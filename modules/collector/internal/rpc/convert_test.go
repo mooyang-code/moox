@@ -12,35 +12,35 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestToPBRuleAndFromPBRule_ShouldRoundTripCoreFields(t *testing.T) {
+func TestToPBTaskAndFromPBTask_ShouldRoundTripCoreFields(t *testing.T) {
 	enabled := true
 	params, err := structpb.NewStruct(map[string]any{"source": map[string]any{"kind": "none"}})
 	require.NoError(t, err)
-	in := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
+	in := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 		Creator: "tester", CreateTime: time.Unix(1, 0).UTC(), ModifyTime: time.Unix(2, 0).UTC(),
 	}
-	pbRule := toPBRule(in)
+	pbRule := toPBTask(in)
 	assert.Equal(t, "crypto", pbRule.GetSpaceId())
-	assert.Equal(t, "rule-1", pbRule.GetRuleId())
+	assert.Equal(t, "rule-1", pbRule.GetTaskId())
 	assert.Equal(t, enabled, pbRule.GetEnabled())
 
-	out := fromPBRule(&pb.TaskRule{
-		SpaceId: "crypto", RuleId: "rule-2", DataType: "kline", Provider: "binance", MarketType: "spot",
+	out := fromPBTask(&pb.CollectionTask{
+		SpaceId: "crypto", TaskId: "rule-2", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: params, Enabled: &enabled,
 	})
 	assert.Equal(t, "crypto", out.SpaceID)
-	assert.Equal(t, "rule-2", out.RuleID)
+	assert.Equal(t, "rule-2", out.TaskID)
 	assert.Equal(t, "binance", out.Provider)
 }
 
-func TestTaskRuleProtoJSONRejectsLegacyRuleFields(t *testing.T) {
+func TestCollectionTaskProtoJSONRejectsLegacyRuleFields(t *testing.T) {
 	for _, raw := range []string{
 		`{"spaceId":"crypto","exchange":"binance"}`,
 		`{"spaceId":"crypto","market":"spot"}`,
 	} {
-		var rule pb.TaskRule
+		var rule pb.CollectionTask
 		err := protojson.Unmarshal([]byte(raw), &rule)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown field")
@@ -65,11 +65,12 @@ func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
 func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 	now := time.Now().UTC()
 	instance := toPBInstance(domain.TaskInstance{
-		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1", Provider: "binance",
+		SpaceID: "crypto", TaskID: "task-1", CollectionTaskID: "rule-1", Provider: "binance",
 		MarketType: "spot", DataType: "instrument", LastExecStatus: domain.InstanceStatusSuccess,
 		CreateTime: now, ModifyTime: now,
 	})
-	assert.Equal(t, "task-1", instance.GetTaskId())
+	assert.Equal(t, "rule-1", instance.GetTaskId())
+	assert.Equal(t, "task-1", instance.GetInstanceId())
 	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS, instance.GetLastExecStatus())
 	encoded, err := protojson.Marshal(instance)
 	require.NoError(t, err)

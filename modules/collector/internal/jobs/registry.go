@@ -51,7 +51,7 @@ func JobDefinitionByDataType(dataType string) (JobDefinition, bool) {
 }
 
 // BuildTaskSpecs dispatches atomic task planning to the matching job definition.
-func BuildTaskSpecs(ctx context.Context, rule *domain.TaskRule, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
+func BuildTaskSpecs(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
 	if params == nil {
 		return nil, fmt.Errorf("collect params are required")
 	}

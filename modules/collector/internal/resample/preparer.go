@@ -16,7 +16,7 @@ import (
 // Preparer asynchronously makes the target catalog ready. Metadata calls are
 // intentionally outside the Collector SQLite transaction.
 type Preparer struct {
-	Rules        *store.TaskRuleRepository
+	Rules        *store.CollectionTaskRepository
 	Source       subjectSource
 	Catalog      *Catalog
 	KeepDuration string
@@ -34,7 +34,7 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 	if limit <= 0 {
 		limit = 50
 	}
-	rules, err := p.Rules.ListResampleByPrepareStates(ctx, []domain.TaskRulePrepareState{
+	rules, err := p.Rules.ListResampleByPrepareStates(ctx, []domain.CollectionTaskPrepareState{
 		domain.PrepareStatePending, domain.PrepareStateWaitingView, domain.PrepareStateError, domain.PrepareStateReady,
 	}, limit)
 	if err != nil {
@@ -43,7 +43,7 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 	for _, rule := range rules {
 		params, parseErr := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
 		if parseErr != nil {
-			_ = p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.RuleID, domain.PrepareStateError, parseErr.Error())
+			_ = p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.TaskID, domain.PrepareStateError, parseErr.Error())
 			continue
 		}
 		source, sourceErr := p.Source.GetDataset(ctx, rule.SpaceID, params.SourceDatasetID)
@@ -65,10 +65,10 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 			if errors.Is(sourceErr, ErrTargetViewNotReady) {
 				state = domain.PrepareStateWaitingView
 			}
-			_ = p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.RuleID, state, sourceErr.Error())
+			_ = p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.TaskID, state, sourceErr.Error())
 			continue
 		}
-		if err := p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.RuleID, domain.PrepareStateReady, ""); err != nil {
+		if err := p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.TaskID, domain.PrepareStateReady, ""); err != nil {
 			return err
 		}
 	}

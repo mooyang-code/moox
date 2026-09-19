@@ -35,6 +35,8 @@
 
       <a-table
         row-key="trading_account_id"
+        size="small"
+        :bordered="{ cell: true }"
         :data="accounts"
         :loading="loading"
         :pagination="pagination"

@@ -3,25 +3,67 @@ import type { ResampleBackfillSummary } from "@/views/collector/collector-rules/
 
 export interface KlineResampleBackfillRequest {
   space_id: string;
-  rule_id: string;
+  task_id: string;
   request_id: string;
   start: string;
   end: string;
 }
 
-export async function startKlineResampleBackfill(request: KlineResampleBackfillRequest) {
-  return callControl<KlineResampleBackfillRequest, Record<string, unknown>>(
-    "collectmgr",
-    "StartKlineResampleBackfill",
-    request
-  );
+export interface CollectorTaskResult {
+  result_name?: string;
+  view_id?: string;
+  status?: string;
+  last_data_time?: string;
+  data_kind?: string;
 }
 
-export async function cancelKlineResampleBackfill(request: Pick<KlineResampleBackfillRequest, "space_id" | "rule_id" | "request_id">) {
+export interface CollectorTask {
+  task_id: string;
+  task_name?: string;
+  description?: string;
+  data_type?: string;
+  provider?: string;
+  market_type?: string;
+  collect_params?: Record<string, unknown>;
+  enabled?: boolean | string;
+  creator?: string;
+  create_time?: string;
+  modify_time?: string;
+  result?: CollectorTaskResult;
+}
+
+export async function listCollectorTasks(spaceId: string): Promise<CollectorTask[]> {
+  const response = await callControl<{ space_id: string; page: { page: number; size: number } }, { tasks?: CollectorTask[] }>(
+    "collectmgr",
+    "GetTaskList",
+    { space_id: spaceId, page: { page: 1, size: 1000 } }
+  );
+  return response.tasks || [];
+}
+
+export async function deleteCollectorTask(spaceId: string, taskId: string, deleteResultData: boolean) {
+  return callControl("collectmgr", "DeleteTask", {
+    space_id: spaceId,
+    task_id: taskId,
+    delete_result_data: deleteResultData
+  });
+}
+
+export async function startKlineResampleBackfill(request: KlineResampleBackfillRequest) {
+  return callControl<KlineResampleBackfillRequest, Record<string, unknown>>("collectmgr", "StartKlineResampleBackfill", request);
+}
+
+export async function cancelKlineResampleBackfill(
+  request: Pick<KlineResampleBackfillRequest, "space_id" | "task_id" | "request_id">
+) {
   return callControl<typeof request, Record<string, unknown>>("collectmgr", "CancelKlineResampleBackfill", request);
 }
 
-export async function getKlineResampleBackfillStatus(spaceId: string, ruleId: string, requestId = ""): Promise<ResampleBackfillSummary | null> {
+export async function getKlineResampleBackfillStatus(
+  spaceId: string,
+  ruleId: string,
+  requestId = ""
+): Promise<ResampleBackfillSummary | null> {
   let response: {
     request_id?: string;
     start?: string;
@@ -37,10 +79,11 @@ export async function getKlineResampleBackfillStatus(spaceId: string, ruleId: st
     failed?: number;
   };
   try {
-    response = await callControl<
-      { space_id: string; rule_id: string; request_id?: string },
-      typeof response
-    >("collectmgr", "GetKlineResampleBackfill", { space_id: spaceId, rule_id: ruleId, request_id: requestId });
+    response = await callControl<{ space_id: string; task_id: string; request_id?: string }, typeof response>(
+      "collectmgr",
+      "GetKlineResampleBackfill",
+      { space_id: spaceId, task_id: ruleId, request_id: requestId }
+    );
   } catch (error) {
     if (error instanceof Error && /backfill request not found/i.test(error.message)) return null;
     throw error;

@@ -4,10 +4,9 @@
       <div class="moox-inner">
         <div class="task-toolbar">
           <a-space wrap class="task-filters">
-            <a-input v-model="form.taskId" placeholder="请输入任务ID" allow-clear style="width: 200px" />
-            <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear style="width: 200px" />
+            <a-input v-model="form.taskId" placeholder="请输入任务 ID" allow-clear style="width: 200px" />
             <a-input v-model="form.functionName" placeholder="写入源函数" allow-clear style="width: 220px" />
-            <a-input v-model="form.symbol" placeholder="请输入交易标的" allow-clear style="width: 150px" />
+            <a-input v-model="form.symbol" placeholder="请输入实例标的" allow-clear style="width: 150px" />
             <a-select placeholder="执行状态" v-model="form.lastExecStatus" style="width: 120px" allow-clear>
               <a-option :value="1">待执行</a-option>
               <a-option :value="2">成功</a-option>
@@ -22,7 +21,7 @@
         </div>
 
         <a-table
-          row-key="TaskID"
+          row-key="InstanceID"
           size="small"
           :data="instanceList"
           :bordered="{ cell: true }"
@@ -33,17 +32,17 @@
           @page-size-change="onPageSizeChange"
         >
           <template #columns>
-            <a-table-column title="任务ID" data-index="TaskID" :width="200">
+            <a-table-column title="实例 ID" data-index="InstanceID" :width="220">
               <template #cell="{ record }">
                 <a-button class="task-id-button" type="text" @click="onViewDetails(record)">
-                  {{ record.TaskID }}
+                  {{ record.InstanceID }}
                 </a-button>
               </template>
             </a-table-column>
-            <a-table-column title="规则ID" data-index="RuleID" :width="190">
+            <a-table-column title="任务 ID" data-index="TaskID" :width="190">
               <template #cell="{ record }">
-                <a-tooltip :content="record.RuleID">
-                  <span class="ellipsis-text">{{ record.RuleID }}</span>
+                <a-tooltip :content="record.TaskID">
+                  <span class="ellipsis-text">{{ record.TaskID }}</span>
                 </a-tooltip>
               </template>
             </a-table-column>
@@ -107,12 +106,12 @@
     <a-modal v-model:visible="detailVisible" :footer="false" width="900px">
       <template #title>任务实例详情</template>
       <a-descriptions :column="2" bordered>
-        <a-descriptions-item label="任务ID">{{ detailData.TaskID }}</a-descriptions-item>
-        <a-descriptions-item label="规则ID">{{ detailData.RuleID }}</a-descriptions-item>
-        <a-descriptions-item label="交易所">{{ detailData.Exchange || "-" }}</a-descriptions-item>
-        <a-descriptions-item label="市场">{{ detailData.Market || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="实例 ID">{{ detailData.InstanceID }}</a-descriptions-item>
+        <a-descriptions-item label="任务 ID">{{ detailData.TaskID }}</a-descriptions-item>
+        <a-descriptions-item label="数据源">{{ detailData.Provider || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="市场类型">{{ detailData.MarketType || "-" }}</a-descriptions-item>
         <a-descriptions-item label="数据类型">{{ detailData.DataType || "-" }}</a-descriptions-item>
-        <a-descriptions-item label="周期">{{ detailData.Interval || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="周期">{{ detailData.Frequency || "-" }}</a-descriptions-item>
         <a-descriptions-item label="数据集">{{ detailData.DatasetID || "-" }}</a-descriptions-item>
         <a-descriptions-item label="标的ID">{{ detailData.SubjectID || "-" }}</a-descriptions-item>
         <a-descriptions-item label="写入源">{{ detailData.FunctionName || "未分配" }}</a-descriptions-item>
@@ -156,15 +155,15 @@ import { useSpaceStore } from "@/store/modules/space";
 import { storeToRefs } from "pinia";
 
 interface TaskInstance {
+  InstanceID: string;
   TaskID: string;
-  RuleID: string;
-  Exchange: string;
-  Market: string;
+  Provider: string;
+  MarketType: string;
   DataType: string;
   DatasetID: string;
   SubjectID: string;
   Symbol: string;
-  Interval: string;
+  Frequency: string;
   FunctionName: string;
   LastExecStatus: number; // v2.0: 最后执行状态
   TaskParams: Record<string, any>;
@@ -184,7 +183,6 @@ const detailData = ref<Partial<TaskInstance>>({});
 
 const form = ref({
   taskId: "",
-  ruleId: "",
   functionName: "",
   symbol: "",
   lastExecStatus: null as number | null, // v2.0: 执行状态
@@ -237,17 +235,17 @@ const getStatusText = (status: number) => {
 const normalizeTaskInstance = (raw: RawTaskInstance): TaskInstance => {
   const lastExecStatus = raw.LastExecStatus ?? raw.last_exec_status ?? 0;
   return {
-    TaskID: raw.TaskID ?? raw.task_id ?? "",
-    RuleID: raw.RuleID ?? raw.rule_id ?? "",
-    Exchange: raw.Exchange ?? raw.exchange ?? "",
-    Market: raw.Market ?? raw.market ?? "",
+    InstanceID: raw.InstanceID ?? raw.instance_id ?? raw.InstanceId ?? raw.instanceId ?? raw.task_id ?? "",
+    TaskID: raw.TaskID ?? raw.task_id ?? raw.TaskId ?? "",
+    Provider: raw.Provider ?? raw.provider ?? "",
+    MarketType: raw.MarketType ?? raw.market_type ?? "",
     DataType: raw.DataType ?? raw.data_type ?? "",
     DatasetID: raw.DatasetID ?? raw.dataset_id ?? "",
     SubjectID: raw.SubjectID ?? raw.subject_id ?? "",
     // Market-fetch instances persist the canonical SubjectID. Treat it as the
     // display symbol when legacy responses do not expose a separate alias.
     Symbol: raw.Symbol ?? raw.symbol ?? raw.SubjectID ?? raw.subject_id ?? "",
-    Interval: raw.Interval ?? raw.interval ?? "",
+    Frequency: raw.Frequency ?? raw.frequency ?? "",
     FunctionName: raw.FunctionName ?? raw.function_name ?? "",
     LastExecStatus: Number(lastExecStatus),
     TaskParams: normalizeObject(raw.TaskParams ?? raw.task_params),
@@ -331,9 +329,8 @@ const getInstanceList = async () => {
     };
 
     if (form.value.taskId) filter.task_id = form.value.taskId;
-    if (form.value.ruleId) filter.rule_id = form.value.ruleId;
     if (form.value.functionName) filter.function_name = form.value.functionName;
-    if (form.value.symbol) filter.symbol = form.value.symbol;
+    if (form.value.symbol) filter.subject_id = form.value.symbol;
     if (form.value.lastExecStatus !== null) filter.last_exec_status = form.value.lastExecStatus;
     if (form.value.includeDeleted) filter.include_deleted = true;
 

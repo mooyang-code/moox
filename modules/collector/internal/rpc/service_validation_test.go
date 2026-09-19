@@ -46,82 +46,82 @@ func (validationDatasetSource) ListSubjects(context.Context, string, string, str
 	return nil, nil
 }
 
-func TestValidateTaskRuleDatasetsRejectsMarketAndFrequencyMismatch(t *testing.T) {
+func TestValidateCollectionTaskDatasetsRejectsMarketAndFrequencyMismatch(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
 		"symbols": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
 		"bars":    {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}},
 	}}
-	rule := domain.TaskRule{SpaceID: "crypto", DataType: "kline", Provider: "binance", MarketType: "spot", CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"5m"}`}
-	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), `does not enable frequency "5m"`)
+	rule := domain.CollectionTask{SpaceID: "crypto", DataType: "kline", Provider: "binance", MarketType: "spot", CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"5m"}`}
+	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), rule), `does not enable frequency "5m"`)
 
 	rule.CollectParams = `{"provider":"binance","market_type":"swap","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`
-	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), "market_type=spot does not match rule market_type=swap")
+	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), rule), "market_type=spot does not match rule market_type=swap")
 }
 
-func TestValidateTaskRuleDatasetsRejectsSymbolMarketMismatch(t *testing.T) {
+func TestValidateCollectionTaskDatasetsRejectsSymbolMarketMismatch(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
 		"symbols": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
 	}}
-	rule := domain.TaskRule{
+	rule := domain.CollectionTask{
 		SpaceID: "crypto", DataType: "instrument", Provider: "binance", MarketType: "swap",
 		CollectParams: `{"provider":"binance","market_type":"swap","symbol_source":"exchange","target_dataset_id":"symbols"}`,
 	}
-	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), "market_type=spot does not match rule market_type=swap")
+	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), rule), "market_type=spot does not match rule market_type=swap")
 }
 
-func TestValidateTaskRuleDatasetsAcceptsStockSharedDataSource(t *testing.T) {
+func TestValidateCollectionTaskDatasetsAcceptsStockSharedDataSource(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"symbols":              {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
+		"symbols":                      {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
 		"dataset_stockcn_equity_kline": {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "equity"}},
 	}}
-	rule := domain.TaskRule{
-		SpaceID: "stockcn", RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity",
+	rule := domain.CollectionTask{
+		SpaceID: "stockcn", TaskID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity",
 		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
 	}
-	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
+	require.NoError(t, service.validateCollectionTaskDatasets(context.Background(), rule))
 }
 
-func TestValidateTaskRuleAcceptsCollectorLocalResampleWithoutCloudRoute(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+func TestValidateCollectionTaskAcceptsCollectorLocalResampleWithoutCloudRoute(t *testing.T) {
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_4h","target_frequency":"4H","alignment":"epoch_utc"}`,
 	}
-	require.NoError(t, validateTaskRule(rule))
+	require.NoError(t, validateCollectionTask(rule))
 }
 
-func TestValidateTaskRuleAcceptsBoundedStockHistoryMode(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: "stockcn", RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity",
+func TestValidateCollectionTaskAcceptsBoundedStockHistoryMode(t *testing.T) {
+	rule := domain.CollectionTask{
+		SpaceID: "stockcn", TaskID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity",
 		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
 	}
-	require.NoError(t, validateTaskRule(rule))
+	require.NoError(t, validateCollectionTask(rule))
 }
 
-func TestPreserveTaskRuleCoverageStartOnOrdinaryUpdate(t *testing.T) {
+func TestPreserveCollectionTaskCoverageStartOnOrdinaryUpdate(t *testing.T) {
 	original := time.Date(2026, 8, 29, 1, 2, 0, 0, time.UTC)
 	replacement := original.Add(24 * time.Hour)
-	desired := domain.TaskRule{CoverageStartTime: &replacement}
-	preserveTaskRuleCoverageStart(domain.TaskRule{CoverageStartTime: &original}, &desired)
+	desired := domain.CollectionTask{CoverageStartTime: &replacement}
+	preserveCollectionTaskCoverageStart(domain.CollectionTask{CoverageStartTime: &original}, &desired)
 	require.NotNil(t, desired.CoverageStartTime)
 	require.Equal(t, original, desired.CoverageStartTime.UTC())
 }
 
 func TestValidateResampleRuleUpdateLocksIdentityAtEveryPrepareState(t *testing.T) {
-	base := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot", Enabled: true,
+	base := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc","settle_delay_ms":10000}`,
 	}
-	for _, state := range []domain.TaskRulePrepareState{domain.PrepareStatePending, domain.PrepareStateWaitingView, domain.PrepareStateReady} {
+	for _, state := range []domain.CollectionTaskPrepareState{domain.PrepareStatePending, domain.PrepareStateWaitingView, domain.PrepareStateReady} {
 		t.Run(string(state), func(t *testing.T) {
 			existing := base
 			existing.PrepareState = state
 			mutable := base
 			mutable.CollectParams = `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc","settle_delay_ms":20000}`
-			require.NoError(t, validateTaskRuleUpdate(existing, mutable))
+			require.NoError(t, validateCollectionTaskUpdate(existing, mutable))
 
 			changed := mutable
 			changed.CollectParams = `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:okx","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc","settle_delay_ms":20000}`
-			require.ErrorContains(t, validateTaskRuleUpdate(existing, changed), "create a new rule")
+			require.ErrorContains(t, validateCollectionTaskUpdate(existing, changed), "create a new rule")
 		})
 	}
 }
@@ -130,22 +130,22 @@ func TestValidateResampleSourceDoesNotFoldMonthIntoMinute(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
 		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1M"}, Attributes: map[string]string{"market_type": "spot"}},
 	}}
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`,
 	}
-	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), `does not enable frequency "1m"`)
+	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), rule), `does not enable frequency "1m"`)
 }
 
-func TestValidateTaskRuleDatasetsAcceptsExchangeSourceForMooxResample(t *testing.T) {
+func TestValidateCollectionTaskDatasetsAcceptsExchangeSourceForMooxResample(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
 		"source": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1H"}, Attributes: map[string]string{"market_type": "spot"}},
 	}}
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"epoch_utc"}`,
 	}
-	require.NoError(t, service.validateTaskRuleDatasets(context.Background(), rule))
+	require.NoError(t, service.validateCollectionTaskDatasets(context.Background(), rule))
 }
 
 func TestGetKlineResampleBackfillKeepsMixedActiveRequestCancelable(t *testing.T) {
@@ -160,12 +160,12 @@ func TestGetKlineResampleBackfillKeepsMixedActiveRequestCancelable(t *testing.T)
 		result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: start, End: start.Add(time.Hour), NextBucket: start, State: state}
 		encoded, marshalErr := result.Marshal()
 		require.NoError(t, marshalErr)
-		return domain.TaskInstance{SpaceID: "crypto", TaskID: taskID, RuleID: "rule-5m", DataType: "kline_resample", Result: encoded}
+		return domain.TaskInstance{SpaceID: "crypto", TaskID: taskID, CollectionTaskID: "rule-5m", DataType: "kline_resample", Result: encoded}
 	}
 	instances := []domain.TaskInstance{makeInstance("failed", domain.ResampleBackfillFailed), makeInstance("syncing", domain.ResampleBackfillSyncing)}
 	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), instances))
 	service := &Service{instanceRepo: db.TaskInstances()}
-	rsp, err := service.GetKlineResampleBackfill(context.Background(), &pb.GetKlineResampleBackfillReq{SpaceId: "crypto", RuleId: "rule-5m", RequestId: "request-1"})
+	rsp, err := service.GetKlineResampleBackfill(context.Background(), &pb.GetKlineResampleBackfillReq{SpaceId: "crypto", TaskId: "rule-5m", RequestId: "request-1"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, "syncing", rsp.GetState())

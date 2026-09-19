@@ -65,7 +65,7 @@ func TestBuildTaskSpecsDispatchesByCollectorParams(t *testing.T) {
 	params.Target.DatasetID = "ds-1"
 	subjects := []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT"}}
 
-	specs, err := BuildTaskSpecs(context.Background(), &domain.TaskRule{RuleID: "r1"}, params, subjects)
+	specs, err := BuildTaskSpecs(context.Background(), &domain.CollectionTask{TaskID: "r1"}, params, subjects)
 	if err != nil {
 		t.Fatalf("BuildTaskSpecs() error = %v", err)
 	}

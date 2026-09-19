@@ -36,7 +36,7 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":0}`
-	require.NoError(t, db.TaskRules().Create(context.Background(), domain.TaskRule{SpaceID: "crypto", RuleID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
+	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
 	start := time.Unix(300, 0).UTC()
 	now := start.Add(5 * time.Minute)
 	fake := &fakePrimary{}
@@ -52,10 +52,10 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 		fields = append(fields, &storagepb.FieldValue{FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 1}}})
 		fake.rows = append(fake.rows, &storagepb.RowFieldValues{Key: rowKey("crypto", "source_bars", "BTC", "1m", at, "venue:binance"), Fields: fields})
 	}
-	runner := &Runner{Rules: db.TaskRules(), Instances: db.TaskInstances(), Source: runnerSource{subjects: []domain.DatasetSubject{{SubjectID: "BTC", Status: "active"}}}, Primary: fake, Config: RunnerConfig{SpaceID: "crypto", WorkerConcurrency: 1, WorkerJobTimeout: time.Second, RepairLookbackBuckets: 0}}
+	runner := &Runner{Rules: db.Tasks(), Instances: db.TaskInstances(), Source: runnerSource{subjects: []domain.DatasetSubject{{SubjectID: "BTC", Status: "active"}}}, Primary: fake, Config: RunnerConfig{SpaceID: "crypto", WorkerConcurrency: 1, WorkerJobTimeout: time.Second, RepairLookbackBuckets: 0}}
 	require.NoError(t, runner.Tick(context.Background(), now))
 	require.Len(t, fake.writes, 1)
-	instances, _, err := db.TaskInstances().List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto", RuleID: "rule-5m", Page: 1, PageSize: 10})
+	instances, _, err := db.TaskInstances().List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto", CollectionTaskID: "rule-5m", Page: 1, PageSize: 10})
 	require.NoError(t, err)
 	require.Len(t, instances, 1)
 }
@@ -71,13 +71,13 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
-	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}
-	require.NoError(t, db.TaskRules().Create(context.Background(), rule))
+	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}
+	require.NoError(t, db.Tasks().Create(context.Background(), rule))
 	cursor := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 	result := domain.NewResampleTaskResult(cursor)
 	encoded, err := result.Marshal()
 	require.NoError(t, err)
-	instance := domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", RuleID: rule.RuleID, Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "dataset_spot_kline_derived_5m", SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
+	instance := domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", CollectionTaskID: rule.TaskID, Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "dataset_spot_kline_derived_5m", SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
 	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{instance}))
 	stored, err := db.TaskInstances().Get(context.Background(), "crypto", "task-btc")
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	claimResult.ActiveOrigin = domain.ResampleOriginRealtime
 	claimResult.ActiveBucket = &cursor
 	runner := &Runner{Instances: db.TaskInstances(), Readiness: db.PeriodReadiness()}
-	require.NoError(t, runner.ensureReadinessForClaims(context.Background(), []store.ResampleTaskClaim{{Instance: stored, Result: claimResult}}, []domain.TaskRule{rule}))
+	require.NoError(t, runner.ensureReadinessForClaims(context.Background(), []store.ResampleTaskClaim{{Instance: stored, Result: claimResult}}, []domain.CollectionTask{rule}))
 	require.NoError(t, db.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_derived_5m", Frequency: "5m", PeriodTime: cursor}, "BTC", localResampleFunction, writeSource, time.Now().UTC()))
 	reports, err := db.PeriodReadiness().FinalizeDue(context.Background(), time.Now().UTC(), 10)
 	require.NoError(t, err)
@@ -130,18 +130,18 @@ func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
-	require.NoError(t, db.TaskRules().Create(context.Background(), domain.TaskRule{SpaceID: "crypto", RuleID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
+	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
 	started := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 	result := domain.NewResampleTaskResult(started)
 	result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: started, End: started.Add(time.Hour), NextBucket: started.Add(time.Hour), State: domain.ResampleBackfillSyncing}
 	encoded, err := result.Marshal()
 	require.NoError(t, err)
-	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", TaskID: "task-btc", RuleID: "rule-5m", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "dataset_spot_kline_derived_5m", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
+	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", TaskID: "task-btc", CollectionTaskID: "rule-5m", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "dataset_spot_kline_derived_5m", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
 	primary := &syncPointPrimary{}
 	runner := &Runner{Instances: db.TaskInstances(), Primary: primary}
-	rule, err := db.TaskRules().GetByRuleID(context.Background(), "crypto", "rule-5m")
+	rule, err := db.Tasks().GetByTaskID(context.Background(), "crypto", "rule-5m")
 	require.NoError(t, err)
-	require.NoError(t, runner.completeBackfills(context.Background(), []domain.TaskRule{*rule}))
+	require.NoError(t, runner.completeBackfills(context.Background(), []domain.CollectionTask{*rule}))
 	require.Equal(t, []string{"crypto/dataset_spot_kline_derived_5m/request-1/catchup"}, primary.appendCalls)
 	require.NotNil(t, primary.waitReq)
 	require.Equal(t, "view_spot_kline_derived_5m", primary.waitReq.GetViewId())

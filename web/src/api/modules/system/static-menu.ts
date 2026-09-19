@@ -58,16 +58,7 @@ export const systemMenu = [
   menu("0306", "03", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
   menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
   menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
-  menu("0303", "03", "/collector/rules", "collector-rules", "collector-rules", "collector/task-management/index", 4),
-  menu(
-    "0305",
-    "03",
-    "/collector/data-management",
-    "collector-data-management",
-    "collector-data-management",
-    "collector/data-management/index",
-    5
-  ),
+  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4),
 
   directory("0240", "0", "/factor/definitions", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
   menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 1),

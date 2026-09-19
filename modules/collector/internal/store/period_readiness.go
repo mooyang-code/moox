@@ -319,7 +319,7 @@ func (r *PeriodReadinessRepository) finalizeDue(ctx context.Context, spaceID str
 func (r *PeriodReadinessRepository) resamplePendingTasksTerminal(ctx context.Context, readinessID int64, spaceID string, pending int64) (bool, error) {
 	var failed int64
 	err := r.db.WithContext(ctx).Table("t_period_readiness_items AS items").
-		Joins("LEFT JOIN t_collector_task_instances AS tasks ON tasks.c_space_id = ? AND tasks.c_task_id = items.c_task_id", spaceID).
+		Joins("LEFT JOIN t_collector_task_instances AS tasks ON tasks.c_space_id = ? AND tasks.c_instance_id = items.c_task_id", spaceID).
 		Where("items.c_readiness_id = ? AND items.c_state = ? AND (tasks.c_is_deleted = 1 OR (json_valid(tasks.c_result) AND json_extract(tasks.c_result, '$.state') = ?))", readinessID, domain.PeriodItemPending, domain.ResampleTaskStateFailed).
 		Count(&failed).Error
 	if err != nil {

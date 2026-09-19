@@ -262,7 +262,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		viewOutputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "output_watermark_timestamp_seconds",
 			Help: "Latest business timestamp successfully committed to an active Storage View.",
-		}, []string{"space_id", "view_id", "freq"}),
+		}, []string{"space_id", "view_id", "dataset_id", "freq"}),
 		datasetOutputLastDataTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "dataset_output_last_data_time_seconds",
 			Help: "Latest business data time successfully committed to an active View index.",
@@ -469,11 +469,11 @@ func timestampSeconds(value time.Time) float64 {
 }
 
 // ObserveViewOutputWatermark advances the committed watermark for one active
-// View. View IDs are deliberately used as the dataset identity here so the
-// monitor can create an independent freshness check instead of folding this
-// signal into the Primary dataset watermark.
-func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, frequency string, watermark time.Time) {
-	if m == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || watermark.IsZero() {
+// View. View IDs remain the metric identity so the monitor can create an
+// independent freshness check, while dataset_id lets it associate the View
+// with the Collector dataset that it serves.
+func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, datasetID, frequency string, watermark time.Time) {
+	if m == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || strings.TrimSpace(datasetID) == "" || watermark.IsZero() {
 		return
 	}
 	frequency = strings.TrimSpace(frequency)
@@ -482,15 +482,16 @@ func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, frequency stri
 	}
 	spaceID = strings.TrimSpace(spaceID)
 	viewID = strings.TrimSpace(viewID)
+	datasetID = strings.TrimSpace(datasetID)
 	watermarkUnix := watermark.UTC().Unix()
-	key := strings.Join([]string{spaceID, viewID, frequency}, "\x00")
+	key := strings.Join([]string{spaceID, viewID, datasetID, frequency}, "\x00")
 	m.viewWatermarkMu.Lock()
 	defer m.viewWatermarkMu.Unlock()
 	if previous, ok := m.viewWatermarks[key]; ok && watermarkUnix <= previous {
 		return
 	}
 	m.viewWatermarks[key] = watermarkUnix
-	m.viewOutputWatermark.WithLabelValues(spaceID, viewID, frequency).Set(float64(watermarkUnix))
+	m.viewOutputWatermark.WithLabelValues(spaceID, viewID, datasetID, frequency).Set(float64(watermarkUnix))
 }
 
 // ObservePeriodWaiting records the current missing-dataset count for a View

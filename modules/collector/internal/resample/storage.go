@@ -98,7 +98,7 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec RuleSpec, subject
 		return result, false, nil
 	}
 	row := resultRowWithSpec(result, spec)
-	eventID := sourceEventID(spec.RuleID, targetKey, result.SourceHash)
+	eventID := sourceEventID(spec.TaskID, targetKey, result.SourceHash)
 	if err := s.Primary.UpsertFieldsWithSource(ctx, []*storagepb.RowFieldUpsert{row}, eventID); err != nil {
 		return Result{}, false, err
 	}
@@ -119,7 +119,7 @@ func resultRow(result Result) *storagepb.RowFieldUpsert {
 			doubleField(fieldClose, result.Close), doubleField(fieldVolume, result.Volume), doubleField(fieldQuoteVolume, result.QuoteVolume), intField(fieldTradeNum, result.TradeNum),
 		},
 		Attributes: map[string]*storagepb.TypedValue{
-			"resample_rule_id":  stringValue(""),
+			"resample_task_id":  stringValue(""),
 			"source_dataset_id": stringValue(""),
 			"source_freq":       stringValue(""),
 			"source_window_end": stringValue(result.SourceWindowEnd.UTC().Format(time.RFC3339Nano)),
@@ -130,7 +130,7 @@ func resultRow(result Result) *storagepb.RowFieldUpsert {
 
 func resultRowWithSpec(result Result, spec RuleSpec) *storagepb.RowFieldUpsert {
 	row := resultRow(result)
-	row.Attributes["resample_rule_id"] = stringValue(spec.RuleID)
+	row.Attributes["resample_task_id"] = stringValue(spec.TaskID)
 	row.Attributes["source_dataset_id"] = stringValue(spec.SourceDatasetID)
 	row.Attributes["source_freq"] = stringValue(spec.SourceFrequency.Storage)
 	return row

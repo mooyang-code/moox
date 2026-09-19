@@ -7,7 +7,7 @@
             <template #icon><icon-plus /></template>
             <span>新建任务</span>
           </a-button>
-          <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear />
+          <a-input v-model="form.taskId" placeholder="请输入任务 ID" allow-clear />
           <a-select v-model="form.dataType" placeholder="请选择数据类型" style="width: 150px" allow-clear>
             <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
               {{ config.type_name }}
@@ -26,7 +26,7 @@
         </a-space>
 
         <a-table
-          row-key="rule_id"
+          row-key="task_id"
           size="small"
           :data="taskList"
           :bordered="{ cell: true }"
@@ -41,14 +41,15 @@
           @page-size-change="onPageSizeChange"
         >
           <template #columns>
-            <a-table-column title="规则ID" data-index="rule_id" :width="150">
+            <a-table-column title="任务 ID" data-index="task_id" :width="150">
               <template #cell="{ record }">
-                <a-link @click="onViewDetails(record)">{{ record.rule_id }}</a-link>
+                <a-link @click="onViewDetails(record)">{{ record.task_id }}</a-link>
               </template>
             </a-table-column>
             <a-table-column title="数据类型" data-index="data_type" :width="260">
               <template #cell="{ record }">
-                <div>{{ record.data_type }}</div>
+                <div>{{ record.task_name || record.task_id }}</div>
+                <small class="resample-summary">{{ record.data_type }}</small>
                 <small v-if="record.data_type === 'kline_resample'" class="resample-summary">{{ resampleSummary(record) }}</small>
               </template>
             </a-table-column>
@@ -86,6 +87,7 @@
                     <template #icon><icon-edit /></template>
                     <span>修改</span>
                   </a-button>
+                  <a-button status="danger" type="text" size="mini" @click="openDelete(record)">删除</a-button>
                 </a-space>
               </template>
             </a-table-column>
@@ -106,14 +108,24 @@
       <template #title> {{ title }} </template>
       <a-form ref="formRef" auto-label-width :rules="rules" :model="addForm" layout="vertical">
         <a-row :gutter="16">
-          <a-col v-if="title === '修改采集规则'" :span="12">
-            <a-form-item field="rule_id" label="规则ID" validate-trigger="blur">
-              <a-input v-model="addForm.rule_id" placeholder="留空自动生成" allow-clear :disabled="true" />
+          <a-col v-if="title === '修改采集任务'" :span="12">
+            <a-form-item field="task_id" label="任务 ID" validate-trigger="blur">
+              <a-input v-model="addForm.task_id" placeholder="留空自动生成" allow-clear :disabled="true" />
             </a-form-item>
           </a-col>
-          <a-col :span="title === '修改采集规则' ? 12 : 24">
+          <a-col :span="title === '修改采集任务' ? 12 : 24">
+            <a-form-item field="task_name" label="任务名称" validate-trigger="blur">
+              <a-input v-model="addForm.task_name" placeholder="例如：币安现货 1 小时行情" allow-clear />
+            </a-form-item>
+          </a-col>
+          <a-col :span="title === '修改采集任务' ? 12 : 24">
             <a-form-item field="data_type" label="数据类型" validate-trigger="blur">
-              <a-select v-model="addForm.data_type" placeholder="请选择数据类型" @change="onDataTypeChange">
+              <a-select
+                v-model="addForm.data_type"
+                placeholder="请选择数据类型"
+                :disabled="title === '修改采集任务'"
+                @change="onDataTypeChange"
+              >
                 <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
                   {{ config.type_name }}
                 </a-option>
@@ -122,8 +134,24 @@
           </a-col>
         </a-row>
 
+        <a-form-item field="description" label="任务描述">
+          <a-textarea
+            v-model="addForm.description"
+            placeholder="补充任务用途、数据范围或负责人信息"
+            :max-length="200"
+            show-word-limit
+            allow-clear
+          />
+        </a-form-item>
+
         <a-form-item field="data_source" label="数据源" validate-trigger="blur">
-          <a-select v-model="addForm.data_source" placeholder="请选择数据源" :loading="loadingDataSources" allow-clear>
+          <a-select
+            v-model="addForm.data_source"
+            placeholder="请选择数据源"
+            :loading="loadingDataSources"
+            allow-clear
+            :disabled="title === '修改采集任务'"
+          >
             <a-option v-for="source in dataSourceOptions" :key="source.value" :value="source.value">
               {{ source.label }}
             </a-option>
@@ -131,14 +159,20 @@
         </a-form-item>
 
         <a-form-item label="产品类型" required>
-          <a-radio-group v-model="marketValue" type="button">
+          <a-radio-group v-model="marketValue" type="button" :disabled="title === '修改采集任务'">
             <a-radio value="spot">现货</a-radio>
             <a-radio value="swap">永续合约</a-radio>
           </a-radio-group>
         </a-form-item>
 
-        <a-form-item :label="addForm.data_type === 'kline_resample' ? '源 K 线 Dataset' : 'Dataset'" required>
-          <a-select v-model="datasetIdValue" placeholder="请选择已激活的 Dataset" :loading="loadingDatasets" allow-search>
+        <a-form-item v-if="addForm.data_type === 'kline_resample'" label="源 K 线数据集" required>
+          <a-select
+            v-model="datasetIdValue"
+            placeholder="请选择已激活的数据来源"
+            :loading="loadingDatasets"
+            allow-search
+            :disabled="title === '修改采集任务'"
+          >
             <a-option v-for="dataset in availableDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
               {{ dataset.name || dataset.dataset_id }} ({{ dataset.dataset_id }})
             </a-option>
@@ -147,25 +181,42 @@
 
         <template v-if="addForm.data_type === 'kline_resample'">
           <a-form-item label="源周期" required>
-            <a-input v-model="sourceFrequencyValue" placeholder="例如 1m、5m、1h" allow-clear />
+            <a-input
+              v-model="sourceFrequencyValue"
+              placeholder="例如 1m、5m、1h"
+              allow-clear
+              :disabled="title === '修改采集任务'"
+            />
           </a-form-item>
           <a-form-item label="序列标签" required>
-            <a-input v-model="sourceSeriesTagValue" placeholder="例如 venue:binance" allow-clear />
-          </a-form-item>
-          <a-form-item label="目标 Dataset" required>
-            <a-input v-model="targetDatasetIdValue" placeholder="例如 dataset_spot_kline_derived_5m" allow-clear />
+            <a-input
+              v-model="sourceSeriesTagValue"
+              placeholder="例如 venue:binance"
+              allow-clear
+              :disabled="title === '修改采集任务'"
+            />
           </a-form-item>
           <a-form-item label="结算延迟（毫秒）">
-            <a-input-number v-model="settleDelayMSValue" :min="0" :max="86400000" :precision="0" placeholder="留空使用全局默认" allow-clear style="width: 100%" />
+            <a-input-number
+              v-model="settleDelayMSValue"
+              :min="0"
+              :max="86400000"
+              :precision="0"
+              placeholder="留空使用全局默认"
+              allow-clear
+              :disabled="title === '修改采集任务'"
+              style="width: 100%"
+            />
           </a-form-item>
         </template>
 
-        <a-form-item v-if="addForm.data_type === 'kline'" label="标的 Dataset" required>
+        <a-form-item v-if="addForm.data_type === 'kline'" label="标的来源" required>
           <a-select
             v-model="symbolDatasetIdValue"
-            placeholder="请选择已激活的标的 Dataset"
+            placeholder="请选择已激活的标的来源"
             :loading="loadingDatasets"
             allow-search
+            :disabled="title === '修改采集任务'"
           >
             <a-option v-for="dataset in availableSymbolDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
               {{ dataset.name || dataset.dataset_id }} ({{ dataset.dataset_id }})
@@ -182,7 +233,12 @@
         />
 
         <a-form-item :label="addForm.data_type === 'kline_resample' ? '目标周期' : '采集频率'" required>
-          <a-input v-model="scheduleIntervalValue" placeholder="例如 5m、1h、24h" allow-clear />
+          <a-input
+            v-model="scheduleIntervalValue"
+            placeholder="例如 5m、1h、24h"
+            allow-clear
+            :disabled="title === '修改采集任务'"
+          />
         </a-form-item>
 
         <a-form-item label="创建人">
@@ -202,7 +258,8 @@
     <a-modal v-model:visible="detailVisible" :footer="false" width="800px">
       <template #title>任务配置详情</template>
       <a-descriptions :column="2" bordered>
-        <a-descriptions-item label="规则ID">{{ detailData.rule_id }}</a-descriptions-item>
+        <a-descriptions-item label="任务 ID">{{ detailData.task_id }}</a-descriptions-item>
+        <a-descriptions-item label="任务名称">{{ detailData.task_name || "-" }}</a-descriptions-item>
         <a-descriptions-item label="数据类型">{{ detailData.data_type }}</a-descriptions-item>
         <a-descriptions-item label="数据源">{{ detailData.data_source }}</a-descriptions-item>
         <a-descriptions-item label="启用状态">
@@ -222,6 +279,16 @@
           <pre>{{ formatJSON(detailData.collect_params || "") }}</pre>
         </a-descriptions-item>
       </a-descriptions>
+    </a-modal>
+
+    <a-modal v-model:visible="deleteVisible" title="删除采集任务" :ok-loading="deleteLoading" @before-ok="handleDeleteOk">
+      <a-alert type="warning" show-icon>
+        删除任务后，任务配置、实例和运行记录都会被删除。请选择是否同时物理删除该任务自动创建的结果数据。
+      </a-alert>
+      <a-radio-group v-model="deleteResultData" direction="vertical" class="delete-options">
+        <a-radio :value="false">保留结果数据和数据视图</a-radio>
+        <a-radio :value="true">同时物理删除结果数据和数据视图</a-radio>
+      </a-radio-group>
     </a-modal>
 
     <ResampleBackfillDialog
@@ -260,7 +327,9 @@ import type { ResampleBackfillSummary } from "./resample-backfill";
 
 interface TaskConfig {
   id?: number;
-  rule_id: string;
+  task_id: string;
+  task_name: string;
+  description?: string;
   space_id: string;
   data_type: string;
   data_source: string;
@@ -269,6 +338,7 @@ interface TaskConfig {
   creator: string;
   create_time: string;
   modify_time: string;
+  result?: { view_id?: string; status?: string };
 }
 
 interface DataTypeConfig {
@@ -295,6 +365,10 @@ const detailData = ref<Partial<TaskConfig>>({});
 const backfillVisible = ref(false);
 const activeBackfill = ref<ResampleBackfillSummary | null>(null);
 const backfillTarget = ref<{ ruleId: string; targetFrequency: string; sourceKeepDuration: string } | null>(null);
+const deleteVisible = ref(false);
+const deleteLoading = ref(false);
+const deleteResultData = ref(false);
+const deleteTarget = ref<TaskConfig | null>(null);
 
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
 const marketValue = ref<CollectorRuleInput["market"]>("spot");
@@ -320,7 +394,7 @@ const userInfoStore = useUserInfoStore();
 const { account } = storeToRefs(userInfoStore);
 
 const form = ref({
-  ruleId: "",
+  taskId: "",
   dataType: "",
   dataSource: "",
   enabled: true
@@ -348,7 +422,9 @@ const paginationConfig = computed(() => ({
 }));
 
 const addForm = ref({
-  rule_id: "",
+  task_id: "",
+  task_name: "",
+  description: "",
   space_id: "",
   data_type: "",
   data_source: "",
@@ -365,7 +441,11 @@ const availableDatasets = computed(() => {
       addForm.value.data_source,
       addForm.value.data_type,
       marketValue.value,
-      addForm.value.data_type === "kline" ? scheduleIntervalValue.value : addForm.value.data_type === "kline_resample" ? sourceFrequencyValue.value : undefined
+      addForm.value.data_type === "kline"
+        ? scheduleIntervalValue.value
+        : addForm.value.data_type === "kline_resample"
+          ? sourceFrequencyValue.value
+          : undefined
     )
   );
 });
@@ -378,6 +458,7 @@ const availableSymbolDatasets = computed(() => {
 });
 
 const rules = {
+  task_name: [{ required: true, message: "请输入任务名称" }],
   data_type: [{ required: true, message: "请选择数据类型" }],
   data_source: [{ required: true, message: "请选择数据源" }]
 };
@@ -503,7 +584,7 @@ const select = (list: string[]) => {
 };
 
 const selectAll = (state: boolean) => {
-  selectedKeys.value = state ? taskList.value.map(el => el.rule_id) : [];
+  selectedKeys.value = state ? taskList.value.map(el => el.task_id) : [];
 };
 
 const onPageChange = (current: number) => {
@@ -545,18 +626,18 @@ const getTaskList = async () => {
       }
     };
 
-    if (form.value.ruleId) params.rule_id = form.value.ruleId;
+    if (form.value.taskId) params.task_id = form.value.taskId;
     if (form.value.dataType) params.data_type = form.value.dataType;
     if (form.value.dataSource) params.provider = form.value.dataSource;
     if (form.value.enabled !== null) params.enabled = form.value.enabled;
 
-    const data = await callControl<typeof params, { rules?: any[]; page?: { total?: number } }>(
+    const data = await callControl<typeof params, { tasks?: any[]; page?: { total?: number } }>(
       "collectmgr",
-      "GetTaskRuleList",
+      "GetTaskList",
       params
     );
-    taskList.value = (data.rules || []).map(normalizeTaskConfig);
-    pagination.value.total = Number(data.page?.total) || (data.rules ? data.rules.length : 0);
+    taskList.value = (data.tasks || []).map(normalizeTaskConfig);
+    pagination.value.total = Number(data.page?.total) || (data.tasks ? data.tasks.length : 0);
   } catch (error) {
     console.error("获取任务列表失败:", error);
     Message.error("获取任务列表失败");
@@ -602,9 +683,9 @@ const loadActiveDatasets = async () => {
     }
     activeDatasets.value = datasets;
   } catch (error) {
-    console.error("获取 Dataset 失败:", error);
+    console.error("获取数据来源失败:", error);
     activeDatasets.value = [];
-    Message.error("获取 Dataset 失败");
+    Message.error("获取数据来源失败");
   } finally {
     loadingDatasets.value = false;
   }
@@ -629,20 +710,34 @@ const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
   if (!isRecord(params)) {
     throw new Error("规则参数不是当前支持的结构");
   }
-  const dataType = params.source_dataset_id ? "kline_resample" : (String(params.symbol_source) === "exchange" ? "symbol" : "kline");
+  const dataType = params.source_dataset_id ? "kline_resample" : String(params.symbol_source) === "exchange" ? "symbol" : "kline";
   const exchange = String(params.provider || "").trim();
   const market = params.market_type;
-  const datasetId = String(params.target_dataset_id || "").trim();
+  const sourceDatasetId = String(params.source_dataset_id || "").trim();
   const symbolDatasetId = String(params.symbol_dataset_id || "").trim();
   const scheduleInterval = String(params.frequency || params.target_frequency || "").trim();
   if (dataType === "kline_resample") {
-    const settleDelayMS = typeof params.settle_delay_ms === "number" && Number.isFinite(params.settle_delay_ms) && params.settle_delay_ms >= 0 ? Math.trunc(params.settle_delay_ms) : undefined;
-    return { dataType, exchange: String(params.provider || "moox"), market: market as "spot" | "swap", datasetId, scheduleInterval, sourceDatasetId: String(params.source_dataset_id || ""), sourceFrequency: String(params.source_frequency || ""), sourceSeriesTag: String(params.source_series_tag || ""), targetFrequency: String(params.target_frequency || scheduleInterval), settleDelayMS };
+    const settleDelayMS =
+      typeof params.settle_delay_ms === "number" && Number.isFinite(params.settle_delay_ms) && params.settle_delay_ms >= 0
+        ? Math.trunc(params.settle_delay_ms)
+        : undefined;
+    return {
+      dataType,
+      exchange: String(params.provider || "moox"),
+      market: market as "spot" | "swap",
+      datasetId: sourceDatasetId,
+      scheduleInterval,
+      sourceDatasetId,
+      sourceFrequency: String(params.source_frequency || ""),
+      sourceSeriesTag: String(params.source_series_tag || ""),
+      targetFrequency: String(params.target_frequency || scheduleInterval),
+      settleDelayMS
+    };
   }
   if (dataType !== "kline" && dataType !== "symbol") {
     throw new Error("规则数据类型无效");
   }
-  if (!exchange || (market !== "spot" && market !== "swap") || !datasetId || !scheduleInterval) {
+  if (!exchange || (market !== "spot" && market !== "swap") || !scheduleInterval) {
     throw new Error("规则缺少必填参数");
   }
   if (dataType === "kline") {
@@ -653,13 +748,15 @@ const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
     throw new Error("标的规则参数无效");
   }
 
-  return { dataType, exchange, market, datasetId, symbolDatasetId, scheduleInterval };
+  return { dataType, exchange, market, datasetId: "", symbolDatasetId, scheduleInterval };
 };
 
 const onAdd = () => {
-  title.value = "新建采集规则";
+  title.value = "新建采集任务";
   addForm.value = {
-    rule_id: "",
+    task_id: "",
+    task_name: "",
+    description: "",
     space_id: selectedSpaceId.value || "",
     data_type: "",
     data_source: "",
@@ -682,9 +779,10 @@ const onUpdate = (record: TaskConfig) => {
     return;
   }
 
-  title.value = "修改采集规则";
+  title.value = "修改采集任务";
   addForm.value = {
     ...record,
+    description: record.description || "",
     data_type: input.dataType,
     data_source: input.exchange
   };
@@ -694,7 +792,7 @@ const onUpdate = (record: TaskConfig) => {
   scheduleIntervalValue.value = input.scheduleInterval;
   sourceFrequencyValue.value = input.sourceFrequency || "";
   sourceSeriesTagValue.value = input.sourceSeriesTag || "venue:binance";
-  targetDatasetIdValue.value = input.dataType === "kline_resample" ? input.datasetId : "";
+  targetDatasetIdValue.value = "";
   // Preserve an omitted value so the server can apply its process-wide default.
   settleDelayMSValue.value = input.settleDelayMS;
   if (input.dataType === "kline_resample") datasetIdValue.value = input.sourceDatasetId || "";
@@ -732,16 +830,24 @@ const handleOk = async (): Promise<boolean> => {
       return false;
     }
 
-    if (addForm.value.data_type !== "kline" && addForm.value.data_type !== "symbol" && addForm.value.data_type !== "kline_resample") {
+    if (
+      addForm.value.data_type !== "kline" &&
+      addForm.value.data_type !== "symbol" &&
+      addForm.value.data_type !== "kline_resample"
+    ) {
       Message.error("不支持的数据类型");
       return false;
     }
 
+    if (!addForm.value.task_name.trim()) {
+      Message.error("请输入任务名称");
+      return false;
+    }
     const collectParams = buildCollectorRuleParams({
       dataType: addForm.value.data_type,
       exchange: addForm.value.data_source,
       market: marketValue.value,
-      datasetId: addForm.value.data_type === "kline_resample" ? targetDatasetIdValue.value : datasetIdValue.value,
+      datasetId: "",
       symbolDatasetId: symbolDatasetIdValue.value,
       scheduleInterval: scheduleIntervalValue.value,
       sourceDatasetId: addForm.value.data_type === "kline_resample" ? datasetIdValue.value : undefined,
@@ -757,7 +863,7 @@ const handleOk = async (): Promise<boolean> => {
         dataType: addForm.value.data_type as CollectorRuleInput["dataType"],
         exchange: addForm.value.data_source,
         market: marketValue.value,
-        datasetId: addForm.value.data_type === "kline_resample" ? targetDatasetIdValue.value : datasetIdValue.value,
+        datasetId: "",
         symbolDatasetId: symbolDatasetIdValue.value,
         scheduleInterval: scheduleIntervalValue.value,
         sourceDatasetId: addForm.value.data_type === "kline_resample" ? datasetIdValue.value : undefined,
@@ -769,19 +875,21 @@ const handleOk = async (): Promise<boolean> => {
       spaceId,
       addForm.value.creator || account.value.user?.userName || "",
       addForm.value.enabled !== "false",
-      title.value.includes("修改") ? addForm.value.rule_id : undefined
+      title.value.includes("修改") ? addForm.value.task_id : undefined
     );
+    requestData.task_name = addForm.value.task_name.trim();
+    requestData.description = addForm.value.description?.trim() || "";
 
-    const method = title.value.includes("新建") ? "CreateTaskRule" : "UpdateTaskRule";
+    const method = title.value.includes("新建") ? "CreateTask" : "UpdateTask";
 
     submitLoading.value = true;
     const payload = title.value.includes("新建")
-      ? { rule: requestData }
-      : { space_id: requestData.space_id, rule_id: requestData.rule_id, rule: requestData };
-    const data = await callControl<typeof payload, { rule_id?: string }>("collectmgr", method, payload);
+      ? { task: requestData }
+      : { space_id: requestData.space_id, task_id: requestData.task_id, task: requestData };
+    const data = await callControl<typeof payload, { task_id?: string }>("collectmgr", method, payload);
     if (title.value.includes("新建")) {
-      const ruleId = data.rule_id || "未知";
-      Message.success(`创建成功，规则ID：${ruleId}`);
+      const ruleId = data.task_id || "未知";
+      Message.success(`创建成功，任务 ID：${ruleId}`);
     } else {
       Message.success("更新成功");
     }
@@ -807,26 +915,26 @@ const handleEnableChange = async (record: TaskConfig, value: boolean) => {
       return;
     }
     if (!value) {
-      await callControl("collectmgr", "DisableTaskRule", {
+      await callControl("collectmgr", "DisableTask", {
         space_id: spaceId,
-        rule_id: record.rule_id
+        task_id: record.task_id
       });
       Message.success("状态更新成功");
       getTaskList();
       return;
     }
     const input = parseStrictRuleParams(record.collect_params);
-    const rule = buildCollectorRuleRequest(
+    const task = buildCollectorRuleRequest(
       input,
       spaceId,
       record.creator || account.value.user?.userName || "",
       value,
-      record.rule_id
+      record.task_id
     );
-    await callControl<Record<string, any>, Record<string, never>>("collectmgr", "UpdateTaskRule", {
+    await callControl<Record<string, any>, Record<string, never>>("collectmgr", "UpdateTask", {
       space_id: spaceId,
-      rule_id: record.rule_id,
-      rule
+      task_id: record.task_id,
+      task: { ...task, task_name: record.task_name || record.task_id, description: record.description || "" }
     });
     Message.success("状态更新成功");
     getTaskList();
@@ -841,19 +949,51 @@ const onViewDetails = (record: TaskConfig) => {
   detailVisible.value = true;
 };
 
+const openDelete = (record: TaskConfig) => {
+  deleteTarget.value = record;
+  deleteResultData.value = false;
+  deleteVisible.value = true;
+};
+
+const handleDeleteOk = async (): Promise<boolean> => {
+  const record = deleteTarget.value;
+  const spaceId = record?.space_id || selectedSpaceId.value || "";
+  if (!record || !spaceId) {
+    Message.error("请选择空间");
+    return false;
+  }
+  deleteLoading.value = true;
+  try {
+    await callControl("collectmgr", "DeleteTask", {
+      space_id: spaceId,
+      task_id: record.task_id,
+      delete_result_data: deleteResultData.value
+    });
+    Message.success(deleteResultData.value ? "任务及结果数据已删除" : "任务已删除，结果数据已保留");
+    await getTaskList();
+    deleteVisible.value = false;
+    return true;
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "删除任务失败");
+    return false;
+  } finally {
+    deleteLoading.value = false;
+  }
+};
+
 const openBackfill = async (record: TaskConfig) => {
   try {
     const input = parseStrictRuleParams(record.collect_params);
     if (input.dataType !== "kline_resample") throw new Error("当前规则不是 K 线重采样规则");
     const source = activeDatasets.value.find(dataset => dataset.dataset_id === input.sourceDatasetId);
     backfillTarget.value = {
-      ruleId: record.rule_id,
+      ruleId: record.task_id,
       targetFrequency: input.targetFrequency || input.scheduleInterval,
       sourceKeepDuration: source?.keep_duration || ""
     };
     activeBackfill.value = null;
     backfillVisible.value = true;
-    activeBackfill.value = await getKlineResampleBackfillStatus(selectedSpaceId.value || record.space_id || "", record.rule_id);
+    activeBackfill.value = await getKlineResampleBackfillStatus(selectedSpaceId.value || record.space_id || "", record.task_id);
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "读取回填状态失败");
   }
@@ -883,7 +1023,13 @@ watch(
 );
 
 watch(
-  [() => addForm.value.data_source, () => addForm.value.data_type, () => marketValue.value, () => scheduleIntervalValue.value, () => sourceFrequencyValue.value],
+  [
+    () => addForm.value.data_source,
+    () => addForm.value.data_type,
+    () => marketValue.value,
+    () => scheduleIntervalValue.value,
+    () => sourceFrequencyValue.value
+  ],
   () => {
     if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
       datasetIdValue.value = "";

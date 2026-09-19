@@ -39,7 +39,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 
 	rules, err := ruleseed.LoadFile(filepath.Join("..", "..", "..", "config", "setup", "collector-rules.yaml"))
 	require.NoError(t, err)
-	summary, err := ruleseed.SeedMissing(ctx, dbm.TaskRules(), rules)
+	summary, err := ruleseed.SeedMissing(ctx, dbm.Tasks(), rules)
 	require.NoError(t, err)
 	require.Equal(t, 8, summary.Created)
 
@@ -71,7 +71,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	defer server.Close()
 
 	scheduler := &marketfetch.Scheduler{
-		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
+		Rules: dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 		Invoker: scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: server.URL, Auth: runtime.AuthConfig{AccessKey: "test", SecretKey: "test", TargetNode: "test"}}),
 		Symbols: defaultRuleDatasetSource{}, SpaceID: "crypto", InvokeNonRealtimeOnly: true,
 		InvokeConcurrency: 1, Now: func() time.Time { return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC) },

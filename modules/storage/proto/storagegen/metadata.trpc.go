@@ -33,6 +33,8 @@ type MetadataService interface {
 	CreateView(ctx context.Context, req *CreateViewReq) (*CreateViewRsp, error)
 	// UpdateView 更新查询视图。
 	UpdateView(ctx context.Context, req *UpdateViewReq) (*UpdateViewRsp, error)
+	// DeleteView 物理删除查询视图及其依赖行。
+	DeleteView(ctx context.Context, req *DeleteViewReq) (*DeleteViewRsp, error)
 	// RequestViewRebuild 请求异步手动重建查询视图；当前 active 索引保持可读。
 	RequestViewRebuild(ctx context.Context, req *RequestViewRebuildReq) (*RequestViewRebuildRsp, error)
 	// GetView 按 ID 获取查询视图。
@@ -283,6 +285,24 @@ func MetadataService_UpdateView_Handler(svr interface{}, ctx context.Context, f 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).UpdateView(ctx, reqbody.(*UpdateViewReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_DeleteView_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteViewReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).DeleteView(ctx, reqbody.(*DeleteViewReq))
 	}
 
 	var rsp interface{}
@@ -1515,6 +1535,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_UpdateView_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/DeleteView",
+			Func: MetadataService_DeleteView_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/RequestViewRebuild",
 			Func: MetadataService_RequestViewRebuild_Handler,
 		},
@@ -1825,6 +1849,11 @@ func (s *UnimplementedMetadata) CreateView(ctx context.Context, req *CreateViewR
 // UpdateView 更新查询视图。
 func (s *UnimplementedMetadata) UpdateView(ctx context.Context, req *UpdateViewReq) (*UpdateViewRsp, error) {
 	return nil, errors.New("rpc UpdateView of service Metadata is not implemented")
+}
+
+// DeleteView 物理删除查询视图及其依赖行。
+func (s *UnimplementedMetadata) DeleteView(ctx context.Context, req *DeleteViewReq) (*DeleteViewRsp, error) {
+	return nil, errors.New("rpc DeleteView of service Metadata is not implemented")
 }
 
 // RequestViewRebuild 请求异步手动重建查询视图；当前 active 索引保持可读。
@@ -2169,6 +2198,8 @@ type MetadataClientProxy interface {
 	CreateView(ctx context.Context, req *CreateViewReq, opts ...client.Option) (rsp *CreateViewRsp, err error)
 	// UpdateView 更新查询视图。
 	UpdateView(ctx context.Context, req *UpdateViewReq, opts ...client.Option) (rsp *UpdateViewRsp, err error)
+	// DeleteView 物理删除查询视图及其依赖行。
+	DeleteView(ctx context.Context, req *DeleteViewReq, opts ...client.Option) (rsp *DeleteViewRsp, err error)
 	// RequestViewRebuild 请求异步手动重建查询视图；当前 active 索引保持可读。
 	RequestViewRebuild(ctx context.Context, req *RequestViewRebuildReq, opts ...client.Option) (rsp *RequestViewRebuildRsp, err error)
 	// GetView 按 ID 获取查询视图。
@@ -2446,6 +2477,26 @@ func (c *MetadataClientProxyImpl) UpdateView(ctx context.Context, req *UpdateVie
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateViewRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) DeleteView(ctx context.Context, req *DeleteViewReq, opts ...client.Option) (*DeleteViewRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/DeleteView")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("DeleteView")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteViewRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

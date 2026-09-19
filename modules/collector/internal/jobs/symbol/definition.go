@@ -41,7 +41,7 @@ func NewJobDefinition() jobdef.JobDefinition {
 			{Exchange: "binance", Market: "spot", DataType: domain.InstrumentDataType, SourceKind: "none"},
 			{Exchange: "binance", Market: "swap", DataType: domain.InstrumentDataType, SourceKind: "none"},
 		},
-		Planner: func(ctx context.Context, rule *domain.TaskRule, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
+		Planner: func(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
 			_ = ctx
 			_ = rule
 			_ = subjects

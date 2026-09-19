@@ -1,10 +1,10 @@
 # moox-collector
 
-MooX 的行情采集控制面和短时 SCF 运行时。Collector 负责规则、完整 Symbol Dataset、稳定
+MooX 的行情采集控制面和短时 SCF 运行时。Collector 负责采集任务、完整 Symbol 数据来源、稳定
 Timer 分片、公共 DNS Environment 和数据新鲜度；SCF 只执行一批行情请求，不常驻等待任务。
 
 实时 K 线的正式架构是 `node_type=scf-event, trigger_type=timer`：Collector 每分钟协调
-每个函数独立的任务环境，最多 40 个 A 股标的；Tencent Timer 到点触发 SCF，函数并发请求市场 Provider
+每个函数独立的任务环境，最多 60 个 A 股标的；Tencent Timer 到点触发 SCF，函数并发请求市场 Provider
 并聚合写 Storage。SCF 不请求 Collector/Admin，也不发布实时 Completion。Symbol 快照、缺口
 补采、出口探针和人工 E2E 才使用有界 `InvokeFunction`。常驻心跳、EventBus 消费和逐节点实时
 Invoke 会增加函数运行时长或控制面排队，不能重新引入。维护背景见
@@ -17,7 +17,7 @@ Invoke 会增加函数运行时长或控制面排队，不能重新引入。维�
 
 | 组件 | 职责 |
 | --- | --- |
-| `moox-collector` | Rule、TaskInstance、Timer 分片、DNS 协调和有限 Invoke 补采 |
+| `moox-collector` | CollectionTask、TaskInstance、Timer 分片、DNS 协调和有限 Invoke 补采 |
 | `moox-collector-scf` | 从 Timer Environment 读取任务，抓取、批量写入 Storage、逐标的 CLS |
 | `modules/cloudnode` | 云账户、代码包、函数节点、Timer Trigger 与受管 Environment |
 | `modules/storage` | 行情数据和最新时间水位真值 |
@@ -35,7 +35,7 @@ Environment。SCF 仍使用原域名作为 Host/SNI，IP 只用于拨号，所�
 实时主链：
 
 ```text
-TaskRule + Symbol Dataset -> Collector Reconciler
+CollectionTask + Symbol 来源 -> Collector Reconciler
          -> CloudNode Environment Patch -> Tencent Timer Trigger
          -> SCF 64MB/15s (Kline) / dedicated daily Instrument Timer -> providers -> Storage
          -> Dataset/K线 freshness + CLS
@@ -44,13 +44,15 @@ TaskRule + Symbol Dataset -> Collector Reconciler
 SCF 不启动 JetStream 任务消费者、驻留循环或后台 reporter。未被调用的富余函数关闭 Timer
 以避免空跑费用；Monitor 通过 Collector 协调状态、Timer 状态、Storage freshness 和 CLS 判断采集是否正常。
 
-## 规则
+## 采集任务
 
-Symbol Rule 将手动配置的 Binance 标的写入 RECORD Dataset。K 线 Rule 从关联 Symbol Dataset
-读取 active subjects，写入 TimeSeries Dataset。实时 K 线批次每项只请求最近 3 根并过滤未收盘
+Symbol 采集任务将手动配置的 Binance 标的写入内部 RECORD Dataset。K 线采集任务从关联 Symbol 来源
+读取 active subjects，写入内部 TimeSeries Dataset。每个采集任务自动独占一个结果 Dataset 和默认 View；
+用户在“采集结果”中按任务名称查看结果，不需要管理 Dataset ID。删除任务时由用户选择保留结果，或同时物理删除结果 Dataset 和 View。
+实时 K 线批次每项只请求最近 3 根并过滤未收盘
 数据；长缺口由独立 CatchupBatch 分页恢复。
 
-每个启用规则按当前 Kline Timer 函数确定性分片；stockcn 单个函数最多 40 个标的，完整 Environment 还必须不超过 4KB。Kline 函数固定为 64MB、15 秒；独立 Instrument snapshot Timer 使用发布配置的全市场快照预算，Storage 请求预算为 5 秒，函数内 HTTP 并发由 Environment 配置；短暂失败由下一次 Timer 及独立缺口补采覆盖。
+每个启用任务按当前 Kline Timer 函数确定性分片；stockcn 单个函数最多 60 个标的，完整 Environment 还必须不超过 4KB。Kline 函数固定为 64MB、15 秒；独立 Instrument snapshot Timer 使用发布配置的全市场快照预算，Storage 请求预算为 5 秒，函数内 HTTP 并发由 Environment 配置；短暂失败由下一次 Timer 及独立缺口补采覆盖。
 
 Collector 同时上报 Space 级 Timer 容量指标：总节点数、当前分片需求、已分配节点数和容量余量。Monitor 会在需求超过节点数时立即告警，并在余量不超过 2 个节点时提前标记为降级，避免新增标的或频率后才发现容量不足。
 

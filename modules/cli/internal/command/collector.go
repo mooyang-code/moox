@@ -742,14 +742,14 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
 	}
 	if fetcherConfig != nil && strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
-		enabledRules, ruleErr := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
+		enabledRules, ruleErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
 		if ruleErr != nil {
 			return collectorPublishSummary{}, fmt.Errorf("stockcn publish requires a rule readback before side effects: %w", ruleErr)
 		}
 		if len(enabledRules) > 0 {
 			ids := make([]string, 0, len(enabledRules))
 			for _, rule := range enabledRules {
-				ids = append(ids, rule.RuleID)
+				ids = append(ids, rule.TaskID)
 			}
 			return collectorPublishSummary{}, fmt.Errorf("stockcn publish requires all equity collector rules disabled; enabled rules: %s", strings.Join(ids, ","))
 		}
@@ -1083,12 +1083,12 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			summary.TotalCount += instrumentSummary.TotalCount
 			instrumentSnapshotFleet = collectorPublishedTimerFleet{opts: instrumentOpts, nodes: instrumentNodes}
 			hasInstrumentSnapshotFleet = true
-			rollbackRuleID := ""
+			rollbackTaskID := ""
 			if opts.EnableStockCN {
-				rollbackRuleID = "builtin-stockcn-kline-1m"
+				rollbackTaskID = "builtin-stockcn-kline-1m"
 			}
 			rollbackActivation := func(cause error) error {
-				rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, rollbackRuleID, allTimerNodes, instrumentSnapshotFleet.nodes)
+				rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, rollbackTaskID, allTimerNodes, instrumentSnapshotFleet.nodes)
 				if rollbackErr != nil {
 					return fmt.Errorf("%w; rollback stockcn activation failed: %v", cause, rollbackErr)
 				}
@@ -1101,13 +1101,13 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				if err := ensureStockCNKlineRule(ctx, client, fetcherConfig.SpaceID); err != nil {
 					return summary, rollbackActivation(fmt.Errorf("enable stock Kline rule: %w", err))
 				}
-				enabledRules, ruleErr := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
+				enabledRules, ruleErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
 				if ruleErr != nil {
 					return summary, rollbackActivation(fmt.Errorf("verify stock Kline rule enabled: %w", ruleErr))
 				}
 				found := false
 				for _, rule := range enabledRules {
-					if rule.RuleID == "builtin-stockcn-kline-1m" && rule.Enabled {
+					if rule.TaskID == "builtin-stockcn-kline-1m" && rule.Enabled {
 						found = true
 						break
 					}
@@ -1159,13 +1159,13 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if len(allTimerNodes) == 0 {
 				return summary, fmt.Errorf("crypto Kline Timer fleet is empty")
 			}
-			enabledRules, ruleErr := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "spot")
+			enabledRules, ruleErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "spot")
 			if ruleErr != nil {
 				return summary, fmt.Errorf("verify crypto Kline rules before Timer activation: %w", ruleErr)
 			}
 			spotKlineEnabled := false
 			for _, rule := range enabledRules {
-				if rule.RuleID == "builtin-binance-spot-kline-1m" && rule.Enabled {
+				if rule.TaskID == "builtin-binance-spot-kline-1m" && rule.Enabled {
 					spotKlineEnabled = true
 					break
 				}
@@ -1219,7 +1219,7 @@ type collectorStockCNActivationSummary struct {
 	InstrumentNodeID   string   `json:"instrument_node_id"`
 	TimerJobIDs        []string `json:"timer_job_ids,omitempty"`
 	InstrumentJobIDs   []string `json:"instrument_job_ids,omitempty"`
-	RuleID             string   `json:"rule_id"`
+	TaskID             string   `json:"task_id"`
 	Enabled            bool     `json:"enabled"`
 }
 
@@ -1228,7 +1228,7 @@ type collectorStockCNActivationSummary struct {
 // identity and the independent Instrument canary before enabling the daily
 // snapshot, Kline Timers, and Kline rule. Egress probing is diagnostic only.
 func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivateOptions) (collectorStockCNActivationSummary, error) {
-	summary := collectorStockCNActivationSummary{SpaceID: opts.SpaceID, PackageVersion: opts.Version, RuleID: "builtin-stockcn-kline-1m"}
+	summary := collectorStockCNActivationSummary{SpaceID: opts.SpaceID, PackageVersion: opts.Version, TaskID: "builtin-stockcn-kline-1m"}
 	if strings.TrimSpace(opts.ControlURL) == "" {
 		return summary, fmt.Errorf("--control-url is required")
 	}
@@ -1297,7 +1297,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
 		return summary, err
 	}
-	enabledRules, err := client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
+	enabledRules, err := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
 	if err != nil {
 		return summary, fmt.Errorf("stockcn activation requires a rule readback: %w", err)
 	}
@@ -1305,8 +1305,8 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	// Timer fleet rollback. Treat that state as resumable; unrelated equity
 	// rules still block activation to avoid changing another workflow.
 	for _, rule := range enabledRules {
-		if rule.RuleID != summary.RuleID {
-			return summary, fmt.Errorf("stockcn activation requires no unrelated equity collector rules enabled; enabled rule: %s", rule.RuleID)
+		if rule.TaskID != summary.TaskID {
+			return summary, fmt.Errorf("stockcn activation requires no unrelated equity collector rules enabled; enabled rule: %s", rule.TaskID)
 		}
 	}
 
@@ -1380,7 +1380,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		return summary, fmt.Errorf("stock Instrument canary: %w", err)
 	}
 	rollbackActivation := func(cause error) error {
-		rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, summary.RuleID, allTimerNodes, instrumentNodes)
+		rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, summary.TaskID, allTimerNodes, instrumentNodes)
 		if rollbackErr != nil {
 			return fmt.Errorf("%w; rollback stockcn activation failed: %v", cause, rollbackErr)
 		}
@@ -1389,12 +1389,12 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err := ensureStockCNKlineRule(ctx, client, fetcherConfig.SpaceID); err != nil {
 		return summary, rollbackActivation(fmt.Errorf("enable stock Kline rule: %w", err))
 	}
-	enabledRules, err = client.ListEnabledTaskRules(ctx, fetcherConfig.SpaceID, "equity")
+	enabledRules, err = client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
 	if err != nil {
 		return summary, rollbackActivation(fmt.Errorf("verify stock Kline rule enabled: %w", err))
 	}
 	for _, rule := range enabledRules {
-		if rule.RuleID == summary.RuleID && rule.Enabled {
+		if rule.TaskID == summary.TaskID && rule.Enabled {
 			if err := waitCollectorTimerFleetsAssigned(ctx, client, fleets); err != nil {
 				return summary, rollbackActivation(fmt.Errorf("verify stock Kline assignments after rule enable: %w", err))
 			}
@@ -1429,12 +1429,12 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 
 func ensureStockCNKlineRule(ctx context.Context, client *adminclient.Client, spaceID string) error {
 	const ruleID = "builtin-stockcn-kline-1m"
-	if err := client.EnableTaskRule(ctx, spaceID, ruleID); err == nil {
+	if err := client.EnableCollectionTask(ctx, spaceID, ruleID); err == nil {
 		return nil
 	} else if !strings.Contains(err.Error(), "record not found") {
 		return err
 	}
-	if err := client.CreateTaskRule(ctx, spaceID, ruleID, "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
+	if err := client.CreateTask(ctx, spaceID, ruleID, "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
 		"provider":          "stockcn_multi",
 		"market_type":       "equity",
 		"symbol_source":     "dataset",
@@ -1444,7 +1444,7 @@ func ensureStockCNKlineRule(ctx context.Context, client *adminclient.Client, spa
 	}); err != nil {
 		return fmt.Errorf("create missing stock Kline rule: %w", err)
 	}
-	if err := client.EnableTaskRule(ctx, spaceID, ruleID); err != nil {
+	if err := client.EnableCollectionTask(ctx, spaceID, ruleID); err != nil {
 		return fmt.Errorf("enable newly created stock Kline rule: %w", err)
 	}
 	return nil
@@ -2161,7 +2161,7 @@ func rollbackStockCNActivation(
 		}
 	}
 	if strings.TrimSpace(ruleID) != "" {
-		if err := client.DisableTaskRule(ctx, spaceID, ruleID); err != nil {
+		if err := client.DisableTask(ctx, spaceID, ruleID); err != nil {
 			errs = append(errs, err)
 		}
 	}

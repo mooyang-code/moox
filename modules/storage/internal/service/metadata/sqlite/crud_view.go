@@ -30,6 +30,24 @@ func (s *Store) ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View
 	return s.upsertView(ctx, item, true)
 }
 
+// DeleteView physically removes a View and all dependent metadata rows via
+// the schema's foreign-key cascades. This is reserved for explicit lifecycle
+// deletion; ordinary updates use status instead.
+func (s *Store) DeleteView(ctx context.Context, spaceID, viewID string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, strings.TrimSpace(spaceID), strings.TrimSpace(viewID))
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bool) (*pb.View, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetDatasetId() == "" {
 		return nil, errors.New("space_id, view_id, name and dataset_id are required")

@@ -129,16 +129,10 @@ export const staticRoutes = [
         meta: { title: "data-import" }
       },
       {
-        path: "/collector/data-management",
-        name: "collector-data-management",
-        component: () => import("@/views/collector/data-management/index.vue"),
-        meta: { title: "collector-data-management" }
-      },
-      {
         path: "/collector/cloudnodes",
         name: "collector-cloudnodes",
         redirect: (to: RedirectLocation) => ({
-          path: "/collector/rules",
+          path: "/collector/tasks",
           query: { ...to.query, tab: "executors" }
         }),
         meta: { title: "collector-cloudnodes" }
@@ -146,8 +140,14 @@ export const staticRoutes = [
       {
         path: "/collector/rules",
         name: "collector-rules",
+        redirect: (to: RedirectLocation) => ({ path: "/collector/tasks", query: to.query }),
+        meta: { title: "collector-tasks" }
+      },
+      {
+        path: "/collector/tasks",
+        name: "collector-tasks",
         component: () => import("@/views/collector/task-management/index.vue"),
-        meta: { title: "collector-rules" }
+        meta: { title: "collector-tasks" }
       },
       {
         path: "/trading/accounts",

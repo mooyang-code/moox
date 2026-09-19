@@ -50,7 +50,7 @@ func TestNewJobDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing
 	params.Normalize("binance", "spot", "kline")
 	params.Source.Kind = "none"
 
-	_, err := def.Planner(context.Background(), &domain.TaskRule{}, params, nil)
+	_, err := def.Planner(context.Background(), &domain.CollectionTask{}, params, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "dataset_subjects")
 }

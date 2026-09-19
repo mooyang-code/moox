@@ -17,14 +17,14 @@ const AlignmentEpochUTC = "epoch_utc"
 
 // RuleSpec is the immutable input/output contract required by Bars.
 type RuleSpec struct {
-	RuleID          string
-	SpaceID         string
-	SourceDatasetID string
-	SourceFrequency FixedFrequency
-	SourceSeriesTag string
-	TargetDatasetID string
-	TargetFrequency FixedFrequency
-	Alignment       string
+	TaskID string
+	SpaceID          string
+	SourceDatasetID  string
+	SourceFrequency  FixedFrequency
+	SourceSeriesTag  string
+	TargetDatasetID  string
+	TargetFrequency  FixedFrequency
+	Alignment        string
 }
 
 // SourceBar is one decoded source K-line. Pointer fields preserve whether a
@@ -163,7 +163,7 @@ func Bars(spec RuleSpec, subjectID string, start, end time.Time, rows []SourceBa
 }
 
 func validateRuleSpec(spec RuleSpec) error {
-	if spec.RuleID == "" || spec.SpaceID == "" || spec.SourceDatasetID == "" || spec.SourceSeriesTag == "" || spec.TargetDatasetID == "" {
+	if spec.TaskID == "" || spec.SpaceID == "" || spec.SourceDatasetID == "" || spec.SourceSeriesTag == "" || spec.TargetDatasetID == "" {
 		return fmt.Errorf("resample rule identity, source, target, and series tag are required")
 	}
 	if spec.SourceDatasetID == spec.TargetDatasetID {

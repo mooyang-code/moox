@@ -19,13 +19,15 @@ import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import CollectionRules from "@/views/collector/collector-rules/collector-rules.vue";
 import TaskInstances from "@/views/collector/task-instances/task-instances.vue";
 import CloudNode from "@/views/collector/cloud-node/cloud-node.vue";
+import TaskResults from "@/views/collector/task-results/index.vue";
 
-type CollectorTaskTab = "rules" | "instances" | "executors";
+type CollectorTaskTab = "tasks" | "instances" | "executors" | "results";
 
 const tabs = [
-  { key: "rules", label: "采集规则" },
+  { key: "tasks", label: "采集任务" },
   { key: "instances", label: "任务实例" },
-  { key: "executors", label: "执行器" }
+  { key: "executors", label: "执行器" },
+  { key: "results", label: "采集结果" }
 ] as const;
 
 const route = useRoute();
@@ -35,20 +37,24 @@ const activeTab = ref<CollectorTaskTab>(normalizeTab(route.query.tab));
 const activeComponent = computed(
   () =>
     ({
-      rules: CollectionRules,
+      tasks: CollectionRules,
       instances: TaskInstances,
-      executors: CloudNode
+      executors: CloudNode,
+      results: TaskResults
     })[activeTab.value]
 );
 
 function normalizeTab(value: unknown): CollectorTaskTab {
-  return value === "instances" || value === "executors" ? value : "rules";
+  return value === "instances" || value === "executors" || value === "results" ? value : "tasks";
 }
 
 function onTabChange(value: string | number) {
   const tab = normalizeTab(value);
   activeTab.value = tab;
-  void router.replace({ path: "/collector/rules", query: tab === "rules" ? {} : { tab } });
+  void router.replace({
+    path: "/collector/tasks",
+    query: { ...route.query, tab: tab === "tasks" ? undefined : tab }
+  });
 }
 
 watch(

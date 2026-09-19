@@ -275,7 +275,7 @@ func completionTestBatch(suffix string) domain.BatchInvocation {
 }
 
 func completionTestInstance() domain.TaskInstance {
-	return domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", RuleID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	return domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
 }
 
 func completionTestPayload(item *marketfetchpb.MarketFetchItemResult, completedAt time.Time) *marketfetchpb.MarketFetchBatchCompleted {

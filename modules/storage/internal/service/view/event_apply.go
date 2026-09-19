@@ -452,7 +452,7 @@ func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.Row
 		}
 	}
 	if frequency != "" && !watermark.IsZero() {
-		s.metrics.ObserveViewOutputWatermark(spaceID, viewID, frequency, watermark)
+		s.metrics.ObserveViewOutputWatermark(spaceID, viewID, datasetID, frequency, watermark)
 	}
 	for key, dataTime := range datasetWatermarks {
 		if err := s.metrics.ObserveViewDatasetOutput(observability.ViewDatasetObservation{

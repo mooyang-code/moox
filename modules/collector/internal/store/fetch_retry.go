@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -12,6 +13,10 @@ import (
 type FetchRetryRepository struct{ db *gorm.DB }
 
 func NewFetchRetryRepository(db *gorm.DB) *FetchRetryRepository { return &FetchRetryRepository{db: db} }
+
+func (r *FetchRetryRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
+	return r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.RetryItem{}).Error
+}
 
 func (r *FetchRetryRepository) Upsert(ctx context.Context, item *domain.RetryItem) error {
 	if item == nil {

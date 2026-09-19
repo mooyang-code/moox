@@ -7,16 +7,48 @@ import {
 } from "./collector-rule-params";
 
 describe("buildCollectorRuleParams", () => {
-	it("builds a kline resample contract from a source Dataset", () => {
-		expect(buildCollectorRuleParams({ dataType: "kline_resample", exchange: "moox", market: "spot", datasetId: "dataset_spot_kline_derived_5m", scheduleInterval: "5m", sourceDatasetId: "dataset_binance_spot_kline_1m", sourceFrequency: "1m", sourceSeriesTag: "venue:binance" })).toMatchObject({ source_dataset_id: "dataset_binance_spot_kline_1m", target_dataset_id: "dataset_spot_kline_derived_5m", target_frequency: "5m", alignment: "epoch_utc" });
-	});
+  it("builds a kline resample contract from a source Dataset", () => {
+    expect(
+      buildCollectorRuleParams({
+        dataType: "kline_resample",
+        exchange: "moox",
+        market: "spot",
+        datasetId: "",
+        scheduleInterval: "5m",
+        sourceDatasetId: "dataset_binance_spot_kline_1m",
+        sourceFrequency: "1m",
+        sourceSeriesTag: "venue:binance"
+      })
+    ).toMatchObject({ source_dataset_id: "dataset_binance_spot_kline_1m", target_frequency: "5m", alignment: "epoch_utc" });
+    expect(
+      buildCollectorRuleParams({
+        dataType: "kline_resample",
+        exchange: "moox",
+        market: "spot",
+        datasetId: "",
+        scheduleInterval: "5m",
+        sourceDatasetId: "dataset_binance_spot_kline_1m",
+        sourceFrequency: "1m",
+        sourceSeriesTag: "venue:binance"
+      })
+    ).not.toHaveProperty("target_dataset_id");
+  });
 
-	it("preserves an explicit resample settle delay, including zero", () => {
-		const base = { dataType: "kline_resample" as const, exchange: "moox", market: "spot" as const, datasetId: "dataset_spot_kline_derived_5m", scheduleInterval: "5m", sourceDatasetId: "dataset_binance_spot_kline_1m", sourceFrequency: "1m", sourceSeriesTag: "venue:binance" };
-		expect(buildCollectorRuleParams({ ...base, settleDelayMS: 2500 })).toMatchObject({ settle_delay_ms: 2500 });
-		expect(buildCollectorRuleParams({ ...base, settleDelayMS: 0 })).toMatchObject({ settle_delay_ms: 0 });
-		expect(buildCollectorRuleParams(base)).not.toHaveProperty("settle_delay_ms");
-	});
+  it("preserves an explicit resample settle delay, including zero", () => {
+    const base = {
+      dataType: "kline_resample" as const,
+      exchange: "moox",
+      market: "spot" as const,
+      datasetId: "dataset_spot_kline_derived_5m",
+      scheduleInterval: "5m",
+      sourceDatasetId: "dataset_binance_spot_kline_1m",
+      sourceFrequency: "1m",
+      sourceSeriesTag: "venue:binance"
+    };
+    expect(buildCollectorRuleParams({ ...base, settleDelayMS: 2500 })).toMatchObject({ settle_delay_ms: 2500 });
+    expect(buildCollectorRuleParams({ ...base, settleDelayMS: 0 })).toMatchObject({ settle_delay_ms: 0 });
+    expect(buildCollectorRuleParams(base)).not.toHaveProperty("settle_delay_ms");
+  });
   it("builds the dataset-driven Kline contract", () => {
     expect(
       buildCollectorRuleParams({
@@ -32,7 +64,6 @@ describe("buildCollectorRuleParams", () => {
       market_type: "spot",
       symbol_source: "dataset",
       symbol_dataset_id: "dataset_binance_spot_symbols",
-      target_dataset_id: "dataset_spot_kline_1h",
       frequency: "1h"
     });
   });
@@ -50,13 +81,12 @@ describe("buildCollectorRuleParams", () => {
       provider: "binance",
       market_type: "spot",
       symbol_source: "exchange",
-      target_dataset_id: "dataset_binance_spot_symbols",
       frequency: "6h"
     });
   });
 
-  it("rejects a missing Dataset instead of inferring its ID", () => {
-    expect(() =>
+  it("does not require a target dataset because the task owns its result", () => {
+    expect(
       buildCollectorRuleParams({
         dataType: "kline",
         exchange: "binance",
@@ -65,7 +95,7 @@ describe("buildCollectorRuleParams", () => {
         symbolDatasetId: "symbols",
         scheduleInterval: "5m"
       })
-    ).toThrow("请选择 Dataset");
+    ).not.toHaveProperty("target_dataset_id");
   });
 
   it("uses the selected market without changing the explicit Dataset", () => {
@@ -82,11 +112,11 @@ describe("buildCollectorRuleParams", () => {
 
     expect(spot).toMatchObject({
       market_type: "spot",
-      target_dataset_id: "shared_kline"
+      symbol_dataset_id: "symbols"
     });
     expect(swap).toMatchObject({
       market_type: "swap",
-      target_dataset_id: "shared_kline"
+      symbol_dataset_id: "symbols"
     });
   });
 });
@@ -119,9 +149,9 @@ describe("datasetMatchesCollector", () => {
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(
       true
     );
-    expect(
-      datasetMatchesCollector({ data_source_id: "crypto", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")
-    ).toBe(true);
+    expect(datasetMatchesCollector({ data_source_id: "crypto", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(
+      true
+    );
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_RECORD" }, "binance", "kline")).toBe(false);
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: 1 }, "binance", "symbol")).toBe(true);
   });
@@ -142,13 +172,25 @@ describe("datasetMatchesCollector", () => {
   });
 
   it("accepts an active time-series Dataset as a resample source", () => {
-    const source = { data_source_id: "crypto", data_kind: "DATA_KIND_TIME_SERIES", attributes: { market_type: "spot" }, freqs: ["1H"] };
+    const source = {
+      data_source_id: "crypto",
+      data_kind: "DATA_KIND_TIME_SERIES",
+      attributes: { market_type: "spot" },
+      freqs: ["1H"]
+    };
     expect(datasetMatchesCollector(source, "moox", "kline_resample", "spot", "1h")).toBe(true);
-    expect(datasetMatchesCollector({ ...source, data_kind: "DATA_KIND_RECORD" }, "moox", "kline_resample", "spot", "1h")).toBe(false);
+    expect(datasetMatchesCollector({ ...source, data_kind: "DATA_KIND_RECORD" }, "moox", "kline_resample", "spot", "1h")).toBe(
+      false
+    );
   });
 
   it("does not treat month M as minute m", () => {
-    const monthly = { data_source_id: "crypto", data_kind: "DATA_KIND_TIME_SERIES", attributes: { market_type: "spot" }, freqs: ["1M"] };
+    const monthly = {
+      data_source_id: "crypto",
+      data_kind: "DATA_KIND_TIME_SERIES",
+      attributes: { market_type: "spot" },
+      freqs: ["1M"]
+    };
     expect(datasetMatchesCollector(monthly, "moox", "kline_resample", "spot", "1m")).toBe(false);
     expect(datasetMatchesCollector(monthly, "moox", "kline", "spot", "1M")).toBe(true);
   });

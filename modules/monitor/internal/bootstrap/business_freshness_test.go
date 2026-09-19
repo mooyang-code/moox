@@ -228,6 +228,81 @@ func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *test
 	}
 }
 
+func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		metrics := []struct {
+			id, name, labels string
+			value            float64
+		}{
+			{"enabled", "moox_collector_dataset_enabled", `{"dataset_id":"dataset_spot_kline_1h","freq":"1H","space_id":"crypto"}`, 1},
+			{"interval", "moox_collector_dataset_expected_interval_seconds", `{"dataset_id":"dataset_spot_kline_1h","freq":"1H","space_id":"crypto"}`, 3600},
+			{"inventory", "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix())},
+			{"view-watermark", "moox_storage_view_output_watermark_timestamp_seconds", `{"freq":"1H","space_id":"crypto","view_id":"view_crypto_spot_kline_1h"}`, float64(now.Add(-time.Hour).Unix())},
+		}
+		for _, metric := range metrics {
+			if err := db.Create(&monmetrics.MetricSeries{
+				ServiceName: "moox_collector", InstanceID: "collector@control", SeriesID: metric.id,
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels, LastSeenAt: now,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			serviceName := "moox_collector"
+			instanceID := "collector@control"
+			if strings.HasPrefix(metric.name, "moox_storage_") {
+				serviceName = "storage-view"
+				instanceID = "storage-view@control"
+			}
+			if err := db.Model(&monmetrics.MetricSeries{}).Where("c_series_id = ?", metric.id).Updates(map[string]any{
+				"c_service_name": serviceName, "c_instance_id": instanceID,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&monmetrics.MetricLatest{
+				SeriesID: metric.id, ServiceName: serviceName, InstanceID: instanceID,
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels,
+				Value: metric.value, ObservedAt: now,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}, repositories, nil)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := repositories.Results.Recent(t.Context(), "crypto", "dataset:collector:dataset_spot_kline_1h:1H", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("collector result should be covered by storage view: %+v", results)
+	}
+	viewResults, err := repositories.Results.Recent(t.Context(), "crypto", "dataset:storage_view:view_crypto_spot_kline_1h:1H", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(viewResults) != 1 || !viewResults[0].Success {
+		t.Fatalf("storage view result = %+v", viewResults)
+	}
+}
+
 func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

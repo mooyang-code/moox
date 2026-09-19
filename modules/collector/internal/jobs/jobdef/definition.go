@@ -9,7 +9,7 @@ import (
 )
 
 // Planner builds atomic task specs for one collector job definition.
-type Planner func(ctx context.Context, rule *domain.TaskRule, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error)
+type Planner func(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error)
 
 // Option is a UI option value exposed through CollectMgr data type configs.
 type Option struct {

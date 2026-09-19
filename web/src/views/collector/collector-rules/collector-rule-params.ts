@@ -22,7 +22,9 @@ export type CollectorDatasetOption = {
 
 export type CollectorRuleRecord = {
   id?: number;
-  rule_id: string;
+  task_id: string;
+  task_name: string;
+  description?: string;
   space_id: string;
   data_type: string;
   data_source: string;
@@ -45,7 +47,10 @@ export function datasetMatchesCollector(
   if (dataType !== "kline" && dataType !== "kline_resample" && dataset.data_source_id !== exchange) {
     return false;
   }
-  const expected = dataType === "kline" || dataType === "kline_resample" ? ["DATA_KIND_TIME_SERIES", "time_series", 2] : ["DATA_KIND_RECORD", "record", 1];
+  const expected =
+    dataType === "kline" || dataType === "kline_resample"
+      ? ["DATA_KIND_TIME_SERIES", "time_series", 2]
+      : ["DATA_KIND_RECORD", "record", 1];
   if (!expected.includes(dataset.data_kind)) return false;
   if (marketType && dataset.attributes?.market_type?.toLowerCase() !== marketType.toLowerCase()) return false;
   if (dataType === "kline_resample" && dataset.attributes?.dataset_role === "kline_resample_result") return false;
@@ -61,22 +66,26 @@ export function datasetMatchesCollector(
 }
 
 export function buildCollectorRuleParams(input: CollectorRuleInput): Record<string, unknown> {
-	if (input.dataType === "kline_resample") {
-		const sourceDatasetId = input.sourceDatasetId?.trim();
-		const sourceFrequency = input.sourceFrequency?.trim();
-		const sourceSeriesTag = input.sourceSeriesTag?.trim();
-		const targetFrequency = input.targetFrequency?.trim() || input.scheduleInterval.trim();
-		const targetDatasetId = input.datasetId.trim();
-		if (!sourceDatasetId || !sourceFrequency || !sourceSeriesTag || !targetDatasetId || !targetFrequency) throw new Error("请填写重采样源、周期、序列和目标 Dataset");
-		const params: Record<string, unknown> = { provider: input.exchange.trim().toLowerCase(), market_type: input.market, source_dataset_id: sourceDatasetId, source_frequency: sourceFrequency, source_series_tag: sourceSeriesTag, target_dataset_id: targetDatasetId, target_frequency: targetFrequency, alignment: "epoch_utc" };
-		if (Number.isFinite(input.settleDelayMS) && (input.settleDelayMS as number) >= 0) params.settle_delay_ms = Math.trunc(input.settleDelayMS as number);
-		return params;
-	}
-  const datasetId = input.datasetId.trim();
-  if (!datasetId) {
-    throw new Error("请选择 Dataset");
+  if (input.dataType === "kline_resample") {
+    const sourceDatasetId = input.sourceDatasetId?.trim();
+    const sourceFrequency = input.sourceFrequency?.trim();
+    const sourceSeriesTag = input.sourceSeriesTag?.trim();
+    const targetFrequency = input.targetFrequency?.trim() || input.scheduleInterval.trim();
+    if (!sourceDatasetId || !sourceFrequency || !sourceSeriesTag || !targetFrequency)
+      throw new Error("请填写重采样源、周期和序列");
+    const params: Record<string, unknown> = {
+      provider: input.exchange.trim().toLowerCase(),
+      market_type: input.market,
+      source_dataset_id: sourceDatasetId,
+      source_frequency: sourceFrequency,
+      source_series_tag: sourceSeriesTag,
+      target_frequency: targetFrequency,
+      alignment: "epoch_utc"
+    };
+    if (Number.isFinite(input.settleDelayMS) && (input.settleDelayMS as number) >= 0)
+      params.settle_delay_ms = Math.trunc(input.settleDelayMS as number);
+    return params;
   }
-
   const exchange = input.exchange.trim().toLowerCase();
   if (!exchange) {
     throw new Error("请选择数据源");
@@ -92,7 +101,6 @@ export function buildCollectorRuleParams(input: CollectorRuleInput): Record<stri
       provider: exchange,
       market_type: input.market,
       symbol_source: "exchange",
-      target_dataset_id: datasetId,
       frequency: scheduleInterval
     };
   }
@@ -106,7 +114,6 @@ export function buildCollectorRuleParams(input: CollectorRuleInput): Record<stri
     market_type: input.market,
     symbol_source: "dataset",
     symbol_dataset_id: symbolDatasetId,
-    target_dataset_id: datasetId,
     frequency: scheduleInterval
   };
 }
@@ -114,7 +121,9 @@ export function buildCollectorRuleParams(input: CollectorRuleInput): Record<stri
 // Storage treats an uppercase M as a month and a lowercase m as a minute.
 // Canonicalize only the spelling aliases, never by lowercasing the unit.
 function normalizeStorageFrequency(value: string): string | undefined {
-  const match = String(value).trim().match(/^(\d+)([smhdwHDWMyY])$/);
+  const match = String(value)
+    .trim()
+    .match(/^(\d+)([smhdwHDWMyY])$/);
   if (!match || Number(match[1]) <= 0) return undefined;
   const count = match[1];
   switch (match[2]) {
@@ -150,7 +159,7 @@ export function buildCollectorRuleRequest(
 ): Record<string, unknown> {
   const params = buildCollectorRuleParams(input);
   return {
-    ...(ruleId ? { rule_id: ruleId } : {}),
+    ...(ruleId ? { task_id: ruleId } : {}),
     space_id: spaceId,
     data_type: input.dataType,
     provider: input.exchange.trim().toLowerCase(),
@@ -164,7 +173,9 @@ export function buildCollectorRuleRequest(
 export function normalizeCollectorRule(raw: any): CollectorRuleRecord {
   return {
     id: raw.id,
-    rule_id: raw.rule_id || "",
+    task_id: raw.task_id || "",
+    task_name: raw.task_name || raw.name || raw.task_id || "",
+    description: raw.description || "",
     space_id: raw.space_id || "",
     data_type: raw.data_type || "",
     data_source: raw.provider || raw.data_source || raw.exchange || "",

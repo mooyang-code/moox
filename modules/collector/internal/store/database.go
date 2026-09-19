@@ -17,11 +17,37 @@ import (
 // Store owns the Collector SQLite connection and repositories.
 type Store struct {
 	db           *gorm.DB
-	taskRules    *TaskRuleRepository
+	taskRules    *CollectionTaskRepository
 	taskItems    *TaskInstanceRepository
 	fetchBatches *FetchBatchRepository
 	fetchRetries *FetchRetryRepository
 	periods      *PeriodReadinessRepository
+}
+
+// DeleteTaskRuntime removes all Collector-owned execution state for one task
+// before the task row itself is deleted.
+func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("collector database is not open")
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`DELETE FROM t_period_readiness_items WHERE c_task_id IN (SELECT c_instance_id FROM t_collector_task_instances WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, taskID).Error; err != nil {
+			return err
+		}
+		for _, query := range []struct {
+			sql  string
+			args []any
+		}{
+			{`DELETE FROM t_collector_task_instances WHERE c_space_id = ? AND c_task_id = ?`, []any{spaceID, taskID}},
+			{`DELETE FROM t_collector_fetch_batches WHERE c_space_id = ? AND c_task_id = ?`, []any{spaceID, taskID}},
+			{`DELETE FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_task_id = ?`, []any{spaceID, taskID}},
+		} {
+			if err := tx.Exec(query.sql, query.args...).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Options configures the Collector SQLite store.
@@ -47,7 +73,7 @@ func Open(opts *Options) (*Store, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	s := &Store{db: db}
-	s.taskRules = NewTaskRuleRepository(db)
+	s.taskRules = NewCollectionTaskRepository(db)
 	s.taskItems = NewTaskInstanceRepository(db)
 	s.fetchBatches = NewFetchBatchRepository(db)
 	s.fetchRetries = NewFetchRetryRepository(db)
@@ -57,8 +83,8 @@ func Open(opts *Options) (*Store, error) {
 	return s, nil
 }
 
-// TaskRules returns the task rule repository.
-func (s *Store) TaskRules() *TaskRuleRepository {
+// Tasks returns the task rule repository.
+func (s *Store) Tasks() *CollectionTaskRepository {
 	if s == nil {
 		return nil
 	}
@@ -112,12 +138,6 @@ func (s *Store) ApplySchema(sql string) error {
 	if err := s.ensureTaskInstanceSourceColumn(); err != nil {
 		return err
 	}
-	if err := s.ensureTaskRulePreparationColumns(); err != nil {
-		return err
-	}
-	if err := s.ensureTaskRuleCoverageStartColumn(); err != nil {
-		return err
-	}
 	if err := s.ensurePeriodReadinessWorkTypeColumn(); err != nil {
 		return err
 	}
@@ -163,70 +183,6 @@ func (s *Store) ensurePeriodReadinessWorkTypeColumn() error {
 		if err := s.db.Exec(`ALTER TABLE t_period_readiness ADD COLUMN c_work_type TEXT NOT NULL DEFAULT 'collection'`).Error; err != nil {
 			return fmt.Errorf("add period readiness work type column: %w", err)
 		}
-	}
-	return nil
-}
-
-func (s *Store) ensureTaskRulePreparationColumns() error {
-	var tableCount int64
-	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_collector_task_rules").Scan(&tableCount).Error; err != nil {
-		return fmt.Errorf("check task rule table: %w", err)
-	}
-	if tableCount == 0 {
-		return nil
-	}
-	rows, err := s.db.Raw("PRAGMA table_info(t_collector_task_rules)").Rows()
-	if err != nil {
-		return fmt.Errorf("inspect task rule columns: %w", err)
-	}
-	columns := make(map[string]struct{})
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan task rule column: %w", err)
-		}
-		columns[name] = struct{}{}
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("inspect task rule columns: %w", err)
-	}
-	if _, exists := columns["c_prepare_state"]; !exists {
-		if err := s.db.Exec(`ALTER TABLE t_collector_task_rules ADD COLUMN c_prepare_state TEXT NOT NULL DEFAULT 'ready'`).Error; err != nil {
-			return fmt.Errorf("add task rule prepare state column: %w", err)
-		}
-	}
-	if _, exists := columns["c_last_error"]; !exists {
-		if err := s.db.Exec(`ALTER TABLE t_collector_task_rules ADD COLUMN c_last_error TEXT NOT NULL DEFAULT ''`).Error; err != nil {
-			return fmt.Errorf("add task rule last error column: %w", err)
-		}
-	}
-	return nil
-}
-
-func (s *Store) ensureTaskRuleCoverageStartColumn() error {
-	var tableCount int64
-	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_collector_task_rules").Scan(&tableCount).Error; err != nil {
-		return fmt.Errorf("check task rule table for coverage_start_time: %w", err)
-	}
-	if tableCount == 0 {
-		return nil
-	}
-	var count int64
-	if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_task_rules') WHERE name = ?`, "c_coverage_start_time").Scan(&count).Error; err != nil {
-		return fmt.Errorf("inspect task rule coverage_start_time column: %w", err)
-	}
-	if count == 0 {
-		if err := s.db.Exec(`ALTER TABLE t_collector_task_rules ADD COLUMN c_coverage_start_time DATETIME`).Error; err != nil {
-			return fmt.Errorf("add task rule coverage_start_time column: %w", err)
-		}
-	}
-	if err := s.db.Exec(`UPDATE t_collector_task_rules
-SET c_coverage_start_time = COALESCE(c_coverage_start_time, c_ctime, c_mtime, CURRENT_TIMESTAMP)
-WHERE c_coverage_start_time IS NULL`).Error; err != nil {
-		return fmt.Errorf("backfill task rule coverage_start_time: %w", err)
 	}
 	return nil
 }

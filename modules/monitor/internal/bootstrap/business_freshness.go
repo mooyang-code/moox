@@ -116,7 +116,11 @@ func buildBusinessFreshnessReporterWithInterval(
 		storageScopes := make(map[string]struct{})
 		for _, dataset := range overview.Datasets {
 			if dataset.Producer == "storage" {
-				storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+dataset.Freq] = struct{}{}
+				storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
+			} else if dataset.Producer == "storage_view" {
+				for _, scopeDatasetID := range storageViewDatasetIDs(dataset.SpaceID, dataset.DatasetID, dataset.PrimaryDatasetID) {
+					storageScopes[dataset.SpaceID+"\x00"+scopeDatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
+				}
 			}
 		}
 		for _, dataset := range overview.Datasets {
@@ -126,7 +130,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				// and the inventory row must not create a duplicate stale alert. If
 				// Storage has never reported, retain this expectation so a newly
 				// enabled but never-running Dataset is still visible as unhealthy.
-				if _, exists := storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+dataset.Freq]; exists {
+				if _, exists := storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+strings.ToLower(dataset.Freq)]; exists {
 					continue
 				}
 			}
@@ -314,6 +318,38 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		return errors.Join(errs...)
 	}
+}
+
+// storageViewDatasetIDs keeps Collector freshness compatible with older View
+// reporters that did not include dataset_id in the watermark labels. New
+// reporters provide the exact primary dataset; the derived candidates cover
+// the repository's historical view_<space>_<dataset> naming convention while
+// the monitor fleet is upgraded one host at a time.
+func storageViewDatasetIDs(spaceID, viewID, primaryDatasetID string) []string {
+	ids := make([]string, 0, 3)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		for _, existing := range ids {
+			if existing == value {
+				return
+			}
+		}
+		ids = append(ids, value)
+	}
+	add(primaryDatasetID)
+	viewID = strings.TrimPrefix(strings.TrimSpace(viewID), "view_")
+	if viewID == "" {
+		return ids
+	}
+	add("dataset_" + viewID)
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID != "" && strings.HasPrefix(viewID, spaceID+"_") {
+		add("dataset_" + strings.TrimPrefix(viewID, spaceID+"_"))
+	}
+	return ids
 }
 
 func serviceDeploymentExpected(

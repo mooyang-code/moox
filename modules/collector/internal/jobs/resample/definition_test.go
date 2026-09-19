@@ -17,7 +17,7 @@ func TestNewJobDefinitionMatchesMooxSpotAndBuildsLocalSpecs(t *testing.T) {
 	require.True(t, definition.Matches(params))
 	assert.Equal(t, jobdef.ExecutionModeCollectorLocal, definition.ExecutionMode)
 
-	specs, err := definition.Planner(context.Background(), &domain.TaskRule{RuleID: "rule-1"}, params, []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}})
+	specs, err := definition.Planner(context.Background(), &domain.CollectionTask{TaskID: "rule-1"}, params, []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}})
 	require.NoError(t, err)
 	require.Len(t, specs, 1)
 	assert.Equal(t, "dataset_spot_kline_derived_4h", specs[0].DatasetID)

@@ -21,14 +21,14 @@ const pageShellFiles = [
   "src/views/factor/bindings/index.vue",
   "src/views/collector/cloud-node/cloud-node.vue",
   "src/views/collector/cloud-node/function-package-manage.vue",
-  "src/views/collector/collector-rules/collector-rules.vue",
+  "src/views/collector/task-management/index.vue",
+  "src/views/collector/task-results/index.vue",
   "src/views/collector/task-instances/task-instances.vue",
   "src/views/trading/account-overview/account-overview.vue",
   "src/views/trading/position-detail/position-detail.vue",
   "src/views/trading/trade-record/trade-record.vue",
   "src/views/container/ssh-hosts/ssh-hosts.vue",
   "src/views/ops/storage/nodes.vue",
-  "src/views/ops/storage/routes.vue",
   "src/views/ops/storage/archive.vue"
 ];
 

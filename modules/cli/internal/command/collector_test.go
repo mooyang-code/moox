@@ -490,7 +490,7 @@ func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {
 	var bundle struct {
 		Rules []struct {
 			SpaceID string `yaml:"space_id"`
-			RuleID  string `yaml:"rule_id"`
+			TaskID  string `yaml:"task_id"`
 			Enabled bool   `yaml:"enabled"`
 		} `yaml:"rules"`
 	}
@@ -500,7 +500,7 @@ func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {
 		if rule.SpaceID != "stockcn" {
 			continue
 		}
-		seen[rule.RuleID] = rule.Enabled
+		seen[rule.TaskID] = rule.Enabled
 	}
 	assert.Contains(t, seen, "builtin-stockcn-instrument-1d")
 	assert.Contains(t, seen, "builtin-stockcn-kline-1m")

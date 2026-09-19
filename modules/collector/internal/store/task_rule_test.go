@@ -23,27 +23,27 @@ func newCollectorStore(t *testing.T) *Store {
 	return mgr
 }
 
-func TestTaskRuleRepository_CRUD(t *testing.T) {
+func TestCollectionTaskRepository_CRUD(t *testing.T) {
 	s := newCollectorStore(t)
-	repo := s.TaskRules()
+	repo := s.Tasks()
 	ctx := context.Background()
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
 
-	got, err := repo.GetByRuleID(ctx, "crypto", "rule-1")
+	got, err := repo.GetByTaskID(ctx, "crypto", "rule-1")
 	require.NoError(t, err)
-	assert.Equal(t, "rule-1", got.RuleID)
+	assert.Equal(t, "rule-1", got.TaskID)
 
-	rules, total, err := repo.List(ctx, TaskRuleFilter{SpaceID: "crypto", Page: 1, PageSize: 10})
+	rules, total, err := repo.List(ctx, TaskFilter{SpaceID: "crypto", Page: 1, PageSize: 10})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
 	assert.Len(t, rules, 1)
 
-	updated, err := repo.UpdateByRuleID(ctx, "crypto", "rule-1", domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
+	updated, err := repo.UpdateByTaskID(ctx, "crypto", "rule-1", domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Creator: "updated", Enabled: true,
 	})
 	require.NoError(t, err)
@@ -55,49 +55,49 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 	assert.Len(t, enabled, 0)
 }
 
-func TestTaskRuleCoverageStartHonorsEnabledAndStockCalendar(t *testing.T) {
+func TestCollectionTaskCoverageStartHonorsEnabledAndStockCalendar(t *testing.T) {
 	t.Setenv("MOOX_STOCK_CN_CALENDAR_PATH", filepath.Join("..", "..", "config", "markets", "stockcn", "calendar.yaml"))
 	now := time.Date(2026, 8, 30, 3, 0, 0, 0, time.UTC) // Sunday in Asia/Shanghai.
-	lookback := domain.TaskRule{
+	lookback := domain.CollectionTask{
 		SpaceID:       "stockcn",
 		DataType:      "kline",
 		Provider:      "stockcn_multi",
 		MarketType:    "equity",
 		CollectParams: `{"history_policy":{"mode":"lookback","lookback":2}}`,
 	}
-	start, err := resolveTaskRuleCoverageStart(&lookback, now)
+	start, err := resolveCollectionTaskCoverageStart(&lookback, now)
 	require.NoError(t, err)
 	require.NotNil(t, start)
 	assert.Equal(t, time.Date(2026, 8, 27, 1, 30, 0, 0, time.UTC), *start)
 
 	disabled := lookback
 	disabled.Enabled = false
-	require.NoError(t, applyTaskRuleCoverageStart(&disabled, now, disabled.Enabled))
+	require.NoError(t, applyCollectionTaskCoverageStart(&disabled, now, disabled.Enabled))
 	assert.Nil(t, disabled.CoverageStartTime)
 
-	repo := newCollectorStore(t).TaskRules()
-	disabled.RuleID = "disabled-stock-rule"
+	repo := newCollectorStore(t).Tasks()
+	disabled.TaskID = "disabled-stock-rule"
 	require.NoError(t, repo.Create(context.Background(), disabled))
-	stored, err := repo.GetByRuleID(context.Background(), "stockcn", disabled.RuleID)
+	stored, err := repo.GetByTaskID(context.Background(), "stockcn", disabled.TaskID)
 	require.NoError(t, err)
 	assert.Nil(t, stored.CoverageStartTime)
 }
 
-func TestTaskRuleReenableRecomputesCoverageStart(t *testing.T) {
-	repo := newCollectorStore(t).TaskRules()
+func TestCollectionTaskReenableRecomputesCoverageStart(t *testing.T) {
+	repo := newCollectorStore(t).Tasks()
 	ctx := context.Background()
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "re-enable", DataType: "kline", Provider: "binance", MarketType: "spot",
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "re-enable", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"history_policy":{"mode":"live_only"}}`, Enabled: true,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
 	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	rule.CoverageStartTime = &old
-	_, err := repo.UpdateByRuleID(ctx, "crypto", rule.RuleID, rule)
+	_, err := repo.UpdateByTaskID(ctx, "crypto", rule.TaskID, rule)
 	require.NoError(t, err)
-	require.NoError(t, repo.SetEnabled(ctx, "crypto", rule.RuleID, false))
-	require.NoError(t, repo.SetEnabled(ctx, "crypto", rule.RuleID, true))
-	stored, err := repo.GetByRuleID(ctx, "crypto", rule.RuleID)
+	require.NoError(t, repo.SetEnabled(ctx, "crypto", rule.TaskID, false))
+	require.NoError(t, repo.SetEnabled(ctx, "crypto", rule.TaskID, true))
+	stored, err := repo.GetByTaskID(ctx, "crypto", rule.TaskID)
 	require.NoError(t, err)
 	require.NotNil(t, stored.CoverageStartTime)
 	assert.True(t, stored.CoverageStartTime.After(old))
@@ -105,7 +105,7 @@ func TestTaskRuleReenableRecomputesCoverageStart(t *testing.T) {
 
 func TestCollectorRuleSchemaOmitsNodeAssignmentColumns(t *testing.T) {
 	s := newCollectorStore(t)
-	rows, err := s.db.Raw("PRAGMA table_info(t_collector_task_rules)").Rows()
+	rows, err := s.db.Raw("PRAGMA table_info(t_collector_tasks)").Rows()
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -130,7 +130,7 @@ func TestCollectorRuleSchemaOmitsNodeAssignmentColumns(t *testing.T) {
 
 func TestCollectorRuleSchemaAddsPreparationStateWithoutConfigHash(t *testing.T) {
 	s := newCollectorStore(t)
-	rows, err := s.db.Raw("PRAGMA table_info(t_collector_task_rules)").Rows()
+	rows, err := s.db.Raw("PRAGMA table_info(t_collector_tasks)").Rows()
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -148,36 +148,36 @@ func TestCollectorRuleSchemaAddsPreparationStateWithoutConfigHash(t *testing.T) 
 	assert.False(t, columns["c_config_hash"])
 }
 
-func TestTaskRuleRepositoryUpdatesPrepareStateWithoutChangingDefinition(t *testing.T) {
+func TestCollectionTaskRepositoryUpdatesPrepareStateWithoutChangingDefinition(t *testing.T) {
 	s := newCollectorStore(t)
-	repo := s.TaskRules()
+	repo := s.Tasks()
 	ctx := context.Background()
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
 		CollectParams: `{"target_dataset_id":"derived"}`, Enabled: true, PrepareState: domain.PrepareStatePending,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
 	require.NoError(t, repo.SetPrepareState(ctx, "crypto", "resample-1", domain.PrepareStateWaitingView, "view pending"))
 
-	got, err := repo.GetByRuleID(ctx, "crypto", "resample-1")
+	got, err := repo.GetByTaskID(ctx, "crypto", "resample-1")
 	require.NoError(t, err)
 	assert.Equal(t, domain.PrepareStateWaitingView, got.PrepareState)
 	assert.Equal(t, "view pending", got.LastError)
 	assert.Equal(t, rule.CollectParams, got.CollectParams)
 
-	rows, err := repo.ListResampleByPrepareStates(ctx, []domain.TaskRulePrepareState{domain.PrepareStateWaitingView}, 10)
+	rows, err := repo.ListResampleByPrepareStates(ctx, []domain.CollectionTaskPrepareState{domain.PrepareStateWaitingView}, 10)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "resample-1", rows[0].RuleID)
+	assert.Equal(t, "resample-1", rows[0].TaskID)
 }
 
-func TestTaskRuleRepository_ListEnabledAllRejectsPartialSnapshot(t *testing.T) {
+func TestCollectionTaskRepository_ListEnabledAllRejectsPartialSnapshot(t *testing.T) {
 	s := newCollectorStore(t)
-	repo := s.TaskRules()
+	repo := s.Tasks()
 	ctx := context.Background()
 	for index := 0; index < 3; index++ {
-		require.NoError(t, repo.Create(ctx, domain.TaskRule{
-			SpaceID: "crypto", RuleID: fmt.Sprintf("rule-%d", index), Enabled: true,
+		require.NoError(t, repo.Create(ctx, domain.CollectionTask{
+			SpaceID: "crypto", TaskID: fmt.Sprintf("rule-%d", index), Enabled: true,
 		}))
 	}
 	rows, err := repo.ListEnabledAll(ctx, 3)
@@ -187,6 +187,6 @@ func TestTaskRuleRepository_ListEnabledAllRejectsPartialSnapshot(t *testing.T) {
 	rows, err = repo.ListEnabledAll(ctx, 2)
 	require.ErrorContains(t, err, "exceeds limit")
 	require.Nil(t, rows)
-	_, err = repo.ListEnabledAll(ctx, MaxEnabledTaskRules+1)
+	_, err = repo.ListEnabledAll(ctx, MaxEnabledTasks+1)
 	require.Error(t, err)
 }

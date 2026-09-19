@@ -10,54 +10,79 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func toPBRule(rule domain.TaskRule) *pb.TaskRule {
-	enabled := rule.Enabled
-	return &pb.TaskRule{
-		SpaceId:       rule.SpaceID,
-		RuleId:        rule.RuleID,
-		DataType:      rule.DataType,
-		Provider:      rule.Provider,
-		MarketType:    rule.MarketType,
-		CollectParams: structFromJSONString(rule.CollectParams),
+func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
+	enabled := task.Enabled
+	return &pb.CollectionTask{
+		SpaceId:       task.SpaceID,
+		TaskId:        task.TaskID,
+		TaskName:      task.TaskName,
+		Description:   task.Description,
+		DataType:      task.DataType,
+		Provider:      task.Provider,
+		MarketType:    task.MarketType,
+		CollectParams: structFromJSONString(redactTaskResultDatasetID(task.CollectParams)),
 		Enabled:       &enabled,
-		Creator:       rule.Creator,
-		CreateTime:    formatTime(rule.CreateTime),
-		ModifyTime:    formatTime(rule.ModifyTime),
-		PrepareState:  string(rule.PrepareState),
-		LastError:     rule.LastError,
+		Creator:       task.Creator,
+		CreateTime:    formatTime(task.CreateTime),
+		ModifyTime:    formatTime(task.ModifyTime),
+		PrepareState:  string(task.PrepareState),
+		LastError:     task.LastError,
+		Result:        &pb.TaskResult{ResultName: "采集结果", ViewId: task.ResultViewID, Status: "active", DataKind: taskResultDataKind(task.DataType)},
 	}
 }
 
-func fromPBRule(rule *pb.TaskRule) domain.TaskRule {
-	if rule == nil {
-		return domain.TaskRule{}
+func redactTaskResultDatasetID(raw string) string {
+	values := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return raw
 	}
-	return domain.TaskRule{
-		SpaceID:       rule.GetSpaceId(),
-		RuleID:        rule.GetRuleId(),
-		DataType:      rule.GetDataType(),
-		Provider:      rule.GetProvider(),
-		MarketType:    rule.GetMarketType(),
-		CollectParams: jsonStringFromStruct(rule.GetCollectParams()),
-		Enabled:       taskRuleEnabled(rule),
-		Creator:       rule.GetCreator(),
-		PrepareState:  domain.TaskRulePrepareState(rule.GetPrepareState()),
-		LastError:     rule.GetLastError(),
+	delete(values, "target_dataset_id")
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
+}
+
+func fromPBTask(task *pb.CollectionTask) domain.CollectionTask {
+	if task == nil {
+		return domain.CollectionTask{}
+	}
+	return domain.CollectionTask{
+		SpaceID:       task.GetSpaceId(),
+		TaskID:        task.GetTaskId(),
+		TaskName:      task.GetTaskName(),
+		Description:   task.GetDescription(),
+		DataType:      task.GetDataType(),
+		Provider:      task.GetProvider(),
+		MarketType:    task.GetMarketType(),
+		CollectParams: jsonStringFromStruct(task.GetCollectParams()),
+		Enabled:       taskEnabled(task),
+		Creator:       task.GetCreator(),
+		PrepareState:  domain.CollectionTaskPrepareState(task.GetPrepareState()),
+		LastError:     task.GetLastError(),
 	}
 }
 
-func taskRuleEnabled(rule *pb.TaskRule) bool {
-	if rule.Enabled == nil {
+func taskEnabled(task *pb.CollectionTask) bool {
+	if task == nil || task.Enabled == nil {
 		return true
 	}
-	return rule.GetEnabled()
+	return task.GetEnabled()
+}
+
+func taskResultDataKind(dataType string) string {
+	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
+		return "record"
+	}
+	return "time_series"
 }
 
 func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 	return &pb.TaskInstance{
 		SpaceId:        instance.SpaceID,
-		TaskId:         instance.TaskID,
-		RuleId:         instance.RuleID,
+		TaskId:         instance.CollectionTaskID,
+		InstanceId:     instance.TaskID,
 		Provider:       instance.Provider,
 		MarketType:     instance.MarketType,
 		DataType:       instance.DataType,

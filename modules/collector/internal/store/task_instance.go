@@ -21,21 +21,21 @@ const (
 
 // TaskInstanceFilter describes task instance list filters.
 type TaskInstanceFilter struct {
-	SpaceID        string
-	TaskID         string
-	RuleID         string
-	Provider       string
-	SourceID       string
-	MarketType     string
-	DataType       string
-	DatasetID      string
-	SubjectID      string
-	Frequency      string
-	FunctionName   string
-	LastExecStatus *int
-	IncludeDeleted bool
-	Page           int
-	PageSize       int
+	SpaceID          string
+	InstanceID       string
+	CollectionTaskID string
+	Provider         string
+	SourceID         string
+	MarketType       string
+	DataType         string
+	DatasetID        string
+	SubjectID        string
+	Frequency        string
+	FunctionName     string
+	LastExecStatus   *int
+	IncludeDeleted   bool
+	Page             int
+	PageSize         int
 }
 
 // TaskInstanceRepository persists executable task instances.
@@ -75,9 +75,13 @@ func NewTaskInstanceRepository(db *gorm.DB) *TaskInstanceRepository {
 func (r *TaskInstanceRepository) Get(ctx context.Context, spaceID, taskID string) (domain.TaskInstance, error) {
 	var instance domain.TaskInstance
 	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).
+		Where("c_space_id = ? AND c_instance_id = ?", spaceID, taskID).
 		First(&instance).Error
 	return instance, err
+}
+
+func (r *TaskInstanceRepository) DeleteByCollectionTaskID(ctx context.Context, spaceID, taskID string) error {
+	return r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.TaskInstance{}).Error
 }
 
 // List returns task instances matching filters.
@@ -118,7 +122,7 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 		}
 		var rows []domain.TaskInstance
 		if err := r.db.WithContext(ctx).
-			Where("c_space_id = ? AND c_task_id IN ?", spaceID, taskIDs[start:end]).
+		Where("c_space_id = ? AND c_instance_id IN ?", spaceID, taskIDs[start:end]).
 			Find(&rows).Error; err != nil {
 			return err
 		}
@@ -160,9 +164,9 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 		changed[i].ModifyTime = now
 	}
 	upsert := r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_task_id"}},
+		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_instance_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"c_rule_id":     clause.Expr{SQL: "excluded.c_rule_id"},
+			"c_task_id":     clause.Expr{SQL: "excluded.c_task_id"},
 			"c_provider":    clause.Expr{SQL: "excluded.c_provider"},
 			"c_market_type": clause.Expr{SQL: "excluded.c_market_type"},
 			"c_data_type":   clause.Expr{SQL: "excluded.c_data_type"},
@@ -370,7 +374,7 @@ func frequencyVariants(value string) []string {
 }
 
 func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
-	return current.RuleID != desired.RuleID ||
+	return current.CollectionTaskID != desired.CollectionTaskID ||
 		current.Provider != desired.Provider ||
 		current.SourceID != desired.SourceID ||
 		current.MarketType != desired.MarketType ||
@@ -386,9 +390,9 @@ func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
 // that are no longer part of an enabled market rule from the stable inventory.
 func (r *TaskInstanceRepository) DeactivateMissingMarketFetchRuleInstances(ctx context.Context, spaceID, ruleID string, activeTaskIDs []string) error {
 	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = ?", spaceID, ruleID, false)
+		Where("c_space_id = ? AND c_task_id = ? AND c_is_deleted = ?", spaceID, ruleID, false)
 	if len(activeTaskIDs) > 0 {
-		query = query.Where("c_task_id NOT IN ?", activeTaskIDs)
+		query = query.Where("c_instance_id NOT IN ?", activeTaskIDs)
 	}
 	// Do not call Count on this statement before Updates. GORM's SQLite
 	// dialect retains the count source table and emits UPDATE ... FROM the
@@ -400,9 +404,9 @@ func (r *TaskInstanceRepository) DeactivateMissingMarketFetchRuleInstances(ctx c
 // touching market-fetch instances that happen to share a rule identifier.
 func (r *TaskInstanceRepository) DeactivateMissingResampleRuleInstances(ctx context.Context, spaceID, ruleID string, activeTaskIDs []string) error {
 	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_rule_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, ruleID, "kline_resample", false)
+		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, ruleID, "kline_resample", false)
 	if len(activeTaskIDs) > 0 {
-		query = query.Where("c_task_id NOT IN ?", activeTaskIDs)
+		query = query.Where("c_instance_id NOT IN ?", activeTaskIDs)
 	}
 	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
 }
@@ -476,11 +480,11 @@ func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilt
 	if filter.SpaceID != "" {
 		q = q.Where("c_space_id = ?", filter.SpaceID)
 	}
-	if filter.TaskID != "" {
-		q = q.Where("c_task_id LIKE ?", "%"+filter.TaskID+"%")
+	if filter.InstanceID != "" {
+		q = q.Where("c_instance_id LIKE ?", "%"+filter.InstanceID+"%")
 	}
-	if filter.RuleID != "" {
-		q = q.Where("c_rule_id LIKE ?", "%"+filter.RuleID+"%")
+	if filter.CollectionTaskID != "" {
+		q = q.Where("c_task_id LIKE ?", "%"+filter.CollectionTaskID+"%")
 	}
 	if filter.Provider != "" {
 		q = q.Where("c_provider = ?", filter.Provider)

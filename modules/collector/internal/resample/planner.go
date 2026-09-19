@@ -28,7 +28,7 @@ type resampleRuleSubjectSource interface {
 
 // PlanRule expands a ready rule into one durable TaskInstance per active source
 // subject. It is idempotent and never deletes target data for removed subjects.
-func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskInstanceRepository, rule domain.TaskRule, now time.Time) error {
+func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskInstanceRepository, rule domain.CollectionTask, now time.Time) error {
 	if source == nil || instances == nil {
 		return fmt.Errorf("resample planner dependencies are required")
 	}
@@ -63,17 +63,17 @@ func PlanRule(ctx context.Context, source subjectSource, instances *store.TaskIn
 			continue
 		}
 		spec := domain.TaskSpec{Provider: rule.Provider, MarketType: rule.MarketType, DataType: "kline_resample", DatasetID: params.TargetDatasetID, SubjectID: subject.SubjectID, Frequency: target.Storage}
-		taskID := domain.StableResampleTaskID(rule.SpaceID, rule.RuleID, spec, params.SourceSeriesTag)
+		taskID := domain.StableResampleTaskID(rule.SpaceID, rule.TaskID, spec, params.SourceSeriesTag)
 		result := domain.NewResampleTaskResult(start)
 		encoded, marshalErr := result.Marshal()
 		if marshalErr != nil {
 			return marshalErr
 		}
-		instancesToWrite = append(instancesToWrite, domain.TaskInstance{SpaceID: rule.SpaceID, TaskID: taskID, RuleID: rule.RuleID, Provider: rule.Provider, MarketType: rule.MarketType, DataType: "kline_resample", DatasetID: params.TargetDatasetID, SubjectID: subject.SubjectID, Frequency: target.Storage, FunctionName: localResampleFunction, LastExecStatus: domain.InstanceStatusPending, TaskParams: rule.CollectParams, Result: encoded})
+		instancesToWrite = append(instancesToWrite, domain.TaskInstance{SpaceID: rule.SpaceID, TaskID: taskID, CollectionTaskID: rule.TaskID, Provider: rule.Provider, MarketType: rule.MarketType, DataType: "kline_resample", DatasetID: params.TargetDatasetID, SubjectID: subject.SubjectID, Frequency: target.Storage, FunctionName: localResampleFunction, LastExecStatus: domain.InstanceStatusPending, TaskParams: rule.CollectParams, Result: encoded})
 		activeIDs = append(activeIDs, taskID)
 	}
 	if err := instances.UpsertMany(ctx, instancesToWrite); err != nil {
 		return fmt.Errorf("upsert resample task instances: %w", err)
 	}
-	return instances.DeactivateMissingResampleRuleInstances(ctx, rule.SpaceID, rule.RuleID, activeIDs)
+	return instances.DeactivateMissingResampleRuleInstances(ctx, rule.SpaceID, rule.TaskID, activeIDs)
 }

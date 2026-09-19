@@ -568,6 +568,18 @@ message CreateViewRsp {
   View view = 2;
 }
 
+// DeleteViewReq 表示物理删除一个查询视图及其依赖行。
+message DeleteViewReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+}
+
+// DeleteViewRsp 表示删除查询视图的结果。
+message DeleteViewRsp {
+  common.RetInfo ret_info = 1;
+}
+
 // UpdateViewReq 表示更新查询视图的请求。
 message UpdateViewReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -1761,6 +1773,8 @@ service Metadata {
   rpc CreateView(CreateViewReq) returns (CreateViewRsp);
   // 更新查询视图。
   rpc UpdateView(UpdateViewReq) returns (UpdateViewRsp);
+  // 物理删除查询视图及其依赖行。
+  rpc DeleteView(DeleteViewReq) returns (DeleteViewRsp);
   // 请求异步手动重建查询视图；当前 active 索引保持可读。
   rpc RequestViewRebuild(RequestViewRebuildReq) returns (RequestViewRebuildRsp);
   // 按 ID 获取查询视图。

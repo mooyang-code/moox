@@ -163,6 +163,17 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 	return &pb.UpdateViewRsp{RetInfo: retinfo.Success("success"), View: updated}, nil
 }
 
+func (s *Service) DeleteView(ctx context.Context, req *pb.DeleteViewReq) (*pb.DeleteViewRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.DeleteViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	if err := s.metadata.DeleteView(ctx, req.GetSpaceId(), req.GetViewId()); err != nil {
+		return &pb.DeleteViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "DeleteView")
+	return &pb.DeleteViewRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
 // RequestViewRebuild records a revision-scoped manual rebuild request and
 // returns immediately. The View Maintainer performs the A/B work in the
 // background while the current active index remains readable.

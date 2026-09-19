@@ -104,6 +104,8 @@
           <a-table
             v-else-if="selectedAccount.market_type === 1"
             row-key="asset"
+            size="small"
+            :bordered="{ cell: true }"
             :data="visibleHoldings"
             :loading="loading"
             :pagination="false"
@@ -127,6 +129,8 @@
           <a-table
             v-else
             row-key="instrument_id"
+            size="small"
+            :bordered="{ cell: true }"
             :data="positions"
             :loading="loading"
             :pagination="false"

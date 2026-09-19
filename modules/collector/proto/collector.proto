@@ -7,7 +7,7 @@ import "google/protobuf/struct.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/collector/proto/collectorgen;collectorpb";
 
-// CollectMgr 管理采集规则、任务实例和任务规划。
+// CollectMgr 管理采集任务、任务实例和任务结果。
 // 纯 RPC 服务，由统一 HTTP 转发层调度：
 //   - /api/admin/collectmgr/{method}（JWT，面向前端）
 //
@@ -23,74 +23,105 @@ enum TaskInstanceStatus {
   TASK_INSTANCE_STATUS_FAILED = 3;
 }
 
-// TaskRule 任务规则。
-message TaskRule {
+// CollectionTask 是用户可见的采集任务。
+message CollectionTask {
   string space_id = 1;
-  string rule_id = 2;
-  string data_type = 3;
-  string provider = 4;
-  google.protobuf.Struct collect_params = 5;
-  optional bool enabled = 6;
-  string creator = 7;
-  string create_time = 8;     // RFC3339
-  string modify_time = 9;     // RFC3339
-  string market_type = 10;
-  string prepare_state = 11;  // pending/waiting_view/ready/error
-  string last_error = 12;
+  string task_id = 2;
+  string task_name = 3;
+  string description = 4;
+  string data_type = 5;
+  string provider = 6;
+  google.protobuf.Struct collect_params = 7;
+  optional bool enabled = 8;
+  string creator = 9;
+  string create_time = 10;    // RFC3339
+  string modify_time = 11;    // RFC3339
+  string market_type = 12;
+  string prepare_state = 13;  // pending/waiting_view/ready/error
+  string last_error = 14;
+  TaskResult result = 15;
 }
 
-message GetTaskRuleListReq {
+// TaskResult 是采集任务唯一结果的用户可读摘要。
+message TaskResult {
+  string result_name = 1;
+  string view_id = 2;
+  string status = 3;
+  string last_data_time = 4;
+  string data_kind = 5;
+}
+
+// ResultConfig 是结果存储的高级配置，不允许指定既有结果。
+message ResultConfig {
+  string data_node_id = 1;
+  string keep_duration = 2;
+  string description = 3;
+}
+
+message GetTaskListReq {
   string space_id = 1;
   string data_type = 2;
   string provider = 3;
   optional bool enabled = 4;
-  string rule_id = 5;
+  string task_id = 5;
   common.Page page = 6;
   string market_type = 7;
 }
 
-message GetTaskRuleListRsp {
+message GetTaskListRsp {
   common.RetInfo ret_info = 1;
-  repeated TaskRule rules = 2;
+  repeated CollectionTask tasks = 2;
   common.PageResult page = 3;
 }
 
-message GetTaskRuleDetailReq {
+message GetTaskDetailReq {
   string space_id = 1;
-  string rule_id = 2;
+  string task_id = 2;
 }
 
-message GetTaskRuleDetailRsp {
+message GetTaskDetailRsp {
   common.RetInfo ret_info = 1;
-  TaskRule rule = 2;
+  CollectionTask task = 2;
 }
 
-message CreateTaskRuleReq {
-  TaskRule rule = 1;
+message CreateTaskReq {
+  CollectionTask task = 1;
+  ResultConfig result_config = 2;
 }
 
-message CreateTaskRuleRsp {
+message CreateTaskRsp {
   common.RetInfo ret_info = 1;
-  string rule_id = 2;
+  string task_id = 2;
 }
 
-message UpdateTaskRuleReq {
+message UpdateTaskReq {
   string space_id = 1;
-  string rule_id = 2;
-  TaskRule rule = 3;
+  string task_id = 2;
+  CollectionTask task = 3;
+  ResultConfig result_config = 4;
 }
 
-message UpdateTaskRuleRsp {
+message UpdateTaskRsp {
   common.RetInfo ret_info = 1;
-  TaskRule rule = 2;
+  CollectionTask task = 2;
 }
 
-message DisableTaskRuleReq {
+message DisableTaskReq {
   string space_id = 1;
-  string rule_id = 2;
+  string task_id = 2;
 }
 
-message DisableTaskRuleRsp {
+message DisableTaskRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message DeleteTaskReq {
+  string space_id = 1;
+  string task_id = 2;
+  bool delete_result_data = 3;
+}
+
+message DeleteTaskRsp {
   common.RetInfo ret_info = 1;
 }
 
@@ -98,7 +129,7 @@ message DisableTaskRuleRsp {
 message TaskInstance {
   string space_id = 1;
   string task_id = 2;
-  string rule_id = 3;
+  string instance_id = 3;
   string provider = 4;
   string market_type = 5;
   string data_type = 6;
@@ -119,8 +150,8 @@ message TaskInstance {
 // TaskInstanceFilter 任务实例筛选条件。
 message TaskInstanceFilter {
   string space_id = 1;
-  string rule_id = 2;
-  string task_id = 3;
+  string task_id = 2;
+  string instance_id = 3;
   string provider = 4;
   string market_type = 5;
   string data_type = 6;
@@ -198,7 +229,7 @@ message GetDataTypeConfigWithFieldsRsp {
 
 message StartKlineResampleBackfillReq {
   string space_id = 1;
-  string rule_id = 2;
+  string task_id = 2;
   string request_id = 3;
   string start = 4;
   string end = 5;
@@ -210,7 +241,7 @@ message StartKlineResampleBackfillRsp {
 
 message CancelKlineResampleBackfillReq {
   string space_id = 1;
-  string rule_id = 2;
+  string task_id = 2;
   string request_id = 3;
 }
 
@@ -220,7 +251,7 @@ message CancelKlineResampleBackfillRsp {
 
 message GetKlineResampleBackfillReq {
   string space_id = 1;
-  string rule_id = 2;
+  string task_id = 2;
   string request_id = 3;
 }
 
@@ -242,12 +273,13 @@ message GetKlineResampleBackfillRsp {
 }
 
 service CollectMgr {
-  // ----- 任务规则 -----
-  rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
-  rpc GetTaskRuleDetail(GetTaskRuleDetailReq) returns (GetTaskRuleDetailRsp);
-  rpc CreateTaskRule(CreateTaskRuleReq) returns (CreateTaskRuleRsp);
-  rpc UpdateTaskRule(UpdateTaskRuleReq) returns (UpdateTaskRuleRsp);
-  rpc DisableTaskRule(DisableTaskRuleReq) returns (DisableTaskRuleRsp);
+  // ----- 采集任务 -----
+  rpc GetTaskList(GetTaskListReq) returns (GetTaskListRsp);
+  rpc GetTaskDetail(GetTaskDetailReq) returns (GetTaskDetailRsp);
+  rpc CreateTask(CreateTaskReq) returns (CreateTaskRsp);
+  rpc UpdateTask(UpdateTaskReq) returns (UpdateTaskRsp);
+  rpc DisableTask(DisableTaskReq) returns (DisableTaskRsp);
+  rpc DeleteTask(DeleteTaskReq) returns (DeleteTaskRsp);
 
   // ----- 任务实例 -----
   rpc GetTaskInstanceList(GetTaskInstanceListReq) returns (GetTaskInstanceListRsp);

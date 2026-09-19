@@ -99,10 +99,10 @@ Kline 采集。目录刷新失败时保留上一版完整快照，Kline Timer �
 出口探针和人工 E2E 没有执行节点；只有在明确不需要这些按需能力时才应删除。`moox.toml` 的
 `function_count` 只统计 Kline Timer 节点，Instrument snapshot Timer 是额外的单节点，Invoke 辅助节点也是额外的每地域 1 个固定容量。
 
-当前部署配置启用新加坡 18 个和广州 10 个 Kline Timer，海外地域优先，广州作为国内兜底；东京因
-Storage Gateway 跨地域写入链路未满足稳定性要求暂不启用。每个启用地域仍有一个辅助函数：
-`...-invoke-ap-singapore-0` 和 `...-invoke-ap-guangzhou-0`。实际地域数量应以
-`moox.toml` 与腾讯云函数配额为准，不得把历史函数占用的配额忽略掉。
+当前 `crypto` 部署配置启用新加坡 17 个和香港 43 个 Kline Timer，共 60 个；广州处于地域黑名单，
+东京及其他地域暂不启用。每个启用地域仍有一个辅助函数：`...-invoke-ap-singapore-0` 和
+`...-invoke-ap-hongkong-0`。实际地域数量应以 `moox.toml` 与腾讯云函数配额为准，不得把历史函数
+占用的配额忽略掉。
 
 ## 任务环境变量
 

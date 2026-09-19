@@ -12,11 +12,11 @@ import (
 )
 
 type ruleSourceStub struct {
-	rules []domain.TaskRule
+	rules []domain.CollectionTask
 	err   error
 }
 
-func (s *ruleSourceStub) ListEnabledAll(context.Context, int) ([]domain.TaskRule, error) {
+func (s *ruleSourceStub) ListEnabledAll(context.Context, int) ([]domain.CollectionTask, error) {
 	return s.rules, s.err
 }
 
@@ -31,16 +31,16 @@ func (s *registryStub) ReplaceExpected(items []report.DatasetExpectation) error 
 }
 func (s *registryStub) ObserveInventoryRefreshError() { s.errors++ }
 
-func collectorRule(id string, enabled bool, dataType, target, frequency string) domain.TaskRule {
+func collectorRule(id string, enabled bool, dataType, target, frequency string) domain.CollectionTask {
 	params := `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
 	if dataType == "kline" {
 		params = `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
 	}
-	return domain.TaskRule{SpaceID: "crypto", RuleID: id, DataType: dataType, Provider: "binance", MarketType: "spot", CollectParams: params, Enabled: enabled}
+	return domain.CollectionTask{SpaceID: "crypto", TaskID: id, DataType: dataType, Provider: "binance", MarketType: "spot", CollectParams: params, Enabled: enabled}
 }
 
 func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing.T) {
-	source := &ruleSourceStub{rules: []domain.TaskRule{
+	source := &ruleSourceStub{rules: []domain.CollectionTask{
 		collectorRule("live", true, "kline", "bars", "1m"),
 		collectorRule("live-5m", true, "kline", "bars", "5m"),
 		collectorRule("duplicate", true, "kline", "bars", "1m"),
@@ -61,7 +61,7 @@ func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing
 }
 
 func TestRealtimeInventoryCanonicalizesFrequencyAliasesBeforeDeduplication(t *testing.T) {
-	source := &ruleSourceStub{rules: []domain.TaskRule{
+	source := &ruleSourceStub{rules: []domain.CollectionTask{
 		collectorRule("lowercase", true, "kline", "bars", "1h"),
 		collectorRule("canonical", true, "kline", "bars", "1H"),
 	}}
@@ -74,13 +74,13 @@ func TestRealtimeInventoryCanonicalizesFrequencyAliasesBeforeDeduplication(t *te
 }
 
 func TestRealtimeInventoryFailureRetainsPreviousSnapshot(t *testing.T) {
-	source := &ruleSourceStub{rules: []domain.TaskRule{collectorRule("live", true, "kline", "bars", "1m")}}
+	source := &ruleSourceStub{rules: []domain.CollectionTask{collectorRule("live", true, "kline", "bars", "1m")}}
 	registry := &registryStub{}
 	inventory := NewRealtimeInventory(source, registry)
 	require.NoError(t, inventory.Refresh(context.Background()))
 	previous := append([]report.DatasetExpectation(nil), registry.items...)
 
-	source.rules = []domain.TaskRule{{SpaceID: "crypto", RuleID: "invalid", Enabled: true, CollectParams: "{"}}
+	source.rules = []domain.CollectionTask{{SpaceID: "crypto", TaskID: "invalid", Enabled: true, CollectParams: "{"}}
 	inventory.MarkDirty()
 	require.Error(t, inventory.Refresh(context.Background()))
 	require.Equal(t, previous, registry.items)

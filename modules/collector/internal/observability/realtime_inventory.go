@@ -15,11 +15,11 @@ import (
 
 const (
 	inventoryRefreshInterval = 5 * time.Minute
-	inventoryRuleLimit       = store.MaxEnabledTaskRules
+	inventoryRuleLimit       = store.MaxEnabledTasks
 )
 
 type taskRuleSource interface {
-	ListEnabledAll(context.Context, int) ([]domain.TaskRule, error)
+	ListEnabledAll(context.Context, int) ([]domain.CollectionTask, error)
 }
 
 type datasetRegistry interface {
@@ -96,11 +96,11 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 		params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
 		if err != nil {
 			i.registry.ObserveInventoryRefreshError()
-			return fmt.Errorf("parse collector rule %q: %w", rule.RuleID, err)
+			return fmt.Errorf("parse collector rule %q: %w", rule.TaskID, err)
 		}
 		if err := params.Validate(); err != nil {
 			i.registry.ObserveInventoryRefreshError()
-			return fmt.Errorf("validate collector rule %q: %w", rule.RuleID, err)
+			return fmt.Errorf("validate collector rule %q: %w", rule.TaskID, err)
 		}
 		if params.Collector.DataType == "kline_resample" {
 			if !i.resampleEnabled {
@@ -112,12 +112,12 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 			frequency, err := report.NormalizeDatasetFrequency(params.TargetFrequency)
 			if err != nil {
 				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("normalize resample rule %q frequency %q: %w", rule.RuleID, params.TargetFrequency, err)
+				return fmt.Errorf("normalize resample rule %q frequency %q: %w", rule.TaskID, params.TargetFrequency, err)
 			}
 			interval, err := report.ParseDatasetFrequency(frequency)
 			if err != nil {
 				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("parse resample rule %q frequency %q: %w", rule.RuleID, frequency, err)
+				return fmt.Errorf("parse resample rule %q frequency %q: %w", rule.TaskID, frequency, err)
 			}
 			key := report.DatasetKey{SpaceID: rule.SpaceID, DatasetID: params.TargetDatasetID, Freq: frequency}
 			if previous, ok := expected[key]; !ok || interval < previous {
@@ -131,17 +131,17 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 		interval, err := domain.ParseScheduleInterval(params.Schedule.Interval)
 		if err != nil {
 			i.registry.ObserveInventoryRefreshError()
-			return fmt.Errorf("parse collector rule %q schedule: %w", rule.RuleID, err)
+			return fmt.Errorf("parse collector rule %q schedule: %w", rule.TaskID, err)
 		}
 		for _, freq := range params.Collector.Intervals {
 			if _, err := report.ParseDatasetFrequency(freq); err != nil {
 				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("parse collector rule %q frequency %q: %w", rule.RuleID, freq, err)
+				return fmt.Errorf("parse collector rule %q frequency %q: %w", rule.TaskID, freq, err)
 			}
 			canonicalFreq, err := report.NormalizeDatasetFrequency(freq)
 			if err != nil {
 				i.registry.ObserveInventoryRefreshError()
-				return fmt.Errorf("normalize collector rule %q frequency %q: %w", rule.RuleID, freq, err)
+				return fmt.Errorf("normalize collector rule %q frequency %q: %w", rule.TaskID, freq, err)
 			}
 			key := report.DatasetKey{SpaceID: rule.SpaceID, DatasetID: params.Target.DatasetID, Freq: canonicalFreq}
 			if previous, ok := expected[key]; !ok || interval < previous {

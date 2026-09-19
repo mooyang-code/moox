@@ -2,16 +2,16 @@ package domain
 
 import "time"
 
-type TaskRulePrepareState string
+type CollectionTaskPrepareState string
 
 const (
-	PrepareStatePending     TaskRulePrepareState = "pending"
-	PrepareStateWaitingView TaskRulePrepareState = "waiting_view"
-	PrepareStateReady       TaskRulePrepareState = "ready"
-	PrepareStateError       TaskRulePrepareState = "error"
+	PrepareStatePending     CollectionTaskPrepareState = "pending"
+	PrepareStateWaitingView CollectionTaskPrepareState = "waiting_view"
+	PrepareStateReady       CollectionTaskPrepareState = "ready"
+	PrepareStateError       CollectionTaskPrepareState = "error"
 )
 
-func (s TaskRulePrepareState) Valid() bool {
+func (s CollectionTaskPrepareState) Valid() bool {
 	switch s {
 	case PrepareStatePending, PrepareStateWaitingView, PrepareStateReady, PrepareStateError:
 		return true
@@ -20,25 +20,29 @@ func (s TaskRulePrepareState) Valid() bool {
 	}
 }
 
-// TaskRule is the Collector-owned采集规则.
-type TaskRule struct {
-	ID                int                  `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID           string               `gorm:"column:c_space_id"`
-	RuleID            string               `gorm:"column:c_rule_id"`
-	DataType          string               `gorm:"column:c_data_type"`
-	Provider          string               `gorm:"column:c_provider"`
-	MarketType        string               `gorm:"column:c_market_type"`
-	CollectParams     string               `gorm:"column:c_collect_params"`
-	Enabled           bool                 `gorm:"column:c_enabled"`
-	Creator           string               `gorm:"column:c_creator"`
-	PrepareState      TaskRulePrepareState `gorm:"column:c_prepare_state"`
-	LastError         string               `gorm:"column:c_last_error"`
-	CoverageStartTime *time.Time           `gorm:"column:c_coverage_start_time"`
-	CreateTime        time.Time            `gorm:"column:c_ctime"`
-	ModifyTime        time.Time            `gorm:"column:c_mtime"`
+// CollectionTask is the Collector-owned collection task.
+type CollectionTask struct {
+	ID                int                        `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID           string                     `gorm:"column:c_space_id"`
+	TaskID            string                     `gorm:"column:c_task_id"`
+	TaskName          string                     `gorm:"column:c_task_name"`
+	Description       string                     `gorm:"column:c_description"`
+	DataType          string                     `gorm:"column:c_data_type"`
+	Provider          string                     `gorm:"column:c_provider"`
+	MarketType        string                     `gorm:"column:c_market_type"`
+	CollectParams     string                     `gorm:"column:c_collect_params"`
+	Enabled           bool                       `gorm:"column:c_enabled"`
+	Creator           string                     `gorm:"column:c_creator"`
+	PrepareState      CollectionTaskPrepareState `gorm:"column:c_prepare_state"`
+	LastError         string                     `gorm:"column:c_last_error"`
+	ResultDatasetID   string                     `gorm:"column:c_result_dataset_id"`
+	ResultViewID      string                     `gorm:"column:c_result_view_id"`
+	CoverageStartTime *time.Time                 `gorm:"column:c_coverage_start_time"`
+	CreateTime        time.Time                  `gorm:"column:c_ctime"`
+	ModifyTime        time.Time                  `gorm:"column:c_mtime"`
 }
 
 // TableName returns the Collector task rule table.
-func (r *TaskRule) TableName() string {
-	return "t_collector_task_rules"
+func (r *CollectionTask) TableName() string {
+	return "t_collector_tasks"
 }

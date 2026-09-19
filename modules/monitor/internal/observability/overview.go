@@ -37,10 +37,14 @@ type HostStatus struct {
 
 type DatasetFrequencyStatus struct {
 	Producer, SpaceID, DatasetID, Freq, Status, Reason string
-	LastRunAt, LastSuccessAt                           time.Time
-	InputWatermarkAt, OutputWatermarkAt                time.Time
-	LastReportedAt                                     time.Time
-	LagSeconds                                         int64
+	// PrimaryDatasetID links an independent Storage View fact back to the
+	// dataset whose Collector produces its input. It is empty for other
+	// producers and keeps DatasetID available as the View identity.
+	PrimaryDatasetID                    string
+	LastRunAt, LastSuccessAt            time.Time
+	InputWatermarkAt, OutputWatermarkAt time.Time
+	LastReportedAt                      time.Time
+	LagSeconds                          int64
 }
 
 type BusinessStatus struct {
@@ -390,7 +394,7 @@ func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
 }
 
 type datasetKey struct {
-	service, producer, instance, spaceID, datasetID, freq, labels string
+	service, producer, instance, spaceID, datasetID, primaryDatasetID, freq, labels string
 }
 
 type datasetValues struct {
@@ -567,7 +571,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				return nil, err
 			}
 			observed := latest.ObservedAt.UTC().Unix()
-			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, freq: freq, labels: series.LabelsJSON}
+			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, primaryDatasetID: labels["dataset_id"], freq: freq, labels: series.LabelsJSON}
 			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, reporterStale: series.IsStale, reportedAt: latest.ObservedAt.UTC()}
 		}
 	}
@@ -583,7 +587,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			current = aggregatedDataset{
 				key: datasetKey{
 					producer: key.producer, spaceID: key.spaceID,
-					datasetID: key.datasetID, freq: key.freq,
+					datasetID: key.datasetID, primaryDatasetID: key.primaryDatasetID, freq: key.freq,
 				},
 				value: value,
 			}
@@ -738,7 +742,8 @@ func datasetLimitError() error {
 func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy report.RealtimeTimeSeriesPolicy) DatasetFrequencyStatus {
 	item := DatasetFrequencyStatus{
 		Producer: key.producer, SpaceID: key.spaceID, DatasetID: key.datasetID, Freq: key.freq,
-		LastRunAt: unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess),
+		PrimaryDatasetID: key.primaryDatasetID,
+		LastRunAt:        unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess),
 		InputWatermarkAt: unixTime(value.input), OutputWatermarkAt: unixTime(value.output),
 		LastReportedAt: value.reportedAt,
 	}

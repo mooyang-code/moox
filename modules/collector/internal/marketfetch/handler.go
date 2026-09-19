@@ -237,6 +237,9 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
+		if strings.TrimSpace(req.DatasetID) != strings.TrimSpace(pipeline.DatasetID) {
+			pipeline.TargetDatasetID = strings.TrimSpace(req.DatasetID)
+		}
 		pipeline.Metrics = h.Metrics
 		snapshotAt := time.Now().UTC()
 		if h.Now != nil {
@@ -274,6 +277,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
+		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
 		pipeline.Metrics = h.Metrics
 		payload, err = pipeline.Execute(workCtx, req)
@@ -287,6 +291,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
+		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
 		pipeline.Metrics = h.Metrics
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)

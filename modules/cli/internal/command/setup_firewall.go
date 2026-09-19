@@ -6,7 +6,9 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
@@ -83,27 +85,20 @@ func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snaps
 		for _, rule := range target.Rules {
 			result, err := tencent.EnsureFirewallRule(ctx, address, rule)
 			if err != nil {
-				// Storage is commonly deployed on a CVM rather than a
-				// Lighthouse instance. Its ingress is managed by VPC security
-				// groups, so retain the existing fallback for that topology.
-				if isStorageFirewallTarget(snapshot.Manifest, target.Host) {
-					cvm, cvmErr := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
-						SecretID:  snapshot.Manifest.TencentCloud.SecretID,
-						SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
-						Region:    snapshot.Manifest.TencentCloud.Region,
-					})
-					if cvmErr == nil {
-						cvmErr = cvm.EnsureSecurityGroupRule(ctx, address, rule)
-					}
-					if cvmErr == nil {
+				// The manifest home region need not be the region of every
+				// configured host. Resolve the actual Tencent region before
+				// falling back to a CVM security group or retrying Lighthouse.
+				created, fallbackErr := ensureFirewallRuleAtDiscoveredRegion(ctx, snapshot.Manifest, address, rule)
+				if fallbackErr == nil {
+					summary.Rules++
+					if created {
+						summary.Created++
+					} else {
 						summary.AlreadyOpen++
-						continue
 					}
-					fmt.Fprintf(os.Stderr, "firewall %s port %s skipped: lighthouse=%v; cvm=%v\n", target.Host.Name, rule.Ports, err, cvmErr)
-					summary.Skipped++
 					continue
 				}
-				fmt.Fprintf(os.Stderr, "firewall %s port %s skipped: %v\n", target.Host.Name, rule.Ports, err)
+				fmt.Fprintf(os.Stderr, "firewall %s port %s skipped: lighthouse=%v; discovered=%v\n", target.Host.Name, rule.Ports, err, fallbackErr)
 				summary.Skipped++
 				continue
 			}
@@ -122,6 +117,51 @@ func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snaps
 		summary.Status = "partial"
 	}
 	return summary, nil
+}
+
+// ensureFirewallRuleAtDiscoveredRegion handles hosts placed outside the
+// manifest's home region. Lighthouse rules and CVM security-group rules both
+// require the actual region in their signed request, so retrying with the
+// home-region client can never succeed for those hosts.
+func ensureFirewallRuleAtDiscoveredRegion(ctx context.Context, manifest setupconfig.Manifest, address string, rule cloudtencent.CreateFirewallRulesOptions) (bool, error) {
+	network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
+		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
+		Region: manifest.TencentCloud.Region,
+	})
+	if err != nil {
+		return false, err
+	}
+	lighthouse, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
+		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
+		Region: manifest.TencentCloud.Region,
+	})
+	if err != nil {
+		return false, err
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	instance, err := (privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(
+		lookupCtx, address, cloudtencent.ProbeRegions(manifest.TencentCloud.Region),
+	)
+	if err != nil {
+		return false, err
+	}
+	switch instance.Kind {
+	case cloudtencent.KindLighthouse:
+		result, err := lighthouse.ForRegion(instance.Region).EnsureFirewallRule(ctx, address, rule)
+		return result.Created, err
+	case cloudtencent.KindCVM:
+		cvm, err := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
+			SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
+			Region: instance.Region,
+		})
+		if err != nil {
+			return false, err
+		}
+		return false, cvm.EnsureSecurityGroupRule(ctx, address, rule)
+	default:
+		return false, fmt.Errorf("unsupported Tencent instance kind %q", instance.Kind)
+	}
 }
 
 func setupFirewallAddress(ctx context.Context, address string) (string, error) {

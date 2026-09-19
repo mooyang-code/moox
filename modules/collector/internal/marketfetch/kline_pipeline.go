@@ -468,7 +468,7 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 		if len(instrumentName) > 0 {
 			name = instrumentName[0]
 		}
-		return stockKlineRow(bar, routeID, routeRank, name)
+		return stockKlineRow(bar, firstNonEmptyString(p.DatasetID, req.DatasetID), routeID, routeRank, name)
 	}
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
 		return nil, err
@@ -532,7 +532,7 @@ func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time, s
 	return false, nil
 }
 
-func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
+func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
 		return nil, err
 	}
@@ -565,7 +565,7 @@ func stockKlineRow(bar marketdata.NormalizedKline, routeID string, routeRank int
 	}
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
-			SpaceId: StockCNSpaceID, DatasetId: StockCNDatasetID,
+			SpaceId: StockCNSpaceID, DatasetId: firstNonEmptyString(datasetID, StockCNDatasetID),
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 				SubjectId: bar.SubjectID, Freq: "1m", DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "default",
 			}},

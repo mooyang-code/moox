@@ -1,7 +1,8 @@
 # Built-in Collector rules. This file contains no cloud credentials or node data.
 rules:
 - space_id: crypto
-  rule_id: builtin-binance-spot-symbols-1h
+  task_id: builtin-binance-spot-symbols-1h
+  task_name: Binance 现货标的 1H
   data_type: instrument
   provider: binance
   market_type: spot
@@ -13,10 +14,11 @@ rules:
     instrument_type: spot
     market_type: spot
     symbol_source: exchange
-    target_dataset_id: dataset_binance_spot_symbols
+    target_dataset_id: dataset_collector_55ea65f2dca90b7f
     frequency: 1H
 - space_id: crypto
-  rule_id: builtin-binance-swap-symbols-1h
+  task_id: builtin-binance-swap-symbols-1h
+  task_name: Binance 合约标的 1H
   data_type: instrument
   provider: binance
   market_type: swap
@@ -28,10 +30,11 @@ rules:
     instrument_type: swap
     market_type: swap
     symbol_source: exchange
-    target_dataset_id: dataset_binance_swap_symbols
+    target_dataset_id: dataset_collector_2fd992b6685723b0
     frequency: 1H
 - space_id: crypto
-  rule_id: builtin-binance-spot-kline-1m
+  task_id: builtin-binance-spot-kline-1m
+  task_name: Binance 现货 K 线 1m
   data_type: kline
   provider: binance
   market_type: spot
@@ -44,10 +47,11 @@ rules:
     market_type: spot
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_spot_symbols
-    target_dataset_id: dataset_binance_spot_kline_1m
+    target_dataset_id: dataset_collector_e85209cd9eb4d363
     frequency: 1m
 - space_id: crypto
-  rule_id: builtin-binance-swap-kline-1m
+  task_id: builtin-binance-swap-kline-1m
+  task_name: Binance 合约 K 线 1m
   data_type: kline
   provider: binance
   market_type: swap
@@ -60,10 +64,11 @@ rules:
     market_type: swap
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_swap_symbols
-    target_dataset_id: dataset_binance_swap_kline_1m
+    target_dataset_id: dataset_collector_df4b3afb3ff5547c
     frequency: 1m
 - space_id: crypto
-  rule_id: builtin-binance-spot-kline-1h
+  task_id: builtin-binance-spot-kline-1h
+  task_name: Binance 现货 K 线 1H
   data_type: kline
   provider: binance
   market_type: spot
@@ -76,10 +81,11 @@ rules:
     market_type: spot
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_spot_symbols
-    target_dataset_id: dataset_spot_kline_1h
+    target_dataset_id: dataset_collector_79650661576858a0
     frequency: 1H
 - space_id: crypto
-  rule_id: builtin-binance-swap-kline-1h
+  task_id: builtin-binance-swap-kline-1h
+  task_name: Binance 合约 K 线 1H
   data_type: kline
   provider: binance
   market_type: swap
@@ -92,10 +98,11 @@ rules:
     market_type: swap
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_swap_symbols
-    target_dataset_id: dataset_perpetual_kline_1h
+    target_dataset_id: dataset_collector_7fa0e5ccbb57684a
     frequency: 1H
 - space_id: stockcn
-  rule_id: builtin-stockcn-instrument-1d
+  task_id: builtin-stockcn-instrument-1d
+  task_name: A 股标的 1d
   data_type: instrument
   provider: stockcn_multi
   market_type: equity
@@ -105,10 +112,11 @@ rules:
     provider: stockcn_multi
     market_type: equity
     symbol_source: exchange
-    target_dataset_id: dataset_stockcn_instruments
+    target_dataset_id: dataset_collector_b19570a5b86d6abd
     frequency: 1d
 - space_id: stockcn
-  rule_id: builtin-stockcn-kline-1m
+  task_id: builtin-stockcn-kline-1m
+  task_name: A 股 K 线 1m
   data_type: kline
   provider: stockcn_multi
   market_type: equity
@@ -119,5 +127,5 @@ rules:
     market_type: equity
     symbol_source: dataset
     symbol_dataset_id: dataset_stockcn_instruments
-    target_dataset_id: dataset_stockcn_equity_kline
+    target_dataset_id: dataset_collector_4a5f6489270932bf
     frequency: 1m

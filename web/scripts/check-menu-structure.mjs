@@ -54,7 +54,7 @@ const ops = findDirectory("ops");
 
 assert(zhCN.includes('["compute-collector"]: "数据采集"'), "compute-collector zh-CN label must be 数据采集");
 assert(zhCN.includes('["factor-definitions"]: "因子定义"'), "factor-definitions zh-CN label must be 因子定义");
-assert(zhCN.includes('["collector-data-management"]: "基础数据集"'), "collector-data-management zh-CN label must be 基础数据集");
+assert(zhCN.includes('["collector-tasks"]: "采集任务"'), "collector-tasks zh-CN label must be 采集任务");
 assert(zhCN.includes('["data-fields"]: "基础字段"'), "data-fields zh-CN label must be 基础字段");
 assert(zhCN.includes('["factor-datasets"]: "复合因子数据集"'), "factor-datasets zh-CN label must be 复合因子数据集");
 assert(zhCN.includes('["factor-construct"]: "构造配置"'), "factor-construct zh-CN label must be 构造配置");
@@ -98,7 +98,7 @@ for (const retired of [
   "/collector/datasets",
   "/collector/views",
   "/collector/packages",
-  "/collector/tasks",
+  "/collector/data-management",
   "/ops/service-monitor",
   "/ops/metric-monitor",
   "/ops/resource-monitor",
@@ -119,15 +119,12 @@ assert(dataFields.parentId === dataCollection.id, "data-fields must be under dat
 assert(dataSources.sort < dataSubjects.sort, "data sources must appear before subjects");
 assert(dataSubjects.sort < dataFields.sort, "subjects must appear before base fields");
 
-const collectorDataManagement = findMenu("collector-data-management");
-const collectorRules = findMenu("collector-rules");
-const collectorCloudnodes = findMenu("collector-cloudnodes");
-assert(collectorDataManagement.parentId === dataCollection.id, "collector-data-management must be under data collection");
-assert(collectorDataManagement.path === "/collector/data-management", "collector-data-management path must be canonical");
-assert(collectorRules.parentId === dataCollection.id, "collector-rules must be under data collection");
-assert(collectorCloudnodes.parentId === dataCollection.id, "collector-cloudnodes must be under data collection");
-assert(dataFields.sort < collectorRules.sort, "base fields must appear before collection rules");
-assert(collectorRules.sort < collectorDataManagement.sort, "collection rules must appear before base datasets");
+const collectorTasks = findMenu("collector-tasks");
+assert(collectorTasks.parentId === dataCollection.id, "collector-tasks must be under data collection");
+assert(collectorTasks.path === "/collector/tasks", "collector-tasks path must be canonical");
+assert(dataFields.sort < collectorTasks.sort, "base fields must appear before collection tasks");
+assert(!staticMenu.includes("collector-data-management"), "collector-data-management must not be visible");
+assert(!staticMenu.includes("collector-rules"), "collector-rules must not be visible");
 assert(!staticMenu.includes('menu("0304"'), "task instances must not remain a separate visible menu");
 assert(!staticMenu.includes('menu("0302"'), "code packages must not remain a separate visible menu");
 

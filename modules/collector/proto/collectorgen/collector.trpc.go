@@ -19,16 +19,18 @@ import (
 
 // CollectMgrService defines service.
 type CollectMgrService interface {
-	// GetTaskRuleList ----- 任务规则 -----
-	GetTaskRuleList(ctx context.Context, req *GetTaskRuleListReq) (*GetTaskRuleListRsp, error)
+	// GetTaskList ----- 采集任务 -----
+	GetTaskList(ctx context.Context, req *GetTaskListReq) (*GetTaskListRsp, error)
 
-	GetTaskRuleDetail(ctx context.Context, req *GetTaskRuleDetailReq) (*GetTaskRuleDetailRsp, error)
+	GetTaskDetail(ctx context.Context, req *GetTaskDetailReq) (*GetTaskDetailRsp, error)
 
-	CreateTaskRule(ctx context.Context, req *CreateTaskRuleReq) (*CreateTaskRuleRsp, error)
+	CreateTask(ctx context.Context, req *CreateTaskReq) (*CreateTaskRsp, error)
 
-	UpdateTaskRule(ctx context.Context, req *UpdateTaskRuleReq) (*UpdateTaskRuleRsp, error)
+	UpdateTask(ctx context.Context, req *UpdateTaskReq) (*UpdateTaskRsp, error)
 
-	DisableTaskRule(ctx context.Context, req *DisableTaskRuleReq) (*DisableTaskRuleRsp, error)
+	DisableTask(ctx context.Context, req *DisableTaskReq) (*DisableTaskRsp, error)
+
+	DeleteTask(ctx context.Context, req *DeleteTaskReq) (*DeleteTaskRsp, error)
 	// GetTaskInstanceList ----- 任务实例 -----
 	GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq) (*GetTaskInstanceListRsp, error)
 	// GetDataTypeConfigs ----- 数据类型配置 -----
@@ -43,14 +45,14 @@ type CollectMgrService interface {
 	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq) (*GetKlineResampleBackfillRsp, error)
 }
 
-func CollectMgrService_GetTaskRuleList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetTaskRuleListReq{}
+func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetTaskListReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).GetTaskRuleList(ctx, reqbody.(*GetTaskRuleListReq))
+		return svr.(CollectMgrService).GetTaskList(ctx, reqbody.(*GetTaskListReq))
 	}
 
 	var rsp interface{}
@@ -61,14 +63,14 @@ func CollectMgrService_GetTaskRuleList_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
-func CollectMgrService_GetTaskRuleDetail_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetTaskRuleDetailReq{}
+func CollectMgrService_GetTaskDetail_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetTaskDetailReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).GetTaskRuleDetail(ctx, reqbody.(*GetTaskRuleDetailReq))
+		return svr.(CollectMgrService).GetTaskDetail(ctx, reqbody.(*GetTaskDetailReq))
 	}
 
 	var rsp interface{}
@@ -79,14 +81,14 @@ func CollectMgrService_GetTaskRuleDetail_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func CollectMgrService_CreateTaskRule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateTaskRuleReq{}
+func CollectMgrService_CreateTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateTaskReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).CreateTaskRule(ctx, reqbody.(*CreateTaskRuleReq))
+		return svr.(CollectMgrService).CreateTask(ctx, reqbody.(*CreateTaskReq))
 	}
 
 	var rsp interface{}
@@ -97,14 +99,14 @@ func CollectMgrService_CreateTaskRule_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func CollectMgrService_UpdateTaskRule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateTaskRuleReq{}
+func CollectMgrService_UpdateTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateTaskReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).UpdateTaskRule(ctx, reqbody.(*UpdateTaskRuleReq))
+		return svr.(CollectMgrService).UpdateTask(ctx, reqbody.(*UpdateTaskReq))
 	}
 
 	var rsp interface{}
@@ -115,14 +117,32 @@ func CollectMgrService_UpdateTaskRule_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func CollectMgrService_DisableTaskRule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DisableTaskRuleReq{}
+func CollectMgrService_DisableTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DisableTaskReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).DisableTaskRule(ctx, reqbody.(*DisableTaskRuleReq))
+		return svr.(CollectMgrService).DisableTask(ctx, reqbody.(*DisableTaskReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_DeleteTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteTaskReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).DeleteTask(ctx, reqbody.(*DeleteTaskReq))
 	}
 
 	var rsp interface{}
@@ -247,24 +267,28 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*CollectMgrService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.collector.CollectMgr/GetTaskRuleList",
-			Func: CollectMgrService_GetTaskRuleList_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/GetTaskList",
+			Func: CollectMgrService_GetTaskList_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/GetTaskRuleDetail",
-			Func: CollectMgrService_GetTaskRuleDetail_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/GetTaskDetail",
+			Func: CollectMgrService_GetTaskDetail_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/CreateTaskRule",
-			Func: CollectMgrService_CreateTaskRule_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/CreateTask",
+			Func: CollectMgrService_CreateTask_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/UpdateTaskRule",
-			Func: CollectMgrService_UpdateTaskRule_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/UpdateTask",
+			Func: CollectMgrService_UpdateTask_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/DisableTaskRule",
-			Func: CollectMgrService_DisableTaskRule_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/DisableTask",
+			Func: CollectMgrService_DisableTask_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/DeleteTask",
+			Func: CollectMgrService_DeleteTask_Handler,
 		},
 		{
 			Name: "/trpc.moox.collector.CollectMgr/GetTaskInstanceList",
@@ -304,21 +328,24 @@ func RegisterCollectMgrService(s server.Service, svr CollectMgrService) {
 
 type UnimplementedCollectMgr struct{}
 
-// GetTaskRuleList ----- 任务规则 -----
-func (s *UnimplementedCollectMgr) GetTaskRuleList(ctx context.Context, req *GetTaskRuleListReq) (*GetTaskRuleListRsp, error) {
-	return nil, errors.New("rpc GetTaskRuleList of service CollectMgr is not implemented")
+// GetTaskList ----- 采集任务 -----
+func (s *UnimplementedCollectMgr) GetTaskList(ctx context.Context, req *GetTaskListReq) (*GetTaskListRsp, error) {
+	return nil, errors.New("rpc GetTaskList of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) GetTaskRuleDetail(ctx context.Context, req *GetTaskRuleDetailReq) (*GetTaskRuleDetailRsp, error) {
-	return nil, errors.New("rpc GetTaskRuleDetail of service CollectMgr is not implemented")
+func (s *UnimplementedCollectMgr) GetTaskDetail(ctx context.Context, req *GetTaskDetailReq) (*GetTaskDetailRsp, error) {
+	return nil, errors.New("rpc GetTaskDetail of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) CreateTaskRule(ctx context.Context, req *CreateTaskRuleReq) (*CreateTaskRuleRsp, error) {
-	return nil, errors.New("rpc CreateTaskRule of service CollectMgr is not implemented")
+func (s *UnimplementedCollectMgr) CreateTask(ctx context.Context, req *CreateTaskReq) (*CreateTaskRsp, error) {
+	return nil, errors.New("rpc CreateTask of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) UpdateTaskRule(ctx context.Context, req *UpdateTaskRuleReq) (*UpdateTaskRuleRsp, error) {
-	return nil, errors.New("rpc UpdateTaskRule of service CollectMgr is not implemented")
+func (s *UnimplementedCollectMgr) UpdateTask(ctx context.Context, req *UpdateTaskReq) (*UpdateTaskRsp, error) {
+	return nil, errors.New("rpc UpdateTask of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) DisableTaskRule(ctx context.Context, req *DisableTaskRuleReq) (*DisableTaskRuleRsp, error) {
-	return nil, errors.New("rpc DisableTaskRule of service CollectMgr is not implemented")
+func (s *UnimplementedCollectMgr) DisableTask(ctx context.Context, req *DisableTaskReq) (*DisableTaskRsp, error) {
+	return nil, errors.New("rpc DisableTask of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) DeleteTask(ctx context.Context, req *DeleteTaskReq) (*DeleteTaskRsp, error) {
+	return nil, errors.New("rpc DeleteTask of service CollectMgr is not implemented")
 }
 
 // GetTaskInstanceList ----- 任务实例 -----
@@ -351,16 +378,18 @@ func (s *UnimplementedCollectMgr) GetKlineResampleBackfill(ctx context.Context, 
 
 // CollectMgrClientProxy defines service client proxy
 type CollectMgrClientProxy interface {
-	// GetTaskRuleList ----- 任务规则 -----
-	GetTaskRuleList(ctx context.Context, req *GetTaskRuleListReq, opts ...client.Option) (rsp *GetTaskRuleListRsp, err error)
+	// GetTaskList ----- 采集任务 -----
+	GetTaskList(ctx context.Context, req *GetTaskListReq, opts ...client.Option) (rsp *GetTaskListRsp, err error)
 
-	GetTaskRuleDetail(ctx context.Context, req *GetTaskRuleDetailReq, opts ...client.Option) (rsp *GetTaskRuleDetailRsp, err error)
+	GetTaskDetail(ctx context.Context, req *GetTaskDetailReq, opts ...client.Option) (rsp *GetTaskDetailRsp, err error)
 
-	CreateTaskRule(ctx context.Context, req *CreateTaskRuleReq, opts ...client.Option) (rsp *CreateTaskRuleRsp, err error)
+	CreateTask(ctx context.Context, req *CreateTaskReq, opts ...client.Option) (rsp *CreateTaskRsp, err error)
 
-	UpdateTaskRule(ctx context.Context, req *UpdateTaskRuleReq, opts ...client.Option) (rsp *UpdateTaskRuleRsp, err error)
+	UpdateTask(ctx context.Context, req *UpdateTaskReq, opts ...client.Option) (rsp *UpdateTaskRsp, err error)
 
-	DisableTaskRule(ctx context.Context, req *DisableTaskRuleReq, opts ...client.Option) (rsp *DisableTaskRuleRsp, err error)
+	DisableTask(ctx context.Context, req *DisableTaskReq, opts ...client.Option) (rsp *DisableTaskRsp, err error)
+
+	DeleteTask(ctx context.Context, req *DeleteTaskReq, opts ...client.Option) (rsp *DeleteTaskRsp, err error)
 	// GetTaskInstanceList ----- 任务实例 -----
 	GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq, opts ...client.Option) (rsp *GetTaskInstanceListRsp, err error)
 	// GetDataTypeConfigs ----- 数据类型配置 -----
@@ -384,100 +413,120 @@ var NewCollectMgrClientProxy = func(opts ...client.Option) CollectMgrClientProxy
 	return &CollectMgrClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *CollectMgrClientProxyImpl) GetTaskRuleList(ctx context.Context, req *GetTaskRuleListReq, opts ...client.Option) (*GetTaskRuleListRsp, error) {
+func (c *CollectMgrClientProxyImpl) GetTaskList(ctx context.Context, req *GetTaskListReq, opts ...client.Option) (*GetTaskListRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetTaskRuleList")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetTaskList")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("GetTaskRuleList")
+	msg.WithCalleeMethod("GetTaskList")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetTaskRuleListRsp{}
+	rsp := &GetTaskListRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) GetTaskRuleDetail(ctx context.Context, req *GetTaskRuleDetailReq, opts ...client.Option) (*GetTaskRuleDetailRsp, error) {
+func (c *CollectMgrClientProxyImpl) GetTaskDetail(ctx context.Context, req *GetTaskDetailReq, opts ...client.Option) (*GetTaskDetailRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetTaskRuleDetail")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetTaskDetail")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("GetTaskRuleDetail")
+	msg.WithCalleeMethod("GetTaskDetail")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetTaskRuleDetailRsp{}
+	rsp := &GetTaskDetailRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) CreateTaskRule(ctx context.Context, req *CreateTaskRuleReq, opts ...client.Option) (*CreateTaskRuleRsp, error) {
+func (c *CollectMgrClientProxyImpl) CreateTask(ctx context.Context, req *CreateTaskReq, opts ...client.Option) (*CreateTaskRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/CreateTaskRule")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/CreateTask")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("CreateTaskRule")
+	msg.WithCalleeMethod("CreateTask")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateTaskRuleRsp{}
+	rsp := &CreateTaskRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) UpdateTaskRule(ctx context.Context, req *UpdateTaskRuleReq, opts ...client.Option) (*UpdateTaskRuleRsp, error) {
+func (c *CollectMgrClientProxyImpl) UpdateTask(ctx context.Context, req *UpdateTaskReq, opts ...client.Option) (*UpdateTaskRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/UpdateTaskRule")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/UpdateTask")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("UpdateTaskRule")
+	msg.WithCalleeMethod("UpdateTask")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateTaskRuleRsp{}
+	rsp := &UpdateTaskRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) DisableTaskRule(ctx context.Context, req *DisableTaskRuleReq, opts ...client.Option) (*DisableTaskRuleRsp, error) {
+func (c *CollectMgrClientProxyImpl) DisableTask(ctx context.Context, req *DisableTaskReq, opts ...client.Option) (*DisableTaskRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/DisableTaskRule")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/DisableTask")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("DisableTaskRule")
+	msg.WithCalleeMethod("DisableTask")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &DisableTaskRuleRsp{}
+	rsp := &DisableTaskRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) DeleteTask(ctx context.Context, req *DeleteTaskReq, opts ...client.Option) (*DeleteTaskRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/DeleteTask")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("DeleteTask")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteTaskRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

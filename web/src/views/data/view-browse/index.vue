@@ -16,14 +16,14 @@
 
         <template v-else>
           <section class="view-tabs-row">
-            <a-tabs v-model:active-key="activeViewId" type="rounded" size="medium" class="view-tabs" @change="onViewChange">
+            <a-tabs v-model:active-key="activeViewKey" type="rounded" size="medium" class="view-tabs" @change="onViewChange">
               <a-tab-pane v-for="view in visibleViews" :key="view.view_id" :title="viewDisplayName(view)" />
             </a-tabs>
           </section>
 
           <section class="view-status-line">
-            <span>View: {{ activeView?.view_id || "-" }}</span>
-            <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
+            <span v-if="!props.hideTechnicalIdentity">View: {{ activeView?.view_id || "-" }}</span>
+            <span v-if="!props.hideTechnicalIdentity">Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
@@ -467,6 +467,8 @@ const props = withDefaults(
     includeUnowned?: boolean;
     excludeLikelyFactorDatasets?: boolean;
     autoRefreshIntervalMs?: number;
+    activeViewId?: string;
+    hideTechnicalIdentity?: boolean;
   }>(),
   {
     embedded: false,
@@ -478,7 +480,9 @@ const props = withDefaults(
     viewRoles: undefined,
     includeUnowned: false,
     excludeLikelyFactorDatasets: false,
-    autoRefreshIntervalMs: 0
+    autoRefreshIntervalMs: 0,
+    activeViewId: "",
+    hideTechnicalIdentity: false
   }
 );
 
@@ -496,6 +500,7 @@ const visibleViews = computed(() => {
   const allowedPrimary = new Set(allowedPrimaryDatasetIds.filter(Boolean));
   const excludedPrimary = new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean));
   return views.value.filter(view => {
+    if (props.activeViewId && view.view_id !== props.activeViewId) return false;
     const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(view.dataset_id);
     if (!matchedByDataset && excludedPrimary.has(view.dataset_id)) {
       return false;
@@ -521,7 +526,7 @@ const viewColumns = ref<ViewColumn[]>([]);
 const datasetColumns = ref<DatasetColumn[]>([]);
 const fields = ref<Field[]>([]);
 const factors = ref<Factor[]>([]);
-const activeViewId = ref("");
+const activeViewKey = ref("");
 const tableRows = ref<ViewBrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
 const detailRow = ref<ViewBrowseTableRow>();
@@ -593,7 +598,7 @@ const filterOperatorSymbols: Record<ViewFilterOperator, string> = {
   not_empty: "Ø"
 };
 
-const activeView = computed(() => visibleViews.value.find(item => item.view_id === activeViewId.value));
+const activeView = computed(() => visibleViews.value.find(item => item.view_id === activeViewKey.value));
 const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === activeView.value?.dataset_id));
 const currentDatasetName = computed(() => {
   const dataset = primaryDataset.value;
@@ -731,9 +736,7 @@ function rebuildLogDetail(log: ViewRebuildLog) {
         rebuild_lookback_periods?: number;
       };
       if (details.subject_id) {
-        const series = [details.subject_id, details.frequency, details.series_tag || "-"]
-          .filter(Boolean)
-          .join(" · ");
+        const series = [details.subject_id, details.frequency, details.series_tag || "-"].filter(Boolean).join(" · ");
         const observed = details.observed_periods || 0;
         const max = details.max_periods_per_series || 0;
         const lookback = details.rebuild_lookback_periods || max;
@@ -886,10 +889,7 @@ async function loadMeta() {
     // and Factors only decorate labels and can arrive afterwards; keeping them
     // out of this critical path avoids making a slow metadata read delay the
     // actual data query.
-    const [viewItems, datasetItems] = await Promise.all([
-      listAllViews(space_id),
-      listAllDatasets(space_id)
-    ]);
+    const [viewItems, datasetItems] = await Promise.all([listAllViews(space_id), listAllDatasets(space_id)]);
     views.value = viewItems;
     datasets.value = datasetItems;
     ensureSelectedView();
@@ -948,22 +948,33 @@ function viewUsesLikelyFactorDataset(view: View) {
 
 function ensureSelectedView() {
   if (!visibleViews.value.length) {
-    activeViewId.value = "";
+    activeViewKey.value = "";
     return;
   }
-  if (!activeViewId.value || !visibleViews.value.some(item => item.view_id === activeViewId.value)) {
-    activeViewId.value = visibleViews.value[0].view_id;
+  if (!activeViewKey.value || !visibleViews.value.some(item => item.view_id === activeViewKey.value)) {
+    activeViewKey.value = visibleViews.value[0].view_id;
   }
 }
 
 watch(
   () => visibleViews.value.map(item => item.view_id).join("|"),
   async () => {
-    const current = activeViewId.value;
+    const current = activeViewKey.value;
     ensureSelectedView();
-    if (activeViewId.value !== current) {
+    if (activeViewKey.value !== current) {
       clearViewState();
       await loadViewContext();
+    }
+  }
+);
+
+watch(
+  () => props.activeViewId,
+  value => {
+    if (value && activeViewKey.value !== value) {
+      activeViewKey.value = value;
+      clearViewState();
+      void loadViewContext();
     }
   }
 );
@@ -1415,7 +1426,7 @@ onBeforeUnmount(() => {
   }
 });
 watch(selectedSpaceId, () => {
-  activeViewId.value = "";
+  activeViewKey.value = "";
   clearViewState();
   loadMeta();
 });

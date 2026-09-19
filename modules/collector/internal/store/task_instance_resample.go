@@ -118,9 +118,9 @@ func (r *TaskInstanceRepository) claimDueResampleTasks(
 		var instances []domain.TaskInstance
 		query := tx.Where("t_collector_task_instances.c_data_type = ? AND t_collector_task_instances.c_is_deleted = ?", "kline_resample", false)
 		if requireReadyRule {
-			query = query.Where(`EXISTS (SELECT 1 FROM t_collector_task_rules rules
+			query = query.Where(`EXISTS (SELECT 1 FROM t_collector_tasks rules
 				WHERE rules.c_space_id = t_collector_task_instances.c_space_id
-				AND rules.c_rule_id = t_collector_task_instances.c_rule_id
+				AND rules.c_task_id = t_collector_task_instances.c_task_id
 				AND rules.c_data_type = 'kline_resample'
 				AND rules.c_enabled = 1
 				AND rules.c_prepare_state = 'ready')`)
@@ -521,7 +521,7 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 	var updated int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var instances []domain.TaskInstance
-		if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample", false).Order("c_id ASC").Find(&instances).Error; err != nil {
+		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample", false).Order("c_id ASC").Find(&instances).Error; err != nil {
 			return err
 		}
 		if len(instances) == 0 {
@@ -624,7 +624,7 @@ func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spa
 	var updated int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var instances []domain.TaskInstance
-		if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample", false).Find(&instances).Error; err != nil {
+		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample", false).Find(&instances).Error; err != nil {
 			return err
 		}
 		matched := false
@@ -705,7 +705,7 @@ func (r *TaskInstanceRepository) updateResampleTask(ctx context.Context, spaceID
 
 func loadResampleTask(tx *gorm.DB, spaceID, taskID string) (domain.TaskInstance, domain.ResampleTaskResult, string, error) {
 	var instance domain.TaskInstance
-	err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID), "kline_resample", false).First(&instance).Error
+	err := tx.Where("c_space_id = ? AND c_instance_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID), "kline_resample", false).First(&instance).Error
 	if err != nil {
 		return instance, domain.ResampleTaskResult{}, "", err
 	}
@@ -715,7 +715,7 @@ func loadResampleTask(tx *gorm.DB, spaceID, taskID string) (domain.TaskInstance,
 
 func updateResampleResultCAS(tx *gorm.DB, spaceID, taskID, previous string, expectedVersion int64, encoded string, status int) (bool, error) {
 	result := tx.Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_result = ?", spaceID, taskID, "kline_resample", previous).
+		Where("c_space_id = ? AND c_instance_id = ? AND c_data_type = ? AND c_result = ?", spaceID, taskID, "kline_resample", previous).
 		Where("json_valid(c_result) AND CAST(json_extract(c_result, '$.state_version') AS INTEGER) = ?", expectedVersion).
 		Updates(map[string]any{"c_result": encoded, "c_last_exec_status": status, "c_mtime": time.Now().UTC()})
 	return result.RowsAffected == 1, result.Error
@@ -731,7 +731,7 @@ func markCorruptResampleResult(tx *gorm.DB, instance domain.TaskInstance, cause 
 		return err
 	}
 	return tx.Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_task_id = ? AND c_result = ?", instance.SpaceID, instance.TaskID, instance.Result).
+		Where("c_space_id = ? AND c_instance_id = ? AND c_result = ?", instance.SpaceID, instance.TaskID, instance.Result).
 		Updates(map[string]any{"c_result": encoded, "c_last_exec_status": domain.InstanceStatusFailed, "c_mtime": time.Now().UTC()}).Error
 }
 

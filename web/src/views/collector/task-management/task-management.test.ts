@@ -8,14 +8,14 @@ describe("collector task management workbench", () => {
   it("combines collection rules, task instances, and executors in one ordered tab surface", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["采集规则", "任务实例", "执行器"].map(label => normalized.indexOf(`label:"${label}"`));
+    const positions = ["采集任务", "任务实例", "执行器", "采集结果"].map(label => normalized.indexOf(`label:"${label}"`));
 
     expect(source).toContain("PageTitleTabs");
     expect(source).toContain('aria-label="采集任务"');
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
-    expect(normalized).toContain('executors:CloudNode');
-    expect(normalized).toContain('typeCollectorTaskTab="rules"|"instances"|"executors"');
+    expect(normalized).toContain("executors:CloudNode");
+    expect(normalized).toContain('typeCollectorTaskTab="tasks"|"instances"|"executors"|"results"');
   });
 
   it("redirects the legacy cloud-node entry into the executor tab", () => {
@@ -27,8 +27,8 @@ describe("collector task management workbench", () => {
 
     expect(normalizedMenu).not.toContain('menu("0301"');
     expect(normalizedRoutes).toContain('path:"/collector/cloudnodes"');
-    expect(normalizedRoutes).toContain('path:"/collector/rules",query:{...to.query,tab:"executors"}');
-    expect(home).toContain('path: "/collector/rules?tab=executors"');
+    expect(normalizedRoutes).toContain('path:"/collector/tasks",query:{...to.query,tab:"executors"}');
+    expect(home).toContain('path: "/collector/tasks?tab=executors"');
   });
 
   it("keeps one visible menu and removes the retired task URL", () => {
@@ -37,10 +37,11 @@ describe("collector task management workbench", () => {
     const normalizedMenu = normalizeSource(menu);
     const normalizedRoutes = normalizeSource(routes);
 
-    expect(normalizedMenu).toContain('menu("0303","03","/collector/rules","collector-rules"');
+    expect(normalizedMenu).toContain('menu("0303","03","/collector/tasks","collector-tasks"');
     expect(normalizedMenu).not.toContain('menu("0304"');
     expect(normalizedRoutes).toContain('component:()=>import("@/views/collector/task-management/index.vue")');
-    expect(normalizedRoutes).not.toContain('path:"/collector/tasks"');
+    expect(normalizedRoutes).toContain('path:"/collector/tasks"');
+    expect(normalizedRoutes).toContain('path:"/collector/rules"');
   });
 
   it("removes the standalone package page and keeps package management on cloud nodes", () => {
@@ -72,7 +73,7 @@ describe("collector task management workbench", () => {
 
   it("clears both Dataset selections when the collector market changes", () => {
     const rules = fs.readFileSync(path.resolve(__dirname, "../collector-rules/collector-rules.vue"), "utf8");
-    const watcherStart = rules.indexOf("watch(\n  [() => addForm.value.data_source");
+    const watcherStart = rules.indexOf("watch(\n  [");
     const watcher = rules.slice(watcherStart, rules.indexOf("onMounted(() =>", watcherStart));
 
     expect(watcher).toContain('datasetIdValue.value = ""');

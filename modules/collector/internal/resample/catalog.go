@@ -52,7 +52,7 @@ var klineFields = []struct {
 // PrepareTarget creates or validates the target Dataset, columns, subject
 // bindings and View. Existing resources with a mismatched immutable contract
 // are rejected instead of being silently overwritten.
-func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.DatasetSubject, keepDuration string) error {
+func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.DatasetSubject, keepDuration string) error {
 	if c == nil || c.Metadata == nil || c.Auth == nil {
 		return errors.New("resample catalog dependencies are required")
 	}
@@ -65,7 +65,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	}
 	attrs := map[string]string{
 		"owner_module": "collector", "managed_by": "collector", "market_type": strings.ToLower(rule.MarketType),
-		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result", "resample_rule_id": rule.RuleID,
+		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result", "resample_task_id": rule.TaskID,
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
 		"target_freq": targetFreq.Storage, "alignment": params.Alignment,
@@ -205,7 +205,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, View: &storagepb.View{
 			SpaceId: rule.SpaceID, ViewId: viewID, Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: params.TargetDatasetID,
-			Engine: "duckdb", KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"route_ready_request_id": "kline-resample-route:" + rule.RuleID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
+			Engine: "duckdb", KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"route_ready_request_id": "kline-resample-route:" + rule.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
 		if createErr != nil {
 			return createErr
@@ -219,7 +219,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.TaskRule, param
 	} else if err := validateTargetView(viewResp.GetView(), rule, params, targetFreq.Storage); err != nil {
 		return err
 	}
-	requestID := "kline-resample-route:" + rule.RuleID + ":" + fmt.Sprint(target.GetDataset().GetRevision())
+	requestID := "kline-resample-route:" + rule.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())
 	if viewResp.GetView() != nil && viewResp.GetView().GetAttributes()["route_ready_request_id"] != requestID {
 		updated := *viewResp.GetView()
 		updated.Attributes = cloneStringMap(updated.GetAttributes())
@@ -358,7 +358,7 @@ func targetViewRevisionReady(view *storagepb.View, desired uint64) bool {
 	return status == "" || status == "active"
 }
 
-func validateTargetView(view *storagepb.View, rule domain.TaskRule, params *domain.CollectParams, frequency string) error {
+func validateTargetView(view *storagepb.View, rule domain.CollectionTask, params *domain.CollectParams, frequency string) error {
 	if view == nil {
 		return errors.New("target View is empty")
 	}

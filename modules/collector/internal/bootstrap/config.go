@@ -59,10 +59,11 @@ type CloudNodeConfig struct {
 
 // StorageConfig describes storage service addresses.
 type StorageConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	GatewayNodeID string `yaml:"gateway_node_id"`
-	KeyID         string `yaml:"key_id"`
-	HMACKeyFile   string `yaml:"hmac_key_file"`
+	GatewayTarget    string `yaml:"gateway_target"`
+	GatewayNodeID    string `yaml:"gateway_node_id"`
+	KeyID            string `yaml:"key_id"`
+	HMACKeyFile      string `yaml:"hmac_key_file"`
+	ResultDataNodeID string `yaml:"result_data_node_id"`
 }
 
 // PeriodReadinessConfig controls the durable Collector period completion
@@ -75,7 +76,7 @@ type PeriodReadinessConfig struct {
 }
 
 // KlineResampleConfig controls the local derived-kline scheduler. Rule
-// identity and source/target semantics remain in TaskRule; these values are
+// identity and source/target semantics remain in CollectionTask; these values are
 // process-wide execution policy.
 type KlineResampleConfig struct {
 	Enabled                     bool          `yaml:"enabled"`
@@ -192,6 +193,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_HMAC_KEY_FILE"); v != "" {
 		c.Storage.HMACKeyFile = v
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_RESULT_DATA_NODE_ID"); v != "" {
+		c.Storage.ResultDataNodeID = v
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
@@ -366,7 +370,7 @@ func Default() *Config {
 			Address:     "127.0.0.1:11401",
 			ServicePath: "trpc.moox.cloudnode.CloudNodeMgr",
 		},
-		Storage: StorageConfig{GatewayTarget: "ip://127.0.0.1:11003"},
+		Storage: StorageConfig{GatewayTarget: "ip://127.0.0.1:11003", ResultDataNodeID: "storage-node-0"},
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,

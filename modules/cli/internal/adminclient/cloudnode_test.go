@@ -97,16 +97,16 @@ func TestCreateCloudAccount_RegistersRegionLocalBucket(t *testing.T) {
 	assert.Equal(t, "tencent-scf-singapore", account.AccountID)
 }
 
-func TestEnableTaskRulePreservesCanonicalDefinition(t *testing.T) {
+func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		switch r.URL.Path {
-		case "/api/admin/collectmgr/GetTaskRuleDetail":
+		case "/api/admin/collectmgr/GetTaskDetail":
 			assert.Equal(t, "stockcn", body["space_id"])
-			assert.Equal(t, "builtin-stockcn-kline-1m", body["rule_id"])
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"rule":{"space_id":"stockcn","rule_id":"builtin-stockcn-kline-1m","data_type":"kline","provider":"stockcn_multi","market_type":"equity","enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"dataset_stockcn_equity_kline"}}}`))
-		case "/api/admin/collectmgr/UpdateTaskRule":
+			assert.Equal(t, "builtin-stockcn-kline-1m", body["task_id"])
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"rule":{"space_id":"stockcn","task_id":"builtin-stockcn-kline-1m","data_type":"kline","provider":"stockcn_multi","market_type":"equity","enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"dataset_stockcn_equity_kline"}}}`))
+		case "/api/admin/collectmgr/UpdateTask":
 			rule, ok := body["rule"].(map[string]any)
 			require.True(t, ok)
 			assert.Equal(t, true, rule["enabled"])
@@ -118,25 +118,25 @@ func TestEnableTaskRulePreservesCanonicalDefinition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	require.NoError(t, New(server.URL).EnableTaskRule(context.Background(), "stockcn", "builtin-stockcn-kline-1m"))
+	require.NoError(t, New(server.URL).EnableCollectionTask(context.Background(), "stockcn", "builtin-stockcn-kline-1m"))
 }
 
-func TestCreateTaskRuleStartsDisabled(t *testing.T) {
+func TestCreateTaskStartsDisabled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/collectmgr/CreateTaskRule", r.URL.Path)
+		assert.Equal(t, "/api/admin/collectmgr/CreateTask", r.URL.Path)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		rule, ok := body["rule"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "stockcn", rule["space_id"])
-		assert.Equal(t, "builtin-stockcn-kline-1m", rule["rule_id"])
+		assert.Equal(t, "builtin-stockcn-kline-1m", rule["task_id"])
 		assert.Equal(t, false, rule["enabled"])
 		assert.Equal(t, "dataset_stockcn_equity_kline", rule["collect_params"].(map[string]any)["target_dataset_id"])
-		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"rule_id":"builtin-stockcn-kline-1m"}`))
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"task_id":"builtin-stockcn-kline-1m"}`))
 	}))
 	defer server.Close()
 
-	require.NoError(t, New(server.URL).CreateTaskRule(context.Background(), "stockcn", "builtin-stockcn-kline-1m", "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
+	require.NoError(t, New(server.URL).CreateTask(context.Background(), "stockcn", "builtin-stockcn-kline-1m", "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
 		"provider":          "stockcn_multi",
 		"market_type":       "equity",
 		"symbol_source":     "dataset",

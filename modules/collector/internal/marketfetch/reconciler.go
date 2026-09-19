@@ -29,7 +29,7 @@ const (
 )
 
 type ruleSource interface {
-	ListEnabled(context.Context, string) ([]domain.TaskRule, error)
+	ListEnabled(context.Context, string) ([]domain.CollectionTask, error)
 }
 
 type datasetSource interface {
@@ -882,7 +882,7 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			// other market/frequency groups from being reconciled. Scheduler.Tick
 			// already treats rules independently; keep the Timer control plane
 			// consistent with that behavior.
-			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: parse rule: %v", rule.RuleID, parseErr)
+			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: parse rule: %v", rule.TaskID, parseErr)
 			continue
 		}
 		if params.Collector.DataType != "kline" {
@@ -890,16 +890,16 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		}
 		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Source.DatasetID)
 		if datasetErr != nil {
-			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: get symbol dataset %s: %v", rule.RuleID, params.Source.DatasetID, datasetErr)
+			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: get symbol dataset %s: %v", rule.TaskID, params.Source.DatasetID, datasetErr)
 			continue
 		}
 		subjects, subjectErr := r.Symbols.ListSubjects(ctx, spaceID, params.Source.DatasetID, dataset.DataSourceID)
 		if subjectErr != nil {
-			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: list symbol dataset %s: %v", rule.RuleID, params.Source.DatasetID, subjectErr)
+			log.WarnContextf(ctx, "skip collection rule=%s during timer reconciliation: list symbol dataset %s: %v", rule.TaskID, params.Source.DatasetID, subjectErr)
 			continue
 		}
 		if len(subjects) == 0 {
-			log.WarnContextf(ctx, "skip collection rule=%s: no active subjects for symbol dataset %s", rule.RuleID, params.Source.DatasetID)
+			log.WarnContextf(ctx, "skip collection rule=%s: no active subjects for symbol dataset %s", rule.TaskID, params.Source.DatasetID)
 			continue
 		}
 		marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, rule.SpaceID), params.InstrumentType, params.Target.DatasetID)
@@ -932,7 +932,7 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			return nil, fmt.Errorf("all active %s subjects are invalid: %s", params.MarketType, strings.Join(invalidSubjects, ","))
 		}
 		if len(invalidSubjects) > 0 {
-			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s rule=%s skipped=%d subjects=%s", spaceID, rule.RuleID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
+			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s rule=%s skipped=%d subjects=%s", spaceID, rule.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 		}
 		for _, frequency := range params.Collector.Intervals {
 			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})

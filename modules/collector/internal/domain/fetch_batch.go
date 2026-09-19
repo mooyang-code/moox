@@ -88,7 +88,7 @@ type BatchInvocation struct {
 	ScheduleID           string      `gorm:"column:c_schedule_id"`
 	BatchKind            BatchKind   `gorm:"column:c_batch_kind"`
 	ShardIndex           int         `gorm:"column:c_shard_index"`
-	RuleID               string      `gorm:"column:c_rule_id"`
+	TaskID     string      `gorm:"column:c_task_id"`
 	DatasetID            string      `gorm:"column:c_dataset_id"`
 	Frequency            string      `gorm:"column:c_frequency"`
 	Region               string      `gorm:"column:c_region"`
@@ -120,7 +120,7 @@ type RetryItem struct {
 	RetryKey         string     `gorm:"column:c_retry_key"`
 	SourceBatchID    string     `gorm:"column:c_source_batch_id"`
 	BatchKind        BatchKind  `gorm:"column:c_batch_kind"`
-	RuleID           string     `gorm:"column:c_rule_id"`
+	TaskID string     `gorm:"column:c_task_id"`
 	DatasetID        string     `gorm:"column:c_dataset_id"`
 	SubjectID        string     `gorm:"column:c_subject_id"`
 	Frequency        string     `gorm:"column:c_frequency"`

@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,12 +14,14 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	collectorresult "github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
@@ -106,16 +109,26 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector run metrics: %w", err)
 	}
-	realtimeInventory := collectorobservability.NewRealtimeInventory(dbm.TaskRules(), datasetMetrics)
+	realtimeInventory := collectorobservability.NewRealtimeInventory(dbm.Tasks(), datasetMetrics)
 	realtimeInventory.SetResampleEnabled(cfg.KlineResample.Enabled)
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize collector realtime dataset inventory: %w", err)
+	}
+	resultMetadata, resultMetadataErr := marketstorage.NewResampleMetadataClient(cfg.Storage.GatewayTarget, marketstorage.InstTypeSPOT)
+	if resultMetadataErr != nil {
+		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
+	}
+	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.Auth)
+	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager, cfg.Storage.ResultDataNodeID); err != nil {
+		return nil, fmt.Errorf("initialize collector task results: %w", err)
 	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
 		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
 		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 		RealtimeInventory:              realtimeInventory,
 		DefaultResampleSettleDelay:     cfg.KlineResample.DefaultSettleDelay,
+		ResultManager:                  resultManager,
+		ResultDataNodeID:               cfg.Storage.ResultDataNodeID,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
@@ -176,6 +189,63 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return s, nil
+}
+
+func ensureTaskResultMetadata(ctx context.Context, repo *store.CollectionTaskRepository, manager *collectorresult.Manager, dataNodeID string) error {
+	if repo == nil || manager == nil {
+		return fmt.Errorf("task result metadata dependencies are not configured")
+	}
+	tasks, _, err := repo.List(ctx, store.TaskFilter{Page: 1, PageSize: store.MaxEnabledTasks})
+	if err != nil {
+		return fmt.Errorf("list collector tasks: %w", err)
+	}
+	for _, task := range tasks {
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+		if parseErr != nil {
+			return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
+		}
+		ids, ensureErr := manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, collectorresult.Config{
+			DataNodeID:   dataNodeID,
+			Description:  task.Description,
+			DataSourceID: task.Provider,
+			Frequency:    taskResultFrequency(*params),
+		})
+		if ensureErr != nil {
+			return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, ensureErr)
+		}
+		needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
+		task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+		rawParams := map[string]any{}
+		if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
+			return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+		}
+		if rawParams["target_dataset_id"] != ids.DatasetID {
+			rawParams["target_dataset_id"] = ids.DatasetID
+			needsUpdate = true
+		}
+		if !needsUpdate {
+			continue
+		}
+		encoded, err := json.Marshal(rawParams)
+		if err != nil {
+			return fmt.Errorf("encode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+		}
+		task.CollectParams = string(encoded)
+		if _, err := repo.UpdateByTaskID(ctx, task.SpaceID, task.TaskID, task); err != nil {
+			return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
+		}
+	}
+	return nil
+}
+
+func taskResultFrequency(params domain.CollectParams) string {
+	if strings.EqualFold(params.Collector.DataType, "kline_resample") && strings.TrimSpace(params.TargetFrequency) != "" {
+		return params.TargetFrequency
+	}
+	if strings.TrimSpace(params.Frequency) != "" {
+		return params.Frequency
+	}
+	return params.TargetFrequency
 }
 
 type realtimeInventoryReconciler interface {
@@ -345,14 +415,14 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			log.WarnContextf(trpc.BackgroundContext(), "collector kline resample disabled: metadata=%v storage=%v", metadataErr, storageErr)
 		} else {
 			catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, Auth: metadataClient.Auth}
-			resamplePreparer = &collectorresample.Preparer{Rules: dbm.TaskRules(), Source: metadataSource, Catalog: catalog, KeepDuration: cfg.KlineResample.TargetKeepDuration.String(), Limit: cfg.KlineResample.WorkerSubjectBatchSize}
+			resamplePreparer = &collectorresample.Preparer{Rules: dbm.Tasks(), Source: metadataSource, Catalog: catalog, KeepDuration: cfg.KlineResample.TargetKeepDuration.String(), Limit: cfg.KlineResample.WorkerSubjectBatchSize}
 			if waiter, ok := localStorage.(marketstorage.ResampleViewSyncWaiter); ok {
 				catalog.ViewSync = waiter
 			} else {
 				log.Warn("collector kline resample disabled: Storage adapter has no View sync waiter")
 			}
 			for _, spaceID := range spaceIDs {
-				resampleRunner = &collectorresample.Runner{Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
+				resampleRunner = &collectorresample.Runner{Rules: dbm.Tasks(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
 					SpaceID: spaceID, ScanTimeout: cfg.KlineResample.ScanTimeout, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, MaxClaimsPerTick: cfg.KlineResample.MaxClaimsPerTick, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
 					WorkerPollInterval: cfg.KlineResample.WorkerPollInterval, WorkerMaxSourceKeys: cfg.KlineResample.WorkerMaxSourceKeysPerClaim,
 					StaleRunningAfter: cfg.KlineResample.StaleRunningAfter, DefaultSettleDelay: cfg.KlineResample.DefaultSettleDelay, RepairLookbackBuckets: cfg.KlineResample.RepairLookbackBuckets,
@@ -381,7 +451,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			ResolveSourceID:     marketwiring.DefaultSourceID,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
 			CompactSymbol:       marketwiring.CompactSymbol,
-			Rules:               dbm.TaskRules(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			Rules:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: 40,
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
@@ -395,7 +465,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		invokeScheduler := &marketfetch.Scheduler{
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
-			Rules:               dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
+			Rules:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 			// Local Storage RPC uses the resolved Collector target (private IP
 			// when runtime.env was rewritten). SCF invoke payloads keep the
 			// discovered public native gateway so overseas functions still work.

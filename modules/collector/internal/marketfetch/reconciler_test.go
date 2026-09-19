@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type reconcilerRulesStub struct{ rules []domain.TaskRule }
+type reconcilerRulesStub struct{ rules []domain.CollectionTask }
 
 func TestDisableBlacklistedTimersHandlesMissingObservation(t *testing.T) {
 	for _, test := range []struct {
@@ -56,7 +56,7 @@ func TestReconcilerRegionBlacklistMigratesOrPreservesOnCapacityFailure(t *testin
 			}
 			r := &Reconciler{
 				SCFRegionBlacklists: map[string][]string{"crypto": {"ap-guangzhou"}},
-				Rules:               reconcilerRulesStub{rules: []domain.TaskRule{{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1h"}`}}},
+				Rules:               reconcilerRulesStub{rules: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1h"}`}}},
 				Symbols:             reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}}, Nodes: nodes,
 			}
 			err := r.Reconcile(context.Background(), "crypto")
@@ -115,8 +115,8 @@ func TestReconcilerDisablesBlacklistedInstrumentWithoutChangingIdentity(t *testi
 	require.Nil(t, nodes.patches[0].GetManagedEnvironment())
 }
 
-func (s reconcilerRulesStub) ListEnabled(context.Context, string) ([]domain.TaskRule, error) {
-	return append([]domain.TaskRule(nil), s.rules...), nil
+func (s reconcilerRulesStub) ListEnabled(context.Context, string) ([]domain.CollectionTask, error) {
+	return append([]domain.CollectionTask(nil), s.rules...), nil
 }
 
 type reconcilerSymbolsStub struct {
@@ -214,7 +214,7 @@ func TestReconcilerResolvesMissingInstrumentIdentity(t *testing.T) {
 		t.Run(product, func(t *testing.T) {
 			r := &Reconciler{
 				ResolveSourceID: func(provider, instrument string) string { return instrument + "_test" },
-				Rules:           reconcilerRulesStub{rules: []domain.TaskRule{{SpaceID: "crypto", Provider: "binance", MarketType: product, DataType: "kline", CollectParams: `{"symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1H"}`}}},
+				Rules:           reconcilerRulesStub{rules: []domain.CollectionTask{{SpaceID: "crypto", Provider: "binance", MarketType: product, DataType: "kline", CollectParams: `{"symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1H"}`}}},
 				Symbols:         reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbols"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
 			}
 			groups, err := r.groups(context.Background(), "crypto")
@@ -231,8 +231,8 @@ func TestReconcilerResolvesMissingInstrumentIdentity(t *testing.T) {
 }
 
 func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{
@@ -241,7 +241,7 @@ func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
 	}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	reconciler := &Reconciler{
-		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules:   reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
 		Nodes:   nodes,
 		Metrics: metrics,
@@ -275,7 +275,7 @@ func TestReconcilerRecordsCompletedBatchBeforeNextDNSChange(t *testing.T) {
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	routes := map[string]sources.DNSResolution{"api.binance.com": {IPs: []string{"203.0.113.1"}}}
 	r := &Reconciler{
-		Rules: reconcilerRulesStub{rules: []domain.TaskRule{{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Enabled: true,
+		Rules: reconcilerRulesStub{rules: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", DataType: "kline", Enabled: true,
 			CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`}}},
 		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
 		Nodes:   nodes, DNS: reconcilerDNSStub{routes: routes}, Metrics: metrics,
@@ -352,8 +352,8 @@ type reconcilerDNSStub struct {
 func (s reconcilerDNSStub) Snapshot() map[string]sources.DNSResolution { return s.routes }
 
 func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
@@ -361,7 +361,7 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 		{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
-		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules: reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{
 			dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"},
 			subjects: []domain.DatasetSubject{
@@ -392,8 +392,8 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 }
 
 func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: StockCNSpaceID, TaskID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
 		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
@@ -401,7 +401,7 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 		{NodeID: "timer-1", FunctionName: "moox-stockcn-ap-guangzhou-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
-		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules: reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
 			{SubjectID: "600000.XSHG", ExternalSymbol: "sh600000", Status: "active"},
 			{SubjectID: "000001.XSHE", ExternalSymbol: "sz000001", Status: "active"},
@@ -434,13 +434,13 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 }
 
 func TestReconcilerSkipsMalformedActiveStockSubjectWithoutBlockingValidSubjects(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: StockCNSpaceID, TaskID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
 		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stockcn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{
-		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules: reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
 			{SubjectID: "600000.XSHG", ExternalSymbol: "sh600000", Status: "active"},
 			{SubjectID: "BAD", ExternalSymbol: "", Status: "active"},
@@ -454,13 +454,13 @@ func TestReconcilerSkipsMalformedActiveStockSubjectWithoutBlockingValidSubjects(
 }
 
 func TestReconcilerFailsClosedWhenAllActiveStockSubjectsAreMalformed(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: StockCNSpaceID, TaskID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
 		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stockcn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{
-		Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules: reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{
 			{SubjectID: "BAD-1", ExternalSymbol: "", Status: "active"},
 			{SubjectID: "BAD-2", ExternalSymbol: "", Status: "active"},
@@ -473,29 +473,29 @@ func TestReconcilerFailsClosedWhenAllActiveStockSubjectsAreMalformed(t *testing.
 }
 
 func TestReconcilerFailsClosedWhenSymbolCatalogIsEmpty(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-fetcher-crypto-0", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
-	reconciler := &Reconciler{Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}}, Nodes: nodes}
+	reconciler := &Reconciler{Rules: reconcilerRulesStub{rules: []domain.CollectionTask{rule}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}}, Nodes: nodes}
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Zero(t, nodes.submits, "an empty symbol catalog must not disable the existing Timer fleet")
 }
 
 func TestReconcilerSkipsUnavailableRuleWithoutBlockingHealthyGroups(t *testing.T) {
-	badRule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "swap-bars", DataType: "kline", Provider: "binance", MarketType: "swap", Enabled: true,
+	badRule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "swap-bars", DataType: "kline", Provider: "binance", MarketType: "swap", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"swap","symbol_source":"dataset","symbol_dataset_id":"missing-swap-symbols","target_dataset_id":"dataset_binance_swap_kline","frequency":"1h"}`,
 	}
-	goodRule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "spot-bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	goodRule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "spot-bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"spot-symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-fetcher-crypto-0", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{
-		Rules: reconcilerRulesStub{rules: []domain.TaskRule{badRule, goodRule}},
+		Rules: reconcilerRulesStub{rules: []domain.CollectionTask{badRule, goodRule}},
 		Symbols: reconcilerSymbolsStub{
 			datasets: map[string]storagesource.DatasetInfo{"spot-symbols": {DataSourceID: "spot-source"}},
 			getErrs:  map[string]error{"missing-swap-symbols": fmt.Errorf("metadata unavailable")},
@@ -511,8 +511,8 @@ func TestReconcilerSkipsUnavailableRuleWithoutBlockingHealthyGroups(t *testing.T
 }
 
 func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: StockCNSpaceID, TaskID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
 		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
 	}
 	subjects := make([]domain.DatasetSubject, 0, 4)
@@ -525,7 +525,7 @@ func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(
 		{NodeID: "timer-2", FunctionName: "moox-stockcn-002", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
-		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules:   reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
 		Nodes:   nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 1,
 	}
@@ -535,8 +535,8 @@ func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(
 }
 
 func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: StockCNSpaceID, RuleID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: StockCNSpaceID, TaskID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity", Enabled: true,
 		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
 	}
 	subjects := make([]domain.DatasetSubject, 0, 40)
@@ -549,7 +549,7 @@ func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *te
 		{NodeID: "timer-2", FunctionName: "moox-stockcn-002", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
-		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules:   reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: subjects},
 		Nodes:   nodes, ExpectedStockCNTimerFunctions: 3, MeasuredSafeGroupSize: 40,
 	}
@@ -564,14 +564,14 @@ func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *te
 }
 
 func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	reconciler := &Reconciler{
-		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules:   reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
 		Nodes:   nodes,
 		Metrics: metrics,
@@ -587,13 +587,13 @@ func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
 }
 
 func TestReconcilerDoesNotEraseDNSWhenRefreshHasNoSnapshot(t *testing.T) {
-	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"dns_hash": "old-dns"}}}}
 	reconciler := &Reconciler{
-		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules:   reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
 		Nodes:   nodes,
 		DNS:     reconcilerDNSStub{routes: nil},
@@ -608,10 +608,10 @@ func TestReconcilerDoesNotEraseDNSWhenRefreshHasNoSnapshot(t *testing.T) {
 }
 
 func TestReconcilerSkipsOverlappingTicks(t *testing.T) {
-	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}, listStarted: make(chan struct{}), listRelease: make(chan struct{})}
-	reconciler := &Reconciler{Rules: reconcilerRulesStub{rules: []domain.TaskRule{rule}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}}, Nodes: nodes}
+	reconciler := &Reconciler{Rules: reconcilerRulesStub{rules: []domain.CollectionTask{rule}}, Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}}, Nodes: nodes}
 	first := make(chan error, 1)
 	go func() { first <- reconciler.Reconcile(context.Background(), "crypto") }()
 	<-nodes.listStarted
@@ -646,11 +646,11 @@ func TestReconcilerTreatsUnknownTimerReadbackAsUnknown(t *testing.T) {
 }
 
 func TestReconcilerRejectsExhaustedRemoteEnvironmentBudget(t *testing.T) {
-	rule := domain.TaskRule{SpaceID: "crypto", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
+	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: true,
 		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	reconciler := &Reconciler{
-		Rules:   reconcilerRulesStub{rules: []domain.TaskRule{rule}},
+		Rules:   reconcilerRulesStub{rules: []domain.CollectionTask{rule}},
 		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
 		Nodes:   &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"managed_environment_budget_bytes": 0}}}},
 		Metrics: metrics,

@@ -127,8 +127,8 @@ describe("storage configuration workbench", () => {
 
     await wrapper.find(".dataset-tag").trigger("click");
     expect(mocks.push).toHaveBeenCalledWith({
-      path: "/collector/data-management",
-      query: { tab: "datasets", space_id: "space-a", dataset_id: "dataset-a" }
+      path: "/collector/tasks",
+      query: { tab: "results", space_id: "space-a" }
     });
 
     await wrapper.find(".dataset-tag").trigger("keydown", { key: "Enter" });

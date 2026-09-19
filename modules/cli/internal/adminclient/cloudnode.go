@@ -128,26 +128,26 @@ type CloudNodeListFilter struct {
 	BizType        string
 }
 
-type TaskRuleSummary struct {
+type CollectionTaskSummary struct {
 	SpaceID    string `json:"space_id"`
-	RuleID     string `json:"rule_id"`
+	TaskID     string `json:"task_id"`
 	DataType   string `json:"data_type"`
 	Provider   string `json:"provider"`
 	MarketType string `json:"market_type"`
 	Enabled    bool   `json:"enabled"`
 }
 
-// CreateTaskRule creates a disabled rule through the Collector control plane.
+// CreateTask creates a disabled rule through the Collector control plane.
 // Callers should enable it only after their deployment-specific gates pass.
-func (c *Client) CreateTaskRule(ctx context.Context, spaceID, ruleID, dataType, provider, marketType, creator string, collectParams map[string]any) error {
+func (c *Client) CreateTask(ctx context.Context, spaceID, ruleID, dataType, provider, marketType, creator string, collectParams map[string]any) error {
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
-		RuleID  string  `json:"rule_id"`
+		TaskID  string  `json:"task_id"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/CreateTaskRule", map[string]any{
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/CreateTask", map[string]any{
 		"rule": map[string]any{
 			"space_id":       spaceID,
-			"rule_id":        ruleID,
+			"task_id":        ruleID,
 			"data_type":      dataType,
 			"provider":       provider,
 			"market_type":    marketType,
@@ -156,99 +156,99 @@ func (c *Client) CreateTaskRule(ctx context.Context, spaceID, ruleID, dataType, 
 			"collect_params": collectParams,
 		},
 	}, &response); err != nil {
-		return fmt.Errorf("CreateTaskRule: %w", err)
+		return fmt.Errorf("CreateTask: %w", err)
 	}
 	if !isRetInfoSuccess(response.RetInfo.Code) {
-		return fmt.Errorf("CreateTaskRule rejected: %s", response.RetInfo.Msg)
+		return fmt.Errorf("CreateTask rejected: %s", response.RetInfo.Msg)
 	}
-	if strings.TrimSpace(response.RuleID) != "" && response.RuleID != ruleID {
-		return fmt.Errorf("CreateTaskRule returned rule_id %q, expected %q", response.RuleID, ruleID)
+	if strings.TrimSpace(response.TaskID) != "" && response.TaskID != ruleID {
+		return fmt.Errorf("CreateTask returned task_id %q, expected %q", response.TaskID, ruleID)
 	}
 	return nil
 }
 
-// EnableTaskRule preserves the server's canonical rule definition and only
+// EnableCollectionTask preserves the server's canonical rule definition and only
 // changes its enabled state. This keeps coverage and dataset fields under the
 // control plane rather than reconstructing them in an operator command.
-func (c *Client) EnableTaskRule(ctx context.Context, spaceID, ruleID string) error {
+func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, ruleID string) error {
 	var detail struct {
 		RetInfo retInfo        `json:"ret_info"`
 		Rule    map[string]any `json:"rule"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskRuleDetail", map[string]any{
-		"space_id": spaceID, "rule_id": ruleID,
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskDetail", map[string]any{
+		"space_id": spaceID, "task_id": ruleID,
 	}, &detail); err != nil {
-		return fmt.Errorf("GetTaskRuleDetail: %w", err)
+		return fmt.Errorf("GetTaskDetail: %w", err)
 	}
 	if !isRetInfoSuccess(detail.RetInfo.Code) {
-		return fmt.Errorf("GetTaskRuleDetail rejected: %s", detail.RetInfo.Msg)
+		return fmt.Errorf("GetTaskDetail rejected: %s", detail.RetInfo.Msg)
 	}
 	if len(detail.Rule) == 0 {
-		return fmt.Errorf("GetTaskRuleDetail returned no rule")
+		return fmt.Errorf("GetTaskDetail returned no rule")
 	}
 	detail.Rule["space_id"] = spaceID
-	detail.Rule["rule_id"] = ruleID
+	detail.Rule["task_id"] = ruleID
 	detail.Rule["enabled"] = true
 	var updated struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/UpdateTaskRule", map[string]any{
-		"space_id": spaceID, "rule_id": ruleID, "rule": detail.Rule,
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/UpdateTask", map[string]any{
+		"space_id": spaceID, "task_id": ruleID, "rule": detail.Rule,
 	}, &updated); err != nil {
-		return fmt.Errorf("UpdateTaskRule: %w", err)
+		return fmt.Errorf("UpdateTask: %w", err)
 	}
 	if !isRetInfoSuccess(updated.RetInfo.Code) {
-		return fmt.Errorf("UpdateTaskRule rejected: %s", updated.RetInfo.Msg)
+		return fmt.Errorf("UpdateTask rejected: %s", updated.RetInfo.Msg)
 	}
 	return nil
 }
 
-// DisableTaskRule disables a rule without deleting its runtime history. It is
+// DisableTask disables a rule without deleting its runtime history. It is
 // used to roll back an activation when the Timer assignment/readback gate
 // fails after rule enablement.
-func (c *Client) DisableTaskRule(ctx context.Context, spaceID, ruleID string) error {
+func (c *Client) DisableTask(ctx context.Context, spaceID, ruleID string) error {
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DisableTaskRule", map[string]any{
-		"space_id": spaceID, "rule_id": ruleID,
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DisableTask", map[string]any{
+		"space_id": spaceID, "task_id": ruleID,
 	}, &response); err != nil {
-		return fmt.Errorf("DisableTaskRule: %w", err)
+		return fmt.Errorf("DisableTask: %w", err)
 	}
 	if !isRetInfoSuccess(response.RetInfo.Code) {
-		return fmt.Errorf("DisableTaskRule rejected: %s", response.RetInfo.Msg)
+		return fmt.Errorf("DisableTask rejected: %s", response.RetInfo.Msg)
 	}
 	return nil
 }
 
-// ListEnabledTaskRules is a narrow control-plane read used by fail-closed
+// ListEnabledTasks is a narrow control-plane read used by fail-closed
 // publication gates. It pages explicitly so a stale enabled rule cannot be
 // hidden behind the default page size.
-func (c *Client) ListEnabledTaskRules(ctx context.Context, spaceID, marketType string) ([]TaskRuleSummary, error) {
-	var result []TaskRuleSummary
+func (c *Client) ListEnabledTasks(ctx context.Context, spaceID, marketType string) ([]CollectionTaskSummary, error) {
+	var result []CollectionTaskSummary
 	for page := 1; page <= 100; page++ {
 		var response struct {
 			RetInfo retInfo           `json:"ret_info"`
-			Rules   []TaskRuleSummary `json:"rules"`
+			Rules   []CollectionTaskSummary `json:"rules"`
 			Page    struct {
 				HasMore bool `json:"has_more"`
 			} `json:"page"`
 		}
-		if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskRuleList", map[string]any{
+		if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskList", map[string]any{
 			"space_id": spaceID, "market_type": marketType, "enabled": true,
 			"page": map[string]any{"page": page, "size": 1000},
 		}, &response); err != nil {
-			return nil, fmt.Errorf("GetTaskRuleList: %w", err)
+			return nil, fmt.Errorf("GetTaskList: %w", err)
 		}
 		if !isRetInfoSuccess(response.RetInfo.Code) {
-			return nil, fmt.Errorf("GetTaskRuleList rejected: %s", response.RetInfo.Msg)
+			return nil, fmt.Errorf("GetTaskList rejected: %s", response.RetInfo.Msg)
 		}
 		result = append(result, response.Rules...)
 		if !response.Page.HasMore {
 			return result, nil
 		}
 	}
-	return nil, fmt.Errorf("GetTaskRuleList exceeded 100 pages")
+	return nil, fmt.Errorf("GetTaskList exceeded 100 pages")
 }
 
 type SubmitNodeBatchResponse struct {

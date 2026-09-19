@@ -105,7 +105,7 @@ func seedRules(dbPath string, seedFile string) (ruleseed.SeedSummary, error) {
 		return ruleseed.SeedSummary{}, fmt.Errorf("open database for rule seed: %w", err)
 	}
 	defer db.Close()
-	summary, err := ruleseed.SeedMissing(context.Background(), db.TaskRules(), rules)
+	summary, err := ruleseed.SeedMissing(context.Background(), db.Tasks(), rules)
 	if err != nil {
 		return ruleseed.SeedSummary{}, err
 	}

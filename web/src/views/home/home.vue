@@ -101,7 +101,7 @@
               :key="item.name"
               class="freshness-row"
               :class="`tone-${item.tone}`"
-              @click="go('/collector/data-management?datasetTab=browse')"
+              @click="go('/collector/tasks?tab=results')"
             >
               <span>
                 <strong>{{ item.name }}</strong>
@@ -187,7 +187,7 @@
               <h2>采集任务脉搏</h2>
               <p>用任务实例和最近执行状态判断链路是否在工作。</p>
             </div>
-            <a-button size="small" @click="go('/collector/rules?tab=instances')">查看任务</a-button>
+            <a-button size="small" @click="go('/collector/tasks?tab=instances')">查看任务</a-button>
           </div>
           <div class="pulse-bars">
             <div v-for="bar in taskPulse" :key="bar.label" class="pulse-bar">
@@ -342,8 +342,8 @@ const spaceLoadGate = new RequestGate();
 
 const pipeline = [
   { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
-  { key: "rules", stage: "02", label: "采集规则", color: "#0d9488", path: "/collector/rules" },
-  { key: "datasets", stage: "03", label: "数据集管理", color: "#059669", path: "/collector/data-management" },
+  { key: "rules", stage: "02", label: "采集任务", color: "#0d9488", path: "/collector/tasks" },
+  { key: "datasets", stage: "03", label: "采集结果", color: "#059669", path: "/collector/tasks?tab=results" },
   { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
   { key: "views", stage: "05", label: "构造配置", color: "#ea580c", path: "/factor/construct" },
   { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
@@ -353,32 +353,38 @@ const workflowLinks = [
   {
     title: "K 线浏览",
     description: "检查最新 bar 是否入库",
-    path: "/collector/data-management?datasetTab=browse",
+    path: "/collector/tasks?tab=results",
     icon: "K",
     tint: "rgba(59, 111, 217, 12%)"
   },
   {
     title: "索引查询",
     description: "查看数据集上的索引",
-    path: "/collector/data-management",
+    path: "/collector/tasks?tab=results",
     icon: "Q",
     tint: "rgba(234, 88, 12, 12%)"
   },
   {
     title: "采集实例",
     description: "任务执行状态与失败明细",
-    path: "/collector/rules?tab=instances",
+    path: "/collector/tasks?tab=instances",
     icon: "T",
     tint: "rgba(13, 148, 136, 12%)"
   },
   {
-    title: "数据集管理",
-    description: "定义采集写入的数据契约",
-    path: "/collector/data-management",
+    title: "采集结果",
+    description: "查看采集任务产生的真实数据",
+    path: "/collector/tasks?tab=results",
     icon: "D",
     tint: "rgba(5, 150, 105, 12%)"
   },
-  { title: "因子结果", description: "查看因子计算写回结果", path: "/factor/datasets", icon: "F", tint: "rgba(192, 38, 211, 12%)" },
+  {
+    title: "因子结果",
+    description: "查看因子计算写回结果",
+    path: "/factor/datasets",
+    icon: "F",
+    tint: "rgba(192, 38, 211, 12%)"
+  },
   { title: "执行账户", description: "账户余额与下单通道", path: "/trading/accounts", icon: "A", tint: "rgba(180, 83, 9, 12%)" }
 ];
 
@@ -434,7 +440,7 @@ const dashboardKpis = computed(() => [
     note: "最新 K 线延迟",
     delta: "APT-USDT",
     tone: "ok",
-    path: "/collector/data-management?datasetTab=browse"
+    path: "/collector/tasks?tab=results"
   },
   {
     key: "tasks",
@@ -444,7 +450,7 @@ const dashboardKpis = computed(() => [
     note: "规则展开实例",
     delta: "运行中 18",
     tone: "neutral",
-    path: "/collector/rules?tab=instances"
+    path: "/collector/tasks?tab=instances"
   },
   {
     key: "incidents",
@@ -454,7 +460,7 @@ const dashboardKpis = computed(() => [
     note: "失败 / 超时",
     delta: "需处理",
     tone: "danger",
-    path: "/collector/rules?tab=instances"
+    path: "/collector/tasks?tab=instances"
   },
   {
     key: "nodes",
@@ -464,7 +470,7 @@ const dashboardKpis = computed(() => [
     note: nodesNote.value,
     delta: "已登记",
     tone: "neutral",
-    path: "/collector/rules?tab=executors"
+    path: "/collector/tasks?tab=executors"
   },
   {
     key: "services",
@@ -499,7 +505,7 @@ const incidentItems = [
     title: "7 个采集实例失败",
     meta: "交易所限频 / 网络超时",
     action: "处理任务",
-    path: "/collector/rules?tab=instances",
+    path: "/collector/tasks?tab=instances",
     tone: "warn"
   },
   {
@@ -619,12 +625,12 @@ async function loadSpaceScoped() {
     listSubjects({ space_id: spaceId, page }).then(rsp => {
       if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
     }),
-    callControl<{ space_id: string; page: { page: number; size: number } }, { rules?: unknown[]; page?: { total?: number } }>(
+    callControl<{ space_id: string; page: { page: number; size: number } }, { tasks?: unknown[]; page?: { total?: number } }>(
       "collectmgr",
-      "GetTaskRuleList",
+      "GetTaskList",
       { space_id: spaceId, page: { page: 1, size: 1 } }
     ).then(rsp => {
-      if (isCurrent()) counts.rules = Number(rsp.page?.total) || rsp.rules?.length || 0;
+      if (isCurrent()) counts.rules = Number(rsp.page?.total) || rsp.tasks?.length || 0;
     }),
     callControl<
       { filter: { space_id: string; page: { page: number; size: number } } },

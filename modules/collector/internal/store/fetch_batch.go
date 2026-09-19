@@ -54,6 +54,10 @@ type FetchCompletionEffects struct {
 
 func NewFetchBatchRepository(db *gorm.DB) *FetchBatchRepository { return &FetchBatchRepository{db: db} }
 
+func (r *FetchBatchRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
+	return r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.BatchInvocation{}).Error
+}
+
 func (r *FetchBatchRepository) CreatePlanned(ctx context.Context, batch *domain.BatchInvocation) (bool, error) {
 	if batch == nil {
 		return false, gorm.ErrInvalidData
@@ -221,7 +225,7 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 		for _, item := range effects.InstanceUpdates {
 			query := tx.Model(&domain.TaskInstance{}).Where("c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_is_deleted = ?", item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, false)
 			if item.TaskID != "" {
-				query = query.Where("c_task_id = ?", item.TaskID)
+				query = query.Where("c_instance_id = ?", item.TaskID)
 			}
 			if !item.TargetDataTime.IsZero() {
 				// Completion order is not data order: an older SCF invocation can

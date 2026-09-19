@@ -105,7 +105,7 @@ describe("page layout standards", () => {
     const taskManagement = read("collector/task-management/index.vue");
     const taskInstances = read("collector/task-instances/task-instances.vue");
     const collectorRules = read("collector/collector-rules/collector-rules.vue");
-    const dataManagement = read("collector/data-management/index.vue");
+    const taskResults = read("collector/task-results/index.vue");
     const gatewayNodes = read("ops/service-management/gateway-nodes.vue");
     const serviceInstances = read("settings/service-deployments/index.vue");
     const storage = read("ops/storage/index.vue");
@@ -117,7 +117,8 @@ describe("page layout standards", () => {
     expectMargin(taskInstances, ".task-toolbar", "margin-bottom", 8);
     expect(collectorRules).toContain('class="rule-toolbar"');
     expectMargin(collectorRules, ".rule-toolbar", "margin-bottom", 5);
-    expect(dataManagement).toMatch(/:deep\(\.page-head\)\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
+    expect(taskResults).toContain('class="moox-page task-results-page"');
+    expect(taskResults).toContain('class="moox-inner"');
 
     expectMargin(gatewayNodes, ".toolbar", "margin-bottom", 8);
     expect(serviceInstances).not.toContain('class="page-head"');

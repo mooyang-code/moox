@@ -123,6 +123,7 @@ type Writer interface {
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error)
+	DeleteView(ctx context.Context, spaceID string, viewID string) error
 	RequestViewRebuild(ctx context.Context, spaceID string, viewID string) (*pb.View, error)
 	UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error)
 	ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error)

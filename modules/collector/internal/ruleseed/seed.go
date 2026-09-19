@@ -22,7 +22,9 @@ type ruleSeed struct {
 
 type ruleSeedItem struct {
 	SpaceID       string         `yaml:"space_id"`
-	RuleID        string         `yaml:"rule_id"`
+	TaskID        string         `yaml:"task_id"`
+	TaskName      string         `yaml:"task_name"`
+	Description   string         `yaml:"description"`
 	DataType      string         `yaml:"data_type"`
 	Provider      string         `yaml:"provider"`
 	MarketType    string         `yaml:"market_type"`
@@ -38,12 +40,12 @@ type SeedSummary struct {
 }
 
 // Load reads and validates a Collector rule bundle.
-func Load(r io.Reader) ([]domain.TaskRule, error) {
+func Load(r io.Reader) ([]domain.CollectionTask, error) {
 	return loadRuleSeed(r)
 }
 
 // LoadFile reads and validates a Collector rule bundle from disk.
-func LoadFile(path string) ([]domain.TaskRule, error) {
+func LoadFile(path string) ([]domain.CollectionTask, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("seed file path is required")
 	}
@@ -55,7 +57,7 @@ func LoadFile(path string) ([]domain.TaskRule, error) {
 	return Load(file)
 }
 
-func loadRuleSeed(r io.Reader) ([]domain.TaskRule, error) {
+func loadRuleSeed(r io.Reader) ([]domain.CollectionTask, error) {
 	if r == nil {
 		return nil, fmt.Errorf("seed reader is required")
 	}
@@ -76,16 +78,16 @@ func loadRuleSeed(r io.Reader) ([]domain.TaskRule, error) {
 		return nil, fmt.Errorf("rule seed must contain at least one rule")
 	}
 
-	rules := make([]domain.TaskRule, 0, len(seed.Rules))
+	rules := make([]domain.CollectionTask, 0, len(seed.Rules))
 	seen := make(map[string]struct{}, len(seed.Rules))
 	for index, item := range seed.Rules {
 		rule, err := validateRuleSeedItem(item)
 		if err != nil {
 			return nil, fmt.Errorf("rules[%d]: %w", index, err)
 		}
-		key := rule.SpaceID + "\x00" + rule.RuleID
+		key := rule.SpaceID + "\x00" + rule.TaskID
 		if _, exists := seen[key]; exists {
-			return nil, fmt.Errorf("rules[%d]: duplicate rule %s/%s", index, rule.SpaceID, rule.RuleID)
+			return nil, fmt.Errorf("rules[%d]: duplicate rule %s/%s", index, rule.SpaceID, rule.TaskID)
 		}
 		seen[key] = struct{}{}
 		rules = append(rules, rule)
@@ -93,39 +95,41 @@ func loadRuleSeed(r io.Reader) ([]domain.TaskRule, error) {
 	return rules, nil
 }
 
-func validateRuleSeedItem(item ruleSeedItem) (domain.TaskRule, error) {
+func validateRuleSeedItem(item ruleSeedItem) (domain.CollectionTask, error) {
 	spaceID := strings.TrimSpace(item.SpaceID)
-	ruleID := strings.TrimSpace(item.RuleID)
+	ruleID := strings.TrimSpace(item.TaskID)
 	dataType := strings.ToLower(strings.TrimSpace(item.DataType))
 	provider := strings.ToLower(strings.TrimSpace(item.Provider))
 	marketType := strings.ToLower(strings.TrimSpace(item.MarketType))
 	if spaceID == "" || ruleID == "" || dataType == "" || provider == "" || marketType == "" {
-		return domain.TaskRule{}, fmt.Errorf("space_id, rule_id, data_type, provider and market_type are required")
+		return domain.CollectionTask{}, fmt.Errorf("space_id, task_id, data_type, provider and market_type are required")
 	}
 	if item.CollectParams == nil {
-		return domain.TaskRule{}, fmt.Errorf("collect_params is required")
+		return domain.CollectionTask{}, fmt.Errorf("collect_params is required")
 	}
 	rawParams, err := json.Marshal(item.CollectParams)
 	if err != nil {
-		return domain.TaskRule{}, fmt.Errorf("marshal collect_params: %w", err)
+		return domain.CollectionTask{}, fmt.Errorf("marshal collect_params: %w", err)
 	}
 	params, err := domain.ParseCollectParams(string(rawParams), provider, marketType, dataType)
 	if err != nil {
-		return domain.TaskRule{}, fmt.Errorf("collect_params: %w", err)
+		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 	}
 	if err := params.Validate(); err != nil {
-		return domain.TaskRule{}, fmt.Errorf("collect_params: %w", err)
+		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 	}
 	if params.Provider != provider || params.MarketType != marketType || params.Collector.DataType != dataType {
-		return domain.TaskRule{}, fmt.Errorf("collect_params provider, market_type and data_type must match rule fields")
+		return domain.CollectionTask{}, fmt.Errorf("collect_params provider, market_type and data_type must match rule fields")
 	}
 	canonical, err := json.Marshal(params)
 	if err != nil {
-		return domain.TaskRule{}, fmt.Errorf("marshal canonical collect_params: %w", err)
+		return domain.CollectionTask{}, fmt.Errorf("marshal canonical collect_params: %w", err)
 	}
-	return domain.TaskRule{
+	return domain.CollectionTask{
 		SpaceID:       spaceID,
-		RuleID:        ruleID,
+		TaskID:        ruleID,
+		TaskName:      strings.TrimSpace(item.TaskName),
+		Description:   strings.TrimSpace(item.Description),
 		DataType:      dataType,
 		Provider:      provider,
 		MarketType:    marketType,
@@ -135,25 +139,25 @@ func validateRuleSeedItem(item ruleSeedItem) (domain.TaskRule, error) {
 	}, nil
 }
 
-// SeedMissing inserts only absent (space_id, rule_id) pairs. Existing rows are
+// SeedMissing inserts only absent (space_id, task_id) pairs. Existing rows are
 // deliberately left untouched so a user disable or edit survives redeploy.
-func SeedMissing(ctx context.Context, repo *store.TaskRuleRepository, rules []domain.TaskRule) (SeedSummary, error) {
+func SeedMissing(ctx context.Context, repo *store.CollectionTaskRepository, rules []domain.CollectionTask) (SeedSummary, error) {
 	if repo == nil {
 		return SeedSummary{}, fmt.Errorf("task rule repository is required")
 	}
 	var summary SeedSummary
 	for _, rule := range rules {
-		_, err := repo.GetByRuleID(ctx, rule.SpaceID, rule.RuleID)
+		_, err := repo.GetByTaskID(ctx, rule.SpaceID, rule.TaskID)
 		switch {
 		case err == nil:
 			summary.Unchanged++
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			if err := repo.Create(ctx, rule); err != nil {
-				return summary, fmt.Errorf("create rule %s/%s: %w", rule.SpaceID, rule.RuleID, err)
+				return summary, fmt.Errorf("create rule %s/%s: %w", rule.SpaceID, rule.TaskID, err)
 			}
 			summary.Created++
 		default:
-			return summary, fmt.Errorf("check rule %s/%s: %w", rule.SpaceID, rule.RuleID, err)
+			return summary, fmt.Errorf("check rule %s/%s: %w", rule.SpaceID, rule.TaskID, err)
 		}
 	}
 	return summary, nil

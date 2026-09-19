@@ -116,7 +116,7 @@ async function start() {
   try {
     await startKlineResampleBackfill({
       space_id: props.spaceId,
-      rule_id: props.ruleId,
+      task_id: props.ruleId,
       request_id: `resample-${Date.now()}`,
       start: new Date(form.start).toISOString(),
       end: new Date(form.end).toISOString()
@@ -136,7 +136,7 @@ async function cancel() {
   cancelling.value = true;
   errorMessage.value = "";
   try {
-    await cancelKlineResampleBackfill({ space_id: props.spaceId, rule_id: props.ruleId, request_id: requestId });
+    await cancelKlineResampleBackfill({ space_id: props.spaceId, task_id: props.ruleId, request_id: requestId });
     Message.success("已取消回填");
     emit("cancelled");
   } catch (error) {

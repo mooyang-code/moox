@@ -33,6 +33,8 @@
           <a-table
             v-else
             row-key="order_id"
+            size="small"
+            :bordered="{ cell: true }"
             :data="orders"
             :loading="loading"
             :pagination="orderPagination"
@@ -124,6 +126,7 @@
                 :data="orderFills"
                 :pagination="false"
                 size="small"
+                :bordered="{ cell: true }"
                 :scroll="{ x: 'max-content' }"
               >
                 <template #columns>

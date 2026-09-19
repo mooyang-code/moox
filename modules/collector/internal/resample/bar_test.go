@@ -174,14 +174,14 @@ func testRuleSpec(t *testing.T, sourceRaw, targetRaw string) RuleSpec {
 	source := mustFrequency(t, sourceRaw)
 	target := mustFrequency(t, targetRaw)
 	return RuleSpec{
-		RuleID:          "rule-1",
-		SpaceID:         "crypto",
-		SourceDatasetID: "dataset_binance_spot_kline_1m",
-		SourceFrequency: source,
-		SourceSeriesTag: "venue:binance",
-		TargetDatasetID: "dataset_spot_kline_derived_" + target.Slug,
-		TargetFrequency: target,
-		Alignment:       AlignmentEpochUTC,
+		TaskID: "rule-1",
+		SpaceID:          "crypto",
+		SourceDatasetID:  "dataset_binance_spot_kline_1m",
+		SourceFrequency:  source,
+		SourceSeriesTag:  "venue:binance",
+		TargetDatasetID:  "dataset_spot_kline_derived_" + target.Slug,
+		TargetFrequency:  target,
+		Alignment:        AlignmentEpochUTC,
 	}
 }
 

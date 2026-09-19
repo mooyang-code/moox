@@ -40,7 +40,7 @@ func NewJobDefinition() jobdef.JobDefinition {
 	}
 }
 
-func buildTaskSpecs(_ context.Context, _ *domain.TaskRule, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
+func buildTaskSpecs(_ context.Context, _ *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
 	if params == nil || params.Collector.DataType != "kline_resample" {
 		return nil, fmt.Errorf("kline resample params are required")
 	}

@@ -1,9 +1,11 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS t_collector_task_rules (
+CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
-    c_rule_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_task_name TEXT NOT NULL,
+    c_description TEXT NOT NULL DEFAULT '',
     c_data_type TEXT NOT NULL DEFAULT '',
     c_provider TEXT NOT NULL DEFAULT '',
     c_market_type TEXT NOT NULL DEFAULT '',
@@ -12,24 +14,27 @@ CREATE TABLE IF NOT EXISTS t_collector_task_rules (
     c_creator TEXT NOT NULL DEFAULT '',
     c_prepare_state TEXT NOT NULL DEFAULT 'ready',
     c_last_error TEXT NOT NULL DEFAULT '',
+    c_result_dataset_id TEXT NOT NULL DEFAULT '',
+    c_result_view_id TEXT NOT NULL DEFAULT '',
     c_coverage_start_time DATETIME,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_rules_space_rule ON t_collector_task_rules (c_space_id, c_rule_id);
-CREATE INDEX IF NOT EXISTS idx_collector_rules_space ON t_collector_task_rules (c_space_id);
-CREATE INDEX IF NOT EXISTS idx_collector_rules_provider ON t_collector_task_rules (c_provider);
-CREATE INDEX IF NOT EXISTS idx_collector_rules_market_type ON t_collector_task_rules (c_market_type);
-CREATE INDEX IF NOT EXISTS idx_collector_rules_type ON t_collector_task_rules (c_data_type);
-CREATE INDEX IF NOT EXISTS idx_collector_rules_enabled ON t_collector_task_rules (c_enabled);
-CREATE INDEX IF NOT EXISTS idx_collector_rules_prepare ON t_collector_task_rules (c_data_type, c_prepare_state, c_enabled);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_task ON t_collector_tasks (c_space_id, c_task_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_name ON t_collector_tasks (c_space_id, c_task_name);
+CREATE INDEX IF NOT EXISTS idx_collector_tasks_space ON t_collector_tasks (c_space_id);
+CREATE INDEX IF NOT EXISTS idx_collector_tasks_provider ON t_collector_tasks (c_provider);
+CREATE INDEX IF NOT EXISTS idx_collector_tasks_market_type ON t_collector_tasks (c_market_type);
+CREATE INDEX IF NOT EXISTS idx_collector_tasks_type ON t_collector_tasks (c_data_type);
+CREATE INDEX IF NOT EXISTS idx_collector_tasks_enabled ON t_collector_tasks (c_enabled);
+CREATE INDEX IF NOT EXISTS idx_collector_tasks_prepare ON t_collector_tasks (c_data_type, c_prepare_state, c_enabled);
 
 CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
+    c_instance_id TEXT NOT NULL,
     c_task_id TEXT NOT NULL,
-    c_rule_id TEXT NOT NULL,
     c_provider TEXT NOT NULL DEFAULT '',
     c_market_type TEXT NOT NULL DEFAULT '',
     c_data_type TEXT NOT NULL DEFAULT '',
@@ -47,18 +52,18 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_space_task ON t_collector_task_instances (c_space_id, c_task_id);
-CREATE INDEX IF NOT EXISTS idx_collector_instances_rule ON t_collector_task_instances (c_space_id, c_rule_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_space_instance ON t_collector_task_instances (c_space_id, c_instance_id);
+CREATE INDEX IF NOT EXISTS idx_collector_instances_task ON t_collector_task_instances (c_space_id, c_task_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_subject ON t_collector_task_instances (c_space_id, c_dataset_id, c_subject_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_function ON t_collector_task_instances (c_space_id, c_function_name);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_instances (c_last_exec_status);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_deleted ON t_collector_task_instances (c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_ctime ON t_collector_task_instances (c_ctime DESC);
 
-CREATE TRIGGER IF NOT EXISTS update_collector_rules_mtime
-AFTER UPDATE ON t_collector_task_rules
+CREATE TRIGGER IF NOT EXISTS update_collector_tasks_mtime
+AFTER UPDATE ON t_collector_tasks
 BEGIN
-    UPDATE t_collector_task_rules SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+    UPDATE t_collector_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
 END;
 
 CREATE TRIGGER IF NOT EXISTS update_collector_instances_mtime
@@ -75,7 +80,7 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_batches (
     c_schedule_id TEXT NOT NULL,
     c_batch_kind TEXT NOT NULL,
     c_shard_index INTEGER NOT NULL,
-    c_rule_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_region TEXT NOT NULL,
@@ -118,7 +123,7 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_retry_items (
     c_retry_key TEXT NOT NULL,
   c_source_batch_id TEXT NOT NULL,
   c_batch_kind TEXT NOT NULL DEFAULT 'realtime',
-    c_rule_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,

@@ -30,7 +30,7 @@
 
 ## 部署注意事项
 
-- `crypto` 黑名单加入 `ap-guangzhou`，实际迁移到新加坡 18、香港 40，总 Timer 容量 58。新加坡 SCF 账号总配额为 50，已被 `stockcn` 占用其余槽位，因此未删除或影响其他空间函数。
+- `crypto` 黑名单加入 `ap-guangzhou`，当前配置为新加坡 17、香港 43，总 Timer 容量 60。新加坡 SCF 账号总配额为 50，已被 `stockcn` 占用其余槽位，因此未删除或影响其他空间函数。
 - 黑名单是硬禁止：先禁用黑名单内已有 Timer，再分配允许地域；容量不足时告警，不恢复禁用地域。Collector 配置部署和 SCF 发布都必须覆盖这一约束。
 - 单服务包也必须检查 ZIP 文件清单。本轮首次 Collector 包误带默认 app.yaml，导致服务打开开发默认库，已重新部署正确的 `../data/collector/moox_collector.db` 配置并从私有 manifest 重渲染 Trade DNSResolver；原业务库未清空。
 - 校验运行日志中的实际 DB 路径、DNSResolver 和协调成功记录，不能仅以服务进程启动成功作为验收。
@@ -41,4 +41,4 @@
 - CLI 配置包及相关发布测试通过；CLI 命令全包存在会话前 metadata seed 状态修改引起的 `TestDefaultMetadataUsesUnifiedCryptoMarket` 失败，不属于本次补丁，未回退该修改。
 - HTTP 缓存和行情身份/DNS 相关 race 测试通过。
 - 独立 codeCR 对身份、DNS 透传和 Transport 缓存未发现 P1/P2。
-- SCF 包 `crypto-20260910-17` 已在新加坡 18、香港 40 个 Timer 节点发布并通过部署门禁；新加坡、香港 Invoke 节点各 1 个。广州 39 个及北京 1 个旧 Timer/Invoke 节点已提交官方删除批次 `node-batch-2d3d5d7f-74aa-43fd-8844-f3bd046cb0fd`（异步处理中）。香港 Timer 手动触发返回成功响应但部分 1m 请求因 Binance 公网限时失败，需以整点 1h 批次作为最终验收。
+- SCF 包 `crypto-20260910-17` 已在新加坡 17、香港 43 个 Timer 节点发布并通过部署门禁；新加坡、香港 Invoke 节点各 1 个。广州 39 个及北京 1 个旧 Timer/Invoke 节点已提交官方删除批次 `node-batch-2d3d5d7f-74aa-43fd-8844-f3bd046cb0fd`（异步处理中）。香港 Timer 手动触发返回成功响应但部分 1m 请求因 Binance 公网限时失败，需以整点 1h 批次作为最终验收。

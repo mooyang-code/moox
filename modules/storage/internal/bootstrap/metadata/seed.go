@@ -95,7 +95,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 	for _, item := range seed.Spaces {
 		if _, err := store.UpsertSpace(ctx, &pb.Space{
 			SpaceId: item.SpaceID, Name: item.Name, Description: item.Description,
-			Owner: item.Owner, Status: item.Status,
+			Owner: item.Owner, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("space", item.SpaceID, err)
 		}
@@ -397,11 +397,14 @@ type seedFile struct {
 
 // seedSpace 描述待初始化的 Space 元数据。
 type seedSpace struct {
-	SpaceID     string `yaml:"space_id"`
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Owner       string `yaml:"owner"`
-	Status      string `yaml:"status"`
+	SpaceID     string            `yaml:"space_id"`
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Owner       string            `yaml:"owner"`
+	Status      string            `yaml:"status"`
+	Market      string            `yaml:"market"`
+	Timezone    string            `yaml:"timezone"`
+	Attributes  map[string]string `yaml:"attributes"`
 }
 
 // seedDataSource 描述待初始化的数据源元数据。
