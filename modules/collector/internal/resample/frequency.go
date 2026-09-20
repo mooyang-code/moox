@@ -95,6 +95,41 @@ func ValidateResamplePair(source, target FixedFrequency) error {
 	return nil
 }
 
+// ValidateTaskParams validates the resample runtime contract after the result
+// Dataset identity has been assigned from space_id and task_id.
+func ValidateTaskParams(params *domain.CollectParams) error {
+	if params == nil {
+		return fmt.Errorf("resample collect params are required")
+	}
+	if strings.TrimSpace(params.SourceDatasetID) == "" {
+		return fmt.Errorf("source_dataset_id is required")
+	}
+	if strings.TrimSpace(params.TargetDatasetID) == "" {
+		return fmt.Errorf("target_dataset_id is required")
+	}
+	if strings.TrimSpace(params.SourceDatasetID) == strings.TrimSpace(params.TargetDatasetID) {
+		return fmt.Errorf("source and target Dataset IDs must differ")
+	}
+	if strings.TrimSpace(params.SourceSeriesTag) == "" {
+		return fmt.Errorf("source_series_tag is required")
+	}
+	if strings.TrimSpace(params.Alignment) != AlignmentEpochUTC {
+		return fmt.Errorf("alignment must be %s", AlignmentEpochUTC)
+	}
+	source, err := ParseFixedFrequency(params.SourceFrequency)
+	if err != nil {
+		return fmt.Errorf("source_frequency: %w", err)
+	}
+	target, err := ParseFixedFrequency(params.TargetFrequency)
+	if err != nil {
+		return fmt.Errorf("target_frequency: %w", err)
+	}
+	if err := ValidateResamplePair(source, target); err != nil {
+		return err
+	}
+	return ValidateTargetDatasetID(params.TargetDatasetID)
+}
+
 // BucketAt returns the latest fully closed target bucket at effectiveNow on
 // the fixed grid anchored at origin.
 func BucketAt(effectiveNow, origin time.Time, target FixedFrequency) (start, end time.Time) {

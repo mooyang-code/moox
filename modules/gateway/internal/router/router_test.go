@@ -82,8 +82,8 @@ func TestNativeCallerPolicyRestrictsMooxSkillToTimeSeriesRead(t *testing.T) {
 	}{
 		{name: "skill read", caller: "moox-skill", servicePath: "trpc.moox.storage.PrimaryStore", method: "ReadTimeSeriesRows", allowed: true},
 		{name: "skill storage write", caller: "moox-skill", servicePath: "trpc.moox.storage.PrimaryStore", method: "UpsertFields"},
-		{name: "skill wildcard collector write", caller: "moox-skill", servicePath: "trpc.moox.collector.CollectMgr", method: "CreateTaskRule"},
-		{name: "ordinary caller unchanged", caller: "admin-gateway", servicePath: "trpc.moox.collector.CollectMgr", method: "CreateTaskRule", allowed: true},
+		{name: "skill wildcard collector write", caller: "moox-skill", servicePath: "trpc.moox.collector.CollectMgr", method: "CreateTask"},
+		{name: "ordinary caller unchanged", caller: "admin-gateway", servicePath: "trpc.moox.collector.CollectMgr", method: "CreateTask", allowed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.allowed, nativeCallerPolicyAllows(test.caller, test.servicePath, test.method))
@@ -254,9 +254,9 @@ func TestNativeGatewayRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T
 	})
 
 	proxy := collectorpb.NewCollectMgrClientProxy(gatewayauth.NewTRPCClientOptions("ip://"+gatewayListener.Addr().String(), testNode, credentials)...)
-	_, err = proxy.CreateTaskRule(context.Background(), &collectorpb.CreateTaskRuleReq{})
+	_, err = proxy.CreateTask(context.Background(), &collectorpb.CreateTaskReq{})
 	require.ErrorContains(t, err, "caller is not allowed")
-	require.Zero(t, upstreamStub.createTaskRuleCalls.Load(), "wildcard write reached Collector upstream")
+	require.Zero(t, upstreamStub.createTaskCalls.Load(), "wildcard write reached Collector upstream")
 }
 
 type nativeMetadataStub struct {
@@ -265,7 +265,7 @@ type nativeMetadataStub struct {
 
 type nativeCollectorStub struct {
 	collectorpb.UnimplementedCollectMgr
-	createTaskRuleCalls atomic.Int32
+	createTaskCalls atomic.Int32
 }
 
 type nativePrimaryStoreStub struct {
@@ -279,9 +279,9 @@ func (stub *nativePrimaryStoreStub) ReadTimeSeriesRows(context.Context, *storage
 	}, nil
 }
 
-func (stub *nativeCollectorStub) CreateTaskRule(context.Context, *collectorpb.CreateTaskRuleReq) (*collectorpb.CreateTaskRuleRsp, error) {
-	stub.createTaskRuleCalls.Add(1)
-	return &collectorpb.CreateTaskRuleRsp{}, nil
+func (stub *nativeCollectorStub) CreateTask(context.Context, *collectorpb.CreateTaskReq) (*collectorpb.CreateTaskRsp, error) {
+	stub.createTaskCalls.Add(1)
+	return &collectorpb.CreateTaskRsp{}, nil
 }
 
 func (*nativeMetadataStub) GetSpace(context.Context, *storagepb.GetSpaceReq) (*storagepb.GetSpaceRsp, error) {
@@ -390,7 +390,7 @@ func TestServiceRouterRejectsMooxSkillOnWildcardWriteBeforeUpstream(t *testing.T
 	defer nonces.Close()
 	credentials := gatewayauth.Credentials{KeyID: "moox-skill", Caller: "moox-skill", Secret: testSecret}
 	handler := New(Options{NodeID: testNode, Credentials: credentials, MaxBodyBytes: 1024, Table: &table, Nonces: nonces})
-	path := "/api/service/collectmgr/CreateTaskRule"
+	path := "/api/service/collectmgr/CreateTask"
 	request := httptest.NewRequest(http.MethodPost, path, nil)
 	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{Method: http.MethodPost, Path: path, TargetNode: testNode}, time.Now())
 	require.NoError(t, err)

@@ -1,19 +1,22 @@
 import { callControl } from "@/api/admin/http";
 import type { ResampleBackfillSummary } from "@/views/collector/collection-tasks/resample-backfill";
 
-export interface KlineResampleBackfillRequest {
-  space_id: string;
-  task_id: string;
-  request_id: string;
-  start: string;
-  end: string;
+export interface CollectorPage {
+  page?: number;
+  size?: number;
+  total?: number;
+  has_more?: boolean;
+  next_cursor?: string;
 }
 
 export interface CollectorTaskResult {
   result_name?: string;
   view_id?: string;
+  view_ids?: string[];
   status?: string;
   last_data_time?: string;
+  coverage_start?: string;
+  coverage_end?: string;
   data_kind?: string;
 }
 
@@ -21,6 +24,7 @@ export interface CollectorTask {
   task_id: string;
   task_name?: string;
   description?: string;
+  space_id?: string;
   data_type?: string;
   provider?: string;
   market_type?: string;
@@ -29,24 +33,117 @@ export interface CollectorTask {
   creator?: string;
   create_time?: string;
   modify_time?: string;
+  prepare_state?: string;
+  last_error?: string;
   result?: CollectorTaskResult;
 }
 
-export async function listCollectorTasks(spaceId: string): Promise<CollectorTask[]> {
-  const response = await callControl<{ space_id: string; page: { page: number; size: number } }, { tasks?: CollectorTask[] }>(
-    "collectmgr",
-    "GetTaskList",
-    { space_id: spaceId, page: { page: 1, size: 1000 } }
-  );
-  return response.tasks || [];
+export interface CollectionTaskPayload {
+  space_id?: string;
+  task_id?: string;
+  task_name?: string;
+  description?: string;
+  data_type?: string;
+  provider?: string;
+  market_type?: string;
+  collect_params?: Record<string, unknown>;
+  enabled?: boolean;
+  creator?: string;
 }
 
-export async function deleteCollectorTask(spaceId: string, taskId: string, deleteResultData: boolean) {
-  return callControl("collectmgr", "DeleteTask", {
-    space_id: spaceId,
-    task_id: taskId,
-    delete_result_data: deleteResultData
-  });
+export interface CollectionTaskResultConfig {
+  data_node_id?: string;
+  keep_duration?: string;
+  description?: string;
+}
+
+export interface GetTaskListRequest {
+  space_id: string;
+  data_type?: string;
+  provider?: string;
+  market_type?: string;
+  enabled?: boolean;
+  task_id?: string;
+  page?: { page?: number; size?: number; cursor?: string };
+}
+
+export interface GetTaskListResponse {
+  tasks?: CollectorTask[];
+  page?: CollectorPage;
+}
+
+export interface CreateTaskRequest {
+  task: CollectionTaskPayload;
+  result_config: CollectionTaskResultConfig;
+}
+
+export interface CreateTaskResponse {
+  task_id?: string;
+}
+
+export interface UpdateTaskRequest {
+  space_id: string;
+  task_id: string;
+  task: Pick<CollectionTaskPayload, "task_id" | "task_name" | "description" | "enabled">;
+}
+
+export interface UpdateTaskResponse {
+  task?: CollectorTask;
+}
+
+export interface DisableTaskRequest {
+  space_id: string;
+  task_id: string;
+}
+
+export interface DeleteTaskRequest {
+  space_id: string;
+  task_id: string;
+  delete_result_data: boolean;
+}
+
+export interface KlineResampleBackfillRequest {
+  space_id: string;
+  task_id: string;
+  request_id: string;
+  start: string;
+  end: string;
+}
+
+export interface DataTypeConfig {
+  id: number;
+  data_type: string;
+  type_name: string;
+  type_desc: string;
+  data_source_options?: Record<string, unknown>;
+  sort_order: number;
+  version: number;
+  create_time: string;
+  modify_time: string;
+}
+
+export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {
+  return callControl<GetTaskListRequest, GetTaskListResponse>("collectmgr", "GetTaskList", params);
+}
+
+export async function CreateTask(params: CreateTaskRequest): Promise<CreateTaskResponse> {
+  return callControl<CreateTaskRequest, CreateTaskResponse>("collectmgr", "CreateTask", params);
+}
+
+export async function UpdateTask(params: UpdateTaskRequest): Promise<UpdateTaskResponse> {
+  return callControl<UpdateTaskRequest, UpdateTaskResponse>("collectmgr", "UpdateTask", params);
+}
+
+export async function DisableTask(params: DisableTaskRequest): Promise<Record<string, unknown>> {
+  return callControl<DisableTaskRequest, Record<string, unknown>>("collectmgr", "DisableTask", params);
+}
+
+export async function DeleteTask(params: DeleteTaskRequest): Promise<Record<string, unknown>> {
+  return callControl<DeleteTaskRequest, Record<string, unknown>>("collectmgr", "DeleteTask", params);
+}
+
+export async function GetDataTypeConfigs(): Promise<{ configs?: DataTypeConfig[] }> {
+  return callControl<Record<string, never>, { configs?: DataTypeConfig[] }>("collectmgr", "GetDataTypeConfigs", {});
 }
 
 export async function startKlineResampleBackfill(request: KlineResampleBackfillRequest) {

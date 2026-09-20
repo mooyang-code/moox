@@ -184,6 +184,9 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 	effects := store.FetchCompletionEffects{}
 	var original Request
 	_ = json.Unmarshal([]byte(batch.RequestJSON), &original)
+	if mismatch := completionItemIdentityMismatch(original, payload); mismatch != "" {
+		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
+	}
 	logicalSyncPointID := strings.TrimSpace(original.SyncPointID)
 	if logicalSyncPointID == "" {
 		logicalSyncPointID = payload.GetBatchId()
@@ -336,7 +339,7 @@ func taskInstanceUpdate(spaceID string, payload *marketfetchpb.MarketFetchBatchC
 	}
 	result, _ := json.Marshal(resultData)
 	return store.MarketFetchInstanceUpdate{
-		SpaceID: spaceID, TaskID: item.GetTaskId(), DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime,
+		SpaceID: spaceID, InstanceID: item.GetInstanceId(), DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime,
 		At: at, Status: status, Result: string(result),
 	}
 }
@@ -362,6 +365,47 @@ func completionIdentityMismatch(batch *domain.BatchInvocation, payload *marketfe
 	}
 	if int(payload.GetPlannedCount()) != batch.PlannedCount {
 		return fmt.Sprintf("planned_count expected=%d actual=%d", batch.PlannedCount, payload.GetPlannedCount())
+	}
+	return ""
+}
+
+func completionItemIdentityMismatch(original Request, payload *marketfetchpb.MarketFetchBatchCompleted) string {
+	if payload == nil {
+		return "payload is nil"
+	}
+	if len(original.Items) != int(payload.GetPlannedCount()) {
+		return fmt.Sprintf("request item count expected=%d actual=%d", len(original.Items), payload.GetPlannedCount())
+	}
+	if len(payload.GetItems()) != len(original.Items) {
+		return fmt.Sprintf("completion item count expected=%d actual=%d", len(original.Items), len(payload.GetItems()))
+	}
+	allowed := make(map[string]domain.CollectionItem, len(original.Items))
+	for _, item := range original.Items {
+		if strings.TrimSpace(item.InstanceID) == "" {
+			return "request item instance_id is empty"
+		}
+		if _, exists := allowed[item.InstanceID]; exists {
+			return fmt.Sprintf("request item instance_id %q is duplicated", item.InstanceID)
+		}
+		allowed[item.InstanceID] = item
+	}
+	seen := make(map[string]struct{}, len(payload.GetItems()))
+	for index, item := range payload.GetItems() {
+		if item == nil || strings.TrimSpace(item.GetInstanceId()) == "" {
+			return fmt.Sprintf("completion item %d instance_id is empty", index)
+		}
+		instanceID := item.GetInstanceId()
+		expected, exists := allowed[instanceID]
+		if !exists {
+			return fmt.Sprintf("completion item %d instance_id %q is not in the original request", index, instanceID)
+		}
+		if _, exists := seen[instanceID]; exists {
+			return fmt.Sprintf("completion item %d instance_id %q is duplicated", index, instanceID)
+		}
+		seen[instanceID] = struct{}{}
+		if item.GetSubjectId() != expected.SubjectID {
+			return fmt.Sprintf("completion item %d subject_id does not match instance %q", index, instanceID)
+		}
 	}
 	return ""
 }
@@ -405,9 +449,9 @@ func retryKey(batchID, subjectID, target string) string {
 }
 
 func retryCollectionItem(request Request, result *marketfetchpb.MarketFetchItemResult, key string) domain.CollectionItem {
-	if result.GetTaskId() != "" {
+	if result.GetInstanceId() != "" {
 		for _, item := range request.Items {
-			if item.TaskID != result.GetTaskId() {
+			if item.InstanceID != result.GetInstanceId() {
 				continue
 			}
 			item.SourceEventID = key
@@ -435,5 +479,5 @@ func retryCollectionItem(request Request, result *marketfetchpb.MarketFetchItemR
 	if request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
 		candidateIndex = klineProviderAttemptBudget
 	}
-	return domain.CollectionItem{TaskID: result.GetTaskId(), SubjectID: result.GetSubjectId(), Symbol: result.GetSymbol(), TargetDataTime: result.GetTargetDataTime(), SourceEventID: key, DatasetID: request.DatasetID, Frequency: request.Frequency, Provider: request.Provider, SourceID: request.SourceID, MarketType: request.MarketType, DataType: "kline", CandidateIndex: candidateIndex}
+	return domain.CollectionItem{InstanceID: result.GetInstanceId(), SubjectID: result.GetSubjectId(), Symbol: result.GetSymbol(), TargetDataTime: result.GetTargetDataTime(), SourceEventID: key, DatasetID: request.DatasetID, Frequency: request.Frequency, Provider: request.Provider, SourceID: request.SourceID, MarketType: request.MarketType, DataType: "kline", CandidateIndex: candidateIndex}
 }

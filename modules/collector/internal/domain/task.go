@@ -1,6 +1,11 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
 
 type CollectionTaskPrepareState string
 
@@ -40,6 +45,26 @@ type CollectionTask struct {
 	CoverageStartTime *time.Time                 `gorm:"column:c_coverage_start_time"`
 	CreateTime        time.Time                  `gorm:"column:c_ctime"`
 	ModifyTime        time.Time                  `gorm:"column:c_mtime"`
+}
+
+// NormalizeCollectionTaskName removes the presentation whitespace from a task
+// name before it is validated or persisted.
+func NormalizeCollectionTaskName(name string) string {
+	return strings.TrimSpace(name)
+}
+
+// ValidateCollectionTaskName validates the user-visible task name. The length
+// is measured in Unicode code points rather than bytes.
+func ValidateCollectionTaskName(name string) error {
+	name = NormalizeCollectionTaskName(name)
+	if name == "" {
+		return fmt.Errorf("task_name is required")
+	}
+	length := utf8.RuneCountInString(name)
+	if length > 80 {
+		return fmt.Errorf("task_name must contain 1-80 Unicode characters")
+	}
+	return nil
 }
 
 // TableName returns the Collector collection-task table.

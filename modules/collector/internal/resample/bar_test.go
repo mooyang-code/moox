@@ -174,7 +174,7 @@ func testTaskSpec(t *testing.T, sourceRaw, targetRaw string) TaskSpec {
 	source := mustFrequency(t, sourceRaw)
 	target := mustFrequency(t, targetRaw)
 	return TaskSpec{
-		TaskID:          "rule-1",
+		InstanceID:      "rule-1",
 		SpaceID:         "crypto",
 		SourceDatasetID: "dataset_binance_spot_kline_1m",
 		SourceFrequency: source,

@@ -14,7 +14,6 @@ tasks:
     instrument_type: spot
     market_type: spot
     symbol_source: exchange
-    target_dataset_id: dataset_collector_55ea65f2dca90b7f
     frequency: 1H
 - space_id: crypto
   task_id: builtin-binance-swap-symbols-1h
@@ -30,7 +29,6 @@ tasks:
     instrument_type: swap
     market_type: swap
     symbol_source: exchange
-    target_dataset_id: dataset_collector_2fd992b6685723b0
     frequency: 1H
 - space_id: crypto
   task_id: builtin-binance-spot-kline-1m
@@ -47,7 +45,6 @@ tasks:
     market_type: spot
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_spot_symbols
-    target_dataset_id: dataset_collector_e85209cd9eb4d363
     frequency: 1m
 - space_id: crypto
   task_id: builtin-binance-swap-kline-1m
@@ -64,7 +61,6 @@ tasks:
     market_type: swap
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_swap_symbols
-    target_dataset_id: dataset_collector_df4b3afb3ff5547c
     frequency: 1m
 - space_id: crypto
   task_id: builtin-binance-spot-kline-1h
@@ -81,7 +77,6 @@ tasks:
     market_type: spot
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_spot_symbols
-    target_dataset_id: dataset_collector_79650661576858a0
     frequency: 1H
 - space_id: crypto
   task_id: builtin-binance-swap-kline-1h
@@ -98,7 +93,6 @@ tasks:
     market_type: swap
     symbol_source: dataset
     symbol_dataset_id: dataset_binance_swap_symbols
-    target_dataset_id: dataset_collector_7fa0e5ccbb57684a
     frequency: 1H
 - space_id: stockcn
   task_id: builtin-stockcn-instrument-1d
@@ -112,7 +106,6 @@ tasks:
     provider: stockcn_multi
     market_type: equity
     symbol_source: exchange
-    target_dataset_id: dataset_collector_b19570a5b86d6abd
     frequency: 1d
 - space_id: stockcn
   task_id: builtin-stockcn-kline-1m
@@ -127,5 +120,4 @@ tasks:
     market_type: equity
     symbol_source: dataset
     symbol_dataset_id: dataset_stockcn_instruments
-    target_dataset_id: dataset_collector_4a5f6489270932bf
     frequency: 1m

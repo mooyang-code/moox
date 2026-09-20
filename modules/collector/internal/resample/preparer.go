@@ -16,7 +16,7 @@ import (
 // Preparer asynchronously makes the target catalog ready. Metadata calls are
 // intentionally outside the Collector SQLite transaction.
 type Preparer struct {
-	Rules        *store.CollectionTaskRepository
+	Tasks        *store.TaskRepository
 	Source       subjectSource
 	Catalog      *Catalog
 	KeepDuration string
@@ -25,7 +25,7 @@ type Preparer struct {
 }
 
 func (p *Preparer) RunOnce(ctx context.Context) error {
-	if p == nil || p.Rules == nil || p.Source == nil || p.Catalog == nil {
+	if p == nil || p.Tasks == nil || p.Source == nil || p.Catalog == nil {
 		return fmt.Errorf("resample preparer dependencies are required")
 	}
 	p.mu.Lock()
@@ -34,30 +34,30 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 	if limit <= 0 {
 		limit = 50
 	}
-	rules, err := p.Rules.ListResampleByPrepareStates(ctx, []domain.CollectionTaskPrepareState{
+	tasks, err := p.Tasks.ListResampleByPrepareStates(ctx, []domain.CollectionTaskPrepareState{
 		domain.PrepareStatePending, domain.PrepareStateWaitingView, domain.PrepareStateError, domain.PrepareStateReady,
 	}, limit)
 	if err != nil {
 		return err
 	}
-	for _, rule := range rules {
-		params, parseErr := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	for _, task := range tasks {
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 		if parseErr != nil {
-			_ = p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.TaskID, domain.PrepareStateError, parseErr.Error())
+			_ = p.Tasks.SetPrepareState(ctx, task.SpaceID, task.TaskID, domain.PrepareStateError, parseErr.Error())
 			continue
 		}
-		source, sourceErr := p.Source.GetDataset(ctx, rule.SpaceID, params.SourceDatasetID)
+		source, sourceErr := p.Source.GetDataset(ctx, task.SpaceID, params.SourceDatasetID)
 		if sourceErr == nil {
 			var subjects []domain.DatasetSubject
-			if sourceWithRuleSet, ok := p.Source.(resampleRuleSubjectSource); ok {
-				subjects, sourceErr = sourceWithRuleSet.ListResampleSubjectsForRule(ctx, rule.SpaceID, params.SourceDatasetID, rule.Provider, params.SourceSeriesTag)
+			if sourceWithTaskSet, ok := p.Source.(resampleTaskSubjectSource); ok {
+				subjects, sourceErr = sourceWithTaskSet.ListResampleSubjectsForTask(ctx, task.SpaceID, params.SourceDatasetID, task.Provider, params.SourceSeriesTag)
 			} else if sourceWithNativeSet, ok := p.Source.(resampleSubjectSource); ok {
-				subjects, sourceErr = sourceWithNativeSet.ListResampleSubjects(ctx, rule.SpaceID, params.SourceDatasetID)
+				subjects, sourceErr = sourceWithNativeSet.ListResampleSubjects(ctx, task.SpaceID, params.SourceDatasetID)
 			} else {
-				subjects, sourceErr = p.Source.ListSubjects(ctx, rule.SpaceID, params.SourceDatasetID, source.DataSourceID)
+				subjects, sourceErr = p.Source.ListSubjects(ctx, task.SpaceID, params.SourceDatasetID, source.DataSourceID)
 			}
 			if sourceErr == nil {
-				sourceErr = p.Catalog.PrepareTarget(ctx, rule, params, source, subjects, p.KeepDuration)
+				sourceErr = p.Catalog.PrepareTarget(ctx, task, params, source, subjects, p.KeepDuration)
 			}
 		}
 		if sourceErr != nil {
@@ -65,26 +65,26 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 			if errors.Is(sourceErr, ErrTargetViewNotReady) {
 				state = domain.PrepareStateWaitingView
 			}
-			_ = p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.TaskID, state, sourceErr.Error())
+			_ = p.Tasks.SetPrepareState(ctx, task.SpaceID, task.TaskID, state, sourceErr.Error())
 			continue
 		}
-		if err := p.Rules.SetPrepareState(ctx, rule.SpaceID, rule.TaskID, domain.PrepareStateReady, ""); err != nil {
+		if err := p.Tasks.SetPrepareState(ctx, task.SpaceID, task.TaskID, domain.PrepareStateReady, ""); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Retry marks an error rule as pending for an explicit operator retry.
-func (p *Preparer) Retry(ctx context.Context, spaceID, ruleID string) error {
-	if p == nil || p.Rules == nil {
+// Retry marks an error task as pending for an explicit operator retry.
+func (p *Preparer) Retry(ctx context.Context, spaceID, taskID string) error {
+	if p == nil || p.Tasks == nil {
 		return fmt.Errorf("resample preparer is not initialized")
 	}
-	return p.Rules.SetPrepareState(ctx, strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), domain.PrepareStatePending, "")
+	return p.Tasks.SetPrepareState(ctx, strings.TrimSpace(spaceID), strings.TrimSpace(taskID), domain.PrepareStatePending, "")
 }
 
 // Start launches the bounded preparation loop. A timer should still invoke
-// RunOnce; the loop is a liveness fallback for rules created while no timer is
+// RunOnce; the loop is a liveness fallback for tasks created while no timer is
 // configured in a development environment.
 func (p *Preparer) Start(ctx context.Context, interval time.Duration) (func(), error) {
 	if ctx == nil {

@@ -29,68 +29,68 @@ type TaskFilter struct {
 	PageSize   int
 }
 
-// CollectionTaskRepository persists collection tasks.
-type CollectionTaskRepository struct {
+// TaskRepository persists collection tasks.
+type TaskRepository struct {
 	db *gorm.DB
 }
 
-// NewCollectionTaskRepository creates a repository.
-func NewCollectionTaskRepository(db *gorm.DB) *CollectionTaskRepository {
-	return &CollectionTaskRepository{db: db}
+// NewTaskRepository creates a repository.
+func NewTaskRepository(db *gorm.DB) *TaskRepository {
+	return &TaskRepository{db: db}
 }
 
 // List returns tasks matching filters.
-func (r *CollectionTaskRepository) List(ctx context.Context, filter TaskFilter) ([]domain.CollectionTask, int64, error) {
+func (r *TaskRepository) List(ctx context.Context, filter TaskFilter) ([]domain.CollectionTask, int64, error) {
 	q := r.applyFilter(r.db.WithContext(ctx).Model(&domain.CollectionTask{}), filter)
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	page, size := normalizePage(filter.Page, filter.PageSize)
-	var rules []domain.CollectionTask
-	if err := q.Order("c_id DESC").Limit(size).Offset((page - 1) * size).Find(&rules).Error; err != nil {
+	var tasks []domain.CollectionTask
+	if err := q.Order("c_id DESC").Limit(size).Offset((page - 1) * size).Find(&tasks).Error; err != nil {
 		return nil, 0, err
 	}
-	return rules, total, nil
+	return tasks, total, nil
 }
 
 // ListEnabled returns enabled tasks in one space.
-func (r *CollectionTaskRepository) ListEnabled(ctx context.Context, spaceID string) ([]domain.CollectionTask, error) {
-	var rules []domain.CollectionTask
+func (r *TaskRepository) ListEnabled(ctx context.Context, spaceID string) ([]domain.CollectionTask, error) {
+	var tasks []domain.CollectionTask
 	err := r.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_enabled = ?", strings.TrimSpace(spaceID), true).
 		Order("c_id ASC").
 		Limit(MaxEnabledTasks + 1).
-		Find(&rules).Error
-	if err == nil && len(rules) > MaxEnabledTasks {
+		Find(&tasks).Error
+	if err == nil && len(tasks) > MaxEnabledTasks {
 		return nil, fmt.Errorf("enabled task count exceeds limit %d", MaxEnabledTasks)
 	}
-	return rules, err
+	return tasks, err
 }
 
 // ListEnabledAll returns the complete enabled task inventory. It fails rather
 // than returning a truncated snapshot because observability reconciliation must
 // never publish a partial expected set.
-func (r *CollectionTaskRepository) ListEnabledAll(ctx context.Context, limit int) ([]domain.CollectionTask, error) {
+func (r *TaskRepository) ListEnabledAll(ctx context.Context, limit int) ([]domain.CollectionTask, error) {
 	if limit <= 0 || limit > MaxEnabledTasks {
 		return nil, fmt.Errorf("enabled task limit must be between 1 and %d", MaxEnabledTasks)
 	}
-	var rules []domain.CollectionTask
+	var tasks []domain.CollectionTask
 	if err := r.db.WithContext(ctx).
 		Where("c_enabled = ?", true).
 		Order("c_id ASC").
 		Limit(limit + 1).
-		Find(&rules).Error; err != nil {
+		Find(&tasks).Error; err != nil {
 		return nil, err
 	}
-	if len(rules) > limit {
+	if len(tasks) > limit {
 		return nil, fmt.Errorf("enabled task count exceeds limit %d", limit)
 	}
-	return rules, nil
+	return tasks, nil
 }
 
 // GetByTaskID returns a task by its business id within a space.
-func (r *CollectionTaskRepository) GetByTaskID(ctx context.Context, spaceID string, taskID string) (*domain.CollectionTask, error) {
+func (r *TaskRepository) GetByTaskID(ctx context.Context, spaceID string, taskID string) (*domain.CollectionTask, error) {
 	var task domain.CollectionTask
 	q := r.db.WithContext(ctx).Where("c_task_id = ?", taskID)
 	if strings.TrimSpace(spaceID) != "" {
@@ -102,25 +102,43 @@ func (r *CollectionTaskRepository) GetByTaskID(ctx context.Context, spaceID stri
 	return &task, nil
 }
 
+// GetByTaskName returns a task by its display name within a space.
+func (r *TaskRepository) GetByTaskName(ctx context.Context, spaceID string, taskName string) (*domain.CollectionTask, error) {
+	var task domain.CollectionTask
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_task_name = ?", strings.TrimSpace(spaceID), domain.NormalizeCollectionTaskName(taskName)).
+		First(&task).Error
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
 // Create inserts a new collection task.
-func (r *CollectionTaskRepository) Create(ctx context.Context, rule domain.CollectionTask) error {
+func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask) error {
 	now := time.Now().UTC()
-	if strings.TrimSpace(rule.TaskName) == "" {
-		rule.TaskName = rule.TaskID
+	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
+	if task.TaskName != "" {
+		if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
+			return err
+		}
 	}
-	if rule.PrepareState == "" {
-		rule.PrepareState = domain.PrepareStateReady
+	if task.TaskName == "" {
+		task.TaskName = task.TaskID
 	}
-	if err := applyCollectionTaskCoverageStart(&rule, now, rule.Enabled); err != nil {
+	if task.PrepareState == "" {
+		task.PrepareState = domain.PrepareStateReady
+	}
+	if err := applyCollectionTaskCoverageStart(&task, now, task.Enabled); err != nil {
 		return err
 	}
-	rule.CreateTime = now
-	rule.ModifyTime = now
-	return r.db.WithContext(ctx).Create(&rule).Error
+	task.CreateTime = now
+	task.ModifyTime = now
+	return r.db.WithContext(ctx).Create(&task).Error
 }
 
 // ListResampleByPrepareStates returns bounded preparation work in stable order.
-func (r *CollectionTaskRepository) ListResampleByPrepareStates(ctx context.Context, states []domain.CollectionTaskPrepareState, limit int) ([]domain.CollectionTask, error) {
+func (r *TaskRepository) ListResampleByPrepareStates(ctx context.Context, states []domain.CollectionTaskPrepareState, limit int) ([]domain.CollectionTask, error) {
 	if limit <= 0 || limit > MaxEnabledTasks {
 		return nil, fmt.Errorf("resample prepare task limit must be between 1 and %d", MaxEnabledTasks)
 	}
@@ -134,27 +152,27 @@ func (r *CollectionTaskRepository) ListResampleByPrepareStates(ctx context.Conte
 	if len(values) == 0 {
 		return nil, fmt.Errorf("at least one task prepare state is required")
 	}
-	var rules []domain.CollectionTask
+	var tasks []domain.CollectionTask
 	err := r.db.WithContext(ctx).
 		Where("c_data_type = ? AND c_enabled = ? AND c_prepare_state IN ?", "kline_resample", true, values).
-		// Always service rules that are not ready before refreshing already-ready
-		// catalogs. Otherwise a stable prefix of ready rules can starve new or
-		// failed rules once the inventory exceeds the per-tick bound.
-		Order("CASE WHEN c_prepare_state = 'ready' THEN 1 ELSE 0 END ASC, c_mtime ASC, c_id ASC").Limit(limit).Find(&rules).Error
-	return rules, err
+		// Always service tasks that are not ready before refreshing already-ready
+		// catalogs. Otherwise a stable prefix of ready tasks can starve new or
+		// failed tasks once the inventory exceeds the per-tick bound.
+		Order("CASE WHEN c_prepare_state = 'ready' THEN 1 ELSE 0 END ASC, c_mtime ASC, c_id ASC").Limit(limit).Find(&tasks).Error
+	return tasks, err
 }
 
 // SetPrepareState advances asynchronous target preparation without changing
-// the immutable rule definition.
-func (r *CollectionTaskRepository) SetPrepareState(ctx context.Context, spaceID, ruleID string, state domain.CollectionTaskPrepareState, lastError string) error {
-	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(ruleID) == "" {
+// the immutable task definition.
+func (r *TaskRepository) SetPrepareState(ctx context.Context, spaceID, taskID string, state domain.CollectionTaskPrepareState, lastError string) error {
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(taskID) == "" {
 		return fmt.Errorf("space_id and task_id are required")
 	}
 	if !state.Valid() {
 		return fmt.Errorf("invalid collection task prepare state: %s", state)
 	}
 	result := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
-		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample").
+		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID), "kline_resample").
 		Updates(map[string]any{"c_prepare_state": state, "c_last_error": strings.TrimSpace(lastError), "c_mtime": time.Now().UTC()})
 	if result.Error != nil {
 		return result.Error
@@ -166,56 +184,97 @@ func (r *CollectionTaskRepository) SetPrepareState(ctx context.Context, spaceID,
 }
 
 // UpdateByTaskID updates an existing collection task.
-func (r *CollectionTaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, ruleID string, rule domain.CollectionTask) (*domain.CollectionTask, error) {
-	if strings.TrimSpace(rule.ResultDatasetID) == "" || strings.TrimSpace(rule.ResultViewID) == "" || strings.TrimSpace(rule.TaskName) == "" {
-		existing, err := r.GetByTaskID(ctx, spaceID, ruleID)
+func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
+	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
+	if task.TaskName != "" {
+		if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(task.ResultDatasetID) == "" || strings.TrimSpace(task.ResultViewID) == "" || strings.TrimSpace(task.TaskName) == "" {
+		existing, err := r.GetByTaskID(ctx, spaceID, taskID)
 		if err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(rule.ResultDatasetID) == "" {
-			rule.ResultDatasetID = existing.ResultDatasetID
+		if strings.TrimSpace(task.ResultDatasetID) == "" {
+			task.ResultDatasetID = existing.ResultDatasetID
 		}
-		if strings.TrimSpace(rule.ResultViewID) == "" {
-			rule.ResultViewID = existing.ResultViewID
+		if strings.TrimSpace(task.ResultViewID) == "" {
+			task.ResultViewID = existing.ResultViewID
 		}
-		if strings.TrimSpace(rule.TaskName) == "" {
-			rule.TaskName = existing.TaskName
+		if strings.TrimSpace(task.TaskName) == "" {
+			task.TaskName = existing.TaskName
 		}
 	}
 	now := time.Now().UTC()
-	if err := applyCollectionTaskCoverageStart(&rule, now, rule.Enabled); err != nil {
+	if err := applyCollectionTaskCoverageStart(&task, now, task.Enabled); err != nil {
 		return nil, err
 	}
 	updates := map[string]any{
-		"c_space_id":            rule.SpaceID,
-		"c_task_name":           rule.TaskName,
-		"c_description":         rule.Description,
-		"c_data_type":           rule.DataType,
-		"c_provider":            rule.Provider,
-		"c_market_type":         rule.MarketType,
-		"c_collect_params":      rule.CollectParams,
-		"c_enabled":             rule.Enabled,
-		"c_creator":             rule.Creator,
-		"c_result_dataset_id":   rule.ResultDatasetID,
-		"c_result_view_id":      rule.ResultViewID,
-		"c_coverage_start_time": rule.CoverageStartTime,
+		"c_space_id":            task.SpaceID,
+		"c_task_name":           task.TaskName,
+		"c_description":         task.Description,
+		"c_data_type":           task.DataType,
+		"c_provider":            task.Provider,
+		"c_market_type":         task.MarketType,
+		"c_collect_params":      task.CollectParams,
+		"c_enabled":             task.Enabled,
+		"c_creator":             task.Creator,
+		"c_result_dataset_id":   task.ResultDatasetID,
+		"c_result_view_id":      task.ResultViewID,
+		"c_coverage_start_time": task.CoverageStartTime,
 		"c_mtime":               now,
 	}
-	q := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Where("c_task_id = ?", ruleID)
+	q := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Where("c_task_id = ?", taskID)
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
 	}
 	if err := q.Updates(updates).Error; err != nil {
 		return nil, err
 	}
-	return r.GetByTaskID(ctx, spaceID, ruleID)
+	return r.GetByTaskID(ctx, spaceID, taskID)
+}
+
+// UpdateMutableByTaskID updates only the public mutable task fields and
+// Collector-owned runtime state. Task identity, collection configuration, and
+// result identities are intentionally absent from the update set.
+func (r *TaskRepository) UpdateMutableByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
+	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
+	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
+		return nil, err
+	}
+	if !domain.CollectionTaskPrepareState(task.PrepareState).Valid() {
+		return nil, fmt.Errorf("invalid collection task prepare state: %s", task.PrepareState)
+	}
+	if !task.Enabled {
+		task.CoverageStartTime = nil
+	}
+	now := time.Now().UTC()
+	result := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+		Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).
+		Updates(map[string]any{
+			"c_task_name":           task.TaskName,
+			"c_description":         task.Description,
+			"c_enabled":             task.Enabled,
+			"c_prepare_state":       task.PrepareState,
+			"c_last_error":          task.LastError,
+			"c_coverage_start_time": task.CoverageStartTime,
+			"c_mtime":               now,
+		})
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return r.GetByTaskID(ctx, spaceID, taskID)
 }
 
 // SetEnabled changes a task enabled flag.
-func (r *CollectionTaskRepository) SetEnabled(ctx context.Context, spaceID string, ruleID string, enabled bool) error {
+func (r *TaskRepository) SetEnabled(ctx context.Context, spaceID, taskID string, enabled bool) error {
 	updates := map[string]any{"c_enabled": enabled, "c_mtime": time.Now().UTC()}
 	if enabled {
-		rule, err := r.GetByTaskID(ctx, spaceID, ruleID)
+		task, err := r.GetByTaskID(ctx, spaceID, taskID)
 		if err != nil {
 			return err
 		}
@@ -223,21 +282,21 @@ func (r *CollectionTaskRepository) SetEnabled(ctx context.Context, spaceID strin
 		// Re-enabling is a new coverage decision. Do not preserve the old
 		// timestamp from the previous enable period, otherwise live_only rules
 		// silently replay stale history and lookback rules never move forward.
-		rule.CoverageStartTime = nil
-		if err := applyCollectionTaskCoverageStart(rule, now, true); err != nil {
+		task.CoverageStartTime = nil
+		if err := applyCollectionTaskCoverageStart(task, now, true); err != nil {
 			return err
 		}
-		updates["c_coverage_start_time"] = rule.CoverageStartTime
+		updates["c_coverage_start_time"] = task.CoverageStartTime
 		updates["c_mtime"] = now
 	}
-	q := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Where("c_task_id = ?", ruleID)
+	q := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Where("c_task_id = ?", taskID)
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
 	}
 	return q.Updates(updates).Error
 }
 
-func (r *CollectionTaskRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
+func (r *TaskRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
 	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.CollectionTask{})
 	if result.Error != nil {
 		return result.Error
@@ -248,7 +307,7 @@ func (r *CollectionTaskRepository) DeleteByTaskID(ctx context.Context, spaceID, 
 	return nil
 }
 
-func (r *CollectionTaskRepository) applyFilter(q *gorm.DB, filter TaskFilter) *gorm.DB {
+func (r *TaskRepository) applyFilter(q *gorm.DB, filter TaskFilter) *gorm.DB {
 	if v := strings.TrimSpace(filter.SpaceID); v != "" {
 		q = q.Where("c_space_id = ?", v)
 	}
@@ -270,34 +329,34 @@ func (r *CollectionTaskRepository) applyFilter(q *gorm.DB, filter TaskFilter) *g
 	return q
 }
 
-func applyCollectionTaskCoverageStart(rule *domain.CollectionTask, now time.Time, enabled bool) error {
-	if rule == nil {
+func applyCollectionTaskCoverageStart(task *domain.CollectionTask, now time.Time, enabled bool) error {
+	if task == nil {
 		return nil
 	}
 	if !enabled {
-		rule.CoverageStartTime = nil
+		task.CoverageStartTime = nil
 		return nil
 	}
-	start, err := resolveCollectionTaskCoverageStart(rule, now)
+	start, err := resolveCollectionTaskCoverageStart(task, now)
 	if err != nil {
 		return err
 	}
 	if start == nil {
 		return nil
 	}
-	rule.CoverageStartTime = start
+	task.CoverageStartTime = start
 	return nil
 }
 
-func resolveCollectionTaskCoverageStart(rule *domain.CollectionTask, now time.Time) (*time.Time, error) {
-	if rule == nil {
+func resolveCollectionTaskCoverageStart(task *domain.CollectionTask, now time.Time) (*time.Time, error) {
+	if task == nil {
 		return nil, nil
 	}
-	if rule.CoverageStartTime != nil && !rule.CoverageStartTime.IsZero() {
-		at := rule.CoverageStartTime.UTC()
+	if task.CoverageStartTime != nil && !task.CoverageStartTime.IsZero() {
+		at := task.CoverageStartTime.UTC()
 		return &at, nil
 	}
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	if err != nil || params == nil || params.HistoryPolicy == nil {
 		at := now.UTC().Truncate(time.Minute)
 		return &at, nil
@@ -312,8 +371,8 @@ func resolveCollectionTaskCoverageStart(rule *domain.CollectionTask, now time.Ti
 		}
 		start = at.UTC()
 	case domain.HistoryModeLookback:
-		if isStockCNRule(rule) {
-			calendar, calendarErr := loadStockCNCalendarForRule()
+		if isStockCNTask(task) {
+			calendar, calendarErr := loadStockCNCalendarForTask()
 			if calendarErr != nil {
 				return nil, calendarErr
 			}
@@ -330,14 +389,14 @@ func resolveCollectionTaskCoverageStart(rule *domain.CollectionTask, now time.Ti
 	return &start, nil
 }
 
-func isStockCNRule(rule *domain.CollectionTask) bool {
-	if rule == nil {
+func isStockCNTask(task *domain.CollectionTask) bool {
+	if task == nil {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(rule.SpaceID), "stockcn") || strings.EqualFold(strings.TrimSpace(rule.MarketType), "equity")
+	return strings.EqualFold(strings.TrimSpace(task.SpaceID), "stockcn") || strings.EqualFold(strings.TrimSpace(task.MarketType), "equity")
 }
 
-func loadStockCNCalendarForRule() (*stockmarket.Calendar, error) {
+func loadStockCNCalendarForTask() (*stockmarket.Calendar, error) {
 	_, sourceFile, _, _ := runtime.Caller(0)
 	sourceRelative := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "config", "markets", "stockcn", "calendar.yaml"))
 	candidates := []string{

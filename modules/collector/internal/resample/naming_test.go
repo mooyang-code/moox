@@ -5,15 +5,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestDefaultTargetNamesKeepDerivedFrequencyIdentity(t *testing.T) {
-	assert.Equal(t, "dataset_spot_kline_derived_4h", DefaultTargetDatasetID("spot", "4h"))
-	assert.Equal(t, "dataset_swap_kline_derived_90m", DefaultTargetDatasetID("swap", "90m"))
-	assert.Equal(t, "view_spot_kline_derived_4h", DefaultTargetViewID("dataset_spot_kline_derived_4h"))
-}
 
 func TestUniqueResampleDisplayNameIsValidAndStable(t *testing.T) {
 	name := uniqueResampleDisplayName("dataset_spot_kline_derived_5m")
@@ -30,26 +23,22 @@ func TestUniqueResampleDisplayNameIsValidAndStable(t *testing.T) {
 	}
 }
 
-func TestValidateTargetDatasetIDRequiresLowerSnakeFrequencySuffix(t *testing.T) {
-	require.NoError(t, ValidateTargetDatasetID("dataset_spot_kline_derived_4h", "4h"))
-	require.NoError(t, ValidateTargetDatasetID("dataset_x_90m", "90m"))
+func TestValidateTargetDatasetIDRequiresTaskOwnedLowerSnakeIdentity(t *testing.T) {
+	require.NoError(t, ValidateTargetDatasetID("dataset_collector_0123456789abcdef", "4h"))
 
 	tests := []struct {
 		name string
 		id   string
-		slug string
 	}{
-		{name: "empty", id: "", slug: "4h"},
-		{name: "uppercase", id: "dataset_spot_kline_derived_4H", slug: "4h"},
-		{name: "dash", id: "spot-kline-derived-4h", slug: "4h"},
-		{name: "wrong suffix", id: "dataset_spot_kline_derived_6h", slug: "4h"},
-		{name: "suffix without separator", id: "spot_kline_derived4h", slug: "4h"},
-		{name: "too long", id: "dataset_" + strings.Repeat("a", 43) + "_4h", slug: "4h"},
-		{name: "invalid slug", id: "dataset_spot_kline_derived_1M", slug: "1M"},
+		{name: "empty", id: ""},
+		{name: "uppercase", id: "dataset_collector_0123456789ABCDEF"},
+		{name: "dash", id: "dataset-collector-0123456789abcdef"},
+		{name: "missing prefix", id: "collector_0123456789abcdef"},
+		{name: "too long", id: "dataset_" + strings.Repeat("a", 44)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Error(t, ValidateTargetDatasetID(tt.id, tt.slug))
+			require.Error(t, ValidateTargetDatasetID(tt.id))
 		})
 	}
 }

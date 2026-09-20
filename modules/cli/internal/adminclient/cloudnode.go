@@ -129,25 +129,55 @@ type CloudNodeListFilter struct {
 }
 
 type CollectionTaskSummary struct {
-	SpaceID    string `json:"space_id"`
-	TaskID     string `json:"task_id"`
-	DataType   string `json:"data_type"`
-	Provider   string `json:"provider"`
-	MarketType string `json:"market_type"`
-	Enabled    bool   `json:"enabled"`
+	SpaceID    string                      `json:"space_id"`
+	TaskID     string                      `json:"task_id"`
+	TaskName   string                      `json:"task_name"`
+	DataType   string                      `json:"data_type"`
+	Provider   string                      `json:"provider"`
+	MarketType string                      `json:"market_type"`
+	Enabled    bool                        `json:"enabled"`
+	Result     CollectionTaskResultSummary `json:"result"`
+}
+
+// CollectionTaskResultSummary is the user-visible result state returned with
+// a collection task. Storage Dataset IDs remain internal to Collector.
+type CollectionTaskResultSummary struct {
+	ResultName   string `json:"result_name"`
+	ViewID       string `json:"view_id"`
+	Status       string `json:"status"`
+	LastDataTime string `json:"last_data_time"`
+	DataKind     string `json:"data_kind"`
+}
+
+// ResultConfig contains optional storage settings for a newly created task
+// result. It cannot select an existing Dataset or View.
+type ResultConfig struct {
+	DataNodeID   string `json:"data_node_id,omitempty"`
+	KeepDuration string `json:"keep_duration,omitempty"`
+	Description  string `json:"description,omitempty"`
 }
 
 // CreateTask creates a disabled task through the Collector control plane.
 // Callers should enable it only after their deployment-specific gates pass.
-func (c *Client) CreateTask(ctx context.Context, spaceID, taskID, dataType, provider, marketType, creator string, collectParams map[string]any) error {
+func (c *Client) CreateTask(ctx context.Context, spaceID, taskID, taskName, dataType, provider, marketType, creator string, collectParams map[string]any, resultConfig *ResultConfig) error {
+	taskName = strings.TrimSpace(taskName)
+	if taskName == "" {
+		return fmt.Errorf("CreateTask: task_name is required")
+	}
+	for _, field := range []string{"target_dataset_id", "target_view_id", "result_dataset_id", "result_view_id", "result_id", "view_id"} {
+		if _, exists := collectParams[field]; exists {
+			return fmt.Errorf("CreateTask: collect_params.%s cannot be specified when creating a task", field)
+		}
+	}
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
 		TaskID  string  `json:"task_id"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/CreateTask", map[string]any{
+	request := map[string]any{
 		"task": map[string]any{
 			"space_id":       spaceID,
 			"task_id":        taskID,
+			"task_name":      taskName,
 			"data_type":      dataType,
 			"provider":       provider,
 			"market_type":    marketType,
@@ -155,7 +185,11 @@ func (c *Client) CreateTask(ctx context.Context, spaceID, taskID, dataType, prov
 			"creator":        creator,
 			"collect_params": collectParams,
 		},
-	}, &response); err != nil {
+	}
+	if resultConfig != nil {
+		request["result_config"] = resultConfig
+	}
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/CreateTask", request, &response); err != nil {
 		return fmt.Errorf("CreateTask: %w", err)
 	}
 	if !isRetInfoSuccess(response.RetInfo.Code) {
@@ -232,6 +266,9 @@ func (c *Client) DeleteTask(ctx context.Context, spaceID, taskID string, deleteR
 		"space_id": spaceID, "task_id": taskID, "delete_result_data": deleteResultData,
 	}, &response); err != nil {
 		return fmt.Errorf("DeleteTask: %w", err)
+	}
+	if isRetInfoNotFound(response.RetInfo) {
+		return nil
 	}
 	if !isRetInfoSuccess(response.RetInfo.Code) {
 		return fmt.Errorf("DeleteTask rejected: %s", response.RetInfo.Msg)

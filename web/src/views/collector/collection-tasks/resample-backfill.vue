@@ -16,7 +16,7 @@
     </a-alert>
     <a-form layout="vertical" :model="form">
       <a-form-item label="采集任务">
-        <a-input :model-value="ruleId" disabled />
+        <a-input :model-value="taskId" disabled />
       </a-form-item>
       <a-form-item label="目标周期">
         <a-input :model-value="targetFrequency" disabled />
@@ -62,7 +62,7 @@ const props = withDefaults(
   defineProps<{
     visible: boolean;
     spaceId: string;
-    ruleId: string;
+    taskId: string;
     targetFrequency: string;
     sourceKeepDuration?: string;
     activeBackfill?: ResampleBackfillSummary | null;
@@ -105,7 +105,7 @@ function close() {
 
 async function start() {
   errorMessage.value = "";
-  if (!props.spaceId || !props.ruleId || !form.start || !form.end) {
+  if (!props.spaceId || !props.taskId || !form.start || !form.end) {
     errorMessage.value = "空间、采集任务和 UTC 时间范围不能为空";
     return;
   }
@@ -117,7 +117,7 @@ async function start() {
   try {
     await startKlineResampleBackfill({
       space_id: props.spaceId,
-      task_id: props.ruleId,
+      task_id: props.taskId,
       request_id: `resample-${Date.now()}`,
       start: new Date(form.start).toISOString(),
       end: new Date(form.end).toISOString()
@@ -137,7 +137,7 @@ async function cancel() {
   cancelling.value = true;
   errorMessage.value = "";
   try {
-    await cancelKlineResampleBackfill({ space_id: props.spaceId, task_id: props.ruleId, request_id: requestId });
+    await cancelKlineResampleBackfill({ space_id: props.spaceId, task_id: props.taskId, request_id: requestId });
     Message.success("已取消回填");
     emit("cancelled");
   } catch (error) {

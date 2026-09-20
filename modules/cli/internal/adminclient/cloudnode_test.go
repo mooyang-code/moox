@@ -130,20 +130,74 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "stockcn", task["space_id"])
 		assert.Equal(t, "builtin-stockcn-kline-1m", task["task_id"])
+		assert.Equal(t, "A 股 K 线 1m", task["task_name"])
 		assert.Equal(t, false, task["enabled"])
-		assert.Equal(t, "dataset_stockcn_equity_kline", task["collect_params"].(map[string]any)["target_dataset_id"])
+		assert.Equal(t, "dataset_stockcn_instruments", task["collect_params"].(map[string]any)["symbol_dataset_id"])
+		assert.NotContains(t, task["collect_params"], "target_dataset_id")
+		resultConfig, ok := body["result_config"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "node-1", resultConfig["data_node_id"])
+		assert.Equal(t, "30d", resultConfig["keep_duration"])
+		assert.Equal(t, "A 股 K 线结果", resultConfig["description"])
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"task_id":"builtin-stockcn-kline-1m"}`))
 	}))
 	defer server.Close()
 
-	require.NoError(t, New(server.URL).CreateTask(context.Background(), "stockcn", "builtin-stockcn-kline-1m", "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
+	require.NoError(t, New(server.URL).CreateTask(context.Background(), "stockcn", "builtin-stockcn-kline-1m", "A 股 K 线 1m", "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
 		"provider":          "stockcn_multi",
 		"market_type":       "equity",
 		"symbol_source":     "dataset",
 		"symbol_dataset_id": "dataset_stockcn_instruments",
-		"target_dataset_id": "dataset_stockcn_equity_kline",
 		"frequency":         "1m",
+	}, &ResultConfig{DataNodeID: "node-1", KeepDuration: "30d", Description: "A 股 K 线结果"}))
+}
+
+func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
+	err := New("http://127.0.0.1").CreateTask(context.Background(), "stockcn", "task-1", "任务一", "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
+		"provider":          "stockcn_multi",
+		"market_type":       "equity",
+		"symbol_source":     "dataset",
+		"symbol_dataset_id": "dataset_stockcn_instruments",
+		"target_dataset_id": "dataset-user-selected",
+		"frequency":         "1m",
+	}, nil)
+	require.ErrorContains(t, err, "target_dataset_id")
+}
+
+func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/collectmgr/GetTaskList", r.URL.Path)
+		_, _ = w.Write([]byte(`{
+			"ret_info":{"code":0,"msg":"ok"},
+			"tasks":[{
+				"space_id":"stockcn",
+				"task_id":"builtin-stockcn-kline-1m",
+				"task_name":"A 股 K 线 1m",
+				"data_type":"kline",
+				"provider":"stockcn_multi",
+				"market_type":"equity",
+				"enabled":true,
+				"result":{
+					"result_name":"采集结果",
+					"view_id":"view-1",
+					"status":"ready",
+					"last_data_time":"2026-09-20T12:00:00Z",
+					"data_kind":"time_series"
+				}
+			}],
+			"page":{"has_more":false}
+		}`))
 	}))
+	defer server.Close()
+
+	tasks, err := New(server.URL).ListEnabledTasks(context.Background(), "stockcn", "equity")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "A 股 K 线 1m", tasks[0].TaskName)
+	assert.Equal(t, "view-1", tasks[0].Result.ViewID)
+	assert.Equal(t, "ready", tasks[0].Result.Status)
+	assert.Equal(t, "2026-09-20T12:00:00Z", tasks[0].Result.LastDataTime)
+	assert.Equal(t, "time_series", tasks[0].Result.DataKind)
 }
 
 func TestPackageUploadClientHasBoundedTimeout(t *testing.T) {

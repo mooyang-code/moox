@@ -51,9 +51,13 @@ function normalizeTab(value: unknown): CollectorTaskTab {
 function onTabChange(value: string | number) {
   const tab = normalizeTab(value);
   activeTab.value = tab;
+  const resultTask = Array.isArray(route.query.resultTask) ? route.query.resultTask[0] : route.query.resultTask;
   void router.replace({
     path: "/collector/tasks",
-    query: { ...route.query, tab: tab === "tasks" ? undefined : tab }
+    query:
+      tab === "results"
+        ? { tab: "results", ...(resultTask ? { resultTask } : {}) }
+        : { ...route.query, tab: tab === "tasks" ? undefined : tab, resultTask: undefined }
   });
 }
 

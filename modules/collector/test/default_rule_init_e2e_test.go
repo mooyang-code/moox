@@ -41,7 +41,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	require.NoError(t, err)
 	summary, err := ruleseed.SeedMissing(ctx, dbm.Tasks(), rules)
 	require.NoError(t, err)
-	require.Equal(t, 8, summary.Created)
+	require.Equal(t, 8, summary.TasksCreated)
 
 	var invocationCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +71,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	defer server.Close()
 
 	scheduler := &marketfetch.Scheduler{
-		Rules: dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
+		Tasks: dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 		Invoker: scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: server.URL, Auth: runtime.AuthConfig{AccessKey: "test", SecretKey: "test", TargetNode: "test"}}),
 		Symbols: defaultRuleDatasetSource{}, SpaceID: "crypto", InvokeNonRealtimeOnly: true,
 		InvokeConcurrency: 1, Now: func() time.Time { return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC) },

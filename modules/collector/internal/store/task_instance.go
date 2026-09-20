@@ -23,7 +23,6 @@ const (
 type TaskInstanceFilter struct {
 	SpaceID          string
 	InstanceID       string
-	TaskID           string
 	CollectionTaskID string
 	Provider         string
 	SourceID         string
@@ -148,22 +147,22 @@ func (r *TaskInstanceRepository) upsertManyTx(ctx context.Context, db *gorm.DB, 
 			return nil
 		}
 	}
-	taskIDs := make([]string, 0, len(instances))
+	instanceIDs := make([]string, 0, len(instances))
 	for _, instance := range instances {
-		taskIDs = append(taskIDs, instance.TaskID)
+		instanceIDs = append(instanceIDs, instance.InstanceID)
 	}
 	var existingRows []domain.TaskInstance
 	// SQLite's variable limit is commonly 999. Keep both the lookup IN list
 	// and the multi-row INSERT below bounded because a full stock catalogue is
 	// several thousand task instances.
-	for start := 0; start < len(taskIDs); start += taskInstanceLookupBatchSize {
+	for start := 0; start < len(instanceIDs); start += taskInstanceLookupBatchSize {
 		end := start + taskInstanceLookupBatchSize
-		if end > len(taskIDs) {
-			end = len(taskIDs)
+		if end > len(instanceIDs) {
+			end = len(instanceIDs)
 		}
 		var rows []domain.TaskInstance
 		if err := db.WithContext(ctx).
-			Where("c_space_id = ? AND c_instance_id IN ?", spaceID, taskIDs[start:end]).
+			Where("c_space_id = ? AND c_instance_id IN ?", spaceID, instanceIDs[start:end]).
 			Find(&rows).Error; err != nil {
 			return err
 		}
@@ -171,11 +170,11 @@ func (r *TaskInstanceRepository) upsertManyTx(ctx context.Context, db *gorm.DB, 
 	}
 	existing := make(map[string]domain.TaskInstance, len(existingRows))
 	for _, instance := range existingRows {
-		existing[instance.TaskID] = instance
+		existing[instance.InstanceID] = instance
 	}
 	changed := make([]domain.TaskInstance, 0, len(instances))
 	for _, instance := range instances {
-		current, found := existing[instance.TaskID]
+		current, found := existing[instance.InstanceID]
 		if found && strings.TrimSpace(instance.SourceID) == "" {
 			instance.SourceID = current.SourceID
 		}
@@ -415,7 +414,8 @@ func frequencyVariants(value string) []string {
 }
 
 func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
-	return current.TaskID != desired.TaskID ||
+	return current.InstanceID != desired.InstanceID ||
+		current.CollectionTaskID != desired.CollectionTaskID ||
 		current.Provider != desired.Provider ||
 		current.SourceID != desired.SourceID ||
 		current.MarketType != desired.MarketType ||
@@ -427,11 +427,12 @@ func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
 		current.IsDeleted != desired.IsDeleted
 }
 
-// DeactivateMissingMarketFetchRuleInstances removes symbols or frequencies
-// that are no longer part of an enabled market rule from the stable inventory.
-func (r *TaskInstanceRepository) DeactivateMissingMarketFetchTaskInstances(ctx context.Context, spaceID, taskID string, activeInstanceIDs []string) error {
+// DeactivateMissingMarketFetchTaskInstances removes symbols or frequencies
+// that are no longer part of an enabled collection task from the stable
+// inventory.
+func (r *TaskInstanceRepository) DeactivateMissingMarketFetchTaskInstances(ctx context.Context, spaceID, collectionTaskID string, activeInstanceIDs []string) error {
 	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_task_id = ? AND c_is_deleted = ?", spaceID, taskID, false)
+		Where("c_space_id = ? AND c_task_id = ? AND c_is_deleted = ?", spaceID, collectionTaskID, false)
 	if len(activeInstanceIDs) > 0 {
 		query = query.Where("c_instance_id NOT IN ?", activeInstanceIDs)
 	}
@@ -441,27 +442,15 @@ func (r *TaskInstanceRepository) DeactivateMissingMarketFetchTaskInstances(ctx c
 	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
 }
 
-// DeactivateMissingResampleRuleInstances keeps resample reconciliation from
-// touching market-fetch instances that happen to share a rule identifier.
-func (r *TaskInstanceRepository) DeactivateMissingResampleTaskInstances(ctx context.Context, spaceID, taskID string, activeInstanceIDs []string) error {
+// DeactivateMissingResampleTaskInstances keeps resample reconciliation from
+// touching market-fetch instances that happen to share a collection task ID.
+func (r *TaskInstanceRepository) DeactivateMissingResampleTaskInstances(ctx context.Context, spaceID, collectionTaskID string, activeInstanceIDs []string) error {
 	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, taskID, "kline_resample", false)
+		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, collectionTaskID, "kline_resample", false)
 	if len(activeInstanceIDs) > 0 {
 		query = query.Where("c_instance_id NOT IN ?", activeInstanceIDs)
 	}
 	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
-}
-
-// DeactivateMissingMarketFetchRuleInstances is retained as an internal source
-// compatibility wrapper while callers migrate to task terminology.
-func (r *TaskInstanceRepository) DeactivateMissingMarketFetchRuleInstances(ctx context.Context, spaceID, taskID string, activeInstanceIDs []string) error {
-	return r.DeactivateMissingMarketFetchTaskInstances(ctx, spaceID, taskID, activeInstanceIDs)
-}
-
-// DeactivateMissingResampleRuleInstances is retained as an internal source
-// compatibility wrapper while callers migrate to task terminology.
-func (r *TaskInstanceRepository) DeactivateMissingResampleRuleInstances(ctx context.Context, spaceID, taskID string, activeInstanceIDs []string) error {
-	return r.DeactivateMissingResampleTaskInstances(ctx, spaceID, taskID, activeInstanceIDs)
 }
 
 func (r *TaskInstanceRepository) ListStale(ctx context.Context, spaceID string, before time.Time, limit int) ([]domain.TaskInstance, error) {
@@ -536,12 +525,8 @@ func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilt
 	if filter.InstanceID != "" {
 		q = q.Where("c_instance_id LIKE ?", "%"+filter.InstanceID+"%")
 	}
-	taskID := filter.TaskID
-	if taskID == "" {
-		taskID = filter.CollectionTaskID
-	}
-	if taskID != "" {
-		q = q.Where("c_task_id LIKE ?", "%"+taskID+"%")
+	if filter.CollectionTaskID != "" {
+		q = q.Where("c_task_id LIKE ?", "%"+filter.CollectionTaskID+"%")
 	}
 	if filter.Provider != "" {
 		q = q.Where("c_provider = ?", filter.Provider)

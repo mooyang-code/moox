@@ -21,9 +21,9 @@ func TestPeriodReadinessServiceUsesRowDataTime(t *testing.T) {
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	ctx := context.Background()
 	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "task-btc", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", FunctionName: "fetch-1",
+		SpaceID: "crypto", InstanceID: "task-btc", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", FunctionName: "fetch-1",
 	}, {
-		SpaceID: "crypto", TaskID: "task-btc-duplicate", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", FunctionName: "fetch-2",
+		SpaceID: "crypto", InstanceID: "task-btc-duplicate", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", FunctionName: "fetch-2",
 	}}))
 	service := NewPeriodReadinessService(db.TaskInstances(), db.PeriodReadiness(), time.Second)
 	period := time.Date(2026, 8, 9, 12, 3, 0, 0, time.UTC)

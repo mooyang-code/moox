@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -19,36 +21,16 @@ type IDs struct {
 }
 
 func resultIDs(spaceID, taskID string) IDs {
-	return resultIDsWithSuffix(spaceID, taskID, "")
-}
-
-func resultIDsWithSuffix(spaceID, taskID, suffix string) IDs {
 	digest := sha256.Sum256([]byte(spaceID + "\x00" + taskID))
 	hashSuffix := hex.EncodeToString(digest[:])[:16]
-	datasetID := "dataset_collector_" + hashSuffix
-	if suffix = strings.ToLower(strings.TrimSpace(suffix)); suffix != "" {
-		datasetID += "_" + suffix
-	}
 	return IDs{
-		DatasetID: datasetID,
-		ViewID: "view_collector_" + hashSuffix + func() string {
-			if suffix == "" {
-				return ""
-			}
-			return "_" + suffix
-		}(),
+		DatasetID: "dataset_collector_" + hashSuffix,
+		ViewID:    "view_collector_" + hashSuffix,
 	}
 }
 
 // ResultIDs returns the stable metadata identities for a task result.
 func ResultIDs(spaceID, taskID string) IDs { return resultIDs(spaceID, taskID) }
-
-// ResultIDsWithFrequency returns stable task-exclusive identities for a
-// frequency-specific derived result. The suffix is expected to be the
-// canonical lower-case frequency slug (for example, 5m or 4h).
-func ResultIDsWithFrequency(spaceID, taskID, frequencySlug string) IDs {
-	return resultIDsWithSuffix(spaceID, taskID, frequencySlug)
-}
 
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
@@ -149,6 +131,190 @@ type Config struct {
 	Frequencies  []string
 }
 
+const (
+	ResultStatusPending = "pending"
+	ResultStatusReady   = "ready"
+	ResultStatusError   = "error"
+)
+
+// Inspection is the read-only result metadata snapshot for one task.
+// LastDataTime is empty when Storage does not expose an authoritative indexed
+// upper bound.
+type Inspection struct {
+	IDs           IDs
+	Status        string
+	Dataset       *storagepb.Dataset
+	View          *storagepb.View
+	LastDataTime  string
+	CoverageStart string
+	CoverageEnd   string
+	Error         string
+}
+
+// Inspect returns the task-owned Dataset/View state without changing Storage.
+// Missing metadata is a normal pending state; ownership and metadata failures
+// are returned as errors so callers cannot mistake another task's result for
+// this task's result.
+func (m *Manager) Inspect(ctx context.Context, spaceID, taskID string) (Inspection, error) {
+	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
+	inspection := Inspection{IDs: resultIDs(spaceID, taskID), Status: ResultStatusPending}
+	if m == nil || m.metadata == nil || m.auth == nil {
+		return inspectionWithError(inspection, fmt.Errorf("task result metadata manager is not configured"))
+	}
+	if spaceID == "" || taskID == "" {
+		return inspectionWithError(inspection, fmt.Errorf("space_id and task_id are required"))
+	}
+
+	datasetRsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: inspection.IDs.DatasetID})
+	if err != nil {
+		return inspectionWithError(inspection, fmt.Errorf("inspect result dataset: %w", err))
+	}
+	if datasetRsp == nil {
+		return inspectionWithError(inspection, fmt.Errorf("inspect result dataset: empty response"))
+	}
+	if datasetRsp.GetRetInfo() == nil {
+		return inspectionWithError(inspection, metadataError("inspect result dataset", nil, nil))
+	}
+	datasetExists := false
+	switch datasetRsp.GetRetInfo().GetCode() {
+	case storagepb.ErrorCode_SUCCESS:
+		dataset := datasetRsp.GetDataset()
+		if dataset == nil {
+			return inspectionWithError(inspection, fmt.Errorf("inspect result dataset: empty dataset"))
+		}
+		if !ownedByTask(dataset.GetAttributes(), taskID) {
+			return inspectionWithError(inspection, fmt.Errorf("result dataset %s is owned by another task", inspection.IDs.DatasetID))
+		}
+		inspection.Dataset = dataset
+		datasetExists = true
+	case storagepb.ErrorCode_DATASET_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
+	default:
+		return inspectionWithError(inspection, metadataError("inspect result dataset", nil, datasetRsp.GetRetInfo()))
+	}
+
+	viewRsp, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: inspection.IDs.ViewID})
+	if err != nil {
+		return inspectionWithError(inspection, fmt.Errorf("inspect result view: %w", err))
+	}
+	if viewRsp == nil {
+		return inspectionWithError(inspection, fmt.Errorf("inspect result view: empty response"))
+	}
+	if viewRsp.GetRetInfo() == nil {
+		return inspectionWithError(inspection, metadataError("inspect result view", nil, nil))
+	}
+	viewExists := false
+	switch viewRsp.GetRetInfo().GetCode() {
+	case storagepb.ErrorCode_SUCCESS:
+		view := viewRsp.GetView()
+		if view == nil {
+			return inspectionWithError(inspection, fmt.Errorf("inspect result view: empty view"))
+		}
+		if !ownedByTask(view.GetAttributes(), taskID) {
+			return inspectionWithError(inspection, fmt.Errorf("result view %s is owned by another task", inspection.IDs.ViewID))
+		}
+		if view.GetDatasetId() != inspection.IDs.DatasetID {
+			return inspectionWithError(inspection, fmt.Errorf("result view %s does not reference task dataset %s", inspection.IDs.ViewID, inspection.IDs.DatasetID))
+		}
+		inspection.View = view
+		viewExists = true
+	case storagepb.ErrorCode_VIEW_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
+	default:
+		return inspectionWithError(inspection, metadataError("inspect result view", nil, viewRsp.GetRetInfo()))
+	}
+
+	if !datasetExists && viewExists {
+		return inspectionWithError(inspection, fmt.Errorf("result view %s exists without task dataset %s", inspection.IDs.ViewID, inspection.IDs.DatasetID))
+	}
+	if !datasetExists || !viewExists {
+		return inspection, nil
+	}
+	inspection.CoverageStart, inspection.CoverageEnd = resultCoverage(inspection.Dataset, inspection.View)
+	inspection.LastDataTime = resultLastDataTime(inspection.Dataset, inspection.View)
+	if strings.EqualFold(strings.TrimSpace(inspection.Dataset.GetStatus()), "error") ||
+		strings.EqualFold(strings.TrimSpace(inspection.View.GetStatus()), "error") ||
+		strings.EqualFold(strings.TrimSpace(inspection.View.GetStatus()), "failed") {
+		inspection.Status = ResultStatusError
+		inspection.Error = "task result metadata is in an error state"
+		return inspection, nil
+	}
+	datasetReady := strings.TrimSpace(inspection.Dataset.GetStatus()) == "" || strings.EqualFold(strings.TrimSpace(inspection.Dataset.GetStatus()), "active")
+	viewReady := strings.TrimSpace(inspection.View.GetStatus()) == "" || strings.EqualFold(strings.TrimSpace(inspection.View.GetStatus()), "active")
+	if datasetReady && viewReady {
+		inspection.Status = ResultStatusReady
+	}
+	return inspection, nil
+}
+
+func inspectionWithError(inspection Inspection, err error) (Inspection, error) {
+	inspection.Status = ResultStatusError
+	if err != nil {
+		inspection.Error = err.Error()
+	}
+	return inspection, err
+}
+
+func resultLastDataTime(dataset *storagepb.Dataset, view *storagepb.View) string {
+	if dataset != nil && dataset.GetDataKind() == storagepb.DataKind_DATA_KIND_RECORD {
+		for _, object := range []map[string]string{dataset.GetAttributes(), func() map[string]string {
+			if view == nil {
+				return nil
+			}
+			return view.GetAttributes()
+		}()} {
+			for _, key := range []string{"last_data_time", "last_data_time_at", "fetched_at"} {
+				if value := strings.TrimSpace(object[key]); value != "" {
+					return value
+				}
+			}
+		}
+		return ""
+	}
+	if view != nil {
+		if value := strings.TrimSpace(view.GetIndexedTo()); value != "" {
+			return value
+		}
+		for _, key := range []string{"last_data_time", "last_data_time_at", "indexed_to"} {
+			if value := strings.TrimSpace(view.GetAttributes()[key]); value != "" {
+				return value
+			}
+		}
+	}
+	if dataset != nil {
+		for _, key := range []string{"last_data_time", "last_data_time_at", "indexed_to"} {
+			if value := strings.TrimSpace(dataset.GetAttributes()[key]); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func resultCoverage(dataset *storagepb.Dataset, view *storagepb.View) (string, string) {
+	start, end := "", ""
+	if view != nil {
+		start, end = strings.TrimSpace(view.GetIndexedFrom()), strings.TrimSpace(view.GetIndexedTo())
+	}
+	if dataset != nil {
+		attrs := dataset.GetAttributes()
+		if start == "" {
+			start = firstNonEmpty(attrs["coverage_start"], attrs["indexed_from"])
+		}
+		if end == "" {
+			end = firstNonEmpty(attrs["coverage_end"], attrs["indexed_to"])
+		}
+	}
+	if view != nil {
+		attrs := view.GetAttributes()
+		if start == "" {
+			start = firstNonEmpty(attrs["coverage_start"], attrs["indexed_from"])
+		}
+		if end == "" {
+			end = firstNonEmpty(attrs["coverage_end"], attrs["indexed_to"])
+		}
+	}
+	return start, end
+}
+
 func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketType string, cfg Config) (IDs, error) {
 	if m == nil || m.metadata == nil || m.auth == nil {
 		return IDs{}, fmt.Errorf("task result metadata manager is not configured")
@@ -165,6 +331,10 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	keep := strings.TrimSpace(cfg.KeepDuration)
 	if keep == "" {
 		keep = "0"
+	}
+	keep, err := normalizeKeepDuration(keep)
+	if err != nil {
+		return IDs{}, err
 	}
 	attrs := map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": taskID, "market_type": strings.TrimSpace(marketType)}
 	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
@@ -273,11 +443,7 @@ func (m *Manager) cleanupCreatedDataset(ctx context.Context, spaceID, datasetID 
 // task-owned resources are never removed by that action.
 func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataType, marketType string, cfg Config) (IDs, func(context.Context) error, error) {
 	ids := resultIDs(spaceID, taskID)
-	datasetExists, viewExists, err := m.resultMetadataState(ctx, spaceID, ids)
-	if err != nil {
-		return IDs{}, nil, err
-	}
-	ensured, err := m.Ensure(ctx, spaceID, taskID, dataType, marketType, cfg)
+	datasetExists, viewExists, err := m.resultMetadataState(ctx, spaceID, taskID, ids)
 	if err != nil {
 		return IDs{}, nil, err
 	}
@@ -286,14 +452,14 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 			return nil
 		}
 		if !viewExists {
-			view, deleteErr := m.metadata.DeleteView(cleanupCtx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ensured.ViewID})
-			if deleteErr != nil || (view != nil && view.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+			view, deleteErr := m.metadata.DeleteView(cleanupCtx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+			if deleteErr != nil || !resultDeleteAccepted(retInfoViewDelete(view)) {
 				return metadataError("cleanup result view", deleteErr, retInfoViewDelete(view))
 			}
 		}
 		if !datasetExists {
 			if m.cleaner != nil {
-				physical, cleanErr := m.cleaner.DeleteDatasetRows(cleanupCtx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ensured.DatasetID})
+				physical, cleanErr := m.cleaner.DeleteDatasetRows(cleanupCtx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 				if cleanErr != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
 					return metadataError("cleanup result dataset rows", cleanErr, func() *storagepb.RetInfo {
 						if physical == nil {
@@ -303,31 +469,50 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 					}())
 				}
 			}
-			dataset, deleteErr := m.metadata.DeleteDataset(cleanupCtx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ensured.DatasetID})
-			if deleteErr != nil || (dataset != nil && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+			dataset, deleteErr := m.metadata.DeleteDataset(cleanupCtx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+			if deleteErr != nil || !resultDeleteAccepted(retInfoDatasetDelete(dataset)) {
 				return metadataError("cleanup result dataset", deleteErr, retInfoDatasetDelete(dataset))
 			}
 		}
 		return nil
 	}
+	ensured, err := m.Ensure(ctx, spaceID, taskID, dataType, marketType, cfg)
+	if err != nil {
+		if cleanupErr := cleanup(ctx); cleanupErr != nil {
+			return IDs{}, nil, fmt.Errorf("%w; result compensation failed: %v", err, cleanupErr)
+		}
+		return IDs{}, nil, err
+	}
 	return ensured, cleanup, nil
 }
 
-func (m *Manager) resultMetadataState(ctx context.Context, spaceID string, ids IDs) (bool, bool, error) {
+func (m *Manager) resultMetadataState(ctx context.Context, spaceID, taskID string, ids IDs) (bool, bool, error) {
 	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
 		return false, false, err
 	}
-	datasetExists := dataset != nil && dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS
-	if dataset != nil && !datasetExists && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
+	if dataset == nil || dataset.GetRetInfo() == nil {
+		return false, false, fmt.Errorf("get result dataset: empty response")
+	}
+	datasetExists := dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS
+	if datasetExists && (dataset.GetDataset() == nil || !ownedByTask(dataset.GetDataset().GetAttributes(), taskID)) {
+		return false, false, fmt.Errorf("result dataset %s is owned by another task", ids.DatasetID)
+	}
+	if !datasetExists && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
 		return false, false, metadataError("get result dataset", nil, dataset.GetRetInfo())
 	}
 	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
 		return false, false, err
 	}
-	viewExists := view != nil && view.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS
-	if view != nil && !viewExists && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
+	if view == nil || view.GetRetInfo() == nil {
+		return false, false, fmt.Errorf("get result view: empty response")
+	}
+	viewExists := view.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS
+	if viewExists && (view.GetView() == nil || !ownedByTask(view.GetView().GetAttributes(), taskID) || view.GetView().GetDatasetId() != ids.DatasetID) {
+		return false, false, fmt.Errorf("result view %s is owned by another task", ids.ViewID)
+	}
+	if !viewExists && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
 		return false, false, metadataError("get result view", nil, view.GetRetInfo())
 	}
 	return datasetExists, viewExists, nil
@@ -494,23 +679,39 @@ func resultDataSourceID(provider string) string {
 	return strings.TrimSpace(provider)
 }
 
+func normalizeKeepDuration(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "0" {
+		return "0", nil
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil && len(raw) > 1 {
+		unit := raw[len(raw)-1]
+		if unit == 'd' || unit == 'D' || unit == 'w' || unit == 'W' {
+			count, parseErr := strconv.ParseInt(raw[:len(raw)-1], 10, 64)
+			if parseErr == nil && count > 0 {
+				multiplier := 24 * time.Hour
+				if unit == 'w' || unit == 'W' {
+					multiplier *= 7
+				}
+				duration = time.Duration(count) * multiplier
+				err = nil
+			}
+		}
+	}
+	if err != nil || duration <= 0 {
+		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", raw)
+	}
+	return duration.String(), nil
+}
+
 func resultName(spaceID, taskID string) string {
 	ids := resultIDs(spaceID, strings.TrimSpace(taskID))
 	return "结果-" + strings.TrimPrefix(ids.DatasetID, "dataset_collector_")[:6]
 }
 
 func ownedByTask(attributes map[string]string, taskID string) bool {
-	if attributes["owner_module"] != "collector" {
-		return false
-	}
-	trimmedTaskID := strings.TrimSpace(taskID)
-	// Older resample results used resample_task_id before all Collector
-	// results were normalized to collector_task_id. Keep that result lineage
-	// verifiable so bootstrap migration and explicit deletion remain safe.
-	if strings.TrimSpace(attributes["collector_task_id"]) != "" {
-		return attributes["collector_task_id"] == trimmedTaskID
-	}
-	return attributes["resample_task_id"] == trimmedTaskID
+	return attributes["owner_module"] == "collector" && attributes["collector_task_id"] == strings.TrimSpace(taskID)
 }
 
 func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
@@ -529,11 +730,11 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 		}
 	}
 	view, err := m.metadata.DeleteView(ctx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
-	if err != nil || (view != nil && view.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+	if err != nil || !resultDeleteAccepted(retInfoViewDelete(view)) {
 		return metadataError("delete result view", err, retInfoViewDelete(view))
 	}
 	dataset, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-	if err != nil || (dataset != nil && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+	if err != nil || !resultDeleteAccepted(retInfoDatasetDelete(dataset)) {
 		return metadataError("delete result dataset", err, retInfoDatasetDelete(dataset))
 	}
 	return nil
@@ -577,43 +778,45 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	if strings.TrimSpace(taskID) == "" {
 		return fmt.Errorf("task_id is required")
 	}
-	base := resultIDs(spaceID, taskID).DatasetID
-	deterministicID := ids.DatasetID == base || strings.HasPrefix(ids.DatasetID, base+"_")
-	expectedViewID := "view_" + strings.TrimPrefix(ids.DatasetID, "dataset_")
-	if ids.ViewID != expectedViewID {
-		return fmt.Errorf("result view %s is not owned by task %s", ids.ViewID, taskID)
+	base := resultIDs(spaceID, taskID)
+	if ids != base {
+		return fmt.Errorf("result identity is not the deterministic result of task %s", taskID)
 	}
 	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
 		return fmt.Errorf("get result dataset ownership: %w", err)
 	}
-	datasetOwned := false
-	if dataset != nil && dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
-		if dataset.GetDataset() == nil || !ownedByTask(dataset.GetDataset().GetAttributes(), taskID) {
+	if dataset == nil || dataset.GetRetInfo() == nil {
+		return fmt.Errorf("get result dataset ownership: empty response")
+	}
+	switch dataset.GetRetInfo().GetCode() {
+	case storagepb.ErrorCode_SUCCESS:
+		if dataset.GetDataset() == nil || dataset.GetDataset().GetSpaceId() != strings.TrimSpace(spaceID) || !ownedByTask(dataset.GetDataset().GetAttributes(), taskID) {
 			return fmt.Errorf("result dataset %s is not owned by task %s", ids.DatasetID, taskID)
 		}
-		datasetOwned = true
-	} else if !deterministicID {
-		// Legacy resample tasks could persist a user-selected result ID. Such
-		// results remain deletable only when the persisted ownership marker is
-		// present; a missing object must not turn an arbitrary ID into a delete
-		// target.
-		return fmt.Errorf("legacy result dataset %s is not verifiably owned by task %s", ids.DatasetID, taskID)
+	case storagepb.ErrorCode_DATASET_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
+	default:
+		return fmt.Errorf("get result dataset ownership: %s", dataset.GetRetInfo().GetMsg())
 	}
 	view, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
 		return fmt.Errorf("get result view ownership: %w", err)
 	}
-	if view != nil && view.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
-		if view.GetView() == nil {
+	if view == nil || view.GetRetInfo() == nil {
+		return fmt.Errorf("get result view ownership: empty response")
+	}
+	switch view.GetRetInfo().GetCode() {
+	case storagepb.ErrorCode_SUCCESS:
+		if view.GetView() == nil || view.GetView().GetSpaceId() != strings.TrimSpace(spaceID) {
 			return fmt.Errorf("result view %s is not owned by task %s", ids.ViewID, taskID)
 		}
 		viewAttrs := view.GetView().GetAttributes()
-		if !ownedByTask(viewAttrs, taskID) && !(datasetOwned && view.GetView().GetDatasetId() == ids.DatasetID && strings.TrimSpace(viewAttrs["owner_module"]) == "") {
+		if !ownedByTask(viewAttrs, taskID) || view.GetView().GetDatasetId() != ids.DatasetID {
 			return fmt.Errorf("result view %s is not owned by task %s", ids.ViewID, taskID)
 		}
-	} else if !deterministicID {
-		return fmt.Errorf("legacy result view %s is not verifiably owned by task %s", ids.ViewID, taskID)
+	case storagepb.ErrorCode_VIEW_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
+	default:
+		return fmt.Errorf("get result view ownership: %s", view.GetRetInfo().GetMsg())
 	}
 	return nil
 }

@@ -94,13 +94,13 @@ func TestDatasetSource_ListResampleSubjectsUsesSharedActiveSubjectSet(t *testing
 	assert.Equal(t, "BTC-USDT", subjects[0].ExternalSymbol)
 }
 
-func TestDatasetSource_ListResampleSubjectsForRuleFiltersSharedActiveSubjectSetByVenue(t *testing.T) {
+func TestDatasetSource_ListResampleSubjectsForTaskFiltersSharedActiveSubjectSetByVenue(t *testing.T) {
 	src := &DatasetSource{metadata: &fakeMetadataClient{
 		dataset:     &storagepb.Dataset{DataSourceId: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
 		allSubjects: []*storagepb.Subject{{SubjectId: "BTC-USDT", Status: "active"}, {SubjectId: "OKX-ONLY", Status: "active"}},
 		symbols:     []*storagepb.SubjectSymbol{{SubjectId: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}},
 	}}
-	subjects, err := src.ListResampleSubjectsForRule(context.Background(), "crypto", "dataset_spot_kline_1h", "moox", "venue:binance")
+	subjects, err := src.ListResampleSubjectsForTask(context.Background(), "crypto", "dataset_spot_kline_1h", "moox", "venue:binance")
 	require.NoError(t, err)
 	require.Len(t, subjects, 1)
 	assert.Equal(t, "BTC-USDT", subjects[0].SubjectID)

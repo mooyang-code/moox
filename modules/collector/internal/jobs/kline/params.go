@@ -4,7 +4,7 @@ package kline
 // Params is the JobItem params shape for K-line collection.
 type Params struct {
 	SpaceID          string `json:"space_id"`
-	TaskID           string `json:"task_id"`
+	InstanceID       string `json:"instance_id"`
 	Exchange         string `json:"exchange"`
 	Market           string `json:"market"`
 	DataType         string `json:"data_type"`

@@ -27,7 +27,8 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testMatch: remote ? /storage-datanode-management\.remote\.e2e\.spec\.ts/ : undefined,
+      testMatch: remote ? /remote\.e2e\.spec\.ts$/ : /\.spec\.ts$/,
+      testIgnore: /\.test\.ts$/,
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: remote ? { args: remoteBrowserLaunchArgs(process.env.MOOX_REMOTE_FORWARD_HOST) } : undefined

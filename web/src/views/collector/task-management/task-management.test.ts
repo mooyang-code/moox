@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const normalizeSource = (source: string) => source.replace(/\s+/g, "").replace(/'/g, '"');
 
 describe("collector task management workbench", () => {
-  it("combines collection rules, task instances, and executors in one ordered tab surface", () => {
+  it("keeps the four tabs in tasks, instances, executors, results order", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
     const positions = ["采集任务", "任务实例", "执行器", "采集结果"].map(label => normalized.indexOf(`label:"${label}"`));
@@ -16,6 +16,14 @@ describe("collector task management workbench", () => {
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
     expect(normalized).toContain("executors:CloudNode");
     expect(normalized).toContain('typeCollectorTaskTab="tasks"|"instances"|"executors"|"results"');
+  });
+
+  it("uses the result task query only for the result tab", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
+    const normalized = normalizeSource(source);
+    expect(normalized).toContain('tab:"results"');
+    expect(normalized).toContain("resultTask");
+    expect(normalized).toContain("resultTask:undefined");
   });
 
   it("redirects the legacy cloud-node entry into the executor tab", () => {
@@ -31,7 +39,7 @@ describe("collector task management workbench", () => {
     expect(home).toContain('path: "/collector/tasks?tab=executors"');
   });
 
-  it("keeps one visible menu and removes the retired task URL", () => {
+  it("keeps one visible task menu and removes retired collector URLs", () => {
     const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
     const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
     const normalizedMenu = normalizeSource(menu);
@@ -41,43 +49,21 @@ describe("collector task management workbench", () => {
     expect(normalizedMenu).not.toContain('menu("0304"');
     expect(normalizedRoutes).toContain('component:()=>import("@/views/collector/task-management/index.vue")');
     expect(normalizedRoutes).toContain('path:"/collector/tasks"');
-    expect(normalizedRoutes).not.toContain('path:"/collector/rules"');
+    for (const retired of ["/collector/rules", "/collector/data-management", "/collector/datasets", "/collector/packages"]) {
+      expect(normalizedRoutes).not.toContain(`path:"${retired}"`);
+    }
   });
 
-  it("removes the standalone package page and keeps package management on cloud nodes", () => {
-    const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
-    const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
-    const cloudNodes = fs.readFileSync(path.resolve(__dirname, "../cloud-node/cloud-node.vue"), "utf8");
-    const normalizedMenu = normalizeSource(menu);
-    const normalizedRoutes = normalizeSource(routes);
-    const normalizedCloudNodes = normalizeSource(cloudNodes);
-
-    expect(normalizedMenu).not.toContain('menu("0302"');
-    expect(normalizedRoutes).not.toContain('path:"/collector/packages"');
-    expect(normalizedRoutes).not.toContain('component:()=>import("@/views/collector/cloud-node/function-package-manage.vue")');
-    expect(normalizedCloudNodes).toContain('importFunctionPackageManagefrom"./function-package-manage.vue"');
-  });
-
-  it("places the create action in the collection rule search row", () => {
-    const rules = fs.readFileSync(path.resolve(__dirname, "../collection-tasks/collection-tasks.vue"), "utf8");
-    const firstToolbarEnd = rules.indexOf("</a-space>");
-    const tableStart = rules.indexOf("<a-table");
-    const createPosition = rules.indexOf("<span>新建任务</span>");
-    const searchPosition = rules.indexOf("<span>查询</span>");
+  it("keeps the create action in the task search row", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "../collection-tasks/collection-tasks.vue"), "utf8");
+    const firstToolbarEnd = source.indexOf("</a-space>");
+    const tableStart = source.indexOf("<a-table");
+    const createPosition = source.indexOf("新建采集任务");
+    const searchPosition = source.indexOf("查询");
 
     expect(createPosition).toBeGreaterThan(0);
     expect(createPosition).toBeLessThan(searchPosition);
     expect(createPosition).toBeLessThan(firstToolbarEnd);
-    expect(rules.slice(firstToolbarEnd, tableStart)).not.toContain("新建任务");
-  });
-
-  it("clears both Dataset selections when the collector market changes", () => {
-    const rules = fs.readFileSync(path.resolve(__dirname, "../collection-tasks/collection-tasks.vue"), "utf8");
-    const watcherStart = rules.indexOf("watch(\n  [");
-    const watcher = rules.slice(watcherStart, rules.indexOf("onMounted(() =>", watcherStart));
-
-    expect(watcher).toContain('datasetIdValue.value = ""');
-    expect(watcher).toContain('symbolDatasetIdValue.value = ""');
-    expect(watcher).toContain("availableSymbolDatasets.value");
+    expect(source.slice(firstToolbarEnd, tableStart)).not.toContain("新建采集任务");
   });
 });

@@ -28,7 +28,7 @@ const (
 	runtimeConfigBatchSize = 100
 )
 
-type ruleSource interface {
+type taskSource interface {
 	ListEnabled(context.Context, string) ([]domain.CollectionTask, error)
 }
 
@@ -55,7 +55,7 @@ type Reconciler struct {
 	ResolveSourceID               func(string, string) string
 	ResolveSymbol                 SymbolResolver
 	CompactSymbol                 SymbolResolver
-	Rules                         ruleSource
+	Tasks                         taskSource
 	Symbols                       datasetSource
 	Nodes                         runtimeConfigClient
 	Instances                     *store.TaskInstanceRepository
@@ -77,7 +77,7 @@ type Reconciler struct {
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
-	if r == nil || r.Rules == nil || r.Symbols == nil || r.Nodes == nil {
+	if r == nil || r.Tasks == nil || r.Symbols == nil || r.Nodes == nil {
 		return fmt.Errorf("SCF timer reconciler is not initialized")
 	}
 	spaceID = strings.TrimSpace(spaceID)
@@ -157,7 +157,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	stockCN := strings.EqualFold(spaceID, StockCNSpaceID)
 	if stockCN && len(groups) == 0 {
 		// Keep the published Timer fleet explicitly disabled when no active
-		// rule/subject remains. This also clears stale FunctionName bindings
+		// task/subject remains. This also clears stale FunctionName bindings
 		// without inventing a fake market subject.
 		groups = []TaskGroup{{
 			Provider: "stockcn_multi", MarketType: "equity", MarketID: StockCNSpaceID,
@@ -165,7 +165,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		}}
 	}
 	if !stockCN && len(groups) == 0 {
-		activeTasks, listErr := r.Rules.ListEnabled(ctx, spaceID)
+		activeTasks, listErr := r.Tasks.ListEnabled(ctx, spaceID)
 		if listErr != nil {
 			return r.fail(spaceID, "rules", fmt.Errorf("list enabled tasks before disabling timers: %w", listErr))
 		}
@@ -814,7 +814,7 @@ func (r *Reconciler) observeAssignmentMetrics(spaceID string, groups []TaskGroup
 	}
 	// A valid reconciliation with zero enabled groups is still a success. Set
 	// the space-level health outside the scope loop so a previous failure can
-	// recover after rules are disabled or removed.
+	// recover after tasks are disabled or removed.
 	r.Metrics.ObserveAssignmentSuccess(spaceID, reconciledAt)
 }
 
@@ -887,19 +887,19 @@ func assignmentMetricKey(datasetID, frequency string) string {
 }
 
 func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, error) {
-	rules, err := r.Rules.ListEnabled(ctx, spaceID)
+	tasks, err := r.Tasks.ListEnabled(ctx, spaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list enabled collection tasks: %w", err)
 	}
 	groups := make([]TaskGroup, 0)
-	for _, rule := range rules {
-		params, parseErr := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	for _, task := range tasks {
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 		if parseErr != nil {
 			// A malformed or temporarily unavailable collection task must not prevent the
 			// other market/frequency groups from being reconciled. Scheduler.Tick
-			// already treats rules independently; keep the Timer control plane
+			// already treats tasks independently; keep the Timer control plane
 			// consistent with that behavior.
-			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: parse task: %v", rule.TaskID, parseErr)
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: parse task: %v", task.TaskID, parseErr)
 			continue
 		}
 		if params.Collector.DataType != "kline" {
@@ -907,19 +907,19 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		}
 		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Source.DatasetID)
 		if datasetErr != nil {
-			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get symbol dataset %s: %v", rule.TaskID, params.Source.DatasetID, datasetErr)
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get symbol dataset %s: %v", task.TaskID, params.Source.DatasetID, datasetErr)
 			continue
 		}
 		subjects, subjectErr := r.Symbols.ListSubjects(ctx, spaceID, params.Source.DatasetID, dataset.DataSourceID)
 		if subjectErr != nil {
-			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: list symbol dataset %s: %v", rule.TaskID, params.Source.DatasetID, subjectErr)
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: list symbol dataset %s: %v", task.TaskID, params.Source.DatasetID, subjectErr)
 			continue
 		}
 		if len(subjects) == 0 {
-			log.WarnContextf(ctx, "skip collection task=%s: no active subjects for symbol dataset %s", rule.TaskID, params.Source.DatasetID)
+			log.WarnContextf(ctx, "skip collection task=%s: no active subjects for symbol dataset %s", task.TaskID, params.Source.DatasetID)
 			continue
 		}
-		marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, rule.SpaceID), params.InstrumentType, params.Target.DatasetID)
+		marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, params.Target.DatasetID)
 		if instrumentType == "" {
 			instrumentType = defaultInstrumentTypeForMarket(marketID, params.MarketType)
 		}
@@ -949,7 +949,7 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 			return nil, fmt.Errorf("all active %s subjects are invalid: %s", params.MarketType, strings.Join(invalidSubjects, ","))
 		}
 		if len(invalidSubjects) > 0 {
-			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s rule=%s skipped=%d subjects=%s", spaceID, rule.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
+			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s task=%s skipped=%d subjects=%s", spaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 		}
 		for _, frequency := range params.Collector.Intervals {
 			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})

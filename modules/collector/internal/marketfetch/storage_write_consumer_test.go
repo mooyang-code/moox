@@ -18,7 +18,7 @@ import (
 func TestHandleStorageWriteUpdatesAssignedTaskInstances(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
-	instance := domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
 	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
 	require.NoError(t, db.TaskInstances().AssignMarketFetchFunction(ctx, "crypto", "binance", "spot", "bars", "1m", "fetcher-1", []string{"BTC-USDT"}))
 	at := time.Date(2026, 8, 5, 2, 3, 4, 0, time.UTC)

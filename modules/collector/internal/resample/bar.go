@@ -17,7 +17,8 @@ const AlignmentEpochUTC = "epoch_utc"
 
 // TaskSpec is the immutable input/output contract required by Bars.
 type TaskSpec struct {
-	TaskID          string
+	// InstanceID identifies the TaskInstance being processed.
+	InstanceID      string
 	SpaceID         string
 	SourceDatasetID string
 	SourceFrequency FixedFrequency
@@ -163,8 +164,8 @@ func Bars(spec TaskSpec, subjectID string, start, end time.Time, rows []SourceBa
 }
 
 func validateTaskSpec(spec TaskSpec) error {
-	if spec.TaskID == "" || spec.SpaceID == "" || spec.SourceDatasetID == "" || spec.SourceSeriesTag == "" || spec.TargetDatasetID == "" {
-		return fmt.Errorf("resample task identity, source, target, and series tag are required")
+	if spec.InstanceID == "" || spec.SpaceID == "" || spec.SourceDatasetID == "" || spec.SourceSeriesTag == "" || spec.TargetDatasetID == "" {
+		return fmt.Errorf("resample instance identity, source, target, and series tag are required")
 	}
 	if spec.SourceDatasetID == spec.TargetDatasetID {
 		return fmt.Errorf("source and target Dataset IDs must differ")
@@ -192,7 +193,7 @@ func validateSourceBar(spec TaskSpec, subjectID string, expectedTime time.Time, 
 		return fmt.Errorf("source frequency does not match task")
 	}
 	if row.SeriesTag != spec.SourceSeriesTag {
-		return fmt.Errorf("source series tag does not match rule")
+		return fmt.Errorf("source series tag does not match task")
 	}
 	if !row.DataTime.UTC().Equal(expectedTime) {
 		return fmt.Errorf("expected data_time %s, got %s", expectedTime.Format(time.RFC3339Nano), row.DataTime.Format(time.RFC3339Nano))

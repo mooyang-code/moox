@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func newCollectorStore(t *testing.T) *Store {
@@ -53,6 +54,66 @@ func TestCollectionTaskRepository_CRUD(t *testing.T) {
 	enabled, err := repo.ListEnabled(ctx, "crypto")
 	require.NoError(t, err)
 	assert.Len(t, enabled, 0)
+}
+
+func TestCollectionTaskRepository_TaskNameLookupIsScopedAndTrimmed(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.Tasks()
+	ctx := context.Background()
+
+	require.NoError(t, repo.Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-1", TaskName: "  same name  ",
+	}))
+	require.NoError(t, repo.Create(ctx, domain.CollectionTask{
+		SpaceID: "stockcn", TaskID: "task-2", TaskName: "same name",
+	}))
+	require.Error(t, repo.Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-3", TaskName: "same name",
+	}))
+
+	got, err := repo.GetByTaskName(ctx, "crypto", "same name")
+	require.NoError(t, err)
+	assert.Equal(t, "same name", got.TaskName)
+	assert.Equal(t, "task-1", got.TaskID)
+
+	got, err = repo.GetByTaskName(ctx, "stockcn", " same name ")
+	require.NoError(t, err)
+	assert.Equal(t, "task-2", got.TaskID)
+
+	_, err = repo.GetByTaskName(ctx, "crypto", "missing")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.Tasks()
+	ctx := context.Background()
+	require.NoError(t, repo.Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-1", TaskName: "original", Description: "before",
+		DataType: "instrument", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"dataset-original"}`,
+		Enabled:       true, Creator: "creator", PrepareState: domain.PrepareStateReady,
+		ResultDatasetID: "dataset-original", ResultViewID: "view-original",
+	}))
+
+	updated, err := repo.UpdateMutableByTaskID(ctx, "crypto", "task-1", domain.CollectionTask{
+		SpaceID: "other", TaskID: "other", TaskName: "renamed", Description: "after",
+		DataType: "kline", Provider: "other", MarketType: "swap",
+		CollectParams: `{"target_dataset_id":"dataset-other"}`, Enabled: false,
+		Creator: "other", PrepareState: domain.PrepareStateReady, ResultDatasetID: "dataset-other", ResultViewID: "view-other",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "renamed", updated.TaskName)
+	assert.Equal(t, "after", updated.Description)
+	assert.False(t, updated.Enabled)
+	assert.Equal(t, "crypto", updated.SpaceID)
+	assert.Equal(t, "task-1", updated.TaskID)
+	assert.Equal(t, "instrument", updated.DataType)
+	assert.Equal(t, "binance", updated.Provider)
+	assert.Equal(t, "spot", updated.MarketType)
+	assert.Equal(t, "dataset-original", updated.ResultDatasetID)
+	assert.Equal(t, "view-original", updated.ResultViewID)
+	assert.Equal(t, "creator", updated.Creator)
 }
 
 func TestCollectionTaskCoverageStartHonorsEnabledAndStockCalendar(t *testing.T) {

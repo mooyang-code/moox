@@ -44,10 +44,10 @@ func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 	}
 }
 
-func TestRunInitCommandSeedsBuiltInRules(t *testing.T) {
+func TestRunInitCommandSeedsBuiltInTasks(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
-	seedPath := filepath.Join(t.TempDir(), "rules.yaml")
-	if err := os.WriteFile(seedPath, []byte("tasks:\n- space_id: crypto\n  task_id: builtin-task\n  data_type: instrument\n  provider: binance\n  market_type: spot\n  enabled: true\n  collect_params:\n    provider: binance\n    market_type: spot\n    symbol_source: exchange\n    target_dataset_id: dataset_binance_spot_symbols\n    frequency: 1h\n"), 0o600); err != nil {
+	seedPath := filepath.Join(t.TempDir(), "tasks.yaml")
+	if err := os.WriteFile(seedPath, []byte("tasks:\n- space_id: crypto\n  task_id: builtin-task\n  task_name: Binance 标的任务\n  data_type: instrument\n  provider: binance\n  market_type: spot\n  enabled: true\n  collect_params:\n    provider: binance\n    market_type: spot\n    symbol_source: exchange\n    frequency: 1h\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
@@ -59,6 +59,9 @@ func TestRunInitCommandSeedsBuiltInRules(t *testing.T) {
 	assert.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
 	assert.Equal(t, 1, result.TasksCreated)
 	assert.Equal(t, 0, result.TasksUnchanged)
+	assert.Contains(t, stdout.String(), `"tasks_created":1`)
+	assert.Contains(t, stdout.String(), `"tasks_unchanged":0`)
+	assert.NotContains(t, stdout.String(), `"created"`)
 	stdout.Reset()
 	if err := runInitCommand([]string{"init", "--db-path", dbPath, "--seed-file", seedPath}, &stdout, &stderr); err != nil {
 		t.Fatalf("second runInitCommand() error = %v", err)
@@ -69,9 +72,9 @@ func TestRunInitCommandSeedsBuiltInRules(t *testing.T) {
 	mgr, err := store.Open(&store.Options{Path: dbPath})
 	assert.NoError(t, err)
 	defer mgr.Close()
-	rule, err := mgr.Tasks().GetByTaskID(context.Background(), "crypto", "builtin-task")
+	task, err := mgr.Tasks().GetByTaskID(context.Background(), "crypto", "builtin-task")
 	assert.NoError(t, err)
-	assert.True(t, rule.Enabled)
+	assert.True(t, task.Enabled)
 }
 
 func assertTableExists(t *testing.T, dbPath string, tableName string) {

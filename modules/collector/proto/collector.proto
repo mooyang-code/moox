@@ -49,6 +49,8 @@ message TaskResult {
   string status = 3;
   string last_data_time = 4;
   string data_kind = 5;
+  string coverage_start = 6;
+  string coverage_end = 7;
 }
 
 // ResultConfig 是结果存储的高级配置，不允许指定既有结果。

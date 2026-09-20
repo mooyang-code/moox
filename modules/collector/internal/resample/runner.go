@@ -11,6 +11,7 @@ import (
 
 	"github.com/avast/retry-go"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -32,7 +33,7 @@ type RunnerConfig struct {
 // Runner is the Collector-local scanner/worker. Timer ticks only enqueue
 // bounded work; network reads and writes happen in worker goroutines.
 type Runner struct {
-	Rules        *store.CollectionTaskRepository
+	Tasks        *store.TaskRepository
 	Instances    *store.TaskInstanceRepository
 	Readiness    *store.PeriodReadinessRepository
 	Metrics      *Metrics
@@ -44,7 +45,7 @@ type Runner struct {
 }
 
 func (r *Runner) Tick(ctx context.Context, now time.Time) error {
-	if r == nil || r.Rules == nil || r.Instances == nil || r.Source == nil || r.Primary == nil {
+	if r == nil || r.Tasks == nil || r.Instances == nil || r.Source == nil || r.Primary == nil {
 		return fmt.Errorf("resample runner dependencies are required")
 	}
 	if ctx == nil {
@@ -100,19 +101,19 @@ func (r *Runner) Tick(ctx context.Context, now time.Time) error {
 	if _, err := r.Instances.RecoverExpiredResampleLeasesInSpaceWithStaleAfter(scanCtx, cfg.SpaceID, now, recoverLimit*4, cfg.StaleRunningAfter); err != nil {
 		return err
 	}
-	rules, err := r.Rules.ListEnabled(scanCtx, cfg.SpaceID)
+	tasks, err := r.Tasks.ListEnabled(scanCtx, cfg.SpaceID)
 	if err != nil {
 		return err
 	}
-	for _, rule := range rules {
-		if !strings.EqualFold(rule.DataType, "kline_resample") || rule.PrepareState != domain.PrepareStateReady {
+	for _, task := range tasks {
+		if !strings.EqualFold(task.DataType, "kline_resample") || task.PrepareState != domain.PrepareStateReady {
 			continue
 		}
-		if err := PlanRule(scanCtx, r.Source, r.Instances, rule, now); err != nil {
+		if err := PlanTask(scanCtx, r.Source, r.Instances, task, now); err != nil {
 			return err
 		}
 		if r.Readiness != nil {
-			if err := r.ensureReadiness(scanCtx, rule, now); err != nil {
+			if err := r.ensureReadiness(scanCtx, task, now); err != nil {
 				return err
 			}
 		}
@@ -149,7 +150,7 @@ func (r *Runner) Tick(ctx context.Context, now time.Time) error {
 		}
 		if r.Readiness != nil {
 			readinessCtx, readinessCancel := newScanCtx()
-			err := r.ensureReadinessForClaims(readinessCtx, claims, rules)
+			err := r.ensureReadinessForClaims(readinessCtx, claims, tasks)
 			readinessCancel()
 			if err != nil {
 				return err
@@ -175,7 +176,7 @@ func (r *Runner) Tick(ctx context.Context, now time.Time) error {
 		}
 		beforeRepair := repairBudget
 		repairCtx, repairCancel := newScanCtx()
-		err := r.scanRepair(repairCtx, ctx, rules, now, cfg, &repairBudget)
+		err := r.scanRepair(repairCtx, ctx, tasks, now, cfg, &repairBudget)
 		repairCancel()
 		if err != nil {
 			return err
@@ -203,7 +204,7 @@ func (r *Runner) Tick(ctx context.Context, now time.Time) error {
 		claimsRemaining -= len(claims)
 	}
 	completeCtx, completeCancel := newScanCtx()
-	err = r.completeBackfills(completeCtx, rules)
+	err = r.completeBackfills(completeCtx, tasks)
 	completeCancel()
 	if err != nil {
 		return err
@@ -211,19 +212,19 @@ func (r *Runner) Tick(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func (r *Runner) completeBackfills(ctx context.Context, rules []domain.CollectionTask) error {
+func (r *Runner) completeBackfills(ctx context.Context, tasks []domain.CollectionTask) error {
 	var firstErr error
-	for _, rule := range rules {
-		if !strings.EqualFold(rule.DataType, "kline_resample") {
+	for _, task := range tasks {
+		if !strings.EqualFold(task.DataType, "kline_resample") {
 			continue
 		}
-		instances, err := listAllResampleInstances(ctx, r.Instances, rule.SpaceID, rule.TaskID)
+		instances, err := listAllResampleInstances(ctx, r.Instances, task.SpaceID, task.TaskID)
 		if err != nil {
 			return err
 		}
 		requestID, ready := resampleBackfillSyncRequest(instances)
 		if ready && requestID != "" {
-			if err := r.completeBackfillWithViewFence(ctx, rule, requestID); err != nil {
+			if err := r.completeBackfillWithViewFence(ctx, task, requestID); err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}
@@ -233,21 +234,22 @@ func (r *Runner) completeBackfills(ctx context.Context, rules []domain.Collectio
 	return firstErr
 }
 
-func (r *Runner) completeBackfillWithViewFence(ctx context.Context, rule domain.CollectionTask, requestID string) error {
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+func (r *Runner) completeBackfillWithViewFence(ctx context.Context, task domain.CollectionTask, requestID string) error {
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	if err != nil {
 		return err
 	}
+	params.TargetDatasetID = taskresult.ResultIDs(task.SpaceID, task.TaskID).DatasetID
 	syncer, ok := r.Primary.(SyncPointStorage)
 	if !ok {
 		return fmt.Errorf("resample backfill View fence is unavailable")
 	}
-	if err := syncer.AppendDatasetSyncPoint(ctx, rule.SpaceID, params.TargetDatasetID, requestID, "catchup"); err != nil {
+	if err := syncer.AppendDatasetSyncPoint(ctx, task.SpaceID, params.TargetDatasetID, requestID, "catchup"); err != nil {
 		return fmt.Errorf("append resample backfill sync point: %w", err)
 	}
-	viewID := DefaultTargetViewID(params.TargetDatasetID)
+	viewID := taskresult.ResultIDs(task.SpaceID, task.TaskID).ViewID
 	response, err := syncer.WaitViewSyncPoint(ctx, &storagepb.WaitViewSyncPointReq{
-		SpaceId: rule.SpaceID, ViewId: viewID, RequestId: requestID,
+		SpaceId: task.SpaceID, ViewId: viewID, RequestId: requestID,
 		DatasetIds: []string{params.TargetDatasetID}, WaitTimeoutMs: 5000,
 	})
 	if err != nil {
@@ -262,7 +264,7 @@ func (r *Runner) completeBackfillWithViewFence(ctx context.Context, rule domain.
 	if !response.GetReady() {
 		return fmt.Errorf("resample backfill View fence is not ready")
 	}
-	if _, err := r.Instances.CompleteResampleBackfillSync(ctx, rule.SpaceID, rule.TaskID, requestID); err != nil {
+	if _, err := r.Instances.CompleteResampleBackfillSync(ctx, task.SpaceID, task.TaskID, requestID); err != nil {
 		return fmt.Errorf("complete resample backfill: %w", err)
 	}
 	return nil
@@ -293,7 +295,7 @@ func resampleBackfillSyncRequest(instances []domain.TaskInstance) (string, bool)
 	return requestID, participants > 0 && requestID != ""
 }
 
-func (r *Runner) scanRepair(scanCtx, workerCtx context.Context, rules []domain.CollectionTask, now time.Time, cfg RunnerConfig, claimsRemaining *int) error {
+func (r *Runner) scanRepair(scanCtx, workerCtx context.Context, tasks []domain.CollectionTask, now time.Time, cfg RunnerConfig, claimsRemaining *int) error {
 	if claimsRemaining == nil {
 		return fmt.Errorf("repair claim budget is required")
 	}
@@ -307,11 +309,11 @@ func (r *Runner) scanRepair(scanCtx, workerCtx context.Context, rules []domain.C
 		target      time.Duration
 	}
 	candidates := make([]repairCandidate, 0)
-	for _, rule := range rules {
-		if !strings.EqualFold(rule.DataType, "kline_resample") || rule.PrepareState != domain.PrepareStateReady {
+	for _, task := range tasks {
+		if !strings.EqualFold(task.DataType, "kline_resample") || task.PrepareState != domain.PrepareStateReady {
 			continue
 		}
-		params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+		params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 		if err != nil {
 			return err
 		}
@@ -321,7 +323,7 @@ func (r *Runner) scanRepair(scanCtx, workerCtx context.Context, rules []domain.C
 		}
 		latestStart, _ := BucketAt(now.Add(-params.SettleDelayOr(cfg.DefaultSettleDelay)), time.Unix(0, 0).UTC(), target)
 		oldestStart := latestStart.Add(-time.Duration(cfg.RepairLookbackBuckets-1) * target.Duration)
-		instances, err := listAllResampleInstances(scanCtx, r.Instances, rule.SpaceID, rule.TaskID)
+		instances, err := listAllResampleInstances(scanCtx, r.Instances, task.SpaceID, task.TaskID)
 		if err != nil {
 			return err
 		}
@@ -346,7 +348,7 @@ func (r *Runner) scanRepair(scanCtx, workerCtx context.Context, rules []domain.C
 	for offset := 0; offset < len(candidates) && *claimsRemaining > 0; offset++ {
 		inspected = offset + 1
 		candidate := candidates[(start+offset)%len(candidates)]
-		current, getErr := r.Instances.Get(scanCtx, candidate.instance.SpaceID, candidate.instance.TaskID)
+		current, getErr := r.Instances.Get(scanCtx, candidate.instance.SpaceID, candidate.instance.InstanceID)
 		if getErr != nil {
 			return getErr
 		}
@@ -355,7 +357,7 @@ func (r *Runner) scanRepair(scanCtx, workerCtx context.Context, rules []domain.C
 			continue
 		}
 		bucket := chooseRepairBucket(result, candidate.oldestStart, candidate.latestStart, candidate.target)
-		taskClaim, claimed, claimErr := r.Instances.ClaimResampleTask(scanCtx, candidate.instance.SpaceID, candidate.instance.TaskID, result.StateVersion, domain.ResampleOriginRepair, bucket, now, cfg.WorkerJobTimeout)
+		taskClaim, claimed, claimErr := r.Instances.ClaimResampleTask(scanCtx, candidate.instance.SpaceID, candidate.instance.InstanceID, result.StateVersion, domain.ResampleOriginRepair, bucket, now, cfg.WorkerJobTimeout)
 		if claimErr != nil {
 			return claimErr
 		}
@@ -431,12 +433,12 @@ func runClaims(ctx context.Context, claims []store.ResampleTaskClaim, instances 
 func failResampleClaim(parent context.Context, instances *store.TaskInstanceRepository, claim store.ResampleTaskClaim, lastError string) {
 	var err error
 	if claim.Result.ActiveOrigin == domain.ResampleOriginBackfill {
-		_, err = instances.FailResampleBackfillTask(parent, claim.Instance.SpaceID, claim.Instance.TaskID, claim.Result.StateVersion, lastError)
+		_, err = instances.FailResampleBackfillTask(parent, claim.Instance.SpaceID, claim.Instance.InstanceID, claim.Result.StateVersion, lastError)
 	} else {
-		_, err = instances.FailResampleTask(parent, claim.Instance.SpaceID, claim.Instance.TaskID, claim.Result.StateVersion, lastError)
+		_, err = instances.FailResampleTask(parent, claim.Instance.SpaceID, claim.Instance.InstanceID, claim.Result.StateVersion, lastError)
 	}
 	if err != nil {
-		log.Printf("resample task failure state update failed task=%s: %v", claim.Instance.TaskID, err)
+		log.Printf("resample instance failure state update failed instance=%s: %v", claim.Instance.InstanceID, err)
 	}
 }
 
@@ -452,6 +454,7 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		failResampleClaim(parent, instances, claim, err.Error())
 		return
 	}
+	params.TargetDatasetID = taskresult.ResultIDs(claim.Instance.SpaceID, claim.Instance.CollectionTaskID).DatasetID
 	sourceFreq, err := ParseFixedFrequency(params.SourceFrequency)
 	if err != nil {
 		markError()
@@ -470,7 +473,7 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		failResampleClaim(parent, instances, claim, "active bucket is missing")
 		return
 	}
-	spec := TaskSpec{TaskID: claim.Instance.TaskID, SpaceID: claim.Instance.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: sourceFreq, SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: targetFreq, Alignment: params.Alignment}
+	spec := TaskSpec{InstanceID: claim.Instance.InstanceID, SpaceID: claim.Instance.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: sourceFreq, SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: targetFreq, Alignment: params.Alignment}
 	if cfg.WorkerMaxSourceKeys > 0 {
 		sourceTimes, countErr := ExpectedSourceTimes(bucket, bucket.Add(targetFreq.Duration), sourceFreq)
 		if countErr != nil {
@@ -521,9 +524,9 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		if isResampleSourceIncomplete(lastRunErr) || isResampleSourceIncomplete(err) {
 			if expired, reason := sourceRetentionExpired(parent, source, claim.Instance.SpaceID, params.SourceDatasetID, bucket); expired {
 				if claim.Result.ActiveOrigin == domain.ResampleOriginRepair {
-					if _, skipErr := instances.SkipResampleRepairTask(parent, claim.Instance.SpaceID, claim.Instance.TaskID, claim.Result.StateVersion, bucket, bucket.Add(targetFreq.Duration), reason); skipErr != nil {
+					if _, skipErr := instances.SkipResampleRepairTask(parent, claim.Instance.SpaceID, claim.Instance.InstanceID, claim.Result.StateVersion, bucket, bucket.Add(targetFreq.Duration), reason); skipErr != nil {
 						markError()
-						log.Printf("resample repair skip state update failed task=%s: %v", claim.Instance.TaskID, skipErr)
+						log.Printf("resample repair skip state update failed instance=%s: %v", claim.Instance.InstanceID, skipErr)
 					}
 					return
 				}
@@ -534,9 +537,9 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		}
 		attempt := claim.Result.Attempt + 1
 		next := time.Now().UTC().Add(pollInterval)
-		if _, waitErr := instances.WaitResampleSource(parent, claim.Instance.SpaceID, claim.Instance.TaskID, claim.Result.StateVersion, attempt, next, err.Error()); waitErr != nil {
+		if _, waitErr := instances.WaitResampleSource(parent, claim.Instance.SpaceID, claim.Instance.InstanceID, claim.Result.StateVersion, attempt, next, err.Error()); waitErr != nil {
 			markError()
-			log.Printf("resample task retry state update failed task=%s: %v", claim.Instance.TaskID, waitErr)
+			log.Printf("resample instance retry state update failed instance=%s: %v", claim.Instance.InstanceID, waitErr)
 		}
 		return
 	}
@@ -552,25 +555,25 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 	if readiness != nil && claim.Result.ActiveOrigin == domain.ResampleOriginRealtime {
 		if markErr := readiness.MarkSubjectSuccess(parent, domain.PeriodKey{SpaceID: result.SpaceID, DatasetID: result.DatasetID, Frequency: result.Frequency, PeriodTime: result.DataTime}, claim.Instance.SubjectID, localResampleFunction, writeSource, time.Now().UTC()); markErr != nil {
 			markError()
-			log.Printf("resample readiness state update failed task=%s: %v", claim.Instance.TaskID, markErr)
+			log.Printf("resample readiness state update failed instance=%s: %v", claim.Instance.InstanceID, markErr)
 			attempt := claim.Result.Attempt + 1
 			nextRetry := time.Now().UTC().Add(pollInterval)
-			if _, waitErr := instances.WaitResampleSource(parent, claim.Instance.SpaceID, claim.Instance.TaskID, claim.Result.StateVersion, attempt, nextRetry, "period readiness: "+markErr.Error()); waitErr != nil {
+			if _, waitErr := instances.WaitResampleSource(parent, claim.Instance.SpaceID, claim.Instance.InstanceID, claim.Result.StateVersion, attempt, nextRetry, "period readiness: "+markErr.Error()); waitErr != nil {
 				markError()
-				log.Printf("resample readiness retry state update failed task=%s: %v", claim.Instance.TaskID, waitErr)
+				log.Printf("resample readiness retry state update failed instance=%s: %v", claim.Instance.InstanceID, waitErr)
 			}
 			return
 		}
 	}
-	completed, completeErr := instances.CompleteResampleTask(parent, claim.Instance.SpaceID, claim.Instance.TaskID, claim.Result.StateVersion, bucket, nextBucket, result.SourceHash)
+	completed, completeErr := instances.CompleteResampleTask(parent, claim.Instance.SpaceID, claim.Instance.InstanceID, claim.Result.StateVersion, bucket, nextBucket, result.SourceHash)
 	if completeErr != nil {
 		markError()
-		log.Printf("resample task completion state update failed task=%s: %v", claim.Instance.TaskID, completeErr)
+		log.Printf("resample instance completion state update failed instance=%s: %v", claim.Instance.InstanceID, completeErr)
 		return
 	}
 	if !completed {
 		markError()
-		log.Printf("resample task completion lost CAS race task=%s", claim.Instance.TaskID)
+		log.Printf("resample instance completion lost CAS race instance=%s", claim.Instance.InstanceID)
 		return
 	}
 	if metrics != nil && wrote {
@@ -617,11 +620,12 @@ func sourceRetentionExpired(ctx context.Context, source subjectSource, spaceID, 
 	return true, fmt.Sprintf("source Dataset retention expired for bucket %s (keep_duration=%s)", bucket.UTC().Format(time.RFC3339), raw)
 }
 
-func (r *Runner) ensureReadiness(ctx context.Context, rule domain.CollectionTask, now time.Time) error {
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+func (r *Runner) ensureReadiness(ctx context.Context, task domain.CollectionTask, now time.Time) error {
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	if err != nil {
 		return err
 	}
+	params.TargetDatasetID = taskresult.ResultIDs(task.SpaceID, task.TaskID).DatasetID
 	target, err := ParseFixedFrequency(params.TargetFrequency)
 	if err != nil {
 		return err
@@ -631,13 +635,13 @@ func (r *Runner) ensureReadiness(ctx context.Context, rule domain.CollectionTask
 		settleDelay = 0
 	}
 	latest, _ := BucketAt(now.Add(-params.SettleDelayOr(settleDelay)), time.Unix(0, 0).UTC(), target)
-	instances, err := listAllResampleInstances(ctx, r.Instances, rule.SpaceID, rule.TaskID)
+	instances, err := listAllResampleInstances(ctx, r.Instances, task.SpaceID, task.TaskID)
 	if err != nil {
 		return err
 	}
 	tasks := make([]domain.PeriodTaskSeed, 0, len(instances))
 	for _, instance := range instances {
-		tasks = append(tasks, domain.PeriodTaskSeed{TaskID: instance.TaskID, SubjectID: instance.SubjectID, FunctionName: localResampleFunction, WriteSource: writeSource, RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`})
+		tasks = append(tasks, domain.PeriodTaskSeed{InstanceID: instance.InstanceID, SubjectID: instance.SubjectID, FunctionName: localResampleFunction, WriteSource: writeSource, RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`})
 	}
 	if len(tasks) == 0 {
 		return nil
@@ -655,7 +659,7 @@ func (r *Runner) ensureReadiness(ctx context.Context, rule domain.CollectionTask
 		periods[bucket] = struct{}{}
 	}
 	for period := range periods {
-		if _, err := r.Readiness.EnsurePeriod(ctx, domain.PeriodSeed{PeriodKey: domain.PeriodKey{SpaceID: rule.SpaceID, DatasetID: params.TargetDatasetID, Frequency: target.Storage, PeriodTime: period}, DeadlineAt: period.Add(target.Duration).Add(2 * time.Minute), WorkType: "resample", Tasks: tasks}); err != nil {
+		if _, err := r.Readiness.EnsurePeriod(ctx, domain.PeriodSeed{PeriodKey: domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: params.TargetDatasetID, Frequency: target.Storage, PeriodTime: period}, DeadlineAt: period.Add(target.Duration).Add(2 * time.Minute), WorkType: "resample", Tasks: tasks}); err != nil {
 			return err
 		}
 	}
@@ -666,16 +670,16 @@ func (r *Runner) ensureReadiness(ctx context.Context, rule domain.CollectionTask
 // exact realtime buckets claimed in this batch. This is needed when a task is
 // catching up multiple buckets in one tick: a single latest-bucket snapshot
 // would leave intermediate buckets without a parent to mark complete.
-func (r *Runner) ensureReadinessForClaims(ctx context.Context, claims []store.ResampleTaskClaim, rules []domain.CollectionTask) error {
+func (r *Runner) ensureReadinessForClaims(ctx context.Context, claims []store.ResampleTaskClaim, tasks []domain.CollectionTask) error {
 	if r.Readiness == nil || len(claims) == 0 {
 		return nil
 	}
-	ruleByID := make(map[string]domain.CollectionTask, len(rules))
-	for _, rule := range rules {
-		ruleByID[rule.SpaceID+"\x00"+rule.TaskID] = rule
+	taskByID := make(map[string]domain.CollectionTask, len(tasks))
+	for _, task := range tasks {
+		taskByID[task.SpaceID+"\x00"+task.TaskID] = task
 	}
 	type readinessPlan struct {
-		rule   domain.CollectionTask
+		task   domain.CollectionTask
 		params *domain.CollectParams
 		target FixedFrequency
 		tasks  []domain.PeriodTaskSeed
@@ -686,30 +690,31 @@ func (r *Runner) ensureReadinessForClaims(ctx context.Context, claims []store.Re
 		if claim.Result.ActiveOrigin != domain.ResampleOriginRealtime || claim.Result.ActiveBucket == nil {
 			continue
 		}
-		rule, ok := ruleByID[claim.Instance.SpaceID+"\x00"+claim.Instance.CollectionTaskID]
+		task, ok := taskByID[claim.Instance.SpaceID+"\x00"+claim.Instance.CollectionTaskID]
 		if !ok {
 			continue
 		}
-		key := rule.SpaceID + "\x00" + rule.TaskID
+		key := task.SpaceID + "\x00" + task.TaskID
 		plan := plans[key]
 		if plan == nil {
-			params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+			params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 			if err != nil {
 				return err
 			}
+			params.TargetDatasetID = taskresult.ResultIDs(task.SpaceID, task.TaskID).DatasetID
 			target, err := ParseFixedFrequency(params.TargetFrequency)
 			if err != nil {
 				return err
 			}
-			instances, err := listAllResampleInstances(ctx, r.Instances, rule.SpaceID, rule.TaskID)
+			instances, err := listAllResampleInstances(ctx, r.Instances, task.SpaceID, task.TaskID)
 			if err != nil {
 				return err
 			}
 			tasks := make([]domain.PeriodTaskSeed, 0, len(instances))
 			for _, instance := range instances {
-				tasks = append(tasks, domain.PeriodTaskSeed{TaskID: instance.TaskID, SubjectID: instance.SubjectID, FunctionName: localResampleFunction, WriteSource: writeSource, RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`})
+				tasks = append(tasks, domain.PeriodTaskSeed{InstanceID: instance.InstanceID, SubjectID: instance.SubjectID, FunctionName: localResampleFunction, WriteSource: writeSource, RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`})
 			}
-			plan = &readinessPlan{rule: rule, params: params, target: target, tasks: tasks, period: make(map[time.Time]struct{})}
+			plan = &readinessPlan{task: task, params: params, target: target, tasks: tasks, period: make(map[time.Time]struct{})}
 			plans[key] = plan
 		}
 		bucket := claim.Result.ActiveBucket.UTC()
@@ -722,7 +727,7 @@ func (r *Runner) ensureReadinessForClaims(ctx context.Context, claims []store.Re
 			continue
 		}
 		for period := range plan.period {
-			if _, err := r.Readiness.EnsurePeriod(ctx, domain.PeriodSeed{PeriodKey: domain.PeriodKey{SpaceID: plan.rule.SpaceID, DatasetID: plan.params.TargetDatasetID, Frequency: plan.target.Storage, PeriodTime: period}, DeadlineAt: period.Add(plan.target.Duration).Add(2 * time.Minute), WorkType: "resample", Tasks: plan.tasks}); err != nil {
+			if _, err := r.Readiness.EnsurePeriod(ctx, domain.PeriodSeed{PeriodKey: domain.PeriodKey{SpaceID: plan.task.SpaceID, DatasetID: plan.params.TargetDatasetID, Frequency: plan.target.Storage, PeriodTime: period}, DeadlineAt: period.Add(plan.target.Duration).Add(2 * time.Minute), WorkType: "resample", Tasks: plan.tasks}); err != nil {
 				return err
 			}
 		}
@@ -730,11 +735,11 @@ func (r *Runner) ensureReadinessForClaims(ctx context.Context, claims []store.Re
 	return nil
 }
 
-func listAllResampleInstances(ctx context.Context, repo *store.TaskInstanceRepository, spaceID, ruleID string) ([]domain.TaskInstance, error) {
+func listAllResampleInstances(ctx context.Context, repo *store.TaskInstanceRepository, spaceID, taskID string) ([]domain.TaskInstance, error) {
 	const pageSize = 1000
 	var all []domain.TaskInstance
 	for page := 1; ; page++ {
-		instances, total, err := repo.List(ctx, store.TaskInstanceFilter{SpaceID: spaceID, CollectionTaskID: ruleID, DataType: "kline_resample", IncludeDeleted: false, Page: page, PageSize: pageSize})
+		instances, total, err := repo.List(ctx, store.TaskInstanceFilter{SpaceID: spaceID, CollectionTaskID: taskID, DataType: "kline_resample", IncludeDeleted: false, Page: page, PageSize: pageSize})
 		if err != nil {
 			return nil, err
 		}

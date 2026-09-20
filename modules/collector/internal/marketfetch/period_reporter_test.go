@@ -31,7 +31,7 @@ func TestPeriodReporterPersistsPayloadBeforeRetry(t *testing.T) {
 	_, err = s.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
 		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period},
 		DeadlineAt: period.Add(time.Minute),
-		Tasks:      []domain.PeriodTaskSeed{{TaskID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
+		Tasks:      []domain.PeriodTaskSeed{{InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}, "BTC-USDT", "fetch-1", "scf:fetch-1", period))
@@ -56,7 +56,7 @@ func TestPeriodReporterRebuildsPayloadWhenSubjectIdsMissing(t *testing.T) {
 	readinessID, err := s.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
 		PeriodKey:  key,
 		DeadlineAt: period.Add(time.Minute),
-		Tasks:      []domain.PeriodTaskSeed{{TaskID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
+		Tasks:      []domain.PeriodTaskSeed{{InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.PeriodReadiness().MarkSubjectSuccess(context.Background(), key, "BTC-USDT", "fetch-1", "scf:fetch-1", period))
@@ -87,7 +87,7 @@ func TestPeriodReporterIsolatesSpaceBacklog(t *testing.T) {
 		key := domain.PeriodKey{SpaceID: spaceID, DatasetID: "bars", Frequency: "1m", PeriodTime: period}
 		_, err = s.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
 			PeriodKey: key, DeadlineAt: period.Add(time.Minute),
-			Tasks: []domain.PeriodTaskSeed{{TaskID: "task-" + spaceID, SubjectID: "subject-" + spaceID, FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
+			Tasks: []domain.PeriodTaskSeed{{InstanceID: "task-" + spaceID, SubjectID: "subject-" + spaceID, FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
 		})
 		require.NoError(t, err)
 		require.NoError(t, s.PeriodReadiness().MarkSubjectSuccess(context.Background(), key, "subject-"+spaceID, "fetch-1", "scf:fetch-1", period))

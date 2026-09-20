@@ -19,6 +19,7 @@ storage:
   gateway_node_id: ""
   key_id: collector
   hmac_key_file: ""
+  result_data_node_id: storage-node-0
 
 period_readiness:
   grace: 2m

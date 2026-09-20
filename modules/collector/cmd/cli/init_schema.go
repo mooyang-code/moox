@@ -60,12 +60,12 @@ func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		DBPath: dbPath,
 	}
 	if strings.TrimSpace(seedFile) != "" {
-		summary, err := seedRules(dbPath, seedFile)
+		summary, err := seedTasks(dbPath, seedFile)
 		if err != nil {
 			return err
 		}
-		result.TasksCreated = summary.Created
-		result.TasksUnchanged = summary.Unchanged
+		result.TasksCreated = summary.TasksCreated
+		result.TasksUnchanged = summary.TasksUnchanged
 	}
 	return json.NewEncoder(stdout).Encode(result)
 }
@@ -95,8 +95,8 @@ func applySchema(dbPath string, rawSQL string) error {
 	return nil
 }
 
-func seedRules(dbPath string, seedFile string) (ruleseed.SeedSummary, error) {
-	rules, err := ruleseed.LoadFile(seedFile)
+func seedTasks(dbPath string, seedFile string) (ruleseed.SeedSummary, error) {
+	tasks, err := ruleseed.LoadFile(seedFile)
 	if err != nil {
 		return ruleseed.SeedSummary{}, err
 	}
@@ -105,7 +105,7 @@ func seedRules(dbPath string, seedFile string) (ruleseed.SeedSummary, error) {
 		return ruleseed.SeedSummary{}, fmt.Errorf("open database for task seed: %w", err)
 	}
 	defer db.Close()
-	summary, err := ruleseed.SeedMissing(context.Background(), db.Tasks(), rules)
+	summary, err := ruleseed.SeedMissing(context.Background(), db.Tasks(), tasks)
 	if err != nil {
 		return ruleseed.SeedSummary{}, err
 	}

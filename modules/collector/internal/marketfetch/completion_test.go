@@ -18,16 +18,16 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestRetryCollectionItemUsesExactTaskIDBeforeSubjectFallback(t *testing.T) {
+func TestRetryCollectionItemUsesExactInstanceIDBeforeSubjectFallback(t *testing.T) {
 	request := Request{DatasetID: "dataset_stockcn_equity_kline", Items: []domain.CollectionItem{
-		{TaskID: "snapshot-shard-0", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
-		{TaskID: "snapshot-shard-1", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 1, SnapshotShardCount: 2},
+		{InstanceID: "snapshot-shard-0", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
+		{InstanceID: "snapshot-shard-1", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 1, SnapshotShardCount: 2},
 	}}
-	result := &marketfetchpb.MarketFetchItemResult{TaskId: "snapshot-shard-1", SubjectId: "stockcn", Outcome: string(domain.ItemOutcomeProviderError)}
+	result := &marketfetchpb.MarketFetchItemResult{InstanceId: "snapshot-shard-1", SubjectId: "stockcn", Outcome: string(domain.ItemOutcomeProviderError)}
 
 	item := retryCollectionItem(request, result, "retry-shard-1")
 
-	assert.Equal(t, "snapshot-shard-1", item.TaskID)
+	assert.Equal(t, "snapshot-shard-1", item.InstanceID)
 	assert.Equal(t, 1, item.SnapshotShardIndex)
 	assert.Equal(t, 2, item.SnapshotShardCount)
 	assert.Equal(t, "2026-08-30T00:00:00Z", item.SnapshotAt)
@@ -45,7 +45,7 @@ func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{completionTestInstance()}))
 
 	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
-		TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
 		Outcome: string(domain.ItemOutcomeInvalid), ErrorType: "invalid_symbol", ErrorSummary: "symbol is delisted",
 	}, completedAt)
 	payload.BatchId = batch.BatchID
@@ -75,7 +75,7 @@ func TestHandleCompletionMarksTaskInstanceFailedWhenRetriesAreExhausted(t *testi
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "retry-key", Attempt: 3, Status: "pending", CreateTime: completedAt.Add(-time.Minute)}))
 
 	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
-		TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z", SourceEventId: "retry-key",
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z", SourceEventId: "retry-key",
 		Outcome: string(domain.ItemOutcomeHTTP429), ErrorType: "rate_limit", ErrorSummary: "too many requests",
 	}, completedAt)
 	payload.BatchId = batch.BatchID
@@ -103,7 +103,7 @@ func TestHandleCompletionPreservesLogicalSyncPointAcrossRetryGenerations(t *test
 		require.NoError(t, err)
 		require.True(t, created)
 		payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
-			TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
+			InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
 			SourceEventId: func() string {
 				if batchID == "b0" {
 					return ""
@@ -131,7 +131,7 @@ func TestHandleCompletionKeepsSuccessfulTaskInstanceSuccessful(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, created)
 	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{completionTestInstance()}))
-	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", Outcome: string(domain.ItemOutcomeSuccess)}, time.Date(2026, time.August, 2, 8, 10, 0, 0, time.UTC))
+	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", Outcome: string(domain.ItemOutcomeSuccess)}, time.Date(2026, time.August, 2, 8, 10, 0, 0, time.UTC))
 	payload.BatchId = batch.BatchID
 	payload.ScheduleId = batch.ScheduleID
 	payload.Status = string(domain.BatchStatusSucceeded)
@@ -164,7 +164,7 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithSupersededRetryFailure(t *t
 
 	newerCompletedAt := newerTarget.Add(time.Minute)
 	newerPayload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
-		TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: newerTarget.Format(time.RFC3339Nano), Outcome: string(domain.ItemOutcomeSuccess),
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: newerTarget.Format(time.RFC3339Nano), Outcome: string(domain.ItemOutcomeSuccess),
 	}, newerCompletedAt)
 	newerPayload.BatchId = newerBatch.BatchID
 	newerPayload.ScheduleId = newerBatch.ScheduleID
@@ -177,7 +177,7 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithSupersededRetryFailure(t *t
 	assert.Equal(t, "superseded", retry.Status)
 
 	olderPayload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
-		TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: olderTarget.Format(time.RFC3339Nano), SourceEventId: "old-retry",
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: olderTarget.Format(time.RFC3339Nano), SourceEventId: "old-retry",
 		Outcome: string(domain.ItemOutcomeInvalid), ErrorType: "invalid_symbol", ErrorSummary: "symbol is delisted",
 	}, newerCompletedAt.Add(time.Minute))
 	olderPayload.BatchId = olderBatch.BatchID
@@ -207,7 +207,7 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithOlderRealtimeFailure(t *tes
 
 	newerCompletedAt := newerTarget.Add(time.Minute)
 	newerPayload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
-		TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: newerTarget.Format(time.RFC3339Nano), Outcome: string(domain.ItemOutcomeSuccess),
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: newerTarget.Format(time.RFC3339Nano), Outcome: string(domain.ItemOutcomeSuccess),
 	}, newerCompletedAt)
 	newerPayload.BatchId = newerBatch.BatchID
 	newerPayload.ScheduleId = newerBatch.ScheduleID
@@ -217,7 +217,7 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithOlderRealtimeFailure(t *tes
 	require.NoError(t, handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(newerPayload)))
 
 	olderPayload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
-		TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: olderTarget.Format(time.RFC3339Nano),
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: olderTarget.Format(time.RFC3339Nano),
 		Outcome: string(domain.ItemOutcomeInvalid), ErrorType: "invalid_symbol", ErrorSummary: "symbol is delisted",
 	}, newerCompletedAt.Add(time.Second))
 	olderPayload.BatchId = olderBatch.BatchID
@@ -246,18 +246,18 @@ func TestCompletionAcceptsFailoverNodeForSameBatch(t *testing.T) {
 
 func TestRetryCollectionItemAdvancesProviderCandidateWindow(t *testing.T) {
 	request := Request{DatasetID: "bars", Frequency: "1m", Provider: "binance", MarketType: "spot", Items: []domain.CollectionItem{{
-		TaskID: "task-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", CandidateIndex: 1,
+		InstanceID: "task-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", CandidateIndex: 1,
 	}}}
-	item := retryCollectionItem(request, &marketfetchpb.MarketFetchItemResult{TaskId: "task-btc", SubjectId: "BTC-USDT"}, "retry-key")
+	item := retryCollectionItem(request, &marketfetchpb.MarketFetchItemResult{InstanceId: "task-btc", SubjectId: "BTC-USDT"}, "retry-key")
 	require.Equal(t, 1+klineProviderAttemptBudget, item.CandidateIndex)
 	require.Equal(t, "retry-key", item.SourceEventID)
 }
 
 func TestRetryCollectionItemKeepsProviderCandidateOnStorageFailure(t *testing.T) {
 	request := Request{DatasetID: "bars", Frequency: "1m", Provider: "binance", MarketType: "spot", Items: []domain.CollectionItem{{
-		TaskID: "task-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", CandidateIndex: 1,
+		InstanceID: "task-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", CandidateIndex: 1,
 	}}}
-	item := retryCollectionItem(request, &marketfetchpb.MarketFetchItemResult{TaskId: "task-btc", SubjectId: "BTC-USDT", Outcome: string(domain.ItemOutcomeStorageError)}, "storage-retry-key")
+	item := retryCollectionItem(request, &marketfetchpb.MarketFetchItemResult{InstanceId: "task-btc", SubjectId: "BTC-USDT", Outcome: string(domain.ItemOutcomeStorageError)}, "storage-retry-key")
 	require.Equal(t, 1, item.CandidateIndex)
 }
 
@@ -271,11 +271,16 @@ func newCompletionTestStore(t *testing.T) *store.Store {
 }
 
 func completionTestBatch(suffix string) domain.BatchInvocation {
-	return domain.BatchInvocation{SpaceID: "crypto", BatchID: "batch-" + suffix, ScheduleID: "schedule-" + suffix, BatchKind: domain.BatchKindRealtime, DatasetID: "bars", Frequency: "1m", NodeID: "node-1", Status: domain.BatchStatusPlanned, PlannedCount: 1}
+	request, _ := json.Marshal(Request{
+		BatchID: "batch-" + suffix, ScheduleID: "schedule-" + suffix, BatchKind: domain.BatchKindRealtime,
+		SpaceID: "crypto", DatasetID: "bars", Frequency: "1m",
+		Items: []domain.CollectionItem{{InstanceID: "task-btc", SubjectID: "BTC-USDT", DatasetID: "bars", Frequency: "1m"}},
+	})
+	return domain.BatchInvocation{SpaceID: "crypto", BatchID: "batch-" + suffix, ScheduleID: "schedule-" + suffix, BatchKind: domain.BatchKindRealtime, DatasetID: "bars", Frequency: "1m", NodeID: "node-1", Status: domain.BatchStatusPlanned, PlannedCount: 1, RequestJSON: string(request)}
 }
 
 func completionTestInstance() domain.TaskInstance {
-	return domain.TaskInstance{SpaceID: "crypto", TaskID: "task-btc", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	return domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
 }
 
 func completionTestPayload(item *marketfetchpb.MarketFetchItemResult, completedAt time.Time) *marketfetchpb.MarketFetchBatchCompleted {

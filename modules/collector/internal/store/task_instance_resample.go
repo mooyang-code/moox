@@ -24,12 +24,12 @@ type ResampleTaskClaim struct {
 
 // InitializeResampleTask sets the first realtime cursor without resetting a
 // task that already has progress. It is safe to call on every scheduler tick.
-func (r *TaskInstanceRepository) InitializeResampleTask(ctx context.Context, spaceID, taskID string, nextBucket time.Time) error {
-	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(taskID) == "" || nextBucket.IsZero() {
-		return fmt.Errorf("space_id, task_id and next_bucket are required")
+func (r *TaskInstanceRepository) InitializeResampleTask(ctx context.Context, spaceID, collectionTaskID string, nextBucket time.Time) error {
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(collectionTaskID) == "" || nextBucket.IsZero() {
+		return fmt.Errorf("space_id, collection_task_id and next_bucket are required")
 	}
 	var instance domain.TaskInstance
-	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, taskID, "kline_resample", false).First(&instance).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, collectionTaskID, "kline_resample", false).First(&instance).Error; err != nil {
 		return err
 	}
 	result, err := domain.ParseResampleTaskResult(instance.Result)
@@ -45,7 +45,7 @@ func (r *TaskInstanceRepository) InitializeResampleTask(ctx context.Context, spa
 	if err != nil {
 		return err
 	}
-	updated, err := updateResampleResultCAS(r.db.WithContext(ctx), spaceID, taskID, instance.Result, result.StateVersion-1, encoded, domain.InstanceStatusPending)
+	updated, err := updateResampleResultCAS(r.db.WithContext(ctx), instance.SpaceID, instance.InstanceID, instance.Result, result.StateVersion-1, encoded, domain.InstanceStatusPending)
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (r *TaskInstanceRepository) claimDueResampleTasks(
 				if markErr := markCorruptResampleResult(tx, instance, err); markErr != nil {
 					return markErr
 				}
-				log.ErrorContextf(ctx, "[Collector] invalid resample task result task=%s: %v", instance.TaskID, err)
+				log.ErrorContextf(ctx, "[Collector] invalid resample task result instance=%s: %v", instance.InstanceID, err)
 				continue
 			}
 			bucket, due := dueResampleBucket(result, origin, now)
@@ -216,7 +216,7 @@ func latestClosedRealtimeBucket(now time.Time, target time.Duration) time.Time {
 // ClaimResampleTask claims one scanner-selected bucket with a state-version CAS.
 func (r *TaskInstanceRepository) ClaimResampleTask(
 	ctx context.Context,
-	spaceID, taskID string,
+	spaceID, instanceID string,
 	expectedStateVersion int64,
 	origin domain.ResampleTaskOrigin,
 	bucket, now time.Time,
@@ -228,7 +228,7 @@ func (r *TaskInstanceRepository) ClaimResampleTask(
 	var claim ResampleTaskClaim
 	claimed := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		instance, result, raw, err := loadResampleTask(tx, spaceID, taskID)
+		instance, result, raw, err := loadResampleTask(tx, spaceID, instanceID)
 		if err != nil {
 			return err
 		}
@@ -281,7 +281,7 @@ func claimResampleTaskTx(tx *gorm.DB, instance domain.TaskInstance, result domai
 	if err != nil {
 		return ResampleTaskClaim{}, false, err
 	}
-	updated, err := updateResampleResultCAS(tx, instance.SpaceID, instance.TaskID, raw, result.StateVersion-1, encoded, domain.InstanceStatusPending)
+	updated, err := updateResampleResultCAS(tx, instance.SpaceID, instance.InstanceID, raw, result.StateVersion-1, encoded, domain.InstanceStatusPending)
 	if err != nil || !updated {
 		return ResampleTaskClaim{}, updated, err
 	}
@@ -289,8 +289,8 @@ func claimResampleTaskTx(tx *gorm.DB, instance domain.TaskInstance, result domai
 	return ResampleTaskClaim{Instance: instance, Result: result}, true, nil
 }
 
-func (r *TaskInstanceRepository) CompleteResampleTask(ctx context.Context, spaceID, taskID string, expectedStateVersion int64, bucket, nextBucket time.Time, inputHash string) (bool, error) {
-	return r.updateResampleTask(ctx, spaceID, taskID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
+func (r *TaskInstanceRepository) CompleteResampleTask(ctx context.Context, spaceID, instanceID string, expectedStateVersion int64, bucket, nextBucket time.Time, inputHash string) (bool, error) {
+	return r.updateResampleTask(ctx, spaceID, instanceID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
 		if result.State != domain.ResampleTaskStateRunning || result.ActiveBucket == nil || !result.ActiveBucket.Equal(bucket) {
 			return errResampleCASMismatch
 		}
@@ -330,8 +330,8 @@ func (r *TaskInstanceRepository) CompleteResampleTask(ctx context.Context, space
 	}, domain.InstanceStatusSuccess)
 }
 
-func (r *TaskInstanceRepository) WaitResampleSource(ctx context.Context, spaceID, taskID string, expectedStateVersion int64, attempt int, nextRetryAt time.Time, lastError string) (bool, error) {
-	return r.updateResampleTask(ctx, spaceID, taskID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
+func (r *TaskInstanceRepository) WaitResampleSource(ctx context.Context, spaceID, instanceID string, expectedStateVersion int64, attempt int, nextRetryAt time.Time, lastError string) (bool, error) {
+	return r.updateResampleTask(ctx, spaceID, instanceID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
 		if result.State != domain.ResampleTaskStateRunning || result.ActiveBucket == nil {
 			return errResampleCASMismatch
 		}
@@ -369,8 +369,8 @@ func (r *TaskInstanceRepository) WaitResampleSource(ctx context.Context, spaceID
 	}, domain.InstanceStatusPending)
 }
 
-func (r *TaskInstanceRepository) FailResampleTask(ctx context.Context, spaceID, taskID string, expectedStateVersion int64, lastError string) (bool, error) {
-	return r.updateResampleTask(ctx, spaceID, taskID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
+func (r *TaskInstanceRepository) FailResampleTask(ctx context.Context, spaceID, instanceID string, expectedStateVersion int64, lastError string) (bool, error) {
+	return r.updateResampleTask(ctx, spaceID, instanceID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
 		result.State = domain.ResampleTaskStateFailed
 		result.LeaseUntil = nil
 		result.NextRetryAt = nil
@@ -385,8 +385,8 @@ func (r *TaskInstanceRepository) FailResampleTask(ctx context.Context, spaceID, 
 // FailResampleBackfillTask terminates only the historical backfill cursor.
 // Realtime state remains idle and claimable because the two workflows share a
 // task row but not a failure state.
-func (r *TaskInstanceRepository) FailResampleBackfillTask(ctx context.Context, spaceID, taskID string, expectedStateVersion int64, lastError string) (bool, error) {
-	return r.updateResampleTask(ctx, spaceID, taskID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
+func (r *TaskInstanceRepository) FailResampleBackfillTask(ctx context.Context, spaceID, instanceID string, expectedStateVersion int64, lastError string) (bool, error) {
+	return r.updateResampleTask(ctx, spaceID, instanceID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
 		if result.State != domain.ResampleTaskStateRunning || result.ActiveOrigin != domain.ResampleOriginBackfill || result.Backfill == nil {
 			return errResampleCASMismatch
 		}
@@ -405,8 +405,8 @@ func (r *TaskInstanceRepository) FailResampleBackfillTask(ctx context.Context, s
 
 // SkipResampleRepairTask records a repair bucket that cannot be reconstructed
 // because its source history has expired, without failing realtime processing.
-func (r *TaskInstanceRepository) SkipResampleRepairTask(ctx context.Context, spaceID, taskID string, expectedStateVersion int64, bucket, nextBucket time.Time, lastError string) (bool, error) {
-	return r.updateResampleTask(ctx, spaceID, taskID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
+func (r *TaskInstanceRepository) SkipResampleRepairTask(ctx context.Context, spaceID, instanceID string, expectedStateVersion int64, bucket, nextBucket time.Time, lastError string) (bool, error) {
+	return r.updateResampleTask(ctx, spaceID, instanceID, expectedStateVersion, func(result *domain.ResampleTaskResult) error {
 		if result.State != domain.ResampleTaskStateRunning || result.ActiveOrigin != domain.ResampleOriginRepair || result.ActiveBucket == nil || !result.ActiveBucket.Equal(bucket) {
 			return errResampleCASMismatch
 		}
@@ -498,7 +498,7 @@ func (r *TaskInstanceRepository) recoverExpiredResampleLeasesInSpace(ctx context
 			if err != nil {
 				return err
 			}
-			updated, err := updateResampleResultCAS(tx, instance.SpaceID, instance.TaskID, instance.Result, version, encoded, domain.InstanceStatusPending)
+			updated, err := updateResampleResultCAS(tx, instance.SpaceID, instance.InstanceID, instance.Result, version, encoded, domain.InstanceStatusPending)
 			if err != nil {
 				return err
 			}
@@ -511,7 +511,7 @@ func (r *TaskInstanceRepository) recoverExpiredResampleLeasesInSpace(ctx context
 	return recovered, err
 }
 
-func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spaceID, ruleID string, request domain.ResampleBackfillRequest) (int64, error) {
+func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spaceID, collectionTaskID string, request domain.ResampleBackfillRequest) (int64, error) {
 	if err := request.Validate(); err != nil {
 		return 0, err
 	}
@@ -521,7 +521,7 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 	var updated int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var instances []domain.TaskInstance
-		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample", false).Order("c_id ASC").Find(&instances).Error; err != nil {
+		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(collectionTaskID), "kline_resample", false).Order("c_id ASC").Find(&instances).Error; err != nil {
 			return err
 		}
 		if len(instances) == 0 {
@@ -532,7 +532,7 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 		for index, instance := range instances {
 			result, err := domain.ParseResampleTaskResult(instance.Result)
 			if err != nil {
-				return fmt.Errorf("task %s: %w", instance.TaskID, err)
+				return fmt.Errorf("instance %s: %w", instance.InstanceID, err)
 			}
 			if result.Backfill != nil && result.Backfill.RequestID == request.RequestID && !activeBackfill(result.Backfill) {
 				if !result.Backfill.Start.Equal(request.Start) || !result.Backfill.End.Equal(request.End) {
@@ -594,7 +594,7 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 			if err != nil {
 				return err
 			}
-			changed, err := updateResampleResultCAS(tx, instance.SpaceID, instance.TaskID, instance.Result, version, encoded, instance.LastExecStatus)
+			changed, err := updateResampleResultCAS(tx, instance.SpaceID, instance.InstanceID, instance.Result, version, encoded, instance.LastExecStatus)
 			if err != nil {
 				return err
 			}
@@ -608,15 +608,15 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 	return updated, err
 }
 
-func (r *TaskInstanceRepository) CancelResampleBackfill(ctx context.Context, spaceID, ruleID, requestID string) (int64, error) {
-	return r.finishResampleBackfill(ctx, spaceID, ruleID, requestID, domain.ResampleBackfillCanceled)
+func (r *TaskInstanceRepository) CancelResampleBackfill(ctx context.Context, spaceID, collectionTaskID, requestID string) (int64, error) {
+	return r.finishResampleBackfill(ctx, spaceID, collectionTaskID, requestID, domain.ResampleBackfillCanceled)
 }
 
-func (r *TaskInstanceRepository) CompleteResampleBackfillSync(ctx context.Context, spaceID, ruleID, requestID string) (int64, error) {
-	return r.finishResampleBackfill(ctx, spaceID, ruleID, requestID, domain.ResampleBackfillComplete)
+func (r *TaskInstanceRepository) CompleteResampleBackfillSync(ctx context.Context, spaceID, collectionTaskID, requestID string) (int64, error) {
+	return r.finishResampleBackfill(ctx, spaceID, collectionTaskID, requestID, domain.ResampleBackfillComplete)
 }
 
-func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spaceID, ruleID, requestID string, state domain.ResampleBackfillState) (int64, error) {
+func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spaceID, collectionTaskID, requestID string, state domain.ResampleBackfillState) (int64, error) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return 0, fmt.Errorf("backfill request_id is required")
@@ -624,7 +624,7 @@ func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spa
 	var updated int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var instances []domain.TaskInstance
-		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(ruleID), "kline_resample", false).Find(&instances).Error; err != nil {
+		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(collectionTaskID), "kline_resample", false).Find(&instances).Error; err != nil {
 			return err
 		}
 		matched := false
@@ -658,7 +658,7 @@ func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spa
 			if err != nil {
 				return err
 			}
-			changed, err := updateResampleResultCAS(tx, instance.SpaceID, instance.TaskID, instance.Result, version, encoded, instance.LastExecStatus)
+			changed, err := updateResampleResultCAS(tx, instance.SpaceID, instance.InstanceID, instance.Result, version, encoded, instance.LastExecStatus)
 			if err != nil {
 				return err
 			}
@@ -676,10 +676,10 @@ func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spa
 
 var errResampleCASMismatch = errors.New("resample task state changed")
 
-func (r *TaskInstanceRepository) updateResampleTask(ctx context.Context, spaceID, taskID string, expectedStateVersion int64, mutate func(*domain.ResampleTaskResult) error, status int) (bool, error) {
+func (r *TaskInstanceRepository) updateResampleTask(ctx context.Context, spaceID, instanceID string, expectedStateVersion int64, mutate func(*domain.ResampleTaskResult) error, status int) (bool, error) {
 	updated := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		instance, result, raw, err := loadResampleTask(tx, spaceID, taskID)
+		instance, result, raw, err := loadResampleTask(tx, spaceID, instanceID)
 		if err != nil {
 			return err
 		}
@@ -697,15 +697,15 @@ func (r *TaskInstanceRepository) updateResampleTask(ctx context.Context, spaceID
 		if err != nil {
 			return err
 		}
-		updated, err = updateResampleResultCAS(tx, instance.SpaceID, instance.TaskID, raw, expectedStateVersion, encoded, status)
+		updated, err = updateResampleResultCAS(tx, instance.SpaceID, instance.InstanceID, raw, expectedStateVersion, encoded, status)
 		return err
 	})
 	return updated, err
 }
 
-func loadResampleTask(tx *gorm.DB, spaceID, taskID string) (domain.TaskInstance, domain.ResampleTaskResult, string, error) {
+func loadResampleTask(tx *gorm.DB, spaceID, instanceID string) (domain.TaskInstance, domain.ResampleTaskResult, string, error) {
 	var instance domain.TaskInstance
-	err := tx.Where("c_space_id = ? AND c_instance_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID), "kline_resample", false).First(&instance).Error
+	err := tx.Where("c_space_id = ? AND c_instance_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(instanceID), "kline_resample", false).First(&instance).Error
 	if err != nil {
 		return instance, domain.ResampleTaskResult{}, "", err
 	}
@@ -713,9 +713,9 @@ func loadResampleTask(tx *gorm.DB, spaceID, taskID string) (domain.TaskInstance,
 	return instance, result, instance.Result, err
 }
 
-func updateResampleResultCAS(tx *gorm.DB, spaceID, taskID, previous string, expectedVersion int64, encoded string, status int) (bool, error) {
+func updateResampleResultCAS(tx *gorm.DB, spaceID, instanceID, previous string, expectedVersion int64, encoded string, status int) (bool, error) {
 	result := tx.Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_instance_id = ? AND c_data_type = ? AND c_result = ?", spaceID, taskID, "kline_resample", previous).
+		Where("c_space_id = ? AND c_instance_id = ? AND c_data_type = ? AND c_result = ?", spaceID, instanceID, "kline_resample", previous).
 		Where("json_valid(c_result) AND CAST(json_extract(c_result, '$.state_version') AS INTEGER) = ?", expectedVersion).
 		Updates(map[string]any{"c_result": encoded, "c_last_exec_status": status, "c_mtime": time.Now().UTC()})
 	return result.RowsAffected == 1, result.Error
@@ -731,7 +731,7 @@ func markCorruptResampleResult(tx *gorm.DB, instance domain.TaskInstance, cause 
 		return err
 	}
 	return tx.Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_instance_id = ? AND c_result = ?", instance.SpaceID, instance.TaskID, instance.Result).
+		Where("c_space_id = ? AND c_instance_id = ? AND c_result = ?", instance.SpaceID, instance.InstanceID, instance.Result).
 		Updates(map[string]any{"c_result": encoded, "c_last_exec_status": domain.InstanceStatusFailed, "c_mtime": time.Now().UTC()}).Error
 }
 

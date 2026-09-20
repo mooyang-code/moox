@@ -40,8 +40,9 @@ type PeriodReadiness struct {
 func (PeriodReadiness) TableName() string { return "t_period_readiness" }
 
 type PeriodReadinessItem struct {
-	ReadinessID    int64     `gorm:"column:c_readiness_id;primaryKey"`
-	TaskID         string    `gorm:"column:c_task_id;primaryKey"`
+	ReadinessID int64 `gorm:"column:c_readiness_id;primaryKey"`
+	// InstanceID is the expected TaskInstance identity for this period.
+	InstanceID     string    `gorm:"column:c_instance_id;primaryKey"`
 	SubjectID      string    `gorm:"column:c_subject_id"`
 	FunctionName   string    `gorm:"column:c_function_name"`
 	WriteSource    string    `gorm:"column:c_write_source"`
@@ -60,7 +61,8 @@ type PeriodKey struct {
 }
 
 type PeriodTaskSeed struct {
-	TaskID         string
+	// InstanceID is the expected TaskInstance identity for this subject.
+	InstanceID     string
 	SubjectID      string
 	FunctionName   string
 	WriteSource    string

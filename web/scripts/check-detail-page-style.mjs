@@ -59,11 +59,26 @@ for (const relativePath of tableFiles) {
   const tableTags = source.match(/<a-table(?=[\s>])[\s\S]*?>/g) || [];
   for (const [index, tableTag] of tableTags.entries()) {
     assert(tableTag.includes('size="small"'), `${relativePath}: table ${index + 1} must use size=small`);
-    assert(
-      tableTag.includes(':bordered="{ cell: true }"'),
-      `${relativePath}: table ${index + 1} must use cell borders`
-    );
+    assert(tableTag.includes(':bordered="{ cell: true }"'), `${relativePath}: table ${index + 1} must use cell borders`);
   }
+}
+
+const viewBrowse = read("src/views/data/view-browse/index.vue");
+const taskResults = read("src/views/collector/task-results/index.vue");
+const taskManagement = read("src/views/collector/task-management/index.vue");
+const routes = read("src/router/route.ts");
+assert(viewBrowse.includes("defineProps"), "view-browse must remain the shared detail implementation");
+assert(viewBrowse.includes("viewIds?: string[]"), "view-browse must expose View filtering");
+assert(viewBrowse.includes("hideTechnicalIdentity?: boolean"), "view-browse must expose technical identity visibility");
+assert(taskResults.includes("task-results-model"), "task-results must use its pure model");
+assert(taskResults.includes("暂无采集任务"), "task-results must define the no-task empty state");
+assert(taskResults.includes("结果准备中，请稍后刷新"), "task-results must define the pending result state");
+assert(taskResults.includes("resultTask"), "task-results must persist the selected task");
+for (const label of ["采集任务", "任务实例", "执行器", "采集结果"]) {
+  assert(taskManagement.includes(`label: "${label}"`), `task management must expose ${label}`);
+}
+for (const retiredPath of ["/collector/rules", "/collector/data-management", "/collector/datasets", "/collector/packages"]) {
+  assert(!routes.includes(`path: "${retiredPath}"`), `retired route ${retiredPath} must be absent`);
 }
 
 console.log(`detail page style ok: ${pageShellFiles.length} pages, ${tableFiles.length} table files`);

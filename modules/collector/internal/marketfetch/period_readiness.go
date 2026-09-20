@@ -73,7 +73,7 @@ func (s *PeriodReadinessService) EnsureCurrentAndNext(ctx context.Context, space
 		for _, task := range groups[key] {
 			subjectID := canonicalPeriodSubjectID(spaceID, task.SubjectID)
 			seed := domain.PeriodTaskSeed{
-				TaskID: task.TaskID, SubjectID: subjectID,
+				InstanceID: task.InstanceID, SubjectID: subjectID,
 				FunctionName:   task.FunctionName,
 				WriteSource:    writeSourceForFunctionName(task.FunctionName),
 				RequiredFields: requiredFieldsJSON(task),

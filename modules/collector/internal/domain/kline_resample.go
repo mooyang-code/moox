@@ -89,7 +89,7 @@ func ValidateSameResampleIdentity(existing, desired *CollectParams) error {
 	return nil
 }
 
-// ValidateKlineResample validates the immutable resample rule contract.
+// ValidateKlineResample validates the immutable resample task contract.
 func (p *CollectParams) ValidateKlineResample() error {
 	if p.SourceDatasetID == "" {
 		return fmt.Errorf("source_dataset_id is required")

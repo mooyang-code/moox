@@ -191,7 +191,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func ensureTaskResultMetadata(ctx context.Context, repo *store.CollectionTaskRepository, manager *collectorresult.Manager, dataNodeID string) error {
+func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager, dataNodeID string) error {
 	if repo == nil || manager == nil {
 		return fmt.Errorf("task result metadata dependencies are not configured")
 	}
@@ -209,21 +209,16 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.CollectionTaskRep
 			// Dataset. The generic result manager must not claim that Dataset as a
 			// raw collection result.
 			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-				params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+				_, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 				if parseErr != nil {
 					return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
 				}
-				targetFrequency, frequencyErr := collectorresample.ParseFixedFrequency(params.TargetFrequency)
-				if frequencyErr != nil {
-					return fmt.Errorf("parse task %s/%s target frequency: %w", task.SpaceID, task.TaskID, frequencyErr)
-				}
-				ids := collectorresult.ResultIDsWithFrequency(task.SpaceID, task.TaskID, targetFrequency.Slug)
-				needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != collectorresample.DefaultTargetViewID(ids.DatasetID)
-				// A pre-task-owned deployment may have persisted the resample
-				// result under the unsuffixed/base identity. Once the task is
-				// upgraded, remove that old result if it is still owned by this
-				// task; otherwise it becomes an unreachable physical orphan.
-				if needsUpdate && strings.TrimSpace(task.ResultDatasetID) != "" {
+				ids := collectorresult.ResultIDs(task.SpaceID, task.TaskID)
+				needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
+				// Only retire a previous result when the Dataset identity itself
+				// changed. A missing or mismatched View ID must not delete the
+				// current task-owned Dataset during startup.
+				if needsUpdate && strings.TrimSpace(task.ResultDatasetID) != "" && task.ResultDatasetID != ids.DatasetID {
 					oldIDs := collectorresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
 					if strings.TrimSpace(oldIDs.ViewID) == "" {
 						oldIDs.ViewID = "view_" + strings.TrimPrefix(oldIDs.DatasetID, "dataset_")
@@ -233,7 +228,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.CollectionTaskRep
 					}
 				}
 				task.ResultDatasetID = ids.DatasetID
-				task.ResultViewID = collectorresample.DefaultTargetViewID(ids.DatasetID)
+				task.ResultViewID = ids.ViewID
 				rawParams := map[string]any{}
 				if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
 					return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
@@ -474,14 +469,14 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			log.WarnContextf(trpc.BackgroundContext(), "collector kline resample disabled: metadata=%v storage=%v", metadataErr, storageErr)
 		} else {
 			catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, Auth: metadataClient.Auth}
-			resamplePreparer = &collectorresample.Preparer{Rules: dbm.Tasks(), Source: metadataSource, Catalog: catalog, KeepDuration: cfg.KlineResample.TargetKeepDuration.String(), Limit: cfg.KlineResample.WorkerSubjectBatchSize}
+			resamplePreparer = &collectorresample.Preparer{Tasks: dbm.Tasks(), Source: metadataSource, Catalog: catalog, KeepDuration: cfg.KlineResample.TargetKeepDuration.String(), Limit: cfg.KlineResample.WorkerSubjectBatchSize}
 			if waiter, ok := localStorage.(marketstorage.ResampleViewSyncWaiter); ok {
 				catalog.ViewSync = waiter
 			} else {
 				log.Warn("collector kline resample disabled: Storage adapter has no View sync waiter")
 			}
 			for _, spaceID := range spaceIDs {
-				resampleRunner = &collectorresample.Runner{Rules: dbm.Tasks(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
+				resampleRunner = &collectorresample.Runner{Tasks: dbm.Tasks(), Instances: dbm.TaskInstances(), Readiness: dbm.PeriodReadiness(), Source: metadataSource, Primary: localStorage, Config: collectorresample.RunnerConfig{
 					SpaceID: spaceID, ScanTimeout: cfg.KlineResample.ScanTimeout, WorkerConcurrency: cfg.KlineResample.WorkerConcurrency, MaxClaimsPerTick: cfg.KlineResample.MaxClaimsPerTick, WorkerJobTimeout: cfg.KlineResample.WorkerJobTimeout,
 					WorkerPollInterval: cfg.KlineResample.WorkerPollInterval, WorkerMaxSourceKeys: cfg.KlineResample.WorkerMaxSourceKeysPerClaim,
 					StaleRunningAfter: cfg.KlineResample.StaleRunningAfter, DefaultSettleDelay: cfg.KlineResample.DefaultSettleDelay, RepairLookbackBuckets: cfg.KlineResample.RepairLookbackBuckets,
@@ -510,7 +505,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			ResolveSourceID:     marketwiring.DefaultSourceID,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
 			CompactSymbol:       marketwiring.CompactSymbol,
-			Rules:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			Tasks:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: 40,
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
@@ -524,7 +519,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		invokeScheduler := &marketfetch.Scheduler{
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
-			Rules:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
+			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 			// Local Storage RPC uses the resolved Collector target (private IP
 			// when runtime.env was rewritten). SCF invoke payloads keep the
 			// discovered public native gateway so overseas functions still work.

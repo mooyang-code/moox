@@ -15,15 +15,15 @@
         <a-empty v-if="visibleViews.length === 0" :description="props.emptyDescription" />
 
         <template v-else>
-          <section class="view-tabs-row">
+          <section v-if="visibleViews.length > 1" class="view-tabs-row">
             <a-tabs v-model:active-key="activeViewKey" type="rounded" size="medium" class="view-tabs" @change="onViewChange">
               <a-tab-pane v-for="view in visibleViews" :key="view.view_id" :title="viewDisplayName(view)" />
             </a-tabs>
           </section>
 
-          <section class="view-status-line">
-            <span v-if="!props.hideTechnicalIdentity">View: {{ activeView?.view_id || "-" }}</span>
-            <span v-if="!props.hideTechnicalIdentity">Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
+          <section v-if="!props.hideTechnicalIdentity" class="view-status-line">
+            <span>View: {{ activeView?.view_id || "-" }}</span>
+            <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
@@ -44,7 +44,7 @@
 
           <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
           <a-alert v-else-if="hasQueried && !loading && tableRows.length === 0" class="query-alert" type="info" show-icon>
-            当前视图查询成功，但结果为空。
+            {{ props.emptyRowsDescription }}
           </a-alert>
 
           <QueryControls :loading="loading" :mode="mode">
@@ -460,6 +460,7 @@ const props = withDefaults(
     embedded?: boolean;
     pageTitle?: string;
     emptyDescription?: string;
+    emptyRowsDescription?: string;
     allowedPrimaryDatasetIds?: string[];
     excludedPrimaryDatasetIds?: string[];
     viewOwnerModules?: OwnerModule[];
@@ -467,6 +468,7 @@ const props = withDefaults(
     includeUnowned?: boolean;
     excludeLikelyFactorDatasets?: boolean;
     autoRefreshIntervalMs?: number;
+    viewIds?: string[];
     activeViewId?: string;
     hideTechnicalIdentity?: boolean;
   }>(),
@@ -474,6 +476,7 @@ const props = withDefaults(
     embedded: false,
     pageTitle: "视图数据浏览",
     emptyDescription: "暂无查询视图",
+    emptyRowsDescription: "当前视图查询成功，但结果为空。",
     allowedPrimaryDatasetIds: undefined,
     excludedPrimaryDatasetIds: undefined,
     viewOwnerModules: undefined,
@@ -481,6 +484,7 @@ const props = withDefaults(
     includeUnowned: false,
     excludeLikelyFactorDatasets: false,
     autoRefreshIntervalMs: 0,
+    viewIds: undefined,
     activeViewId: "",
     hideTechnicalIdentity: false
   }
@@ -496,11 +500,12 @@ const views = ref<View[]>([]);
 const datasets = ref<Dataset[]>([]);
 const datasetById = computed(() => new Map(datasets.value.map(item => [item.dataset_id, item])));
 const visibleViews = computed(() => {
+  const allowedViewIds = new Set((props.viewIds || []).filter(Boolean));
   const allowedPrimaryDatasetIds = props.allowedPrimaryDatasetIds || [];
   const allowedPrimary = new Set(allowedPrimaryDatasetIds.filter(Boolean));
   const excludedPrimary = new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean));
   return views.value.filter(view => {
-    if (props.activeViewId && view.view_id !== props.activeViewId) return false;
+    if (allowedViewIds.size > 0) return allowedViewIds.has(view.view_id);
     const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(view.dataset_id);
     if (!matchedByDataset && excludedPrimary.has(view.dataset_id)) {
       return false;
@@ -951,7 +956,10 @@ function ensureSelectedView() {
     activeViewKey.value = "";
     return;
   }
-  if (!activeViewKey.value || !visibleViews.value.some(item => item.view_id === activeViewKey.value)) {
+  const requestedViewId = props.activeViewId || activeViewKey.value;
+  if (requestedViewId && visibleViews.value.some(item => item.view_id === requestedViewId)) {
+    activeViewKey.value = requestedViewId;
+  } else if (!activeViewKey.value || !visibleViews.value.some(item => item.view_id === activeViewKey.value)) {
     activeViewKey.value = visibleViews.value[0].view_id;
   }
 }
@@ -969,10 +977,11 @@ watch(
 );
 
 watch(
-  () => props.activeViewId,
-  value => {
-    if (value && activeViewKey.value !== value) {
-      activeViewKey.value = value;
+  () => [props.activeViewId, ...(props.viewIds || [])],
+  () => {
+    const current = activeViewKey.value;
+    ensureSelectedView();
+    if (activeViewKey.value !== current) {
       clearViewState();
       void loadViewContext();
     }

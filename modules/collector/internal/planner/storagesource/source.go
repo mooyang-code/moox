@@ -320,14 +320,14 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 // Shared/normalized K-line result Datasets commonly use data_source_id=crypto
 // while their exchange symbols remain registered under binance or another venue.
 func (s *DatasetSource) ListResampleSubjects(ctx context.Context, spaceID, datasetID string) ([]domain.DatasetSubject, error) {
-	return s.ListResampleSubjectsForRule(ctx, spaceID, datasetID, "", "")
+	return s.ListResampleSubjectsForTask(ctx, spaceID, datasetID, "", "")
 }
 
-// ListResampleSubjectsForRule resolves the active subject set with the rule's
+// ListResampleSubjectsForTask resolves the active subject set with the task's
 // provider/series tag when a shared result Dataset contains multiple venues.
 // This keeps an OKX-only Subject out of a Binance resample task even though
 // both venues share the same market-level Dataset metadata.
-func (s *DatasetSource) ListResampleSubjectsForRule(ctx context.Context, spaceID, datasetID, provider, seriesTag string) ([]domain.DatasetSubject, error) {
+func (s *DatasetSource) ListResampleSubjectsForTask(ctx context.Context, spaceID, datasetID, provider, seriesTag string) ([]domain.DatasetSubject, error) {
 	if strings.TrimSpace(datasetID) == "" {
 		return nil, fmt.Errorf("dataset_id is required")
 	}

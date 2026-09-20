@@ -5,7 +5,7 @@
 - `metadata.yaml`：A 股、加密货币和内部监控元数据。
 - `dataset-health-policy.yaml`：Monitor 的 Dataset 健康判定阈值。
 - `service-deployments.yaml`：Admin 服务部署清单。
-- `collector-rules.yaml`：Collector 默认采集规则。
+- `collection-tasks.yaml`：Collector 默认采集任务。
 
 新系统使用 `moox-cli setup init` 读取这个固定目录，不需要逐个挑选 YAML：
 

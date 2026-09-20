@@ -82,7 +82,7 @@ func (r *Request) validate() error {
 	if len(r.Items) > maxItems && !(r.BatchKind == domain.BatchKindRealtime && strings.EqualFold(r.SpaceID, StockCNSpaceID)) {
 		return fmt.Errorf("items exceed maximum batch size %d for %s", maxItems, r.BatchKind)
 	}
-	seenTaskIDs := make(map[string]struct{}, len(r.Items))
+	seenInstanceIDs := make(map[string]struct{}, len(r.Items))
 	for index, item := range r.Items {
 		if r.BatchKind != domain.BatchKindInstrumentSnapshot && (strings.TrimSpace(item.SubjectID) == "" || strings.TrimSpace(item.Symbol) == "") {
 			return fmt.Errorf("items[%d] subject_id and symbol are required", index)
@@ -96,11 +96,11 @@ func (r *Request) validate() error {
 		if strings.TrimSpace(item.DatasetID) != r.DatasetID {
 			return fmt.Errorf("items[%d] dataset_id differs from batch dataset", index)
 		}
-		if strings.TrimSpace(item.TaskID) != "" {
-			if _, exists := seenTaskIDs[item.TaskID]; exists {
-				return fmt.Errorf("items[%d] task_id %q is duplicated", index, item.TaskID)
+		if strings.TrimSpace(item.InstanceID) != "" {
+			if _, exists := seenInstanceIDs[item.InstanceID]; exists {
+				return fmt.Errorf("items[%d] instance_id %q is duplicated", index, item.InstanceID)
 			}
-			seenTaskIDs[item.TaskID] = struct{}{}
+			seenInstanceIDs[item.InstanceID] = struct{}{}
 		}
 		start, startErr := parseRequestTime(item.StartTime)
 		if startErr != nil {

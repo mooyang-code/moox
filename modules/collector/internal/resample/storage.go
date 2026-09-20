@@ -98,7 +98,7 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subject
 		return result, false, nil
 	}
 	row := resultRowWithSpec(result, spec)
-	eventID := sourceEventID(spec.TaskID, targetKey, result.SourceHash)
+	eventID := sourceEventID(spec.InstanceID, targetKey, result.SourceHash)
 	if err := s.Primary.UpsertFieldsWithSource(ctx, []*storagepb.RowFieldUpsert{row}, eventID); err != nil {
 		return Result{}, false, err
 	}
@@ -130,19 +130,19 @@ func resultRow(result Result) *storagepb.RowFieldUpsert {
 
 func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 	row := resultRow(result)
-	row.Attributes["resample_task_id"] = stringValue(spec.TaskID)
+	row.Attributes["resample_task_id"] = stringValue(spec.InstanceID)
 	row.Attributes["source_dataset_id"] = stringValue(spec.SourceDatasetID)
 	row.Attributes["source_freq"] = stringValue(spec.SourceFrequency.Storage)
 	return row
 }
 
-func sourceEventID(ruleID string, key *storagepb.RowKey, hash string) string {
+func sourceEventID(instanceID string, key *storagepb.RowKey, hash string) string {
 	keyText := ""
 	if key != nil && key.GetTimeSeries() != nil {
 		k := key.GetTimeSeries()
 		keyText = strings.Join([]string{key.GetSpaceId(), key.GetDatasetId(), k.GetSubjectId(), k.GetFreq(), k.GetDataTime(), k.GetSeriesTag()}, "\x00")
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{ruleID, keyText, hash}, "\x00")))
+	sum := sha256.Sum256([]byte(strings.Join([]string{instanceID, keyText, hash}, "\x00")))
 	return "resample-" + hex.EncodeToString(sum[:])[:32]
 }
 

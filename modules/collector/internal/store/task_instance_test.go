@@ -15,7 +15,7 @@ func TestTaskInstanceRepositoryUpsertKeepsFreshnessForStableTask(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	instance := domain.TaskInstance{
-		SpaceID: "crypto", TaskID: "task-1", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot",
 		DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`,
 	}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
@@ -36,7 +36,7 @@ func TestTaskInstanceRepositoryPreservesAssignedSourceOnPlannerUpsert(t *testing
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	initial := domain.TaskInstance{
-		SpaceID: "stockcn", TaskID: "stock-task", CollectionTaskID: "rule-1",
+		SpaceID: "stockcn", InstanceID: "stock-task", CollectionTaskID: "rule-1",
 		Provider: "stockcn_multi", SourceID: "stockcn_http", MarketType: "equity",
 		DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG",
 		Frequency: "1m", TaskParams: `{}`,
@@ -45,7 +45,7 @@ func TestTaskInstanceRepositoryPreservesAssignedSourceOnPlannerUpsert(t *testing
 	plannerDefinition := initial
 	plannerDefinition.SourceID = ""
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{plannerDefinition}))
-	stored, err := s.TaskInstances().Get(ctx, initial.SpaceID, initial.TaskID)
+	stored, err := s.TaskInstances().Get(ctx, initial.SpaceID, initial.InstanceID)
 	require.NoError(t, err)
 	assert.Equal(t, initial.SourceID, stored.SourceID)
 }
@@ -54,7 +54,7 @@ func TestTaskInstanceRepositoryUpsertSkipsUnchangedDefinition(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	instance := domain.TaskInstance{
-		SpaceID: "crypto", TaskID: "task-1", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot",
 		DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`,
 	}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
@@ -74,7 +74,7 @@ func TestTaskInstanceRepositoryUpsertBatchesLargeCatalogue(t *testing.T) {
 	instances := make([]domain.TaskInstance, 0, 1200)
 	for index := 0; index < 1200; index++ {
 		instances = append(instances, domain.TaskInstance{
-			SpaceID: "stockcn", TaskID: fmt.Sprintf("task-%04d", index), CollectionTaskID: "rule-1",
+			SpaceID: "stockcn", InstanceID: fmt.Sprintf("task-%04d", index), CollectionTaskID: "rule-1",
 			Provider: "stockcn_multi", MarketType: "equity", DataType: "kline",
 			DatasetID: "dataset_stockcn_equity_kline", SubjectID: fmt.Sprintf("600%03d.XSHG", index), Frequency: "1m", TaskParams: `{}`,
 		})
@@ -88,7 +88,7 @@ func TestTaskInstanceRepositoryUpsertBatchesLargeCatalogue(t *testing.T) {
 func TestTaskInstanceRepositoryTracksSCFAssignmentAndStorageWrite(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
-	instance := domain.TaskInstance{SpaceID: "crypto", TaskID: "task-1", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
 	require.NoError(t, s.TaskInstances().AssignMarketFetchFunction(ctx, "crypto", "binance", "spot", "bars", "1m", "market-fetch-1", []string{"BTC-USDT"}))
 	at := time.Date(2026, 8, 5, 1, 2, 3, 0, time.UTC)
@@ -112,7 +112,7 @@ func TestTaskInstanceUpsertSkipsParentTaskDisabledDuringDelete(t *testing.T) {
 	now := time.Now().UTC()
 	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task-disabled", TaskName: "Disabled", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: false, CollectParams: `{}`}))
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "instance-disabled", CollectionTaskID: "task-disabled", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", CreateTime: now,
+		SpaceID: "crypto", InstanceID: "instance-disabled", CollectionTaskID: "task-disabled", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", CreateTime: now,
 	}}))
 	_, total, err := s.TaskInstances().List(ctx, TaskInstanceFilter{SpaceID: "crypto", CollectionTaskID: "task-disabled"})
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestTaskInstanceUpsertSkipsParentTaskDisabledDuringDelete(t *testing.T) {
 func TestTaskInstanceRepositoryMatchesCanonicalStorageFrequency(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
-	instance := domain.TaskInstance{SpaceID: "crypto", TaskID: "task-hour", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1h", TaskParams: `{}`}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-hour", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1h", TaskParams: `{}`}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
 	require.NoError(t, s.TaskInstances().AssignMarketFetchFunction(ctx, "crypto", "binance", "spot", "bars", "1h", "market-fetch-hour", []string{"BTC-USDT"}))
 	at := time.Date(2026, 8, 5, 1, 2, 3, 0, time.UTC)
@@ -135,7 +135,7 @@ func TestReplaceMarketFetchAssignmentsUsesRouteProviderAndChecksCoverage(t *test
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "stockcn", TaskID: "task-1", CollectionTaskID: "rule-1", Provider: "stockcn_multi", MarketType: "equity",
+		SpaceID: "stockcn", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "stockcn_multi", MarketType: "equity",
 		DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`,
 	}}))
 
@@ -154,8 +154,8 @@ func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T)
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	instances := []domain.TaskInstance{
-		{SpaceID: "stockcn", TaskID: "task-1", CollectionTaskID: "rule-1", Provider: "stockcn_multi", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`},
-		{SpaceID: "stockcn", TaskID: "task-2", CollectionTaskID: "rule-2", Provider: "stockcn_multi", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: "stockcn", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "stockcn_multi", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: "stockcn", InstanceID: "task-2", CollectionTaskID: "rule-2", Provider: "stockcn_multi", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`},
 	}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
 
@@ -172,15 +172,15 @@ func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T)
 	}
 }
 
-func TestTaskInstanceRepositoryDeactivatesMissingRuleInstances(t *testing.T) {
+func TestTaskInstanceRepositoryDeactivatesMissingTaskInstances(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	instances := []domain.TaskInstance{
-		{SpaceID: "crypto", TaskID: "keep", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
-		{SpaceID: "crypto", TaskID: "remove", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "ETH-USDT", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: "crypto", InstanceID: "keep", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: "crypto", InstanceID: "remove", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "ETH-USDT", Frequency: "1m", TaskParams: `{}`},
 	}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
-	require.NoError(t, s.TaskInstances().DeactivateMissingMarketFetchRuleInstances(ctx, "crypto", "rule-1", []string{"keep"}))
+	require.NoError(t, s.TaskInstances().DeactivateMissingMarketFetchTaskInstances(ctx, "crypto", "rule-1", []string{"keep"}))
 
 	removed, err := s.TaskInstances().Get(ctx, "crypto", "remove")
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestResampleTaskClaimCompleteUsesStateVersionCAS(t *testing.T) {
 	raw, err := initial.Marshal()
 	require.NoError(t, err)
 	instance := domain.TaskInstance{
-		SpaceID: "crypto", TaskID: "resample-btc", CollectionTaskID: "rule-1", Provider: "moox", MarketType: "spot",
+		SpaceID: "crypto", InstanceID: "resample-btc", CollectionTaskID: "rule-1", Provider: "moox", MarketType: "spot",
 		DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", TaskParams: `{}`, Result: raw,
 	}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
@@ -251,7 +251,7 @@ func TestResampleTaskWaitAndRecoverExpiredLease(t *testing.T) {
 	raw, err := initial.Marshal()
 	require.NoError(t, err)
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "resample-btc", CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", Result: raw,
+		SpaceID: "crypto", InstanceID: "resample-btc", CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", Result: raw,
 	}}))
 
 	claims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket.Add(4*time.Hour+time.Second), domain.ResampleOriginRealtime, 1, time.Second)
@@ -289,7 +289,7 @@ func TestResampleBackfillSourceWaitReleasesRealtimeTask(t *testing.T) {
 	raw, err := result.Marshal()
 	require.NoError(t, err)
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
+		SpaceID: "crypto", InstanceID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
 	}}))
 	claims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket, domain.ResampleOriginBackfill, 1, time.Minute)
 	require.NoError(t, err)
@@ -320,7 +320,7 @@ func TestResampleBackfillFailureDoesNotFailRealtimeTask(t *testing.T) {
 	raw, err := result.Marshal()
 	require.NoError(t, err)
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
+		SpaceID: "crypto", InstanceID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
 	}}))
 	claims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket, domain.ResampleOriginBackfill, 1, time.Minute)
 	require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestResampleBackfillLeaseRecoveryReleasesRealtimeTask(t *testing.T) {
 	raw, err := result.Marshal()
 	require.NoError(t, err)
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
+		SpaceID: "crypto", InstanceID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
 	}}))
 	claims, err := s.TaskInstances().ClaimDueResampleTasks(ctx, bucket, domain.ResampleOriginBackfill, 1, time.Second)
 	require.NoError(t, err)
@@ -378,7 +378,7 @@ func TestResampleBackfillStartResetsRetentionExpiredRealtimeCursor(t *testing.T)
 	raw, err := result.Marshal()
 	require.NoError(t, err)
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
+		SpaceID: "crypto", InstanceID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
 	}}))
 	now := time.Now().UTC().Truncate(5 * time.Minute)
 	request := domain.ResampleBackfillRequest{RequestID: "new", Start: now.Add(-10 * time.Minute), End: now}
@@ -410,7 +410,7 @@ func TestResampleRepairLeaseRecoveryReturnsToIdle(t *testing.T) {
 	initial := domain.NewResampleTaskResult(bucket)
 	raw, err := initial.Marshal()
 	require.NoError(t, err)
-	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", TaskID: "repair-btc", CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", Result: raw}}))
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "repair-btc", CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", Result: raw}}))
 	_, claimed, err := s.TaskInstances().ClaimResampleTask(ctx, "crypto", "repair-btc", 0, domain.ResampleOriginRepair, bucket, bucket, time.Second)
 	require.NoError(t, err)
 	require.True(t, claimed)
@@ -434,7 +434,7 @@ func TestResampleRepairSkipAdvancesCursorWithoutFailure(t *testing.T) {
 	initial := domain.NewResampleTaskResult(bucket)
 	raw, err := initial.Marshal()
 	require.NoError(t, err)
-	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", TaskID: "repair-btc", CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", Result: raw}}))
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "repair-btc", CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H", Result: raw}}))
 	claim, claimed, err := s.TaskInstances().ClaimResampleTask(ctx, "crypto", "repair-btc", 0, domain.ResampleOriginRepair, bucket, bucket, time.Minute)
 	require.NoError(t, err)
 	require.True(t, claimed)
@@ -459,7 +459,7 @@ func TestResampleBackfillStartIsIdempotentAndConflicts(t *testing.T) {
 	require.NoError(t, err)
 	for _, taskID := range []string{"btc", "eth"} {
 		require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-			SpaceID: "crypto", TaskID: taskID, CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: taskID, Frequency: "4H", Result: initial,
+			SpaceID: "crypto", InstanceID: taskID, CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: taskID, Frequency: "4H", Result: initial,
 		}}))
 	}
 	request := domain.ResampleBackfillRequest{
@@ -483,14 +483,14 @@ func TestResampleUpsertResetsCursorWhenSubjectIsReactivated(t *testing.T) {
 	oldResult, err := oldResultValue.Marshal()
 	require.NoError(t, err)
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "btc", CollectionTaskID: "rule-1", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "4H", Result: oldResult,
+		SpaceID: "crypto", InstanceID: "btc", CollectionTaskID: "rule-1", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "4H", Result: oldResult,
 	}}))
 	require.NoError(t, s.TaskInstances().db.Exec("UPDATE t_collector_task_instances SET c_is_deleted = 1 WHERE c_space_id = ? AND c_instance_id = ?", "crypto", "btc").Error)
 	newResultValue := domain.NewResampleTaskResult(time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC))
 	newResult, err := newResultValue.Marshal()
 	require.NoError(t, err)
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", TaskID: "btc", CollectionTaskID: "rule-1", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "4H", Result: newResult,
+		SpaceID: "crypto", InstanceID: "btc", CollectionTaskID: "rule-1", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "4H", Result: newResult,
 	}}))
 	current, err := s.TaskInstances().Get(ctx, "crypto", "btc")
 	require.NoError(t, err)

@@ -92,7 +92,7 @@ func TestApplySchemaRejectsIncompleteCurrentTaskSchema(t *testing.T) {
 	err = mgr.ApplySchema(schema.AllSQL())
 	require.Error(t, err)
 	require.ErrorContains(t, err, "collector schema reset required")
-	require.ErrorContains(t, err, "c_task_name missing")
+	require.ErrorContains(t, err, "current task schema is incomplete")
 }
 
 func TestDeleteTaskRuntimeRemovesEmptyReadinessParents(t *testing.T) {
@@ -107,12 +107,12 @@ func TestDeleteTaskRuntimeRemovesEmptyReadinessParents(t *testing.T) {
 	_, err = mgr.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
 		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: time.Now().UTC()},
 		DeadlineAt: time.Now().UTC().Add(time.Minute),
-		Tasks:      []domain.PeriodTaskSeed{{TaskID: "task-runtime", SubjectID: "BTC-USDT"}},
+		Tasks:      []domain.PeriodTaskSeed{{InstanceID: "task-runtime", SubjectID: "BTC-USDT"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", TaskID: "task-runtime", CollectionTaskID: "task-runtime", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m"}}); err != nil {
+	if err := mgr.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-runtime", CollectionTaskID: "task-runtime", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.DeleteTaskRuntime(context.Background(), "crypto", "task-runtime"); err != nil {
@@ -125,4 +125,26 @@ func TestDeleteTaskRuntimeRemovesEmptyReadinessParents(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("empty readiness parents = %d, want 0", count)
 	}
+}
+
+func TestWaitTaskDrainUsesParentTaskIdentity(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+
+	_, err = mgr.FetchBatches().CreatePlanned(context.Background(), &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: "batch-1", ScheduleID: "schedule-1",
+		BatchKind: domain.BatchKindRealtime, TaskID: "task-1", DatasetID: "bars",
+		Frequency: "1m", Status: domain.BatchStatusPlanned,
+	})
+	require.NoError(t, err)
+	err = mgr.WaitTaskDrain(context.Background(), "crypto", "task-1", 20*time.Millisecond)
+	require.ErrorContains(t, err, "active fetch batch")
+
+	_, err = mgr.FetchBatches().Complete(context.Background(), &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: "batch-1", Status: domain.BatchStatusSucceeded,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mgr.WaitTaskDrain(context.Background(), "crypto", "task-1", 20*time.Millisecond))
 }

@@ -8,11 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResultIDsWithFrequencyAreTaskExclusiveAndFrequencyQualified(t *testing.T) {
-	ids := ResultIDsWithFrequency("crypto", "task-5m", "5m")
-	require.Equal(t, "dataset_collector_"+hashForTest("crypto", "task-5m")+"_5m", ids.DatasetID)
-	require.Equal(t, "view_collector_"+hashForTest("crypto", "task-5m")+"_5m", ids.ViewID)
-	require.NotEqual(t, ids, ResultIDsWithFrequency("crypto", "task-1h", "1h"))
+func TestResultIDsAreTaskExclusiveAcrossResampleFrequencies(t *testing.T) {
+	ids := ResultIDs("crypto", "task-5m")
+	require.Equal(t, "dataset_collector_"+hashForTest("crypto", "task-5m"), ids.DatasetID)
+	require.Equal(t, "view_collector_"+hashForTest("crypto", "task-5m"), ids.ViewID)
+	require.Equal(t, ids, ResultIDs("crypto", "task-5m"))
+	require.NotEqual(t, ids, ResultIDs("crypto", "task-1h"))
 }
 
 func hashForTest(spaceID, taskID string) string {
@@ -135,6 +136,21 @@ func TestEnsureDeclaresAllCollectionFrequencies(t *testing.T) {
 	require.Equal(t, `{"freq":"1m"}`, fake.views[ids.ViewID].GetFilterJson())
 }
 
+func TestNormalizeKeepDurationAcceptsDaysAndWeeks(t *testing.T) {
+	require.Equal(t, "720h0m0s", mustNormalizeKeepDuration(t, "30d"))
+	require.Equal(t, "168h0m0s", mustNormalizeKeepDuration(t, "1w"))
+	require.Equal(t, "0", mustNormalizeKeepDuration(t, "0"))
+	_, err := normalizeKeepDuration("invalid")
+	require.Error(t, err)
+}
+
+func mustNormalizeKeepDuration(t *testing.T, raw string) string {
+	t.Helper()
+	value, err := normalizeKeepDuration(raw)
+	require.NoError(t, err)
+	return value
+}
+
 func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
 	fake := newResultMetadataFake()
 	fake.failView = true
@@ -147,8 +163,66 @@ func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
 	require.Empty(t, fake.views)
 }
 
+func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "task-inspect")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto",
+		Attributes: map[string]string{
+			"owner_module":      "collector",
+			"collector_task_id": "task-inspect",
+		},
+		Status: "active",
+	}
+	fake.views[ids.ViewID] = &storagepb.View{
+		ViewId:     ids.ViewID,
+		DatasetId:  ids.DatasetID,
+		Status:     "active",
+		IndexedTo:  "2026-09-20T04:00:00Z",
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+	inspection, err := manager.Inspect(context.Background(), "crypto", "task-inspect")
+	require.NoError(t, err)
+	require.Equal(t, ids, inspection.IDs)
+	require.Equal(t, "ready", inspection.Status)
+	require.Equal(t, "2026-09-20T04:00:00Z", inspection.LastDataTime)
+	require.Equal(t, ids.ViewID, inspection.View.GetViewId())
+}
+
+func TestInspectReportsPendingWhenResultMetadataIsIncomplete(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "task-pending")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-pending"},
+		Status:     "draft",
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+	inspection, err := manager.Inspect(context.Background(), "crypto", "task-pending")
+	require.NoError(t, err)
+	require.Equal(t, "pending", inspection.Status)
+	require.Empty(t, inspection.LastDataTime)
+	require.Nil(t, inspection.View)
+}
+
+func TestInspectRejectsResultOwnedByAnotherTask(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "task-inspect")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "other-task"},
+		Status:     "active",
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+	_, err := manager.Inspect(context.Background(), "crypto", "task-inspect")
+	require.ErrorContains(t, err, "owned by another task")
+}
+
 func TestOwnedByTaskDoesNotAcceptConflictingLegacyOwner(t *testing.T) {
 	require.True(t, ownedByTask(map[string]string{"owner_module": "collector", "collector_task_id": "task-b", "resample_task_id": "task-a"}, "task-b"))
 	require.False(t, ownedByTask(map[string]string{"owner_module": "collector", "collector_task_id": "task-b", "resample_task_id": "task-a"}, "task-a"))
+	require.False(t, ownedByTask(map[string]string{"owner_module": "collector", "resample_task_id": "task-a"}, "task-a"))
 	require.False(t, ownedByTask(map[string]string{"owner_module": "factor", "collector_task_id": "task-a"}, "task-a"))
 }

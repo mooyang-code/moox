@@ -104,7 +104,7 @@ describe("page layout standards", () => {
   it("uses the multi-tab spacing standard", () => {
     const taskManagement = read("collector/task-management/index.vue");
     const taskInstances = read("collector/task-instances/task-instances.vue");
-    const collectorRules = read("collector/collection-tasks/collection-tasks.vue");
+    const collectorTasks = read("collector/collection-tasks/collection-tasks.vue");
     const taskResults = read("collector/task-results/index.vue");
     const gatewayNodes = read("ops/service-management/gateway-nodes.vue");
     const serviceInstances = read("settings/service-deployments/index.vue");
@@ -115,8 +115,8 @@ describe("page layout standards", () => {
 
     expectMargin(taskManagement, ".task-management-content", "margin-top", 12);
     expectMargin(taskInstances, ".task-toolbar", "margin-bottom", 8);
-    expect(collectorRules).toContain('class="rule-toolbar"');
-    expectMargin(collectorRules, ".rule-toolbar", "margin-bottom", 5);
+    expect(collectorTasks).toContain('class="task-toolbar"');
+    expectMargin(collectorTasks, ".task-toolbar", "margin-bottom", 5);
     expect(taskResults).toContain('class="moox-page task-results-page"');
     expect(taskResults).toContain('class="moox-inner"');
 

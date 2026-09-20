@@ -35,8 +35,8 @@ func (r *PeriodReadinessRepository) EnsurePeriod(ctx context.Context, seed domai
 	}
 	seenSubjects := make(map[string]struct{}, len(seed.Tasks))
 	for _, task := range seed.Tasks {
-		if strings.TrimSpace(task.TaskID) == "" || strings.TrimSpace(task.SubjectID) == "" {
-			return 0, fmt.Errorf("task_id and subject_id are required")
+		if strings.TrimSpace(task.InstanceID) == "" || strings.TrimSpace(task.SubjectID) == "" {
+			return 0, fmt.Errorf("instance_id and subject_id are required")
 		}
 		if _, exists := seenSubjects[task.SubjectID]; exists {
 			return 0, fmt.Errorf("duplicate period subject %q", task.SubjectID)
@@ -69,7 +69,7 @@ func (r *PeriodReadinessRepository) EnsurePeriod(ctx context.Context, seed domai
 		}
 		for _, task := range seed.Tasks {
 			item := &domain.PeriodReadinessItem{
-				ReadinessID: parent.ID, TaskID: task.TaskID, SubjectID: task.SubjectID,
+				ReadinessID: parent.ID, InstanceID: task.InstanceID, SubjectID: task.SubjectID,
 				FunctionName: task.FunctionName, WriteSource: task.WriteSource,
 				RequiredFields: task.RequiredFields, State: domain.PeriodItemPending,
 				UpdatedAt: time.Now().UTC(),
@@ -132,7 +132,7 @@ func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Con
 		if fields != nil {
 			var required []string
 			if strings.TrimSpace(item.RequiredFields) != "" && json.Unmarshal([]byte(item.RequiredFields), &required) != nil {
-				return fmt.Errorf("invalid required fields for task %s", item.TaskID)
+				return fmt.Errorf("invalid required fields for instance %s", item.InstanceID)
 			}
 			complete := true
 			for _, field := range required {
@@ -145,7 +145,7 @@ func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Con
 				continue
 			}
 		}
-		if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ? AND c_task_id = ? AND c_state = ?", item.ReadinessID, item.TaskID, domain.PeriodItemPending).Updates(map[string]any{"c_state": domain.PeriodItemSuccess, "c_updated_at": at.UTC()}).Error; err != nil {
+		if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ? AND c_instance_id = ? AND c_state = ?", item.ReadinessID, item.InstanceID, domain.PeriodItemPending).Updates(map[string]any{"c_state": domain.PeriodItemSuccess, "c_updated_at": at.UTC()}).Error; err != nil {
 			return err
 		}
 	}
@@ -319,7 +319,7 @@ func (r *PeriodReadinessRepository) finalizeDue(ctx context.Context, spaceID str
 func (r *PeriodReadinessRepository) resamplePendingTasksTerminal(ctx context.Context, readinessID int64, spaceID string, pending int64) (bool, error) {
 	var failed int64
 	err := r.db.WithContext(ctx).Table("t_period_readiness_items AS items").
-		Joins("LEFT JOIN t_collector_task_instances AS tasks ON tasks.c_space_id = ? AND tasks.c_instance_id = items.c_task_id", spaceID).
+		Joins("LEFT JOIN t_collector_task_instances AS tasks ON tasks.c_space_id = ? AND tasks.c_instance_id = items.c_instance_id", spaceID).
 		Where("items.c_readiness_id = ? AND items.c_state = ? AND (tasks.c_is_deleted = 1 OR (json_valid(tasks.c_result) AND json_extract(tasks.c_result, '$.state') = ?))", readinessID, domain.PeriodItemPending, domain.ResampleTaskStateFailed).
 		Count(&failed).Error
 	if err != nil {

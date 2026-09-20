@@ -121,8 +121,8 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_retry_items (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_retry_key TEXT NOT NULL,
-  c_source_batch_id TEXT NOT NULL,
-  c_batch_kind TEXT NOT NULL DEFAULT 'realtime',
+    c_source_batch_id TEXT NOT NULL,
+    c_batch_kind TEXT NOT NULL DEFAULT 'realtime',
     c_task_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
@@ -174,14 +174,14 @@ ON t_period_readiness (c_report_state, c_deadline_at);
 
 CREATE TABLE IF NOT EXISTS t_period_readiness_items (
     c_readiness_id INTEGER NOT NULL,
-    c_task_id TEXT NOT NULL,
+    c_instance_id TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
     c_function_name TEXT NOT NULL DEFAULT '',
     c_write_source TEXT NOT NULL DEFAULT '',
     c_required_fields_json TEXT NOT NULL DEFAULT '[]',
     c_state TEXT NOT NULL DEFAULT 'pending',
     c_updated_at DATETIME NOT NULL,
-    PRIMARY KEY (c_readiness_id, c_task_id),
+    PRIMARY KEY (c_readiness_id, c_instance_id),
     UNIQUE (c_readiness_id, c_subject_id),
     CHECK (c_state IN ('pending', 'success', 'timed_out')),
     FOREIGN KEY (c_readiness_id) REFERENCES t_period_readiness(c_id) ON DELETE CASCADE

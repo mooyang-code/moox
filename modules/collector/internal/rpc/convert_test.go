@@ -25,6 +25,7 @@ func TestToPBTaskAndFromPBTask_ShouldRoundTripCoreFields(t *testing.T) {
 	assert.Equal(t, "crypto", pbRule.GetSpaceId())
 	assert.Equal(t, "rule-1", pbRule.GetTaskId())
 	assert.Equal(t, enabled, pbRule.GetEnabled())
+	assert.Equal(t, "采集结果", pbRule.GetResult().GetResultName())
 
 	out := fromPBTask(&pb.CollectionTask{
 		SpaceId: "crypto", TaskId: "rule-2", DataType: "kline", Provider: "binance", MarketType: "spot",
@@ -33,6 +34,21 @@ func TestToPBTaskAndFromPBTask_ShouldRoundTripCoreFields(t *testing.T) {
 	assert.Equal(t, "crypto", out.SpaceID)
 	assert.Equal(t, "rule-2", out.TaskID)
 	assert.Equal(t, "binance", out.Provider)
+}
+
+func TestToPBTaskRedactsInternalDatasetIDsAndNamesResult(t *testing.T) {
+	task := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-1", TaskName: "币安现货", DataType: "kline",
+		CollectParams: `{"symbol_dataset_id":"symbols","source_dataset_id":"source","target_dataset_id":"target","frequency":"1h"}`,
+		ResultViewID:  "view-1",
+	}
+	pbTask := toPBTask(task)
+	assert.Equal(t, "币安现货 结果", pbTask.GetResult().GetResultName())
+	params := pbTask.GetCollectParams().AsMap()
+	assert.NotContains(t, params, "target_dataset_id")
+	assert.NotContains(t, params, "symbol_dataset_id")
+	assert.NotContains(t, params, "source_dataset_id")
+	assert.Equal(t, "1h", params["frequency"])
 }
 
 func TestCollectionTaskProtoJSONRejectsLegacyRuleFields(t *testing.T) {
@@ -65,7 +81,7 @@ func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
 func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 	now := time.Now().UTC()
 	instance := toPBInstance(domain.TaskInstance{
-		SpaceID: "crypto", TaskID: "task-1", CollectionTaskID: "rule-1", Provider: "binance",
+		SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "binance",
 		MarketType: "spot", DataType: "instrument", LastExecStatus: domain.InstanceStatusSuccess,
 		CreateTime: now, ModifyTime: now,
 	})

@@ -56,7 +56,7 @@ func buildCompletion(req Request, results []domain.ItemResult, completed time.Ti
 		payload.Items = append(payload.Items, &marketfetchpb.MarketFetchItemResult{
 			SubjectId: result.SubjectID, Symbol: result.Symbol, TargetDataTime: result.TargetDataTime,
 			Outcome: string(result.Outcome), ErrorType: result.ErrorType, ErrorSummary: result.ErrorSummary,
-			SourceEventId: result.SourceEventID, TaskId: result.TaskID,
+			SourceEventId: result.SourceEventID, InstanceId: result.InstanceID,
 		})
 	}
 	switch {

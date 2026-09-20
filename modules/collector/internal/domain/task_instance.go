@@ -42,9 +42,11 @@ type TaskSpec struct {
 
 // TaskInstance is the Collector-owned executable business task.
 type TaskInstance struct {
-	ID               int        `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID          string     `gorm:"column:c_space_id"`
-	TaskID           string     `gorm:"column:c_instance_id"`
+	ID      int    `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID string `gorm:"column:c_space_id"`
+	// InstanceID is the stable executable identity for one subject/frequency.
+	InstanceID string `gorm:"column:c_instance_id"`
+	// CollectionTaskID identifies the parent CollectionTask.
 	CollectionTaskID string     `gorm:"column:c_task_id"`
 	Provider         string     `gorm:"column:c_provider"`
 	MarketType       string     `gorm:"column:c_market_type"`
@@ -69,15 +71,16 @@ func (i *TaskInstance) TableName() string {
 	return "t_collector_task_instances"
 }
 
-// StableTaskID creates an idempotent execution instance ID for a task/object/interval.
-func StableTaskID(spaceID string, taskID string, spec TaskSpec) string {
+// StableTaskID creates an idempotent execution instance ID for a parent task,
+// object, and interval.
+func StableTaskID(spaceID string, collectionTaskID string, spec TaskSpec) string {
 	routeID := strings.TrimSpace(spec.RouteID)
 	if routeID == "" {
 		routeID = strings.Join([]string{spec.MarketType, spec.DataType, spec.DatasetID, spec.Frequency}, ":")
 	}
 	parts := []string{
 		spaceID,
-		taskID,
+		collectionTaskID,
 		routeID,
 		spec.MarketType,
 		spec.DataType,
@@ -91,10 +94,10 @@ func StableTaskID(spaceID string, taskID string, spec TaskSpec) string {
 
 // StableResampleTaskID includes the selected source series because a target
 // subject can otherwise be backed by multiple venue streams.
-func StableResampleTaskID(spaceID string, taskID string, spec TaskSpec, sourceSeriesTag string) string {
+func StableResampleTaskID(spaceID string, collectionTaskID string, spec TaskSpec, sourceSeriesTag string) string {
 	parts := []string{
 		spaceID,
-		taskID,
+		collectionTaskID,
 		spec.Provider,
 		spec.MarketType,
 		spec.DataType,

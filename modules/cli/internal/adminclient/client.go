@@ -39,6 +39,14 @@ type retInfo struct {
 func isRetInfoSuccess(code int) bool {
 	return code == 0 || code == 200
 }
+
+func isRetInfoNotFound(info retInfo) bool {
+	if info.Code == 404 {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(info.Msg))
+	return strings.Contains(message, "not found") || strings.Contains(message, "record not found")
+}
 func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([]byte, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("control url is required")

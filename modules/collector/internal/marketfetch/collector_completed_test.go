@@ -43,17 +43,17 @@ func TestCollectorCompletedRestartDoesNotChangeFrozenSet(t *testing.T) {
 	_, err := db.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
 		PeriodKey: key, DeadlineAt: period.Add(time.Minute),
 		Tasks: []domain.PeriodTaskSeed{
-			{TaskID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
-			{TaskID: "task-eth", SubjectID: "ETH-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
+			{InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
+			{InstanceID: "task-eth", SubjectID: "ETH-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
 		},
 	})
 	require.NoError(t, err)
 	_, err = db.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
 		PeriodKey: key, DeadlineAt: period.Add(time.Minute),
 		Tasks: []domain.PeriodTaskSeed{
-			{TaskID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
-			{TaskID: "task-eth", SubjectID: "ETH-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
-			{TaskID: "task-sol", SubjectID: "SOL-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
+			{InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
+			{InstanceID: "task-eth", SubjectID: "ETH-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
+			{InstanceID: "task-sol", SubjectID: "SOL-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"},
 		},
 	})
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestCollectorCompletedUsesStorageWritePositions(t *testing.T) {
 	key := domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}
 	_, err := db.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
 		PeriodKey: key, DeadlineAt: period.Add(time.Minute),
-		Tasks: []domain.PeriodTaskSeed{{TaskID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
+		Tasks: []domain.PeriodTaskSeed{{InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "scf:fetch-1"}},
 	})
 	require.NoError(t, err)
 	service := NewPeriodReadinessService(db.TaskInstances(), db.PeriodReadiness(), time.Second)
@@ -130,7 +130,7 @@ func openCollectorCompletedReporter(t *testing.T, subjects, succeed []string) (*
 	tasks := make([]domain.PeriodTaskSeed, 0, len(subjects))
 	for _, subject := range subjects {
 		tasks = append(tasks, domain.PeriodTaskSeed{
-			TaskID: "task-" + subject, SubjectID: subject, FunctionName: "fetch-1", WriteSource: "scf:fetch-1",
+			InstanceID: "task-" + subject, SubjectID: subject, FunctionName: "fetch-1", WriteSource: "scf:fetch-1",
 		})
 	}
 	_, err := db.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{

@@ -484,7 +484,7 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 	assert.Equal(t, map[string]any{"data-api.binance.vision": map[string]any{"ips": []any{"203.0.113.10"}}}, cryptoData["dns_routes"])
 }
 
-func TestDefaultStockCNCollectorRulesRequireExplicitActivation(t *testing.T) {
+func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
 	require.NoError(t, err)
 	var bundle struct {

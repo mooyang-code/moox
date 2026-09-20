@@ -34,7 +34,7 @@ func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 		ModifyTime:    formatTime(task.ModifyTime),
 		PrepareState:  string(task.PrepareState),
 		LastError:     task.LastError,
-		Result:        &pb.TaskResult{ResultName: "采集结果", ViewId: task.ResultViewID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
+		Result:        &pb.TaskResult{ResultName: resultName(task.TaskName), ViewId: task.ResultViewID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
 	}
 }
 
@@ -43,7 +43,9 @@ func redactTaskResultDatasetID(raw string) string {
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
 		return raw
 	}
-	delete(values, "target_dataset_id")
+	for _, key := range []string{"target_dataset_id", "result_dataset_id", "symbol_dataset_id", "source_dataset_id"} {
+		delete(values, key)
+	}
 	encoded, err := json.Marshal(values)
 	if err != nil {
 		return raw
@@ -78,6 +80,14 @@ func taskEnabled(task *pb.CollectionTask) bool {
 	return task.GetEnabled()
 }
 
+func resultName(taskName string) string {
+	name := strings.TrimSpace(taskName)
+	if name == "" {
+		return "采集结果"
+	}
+	return name + " 结果"
+}
+
 func taskResultDataKind(dataType string) string {
 	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
 		return "record"
@@ -89,7 +99,7 @@ func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 	return &pb.TaskInstance{
 		SpaceId:        instance.SpaceID,
 		TaskId:         instance.CollectionTaskID,
-		InstanceId:     instance.TaskID,
+		InstanceId:     instance.InstanceID,
 		Provider:       instance.Provider,
 		MarketType:     instance.MarketType,
 		DataType:       instance.DataType,

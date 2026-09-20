@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
@@ -47,7 +48,7 @@ type RealtimeInventory interface {
 type Service struct {
 	pb.UnimplementedCollectMgr
 	persistence                *store.Store
-	ruleRepo                   *store.CollectionTaskRepository
+	taskRepo                   *store.TaskRepository
 	instanceRepo               *store.TaskInstanceRepository
 	datasetSrc                 datasetSource
 	inventory                  RealtimeInventory
@@ -76,7 +77,7 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 	}
 	return &Service{
 		persistence:                persistence,
-		ruleRepo:                   persistence.Tasks(),
+		taskRepo:                   persistence.Tasks(),
 		instanceRepo:               persistence.TaskInstances(),
 		datasetSrc:                 storagesource.NewDatasetSource(plannerMetadataTarget),
 		inventory:                  deps.RealtimeInventory,
@@ -134,14 +135,17 @@ func uint32Total(total int64) uint32 {
 	return uint32(total)
 }
 
-// GetTaskList returns rule data from the new collector DB.
+// GetTaskList returns task data from the new collector DB.
 func (s *Service) GetTaskList(ctx context.Context, req *pb.GetTaskListReq) (*pb.GetTaskListRsp, error) {
+	if req == nil {
+		return &pb.GetTaskListRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+	}
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	if spaceID == "" {
 		return &pb.GetTaskListRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	page, size := pageParams(req.GetPage())
-	tasks, total, err := s.ruleRepo.List(ctx, store.TaskFilter{
+	tasks, total, err := s.taskRepo.List(ctx, store.TaskFilter{
 		SpaceID:    spaceID,
 		DataType:   req.GetDataType(),
 		Provider:   req.GetProvider(),
@@ -157,24 +161,58 @@ func (s *Service) GetTaskList(ctx context.Context, req *pb.GetTaskListReq) (*pb.
 	}
 	out := make([]*pb.CollectionTask, 0, len(tasks))
 	for _, task := range tasks {
-		out = append(out, toPBTask(task))
+		out = append(out, s.toPBTask(ctx, task))
 	}
 	return &pb.GetTaskListRsp{RetInfo: retOK(), Tasks: out, Page: pageResult(page, size, total)}, nil
 }
 
 // GetTaskDetail returns a single collection task.
 func (s *Service) GetTaskDetail(ctx context.Context, req *pb.GetTaskDetailReq) (*pb.GetTaskDetailRsp, error) {
+	if req == nil {
+		return &pb.GetTaskDetailRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+	}
 	if strings.TrimSpace(req.GetSpaceId()) == "" {
 		return &pb.GetTaskDetailRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	if strings.TrimSpace(req.GetTaskId()) == "" {
 		return &pb.GetTaskDetailRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
-	rule, err := s.ruleRepo.GetByTaskID(ctx, req.GetSpaceId(), req.GetTaskId())
+	task, err := s.taskRepo.GetByTaskID(ctx, req.GetSpaceId(), req.GetTaskId())
 	if err != nil {
 		return &pb.GetTaskDetailRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
 	}
-	return &pb.GetTaskDetailRsp{RetInfo: retOK(), Task: toPBTask(*rule)}, nil
+	return &pb.GetTaskDetailRsp{RetInfo: retOK(), Task: s.toPBTask(ctx, *task)}, nil
+}
+
+// toPBTask enriches the public task with the current task-owned Storage
+// metadata state. The Collector database stores the stable result identity,
+// while readiness and indexed watermarks are derived from Storage.
+func (s *Service) toPBTask(ctx context.Context, task domain.CollectionTask) *pb.CollectionTask {
+	result := toPBTask(task)
+	if s == nil || s.resultManager == nil || result == nil || result.Result == nil {
+		return result
+	}
+	inspection, err := s.resultManager.Inspect(ctx, task.SpaceID, task.TaskID)
+	if err != nil {
+		log.WarnContextf(ctx, "[Collector] inspect task result failed space=%s task=%s: %v", task.SpaceID, task.TaskID, err)
+		result.Result.Status = taskresult.ResultStatusError
+		if result.LastError == "" {
+			result.LastError = inspection.Error
+		}
+		return result
+	}
+	if task.PrepareState == domain.PrepareStateError || strings.TrimSpace(task.LastError) != "" {
+		result.Result.Status = taskresult.ResultStatusError
+		return result
+	}
+	result.Result.Status = inspection.Status
+	result.Result.LastDataTime = inspection.LastDataTime
+	result.Result.CoverageStart = inspection.CoverageStart
+	result.Result.CoverageEnd = inspection.CoverageEnd
+	if inspection.Error != "" && result.LastError == "" {
+		result.LastError = inspection.Error
+	}
+	return result
 }
 
 // CreateTask creates a collection task through the independent collector service.
@@ -184,30 +222,63 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	// by the winning request.
 	s.createTaskMu.Lock()
 	defer s.createTaskMu.Unlock()
-	rule := normalizeCollectionTask(fromPBTask(req.GetTask()))
-	if strings.TrimSpace(rule.TaskName) == "" {
-		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_name is required")}, nil
+	if req == nil || req.GetTask() == nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is required")}, nil
 	}
-	if err := validateCollectionTask(rule); err != nil {
+	requestedTaskID := strings.TrimSpace(req.GetTask().GetTaskId())
+	if result := req.GetTask().GetResult(); result != nil && strings.TrimSpace(result.GetViewId()) != "" {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "result.view_id cannot be specified when creating a task")}, nil
+	}
+	task := fromPBTask(req.GetTask())
+	if err := validateCreateTaskResultIdentity(task.CollectParams); err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	task = normalizeCollectionTask(task)
+	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	var err error
-	rule, err = canonicalizeCollectionTask(rule)
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	if err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	if existing, lookupErr := s.ruleRepo.GetByTaskID(ctx, rule.SpaceID, rule.TaskID); lookupErr == nil {
-		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task %s already exists", existing.TaskID))}, nil
+	task, _, err = assignGeneratedCollectionTaskResult(task, params)
+	if err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	params, err = domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	if err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if err := validateCollectionTask(task); err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	task, err = canonicalizeCollectionTask(task)
+	if err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if _, lookupErr := s.taskRepo.GetByTaskID(ctx, task.SpaceID, task.TaskID); lookupErr == nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task %s already exists", task.TaskID))}, nil
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, lookupErr.Error())}, nil
 	}
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
-	if err != nil {
-		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	if _, lookupErr := s.taskRepo.GetByTaskName(ctx, task.SpaceID, task.TaskName); lookupErr == nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task_name %q already exists in space %q", task.TaskName, task.SpaceID))}, nil
+	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, lookupErr.Error())}, nil
+	}
+	if requestedTaskID != "" && s.resultManager != nil {
+		inspection, inspectErr := s.resultManager.Inspect(ctx, task.SpaceID, task.TaskID)
+		if inspectErr != nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("inspect retained task result before create: %v", inspectErr))}, nil
+		}
+		if inspection.Dataset != nil || inspection.View != nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id has retained result data; create the task with a new task_id")}, nil
+		}
 	}
 	resultConfig := req.GetResultConfig()
 	dataNodeID := s.resultDataNodeID
-	keepDuration, description := "0", rule.Description
+	keepDuration, description := "0", task.Description
 	if resultConfig != nil {
 		if strings.TrimSpace(resultConfig.GetDataNodeId()) != "" {
 			dataNodeID = strings.TrimSpace(resultConfig.GetDataNodeId())
@@ -221,19 +292,14 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	}
 	var resultIDs taskresult.IDs
 	var cleanupResult func(context.Context) error
-	if strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
-		// Resample results use the same task-exclusive identity, but their
-		// Dataset/View must be created by resample.Preparer with source lineage.
-		// Do not provision them through the generic raw-collection manager.
-		targetFrequency, frequencyErr := collectorresample.ParseFixedFrequency(params.TargetFrequency)
-		if frequencyErr != nil {
-			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, frequencyErr.Error())}, nil
-		}
-		resultIDs = taskresult.ResultIDsWithFrequency(rule.SpaceID, rule.TaskID, targetFrequency.Slug)
-		rule.ResultDatasetID = resultIDs.DatasetID
-		rule.ResultViewID = collectorresample.DefaultTargetViewID(resultIDs.DatasetID)
-		rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, resultIDs.DatasetID)
-		params, err = domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		// Resample results use the same task-exclusive identity. Their
+		// Dataset/View are prepared asynchronously with source lineage.
+		resultIDs = taskresult.ResultIDs(task.SpaceID, task.TaskID)
+		task.ResultDatasetID = resultIDs.DatasetID
+		task.ResultViewID = resultIDs.ViewID
+		task.CollectParams = setTaskResultDatasetID(task.CollectParams, resultIDs.DatasetID)
+		params, err = domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 		if err != nil {
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 		}
@@ -242,116 +308,178 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
 		var err error
-		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, rule.SpaceID, rule.TaskID, rule.DataType, rule.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Description: description, DataSourceID: rule.Provider, Frequency: firstTaskFrequency(params), Frequencies: append([]string(nil), params.Collector.Intervals...)})
+		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Description: description, DataSourceID: task.Provider, Frequency: firstTaskFrequency(params), Frequencies: append([]string(nil), params.Collector.Intervals...)})
 		if err != nil {
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
-		rule.ResultDatasetID, rule.ResultViewID = resultIDs.DatasetID, resultIDs.ViewID
-		rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, resultIDs.DatasetID)
+		task.ResultDatasetID, task.ResultViewID = resultIDs.DatasetID, resultIDs.ViewID
+		task.CollectParams = setTaskResultDatasetID(task.CollectParams, resultIDs.DatasetID)
 	}
-	if err := s.validateCollectionTaskDatasets(ctx, rule); err != nil {
+	if err := s.validateCollectionTaskDatasets(ctx, task); err != nil {
 		if cleanupResult != nil {
 			if cleanupErr := cleanupResult(ctx); cleanupErr != nil {
 				log.ErrorContextf(ctx, "[Collector] cleanup uncommitted task result failed: %v", cleanupErr)
+				return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("%v; result compensation failed: %v", err, cleanupErr))}, nil
 			}
 		}
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	if err := s.ruleRepo.Create(ctx, rule); err != nil {
+	if err := s.taskRepo.Create(ctx, task); err != nil {
 		log.ErrorContextf(ctx, "[Collector] create collection task failed: %v", err)
 		// A second process may still win the same task-id race. Preserve the
 		// winner's result resources; cleanup remains appropriate for a distinct
 		// conflict such as a duplicate task name.
 		preserveResult := false
-		if existing, lookupErr := s.ruleRepo.GetByTaskID(ctx, rule.SpaceID, rule.TaskID); lookupErr == nil && existing != nil {
+		if existing, lookupErr := s.taskRepo.GetByTaskID(ctx, task.SpaceID, task.TaskID); lookupErr == nil && existing != nil {
 			preserveResult = true
 		}
 		if cleanupResult != nil && !preserveResult {
 			if cleanupErr := cleanupResult(ctx); cleanupErr != nil {
 				log.ErrorContextf(ctx, "[Collector] cleanup uncommitted task result failed: %v", cleanupErr)
+				return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("%v; result compensation failed: %v", err, cleanupErr))}, nil
 			}
+		}
+		if existing, lookupErr := s.taskRepo.GetByTaskName(ctx, task.SpaceID, task.TaskName); lookupErr == nil && existing != nil && existing.TaskID != task.TaskID {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task_name %q already exists in space %q", task.TaskName, task.SpaceID))}, nil
 		}
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	s.refreshRealtimeInventory(ctx)
-	return &pb.CreateTaskRsp{RetInfo: retOK(), TaskId: rule.TaskID}, nil
+	return &pb.CreateTaskRsp{RetInfo: retOK(), TaskId: task.TaskID}, nil
 }
 
 // UpdateTask updates a collection task through the independent collector service.
 func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.UpdateTaskRsp, error) {
+	if req == nil || req.GetTask() == nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is required")}, nil
+	}
 	spaceID := strings.TrimSpace(req.GetSpaceId())
-	ruleID := strings.TrimSpace(req.GetTaskId())
-	rule := fromPBTask(req.GetTask())
+	taskID := strings.TrimSpace(req.GetTaskId())
+	requested := fromPBTask(req.GetTask())
+	requestedSpaceID := strings.TrimSpace(requested.SpaceID)
+	requestedTaskID := strings.TrimSpace(requested.TaskID)
+	if spaceID != "" && requestedSpaceID != "" && spaceID != requestedSpaceID {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id cannot change")}, nil
+	}
+	if taskID != "" && requestedTaskID != "" && taskID != requestedTaskID {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id cannot change")}, nil
+	}
 	if spaceID == "" {
-		spaceID = strings.TrimSpace(rule.SpaceID)
+		spaceID = requestedSpaceID
 	}
 	if spaceID == "" {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
-	if ruleID == "" {
-		ruleID = strings.TrimSpace(rule.TaskID)
+	if taskID == "" {
+		taskID = requestedTaskID
 	}
-	if ruleID == "" {
+	if taskID == "" {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
-	if rule.TaskID == "" {
-		rule.TaskID = ruleID
-	}
-	rule.SpaceID = spaceID
-	rule = normalizeCollectionTask(rule)
-	if strings.TrimSpace(rule.TaskName) == "" {
-		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_name is required")}, nil
-	}
-	if err := validateCollectionTask(rule); err != nil {
+	if err := validateTaskResultConfigUpdate(req.GetResultConfig()); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	existing, err := s.ruleRepo.GetByTaskID(ctx, spaceID, ruleID)
+	existing, err := s.taskRepo.GetByTaskID(ctx, spaceID, taskID)
 	if err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
 	}
-	if err := validateCollectionTaskUpdate(*existing, rule); err != nil {
+	if err := validateTaskResultIdentityUpdate(*existing, req.GetTask()); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	rule.ResultDatasetID, rule.ResultViewID = existing.ResultDatasetID, existing.ResultViewID
-	rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, existing.ResultDatasetID)
-	preserveCollectionTaskCoverageStart(*existing, &rule)
-	rule, err = canonicalizeCollectionTask(rule)
+	task := *existing
+	task.TaskID = taskID
+	task.SpaceID = spaceID
+	if strings.TrimSpace(requested.TaskName) == "" {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_name is required")}, nil
+	}
+	task.TaskName = domain.NormalizeCollectionTaskName(requested.TaskName)
+	task.Description = requested.Description
+	if req.GetTask().Enabled != nil {
+		task.Enabled = req.GetTask().GetEnabled()
+	}
+	if dataType := strings.TrimSpace(requested.DataType); dataType != "" {
+		task.DataType = dataType
+	}
+	if provider := strings.TrimSpace(requested.Provider); provider != "" {
+		task.Provider = provider
+	}
+	if marketType := strings.TrimSpace(requested.MarketType); marketType != "" {
+		task.MarketType = marketType
+	}
+	if creator := strings.TrimSpace(requested.Creator); creator != "" {
+		task.Creator = creator
+	}
+	if req.GetTask().GetCollectParams() != nil {
+		task.CollectParams, err = inheritCollectionTaskResultDatasetID(
+			jsonStringFromStruct(req.GetTask().GetCollectParams()),
+			existing.ResultDatasetID,
+		)
+		if err != nil {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+	}
+	task.ResultDatasetID, task.ResultViewID = existing.ResultDatasetID, existing.ResultViewID
+	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if err := validateCollectionTaskUpdate(*existing, task); err != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if task.Enabled {
+		preserveCollectionTaskCoverageStart(*existing, &task)
+	} else {
+		task.CoverageStartTime = nil
+	}
+	task, err = canonicalizeCollectionTask(task)
 	if err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if strings.EqualFold(existing.DataType, "kline_resample") {
-		rule.Creator = existing.Creator
+		task.Creator = existing.Creator
 		// Re-running preparation on an enabled update also recovers a transient
-		// Metadata/Storage error without requiring a second operator-only API.
-		if rule.Enabled {
-			rule.PrepareState = domain.PrepareStatePending
-			rule.LastError = ""
+		// metadata/storage error without requiring a second operator-only API.
+		if task.Enabled {
+			task.PrepareState = domain.PrepareStateWaitingView
+			task.LastError = ""
 		} else {
-			rule.PrepareState = existing.PrepareState
-			rule.LastError = existing.LastError
+			task.PrepareState = existing.PrepareState
+			task.LastError = existing.LastError
 		}
 	}
-	if err := s.validateCollectionTaskDatasets(ctx, rule); err != nil {
+	if task.TaskName != existing.TaskName {
+		if named, lookupErr := s.taskRepo.GetByTaskName(ctx, spaceID, task.TaskName); lookupErr == nil && named.TaskID != existing.TaskID {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task_name %q already exists in space %q", task.TaskName, spaceID))}, nil
+		} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, lookupErr.Error())}, nil
+		}
+	}
+	if err := s.validateCollectionTaskDatasets(ctx, task); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	updated, err := s.ruleRepo.UpdateByTaskID(ctx, spaceID, ruleID, rule)
+	updated, err := s.taskRepo.UpdateMutableByTaskID(ctx, spaceID, taskID, task)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] update collection task failed: %v", err)
+		if named, lookupErr := s.taskRepo.GetByTaskName(ctx, spaceID, task.TaskName); lookupErr == nil && named != nil && named.TaskID != existing.TaskID {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task_name %q already exists in space %q", task.TaskName, spaceID))}, nil
+		}
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	s.refreshRealtimeInventory(ctx)
-	return &pb.UpdateTaskRsp{RetInfo: retOK(), Task: toPBTask(*updated)}, nil
+	return &pb.UpdateTaskRsp{RetInfo: retOK(), Task: s.toPBTask(ctx, *updated)}, nil
 }
 
 // DisableTask disables a collection task without deleting runtime history.
 func (s *Service) DisableTask(ctx context.Context, req *pb.DisableTaskReq) (*pb.DisableTaskRsp, error) {
+	if req == nil {
+		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+	}
 	if strings.TrimSpace(req.GetSpaceId()) == "" {
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	if strings.TrimSpace(req.GetTaskId()) == "" {
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
-	if err := s.ruleRepo.SetEnabled(ctx, req.GetSpaceId(), req.GetTaskId(), false); err != nil {
+	if err := s.taskRepo.SetEnabled(ctx, req.GetSpaceId(), req.GetTaskId(), false); err != nil {
 		log.ErrorContextf(ctx, "[Collector] disable collection task failed: %v", err)
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -367,7 +495,7 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id and task_id are required")}, nil
 	}
 	spaceID, taskID := strings.TrimSpace(req.GetSpaceId()), strings.TrimSpace(req.GetTaskId())
-	task, err := s.ruleRepo.GetByTaskID(ctx, spaceID, taskID)
+	task, err := s.taskRepo.GetByTaskID(ctx, spaceID, taskID)
 	if err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
 	}
@@ -384,8 +512,11 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("delete task result preflight failed; task remains enabled: %v", err))}, nil
 		}
 	}
-	if err := s.ruleRepo.SetEnabled(ctx, spaceID, taskID, false); err != nil {
+	if err := s.taskRepo.SetEnabled(ctx, spaceID, taskID, false); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	if err := s.persistence.WaitTaskDrain(ctx, spaceID, taskID, 30*time.Second); err != nil {
+		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("task drain failed; task remains disabled for retry: %v", err))}, nil
 	}
 	if err := s.persistence.DeleteTaskRuntime(ctx, spaceID, taskID); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -395,7 +526,7 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("delete task result failed; task remains disabled for retry: %v", err))}, nil
 		}
 	}
-	if err := s.ruleRepo.DeleteByTaskID(ctx, spaceID, taskID); err != nil {
+	if err := s.taskRepo.DeleteByTaskID(ctx, spaceID, taskID); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	s.refreshRealtimeInventory(ctx)
@@ -467,7 +598,7 @@ func (s *Service) GetDataTypeConfigs(ctx context.Context, req *pb.GetDataTypeCon
 	}, nil
 }
 
-// GetDataTypeConfigWithFields returns field metadata for the rule form.
+// GetDataTypeConfigWithFields returns field metadata for the task form.
 func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDataTypeConfigWithFieldsReq) (*pb.GetDataTypeConfigWithFieldsRsp, error) {
 	definition, ok := jobs.JobDefinitionByDataType(req.GetDataType())
 	if !ok {
@@ -494,20 +625,20 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 	if err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "end must be RFC3339")}, nil
 	}
-	rule, err := s.ruleRepo.GetByTaskID(ctx, req.GetSpaceId(), req.GetTaskId())
+	task, err := s.taskRepo.GetByTaskID(ctx, req.GetSpaceId(), req.GetTaskId())
 	if err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
 	}
-	if !strings.EqualFold(rule.DataType, "kline_resample") {
+	if !strings.EqualFold(task.DataType, "kline_resample") {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is not kline_resample")}, nil
 	}
-	if !rule.Enabled {
+	if !task.Enabled {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is disabled")}, nil
 	}
-	if rule.PrepareState != domain.PrepareStateReady {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task is not ready (prepare_state=%s)", rule.PrepareState))}, nil
+	if task.PrepareState != domain.PrepareStateReady {
+		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task is not ready (prepare_state=%s)", task.PrepareState))}, nil
 	}
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	if err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -663,42 +794,108 @@ func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKline
 	return response, nil
 }
 
-func normalizeCollectionTask(rule domain.CollectionTask) domain.CollectionTask {
-	rule.TaskID = strings.TrimSpace(rule.TaskID)
-	if rule.TaskID == "" {
-		rule.TaskID = fmt.Sprintf("task_%d", time.Now().UnixNano())
+func normalizeCollectionTask(task domain.CollectionTask) domain.CollectionTask {
+	task.SpaceID = strings.TrimSpace(task.SpaceID)
+	task.TaskID = strings.TrimSpace(task.TaskID)
+	if task.TaskID == "" {
+		task.TaskID = "task_" + uuid.NewString()
 	}
-	if strings.TrimSpace(rule.CollectParams) == "" {
-		rule.CollectParams = "{}"
+	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
+	task.Description = strings.TrimSpace(task.Description)
+	task.DataType = strings.TrimSpace(task.DataType)
+	task.Provider = strings.TrimSpace(task.Provider)
+	task.MarketType = strings.TrimSpace(task.MarketType)
+	if strings.TrimSpace(task.CollectParams) == "" {
+		task.CollectParams = "{}"
 	}
-	if !strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
-		if params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType); err == nil && strings.TrimSpace(params.TargetDatasetID) == "" {
-			rule.CollectParams = setTaskResultDatasetID(rule.CollectParams, taskresult.ResultIDs(rule.SpaceID, rule.TaskID).DatasetID)
+	return task
+}
+
+func validateCreateTaskResultIdentity(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = "{}"
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	for _, field := range []string{
+		"target_dataset_id",
+		"target_view_id",
+		"result_dataset_id",
+		"result_view_id",
+		"result_id",
+		"view_id",
+	} {
+		if _, exists := values[field]; exists {
+			return fmt.Errorf("collect_params.%s cannot be specified when creating a task", field)
 		}
 	}
-	return rule
+	return nil
+}
+
+func assignGeneratedCollectionTaskResult(task domain.CollectionTask, params *domain.CollectParams) (domain.CollectionTask, taskresult.IDs, error) {
+	if params == nil {
+		return task, taskresult.IDs{}, fmt.Errorf("collect params are required")
+	}
+	var ids taskresult.IDs
+	ids = taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+	task.CollectParams = setTaskResultDatasetID(task.CollectParams, ids.DatasetID)
+	return task, ids, nil
+}
+
+func inheritCollectionTaskResultDatasetID(raw, datasetID string) (string, error) {
+	var values map[string]any
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return raw, fmt.Errorf("invalid collect_params: %w", err)
+	}
+	if values == nil {
+		return raw, fmt.Errorf("invalid collect_params: object is required")
+	}
+	if _, exists := values["target_dataset_id"]; !exists {
+		values["target_dataset_id"] = strings.TrimSpace(datasetID)
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return raw, fmt.Errorf("encode collect_params: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func validateTaskResultConfigUpdate(config *pb.ResultConfig) error {
+	if config == nil {
+		return nil
+	}
+	if strings.TrimSpace(config.GetDataNodeId()) != "" ||
+		strings.TrimSpace(config.GetKeepDuration()) != "" ||
+		strings.TrimSpace(config.GetDescription()) != "" {
+		return fmt.Errorf("result_config cannot change an existing task result")
+	}
+	return nil
+}
+
+func validateTaskResultIdentityUpdate(existing domain.CollectionTask, requested *pb.CollectionTask) error {
+	if requested == nil || requested.GetResult() == nil {
+		return nil
+	}
+	if viewID := strings.TrimSpace(requested.GetResult().GetViewId()); viewID != "" && viewID != existing.ResultViewID {
+		return fmt.Errorf("task result identity cannot change; create a new task")
+	}
+	return nil
 }
 
 func collectionTaskResultIDs(task domain.CollectionTask) (taskresult.IDs, error) {
-	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-		return taskresult.ResultIDs(task.SpaceID, task.TaskID), nil
-	}
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
-	if err != nil {
-		return taskresult.IDs{}, err
-	}
-	frequency, err := collectorresample.ParseFixedFrequency(params.TargetFrequency)
-	if err != nil {
-		return taskresult.IDs{}, err
-	}
-	ids := taskresult.ResultIDsWithFrequency(task.SpaceID, task.TaskID, frequency.Slug)
-	ids.ViewID = collectorresample.DefaultTargetViewID(ids.DatasetID)
-	return ids, nil
+	return taskresult.ResultIDs(task.SpaceID, task.TaskID), nil
 }
 
 func setTaskResultDatasetID(raw, datasetID string) string {
 	values := make(map[string]any)
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return raw
+	}
+	if values == nil {
 		return raw
 	}
 	values["target_dataset_id"] = strings.TrimSpace(datasetID)
@@ -719,24 +916,31 @@ func firstTaskFrequency(params *domain.CollectParams) string {
 	return params.TargetFrequency
 }
 
-func validateCollectionTask(rule domain.CollectionTask) error {
-	if strings.TrimSpace(rule.TaskID) == "" {
+func validateCollectionTask(task domain.CollectionTask) error {
+	if strings.TrimSpace(task.TaskID) == "" {
 		return fmt.Errorf("task_id is required")
 	}
-	if strings.TrimSpace(rule.SpaceID) == "" {
+	if strings.TrimSpace(task.SpaceID) == "" {
 		return fmt.Errorf("space_id is required")
 	}
-	if strings.TrimSpace(rule.DataType) == "" {
+	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
+		return err
+	}
+	if strings.TrimSpace(task.DataType) == "" {
 		return fmt.Errorf("data_type is required")
 	}
-	if strings.TrimSpace(rule.Provider) == "" {
+	if strings.TrimSpace(task.Provider) == "" {
 		return fmt.Errorf("provider is required")
 	}
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	if err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
-	if err := params.Validate(); err != nil {
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		if err := collectorresample.ValidateTaskParams(params); err != nil {
+			return fmt.Errorf("invalid collect_params: %w", err)
+		}
+	} else if err := params.Validate(); err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
 	if strings.EqualFold(params.Provider, "stockcn_multi") &&
@@ -761,9 +965,9 @@ func validateCollectionTask(rule domain.CollectionTask) error {
 			}
 		}
 	}
-	if !strings.EqualFold(rule.Provider, params.Provider) ||
-		!strings.EqualFold(rule.MarketType, params.MarketType) ||
-		!strings.EqualFold(rule.DataType, params.Collector.DataType) {
+	if !strings.EqualFold(task.Provider, params.Provider) ||
+		!strings.EqualFold(task.MarketType, params.MarketType) ||
+		!strings.EqualFold(task.DataType, params.Collector.DataType) {
 		return fmt.Errorf("task identity does not match collect_params")
 	}
 	return nil
@@ -781,57 +985,71 @@ func preserveCollectionTaskCoverageStart(existing domain.CollectionTask, desired
 	desired.CoverageStartTime = &at
 }
 
-func canonicalizeCollectionTask(rule domain.CollectionTask) (domain.CollectionTask, error) {
-	if !strings.EqualFold(strings.TrimSpace(rule.DataType), "kline_resample") {
-		if rule.PrepareState == "" {
-			rule.PrepareState = domain.PrepareStateReady
+func canonicalizeCollectionTask(task domain.CollectionTask) (domain.CollectionTask, error) {
+	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		if task.PrepareState == "" {
+			task.PrepareState = domain.PrepareStateReady
 		}
-		return rule, nil
+		return task, nil
 	}
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	if err != nil {
-		return rule, err
+		return task, err
 	}
 	canonical, err := params.CanonicalJSON()
 	if err != nil {
-		return rule, err
+		return task, err
 	}
-	rule.CollectParams = canonical
-	if rule.PrepareState == "" || rule.PrepareState == domain.PrepareStateReady {
-		rule.PrepareState = domain.PrepareStatePending
+	task.CollectParams = canonical
+	if task.PrepareState == "" || task.PrepareState == domain.PrepareStateReady {
+		task.PrepareState = domain.PrepareStateWaitingView
 	}
-	rule.LastError = ""
-	return rule, nil
+	task.LastError = ""
+	return task, nil
 }
 
 func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error {
-	if existing.SpaceID != desired.SpaceID || existing.TaskID != desired.TaskID || !strings.EqualFold(existing.DataType, desired.DataType) || !strings.EqualFold(existing.Provider, desired.Provider) || !strings.EqualFold(existing.MarketType, desired.MarketType) {
+	if existing.SpaceID != desired.SpaceID ||
+		existing.TaskID != desired.TaskID ||
+		strings.TrimSpace(existing.DataType) != strings.TrimSpace(desired.DataType) ||
+		strings.TrimSpace(existing.Provider) != strings.TrimSpace(desired.Provider) ||
+		strings.TrimSpace(existing.MarketType) != strings.TrimSpace(desired.MarketType) {
 		return fmt.Errorf("task identity and data source cannot change; create a new task")
+	}
+	if strings.TrimSpace(existing.ResultDatasetID) != strings.TrimSpace(desired.ResultDatasetID) ||
+		strings.TrimSpace(existing.ResultViewID) != strings.TrimSpace(desired.ResultViewID) {
+		return fmt.Errorf("task result identity cannot change; create a new task")
+	}
+	if strings.TrimSpace(existing.Creator) != strings.TrimSpace(desired.Creator) {
+		return fmt.Errorf("task creator cannot change; create a new task")
+	}
+	if err := domain.ValidateCollectionTaskName(desired.TaskName); err != nil {
+		return err
 	}
 	existingParams, err := domain.ParseCollectParams(existing.CollectParams, existing.Provider, existing.MarketType, existing.DataType)
 	if err != nil {
-		return fmt.Errorf("parse existing resample rule: %w", err)
+		return fmt.Errorf("parse existing task collect_params: %w", err)
 	}
 	desiredParams, err := domain.ParseCollectParams(desired.CollectParams, desired.Provider, desired.MarketType, desired.DataType)
 	if err != nil {
-		return fmt.Errorf("parse desired resample rule: %w", err)
+		return fmt.Errorf("parse desired task collect_params: %w", err)
 	}
-	if !strings.EqualFold(strings.TrimSpace(existing.DataType), "kline_resample") {
-		existingCanonical, _ := existingParams.CanonicalJSON()
-		desiredCanonical, _ := desiredParams.CanonicalJSON()
-		if existingCanonical != desiredCanonical {
-			return fmt.Errorf("collection parameters cannot change; create a new task")
-		}
-		return nil
+	existingCanonical, err := existingParams.CanonicalJSON()
+	if err != nil {
+		return fmt.Errorf("canonicalize existing task collect_params: %w", err)
 	}
-	if err := domain.ValidateSameResampleIdentity(existingParams, desiredParams); err != nil {
-		return fmt.Errorf("%w; create a new rule/task", err)
+	desiredCanonical, err := desiredParams.CanonicalJSON()
+	if err != nil {
+		return fmt.Errorf("canonicalize desired task collect_params: %w", err)
+	}
+	if existingCanonical != desiredCanonical {
+		return fmt.Errorf("task collect_params cannot change; create a new task")
 	}
 	return nil
 }
 
-func (s *Service) validateCollectionTaskDatasets(ctx context.Context, rule domain.CollectionTask) error {
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+func (s *Service) validateCollectionTaskDatasets(ctx context.Context, task domain.CollectionTask) error {
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	if err != nil {
 		return err
 	}
@@ -842,7 +1060,7 @@ func (s *Service) validateCollectionTaskDatasets(ctx context.Context, rule domai
 	case domain.InstrumentDataType:
 		return s.validateDataset(
 			ctx,
-			rule.SpaceID,
+			task.SpaceID,
 			params.Target.DatasetID,
 			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_RECORD,
@@ -854,7 +1072,7 @@ func (s *Service) validateCollectionTaskDatasets(ctx context.Context, rule domai
 	case "kline":
 		if err := s.validateDataset(
 			ctx,
-			rule.SpaceID,
+			task.SpaceID,
 			params.Source.DatasetID,
 			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_RECORD,
@@ -867,7 +1085,7 @@ func (s *Service) validateCollectionTaskDatasets(ctx context.Context, rule domai
 		}
 		return s.validateDataset(
 			ctx,
-			rule.SpaceID,
+			task.SpaceID,
 			params.Target.DatasetID,
 			datasetSourceID,
 			storagepb.DataKind_DATA_KIND_TIME_SERIES,
@@ -877,7 +1095,7 @@ func (s *Service) validateCollectionTaskDatasets(ctx context.Context, rule domai
 			params.Collector.Intervals,
 		)
 	case "kline_resample":
-		return s.validateResampleSourceDataset(ctx, rule, params)
+		return s.validateResampleSourceDataset(ctx, task, params)
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", params.Collector.DataType)
 	}
@@ -890,8 +1108,8 @@ func collectorDatasetSourceID(exchange string) string {
 	return exchange
 }
 
-func (s *Service) validateResampleSourceDataset(ctx context.Context, rule domain.CollectionTask, params *domain.CollectParams) error {
-	info, err := s.datasetSrc.GetDataset(ctx, rule.SpaceID, params.SourceDatasetID)
+func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams) error {
+	info, err := s.datasetSrc.GetDataset(ctx, task.SpaceID, params.SourceDatasetID)
 	if err != nil {
 		return fmt.Errorf("source Dataset %s is unavailable: %w", params.SourceDatasetID, err)
 	}
@@ -905,8 +1123,8 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, rule domain
 		return fmt.Errorf("source Dataset %s cannot be another resample result", params.SourceDatasetID)
 	}
 	actualMarket := strings.ToLower(strings.TrimSpace(info.Attributes["market_type"]))
-	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(rule.MarketType)) {
-		return fmt.Errorf("source Dataset %s market_type=%s does not match rule market_type=%s", params.SourceDatasetID, actualMarket, rule.MarketType)
+	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(task.MarketType)) {
+		return fmt.Errorf("source Dataset %s market_type=%s does not match task market_type=%s", params.SourceDatasetID, actualMarket, task.MarketType)
 	}
 	wantedFrequency, normalizeErr := report.NormalizeDatasetFrequency(strings.TrimSpace(params.SourceFrequency))
 	if normalizeErr != nil {
@@ -990,7 +1208,7 @@ func (s *Service) validateDataset(
 			return fmt.Errorf("%s Dataset %s must declare attributes.market_type", role, datasetID)
 		}
 		if actual != marketType {
-			return fmt.Errorf("%s Dataset %s market_type=%s does not match rule market_type=%s", role, datasetID, actual, marketType)
+			return fmt.Errorf("%s Dataset %s market_type=%s does not match task market_type=%s", role, datasetID, actual, marketType)
 		}
 	}
 	if len(requiredFreqs) > 0 {

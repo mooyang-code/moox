@@ -8,12 +8,14 @@ const staticMenu = fs.readFileSync(path.join(root, "src/api/modules/system/stati
 const routes = fs.readFileSync(path.join(root, "src/router/route.ts"), "utf8");
 const zhCN = fs.readFileSync(path.join(root, "src/lang/modules/zhCN.ts"), "utf8");
 const collectorTaskWorkbench = fs.readFileSync(path.join(root, "src/views/collector/task-management/index.vue"), "utf8");
+const collectorTaskResults = fs.readFileSync(path.join(root, "src/views/collector/task-results/index.vue"), "utf8");
 const collectorTaskUI = [
   collectorTaskWorkbench,
   fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/collection-tasks.vue"), "utf8"),
   fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/resample-backfill.vue"), "utf8"),
   fs.readFileSync(path.join(root, "src/views/collector/task-instances/task-instances.vue"), "utf8"),
-  fs.readFileSync(path.join(root, "src/views/home/home.vue"), "utf8")
+  fs.readFileSync(path.join(root, "src/views/home/home.vue"), "utf8"),
+  collectorTaskResults
 ].join("\n");
 
 function assert(condition, message) {
@@ -143,6 +145,10 @@ assert(
   collectorTabOrder.every((position, index) => index === 0 || position > collectorTabOrder[index - 1]),
   "collector task tabs must stay ordered"
 );
+assert(collectorTaskResults.includes("暂无采集任务"), "collector task results must expose the no-task state");
+assert(collectorTaskResults.includes("结果准备中，请稍后刷新"), "collector task results must expose the pending state");
+assert(collectorTaskResults.includes("resultTask"), "collector task results must persist the selected task");
+assert(collectorTaskResults.includes(":view-ids="), "collector task results must scope the shared browser to the task View");
 assert(!staticMenu.includes("collector-data-management"), "collector-data-management must not be visible");
 assert(!staticMenu.includes("collector-rules"), "collector-rules must not be visible");
 assert(!staticMenu.includes('menu("0304"'), "task instances must not remain a separate visible menu");

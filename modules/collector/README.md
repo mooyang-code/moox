@@ -47,8 +47,10 @@ SCF 不启动 JetStream 任务消费者、驻留循环或后台 reporter。未�
 ## 采集任务
 
 Symbol 采集任务将手动配置的 Binance 标的写入内部 RECORD Dataset。K 线采集任务从关联 Symbol 来源
-读取 active subjects，写入内部 TimeSeries Dataset。每个采集任务自动独占一个结果 Dataset 和默认 View；
-用户在“采集结果”中按任务名称查看结果，不需要管理 Dataset ID。删除任务时由用户选择保留结果，或同时物理删除结果 Dataset 和 View。
+读取 active subjects，写入内部 TimeSeries Dataset。一任务一结果：每个采集任务自动独占一个结果
+Dataset 和默认 View；Storage Dataset/View 是 Collector 的内部对象，用户在“采集结果”中按任务名称
+查看结果，不需要管理 Dataset ID。删除任务时由用户选择保留结果，或同时物理删除结果 Dataset、
+View 及其物理数据。
 实时 K 线批次每项只请求最近 3 根并过滤未收盘
 数据；长缺口由独立 CatchupBatch 分页恢复。
 
@@ -56,7 +58,7 @@ Symbol 采集任务将手动配置的 Binance 标的写入内部 RECORD Dataset�
 
 Collector 同时上报 Space 级 Timer 容量指标：总节点数、当前分片需求、已分配节点数和容量余量。Monitor 会在需求超过节点数时立即告警，并在余量不超过 2 个节点时提前标记为降级，避免新增标的或频率后才发现容量不足。
 
-规则、运行态字段与接口说明见 [采集任务管理](../../docs/采集任务管理.md)。
+任务、运行态字段与接口说明见 [采集任务管理](../../docs/采集任务管理.md)。
 
 ## 构建
 

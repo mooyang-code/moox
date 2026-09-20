@@ -16,8 +16,9 @@ type FetchBatchRepository struct{ db *gorm.DB }
 // the short-lived collector. Keeping it here lets batch completion commit the
 // batch, retry state, and task freshness in one SQLite transaction.
 type MarketFetchInstanceUpdate struct {
-	SpaceID        string
-	TaskID         string
+	SpaceID string
+	// InstanceID narrows the freshness update to one stable TaskInstance.
+	InstanceID     string
 	DatasetID      string
 	SubjectID      string
 	Frequency      string
@@ -259,8 +260,8 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 		}
 		for _, item := range effects.InstanceUpdates {
 			query := tx.Model(&domain.TaskInstance{}).Where("c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_is_deleted = ?", item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, false)
-			if item.TaskID != "" {
-				query = query.Where("c_instance_id = ?", item.TaskID)
+			if item.InstanceID != "" {
+				query = query.Where("c_instance_id = ?", item.InstanceID)
 			}
 			if !item.TargetDataTime.IsZero() {
 				// Completion order is not data order: an older SCF invocation can
@@ -290,17 +291,17 @@ func (r *FetchBatchRepository) ListDue(ctx context.Context, spaceID string, now 
 	return batches, err
 }
 
-// HasActiveTask prevents non-realtime recovery work from competing with a
-// realtime batch for the same logical task. Task IDs are stable and appear in
-// the persisted request JSON, while the batch table intentionally stays free
-// of per-item columns.
+// HasActiveTask reports planned/dispatched batches for one parent task.
+// The batch table stores the parent CollectionTask ID explicitly; do not infer
+// it from the per-item request JSON, whose instance_id fields have a different
+// identity.
 func (r *FetchBatchRepository) HasActiveTask(ctx context.Context, spaceID, taskID string, kinds ...domain.BatchKind) (bool, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
 		return false, nil
 	}
 	query := r.db.WithContext(ctx).Model(&domain.BatchInvocation{}).
-		Where("c_space_id = ? AND c_status IN ? AND c_request_json LIKE ?", spaceID, []domain.BatchStatus{domain.BatchStatusPlanned, domain.BatchStatusDispatched}, `%"task_id":"`+taskID+`"%`)
+		Where("c_space_id = ? AND c_task_id = ? AND c_status IN ?", spaceID, taskID, []domain.BatchStatus{domain.BatchStatusPlanned, domain.BatchStatusDispatched})
 	if len(kinds) > 0 {
 		query = query.Where("c_batch_kind IN ?", kinds)
 	}

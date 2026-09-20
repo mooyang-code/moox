@@ -3,7 +3,6 @@ import { installE2ESession } from "./e2e-session";
 
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
 
-let views: Array<{ view_id: string; name: string; dataset_id: string; status: string }> = [];
 let jobs: Array<{ job_id: string; status: string; request_id: string }> = [];
 
 async function mockGateway(route: Route) {
@@ -51,21 +50,6 @@ async function mockGateway(route: Route) {
       })
     });
   }
-  if (method === "ListViews") {
-    const datasetId = String(body.dataset_id || "");
-    const rows = datasetId ? views.filter(item => item.dataset_id === datasetId) : views;
-    return route.fulfill({ json: ok({ views: rows, page_result: { page: 1, size: 20, total: rows.length, has_more: false } }) });
-  }
-  if (method === "CreateView") {
-    const view = body.view || {};
-    views = [...views.filter(item => item.view_id !== view.view_id), { ...view, status: "active" }];
-    return route.fulfill({ json: ok({ view }) });
-  }
-  if (method === "UpdateView") {
-    const view = body.view || {};
-    views = views.map(item => (item.view_id === view.view_id ? { ...item, ...view } : item)).filter(item => item.status !== "deleted");
-    return route.fulfill({ json: ok({ view }) });
-  }
   if (method === "ListDatasetColumns") {
     return route.fulfill({
       json: ok({
@@ -83,44 +67,32 @@ async function mockGateway(route: Route) {
     return route.fulfill({ json: ok(job) });
   }
   if (method === "GetRecalcJob") {
-    const job = jobs.find(item => item.job_id === body.job_id) || { job_id: body.job_id, status: "accepted", request_id: body.job_id };
+    const job = jobs.find(item => item.job_id === body.job_id) || {
+      job_id: body.job_id,
+      status: "accepted",
+      request_id: body.job_id
+    };
     return route.fulfill({ json: ok(job) });
   }
   if (method === "GetEngineStatus") {
     return route.fulfill({
-      json: ok({ python_workers: 0, active_tasks: 0, pending_tasks: jobs.length, desired_revision: 4, applied_revision: 4, engine_id: "local-engine" })
+      json: ok({
+        python_workers: 0,
+        active_tasks: 0,
+        pending_tasks: jobs.length,
+        desired_revision: 4,
+        applied_revision: 4,
+        engine_id: "local-engine"
+      })
     });
   }
   return route.fulfill({ json: ok() });
 }
 
 test.beforeEach(async ({ page }) => {
-  views = [];
   jobs = [];
   await installE2ESession(page, "crypto");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockGateway);
-});
-
-test("dataset detail can create two independent single-dataset indexes", async ({ page }) => {
-  await page.goto("/#/collector/data-management");
-  await page.getByRole("button", { name: "列/对象" }).click();
-  await expect(page.getByText("索引", { exact: true })).toBeVisible();
-  await page.getByText("索引", { exact: true }).click();
-  await page.getByRole("button", { name: "新增视图" }).click();
-  await expect(page.getByPlaceholder("选择数据集")).toHaveCount(0);
-  await page.getByPlaceholder("例如 view_crypto_spot_kline_1m").fill("view_spot_primary");
-  await page.getByPlaceholder("例如 K线视图").fill("主索引");
-  await page.getByRole("button", { name: "确定" }).click();
-  await page.getByRole("button", { name: "新增视图" }).click();
-  await page.getByPlaceholder("例如 view_crypto_spot_kline_1m").fill("view_spot_filter");
-  await page.getByPlaceholder("例如 K线视图").fill("过滤索引");
-  await page.getByRole("button", { name: "确定" }).click();
-  await expect(page.getByText("view_spot_primary")).toBeVisible();
-  await expect(page.getByText("view_spot_filter")).toBeVisible();
-  await page.getByRole("row", { name: /view_spot_filter/ }).getByRole("button", { name: "删除" }).click();
-  await page.getByRole("button", { name: "确定" }).click();
-  await expect(page.getByText("view_spot_filter")).toHaveCount(0);
-  await expect(page.getByText("view_spot_primary")).toBeVisible();
 });
 
 test("factor pages show construct status, field ownership and async recalc", async ({ page }) => {
@@ -135,7 +107,7 @@ test("factor pages show construct status, field ownership and async recalc", asy
   await page.goto("/#/factor/tasks");
   await expect(page.getByText("local-engine")).toBeVisible();
   await page.getByPlaceholder("请求 ID").fill("recalc-e2e");
-  await page.getByPlaceholder("源视图").fill("view_binance_kline_1m");
+  await page.getByPlaceholder("输入数据集").fill("dataset_binance_spot_kline_1m");
   await page.getByPlaceholder("对象").fill("BTC-USDT");
   await page.getByPlaceholder("频率").fill("1m");
   await page.getByPlaceholder("开始时间").fill("2026-09-13T12:00:00Z");

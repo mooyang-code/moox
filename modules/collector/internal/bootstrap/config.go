@@ -75,7 +75,7 @@ type PeriodReadinessConfig struct {
 	ParentRetention time.Duration `yaml:"parent_retention"`
 }
 
-// KlineResampleConfig controls the local derived-kline scheduler. Rule
+// KlineResampleConfig controls the local derived-kline scheduler. Task
 // identity and source/target semantics remain in CollectionTask; these values are
 // process-wide execution policy.
 type KlineResampleConfig struct {

@@ -2,27 +2,35 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <a-space class="rule-toolbar" wrap>
+        <a-space class="task-toolbar" wrap>
           <a-button type="primary" status="success" @click="onAdd">
             <template #icon><icon-plus /></template>
-            <span>新建任务</span>
+            新建采集任务
           </a-button>
-          <a-input v-model="form.taskId" placeholder="请输入任务 ID" allow-clear />
-          <a-select v-model="form.dataType" placeholder="请选择数据类型" style="width: 150px" allow-clear>
+          <a-input v-model="filters.taskId" placeholder="按内部任务 ID 筛选" allow-clear style="width: 180px" />
+          <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px">
             <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
               {{ config.type_name }}
             </a-option>
           </a-select>
-          <a-select v-model="form.dataSource" placeholder="请选择数据源" style="width: 150px" allow-clear>
-            <a-option v-for="source in getSearchDataSourceOptions()" :key="source.value" :value="source.value">
+          <a-select v-model="filters.provider" placeholder="数据源" allow-clear style="width: 140px">
+            <a-option v-for="source in providerOptions" :key="source.value" :value="source.value">
               {{ source.label }}
             </a-option>
           </a-select>
+          <a-select v-model="filters.market" placeholder="市场" allow-clear style="width: 120px">
+            <a-option value="spot">现货</a-option>
+            <a-option value="swap">永续合约</a-option>
+          </a-select>
+          <a-select v-model="filters.enabled" placeholder="启用状态" style="width: 120px">
+            <a-option value="">全部</a-option>
+            <a-option value="true">启用</a-option>
+            <a-option value="false">禁用</a-option>
+          </a-select>
           <a-button type="primary" @click="search">
             <template #icon><icon-search /></template>
-            <span>查询</span>
+            查询
           </a-button>
-          <a-switch v-model="form.enabled" :checked-text="'启用'" :unchecked-text="'禁用'" @change="onEnabledChange" />
         </a-space>
 
         <a-table
@@ -31,49 +39,49 @@
           :data="taskList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: '100%', y: '100%', minWidth: 1000 }"
+          :scroll="{ x: 1380 }"
           :pagination="paginationConfig"
-          :row-selection="{ type: 'checkbox', showCheckedAll: true }"
-          :selected-keys="selectedKeys"
-          @select="select"
-          @select-all="selectAll"
           @page-change="onPageChange"
           @page-size-change="onPageSizeChange"
         >
           <template #columns>
-            <a-table-column title="任务名称" data-index="task_name" :width="260">
+            <a-table-column title="任务名称" data-index="task_name" :width="240">
               <template #cell="{ record }">
                 <a-link @click="onViewDetails(record)">{{ record.task_name || record.task_id }}</a-link>
-                <small class="resample-summary">{{ record.data_type }}</small>
-                <small v-if="record.data_type === 'kline_resample'" class="resample-summary">{{ resampleSummary(record) }}</small>
               </template>
             </a-table-column>
-            <a-table-column title="数据类型" data-index="data_type" :width="120" />
-            <a-table-column title="数据源" data-index="data_source" :width="120"></a-table-column>
-            <a-table-column title="创建时间" :width="160">
+            <a-table-column title="数据类型" :width="120">
+              <template #cell="{ record }">{{ dataTypeLabel(record.data_type) }}</template>
+            </a-table-column>
+            <a-table-column title="数据源" data-index="provider" :width="120" />
+            <a-table-column title="市场" data-index="market_type" :width="100" />
+            <a-table-column title="频率" :width="100">
+              <template #cell="{ record }">{{ taskFrequency(record) }}</template>
+            </a-table-column>
+            <a-table-column title="结果状态" :width="120" align="center">
               <template #cell="{ record }">
-                {{ formatDateTime(record.create_time) }}
+                <a-tag size="small" :color="resultStatusColor(record)">{{ resultStatusLabel(record) }}</a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="修改时间" :width="160">
+            <a-table-column title="最近数据时间" :width="180">
+              <template #cell="{ record }">{{ formatDateTime(record.result?.last_data_time) }}</template>
+            </a-table-column>
+            <a-table-column title="启用状态" :width="100" align="center">
               <template #cell="{ record }">
-                {{ formatDateTime(record.modify_time) }}
+                <a-tag size="small" :color="record.enabled ? 'green' : 'orange'">
+                  {{ record.enabled ? "启用" : "禁用" }}
+                </a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
+            <a-table-column title="操作" :width="260" align="center" fixed="right">
               <template #cell="{ record }">
-                <a-space>
+                <a-space wrap>
                   <a-button
-                    :type="record.enabled === 'true' ? 'outline' : 'primary'"
-                    :status="record.enabled === 'true' ? 'warning' : 'success'"
                     size="mini"
-                    @click="handleEnableChange(record, record.enabled !== 'true')"
+                    :status="record.enabled ? 'warning' : 'success'"
+                    @click="handleEnableChange(record, !record.enabled)"
                   >
-                    <template #icon>
-                      <icon-close-circle v-if="record.enabled === 'true'" />
-                      <icon-check-circle v-else />
-                    </template>
-                    <span>{{ record.enabled === "true" ? "禁用" : "启用" }}</span>
+                    {{ record.enabled ? "禁用" : "启用" }}
                   </a-button>
                   <a-button v-if="record.data_type === 'kline_resample'" type="text" size="mini" @click="openBackfill(record)">
                     <template #icon><icon-refresh /></template>
@@ -81,7 +89,7 @@
                   </a-button>
                   <a-button type="primary" size="mini" @click="onUpdate(record)">
                     <template #icon><icon-edit /></template>
-                    <span>修改</span>
+                    修改
                   </a-button>
                   <a-button status="danger" type="text" size="mini" @click="openDelete(record)">删除</a-button>
                 </a-space>
@@ -92,47 +100,33 @@
       </div>
     </a-spin>
 
-    <!-- 新增/修改模态框 -->
     <a-modal
-      v-model:visible="open"
-      @close="afterClose"
-      @cancel="afterClose"
+      v-model:visible="editorVisible"
+      :title="editorTitle"
+      ok-text="保存任务"
       width="760px"
       :ok-loading="submitLoading"
       @before-ok="handleOk"
+      @close="afterClose"
+      @cancel="afterClose"
     >
-      <template #title> {{ title }} </template>
-      <a-form ref="formRef" auto-label-width :rules="rules" :model="addForm" layout="vertical">
-        <a-row :gutter="16">
-          <a-col v-if="title === '修改采集任务'" :span="12">
-            <a-form-item field="task_id" label="任务 ID" validate-trigger="blur">
-              <a-input v-model="addForm.task_id" placeholder="留空自动生成" allow-clear :disabled="true" />
-            </a-form-item>
-          </a-col>
-          <a-col :span="title === '修改采集任务' ? 12 : 24">
-            <a-form-item field="task_name" label="任务名称" validate-trigger="blur">
-              <a-input v-model="addForm.task_name" placeholder="例如：币安现货 1 小时行情" allow-clear />
-            </a-form-item>
-          </a-col>
-          <a-col :span="title === '修改采集任务' ? 12 : 24">
-            <a-form-item field="data_type" label="数据类型" validate-trigger="blur">
-              <a-select
-                v-model="addForm.data_type"
-                placeholder="请选择数据类型"
-                :disabled="title === '修改采集任务'"
-                @change="onDataTypeChange"
-              >
-                <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
-                  {{ config.type_name }}
-                </a-option>
-              </a-select>
-            </a-form-item>
-          </a-col>
-        </a-row>
+      <a-form ref="formRef" auto-label-width :rules="rules" :model="editor" layout="vertical">
+        <a-alert v-if="editing" type="info" show-icon class="immutable-hint">
+          数据类型、市场、结果身份和结果形态不可修改，如需变更请创建新任务。
+        </a-alert>
+        <a-form-item field="task_name" label="任务名称" validate-trigger="blur">
+          <a-input
+            v-model="editor.task_name"
+            placeholder="例如：币安现货 1 小时行情"
+            allow-clear
+            :max-length="80"
+            show-word-limit
+          />
+        </a-form-item>
 
-        <a-form-item field="description" label="任务描述">
+        <a-form-item field="description" label="描述">
           <a-textarea
-            v-model="addForm.description"
+            v-model="editor.description"
             placeholder="补充任务用途、数据范围或负责人信息"
             :max-length="200"
             show-word-limit
@@ -140,150 +134,179 @@
           />
         </a-form-item>
 
-        <a-form-item field="data_source" label="数据源" validate-trigger="blur">
-          <a-select
-            v-model="addForm.data_source"
-            placeholder="请选择数据源"
-            :loading="loadingDataSources"
-            allow-clear
-            :disabled="title === '修改采集任务'"
-          >
-            <a-option v-for="source in dataSourceOptions" :key="source.value" :value="source.value">
-              {{ source.label }}
-            </a-option>
-          </a-select>
-        </a-form-item>
+        <a-row :gutter="16">
+          <a-col :span="12">
+            <a-form-item field="data_type" label="数据类型" required>
+              <a-select v-model="editor.data_type" placeholder="请选择数据类型" :disabled="editing" @change="onDataTypeChange">
+                <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
+                  {{ config.type_name }}
+                </a-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item field="provider" label="数据源" required>
+              <a-select
+                v-model="editor.provider"
+                placeholder="请选择数据源"
+                :loading="loadingProviders"
+                :disabled="editing"
+                allow-clear
+              >
+                <a-option v-for="source in editorProviderOptions" :key="source.value" :value="source.value">
+                  {{ source.label }}
+                </a-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+        </a-row>
 
-        <a-form-item label="产品类型" required>
-          <a-radio-group v-model="marketValue" type="button" :disabled="title === '修改采集任务'">
-            <a-radio value="spot">现货</a-radio>
-            <a-radio value="swap">永续合约</a-radio>
-          </a-radio-group>
-        </a-form-item>
+        <a-row :gutter="16">
+          <a-col :span="12">
+            <a-form-item field="market_type" label="市场类型" required>
+              <a-radio-group v-model="editor.market_type" type="button" :disabled="editing">
+                <a-radio value="spot">现货</a-radio>
+                <a-radio value="swap">永续合约</a-radio>
+              </a-radio-group>
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item field="frequency" :label="editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'" required>
+              <a-input v-model="frequencyValue" placeholder="例如 1m、5m、1h" allow-clear :disabled="editing" />
+            </a-form-item>
+          </a-col>
+        </a-row>
 
-        <a-form-item v-if="addForm.data_type === 'kline_resample'" label="源 K 线结果" required>
+        <a-form-item v-if="editor.data_type === 'kline'" label="标的来源" required>
           <a-select
-            v-model="datasetIdValue"
-            placeholder="请选择已激活的数据来源"
-            :loading="loadingDatasets"
+            v-model="symbolSourceId"
+            placeholder="请选择标的来源"
+            :loading="loadingSources"
             allow-search
-            :disabled="title === '修改采集任务'"
+            allow-clear
+            :disabled="editing"
           >
-            <a-option v-for="dataset in availableDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
-              {{ dataset.name || "源 K 线结果" }}
+            <a-option v-for="source in symbolSourceOptions" :key="source.source_id" :value="source.source_id">
+              {{ source.name || "标的来源" }}
             </a-option>
           </a-select>
         </a-form-item>
+        <a-form-item v-else-if="editor.data_type === 'instrument'" label="标的来源">
+          <a-input model-value="交易所提供的全量标的" disabled />
+        </a-form-item>
 
-        <template v-if="addForm.data_type === 'kline_resample'">
-          <a-form-item label="源周期" required>
-            <a-input
-              v-model="sourceFrequencyValue"
-              placeholder="例如 1m、5m、1h"
+        <template v-if="editor.data_type === 'kline_resample'">
+          <a-form-item label="源行情" required>
+            <a-select
+              v-model="sourceIdValue"
+              placeholder="请选择源行情"
+              :loading="loadingSources"
+              allow-search
               allow-clear
-              :disabled="title === '修改采集任务'"
-            />
+              :disabled="editing"
+            >
+              <a-option v-for="source in resampleSourceOptions" :key="source.source_id" :value="source.source_id">
+                {{ source.name || "源行情" }}
+              </a-option>
+            </a-select>
           </a-form-item>
-          <a-form-item label="序列标签" required>
-            <a-input
-              v-model="sourceSeriesTagValue"
-              placeholder="例如 venue:binance"
-              allow-clear
-              :disabled="title === '修改采集任务'"
-            />
-          </a-form-item>
-          <a-form-item label="结算延迟（毫秒）">
+          <a-row :gutter="16">
+            <a-col :span="12">
+              <a-form-item label="源周期" required>
+                <a-input v-model="sourceFrequencyValue" placeholder="例如 1m、5m、1h" allow-clear :disabled="editing" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item label="序列标签" required>
+                <a-input v-model="sourceSeriesTagValue" placeholder="例如 venue:binance" allow-clear :disabled="editing" />
+              </a-form-item>
+            </a-col>
+          </a-row>
+          <a-form-item label="收盘等待（毫秒）">
             <a-input-number
               v-model="settleDelayMSValue"
               :min="0"
               :max="86400000"
               :precision="0"
-              placeholder="留空使用全局默认"
+              placeholder="留空使用默认值"
               allow-clear
-              :disabled="title === '修改采集任务'"
+              :disabled="editing"
               style="width: 100%"
             />
           </a-form-item>
         </template>
 
-        <a-form-item v-if="addForm.data_type === 'kline'" label="标的来源" required>
-          <a-select
-            v-model="symbolDatasetIdValue"
-            placeholder="请选择已激活的标的来源"
-            :loading="loadingDatasets"
-            allow-search
-            :disabled="title === '修改采集任务'"
-          >
-            <a-option v-for="dataset in availableSymbolDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
-              {{ dataset.name || "标的来源" }}
-            </a-option>
+        <a-form-item field="enabled" label="启用状态" required>
+          <a-select v-model="editor.enabled">
+            <a-option :value="true">启用</a-option>
+            <a-option :value="false">禁用</a-option>
           </a-select>
         </a-form-item>
 
-        <a-alert
-          v-if="addForm.data_type === 'symbol'"
-          type="info"
-          :show-icon="true"
-          :closable="false"
-          title="从交易所读取全量活跃标的快照"
-        />
-
-        <a-form-item :label="addForm.data_type === 'kline_resample' ? '目标周期' : '采集频率'" required>
-          <a-input
-            v-model="scheduleIntervalValue"
-            placeholder="例如 5m、1h、24h"
-            allow-clear
-            :disabled="title === '修改采集任务'"
-          />
+        <a-form-item v-if="editing" label="任务 ID">
+          <a-input :model-value="editor.task_id" disabled />
+        </a-form-item>
+        <a-form-item v-if="editing" label="创建人">
+          <a-input :model-value="editor.creator || '-'" disabled />
         </a-form-item>
 
-        <a-form-item label="创建人">
-          <a-input v-model="addForm.creator" readonly />
-        </a-form-item>
-
-        <a-form-item field="enabled" label="启用状态">
-          <a-select v-model="addForm.enabled">
-            <a-option value="true">启用</a-option>
-            <a-option value="false">禁用</a-option>
-          </a-select>
-        </a-form-item>
+        <a-collapse v-if="!editing" :default-active-key="[]">
+          <a-collapse-item key="advanced" header="高级设置">
+            <a-form-item label="结果 DataNode">
+              <a-select
+                v-model="resultConfig.data_node_id"
+                placeholder="留空使用系统默认节点"
+                :loading="loadingDataNodes"
+                allow-search
+                allow-clear
+              >
+                <a-option v-for="node in dataNodes" :key="node.node_id" :value="node.node_id">
+                  {{ node.name || node.node_id }}
+                </a-option>
+              </a-select>
+            </a-form-item>
+            <a-form-item label="保留时长">
+              <a-input v-model="resultConfig.keep_duration" placeholder="例如 30d，0 表示不限制" allow-clear />
+            </a-form-item>
+            <a-form-item label="结果描述">
+              <a-textarea v-model="resultConfig.description" :max-length="200" show-word-limit allow-clear />
+            </a-form-item>
+          </a-collapse-item>
+        </a-collapse>
       </a-form>
     </a-modal>
 
-    <!-- 详情模态框 -->
-    <a-modal v-model:visible="detailVisible" :footer="false" width="800px">
-      <template #title>任务配置详情</template>
-      <a-descriptions :column="2" bordered>
+    <a-modal v-model:visible="detailVisible" title="任务详情" :footer="false" width="800px">
+      <a-descriptions v-if="detailData" :column="2" bordered>
         <a-descriptions-item label="任务 ID">{{ detailData.task_id }}</a-descriptions-item>
         <a-descriptions-item label="任务名称">{{ detailData.task_name || "-" }}</a-descriptions-item>
-        <a-descriptions-item label="数据类型">{{ detailData.data_type }}</a-descriptions-item>
-        <a-descriptions-item label="数据源">{{ detailData.data_source }}</a-descriptions-item>
-        <a-descriptions-item label="启用状态">
-          <a-tag :color="detailData.enabled === 'true' ? 'green' : 'red'">
-            {{ detailData.enabled === "true" ? "启用" : "禁用" }}
-          </a-tag>
-        </a-descriptions-item>
+        <a-descriptions-item label="数据类型">{{ dataTypeLabel(detailData.data_type) }}</a-descriptions-item>
+        <a-descriptions-item label="数据源">{{ detailData.provider || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="市场">{{ detailData.market_type || "-" }}</a-descriptions-item>
+        <a-descriptions-item label="频率">{{ taskFrequency(detailData) }}</a-descriptions-item>
+        <a-descriptions-item label="结果状态">{{ resultStatusLabel(detailData) }}</a-descriptions-item>
+        <a-descriptions-item label="最近数据时间">{{ formatDateTime(detailData.result?.last_data_time) }}</a-descriptions-item>
+        <a-descriptions-item label="启用状态">{{ detailData.enabled ? "启用" : "禁用" }}</a-descriptions-item>
         <a-descriptions-item label="创建人">{{ detailData.creator || "-" }}</a-descriptions-item>
-        <a-descriptions-item label="创建时间">{{ formatDateTime(detailData.create_time || "") }}</a-descriptions-item>
-        <a-descriptions-item label="修改时间">{{ formatDateTime(detailData.modify_time || "") }}</a-descriptions-item>
+        <a-descriptions-item label="创建时间">{{ formatDateTime(detailData.create_time) }}</a-descriptions-item>
+        <a-descriptions-item label="修改时间">{{ formatDateTime(detailData.modify_time) }}</a-descriptions-item>
       </a-descriptions>
-
       <a-divider />
-
-      <a-descriptions :column="1" bordered>
-        <a-descriptions-item label="采集参数">
-          <pre>{{ formatJSON(detailData.collect_params || "") }}</pre>
+      <a-descriptions v-if="detailData" :column="1" bordered>
+        <a-descriptions-item label="任务描述">{{ detailData.description || "-" }}</a-descriptions-item>
+        <a-descriptions-item v-if="detailData.last_error" label="准备信息">
+          {{ detailData.last_error }}
         </a-descriptions-item>
       </a-descriptions>
     </a-modal>
 
     <a-modal v-model:visible="deleteVisible" title="删除采集任务" :ok-loading="deleteLoading" @before-ok="handleDeleteOk">
       <a-alert type="warning" show-icon>
-        删除任务后，任务配置、实例和运行记录都会被删除。请选择是否同时物理删除该任务自动创建的结果数据。
+        删除任务会移除任务配置、实例和运行记录。结果数据默认保留；如需物理删除，请显式选择第二项。
       </a-alert>
       <a-radio-group v-model="deleteResultData" direction="vertical" class="delete-options">
-        <a-radio :value="false">保留结果数据和数据视图</a-radio>
-        <a-radio :value="true">同时物理删除结果数据和数据视图</a-radio>
+        <a-radio :value="false">删除任务，保留结果数据</a-radio>
+        <a-radio :value="true">删除任务并物理删除结果数据和数据视图</a-radio>
       </a-radio-group>
     </a-modal>
 
@@ -291,7 +314,7 @@
       v-if="backfillTarget"
       v-model:visible="backfillVisible"
       :space-id="selectedSpaceId || ''"
-      :rule-id="backfillTarget.ruleId"
+      :task-id="backfillTarget.taskId"
       :target-frequency="backfillTarget.targetFrequency"
       :source-keep-duration="backfillTarget.sourceKeepDuration"
       :active-backfill="activeBackfill"
@@ -302,672 +325,550 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { callControl } from "@/api/admin/http";
-import { listDatasets } from "@/api/storage/metadata";
-import type { Dataset } from "@/api/storage/types";
+import {
+  CreateTask,
+  DeleteTask,
+  DisableTask,
+  GetDataTypeConfigs,
+  GetTaskList,
+  UpdateTask,
+  getKlineResampleBackfillStatus,
+  type DataTypeConfig
+} from "@/api/collector";
+import { listDataNodes, listDatasets } from "@/api/storage/metadata";
+import type { DataNode } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { storeToRefs } from "pinia";
 import {
-  buildCollectorRuleParams,
-  buildCollectorRuleRequest,
-  datasetMatchesCollector,
-  normalizeCollectorRule,
-  type CollectorRuleInput
+  buildCollectionTaskPayload,
+  collectionSourceMatches,
+  collectionTaskNameError,
+  normalizeCollectionTask,
+  parseCollectionTaskInput,
+  taskFrequency,
+  type CollectionSourceOption,
+  type CollectionTaskDataType,
+  type CollectionTaskInput,
+  type CollectionTaskMarket,
+  type CollectionTaskRecord
 } from "./collection-task-params";
 import ResampleBackfillDialog from "./resample-backfill.vue";
-import { getKlineResampleBackfillStatus } from "@/api/collector";
 import type { ResampleBackfillSummary } from "./resample-backfill";
 
-interface TaskConfig {
-  id?: number;
+type EnabledFilter = "" | "true" | "false";
+type EditorMode = "create" | "edit";
+type EditorForm = {
   task_id: string;
   task_name: string;
-  description?: string;
+  description: string;
   space_id: string;
-  data_type: string;
-  data_source: string;
-  collect_params: string;
-  enabled: string;
+  data_type: CollectionTaskDataType | "";
+  provider: string;
+  market_type: CollectionTaskMarket;
+  enabled: boolean;
   creator: string;
-  create_time: string;
-  modify_time: string;
-  result?: { view_id?: string; status?: string };
-}
-
-interface DataTypeConfig {
-  id: number;
-  data_type: string;
-  type_name: string;
-  type_desc: string;
-  data_source_options: Record<string, any>;
-  sort_order: number;
-  version: number;
-  create_time: string;
-  modify_time: string;
-}
+};
 
 const loading = ref(false);
 const submitLoading = ref(false);
-const taskList = ref<TaskConfig[]>([]);
-const selectedKeys = ref<string[]>([]);
-const open = ref(false);
-const title = ref("新建任务");
-const formRef = ref();
+const loadingProviders = ref(false);
+const loadingSources = ref(false);
+const loadingDataNodes = ref(false);
+const taskList = ref<CollectionTaskRecord[]>([]);
+const dataTypeConfigs = ref<DataTypeConfig[]>([]);
+const sourceOptions = ref<CollectionSourceOption[]>([]);
+const dataNodes = ref<DataNode[]>([]);
+const editorVisible = ref(false);
+const editorMode = ref<EditorMode>("create");
+const formRef = ref<{ validate?: () => Promise<unknown>; clearValidate?: () => void }>();
 const detailVisible = ref(false);
-const detailData = ref<Partial<TaskConfig>>({});
-const backfillVisible = ref(false);
-const activeBackfill = ref<ResampleBackfillSummary | null>(null);
-const backfillTarget = ref<{ ruleId: string; targetFrequency: string; sourceKeepDuration: string } | null>(null);
+const detailData = ref<CollectionTaskRecord>();
 const deleteVisible = ref(false);
 const deleteLoading = ref(false);
 const deleteResultData = ref(false);
-const deleteTarget = ref<TaskConfig | null>(null);
+const deleteTarget = ref<CollectionTaskRecord>();
+const backfillVisible = ref(false);
+const activeBackfill = ref<ResampleBackfillSummary | null>(null);
+const backfillTarget = ref<{ taskId: string; targetFrequency: string; sourceKeepDuration: string }>();
 
-const dataTypeConfigs = ref<DataTypeConfig[]>([]);
-const marketValue = ref<CollectorRuleInput["market"]>("spot");
-const datasetIdValue = ref("");
-const symbolDatasetIdValue = ref("");
-const scheduleIntervalValue = ref("");
+const frequencyValue = ref("");
+const symbolSourceId = ref("");
+const sourceIdValue = ref("");
 const sourceFrequencyValue = ref("");
 const sourceSeriesTagValue = ref("");
-const targetDatasetIdValue = ref("");
-const settleDelayMSValue = ref<number | undefined>(10000);
+const settleDelayMSValue = ref<number>();
+const resultConfig = reactive({
+  data_node_id: "",
+  keep_duration: "0",
+  description: ""
+});
 
-const dataSourceOptions = ref<{ label: string; value: string }[]>([]);
-const loadingDataSources = ref(false);
-const activeDatasets = ref<Dataset[]>([]);
-const loadingDatasets = ref(false);
-
-// Get Space store
-const spaceStore = useSpaceStore();
-const { selectedSpaceId } = storeToRefs(spaceStore);
-
-// Get user info store
-const userInfoStore = useUserInfoStore();
-const { account } = storeToRefs(userInfoStore);
-
-const form = ref({
+const filters = reactive<{
+  taskId: string;
+  dataType: string;
+  provider: string;
+  market: string;
+  enabled: EnabledFilter;
+}>({
   taskId: "",
   dataType: "",
-  dataSource: "",
-  enabled: true
+  provider: "",
+  market: "",
+  enabled: ""
 });
 
-const pagination = ref({
-  current: 1,
-  pageSize: 10,
-  total: 0,
-  showTotal: true,
-  showPageSize: true
-});
-
-const paginationConfig = computed(() => ({
-  ...pagination.value,
-  onChange: (current: number) => {
-    pagination.value.current = current;
-    getTaskList();
-  },
-  onPageSizeChange: (pageSize: number) => {
-    pagination.value.pageSize = pageSize;
-    pagination.value.current = 1;
-    getTaskList();
-  }
-}));
-
-const addForm = ref({
+const editor = reactive<EditorForm>({
   task_id: "",
   task_name: "",
   description: "",
   space_id: "",
   data_type: "",
-  data_source: "",
-  collect_params: "{}",
-  enabled: "true",
+  provider: "",
+  market_type: "spot",
+  enabled: true,
   creator: ""
 });
 
-const availableDatasets = computed(() => {
-  if (!addForm.value.data_source || !addForm.value.data_type) return [];
-  return activeDatasets.value.filter(dataset =>
-    datasetMatchesCollector(
-      dataset,
-      addForm.value.data_source,
-      addForm.value.data_type,
-      marketValue.value,
-      addForm.value.data_type === "kline"
-        ? scheduleIntervalValue.value
-        : addForm.value.data_type === "kline_resample"
-          ? sourceFrequencyValue.value
-          : undefined
-    )
-  );
+const pagination = reactive({
+  current: 1,
+  pageSize: 10,
+  total: 0
 });
 
-const availableSymbolDatasets = computed(() => {
-  if (!addForm.value.data_source) return [];
-  return activeDatasets.value.filter(dataset =>
-    datasetMatchesCollector(dataset, addForm.value.data_source, "instrument", marketValue.value)
-  );
+const spaceStore = useSpaceStore();
+const { selectedSpaceId } = storeToRefs(spaceStore);
+const route = useRoute();
+const userInfoStore = useUserInfoStore();
+const { account } = storeToRefs(userInfoStore);
+
+const editorTitle = computed(() => (editorMode.value === "create" ? "新建采集任务" : "修改采集任务"));
+const editing = computed(() => editorMode.value === "edit");
+const selectedDataTypeConfig = computed(() => dataTypeConfigs.value.find(item => item.data_type === editor.data_type));
+const providerOptions = computed(() => {
+  const options = filters.dataType
+    ? dataTypeConfigs.value.find(item => item.data_type === filters.dataType)?.data_source_options
+    : undefined;
+  return dataSourceOptionsFromConfig(options);
 });
+const editorProviderOptions = computed(() => dataSourceOptionsFromConfig(selectedDataTypeConfig.value?.data_source_options));
+const symbolSourceOptions = computed(() =>
+  sourceOptions.value.filter(source => collectionSourceMatches(source, editor.provider, "instrument", editor.market_type))
+);
+const resampleSourceOptions = computed(() =>
+  sourceOptions.value.filter(source =>
+    collectionSourceMatches(source, editor.provider, "kline_resample", editor.market_type, sourceFrequencyValue.value)
+  )
+);
+
+const paginationConfig = computed(() => ({
+  current: pagination.current,
+  pageSize: pagination.pageSize,
+  total: pagination.total,
+  showTotal: true,
+  showPageSize: true
+}));
 
 const rules = {
   task_name: [{ required: true, message: "请输入任务名称" }],
   data_type: [{ required: true, message: "请选择数据类型" }],
-  data_source: [{ required: true, message: "请选择数据源" }]
+  provider: [{ required: true, message: "请选择 Provider" }],
+  market_type: [{ required: true, message: "请选择市场" }],
+  enabled: [{ required: true, message: "请选择启用状态" }]
 };
 
-// 获取数据源标签
-const getDataSourceLabel = (value: string) => {
-  const labels: { [key: string]: string } = {
-    binance: "币安 (Binance)",
-    okx: "OKX",
-    huobi: "火币 (Huobi)",
-    bybit: "Bybit",
-    bitget: "Bitget",
-    kucoin: "KuCoin",
-    gate: "Gate.io",
-    mexc: "MEXC",
-    bitfinex: "Bitfinex",
-    coinbase: "Coinbase",
-    cryptonews: "CryptoNews",
-    coindesk: "CoinDesk",
-    cointelegraph: "Cointelegraph",
-    decrypt: "Decrypt",
-    theblock: "The Block",
-    messari: "Messari",
-    glassnode: "Glassnode",
-    intoblock: "IntoTheBlock"
-  };
-  return labels[value] || value;
-};
+function dataTypeOptions(value: unknown): Array<{ label?: string; value?: string }> {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.map(item => (typeof item === "string" ? { value: item } : (item as { label?: string; value?: string })));
+  }
+  if (typeof value !== "object") return [];
+  const options = (value as { options?: unknown }).options;
+  return Array.isArray(options)
+    ? options.map(item => (typeof item === "string" ? { value: item } : (item as { label?: string; value?: string })))
+    : [];
+}
 
-const toDataSourceOptions = (options: Array<{ label?: string; value?: string }>) =>
-  options
+function dataSourceOptionsFromConfig(value: unknown): Array<{ label: string; value: string }> {
+  return dataTypeOptions(value)
     .filter(option => option.value)
     .map(option => ({
-      label: option.label || getDataSourceLabel(option.value as string),
-      value: option.value as string
+      value: option.value as string,
+      label: option.label || providerLabel(option.value as string)
     }));
+}
 
-const normalizeObject = (value: any): Record<string, any> => {
-  if (!value) return {};
-  if (typeof value === "object") return value;
-  try {
-    const parsed = JSON.parse(String(value));
-    return parsed && typeof parsed === "object" ? parsed : { value: parsed };
-  } catch {
-    return { raw: String(value) };
-  }
-};
+function providerLabel(value: string) {
+  const labels: Record<string, string> = {
+    binance: "币安（Binance）",
+    moox: "MooX",
+    okx: "OKX",
+    stockcn_multi: "A 股行情"
+  };
+  return labels[value] || value;
+}
 
-const normalizeTaskConfig = (raw: any): TaskConfig => normalizeCollectorRule(raw);
+function dataTypeLabel(value?: string) {
+  return dataTypeConfigs.value.find(config => config.data_type === value)?.type_name || value || "-";
+}
 
-const dataSourceOptionsFromConfig = (value: any) => {
-  const config = normalizeObject(value);
-  if (config.options && Array.isArray(config.options)) {
-    return toDataSourceOptions(
-      config.options.map((option: any) => ({
-        label: option.label || getDataSourceLabel(option.value),
-        value: option.value
-      }))
-    );
-  }
-  if (Array.isArray(value)) {
-    return toDataSourceOptions(
-      value.map((source: string) => ({
-        label: getDataSourceLabel(source),
-        value: source
-      }))
-    );
-  }
-  return [];
-};
+function formatDateTime(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN");
+}
 
-// 获取搜索用的数据源选项
-const getSearchDataSourceOptions = () => {
-  if (!form.value.dataType) {
-    return [];
-  }
+function resultStatusLabel(task: CollectionTaskRecord) {
+  const status = String(task.result?.status || "").toLowerCase();
+  const prepareState = String(task.prepare_state || "").toLowerCase();
+  if (status === "error" || prepareState === "error" || task.last_error) return "结果异常";
+  if (task.result?.view_id && ["active", "ready", "succeeded"].includes(status)) return "结果可用";
+  return "结果准备中";
+}
 
-  // 查找选中的数据类型配置
-  const selectedConfig = dataTypeConfigs.value.find(config => config.data_type === form.value.dataType);
-  if (!selectedConfig || !selectedConfig.data_source_options) {
-    return [];
-  }
+function resultStatusColor(task: CollectionTaskRecord) {
+  const label = resultStatusLabel(task);
+  return label === "结果可用" ? "green" : label === "结果异常" ? "red" : "orange";
+}
 
-  return dataSourceOptionsFromConfig(selectedConfig.data_source_options);
-};
+function selectEnabledFilter(): boolean | undefined {
+  if (filters.enabled === "true") return true;
+  if (filters.enabled === "false") return false;
+  return undefined;
+}
 
-const formatJSON = (value: any) => JSON.stringify(normalizeObject(value), null, 2);
-
-const resampleSummary = (record: TaskConfig) => {
-  if (record.data_type !== "kline_resample") return "";
-  const params = normalizeObject(record.collect_params);
-  return `源 ${String(params.source_frequency || "-")} → 目标 ${String(params.target_frequency || "-")}`;
-};
-
-// 格式化时间为本地时间格式
-const formatDateTime = (dateTime: string) => {
-  if (!dateTime) return "-";
-
-  try {
-    const date = new Date(dateTime);
-    // 检查日期是否有效
-    if (isNaN(date.getTime())) {
-      return dateTime; // 如果转换失败，返回原始值
-    }
-
-    // 格式化日期为 YYYY-MM-DD HH:mm:ss
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    const hours = String(date.getHours()).padStart(2, "0");
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const seconds = String(date.getSeconds()).padStart(2, "0");
-
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-  } catch (error) {
-    console.error("格式化时间失败:", error);
-    return dateTime;
-  }
-};
-
-const select = (list: string[]) => {
-  selectedKeys.value = list;
-};
-
-const selectAll = (state: boolean) => {
-  selectedKeys.value = state ? taskList.value.map(el => el.task_id) : [];
-};
-
-const onPageChange = (current: number) => {
-  pagination.value.current = current;
-  getTaskList();
-};
-
-const onPageSizeChange = (pageSize: number) => {
-  pagination.value.pageSize = pageSize;
-  pagination.value.current = 1;
-  getTaskList();
-};
-
-const search = () => {
-  pagination.value.current = 1;
-  getTaskList();
-};
-
-const onEnabledChange = () => {
-  // 当启用状态开关变化时，重新查询列表
-  search();
-};
-
-const getTaskList = async () => {
-  const spaceId = selectedSpaceId.value || "";
-  if (!spaceId) {
-    taskList.value = [];
-    pagination.value.total = 0;
-    loading.value = false;
-    return;
-  }
-  loading.value = true;
-  try {
-    const params: any = {
-      space_id: spaceId,
-      page: {
-        page: pagination.value.current,
-        size: pagination.value.pageSize
-      }
-    };
-
-    if (form.value.taskId) params.task_id = form.value.taskId;
-    if (form.value.dataType) params.data_type = form.value.dataType;
-    if (form.value.dataSource) params.provider = form.value.dataSource;
-    if (form.value.enabled !== null) params.enabled = form.value.enabled;
-
-    const data = await callControl<typeof params, { tasks?: any[]; page?: { total?: number } }>(
-      "collectmgr",
-      "GetTaskList",
-      params
-    );
-    taskList.value = (data.tasks || []).map(normalizeTaskConfig);
-    pagination.value.total = Number(data.page?.total) || (data.tasks ? data.tasks.length : 0);
-  } catch (error) {
-    console.error("获取任务列表失败:", error);
-    Message.error("获取任务列表失败");
-  } finally {
-    loading.value = false;
-  }
-};
-
-// 获取数据类型配置
-const getDataTypeConfigs = async () => {
-  try {
-    const data = await callControl<Record<string, never>, { configs?: DataTypeConfig[] }>("collectmgr", "GetDataTypeConfigs", {});
-    dataTypeConfigs.value = data.configs || [];
-  } catch (error) {
-    console.error("获取数据类型配置失败:", error);
-    Message.error("获取数据类型配置失败");
-  }
-};
-
-const loadDataSourceOptionsForType = (dataType: string) => {
-  loadingDataSources.value = true;
-  const config = dataTypeConfigs.value.find(item => item.data_type === dataType);
-  dataSourceOptions.value = config ? dataSourceOptionsFromConfig(config.data_source_options) : [];
-  loadingDataSources.value = false;
-};
-
-const loadActiveDatasets = async () => {
-  const spaceId = selectedSpaceId.value || "";
-  if (!spaceId) {
-    activeDatasets.value = [];
-    return;
-  }
-  loadingDatasets.value = true;
-  try {
-    const datasets: Dataset[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await listDatasets({
-        space_id: spaceId,
-        page: { page, size: 500 }
-      });
-      datasets.push(...(response.datasets || []).filter(dataset => dataset.status === "active"));
-      if (!response.page_result?.has_more || (response.datasets || []).length === 0) break;
-    }
-    activeDatasets.value = datasets;
-  } catch (error) {
-    console.error("获取数据来源失败:", error);
-    activeDatasets.value = [];
-    Message.error("获取数据来源失败");
-  } finally {
-    loadingDatasets.value = false;
-  }
-};
-
-const resetRuleFields = () => {
-  marketValue.value = "spot";
-  datasetIdValue.value = "";
-  symbolDatasetIdValue.value = "";
-  scheduleIntervalValue.value = "";
+function resetEditor() {
+  editor.task_id = "";
+  editor.task_name = "";
+  editor.description = "";
+  editor.space_id = selectedSpaceId.value || "";
+  editor.data_type = "";
+  editor.provider = "";
+  editor.market_type = "spot";
+  editor.enabled = true;
+  editor.creator = account.value?.user?.userName || "";
+  frequencyValue.value = "";
+  symbolSourceId.value = "";
+  sourceIdValue.value = "";
   sourceFrequencyValue.value = "";
-  sourceSeriesTagValue.value = "venue:binance";
-  targetDatasetIdValue.value = "";
-  settleDelayMSValue.value = 10000;
-};
+  sourceSeriesTagValue.value = "";
+  settleDelayMSValue.value = undefined;
+  resultConfig.data_node_id = "";
+  resultConfig.keep_duration = "0";
+  resultConfig.description = "";
+}
 
-const isRecord = (value: unknown): value is Record<string, any> =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function onAdd() {
+  editorMode.value = "create";
+  resetEditor();
+  editorVisible.value = true;
+}
 
-const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
-  const params: unknown = JSON.parse(raw || "{}");
-  if (!isRecord(params)) {
-    throw new Error("规则参数不是当前支持的结构");
-  }
-  const dataType = params.source_dataset_id ? "kline_resample" : String(params.symbol_source) === "exchange" ? "instrument" : "kline";
-  const exchange = String(params.provider || "").trim();
-  const market = params.market_type;
-  const sourceDatasetId = String(params.source_dataset_id || "").trim();
-  const symbolDatasetId = String(params.symbol_dataset_id || "").trim();
-  const scheduleInterval = String(params.frequency || params.target_frequency || "").trim();
-  if (dataType === "kline_resample") {
-    const settleDelayMS =
-      typeof params.settle_delay_ms === "number" && Number.isFinite(params.settle_delay_ms) && params.settle_delay_ms >= 0
-        ? Math.trunc(params.settle_delay_ms)
-        : undefined;
-    return {
-      dataType,
-      exchange: String(params.provider || "moox"),
-      market: market as "spot" | "swap",
-      datasetId: sourceDatasetId,
-      scheduleInterval,
-      sourceDatasetId,
-      sourceFrequency: String(params.source_frequency || ""),
-      sourceSeriesTag: String(params.source_series_tag || ""),
-      targetFrequency: String(params.target_frequency || scheduleInterval),
-      settleDelayMS
-    };
-  }
-  if (dataType !== "kline" && dataType !== "instrument") {
-    throw new Error("规则数据类型无效");
-  }
-  if (!exchange || (market !== "spot" && market !== "swap") || !scheduleInterval) {
-    throw new Error("规则缺少必填参数");
-  }
-  if (dataType === "kline") {
-    if (params.symbol_source !== "dataset" || !symbolDatasetId) {
-      throw new Error("K线规则参数无效");
-    }
-  } else if (params.symbol_source !== "exchange") {
-    throw new Error("标的规则参数无效");
-  }
-
-  return { dataType, exchange, market, datasetId: "", symbolDatasetId, scheduleInterval };
-};
-
-const onAdd = () => {
-  title.value = "新建采集任务";
-  addForm.value = {
-    task_id: "",
-    task_name: "",
-    description: "",
-    space_id: selectedSpaceId.value || "",
-    data_type: "",
-    data_source: "",
-    collect_params: "{}",
-    enabled: "true",
-    creator: account.value.user.userName || ""
-  };
-  resetRuleFields();
-  dataSourceOptions.value = [];
-  open.value = true;
-};
-
-const onUpdate = (record: TaskConfig) => {
-  let input: CollectorRuleInput;
-  try {
-    input = parseStrictRuleParams(record.collect_params);
-  } catch (error) {
-    console.error("解析现有采集参数失败:", error);
-    Message.error(error instanceof Error ? error.message : "解析现有采集参数失败");
-    return;
-  }
-
-  title.value = "修改采集任务";
-  addForm.value = {
-    ...record,
-    description: record.description || "",
-    data_type: input.dataType,
-    data_source: input.exchange
-  };
-  marketValue.value = input.market;
-  datasetIdValue.value = input.datasetId;
-  symbolDatasetIdValue.value = input.symbolDatasetId || "";
-  scheduleIntervalValue.value = input.scheduleInterval;
+function onUpdate(record: CollectionTaskRecord) {
+  const input = parseCollectionTaskInput(record);
+  editorMode.value = "edit";
+  editor.task_id = record.task_id;
+  editor.task_name = record.task_name;
+  editor.description = record.description;
+  editor.space_id = record.space_id || selectedSpaceId.value || "";
+  editor.data_type = input.dataType;
+  editor.provider = input.provider;
+  editor.market_type = input.market;
+  editor.enabled = record.enabled;
+  editor.creator = record.creator;
+  frequencyValue.value = input.frequency;
+  symbolSourceId.value = input.symbolSourceId || "";
+  sourceIdValue.value = input.sourceId || "";
   sourceFrequencyValue.value = input.sourceFrequency || "";
-  sourceSeriesTagValue.value = input.sourceSeriesTag || "venue:binance";
-  targetDatasetIdValue.value = "";
-  // Preserve an omitted value so the server can apply its process-wide default.
+  sourceSeriesTagValue.value = input.sourceSeriesTag || "";
   settleDelayMSValue.value = input.settleDelayMS;
-  if (input.dataType === "kline_resample") datasetIdValue.value = input.sourceDatasetId || "";
-  loadDataSourceOptionsForType(input.dataType);
-  open.value = true;
-};
+  editorVisible.value = true;
+}
 
-const onDataTypeChange = (value: string) => {
-  addForm.value.data_type = value;
-  addForm.value.data_source = "";
-  datasetIdValue.value = "";
-  symbolDatasetIdValue.value = "";
-  loadDataSourceOptionsForType(value);
-};
+function onDataTypeChange() {
+  if (editing.value) return;
+  editor.provider = "";
+  frequencyValue.value = "";
+  symbolSourceId.value = "";
+  sourceIdValue.value = "";
+  sourceFrequencyValue.value = "";
+  sourceSeriesTagValue.value = "";
+  settleDelayMSValue.value = undefined;
+}
 
-const afterClose = () => {
-  formRef.value?.clearValidate();
-  open.value = false;
-};
+function afterClose() {
+  formRef.value?.clearValidate?.();
+  editorVisible.value = false;
+}
 
-const handleOk = async (): Promise<boolean> => {
+function currentTaskInput(): CollectionTaskInput {
+  if (!editor.data_type) throw new Error("请选择数据类型");
+  return {
+    dataType: editor.data_type,
+    provider: editor.provider,
+    market: editor.market_type,
+    frequency: frequencyValue.value,
+    symbolSource: editor.data_type === "instrument" ? "exchange" : "dataset",
+    symbolSourceId: symbolSourceId.value,
+    sourceId: sourceIdValue.value,
+    sourceFrequency: sourceFrequencyValue.value,
+    sourceSeriesTag: sourceSeriesTagValue.value,
+    settleDelayMS: settleDelayMSValue.value
+  };
+}
+
+async function validateEditor() {
+  const nameError = collectionTaskNameError(editor.task_name);
+  if (nameError) {
+    Message.error(nameError);
+    return false;
+  }
+  if (!editor.space_id) {
+    Message.error("请先选择空间");
+    return false;
+  }
   try {
-    if (!addForm.value.data_type) {
-      Message.error("请选择数据类型");
-      return false;
+    const input = currentTaskInput();
+    if (input.dataType === "kline" && !symbolSourceId.value.trim()) {
+      throw new Error("请选择标的来源");
     }
-
-    if (!addForm.value.data_source) {
-      Message.error("请选择数据源");
-      return false;
+    if (input.dataType === "kline_resample" && !sourceIdValue.value.trim()) {
+      throw new Error("请选择源行情");
     }
-    const spaceId = addForm.value.space_id || selectedSpaceId.value || "";
-    if (!spaceId) {
-      Message.error("请选择空间");
-      return false;
+    if (input.dataType === "kline_resample" && !sourceFrequencyValue.value.trim()) {
+      throw new Error("请输入源周期");
     }
-
-    if (
-      addForm.value.data_type !== "kline" &&
-      addForm.value.data_type !== "instrument" &&
-      addForm.value.data_type !== "kline_resample"
-    ) {
-      Message.error("不支持的数据类型");
-      return false;
+    if (input.dataType === "kline_resample" && !sourceSeriesTagValue.value.trim()) {
+      throw new Error("请输入序列标签");
     }
-
-    if (!addForm.value.task_name.trim()) {
-      Message.error("请输入任务名称");
-      return false;
-    }
-    const collectParams = buildCollectorRuleParams({
-      dataType: addForm.value.data_type,
-      exchange: addForm.value.data_source,
-      market: marketValue.value,
-      datasetId: "",
-      symbolDatasetId: symbolDatasetIdValue.value,
-      scheduleInterval: scheduleIntervalValue.value,
-      sourceDatasetId: addForm.value.data_type === "kline_resample" ? datasetIdValue.value : undefined,
-      sourceFrequency: sourceFrequencyValue.value,
-      sourceSeriesTag: sourceSeriesTagValue.value,
-      targetFrequency: scheduleIntervalValue.value,
-      settleDelayMS: settleDelayMSValue.value
-    });
-    addForm.value.collect_params = JSON.stringify(collectParams);
-
-    const requestData: any = buildCollectorRuleRequest(
-      {
-        dataType: addForm.value.data_type as CollectorRuleInput["dataType"],
-        exchange: addForm.value.data_source,
-        market: marketValue.value,
-        datasetId: "",
-        symbolDatasetId: symbolDatasetIdValue.value,
-        scheduleInterval: scheduleIntervalValue.value,
-        sourceDatasetId: addForm.value.data_type === "kline_resample" ? datasetIdValue.value : undefined,
-        sourceFrequency: sourceFrequencyValue.value,
-        sourceSeriesTag: sourceSeriesTagValue.value,
-        targetFrequency: scheduleIntervalValue.value,
-        settleDelayMS: settleDelayMSValue.value
-      },
-      spaceId,
-      addForm.value.creator || account.value.user?.userName || "",
-      addForm.value.enabled !== "false",
-      title.value.includes("修改") ? addForm.value.task_id : undefined
-    );
-    requestData.task_name = addForm.value.task_name.trim();
-    requestData.description = addForm.value.description?.trim() || "";
-
-    const method = title.value.includes("新建") ? "CreateTask" : "UpdateTask";
-
-    submitLoading.value = true;
-    const payload = title.value.includes("新建")
-      ? { task: requestData }
-      : { space_id: requestData.space_id, task_id: requestData.task_id, task: requestData };
-    const data = await callControl<typeof payload, { task_id?: string }>("collectmgr", method, payload);
-    if (title.value.includes("新建")) {
-      const ruleId = data.task_id || "未知";
-      Message.success(`创建成功，任务 ID：${ruleId}`);
-    } else {
-      Message.success("更新成功");
-    }
-    getTaskList();
+    if (!frequencyValue.value.trim()) throw new Error("请输入采集频率");
     return true;
   } catch (error) {
-    if (error instanceof Error && error.message) {
-      Message.error(error.message);
+    Message.error(error instanceof Error ? error.message : "请完善任务配置");
+    return false;
+  }
+}
+
+async function handleOk(): Promise<boolean> {
+  if (!(await validateEditor())) return false;
+  submitLoading.value = true;
+  try {
+    if (editorMode.value === "create") {
+      const input = currentTaskInput();
+      const task = buildCollectionTaskPayload(
+        input,
+        {
+          task_name: editor.task_name,
+          description: editor.description,
+          space_id: editor.space_id,
+          creator: editor.creator || account.value?.user?.userName || "",
+          enabled: editor.enabled
+        },
+        undefined
+      );
+      await CreateTask({
+        task,
+        result_config: {
+          data_node_id: resultConfig.data_node_id.trim(),
+          keep_duration: resultConfig.keep_duration.trim(),
+          description: resultConfig.description.trim()
+        }
+      });
+      Message.success(`采集任务“${task.task_name}”已创建`);
     } else {
-      Message.error(title.value.includes("新建") ? "创建失败，请检查网络连接" : "更新失败，请检查网络连接");
+      await UpdateTask({
+        space_id: editor.space_id,
+        task_id: editor.task_id,
+        task: {
+          task_id: editor.task_id,
+          task_name: editor.task_name.trim(),
+          description: editor.description.trim(),
+          enabled: editor.enabled
+        }
+      });
+      Message.success("更新成功");
     }
+    editorVisible.value = false;
+    await getTaskList();
+    return true;
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "保存任务失败");
     return false;
   } finally {
     submitLoading.value = false;
   }
-};
+}
 
-const handleEnableChange = async (record: TaskConfig, value: boolean) => {
-  try {
-    const spaceId = record.space_id || selectedSpaceId.value || "";
-    if (!spaceId) {
-      Message.error("请选择空间");
-      return;
-    }
-    if (!value) {
-      await callControl("collectmgr", "DisableTask", {
-        space_id: spaceId,
-        task_id: record.task_id
-      });
-      Message.success("状态更新成功");
-      getTaskList();
-      return;
-    }
-    const input = parseStrictRuleParams(record.collect_params);
-    const task = buildCollectorRuleRequest(
-      input,
-      spaceId,
-      record.creator || account.value.user?.userName || "",
-      value,
-      record.task_id
-    );
-    await callControl<Record<string, any>, Record<string, never>>("collectmgr", "UpdateTask", {
-      space_id: spaceId,
-      task_id: record.task_id,
-      task: { ...task, task_name: record.task_name || record.task_id, description: record.description || "" }
-    });
-    Message.success("状态更新成功");
-    getTaskList();
-  } catch (error) {
-    console.error("状态更新失败:", error);
-    Message.error("状态更新失败");
+async function getTaskList() {
+  const spaceId = selectedSpaceId.value;
+  if (!spaceId) {
+    taskList.value = [];
+    pagination.total = 0;
+    return;
   }
-};
+  loading.value = true;
+  try {
+    const response = await GetTaskList({
+      space_id: spaceId,
+      page: { page: pagination.current, size: pagination.pageSize },
+      ...(filters.taskId.trim() ? { task_id: filters.taskId.trim() } : {}),
+      ...(filters.dataType ? { data_type: filters.dataType } : {}),
+      ...(filters.provider ? { provider: filters.provider } : {}),
+      ...(filters.market ? { market_type: filters.market } : {}),
+      ...(selectEnabledFilter() === undefined ? {} : { enabled: selectEnabledFilter() })
+    });
+    taskList.value = (response.tasks || []).map(normalizeCollectionTask);
+    pagination.total = Number(response.page?.total ?? taskList.value.length);
+    const requestedTaskID = typeof route.query.taskId === "string" ? route.query.taskId : "";
+    if (requestedTaskID) {
+      const requestedTask = taskList.value.find(task => task.task_id === requestedTaskID);
+      if (requestedTask) onViewDetails(requestedTask);
+    }
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "获取任务列表失败");
+  } finally {
+    loading.value = false;
+  }
+}
 
-const onViewDetails = (record: TaskConfig) => {
+async function getDataTypeConfigs() {
+  try {
+    const response = await GetDataTypeConfigs();
+    dataTypeConfigs.value = response.configs || [];
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "获取数据类型失败");
+  }
+}
+
+async function loadSources() {
+  const sources: CollectionSourceOption[] = [];
+  if (!selectedSpaceId.value) {
+    sourceOptions.value = [];
+    return;
+  }
+  loadingSources.value = true;
+  try {
+    for (let page = 1; ; page += 1) {
+      const response = await listDatasets({
+        space_id: selectedSpaceId.value,
+        page: { page, size: 500 }
+      });
+      for (const source of response.datasets || []) {
+        if (source.status !== "active") continue;
+        sources.push({
+          source_id: source.dataset_id,
+          name: source.name,
+          data_source_id: source.data_source_id,
+          data_kind: source.data_kind,
+          attributes: source.attributes,
+          freqs: source.freqs,
+          keep_duration: source.keep_duration
+        });
+      }
+      if (!response.page_result?.has_more || (response.datasets || []).length === 0) break;
+    }
+    sourceOptions.value = sources;
+  } catch (error) {
+    sourceOptions.value = [];
+    Message.error(error instanceof Error ? error.message : "获取标的来源失败");
+  } finally {
+    loadingSources.value = false;
+  }
+}
+
+async function loadDataNodes() {
+  loadingDataNodes.value = true;
+  try {
+    const nodes: DataNode[] = [];
+    for (let page = 1; ; page += 1) {
+      const response = await listDataNodes({ status: "active", page: { page, size: 500 } });
+      nodes.push(...(response.items || []).map(item => item.node).filter(node => node?.node_id));
+      if (!response.page_result?.has_more || (response.items || []).length === 0) break;
+    }
+    dataNodes.value = nodes;
+  } catch (error) {
+    dataNodes.value = [];
+    Message.warning(error instanceof Error ? error.message : "获取结果 DataNode 失败");
+  } finally {
+    loadingDataNodes.value = false;
+  }
+}
+
+function search() {
+  pagination.current = 1;
+  void getTaskList();
+}
+
+function onPageChange(current: number) {
+  pagination.current = current;
+  void getTaskList();
+}
+
+function onPageSizeChange(pageSize: number) {
+  pagination.pageSize = pageSize;
+  pagination.current = 1;
+  void getTaskList();
+}
+
+async function handleEnableChange(record: CollectionTaskRecord, enabled: boolean) {
+  const spaceId = record.space_id || selectedSpaceId.value;
+  if (!spaceId) {
+    Message.error("请先选择空间");
+    return;
+  }
+  try {
+    if (!enabled) {
+      await DisableTask({ space_id: spaceId, task_id: record.task_id });
+    } else {
+      await UpdateTask({
+        space_id: spaceId,
+        task_id: record.task_id,
+        task: {
+          task_id: record.task_id,
+          task_name: record.task_name,
+          description: record.description,
+          enabled: true
+        }
+      });
+    }
+    Message.success("状态更新成功");
+    await getTaskList();
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "状态更新失败");
+  }
+}
+
+function onViewDetails(record: CollectionTaskRecord) {
   detailData.value = record;
   detailVisible.value = true;
-};
+}
 
-const openDelete = (record: TaskConfig) => {
+function openDelete(record: CollectionTaskRecord) {
   deleteTarget.value = record;
   deleteResultData.value = false;
   deleteVisible.value = true;
-};
+}
 
-const handleDeleteOk = async (): Promise<boolean> => {
+async function handleDeleteOk(): Promise<boolean> {
   const record = deleteTarget.value;
-  const spaceId = record?.space_id || selectedSpaceId.value || "";
+  const spaceId = record?.space_id || selectedSpaceId.value;
   if (!record || !spaceId) {
-    Message.error("请选择空间");
+    Message.error("请先选择空间");
     return false;
   }
   deleteLoading.value = true;
   try {
-    await callControl("collectmgr", "DeleteTask", {
+    await DeleteTask({
       space_id: spaceId,
       task_id: record.task_id,
       delete_result_data: deleteResultData.value
     });
     Message.success(deleteResultData.value ? "任务及结果数据已删除" : "任务已删除，结果数据已保留");
-    await getTaskList();
     deleteVisible.value = false;
+    await getTaskList();
     return true;
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "删除任务失败");
@@ -975,16 +876,16 @@ const handleDeleteOk = async (): Promise<boolean> => {
   } finally {
     deleteLoading.value = false;
   }
-};
+}
 
-const openBackfill = async (record: TaskConfig) => {
+async function openBackfill(record: CollectionTaskRecord) {
   try {
-    const input = parseStrictRuleParams(record.collect_params);
-    if (input.dataType !== "kline_resample") throw new Error("当前规则不是 K 线重采样规则");
-    const source = activeDatasets.value.find(dataset => dataset.dataset_id === input.sourceDatasetId);
+    const input = parseCollectionTaskInput(record);
+    if (input.dataType !== "kline_resample") throw new Error("当前任务不是 K 线重采样任务");
+    const source = sourceOptions.value.find(item => item.source_id === input.sourceId);
     backfillTarget.value = {
-      ruleId: record.task_id,
-      targetFrequency: input.targetFrequency || input.scheduleInterval,
+      taskId: record.task_id,
+      targetFrequency: input.frequency,
       sourceKeepDuration: source?.keep_duration || ""
     };
     activeBackfill.value = null;
@@ -993,61 +894,43 @@ const openBackfill = async (record: TaskConfig) => {
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "读取回填状态失败");
   }
-};
+}
 
-const onBackfillChanged = async () => {
+async function onBackfillChanged() {
   await getTaskList();
   if (backfillTarget.value) {
-    activeBackfill.value = await getKlineResampleBackfillStatus(selectedSpaceId.value || "", backfillTarget.value.ruleId);
+    activeBackfill.value = await getKlineResampleBackfillStatus(selectedSpaceId.value || "", backfillTarget.value.taskId);
   }
-};
+}
 
 watch(selectedSpaceId, () => {
-  datasetIdValue.value = "";
-  getTaskList();
-  loadActiveDatasets();
+  pagination.current = 1;
+  void getTaskList();
+  void loadSources();
 });
 
 watch(
-  () => form.value.dataType,
-  newDataType => {
-    // 当数据类型变化时，清空数据源选择
-    if (newDataType) {
-      form.value.dataSource = "";
-    }
-  }
-);
-
-watch(
-  [
-    () => addForm.value.data_source,
-    () => addForm.value.data_type,
-    () => marketValue.value,
-    () => scheduleIntervalValue.value,
-    () => sourceFrequencyValue.value
-  ],
+  () => [editor.provider, editor.market_type, frequencyValue.value, sourceFrequencyValue.value],
   () => {
-    if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
-      datasetIdValue.value = "";
+    if (symbolSourceId.value && !symbolSourceOptions.value.some(source => source.source_id === symbolSourceId.value)) {
+      symbolSourceId.value = "";
     }
-    if (
-      symbolDatasetIdValue.value &&
-      !availableSymbolDatasets.value.some(dataset => dataset.dataset_id === symbolDatasetIdValue.value)
-    ) {
-      symbolDatasetIdValue.value = "";
+    if (sourceIdValue.value && !resampleSourceOptions.value.some(source => source.source_id === sourceIdValue.value)) {
+      sourceIdValue.value = "";
     }
   }
 );
 
 onMounted(() => {
-  getTaskList();
-  getDataTypeConfigs();
-  loadActiveDatasets();
+  void getTaskList();
+  void getDataTypeConfigs();
+  void loadSources();
+  void loadDataNodes();
 });
 </script>
 
 <style scoped>
-.rule-toolbar {
+.task-toolbar {
   margin-bottom: var(--moox-space-toolbar-table);
 }
 
@@ -1055,38 +938,22 @@ onMounted(() => {
   min-height: 100%;
 }
 
-.moox-inner :deep(.arco-table) {
-  margin-top: 0;
-}
-
-.resample-summary {
-  color: var(--color-text-3);
-  display: block;
-  line-height: 18px;
-}
-
 pre {
+  max-height: 220px;
   margin: 0;
+  padding: var(--moox-space-2);
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--color-fill-1);
   font-family: monospace;
   font-size: 12px;
-  background: #f5f5f5;
-  padding: var(--moox-space-2);
-  border-radius: 4px;
-  max-height: 200px;
-  overflow: auto;
 }
 
-:deep(.arco-checkbox-group) {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--moox-space-2);
+.immutable-hint {
+  margin-bottom: var(--moox-space-4);
 }
 
-:deep(.arco-checkbox-group .arco-checkbox) {
-  margin-right: 0;
-}
-
-:deep(.arco-input-tag) {
-  min-height: 32px;
+.delete-options {
+  margin-top: var(--moox-space-4);
 }
 </style>

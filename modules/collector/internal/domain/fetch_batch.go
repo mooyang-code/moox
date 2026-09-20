@@ -43,7 +43,8 @@ const (
 )
 
 type CollectionItem struct {
-	TaskID         string `json:"task_id,omitempty"`
+	// InstanceID is the stable TaskInstance identity.
+	InstanceID     string `json:"instance_id,omitempty"`
 	SubjectID      string `json:"subject_id"`
 	Symbol         string `json:"symbol"`
 	TargetDataTime string `json:"target_data_time,omitempty"`
@@ -81,14 +82,15 @@ type ItemResult struct {
 }
 
 type BatchInvocation struct {
-	ID                   int         `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID              string      `gorm:"column:c_space_id"`
-	BatchID              string      `gorm:"column:c_batch_id"`
-	ParentBatchID        string      `gorm:"column:c_parent_batch_id"`
-	ScheduleID           string      `gorm:"column:c_schedule_id"`
-	BatchKind            BatchKind   `gorm:"column:c_batch_kind"`
-	ShardIndex           int         `gorm:"column:c_shard_index"`
-	TaskID     string      `gorm:"column:c_task_id"`
+	ID            int       `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID       string    `gorm:"column:c_space_id"`
+	BatchID       string    `gorm:"column:c_batch_id"`
+	ParentBatchID string    `gorm:"column:c_parent_batch_id"`
+	ScheduleID    string    `gorm:"column:c_schedule_id"`
+	BatchKind     BatchKind `gorm:"column:c_batch_kind"`
+	ShardIndex    int       `gorm:"column:c_shard_index"`
+	// TaskID is the parent CollectionTask ID for this batch.
+	TaskID               string      `gorm:"column:c_task_id"`
 	DatasetID            string      `gorm:"column:c_dataset_id"`
 	Frequency            string      `gorm:"column:c_frequency"`
 	Region               string      `gorm:"column:c_region"`
@@ -115,12 +117,13 @@ type BatchInvocation struct {
 func (b *BatchInvocation) TableName() string { return "t_collector_fetch_batches" }
 
 type RetryItem struct {
-	ID               int        `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID          string     `gorm:"column:c_space_id"`
-	RetryKey         string     `gorm:"column:c_retry_key"`
-	SourceBatchID    string     `gorm:"column:c_source_batch_id"`
-	BatchKind        BatchKind  `gorm:"column:c_batch_kind"`
-	TaskID string     `gorm:"column:c_task_id"`
+	ID            int       `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID       string    `gorm:"column:c_space_id"`
+	RetryKey      string    `gorm:"column:c_retry_key"`
+	SourceBatchID string    `gorm:"column:c_source_batch_id"`
+	BatchKind     BatchKind `gorm:"column:c_batch_kind"`
+	// TaskID is the parent CollectionTask ID for this retry item.
+	TaskID           string     `gorm:"column:c_task_id"`
 	DatasetID        string     `gorm:"column:c_dataset_id"`
 	SubjectID        string     `gorm:"column:c_subject_id"`
 	Frequency        string     `gorm:"column:c_frequency"`

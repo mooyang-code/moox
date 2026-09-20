@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/proto"
@@ -26,11 +27,26 @@ type ViewSyncWaiter interface {
 	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error)
 }
 
-// Catalog is the narrow Metadata API needed to provision a target dataset and
-// its query View. The concrete proxy uses trpc client.Option; any is avoided in
-// the public constructor by accepting the generated proxy below.
+type metadataAPI interface {
+	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
+	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
+	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
+	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
+	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
+	UpdateView(context.Context, *storagepb.UpdateViewReq, ...client.Option) (*storagepb.UpdateViewRsp, error)
+	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
+	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
+	BindDatasetSubject(context.Context, *storagepb.BindDatasetSubjectReq, ...client.Option) (*storagepb.BindDatasetSubjectRsp, error)
+	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
+	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
+	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq, ...client.Option) (*storagepb.CheckDatasetActivationRsp, error)
+	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
+}
+
+// Catalog is the narrow Metadata API needed to provision a task-owned target
+// dataset and its query View.
 type Catalog struct {
-	Metadata storagepb.MetadataClientProxy
+	Metadata metadataAPI
 	Auth     *storagepb.AuthInfo
 	ViewSync ViewSyncWaiter
 }
@@ -52,7 +68,7 @@ var klineFields = []struct {
 // PrepareTarget creates or validates the target Dataset, columns, subject
 // bindings and View. Existing resources with a mismatched immutable contract
 // are rejected instead of being silently overwritten.
-func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.DatasetSubject, keepDuration string) error {
+func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.DatasetSubject, keepDuration string) error {
 	if c == nil || c.Metadata == nil || c.Auth == nil {
 		return errors.New("resample catalog dependencies are required")
 	}
@@ -63,14 +79,27 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask,
 	if err != nil {
 		return err
 	}
+	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	params.TargetDatasetID = ids.DatasetID
+	targetDatasetID, targetViewID := ids.DatasetID, ids.ViewID
 	attrs := map[string]string{
-		"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID, "market_type": strings.ToLower(rule.MarketType),
-		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result", "resample_task_id": rule.TaskID,
+		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "market_type": strings.ToLower(task.MarketType),
+		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
 		"target_freq": targetFreq.Storage, "alignment": params.Alignment,
 	}
-	target, getErr := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.Auth, SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID})
+	createdDataset, createdView := false, false
+	compensate := func(original error) error {
+		if original == nil {
+			return nil
+		}
+		if cleanupErr := c.cleanupCreatedTarget(ctx, task.SpaceID, targetDatasetID, targetViewID, createdView, createdDataset); cleanupErr != nil {
+			return errors.Join(original, cleanupErr)
+		}
+		return original
+	}
+	target, getErr := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID})
 	if getErr != nil {
 		return fmt.Errorf("get target Dataset: %w", getErr)
 	}
@@ -79,11 +108,11 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask,
 	}
 	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.Auth, Dataset: &storagepb.Dataset{
-			SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, DataSourceId: "crypto", DataNodeId: source.DataNodeID,
+			SpaceId: task.SpaceID, DatasetId: targetDatasetID, DataSourceId: "crypto", DataNodeId: source.DataNodeID,
 			// Dataset names are unique within a space and must contain Chinese
 			// display text. Derive a short stable suffix from the target ID so
 			// independent resample targets do not collide on metadata creation.
-			Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs: []string{targetFreq.Storage}, Status: "draft", Attributes: attrs, KeepDuration: keepDuration,
 		}})
 		if createErr != nil {
@@ -92,27 +121,28 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask,
 		if err := ensureMetadataSuccess("create target Dataset", created.GetRetInfo()); err != nil {
 			return err
 		}
+		createdDataset = true
 		target.Dataset = created.GetDataset()
 	} else if err := ensureMetadataSuccess("get target Dataset", target.GetRetInfo()); err != nil {
 		return err
 	}
 	if target.GetDataset() == nil {
-		return errors.New("target Dataset is empty")
+		return compensate(errors.New("target Dataset is empty"))
 	}
 	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, "crypto", source.DataNodeID); err != nil {
-		return err
+		return compensate(err)
 	}
 	// Mirror the source subject snapshot before activation so the target has the
 	// same active subject set. Read existing memberships first so an unchanged target does
 	// not issue hundreds of redundant metadata writes on every timer tick.
 	existingSubjects := make(map[string]*storagepb.DatasetSubject)
 	for page := uint32(1); ; page++ {
-		bindings, listErr := c.Metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{AuthInfo: c.Auth, SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, Page: &storagepb.Page{Page: page, Size: 500}})
+		bindings, listErr := c.Metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID, Page: &storagepb.Page{Page: page, Size: 500}})
 		if listErr != nil {
-			return fmt.Errorf("list target Dataset subjects: %w", listErr)
+			return compensate(fmt.Errorf("list target Dataset subjects: %w", listErr))
 		}
 		if err := ensureMetadataSuccess("list target Dataset subjects", bindings.GetRetInfo()); err != nil {
-			return err
+			return compensate(err)
 		}
 		for _, binding := range bindings.GetDatasetSubjects() {
 			if binding != nil && strings.TrimSpace(binding.GetSubjectId()) != "" {
@@ -132,13 +162,13 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask,
 		if current := existingSubjects[subject.SubjectID]; current != nil && strings.EqualFold(strings.TrimSpace(current.GetStatus()), "active") {
 			continue
 		}
-		binding := &storagepb.DatasetSubject{SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, SubjectId: subject.SubjectID, SubjectRole: "normal", Status: "active"}
+		binding := &storagepb.DatasetSubject{SpaceId: task.SpaceID, DatasetId: targetDatasetID, SubjectId: subject.SubjectID, SubjectRole: "normal", Status: "active"}
 		resp, bindErr := c.Metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{AuthInfo: c.Auth, DatasetSubject: binding})
 		if bindErr != nil {
-			return fmt.Errorf("bind target Dataset subject: %w", bindErr)
+			return compensate(fmt.Errorf("bind target Dataset subject: %w", bindErr))
 		}
 		if err := ensureMetadataSuccess("bind target Dataset subject", resp.GetRetInfo()); err != nil {
-			return err
+			return compensate(err)
 		}
 	}
 	// Disable memberships that disappeared from the source snapshot. Keeping
@@ -153,135 +183,185 @@ func (c *Catalog) PrepareTarget(ctx context.Context, rule domain.CollectionTask,
 		}
 		copy, ok := proto.Clone(binding).(*storagepb.DatasetSubject)
 		if !ok {
-			return fmt.Errorf("clone stale target Dataset subject failed")
+			return compensate(fmt.Errorf("clone stale target Dataset subject failed"))
 		}
 		copy.Status = "disabled"
 		if resp, bindErr := c.Metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{AuthInfo: c.Auth, DatasetSubject: copy}); bindErr != nil {
-			return fmt.Errorf("disable stale target Dataset subject: %w", bindErr)
+			return compensate(fmt.Errorf("disable stale target Dataset subject: %w", bindErr))
 		} else if err := ensureMetadataSuccess("disable stale target Dataset subject", resp.GetRetInfo()); err != nil {
-			return err
+			return compensate(err)
 		}
 	}
 	for _, field := range klineFields {
 		resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: &storagepb.DatasetColumn{
-			SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, ColumnName: field.name,
+			SpaceId: task.SpaceID, DatasetId: targetDatasetID, ColumnName: field.name,
 			OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
 			ValueType: field.type_, Required: true, Status: "active", Attributes: map[string]string{"display_name": field.label},
 		}})
 		if callErr != nil {
-			return fmt.Errorf("upsert target column %s: %w", field.name, callErr)
+			return compensate(fmt.Errorf("upsert target column %s: %w", field.name, callErr))
 		}
 		if err := ensureMetadataSuccess("upsert target column", resp.GetRetInfo()); err != nil {
-			return err
+			return compensate(err)
 		}
 	}
-	check, err := c.Metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: c.Auth, SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID})
+	check, err := c.Metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID})
 	if err != nil {
-		return err
+		return compensate(fmt.Errorf("check target Dataset activation: %w", err))
 	}
 	if err := ensureMetadataSuccess("check target Dataset activation", check.GetRetInfo()); err != nil {
-		return err
+		return compensate(err)
 	}
 	if !check.GetReady() {
-		return fmt.Errorf("target Dataset activation is not ready")
+		return compensate(fmt.Errorf("target Dataset activation is not ready"))
 	}
 	if strings.ToLower(strings.TrimSpace(target.GetDataset().GetStatus())) != "active" {
-		activated, activateErr := c.Metadata.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{AuthInfo: c.Auth, SpaceId: rule.SpaceID, DatasetId: params.TargetDatasetID, ExpectedRevision: target.GetDataset().GetRevision()})
+		activated, activateErr := c.Metadata.ActivateDataset(ctx, &storagepb.ActivateDatasetReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID, ExpectedRevision: target.GetDataset().GetRevision()})
 		if activateErr != nil {
-			return fmt.Errorf("activate target Dataset: %w", activateErr)
+			return compensate(fmt.Errorf("activate target Dataset: %w", activateErr))
 		}
 		if err := ensureMetadataSuccess("activate target Dataset", activated.GetRetInfo()); err != nil {
-			return err
+			return compensate(err)
 		}
 	}
-	viewID := DefaultTargetViewID(params.TargetDatasetID)
-	viewResp, viewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: rule.SpaceID, ViewId: viewID})
+	viewResp, viewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
 	if viewErr != nil {
-		return viewErr
+		return compensate(fmt.Errorf("get target View: %w", viewErr))
 	}
 	if viewResp.GetRetInfo() == nil {
-		return errors.New("get target View: empty ret_info")
+		return compensate(errors.New("get target View: empty ret_info"))
 	}
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, View: &storagepb.View{
-			SpaceId: rule.SpaceID, ViewId: viewID, Name: uniqueResampleDisplayName(params.TargetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: params.TargetDatasetID,
-			Engine: "duckdb", FilterJson: fmt.Sprintf(`{"freq":%q}`, targetFreq.Storage), KeepDuration: keepDuration, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": rule.TaskID, "route_ready_request_id": "kline-resample-route:" + rule.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
+			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
+			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", FilterJson: fmt.Sprintf(`{"freq":%q}`, targetFreq.Storage), KeepDuration: keepDuration, Status: "active",
+			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse", "route_ready_request_id": "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
 		if createErr != nil {
-			return createErr
+			return compensate(fmt.Errorf("create target View: %w", createErr))
 		}
 		if err := ensureMetadataSuccess("create target View", created.GetRetInfo()); err != nil {
-			return err
+			return compensate(err)
 		}
+		createdView = true
 		viewResp.View = created.GetView()
 	} else if err := ensureMetadataSuccess("get target View", viewResp.GetRetInfo()); err != nil {
-		return err
-	} else if err := validateTargetView(viewResp.GetView(), rule, params, targetFreq.Storage); err != nil {
-		return err
+		return compensate(err)
+	} else if err := validateTargetView(viewResp.GetView(), task, params, targetFreq.Storage); err != nil {
+		return compensate(err)
 	}
-	requestID := "kline-resample-route:" + rule.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())
+	requestID := "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())
 	if viewResp.GetView() != nil && viewResp.GetView().GetAttributes()["route_ready_request_id"] != requestID {
 		updated := *viewResp.GetView()
 		updated.Attributes = cloneStringMap(updated.GetAttributes())
 		updated.Attributes["route_ready_request_id"] = requestID
 		updatedResp, updateErr := c.Metadata.UpdateView(ctx, &storagepb.UpdateViewReq{AuthInfo: c.Auth, View: &updated})
 		if updateErr != nil {
-			return fmt.Errorf("update target View route-ready marker: %w", updateErr)
+			return compensate(fmt.Errorf("update target View route-ready marker: %w", updateErr))
 		}
 		if err := ensureMetadataSuccess("update target View route-ready marker", updatedResp.GetRetInfo()); err != nil {
-			return err
+			return compensate(err)
 		}
+		viewResp.View = updatedResp.GetView()
 	}
 	for index, field := range klineFields {
-		originID := params.TargetDatasetID + "." + field.name
+		originID := targetDatasetID + "." + field.name
 		resp, callErr := c.Metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: c.Auth, Column: &storagepb.ViewColumn{
-			SpaceId: rule.SpaceID, ViewId: viewID, ColumnName: originID, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+			SpaceId: task.SpaceID, ViewId: targetViewID, ColumnName: originID, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			OriginId: originID, ValueType: field.type_, SortOrder: uint32(index + 1), Attributes: map[string]string{"display_name": field.label},
 		}})
 		if callErr != nil {
-			return callErr
+			return compensate(fmt.Errorf("upsert target View column %s: %w", field.name, callErr))
 		}
 		if err := ensureMetadataSuccess("upsert target View column", resp.GetRetInfo()); err != nil {
-			return err
+			return compensate(err)
 		}
 	}
 	// Upserting a View column advances desired_view_revision. Re-read the
 	// authoritative revision after the complete desired schema is written; the
 	// earlier GetView response may describe a stale definition.
-	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: rule.SpaceID, ViewId: viewID})
+	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
 	if finalViewErr != nil {
-		return fmt.Errorf("get target View after columns: %w", finalViewErr)
+		return compensate(fmt.Errorf("get target View after columns: %w", finalViewErr))
 	}
 	if err := ensureMetadataSuccess("get target View after columns", finalViewResp.GetRetInfo()); err != nil {
-		return err
+		return compensate(err)
 	}
 	finalView := finalViewResp.GetView()
 	if finalView == nil {
-		return errors.New("target View after columns is empty")
+		return compensate(errors.New("target View after columns is empty"))
 	}
 	if c.ViewSync == nil {
-		return errors.New("resample catalog View sync waiter is required")
+		return compensate(errors.New("resample catalog View sync waiter is required"))
 	}
 	syncResp, syncErr := c.ViewSync.WaitViewSyncPoint(ctx, &storagepb.WaitViewSyncPointReq{
-		AuthInfo: c.Auth, SpaceId: rule.SpaceID, ViewId: viewID, RequestId: requestID,
-		DatasetIds: []string{params.TargetDatasetID}, WaitTimeoutMs: 5000,
+		AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID, RequestId: requestID,
+		DatasetIds: []string{targetDatasetID}, WaitTimeoutMs: 5000,
 	})
 	if syncErr != nil {
-		return fmt.Errorf("wait target View sync point: %w", syncErr)
+		return compensate(fmt.Errorf("wait target View sync point: %w", syncErr))
 	}
 	if syncResp == nil {
-		return ErrTargetViewNotReady
+		return compensate(ErrTargetViewNotReady)
 	}
 	if err := ensureMetadataSuccess("wait target View sync point", syncResp.GetRetInfo()); err != nil {
-		return err
+		return compensate(err)
 	}
 	if !syncResp.GetReady() {
-		return ErrTargetViewNotReady
+		return compensate(ErrTargetViewNotReady)
 	}
-	if err := waitTargetViewRevision(ctx, c.Metadata, c.Auth, rule.SpaceID, viewID, finalView.GetDesiredViewRevision(), 5*time.Second); err != nil {
-		return err
+	if err := waitTargetViewRevision(ctx, c.Metadata, c.Auth, task.SpaceID, targetViewID, finalView.GetDesiredViewRevision(), 5*time.Second); err != nil {
+		return compensate(err)
 	}
 	return nil
+}
+
+func (c *Catalog) cleanupCreatedTarget(ctx context.Context, spaceID, datasetID, viewID string, deleteView, deleteDataset bool) error {
+	if c == nil || c.Metadata == nil {
+		return errors.New("resample catalog metadata is not configured")
+	}
+	var cleanupErrors []error
+	if deleteView {
+		view, err := c.Metadata.DeleteView(ctx, &storagepb.DeleteViewReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID})
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete newly-created target View: %w", err))
+		} else if view == nil || (view.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+			cleanupErrors = append(cleanupErrors, catalogMetadataError("delete newly-created target View", nil, retInfoViewDelete(view)))
+		}
+	}
+	if deleteDataset {
+		dataset, err := c.Metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID})
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete newly-created target Dataset: %w", err))
+		} else if dataset == nil || (dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+			cleanupErrors = append(cleanupErrors, catalogMetadataError("delete newly-created target Dataset", nil, retInfoDatasetDelete(dataset)))
+		}
+	}
+	return errors.Join(cleanupErrors...)
+}
+
+func retInfoViewDelete(resp *storagepb.DeleteViewRsp) *storagepb.RetInfo {
+	if resp == nil {
+		return nil
+	}
+	return resp.GetRetInfo()
+}
+
+func retInfoDatasetDelete(resp *storagepb.DeleteDatasetRsp) *storagepb.RetInfo {
+	if resp == nil {
+		return nil
+	}
+	return resp.GetRetInfo()
+}
+
+func catalogMetadataError(action string, callErr error, ret *storagepb.RetInfo) error {
+	if callErr != nil {
+		return fmt.Errorf("%s: %w", action, callErr)
+	}
+	if ret == nil {
+		return fmt.Errorf("%s: empty response", action)
+	}
+	return fmt.Errorf("%s: %s", action, ret.GetMsg())
 }
 
 func uniqueResampleDisplayName(targetDatasetID string) string {
@@ -358,26 +438,31 @@ func targetViewRevisionReady(view *storagepb.View, desired uint64) bool {
 	return status == "" || status == "active"
 }
 
-func validateTargetView(view *storagepb.View, rule domain.CollectionTask, params *domain.CollectParams, frequency string) error {
+func validateTargetView(view *storagepb.View, task domain.CollectionTask, params *domain.CollectParams, frequency string) error {
 	if view == nil {
 		return errors.New("target View is empty")
 	}
 	if view.GetDatasetId() != params.TargetDatasetID {
-		return errors.New("target View immutable Dataset contract does not match rule")
+		return errors.New("target View immutable Dataset contract does not match task")
 	}
 	if view.GetFilterJson() != fmt.Sprintf(`{"freq":%q}`, frequency) || view.GetEngine() != "duckdb" {
-		return errors.New("target View immutable frequency contract does not match rule")
+		return errors.New("target View immutable frequency contract does not match task")
 	}
 	wantGrain := []string{"subject_id", "freq", "data_time", "series_tag"}
 	if len(view.GetGrainKeys()) != len(wantGrain) {
-		return errors.New("target View grain contract does not match rule")
+		return errors.New("target View grain contract does not match task")
 	}
 	for i := range wantGrain {
 		if view.GetGrainKeys()[i] != wantGrain[i] {
-			return errors.New("target View grain contract does not match rule")
+			return errors.New("target View grain contract does not match task")
 		}
 	}
-	_ = rule
+	if strings.TrimSpace(task.TaskID) != "" {
+		attributes := view.GetAttributes()
+		if attributes["owner_module"] != "collector" || attributes["collector_task_id"] != task.TaskID {
+			return errors.New("target View owner contract does not match task")
+		}
+	}
 	return nil
 }
 
@@ -394,14 +479,14 @@ func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, f
 		return errors.New("target Dataset must be time_series")
 	}
 	if strings.TrimSpace(dataset.GetDataSourceId()) != strings.TrimSpace(dataSourceID) {
-		return fmt.Errorf("target Dataset data source does not match rule: got %q want %q", dataset.GetDataSourceId(), dataSourceID)
+		return fmt.Errorf("target Dataset data source does not match task: got %q want %q", dataset.GetDataSourceId(), dataSourceID)
 	}
 	if strings.TrimSpace(dataNodeID) != "" && strings.TrimSpace(dataset.GetDataNodeId()) != strings.TrimSpace(dataNodeID) {
 		return fmt.Errorf("target Dataset data node does not match source: got %q want %q", dataset.GetDataNodeId(), dataNodeID)
 	}
 	for key, expected := range want {
 		if dataset.GetAttributes()[key] != expected {
-			return fmt.Errorf("target Dataset immutable lineage attribute %s does not match rule", key)
+			return fmt.Errorf("target Dataset immutable lineage attribute %s does not match task", key)
 		}
 	}
 	wantedFrequency, err := report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
