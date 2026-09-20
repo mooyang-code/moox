@@ -2656,11 +2656,13 @@ start_collector() {
   init_collector_schema
   gateway_service_env_for collector
   runtime_identity_env moox_collector "${ROOT}/collector/config/app.yaml"
+  STARTUP_WAIT_SECONDS="${MOOX_COLLECTOR_STARTUP_WAIT_SECONDS:-25}"
   start_service "collector" "${ROOT}/collector" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
       "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" \
       "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
+      "MOOX_COLLECTOR_RESULT_DATA_NODE_ID=${MOOX_COLLECTOR_RESULT_DATA_NODE_ID:-storage-node-0}" \
       "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
 }
 
