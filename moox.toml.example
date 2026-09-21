@@ -129,14 +129,87 @@ enabled = false
 
 # 腾讯云 SCF 默认配额参考（按账号/地域；购买套餐或工单调整后以实时账号配额为准）。
 # 发布器按 max_functions_per_namespace 校验每个地域/命名空间的函数总数（含 Invoke/快照辅助函数），
-# 未列出的地域并发内存不作假设，正式发布前应通过腾讯云 API/控制台核对。
+# region_limits 显式列出每个支持地域的命名空间、函数和并发内存上限；购买提额后按地域覆盖。
 [scf_fetcher.tencent_limits]
 max_namespaces_per_region = 5
 max_functions_per_namespace = 50
 max_burst_concurrency_per_minute = 500
-total_concurrency_memory_mb_by_region = { ap-guangzhou = 128000, ap-shanghai = 128000, ap-beijing = 128000, ap-chengdu = 128000, ap-hongkong = 128000, ap-singapore = 64000, ap-tokyo = 64000, na-siliconvalley = 64000, eu-frankfurt = 64000, ap-shanghai-fsi = 64000, ap-shenzhen-fsi = 64000 }
+total_concurrency_memory_mb_by_region = { ap-beijing = 128000, ap-chengdu = 128000, ap-chongqing = 64000, ap-guangzhou = 128000, ap-nanjing = 64000, ap-shanghai = 128000, ap-shanghai-fsi = 64000, ap-shenzhen-fsi = 64000, ap-hongkong = 128000, na-ashburn = 64000, na-siliconvalley = 64000, eu-frankfurt = 64000, ap-singapore = 64000, ap-bangkok = 64000, ap-jakarta = 64000, sa-saopaulo = 64000, ap-tokyo = 64000, ap-seoul = 64000 }
 reference_url = "https://cloud.tencent.com/document/product/583/11637"
 reference_checked_at = "2026-09-17"
+
+[scf_fetcher.tencent_limits.region_limits.ap-beijing]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 128000
+[scf_fetcher.tencent_limits.region_limits.ap-chengdu]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 128000
+[scf_fetcher.tencent_limits.region_limits.ap-chongqing]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-guangzhou]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 128000
+[scf_fetcher.tencent_limits.region_limits.ap-nanjing]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-shanghai]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 128000
+[scf_fetcher.tencent_limits.region_limits.ap-shanghai-fsi]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-shenzhen-fsi]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-hongkong]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 128000
+[scf_fetcher.tencent_limits.region_limits.na-ashburn]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.na-siliconvalley]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.eu-frankfurt]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-singapore]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-bangkok]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-jakarta]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.sa-saopaulo]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-tokyo]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
+[scf_fetcher.tencent_limits.region_limits.ap-seoul]
+max_namespaces_per_region = 5
+max_functions_per_namespace = 50
+total_concurrency_memory_mb = 64000
 
 [scf_fetcher.cloud_account]
 account_id = "tencent-scf"
@@ -157,7 +230,7 @@ package_config_dir = "scf/market_data"
 package_name = "moox-collector-market-data-crypto"
 # 每个 Space 使用独立 namespace，避免不同 Space 共享 Tencent SCF 的函数配额；首次发布时
 # CloudNode 会在目标地域幂等创建该命名空间。
-namespace = "crypto"
+namespace = "moox-crypto"
 runtime = "Go1"
 function_prefix = "moox-fetcher-crypto-binance"
 # crypto 需要公网出口访问交易所；Storage 数据面由 CLI 按地域自动选择私网或公网。
@@ -222,7 +295,7 @@ package_config_dir = "scf/stockcn"
 package_name = "moox-collector-stockcn"
 cls_cloud_account_id = "tencent-scf"
 # 与 crypto 隔离 namespace；Timer 与发布辅助函数合计受配额约束。
-namespace = "stockcn"
+namespace = "moox-stockcn"
 runtime = "Go1"
 function_prefix = "moox-fetcher-stockcn"
 # Full stock Instrument snapshot: one independent daily Timer SCF.

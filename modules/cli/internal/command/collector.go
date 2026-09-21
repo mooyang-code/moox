@@ -173,6 +173,7 @@ type collectorDeleteOptions struct {
 	ServiceAccessKey string
 	ServiceSecretKey string
 	SpaceID          string
+	Namespace        string
 	Region           string
 	Confirm          bool
 	DryRun           bool
@@ -214,7 +215,7 @@ var collectorFunctionDeployCmd = &cobra.Command{
 var collectorFunctionDeleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "异步删除当前 space 中全部 SCF 云函数",
-	Long: "列出当前 space 的 scf-event 节点，并通过 CloudNode 提交可恢复查询的异步删除任务；可按地域筛选。\n" +
+	Long: "列出当前 space 的 scf-event 节点，并通过 CloudNode 提交可恢复查询的异步删除任务；可按命名空间和地域筛选。\n" +
 		"必须显式指定 --confirm；使用 --dry-run 只列出目标而不提交删除。",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -367,6 +368,7 @@ type collectorDeploySummary struct {
 
 type collectorDeleteSummary struct {
 	SpaceID       string                            `json:"space_id"`
+	Namespace     string                            `json:"namespace"`
 	Region        string                            `json:"region,omitempty"`
 	NodeType      string                            `json:"node_type"`
 	DryRun        bool                              `json:"dry_run"`
@@ -415,6 +417,7 @@ func init() {
 	deleteFlags.StringVar(&collectorDeleteFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
 	deleteFlags.StringVar(&collectorDeleteFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	deleteFlags.StringVar(&collectorDeleteFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
+	deleteFlags.StringVar(&collectorDeleteFlags.Namespace, "namespace", "", "只删除指定 SCF 命名空间中的节点")
 	deleteFlags.StringVar(&collectorDeleteFlags.Region, "region", "", "只删除指定地域的 SCF 节点")
 	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前筛选范围内的 SCF 节点")
 	deleteFlags.BoolVar(&collectorDeleteFlags.DryRun, "dry-run", false, "只列出目标，不提交删除任务")
@@ -632,6 +635,15 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, err
 		}
 		storageRoutes = routeMap(storageRoutePlan)
+		if opts.SameRegionFirst && strings.TrimSpace(storageRoutePlan.Storage.Instance.Region) != "" {
+			storageRegion := strings.ToLower(strings.TrimSpace(storageRoutePlan.Storage.Instance.Region))
+			if err := setupconfig.RebalanceSCFTimerFunctionCounts(fetcherConfig, storageRegion, manifest.Manifest.SCFFetcher.TencentLimits); err != nil {
+				return collectorPublishSummary{}, fmt.Errorf("rebalance SCF functions for Storage region %s: %w", storageRegion, err)
+			}
+			if err := setupconfig.ValidateSCFCapacities(&manifest.Manifest.SCFFetcher, manifest.Manifest.SCFFetcher.TencentLimits); err != nil {
+				return collectorPublishSummary{}, fmt.Errorf("validate rebalanced SCF publication quota: %w", err)
+			}
+		}
 	}
 	// A manifest deployment must build the package from the authoritative
 	// control-plane trust material below. Accepting an operator-supplied zip
@@ -910,6 +922,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				}
 			}
 			regionNodeLimit := manifestFunctionLimit
+			if manifest != nil {
+				if regionalLimit := manifest.Manifest.SCFFetcher.TencentLimits.ForRegion(regionOpts.Region).MaxFunctionsPerNamespace; regionalLimit > 0 {
+					regionNodeLimit = regionalLimit
+				}
+			}
 			if fetcherConfig != nil {
 				// Every active regional publication also creates one Invoke
 				// canary. stockcn's snapshot region gets one more Timer.
@@ -2502,6 +2519,7 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	}
 
 	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
+	namespace := strings.TrimSpace(opts.Namespace)
 	region := strings.TrimSpace(opts.Region)
 	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
 		NodeType: "scf-event",
@@ -2513,13 +2531,14 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	}
 	nodeIDs := make([]string, 0, len(nodes))
 	for _, node := range nodes {
-		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" {
+		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || (namespace != "" && strings.TrimSpace(node.Namespace) != namespace) {
 			continue
 		}
 		nodeIDs = append(nodeIDs, node.NodeID)
 	}
 	summary := &collectorDeleteSummary{
 		SpaceID:    spaceID,
+		Namespace:  namespace,
 		Region:     region,
 		NodeType:   "scf-event",
 		DryRun:     opts.DryRun,

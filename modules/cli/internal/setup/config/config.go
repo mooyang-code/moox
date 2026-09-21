@@ -239,6 +239,10 @@ type SCFFetcherRegion struct {
 	DisplayName   string `toml:"display_name"`
 	Enabled       bool   `toml:"enabled"`
 	FunctionCount int    `toml:"function_count"`
+	// AutoFunctionCount remembers that function_count was omitted/zero in the
+	// manifest. Publication can then rebalance only automatic capacity after
+	// discovering the live Storage region, without overriding explicit counts.
+	AutoFunctionCount bool `toml:"-" json:"-"`
 
 	// These fields are populated from SCFFetcher.CloudAccount during manifest
 	// validation. Cloud account identity is global to the SCF fleet, not a
@@ -265,16 +269,26 @@ type SCFFetcherCloudAccount struct {
 // namespace, so they are configuration references rather than a substitute
 // for a live quota query.
 type TencentSCFLimits struct {
-	MaxNamespacesPerRegion           int            `toml:"max_namespaces_per_region"`
-	MaxFunctionsPerNamespace         int            `toml:"max_functions_per_namespace"`
-	MaxBurstConcurrencyPerMinute     int            `toml:"max_burst_concurrency_per_minute"`
-	TotalConcurrencyMemoryMBByRegion map[string]int `toml:"total_concurrency_memory_mb_by_region"`
-	ReferenceURL                     string         `toml:"reference_url"`
-	ReferenceCheckedAt               string         `toml:"reference_checked_at"`
+	MaxNamespacesPerRegion           int                              `toml:"max_namespaces_per_region"`
+	MaxFunctionsPerNamespace         int                              `toml:"max_functions_per_namespace"`
+	MaxBurstConcurrencyPerMinute     int                              `toml:"max_burst_concurrency_per_minute"`
+	TotalConcurrencyMemoryMBByRegion map[string]int                   `toml:"total_concurrency_memory_mb_by_region"`
+	RegionLimits                     map[string]TencentSCFRegionLimit `toml:"region_limits"`
+	ReferenceURL                     string                           `toml:"reference_url"`
+	ReferenceCheckedAt               string                           `toml:"reference_checked_at"`
+}
+
+// TencentSCFRegionLimit is the account-level default quota for one Tencent
+// SCF region. The values are deliberately manifest data: Tencent can raise
+// them per account, so deployment must be able to override them explicitly.
+type TencentSCFRegionLimit struct {
+	MaxNamespacesPerRegion   int `toml:"max_namespaces_per_region"`
+	MaxFunctionsPerNamespace int `toml:"max_functions_per_namespace"`
+	TotalConcurrencyMemoryMB int `toml:"total_concurrency_memory_mb"`
 }
 
 func defaultTencentSCFLimits() TencentSCFLimits {
-	return TencentSCFLimits{
+	limits := TencentSCFLimits{
 		MaxNamespacesPerRegion:       DefaultSCFMaxNamespacesPerRegion,
 		MaxFunctionsPerNamespace:     DefaultSCFMaxFunctionsPerNamespace,
 		MaxBurstConcurrencyPerMinute: DefaultSCFMaxBurstConcurrencyPerMinute,
@@ -294,6 +308,32 @@ func defaultTencentSCFLimits() TencentSCFLimits {
 		ReferenceURL:       "https://cloud.tencent.com/document/product/583/11637",
 		ReferenceCheckedAt: "2026-09-17",
 	}
+	// Tencent's documentation lists the higher default concurrency quota for
+	// Guangzhou, Shanghai, Beijing, Chengdu and Hong Kong. Regions not listed
+	// there use the documented 64000MB default.
+	primaryMemoryRegions := map[string]bool{
+		"ap-guangzhou": true, "ap-shanghai": true, "ap-beijing": true,
+		"ap-chengdu": true, "ap-hongkong": true,
+	}
+	limits.RegionLimits = make(map[string]TencentSCFRegionLimit, len(tencent.SCFRegions()))
+	for _, region := range tencent.SCFRegions() {
+		memory := 64000
+		if primaryMemoryRegions[region.Code] {
+			memory = 128000
+		}
+		limits.RegionLimits[region.Code] = TencentSCFRegionLimit{
+			MaxNamespacesPerRegion:   limits.MaxNamespacesPerRegion,
+			MaxFunctionsPerNamespace: limits.MaxFunctionsPerNamespace,
+			TotalConcurrencyMemoryMB: memory,
+		}
+	}
+	for region, memory := range limits.TotalConcurrencyMemoryMBByRegion {
+		if item, ok := limits.RegionLimits[region]; ok {
+			item.TotalConcurrencyMemoryMB = memory
+			limits.RegionLimits[region] = item
+		}
+	}
+	return limits
 }
 
 func (l *TencentSCFLimits) normalize() {
@@ -316,10 +356,6 @@ func (l *TencentSCFLimits) normalize() {
 	if strings.TrimSpace(l.ReferenceCheckedAt) == "" {
 		l.ReferenceCheckedAt = defaults.ReferenceCheckedAt
 	}
-	if l.TotalConcurrencyMemoryMBByRegion == nil {
-		l.TotalConcurrencyMemoryMBByRegion = defaults.TotalConcurrencyMemoryMBByRegion
-		return
-	}
 	normalized := make(map[string]int, len(defaults.TotalConcurrencyMemoryMBByRegion)+len(l.TotalConcurrencyMemoryMBByRegion))
 	for region, memory := range defaults.TotalConcurrencyMemoryMBByRegion {
 		normalized[region] = memory
@@ -331,6 +367,55 @@ func (l *TencentSCFLimits) normalize() {
 		}
 	}
 	l.TotalConcurrencyMemoryMBByRegion = normalized
+
+	regionLimits := make(map[string]TencentSCFRegionLimit, len(defaults.RegionLimits)+len(l.RegionLimits))
+	for region, item := range defaults.RegionLimits {
+		regionLimits[region] = item
+	}
+	for region, memory := range normalized {
+		if item, ok := regionLimits[region]; ok {
+			item.TotalConcurrencyMemoryMB = memory
+			regionLimits[region] = item
+		}
+	}
+	for region, item := range l.RegionLimits {
+		region = strings.ToLower(strings.TrimSpace(region))
+		if region == "" {
+			continue
+		}
+		base := regionLimits[region]
+		if item.MaxNamespacesPerRegion > 0 {
+			base.MaxNamespacesPerRegion = item.MaxNamespacesPerRegion
+		}
+		if item.MaxFunctionsPerNamespace > 0 {
+			base.MaxFunctionsPerNamespace = item.MaxFunctionsPerNamespace
+		}
+		if item.TotalConcurrencyMemoryMB > 0 {
+			base.TotalConcurrencyMemoryMB = item.TotalConcurrencyMemoryMB
+		}
+		regionLimits[region] = base
+	}
+	// Keep the legacy memory map and the explicit regional quota map coherent
+	// for callers that still inspect the former field.
+	for region, item := range regionLimits {
+		l.TotalConcurrencyMemoryMBByRegion[region] = item.TotalConcurrencyMemoryMB
+	}
+	l.RegionLimits = regionLimits
+}
+
+// ForRegion returns the normalized quota for one supported region. It also
+// provides a deterministic global fallback for callers constructing limits in
+// tests or older manifests without calling normalize first.
+func (l TencentSCFLimits) ForRegion(region string) TencentSCFRegionLimit {
+	region = strings.ToLower(strings.TrimSpace(region))
+	if item, ok := l.RegionLimits[region]; ok {
+		return item
+	}
+	return TencentSCFRegionLimit{
+		MaxNamespacesPerRegion:   l.MaxNamespacesPerRegion,
+		MaxFunctionsPerNamespace: l.MaxFunctionsPerNamespace,
+		TotalConcurrencyMemoryMB: l.TotalConcurrencyMemoryMBByRegion[region],
+	}
 }
 
 func (l TencentSCFLimits) validate(path string) error {
@@ -349,6 +434,14 @@ func (l TencentSCFLimits) validate(path string) error {
 		}
 		if memory <= 0 {
 			return fmt.Errorf("config_invalid: %s.total_concurrency_memory_mb_by_region[%q] must be positive", path, region)
+		}
+	}
+	for region, item := range l.RegionLimits {
+		if !supportedSCFRegion(region) {
+			return fmt.Errorf("config_invalid: %s.region_limits contains unsupported region %q", path, region)
+		}
+		if item.MaxNamespacesPerRegion < 1 || item.MaxFunctionsPerNamespace < 1 || item.TotalConcurrencyMemoryMB <= 0 {
+			return fmt.Errorf("config_invalid: %s.region_limits[%q] must define positive namespace, function, and memory limits", path, region)
 		}
 	}
 	return nil
@@ -1224,6 +1317,9 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 			return fmt.Errorf("config_invalid: scf_fetcher space %q is duplicated", spaceID)
 		}
 		seenSpaces[spaceID] = struct{}{}
+		if err := validateSCFNamespace(&cfg.Spaces[index], fmt.Sprintf("scf_fetcher.spaces[%d]", index)); err != nil {
+			return err
+		}
 		for regionIndex := range cfg.Spaces[index].Regions {
 			region := &cfg.Spaces[index].Regions[regionIndex]
 			region.CloudAccountID = account.AccountID
@@ -1248,6 +1344,34 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 			return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].cls_cloud_account_id must match scf_fetcher.cloud_account.account_id", index)
 		}
 	}
+	return nil
+}
+
+// ExpectedSCFNamespace returns the stable namespace assigned to one MooX
+// Space. Keeping one namespace per Space prevents unrelated fleets from
+// silently consuming each other's per-namespace function quota.
+func ExpectedSCFNamespace(spaceID string) string {
+	spaceID = strings.ToLower(strings.TrimSpace(spaceID))
+	spaceID = strings.ReplaceAll(spaceID, "_", "-")
+	return "moox-" + spaceID
+}
+
+func validateSCFNamespace(cfg *SCFFetcherSpace, path string) error {
+	if cfg == nil {
+		return fmt.Errorf("config_invalid: %s is required", path)
+	}
+	expected := ExpectedSCFNamespace(cfg.SpaceID)
+	namespace := strings.ToLower(strings.TrimSpace(cfg.Namespace))
+	if namespace == "" {
+		namespace = expected
+	}
+	if namespace != expected || namespace == "default" {
+		return fmt.Errorf("config_invalid: %s.namespace must be %q (one namespace per Space; default is not allowed)", path, expected)
+	}
+	if len(namespace) > 60 || !regexp.MustCompile(`^moox-[a-z0-9]+(?:-[a-z0-9]+)*$`).MatchString(namespace) {
+		return fmt.Errorf("config_invalid: %s.namespace %q must match moox-<space-id>", path, namespace)
+	}
+	cfg.Namespace = namespace
 	return nil
 }
 
@@ -1330,13 +1454,15 @@ func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
 		}
 	}
 	for region, regionNamespaces := range namespaces {
-		if len(regionNamespaces) > limits.MaxNamespacesPerRegion {
-			return fmt.Errorf("config_invalid: scf region %s uses %d namespaces, above max_namespaces_per_region %d", region, len(regionNamespaces), limits.MaxNamespacesPerRegion)
+		regionLimit := limits.ForRegion(region)
+		if len(regionNamespaces) > regionLimit.MaxNamespacesPerRegion {
+			return fmt.Errorf("config_invalid: scf region %s uses %d namespaces, above max_namespaces_per_region %d", region, len(regionNamespaces), regionLimit.MaxNamespacesPerRegion)
 		}
 	}
 	for key, count := range functions {
-		if count > limits.MaxFunctionsPerNamespace {
-			return fmt.Errorf("config_invalid: scf region %s namespace %s uses %d functions including publisher auxiliaries, above max_functions_per_namespace %d", key.region, key.namespace, count, limits.MaxFunctionsPerNamespace)
+		regionLimit := limits.ForRegion(key.region)
+		if count > regionLimit.MaxFunctionsPerNamespace {
+			return fmt.Errorf("config_invalid: scf region %s namespace %s uses %d functions including publisher auxiliaries, above max_functions_per_namespace %d", key.region, key.namespace, count, regionLimit.MaxFunctionsPerNamespace)
 		}
 	}
 	return nil
@@ -1353,6 +1479,9 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	}
 	limits.normalize()
 	if err := limits.validate("scf_fetcher.tencent_limits"); err != nil {
+		return err
+	}
+	if err := validateSCFNamespace(cfg, path); err != nil {
 		return err
 	}
 	if err := normalizeSCFRegionBlacklist(cfg, path); err != nil {
@@ -1577,8 +1706,13 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	enabledRegions := 0
 	for i := range cfg.Regions {
 		region := strings.TrimSpace(cfg.Regions[i].Region)
-		if region == "" || cfg.Regions[i].FunctionCount < 0 || cfg.Regions[i].FunctionCount > limits.MaxFunctionsPerNamespace || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
-			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..%d are required (0 enables automatic allocation)", path, i, limits.MaxFunctionsPerNamespace)
+		regionLimit := limits.ForRegion(region)
+		if region == "" || cfg.Regions[i].FunctionCount < 0 || (regionLimit.MaxFunctionsPerNamespace > 0 && cfg.Regions[i].FunctionCount > regionLimit.MaxFunctionsPerNamespace) || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
+			maxFunctions := limits.MaxFunctionsPerNamespace
+			if regionLimit.MaxFunctionsPerNamespace > 0 {
+				maxFunctions = regionLimit.MaxFunctionsPerNamespace
+			}
+			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..%d are required (0 enables automatic allocation)", path, i, maxFunctions)
 		}
 		if !supportedSCFRegion(region) {
 			return fmt.Errorf("config_invalid: %s.regions[%d] region %q is not supported", path, i, region)
@@ -1608,7 +1742,7 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") && strings.TrimSpace(cfg.InstrumentSnapshotRegion) != "" {
 		reserved[strings.ToLower(strings.TrimSpace(cfg.InstrumentSnapshotRegion))] = 1
 	}
-	if err := resolveSCFTimerFunctionCountsWithCapacities(cfg, path, limits.MaxFunctionsPerNamespace, reserved); err != nil {
+	if err := resolveSCFTimerFunctionCountsWithRegionalCapacities(cfg, path, limits, reserved); err != nil {
 		return err
 	}
 	if cfg.CLSCloudAccountID == "" {
@@ -1704,10 +1838,23 @@ func resolveSCFTimerFunctionCountsWithLimit(cfg *SCFFetcherSpace, path string, m
 // reserved map currently contains the stock Instrument snapshot (one extra
 // Timer); every active region also reserves one Invoke in this function.
 func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path string, maxFunctionsPerNamespace int, reservedByRegion map[string]int) error {
+	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
+		return maxFunctionsPerNamespace - 1 - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
+	})
+}
+
+func resolveSCFTimerFunctionCountsWithRegionalCapacities(cfg *SCFFetcherSpace, path string, limits TencentSCFLimits, reservedByRegion map[string]int) error {
+	limits.normalize()
+	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
+		return limits.ForRegion(region).MaxFunctionsPerNamespace - 1 - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
+	})
+}
+
+func resolveSCFTimerFunctionCountsWithCapacityFunc(cfg *SCFFetcherSpace, path string, capacity func(string) int) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
 	}
-	if maxFunctionsPerNamespace < 1 {
+	if capacity == nil {
 		return fmt.Errorf("config_invalid: max_functions_per_namespace must be positive")
 	}
 	if err := normalizeSCFRegionBlacklist(cfg, path); err != nil {
@@ -1718,11 +1865,7 @@ func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path stri
 		cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
 		cfg.StaggerMaxStartsPerSecond = DefaultStockCNStaggerMaxStartsPerSecond
 	}
-	regionCapacity := func(region string) int {
-		capacity := maxFunctionsPerNamespace - 1 // one Invoke canary
-		capacity -= reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
-		return capacity
-	}
+	regionCapacity := capacity
 	explicitTotal := 0
 	autoRegions := make([]int, 0)
 	enabledRegions := make([]int, 0)
@@ -1741,9 +1884,11 @@ func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path stri
 		}
 		enabledRegions = append(enabledRegions, index)
 		if region.FunctionCount == 0 {
+			cfg.Regions[index].AutoFunctionCount = true
 			autoRegions = append(autoRegions, index)
 			continue
 		}
+		cfg.Regions[index].AutoFunctionCount = false
 		explicitTotal += region.FunctionCount
 	}
 	desired := cfg.TimerFunctionCount
@@ -1802,9 +1947,86 @@ func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path stri
 	return nil
 }
 
+// RebalanceSCFTimerFunctionCounts applies the same quota-aware allocator after
+// the publisher has discovered the actual Storage region. Only regions whose
+// function_count was automatic are changed; explicit regional counts remain
+// operator-owned. The preferred region is filled to its namespace capacity
+// before any remaining automatic functions are assigned elsewhere.
+func RebalanceSCFTimerFunctionCounts(cfg *SCFFetcherSpace, storageRegion string, limits TencentSCFLimits) error {
+	if cfg == nil {
+		return fmt.Errorf("config_invalid: scf space is required")
+	}
+	limits.normalize()
+	reserved := map[string]int{}
+	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") && strings.TrimSpace(cfg.InstrumentSnapshotRegion) != "" {
+		reserved[strings.ToLower(strings.TrimSpace(cfg.InstrumentSnapshotRegion))] = 1
+	}
+	capacity := func(region string) int {
+		return limits.ForRegion(region).MaxFunctionsPerNamespace - 1 - reserved[strings.ToLower(strings.TrimSpace(region))]
+	}
+	autoRegions := make([]int, 0)
+	explicitTotal := 0
+	for index := range cfg.Regions {
+		region := &cfg.Regions[index]
+		if cfg.IsRegionBlacklisted(region.Region) || !region.Enabled {
+			continue
+		}
+		if capacity(region.Region) < 1 {
+			return fmt.Errorf("config_invalid: scf region %s has no Timer capacity after publisher auxiliary functions", region.Region)
+		}
+		if region.AutoFunctionCount {
+			autoRegions = append(autoRegions, index)
+			region.FunctionCount = 0
+		} else {
+			explicitTotal += region.FunctionCount
+		}
+	}
+	if len(autoRegions) == 0 {
+		return nil
+	}
+	desired := cfg.TimerFunctionCount
+	if desired <= 0 {
+		desired = explicitTotal
+		for range autoRegions {
+			desired += 1
+		}
+	}
+	remaining := desired - explicitTotal
+	if remaining < len(autoRegions) {
+		return fmt.Errorf("config_invalid: %s timer_function_count %d cannot assign at least one function to each automatic region", cfg.SpaceID, desired)
+	}
+	totalCapacity := 0
+	for _, index := range autoRegions {
+		totalCapacity += capacity(cfg.Regions[index].Region)
+	}
+	if remaining > totalCapacity {
+		return fmt.Errorf("config_invalid: %s timer_function_count %d exceeds automatic regional capacity %d", cfg.SpaceID, desired, totalCapacity+explicitTotal)
+	}
+	preferred := make([]int, 0, 1)
+	other := make([]int, 0, len(autoRegions))
+	storageRegion = strings.ToLower(strings.TrimSpace(storageRegion))
+	for _, index := range autoRegions {
+		if strings.EqualFold(strings.TrimSpace(cfg.Regions[index].Region), storageRegion) {
+			preferred = append(preferred, index)
+		} else {
+			other = append(other, index)
+		}
+	}
+	groups := make([][]int, 0, 2)
+	if len(preferred) > 0 {
+		groups = append(groups, preferred)
+	}
+	if len(other) > 0 {
+		groups = append(groups, other)
+	}
+	allocateSCFAutoRegionCountsWithGroups(cfg, groups, remaining, capacity)
+	return nil
+}
+
 // allocateSCFAutoRegionCounts spreads automatically allocated Timer capacity
-// across enabled regions. Crypto deliberately fills overseas regions first so
-// domestic regions remain a fallback for quota or availability constraints.
+// across enabled regions. Runtime publication may provide a Storage-region
+// preference; this manifest-only fallback keeps the historical crypto
+// overseas-first ordering when no live Storage route is available.
 // Every configured automatic region still receives at least one function.
 func allocateSCFAutoRegionCounts(cfg *SCFFetcherSpace, autoRegions []int, remaining int) {
 	allocateSCFAutoRegionCountsWithLimit(cfg, autoRegions, remaining, DefaultSCFMaxFunctionsPerNamespace)
@@ -1828,7 +2050,10 @@ func allocateSCFAutoRegionCountsWithCapacities(cfg *SCFFetcherSpace, autoRegions
 		}
 		groups = [][]int{overseas, domestic}
 	}
+	allocateSCFAutoRegionCountsWithGroups(cfg, groups, remaining, capacity)
+}
 
+func allocateSCFAutoRegionCountsWithGroups(cfg *SCFFetcherSpace, groups [][]int, remaining int, capacity func(string) int) {
 	for groupIndex, group := range groups {
 		if len(group) == 0 {
 			continue

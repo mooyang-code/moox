@@ -32,17 +32,17 @@ HTTPS，并配置健康检查以维持 Caddy 运行和自动续期。公网 IP/D
 SCF 的各个 `regions` 只描述函数部署地域，不再为每个地域复制云账户。
 
 同一文件的 `[scf_fetcher.tencent_limits]` 保存腾讯云默认配额参考：每地域 5 个命名空间、
-每命名空间 50 个函数、每分钟默认 burst 500，以及已核对地域的账号级并发内存配额。
-发布校验使用 `max_functions_per_namespace` 作为每个 SCF 地域的函数数上限；这是默认配额
-而不是实时账号状态。购买套餐、工单提额或腾讯云调整后，应同步更新该配置，并在发布前通过
-腾讯云控制台或 API 再核对。未出现在 `total_concurrency_memory_mb_by_region` 的地域不作
-并发内存假设，不能仅凭配置推断其可用节点数。每个 Space 建议使用独立 `namespace`；校验
-还会为每个活跃地域预留 1 个 Invoke canary，并为 `stockcn` 快照地域预留 1 个 Instrument
-Timer，均计入同一 namespace 的函数配额。首次发布非 `default` namespace 时，CloudNode
-会在目标地域先幂等创建命名空间；已有同名函数但属于其他 namespace 的节点不会被复用。
-当前仓库的 `moox.toml` 为避免误迁移仍保留既有 `default` fleet 且默认关闭 SCF；启用前若
-同一地域的多个 Space 合计超过 50（含辅助函数），应先显式迁移到专用 namespace 或减少地域
-节点数，发布校验会拒绝超额配置。
+每命名空间 50 个函数、每分钟默认 burst 500。`region_limits` 逐地域保存命名空间数、函数数
+和账号级并发内存上限；当前官方文档的默认并发内存为广州/上海/北京/成都/中国香港
+128000MB，其余支持地域 64000MB。购买套餐、工单提额或腾讯云调整后，应按地域覆盖该配置，
+并在发布前通过腾讯云控制台或 API 再核对。配置是发布前的计划约束，不等于实时账号配额。
+每个 Space 的 namespace 必须严格为 `moox-<space_id>`，例如 `moox-crypto`、`moox-stockcn`；
+未填写时 CLI 会按该规范补全，显式使用 `default` 或跨 Space 共享 namespace 会被拒绝。
+发布校验会为每个活跃地域预留 1 个 Invoke canary，并为 `stockcn` 快照地域预留 1 个
+Instrument Timer，均计入同一 namespace 的函数配额。首次发布非 `default` namespace 时，
+CloudNode 会在目标地域先幂等创建命名空间；已有同名函数但属于其他 namespace 的节点不会被复用。
+当前仓库的 `moox.toml` 已切换为专用 namespace；线上旧 `default` fleet 需要按“新 namespace
+发布并验收，再删除旧节点”的顺序迁移。
 
 ## 初始化命令
 
@@ -66,12 +66,14 @@ moox-cli setup init \
 
 若启用了 `[scf_fetcher]`，初始化开始时还会只读发现 `storage_host` 对应的腾讯云实例，
 把地域、可用区、VPC、子网和私网地址写入返回的 `scf_routes` 计划。该计划不修改云资源，
-后续 `collector function publish submit` 会优先完整发布 Storage 同地域配置的节点数，并为
+后续 `collector function publish submit` 会优先向 Storage 同地域分配函数，自动分配的容量会先
+填满该地域，再把剩余函数分配到其他地域，并为
 同地域函数设置 `ip://<storage-private-ip>:11003` 和 Storage 的 VPC/子网；该地域的
 Invoke canary、Timer 批次和回读全部成功后才继续其他地域。其他地域使用
 `ip://<storage-public-ip>:11003`。跨地域不创建 CCN。可单独查看计划：
-这里的“完整发布”按该地域 manifest 的 `function_count` 计算；CLI 不会自动迁移其他地域的
-节点配额。
+这里的“填满”按 `region_limits.<storage-region>.max_functions_per_namespace` 扣除 Invoke
+和快照辅助函数后的容量计算；显式 `function_count` 不会被改写。CLI 不会自动迁移已有其他
+地域的线上节点，也不会自动删除旧 namespace。
 
 ```bash
 moox-cli setup scf-network-plan --file ./moox.toml

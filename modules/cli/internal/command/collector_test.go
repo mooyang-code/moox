@@ -877,6 +877,32 @@ func TestCollectorPublishStatusCommandExists(t *testing.T) {
 	assert.Same(t, collectorFunctionPublishStatusCmd, cmd)
 }
 
+func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/admin/cloudnode/GetNodeList", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0},
+			"items": []adminclient.CloudNode{
+				{NodeID: "legacy-default", Namespace: "default", NodeType: "scf-event", BizType: "market_fetcher"},
+				{NodeID: "new-crypto", Namespace: "moox-crypto", NodeType: "scf-event", BizType: "market_fetcher"},
+				{NodeID: "deleted-default", Namespace: "default", IsDeleted: true, NodeType: "scf-event", BizType: "market_fetcher"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
+		ControlURL: server.URL,
+		SpaceID:    "crypto",
+		Namespace:  "default",
+		DryRun:     true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "default", summary.Namespace)
+	assert.Equal(t, 1, summary.TotalCount)
+	assert.Equal(t, []string{"legacy-default"}, summary.NodeIDs)
+}
+
 func TestPublishSubmitReturnsAfterJobSubmission(t *testing.T) {
 	api := &fakeCollectorFleetAPI{}
 	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{

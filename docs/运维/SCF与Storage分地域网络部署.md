@@ -35,13 +35,15 @@ CLI 不修改 `moox.toml`，也不会因为路由检查自动创建云联网（C
    moox-cli setup scf-network-plan --file ./moox.toml
    ```
 
-4. 发布 SCF 时，CLI 默认启用 `--same-region-first`：先处理 Storage 同地域，并把该地域在
-   配置中的 `function_count` 全部创建/更新并完成回读，再开始其他地域。每个地域都会先
+4. 发布 SCF 时，CLI 默认启用 `--same-region-first`：自动分配的函数先处理 Storage 同地域，
+   直到该地域按 `region_limits.<region>.max_functions_per_namespace` 扣除 Invoke/快照辅助
+   函数后的容量用尽，再把剩余函数分配到其他地域。显式 `function_count` 仍按运维配置执行。
+   每个地域都会先
    创建/更新 Invoke canary，再放大 Timer fleet；同地域 canary 的 NodeCreateItem 同时携带
    `vpc_id`、`subnet_id` 和私网 Storage target。Storage 地域的任一 canary、批次或回读失败
    都会立即停止发布，不会继续消耗其他地域的公网流量。
-   这里的“占满”指达到该地域配置的 `function_count`；CLI 不会擅自把其他地域的数量搬到
-   Storage 地域。若希望更多请求走内网，应先在 manifest 中为 Storage 地域配置目标数量。
+   这里的“占满”指达到该地域命名空间可用容量，而不是达到一个固定的全球数量。CLI 不会
+   自动迁移已有线上函数或删除旧 namespace；namespace 迁移必须先发布并验收新 namespace。
 
    ```bash
    moox-cli collector function publish submit \
@@ -75,7 +77,7 @@ CLI 不修改 `moox.toml`，也不会因为路由检查自动创建云联网（C
 
 ```bash
 moox-cli setup inspect-scf --file ./moox.toml \
-  --region <scf-region> --namespace default --function <function-name>
+  --region <scf-region> --namespace moox-crypto --function <function-name>
 ```
 
 重点核对 `vpc_id`、`subnet_id`、`public_net_status` 和

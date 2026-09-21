@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +23,13 @@ func TestTencentSCFLimitsNormalizeDefaults(t *testing.T) {
 	assert.Equal(t, 128000, limits.TotalConcurrencyMemoryMBByRegion["ap-guangzhou"])
 	assert.Equal(t, 64000, limits.TotalConcurrencyMemoryMBByRegion["ap-singapore"])
 	assert.Equal(t, "https://cloud.tencent.com/document/product/583/11637", limits.ReferenceURL)
+	for _, region := range tencent.SCFRegions() {
+		item, ok := limits.RegionLimits[region.Code]
+		require.True(t, ok, region.Code)
+		assert.Equal(t, DefaultSCFMaxNamespacesPerRegion, item.MaxNamespacesPerRegion, region.Code)
+		assert.Equal(t, DefaultSCFMaxFunctionsPerNamespace, item.MaxFunctionsPerNamespace, region.Code)
+		assert.Positive(t, item.TotalConcurrencyMemoryMB)
+	}
 }
 
 func TestTencentSCFLimitsNormalizeMergesRegionOverrides(t *testing.T) {
@@ -34,6 +42,60 @@ func TestTencentSCFLimitsNormalizeMergesRegionOverrides(t *testing.T) {
 	assert.Equal(t, 96000, limits.TotalConcurrencyMemoryMBByRegion["ap-nanjing"])
 	assert.Equal(t, 256000, limits.TotalConcurrencyMemoryMBByRegion["ap-guangzhou"])
 	assert.Equal(t, 64000, limits.TotalConcurrencyMemoryMBByRegion["ap-tokyo"])
+}
+
+func TestTencentSCFRegionLimitOverrideIsUsedForFunctionCapacity(t *testing.T) {
+	limits := TencentSCFLimits{RegionLimits: map[string]TencentSCFRegionLimit{
+		"ap-nanjing": {MaxNamespacesPerRegion: 3, MaxFunctionsPerNamespace: 8, TotalConcurrencyMemoryMB: 32000},
+	}}
+	limits.normalize()
+	assert.Equal(t, 8, limits.ForRegion("ap-nanjing").MaxFunctionsPerNamespace)
+
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "moox-crypto",
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 8}},
+	}}}
+	limits.MaxFunctionsPerNamespace = DefaultSCFMaxFunctionsPerNamespace
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_functions_per_namespace 8")
+}
+
+func TestValidateSCFCapacitiesUsesRegionalNamespaceLimit(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	limits.RegionLimits["ap-nanjing"] = TencentSCFRegionLimit{
+		MaxNamespacesPerRegion: 2, MaxFunctionsPerNamespace: 50, TotalConcurrencyMemoryMB: 64000,
+	}
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{
+		{SpaceID: "crypto", Namespace: "moox-crypto", Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 1}}},
+		{SpaceID: "stockcn", Namespace: "moox-stockcn", Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 1}}},
+	}}
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region 2")
+}
+
+func TestValidateSCFNamespaceUsesSpaceIdentity(t *testing.T) {
+	space := SCFFetcherSpace{SpaceID: "stockcn", Namespace: "default"}
+	err := validateSCFNamespace(&space, "scf_fetcher.spaces[0]")
+	require.ErrorContains(t, err, "must be")
+
+	space.Namespace = ""
+	require.NoError(t, validateSCFNamespace(&space, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, "moox-stockcn", space.Namespace)
+
+	space.Namespace = "moox-crypto"
+	require.ErrorContains(t, validateSCFNamespace(&space, "scf_fetcher.spaces[0]"), "moox-stockcn")
+}
+
+func TestRebalanceSCFTimerFunctionCountsFillsStorageRegionFirst(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	cfg := SCFFetcherSpace{
+		SpaceID: "crypto", TimerFunctionCount: 60,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-nanjing", Enabled: true, AutoFunctionCount: true},
+			{Region: "ap-singapore", Enabled: true, AutoFunctionCount: true},
+		},
+	}
+	require.NoError(t, RebalanceSCFTimerFunctionCounts(&cfg, "ap-nanjing", limits))
+	assert.Equal(t, 49, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 11, cfg.Regions[1].FunctionCount)
 }
 
 func TestTencentSCFLimitsRejectInvalidRegionMemory(t *testing.T) {
