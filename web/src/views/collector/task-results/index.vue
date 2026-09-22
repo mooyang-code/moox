@@ -12,31 +12,9 @@
         </a-empty>
 
         <template v-else>
-          <a-tabs v-model:active-key="activeTaskId" type="rounded" @change="onTaskChange">
+          <a-tabs v-model:active-key="activeTaskId" type="rounded" size="medium" class="result-tabs" @change="onTaskChange">
             <a-tab-pane v-for="tab in resultTabs" :key="tab.taskId" :title="tab.title" />
           </a-tabs>
-
-          <section v-if="activeTask" class="result-context">
-            <div class="result-context__heading">
-              <h3>{{ activeTask.task_name || activeTask.task_id }}</h3>
-              <div class="result-context__tags">
-                <a-tag :color="activeTask.enabled === false || activeTask.enabled === 'false' ? 'orange' : 'green'">
-                  {{ taskStateLabel(activeTask) }}
-                </a-tag>
-                <a-tag :color="resultStateColor(activeState)">{{ resultStateLabel(activeState) }}</a-tag>
-              </div>
-            </div>
-            <dl class="result-context__summary">
-              <div>
-                <dt>{{ activeTask.result?.data_kind === "record" ? "最近更新" : "最近数据时间" }}</dt>
-                <dd>{{ lastDataTime(activeTask) }}</dd>
-              </div>
-              <div>
-                <dt>覆盖范围</dt>
-                <dd>{{ coverageText(activeTask) }}</dd>
-              </div>
-            </dl>
-          </section>
 
           <a-alert v-if="activeState === 'error'" type="error" show-icon>
             {{ activeTask?.last_error || "结果视图不可用，请检查任务配置或稍后重试。" }}
@@ -51,12 +29,10 @@
             embedded
             :view-ids="activeViewIds"
             :active-view-id="activeViewIds[0]"
-            :hide-technical-identity="true"
             :view-owner-modules="['collector']"
             :view-roles="['collection_browse']"
             empty-description="结果准备中"
             empty-rows-description="任务已准备，尚未产生数据"
-            :auto-refresh-interval-ms="30000"
           />
         </template>
       </a-spin>
@@ -75,11 +51,7 @@ import {
   buildResultsQuery,
   buildTaskResultTabs,
   getTaskResultState,
-  lastDataTime,
-  resultCoverage,
-  resultStateLabel,
   selectTaskIdFromQuery,
-  taskStateLabel,
   type TaskResultState
 } from "./task-results-model";
 
@@ -102,16 +74,6 @@ const activeState = computed<TaskResultState>(() => (activeTask.value ? getTaskR
 
 function queryTaskId(value: unknown) {
   return Array.isArray(value) ? String(value[0] || "") : String(value || "");
-}
-
-function resultStateColor(state: TaskResultState) {
-  return state === "ready" ? "green" : state === "error" ? "red" : "orange";
-}
-
-function coverageText(task: CollectorTask) {
-  const coverage = resultCoverage(task);
-  if (coverage.start === "-" && coverage.end === "-") return "暂未提供";
-  return `${coverage.start} 至 ${coverage.end}`;
 }
 
 async function load() {
@@ -192,54 +154,27 @@ watch(
 
 <style scoped>
 .task-results-page {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 100%;
+  overflow-x: hidden;
 }
 
-.result-context {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--moox-space-4);
-  margin: var(--moox-space-3) 0;
-  padding: var(--moox-space-3) var(--moox-space-4);
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
+.task-results-page :deep(.arco-spin),
+.task-results-page :deep(.arco-spin-children) {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
-.result-context__heading {
-  min-width: 220px;
+.result-tabs {
+  min-width: 0;
+  margin-bottom: var(--moox-space-3);
 }
 
-.result-context h3 {
-  margin: 0 0 var(--moox-space-2);
-}
-
-.result-context__tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--moox-space-2);
-}
-
-.result-context__summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--moox-space-4);
-  margin: 0;
-}
-
-.result-context__summary div {
-  min-width: 150px;
-}
-
-.result-context__summary dt {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.result-context__summary dd {
-  margin: var(--moox-space-1) 0 0;
-  color: var(--color-text-1);
+.result-tabs :deep(.arco-tabs-content) {
+  display: none;
 }
 </style>

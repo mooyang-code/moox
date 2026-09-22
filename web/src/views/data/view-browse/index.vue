@@ -619,7 +619,11 @@ const modeText = computed(() => {
   return "未知类型";
 });
 
-const preferredColumnNames = computed(() => viewColumns.value.map(item => item.column_name).filter(Boolean));
+const explicitViewColumnNames = computed(() => viewColumns.value.map(item => item.column_name).filter(Boolean));
+const datasetColumnNames = computed(() => datasetColumns.value.map(item => item.column_name).filter(Boolean));
+const preferredColumnNames = computed(() =>
+  explicitViewColumnNames.value.length > 0 ? explicitViewColumnNames.value : datasetColumnNames.value
+);
 const klineColumnNames = computed(() => {
   const names = preferredColumnNames.value;
   const out: string[] = [];
@@ -629,9 +633,21 @@ const klineColumnNames = computed(() => {
   }
   return out;
 });
-const columnLabels = computed(() =>
-  buildViewColumnLabels(viewColumns.value, datasetColumns.value, fields.value, factors.value, datasets.value, activeView.value)
-);
+const columnLabels = computed(() => {
+  const labels = buildViewColumnLabels(
+    viewColumns.value,
+    datasetColumns.value,
+    fields.value,
+    factors.value,
+    datasets.value,
+    activeView.value
+  );
+  for (const column of datasetColumns.value) {
+    if (!column.column_name || labels[column.column_name]) continue;
+    labels[column.column_name] = column.attributes?.display_name?.trim() || column.column_name;
+  }
+  return labels;
+});
 const filterFieldOptions = computed(() => {
   const options: FilterFieldOption[] = [];
   const seen = new Set<string>();
@@ -650,6 +666,9 @@ const filterFieldOptions = computed(() => {
     push("version", "版本", "FIELD_VALUE_TYPE_STRING");
   }
   for (const column of viewColumns.value) {
+    push(column.column_name, columnTitle(column.column_name), column.value_type || "FIELD_VALUE_TYPE_STRING");
+  }
+  for (const column of datasetColumns.value) {
     push(column.column_name, columnTitle(column.column_name), column.value_type || "FIELD_VALUE_TYPE_STRING");
   }
   return options;
@@ -1026,13 +1045,12 @@ async function loadViewContext() {
     });
     const columnsRsp = await listViewColumns({ space_id, view_id: contextViewId, page: { page: 1, size: 1000 } });
     viewColumns.value = columnsRsp.columns || [];
+    // Collection result views often have few explicit View columns. Dataset
+    // columns supply the rest of the searchable fields in the filter bar.
+    await datasetColumnsPromise;
     resetFilterRows();
     resetSortState();
     await reloadRows();
-    // Dataset columns are only used for labels. Do not keep the data table
-    // behind this second metadata round trip, but still update labels when it
-    // eventually completes for the same View.
-    void datasetColumnsPromise;
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "加载视图上下文失败");
   } finally {
@@ -1079,7 +1097,7 @@ async function loadTimeSeriesViewRows() {
       space_id,
       view_id: view.view_id,
       ...(timeRange ? { time_range: timeRange } : {}),
-      ...(preferredColumnNames.value.length > 0 ? { column_names: preferredColumnNames.value } : {}),
+      ...(explicitViewColumnNames.value.length > 0 ? { column_names: explicitViewColumnNames.value } : {}),
       filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
       page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
@@ -1444,13 +1462,17 @@ watch(selectedSpaceId, () => {
 <style scoped>
 .view-browse-page {
   width: 100%;
+  max-width: 100%;
   height: 100%;
   min-width: 0;
+  overflow-x: hidden;
 }
 
-.view-browse-page :deep(.arco-spin) {
+.view-browse-page :deep(.arco-spin),
+.view-browse-page :deep(.arco-spin-children) {
   display: block;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -1500,6 +1522,10 @@ watch(selectedSpaceId, () => {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px 18px;
   align-items: start;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   margin-bottom: var(--moox-space-3);
   padding: 18px var(--moox-space-5);
   border: 1px solid var(--color-border-2);
@@ -1509,8 +1535,9 @@ watch(selectedSpaceId, () => {
 
 .filter-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 14px 28px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -1604,9 +1631,15 @@ watch(selectedSpaceId, () => {
   max-width: 100%;
   box-sizing: border-box;
   padding: var(--moox-space-3);
+  overflow: hidden;
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
   background: var(--color-bg-2);
+}
+
+.result-pane :deep(.arco-table),
+.result-pane :deep(.arco-table-container) {
+  width: 100%;
 }
 
 .result-pane :deep(.arco-pagination) {

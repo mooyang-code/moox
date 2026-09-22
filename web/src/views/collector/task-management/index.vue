@@ -83,17 +83,21 @@ watch(
 }
 
 .task-management-content {
+  min-width: 0;
   min-height: 0;
   flex: 1;
   margin-top: var(--moox-space-3);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .task-management-content :deep(.moox-page) {
   height: auto;
   min-height: 100%;
+  max-width: 100%;
   padding: 0;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: visible;
   background: transparent;
 }
 

@@ -22,7 +22,7 @@ describe("storage view browse workflows", () => {
     const source = readFileSync(resolve(__dirname, "../src/views/data/view-browse/index.vue"), "utf8");
 
     expect(source).not.toContain("VIEW_BROWSE_PREVIEW_LIMIT");
-    expect(source).toContain('page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }');
+    expect(source).toContain("page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }");
     expect(source).toContain('total_mode: "NONE"');
     expect(source).toContain("VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS = 24");
     expect(source).toContain("hasExactSubjectIDFilter()");
@@ -34,6 +34,19 @@ describe("storage view browse workflows", () => {
     expect(source).not.toContain("频率: {{ currentViewFrequency }}");
     expect(source).not.toContain("{{ buildTimeText }}");
     expect(source).not.toContain("活跃版本 {{ activeView.active_view_revision }}");
+  });
+
+  it("uses dataset columns for filters and keeps the query pane within the window", () => {
+    const source = readFileSync(resolve(__dirname, "../src/views/data/view-browse/index.vue"), "utf8");
+
+    expect(source).toContain("for (const column of viewColumns.value)");
+    expect(source).toContain("for (const column of datasetColumns.value)");
+    expect(source).toContain("await datasetColumnsPromise");
+    expect(source).toContain("repeat(auto-fit, minmax(min(220px, 100%), 1fr))");
+    expect(source).toContain(":scroll=\"{ x: 'max-content', y: 500 }\"");
+    expect(source).toContain('fixed="right"');
+    expect(source).toContain("overflow-x: hidden");
+    expect(source).not.toContain("overflow-x: hidden !important");
   });
 
   it("selects the first remaining view when the active view disappears", () => {

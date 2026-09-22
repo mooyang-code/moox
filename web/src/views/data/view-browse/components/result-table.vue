@@ -6,3 +6,11 @@
 defineProps<{ loading?: boolean; rows?: unknown[] }>();
 defineEmits<{ select: [row: unknown] }>();
 </script>
+
+<style scoped>
+.view-result-table {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+</style>

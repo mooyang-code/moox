@@ -33,9 +33,10 @@ describe("collector result workflow", () => {
     expect(results).toContain("<ViewBrowse");
     expect(results).toContain(":active-view-id=");
     expect(results).toContain(":view-ids=");
-    expect(results).toContain(':hide-technical-identity="true"');
+    expect(results).not.toContain("hide-technical-identity");
+    expect(results).not.toContain("auto-refresh-interval-ms");
+    expect(results).not.toContain("result-context");
     expect(browse).toContain('v-if="!props.hideTechnicalIdentity" class="view-status-line"');
-    expect(results).toContain(':auto-refresh-interval-ms="30000"');
     expect(browse).toContain("<KlineModal");
     expect(browse).toContain('@click="openKlineModal"');
   });

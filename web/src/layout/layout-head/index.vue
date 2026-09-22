@@ -207,6 +207,7 @@ const onMenuItem = (key: string) => {
     display: grid;
     grid-template-rows: auto 1fr auto;
     height: 100%;
+    min-width: 0;
   }
 }
 .header {
