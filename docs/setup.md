@@ -36,13 +36,14 @@ SCF 的各个 `regions` 只描述函数部署地域，不再为每个地域复�
 和账号级并发内存上限；当前官方文档的默认并发内存为广州/上海/北京/成都/中国香港
 128000MB，其余支持地域 64000MB。购买套餐、工单提额或腾讯云调整后，应按地域覆盖该配置，
 并在发布前通过腾讯云控制台或 API 再核对。配置是发布前的计划约束，不等于实时账号配额。
-每个 Space 的 namespace 必须严格为 `moox-<space_id>`，例如 `moox-crypto`、`moox-stockcn`；
-未填写时 CLI 会按该规范补全，显式使用 `default` 或跨 Space 共享 namespace 会被拒绝。
-发布校验会为每个活跃地域预留 1 个 Invoke canary，并为 `stockcn` 快照地域预留 1 个
-Instrument Timer，均计入同一 namespace 的函数配额。首次发布非 `default` namespace 时，
-CloudNode 会在目标地域先幂等创建命名空间；已有同名函数但属于其他 namespace 的节点不会被复用。
-当前仓库的 `moox.toml` 已切换为专用 namespace；线上旧 `default` fleet 需要按“新 namespace
-发布并验收，再删除旧节点”的顺序迁移。
+每个 Space 的主 namespace 必须严格为 `moox-<space_id>`，例如 `moox-crypto`、`moox-stockcn`；
+未填写时 CLI 会按该规范补全，显式使用 `default` 或跨 Space 共享主 namespace 会被拒绝。单地域
+函数超过每命名空间 50 个上限时，发布器会继续创建 `moox-<space_id>-ns2` 等溢出命名空间，直到
+达到该地域 5 个命名空间 / 250 个函数的默认配额。发布校验会为每个活跃地域预留 1 个 Invoke
+canary，并为 `stockcn` 快照地域预留 1 个 Instrument Timer，均计入对应 namespace 的函数配额。
+首次发布非 `default` namespace 时，CloudNode 会在目标地域先幂等创建命名空间；已有同名函数但
+属于其他 namespace 的节点不会被复用。当前仓库的 `moox.toml` 已切换为专用 namespace；线上旧
+`default` fleet 需要按“新 namespace 发布并验收，再删除旧节点”的顺序迁移。
 
 ## 初始化命令
 
@@ -70,7 +71,8 @@ moox-cli setup init \
 填满该地域，再把剩余函数分配到其他地域，并为
 同地域函数设置 `ip://<storage-private-ip>:11003` 和 Storage 的 VPC/子网；该地域的
 Invoke canary、Timer 批次和回读全部成功后才继续其他地域。其他地域使用
-`ip://<storage-public-ip>:11003`。跨地域不创建 CCN。可单独查看计划：
+`ip://<storage-public-ip>:11003`。跨地域不创建 CCN。Binance 合约采集额外需要海外
+SCF 出口（中国香港），这与配额扩容无关。可单独查看计划：
 这里的“填满”按 `region_limits.<storage-region>.max_functions_per_namespace` 扣除 Invoke
 和快照辅助函数后的容量计算；显式 `function_count` 不会被改写。CLI 不会自动迁移已有其他
 地域的线上节点，也不会自动删除旧 namespace。
@@ -85,6 +87,30 @@ SCF 函数需要访问交易所公网时，继续将 `public_net_status = "ENABL
 
 命令可重复执行。相同资源记为 `unchanged`；已激活且锁定绑定的 Dataset 也记为
 `unchanged`。同 ID 资源字段不一致时返回冲突，不自动覆盖现有配置或数据。
+
+## Storage 全量重建
+
+如果需要删除全部 Storage 数据、View 数据、durable consumers 和 Storage 元数据后重新建立，
+不要分别手工执行多个 reset 命令，使用 `setup rebuild-storage`。不带 `--yes` 时只做远端
+dry-run，确认返回的目标、View 数量、索引和消费者后再执行：
+
+```bash
+moox-cli setup rebuild-storage \
+  --file ./moox.toml \
+  --host storage \
+  --config-dir ./config/setup
+
+moox-cli setup rebuild-storage \
+  --file ./moox.toml \
+  --host storage \
+  --config-dir ./config/setup \
+  --yes
+```
+
+破坏性阶段由 CLI 串行完成：停止写入方，预检并清理 EventBus consumers/subjects，停止 Storage，
+删除 Primary/DataNode 数据、View 索引和 metadata DB，启动全新 Storage，重新执行本页的
+`setup init` 流程，最后验证 Storage 健康、Schema、DataNode 和 Dataset。命令失败时会尝试
+恢复重建前仍在运行的 Collector、Factor、Strategy 和 Trade。
 
 完成后登录管理台，在空间选择器中可切换“A股市场”和“加密货币市场”，并查看各自的
 Dataset、Field、DatasetColumn 和 View。

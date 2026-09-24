@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,10 +79,15 @@ func (a *MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
 	}
 }
 
-func (*MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
+func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
+	instrument := marketdata.InstrumentSpot
+	if a != nil && a.defaultProductType == marketdata.ProductSwap {
+		instrument = marketdata.InstrumentSwap
+	}
 	return marketdata.KlineSpec{
-		Markets:   []string{"crypto"},
-		Exchanges: []string{"binance"},
+		Markets:     []string{"crypto"},
+		Exchanges:   []string{"binance"},
+		Instruments: []marketdata.InstrumentType{instrument},
 		Frequencies: []string{
 			string(marketdata.FrequencyMinute), string(marketdata.Frequency5Min),
 			string(marketdata.Frequency15Min), string(marketdata.Frequency30Min),
@@ -98,9 +105,22 @@ func (*MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 			Burst:             5,
 			MaxConcurrent:     1,
 			Cooldown:          time.Second,
-			RequestTimeout:    5 * time.Second,
+			RequestTimeout:    configuredKlineRequestTimeout(),
 		},
 	}
+}
+
+func configuredKlineRequestTimeout() time.Duration {
+	const defaultTimeout = 5 * time.Second
+	raw := strings.TrimSpace(os.Getenv("MOOX_FETCH_REQUEST_TIMEOUT_MS"))
+	if raw == "" {
+		return defaultTimeout
+	}
+	milliseconds, err := strconv.Atoi(raw)
+	if err != nil || milliseconds <= 0 {
+		return defaultTimeout
+	}
+	return time.Duration(milliseconds) * time.Millisecond
 }
 
 func (*MarketDataAdapter) InstrumentSpec() marketdata.InstrumentSpec {

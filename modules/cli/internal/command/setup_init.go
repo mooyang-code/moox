@@ -84,123 +84,11 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			// Resolve the Storage placement before mutating Admin/metadata. This is
-			// a read-only preflight: collector publication later consumes the same
-			// plan and applies private routing only to SCF functions in Storage's
-			// Tencent region.
-			var scfRoutes *privatenet.SCFRoutePlan
-			if snapshot.Manifest.SCFFetcher.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost.Provider), "tencent") {
-				plan, routeErr := deps.resolveSCFRoutes(cmd.Context(), snapshot, "")
-				if routeErr != nil {
-					return fmt.Errorf("scf-network: %w", routeErr)
-				}
-				scfRoutes = &plan
-			}
-			// Open the cloud ingress required by every configured public runtime endpoint
-			// before the first Admin/Storage mutation. The operation is idempotent;
-			// keeping its summary in the result makes skipped targets visible to
-			// automation instead of silently reporting a complete initialization.
-			firewall, err := deps.ensureFirewall(cmd.Context(), snapshot)
-			if err != nil {
-				return fmt.Errorf("firewall: %w", err)
-			}
-			if firewall.Status != "" && firewall.Status != "ready" {
-				// Preserve the machine-readable summary even though initialization
-				// must stop before mutating Admin/Storage.
-				_ = writeSetupJSON(cmd, map[string]any{"status": "firewall_incomplete", "firewall": firewall, "scf_routes": scfRoutes})
-				return fmt.Errorf("firewall_incomplete: status=%s skipped=%d", firewall.Status, firewall.Skipped)
-			}
-			// Fail before mutating Admin/Storage metadata when an internal Caddy
-			// CA is not trusted by the browser machine.
-			if err := ensureSetupBrowserCATrust(cmd.Context(), snapshot); err != nil {
-				return err
-			}
-
-			admin, err := deps.applySpaces(cmd.Context(), snapshot, bundle.Spaces)
+			result, err := deps.initStorage(cmd.Context(), snapshot, file, configDir, storageHost, bundle)
 			if err != nil {
 				return err
 			}
-			adminStatus, err := deps.statusSpaces(cmd.Context(), snapshot, bundle.Spaces)
-			if err != nil {
-				return err
-			}
-			if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
-				return fmt.Errorf("setup_incomplete")
-			}
-			cloudAccounts, err := deps.registerCloudAccounts(cmd.Context(), snapshot)
-			if err != nil {
-				return err
-			}
-			login, err := deps.login(cmd.Context(), snapshot)
-			if err != nil {
-				return err
-			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
-
-			storage, err := deps.openInitStorage(cmd.Context(), snapshot, storageHost)
-			if err != nil {
-				return err
-			}
-			defer storage.Close()
-			metadata, err := storage.Apply(cmd.Context(), bundle.Calls)
-			if err != nil {
-				return err
-			}
-			datasets, err := storage.Activate(cmd.Context(), bundle.Datasets)
-			if err != nil {
-				return err
-			}
-			verification, err := storage.Verify(cmd.Context(), bundle.Calls)
-			if err != nil {
-				return err
-			}
-			if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
-				return fmt.Errorf("metadata_verification_failed")
-			}
-			factorItems, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
-			if err != nil {
-				return err
-			}
-			var factorSummary *setupFactorSummary
-			if len(factorItems) > 0 {
-				factorService, openErr := deps.openInitFactor(cmd.Context(), snapshot)
-				if openErr != nil {
-					return openErr
-				}
-				appliedSummary, applyErr := factorService.Apply(cmd.Context(), sortedFactorItems(factorItems))
-				closeErr := factorService.Close()
-				if applyErr != nil {
-					return applyErr
-				}
-				if closeErr != nil {
-					return closeErr
-				}
-				factorSummary = &appliedSummary
-			}
-			adminStatus, err = deps.statusSpaces(cmd.Context(), snapshot, bundle.Spaces)
-			if err != nil {
-				return err
-			}
-			if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
-				return fmt.Errorf("setup_incomplete")
-			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
-			return writeSetupJSON(cmd, setupInitSummary{
-				Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
-				Admin: admin, CloudAccounts: cloudAccounts, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
-				Metadata: setupInitMetadataCounts{
-					Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
-				},
-				Datasets: datasets,
-				Verification: setupInitMetadataCounts{
-					Planned: verification.Planned, Unchanged: verification.Unchanged,
-				},
-				Factors: factorSummary, SCFRoutes: scfRoutes,
-			})
+			return writeSetupJSON(cmd, result)
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
@@ -208,6 +96,125 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
 	_ = cmd.MarkFlagRequired("storage-host")
 	return cmd
+}
+
+func runSetupInit(
+	ctx context.Context,
+	deps setupDeps,
+	snapshot *setupconfig.Snapshot,
+	file, configDir, storageHost string,
+	bundle setupInitBundle,
+) (setupInitSummary, error) {
+	// Resolve the Storage placement before mutating Admin/metadata. This is a
+	// read-only preflight: collector publication later consumes the same plan
+	// and applies private routing only to SCF functions in Storage's Tencent
+	// region.
+	var scfRoutes *privatenet.SCFRoutePlan
+	if snapshot.Manifest.SCFFetcher.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost.Provider), "tencent") {
+		plan, routeErr := deps.resolveSCFRoutes(ctx, snapshot, "")
+		if routeErr != nil {
+			return setupInitSummary{}, fmt.Errorf("scf-network: %w", routeErr)
+		}
+		scfRoutes = &plan
+	}
+	// Open the cloud ingress required by every configured public runtime endpoint
+	// before the first Admin/Storage mutation.
+	firewall, err := deps.ensureFirewall(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, fmt.Errorf("firewall: %w", err)
+	}
+	if firewall.Status != "" && firewall.Status != "ready" {
+		return setupInitSummary{}, fmt.Errorf("firewall_incomplete: status=%s skipped=%d", firewall.Status, firewall.Skipped)
+	}
+	if err := ensureSetupBrowserCATrust(ctx, snapshot); err != nil {
+		return setupInitSummary{}, err
+	}
+
+	admin, err := deps.applySpaces(ctx, snapshot, bundle.Spaces)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	adminStatus, err := deps.statusSpaces(ctx, snapshot, bundle.Spaces)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
+		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
+	}
+	cloudAccounts, err := deps.registerCloudAccounts(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	login, err := deps.login(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	if err := snapshot.VerifyUnchanged(); err != nil {
+		return setupInitSummary{}, fmt.Errorf("config_changed")
+	}
+
+	storage, err := deps.openInitStorage(ctx, snapshot, storageHost)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	defer storage.Close()
+	metadata, err := storage.Apply(ctx, bundle.Calls)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	datasets, err := storage.Activate(ctx, bundle.Datasets)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	verification, err := storage.Verify(ctx, bundle.Calls)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
+		return setupInitSummary{}, fmt.Errorf("metadata_verification_failed")
+	}
+	factorItems, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	var factorSummary *setupFactorSummary
+	if len(factorItems) > 0 {
+		factorService, openErr := deps.openInitFactor(ctx, snapshot)
+		if openErr != nil {
+			return setupInitSummary{}, openErr
+		}
+		appliedSummary, applyErr := factorService.Apply(ctx, sortedFactorItems(factorItems))
+		closeErr := factorService.Close()
+		if applyErr != nil {
+			return setupInitSummary{}, applyErr
+		}
+		if closeErr != nil {
+			return setupInitSummary{}, closeErr
+		}
+		factorSummary = &appliedSummary
+	}
+	adminStatus, err = deps.statusSpaces(ctx, snapshot, bundle.Spaces)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
+		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
+	}
+	if err := snapshot.VerifyUnchanged(); err != nil {
+		return setupInitSummary{}, fmt.Errorf("config_changed")
+	}
+	return setupInitSummary{
+		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
+		Admin: admin, CloudAccounts: cloudAccounts, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
+		Metadata: setupInitMetadataCounts{
+			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
+		},
+		Datasets: datasets,
+		Verification: setupInitMetadataCounts{
+			Planned: verification.Planned, Unchanged: verification.Unchanged,
+		},
+		Factors: factorSummary, SCFRoutes: scfRoutes,
+	}, nil
 }
 
 // defaultSetupRegisterCloudAccounts makes the single declarative SCF account

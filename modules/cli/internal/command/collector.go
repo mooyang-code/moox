@@ -105,12 +105,15 @@ type collectorPublishOptions struct {
 	EventBusCredentialFile         string
 	NodeCount                      int
 	NodeCountExplicit              bool
-	FunctionNamePrefix             string
-	File                           string
-	FetcherConfig                  *setupconfig.SCFFetcherSpace
-	CLSSecretID                    string
-	CLSSecretKey                   string
-	CLSHost                        string
+	// IndexOffset is the first fleet index for this shard. Overflow namespaces
+	// continue the Space-wide Timer numbering so function names stay unique.
+	IndexOffset        int
+	FunctionNamePrefix string
+	File               string
+	FetcherConfig      *setupconfig.SCFFetcherSpace
+	CLSSecretID        string
+	CLSSecretKey       string
+	CLSHost            string
 	// In manifest mode these public materials are read from the control host
 	// immediately before a fleet is published. They must not come from the
 	// operator machine, which may still hold an old CA after a control-plane
@@ -616,9 +619,14 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	manifestFunctionLimit := maxCollectorPublishNodeCount
 	if manifest != nil && fetcherConfig != nil && manifest.Manifest.SCFFetcher.TencentLimits.MaxFunctionsPerNamespace > 0 {
 		// A manifest deployment is constrained by the configured Tencent SCF
-		// per-namespace quota. The larger command-line guard remains for the
-		// ad-hoc zip mode, which has no manifest quota reference.
-		manifestFunctionLimit = manifest.Manifest.SCFFetcher.TencentLimits.MaxFunctionsPerNamespace
+		// regional quota (namespaces × functions per namespace). The larger
+		// command-line guard remains for the ad-hoc zip mode.
+		limits := manifest.Manifest.SCFFetcher.TencentLimits
+		if limits.MaxNamespacesPerRegion > 0 {
+			manifestFunctionLimit = limits.MaxNamespacesPerRegion * limits.MaxFunctionsPerNamespace
+		} else {
+			manifestFunctionLimit = limits.MaxFunctionsPerNamespace
+		}
 	}
 	if fetcherConfig == nil && (opts.NodeCount <= 0 || opts.NodeCount > maxCollectorPublishNodeCount) {
 		return collectorPublishSummary{}, fmt.Errorf(
@@ -923,13 +931,17 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			}
 			regionNodeLimit := manifestFunctionLimit
 			if manifest != nil {
-				if regionalLimit := manifest.Manifest.SCFFetcher.TencentLimits.ForRegion(regionOpts.Region).MaxFunctionsPerNamespace; regionalLimit > 0 {
-					regionNodeLimit = regionalLimit
+				regionalLimit := manifest.Manifest.SCFFetcher.TencentLimits.ForRegion(regionOpts.Region)
+				if regionalLimit.MaxFunctionsPerRegion() > 0 {
+					regionNodeLimit = regionalLimit.MaxFunctionsPerRegion()
+				} else if regionalLimit.MaxFunctionsPerNamespace > 0 {
+					regionNodeLimit = regionalLimit.MaxFunctionsPerNamespace
 				}
 			}
 			if fetcherConfig != nil {
 				// Every active regional publication also creates one Invoke
 				// canary. stockcn's snapshot region gets one more Timer.
+				// Overflow namespaces are included in the regional ceiling.
 				regionNodeLimit--
 				if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") && strings.EqualFold(strings.TrimSpace(regionOpts.Region), strings.TrimSpace(fetcherConfig.InstrumentSnapshotRegion)) {
 					regionNodeLimit--
@@ -948,89 +960,112 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if uploadErr != nil {
 				return summary, uploadErr
 			}
-			// The auxiliary Invoke node is deployed and exercised first. A
-			// successful market_fetch canary proves the Kline SCF -> Storage path
-			// before any regional Timer fleet is changed. The full-market Instrument
-			// snapshot is deployed as a separate daily Timer fleet below.
-			invokeOpts := regionOpts
-			invokeOpts.TriggerType = "invoke"
-			invokeOpts.NodeCount = 1
-			invokeOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-invoke"
-			invokeNodes, inspectInvokeErr := inspectCollectorFleet(ctx, client, invokeOpts)
-			if inspectInvokeErr != nil {
-				return summary, inspectInvokeErr
+			publishLimits := setupconfig.TencentSCFLimits{}
+			if manifest != nil {
+				publishLimits = manifest.Manifest.SCFFetcher.TencentLimits
 			}
-			invokeItems, buildInvokeErr := buildCollectorFleetCreateItems(invokeOpts, packageID)
-			if buildInvokeErr != nil {
-				return summary, buildInvokeErr
+			shards := setupconfig.SpaceRegionNamespaceShards(*fetcherConfig, region, publishLimits)
+			if len(shards) == 0 {
+				shards = []setupconfig.SCFNamespaceShard{{
+					Namespace: defaultFlag(regionOpts.Namespace, fetcherConfig.Namespace),
+					Timers:    regionOpts.NodeCount,
+					Invokes:   1,
+				}}
 			}
-			invokeSummary, submitInvokeErr := submitCollectorFleet(ctx, client, invokeOpts, packageID, invokeItems, invokeNodes)
-			if submitInvokeErr != nil {
-				return summary, submitInvokeErr
-			}
-			if err := waitCollectorBatch(ctx, client, invokeSummary.JobID); err != nil {
-				return summary, fmt.Errorf("SCF invoke canary fleet for region %s: %w", regionOpts.Region, err)
-			}
-			invokeNodes, inspectInvokeErr = inspectCollectorFleet(ctx, client, invokeOpts)
-			if inspectInvokeErr != nil || len(invokeNodes) != 1 {
-				if inspectInvokeErr != nil {
-					return summary, inspectInvokeErr
+			timerIndexOffset := 0
+			for _, shard := range shards {
+				shardOpts := regionOpts
+				shardOpts.Namespace = shard.Namespace
+				shardOpts.NodeCount = shard.Timers
+				shardOpts.IndexOffset = timerIndexOffset
+				if shard.Invokes > 0 {
+					// The auxiliary Invoke node is deployed and exercised first. A
+					// successful market_fetch canary proves the Kline SCF -> Storage path
+					// before any regional Timer fleet is changed. The full-market Instrument
+					// snapshot is deployed as a separate daily Timer fleet below.
+					invokeOpts := shardOpts
+					invokeOpts.TriggerType = "invoke"
+					invokeOpts.NodeCount = 1
+					invokeOpts.IndexOffset = 0
+					invokeOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-invoke"
+					invokeNodes, inspectInvokeErr := inspectCollectorFleet(ctx, client, invokeOpts)
+					if inspectInvokeErr != nil {
+						return summary, inspectInvokeErr
+					}
+					invokeItems, buildInvokeErr := buildCollectorFleetCreateItems(invokeOpts, packageID)
+					if buildInvokeErr != nil {
+						return summary, buildInvokeErr
+					}
+					invokeSummary, submitInvokeErr := submitCollectorFleet(ctx, client, invokeOpts, packageID, invokeItems, invokeNodes)
+					if submitInvokeErr != nil {
+						return summary, submitInvokeErr
+					}
+					if err := waitCollectorBatch(ctx, client, invokeSummary.JobID); err != nil {
+						return summary, fmt.Errorf("SCF invoke canary fleet for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
+					}
+					invokeNodes, inspectInvokeErr = inspectCollectorFleet(ctx, client, invokeOpts)
+					if inspectInvokeErr != nil || len(invokeNodes) != 1 {
+						if inspectInvokeErr != nil {
+							return summary, inspectInvokeErr
+						}
+						return summary, fmt.Errorf("SCF invoke canary fleet for region %s namespace %s has no ready node", regionOpts.Region, shard.Namespace)
+					}
+					if err := runCollectorSCFCanary(ctx, client, invokeOpts, invokeNodes[0].NodeID); err != nil {
+						return summary, fmt.Errorf("SCF canary for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
+					}
+					summary.TotalCount += invokeSummary.TotalCount
+					if invokeSummary.JobID != "" {
+						jobs = append(jobs, invokeSummary.JobID)
+					}
 				}
-				return summary, fmt.Errorf("SCF invoke canary fleet for region %s has no ready node", regionOpts.Region)
-			}
-			if err := runCollectorSCFCanary(ctx, client, invokeOpts, invokeNodes[0].NodeID); err != nil {
-				return summary, fmt.Errorf("SCF canary for region %s: %w", regionOpts.Region, err)
-			}
-			// The stock instrument snapshot is published as its own daily Timer
-			// below. The regional Invoke node is only the Kline canary path.
-			summary.TotalCount += invokeSummary.TotalCount
-			if invokeSummary.JobID != "" {
-				jobs = append(jobs, invokeSummary.JobID)
-			}
-
-			fleetNodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
-			if inspectErr != nil {
-				return summary, inspectErr
-			}
-			if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
-				disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(fleetNodes))
-				if disableErr != nil {
-					return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", disableErr)
+				if shard.Timers <= 0 {
+					continue
 				}
-				if err := waitCollectorBatches(ctx, client, disableJobs); err != nil {
-					return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", err)
+				timerIndexOffset += shard.Timers
+				fleetNodes, inspectErr := inspectCollectorFleet(ctx, client, shardOpts)
+				if inspectErr != nil {
+					return summary, inspectErr
 				}
-				jobs = append(jobs, disableJobs...)
-			}
-			createItems, buildErr := buildCollectorFleetCreateItems(regionOpts, packageID)
-			if buildErr != nil {
-				return summary, buildErr
-			}
-			fleetSummary, submitErr := submitCollectorFleet(ctx, client, regionOpts, packageID, createItems, fleetNodes)
-			if submitErr != nil {
+				if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
+					disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(fleetNodes))
+					if disableErr != nil {
+						return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", disableErr)
+					}
+					if err := waitCollectorBatches(ctx, client, disableJobs); err != nil {
+						return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", err)
+					}
+					jobs = append(jobs, disableJobs...)
+				}
+				createItems, buildErr := buildCollectorFleetCreateItems(shardOpts, packageID)
+				if buildErr != nil {
+					return summary, buildErr
+				}
+				fleetSummary, submitErr := submitCollectorFleet(ctx, client, shardOpts, packageID, createItems, fleetNodes)
+				if submitErr != nil {
+					summary.JobIDs = append([]string(nil), jobs...)
+					summary.JobID = strings.Join(summary.JobIDs, ",")
+					return summary, submitErr
+				}
+				if err := waitCollectorBatch(ctx, client, fleetSummary.JobID); err != nil {
+					return summary, fmt.Errorf("SCF Timer fleet for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
+				}
+				deployedNodes, inspectDeployedErr := inspectCollectorFleet(ctx, client, shardOpts)
+				if inspectDeployedErr != nil {
+					return summary, inspectDeployedErr
+				}
+				publishedTimerFleets = append(publishedTimerFleets, collectorPublishedTimerFleet{opts: shardOpts, nodes: deployedNodes})
+				summary.FleetMode = fleetSummary.FleetMode
+				summary.Operation = fleetSummary.Operation
+				summary.TotalCount += fleetSummary.TotalCount
+				summary.PackageID = packageID
+				summary.CLSTopicID = regionOpts.CLSTopicID
+				summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Region: regionOpts.Region, CloudAccountID: regionOpts.CloudAccountID, PackageID: packageID, CLSLogsetID: regionOpts.CLSLogsetID, CLSTopicID: regionOpts.CLSTopicID, JobID: fleetSummary.JobID, TotalCount: fleetSummary.TotalCount})
+				if fleetSummary.JobID != "" {
+					jobs = append(jobs, fleetSummary.JobID)
+				}
 				summary.JobIDs = append([]string(nil), jobs...)
 				summary.JobID = strings.Join(summary.JobIDs, ",")
-				return summary, submitErr
 			}
-			if err := waitCollectorBatch(ctx, client, fleetSummary.JobID); err != nil {
-				return summary, fmt.Errorf("SCF Timer fleet for region %s: %w", regionOpts.Region, err)
-			}
-			deployedNodes, inspectDeployedErr := inspectCollectorFleet(ctx, client, regionOpts)
-			if inspectDeployedErr != nil {
-				return summary, inspectDeployedErr
-			}
-			publishedTimerFleets = append(publishedTimerFleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: deployedNodes})
-			summary.FleetMode = fleetSummary.FleetMode
-			summary.Operation = fleetSummary.Operation
-			summary.TotalCount += fleetSummary.TotalCount
-			summary.PackageID = packageID
-			summary.CLSTopicID = regionOpts.CLSTopicID
-			summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Region: regionOpts.Region, CloudAccountID: regionOpts.CloudAccountID, PackageID: packageID, CLSLogsetID: regionOpts.CLSLogsetID, CLSTopicID: regionOpts.CLSTopicID, JobID: fleetSummary.JobID, TotalCount: fleetSummary.TotalCount})
-			if fleetSummary.JobID != "" {
-				jobs = append(jobs, fleetSummary.JobID)
-			}
-			summary.JobIDs = append([]string(nil), jobs...)
-			summary.JobID = strings.Join(summary.JobIDs, ",")
 		}
 		// Keep the deployed Timer nodes available to every manifest space. Stock
 		// activation has extra canary gates; crypto activation only needs the
@@ -1331,38 +1366,55 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 
 	var fleets []collectorPublishedTimerFleet
 	var allTimerNodes []adminclient.CloudNode
+	activateLimits := setupconfig.TencentSCFLimits{}
+	if manifest != nil {
+		activateLimits = manifest.Manifest.SCFFetcher.TencentLimits
+	}
 	for _, region := range fetcherConfig.Regions {
 		if !region.Enabled || region.FunctionCount <= 0 || fetcherConfig.IsRegionBlacklisted(region.Region) {
 			continue
 		}
-		regionOpts := collectorPublishOptions{
-			SpaceID:                        fetcherConfig.SpaceID,
-			CloudAccountID:                 region.CloudAccountID,
-			Region:                         region.Region,
-			NodeType:                       "scf-event",
-			BizType:                        "market_fetcher",
-			TriggerType:                    "timer",
-			NodeCount:                      region.FunctionCount,
-			FunctionNamePrefix:             fetcherConfig.FunctionPrefix,
-			StorageRPCGatewayTarget:        fetcherConfig.StorageRPCGatewayTarget,
-			StoragePrivateRPCGatewayTarget: fetcherConfig.StoragePrivateRPCGatewayTarget,
-			FetcherConfig:                  fetcherConfig,
+		shards := setupconfig.SpaceRegionNamespaceShards(*fetcherConfig, region, activateLimits)
+		if len(shards) == 0 {
+			shards = []setupconfig.SCFNamespaceShard{{
+				Namespace: defaultFlag(fetcherConfig.Namespace, setupconfig.ExpectedSCFNamespace(fetcherConfig.SpaceID)),
+				Timers:    region.FunctionCount,
+			}}
 		}
-		regionOpts = applyCollectorStorageRoute(regionOpts, storageRoutes, fetcherConfig, false)
-		nodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
-		if inspectErr != nil {
-			return summary, fmt.Errorf("inspect stock Kline fleet in %s: %w", region.Region, inspectErr)
-		}
-		if len(nodes) != region.FunctionCount {
-			return summary, fmt.Errorf("stock Kline fleet in %s has %d nodes; expected %d", region.Region, len(nodes), region.FunctionCount)
-		}
-		for _, node := range nodes {
-			if !strings.Contains(node.PackageID, opts.Version) {
-				return summary, fmt.Errorf("stock Kline node %s is on package %q, expected version %q", node.NodeID, node.PackageID, opts.Version)
+		timerIndexOffset := 0
+		for _, shard := range shards {
+			regionOpts := collectorPublishOptions{
+				SpaceID:                        fetcherConfig.SpaceID,
+				CloudAccountID:                 region.CloudAccountID,
+				Region:                         region.Region,
+				Namespace:                      shard.Namespace,
+				NodeType:                       "scf-event",
+				BizType:                        "market_fetcher",
+				TriggerType:                    "timer",
+				NodeCount:                      shard.Timers,
+				IndexOffset:                    timerIndexOffset,
+				FunctionNamePrefix:             fetcherConfig.FunctionPrefix,
+				StorageRPCGatewayTarget:        fetcherConfig.StorageRPCGatewayTarget,
+				StoragePrivateRPCGatewayTarget: fetcherConfig.StoragePrivateRPCGatewayTarget,
+				FetcherConfig:                  fetcherConfig,
 			}
+			regionOpts = applyCollectorStorageRoute(regionOpts, storageRoutes, fetcherConfig, false)
+			nodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
+			if inspectErr != nil {
+				return summary, fmt.Errorf("inspect stock Kline fleet in %s namespace %s: %w", region.Region, shard.Namespace, inspectErr)
+			}
+			if len(nodes) != shard.Timers {
+				return summary, fmt.Errorf("stock Kline fleet in %s namespace %s has %d nodes; expected %d", region.Region, shard.Namespace, len(nodes), shard.Timers)
+			}
+			for _, node := range nodes {
+				if !strings.Contains(node.PackageID, opts.Version) {
+					return summary, fmt.Errorf("stock Kline node %s is on package %q, expected version %q", node.NodeID, node.PackageID, opts.Version)
+				}
+			}
+			fleets = append(fleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: nodes})
+			allTimerNodes = append(allTimerNodes, nodes...)
+			timerIndexOffset += shard.Timers
 		}
-		fleets = append(fleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: nodes})
-		allTimerNodes = append(allTimerNodes, nodes...)
 	}
 	summary.ExpectedTimerCount = fetcherConfig.TimerFunctionCount
 	summary.TimerCount = len(allTimerNodes)
@@ -1738,6 +1790,7 @@ func inspectCollectorFleet(
 		defaultFlag(opts.BizType, "market_fetcher"),
 		opts.NodeCount,
 		defaultFlag(opts.TriggerType, "timer"),
+		opts.IndexOffset,
 		defaultFlag(opts.Namespace, "default"),
 	)
 	if err != nil {
@@ -2138,12 +2191,20 @@ func collectorTimerEnablePatches(nodes []adminclient.CloudNode, configs ...setup
 		}
 		return ordered[i].FunctionName < ordered[j].FunctionName
 	})
+	stockCN := len(configs) == 0 || strings.EqualFold(strings.TrimSpace(configs[0].SpaceID), "stockcn")
 	patches := make([]collectorRuntimeConfigPatch, 0, len(ordered))
 	for index, node := range ordered {
 		if strings.TrimSpace(node.NodeID) == "" {
 			continue
 		}
-		cron := fmt.Sprintf("%d * * * * * *", startSecond+index%windowSeconds)
+		cron := firstNonEmpty(metadataStringValue(node.Metadata, "timer_cron"), metadataStringValue(node.Metadata, "timer_actual_cron"))
+		if stockCN || cron == "" {
+			if stockCN {
+				cron = fmt.Sprintf("%d * * * * * *", startSecond+index%windowSeconds)
+			} else {
+				cron = "0 * * * * * *"
+			}
+		}
 		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: true, TimerCron: cron})
 	}
 	return patches
@@ -3098,11 +3159,14 @@ func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID stri
 		return nil, err
 	}
 	prefix := defaultFlag(opts.FunctionNamePrefix, defaultFlag(opts.PackageName, "moox-collector"))
+	if opts.IndexOffset < 0 {
+		return nil, fmt.Errorf("collector fleet index offset must not be negative")
+	}
 	items := make([]adminclient.NodeCreateItem, opts.NodeCount)
 	for index := range items {
 		items[index] = cloneCollectorNodeCreateItem(base)
 		items[index].Metadata["function_name_prefix"] = prefix
-		items[index].Metadata["index"] = index
+		items[index].Metadata["index"] = opts.IndexOffset + index
 	}
 	return items, nil
 }
@@ -3184,13 +3248,16 @@ func cloneCollectorStringMap(source map[string]string) map[string]string {
 }
 
 func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, bizType string, expected int) ([]adminclient.CloudNode, error) {
-	return selectCollectorFleetNodesForTrigger(nodes, prefix, bizType, expected, "", "")
+	return selectCollectorFleetNodesForTrigger(nodes, prefix, bizType, expected, "", 0)
 }
 
-func selectCollectorFleetNodesForTrigger(nodes []adminclient.CloudNode, prefix string, bizType string, expected int, triggerType string, namespace ...string) ([]adminclient.CloudNode, error) {
+func selectCollectorFleetNodesForTrigger(nodes []adminclient.CloudNode, prefix string, bizType string, expected int, triggerType string, indexOffset int, namespace ...string) ([]adminclient.CloudNode, error) {
 	expectedNamespace := ""
 	if len(namespace) > 0 {
 		expectedNamespace = strings.TrimSpace(namespace[0])
+	}
+	if indexOffset < 0 {
+		return nil, fmt.Errorf("fleet prefix %q has negative index offset", prefix)
 	}
 	indexed := make([]adminclient.CloudNode, expected)
 	found := make([]bool, expected)
@@ -3227,15 +3294,16 @@ func selectCollectorFleetNodesForTrigger(nodes []adminclient.CloudNode, prefix s
 			// namespace, so this deployment must create its own fleet.
 			continue
 		}
-		count++
-		if index < 0 || index >= expected {
+		slot := index - indexOffset
+		if slot < 0 || slot >= expected {
 			return nil, fmt.Errorf("fleet prefix %q has invalid index metadata on node %q", prefix, node.NodeID)
 		}
-		if found[index] {
+		count++
+		if found[slot] {
 			return nil, fmt.Errorf("fleet prefix %q has duplicate fleet index %d", prefix, index)
 		}
-		found[index] = true
-		indexed[index] = node
+		found[slot] = true
+		indexed[slot] = node
 	}
 	if count == 0 {
 		return nil, nil
@@ -3379,7 +3447,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		setDefaultEnv(env, "MOOX_MARKET_FETCH_MODE", "instrument_snapshot")
 	}
 	setDefaultEnv(env, "MOOX_STORAGE_RPC_GATEWAY_TARGET", collectorStorageRPCGatewayTarget(opts))
-	gatewayNodeID := firstNonEmpty(fetcher.StorageGatewayNodeID, os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
+	gatewayNodeID := firstNonEmpty(fetcher.StorageAccessTargetNode(opts.Region), os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_TARGET_NODE", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", firstNonEmpty(opts.RuntimeServiceKeyID, os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID")))

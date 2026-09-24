@@ -158,6 +158,37 @@ func TestHTTPClientGetWithIPsReservesTimeForHostnameAfterIPTimeout(t *testing.T)
 	assert.Less(t, time.Since(started), time.Second, "hostname fallback should receive a reserved portion of the request deadline")
 }
 
+func TestSkipControlPlaneIPsForBinanceFuturesHosts(t *testing.T) {
+	require.True(t, skipControlPlaneIPs("fapi.binance.com"))
+	require.True(t, skipControlPlaneIPs("FAPI1.BINANCE.COM"))
+	require.False(t, skipControlPlaneIPs("api.binance.com"))
+	require.False(t, skipControlPlaneIPs("data-api.binance.vision"))
+}
+
+func TestHTTPClientGetWithIPsDoesNotDialSnapshotIPsForFAPI(t *testing.T) {
+	var dialed []string
+	var mu sync.Mutex
+	client := NewHTTPClient(&http.Client{
+		Timeout: 200 * time.Millisecond,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				mu.Lock()
+				dialed = append(dialed, address)
+				mu.Unlock()
+				return nil, fmt.Errorf("blocked dial %s", address)
+			},
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_ = client.GetWithIPs(ctx, "fapi.binance.com", []string{"192.0.2.1"}, "/fapi/v1/ping", nil, nil)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, address := range dialed {
+		require.False(t, strings.HasPrefix(address, "192.0.2.1:"), "futures snapshot IP must not be dialed: %s", address)
+	}
+}
+
 func TestHTTPClientGetWithIPsTriesNextAddressAfterFirstTimeout(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"host": r.Host})

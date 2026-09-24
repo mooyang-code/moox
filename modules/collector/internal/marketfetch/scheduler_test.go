@@ -216,6 +216,26 @@ func TestPriorityCryptoMinuteItemsSelectsBTCAndETHOnOneMinute(t *testing.T) {
 	require.Empty(t, priorityCryptoMinuteItems(items, "1h"))
 }
 
+func TestPriorityCryptoInvokeNodesKeepSwapOnOverseasEgress(t *testing.T) {
+	nodes := []scfinvoker.Node{
+		{NodeID: "invoke-nanjing", FunctionName: "fn-nanjing", Region: "ap-nanjing", TriggerType: "invoke"},
+		{NodeID: "invoke-hongkong", FunctionName: "fn-hongkong", Region: "ap-hongkong", TriggerType: "invoke"},
+	}
+
+	got := priorityNodesForTask(domain.CollectionTask{MarketType: "swap"}, nodes)
+	require.Len(t, got, 1)
+	assert.Equal(t, "invoke-hongkong", got[0].NodeID)
+	assert.Equal(t, []string{"invoke-hongkong"}, nodeIDsForTest(priorityNodesForTask(domain.CollectionTask{Provider: "binance", MarketType: "spot", ResultDatasetID: "dataset_binance_spot_kline_1m"}, nodes)))
+}
+
+func nodeIDsForTest(nodes []scfinvoker.Node) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		ids = append(ids, node.NodeID)
+	}
+	return ids
+}
+
 func TestTickInvokesPriorityCryptoMinuteWhenTimersOwnRealtime(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()

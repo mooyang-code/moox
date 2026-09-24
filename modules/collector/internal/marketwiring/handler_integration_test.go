@@ -74,6 +74,13 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 						}
 						return pipeline, err
 					}
+					h.NewCryptoKlinePipeline = func(s marketfetch.Storage, productType marketdata.ProductType) (*marketfetch.KlinePipeline, error) {
+						pipeline, err := NewCryptoKlinePipeline(s, productType)
+						if err == nil {
+							pipeline.Router = router
+						}
+						return pipeline, err
+					}
 					t.Setenv("MOOX_SPACE_ID", "crypto")
 					subject := "BTC-USDT-" + strings.ToUpper(product)
 					var response *model.Response

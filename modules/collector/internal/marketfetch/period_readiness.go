@@ -103,9 +103,16 @@ func (s *PeriodReadinessService) EnsureCurrentAndNext(ctx context.Context, space
 	return nil
 }
 
+// realtimeMinuteGrace is how long a 1m period waits after close for Storage
+// echo. Timer collectors do not publish completion, so the old 2m floor left
+// View period-ready two extra minutes behind Primary even when most rows were
+// already committed.
+const realtimeMinuteGrace = 20 * time.Second
+
 // readinessGrace keeps the default personal deployment forgiving for slower
 // frequencies without making test/injected short grace periods surprising.
-// The production default is 2m; for it, use min(2*frequency, 10m).
+// The production default is 2m; for it, use min(2*frequency, 10m), except 1m
+// which stays tight so View can advance shortly after the bar closes.
 func readinessGrace(frequency string, configured time.Duration) time.Duration {
 	if configured <= 0 {
 		configured = 2 * time.Minute
@@ -139,6 +146,9 @@ func readinessGrace(frequency string, configured time.Duration) time.Duration {
 		return configured
 	}
 	interval := time.Duration(count) * unit
+	if interval == time.Minute {
+		return realtimeMinuteGrace
+	}
 	grace := 2 * interval
 	if grace > 10*time.Minute {
 		grace = 10 * time.Minute
@@ -155,11 +165,9 @@ func (s *PeriodReadinessService) ApplyRows(ctx context.Context, payload *storage
 	if s == nil || s.periods == nil || payload == nil {
 		return fmt.Errorf("period readiness payload/service is nil")
 	}
-	functionName := functionNameFromWriteSource(payload.GetWriteSource())
-	if functionName == "" {
+	if functionNameFromWriteSource(payload.GetWriteSource()) == "" {
 		return nil
 	}
-	writeSource := payload.GetWriteSource()
 	for _, row := range payload.GetRows() {
 		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
 			continue
@@ -183,7 +191,10 @@ func (s *PeriodReadinessService) ApplyRows(ctx context.Context, payload *storage
 			SpaceID: payload.GetSpaceId(), DatasetID: payload.GetDatasetId(), Frequency: frequency, PeriodTime: dataTime.UTC(),
 		}
 		subjectID := canonicalPeriodSubjectID(payload.GetSpaceId(), key.GetSubjectId())
-		if err := s.periods.MarkSubjectSuccessWithFields(ctx, periodKey, subjectID, functionName, writeSource, fieldIDs, dataTime.UTC()); err != nil {
+		// Period snapshots freeze the assigned Timer. A later reassignment can
+		// make the Storage write arrive from a different SCF; the row itself is
+		// still the evidence that this subject is ready.
+		if err := s.periods.MarkSubjectSuccessWithFields(ctx, periodKey, subjectID, "", "", fieldIDs, dataTime.UTC()); err != nil {
 			return err
 		}
 		if err := s.periods.NoteWritePosition(ctx, periodKey, payload.GetSourceNodeId(), payload.GetSourceStoreId(), payload.GetSourceSequence()); err != nil {

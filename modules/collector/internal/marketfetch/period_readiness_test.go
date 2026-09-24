@@ -59,3 +59,72 @@ func TestPeriodReadinessServiceUsesRowDataTime(t *testing.T) {
 	}
 	require.True(t, found)
 }
+
+func TestApplyRowsMarksSubjectAfterTimerReassignment(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	db, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	ctx := context.Background()
+	period := time.Date(2026, 8, 9, 12, 3, 0, 0, time.UTC)
+	key := domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}
+	_, err = db.PeriodReadiness().EnsurePeriod(ctx, domain.PeriodSeed{
+		PeriodKey: key, DeadlineAt: period.Add(time.Minute),
+		Tasks: []domain.PeriodTaskSeed{{
+			InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "nanjing-25",
+			WriteSource: "scf:nanjing-25", RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`,
+		}},
+	})
+	require.NoError(t, err)
+	service := NewPeriodReadinessService(db.TaskInstances(), db.PeriodReadiness(), time.Second)
+	require.NoError(t, service.ApplyRows(ctx, &storagepb.DatasetRowsUpserted{
+		SpaceId: "crypto", DatasetId: "bars", WriteSource: "scf:nanjing-30",
+		Rows: []*storagepb.RowUpsert{{
+			Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: "BTC-USDT", Freq: "1m", DataTime: period.Format(time.RFC3339Nano),
+			}}},
+			Fields: []*storagepb.FieldValue{
+				{FieldId: "open"}, {FieldId: "high"}, {FieldId: "low"}, {FieldId: "close"},
+				{FieldId: "volume"}, {FieldId: "quote_volume"}, {FieldId: "trade_num"},
+			},
+		}},
+	}))
+	reports, err := db.PeriodReadiness().FinalizeDue(ctx, period.Add(10*time.Second), 10)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, domain.PeriodStatusComplete, reports[0].Readiness.Status)
+	require.Equal(t, domain.PeriodItemSuccess, reports[0].Items[0].State)
+}
+
+func TestApplyRowsKeepsPendingWhenKlineFieldsAreIncomplete(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	db, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	ctx := context.Background()
+	period := time.Date(2026, 8, 9, 12, 3, 0, 0, time.UTC)
+	key := domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}
+	_, err = db.PeriodReadiness().EnsurePeriod(ctx, domain.PeriodSeed{
+		PeriodKey: key, DeadlineAt: period.Add(time.Minute),
+		Tasks: []domain.PeriodTaskSeed{{
+			InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "nanjing-25",
+			WriteSource: "scf:nanjing-25", RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`,
+		}},
+	})
+	require.NoError(t, err)
+	service := NewPeriodReadinessService(db.TaskInstances(), db.PeriodReadiness(), time.Second)
+	require.NoError(t, service.ApplyRows(ctx, &storagepb.DatasetRowsUpserted{
+		SpaceId: "crypto", DatasetId: "bars", WriteSource: "scf:nanjing-25",
+		Rows: []*storagepb.RowUpsert{{
+			Key: &storagepb.RowKey{Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: "BTC-USDT", Freq: "1m", DataTime: period.Format(time.RFC3339Nano),
+			}}},
+			Fields: []*storagepb.FieldValue{{FieldId: "close"}, {FieldId: "volume"}},
+		}},
+	}))
+	reports, err := db.PeriodReadiness().FinalizeDue(ctx, period.Add(10*time.Second), 10)
+	require.NoError(t, err)
+	require.Empty(t, reports)
+}

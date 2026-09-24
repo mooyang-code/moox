@@ -29,6 +29,7 @@ type pipelineProvider struct {
 	calls     *int32
 	request   *marketdata.KlineRequest
 	rowsFor   func(marketdata.KlineRequest) []marketdata.NormalizedKline
+	errFor    func() error
 }
 
 func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.T) {
@@ -54,6 +55,61 @@ func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.
 	require.Equal(t, "tdx", selected)
 	require.Equal(t, int32(3), atomic.LoadInt32(&firstCalls))
 	require.Equal(t, int32(1), atomic.LoadInt32(&fallbackCalls))
+}
+
+func TestFetchKlinesFromChainUsesConfiguredHTTPMaxAttempts(t *testing.T) {
+	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "4")
+	var calls int32
+	bar := marketdata.NormalizedKline{
+		SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m",
+		BarStart: time.Date(2026, 9, 3, 3, 0, 0, 0, time.UTC), BarEnd: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC),
+		Open: 100, High: 101, Low: 99, Close: 100.5, VolumeShares: 10, AmountCNY: 1005,
+		ProviderTimestamp: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "retry-4",
+	}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{
+		id: "binance", rows: []marketdata.NormalizedKline{bar}, calls: &calls,
+		errFor: func() error {
+			if atomic.LoadInt32(&calls) < 4 {
+				return marketdata.ErrTimeout
+			}
+			return nil
+		},
+	}))
+	router, err := marketdata.NewRouter(registry, 10, nil, nil)
+	require.NoError(t, err)
+
+	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+		MarketID: "crypto", ExchangeID: "binance", SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT",
+		Frequency: "1m", Limit: 1, RequestID: "retry-4",
+	}, []string{"binance"}, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "binance", selected)
+	require.Equal(t, int32(4), atomic.LoadInt32(&calls))
+}
+
+func TestFetchKlinesFromChainUsesConfiguredRequestTimeout(t *testing.T) {
+	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "1")
+	t.Setenv("MOOX_FETCH_REQUEST_TIMEOUT_MS", "10")
+	var calls int32
+	bar := marketdata.NormalizedKline{
+		SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m",
+		BarStart: time.Date(2026, 9, 3, 3, 0, 0, 0, time.UTC), BarEnd: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC),
+		Open: 100, High: 101, Low: 99, Close: 100.5, VolumeShares: 10, AmountCNY: 1005,
+		ProviderTimestamp: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "request-timeout",
+	}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "binance", rows: []marketdata.NormalizedKline{bar}, calls: &calls, delay: 100 * time.Millisecond}))
+	router, err := marketdata.NewRouter(registry, 10, pipelineClock{now: time.Now().UTC()}, nil)
+	require.NoError(t, err)
+
+	_, _, _, err = fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+		MarketID: "crypto", ExchangeID: "binance", SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT",
+		Frequency: "1m", Limit: 1, RequestID: "request-timeout",
+	}, []string{"binance"}, 0)
+	require.ErrorIs(t, err, marketdata.ErrTimeout)
+	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
 }
 
 func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
@@ -117,9 +173,17 @@ func (p pipelineProvider) FetchKlines(ctx context.Context, req marketdata.KlineR
 		}
 	}
 	if p.rowsFor != nil {
-		return p.rowsFor(req), p.err
+		err := p.err
+		if p.errFor != nil {
+			err = p.errFor()
+		}
+		return p.rowsFor(req), err
 	}
-	return p.rows, p.err
+	err := p.err
+	if p.errFor != nil {
+		err = p.errFor()
+	}
+	return p.rows, err
 }
 
 func TestKlinePipelineCanaryUsesLatestClosedCalendarSession(t *testing.T) {

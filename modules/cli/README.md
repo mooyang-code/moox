@@ -287,7 +287,7 @@ moox-cli setup factors --file ./moox.toml
 如果 `moox.toml` 启用了 `[factors]`，同一个 `setup init` 还会从
 `factors.source_dir` 读取 Python 因子，调用 FactorMgr 导入定义、建立绑定并启用因子。
 仓库的 `moox.toml.example` 已给出 `Bias`、`Cci` 到
-`crypto/view_crypto_spot_kline_1m` 的默认配置；修改
+`crypto/view_binance_spot_kline_1m` 的默认配置；修改
 `[[factors.items]]` 的 `space_id`、`source_view_id`、`freq` 和参数即可切换默认关联。
 重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，命令会停止而不会静默覆盖已有因子。修改同一因子的默认 View 或频率后再次执行，会删除此前由 `setup factors` 创建的旧绑定。
 
@@ -307,6 +307,31 @@ Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且
 ```bash
 moox-cli setup install-storage-watchdog --file ./moox.toml --host compute
 ```
+
+### Storage 全量重建
+
+需要同时清理 Storage Primary、DataNode、View A/B 索引、View durable consumers 和
+Storage 元数据时，使用专用的一键编排命令。省略 `--yes` 只执行远端 dry-run；确认汇总中的
+目标主机、View 数量和消费者后，再加 `--yes` 执行删除、重启、metadata seed 导入、Dataset
+激活和 Storage 验证：
+
+```bash
+moox-cli setup rebuild-storage \
+  --file ./moox.toml \
+  --host storage \
+  --config-dir ./config/setup
+
+moox-cli setup rebuild-storage \
+  --file ./moox.toml \
+  --host storage \
+  --config-dir ./config/setup \
+  --yes
+```
+
+命令只会在 `--yes` 下进入破坏性阶段；执行前先停写入 Storage 的 Collector、Factor、Strategy
+和 Trade，远端 reset CLI 先完成 EventBus/消费者预检，再停止 Storage 并清理 `/data/moox/storage/data`、
+View 索引和元数据数据库。初始化失败时仍会尝试恢复之前运行的写入服务，命令返回的 JSON 会包含
+`quiesced`、`reset`、`initialization` 和 `verification` 四个阶段的结果。
 
 `metadata spaces` 和 `setup metadata-import` 保留给只导入部分业务空间的高级操作；
 标准新系统初始化不需要逐个选择 YAML 或 Space。

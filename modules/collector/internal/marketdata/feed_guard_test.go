@@ -348,6 +348,30 @@ func TestRouterSessionSharesInvocationBreakerAcrossSubjects(t *testing.T) {
 	assert.Equal(t, 3, succeeding.Calls())
 }
 
+func TestRouterSessionKeepsLastTimeoutWhenBreakerTrips(t *testing.T) {
+	registry := NewRegistry()
+	spec := KlineSpec{
+		Markets: []string{"crypto"}, Instruments: []InstrumentType{InstrumentSwap}, Frequencies: []string{"1m"},
+		CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 1, TimestampMode: TimestampModeOpen,
+		RateLimit: RateLimitPolicy{RequestsPerSecond: 100, Burst: 10, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: time.Second},
+	}
+	require.NoError(t, registry.Register(&stubKlineProvider{
+		testProvider: testProvider{descriptor: ProviderDescriptor{ID: "binance", SourceID: "swap_http", DisplayName: "Binance", Hosts: []string{"fapi.binance.com"}}},
+		spec:         spec, err: fmt.Errorf("%w: hung fapi", ErrTimeout),
+	}))
+	router, err := NewRouter(registry, 2, nil, nil)
+	require.NoError(t, err)
+	session := router.NewSession()
+	req := KlineRequest{MarketID: "crypto", InstrumentType: InstrumentSwap, SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT", SourceID: "swap_http", Frequency: "1m", Limit: 1, RequestID: "swap-1"}
+	_, firstErr := session.FetchKlines(context.Background(), req, []string{"binance"})
+	require.ErrorIs(t, firstErr, ErrTimeout)
+	_, secondErr := session.FetchKlines(context.Background(), req, []string{"binance"})
+	require.ErrorIs(t, secondErr, ErrTimeout)
+	_, thirdErr := session.FetchKlines(context.Background(), req, []string{"binance"})
+	require.ErrorIs(t, thirdErr, ErrTimeout)
+	require.NotErrorIs(t, thirdErr, ErrProviderNotFound)
+}
+
 func TestRouterSkipsProviderThatDoesNotAdvertiseExchange(t *testing.T) {
 	registry := NewRegistry()
 	clock := newFakeClock(time.Date(2026, 8, 29, 12, 30, 0, 0, time.UTC))
@@ -409,16 +433,20 @@ type stubKlineProvider struct {
 	spec      KlineSpec
 	rows      []NormalizedKline
 	err       error
+	fetch     func(context.Context, KlineRequest) ([]NormalizedKline, error)
 	mu        sync.Mutex
 	callCount int
 }
 
 func (p *stubKlineProvider) KlineSpec() KlineSpec { return p.spec }
 
-func (p *stubKlineProvider) FetchKlines(context.Context, KlineRequest) ([]NormalizedKline, error) {
+func (p *stubKlineProvider) FetchKlines(ctx context.Context, req KlineRequest) ([]NormalizedKline, error) {
 	p.mu.Lock()
 	p.callCount++
 	p.mu.Unlock()
+	if p.fetch != nil {
+		return p.fetch(ctx, req)
+	}
 	return append([]NormalizedKline(nil), p.rows...), p.err
 }
 
@@ -426,6 +454,31 @@ func (p *stubKlineProvider) Calls() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.callCount
+}
+
+func TestRouterEnforcesKlineRequestTimeoutPolicy(t *testing.T) {
+	registry := NewRegistry()
+	provider := &stubKlineProvider{
+		testProvider: testProvider{descriptor: ProviderDescriptor{ID: "alpha", DisplayName: "Alpha", Hosts: []string{"alpha.test"}}},
+		spec: KlineSpec{
+			Markets: []string{"stockcn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1m"},
+			CompleteOHLCV: true, HasAmount: true, MaxBarsPerRequest: 1, TimestampMode: TimestampModeOpen,
+			RateLimit: RateLimitPolicy{RequestsPerSecond: 100, Burst: 1, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 20 * time.Millisecond},
+		},
+		fetch: func(ctx context.Context, _ KlineRequest) ([]NormalizedKline, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	require.NoError(t, registry.Register(provider))
+	router, err := NewRouter(registry, 2, nil, nil)
+	require.NoError(t, err)
+
+	_, err = router.FetchKlines(context.Background(), KlineRequest{
+		MarketID: "stockcn", ExchangeID: "XSHG", SubjectID: "600000.XSHG", ProviderSymbol: "sh600000",
+		Frequency: "1m", Limit: 1, RequestID: "request-timeout",
+	}, []string{"alpha"})
+	require.ErrorIs(t, err, ErrTimeout)
 }
 
 func TestRouterStopsAfterTwoProvidersAndReturnsTheSuccessfulRowsOnly(t *testing.T) {

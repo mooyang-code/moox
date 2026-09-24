@@ -266,6 +266,20 @@ func (t *transport) forwardConnection(local net.Conn, remote string) {
 	_ = upstream.Close()
 }
 
+func (t *transport) Download(ctx context.Context, src string, dst io.Writer) (int64, error) {
+	client, err := sftp.NewClient(t.client)
+	if err != nil {
+		return 0, fmt.Errorf("ssh_download_failed: %w", err)
+	}
+	defer closeSFTPClient(client)
+	file, err := client.Open(src)
+	if err != nil {
+		return 0, fmt.Errorf("ssh_download_failed: %w", err)
+	}
+	defer file.Close()
+	return io.Copy(dst, &contextReader{ctx: ctx, reader: file})
+}
+
 func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst string, mode fs.FileMode) error {
 	if size < 0 || !mode.IsRegular() {
 		return fmt.Errorf("ssh_upload_invalid")

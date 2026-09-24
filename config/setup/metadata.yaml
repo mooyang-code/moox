@@ -2993,7 +2993,7 @@ devices:
   
 views:
 - space_id: crypto
-  view_id: view_crypto_spot_kline_1m
+  view_id: view_binance_spot_kline_1m
   name: 加密现货分钟行情
   dataset_id: dataset_binance_spot_kline_1m
   grain_keys:
@@ -3009,7 +3009,7 @@ views:
   keep_duration: 24h
   status: active
 - space_id: crypto
-  view_id: view_crypto_swap_kline_1m
+  view_id: view_binance_swap_kline_1m
   name: 加密永续分钟行情
   dataset_id: dataset_binance_swap_kline_1m
   grain_keys:
@@ -3192,7 +3192,7 @@ views:
   status: active
 view_columns:
 - space_id: crypto
-  view_id: view_crypto_swap_kline_1m
+  view_id: view_binance_swap_kline_1m
   column_name: dataset_binance_swap_kline_1m.open
   origin_type: dataset_column
   origin_id: dataset_binance_swap_kline_1m.open
@@ -3201,7 +3201,7 @@ view_columns:
   attributes:
     display_name: 开盘价
 - space_id: crypto
-  view_id: view_crypto_swap_kline_1m
+  view_id: view_binance_swap_kline_1m
   column_name: dataset_binance_swap_kline_1m.high
   origin_type: dataset_column
   origin_id: dataset_binance_swap_kline_1m.high
@@ -3210,7 +3210,7 @@ view_columns:
   attributes:
     display_name: 最高价
 - space_id: crypto
-  view_id: view_crypto_swap_kline_1m
+  view_id: view_binance_swap_kline_1m
   column_name: dataset_binance_swap_kline_1m.low
   origin_type: dataset_column
   origin_id: dataset_binance_swap_kline_1m.low
@@ -3219,7 +3219,7 @@ view_columns:
   attributes:
     display_name: 最低价
 - space_id: crypto
-  view_id: view_crypto_swap_kline_1m
+  view_id: view_binance_swap_kline_1m
   column_name: dataset_binance_swap_kline_1m.close
   origin_type: dataset_column
   origin_id: dataset_binance_swap_kline_1m.close
@@ -3228,7 +3228,7 @@ view_columns:
   attributes:
     display_name: 收盘价
 - space_id: crypto
-  view_id: view_crypto_swap_kline_1m
+  view_id: view_binance_swap_kline_1m
   column_name: dataset_binance_swap_kline_1m.volume
   origin_type: dataset_column
   origin_id: dataset_binance_swap_kline_1m.volume
@@ -3237,7 +3237,7 @@ view_columns:
   attributes:
     display_name: 成交量
 - space_id: crypto
-  view_id: view_crypto_swap_kline_1m
+  view_id: view_binance_swap_kline_1m
   column_name: dataset_binance_swap_kline_1m.quote_volume
   origin_type: dataset_column
   origin_id: dataset_binance_swap_kline_1m.quote_volume
@@ -3246,7 +3246,7 @@ view_columns:
   attributes:
     display_name: 报价量
 - space_id: crypto
-  view_id: view_crypto_swap_kline_1m
+  view_id: view_binance_swap_kline_1m
   column_name: dataset_binance_swap_kline_1m.trade_num
   origin_type: dataset_column
   origin_id: dataset_binance_swap_kline_1m.trade_num
@@ -3615,7 +3615,7 @@ view_columns:
   attributes:
     display_name: 成交额
 - space_id: crypto
-  view_id: view_crypto_spot_kline_1m
+  view_id: view_binance_spot_kline_1m
   column_name: dataset_binance_spot_kline_1m.open
   origin_type: dataset_column
   origin_id: dataset_binance_spot_kline_1m.open
@@ -3624,7 +3624,7 @@ view_columns:
   attributes:
     display_name: 开盘价
 - space_id: crypto
-  view_id: view_crypto_spot_kline_1m
+  view_id: view_binance_spot_kline_1m
   column_name: dataset_binance_spot_kline_1m.high
   origin_type: dataset_column
   origin_id: dataset_binance_spot_kline_1m.high
@@ -3633,7 +3633,7 @@ view_columns:
   attributes:
     display_name: 最高价
 - space_id: crypto
-  view_id: view_crypto_spot_kline_1m
+  view_id: view_binance_spot_kline_1m
   column_name: dataset_binance_spot_kline_1m.low
   origin_type: dataset_column
   origin_id: dataset_binance_spot_kline_1m.low
@@ -3642,7 +3642,7 @@ view_columns:
   attributes:
     display_name: 最低价
 - space_id: crypto
-  view_id: view_crypto_spot_kline_1m
+  view_id: view_binance_spot_kline_1m
   column_name: dataset_binance_spot_kline_1m.close
   origin_type: dataset_column
   origin_id: dataset_binance_spot_kline_1m.close
@@ -3651,7 +3651,7 @@ view_columns:
   attributes:
     display_name: 收盘价
 - space_id: crypto
-  view_id: view_crypto_spot_kline_1m
+  view_id: view_binance_spot_kline_1m
   column_name: dataset_binance_spot_kline_1m.volume
   origin_type: dataset_column
   origin_id: dataset_binance_spot_kline_1m.volume
@@ -3660,7 +3660,7 @@ view_columns:
   attributes:
     display_name: 成交量
 - space_id: crypto
-  view_id: view_crypto_spot_kline_1m
+  view_id: view_binance_spot_kline_1m
   column_name: dataset_binance_spot_kline_1m.quote_volume
   origin_type: dataset_column
   origin_id: dataset_binance_spot_kline_1m.quote_volume

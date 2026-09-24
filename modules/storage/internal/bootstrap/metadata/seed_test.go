@@ -41,8 +41,8 @@ func TestDefaultViewInventory(t *testing.T) {
 	sort.Strings(got)
 	want := []string{
 		"crypto/view_binance_kline_1m",
-		"crypto/view_crypto_spot_kline_1m",
-		"crypto/view_crypto_swap_kline_1m",
+		"crypto/view_binance_spot_kline_1m",
+		"crypto/view_binance_swap_kline_1m",
 		"crypto/view_crypto_swap_kline_1h",
 		"crypto/view_crypto_spot_kline_1h",
 		"mooxsys/view_mooxsys_host_disk",

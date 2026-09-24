@@ -154,6 +154,13 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		}
 	}
 	if opts.dryRun {
+		// Dry-run is the normal preflight for the higher-level rebuild workflow.
+		// Validate the credential, broker connection, stream and purge subjects
+		// before reporting an executable plan so a later destructive run cannot
+		// fail only after writers have been quiesced.
+		if err := preflightResetEventBus(ctx, opts, storage.View, views); err != nil {
+			return fmt.Errorf("preflight EventBus reset: %w", err)
+		}
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "reset-view-consumers", Status: "dry_run", Summary: summary})
 	}
 	// Complete all non-destructive EventBus checks before touching local

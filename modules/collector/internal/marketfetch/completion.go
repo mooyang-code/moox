@@ -456,7 +456,7 @@ func retryCollectionItem(request Request, result *marketfetchpb.MarketFetchItemR
 			}
 			item.SourceEventID = key
 			if item.SourceID == "" && request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
-				item.CandidateIndex += klineProviderAttemptBudget
+				item.CandidateIndex += RuntimeKlineProviderAttemptBudget()
 			}
 			return item
 		}
@@ -470,14 +470,14 @@ func retryCollectionItem(request Request, result *marketfetchpb.MarketFetchItemR
 			// instead of skipping a healthy provider merely because the write
 			// acknowledgment was lost.
 			if item.SourceID == "" && request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
-				item.CandidateIndex += klineProviderAttemptBudget
+				item.CandidateIndex += RuntimeKlineProviderAttemptBudget()
 			}
 			return item
 		}
 	}
 	candidateIndex := 0
 	if request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
-		candidateIndex = klineProviderAttemptBudget
+		candidateIndex = RuntimeKlineProviderAttemptBudget()
 	}
 	return domain.CollectionItem{InstanceID: result.GetInstanceId(), SubjectID: result.GetSubjectId(), Symbol: result.GetSymbol(), TargetDataTime: result.GetTargetDataTime(), SourceEventID: key, DatasetID: request.DatasetID, Frequency: request.Frequency, Provider: request.Provider, SourceID: request.SourceID, MarketType: request.MarketType, DataType: "kline", CandidateIndex: candidateIndex}
 }

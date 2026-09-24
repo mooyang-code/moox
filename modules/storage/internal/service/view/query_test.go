@@ -33,7 +33,10 @@ type existenceQueryEngine struct {
 	existsCalls int
 }
 
-func (e *existenceQueryEngine) Exists(context.Context, string) (bool, error) {
+func (e *existenceQueryEngine) Exists(ctx context.Context, _ string) (bool, error) {
+	if ctx != nil && ctx.Err() != nil {
+		return false, ctx.Err()
+	}
 	e.existsCalls++
 	return e.exists, e.existsErr
 }
@@ -69,6 +72,83 @@ func TestLiveIndexReadyUsesLightweightExistenceCheck(t *testing.T) {
 	}
 	if engine.existsCalls != 1 || engine.statCalls != 0 {
 		t.Fatalf("exists calls=%d stat calls=%d, want 1 and 0", engine.existsCalls, engine.statCalls)
+	}
+}
+
+type deadlineAwareEngine struct {
+	*existenceQueryEngine
+	sawLiveContext bool
+}
+
+func (e *deadlineAwareEngine) Write(ctx context.Context, indexID string, batch viewindex.ViewIndexWriteBatch) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	e.sawLiveContext = true
+	return e.queryEngine.Write(ctx, indexID, batch)
+}
+
+func TestPrimaryPointReadChunkSizeStaysUnderDataNodeBudget(t *testing.T) {
+	if got := primaryPointReadChunkSize(6, 400); got != 400 {
+		t.Fatalf("small batch chunk=%d, want 400", got)
+	}
+	if got := primaryPointReadChunkSize(250, 2000); got != 400 {
+		t.Fatalf("wide schema chunk=%d, want 400", got)
+	}
+	if got := primaryPointReadChunkSize(1, 20000); got != 512 {
+		t.Fatalf("chunk=%d, want 512", got)
+	}
+}
+
+func TestLiveIndexWriteContextKeepsDeadlineButHonorsCancel(t *testing.T) {
+	expired, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond)
+	writeCtx, writeCancel, err := liveIndexWriteContext(expired)
+	if err != nil {
+		t.Fatalf("deadline context: %v", err)
+	}
+	defer writeCancel()
+	if writeCtx.Err() != nil {
+		t.Fatal("live write context inherited an expired delivery deadline")
+	}
+
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	if _, _, err := liveIndexWriteContext(stopped); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context error=%v, want context.Canceled", err)
+	}
+}
+
+func TestLiveIndexWriteUsesDedicatedBudgetAfterDeliveryDeadline(t *testing.T) {
+	engine := &deadlineAwareEngine{existenceQueryEngine: &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}}
+	svc, _ := queryTestService(engine, true)
+	key := viewRef{spaceID: "space", viewID: "prices"}
+	svc.schemas["prices-index"] = viewindex.ViewIndexSchema{
+		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market",
+		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+	}
+	svc.indexView = map[string]viewRef{"prices-index": key}
+	svc.byData = map[datasetRef]map[string]struct{}{
+		{spaceID: "space", datasetID: "market"}: {"prices-index": {}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond)
+
+	err := svc.applyDatasetEvent(ctx, "space", "market", []*pb.RowFieldUpsert{{
+		Key: timeSeriesTestRowKey("venue:binance"),
+		Fields: []*pb.FieldValue{{
+			FieldId: "close",
+			Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("apply expired delivery ctx: %v", err)
+	}
+	if !engine.sawLiveContext || engine.writes["prices-index"] != 1 {
+		t.Fatalf("writes=%v live=%v, want one write on a live context", engine.writes, engine.sawLiveContext)
 	}
 }
 

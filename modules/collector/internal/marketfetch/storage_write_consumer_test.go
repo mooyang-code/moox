@@ -34,6 +34,12 @@ func TestHandleStorageWriteUpdatesAssignedTaskInstances(t *testing.T) {
 	require.Equal(t, at, stored.LastExecTime.UTC())
 }
 
+func TestStorageWriteConsumerKeepsFullMarketFetchWindow(t *testing.T) {
+	if storageWriteConsumerFetchBatch < 64 || storageWriteConsumerMaxAckPending < 512 {
+		t.Fatalf("storage write consumer window fetch=%d ack=%d is too small for full-market 1m streams", storageWriteConsumerFetchBatch, storageWriteConsumerMaxAckPending)
+	}
+}
+
 func TestFunctionNameFromWriteSourceRequiresSCFPrefixedSource(t *testing.T) {
 	if got := functionNameFromWriteSource("scf:fetcher-1"); got != "fetcher-1" {
 		t.Fatalf("functionNameFromWriteSource() = %q, want fetcher-1", got)

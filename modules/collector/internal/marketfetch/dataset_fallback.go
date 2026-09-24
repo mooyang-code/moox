@@ -173,15 +173,25 @@ func (s *TaskInstanceDatasetSource) listMatchingInstances(ctx context.Context, s
 
 func fallbackCryptoSymbol(subjectID, marketType string) string {
 	parts := strings.Split(strings.ToUpper(strings.TrimSpace(subjectID)), "-")
-	if len(parts) < 3 || !strings.EqualFold(parts[len(parts)-1], strings.TrimSpace(marketType)) {
+	if len(parts) < 2 {
 		return ""
 	}
-	for _, part := range parts[:len(parts)-1] {
+	for _, part := range parts {
 		if strings.TrimSpace(part) == "" {
 			return ""
 		}
 	}
-	return strings.Join(parts[:len(parts)-1], "")
+	last := parts[len(parts)-1]
+	if last == "SPOT" || last == "SWAP" {
+		if !strings.EqualFold(last, strings.TrimSpace(marketType)) {
+			return ""
+		}
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.Join(parts, "")
 }
 
 func datasetCacheKey(spaceID, datasetID string) string {

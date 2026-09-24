@@ -263,7 +263,7 @@ func (v *StorageView) applyConsumerPartitionDefaults() {
 				"mdataset_binance_kline_1m",
 				"dataset_spot_kline_1h",
 				"dataset_perpetual_kline_1h",
-			}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
+			}}}, FetchBatch: 32, MaxWorkers: 8, MaxAckPending: 256},
 			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_crypto_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
 			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
 			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{

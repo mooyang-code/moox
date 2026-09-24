@@ -19,6 +19,44 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// liveIndexWriteTimeout is the dedicated budget for one DuckDB live upsert.
+// JetStream deliveries often arrive with a short remaining deadline after a
+// previous index held the write gate; inheriting that deadline turns a healthy
+// write into a NAK loop and leaves View minutes behind Primary.
+const liveIndexWriteTimeout = 30 * time.Second
+
+// primaryPointReadChunkSize keeps live enrichment under the DataNode
+// 10k-key / 100k key-field point-read budget. Full-market 1m batches
+// otherwise fail the whole delivery with "read request exceeds key/field limit".
+func primaryPointReadChunkSize(fieldCount, keyCount int) int {
+	chunkSize := keyCount
+	if fieldCount > 0 && chunkSize > 100000/fieldCount {
+		chunkSize = 100000 / fieldCount
+		if chunkSize == 0 {
+			chunkSize = 1
+		}
+	}
+	if chunkSize > 512 {
+		chunkSize = 512
+	}
+	if chunkSize < 1 {
+		chunkSize = 1
+	}
+	return chunkSize
+}
+
+func liveIndexWriteContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	if ctx != nil && errors.Is(ctx.Err(), context.Canceled) {
+		return nil, func() {}, ctx.Err()
+	}
+	base := context.TODO()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	writeCtx, cancel := context.WithTimeout(base, liveIndexWriteTimeout)
+	return writeCtx, cancel, nil
+}
+
 func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventMessage, payload *storagepb.DatasetRowsUpserted) error {
 	if message == nil || payload == nil {
 		return eventconsumer.Permanent(errors.New("storage dataset event is empty"))
@@ -307,6 +345,12 @@ func (s *Service) liveIndexReady(ctx context.Context, indexID string) (bool, err
 	if indexID == "" {
 		return false, nil
 	}
+	probeCtx, cancel, err := liveIndexWriteContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer cancel()
+	ctx = probeCtx
 	s.mu.RLock()
 	if len(s.engines) == 0 {
 		s.mu.RUnlock()
@@ -334,6 +378,12 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if id == "" {
 		return nil, nil
 	}
+	writeCtx, cancel, err := liveIndexWriteContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	ctx = writeCtx
 	engine, err := s.engineFor(id)
 	if err != nil {
 		return nil, err
@@ -554,23 +604,31 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 			key.DatasetId = sourceDataset
 			keys = append(keys, key)
 		}
-		rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: fieldIDs, AttributeKeys: factorAttributeKeys(schema.Columns, sourceDataset)})
-		if err != nil {
-			return nil, err
-		}
-		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return nil, err
-		}
+		attributeKeys := factorAttributeKeys(schema.Columns, sourceDataset)
 		loaded := sourceRows{values: make(map[string]*pb.RowFieldValues), present: make(map[string]struct{})}
-		for _, row := range rsp.GetRows() {
-			if row != nil && row.GetKey() != nil && (len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0) {
-				loaded.values[viewindex.RowKeyID(row.GetKey())] = row
-				loaded.present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
+		chunkSize := primaryPointReadChunkSize(len(fieldIDs)+len(attributeKeys), len(keys))
+		for chunkStart := 0; chunkStart < len(keys); chunkStart += chunkSize {
+			chunkEnd := chunkStart + chunkSize
+			if chunkEnd > len(keys) {
+				chunkEnd = len(keys)
 			}
-		}
-		for _, key := range rsp.GetExistingKeys() {
-			if key != nil {
-				loaded.present[viewindex.RowKeyID(key)] = struct{}{}
+			rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys[chunkStart:chunkEnd], FieldIds: fieldIDs, AttributeKeys: attributeKeys})
+			if err != nil {
+				return nil, err
+			}
+			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+				return nil, err
+			}
+			for _, row := range rsp.GetRows() {
+				if row != nil && row.GetKey() != nil && (len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0) {
+					loaded.values[viewindex.RowKeyID(row.GetKey())] = row
+					loaded.present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
+				}
+			}
+			for _, key := range rsp.GetExistingKeys() {
+				if key != nil {
+					loaded.present[viewindex.RowKeyID(key)] = struct{}{}
+				}
 			}
 		}
 		rowsByDataset[sourceDataset] = loaded

@@ -286,16 +286,17 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 		startIndex += len(chain)
 	}
 	attempts := 0
+	attemptBudget := RuntimeKlineProviderAttemptBudget()
 	for index := 0; index < len(chain); index++ {
 		chainIndex := (startIndex + index) % len(chain)
 		provider := chain[chainIndex]
 		lastProvider = provider
-		for retry := 0; retry < klineProviderAttemptBudget; retry++ {
+		for retry := 0; retry < attemptBudget; retry++ {
 			attemptCtx := ctx
 			cancel := func() {}
 			if deadline, ok := ctx.Deadline(); ok {
 				remaining := time.Until(deadline)
-				attemptsLeft := (len(chain)-index-1)*klineProviderAttemptBudget + klineProviderAttemptBudget - retry
+				attemptsLeft := (len(chain)-index-1)*attemptBudget + attemptBudget - retry
 				if remaining <= 0 {
 					return nil, provider, (startIndex + attempts) % len(chain), ctx.Err()
 				}

@@ -25,6 +25,9 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 				{
 					SpaceID: "crypto", FunctionPrefix: "moox-fetcher-crypto-binance", Namespace: "default",
 					PublicNetStatus: "ENABLE", RegionBlacklist: []string{"ap-guangzhou"},
+					StorageAccessTargets: map[string]string{
+						"ap-hongkong": "ip://43.132.204.177:12004",
+					},
 					Regions: []setupconfig.SCFFetcherRegion{
 						{Region: "ap-singapore", Enabled: true, FunctionCount: 18},
 						{Region: "ap-guangzhou", Enabled: true, FunctionCount: 11},
@@ -53,8 +56,32 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 	_, hasGZ := regions["ap-guangzhou"]
 	assert.False(t, hasGZ)
 	assert.Contains(t, regions["ap-hongkong"].Prefixes, "moox-fetcher-crypto-binance")
+	assert.Equal(t, "ip://43.132.204.177:12004", regions["ap-hongkong"].StorageAccessTarget)
 	assert.Contains(t, regions["ap-chengdu"].Prefixes, "moox-fetcher-stockcn-instrument")
 	assert.Equal(t, 33, regions["ap-chengdu"].FunctionCount)
+}
+
+func TestCollectSCFTargetsSplitsOverflowNamespaces(t *testing.T) {
+	manifest := setupconfig.Manifest{
+		SCFFetcher: setupconfig.SCFFetcher{
+			Enabled: true,
+			TencentLimits: setupconfig.TencentSCFLimits{
+				MaxNamespacesPerRegion:   5,
+				MaxFunctionsPerNamespace: 50,
+			},
+			Spaces: []setupconfig.SCFFetcherSpace{{
+				SpaceID: "crypto", FunctionPrefix: "moox-fetcher-crypto-binance", Namespace: "moox-crypto",
+				Regions: []setupconfig.SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 54}},
+			}},
+		},
+	}
+	targets := CollectSCFTargets(manifest)
+	require.Len(t, targets, 2)
+	assert.Equal(t, "ap-nanjing", targets[0].Region)
+	assert.Equal(t, "moox-crypto", targets[0].Namespace)
+	assert.Equal(t, 49, targets[0].FunctionCount)
+	assert.Equal(t, "moox-crypto-ns2", targets[1].Namespace)
+	assert.Equal(t, 5, targets[1].FunctionCount)
 }
 
 func TestBuildPlanDoesNotCreatePrivateNetwork(t *testing.T) {
@@ -94,6 +121,19 @@ func TestBuildSCFStorageRouteSelectsPrivateOnlyForSameRegion(t *testing.T) {
 	assert.Equal(t, "public", public.Network)
 	assert.Equal(t, "ip://146.56.196.204:11003", public.Target)
 	assert.Empty(t, public.VpcID)
+}
+
+func TestBuildSCFStorageRouteForTargetUsesExplicitAccess(t *testing.T) {
+	route := BuildSCFStorageRouteForTarget(ResolvedHost{
+		HostTarget: HostTarget{Name: "storage", Address: "146.56.196.204", Roles: []string{"storage"}},
+		Instance:   tencent.CloudInstance{Region: "ap-nanjing", VpcID: "vpc-storage", SubnetID: "subnet-storage", PrivateIPs: []string{"10.206.0.5"}},
+	}, SCFTarget{Region: "ap-hongkong", StorageAccessTarget: "ip://43.132.204.177:12004"})
+
+	assert.Equal(t, "access", route.Network)
+	assert.Equal(t, "ip://43.132.204.177:12004", route.Target)
+	assert.Empty(t, route.VpcID)
+	assert.Empty(t, route.SubnetID)
+	assert.Contains(t, route.Reason, "Access")
 }
 
 func TestBuildSCFStorageRouteFallsBackWhenPrivateMetadataIncomplete(t *testing.T) {

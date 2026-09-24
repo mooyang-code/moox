@@ -62,7 +62,7 @@ target_goarch_q="$(shell_quote "${target_goarch}")"
 linux_cgo_target="${MOOX_LINUX_CGO_TARGET:-storage}"
 case "${linux_cgo_target}" in
   storage)
-    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli)
+	    linux_cgo_binaries=(moox-storage-primary moox-storage-node moox-storage-view moox-storage-access moox-storage-cli)
     ;;
   factor)
     linux_cgo_binaries=(moox-factor moox-factor-cli moox-factor-engine)

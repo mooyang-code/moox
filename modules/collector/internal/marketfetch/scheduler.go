@@ -263,8 +263,8 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			state := s.planStates[stateKey]
 			frequencyFingerprint := taskFingerprint(frequencyInstanceIDs, task.CollectParams)
 			if s.InvokeNonRealtimeOnly && isKlineTask(task) {
-				priorityNodes := invokeNodes
-				if len(priorityNodes) == 0 {
+				priorityNodes := priorityNodesForTask(task, invokeNodes)
+				if len(priorityNodes) == 0 && !requiresOverseasEgress(TaskGroup{Provider: task.Provider, MarketType: task.MarketType, DatasetID: task.ResultDatasetID}) {
 					priorityNodes = taskNodes
 				}
 				if err := s.dispatchPriorityCryptoMinute(ctx, spaceID, task, items, frequency, target, priorityNodes); err != nil {
@@ -506,6 +506,19 @@ func priorityCryptoMinuteItems(items []domain.CollectionItem, frequency string) 
 		selected = append(selected, item)
 	}
 	return selected
+}
+
+func priorityNodesForTask(task domain.CollectionTask, nodes []scfinvoker.Node) []scfinvoker.Node {
+	if !requiresOverseasEgress(TaskGroup{Provider: task.Provider, MarketType: task.MarketType, DatasetID: task.ResultDatasetID}) {
+		return nodes
+	}
+	overseas := make([]scfinvoker.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if isOverseasSCFRegion(node.Region) {
+			overseas = append(overseas, node)
+		}
+	}
+	return overseas
 }
 
 func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID string, task domain.CollectionTask, items []domain.CollectionItem, frequency string, target time.Time, nodes []scfinvoker.Node) error {

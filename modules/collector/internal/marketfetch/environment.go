@@ -160,6 +160,14 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	return environment, nil
 }
 
+func isSCFPlatformResolvedHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" || !strings.Contains(host, "binance.com") {
+		return false
+	}
+	return strings.HasPrefix(host, "fapi")
+}
+
 func isStockCNAssignment(assignment NodeAssignment) bool {
 	return assignment.RouteVersion == StockCNRouteID ||
 		(strings.EqualFold(strings.TrimSpace(assignment.MarketType), "equity") && strings.TrimSpace(assignment.DatasetID) == StockCNDatasetID)
@@ -178,7 +186,11 @@ func normalizeDNSRoutes(snapshot map[string]sources.DNSResolution) (map[string][
 	var latest time.Time
 	for host, resolution := range snapshot {
 		host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-		if host == "" {
+		if host == "" || isSCFPlatformResolvedHost(host) {
+			// Futures hosts are resolved from the Collector/trade vantage.
+			// Those CloudFront anycast addresses commonly hang from Nanjing
+			// SCF and consume the whole swap request budget before fapi1-4
+			// failover can run. Leave them to the function's platform DNS.
 			continue
 		}
 		seen := make(map[string]struct{})

@@ -14,6 +14,7 @@ func NewHandler() *marketfetch.Handler {
 	h := marketfetch.NewHandler()
 	h.NewInstrumentPipeline = NewMarketInstrumentPipeline
 	h.NewMarketKlinePipeline = NewMarketKlinePipeline
+	h.NewCryptoKlinePipeline = NewCryptoKlinePipeline
 	h.NewStockKlinePipeline = NewStockKlinePipeline
 	h.ResolveSourceID = DefaultSourceID
 	h.ResolveSymbol = ResolveSymbol

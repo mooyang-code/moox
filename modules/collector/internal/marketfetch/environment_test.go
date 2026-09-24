@@ -88,6 +88,19 @@ func TestManagedDNSHashIgnoresLatencyOrderedIPChanges(t *testing.T) {
 	require.Equal(t, []string{"203.0.113.1", "203.0.113.2"}, firstRoutes["api.binance.com"])
 }
 
+func TestNormalizeDNSRoutesOmitsBinanceFuturesHosts(t *testing.T) {
+	routes, _, _ := normalizeDNSRoutes(map[string]sources.DNSResolution{
+		"api.binance.com":  {IPs: []string{"203.0.113.1"}},
+		"fapi.binance.com": {IPs: []string{"203.0.113.8"}},
+		"fapi1.binance.com": {IPs: []string{"203.0.113.9"}},
+	})
+	require.Equal(t, []string{"203.0.113.1"}, routes["api.binance.com"])
+	_, hasFAPI := routes["fapi.binance.com"]
+	_, hasFAPI1 := routes["fapi1.binance.com"]
+	require.False(t, hasFAPI)
+	require.False(t, hasFAPI1)
+}
+
 func TestBuildManagedEnvironmentFitsTypicalThirtySymbols(t *testing.T) {
 	subjects := make([]string, 0, 30)
 	externals := make(map[string]string, 30)

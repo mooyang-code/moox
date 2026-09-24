@@ -50,25 +50,30 @@ func TestTencentSCFRegionLimitOverrideIsUsedForFunctionCapacity(t *testing.T) {
 	}}
 	limits.normalize()
 	assert.Equal(t, 8, limits.ForRegion("ap-nanjing").MaxFunctionsPerNamespace)
+	assert.Equal(t, 24, limits.ForRegion("ap-nanjing").MaxFunctionsPerRegion())
+	assert.Equal(t, 23, limits.ForRegion("ap-nanjing").TimerCapacity(0))
 
 	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
 		SpaceID: "crypto", Namespace: "moox-crypto",
 		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 8}},
 	}}}
 	limits.MaxFunctionsPerNamespace = DefaultSCFMaxFunctionsPerNamespace
-	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_functions_per_namespace 8")
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+
+	cfg.Spaces[0].Regions[0].FunctionCount = 24
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region 3")
 }
 
 func TestValidateSCFCapacitiesUsesRegionalNamespaceLimit(t *testing.T) {
 	limits := defaultTencentSCFLimits()
 	limits.RegionLimits["ap-nanjing"] = TencentSCFRegionLimit{
-		MaxNamespacesPerRegion: 2, MaxFunctionsPerNamespace: 50, TotalConcurrencyMemoryMB: 64000,
+		MaxNamespacesPerRegion: 1, MaxFunctionsPerNamespace: 50, TotalConcurrencyMemoryMB: 64000,
 	}
 	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{
 		{SpaceID: "crypto", Namespace: "moox-crypto", Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 1}}},
 		{SpaceID: "stockcn", Namespace: "moox-stockcn", Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 1}}},
 	}}
-	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region 2")
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region 1")
 }
 
 func TestValidateSCFNamespaceUsesSpaceIdentity(t *testing.T) {
@@ -94,8 +99,8 @@ func TestRebalanceSCFTimerFunctionCountsFillsStorageRegionFirst(t *testing.T) {
 		},
 	}
 	require.NoError(t, RebalanceSCFTimerFunctionCounts(&cfg, "ap-nanjing", limits))
-	assert.Equal(t, 49, cfg.Regions[0].FunctionCount)
-	assert.Equal(t, 11, cfg.Regions[1].FunctionCount)
+	assert.Equal(t, 59, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 1, cfg.Regions[1].FunctionCount)
 }
 
 func TestTencentSCFLimitsRejectInvalidRegionMemory(t *testing.T) {
@@ -147,7 +152,7 @@ func TestValidateSCFCapacitiesReservesPublisherAuxiliaries(t *testing.T) {
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50}},
 	}}}
 	limits := defaultTencentSCFLimits()
-	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "including publisher auxiliaries")
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
 
 	cfg.Spaces[0].Regions[0].FunctionCount = 49
 	require.NoError(t, ValidateSCFCapacities(cfg, limits))
@@ -159,10 +164,36 @@ func TestValidateSCFCapacitiesReservesPublisherAuxiliaries(t *testing.T) {
 	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_functions_per_namespace")
 }
 
-func TestValidateSCFCapacitiesCountsBuiltinDefaultNamespace(t *testing.T) {
+func TestValidateSCFCapacitiesAllowsOverflowNamespacesInOneRegion(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "moox-crypto",
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 54}},
+	}}}
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+
+	shards := SpaceRegionNamespaceShards(cfg.Spaces[0], cfg.Spaces[0].Regions[0], limits)
+	require.Len(t, shards, 2)
+	assert.Equal(t, "moox-crypto", shards[0].Namespace)
+	assert.Equal(t, 49, shards[0].Timers)
+	assert.Equal(t, 1, shards[0].Invokes)
+	assert.Equal(t, "moox-crypto-ns2", shards[1].Namespace)
+	assert.Equal(t, 5, shards[1].Timers)
+}
+
+func TestValidateSCFCapacitiesRejectsOverflowBeyondRegionalNamespaces(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "moox-crypto",
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 250}},
+	}}}
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region")
+}
+
+func TestValidateSCFCapacitiesCountsUsedNamespaces(t *testing.T) {
 	limits := defaultTencentSCFLimits()
 	cfg := &SCFFetcher{}
-	for index := 0; index < 4; index++ {
+	for index := 0; index < 5; index++ {
 		cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
 			SpaceID: fmt.Sprintf("space-%d", index), Namespace: fmt.Sprintf("custom-%d", index),
 			Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
@@ -170,10 +201,18 @@ func TestValidateSCFCapacitiesCountsBuiltinDefaultNamespace(t *testing.T) {
 	}
 	require.NoError(t, ValidateSCFCapacities(cfg, limits))
 	cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
-		SpaceID: "space-4", Namespace: "custom-4",
+		SpaceID: "space-5", Namespace: "custom-5",
 		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
 	})
 	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region")
+}
+
+func TestPlanSCFNamespaceShardsKeepsCanaryInPrimaryNamespace(t *testing.T) {
+	shards := PlanSCFNamespaceShards("moox-crypto", 54, 1, 0, 50)
+	require.Len(t, shards, 2)
+	assert.Equal(t, SCFNamespaceShard{Namespace: "moox-crypto", Timers: 49, Invokes: 1}, shards[0])
+	assert.Equal(t, SCFNamespaceShard{Namespace: "moox-crypto-ns2", Timers: 5}, shards[1])
+	assert.Equal(t, "moox-crypto-ns3", OverflowSCFNamespace("moox-crypto", 2))
 }
 
 func TestValidateSCFRejectsSharedNamespaceAutoAllocation(t *testing.T) {
@@ -648,6 +687,25 @@ storage_gateway_host = "192.0.2.10"
 	assert.Equal(t, "192.0.2.10", snapshot.Manifest.SCFFetcher.Spaces[0].StorageGatewayHost)
 	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StorageRPCGatewayTarget)
 	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+}
+
+func TestLoadNormalizesRegionalStorageAccessTargets(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+storage_gateway_host = "192.0.2.10"
+storage_access_targets = { AP-NANJING = "ip://192.0.2.20:11004", ap-hongkong = "ip://192.0.2.21:12004" }
+storage_access_target_nodes = { AP-NANJING = "storage-access-nanjing", ap-hongkong = "storage-access-hongkong" }
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	space := snapshot.Manifest.SCFFetcher.Spaces[0]
+	assert.Equal(t, "ip://192.0.2.20:11004", space.StorageAccessTarget("ap-nanjing"))
+	assert.Equal(t, "ip://192.0.2.21:12004", space.StorageAccessTarget("ap-hongkong"))
+	assert.Equal(t, "storage-access-nanjing", space.StorageAccessTargetNode("ap-nanjing"))
+	assert.Equal(t, "storage-access-hongkong", space.StorageAccessTargetNode("ap-hongkong"))
 }
 
 func TestLoadResolvesStoragePrivateGatewayHost(t *testing.T) {

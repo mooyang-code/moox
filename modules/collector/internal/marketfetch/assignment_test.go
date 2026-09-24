@@ -464,6 +464,118 @@ func TestBuildAssignmentsRejectsCapacity(t *testing.T) {
 	require.ErrorContains(t, err, "capacity")
 }
 
+func TestSelectCryptoGroupsForCapacityKeepsMinuteBars(t *testing.T) {
+	subjects := make([]string, 0, 80)
+	externals := make(map[string]string, 80)
+	for i := 0; i < 80; i++ {
+		subject := fmt.Sprintf("S%02d-USDT", i)
+		subjects = append(subjects, subject)
+		externals[subject] = fmt.Sprintf("S%02dUSDT", i)
+	}
+	groups := []TaskGroup{
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+	}
+	nodes := make([]scfinvoker.Node, 0, 4)
+	for i := 0; i < 4; i++ {
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("n%d", i), Region: "ap-nanjing", NodeType: "scf-event", TriggerType: "timer"})
+	}
+	selected, deferred, err := selectCryptoGroupsForCapacity(groups, nodes, 40)
+	require.NoError(t, err)
+	require.Len(t, selected, 2)
+	require.Len(t, deferred, 2)
+	for _, group := range selected {
+		require.Equal(t, "1m", group.Frequency)
+	}
+	for _, group := range deferred {
+		require.Equal(t, "1H", group.Frequency)
+	}
+}
+
+func TestSelectCryptoGroupsForCapacityKeepsBinanceCryptoInOverseasRegion(t *testing.T) {
+	subjects := make([]string, 0, 80)
+	externals := make(map[string]string, 80)
+	for i := 0; i < 80; i++ {
+		subject := fmt.Sprintf("S%02d-USDT", i)
+		subjects = append(subjects, subject)
+		externals[subject] = fmt.Sprintf("S%02dUSDT", i)
+	}
+	groups := []TaskGroup{
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+	}
+	nodes := []scfinvoker.Node{
+		{NodeID: "hk-0", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-1", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-2", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-3", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	selected, deferred, err := selectCryptoGroupsForCapacity(groups, nodes, 40)
+	require.NoError(t, err)
+	require.Len(t, selected, 2)
+	require.Len(t, deferred, 2)
+	selectedKeys := make([]string, 0, len(selected))
+	for _, group := range selected {
+		selectedKeys = append(selectedKeys, group.MarketType+"/"+group.Frequency)
+	}
+	require.ElementsMatch(t, []string{"swap/1m", "spot/1m"}, selectedKeys)
+	for _, group := range deferred {
+		require.Equal(t, "1H", group.Frequency)
+	}
+}
+
+func TestBuildAssignmentsPinsBinanceCryptoToOverseasRegions(t *testing.T) {
+	subjects := []string{"AAA-USDT", "BTC-USDT"}
+	externals := map[string]string{"AAA-USDT": "AAAUSDT", "BTC-USDT": "BTCUSDT"}
+	nodes := []scfinvoker.Node{
+		{NodeID: "nj-0", FunctionName: "fn-nj-0", Region: "ap-nanjing", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-0", FunctionName: "fn-hk-0", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-1", FunctionName: "fn-hk-1", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments([]TaskGroup{
+		{Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", MarketID: "crypto", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+	}, nodes, 30)
+	require.NoError(t, err)
+	byMarket := map[string]NodeAssignment{}
+	for _, assignment := range assignments {
+		if !assignment.Enabled {
+			continue
+		}
+		byMarket[assignment.MarketType] = assignment
+	}
+	require.Equal(t, "ap-hongkong", byMarket["swap"].Region)
+	require.Equal(t, "ap-hongkong", byMarket["spot"].Region)
+	require.NotEqual(t, "nj-0", byMarket["swap"].NodeID)
+	require.NotEqual(t, "nj-0", byMarket["spot"].NodeID)
+}
+
+func TestRequiresOverseasEgressPinsBinanceCryptoSpotAndSwap(t *testing.T) {
+	for _, marketType := range []string{"spot", "swap"} {
+		require.True(t, requiresOverseasEgress(TaskGroup{
+			Provider: "binance", MarketID: "crypto", MarketType: marketType,
+			DatasetID: "dataset_binance_" + marketType + "_kline_1m",
+		}), marketType)
+	}
+	require.False(t, requiresOverseasEgress(TaskGroup{Provider: "eastmoney", MarketID: "stockcn", MarketType: "equity"}))
+}
+
+func TestBuildAssignmentsRejectsOverseasCapacity(t *testing.T) {
+	subjects := []string{"AAA-USDT", "BTC-USDT"}
+	externals := map[string]string{"AAA-USDT": "AAAUSDT", "BTC-USDT": "BTCUSDT"}
+	_, err := BuildAssignments([]TaskGroup{
+		{Provider: "binance", MarketType: "swap", MarketID: "crypto", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+	}, []scfinvoker.Node{
+		{NodeID: "nj-0", Region: "ap-nanjing", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-0", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+	}, 1)
+	require.ErrorContains(t, err, "overseas")
+}
+
 func TestBuildAssignmentsRejectsMissingExternalSymbolMapping(t *testing.T) {
 	_, err := BuildAssignments([]TaskGroup{{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"BTC-USDT"}}}, []scfinvoker.Node{{NodeID: "n", NodeType: "scf-event", TriggerType: "timer"}}, 30)
 	require.ErrorContains(t, err, "external symbol mapping")

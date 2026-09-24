@@ -26,6 +26,10 @@ Instrument snapshot Timer 预留函数配额。首次发布时 CloudNode 会在�
 配置和数据。Dataset 先以 disabled 创建，通过 Storage 激活检查后由 `setup init`
 显式激活。
 
+需要清空并重建全部 Storage/View 数据时，使用 `moox-cli setup rebuild-storage`；命令默认只做
+dry-run，确认目标和数量后加 `--yes` 执行全量删除、重新导入本目录的 `metadata.yaml` 并激活
+Dataset。
+
 ```bash
 moox-cli setup init \
   --file ./moox.toml \
@@ -52,7 +56,7 @@ moox-cli collector function publish submit --file ./moox.toml --space-id crypto 
 Storage 同地域的目标数量，CLI 不会自动挪动其他地域配额。
 
 默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `Bias.py` 和 `Cci.py`
-关联到 `crypto/view_crypto_spot_kline_1m`（`1m`）。将示例复制为
+关联到 `crypto/view_binance_spot_kline_1m`（`1m`）。将示例复制为
 `moox.toml` 后，`setup init` 会导入因子、创建绑定并启用它们；因子源文件路径相对
 `factors.source_dir` 解析。若不需要默认因子，设置 `factors.enabled = false`。如果 Storage
 已存在且 `setup init` 因元数据契约差异停止，可改用 `moox-cli setup factors --file ./moox.toml`

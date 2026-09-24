@@ -11,7 +11,8 @@ func TestFallbackCryptoSymbol(t *testing.T) {
 		{subject: "AAOIB-USDT-SPOT", market: "spot", want: "AAOIBUSDT"},
 		{subject: "1000CAT-USDT-SWAP", market: "swap", want: "1000CATUSDT"},
 		{subject: "BTC-USDT-SPOT", market: "swap", want: ""},
-		{subject: "BTC-USDT", market: "spot", want: ""},
+		{subject: "BTC-USDT", market: "spot", want: "BTCUSDT"},
+		{subject: "BTC-USDT", market: "swap", want: "BTCUSDT"},
 	}
 	for _, tt := range tests {
 		if got := fallbackCryptoSymbol(tt.subject, tt.market); got != tt.want {

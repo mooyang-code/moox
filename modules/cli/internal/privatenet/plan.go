@@ -229,3 +229,19 @@ func BuildSCFStorageRoute(storage ResolvedHost, region string) SCFStorageRoute {
 	route.Reason = "same Tencent region with Storage VPC/subnet/private IP"
 	return route
 }
+
+// BuildSCFStorageRouteForTarget applies an explicit regional Access endpoint
+// without changing the legacy same-region VPC/public fallback behavior.
+func BuildSCFStorageRouteForTarget(storage ResolvedHost, target SCFTarget) SCFStorageRoute {
+	route := BuildSCFStorageRoute(storage, target.Region)
+	if strings.TrimSpace(target.StorageAccessTarget) == "" {
+		return route
+	}
+	route.Target = strings.TrimSpace(target.StorageAccessTarget)
+	route.Network = "access"
+	route.StoragePrivateIP = ""
+	route.VpcID = ""
+	route.SubnetID = ""
+	route.Reason = "explicit regional Storage Access route"
+	return route
+}

@@ -36,6 +36,7 @@ type Handler struct {
 	// mutation details.
 	NewInstrumentPipeline  func(InstrumentStorage, string, marketdata.ProductType) (*InstrumentPipeline, error)
 	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
+	NewCryptoKlinePipeline func(Storage, marketdata.ProductType) (*KlinePipeline, error)
 	NewStockKlinePipeline  func(Storage) (*KlinePipeline, error)
 	ResolveSourceID        func(string, string) string
 	ResolveSymbol          SymbolResolver
@@ -282,12 +283,24 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		pipeline.Metrics = h.Metrics
 		payload, err = pipeline.Execute(workCtx, req)
 	} else {
-		if h.NewMarketKlinePipeline == nil {
-			return nil, fmt.Errorf("market kline pipeline factory is not configured")
-		}
 		marketID := firstNonEmptyString(req.MarketID, req.SpaceID)
 		instrumentType := marketdata.InstrumentType(firstNonEmptyString(req.InstrumentType, req.MarketType))
-		pipeline, pipelineErr := h.NewMarketKlinePipeline(storage, marketID, instrumentType, req.Provider, req.SourceID)
+		var (
+			pipeline    *KlinePipeline
+			pipelineErr error
+		)
+		if cryptoProduct, ok := cryptoKlineProduct(req.SpaceID, marketID, req.MarketType, instrumentType, req.DatasetID); ok {
+			if h.NewCryptoKlinePipeline == nil {
+				return nil, fmt.Errorf("crypto kline pipeline factory is not configured")
+			}
+			alignCryptoRequest(&req, cryptoProduct)
+			pipeline, pipelineErr = h.NewCryptoKlinePipeline(storage, cryptoProduct)
+		} else {
+			if h.NewMarketKlinePipeline == nil {
+				return nil, fmt.Errorf("market kline pipeline factory is not configured")
+			}
+			pipeline, pipelineErr = h.NewMarketKlinePipeline(storage, marketID, instrumentType, req.Provider, req.SourceID)
+		}
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
@@ -518,4 +531,32 @@ func publishCompletion(ctx context.Context, req Request, payload proto.Message) 
 		log.ErrorContextf(ctx, "publish market fetch completion failed: batch_id=%s err=%v", req.BatchID, lastErr)
 	}
 	return lastErr
+}
+
+func alignCryptoRequest(req *Request, product marketdata.ProductType) {
+	if req == nil {
+		return
+	}
+	sourceID, marketType, instrumentType := "spot_http", "spot", string(marketdata.InstrumentSpot)
+	if product == marketdata.ProductSwap {
+		sourceID, marketType, instrumentType = "swap_http", "swap", string(marketdata.InstrumentSwap)
+	}
+	req.SourceID = sourceID
+	req.MarketType = marketType
+	req.InstrumentType = instrumentType
+	for index := range req.Items {
+		req.Items[index].SourceID = sourceID
+		req.Items[index].MarketType = marketType
+	}
+}
+
+func cryptoKlineProduct(spaceID, marketID, marketType string, instrumentType marketdata.InstrumentType, datasetID string) (marketdata.ProductType, bool) {
+	if !strings.EqualFold(strings.TrimSpace(spaceID), "crypto") && !strings.EqualFold(strings.TrimSpace(marketID), "crypto") {
+		return "", false
+	}
+	dataset := strings.ToLower(strings.TrimSpace(datasetID))
+	if strings.EqualFold(strings.TrimSpace(marketType), "swap") || strings.EqualFold(string(instrumentType), string(marketdata.InstrumentSwap)) || strings.Contains(dataset, "_swap_") || strings.Contains(dataset, "swap_kline") {
+		return marketdata.ProductSwap, true
+	}
+	return marketdata.ProductSpot, true
 }

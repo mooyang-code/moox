@@ -462,7 +462,7 @@ func TestRestoreActiveViewsFailsWhenMetadataActiveIndexIsMissing(t *testing.T) {
 	}
 }
 
-func TestRestoreActiveViewsRejectsPhysicalContractMismatch(t *testing.T) {
+func TestRestoreActiveViewsSkipsPhysicalContractMismatch(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
@@ -472,8 +472,12 @@ func TestRestoreActiveViewsRejectsPhysicalContractMismatch(t *testing.T) {
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 2, ActiveViewSchemaHash: "new",
 	}}
-	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "contract mismatch") {
-		t.Fatalf("restore mismatch error = %v", err)
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
+		t.Fatalf("restore mismatch should skip, got %v", err)
+	}
+	indexID, runtime := svc.activeIndex("space", "prices")
+	if runtime != nil && strings.TrimSpace(indexID) != "" {
+		t.Fatalf("mismatched view attached active=%q", indexID)
 	}
 }
 

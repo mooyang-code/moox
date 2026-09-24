@@ -297,10 +297,12 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 					return err
 				}
 				if err := validatePhysicalViewContract(view, stats); err != nil {
+					// One stale/corrupt active index must not take down the
+					// whole View process. Leave this View unattached so
+					// maintenance can rebuild it, and keep restoring others.
+					log.Printf("storage view skip stale active index on restore space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
 					s.recordFailedRebuild(ctx, opts, auth, view, pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_INVALID, err, stats)
-					return err
-				}
-				if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
+				} else if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
 					return err
 				}
 			}

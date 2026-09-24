@@ -62,6 +62,17 @@ func TestValidateSCFPublishOverrideCapacityIncludesOtherSpaces(t *testing.T) {
 	require.ErrorContains(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-guangzhou", 25), "above max_functions_per_namespace")
 }
 
+func TestValidateSCFPublishOverrideCapacityAllowsOverflowNamespaces(t *testing.T) {
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{SCFFetcher: setupconfig.SCFFetcher{
+		TencentLimits: setupconfig.TencentSCFLimits{MaxNamespacesPerRegion: 5, MaxFunctionsPerNamespace: 50},
+		Spaces: []setupconfig.SCFFetcherSpace{
+			{SpaceID: "crypto", Namespace: "moox-crypto", Regions: []setupconfig.SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 49}}},
+		},
+	}}}
+	require.NoError(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-nanjing", 54))
+	require.ErrorContains(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-nanjing", 250), "above max_namespaces_per_region")
+}
+
 func TestValidateSCFPublishOverrideCanRepairOriginalQuotaOverflow(t *testing.T) {
 	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{SCFFetcher: setupconfig.SCFFetcher{
 		TencentLimits: setupconfig.TencentSCFLimits{MaxNamespacesPerRegion: 5, MaxFunctionsPerNamespace: 50},
@@ -755,6 +766,36 @@ func TestBuildCollectorFleetCreateItemsAreUniqueAndDeepCloned(t *testing.T) {
 	assert.Equal(t, defaultCollectorSCFTimeout, items[1].Config["timeout"])
 }
 
+func TestBuildCollectorFleetCreateItemsContinuesOverflowIndexes(t *testing.T) {
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	items, err := buildCollectorFleetCreateItems(collectorPublishOptions{
+		CloudAccountID:         "account-a",
+		SpaceID:                "crypto",
+		Region:                 "ap-nanjing",
+		FunctionNamePrefix:     "moox-fetcher-crypto-binance",
+		NodeCount:              11,
+		IndexOffset:            49,
+		EventBusCredentialFile: credentialFile,
+	}, "pkg-new")
+	require.NoError(t, err)
+	require.Len(t, items, 11)
+	assert.Equal(t, 49, items[0].Metadata["index"])
+	assert.Equal(t, 59, items[10].Metadata["index"])
+}
+
+func TestSelectCollectorFleetNodesMapsOverflowIndexes(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "fleet-49", Namespace: "moox-crypto-ns2", TriggerType: "timer", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(49)}},
+		{NodeID: "fleet-50", Namespace: "moox-crypto-ns2", TriggerType: "timer", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(50)}},
+	}
+	selected, err := selectCollectorFleetNodesForTrigger(nodes, "fleet", "data_collector", 11, "timer", 49, "moox-crypto-ns2")
+	require.NoError(t, err)
+	require.Len(t, selected, 11)
+	assert.Equal(t, "fleet-49", selected[0].NodeID)
+	assert.Equal(t, "fleet-50", selected[1].NodeID)
+	assert.Empty(t, selected[2].NodeID)
+}
+
 func TestBuildCollectorFleetCreateItemsRequiresCompleteRuntimeEnvironment(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	t.Setenv("MOOX_CLS_ENDPOINT", "ap-guangzhou.cls.tencentyun.com")
@@ -782,7 +823,7 @@ func TestSelectCollectorFleetNodesDoesNotReuseOtherNamespace(t *testing.T) {
 	nodes := []adminclient.CloudNode{
 		{NodeID: "old-0", Namespace: "default", TriggerType: "timer", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}},
 	}
-	selected, err := selectCollectorFleetNodesForTrigger(nodes, "fleet", "data_collector", 1, "timer", "crypto")
+	selected, err := selectCollectorFleetNodesForTrigger(nodes, "fleet", "data_collector", 1, "timer", 0, "crypto")
 	require.NoError(t, err)
 	assert.Empty(t, selected)
 }
@@ -1310,6 +1351,19 @@ func TestCollectorTimerEnablePatchesIncludeFreshNodes(t *testing.T) {
 	assert.Equal(t, "5 * * * * * *", patches[0].TimerCron)
 	assert.Equal(t, "sh-1", patches[1].NodeID)
 	assert.Equal(t, "6 * * * * * *", patches[1].TimerCron)
+}
+
+func TestCollectorTimerEnablePatchesKeepCryptoAssignmentCron(t *testing.T) {
+	cfg := setupconfig.SCFFetcherSpace{SpaceID: "crypto"}
+	patches := collectorTimerEnablePatches([]adminclient.CloudNode{
+		{NodeID: "hourly", Metadata: map[string]any{"timer_cron": "0 4 * * * * *", "index": 0}},
+		{NodeID: "fresh", Metadata: map[string]any{"index": 1}},
+	}, cfg)
+
+	require.Len(t, patches, 2)
+	assert.Equal(t, "0 4 * * * * *", patches[0].TimerCron)
+	assert.Equal(t, "0 * * * * * *", patches[1].TimerCron)
+	assert.True(t, patches[0].TimerEnabled)
 }
 
 func TestCollectorStockCNInstrumentTimerEnablePatchesUseDailyCron(t *testing.T) {

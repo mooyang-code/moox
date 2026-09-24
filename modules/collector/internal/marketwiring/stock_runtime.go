@@ -50,7 +50,7 @@ func NewStockKlinePipeline(storage marketfetch.Storage) (*marketfetch.KlinePipel
 			return nil, err
 		}
 	}
-	router, err := marketdata.NewRouter(registry, len(route.KlineProviders())*marketfetch.KlineProviderAttemptBudget, nil, nil)
+	router, err := marketdata.NewRouter(registry, len(route.KlineProviders())*marketfetch.RuntimeKlineProviderAttemptBudget(), nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func NewStockKlinePipelineForSource(storage marketfetch.Storage, providerID, sou
 			return nil, err
 		}
 	}
-	router, err := marketdata.NewRouter(registry, len(route.KlineProviders())*marketfetch.KlineProviderAttemptBudget, nil, nil)
+	router, err := marketdata.NewRouter(registry, len(route.KlineProviders())*marketfetch.RuntimeKlineProviderAttemptBudget(), nil, nil)
 	if err != nil {
 		return nil, err
 	}

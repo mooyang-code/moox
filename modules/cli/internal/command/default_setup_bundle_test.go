@@ -89,7 +89,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		viewCount[view.SpaceID+"/"+view.PrimaryDatasetID]++
 		if view.SpaceID == "crypto" {
 			switch view.ViewID {
-			case "view_crypto_spot_kline_1m", "view_crypto_swap_kline_1m":
+			case "view_binance_spot_kline_1m", "view_binance_swap_kline_1m":
 				// Source 1m views.
 			case "view_binance_kline_1m":
 				require.Contains(t, view.FilterJSON, `"freq":"1m"`, view.ViewID)

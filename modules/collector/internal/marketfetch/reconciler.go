@@ -201,6 +201,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// validation. A malformed budget or an individual symbol that cannot fit
 	// must still become a visible Monitor coordination failure.
 	r.observeAssignmentRequirements(spaceID, groups)
+	if !stockCN && len(groups) > 0 {
+		selected, deferred, selectErr := selectCryptoGroupsForCapacity(groups, eligibleNodes, r.maxSubjects())
+		if selectErr != nil {
+			r.observeTimerCapacity(spaceID, eligibleNodes, groups, nil)
+			return r.fail(spaceID, "capacity", selectErr)
+		}
+		if len(deferred) > 0 {
+			names := make([]string, 0, len(deferred))
+			for _, group := range deferred {
+				names = append(names, strings.TrimSpace(group.DatasetID)+"/"+strings.TrimSpace(group.Frequency))
+			}
+			log.WarnContextf(ctx, "collector SCF timer deferred lower-priority groups space=%s nodes=%d groups=%s", spaceID, len(eligibleNodes), strings.Join(names, ","))
+		}
+		groups = selected
+		r.observeAssignmentRequirements(spaceID, groups)
+	}
 	managedBudget, budgetErr := managedEnvironmentBudget(eligibleNodes, managedEnvironmentLimit(stockCN))
 	if budgetErr != nil {
 		return r.fail(spaceID, "environment", budgetErr)
@@ -1026,6 +1042,15 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 func (r *Reconciler) maxSubjects() int {
 	if r.MaxSubjects > 0 && r.MaxSubjects <= 40 {
 		return r.MaxSubjects
+	}
+	return 40
+}
+
+// DefaultMaxSubjects keeps overseas-provider requests below the SCF timeout
+// budget while preserving the wider shard size used by domestic collectors.
+func DefaultMaxSubjects(spaceID string) int {
+	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
+		return 30
 	}
 	return 40
 }

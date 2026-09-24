@@ -30,7 +30,7 @@ func TestPeriodWindowsHandlesMonthBoundary(t *testing.T) {
 }
 
 func TestReadinessGraceScalesWithFrequency(t *testing.T) {
-	require.Equal(t, 2*time.Minute, readinessGrace("1m", 2*time.Minute))
+	require.Equal(t, 20*time.Second, readinessGrace("1m", 2*time.Minute))
 	require.Equal(t, 10*time.Minute, readinessGrace("5m", 2*time.Minute))
 	require.Equal(t, 10*time.Minute, readinessGrace("1h", 2*time.Minute))
 	require.Equal(t, time.Second, readinessGrace("1h", time.Second))

@@ -75,8 +75,19 @@ grep -Fq '[存储层架构](存储层架构.md)' docs/架构总览.md || fail 'a
 
 assert_no_match 'trpc\.moox\.storage\.(Access|AccessScan)|Write(TimeSeries|Record)Rows|WritePrimaryRows|ReadPrimaryRows|WriteViewIndex|ViewIndexBatch\b|active_coverage_(start|end)|factkey|factvalue|DataChange|Envelope(Publisher)?|PublishEnvelope|RawEnvelope' modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go packages/gatewayproxy modules/admin modules/gateway web/src/api/storage examples
 assert_no_match 'FactKey|RowMarker|content_hash|FACT_VERSION_IMMUTABLE|node_sequence|source_sequence|DatasetProgress|GetDatasetProgress|ViewIndexSourceProgress|expected_last_applied_sequence|base_progress|MergeRows|DeleteRows|ReadRows|ScanRows|keep_days' modules/storage/proto modules/storage/schema modules/storage/internal/service/datanode modules/storage/internal/service/viewindex/model.go modules/storage/internal/service/viewindex/slots.go
-assert_no_match 'storage[_-]access|moox-storage-access|ProjectionReader|internal/(core|infra)/' modules/storage packages/gatewayproxy modules/admin modules/gateway web/src/api/storage examples
-assert_no_match 'context\.Background\(\)' modules/storage packages/gatewayproxy modules/admin modules/gateway --glob '*.go' --glob '!**/*_test.go' --glob '!**/*pb.go' --glob '!**/*trpc.go'
+assert_no_match 'ProjectionReader|internal/(core|infra)/' modules/storage packages/gatewayproxy modules/admin modules/gateway web/src/api/storage examples
+assert_no_match 'storage[_-]access|moox-storage-access|internal/accessproxy|cmd/access' modules/storage/cmd modules/storage/internal packages/gatewayproxy modules/admin modules/gateway web/src/api/storage examples --glob '!modules/storage/cmd/access/**' --glob '!modules/storage/internal/accessproxy/**'
+# Standalone CLIs and Storage's long-lived maintenance loops intentionally
+# create root contexts at process/lifecycle boundaries. Keep the boundary
+# check focused on request-serving code rather than those explicit roots.
+assert_no_match 'context\.Background\(\)' modules/storage packages/gatewayproxy modules/admin modules/gateway \
+  --glob '*.go' --glob '!**/*_test.go' --glob '!**/*pb.go' --glob '!**/*trpc.go' \
+  --glob '!modules/storage/cmd/**' \
+  --glob '!modules/storage/internal/service/view/maintenance.go' \
+  --glob '!modules/storage/internal/service/view/build.go' \
+  --glob '!modules/storage/internal/service/datanode/pebble/store.go' \
+  --glob '!modules/storage/internal/service/datanode/pebble/history.go' \
+  --glob '!modules/storage/internal/service/viewindex/duckdb/index_manager.go'
 assert_no_match 'packages/crypto|package crypto' modules/storage packages/gatewayproxy modules/admin modules/gateway
 assert_no_legacy_series_identity
 

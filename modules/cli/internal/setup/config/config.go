@@ -71,6 +71,11 @@ const (
 	// Tencent SCF publishes these as the default account quotas. Keep them in
 	// the manifest so release planning does not depend on a hidden allocator
 	// constant. An account or namespace may have purchased higher quotas.
+	// A region can host MaxNamespacesPerRegion namespaces, and each namespace
+	// can host MaxFunctionsPerNamespace functions, so the default regional
+	// ceiling is 5 * 50 = 250 functions. A Space uses its primary namespace
+	// first and overflow namespaces (moox-<space>-ns2, ...) when one
+	// namespace is full.
 	DefaultSCFMaxNamespacesPerRegion       = 5
 	DefaultSCFMaxFunctionsPerNamespace     = 50
 	DefaultSCFMaxBurstConcurrencyPerMinute = 500
@@ -418,6 +423,124 @@ func (l TencentSCFLimits) ForRegion(region string) TencentSCFRegionLimit {
 	}
 }
 
+// MaxFunctionsPerRegion is the Tencent default regional function ceiling:
+// namespaces in the region multiplied by functions in each namespace.
+func (l TencentSCFRegionLimit) MaxFunctionsPerRegion() int {
+	if l.MaxNamespacesPerRegion < 1 || l.MaxFunctionsPerNamespace < 1 {
+		return 0
+	}
+	return l.MaxNamespacesPerRegion * l.MaxFunctionsPerNamespace
+}
+
+// TimerCapacity is the number of Timer functions one Space may place in a
+// region after reserving one Invoke canary and any publisher auxiliaries
+// (currently the stock Instrument snapshot). Overflow namespaces are included.
+func (l TencentSCFRegionLimit) TimerCapacity(reservedAuxiliary int) int {
+	capacity := l.MaxFunctionsPerRegion() - 1 - reservedAuxiliary
+	if capacity < 0 {
+		return 0
+	}
+	return capacity
+}
+
+// SCFNamespaceShard is one namespace slice of a Space/region fleet. The
+// publisher creates these namespaces independently; Collector assignment
+// treats the union as the regional Timer fleet.
+type SCFNamespaceShard struct {
+	Namespace string
+	Timers    int
+	Invokes   int
+	Snapshots int
+}
+
+func (s SCFNamespaceShard) Functions() int {
+	return s.Timers + s.Invokes + s.Snapshots
+}
+
+// OverflowSCFNamespace returns the Space namespace at overflow index.
+// index 0 is the primary name (moox-crypto); index 1 is moox-crypto-ns2.
+func OverflowSCFNamespace(base string, index int) string {
+	base = strings.ToLower(strings.TrimSpace(base))
+	if index <= 0 {
+		return base
+	}
+	return fmt.Sprintf("%s-ns%d", base, index+1)
+}
+
+// PlanSCFNamespaceShards packs timer, invoke and snapshot functions into
+// namespaces of at most maxPerNS functions each. Invoke and snapshot stay in
+// the first namespace so the canary identity remains stable.
+func PlanSCFNamespaceShards(base string, timers, invokes, snapshots, maxPerNS int) []SCFNamespaceShard {
+	if maxPerNS < 1 {
+		return nil
+	}
+	if timers < 0 {
+		timers = 0
+	}
+	if invokes < 0 {
+		invokes = 0
+	}
+	if snapshots < 0 {
+		snapshots = 0
+	}
+	if timers == 0 && invokes == 0 && snapshots == 0 {
+		return nil
+	}
+	firstAux := invokes + snapshots
+	firstTimers := timers
+	if firstAux+firstTimers > maxPerNS {
+		firstTimers = maxPerNS - firstAux
+		if firstTimers < 0 {
+			firstTimers = 0
+		}
+	}
+	shards := []SCFNamespaceShard{{
+		Namespace: OverflowSCFNamespace(base, 0),
+		Timers:    firstTimers,
+		Invokes:   invokes,
+		Snapshots: snapshots,
+	}}
+	remaining := timers - firstTimers
+	for index := 1; remaining > 0; index++ {
+		n := remaining
+		if n > maxPerNS {
+			n = maxPerNS
+		}
+		shards = append(shards, SCFNamespaceShard{
+			Namespace: OverflowSCFNamespace(base, index),
+			Timers:    n,
+		})
+		remaining -= n
+	}
+	return shards
+}
+
+func spaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, limits TencentSCFLimits, includeSnapshot bool) []SCFNamespaceShard {
+	namespace := strings.ToLower(strings.TrimSpace(space.Namespace))
+	if namespace == "" {
+		namespace = ExpectedSCFNamespace(space.SpaceID)
+	}
+	invoke, snapshot := 1, 0
+	if includeSnapshot && strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") &&
+		strings.EqualFold(strings.TrimSpace(region.Region), strings.TrimSpace(space.InstrumentSnapshotRegion)) {
+		snapshot = 1
+	}
+	maxPerNS := limits.ForRegion(region.Region).MaxFunctionsPerNamespace
+	if maxPerNS < 1 {
+		maxPerNS = DefaultSCFMaxFunctionsPerNamespace
+	}
+	return PlanSCFNamespaceShards(namespace, region.FunctionCount, invoke, snapshot, maxPerNS)
+}
+
+// SpaceRegionNamespaceShards returns the namespace slices the publisher will
+// create for one enabled regional Timer fleet, including the Invoke canary.
+func SpaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, limits TencentSCFLimits) []SCFNamespaceShard {
+	if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
+		return nil
+	}
+	return spaceRegionNamespaceShards(space, region, limits, true)
+}
+
 func (l TencentSCFLimits) validate(path string) error {
 	if l.MaxNamespacesPerRegion < 1 {
 		return fmt.Errorf("config_invalid: %s.max_namespaces_per_region must be positive", path)
@@ -543,8 +666,16 @@ type SCFFetcherSpace struct {
 	StorageRPCGatewayTarget          string `toml:"-"`
 	StoragePrivateGatewayHost        string `toml:"storage_private_gateway_host"`
 	StoragePrivateRPCGatewayTarget   string `toml:"-"`
-	MemorySize                       int    `toml:"memory_size"`
-	TimeoutSeconds                   int    `toml:"timeout_seconds"`
+	// StorageAccessTargets overrides the central Storage gateway per SCF
+	// region. Values are regional stateless Access endpoints, while the
+	// central gateway remains the fallback for regions without an override.
+	StorageAccessTargets map[string]string `toml:"storage_access_targets"`
+	// StorageAccessTargetNodes selects the target-node identity used by the
+	// regional Access endpoint for each SCF region. The central gateway node
+	// remains the fallback when a region is not listed.
+	StorageAccessTargetNodes map[string]string `toml:"storage_access_target_nodes"`
+	MemorySize               int               `toml:"memory_size"`
+	TimeoutSeconds           int               `toml:"timeout_seconds"`
 	// InstrumentInvokeTimeoutSeconds is used by Invoke nodes that refresh a
 	// complete instrument snapshot. Timer nodes retain TimeoutSeconds.
 	InstrumentInvokeTimeoutSeconds int                `toml:"instrument_invoke_timeout_seconds"`
@@ -561,6 +692,31 @@ type SCFFetcherSpace struct {
 	RetryDelays                    []string           `toml:"retry_delays"`
 	StaggerEnabled                 bool               `toml:"stagger_enabled"`
 	Regions                        []SCFFetcherRegion `toml:"regions"`
+}
+
+// StorageAccessTarget returns the normalized regional Access target for one
+// SCF region, if the manifest explicitly configured one.
+func (s SCFFetcherSpace) StorageAccessTarget(region string) string {
+	region = strings.ToLower(strings.TrimSpace(region))
+	for configuredRegion, target := range s.StorageAccessTargets {
+		if strings.EqualFold(strings.TrimSpace(configuredRegion), region) {
+			return strings.TrimSpace(target)
+		}
+	}
+	return ""
+}
+
+// StorageAccessTargetNode returns the target-node identity for one SCF
+// region. Regional Access nodes use distinct replay namespaces; callers that
+// do not configure a regional identity retain the legacy central node.
+func (s SCFFetcherSpace) StorageAccessTargetNode(region string) string {
+	region = strings.ToLower(strings.TrimSpace(region))
+	for configuredRegion, node := range s.StorageAccessTargetNodes {
+		if strings.EqualFold(strings.TrimSpace(configuredRegion), region) {
+			return strings.TrimSpace(node)
+		}
+	}
+	return strings.TrimSpace(s.StorageGatewayNodeID)
 }
 
 // DefaultTimerFunctionCount returns the built-in Timer capacity for a known
@@ -1347,9 +1503,10 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	return nil
 }
 
-// ExpectedSCFNamespace returns the stable namespace assigned to one MooX
-// Space. Keeping one namespace per Space prevents unrelated fleets from
-// silently consuming each other's per-namespace function quota.
+// ExpectedSCFNamespace returns the primary namespace assigned to one MooX
+// Space. Additional overflow namespaces are derived from this name when a
+// region needs more than one namespace of functions. Unrelated Spaces still
+// keep dedicated primary names so they do not share a per-namespace quota.
 func ExpectedSCFNamespace(spaceID string) string {
 	spaceID = strings.ToLower(strings.TrimSpace(spaceID))
 	spaceID = strings.ReplaceAll(spaceID, "_", "-")
@@ -1366,7 +1523,7 @@ func validateSCFNamespace(cfg *SCFFetcherSpace, path string) error {
 		namespace = expected
 	}
 	if namespace != expected || namespace == "default" {
-		return fmt.Errorf("config_invalid: %s.namespace must be %q (one namespace per Space; default is not allowed)", path, expected)
+		return fmt.Errorf("config_invalid: %s.namespace must be %q (primary namespace per Space; default is not allowed)", path, expected)
 	}
 	if len(namespace) > 60 || !regexp.MustCompile(`^moox-[a-z0-9]+(?:-[a-z0-9]+)*$`).MatchString(namespace) {
 		return fmt.Errorf("config_invalid: %s.namespace %q must match moox-<space-id>", path, namespace)
@@ -1406,8 +1563,10 @@ func validateSCFSharedNamespaceAutoAllocation(cfg *SCFFetcher) error {
 
 // ValidateSCFCapacities accounts for every function the manifest publisher
 // creates for each Space/region/namespace: Timer functions, one Invoke canary
-// per active region and the optional stock Instrument snapshot Timer. Tencent's
-// function quota applies to that aggregate, not only to timer_function_count.
+// per active region and the optional stock Instrument snapshot Timer. A Space
+// may occupy multiple namespaces in the same region when one namespace's
+// function quota is full. Tencent's function quota applies to that aggregate,
+// not only to timer_function_count.
 func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
 	if cfg == nil {
 		return nil
@@ -1419,38 +1578,38 @@ func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
 	}
 	namespaces := make(map[string]map[string]struct{})
 	functions := make(map[regionNamespace]int)
-	for _, space := range cfg.Spaces {
-		namespace := strings.ToLower(strings.TrimSpace(space.Namespace))
-		if namespace == "" {
-			namespace = "default"
+	add := func(region, namespace string, count int) {
+		region = strings.ToLower(strings.TrimSpace(region))
+		namespace = strings.ToLower(strings.TrimSpace(namespace))
+		if region == "" || namespace == "" || count <= 0 {
+			return
 		}
+		if namespaces[region] == nil {
+			namespaces[region] = make(map[string]struct{})
+		}
+		namespaces[region][namespace] = struct{}{}
+		functions[regionNamespace{region: region, namespace: namespace}] += count
+	}
+	for _, space := range cfg.Spaces {
+		snapshotRegion := strings.ToLower(strings.TrimSpace(space.InstrumentSnapshotRegion))
+		snapshotCounted := false
 		for _, region := range space.Regions {
 			if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
 				continue
 			}
-			regionCode := strings.ToLower(strings.TrimSpace(region.Region))
-			if namespaces[regionCode] == nil {
-				namespaces[regionCode] = make(map[string]struct{})
-			}
-			// Tencent provides the built-in default namespace in every region;
-			// custom namespaces consume the remaining regional quota slots.
-			namespaces[regionCode]["default"] = struct{}{}
-			key := regionNamespace{region: regionCode, namespace: namespace}
-			namespaces[regionCode][namespace] = struct{}{}
-			// The standard publisher creates one Invoke canary in addition to
-			// the configured Timer fleet for each active Space/region pair.
-			functions[key] += region.FunctionCount + 1
-		}
-		if snapshotRegion := strings.ToLower(strings.TrimSpace(space.InstrumentSnapshotRegion)); snapshotRegion != "" {
-			if !space.IsRegionBlacklisted(snapshotRegion) {
-				if namespaces[snapshotRegion] == nil {
-					namespaces[snapshotRegion] = make(map[string]struct{})
+			for _, shard := range spaceRegionNamespaceShards(space, region, limits, true) {
+				add(region.Region, shard.Namespace, shard.Functions())
+				if shard.Snapshots > 0 {
+					snapshotCounted = true
 				}
-				namespaces[snapshotRegion]["default"] = struct{}{}
-				key := regionNamespace{region: snapshotRegion, namespace: namespace}
-				namespaces[snapshotRegion][namespace] = struct{}{}
-				functions[key]++
 			}
+		}
+		if snapshotRegion != "" && !snapshotCounted && !space.IsRegionBlacklisted(snapshotRegion) {
+			namespace := strings.ToLower(strings.TrimSpace(space.Namespace))
+			if namespace == "" {
+				namespace = ExpectedSCFNamespace(space.SpaceID)
+			}
+			add(snapshotRegion, namespace, 1)
 		}
 	}
 	for region, regionNamespaces := range namespaces {
@@ -1574,6 +1733,42 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	cfg.StorageRPCGatewayTarget = strings.TrimSpace(cfg.StorageRPCGatewayTarget)
 	if err := validateStorageRPCTarget(cfg.StorageRPCGatewayTarget, path+".storage_rpc_gateway_target"); err != nil {
 		return err
+	}
+	if len(cfg.StorageAccessTargets) > 0 {
+		normalizedAccessTargets := make(map[string]string, len(cfg.StorageAccessTargets))
+		for rawRegion, rawTarget := range cfg.StorageAccessTargets {
+			region := strings.ToLower(strings.TrimSpace(rawRegion))
+			if !supportedSCFRegion(region) {
+				return fmt.Errorf("config_invalid: %s.storage_access_targets[%q] uses unsupported SCF region", path, rawRegion)
+			}
+			target := strings.TrimSpace(rawTarget)
+			if err := validateStorageRPCTarget(target, fmt.Sprintf("%s.storage_access_targets[%s]", path, region)); err != nil {
+				return err
+			}
+			if _, exists := normalizedAccessTargets[region]; exists {
+				return fmt.Errorf("config_invalid: %s.storage_access_targets contains duplicate region %q", path, region)
+			}
+			normalizedAccessTargets[region] = target
+		}
+		cfg.StorageAccessTargets = normalizedAccessTargets
+	}
+	if len(cfg.StorageAccessTargetNodes) > 0 {
+		normalizedAccessNodes := make(map[string]string, len(cfg.StorageAccessTargetNodes))
+		for rawRegion, rawNode := range cfg.StorageAccessTargetNodes {
+			region := strings.ToLower(strings.TrimSpace(rawRegion))
+			if !supportedSCFRegion(region) {
+				return fmt.Errorf("config_invalid: %s.storage_access_target_nodes[%q] uses unsupported SCF region", path, rawRegion)
+			}
+			node := strings.ToLower(strings.TrimSpace(rawNode))
+			if !hostNamePattern.MatchString(node) {
+				return fmt.Errorf("config_invalid: %s.storage_access_target_nodes[%s] must be a valid target node", path, region)
+			}
+			if _, exists := normalizedAccessNodes[region]; exists {
+				return fmt.Errorf("config_invalid: %s.storage_access_target_nodes contains duplicate region %q", path, region)
+			}
+			normalizedAccessNodes[region] = node
+		}
+		cfg.StorageAccessTargetNodes = normalizedAccessNodes
 	}
 	if cfg.Runtime == "" {
 		cfg.Runtime = "Go1"
@@ -1707,12 +1902,17 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	for i := range cfg.Regions {
 		region := strings.TrimSpace(cfg.Regions[i].Region)
 		regionLimit := limits.ForRegion(region)
-		if region == "" || cfg.Regions[i].FunctionCount < 0 || (regionLimit.MaxFunctionsPerNamespace > 0 && cfg.Regions[i].FunctionCount > regionLimit.MaxFunctionsPerNamespace) || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
-			maxFunctions := limits.MaxFunctionsPerNamespace
-			if regionLimit.MaxFunctionsPerNamespace > 0 {
-				maxFunctions = regionLimit.MaxFunctionsPerNamespace
-			}
-			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..%d are required (0 enables automatic allocation)", path, i, maxFunctions)
+		reserved := 0
+		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") &&
+			strings.EqualFold(region, strings.TrimSpace(cfg.InstrumentSnapshotRegion)) {
+			reserved = 1
+		}
+		maxTimers := regionLimit.TimerCapacity(reserved)
+		if maxTimers < 1 && regionLimit.MaxFunctionsPerNamespace > 0 {
+			maxTimers = regionLimit.MaxFunctionsPerNamespace
+		}
+		if region == "" || cfg.Regions[i].FunctionCount < 0 || (maxTimers > 0 && cfg.Regions[i].FunctionCount > maxTimers) || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
+			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..%d are required (0 enables automatic allocation)", path, i, maxTimers)
 		}
 		if !supportedSCFRegion(region) {
 			return fmt.Errorf("config_invalid: %s.regions[%d] region %q is not supported", path, i, region)
@@ -1846,7 +2046,7 @@ func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path stri
 func resolveSCFTimerFunctionCountsWithRegionalCapacities(cfg *SCFFetcherSpace, path string, limits TencentSCFLimits, reservedByRegion map[string]int) error {
 	limits.normalize()
 	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
-		return limits.ForRegion(region).MaxFunctionsPerNamespace - 1 - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
+		return limits.ForRegion(region).TimerCapacity(reservedByRegion[strings.ToLower(strings.TrimSpace(region))])
 	})
 }
 
@@ -1950,8 +2150,9 @@ func resolveSCFTimerFunctionCountsWithCapacityFunc(cfg *SCFFetcherSpace, path st
 // RebalanceSCFTimerFunctionCounts applies the same quota-aware allocator after
 // the publisher has discovered the actual Storage region. Only regions whose
 // function_count was automatic are changed; explicit regional counts remain
-// operator-owned. The preferred region is filled to its namespace capacity
-// before any remaining automatic functions are assigned elsewhere.
+// operator-owned. The preferred region is filled to its regional capacity
+// (namespaces × functions per namespace, minus auxiliaries) before any
+// remaining automatic functions are assigned elsewhere.
 func RebalanceSCFTimerFunctionCounts(cfg *SCFFetcherSpace, storageRegion string, limits TencentSCFLimits) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: scf space is required")
@@ -1962,7 +2163,7 @@ func RebalanceSCFTimerFunctionCounts(cfg *SCFFetcherSpace, storageRegion string,
 		reserved[strings.ToLower(strings.TrimSpace(cfg.InstrumentSnapshotRegion))] = 1
 	}
 	capacity := func(region string) int {
-		return limits.ForRegion(region).MaxFunctionsPerNamespace - 1 - reserved[strings.ToLower(strings.TrimSpace(region))]
+		return limits.ForRegion(region).TimerCapacity(reserved[strings.ToLower(strings.TrimSpace(region))])
 	}
 	autoRegions := make([]int, 0)
 	explicitTotal := 0

@@ -8,16 +8,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResultIDsAreTaskExclusiveAcrossResampleFrequencies(t *testing.T) {
-	ids := ResultIDs("crypto", "task-5m")
-	require.Equal(t, "dataset_collector_"+hashForTest("crypto", "task-5m"), ids.DatasetID)
-	require.Equal(t, "view_collector_"+hashForTest("crypto", "task-5m"), ids.ViewID)
-	require.Equal(t, ids, ResultIDs("crypto", "task-5m"))
-	require.NotEqual(t, ids, ResultIDs("crypto", "task-1h"))
+func TestResultIDsUseReadableTaskSlug(t *testing.T) {
+	ids := ResultIDs("crypto", "builtin-binance-spot-kline-1m")
+	require.Equal(t, "dataset_binance_spot_kline_1m", ids.DatasetID)
+	require.Equal(t, "view_binance_spot_kline_1m", ids.ViewID)
+	require.Equal(t, ids, ResultIDs("stockcn", "builtin-binance-spot-kline-1m"))
+
+	symbols := ResultIDs("crypto", "builtin-binance-swap-symbols-1h")
+	require.Equal(t, "dataset_binance_swap_symbols", symbols.DatasetID)
+	require.Equal(t, "view_binance_swap_symbols", symbols.ViewID)
+
+	fiveMinute := ResultIDs("crypto", "task-5m")
+	require.Equal(t, "dataset_task_5m", fiveMinute.DatasetID)
+	require.Equal(t, "view_task_5m", fiveMinute.ViewID)
+	require.NotEqual(t, fiveMinute, ResultIDs("crypto", "task-1h"))
 }
 
-func hashForTest(spaceID, taskID string) string {
-	return resultIDs(spaceID, taskID).DatasetID[len("dataset_collector_"):]
+func TestResultIDsUseCanonicalCryptoHourlyDatasets(t *testing.T) {
+	spot := ResultIDs("crypto", "builtin-binance-spot-kline-1h")
+	require.Equal(t, "dataset_spot_kline_1h", spot.DatasetID)
+	require.Equal(t, "view_crypto_spot_kline_1h", spot.ViewID)
+
+	swap := ResultIDs("crypto", "builtin-binance-swap-kline-1h")
+	require.Equal(t, "dataset_perpetual_kline_1h", swap.DatasetID)
+	require.Equal(t, "view_crypto_swap_kline_1h", swap.ViewID)
+}
+
+func TestResultDisplayNameUsesShortChinese(t *testing.T) {
+	require.Equal(t, "合约小时K线", resultDisplayName(Config{Name: "Binance 合约 K 线 1H"}, "builtin-binance-swap-kline-1h"))
+	require.Equal(t, "采集结果", resultDisplayName(Config{Name: "too long english name"}, "custom-task"))
+	require.True(t, isChineseDisplayName("现货分钟K线"))
+	require.False(t, isChineseDisplayName("Binance 现货 K 线 1m"))
+}
+
+func TestIsLegacyHashedIDs(t *testing.T) {
+	require.True(t, IsLegacyHashedIDs(IDs{DatasetID: "dataset_collector_df4b3afb3ff5547c", ViewID: "view_collector_df4b3afb3ff5547c"}))
+	require.False(t, IsLegacyHashedIDs(ResultIDs("crypto", "builtin-binance-spot-kline-1m")))
 }
 
 type resultMetadataFake struct {
@@ -225,4 +251,70 @@ func TestOwnedByTaskDoesNotAcceptConflictingLegacyOwner(t *testing.T) {
 	require.False(t, ownedByTask(map[string]string{"owner_module": "collector", "collector_task_id": "task-b", "resample_task_id": "task-a"}, "task-a"))
 	require.False(t, ownedByTask(map[string]string{"owner_module": "collector", "resample_task_id": "task-a"}, "task-a"))
 	require.False(t, ownedByTask(map[string]string{"owner_module": "factor", "collector_task_id": "task-a"}, "task-a"))
+}
+
+func TestOwnedByTaskAdoptsCatalogDataset(t *testing.T) {
+	require.True(t, ownedByTask(map[string]string{"market_type": "spot"}, "builtin-binance-spot-kline-1m"))
+	require.True(t, ownedByTask(nil, "builtin-binance-spot-kline-1m"))
+}
+
+func TestEnsureAdoptsCatalogDatasetAndCreatesTaskView(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "builtin-binance-spot-kline-1m")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Name: "加密现货一分钟行情", Status: "active",
+		KeepDuration: "720h0m0s", Attributes: map[string]string{"market_type": "spot"},
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	got, err := manager.Ensure(context.Background(), "crypto", "builtin-binance-spot-kline-1m", "kline", "spot", Config{
+		DataNodeID: "node-1", Name: "Binance 现货 K 线 1m", DataSourceID: "binance", Frequency: "1m",
+	})
+	require.NoError(t, err)
+	require.Equal(t, ids, got)
+	require.Equal(t, 0, fake.createDatasets)
+	require.Equal(t, 1, fake.createViews)
+	require.Equal(t, "现货分钟K线", fake.views[ids.ViewID].GetName())
+	require.Equal(t, "720h0m0s", fake.views[ids.ViewID].GetKeepDuration())
+}
+
+type restoreFailCleaner struct{}
+
+func (restoreFailCleaner) DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
+	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: resultOK()}, nil
+}
+
+func (restoreFailCleaner) RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
+	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "dataset is not a Collector task result"}}, nil
+}
+
+func TestEnsureSkipsRestoreForCatalogDataset(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "builtin-binance-swap-kline-1m")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
+		Attributes: map[string]string{"market_type": "swap"},
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager.cleaner = restoreFailCleaner{}
+	got, err := manager.Ensure(context.Background(), "crypto", "builtin-binance-swap-kline-1m", "kline", "swap", Config{
+		DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1m",
+	})
+	require.NoError(t, err)
+	require.Equal(t, ids, got)
+}
+
+func TestDeleteLeavesCatalogDataset(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "builtin-binance-spot-kline-1m")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
+		Attributes: map[string]string{"market_type": "spot"},
+	}
+	fake.views[ids.ViewID] = &storagepb.View{ViewId: ids.ViewID, DatasetId: ids.DatasetID, Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "builtin-binance-spot-kline-1m"}}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	require.NoError(t, manager.Delete(context.Background(), "crypto", ids))
+	_, datasetExists := fake.datasets[ids.DatasetID]
+	require.True(t, datasetExists)
+	_, viewExists := fake.views[ids.ViewID]
+	require.False(t, viewExists)
 }

@@ -16,6 +16,15 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+const (
+	// Full-market 1m streams publish hundreds of DatasetRowsUpserted events
+	// every minute. The previous 16/128 fetch window could stall period
+	// success marks behind the View deadline even when Primary already had
+	// the rows.
+	storageWriteConsumerFetchBatch    = 64
+	storageWriteConsumerMaxAckPending = 512
+)
+
 // StartStorageWriteConsumer consumes the durable Storage mutation stream and
 // projects successful writes into task-instance freshness. It is separate from
 // the Invoke completion consumer because Timer SCFs intentionally do not
@@ -67,7 +76,7 @@ func StartStorageWriteConsumerReady(ctx context.Context, spaceID string, instanc
 			// A row event is the readiness evidence for a period. Keep it pending
 			// through transient SQLite/EventBus outages instead of TERM'ing it
 			// after a small delivery count and reporting a false degraded period.
-			consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{ConsumerConfig: events.ConsumerConfig{Name: storageWriteConsumerName(spaceID), Event: events.DatasetRowsUpserted, AckWait: 30 * time.Second, MaxDeliver: -1, MaxAckPending: 128, FetchMaxWait: 500 * time.Millisecond, DeliverDecodeErrors: true}, SpaceID: spaceID})
+			consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{ConsumerConfig: events.ConsumerConfig{Name: storageWriteConsumerName(spaceID), Event: events.DatasetRowsUpserted, AckWait: 30 * time.Second, MaxDeliver: -1, MaxAckPending: storageWriteConsumerMaxAckPending, FetchMaxWait: 500 * time.Millisecond, DeliverDecodeErrors: true}, SpaceID: spaceID})
 			if err != nil {
 				client.Close()
 				log.WarnContextf(ctx, "collector storage write consumer unavailable; retrying: %v", err)
@@ -129,7 +138,7 @@ func storageWriteConsumerName(spaceID string) string {
 
 func runStorageWriteConsumer(ctx context.Context, consumer *events.Consumer, instances *store.TaskInstanceRepository, readiness ...*PeriodReadinessService) {
 	for ctx.Err() == nil {
-		deliveries, fetchErr := consumer.FetchEvents(ctx, 16)
+		deliveries, fetchErr := consumer.FetchEvents(ctx, storageWriteConsumerFetchBatch)
 		if fetchErr != nil && len(deliveries) == 0 {
 			if ctx.Err() != nil {
 				return

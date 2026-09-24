@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -177,19 +178,27 @@ func NewInvocationBreaker(threshold int) *InvocationBreaker {
 
 func (b *InvocationBreaker) NewSession() *InvocationBreakerSession {
 	return &InvocationBreakerSession{
-		threshold: b.threshold,
-		streaks:   make(map[string]int),
-		inFlight:  make(map[string]int),
-		notify:    make(chan struct{}),
+		threshold:  b.threshold,
+		streaks:    make(map[string]int),
+		inFlight:   make(map[string]int),
+		lastErrors: make(map[string]error),
+		notify:     make(chan struct{}),
 	}
 }
 
 type InvocationBreakerSession struct {
-	mu        sync.Mutex
-	threshold int
-	streaks   map[string]int
-	inFlight  map[string]int
-	notify    chan struct{}
+	mu         sync.Mutex
+	threshold  int
+	streaks    map[string]int
+	inFlight   map[string]int
+	lastErrors map[string]error
+	notify     chan struct{}
+}
+
+func (s *InvocationBreakerSession) LastError(providerID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastErrors[providerID]
 }
 
 func (s *InvocationBreakerSession) Admit(ctx context.Context, providerID string) bool {
@@ -232,8 +241,10 @@ func (s *InvocationBreakerSession) Observe(providerID string, err error) {
 	}
 	if err == nil {
 		s.streaks[providerID] = 0
+		delete(s.lastErrors, providerID)
 		return
 	}
+	s.lastErrors[providerID] = err
 	if isBreakerFailure(err) {
 		s.streaks[providerID]++
 		return
@@ -342,6 +353,9 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
+			if last := s.breaker.LastError(providerID); last != nil {
+				lastErr = last
+			}
 			continue
 		}
 
@@ -362,7 +376,10 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 		}
 		if err != nil {
 			s.breaker.Observe(providerID, err)
-			return nil, err
+			if sourceID := strings.TrimSpace(req.SourceID); sourceID != "" {
+				return nil, fmt.Errorf("%w: provider=%s source=%s", err, providerID, sourceID)
+			}
+			return nil, fmt.Errorf("%w: provider=%s", err, providerID)
 		}
 		if status := fetcher.Descriptor().Status; status == SourceShadow || status == SourceCatalogOnly {
 			err = fmt.Errorf("%w: %s", ErrSourceUnavailable, fetcher.Descriptor().SourceKey().String())
@@ -390,13 +407,18 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			lastErr = err
 			continue
 		}
+		guard, err := s.router.feedGuard(providerID, spec.RateLimit, req.RateBudgetRatio)
+		if err != nil {
+			s.breaker.Observe(providerID, err)
+			return nil, err
+		}
 
 		var rows []NormalizedKline
-		err = func() error {
+		err = guard.Do(ctx, func(requestCtx context.Context) error {
 			var fetchErr error
-			rows, fetchErr = fetcher.FetchKlines(ctx, providerReq)
+			rows, fetchErr = fetcher.FetchKlines(requestCtx, providerReq)
 			return fetchErr
-		}()
+		})
 		s.breaker.Observe(providerID, err)
 
 		if err == nil {
@@ -409,6 +431,9 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 	}
 
 	if lastErr == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		lastErr = ErrProviderNotFound
 	}
 	return nil, lastErr
@@ -432,6 +457,7 @@ func (r *Router) feedGuard(providerID string, policy RateLimitPolicy, rateBudget
 	defer r.guardsMu.Unlock()
 
 	rateBudgetRatio = normalizedRateBudgetRatio(rateBudgetRatio)
+	policy = applyRuntimeRequestTimeout(policy)
 	guardKey := providerID + "\x00" + strconv.FormatFloat(rateBudgetRatio, 'g', -1, 64)
 	guard, ok := r.feedGuardsByID[guardKey]
 	if ok {
@@ -443,6 +469,19 @@ func (r *Router) feedGuard(providerID string, policy RateLimitPolicy, rateBudget
 	}
 	r.feedGuardsByID[guardKey] = created
 	return created, nil
+}
+
+func applyRuntimeRequestTimeout(policy RateLimitPolicy) RateLimitPolicy {
+	raw := strings.TrimSpace(os.Getenv("MOOX_FETCH_REQUEST_TIMEOUT_MS"))
+	if raw == "" {
+		return policy
+	}
+	milliseconds, err := strconv.Atoi(raw)
+	if err != nil || milliseconds <= 0 {
+		return policy
+	}
+	policy.RequestTimeout = time.Duration(milliseconds) * time.Millisecond
+	return policy
 }
 
 func normalizedRateBudgetRatio(value float64) float64 {

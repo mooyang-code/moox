@@ -253,8 +253,10 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 			if parseErr != nil {
 				return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
 			}
+			oldIDs := collectorresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
 			ids, ensureErr := manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, collectorresult.Config{
 				DataNodeID:   dataNodeID,
+				Name:         task.TaskName,
 				Description:  task.Description,
 				DataSourceID: task.Provider,
 				Frequency:    taskResultFrequency(*params),
@@ -262,6 +264,11 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 			})
 			if ensureErr != nil {
 				return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, ensureErr)
+			}
+			if collectorresult.IsLegacyHashedIDs(oldIDs) && oldIDs.DatasetID != ids.DatasetID {
+				if err := manager.Delete(ctx, task.SpaceID, oldIDs); err != nil {
+					return fmt.Errorf("retire hashed task %s/%s result: %w", task.SpaceID, task.TaskID, err)
+				}
 			}
 			needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
 			task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
@@ -506,7 +513,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			ResolveSymbol:       marketwiring.ResolveSymbol,
 			CompactSymbol:       marketwiring.CompactSymbol,
 			Tasks:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
-			Metrics: metrics, MaxSubjects: 40,
+			Metrics: metrics, MaxSubjects: marketfetch.DefaultMaxSubjects(spaceID),
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
 			StockCNStagger: marketfetch.StockCNStaggerConfig{

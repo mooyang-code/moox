@@ -107,6 +107,9 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 		ctx = context.Background()
 	}
 	candidates := uniqueIPs(ips)
+	if skipControlPlaneIPs(domain) {
+		candidates = nil
+	}
 	ipDeadline, hasIPDeadline := ipAttemptDeadline(ctx)
 	source := dnsSource(len(candidates) > 0)
 	for index, ip := range candidates {
@@ -171,6 +174,14 @@ func ipCandidateContext(parent context.Context, deadline time.Time, hasDeadline 
 		budget = remaining
 	}
 	return context.WithTimeout(parent, budget)
+}
+
+func skipControlPlaneIPs(domain string) bool {
+	host := strings.ToLower(strings.TrimSpace(domain))
+	if host == "" || !strings.Contains(host, "binance.com") {
+		return false
+	}
+	return strings.HasPrefix(host, "fapi")
 }
 
 func dnsSource(hasSnapshot bool) string {

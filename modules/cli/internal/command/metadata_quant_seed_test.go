@@ -78,8 +78,8 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	require.True(t, foundStockKline)
 	require.Equal(t, []string{"1m"}, stockKline.Freqs)
 	require.ElementsMatch(t, []string{
-		"view_crypto_spot_kline_1m",
-		"view_crypto_swap_kline_1m",
+		"view_binance_spot_kline_1m",
+		"view_binance_swap_kline_1m",
 		"view_binance_kline_1m",
 		"view_crypto_spot_kline_1h",
 		"view_crypto_swap_kline_1h",

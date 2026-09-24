@@ -46,6 +46,8 @@ type setupDeps struct {
 	login                  func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
 	openInitStorage        func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
 	openInitFactor         func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
+	initStorage            func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error)
+	rebuildStorage         func(context.Context, *setupconfig.Snapshot, string, string, string, bool) (storageRebuildSummary, error)
 	deployStorage          func(context.Context, *setupconfig.Snapshot, string, bool, bool) error
 	installStorageWatchdog func(context.Context, *setupconfig.Snapshot, string) error
 	importMetadata         func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
@@ -84,6 +86,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
 		newSetupDeployStorageCommand(deps),
+		newSetupRebuildStorageCommand(deps),
 		newSetupRebootHostCommand(deps),
 		newSetupRestartHostCommand(deps),
 		newSetupHostDiagnosticsCommand(deps),
@@ -1040,6 +1043,16 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.openInitFactor == nil {
 		deps.openInitFactor = defaults.openInitFactor
 	}
+	if deps.initStorage == nil {
+		deps.initStorage = func(ctx context.Context, snapshot *setupconfig.Snapshot, file, configDir, storageHost string, bundle setupInitBundle) (setupInitSummary, error) {
+			return runSetupInit(ctx, deps, snapshot, file, configDir, storageHost, bundle)
+		}
+	}
+	if deps.rebuildStorage == nil {
+		deps.rebuildStorage = func(ctx context.Context, snapshot *setupconfig.Snapshot, host, file, configDir string, apply bool) (storageRebuildSummary, error) {
+			return runSetupRebuildStorage(ctx, deps, snapshot, host, file, configDir, apply)
+		}
+	}
 	if deps.deployStorage == nil {
 		deps.deployStorage = defaults.deployStorage
 	}
@@ -1098,6 +1111,8 @@ func defaultSetupDeps() setupDeps {
 		registerCloudAccounts:  defaultSetupRegisterCloudAccounts,
 		openInitStorage:        defaultOpenSetupInitStorage,
 		openInitFactor:         defaultOpenSetupFactor,
+		initStorage:            nil,
+		rebuildStorage:         nil,
 		deployStorage:          defaultSetupDeployStorage,
 		installStorageWatchdog: defaultSetupInstallStorageWatchdog,
 		importMetadata:         defaultSetupImportMetadata,

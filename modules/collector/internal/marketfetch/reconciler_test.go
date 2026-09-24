@@ -20,6 +20,11 @@ import (
 
 type reconcilerTasksStub struct{ tasks []domain.CollectionTask }
 
+func TestDefaultMaxSubjectsUsesSmallerCryptoShards(t *testing.T) {
+	require.Equal(t, 30, DefaultMaxSubjects("crypto"))
+	require.Equal(t, 40, DefaultMaxSubjects("stockcn"))
+}
+
 func TestDisableBlacklistedTimersHandlesMissingObservation(t *testing.T) {
 	for _, test := range []struct {
 		name     string

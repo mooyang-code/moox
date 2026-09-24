@@ -116,7 +116,7 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	}
 	klineDatasets := partitions[0].Datasets()
 	wantKlineDatasets := []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m", "mdataset_binance_kline_1m", "dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}
-	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline" || len(klineDatasets) != len(wantKlineDatasets) {
+	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline" || len(klineDatasets) != len(wantKlineDatasets) || partitions[0].FetchBatch != 32 || partitions[0].MaxWorkers != 8 || partitions[0].MaxAckPending != 256 {
 		t.Fatalf("kline partition = %+v", partitions[0])
 	}
 	for i, datasetID := range wantKlineDatasets {

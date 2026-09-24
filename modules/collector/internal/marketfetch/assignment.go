@@ -451,75 +451,234 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 	sort.Slice(normalized, func(i, j int) bool { return groupKey(normalized[i]) < groupKey(normalized[j]) })
 	planned := make([][][]string, len(normalized))
 	needed := 0
+	swapNeeded := 0
+	otherNeeded := 0
+	swapAllow := make(map[int]bool)
+	otherAllow := make(map[int]bool)
 	for index, group := range normalized {
 		subjects := group.Subjects
 		if isCryptoKlineGroup(group) {
 			subjects = pinPriorityCryptoSubjects(subjects)
 		}
 		planned[index] = splitSubjectChunks(subjects, maxSubjects)
-		needed += len(planned[index])
-	}
-	if needed > len(timerNodes) {
-		return nil, fmt.Errorf("timer assignment capacity insufficient: %d Timer nodes are required for the configured dataset/frequency shards, but only %d are available; increase the Timer SCF fleet", needed, len(timerNodes))
-	}
-	spare := len(timerNodes) - needed
-	for _, index := range cryptoSpareAllocationOrder(normalized) {
-		if spare <= 0 {
-			break
+		count := len(planned[index])
+		needed += count
+		if requiresOverseasEgress(group) {
+			swapNeeded += count
+			swapAllow[index] = true
+		} else {
+			otherNeeded += count
+			otherAllow[index] = true
 		}
+	}
+	overseasNodes, mainlandNodes := partitionTimerNodesByEgress(timerNodes)
+	pinOverseas := len(overseasNodes) > 0 && swapNeeded > 0
+	if pinOverseas {
+		if swapNeeded > len(overseasNodes) {
+			return nil, fmt.Errorf("timer assignment capacity insufficient: %d overseas Timer nodes are required for Binance swap shards, but only %d are available; increase the Hong Kong/Singapore Timer fleet or drop lower-priority swap frequencies", swapNeeded, len(overseasNodes))
+		}
+		if otherNeeded > len(timerNodes)-swapNeeded {
+			return nil, fmt.Errorf("timer assignment capacity insufficient: %d Timer nodes are required for the configured dataset/frequency shards, but only %d are available; increase the Timer SCF fleet or drop lower-priority frequencies", needed, len(timerNodes))
+		}
+		swapNeeded += applyCryptoSpare(normalized, planned, swapAllow, len(overseasNodes)-swapNeeded, maxSubjects)
+		otherNeeded += applyCryptoSpare(normalized, planned, otherAllow, len(timerNodes)-swapNeeded-otherNeeded, maxSubjects)
+		needed = swapNeeded + otherNeeded
+	} else {
+		if needed > len(timerNodes) {
+			return nil, fmt.Errorf("timer assignment capacity insufficient: %d Timer nodes are required for the configured dataset/frequency shards, but only %d are available; increase the Timer SCF fleet or drop lower-priority frequencies", needed, len(timerNodes))
+		}
+		needed += applyCryptoSpare(normalized, planned, nil, len(timerNodes)-needed, maxSubjects)
+	}
+	queues := assignmentNodeQueues(timerNodes, overseasNodes, mainlandNodes, pinOverseas)
+	assignments := make([]NodeAssignment, 0, len(timerNodes))
+	groupID := 0
+	used := make(map[string]struct{}, len(timerNodes))
+	for _, index := range overseasFirstIndexes(normalized) {
 		group := normalized[index]
-		chunks := planCryptoSubjectChunks(group.Subjects, maxSubjects, spare)
-		extra := len(chunks) - len(planned[index])
-		if extra > spare {
+		for _, subjects := range planned[index] {
+			node, err := takeAssignmentNode(&queues, requiresOverseasEgress(group), pinOverseas)
+			if err != nil {
+				return nil, err
+			}
+			assignment, assignErr := assignmentFromChunk(group, subjects, node, groupID, needed)
+			if assignErr != nil {
+				return nil, assignErr
+			}
+			assignments = append(assignments, assignment)
+			used[node.NodeID] = struct{}{}
+			groupID++
+		}
+	}
+	for _, node := range timerNodes {
+		if _, ok := used[node.NodeID]; ok {
 			continue
 		}
-		spare -= extra
-		needed += extra
-		planned[index] = chunks
-	}
-	assignments := make([]NodeAssignment, 0, len(timerNodes))
-	nodeIndex := 0
-	for index, group := range normalized {
-		stockGroup := strings.EqualFold(group.MarketType, "equity") && group.DatasetID == StockCNDatasetID
-		for _, subjects := range planned[index] {
-			hashParts := make([]string, 0, len(subjects))
-			externals := make(map[string]string, len(subjects))
-			for _, subject := range subjects {
-				external := strings.TrimSpace(group.ExternalSymbols[subject])
-				if stockGroup {
-					resolved, symbolErr := stockProviderSymbol(subject, external)
-					if symbolErr != nil {
-						return nil, symbolErr
-					}
-					if external != "" && external != resolved {
-						externals[subject] = external
-					}
-					hashParts = append(hashParts, subject+"="+resolved)
-					continue
-				}
-				externals[subject] = external
-				hashParts = append(hashParts, subject+"="+external)
-			}
-			node := timerNodes[nodeIndex]
-			groupID := nodeIndex
-			nodeIndex++
-			cron := assignmentCron(group, groupID)
-			assignments = append(assignments, NodeAssignment{
-				NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
-				Provider: group.Provider, RouteProvider: group.Provider, MarketType: group.MarketType,
-				MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag,
-				DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals,
-				GroupID: groupID, GroupCount: needed, Cron: cron, Enabled: true,
-				AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
-			})
-		}
-	}
-	for ; nodeIndex < len(timerNodes); nodeIndex++ {
-		node := timerNodes[nodeIndex]
 		assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Enabled: false, AssignmentHash: AssignmentHash()})
 	}
 	sort.Slice(assignments, func(i, j int) bool { return assignments[i].NodeID < assignments[j].NodeID })
 	return assignments, nil
+}
+
+type assignmentQueues struct {
+	overseas []scfinvoker.Node
+	remain   []scfinvoker.Node
+	shared   []scfinvoker.Node
+}
+
+func assignmentNodeQueues(all, overseas, mainland []scfinvoker.Node, pinOverseas bool) assignmentQueues {
+	if !pinOverseas {
+		return assignmentQueues{shared: append([]scfinvoker.Node(nil), all...)}
+	}
+	return assignmentQueues{
+		overseas: append([]scfinvoker.Node(nil), overseas...),
+		remain:   append(append([]scfinvoker.Node(nil), mainland...), overseas...),
+	}
+}
+
+func takeAssignmentNode(queues *assignmentQueues, overseasOnly, pinOverseas bool) (scfinvoker.Node, error) {
+	if queues == nil {
+		return scfinvoker.Node{}, fmt.Errorf("timer assignment has no node queue")
+	}
+	if !pinOverseas {
+		if len(queues.shared) == 0 {
+			return scfinvoker.Node{}, fmt.Errorf("timer assignment capacity insufficient: no Timer node remains")
+		}
+		node := queues.shared[0]
+		queues.shared = queues.shared[1:]
+		return node, nil
+	}
+	if overseasOnly {
+		if len(queues.overseas) == 0 {
+			return scfinvoker.Node{}, fmt.Errorf("timer assignment capacity insufficient: no overseas Timer node remains for Binance swap")
+		}
+		node := queues.overseas[0]
+		queues.overseas = queues.overseas[1:]
+		queues.remain = removeNodeByID(queues.remain, node.NodeID)
+		return node, nil
+	}
+	if len(queues.remain) == 0 {
+		return scfinvoker.Node{}, fmt.Errorf("timer assignment capacity insufficient: no Timer node remains")
+	}
+	node := queues.remain[0]
+	queues.remain = queues.remain[1:]
+	queues.overseas = removeNodeByID(queues.overseas, node.NodeID)
+	return node, nil
+}
+
+func overseasFirstIndexes(groups []TaskGroup) []int {
+	indexes := make([]int, 0, len(groups))
+	for index, group := range groups {
+		if requiresOverseasEgress(group) {
+			indexes = append(indexes, index)
+		}
+	}
+	for index, group := range groups {
+		if !requiresOverseasEgress(group) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+func removeNodeByID(nodes []scfinvoker.Node, nodeID string) []scfinvoker.Node {
+	out := nodes[:0]
+	for _, node := range nodes {
+		if node.NodeID == nodeID {
+			continue
+		}
+		out = append(out, node)
+	}
+	return out
+}
+
+func assignmentFromChunk(group TaskGroup, subjects []string, node scfinvoker.Node, groupID, needed int) (NodeAssignment, error) {
+	stockGroup := strings.EqualFold(group.MarketType, "equity") && group.DatasetID == StockCNDatasetID
+	hashParts := make([]string, 0, len(subjects))
+	externals := make(map[string]string, len(subjects))
+	for _, subject := range subjects {
+		external := strings.TrimSpace(group.ExternalSymbols[subject])
+		if stockGroup {
+			resolved, symbolErr := stockProviderSymbol(subject, external)
+			if symbolErr != nil {
+				return NodeAssignment{}, symbolErr
+			}
+			if external != "" && external != resolved {
+				externals[subject] = external
+			}
+			hashParts = append(hashParts, subject+"="+resolved)
+			continue
+		}
+		externals[subject] = external
+		hashParts = append(hashParts, subject+"="+external)
+	}
+	return NodeAssignment{
+		NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
+		Provider: group.Provider, RouteProvider: group.Provider, MarketType: group.MarketType,
+		MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag,
+		DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals,
+		GroupID: groupID, GroupCount: needed, Cron: assignmentCron(group, groupID), Enabled: true,
+		AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
+	}, nil
+}
+
+func applyCryptoSpare(normalized []TaskGroup, planned [][][]string, allow map[int]bool, spare, maxSubjects int) int {
+	added := 0
+	for _, index := range cryptoSpareAllocationOrder(normalized) {
+		if spare <= 0 {
+			break
+		}
+		if allow != nil && !allow[index] {
+			continue
+		}
+		chunks := planCryptoSubjectChunks(normalized[index].Subjects, maxSubjects, spare)
+		extra := len(chunks) - len(planned[index])
+		if extra <= 0 || extra > spare {
+			continue
+		}
+		spare -= extra
+		added += extra
+		planned[index] = chunks
+	}
+	return added
+}
+
+func requiresOverseasEgress(group TaskGroup) bool {
+	// Binance is an overseas provider for both spot and perpetual markets.
+	// Keep all crypto K-line traffic in an overseas SCF region so the provider
+	// request and the regional Storage Access hop use the same egress path.
+	dataset := strings.ToLower(strings.TrimSpace(group.DatasetID))
+	if strings.EqualFold(strings.TrimSpace(group.Provider), "binance") &&
+		(strings.EqualFold(strings.TrimSpace(group.MarketID), "crypto") || strings.Contains(dataset, "binance_")) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(group.MarketType), "swap") {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(group.InstrumentType), "swap") {
+		return true
+	}
+	return strings.Contains(dataset, "_swap_") || strings.Contains(dataset, "swap_kline")
+}
+
+func isOverseasSCFRegion(region string) bool {
+	switch strings.ToLower(strings.TrimSpace(region)) {
+	case "ap-hongkong", "ap-singapore", "ap-tokyo", "ap-seoul", "ap-bangkok", "ap-jakarta",
+		"eu-frankfurt", "na-ashburn", "na-siliconvalley", "sa-saopaulo":
+		return true
+	default:
+		return false
+	}
+}
+
+func partitionTimerNodesByEgress(nodes []scfinvoker.Node) (overseas, mainland []scfinvoker.Node) {
+	for _, node := range nodes {
+		if isOverseasSCFRegion(node.Region) {
+			overseas = append(overseas, node)
+		} else {
+			mainland = append(mainland, node)
+		}
+	}
+	return roundRobinRegions(overseas), roundRobinRegions(mainland)
 }
 
 var priorityCryptoSubjects = []string{"BTC-USDT", "ETH-USDT"}
@@ -738,6 +897,88 @@ func normalizeSubjects(subjects []string) []string {
 
 func groupKey(group TaskGroup) string {
 	return strings.Join([]string{group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency}, "\x00")
+}
+
+func cryptoTimerGroupRank(frequency string) int {
+	switch strings.ToLower(strings.TrimSpace(frequency)) {
+	case "1m", "1min", "1minute":
+		return 0
+	default:
+		return 1
+	}
+}
+
+func assignmentShardCount(groups []TaskGroup, maxSubjects int) int {
+	needed := 0
+	for _, group := range groups {
+		subjects := group.Subjects
+		if isCryptoKlineGroup(group) {
+			subjects = pinPriorityCryptoSubjects(subjects)
+		}
+		needed += len(splitSubjectChunks(subjects, maxSubjects))
+	}
+	return needed
+}
+
+// selectCryptoGroupsForCapacity keeps higher-priority frequencies when the
+// Timer fleet cannot cover every dataset/frequency shard. Minute bars stay
+// assigned; hourly and slower groups are deferred instead of failing the
+// whole reconciliation and stopping all collection.
+func selectCryptoGroupsForCapacity(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects int) ([]TaskGroup, []TaskGroup, error) {
+	if maxSubjects <= 0 {
+		return nil, nil, fmt.Errorf("max subjects must be positive")
+	}
+	timerNodes := eligibleTimerNodes(nodes)
+	if len(timerNodes) == 0 {
+		timerNodes = append([]scfinvoker.Node(nil), nodes...)
+	}
+	nodeCount := len(timerNodes)
+	overseasCount := 0
+	for _, node := range timerNodes {
+		if isOverseasSCFRegion(node.Region) {
+			overseasCount++
+		}
+	}
+	ordered := append([]TaskGroup(nil), groups...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if rankI, rankJ := cryptoTimerGroupRank(ordered[i].Frequency), cryptoTimerGroupRank(ordered[j].Frequency); rankI != rankJ {
+			return rankI < rankJ
+		}
+		return groupKey(ordered[i]) < groupKey(ordered[j])
+	})
+	selected := make([]TaskGroup, 0, len(ordered))
+	deferred := make([]TaskGroup, 0)
+	usedOverseas := 0
+	usedOther := 0
+	pinOverseas := overseasCount > 0
+	for _, group := range ordered {
+		need := assignmentShardCount([]TaskGroup{group}, maxSubjects)
+		if need == 0 || !pinOverseas || !requiresOverseasEgress(group) {
+			continue
+		}
+		if usedOverseas+need <= overseasCount {
+			selected = append(selected, group)
+			usedOverseas += need
+			continue
+		}
+		deferred = append(deferred, group)
+	}
+	for _, group := range ordered {
+		need := assignmentShardCount([]TaskGroup{group}, maxSubjects)
+		if need == 0 || (pinOverseas && requiresOverseasEgress(group)) {
+			continue
+		}
+		if usedOther+need <= nodeCount-usedOverseas {
+			selected = append(selected, group)
+			usedOther += need
+			continue
+		}
+		deferred = append(deferred, group)
+	}
+	if len(selected) == 0 {
+		return nil, deferred, fmt.Errorf("timer assignment capacity insufficient: %d Timer nodes are required for the configured dataset/frequency shards, but only %d are available; increase the Timer SCF fleet", assignmentShardCount(groups, maxSubjects), nodeCount)
+	}
+	return selected, deferred, nil
 }
 
 // AssignmentHash intentionally excludes timestamps so unchanged assignments

@@ -61,28 +61,28 @@ func defaultSetupFactorItems() []setupconfig.FactorSetupItem {
 			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", Name: "Bias",
 			InputColumns: []string{"close"}, Outputs: []string{"bias_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
+			SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "Cci", File: "Cci.py", Name: "Cci",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"cci"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
+			SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "MinMax", File: "MinMax.py", Name: "MinMax",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"minmax_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
+			SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "QuoteVolumeMean", File: "QuoteVolumeMean.py", Name: "QuoteVolumeMean",
 			InputColumns: []string{"quote_volume"}, Outputs: []string{"quote_volume_mean_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
+			SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
 	}
@@ -347,6 +347,11 @@ func (r *remoteSetupFactor) call(ctx context.Context, method string, body any, r
 
 func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) (setupFactorSummary, error) {
 	summary := setupFactorSummary{Enabled: len(items) > 0, Planned: len(items)}
+	// Drop stale setup-* bindings before enable, so SetFactorStatus does not
+	// revalidate a leftover source View that this run is replacing.
+	if err := r.removeObsoleteSetupBindings(ctx, items); err != nil {
+		return summary, err
+	}
 	for _, item := range items {
 		get := factorAPIResponse{}
 		err := r.call(ctx, "GetFactor", map[string]any{"factor_id": item.FactorID}, &get)

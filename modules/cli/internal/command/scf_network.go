@@ -89,7 +89,7 @@ func resolveSCFRoutePlan(ctx context.Context, snapshot *setupconfig.Snapshot, re
 		if strings.EqualFold(strings.TrimSpace(target.Region), strings.TrimSpace(resolved[0].Instance.Region)) {
 			storageRegionConfigured = true
 		}
-		routes = append(routes, privatenet.BuildSCFStorageRoute(resolved[0], target.Region))
+		routes = append(routes, privatenet.BuildSCFStorageRouteForTarget(resolved[0], target))
 	}
 	notes := []string{
 		"Storage host region/VPC/subnet is discovered from Tencent instead of being hand-copied into each SCF region.",

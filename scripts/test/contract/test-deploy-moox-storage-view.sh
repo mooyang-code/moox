@@ -245,6 +245,52 @@ fi
 assert_grep '^MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-\$\{MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT\}\}$' "${DEPLOY_DIR}/config/components.env"
 assert_grep 'storage_internal_auth_mismatch_preflight' "${ROOT}/scripts/deploy/deploy-moox.sh"
 assert_grep 'check_storage_auth_files' "${DEPLOY_DIR}/healthcheck.sh"
+
+# A split Storage host cannot read the Control host's filesystem. Its
+# healthcheck must validate the local Storage auth material without requiring
+# MOOX_CONTROL_ROOT to resolve on the same machine.
+REMOTE_HEALTH_ROOT="${TMP_ROOT}/remote-healthcheck"
+mkdir -p "${REMOTE_HEALTH_ROOT}/config" "${REMOTE_HEALTH_ROOT}/secrets" "${REMOTE_HEALTH_ROOT}/bin"
+cat >"${REMOTE_HEALTH_ROOT}/config/components.env" <<EOF
+MOOX_INSTALLED_WITH_STORAGE=1
+MOOX_INSTALLED_WITH_STORAGE_NODE=0
+MOOX_INSTALLED_WITH_EVENTBUS=0
+MOOX_INSTALLED_WITH_ADMIN=0
+MOOX_INSTALLED_WITH_GATEWAY=0
+MOOX_INSTALLED_CONTROL_ROOT=${TMP_ROOT}/missing-control
+EOF
+cat >"${REMOTE_HEALTH_ROOT}/secrets/health-auth.env" <<'EOF'
+MOOX_HEALTH_AUTH_VERSION=moox-health-v1
+MOOX_HEALTH_AUTH_ACCESS_KEY=health-test
+MOOX_HEALTH_AUTH_SECRET_KEY=health-secret
+EOF
+cp "${DEPLOY_DIR}/secrets/storage-internal-auth.env" "${REMOTE_HEALTH_ROOT}/secrets/storage-internal-auth.env"
+cat >"${REMOTE_HEALTH_ROOT}/bin/moox-log-rotate" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${REMOTE_HEALTH_ROOT}/bin/moox-log-rotate"
+cat >"${REMOTE_HEALTH_ROOT}/bin/flock" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${REMOTE_HEALTH_ROOT}/bin/flock"
+cat >"${REMOTE_HEALTH_ROOT}/start.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "${REMOTE_HEALTH_ROOT}/start.sh"
+cp "${DEPLOY_DIR}/healthcheck.sh" "${REMOTE_HEALTH_ROOT}/healthcheck.sh"
+chmod +x "${REMOTE_HEALTH_ROOT}/healthcheck.sh"
+REMOTE_HEALTH_OUTPUT="${TMP_ROOT}/remote-healthcheck.out"
+ PATH="${REMOTE_HEALTH_ROOT}/bin:${PATH}" MOOX_CONTROL_ROOT="${TMP_ROOT}/missing-control" \
+  "${REMOTE_HEALTH_ROOT}/healthcheck.sh" storage-primary >"${REMOTE_HEALTH_OUTPUT}" 2>&1 || true
+if grep -Fq 'storage-auth unavailable' "${REMOTE_HEALTH_OUTPUT}"; then
+  echo 'split Storage healthcheck must not require Control-side credentials' >&2
+  cat "${REMOTE_HEALTH_OUTPUT}" >&2
+  exit 1
+fi
+
 if grep -Eq 'wait_eventbus_storage_view_topology|storage_view durable topology' "${DEPLOY_DIR}/start.sh"; then
   echo "storage-view must create and own its Consumer instead of waiting for EventBus topology" >&2
   exit 1

@@ -19,11 +19,12 @@ type HostTarget struct {
 }
 
 type SCFTarget struct {
-	Region          string   `json:"region"`
-	Namespace       string   `json:"namespace"`
-	Prefixes        []string `json:"prefixes"`
-	PublicNetStatus string   `json:"public_net_status"`
-	FunctionCount   int      `json:"function_count"`
+	Region              string   `json:"region"`
+	Namespace           string   `json:"namespace"`
+	Prefixes            []string `json:"prefixes"`
+	PublicNetStatus     string   `json:"public_net_status"`
+	FunctionCount       int      `json:"function_count"`
+	StorageAccessTarget string   `json:"storage_access_target,omitempty"`
 }
 
 func CollectTencentHosts(manifest setupconfig.Manifest) []HostTarget {
@@ -99,21 +100,30 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 	if !manifest.SCFFetcher.Enabled {
 		return nil
 	}
-	byRegion := make(map[string]*SCFTarget)
-	add := func(region, namespace, prefix, publicNet string, count int) {
+	byKey := make(map[string]*SCFTarget)
+	add := func(region, namespace, prefix, publicNet, storageAccessTarget string, count int) {
 		region = strings.ToLower(strings.TrimSpace(region))
 		if region == "" {
 			return
 		}
-		item, ok := byRegion[region]
+		namespace = firstNonEmpty(strings.ToLower(strings.TrimSpace(namespace)), "default")
+		key := region + "\x00" + namespace
+		item, ok := byKey[key]
 		if !ok {
-			item = &SCFTarget{Region: region, Namespace: firstNonEmpty(namespace, "default"), PublicNetStatus: firstNonEmpty(publicNet, "ENABLE")}
-			byRegion[region] = item
+			item = &SCFTarget{
+				Region: region, Namespace: namespace,
+				PublicNetStatus:     firstNonEmpty(publicNet, "ENABLE"),
+				StorageAccessTarget: strings.TrimSpace(storageAccessTarget),
+			}
+			byKey[key] = item
 		}
 		item.Prefixes = appendUnique(item.Prefixes, prefix)
 		item.FunctionCount += count
 		if strings.TrimSpace(publicNet) != "" {
 			item.PublicNetStatus = publicNet
+		}
+		if strings.TrimSpace(storageAccessTarget) != "" {
+			item.StorageAccessTarget = strings.TrimSpace(storageAccessTarget)
 		}
 	}
 	for _, space := range manifest.SCFFetcher.Spaces {
@@ -123,20 +133,36 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 			if !includeIdle && (!region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region)) {
 				continue
 			}
-			add(region.Region, namespace, space.FunctionPrefix, publicNet, region.FunctionCount)
+			shards := setupconfig.SpaceRegionNamespaceShards(space, region, manifest.SCFFetcher.TencentLimits)
+			if len(shards) == 0 {
+				add(region.Region, namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), region.FunctionCount)
+				continue
+			}
+			for _, shard := range shards {
+				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), shard.Timers)
+			}
 		}
 		if prefix := strings.TrimSpace(space.InstrumentSnapshotFunctionPrefix); prefix != "" && strings.TrimSpace(space.InstrumentSnapshotRegion) != "" {
 			if includeIdle || !space.IsRegionBlacklisted(space.InstrumentSnapshotRegion) {
-				add(space.InstrumentSnapshotRegion, namespace, prefix, publicNet, 1)
+				snapshotNS := namespace
+				if strings.TrimSpace(snapshotNS) == "" {
+					snapshotNS = setupconfig.ExpectedSCFNamespace(space.SpaceID)
+				}
+				add(space.InstrumentSnapshotRegion, snapshotNS, prefix, publicNet, space.StorageAccessTarget(space.InstrumentSnapshotRegion), 1)
 			}
 		}
 	}
-	out := make([]SCFTarget, 0, len(byRegion))
-	for _, item := range byRegion {
+	out := make([]SCFTarget, 0, len(byKey))
+	for _, item := range byKey {
 		sort.Strings(item.Prefixes)
 		out = append(out, *item)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Region < out[j].Region })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Region != out[j].Region {
+			return out[i].Region < out[j].Region
+		}
+		return out[i].Namespace < out[j].Namespace
+	})
 	return out
 }
 

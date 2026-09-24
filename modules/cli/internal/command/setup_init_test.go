@@ -67,7 +67,7 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 		FactorType: "timeseries",
 		FactorID:   "bias", File: "timeseries/bias.py", InputColumns: []string{"close"},
 		Outputs: []string{"bias_5"}, ParamsJSON: `{"windows":[5]}`, LookbackPeriods: 5,
-		SpaceID: "crypto", SourceViewID: "view_crypto_spot_kline_1m", Freq: "1m",
+		SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m",
 	}}
 	factor := &fakeSetupInitFactor{}
 	cmd := newSetupCommand(setupDeps{

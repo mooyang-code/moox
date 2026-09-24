@@ -158,6 +158,7 @@ func (p RateLimitPolicy) Validate() error {
 type KlineSpec struct {
 	Markets           []string
 	Exchanges         []string
+	Instruments       []InstrumentType
 	Frequencies       []string
 	CompleteOHLCV     bool
 	HasAmount         bool
@@ -181,6 +182,18 @@ func (s KlineSpec) SupportsRequest(req KlineRequest) bool {
 	}
 	if strings.TrimSpace(string(req.ExchangeID)) != "" && !containsFold(s.Exchanges, string(req.ExchangeID)) {
 		return false
+	}
+	if instrument := strings.TrimSpace(string(req.InstrumentType)); instrument != "" && len(s.Instruments) > 0 {
+		matched := false
+		for _, candidate := range s.Instruments {
+			if strings.EqualFold(strings.TrimSpace(string(candidate)), instrument) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	return true
 }
