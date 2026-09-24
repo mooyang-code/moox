@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS t_tags (
 ```
 
 - `c_tag_id` 使用小写 snake case，创建后不可修改；`c_tag_name` 可修改。
-- `c_sources_json` 为提供标的列表的抓取源，多个源时列表取并集并沿用现有的多源合并校验。
+- `c_sources_json` 为提供标的列表的抓取源，多个源时按标的 ID 取并集，同一标的以排在前面的源为准；任一源失败即本轮失败。
 - `auto` 模式必须填写 `c_sources_json`、`c_instrument_type`；`manual` 模式两者同时填写表示开启探测，同时为空表示不探测。该约束由 Storage 接口校验。
 - `c_cron` 为标准 5 段 cron 语法，按 `c_timezone` 解释，默认每小时一次。
 - 最近运行信息（`c_last_run_at`、`c_last_status`、`c_last_error`）由同步器回写；有效 / 失效成员数由查询实时统计，不落库。
@@ -123,7 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_t_subject_tags_status ON t_subject_tags (c_space_
 CREATE INDEX IF NOT EXISTS idx_t_subject_tags_subject ON t_subject_tags (c_space_id, c_subject_id);
 ```
 
-`t_tags` 与 `t_subject_tags` 均按 schema 规范补充 `c_mtime` 触发器。
+`t_tags` 与 `t_subject_tags` 均按 schema 规范补充 `c_mtime` 触发器。`t_tags` 的触发器在 `c_last_run_at` 变化时不刷新 `c_mtime`，使 `c_mtime` 只反映定义变更，否则同步器回写运行状态会触发下一轮立即运行。
 
 ### `t_datasets`（改造）
 
@@ -136,7 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_t_subject_tags_subject ON t_subject_tags (c_space
 
 ### 内置标签种子
 
-内置标签定义在 `config/setup/subject-tags.yaml`，由 Storage metadata 初始化流程在系统初始化时写入 `t_tags`，`c_builtin = 1`；记录已存在时不覆盖，保留用户在页面上的修改。
+内置标签定义在 `config/setup/metadata.yaml` 的 `tags:` 段（`moox-cli setup init` 与 `moox-storage-cli import-seed` 都读取该文件），系统初始化时写入 `t_tags`，`c_builtin = 1`；记录已存在时不覆盖，保留用户在页面上的修改。
 
 ```yaml
 tags:
