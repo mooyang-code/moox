@@ -11,14 +11,21 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestMetadataSchemaV11Contract(t *testing.T) {
+func TestMetadataSchemaV12Contract(t *testing.T) {
 	sql, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '11')",
+		"VALUES ('schema_version', '12')",
+		"CREATE TABLE IF NOT EXISTS t_tags (",
+		"CREATE TABLE IF NOT EXISTS t_subject_tags (",
+		"c_subject_tags_json TEXT NOT NULL DEFAULT '[]'",
+		"CHECK (c_mode IN ('auto', 'manual'))",
+		"CHECK (c_status IN ('active', 'inactive'))",
+		"CREATE TRIGGER IF NOT EXISTS trg_t_tags_mtime",
+		"CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_mtime",
 		"CREATE TABLE IF NOT EXISTS t_data_nodes",
 		"c_node_id TEXT NOT NULL",
 		"c_name TEXT NOT NULL",
@@ -52,6 +59,9 @@ func TestMetadataSchemaV11Contract(t *testing.T) {
 		"c_content_hash",
 		"c_required",
 		"ALTER TABLE",
+		"t_subject_symbols",
+		"t_dataset_subjects",
+		"t_dataset_subject_set_staging",
 		"c_primary_dataset_id",
 		"c_dataset_ids_json",
 	} {
@@ -78,7 +88,7 @@ func TestMetadataSchemaV11Contract(t *testing.T) {
 	}
 }
 
-func TestMetadataSchemaV11DDLExecutes(t *testing.T) {
+func TestMetadataSchemaV12DDLExecutes(t *testing.T) {
 	schema, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -97,8 +107,8 @@ func TestMetadataSchemaV11DDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "11" {
-		t.Fatalf("persisted schema version = %q, want 11", version)
+	if version != "12" {
+		t.Fatalf("persisted schema version = %q, want 12", version)
 	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {

@@ -144,7 +144,7 @@ func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	return nil
 }
 
-const metadataSchemaVersion = "11"
+const metadataSchemaVersion = "12"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
@@ -202,6 +202,12 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 		}
 		version = "11"
 	}
+	if err == nil && version == "11" {
+		if migrateErr := s.migrateV11ToV12(ctx); migrateErr != nil {
+			return migrateErr
+		}
+		version = "12"
+	}
 	if err == nil && version == metadataSchemaVersion {
 		if repairErr := s.repairViewChildForeignKeys(ctx); repairErr != nil {
 			return repairErr
@@ -215,6 +221,57 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 		return fmt.Errorf("incompatible storage metadata schema v%s; remove the metadata database and run init/import-seed", version)
 	}
 	return err
+}
+
+// migrateV11ToV12 replaces symbol mappings and dataset membership with tags.
+// The schema file creates the new tag tables after this migration completes.
+func (s *Store) migrateV11ToV12(ctx context.Context) error {
+	tx, err := beginImmediate(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+	}
+	defer tx.Rollback()
+	var hasColumn int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM pragma_table_info('t_datasets') WHERE name = 'c_subject_tags_json'`).Scan(&hasColumn); err != nil {
+		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+	}
+	statements := []string{
+		`DROP TABLE IF EXISTS t_dataset_subject_set_staging`,
+		`DROP TABLE IF EXISTS t_dataset_subjects`,
+		`DROP TABLE IF EXISTS t_subject_symbols`,
+		`DELETE FROM t_datasets WHERE c_dataset_id IN ('dataset_binance_spot_symbols', 'dataset_binance_swap_symbols', 'dataset_stockcn_instruments')`,
+		`UPDATE t_subjects SET c_status = 'disabled' WHERE c_status NOT IN ('active', 'disabled')`,
+		`CREATE TABLE t_subjects_v12 (
+			c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			c_space_id TEXT NOT NULL,
+			c_subject_id TEXT NOT NULL,
+			c_subject_type TEXT NOT NULL,
+			c_name TEXT NOT NULL DEFAULT '',
+			c_market TEXT NOT NULL DEFAULT '',
+			c_currency TEXT NOT NULL DEFAULT '',
+			c_timezone TEXT NOT NULL DEFAULT '',
+			c_status TEXT NOT NULL DEFAULT 'active',
+			c_attrs_json TEXT NOT NULL DEFAULT '{}',
+			c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			CHECK (c_status IN ('active', 'disabled')),
+			FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
+			UNIQUE (c_space_id, c_subject_id)
+		)`,
+		`INSERT INTO t_subjects_v12 SELECT c_id, c_space_id, c_subject_id, c_subject_type, c_name, c_market, c_currency, c_timezone, c_status, c_attrs_json, c_ctime, c_mtime FROM t_subjects`,
+		`DROP TABLE t_subjects`,
+		`ALTER TABLE t_subjects_v12 RENAME TO t_subjects`,
+	}
+	if hasColumn == 0 {
+		statements = append(statements, `ALTER TABLE t_datasets ADD COLUMN c_subject_tags_json TEXT NOT NULL DEFAULT '[]'`)
+	}
+	statements = append(statements, `UPDATE t_schema_meta SET c_value = '12' WHERE c_key = 'schema_version'`)
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) migrateV9ToV10(ctx context.Context) error {

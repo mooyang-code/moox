@@ -14,8 +14,8 @@ func TestMetadataSchemaVersionIsExact(t *testing.T) {
 			t.Fatalf("test case %q unexpectedly equals current schema version", version)
 		}
 	}
-	if metadataSchemaVersion != "11" {
-		t.Fatalf("metadata schema version = %q, want 11", metadataSchemaVersion)
+	if metadataSchemaVersion != "12" {
+		t.Fatalf("metadata schema version = %q, want 12", metadataSchemaVersion)
 	}
 }
 

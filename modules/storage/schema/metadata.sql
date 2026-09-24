@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '11')
+VALUES ('schema_version', '12')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -258,7 +258,7 @@ CREATE TABLE IF NOT EXISTS t_subjects (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
+    CHECK (c_status IN ('active', 'disabled')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_subject_id)
 );
@@ -274,31 +274,64 @@ BEGIN
     UPDATE t_subjects SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
-CREATE TABLE IF NOT EXISTS t_subject_symbols (
+-- 标签：Subject 的分组；auto 标签成员由 moox-collector-subject 按 cron 同步
+CREATE TABLE IF NOT EXISTS t_tags (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
-    c_subject_id TEXT NOT NULL,
-    c_data_source_id TEXT NOT NULL,
-    c_external_symbol TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_attrs_json TEXT NOT NULL DEFAULT '{}',
+    c_tag_id TEXT NOT NULL,
+    c_tag_name TEXT NOT NULL,
+    c_description TEXT NOT NULL DEFAULT '',
+    c_mode TEXT NOT NULL,
+    c_builtin INTEGER NOT NULL DEFAULT 0,
+    c_sources_json TEXT NOT NULL DEFAULT '[]',
+    c_instrument_type TEXT NOT NULL DEFAULT '',
+    c_cron TEXT NOT NULL DEFAULT '0 * * * *',
+    c_timezone TEXT NOT NULL DEFAULT 'UTC',
+    c_last_run_at DATETIME NOT NULL DEFAULT '',
+    c_last_status TEXT NOT NULL DEFAULT '',
+    c_last_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
-    FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_space_id, c_data_source_id) REFERENCES t_data_sources (c_space_id, c_data_source_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_data_source_id, c_external_symbol)
+    CHECK (c_mode IN ('auto', 'manual')),
+    CHECK (c_builtin IN (0, 1)),
+    CHECK (c_last_status IN ('', 'success', 'failed')),
+    FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    UNIQUE (c_space_id, c_tag_id),
+    UNIQUE (c_space_id, c_tag_name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_subject_symbols_subject ON t_subject_symbols (c_space_id, c_subject_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_subject_symbols_source ON t_subject_symbols (c_space_id, c_data_source_id, c_status);
+CREATE TRIGGER IF NOT EXISTS trg_t_tags_mtime
+AFTER UPDATE ON t_tags
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime AND NEW.c_last_run_at = OLD.c_last_run_at
+BEGIN
+    UPDATE t_tags SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
 
-CREATE TRIGGER IF NOT EXISTS trg_t_subject_symbols_mtime
-AFTER UPDATE ON t_subject_symbols
+CREATE TABLE IF NOT EXISTS t_subject_tags (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_tag_id TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'active',
+    c_inactive_at DATETIME NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('active', 'inactive')),
+    FOREIGN KEY (c_space_id, c_tag_id) REFERENCES t_tags (c_space_id, c_tag_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    UNIQUE (c_space_id, c_tag_id, c_subject_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_subject_tags_status ON t_subject_tags (c_space_id, c_tag_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_subject_tags_subject ON t_subject_tags (c_space_id, c_subject_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_mtime
+AFTER UPDATE ON t_subject_tags
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_subject_symbols SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_subject_tags SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 -- ************ DataNode ************
@@ -340,6 +373,7 @@ CREATE TABLE IF NOT EXISTS t_datasets (
     c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0),
     c_status TEXT NOT NULL DEFAULT 'disabled' CHECK (c_status IN ('active', 'disabled')),
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
+    c_subject_tags_json TEXT NOT NULL DEFAULT '[]',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_data_kind IN ('record', 'time_series')),
@@ -361,60 +395,6 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_datasets SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
-
-CREATE TABLE IF NOT EXISTS t_dataset_subjects (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_subject_id TEXT NOT NULL,
-    c_subject_role TEXT NOT NULL DEFAULT 'normal',
-    c_effective_start_time DATETIME NOT NULL DEFAULT '',
-    c_effective_end_time DATETIME NOT NULL DEFAULT '',
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_attrs_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member', 'record')),
-    CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
-    FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_dataset_id, c_subject_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_dataset_subjects_dataset ON t_dataset_subjects (c_space_id, c_dataset_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_dataset_subjects_subject ON t_dataset_subjects (c_space_id, c_subject_id, c_status);
-
-CREATE TRIGGER IF NOT EXISTS trg_t_dataset_subjects_mtime
-AFTER UPDATE ON t_dataset_subjects
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_dataset_subjects SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
--- A complete instrument set is staged here as building rows and only copied
--- into t_dataset_subjects by one activation transaction.
-CREATE TABLE IF NOT EXISTS t_dataset_subject_set_staging (
-    c_space_id TEXT NOT NULL,
-    c_set_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_subject_id TEXT NOT NULL,
-    c_subject_role TEXT NOT NULL DEFAULT 'normal',
-    c_effective_start_time DATETIME NOT NULL DEFAULT '',
-    c_effective_end_time DATETIME NOT NULL DEFAULT '',
-    c_status TEXT NOT NULL DEFAULT 'building',
-    c_active_status TEXT NOT NULL DEFAULT 'active',
-    c_attrs_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('building', 'activated')),
-    CHECK (c_active_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
-    CHECK (c_subject_role IN ('normal', 'benchmark', 'index', 'universe_member', 'record')),
-    FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    PRIMARY KEY (c_space_id, c_set_id, c_dataset_id, c_subject_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_dataset_subject_set_staging_set ON t_dataset_subject_set_staging (c_space_id, c_set_id);
 
 CREATE TABLE IF NOT EXISTS t_field_groups (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
