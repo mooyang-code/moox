@@ -13,7 +13,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: remoterun [--host control|storage] <bash-script>")
+		fmt.Fprintln(os.Stderr, "usage: remoterun [--host <name>] <bash-script>")
 		os.Exit(2)
 	}
 	wd, err := os.Getwd()
@@ -29,19 +29,16 @@ func main() {
 	args := os.Args[1:]
 	host := snapshot.Manifest.ControlHost
 	if len(args) >= 2 && args[0] == "--host" {
-		switch args[1] {
-		case "storage":
-			host = snapshot.Manifest.StorageHost
-		case "control":
-			host = snapshot.Manifest.ControlHost
-		default:
+		resolved, ok := hostByName(snapshot.Manifest, args[1])
+		if !ok {
 			fmt.Fprintf(os.Stderr, "unknown host %q\n", args[1])
 			os.Exit(2)
 		}
+		host = resolved
 		args = args[2:]
 	}
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: remoterun [--host control|storage] <bash-script>")
+		fmt.Fprintln(os.Stderr, "usage: remoterun [--host <name>] <bash-script>")
 		os.Exit(2)
 	}
 	script := strings.TrimSpace(args[0])
@@ -68,5 +65,22 @@ func main() {
 	}
 	if result.ExitCode != 0 {
 		os.Exit(result.ExitCode)
+	}
+}
+
+func hostByName(manifest setupconfig.Manifest, name string) (setupconfig.Host, bool) {
+	name = strings.TrimSpace(name)
+	for _, host := range manifest.Hosts() {
+		if strings.EqualFold(strings.TrimSpace(host.Name), name) {
+			return host, true
+		}
+	}
+	switch name {
+	case "storage":
+		return manifest.StorageHost, true
+	case "control":
+		return manifest.ControlHost, true
+	default:
+		return setupconfig.Host{}, false
 	}
 }
