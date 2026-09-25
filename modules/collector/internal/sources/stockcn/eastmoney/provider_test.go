@@ -2,6 +2,7 @@ package eastmoney
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -207,6 +208,64 @@ func TestFetchInstrumentSnapshotFallsBackWhenPrimaryHostIsUnavailable(t *testing
 	require.NoError(t, err)
 	require.True(t, snapshot.Complete)
 	require.Equal(t, "600000.XSHG", snapshot.Instruments[0].SubjectID)
+}
+
+func TestFetchInstrumentSnapshotFallsBackWhenPrimaryTransportFails(t *testing.T) {
+	var hosts []string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hosts = append(hosts, req.URL.Host)
+		if req.URL.Host == "push2.eastmoney.com" {
+			return nil, errors.New("connection reset")
+		}
+		require.Equal(t, "push2test.eastmoney.com", req.URL.Host)
+		recorder := httptest.NewRecorder()
+		_, _ = recorder.WriteString(`{"data":{"total":1,"diff":[{"f12":"600000","f13":1,"f14":"Pudong Bank"}]}}`)
+		return recorder.Result(), nil
+	})}
+	provider := New(Config{BaseURL: "https://push2.eastmoney.com", HTTPClient: client, Now: time.Now})
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "transport"})
+	require.NoError(t, err)
+	require.Equal(t, "600000.XSHG", snapshot.Instruments[0].SubjectID)
+	require.Equal(t, []string{"push2.eastmoney.com", "push2test.eastmoney.com"}, hosts)
+}
+
+func TestFetchInstrumentSnapshotDoesNotSwitchHostAfterPrimaryPageSucceeds(t *testing.T) {
+	var hosts []string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hosts = append(hosts, req.URL.Host)
+		recorder := httptest.NewRecorder()
+		if req.URL.Query().Get("pn") == "2" {
+			http.Error(recorder, "boom", http.StatusBadGateway)
+			return recorder.Result(), nil
+		}
+		_, _ = recorder.WriteString(`{"data":{"total":2,"diff":[{"f12":"600000","f13":1,"f14":"Pudong Bank"}]}}`)
+		return recorder.Result(), nil
+	})}
+	provider := New(Config{BaseURL: "https://push2.eastmoney.com", HTTPClient: client, Now: time.Now})
+	_, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "pinned"})
+	require.ErrorIs(t, err, marketdata.ErrHTTPStatus)
+	require.Equal(t, []string{"push2.eastmoney.com", "push2.eastmoney.com"}, hosts)
+}
+
+func TestFetchInstrumentSnapshotContinuesWhenCappedPageIsShortOfDeclaredTotal(t *testing.T) {
+	var pages []string
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pages = append(pages, r.URL.Query().Get("pn"))
+		switch r.URL.Query().Get("pn") {
+		case "1":
+			_, _ = w.Write([]byte(`{"data":{"total":3,"diff":[{"f12":"600000","f13":1,"f14":"Pudong Bank"}]}}`))
+		case "2":
+			_, _ = w.Write([]byte(`{"data":{"total":3,"diff":[{"f12":"000001","f13":0,"f14":"Ping An Bank"},{"f12":"920000","f13":2,"f14":"Beijing Stock"}]}}`))
+		default:
+			t.Fatalf("unexpected page %q", r.URL.Query().Get("pn"))
+		}
+	}))
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: time.Now})
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "capped"})
+	require.NoError(t, err)
+	require.True(t, snapshot.Complete)
+	require.Equal(t, []string{"1", "2"}, pages)
+	require.Len(t, snapshot.Instruments, 3)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
