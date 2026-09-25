@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"trpc.group/trpc-go/trpc-go/log"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
@@ -285,7 +286,10 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 		instruments = kept
 	}
 	if skipped > 0 || len(duplicated) > 0 {
-		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: binance subject ids skipped=%d duplicated=%d", marketdata.ErrProtocol, skipped, len(duplicated))
+		log.WarnContextf(ctx, "binance symbol list skipped=%d duplicated=%d", skipped, len(duplicated))
+	}
+	if len(instruments) == 0 {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: binance subject list is empty", marketdata.ErrProtocol)
 	}
 	snapshot := marketdata.InstrumentSnapshot{
 		SnapshotID:     fetchedAt.Format(time.RFC3339Nano),
