@@ -175,7 +175,10 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	}
 	for _, item := range seed.Tags {
 		tag := item.toPB()
-		calls = append(calls, metadataImportCall{Resource: "tags", Method: "UpsertTag", Request: &pb.UpsertTagReq{Tag: tag}, Response: &pb.UpsertTagRsp{}})
+		calls = append(calls, metadataImportCall{
+			Resource: "tags", Method: "UpsertTag", Request: &pb.UpsertTagReq{Tag: tag}, Response: &pb.UpsertTagRsp{},
+			Exists: &metadataExistsProbe{Method: "GetTag", Request: &pb.GetTagReq{SpaceId: tag.GetSpaceId(), TagId: tag.GetTagId()}, Response: &pb.GetTagRsp{}},
+		})
 	}
 	for _, item := range seed.Datasets {
 		dataset, err := item.toPB()
@@ -438,6 +441,11 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 			summary.Applied++
 			continue
 		}
+		if call.Resource == "tags" {
+			summary.Skipped++
+			summary.Unchanged++
+			continue
+		}
 		if err := verifyMetadataResource(call.Resource, call.Request, actual); err != nil {
 			return summary, err
 		}
@@ -577,6 +585,8 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		return true, rsp.GetDevice()
 	case *pb.GetViewRsp:
 		return true, rsp.GetView()
+	case *pb.GetTagRsp:
+		return rsp.GetTag() != nil, rsp.GetTag()
 	}
 	return true, nil
 }
