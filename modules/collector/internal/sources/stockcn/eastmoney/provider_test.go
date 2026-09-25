@@ -190,6 +190,25 @@ func TestFetchInstrumentSnapshotFailsWhenLaterPageReturnsHTTPError(t *testing.T)
 	require.Equal(t, []string{"1", "2"}, requests)
 }
 
+func TestFetchInstrumentSnapshotFallsBackWhenPrimaryHostIsUnavailable(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		if req.URL.Host == "push2.eastmoney.com" {
+			http.Error(recorder, "blocked", http.StatusBadGateway)
+			return recorder.Result(), nil
+		}
+		require.Equal(t, "push2test.eastmoney.com", req.URL.Host)
+		require.Equal(t, "/api/qt/clist/get", req.URL.Path)
+		_, _ = recorder.WriteString(`{"data":{"total":1,"diff":[{"f12":"600000","f13":1,"f14":"Pudong Bank"}]}}`)
+		return recorder.Result(), nil
+	})}
+	provider := New(Config{BaseURL: "https://push2.eastmoney.com", HTTPClient: client, Now: func() time.Time { return time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC) }})
+	snapshot, err := provider.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{MarketID: "stockcn", RequestID: "fallback"})
+	require.NoError(t, err)
+	require.True(t, snapshot.Complete)
+	require.Equal(t, "600000.XSHG", snapshot.Instruments[0].SubjectID)
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

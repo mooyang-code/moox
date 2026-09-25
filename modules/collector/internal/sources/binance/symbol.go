@@ -47,7 +47,21 @@ func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.Coll
 		}
 		return nil, lastErr
 	case InstTypeSWAP:
-		return c.swapAPI.GetExchangeInfoWithIPs(binanceapi.SingleAttempt(ctx), params.DNSIPs(c.client.SwapDomain()))
+		var lastErr error
+		domains := c.client.SwapDomains()
+		for index, domain := range domains {
+			attemptCtx, cancel := endpointAttemptContext(binanceapi.SingleAttempt(ctx), len(domains)-index)
+			symbols, err := c.swapAPI.GetExchangeInfoWithDomainIPs(attemptCtx, domain, params.DNSIPs(domain))
+			cancel()
+			if err == nil {
+				return symbols, nil
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		return nil, lastErr
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
 	}

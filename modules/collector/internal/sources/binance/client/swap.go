@@ -106,13 +106,27 @@ func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*e
 }
 
 func (api *SwapAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*exchange.SymbolInfo, error) {
-	return api.getExchangeInfoWithIPs(ctx, nil, ips)
+	return api.GetExchangeInfoWithDomainIPs(ctx, api.client.SwapDomain(), ips)
+}
+
+// GetExchangeInfoWithDomainIPs requests swap exchange metadata from the
+// explicitly selected official endpoint. The caller owns endpoint fallback so
+// each configured domain can use its own DNS snapshot.
+func (api *SwapAPI) GetExchangeInfoWithDomainIPs(ctx context.Context, domain string, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithDomainIPs(ctx, domain, nil, ips)
 }
 
 func (api *SwapAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithDomainIPs(ctx, api.client.SwapDomain(), query, ips)
+}
+
+func (api *SwapAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain string, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
 	var symbols []*exchange.SymbolInfo
 	var total int
-	domain := api.client.SwapDomain()
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		domain = api.client.SwapDomain()
+	}
 
 	err := retryBinance(ctx,
 		func() error {

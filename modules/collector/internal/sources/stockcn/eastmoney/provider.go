@@ -3,6 +3,7 @@ package eastmoney
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -230,6 +231,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 	declaredTotal := 0
 	itemsSeen := 0
 	sawUnverifiedShortPage := false
+	activeBase := ""
 	for page := 1; ; page++ {
 		if page > maxInstrumentPages {
 			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument pagination exceeded %d pages", marketdata.ErrProtocol, maxInstrumentPages)
@@ -241,31 +243,21 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 			"fid":    {"f12"},
 			"fields": {"f12,f13,f14,f115,f152,f103,f128,f129"},
 		}
+		bases := []string{activeBase}
+		if activeBase == "" {
+			bases = p.instrumentPageBases()
+		}
 		var body []byte
-		if err := func(pageCtx context.Context) error {
-			httpReq, requestErr := http.NewRequestWithContext(pageCtx, http.MethodGet, p.baseURL+"/api/qt/clist/get?"+query.Encode(), nil)
-			if requestErr != nil {
-				return requestErr
+		var fetchErr error
+		for i, base := range bases {
+			body, fetchErr = p.fetchInstrumentPage(ctx, base, query)
+			if fetchErr == nil {
+				activeBase = base
+				break
 			}
-			httpReq.Header.Set("User-Agent", "moox-collector/1.0")
-			resp, requestErr := p.client.Do(httpReq)
-			if requestErr != nil {
-				return fmt.Errorf("%w: %v", marketdata.ErrTimeout, requestErr)
+			if i == len(bases)-1 || !instrumentHostRetryable(fetchErr) {
+				return marketdata.InstrumentSnapshot{}, fetchErr
 			}
-			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusTooManyRequests {
-				return marketdata.ErrRateLimited
-			}
-			if resp.StatusCode >= 400 {
-				return fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
-			}
-			body, requestErr = io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-			if requestErr != nil {
-				return fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, requestErr)
-			}
-			return nil
-		}(ctx); err != nil {
-			return marketdata.InstrumentSnapshot{}, err
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(body, &payload); err != nil {
@@ -343,6 +335,14 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		builder.NextPage()
 		if totalPages := commonsrc.PageLimit(data, spec.PageSize); totalPages > 0 {
 			if page >= totalPages {
+				// Without an explicit page count, PageLimit derives the last
+				// page from total/requested page size. Eastmoney caps pz below
+				// that size, so keep reading while a non-empty page is still
+				// short of the declared total. An explicit pagecount stays terminal.
+				_, hasExplicitPageCount := commonsrc.IntField(data, "pagecount", "page_count", "total_pages", "totalpage", "pages")
+				if !hasExplicitPageCount && declaredTotal > 0 && itemsSeen < declaredTotal && len(items) > 0 {
+					continue
+				}
 				if declaredTotal > 0 && itemsSeen != declaredTotal {
 					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
 				}
@@ -372,4 +372,69 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 	return builder.Snapshot()
 }
 
-const maxInstrumentPages = 128
+func (p *Provider) instrumentPageBases() []string {
+	bases := []string{p.baseURL}
+	if instrumentHost(p.baseURL) == eastMoneyPushHost {
+		bases = append(bases, eastMoneyPushFallbackBase)
+	}
+	return bases
+}
+
+func (p *Provider) fetchInstrumentPage(ctx context.Context, base string, query url.Values) ([]byte, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/api/qt/clist/get?"+query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("User-Agent", "moox-collector/1.0")
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, marketdata.ErrRateLimited
+	}
+	if resp.StatusCode >= 400 {
+		return nil, &instrumentHTTPError{status: resp.StatusCode, err: fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, err)
+	}
+	return body, nil
+}
+
+func instrumentHost(base string) string {
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
+}
+
+func instrumentHostRetryable(err error) bool {
+	if errors.Is(err, marketdata.ErrTimeout) {
+		return true
+	}
+	var httpErr *instrumentHTTPError
+	return errors.As(err, &httpErr) && httpErr.status >= 500
+}
+
+type instrumentHTTPError struct {
+	status int
+	err    error
+}
+
+func (e *instrumentHTTPError) Error() string {
+	return e.err.Error()
+}
+
+func (e *instrumentHTTPError) Unwrap() error {
+	return e.err
+}
+
+const (
+	maxInstrumentPages        = 128
+	eastMoneyPushHost         = "push2.eastmoney.com"
+	eastMoneyPushFallbackBase = "https://push2test.eastmoney.com"
+)
