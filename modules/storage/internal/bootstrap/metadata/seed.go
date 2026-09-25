@@ -143,11 +143,19 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 	}
 
 	for _, item := range seed.Datasets {
+		subjectTags := item.SubjectTags
+		if len(subjectTags) == 0 {
+			if existing, getErr := store.GetDataset(ctx, item.SpaceID, item.DatasetID); getErr == nil {
+				subjectTags = existing.GetSubjectTags()
+			} else if !errors.Is(getErr, sql.ErrNoRows) {
+				return result, seedErr("dataset", item.DatasetID, getErr)
+			}
+		}
 		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
 			Freqs: item.Freqs, Status: "disabled", Attributes: item.Attributes,
-			DataNodeId: item.DataNodeID, KeepDuration: item.KeepDuration, SubjectTags: item.SubjectTags,
+			DataNodeId: item.DataNodeID, KeepDuration: item.KeepDuration, SubjectTags: subjectTags,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}

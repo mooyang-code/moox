@@ -274,7 +274,16 @@ func (s *Store) migrateV11ToV12(ctx context.Context) error {
 			)`,
 			`INSERT INTO t_subjects_v12 SELECT c_id, c_space_id, c_subject_id, c_subject_type, c_name, c_market, c_currency, c_timezone, c_status, c_attrs_json, c_ctime, c_mtime FROM t_subjects`,
 			`DROP TABLE t_subjects`,
-			`ALTER TABLE t_subjects_v12 RENAME TO t_subjects`)
+			`ALTER TABLE t_subjects_v12 RENAME TO t_subjects`,
+			`CREATE INDEX IF NOT EXISTS idx_t_subjects_type ON t_subjects (c_space_id, c_subject_type, c_status)`,
+			`CREATE INDEX IF NOT EXISTS idx_t_subjects_market ON t_subjects (c_space_id, c_market, c_status)`,
+			`CREATE TRIGGER IF NOT EXISTS trg_t_subjects_mtime
+				AFTER UPDATE ON t_subjects
+				FOR EACH ROW
+				WHEN NEW.c_mtime = OLD.c_mtime
+			BEGIN
+				UPDATE t_subjects SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+			END`)
 	}
 	if hasColumn == 0 {
 		statements = append(statements, `ALTER TABLE t_datasets ADD COLUMN c_subject_tags_json TEXT NOT NULL DEFAULT '[]'`)

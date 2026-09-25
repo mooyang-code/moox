@@ -177,7 +177,7 @@
           </a-col>
         </a-row>
 
-        <a-form-item v-if="editor.data_type === 'kline'" label="标的来源" required>
+        <a-form-item v-if="editor.data_type === 'kline' || editor.data_type === 'kline_resample'" label="标的来源" :required="editor.data_type === 'kline'">
           <a-select v-model="subjectTagIds" placeholder="请选择标的标签" :loading="loadingTags" multiple allow-search allow-clear>
             <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
               {{ tag.tag_name }}（{{ tag.tag_id }}）
@@ -190,6 +190,7 @@
             <a-select
               v-model="sourceIdValue"
               placeholder="请选择源行情"
+              @change="loadSourceSubjectTags"
               :loading="loadingSources"
               allow-search
               allow-clear
@@ -789,6 +790,16 @@ async function loadTags() {
     Message.error(error instanceof Error ? error.message : "获取标签失败");
   } finally {
     loadingTags.value = false;
+  }
+}
+
+async function loadSourceSubjectTags() {
+  if (editing.value || editor.data_type !== "kline_resample" || !selectedSpaceId.value || !sourceIdValue.value) return;
+  try {
+    const dataset = await getDataset({ space_id: selectedSpaceId.value, dataset_id: sourceIdValue.value });
+    subjectTagIds.value = dataset.dataset?.subject_tags || [];
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "获取源行情标签失败");
   }
 }
 

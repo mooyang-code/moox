@@ -43,7 +43,7 @@ func TestApplyAutoTagSnapshotResolvesAndInactivatesMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resolved) != 1 || resolved[0].GetSubjectId() != "BTC-USDT" || resolved[0].GetName() != "Bitcoin" {
+	if len(resolved) != 1 || resolved[0].GetSubjectId() != "BTC-USDT" || resolved[0].GetName() != "BTC" {
 		t.Fatalf("resolved subjects = %v", resolved)
 	}
 	all, _, err := store.ListTagMembers(ctx, metadata.TagMemberQuery{SpaceID: "space", TagID: "assets", Page: &pb.Page{Page: 1, Size: 20}})
@@ -150,5 +150,46 @@ func TestUpdateSubjectAttributesDoesNotCreateOrChangeMembership(t *testing.T) {
 	}
 	if _, _, err := store.ListTagMembers(ctx, metadata.TagMemberQuery{SpaceID: "space", TagID: "manual", Page: &pb.Page{Page: 1, Size: 20}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListDatasetSubjectsUsesTagUnion(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node")
+	if _, err := store.UpsertTag(ctx, testAutoTag("tag_a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertTag(ctx, testAutoTag("tag_b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyTagSnapshot(ctx, "space", "tag_a", time.Now().UTC(), []*pb.TagSnapshotItem{{SubjectId: "A", SubjectType: "custom"}, {SubjectId: "B", SubjectType: "custom"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyTagSnapshot(ctx, "space", "tag_b", time.Now().UTC(), []*pb.TagSnapshotItem{{SubjectId: "B", SubjectType: "custom"}, {SubjectId: "C", SubjectType: "custom"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyTagSnapshot(ctx, "space", "tag_b", time.Now().UTC(), []*pb.TagSnapshotItem{{SubjectId: "B", SubjectType: "custom"}}); err != nil {
+		t.Fatal(err)
+	}
+	dataset := createTestDataset(t, ctx, store, "dataset_ab", "node")
+	dataset.SubjectTags = []string{"tag_a", "tag_b"}
+	if _, err := store.UpdateDataset(ctx, dataset); err != nil {
+		t.Fatal(err)
+	}
+	rows, page, err := store.ListDatasetSubjects(ctx, "space", "dataset_ab", "", &pb.Page{Page: 1, Size: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.GetTotal() != 3 || len(rows) != 3 {
+		t.Fatalf("rows=%d total=%d", len(rows), page.GetTotal())
+	}
+	status := map[string]string{}
+	for _, row := range rows {
+		status[row.GetSubjectId()] = row.GetStatus()
+	}
+	if status["A"] != "active" || status["B"] != "active" || status["C"] != "inactive" {
+		t.Fatalf("status = %v", status)
 	}
 }

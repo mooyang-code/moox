@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"time"
@@ -14,6 +15,9 @@ import (
 func (s *Service) UpsertTag(ctx context.Context, req *pb.UpsertTagReq) (*pb.UpsertTagRsp, error) {
 	if req == nil || req.GetTag() == nil {
 		return &pb.UpsertTagRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("tag is required"))}, nil
+	}
+	if _, err := s.metadata.GetTag(ctx, req.GetTag().GetSpaceId(), req.GetTag().GetTagId()); errors.Is(err, sql.ErrNoRows) {
+		req.GetTag().Builtin = false
 	}
 	tag, err := s.metadata.UpsertTag(ctx, req.GetTag())
 	if err != nil {

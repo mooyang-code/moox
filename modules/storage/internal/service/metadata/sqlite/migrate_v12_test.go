@@ -38,4 +38,13 @@ func TestMigrateV11ToV12CreatesTagTablesBeforeVersionValidation(t *testing.T) {
 			t.Fatalf("table %s was not created by migration", table)
 		}
 	}
+	for _, name := range []string{"idx_t_subjects_type", "idx_t_subjects_market", "trg_t_subjects_mtime"} {
+		var count int
+		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE name = ?`, name).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("%s was not recreated by migration", name)
+		}
+	}
 }

@@ -227,36 +227,14 @@ func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, run
 		seen[item.GetSubjectId()] = true
 		ids = append(ids, item.GetSubjectId())
 		if mode == metadatastore.TagModeAuto {
-			subject := &pb.Subject{SpaceId: spaceID, SubjectId: item.GetSubjectId(), SubjectType: item.GetSubjectType(), Name: item.GetName(), Market: item.GetMarket(), Currency: item.GetCurrency(), Timezone: item.GetTimezone(), Status: "active"}
-			var raw string
-			if err := tx.QueryRowContext(ctx, `SELECT c_attrs_json FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, spaceID, item.GetSubjectId()).Scan(&raw); err == nil {
-				if err := unmarshalOptions.Unmarshal([]byte(raw), subject); err != nil {
+			var existing int
+			err := tx.QueryRowContext(ctx, `SELECT 1 FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, spaceID, item.GetSubjectId()).Scan(&existing)
+			if err == sql.ErrNoRows {
+				subject := &pb.Subject{SpaceId: spaceID, SubjectId: item.GetSubjectId(), SubjectType: item.GetSubjectType(), Name: item.GetName(), Market: item.GetMarket(), Currency: item.GetCurrency(), Timezone: item.GetTimezone(), Status: "active"}
+				if err := upsertSubject(ctx, tx, subject); err != nil {
 					return metadatastore.TagSnapshotResult{}, err
 				}
-				subject.SpaceId = spaceID
-				subject.SubjectId = item.GetSubjectId()
-				if subject.Status == "" {
-					subject.Status = "active"
-				}
-				if item.GetSubjectType() != "" {
-					subject.SubjectType = item.GetSubjectType()
-				}
-				if item.GetName() != "" {
-					subject.Name = item.GetName()
-				}
-				if item.GetMarket() != "" {
-					subject.Market = item.GetMarket()
-				}
-				if item.GetCurrency() != "" {
-					subject.Currency = item.GetCurrency()
-				}
-				if item.GetTimezone() != "" {
-					subject.Timezone = item.GetTimezone()
-				}
-			} else if err != sql.ErrNoRows {
-				return metadatastore.TagSnapshotResult{}, err
-			}
-			if err := upsertSubject(ctx, tx, subject); err != nil {
+			} else if err != nil {
 				return metadatastore.TagSnapshotResult{}, err
 			}
 			memberResult, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO t_subject_tags (c_space_id, c_tag_id, c_subject_id, c_status) VALUES (?, ?, ?, 'active')`, spaceID, tagID, item.GetSubjectId())
@@ -267,10 +245,10 @@ func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, run
 			result.Added += int(n)
 		}
 	}
-	if mode == metadatastore.TagModeAuto && len(ids) == 0 {
+	if len(ids) == 0 {
 		return metadatastore.TagSnapshotResult{}, metadatastore.ErrTagSnapshotEmpty
 	}
-	if len(ids) > 0 {
+	{
 		resultSet := `(` + placeholders(len(ids)) + `)`
 		args := append([]any{spaceID, tagID}, stringsToAny(ids)...)
 		res, err := tx.ExecContext(ctx, `UPDATE t_subject_tags SET c_status = 'active', c_inactive_at = '' WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN `+resultSet+` AND c_status <> 'active'`, args...)
@@ -284,13 +262,6 @@ func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, run
 			return metadatastore.TagSnapshotResult{}, err
 		}
 		n, _ = res.RowsAffected()
-		result.Inactivated = int(n)
-	} else {
-		res, err := tx.ExecContext(ctx, `UPDATE t_subject_tags SET c_status = 'inactive', c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_status = 'active'`, formatSQLiteTime(runAt), spaceID, tagID)
-		if err != nil {
-			return metadatastore.TagSnapshotResult{}, err
-		}
-		n, _ := res.RowsAffected()
 		result.Inactivated = int(n)
 	}
 	if mode == metadatastore.TagModeManual {
@@ -384,61 +355,43 @@ func (s *Store) ResolveSubjects(ctx context.Context, spaceID string, tagIDs []st
 }
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID, datasetID, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
-	dataset, err := s.GetDataset(ctx, spaceID, datasetID)
-	if err != nil {
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
+		return nil, nil, fmt.Errorf("space_id and dataset_id are required")
+	}
+	const from = `
+		FROM t_datasets d
+		JOIN json_each(d.c_subject_tags_json) j
+		JOIN t_subject_tags m ON m.c_space_id = d.c_space_id AND m.c_tag_id = j.value
+		JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id
+		WHERE d.c_space_id = ? AND d.c_dataset_id = ? AND (? = '' OR m.c_subject_id = ?)`
+	args := []any{spaceID, datasetID, subjectID, subjectID}
+	db := s.queryDB(ctx)
+	var total uint64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT m.c_subject_id) `+from, args...).Scan(&total); err != nil {
 		return nil, nil, err
 	}
-	ids := uniqueStrings(dataset.GetSubjectTags())
-	where := `s.c_space_id = ? AND (? = '' OR s.c_subject_id = ?)`
-	args := []any{spaceID, subjectID, subjectID}
-	if len(ids) > 0 {
-		where += ` AND EXISTS (SELECT 1 FROM t_subject_tags m WHERE m.c_space_id = s.c_space_id AND m.c_subject_id = s.c_subject_id AND m.c_tag_id IN (` + placeholders(len(ids)) + `))`
-		args = append(args, stringsToAny(ids)...)
-	} else {
-		where += ` AND 1 = 0`
-	}
-	query := `SELECT s.c_subject_id, CASE WHEN EXISTS (SELECT 1 FROM t_subject_tags m WHERE m.c_space_id = s.c_space_id AND m.c_subject_id = s.c_subject_id AND m.c_tag_id IN (` + placeholders(len(ids)) + `) AND m.c_status = 'active') THEN 'active' ELSE 'inactive' END, s.c_attrs_json FROM t_subjects s WHERE ` + where
-	// The CASE expression precedes the WHERE clause, so its arguments must be
-	// supplied first, followed by the outer subject filter and membership query.
-	queryArgs := append([]any{spaceID}, stringsToAny(ids)...)
-	queryArgs = append(queryArgs, spaceID, subjectID, subjectID)
-	if len(ids) > 0 {
-		queryArgs = append(queryArgs, spaceID)
-		queryArgs = append(queryArgs, stringsToAny(ids)...)
-	}
-	// Keep the DatasetSubject compatibility projection small and deterministic.
-	return queryDatasetSubjects(ctx, s.queryDB(ctx), query, queryArgs, datasetID, page)
-}
-
-func queryDatasetSubjects(ctx context.Context, db readDB, query string, args []any, datasetID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
 	pageNo, size, offset := normalizePage(page)
-	rows, err := db.QueryContext(ctx, query+` ORDER BY s.c_subject_id LIMIT ? OFFSET ?`, append(args, size, offset)...)
+	rows, err := db.QueryContext(ctx, `
+		SELECT m.c_subject_id, MAX(CASE WHEN m.c_status = 'active' AND s.c_status = 'active' THEN 1 ELSE 0 END) `+from+`
+		GROUP BY m.c_subject_id ORDER BY m.c_subject_id LIMIT ? OFFSET ?`, append(args, size, offset)...)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
 	items := make([]*pb.DatasetSubject, 0)
 	for rows.Next() {
-		item := &pb.DatasetSubject{SpaceId: "", DatasetId: datasetID}
-		var raw string
-		if err := rows.Scan(&item.SubjectId, &item.Status, &raw); err != nil {
+		var id string
+		var active int
+		if err := rows.Scan(&id, &active); err != nil {
 			return nil, nil, err
 		}
-		subject := &pb.Subject{}
-		if err := unmarshalOptions.Unmarshal([]byte(raw), subject); err != nil {
-			return nil, nil, err
+		status := metadatastore.TagMemberInactive
+		if active == 1 {
+			status = metadatastore.TagMemberActive
 		}
-		item.SpaceId = subject.GetSpaceId()
-		items = append(items, item)
+		items = append(items, &pb.DatasetSubject{SpaceId: spaceID, DatasetId: datasetID, SubjectId: id, Status: status})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	var total uint32
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM (`+query+`)`, args...).Scan(&total); err != nil {
-		return nil, nil, err
-	}
-	return items, &pb.PageResult{Page: pageNo, Size: size, Total: total, HasMore: uint64(offset)+uint64(len(items)) < uint64(total)}, nil
+	return items, &pb.PageResult{Page: pageNo, Size: size, Total: uint32(total), HasMore: uint64(offset)+uint64(len(items)) < total}, rows.Err()
 }
 
 func placeholders(count int) string {

@@ -285,9 +285,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 		instruments = kept
 	}
 	if skipped > 0 || len(duplicated) > 0 {
-		// Invalid or ambiguous exchange rows must never become durable IDs.
-		// The complete snapshot validator below still rejects an empty result.
-		_ = skipped
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: binance subject ids skipped=%d duplicated=%d", marketdata.ErrProtocol, skipped, len(duplicated))
 	}
 	snapshot := marketdata.InstrumentSnapshot{
 		SnapshotID:     fetchedAt.Format(time.RFC3339Nano),
