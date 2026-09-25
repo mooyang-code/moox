@@ -1242,6 +1242,12 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		if err = configureRemoteCollectorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
 			return err
 		}
+		if err = configureRemoteMonitorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
+			return err
+		}
+		if err = setupclient.New(control).DisableServiceDeployment(ctx, "control", "storage-view"); err != nil {
+			return err
+		}
 		if err = ensureSetupStorageGatewayFirewall(ctx, snapshot, host.Address); err != nil {
 			return err
 		}
@@ -1349,6 +1355,42 @@ PY
 	`, "sh", controlRoot, target, nodeID}, nil)
 	if err != nil {
 		return fmt.Errorf("collector_storage_target_prepare_failed")
+	}
+	return nil
+}
+
+// configureRemoteMonitorStorageTarget points Monitor's Primary/Metadata
+// clients at the remote Storage gateway. Control's leftover Primary has
+// catalog metadata from earlier local installs but no live market facts.
+func configureRemoteMonitorStorageTarget(ctx context.Context, control setupssh.Client, nodeID, host, controlRoot string) error {
+	if control == nil || strings.TrimSpace(nodeID) == "" || net.ParseIP(strings.TrimSpace(host)) == nil {
+		return fmt.Errorf("monitor_storage_target_prepare_failed")
+	}
+	target := "ip://" + net.JoinHostPort(host, "11003")
+	_, err := control.Run(ctx, []string{
+		"sh", "-lc", `set -eu
+control_root="$1"
+target="$2"
+config="$control_root/monitor/config/app.yaml"
+test -f "$config"
+python3 - "$config" "$target" "$3" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+target = sys.argv[2]
+node_id = sys.argv[3]
+raw = path.read_text()
+updated, target_count = re.subn(r'(?m)^    gateway_target:.*$', '    gateway_target: ' + target, raw)
+updated, node_count = re.subn(r'(?m)^    gateway_node_id:.*$', '    gateway_node_id: ' + node_id, updated)
+if target_count < 2 or node_count < 2:
+    raise SystemExit(1)
+path.write_text(updated)
+PY
+	`, "sh", controlRoot, target, nodeID}, nil)
+	if err != nil {
+		return fmt.Errorf("monitor_storage_target_prepare_failed")
 	}
 	return nil
 }
