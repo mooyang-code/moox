@@ -39,15 +39,22 @@ func probing(tag *pb.Tag) bool {
 		(strings.EqualFold(tag.GetMode(), "auto") || strings.EqualFold(tag.GetMode(), "manual"))
 }
 
+func parseTagTime(value string) (time.Time, error) {
+	if parsed, err := time.ParseInLocation(sqliteTimeLayout, value, time.UTC); err == nil {
+		return parsed, nil
+	}
+	return time.Parse(time.RFC3339, value)
+}
+
 func tagDue(tag *pb.Tag, now time.Time) (bool, error) {
 	if tag == nil || tag.GetLastRunAt() == "" {
 		return true, nil
 	}
-	lastRun, err := time.ParseInLocation(sqliteTimeLayout, tag.GetLastRunAt(), time.UTC)
+	lastRun, err := parseTagTime(tag.GetLastRunAt())
 	if err != nil {
 		return false, fmt.Errorf("parse last_run_at: %w", err)
 	}
-	if tag.GetUpdatedAt() > tag.GetLastRunAt() {
+	if updated, err := parseTagTime(tag.GetUpdatedAt()); err == nil && updated.After(lastRun) {
 		return true, nil
 	}
 	schedule, err := cron.ParseStandard(tag.GetCron())
