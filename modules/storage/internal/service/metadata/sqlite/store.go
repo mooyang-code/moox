@@ -228,11 +228,28 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 // role validates the schema version without executing the schema file on an
 // existing database.
 func (s *Store) migrateV11ToV12(ctx context.Context) error {
-	tx, err := beginImmediate(ctx, s.db)
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
 	}
-	defer tx.Rollback()
+	defer conn.Close()
+	// Rebuilding t_subjects and removing the symbol datasets touches parent
+	// tables that other rows still reference. Do that with foreign keys off,
+	// after deleting the referencing rows explicitly.
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+	}
+	tx := conn
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+		_, _ = conn.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`)
+	}()
 	var hasColumn int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM pragma_table_info('t_datasets') WHERE name = 'c_subject_tags_json'`).Scan(&hasColumn); err != nil {
 		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
@@ -250,7 +267,17 @@ func (s *Store) migrateV11ToV12(ctx context.Context) error {
 		`DROP TABLE IF EXISTS t_subject_symbols`,
 	}
 	if hasDatasets != 0 {
-		statements = append(statements, `DELETE FROM t_datasets WHERE c_dataset_id IN ('dataset_binance_spot_symbols', 'dataset_binance_swap_symbols', 'dataset_stockcn_instruments')`)
+		const removedDatasets = `'dataset_binance_spot_symbols', 'dataset_binance_swap_symbols', 'dataset_stockcn_instruments'`
+		statements = append(statements,
+			`DELETE FROM t_view_columns WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
+			`DELETE FROM t_view_index_builds WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
+			`DELETE FROM t_view_rebuild_logs WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
+			`DELETE FROM t_view_period_dataset_states WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
+			`DELETE FROM t_view_sync_points WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
+			`DELETE FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`)`,
+			`DELETE FROM t_dataset_columns WHERE c_dataset_id IN (`+removedDatasets+`)`,
+			`DELETE FROM t_archive_files WHERE c_dataset_id IN (`+removedDatasets+`)`,
+			`DELETE FROM t_datasets WHERE c_dataset_id IN (`+removedDatasets+`)`)
 	}
 	if hasSubjects != 0 {
 		statements = append(statements,
@@ -350,7 +377,11 @@ func (s *Store) migrateV11ToV12(ctx context.Context) error {
 			return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
 		}
 	}
-	return tx.Commit()
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (s *Store) migrateV9ToV10(ctx context.Context) error {
