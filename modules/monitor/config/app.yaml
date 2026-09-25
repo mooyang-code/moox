@@ -90,7 +90,7 @@ metrics:
     gateway_target: ip://127.0.0.1:11003
     gateway_node_id: ""
     key_id: monitor
-    hmac_key_file: ""
+    hmac_key_file: "../secrets/gateway-monitor.key"
     space_id: mooxsys
     dataset_id: dataset_mooxsys_service_metrics
     frequency: 30s
@@ -101,7 +101,7 @@ metrics:
     gateway_target: ip://127.0.0.1:11003
     gateway_node_id: ""
     key_id: monitor
-    hmac_key_file: ""
+    hmac_key_file: "../secrets/gateway-monitor.key"
     space_id: mooxsys
     frequency: 1m
     write_timeout: 5s

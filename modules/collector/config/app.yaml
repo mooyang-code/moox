@@ -18,7 +18,7 @@ storage:
   gateway_target: ip://127.0.0.1:11003
   gateway_node_id: ""
   key_id: collector
-  hmac_key_file: ""
+  hmac_key_file: "../secrets/gateway-collector.key"
   result_data_node_id: storage-node-0
 
 period_readiness:
