@@ -26,7 +26,6 @@ func TestDisableCollectorBlacklistedTimersBeforePublishing(t *testing.T) {
 				case "/api/admin/cloudnode/GetNodeList":
 					_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": []adminclient.CloudNode{
 						{NodeID: "blocked", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": true}},
-						{NodeID: "instrument", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"function_mode": "instrument_snapshot", "timer_enabled": false, "timer_actual_enabled": true}},
 						{NodeID: "disabled", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": false}},
 						{NodeID: "allowed", Region: "ap-singapore", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": true}},
 						{NodeID: "invoke", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke"},
@@ -53,9 +52,9 @@ func TestDisableCollectorBlacklistedTimersBeforePublishing(t *testing.T) {
 				require.ErrorContains(t, err, "FAILED")
 			}
 			require.True(t, waited)
-			require.Len(t, submitted, 3)
-			require.Equal(t, "blocked", submitted[0].NodeID)
-			require.Equal(t, "instrument", submitted[1].NodeID)
+				require.Len(t, submitted, 2)
+				require.Equal(t, "blocked", submitted[0].NodeID)
+				require.Equal(t, "disabled", submitted[1].NodeID)
 			for _, patch := range submitted {
 				require.False(t, patch.TimerEnabled)
 			}

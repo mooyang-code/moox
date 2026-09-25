@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -24,19 +25,18 @@ type SeedOptions struct {
 
 // ImportResult 汇总各类元数据的导入数量，便于日志展示。
 type ImportResult struct {
-	Spaces          int
-	DataSources     int
-	Subjects        int
-	SubjectSymbols  int
-	Datasets        int
-	DatasetSubjects int
-	FieldGroups     int
-	Fields          int
-	Factors         int
-	DatasetColumns  int
-	Views           int
-	ViewColumns     int
-	Devices         int
+	Spaces         int
+	DataSources    int
+	Subjects       int
+	Tags           int
+	Datasets       int
+	FieldGroups    int
+	Fields         int
+	Factors        int
+	DatasetColumns int
+	Views          int
+	ViewColumns    int
+	Devices        int
 }
 
 // ImportSeed 读取显式指定的 metadata seed 文件，并按依赖顺序通过元数据控制面写入。
@@ -124,14 +124,22 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		result.Subjects++
 	}
 
-	for _, item := range seed.SubjectSymbols {
-		if _, err := store.UpsertSubjectSymbol(ctx, &pb.SubjectSymbol{
-			SpaceId: item.SpaceID, SubjectId: item.SubjectID, DataSourceId: item.DataSourceID,
-			ExternalSymbol: item.ExternalSymbol, Status: item.Status,
-		}); err != nil {
-			return result, seedErr("subject_symbol", item.SubjectID, err)
+	for _, item := range seed.Tags {
+		if existing, getErr := store.GetTag(ctx, item.SpaceID, item.TagID); getErr == nil && existing != nil {
+			// Tags are operator-owned after the first seed. In particular, do not
+			// reset a customized description, schedule, or source list on restart.
+			continue
+		} else if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
+			return result, seedErr("tag", item.TagID, getErr)
 		}
-		result.SubjectSymbols++
+		if _, err := store.UpsertTag(ctx, &pb.Tag{
+			SpaceId: item.SpaceID, TagId: item.TagID, TagName: item.TagName, Description: item.Description,
+			Mode: item.Mode, Builtin: item.Builtin, Sources: item.Sources, InstrumentType: item.InstrumentType,
+			Cron: item.Cron, Timezone: item.Timezone,
+		}); err != nil {
+			return result, seedErr("tag", item.TagID, err)
+		}
+		result.Tags++
 	}
 
 	for _, item := range seed.Datasets {
@@ -139,22 +147,11 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
 			Freqs: item.Freqs, Status: "disabled", Attributes: item.Attributes,
-			DataNodeId: item.DataNodeID, KeepDuration: item.KeepDuration,
+			DataNodeId: item.DataNodeID, KeepDuration: item.KeepDuration, SubjectTags: item.SubjectTags,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
 		}
 		result.Datasets++
-	}
-
-	for _, item := range seed.DatasetSubjects {
-		if _, err := store.BindDatasetSubject(ctx, &pb.DatasetSubject{
-			SpaceId: item.SpaceID, DatasetId: item.DatasetID, SubjectId: item.SubjectID,
-			SubjectRole: item.SubjectRole, EffectiveStartTime: item.EffectiveStartTime,
-			EffectiveEndTime: item.EffectiveEndTime, Status: item.Status,
-		}); err != nil {
-			return result, seedErr("dataset_subject", item.DatasetID+"/"+item.SubjectID, err)
-		}
-		result.DatasetSubjects++
 	}
 
 	for _, item := range seed.FieldGroups {
@@ -380,19 +377,18 @@ func parseColumnOriginType(value string) pb.ColumnOriginType {
 
 // seedFile 对应 metadata YAML 的顶层配置。
 type seedFile struct {
-	Spaces          []seedSpace          `yaml:"spaces"`
-	DataSources     []seedDataSource     `yaml:"data_sources"`
-	Subjects        []seedSubject        `yaml:"subjects"`
-	SubjectSymbols  []seedSubjectSymbol  `yaml:"subject_symbols"`
-	Datasets        []seedDataset        `yaml:"datasets"`
-	DatasetSubjects []seedDatasetSubject `yaml:"dataset_subjects"`
-	FieldGroups     []seedFieldGroup     `yaml:"field_groups"`
-	Fields          []seedField          `yaml:"fields"`
-	Factors         []seedFactor         `yaml:"factors"`
-	DatasetColumns  []seedDatasetColumn  `yaml:"dataset_columns"`
-	Views           []seedView           `yaml:"views"`
-	ViewColumns     []seedViewColumn     `yaml:"view_columns"`
-	Devices         []seedDevice         `yaml:"devices"`
+	Spaces         []seedSpace         `yaml:"spaces"`
+	DataSources    []seedDataSource    `yaml:"data_sources"`
+	Subjects       []seedSubject       `yaml:"subjects"`
+	Tags           []seedTag           `yaml:"tags"`
+	Datasets       []seedDataset       `yaml:"datasets"`
+	FieldGroups    []seedFieldGroup    `yaml:"field_groups"`
+	Fields         []seedField         `yaml:"fields"`
+	Factors        []seedFactor        `yaml:"factors"`
+	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
+	Views          []seedView          `yaml:"views"`
+	ViewColumns    []seedViewColumn    `yaml:"view_columns"`
+	Devices        []seedDevice        `yaml:"devices"`
 }
 
 // seedSpace 描述待初始化的 Space 元数据。
@@ -431,13 +427,18 @@ type seedSubject struct {
 	Status      string `yaml:"status"`
 }
 
-// seedSubjectSymbol 描述 Subject 与外部数据源符号的映射。
-type seedSubjectSymbol struct {
-	SpaceID        string `yaml:"space_id"`
-	SubjectID      string `yaml:"subject_id"`
-	DataSourceID   string `yaml:"data_source_id"`
-	ExternalSymbol string `yaml:"external_symbol"`
-	Status         string `yaml:"status"`
+// seedTag 描述静态标签定义；运行态成员由 subject collector 维护。
+type seedTag struct {
+	SpaceID        string   `yaml:"space_id"`
+	TagID          string   `yaml:"tag_id"`
+	TagName        string   `yaml:"tag_name"`
+	Description    string   `yaml:"description"`
+	Mode           string   `yaml:"mode"`
+	Builtin        bool     `yaml:"builtin"`
+	Sources        []string `yaml:"sources"`
+	InstrumentType string   `yaml:"instrument_type"`
+	Cron           string   `yaml:"cron"`
+	Timezone       string   `yaml:"timezone"`
 }
 
 // seedDataset 描述待初始化的 Dataset 元数据。
@@ -451,19 +452,9 @@ type seedDataset struct {
 	DataKind     string            `yaml:"data_kind"`
 	Freqs        []string          `yaml:"freqs"`
 	KeepDuration string            `yaml:"keep_duration"`
+	SubjectTags  []string          `yaml:"subject_tags"`
 	Status       string            `yaml:"status"`
 	Attributes   map[string]string `yaml:"attributes"`
-}
-
-// seedDatasetSubject 描述 Dataset 与 Subject 的绑定关系。
-type seedDatasetSubject struct {
-	SpaceID            string `yaml:"space_id"`
-	DatasetID          string `yaml:"dataset_id"`
-	SubjectID          string `yaml:"subject_id"`
-	SubjectRole        string `yaml:"subject_role"`
-	EffectiveStartTime string `yaml:"effective_start_time"`
-	EffectiveEndTime   string `yaml:"effective_end_time"`
-	Status             string `yaml:"status"`
 }
 
 // seedField 描述待初始化的字段定义。

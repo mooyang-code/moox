@@ -35,7 +35,6 @@ func (f *fakeViewGetter) GetView(_ context.Context, _ *storagepb.GetViewReq, _ .
 type catalogMetadataFake struct {
 	datasets    map[string]*storagepb.Dataset
 	views       map[string]*storagepb.View
-	subjects    []*storagepb.DatasetSubject
 	failAt      string
 	failCleanup bool
 	deleteOrder []string
@@ -124,24 +123,6 @@ func (f *catalogMetadataFake) DeleteView(_ context.Context, req *storagepb.Delet
 	return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *catalogMetadataFake) ListDatasetSubjects(_ context.Context, _ *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
-	if err := f.fail("list_subjects"); err != nil {
-		return &storagepb.ListDatasetSubjectsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
-	}
-	return &storagepb.ListDatasetSubjectsRsp{
-		RetInfo:         &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
-		DatasetSubjects: f.subjects,
-		PageResult:      &storagepb.PageResult{HasMore: false},
-	}, nil
-}
-
-func (f *catalogMetadataFake) BindDatasetSubject(_ context.Context, _ *storagepb.BindDatasetSubjectReq, _ ...client.Option) (*storagepb.BindDatasetSubjectRsp, error) {
-	if err := f.fail("bind_subject"); err != nil {
-		return &storagepb.BindDatasetSubjectRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
-	}
-	return &storagepb.BindDatasetSubjectRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (f *catalogMetadataFake) UpsertDatasetColumn(_ context.Context, _ *storagepb.UpsertDatasetColumnReq, _ ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
 	if err := f.fail("dataset_column"); err != nil {
 		return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
@@ -199,7 +180,7 @@ func (f catalogViewSyncFake) WaitViewSyncPoint(_ context.Context, _ *storagepb.W
 	return &storagepb.WaitViewSyncPointRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Ready: true}, nil
 }
 
-func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.DatasetSubject) {
+func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.Subject) {
 	metadata := newCatalogMetadataFake(failAt)
 	catalog := &Catalog{Metadata: metadata, Auth: &storagepb.AuthInfo{AppId: "collector"}, ViewSync: catalogViewSyncFake{metadata: metadata}}
 	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample", MarketType: "spot"}
@@ -208,7 +189,7 @@ func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, dom
 		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m", Alignment: domain.ResampleAlignmentEpochUTC,
 	}
 	source := storagesource.DatasetInfo{DataSourceID: "crypto", DataNodeID: "node-1"}
-	subjects := []domain.DatasetSubject{{SubjectID: "BTC", Status: "active"}}
+	subjects := []domain.Subject{{SubjectID: "BTC", Status: "active"}}
 	return metadata, catalog, rule, params, source, subjects
 }
 
@@ -228,7 +209,6 @@ func TestPrepareTargetCompensatesNewResourcesInReverseOrderAfterLaterFailure(t *
 		failAt      string
 		deleteOrder []string
 	}{
-		{failAt: "bind_subject", deleteOrder: []string{"dataset"}},
 		{failAt: "dataset_column", deleteOrder: []string{"dataset"}},
 		{failAt: "check_activation", deleteOrder: []string{"dataset"}},
 		{failAt: "activate_dataset", deleteOrder: []string{"dataset"}},

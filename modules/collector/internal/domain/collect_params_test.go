@@ -13,8 +13,7 @@ func TestParseCollectParamsUsesSingleDatasetDrivenContract(t *testing.T) {
 	raw := `{
 		"provider":" Binance ",
 		"market_type":" SPOT ",
-		"symbol_source":"dataset",
-		"symbol_dataset_id":"source-kline",
+		"subject_tags":["binance_spot"],
 		"target_dataset_id":"target-kline",
 		"frequency":"1h"
 	}`
@@ -24,68 +23,16 @@ func TestParseCollectParamsUsesSingleDatasetDrivenContract(t *testing.T) {
 	assert.Equal(t, "binance", params.Collector.Exchange)
 	assert.Equal(t, "spot", params.Collector.Market)
 	assert.Equal(t, "kline", params.Collector.DataType)
-	assert.Equal(t, "source-kline", params.Source.DatasetID)
+	assert.Equal(t, "dataset", params.Source.Kind)
+	assert.Equal(t, []string{"binance_spot"}, params.SubjectTags)
 	assert.Equal(t, "target-kline", params.Target.DatasetID)
-}
-
-func TestParseCollectParamsRequiresExchangeInstrumentSnapshot(t *testing.T) {
-	raw := `{
-		"provider":"binance",
-		"market_type":"swap",
-		"symbol_source":"exchange",
-		"target_dataset_id":"symbols",
-		"frequency":"30m"
-	}`
-	params, err := ParseCollectParams(raw, "", "", "instrument")
-	require.NoError(t, err)
-	require.NoError(t, params.Validate())
-	assert.Equal(t, "none", params.Source.Kind)
-	assert.Equal(t, []string{"30m"}, params.Collector.Intervals)
-}
-
-func TestParseCollectParamsAcceptsExchangeInstrumentSnapshot(t *testing.T) {
-	params, err := ParseCollectParams(`{
-		"provider":"binance",
-		"market_type":"spot",
-		"symbol_source":"exchange",
-		"target_dataset_id":"symbols"
-	}`, "", "", "instrument")
-	require.NoError(t, err)
-	require.NoError(t, params.Validate())
-	assert.Equal(t, "none", params.Source.Kind)
-	assert.Equal(t, "1h", params.Frequency)
-}
-
-func TestCollectParamsRejectsManualInstrumentSnapshot(t *testing.T) {
-	params, err := ParseCollectParams(`{
-		"provider":"binance",
-		"market_type":"spot",
-		"symbol_source":"manual",
-		"target_dataset_id":"symbols"
-	}`, "", "", "instrument")
-	require.NoError(t, err)
-	require.ErrorContains(t, params.Validate(), "symbol_source must be exchange")
-}
-
-func TestParseCollectParamsDefaultsInstrumentFrequencyToHourly(t *testing.T) {
-	params, err := ParseCollectParams(`{
-		"provider":"binance",
-		"market_type":"spot",
-		"symbol_source":"exchange",
-		"target_dataset_id":"symbols"
-	}`, "", "", "instrument")
-	require.NoError(t, err)
-	require.NoError(t, params.Validate())
-	assert.Equal(t, "1h", params.Frequency)
-	assert.Equal(t, "1h", params.Schedule.Interval)
 }
 
 func TestParseCollectParamsAddsExplicitDefaultKlineHistoryPolicy(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",
 		"market_type":"spot",
-		"symbol_source":"dataset",
-		"symbol_dataset_id":"dataset_binance_spot_symbols",
+		"subject_tags":["binance_spot"],
 		"target_dataset_id":"dataset_binance_spot_kline_1m",
 		"frequency":"1m"
 	}`, "", "", "kline")
@@ -107,8 +54,7 @@ func TestParseCollectParamsAcceptsExplicitKlineHistoryPolicy(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",
 		"market_type":"spot",
-		"symbol_source":"dataset",
-		"symbol_dataset_id":"dataset_binance_spot_symbols",
+		"subject_tags":["binance_spot"],
 		"target_dataset_id":"dataset_binance_spot_kline_1m",
 		"frequency":"1m",
 		"history_policy":{
@@ -149,11 +95,19 @@ func TestParseCollectParamsRejectsRemovedFields(t *testing.T) {
 	}
 }
 
+func TestSplitSubjectTagsRemovesAndNormalizesTransientInput(t *testing.T) {
+	clean, tags, err := SplitSubjectTags(`{"provider":"binance","subject_tags":[" b ","a","a",""],"frequency":"1m"}`)
+	require.NoError(t, err)
+	assert.NotContains(t, clean, "subject_tags")
+	assert.Equal(t, []string{"a", "b"}, tags)
+}
+
 func TestCollectParamsValidateRequiresExplicitDatasetsAndIntervals(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",
 		"market_type":"spot",
-		"symbol_source":"dataset",
+		"subject_tags":["binance_spot"],
+		"target_dataset_id":"dataset_target_kline",
 		"frequency":"bad"
 	}`, "", "", "kline")
 	require.NoError(t, err)
@@ -171,8 +125,7 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 			raw: `{
 				"provider":"binance",
 				"market_type":"spot",
-				"symbol_source":"dataset",
-				"symbol_dataset_id":"dataset_binance_spot_symbols",
+				"subject_tags":["binance_spot"],
 				"target_dataset_id":"dataset_binance_spot_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"lookback","lookback":0}
@@ -184,8 +137,7 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 			raw: `{
 				"provider":"binance",
 				"market_type":"spot",
-				"symbol_source":"dataset",
-				"symbol_dataset_id":"dataset_binance_spot_symbols",
+				"subject_tags":["binance_spot"],
 				"target_dataset_id":"dataset_binance_spot_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"since","since":"yesterday"}
@@ -197,8 +149,7 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 			raw: `{
 				"provider":"binance",
 				"market_type":"spot",
-				"symbol_source":"dataset",
-				"symbol_dataset_id":"dataset_binance_spot_symbols",
+				"subject_tags":["binance_spot"],
 				"target_dataset_id":"dataset_binance_spot_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"live_only","rate_budget_ratio":1.5}
@@ -242,10 +193,10 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 			params, err := ParseCollectParams(`{
 				"provider":"binance",
 				"market_type":"spot",
-				"symbol_source":"exchange",
-				"target_dataset_id":"symbols",
+				"subject_tags":["binance_spot"],
+				"target_dataset_id":"dataset_target_kline",
 				"frequency":"`+tt.interval+`"
-			}`, "", "", "instrument")
+			}`, "", "", "kline")
 			require.NoError(t, err)
 
 			err = params.Validate()
@@ -276,6 +227,7 @@ func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 
 	assert.Equal(t, "moox", params.Provider)
 	assert.Equal(t, "spot", params.MarketType)
+	assert.Equal(t, "dataset", params.Source.Kind)
 	assert.Equal(t, "dataset_binance_spot_kline_1m", params.Source.DatasetID)
 	assert.Equal(t, "1H", params.SourceFrequency)
 	assert.Equal(t, "venue:binance", params.SourceSeriesTag)

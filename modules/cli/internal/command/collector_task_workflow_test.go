@@ -38,8 +38,7 @@ func TestEnsureStockCNKlineTaskCreatesStableTaskWithoutResultDatasetID(t *testin
 					"collect_params":{
 						"provider":"stockcn_multi",
 						"market_type":"equity",
-						"symbol_source":"dataset",
-						"symbol_dataset_id":"dataset_stockcn_instruments",
+						"subject_tags":["cn_a_share"],
 						"frequency":"1m"
 					}
 				}
@@ -53,7 +52,7 @@ func TestEnsureStockCNKlineTaskCreatesStableTaskWithoutResultDatasetID(t *testin
 			assert.Equal(t, false, task["enabled"])
 			collectParams, ok := task["collect_params"].(map[string]any)
 			require.True(t, ok)
-			assert.Equal(t, "dataset_stockcn_instruments", collectParams["symbol_dataset_id"])
+			assert.Equal(t, []any{"cn_a_share"}, collectParams["subject_tags"])
 			assert.NotContains(t, collectParams, "target_dataset_id")
 			assert.NotContains(t, body, "result_config")
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task_id":"builtin-stockcn-kline-1m"}`))

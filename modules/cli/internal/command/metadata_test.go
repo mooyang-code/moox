@@ -260,15 +260,14 @@ func TestValidateReservedInternalSpacesAcceptsDeclaredSpace(t *testing.T) {
 
 func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 	seed := metadataSeed{
-		Spaces:          []seedSpace{{SpaceID: "crypto", Name: "Crypto"}},
-		DataSources:     []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange"}},
-		Subjects:        []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
-		SubjectSymbols:  []seedSubjectSymbol{{SpaceID: "crypto", SubjectID: "BTC", DataSourceID: "binance", ExternalSymbol: "BTCUSDT"}},
-		Datasets:        []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"}}},
-		DatasetSubjects: []seedDatasetSubject{{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC"}},
-		Fields:          []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
-		Factors:         []seedFactor{{SpaceID: "crypto", FactorID: "ma", ValueType: "DOUBLE"}},
-		DatasetColumns:  []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
+		Spaces:         []seedSpace{{SpaceID: "crypto", Name: "Crypto"}},
+		DataSources:    []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange"}},
+		Subjects:       []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
+		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Sources: []string{"binance"}, InstrumentType: "spot"}},
+		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"}, SubjectTags: []string{"binance_spot"}}},
+		Fields:         []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
+		Factors:        []seedFactor{{SpaceID: "crypto", FactorID: "ma", ValueType: "DOUBLE"}},
+		DatasetColumns: []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "v1", Name: "View", PrimaryDatasetID: "kline", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
 			FilterJSON: `{"freq":"1m"}`, Engine: "duckdb",
@@ -278,7 +277,7 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 	}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(calls), 13)
+	require.GreaterOrEqual(t, len(calls), 12)
 }
 
 func TestBuildMetadataImportCallsBackfillsColumnDisplayName(t *testing.T) {
@@ -509,7 +508,7 @@ func TestProtoMessageSpaceIDFindsNestedMetadataResource(t *testing.T) {
 func TestSeedToPBAllTypes(t *testing.T) {
 	assert.Equal(t, "binance", (seedDataSource{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance"}).toPB().GetDataSourceId())
 	assert.Equal(t, "BTC", (seedSubject{SpaceID: "crypto", SubjectID: "BTC"}).toPB().GetSubjectId())
-	assert.Equal(t, "BTCUSDT", (seedSubjectSymbol{SpaceID: "crypto", SubjectID: "BTC", ExternalSymbol: "BTCUSDT"}).toPB().GetExternalSymbol())
+	assert.Equal(t, "binance_spot", (seedTag{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance spot", Mode: "auto"}).toPB().GetTagId())
 	field, err := (seedField{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, field.GetValueType())
@@ -519,7 +518,9 @@ func TestSeedToPBAllTypes(t *testing.T) {
 	col, err := (seedDatasetColumn{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, "close", col.GetColumnName())
-	assert.Equal(t, "kline", (seedDatasetSubject{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC"}).toPB().GetDatasetId())
+	dataset, err := (seedDataset{SpaceID: "crypto", DatasetID: "kline", SubjectTags: []string{"binance_spot"}}).toPB()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"binance_spot"}, dataset.GetSubjectTags())
 	assert.Equal(t, "v1", (seedView{SpaceID: "crypto", ViewID: "v1"}).toPB().GetViewId())
 	viewCol, err := (seedViewColumn{SpaceID: "crypto", ViewID: "v1", ColumnName: "close", OriginType: "DATASET_COLUMN", ValueType: "DOUBLE"}).toPB()
 	require.NoError(t, err)
@@ -825,8 +826,8 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "kline", Name: "行情视图", Description: "默认行情",
 			PrimaryDatasetID: "kline",
-			GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
-			FilterJSON: `{"freq":"1H"}`, Engine: "duckdb", KeepDuration: "8760h",
+			GrainKeys:        []string{"subject_id", "freq", "data_time", "series_tag"},
+			FilterJSON:       `{"freq":"1H"}`, Engine: "duckdb", KeepDuration: "8760h",
 		}},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close",

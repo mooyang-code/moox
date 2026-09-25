@@ -272,12 +272,12 @@ func InstrumentFromFields(code, symbol, exchangeValue, name, status string) (mar
 			return marketdata.Instrument{}, fmt.Errorf("%w: symbol %q does not match exchange %q", marketdata.ErrUnsupportedSymbol, symbol, exchange)
 		}
 	case code != "" && exchange != "":
-		subjectID, err = CanonicalSubjectIDWithExchange(code, exchange)
+		subjectID, err = SubjectIDWithExchange(code, exchange)
 		if err != nil {
 			return marketdata.Instrument{}, err
 		}
 	default:
-		subjectID, err = CanonicalSubjectID(code)
+		subjectID, err = SubjectID(code)
 		if err != nil {
 			return marketdata.Instrument{}, err
 		}

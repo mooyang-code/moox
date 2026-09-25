@@ -17,16 +17,13 @@ func TestSyncTargetDatasetReconcilesOutputsForActiveLockedTarget(t *testing.T) {
 	client.datasets["source"] = &storagepb.Dataset{
 		SpaceId: "space", DatasetId: "source", DataSourceId: "market",
 		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, DataNodeId: "node-1",
-		KeepDuration: "30d", Status: "active",
+		KeepDuration: "30d", Status: "active", SubjectTags: []string{"binance_spot"},
 	}
 	client.datasets["target"] = &storagepb.Dataset{
 		SpaceId: "space", DatasetId: "target", DataSourceId: "market",
 		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, DataNodeId: "node-1",
 		KeepDuration: "30d", Status: "active", BindingLocked: true,
 	}
-	client.subjects["source"] = []*storagepb.DatasetSubject{{
-		SpaceId: "space", DatasetId: "source", SubjectId: "BTC-USDT",
-	}}
 	syncer := NewMetadataSync(client, nil)
 
 	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
@@ -38,12 +35,10 @@ func TestSyncTargetDatasetReconcilesOutputsForActiveLockedTarget(t *testing.T) {
 	require.Equal(t, []string{"excess_return", "rolling_rank"}, client.upsertedColumnNames())
 	require.Zero(t, client.checkActivationCalls)
 	require.Zero(t, client.activateCalls)
-	require.Len(t, client.updatedDatasets, 1)
+	require.Len(t, client.updatedDatasets, 2)
 	require.Equal(t, "factor_result", client.updatedDatasets[0].GetAttributes()["dataset_role"])
 	require.Equal(t, []string{"1m"}, client.updatedDatasets[0].GetFreqs())
-	require.Len(t, client.boundSubjects, 1)
-	require.Equal(t, "target", client.boundSubjects[0].GetDatasetId())
-	require.Equal(t, "BTC-USDT", client.boundSubjects[0].GetSubjectId())
+	require.Equal(t, []string{"binance_spot"}, client.updatedDatasets[1].GetSubjectTags())
 }
 
 func TestResolveManagedResultIDsUsesSourceViewIdentity(t *testing.T) {
@@ -122,7 +117,6 @@ func TestSyncBindingViewsReusesSourceDatasetAndView(t *testing.T) {
 	require.True(t, ready)
 	require.Empty(t, client.createdDatasets)
 	require.Empty(t, client.updatedDatasets)
-	require.Empty(t, client.boundSubjects)
 	require.Equal(t, []string{"bias__bias_20"}, client.upsertedColumnNames())
 	require.Equal(t, "merged_factor", client.datasets[datasetID].GetAttributes()["dataset_role"])
 }
@@ -240,15 +234,11 @@ func TestSyncTargetDatasetRejectsExistingNonTimeSeriesTargetBeforeMutation(t *te
 		DataKind: storagepb.DataKind_DATA_KIND_RECORD, DataNodeId: "node-1",
 		KeepDuration: "30d", Status: "active", BindingLocked: true,
 	}
-	client.subjects["source"] = []*storagepb.DatasetSubject{{
-		SpaceId: "space", DatasetId: "source", SubjectId: "BTC-USDT",
-	}}
 	syncer := NewMetadataSync(client, nil)
 
 	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", nil)
 	require.ErrorContains(t, err, "target dataset space/target must be time-series")
 	require.Empty(t, client.updatedDatasets)
-	require.Empty(t, client.boundSubjects)
 	require.Empty(t, client.upsertedColumns)
 	require.Zero(t, client.checkActivationCalls)
 	require.Zero(t, client.activateCalls)
@@ -265,11 +255,9 @@ func testSourceDataset() *storagepb.Dataset {
 type fakeMetadataClient struct {
 	datasets             map[string]*storagepb.Dataset
 	factors              map[string]*storagepb.Factor
-	subjects             map[string][]*storagepb.DatasetSubject
 	upsertedColumns      []*storagepb.DatasetColumn
 	updatedDatasets      []*storagepb.Dataset
 	createdDatasets      []*storagepb.Dataset
-	boundSubjects        []*storagepb.DatasetSubject
 	createdFactors       []*storagepb.Factor
 	updatedFactors       []*storagepb.Factor
 	getFactorRet         *commonpb.RetInfo
@@ -311,7 +299,6 @@ func newFakeMetadataClient() *fakeMetadataClient {
 	return &fakeMetadataClient{
 		datasets: map[string]*storagepb.Dataset{},
 		factors:  map[string]*storagepb.Factor{},
-		subjects: map[string][]*storagepb.DatasetSubject{},
 	}
 }
 
@@ -380,17 +367,6 @@ func (f *fakeMetadataClient) ActivateDataset(context.Context, *storagepb.Activat
 func (f *fakeMetadataClient) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
 	f.upsertedColumns = append(f.upsertedColumns, req.GetColumn())
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: successRet()}, nil
-}
-
-func (f *fakeMetadataClient) ListDatasetSubjects(_ context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
-	return &storagepb.ListDatasetSubjectsRsp{
-		RetInfo: successRet(), DatasetSubjects: f.subjects[req.GetDatasetId()],
-	}, nil
-}
-
-func (f *fakeMetadataClient) BindDatasetSubject(_ context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
-	f.boundSubjects = append(f.boundSubjects, req.GetDatasetSubject())
-	return &storagepb.BindDatasetSubjectRsp{RetInfo: successRet()}, nil
 }
 
 func successRet() *commonpb.RetInfo {

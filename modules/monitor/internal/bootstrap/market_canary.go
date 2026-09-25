@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -14,8 +15,60 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/robfig/cron"
 	"gorm.io/gorm"
 )
+
+const (
+	tagStaleFactor   = 3
+	tagCheckPrefix   = "subject_tag:"
+	sqliteTimeLayout = "2006-01-02 15:04:05"
+)
+
+// checkTag evaluates the health of one tag definition. Member counts are
+// queried by Storage, while freshness is derived from the tag's own cron and
+// timezone so a slow or failed sync cannot be mistaken for a healthy catalog.
+func checkTag(tag *storagepb.Tag, now time.Time) []string {
+	if tag == nil {
+		return []string{"missing"}
+	}
+	reasons := make([]string, 0, 3)
+	if tag.GetLastStatus() == "failed" {
+		reasons = append(reasons, "failed")
+	}
+	if tag.GetActiveCount() == 0 {
+		reasons = append(reasons, "no_active_members")
+	}
+	if tagStale(tag, now) {
+		reasons = append(reasons, "stale")
+	}
+	if len(reasons) == 0 {
+		return nil
+	}
+	return reasons
+}
+
+func tagStale(tag *storagepb.Tag, now time.Time) bool {
+	lastRun, err := time.ParseInLocation(sqliteTimeLayout, tag.GetLastRunAt(), time.UTC)
+	if err != nil {
+		return true
+	}
+	schedule, err := cron.ParseStandard(tag.GetCron())
+	if err != nil {
+		return true
+	}
+	loc, err := time.LoadLocation(firstNonEmptyString(tag.GetTimezone(), "UTC"))
+	if err != nil {
+		return true
+	}
+	next := schedule.Next(lastRun.In(loc))
+	period := schedule.Next(next).Sub(next)
+	return now.Sub(lastRun) > time.Duration(tagStaleFactor)*period
+}
+
+func subjectTagCheckID(spaceID, tagID string) string {
+	return tagCheckPrefix + strings.TrimSpace(spaceID) + ":" + strings.TrimSpace(tagID)
+}
 
 func buildMonitorMarketCanary(
 	ctx context.Context,
@@ -40,8 +93,16 @@ func buildMonitorMarketCanary(
 		credentials,
 	)...)
 	canaries := make([]watchdog.MarketCanary, 0, len(cfg.MarketCanary.Subjects))
+	tagSpaces := make([]string, 0, len(cfg.MarketCanary.Subjects))
+	seenTagSpaces := make(map[string]struct{})
 	configuredCheckIDs := make(map[string]struct{}, len(cfg.MarketCanary.Subjects))
 	for _, subject := range cfg.MarketCanary.Subjects {
+		if spaceID := strings.TrimSpace(subject.SpaceID); spaceID != "" {
+			if _, ok := seenTagSpaces[spaceID]; !ok {
+				seenTagSpaces[spaceID] = struct{}{}
+				tagSpaces = append(tagSpaces, spaceID)
+			}
+		}
 		canaryConfig := watchdog.MarketCanaryConfig{
 			SpaceID: subject.SpaceID, DatasetID: subject.DatasetID, SubjectID: subject.Symbol, Frequency: subject.Frequency,
 			SeriesTag: subject.SeriesTag,
@@ -74,7 +135,6 @@ func buildMonitorMarketCanary(
 		}
 		canaries = append(canaries, watchdog.MarketCanary{
 			Reader: reader, AuthInfo: storageauth.Primary("monitor-market-canary"), Config: canaryConfig,
-			ResolveSubjectID: marketCanarySubjectResolver(metricsStorage),
 		})
 	}
 	// Canary identity includes the symbol. When configuration moves from an
@@ -149,20 +209,58 @@ func buildMonitorMarketCanary(
 		}
 		return nil
 	}
-	return run, probe, nil
-}
-
-func marketCanarySubjectResolver(storage *monmetrics.StorageAdapter) func(context.Context, string, string, string) (string, error) {
-	if storage == nil {
-		return nil
-	}
-	return func(ctx context.Context, spaceID, datasetID, configured string) (string, error) {
-		active, err := storage.ListActiveDatasetSubjects(ctx, spaceID, datasetID)
-		if err != nil {
-			return "", err
+	if metricsStorage != nil {
+		previousRun := run
+		run = func(runCtx context.Context) error {
+			err := previousRun(runCtx)
+			now := time.Now().UTC()
+			for _, spaceID := range tagSpaces {
+				tags, tagErr := metricsStorage.ListTags(runCtx, spaceID)
+				if tagErr != nil {
+					err = errors.Join(err, tagErr)
+					continue
+				}
+				for _, tag := range tags {
+					if tag == nil || !tag.GetBuiltin() {
+						continue
+					}
+					checkID := subjectTagCheckID(spaceID, tag.GetTagId())
+					check, getErr := runtime.Repositories.Checks.Get(runCtx, spaceID, checkID)
+					if errors.Is(getErr, gorm.ErrRecordNotFound) {
+						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "Subject tag " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
+						getErr = runtime.Repositories.Checks.Create(runCtx, check)
+					} else if getErr == nil && check.Name != "Subject tag "+tag.GetTagName() {
+						check.Name = "Subject tag " + tag.GetTagName()
+						getErr = runtime.Repositories.Checks.Update(runCtx, check)
+					}
+					if getErr != nil {
+						err = errors.Join(err, getErr)
+						continue
+					}
+					reasons := checkTag(tag, now)
+					result := domain.CheckResult{ResultID: fmt.Sprintf("%s-%d", checkID, now.UnixNano()), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: strings.Join(reasons, ","), CheckedAt: now, CreatedAt: now}
+					if !result.Success {
+						result.Status = domain.CheckStatusDown
+					}
+					inserted, insertErr := runtime.Repositories.Results.InsertIfAbsent(runCtx, &result)
+					if insertErr != nil {
+						err = errors.Join(err, insertErr)
+						continue
+					}
+					if inserted {
+						check.LastCheckedAt = &now
+						if updateErr := runtime.Repositories.Checks.Update(runCtx, check); updateErr != nil {
+							err = errors.Join(err, updateErr)
+						} else if hook != nil {
+							hook(runCtx, *check, result)
+						}
+					}
+				}
+			}
+			return err
 		}
-		return watchdog.ResolveCanonicalSubjectIDForDataset(configured, datasetID, active)
 	}
+	return run, probe, nil
 }
 
 func firstNonEmptyString(values ...string) string {

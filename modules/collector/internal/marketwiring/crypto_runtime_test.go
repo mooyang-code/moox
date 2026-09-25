@@ -8,7 +8,7 @@ import (
 )
 
 func TestCryptoCompositionRootSupportsMinuteAndHourMarkets(t *testing.T) {
-	for _, product := range []marketdata.ProductType{marketdata.ProductSpot, marketdata.ProductSwap} {
+	for _, product := range []marketdata.InstrumentType{marketdata.InstrumentSpot, marketdata.InstrumentSwap} {
 		for _, frequency := range []string{"1m", "1H"} {
 			t.Run(string(product)+"/"+frequency, func(t *testing.T) {
 				pipeline, err := NewCryptoKlinePipeline(timerHandlerStorage{}, product)
@@ -16,12 +16,11 @@ func TestCryptoCompositionRootSupportsMinuteAndHourMarkets(t *testing.T) {
 				require.Empty(t, pipeline.DatasetID)
 				require.Equal(t, string(product)+"_http", pipeline.SourceID)
 				require.Equal(t, []string{"binance"}, pipeline.CandidateChain)
-				require.Equal(t, product, pipeline.ProductType)
+				require.Equal(t, product, pipeline.InstrumentType)
 				spec, err := pipeline.Router.NewSession().KlineSpec("binance")
 				require.NoError(t, err)
 				require.True(t, spec.SupportsRequest(marketdata.KlineRequest{
-					MarketID: "crypto", ExchangeID: "binance", ProductType: product,
-					InstrumentType: marketdata.InstrumentType(product), Frequency: frequency,
+					MarketID: "crypto", ExchangeID: "binance", InstrumentType: product, Frequency: frequency,
 				}))
 			})
 		}

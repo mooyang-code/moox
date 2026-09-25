@@ -19,14 +19,14 @@ import (
 )
 
 type runnerSource struct {
-	subjects     []domain.DatasetSubject
+	subjects     []domain.Subject
 	keepDuration string
 }
 
 func (s runnerSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
+	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, SubjectTags: []string{"test"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
 }
-func (s runnerSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
+func (s runnerSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
 	return s.subjects, nil
 }
 
@@ -55,7 +55,7 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 		fields = append(fields, &storagepb.FieldValue{FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 1}}})
 		fake.rows = append(fake.rows, &storagepb.RowFieldValues{Key: rowKey("crypto", "source_bars", "BTC", "1m", at, "venue:binance"), Fields: fields})
 	}
-	runner := &Runner{Tasks: db.Tasks(), Instances: db.TaskInstances(), Source: runnerSource{subjects: []domain.DatasetSubject{{SubjectID: "BTC", Status: "active"}}}, Primary: fake, Config: RunnerConfig{SpaceID: "crypto", WorkerConcurrency: 1, WorkerJobTimeout: time.Second, RepairLookbackBuckets: 0}}
+	runner := &Runner{Tasks: db.Tasks(), Instances: db.TaskInstances(), Source: runnerSource{subjects: []domain.Subject{{SubjectID: "BTC", Status: "active"}}}, Primary: fake, Config: RunnerConfig{SpaceID: "crypto", WorkerConcurrency: 1, WorkerJobTimeout: time.Second, RepairLookbackBuckets: 0}}
 	require.NoError(t, runner.Tick(context.Background(), now))
 	require.Len(t, fake.writes, 1)
 	instances, _, err := db.TaskInstances().List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto", CollectionTaskID: "rule-5m", Page: 1, PageSize: 10})

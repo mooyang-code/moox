@@ -17,7 +17,7 @@ func TestToPBTaskAndFromPBTask_ShouldRoundTripCoreFields(t *testing.T) {
 	params, err := structpb.NewStruct(map[string]any{"source": map[string]any{"kind": "none"}})
 	require.NoError(t, err)
 	in := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 		Creator: "tester", CreateTime: time.Unix(1, 0).UTC(), ModifyTime: time.Unix(2, 0).UTC(),
 	}
@@ -39,14 +39,14 @@ func TestToPBTaskAndFromPBTask_ShouldRoundTripCoreFields(t *testing.T) {
 func TestToPBTaskRedactsInternalDatasetIDsAndNamesResult(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "币安现货", DataType: "kline",
-		CollectParams: `{"symbol_dataset_id":"symbols","source_dataset_id":"source","target_dataset_id":"target","frequency":"1h"}`,
+		CollectParams: `{"subject_tags":["binance_spot"],"source_dataset_id":"source","target_dataset_id":"target","frequency":"1h"}`,
 		ResultViewID:  "view-1",
 	}
 	pbTask := toPBTask(task)
 	assert.Equal(t, "币安现货 结果", pbTask.GetResult().GetResultName())
 	params := pbTask.GetCollectParams().AsMap()
 	assert.NotContains(t, params, "target_dataset_id")
-	assert.NotContains(t, params, "symbol_dataset_id")
+	assert.NotContains(t, params, "subject_tags")
 	assert.NotContains(t, params, "source_dataset_id")
 	assert.Equal(t, "1h", params["frequency"])
 }
@@ -82,7 +82,7 @@ func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 	now := time.Now().UTC()
 	instance := toPBInstance(domain.TaskInstance{
 		SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "binance",
-		MarketType: "spot", DataType: "instrument", LastExecStatus: domain.InstanceStatusSuccess,
+		MarketType: "spot", DataType: "kline", LastExecStatus: domain.InstanceStatusSuccess,
 		CreateTime: now, ModifyTime: now,
 	})
 	assert.Equal(t, "rule-1", instance.GetTaskId())

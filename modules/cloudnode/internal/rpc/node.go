@@ -414,10 +414,8 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	memorySize := configInt64(config, "memory_size", 256)
 	timeoutSeconds := configInt64(config, "timeout", defaultSCFTimeoutSeconds)
 	effectiveConfig := config
-	// Kline Timer functions are intentionally capped at 15 seconds, but the
-	// independent full-market Instrument snapshot Timer uses the configured
-	// long execution budget (currently 300 seconds).
-	if isMarketFetchNode(node) && node.TriggerType == "timer" && !isInstrumentSnapshotNode(node) {
+	// Kline Timer functions are intentionally capped at 15 seconds.
+	if isMarketFetchNode(node) && node.TriggerType == "timer" {
 		memorySize = 64
 		timeoutSeconds = 15
 		effectiveConfig = copyStringMap(config)
@@ -815,10 +813,6 @@ func reconcileSCFPublicNetwork(ctx context.Context, client scfProvisioner, ref t
 
 func isMarketFetchNode(node *store.CloudNode) bool {
 	return node != nil && strings.EqualFold(strings.TrimSpace(metadataString(parseJSONMap(node.Metadata), "biz_type")), "market_fetcher")
-}
-
-func isInstrumentSnapshotNode(node *store.CloudNode) bool {
-	return node != nil && strings.EqualFold(strings.TrimSpace(metadataString(parseJSONMap(node.Metadata), "function_mode")), "instrument_snapshot")
 }
 
 func acceptedSCFPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {

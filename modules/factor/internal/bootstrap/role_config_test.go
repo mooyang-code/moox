@@ -38,7 +38,7 @@ func TestRoleConfigurationsHaveIndependentStorageAndStrictFields(t *testing.T) {
 	require.ErrorContains(t, err, "catalog_poll_interval")
 	_, err = LoadEngineApplicationConfig(roleConfigFile(t, "catalog_sync_timeout: 0s\n"))
 	require.ErrorContains(t, err, "catalog_sync_timeout")
-	_, err = LoadEngineApplicationConfig(roleConfigFile(t, "definitions:\n  - dataset_id: mdataset_binance_kline_1m\n"))
+	_, err = LoadEngineApplicationConfig(roleConfigFile(t, "definitions:\n  - space_id: crypto\n    dataset_id: mdataset_binance_kline_1m\n    frequency: 1m\n    merge_mode: system\n    key_contract:\n      subject_id: subject_id\n      frequency: frequency\n      period_time: period_time\n      series_tag: series_tag\n      period_boundary: close\n    sources:\n      - dataset_id: dataset_binance_spot_kline_1m\n        frequency: 1m\n        period_boundary: close\n        fields: [close]\n    field_mappings:\n      - source_dataset_id: dataset_binance_spot_kline_1m\n        source_field: close\n        target_field: dataset_binance_spot_kline_1m__close\n"))
 	require.NoError(t, err)
 }
 

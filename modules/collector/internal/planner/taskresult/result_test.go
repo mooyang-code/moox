@@ -14,9 +14,9 @@ func TestResultIDsUseReadableTaskSlug(t *testing.T) {
 	require.Equal(t, "view_binance_spot_kline_1m", ids.ViewID)
 	require.Equal(t, ids, ResultIDs("stockcn", "builtin-binance-spot-kline-1m"))
 
-	symbols := ResultIDs("crypto", "builtin-binance-swap-symbols-1h")
-	require.Equal(t, "dataset_binance_swap_symbols", symbols.DatasetID)
-	require.Equal(t, "view_binance_swap_symbols", symbols.ViewID)
+	custom := ResultIDs("crypto", "builtin-custom-kline-1m")
+	require.Equal(t, "dataset_custom_kline_1m", custom.DatasetID)
+	require.Equal(t, "view_custom_kline_1m", custom.ViewID)
 
 	fiveMinute := ResultIDs("crypto", "task-5m")
 	require.Equal(t, "dataset_task_5m", fiveMinute.DatasetID)
@@ -89,6 +89,11 @@ func (f *resultMetadataFake) CreateDataset(_ context.Context, req *storagepb.Cre
 	return &storagepb.CreateDatasetRsp{RetInfo: resultOK(), Dataset: req.GetDataset()}, nil
 }
 
+func (f *resultMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
+	return &storagepb.UpdateDatasetRsp{RetInfo: resultOK(), Dataset: req.GetDataset()}, nil
+}
+
 func (f *resultMetadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
 	delete(f.datasets, req.GetDatasetId())
 	return &storagepb.DeleteDatasetRsp{RetInfo: resultOK()}, nil
@@ -139,7 +144,7 @@ func (f *resultMetadataFake) ActivateDataset(_ context.Context, req *storagepb.A
 func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	config := Config{DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1h"}
+	config := Config{DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1h", SubjectTags: []string{"binance_spot"}}
 	first, err := manager.Ensure(context.Background(), "crypto", "task-1", "kline", "spot", config)
 	require.NoError(t, err)
 	second, err := manager.Ensure(context.Background(), "crypto", "task-1", "kline", "spot", config)
@@ -149,6 +154,41 @@ func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	require.Equal(t, 1, fake.createViews)
 	require.Equal(t, "task-1", fake.datasets[first.DatasetID].GetAttributes()["collector_task_id"])
 	require.Equal(t, "task-1", fake.views[first.ViewID].GetAttributes()["collector_task_id"])
+	require.Equal(t, []string{"binance_spot"}, fake.datasets[first.DatasetID].GetSubjectTags())
+}
+
+func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "task-existing-tags")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
+		Attributes:  map[string]string{"owner_module": "collector", "collector_task_id": "task-existing-tags"},
+		SubjectTags: []string{"binance_spot"},
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+	_, err := manager.Ensure(context.Background(), "crypto", "task-existing-tags", "kline", "spot", Config{
+		DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1h",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"binance_spot"}, fake.datasets[ids.DatasetID].GetSubjectTags())
+}
+
+func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "task-update-tags")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
+		Attributes:  map[string]string{"owner_module": "collector", "collector_task_id": "task-update-tags"},
+		SubjectTags: []string{"old_tag"},
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+	_, err := manager.Ensure(context.Background(), "crypto", "task-update-tags", "kline", "spot", Config{
+		DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1h", SubjectTags: []string{"new_tag"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"new_tag"}, fake.datasets[ids.DatasetID].GetSubjectTags())
 }
 
 func TestEnsureDeclaresAllCollectionFrequencies(t *testing.T) {

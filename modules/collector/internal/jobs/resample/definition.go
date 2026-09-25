@@ -31,10 +31,10 @@ func NewJobDefinition() jobdef.JobDefinition {
 			{ID: 10, DataType: "kline_resample", FieldKey: "settle_delay_ms", FieldName: "收盘等待毫秒", FieldType: "number", DefaultValue: float64(10000), DataSourceOptions: dataSources, SortOrder: 6},
 		},
 		Supports: []jobdef.Support{
-			{Exchange: "binance", Market: "spot", DataType: "kline_resample", SourceKind: "dataset_subjects"},
-			{Exchange: "binance", Market: "swap", DataType: "kline_resample", SourceKind: "dataset_subjects"},
-			{Exchange: "moox", Market: "spot", DataType: "kline_resample", SourceKind: "dataset_subjects"},
-			{Exchange: "moox", Market: "swap", DataType: "kline_resample", SourceKind: "dataset_subjects"},
+			{Exchange: "binance", Market: "spot", DataType: "kline_resample", SourceKind: "dataset"},
+			{Exchange: "binance", Market: "swap", DataType: "kline_resample", SourceKind: "dataset"},
+			{Exchange: "moox", Market: "spot", DataType: "kline_resample", SourceKind: "dataset"},
+			{Exchange: "moox", Market: "swap", DataType: "kline_resample", SourceKind: "dataset"},
 		},
 		Planner: buildTaskSpecs,
 	}

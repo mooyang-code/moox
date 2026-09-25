@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/kline"
 	resamplejob "github.com/mooyang-code/moox/modules/collector/internal/jobs/resample"
-	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
 )
 
 // JobDefinition describes one collector job type.
@@ -28,7 +27,6 @@ const (
 
 var jobDefinitions = []JobDefinition{
 	kline.NewJobDefinition(),
-	symbol.NewJobDefinition(),
 	resamplejob.NewJobDefinition(),
 }
 

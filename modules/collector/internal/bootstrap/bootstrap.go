@@ -211,6 +211,10 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
 				_, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 				if parseErr != nil {
+					if isLegacySubjectSelectionError(parseErr) {
+						log.WarnContextf(ctx, "skip legacy collection task=%s/%s result provisioning: %v; edit the task to select subject tags", task.SpaceID, task.TaskID, parseErr)
+						continue
+					}
 					return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
 				}
 				ids := collectorresult.ResultIDs(task.SpaceID, task.TaskID)
@@ -251,7 +255,20 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 			}
 			params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 			if parseErr != nil {
+				if isLegacySubjectSelectionError(parseErr) {
+					log.WarnContextf(ctx, "skip legacy collection task=%s/%s result provisioning: %v; edit the task to select subject tags", task.SpaceID, task.TaskID, parseErr)
+					continue
+				}
 				return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
+			}
+			originalParams := task.CollectParams
+			cleanParams, subjectTags, splitErr := domain.SplitSubjectTags(originalParams)
+			if splitErr != nil {
+				return fmt.Errorf("split task %s/%s subject tags: %w", task.SpaceID, task.TaskID, splitErr)
+			}
+			paramsHadSubjectTags := cleanParams != originalParams
+			if paramsHadSubjectTags {
+				task.CollectParams = cleanParams
 			}
 			oldIDs := collectorresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
 			ids, ensureErr := manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, collectorresult.Config{
@@ -261,6 +278,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				DataSourceID: task.Provider,
 				Frequency:    taskResultFrequency(*params),
 				Frequencies:  append([]string(nil), params.Collector.Intervals...),
+				SubjectTags:  subjectTags,
 			})
 			if ensureErr != nil {
 				return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, ensureErr)
@@ -270,7 +288,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 					return fmt.Errorf("retire hashed task %s/%s result: %w", task.SpaceID, task.TaskID, err)
 				}
 			}
-			needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
+			needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID || paramsHadSubjectTags
 			task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
 			rawParams := map[string]any{}
 			if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
@@ -297,6 +315,14 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 		}
 	}
 	return nil
+}
+
+func isLegacySubjectSelectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "symbol_source") || strings.Contains(message, "symbol_dataset_id")
 }
 
 func taskResultFrequency(params domain.CollectParams) string {
@@ -458,7 +484,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	// large-fleet response as a coordination failure.
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 60 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(deps.StorageRPCGatewayTarget)
-	plannerSource := marketfetch.NewTaskInstanceDatasetSource(metadataSource, dbm.TaskInstances())
+	plannerSource := metadataSource
 	spaceIDs := marketFetchSpaceIDs()
 	if len(spaceIDs) == 0 {
 		log.Warn("collector market fetch scheduler has no configured spaces")
@@ -511,7 +537,6 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSourceID:     marketwiring.DefaultSourceID,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
-			CompactSymbol:       marketwiring.CompactSymbol,
 			Tasks:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: marketfetch.DefaultMaxSubjects(spaceID),
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,

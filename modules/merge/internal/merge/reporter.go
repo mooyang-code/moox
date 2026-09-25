@@ -16,10 +16,6 @@ type mergeMarkerClient interface {
 	ReportMergePeriodCompleted(context.Context, *storagepb.ReportMergePeriodCompletedReq, ...client.Option) (*storagepb.ReportMergePeriodCompletedRsp, error)
 }
 
-type datasetPeriodReportClient interface {
-	ReportPeriod(context.Context, *storagepb.PrimaryReportPeriodReq, ...client.Option) (*storagepb.PrimaryReportPeriodRsp, error)
-}
-
 // StoragePeriodReporter publishes MergePeriodCompleted after receipts are persisted.
 type StoragePeriodReporter struct {
 	client  mergeMarkerClient
@@ -58,41 +54,6 @@ func (r *StoragePeriodReporter) Report(ctx context.Context, marker PeriodMarker)
 			msg = rsp.GetRetInfo().GetCode().String()
 		}
 		return fmt.Errorf("report merge period completed: %s", msg)
-	}
-	return nil
-}
-
-// StorageDatasetPeriodReporter closes the derived Dataset period through the
-// generic Storage-owned protocol. Successful subjects were already recorded
-// atomically by CommitInput; only failed/missing subjects are reported here.
-type StorageDatasetPeriodReporter struct {
-	client  datasetPeriodReportClient
-	auth    *commonpb.AuthInfo
-	spaceID string
-}
-
-func NewStorageDatasetPeriodReporter(client datasetPeriodReportClient, auth *commonpb.AuthInfo, spaceID string) *StorageDatasetPeriodReporter {
-	return &StorageDatasetPeriodReporter{client: client, auth: auth, spaceID: spaceID}
-}
-
-func (r *StorageDatasetPeriodReporter) Report(ctx context.Context, marker PeriodMarker) error {
-	if r == nil || r.client == nil {
-		return fmt.Errorf("dataset period reporter is not initialized")
-	}
-	if len(marker.FailedSubjects) == 0 {
-		return nil
-	}
-	items := make([]*storagepb.DatasetPeriodItem, 0, len(marker.FailedSubjects))
-	for _, subjectID := range marker.FailedSubjects {
-		items = append(items, &storagepb.DatasetPeriodItem{SubjectId: subjectID, State: "missing", Reason: "merge_deadline_exceeded"})
-	}
-	requestID := fmt.Sprintf("merge-period-report:%s:%s:%d", marker.DatasetID, marker.Frequency, marker.PeriodTime.Unix())
-	rsp, err := r.client.ReportPeriod(ctx, &storagepb.PrimaryReportPeriodReq{AuthInfo: r.auth, ReportId: requestID, SpaceId: r.spaceID, DatasetId: marker.DatasetID, Frequency: marker.Frequency, PeriodTime: marker.PeriodTime.Unix(), Items: items})
-	if err != nil {
-		return fmt.Errorf("report Dataset period: %w", err)
-	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		return fmt.Errorf("report Dataset period: %s", rsp.GetRetInfo().GetMsg())
 	}
 	return nil
 }

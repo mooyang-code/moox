@@ -95,7 +95,7 @@ func TestParseTimeAndMergePatch(t *testing.T) {
 }
 
 func validStorageEvent() *storagepb.DatasetRowsUpserted {
-	return &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-06-30T23:59:00Z", SeriesTag: "venue:binance"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100.25}}}}}}}
+	return &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", SourceNodeId: "node-1", SourceStoreId: "store-1", SourceSequence: 1, WriteSource: "test", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-06-30T23:59:00Z", SeriesTag: "venue:binance"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100.25}}}}}}}
 }
 
 func marshalEvent(t *testing.T, payload *storagepb.DatasetRowsUpserted) ([]byte, string, string) {

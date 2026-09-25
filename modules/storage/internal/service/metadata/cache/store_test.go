@@ -54,9 +54,6 @@ func (stubMetadataReader) GetSubject(context.Context, string, string) (*pb.Subje
 func (stubMetadataReader) ListSubjects(context.Context, string, string, string, []string, string, *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
 	return nil, nil, nil
 }
-func (stubMetadataReader) ListSubjectSymbols(context.Context, string, string, string, string, *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error) {
-	return nil, nil, nil
-}
 func (stubMetadataReader) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
 	return nil, nil
 }

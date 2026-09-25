@@ -33,7 +33,6 @@ type KlinePipeline struct {
 	RouteID        string
 	SpaceID        string
 	MarketID       string
-	ProductType    marketdata.ProductType
 	InstrumentType marketdata.InstrumentType
 	DatasetID      string
 	SourceID       string
@@ -133,7 +132,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			providerSymbol := strings.TrimSpace(item.Symbol)
 			if p.MarketID == StockCNSpaceID || p.MarketID == "" && req.SpaceID == StockCNSpaceID {
-				converted, symbolErr := stockProviderSymbol(item.SubjectID, providerSymbol)
+				converted, symbolErr := stockProviderSymbol(item.SubjectID)
 				if symbolErr != nil {
 					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", symbolErr)
 					return
@@ -160,10 +159,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				limit = MaxRealtimeRows
 			}
 			marketID := marketdata.MarketID(firstNonEmptyString(p.MarketID, req.SpaceID))
-			productType := p.ProductType
-			if productType == "" {
-				productType = marketdata.ProductEquity
-			}
 			instrumentType := p.InstrumentType
 			if instrumentType == "" {
 				instrumentType = marketdata.InstrumentEquity
@@ -191,7 +186,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					dnsRoutes[host] = append([]string(nil), route.IPs...)
 				}
 			}
-			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, ProductType: productType, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
 			if err != nil {
 				item.CandidateIndex = nextCandidateIndex
 				p.observeFeed(req, selectedProvider, "kline", metricKlineResult(err))
@@ -408,7 +403,7 @@ func requestKlineRouteID(p *KlinePipeline, frequency string) string {
 	}
 	if strings.EqualFold(strings.TrimSpace(firstNonEmptyString(p.MarketID, p.SpaceID)), "crypto") {
 		product := "spot"
-		if p.ProductType == marketdata.ProductSwap || p.InstrumentType == marketdata.InstrumentSwap {
+		if p.InstrumentType == marketdata.InstrumentSwap {
 			product = "swap"
 		}
 		if parsed, err := marketdata.ParseFrequency(frequency); err == nil {
@@ -475,7 +470,7 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 		return nil, err
 	}
 	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
-		bar.SubjectID = marketdata.CanonicalCryptoSubjectID(bar.SubjectID)
+		bar.SubjectID = strings.ToUpper(strings.TrimSpace(bar.SubjectID))
 	}
 	seriesTag := strings.TrimSpace(p.SeriesTag)
 	if seriesTag == "" {

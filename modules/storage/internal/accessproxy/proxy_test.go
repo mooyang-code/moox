@@ -120,7 +120,7 @@ func TestProxyRejectsInvalidAuthAndReplay(t *testing.T) {
 }
 
 func TestMethodAllowedIncludesCollectorResampleMethods(t *testing.T) {
-	for _, method := range []string{"BindDatasetSubject", "UpdateView", "UpsertViewColumn", "RequestViewRebuild"} {
+	for _, method := range []string{"ResolveSubjects", "UpdateView", "UpsertViewColumn", "RequestViewRebuild"} {
 		require.True(t, methodAllowed(MetadataName, method), method)
 	}
 }

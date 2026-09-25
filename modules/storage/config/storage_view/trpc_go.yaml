@@ -195,7 +195,7 @@ storage:
           - space_id: stockcn
             dataset_ids: ["*"]
           - space_id: stockcn
-            dataset_ids: [dataset_stockcn_financial_statement_metric, dataset_stockcn_financial_summary, dataset_stockcn_bond_kline, dataset_stockcn_index_kline, dataset_stockcn_instruments, dataset_stockcn_equity_kline]
+            dataset_ids: [dataset_stockcn_financial_statement_metric, dataset_stockcn_financial_summary, dataset_stockcn_bond_kline, dataset_stockcn_index_kline, dataset_stockcn_equity_kline]
           - space_id: stockhk
             dataset_ids: ["*"]
           - space_id: stockhk

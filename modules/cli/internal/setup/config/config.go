@@ -45,21 +45,10 @@ const (
 	// release baseline. stockcn config validation still requires an explicit
 	// timer_function_count instead of applying this value implicitly.
 	DefaultStockCNMarketTimerFunctionCount = 170
-	// DefaultStockCNInstrumentInvokeTimeoutSeconds leaves enough room for the
-	// measured full-market Sina instrument snapshot while Timer functions keep
-	// their fixed 15-second execution budget.
-	DefaultStockCNInstrumentInvokeTimeoutSeconds = 60
-	// DefaultCryptoInstrumentInvokeTimeoutSeconds leaves enough room for the
-	// crypto exchange symbol snapshot and its metadata repair writes while
-	// regular Kline Timer functions keep their fixed 15-second budget.
-	DefaultCryptoInstrumentInvokeTimeoutSeconds = 60
-	// DefaultStockCNInstrumentSnapshotTimeoutSeconds is the longer budget for
-	// the single daily full-market Instrument Timer, which is not a Kline Timer.
-	DefaultStockCNInstrumentSnapshotTimeoutSeconds = 300
-	// DefaultStockCNInstrumentSnapshotMemorySize leaves headroom for the full
-	// market Instrument snapshot. Kline Timer functions remain fixed at 64MB.
-	DefaultStockCNInstrumentSnapshotMemorySize = 256
-	DefaultStockCNInstrumentSnapshotTimerCron  = "0 0 0 * * * *"
+	// Invoke nodes need a larger budget than the regular Kline Timer fleet for
+	// the deployment canary and Storage acknowledgement path.
+	DefaultStockCNInvokeTimeoutSeconds = 60
+	DefaultCryptoInvokeTimeoutSeconds  = 60
 	// Stock Timer groups are spread across this fixed second window. These are
 	// release defaults; changing them requires a new rendered configuration.
 	DefaultStockCNStaggerStartSecond        = 5
@@ -433,8 +422,7 @@ func (l TencentSCFRegionLimit) MaxFunctionsPerRegion() int {
 }
 
 // TimerCapacity is the number of Timer functions one Space may place in a
-// region after reserving one Invoke canary and any publisher auxiliaries
-// (currently the stock Instrument snapshot). Overflow namespaces are included.
+// region after reserving one Invoke canary. Overflow namespaces are included.
 func (l TencentSCFRegionLimit) TimerCapacity(reservedAuxiliary int) int {
 	capacity := l.MaxFunctionsPerRegion() - 1 - reservedAuxiliary
 	if capacity < 0 {
@@ -450,11 +438,10 @@ type SCFNamespaceShard struct {
 	Namespace string
 	Timers    int
 	Invokes   int
-	Snapshots int
 }
 
 func (s SCFNamespaceShard) Functions() int {
-	return s.Timers + s.Invokes + s.Snapshots
+	return s.Timers + s.Invokes
 }
 
 // OverflowSCFNamespace returns the Space namespace at overflow index.
@@ -467,10 +454,10 @@ func OverflowSCFNamespace(base string, index int) string {
 	return fmt.Sprintf("%s-ns%d", base, index+1)
 }
 
-// PlanSCFNamespaceShards packs timer, invoke and snapshot functions into
-// namespaces of at most maxPerNS functions each. Invoke and snapshot stay in
-// the first namespace so the canary identity remains stable.
-func PlanSCFNamespaceShards(base string, timers, invokes, snapshots, maxPerNS int) []SCFNamespaceShard {
+// PlanSCFNamespaceShards packs timer and invoke functions into namespaces of
+// at most maxPerNS functions each. The Invoke canary stays in the first
+// namespace so its identity remains stable.
+func PlanSCFNamespaceShards(base string, timers, invokes, maxPerNS int) []SCFNamespaceShard {
 	if maxPerNS < 1 {
 		return nil
 	}
@@ -480,13 +467,10 @@ func PlanSCFNamespaceShards(base string, timers, invokes, snapshots, maxPerNS in
 	if invokes < 0 {
 		invokes = 0
 	}
-	if snapshots < 0 {
-		snapshots = 0
-	}
-	if timers == 0 && invokes == 0 && snapshots == 0 {
+	if timers == 0 && invokes == 0 {
 		return nil
 	}
-	firstAux := invokes + snapshots
+	firstAux := invokes
 	firstTimers := timers
 	if firstAux+firstTimers > maxPerNS {
 		firstTimers = maxPerNS - firstAux
@@ -498,7 +482,6 @@ func PlanSCFNamespaceShards(base string, timers, invokes, snapshots, maxPerNS in
 		Namespace: OverflowSCFNamespace(base, 0),
 		Timers:    firstTimers,
 		Invokes:   invokes,
-		Snapshots: snapshots,
 	}}
 	remaining := timers - firstTimers
 	for index := 1; remaining > 0; index++ {
@@ -515,21 +498,17 @@ func PlanSCFNamespaceShards(base string, timers, invokes, snapshots, maxPerNS in
 	return shards
 }
 
-func spaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, limits TencentSCFLimits, includeSnapshot bool) []SCFNamespaceShard {
+func spaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, limits TencentSCFLimits) []SCFNamespaceShard {
 	namespace := strings.ToLower(strings.TrimSpace(space.Namespace))
 	if namespace == "" {
 		namespace = ExpectedSCFNamespace(space.SpaceID)
 	}
-	invoke, snapshot := 1, 0
-	if includeSnapshot && strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") &&
-		strings.EqualFold(strings.TrimSpace(region.Region), strings.TrimSpace(space.InstrumentSnapshotRegion)) {
-		snapshot = 1
-	}
+	invoke := 1
 	maxPerNS := limits.ForRegion(region.Region).MaxFunctionsPerNamespace
 	if maxPerNS < 1 {
 		maxPerNS = DefaultSCFMaxFunctionsPerNamespace
 	}
-	return PlanSCFNamespaceShards(namespace, region.FunctionCount, invoke, snapshot, maxPerNS)
+	return PlanSCFNamespaceShards(namespace, region.FunctionCount, invoke, maxPerNS)
 }
 
 // SpaceRegionNamespaceShards returns the namespace slices the publisher will
@@ -538,7 +517,7 @@ func SpaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, 
 	if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
 		return nil
 	}
-	return spaceRegionNamespaceShards(space, region, limits, true)
+	return spaceRegionNamespaceShards(space, region, limits)
 }
 
 func (l TencentSCFLimits) validate(path string) error {
@@ -650,22 +629,16 @@ type SCFFetcherSpace struct {
 	// TimerFunctionCount is the total Timer fleet size for this Space. stockcn
 	// must set it explicitly to a positive value; other Spaces may use the
 	// built-in default when all enabled regional function_count values are zero.
-	TimerFunctionCount               int    `toml:"timer_function_count"`
-	MeasuredSafeGroupSize            int    `toml:"measured_safe_group_size"`
-	InstrumentSnapshotRegion         string `toml:"instrument_snapshot_region"`
-	InstrumentSnapshotCloudAccountID string `toml:"instrument_snapshot_cloud_account_id"`
-	InstrumentSnapshotFunctionPrefix string `toml:"instrument_snapshot_function_prefix"`
-	InstrumentSnapshotTimerCron      string `toml:"instrument_snapshot_timer_cron"`
-	InstrumentSnapshotTimeoutSeconds int    `toml:"instrument_snapshot_timeout_seconds"`
-	InstrumentSnapshotMemorySize     int    `toml:"instrument_snapshot_memory_size"`
-	StaggerStartSecond               int    `toml:"stagger_start_second"`
-	StaggerWindowSeconds             int    `toml:"stagger_window_seconds"`
-	StaggerMaxStartsPerSecond        int    `toml:"stagger_max_starts_per_second"`
-	StorageGatewayNodeID             string `toml:"storage_gateway_node_id"`
-	StorageGatewayHost               string `toml:"storage_gateway_host"`
-	StorageRPCGatewayTarget          string `toml:"-"`
-	StoragePrivateGatewayHost        string `toml:"storage_private_gateway_host"`
-	StoragePrivateRPCGatewayTarget   string `toml:"-"`
+	TimerFunctionCount             int    `toml:"timer_function_count"`
+	MeasuredSafeGroupSize          int    `toml:"measured_safe_group_size"`
+	StaggerStartSecond             int    `toml:"stagger_start_second"`
+	StaggerWindowSeconds           int    `toml:"stagger_window_seconds"`
+	StaggerMaxStartsPerSecond      int    `toml:"stagger_max_starts_per_second"`
+	StorageGatewayNodeID           string `toml:"storage_gateway_node_id"`
+	StorageGatewayHost             string `toml:"storage_gateway_host"`
+	StorageRPCGatewayTarget        string `toml:"-"`
+	StoragePrivateGatewayHost      string `toml:"storage_private_gateway_host"`
+	StoragePrivateRPCGatewayTarget string `toml:"-"`
 	// StorageAccessTargets overrides the central Storage gateway per SCF
 	// region. Values are regional stateless Access endpoints, while the
 	// central gateway remains the fallback for regions without an override.
@@ -676,22 +649,22 @@ type SCFFetcherSpace struct {
 	StorageAccessTargetNodes map[string]string `toml:"storage_access_target_nodes"`
 	MemorySize               int               `toml:"memory_size"`
 	TimeoutSeconds           int               `toml:"timeout_seconds"`
-	// InstrumentInvokeTimeoutSeconds is used by Invoke nodes that refresh a
-	// complete instrument snapshot. Timer nodes retain TimeoutSeconds.
-	InstrumentInvokeTimeoutSeconds int                `toml:"instrument_invoke_timeout_seconds"`
-	RealtimeBatchSize              int                `toml:"realtime_batch_size"`
-	RealtimeBarLimit               int                `toml:"realtime_bar_limit"`
-	CatchupBatchSize               int                `toml:"catchup_batch_size"`
-	CatchupBarLimit                int                `toml:"catchup_bar_limit"`
-	MaxInflightRequests            int                `toml:"max_inflight_requests"`
-	RequestTimeoutMS               int                `toml:"request_timeout_ms"`
-	HTTPMaxAttempts                int                `toml:"http_max_attempts"`
-	StorageMaxAttempts             int                `toml:"storage_max_attempts"`
-	StorageTimeoutMS               int                `toml:"storage_timeout_ms"`
-	MaxRetryAttempts               int                `toml:"max_retry_attempts"`
-	RetryDelays                    []string           `toml:"retry_delays"`
-	StaggerEnabled                 bool               `toml:"stagger_enabled"`
-	Regions                        []SCFFetcherRegion `toml:"regions"`
+	// InvokeTimeoutSeconds is used by deployment canary Invoke nodes. Timer
+	// nodes retain TimeoutSeconds.
+	InvokeTimeoutSeconds int                `toml:"invoke_timeout_seconds"`
+	RealtimeBatchSize    int                `toml:"realtime_batch_size"`
+	RealtimeBarLimit     int                `toml:"realtime_bar_limit"`
+	CatchupBatchSize     int                `toml:"catchup_batch_size"`
+	CatchupBarLimit      int                `toml:"catchup_bar_limit"`
+	MaxInflightRequests  int                `toml:"max_inflight_requests"`
+	RequestTimeoutMS     int                `toml:"request_timeout_ms"`
+	HTTPMaxAttempts      int                `toml:"http_max_attempts"`
+	StorageMaxAttempts   int                `toml:"storage_max_attempts"`
+	StorageTimeoutMS     int                `toml:"storage_timeout_ms"`
+	MaxRetryAttempts     int                `toml:"max_retry_attempts"`
+	RetryDelays          []string           `toml:"retry_delays"`
+	StaggerEnabled       bool               `toml:"stagger_enabled"`
+	Regions              []SCFFetcherRegion `toml:"regions"`
 }
 
 // StorageAccessTarget returns the normalized regional Access target for one
@@ -1562,11 +1535,10 @@ func validateSCFSharedNamespaceAutoAllocation(cfg *SCFFetcher) error {
 }
 
 // ValidateSCFCapacities accounts for every function the manifest publisher
-// creates for each Space/region/namespace: Timer functions, one Invoke canary
-// per active region and the optional stock Instrument snapshot Timer. A Space
-// may occupy multiple namespaces in the same region when one namespace's
-// function quota is full. Tencent's function quota applies to that aggregate,
-// not only to timer_function_count.
+// creates for each Space/region/namespace: Timer functions and one Invoke
+// canary per active region. A Space may occupy multiple namespaces in the same
+// region when one namespace's function quota is full. Tencent's function quota
+// applies to that aggregate, not only to timer_function_count.
 func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
 	if cfg == nil {
 		return nil
@@ -1591,25 +1563,13 @@ func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
 		functions[regionNamespace{region: region, namespace: namespace}] += count
 	}
 	for _, space := range cfg.Spaces {
-		snapshotRegion := strings.ToLower(strings.TrimSpace(space.InstrumentSnapshotRegion))
-		snapshotCounted := false
 		for _, region := range space.Regions {
 			if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
 				continue
 			}
-			for _, shard := range spaceRegionNamespaceShards(space, region, limits, true) {
+			for _, shard := range spaceRegionNamespaceShards(space, region, limits) {
 				add(region.Region, shard.Namespace, shard.Functions())
-				if shard.Snapshots > 0 {
-					snapshotCounted = true
-				}
 			}
-		}
-		if snapshotRegion != "" && !snapshotCounted && !space.IsRegionBlacklisted(snapshotRegion) {
-			namespace := strings.ToLower(strings.TrimSpace(space.Namespace))
-			if namespace == "" {
-				namespace = ExpectedSCFNamespace(space.SpaceID)
-			}
-			add(snapshotRegion, namespace, 1)
 		}
 	}
 	for region, regionNamespaces := range namespaces {
@@ -1800,9 +1760,6 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 		if cfg.MeasuredSafeGroupSize <= 0 {
 			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be a positive value for stockcn", path)
 		}
-		if err := normalizeStockCNInstrumentSnapshotConfig(cfg, path); err != nil {
-			return err
-		}
 		if cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
 			cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond
 			cfg.StaggerWindowSeconds = DefaultStockCNStaggerWindowSeconds
@@ -1821,25 +1778,23 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 		if startsPerSecond > cfg.StaggerMaxStartsPerSecond {
 			return fmt.Errorf("config_invalid: %s timer_function_count %d requires up to %d starts per second, above stagger_max_starts_per_second %d", path, cfg.TimerFunctionCount, startsPerSecond, cfg.StaggerMaxStartsPerSecond)
 		}
-		if cfg.InstrumentInvokeTimeoutSeconds == 0 {
-			cfg.InstrumentInvokeTimeoutSeconds = DefaultStockCNInstrumentInvokeTimeoutSeconds
+		if cfg.InvokeTimeoutSeconds == 0 {
+			cfg.InvokeTimeoutSeconds = DefaultStockCNInvokeTimeoutSeconds
 		}
-		if cfg.InstrumentInvokeTimeoutSeconds < DefaultStockCNInstrumentInvokeTimeoutSeconds || cfg.InstrumentInvokeTimeoutSeconds > 900 {
-			return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds must be between %d and 900", path, DefaultStockCNInstrumentInvokeTimeoutSeconds)
+		if cfg.InvokeTimeoutSeconds < DefaultStockCNInvokeTimeoutSeconds || cfg.InvokeTimeoutSeconds > 900 {
+			return fmt.Errorf("config_invalid: %s.invoke_timeout_seconds must be between %d and 900", path, DefaultStockCNInvokeTimeoutSeconds)
 		}
 	} else if cfg.MeasuredSafeGroupSize != 0 {
 		return fmt.Errorf("config_invalid: %s.measured_safe_group_size is only valid for stockcn", path)
 	} else if strings.EqualFold(cfg.SpaceID, "crypto") {
-		if cfg.InstrumentInvokeTimeoutSeconds == 0 {
-			cfg.InstrumentInvokeTimeoutSeconds = DefaultCryptoInstrumentInvokeTimeoutSeconds
+		if cfg.InvokeTimeoutSeconds == 0 {
+			cfg.InvokeTimeoutSeconds = DefaultCryptoInvokeTimeoutSeconds
 		}
-		if cfg.InstrumentInvokeTimeoutSeconds < DefaultCryptoInstrumentInvokeTimeoutSeconds || cfg.InstrumentInvokeTimeoutSeconds > 900 {
-			return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds must be between %d and 900", path, DefaultCryptoInstrumentInvokeTimeoutSeconds)
+		if cfg.InvokeTimeoutSeconds < DefaultCryptoInvokeTimeoutSeconds || cfg.InvokeTimeoutSeconds > 900 {
+			return fmt.Errorf("config_invalid: %s.invoke_timeout_seconds must be between %d and 900", path, DefaultCryptoInvokeTimeoutSeconds)
 		}
-	} else if cfg.InstrumentInvokeTimeoutSeconds != 0 {
-		return fmt.Errorf("config_invalid: %s.instrument_invoke_timeout_seconds is only valid for stockcn or crypto", path)
-	} else if cfg.InstrumentSnapshotRegion != "" || cfg.InstrumentSnapshotCloudAccountID != "" || cfg.InstrumentSnapshotFunctionPrefix != "" || cfg.InstrumentSnapshotTimerCron != "" || cfg.InstrumentSnapshotTimeoutSeconds != 0 || cfg.InstrumentSnapshotMemorySize != 0 {
-		return fmt.Errorf("config_invalid: %s instrument snapshot settings are only valid for stockcn", path)
+	} else if cfg.InvokeTimeoutSeconds != 0 {
+		return fmt.Errorf("config_invalid: %s.invoke_timeout_seconds is only valid for stockcn or crypto", path)
 	} else if cfg.StaggerStartSecond != 0 || cfg.StaggerWindowSeconds != 0 || cfg.StaggerMaxStartsPerSecond != 0 {
 		return fmt.Errorf("config_invalid: %s stagger settings are only valid for stockcn", path)
 	}
@@ -1902,12 +1857,7 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	for i := range cfg.Regions {
 		region := strings.TrimSpace(cfg.Regions[i].Region)
 		regionLimit := limits.ForRegion(region)
-		reserved := 0
-		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") &&
-			strings.EqualFold(region, strings.TrimSpace(cfg.InstrumentSnapshotRegion)) {
-			reserved = 1
-		}
-		maxTimers := regionLimit.TimerCapacity(reserved)
+		maxTimers := regionLimit.TimerCapacity(0)
 		if maxTimers < 1 && regionLimit.MaxFunctionsPerNamespace > 0 {
 			maxTimers = regionLimit.MaxFunctionsPerNamespace
 		}
@@ -1938,11 +1888,7 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	if enabledRegions == 0 {
 		return fmt.Errorf("config_invalid: %s.regions must contain at least one enabled region", path)
 	}
-	reserved := map[string]int{}
-	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") && strings.TrimSpace(cfg.InstrumentSnapshotRegion) != "" {
-		reserved[strings.ToLower(strings.TrimSpace(cfg.InstrumentSnapshotRegion))] = 1
-	}
-	if err := resolveSCFTimerFunctionCountsWithRegionalCapacities(cfg, path, limits, reserved); err != nil {
+	if err := resolveSCFTimerFunctionCountsWithRegionalCapacities(cfg, path, limits, nil); err != nil {
 		return err
 	}
 	if cfg.CLSCloudAccountID == "" {
@@ -1966,62 +1912,6 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	return nil
 }
 
-func normalizeStockCNInstrumentSnapshotConfig(cfg *SCFFetcherSpace, path string) error {
-	if strings.TrimSpace(cfg.InstrumentSnapshotRegion) == "" {
-		for _, region := range cfg.Regions {
-			if region.Enabled && !cfg.IsRegionBlacklisted(region.Region) {
-				cfg.InstrumentSnapshotRegion = strings.TrimSpace(region.Region)
-				break
-			}
-		}
-	}
-	if cfg.InstrumentSnapshotRegion == "" {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_region must select an enabled region", path)
-	}
-	var selected *SCFFetcherRegion
-	for index := range cfg.Regions {
-		region := &cfg.Regions[index]
-		if strings.EqualFold(strings.TrimSpace(region.Region), cfg.InstrumentSnapshotRegion) {
-			selected = region
-			break
-		}
-	}
-	if selected == nil || !selected.Enabled || cfg.IsRegionBlacklisted(selected.Region) {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_region %q must select an enabled region", path, cfg.InstrumentSnapshotRegion)
-	}
-	if strings.TrimSpace(cfg.InstrumentSnapshotCloudAccountID) == "" {
-		cfg.InstrumentSnapshotCloudAccountID = strings.TrimSpace(selected.CloudAccountID)
-	}
-	if cfg.InstrumentSnapshotCloudAccountID == "" || cfg.InstrumentSnapshotCloudAccountID != strings.TrimSpace(selected.CloudAccountID) {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_cloud_account_id must match scf_fetcher.cloud_account.account_id", path)
-	}
-	if strings.TrimSpace(cfg.InstrumentSnapshotFunctionPrefix) == "" {
-		cfg.InstrumentSnapshotFunctionPrefix = strings.TrimSuffix(cfg.FunctionPrefix, "-") + "-instrument"
-	}
-	if !includesSpaceIdentity(cfg.InstrumentSnapshotFunctionPrefix, cfg.SpaceID) || strings.EqualFold(cfg.InstrumentSnapshotFunctionPrefix, cfg.FunctionPrefix) {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_function_prefix must be distinct and include space_id", path)
-	}
-	if strings.TrimSpace(cfg.InstrumentSnapshotTimerCron) == "" {
-		cfg.InstrumentSnapshotTimerCron = DefaultStockCNInstrumentSnapshotTimerCron
-	}
-	if cfg.InstrumentSnapshotTimerCron != DefaultStockCNInstrumentSnapshotTimerCron {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_timer_cron must run once daily as %q", path, DefaultStockCNInstrumentSnapshotTimerCron)
-	}
-	if cfg.InstrumentSnapshotTimeoutSeconds == 0 {
-		cfg.InstrumentSnapshotTimeoutSeconds = DefaultStockCNInstrumentSnapshotTimeoutSeconds
-	}
-	if cfg.InstrumentSnapshotTimeoutSeconds < DefaultStockCNInstrumentSnapshotTimeoutSeconds || cfg.InstrumentSnapshotTimeoutSeconds > 900 {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_timeout_seconds must be between %d and 900", path, DefaultStockCNInstrumentSnapshotTimeoutSeconds)
-	}
-	if cfg.InstrumentSnapshotMemorySize == 0 {
-		cfg.InstrumentSnapshotMemorySize = DefaultStockCNInstrumentSnapshotMemorySize
-	}
-	if cfg.InstrumentSnapshotMemorySize < 128 || cfg.InstrumentSnapshotMemorySize > 1024 || cfg.InstrumentSnapshotMemorySize%64 != 0 {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_memory_size must be a multiple of 64 between 128 and 1024", path)
-	}
-	return nil
-}
-
 func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
 	return resolveSCFTimerFunctionCountsWithLimit(cfg, path, DefaultSCFMaxFunctionsPerNamespace)
 }
@@ -2034,9 +1924,7 @@ func resolveSCFTimerFunctionCountsWithLimit(cfg *SCFFetcherSpace, path string, m
 }
 
 // resolveSCFTimerFunctionCountsWithCapacities allocates Timer functions while
-// reserving the publisher-created auxiliary functions for each region. The
-// reserved map currently contains the stock Instrument snapshot (one extra
-// Timer); every active region also reserves one Invoke in this function.
+// reserving the publisher-created Invoke canary for each region.
 func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path string, maxFunctionsPerNamespace int, reservedByRegion map[string]int) error {
 	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
 		return maxFunctionsPerNamespace - 1 - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
@@ -2158,12 +2046,8 @@ func RebalanceSCFTimerFunctionCounts(cfg *SCFFetcherSpace, storageRegion string,
 		return fmt.Errorf("config_invalid: scf space is required")
 	}
 	limits.normalize()
-	reserved := map[string]int{}
-	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "stockcn") && strings.TrimSpace(cfg.InstrumentSnapshotRegion) != "" {
-		reserved[strings.ToLower(strings.TrimSpace(cfg.InstrumentSnapshotRegion))] = 1
-	}
 	capacity := func(region string) int {
-		return limits.ForRegion(region).TimerCapacity(reserved[strings.ToLower(strings.TrimSpace(region))])
+		return limits.ForRegion(region).TimerCapacity(0)
 	}
 	autoRegions := make([]int, 0)
 	explicitTotal := 0

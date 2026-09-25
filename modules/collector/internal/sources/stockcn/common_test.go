@@ -19,7 +19,7 @@ func TestCanonicalSubjectAndProviderSymbolCodec(t *testing.T) {
 		{code: "920000", subjectID: "920000.XBSE", providerSymbol: "bj920000"},
 	}
 	for _, tt := range tests {
-		subjectID, err := CanonicalSubjectID(tt.code)
+		subjectID, err := SubjectID(tt.code)
 		require.NoError(t, err)
 		require.Equal(t, tt.subjectID, subjectID)
 

@@ -103,19 +103,14 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 			out.Subjects = append(out.Subjects, item)
 		}
 	}
-	for _, item := range seed.SubjectSymbols {
+	for _, item := range seed.Tags {
 		if keep(item.SpaceID) {
-			out.SubjectSymbols = append(out.SubjectSymbols, item)
+			out.Tags = append(out.Tags, item)
 		}
 	}
 	for _, item := range seed.Datasets {
 		if keep(item.SpaceID) {
 			out.Datasets = append(out.Datasets, item)
-		}
-	}
-	for _, item := range seed.DatasetSubjects {
-		if keep(item.SpaceID) {
-			out.DatasetSubjects = append(out.DatasetSubjects, item)
 		}
 	}
 	for _, item := range seed.FieldGroups {

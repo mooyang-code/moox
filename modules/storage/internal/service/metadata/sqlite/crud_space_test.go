@@ -44,14 +44,14 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		INSERT INTO t_storage_devices(c_device_id,c_name,c_engine) VALUES ('device','Device','duckdb');
 		INSERT INTO t_data_sources(c_space_id,c_data_source_id,c_name,c_kind) VALUES ('target','source','Source','internal');
 		INSERT INTO t_subjects(c_space_id,c_subject_id,c_subject_type,c_name) VALUES ('target','subject','fund','Subject');
-		INSERT INTO t_subject_symbols(c_space_id,c_subject_id,c_data_source_id,c_external_symbol)
-			VALUES ('target','subject','source','TARGET');
+		INSERT INTO t_tags(c_space_id,c_tag_id,c_tag_name,c_mode) VALUES ('target','tag','Tag','manual');
+		INSERT INTO t_subject_tags(c_space_id,c_tag_id,c_subject_id) VALUES ('target','tag','subject');
 		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name) VALUES ('target','root','Root');
 		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name,c_parent_group_id) VALUES ('target','child','Child','root');
 		INSERT INTO t_fields(c_space_id,c_field_id,c_group_id,c_name,c_value_type) VALUES ('target','value','child','Value','double');
 		INSERT INTO t_datasets(c_space_id,c_dataset_id,c_data_source_id,c_data_node_id,c_name,c_data_kind,c_keep_duration)
 			VALUES ('target','dataset','source','node','Dataset','time_series','24h');
-		INSERT INTO t_dataset_subjects(c_space_id,c_dataset_id,c_subject_id) VALUES ('target','dataset','subject');
+		UPDATE t_datasets SET c_subject_tags_json = '["tag"]' WHERE c_space_id = 'target' AND c_dataset_id = 'dataset';
 		INSERT INTO t_dataset_columns(c_space_id,c_dataset_id,c_column_name,c_origin_type,c_origin_id,c_value_type)
 			VALUES ('target','dataset','value','field','value','double');
 		INSERT INTO t_views(c_space_id,c_view_id,c_name,c_dataset_id) VALUES ('target','view','View','dataset');
@@ -72,8 +72,8 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, table := range []string{
-		"t_spaces", "t_data_sources", "t_subjects", "t_subject_symbols",
-		"t_field_groups", "t_fields", "t_datasets", "t_dataset_subjects",
+		"t_spaces", "t_data_sources", "t_subjects", "t_tags", "t_subject_tags",
+		"t_field_groups", "t_fields", "t_datasets",
 		"t_dataset_columns", "t_views", "t_view_columns", "t_view_index_builds",
 		"t_factors", "t_archive_files",
 	} {

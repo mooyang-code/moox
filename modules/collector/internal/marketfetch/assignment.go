@@ -157,7 +157,7 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 		hashParts := make([]string, 0, len(subjects))
 		for _, subject := range subjects {
 			external := strings.TrimSpace(group.ExternalSymbols[subject])
-			resolved, symbolErr := stockProviderSymbol(subject, external)
+			resolved, symbolErr := stockProviderSymbol(subject)
 			if symbolErr != nil {
 				return nil, symbolErr
 			}
@@ -598,7 +598,7 @@ func assignmentFromChunk(group TaskGroup, subjects []string, node scfinvoker.Nod
 	for _, subject := range subjects {
 		external := strings.TrimSpace(group.ExternalSymbols[subject])
 		if stockGroup {
-			resolved, symbolErr := stockProviderSymbol(subject, external)
+			resolved, symbolErr := stockProviderSymbol(subject)
 			if symbolErr != nil {
 				return NodeAssignment{}, symbolErr
 			}
@@ -845,7 +845,7 @@ func assignmentCron(group TaskGroup, groupID int) string {
 func eligibleTimerNodes(nodes []scfinvoker.Node) []scfinvoker.Node {
 	timerNodes := make([]scfinvoker.Node, 0, len(nodes))
 	for _, node := range nodes {
-		if strings.EqualFold(strings.TrimSpace(node.NodeType), "scf-event") && strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") && !scfinvoker.IsInstrumentSnapshotNode(node) {
+		if strings.EqualFold(strings.TrimSpace(node.NodeType), "scf-event") && strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") {
 			timerNodes = append(timerNodes, node)
 		}
 	}

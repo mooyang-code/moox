@@ -181,7 +181,7 @@ func TestExecuteCreateTimerMarketFetcherKeepsFifteenSecondTimeout(t *testing.T) 
 	assert.Equal(t, int64(15), fake.created[0].Timeout)
 }
 
-func TestExecuteCreateInstrumentSnapshotTimerPreservesLongTimeout(t *testing.T) {
+func TestExecuteCreateLegacyInstrumentModeUsesTimerTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
 	require.NoError(t, catalog.UpsertPackage(context.Background(), store.FunctionPackage{
@@ -191,7 +191,7 @@ func TestExecuteCreateInstrumentSnapshotTimerPreservesLongTimeout(t *testing.T) 
 	}))
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{err: errors.New("ResourceNotFound.FunctionName")},
-		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 300, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "stockcn"}}},
+		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 15, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "stockcn"}}},
 	}}
 	svc := &Service{
 		catalog:            catalog,
@@ -202,12 +202,12 @@ func TestExecuteCreateInstrumentSnapshotTimerPreservesLongTimeout(t *testing.T) 
 	require.NoError(t, err)
 	_, err = svc.executeCreateNodeItem(context.Background(), "stockcn", &pb.NodeCreateItem{
 		CloudAccountId: "account-a", Region: "ap-chengdu", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
-		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "300"},
+		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "15"},
 		Environment: map[string]string{"MOOX_SPACE_ID": "stockcn"}, Metadata: metadata,
 	}, 0)
 	require.NoError(t, err)
 	require.Len(t, fake.created, 1)
-	assert.Equal(t, int64(300), fake.created[0].Timeout)
+	assert.Equal(t, int64(15), fake.created[0].Timeout)
 }
 
 func TestExecuteCreateNodeItemRejectsEnvironmentOverLimitBeforeCreate(t *testing.T) {

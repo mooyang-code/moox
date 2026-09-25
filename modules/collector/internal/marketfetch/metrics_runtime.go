@@ -69,7 +69,7 @@ func (m *InvocationMetrics) ReportNow(ctx context.Context) error {
 }
 
 // ReportInvocationMetrics is used by SCF actions that build an
-// InstrumentPipeline directly rather than going through Handler. Reporting is
+// the collection pipeline directly rather than going through Handler. Reporting is
 // best effort and leaves a small response reserve for the cloud runtime.
 func ReportInvocationMetrics(parent context.Context, metrics *InvocationMetrics) {
 	if metrics == nil || metrics.Reporter == nil {

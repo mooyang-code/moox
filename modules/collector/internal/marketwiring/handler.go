@@ -12,7 +12,6 @@ import (
 
 func NewHandler() *marketfetch.Handler {
 	h := marketfetch.NewHandler()
-	h.NewInstrumentPipeline = NewMarketInstrumentPipeline
 	h.NewMarketKlinePipeline = NewMarketKlinePipeline
 	h.NewCryptoKlinePipeline = NewCryptoKlinePipeline
 	h.NewStockKlinePipeline = NewStockKlinePipeline
@@ -21,22 +20,15 @@ func NewHandler() *marketfetch.Handler {
 	return h
 }
 
-func ResolveSymbol(provider, marketID, marketType, subjectID, configured string) (string, error) {
+func ResolveSymbol(provider, marketID, marketType, subjectID string) (string, error) {
 	if strings.EqualFold(strings.TrimSpace(provider), "binance") && strings.EqualFold(strings.TrimSpace(marketID), "crypto") &&
 		(strings.EqualFold(strings.TrimSpace(marketType), "spot") || strings.EqualFold(strings.TrimSpace(marketType), "swap")) {
-		return binance.ProviderSymbol(subjectID, configured)
+		return binance.ToSymbol(subjectID)
 	}
-	return marketfetch.DefaultProviderSymbol(marketID, marketType, subjectID, configured)
-}
-
-// CompactSymbol deliberately limits omission to the codec already deployed in
-// crypto Timer runtimes. Other markets retain their explicit symbol mapping.
-func CompactSymbol(provider, marketID, marketType, subjectID, configured string) (string, error) {
-	if !strings.EqualFold(strings.TrimSpace(provider), "binance") || !strings.EqualFold(strings.TrimSpace(marketID), "crypto") ||
-		(!strings.EqualFold(strings.TrimSpace(marketType), "spot") && !strings.EqualFold(strings.TrimSpace(marketType), "swap")) {
-		return "", fmt.Errorf("source requires explicit symbol mapping")
+	if strings.EqualFold(strings.TrimSpace(marketID), "crypto") {
+		return "", fmt.Errorf("provider %q does not support crypto market symbol conversion", provider)
 	}
-	return binance.ProviderSymbol(subjectID, configured)
+	return marketfetch.DefaultProviderSymbol(marketID, marketType, subjectID)
 }
 
 func DefaultSourceID(provider, instrumentType string) string {

@@ -19,11 +19,6 @@ const datasetSubjectPageSize = 1000
 type BatchStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
-	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
-	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
-	ListSubjectSymbols(context.Context, string, string) ([]*storagepb.SubjectSymbol, error)
-	StageDatasetSubjectSet(context.Context, string, string, []*storagepb.DatasetSubject) error
-	ActivateDatasetSubjectSet(context.Context, string, string) error
 }
 
 // ResampleStorage is the narrow exact-read/write surface used by the local
@@ -93,6 +88,11 @@ func collectorStorageGatewayNodeID() string {
 	}
 	return strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 }
+
+// StorageGatewayNodeID returns the gateway node used by collector control-plane
+// calls. Subject synchronization is a separate binary, but it must use the
+// same routing identity as the regular collector.
+func StorageGatewayNodeID() string { return collectorStorageGatewayNodeID() }
 
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
 	return w.UpsertFieldsWithSource(ctx, rows, "")
@@ -244,102 +244,6 @@ func (w *storageWriter) WaitViewSyncPoint(ctx context.Context, req *storagepb.Wa
 	return w.access.WaitViewSyncPoint(ctx, copyReq)
 }
 
-func (w *storageWriter) RegisterDataSubject(ctx context.Context, req *storagepb.RegisterDataSubjectReq) error {
-	if req == nil {
-		return fmt.Errorf("register data subject: request is required")
-	}
-	copyReq := proto.Clone(req).(*storagepb.RegisterDataSubjectReq)
-	copyReq.AuthInfo = w.authInfo
-	return retryStorage(ctx, func() error {
-		response, err := w.metadata.RegisterDataSubject(ctx, copyReq)
-		if err != nil {
-			return fmt.Errorf("register data subject: %w", err)
-		}
-		return ensureStorageOK("register data subject", response.GetRetInfo())
-	})
-}
-
-func (w *storageWriter) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]*storagepb.DatasetSubject, error) {
-	var all []*storagepb.DatasetSubject
-	for page := uint32(1); ; page++ {
-		var response *storagepb.ListDatasetSubjectsRsp
-		err := retryStorage(ctx, func() error {
-			var err error
-			response, err = w.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{AuthInfo: w.authInfo, SpaceId: spaceID, DatasetId: datasetID, Page: &storagepb.Page{Page: page, Size: datasetSubjectPageSize}})
-			if err != nil {
-				return fmt.Errorf("list dataset subjects: %w", err)
-			}
-			return ensureStorageOK("list dataset subjects", response.GetRetInfo())
-		})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, response.GetDatasetSubjects()...)
-		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
-			return all, nil
-		}
-	}
-}
-
-func (w *storageWriter) ListSubjectSymbols(ctx context.Context, spaceID, dataSourceID string) ([]*storagepb.SubjectSymbol, error) {
-	var all []*storagepb.SubjectSymbol
-	for page := uint32(1); ; page++ {
-		var response *storagepb.ListSubjectSymbolsRsp
-		err := retryStorage(ctx, func() error {
-			var err error
-			response, err = w.metadata.ListSubjectSymbols(ctx, &storagepb.ListSubjectSymbolsReq{
-				AuthInfo: w.authInfo, SpaceId: spaceID, DataSourceId: dataSourceID,
-				Page: &storagepb.Page{Page: page, Size: datasetSubjectPageSize},
-			})
-			if err != nil {
-				return fmt.Errorf("list subject symbols: %w", err)
-			}
-			return ensureStorageOK("list subject symbols", response.GetRetInfo())
-		})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, response.GetSubjectSymbols()...)
-		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
-			return all, nil
-		}
-	}
-}
-
-func (w *storageWriter) StageDatasetSubjectSet(ctx context.Context, spaceID, setID string, bindings []*storagepb.DatasetSubject) error {
-	return retryStorage(ctx, func() error {
-		response, err := w.metadata.StageDatasetSubjectSet(ctx, &storagepb.StageDatasetSubjectSetReq{AuthInfo: w.authInfo, SpaceId: spaceID, SetId: setID, DatasetSubjects: bindings})
-		if err != nil {
-			return fmt.Errorf("stage dataset subject set: %w", err)
-		}
-		return ensureStorageOK("stage dataset subject set", response.GetRetInfo())
-	})
-}
-
-func (w *storageWriter) ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID string) error {
-	_, err := w.ActivateDatasetSubjectSetWithCount(ctx, spaceID, setID)
-	return err
-}
-
-// ActivateDatasetSubjectSetWithCount exposes the Storage response count to the
-// common InstrumentPipeline. A zero count means a sharded snapshot is still
-// waiting for another shard; it is not an activation failure.
-func (w *storageWriter) ActivateDatasetSubjectSetWithCount(ctx context.Context, spaceID, setID string) (int, error) {
-	var count uint32
-	err := retryStorage(ctx, func() error {
-		response, err := w.metadata.ActivateDatasetSubjectSet(ctx, &storagepb.ActivateDatasetSubjectSetReq{AuthInfo: w.authInfo, SpaceId: spaceID, SetId: setID})
-		if err != nil {
-			return fmt.Errorf("activate dataset subject set: %w", err)
-		}
-		if err := ensureStorageOK("activate dataset subject set", response.GetRetInfo()); err != nil {
-			return err
-		}
-		count = response.GetCount()
-		return nil
-	})
-	return int(count), err
-}
-
 type storageResponseError struct{ message string }
 
 func (e *storageResponseError) Error() string { return e.message }
@@ -362,6 +266,17 @@ func storageAuthInfo(binding StorageBinding) *storagepb.AuthInfo {
 	return &storagepb.AuthInfo{AppId: binding.AuthInfo.AppID, AppKey: appKey, Operator: binding.AuthInfo.Operator, RequestId: binding.AuthInfo.RequestID}
 }
 
+// StorageAuthInfo returns the metadata caller identity for a configured market
+// binding. The subject synchronizer uses the spot binding as its control-plane
+// identity for both crypto and stock metadata calls.
+func ResolveStorageAuthInfo(instType string) (*storagepb.AuthInfo, error) {
+	binding, err := ResolveStorageBinding(instType)
+	if err != nil {
+		return nil, err
+	}
+	return storageAuthInfo(binding), nil
+}
+
 func normalizeStorageTarget(raw, defaultPort string) string {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {
@@ -378,4 +293,10 @@ func normalizeStorageTarget(raw, defaultPort string) string {
 		return "ip://" + raw
 	}
 	return raw
+}
+
+// NormalizeStorageTarget normalizes a gateway target for standalone collector
+// binaries that share the collector's Storage client configuration.
+func NormalizeStorageTarget(raw, defaultPort string) string {
+	return normalizeStorageTarget(raw, defaultPort)
 }

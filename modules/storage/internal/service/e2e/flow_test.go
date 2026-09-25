@@ -355,7 +355,7 @@ func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.S
 	}
 	empty := ""
 	defaultRows := query(&pb.TimeSeriesSelector{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty})
-	if len(defaultRows) != 1 || defaultRows[0].GetKey().GetSeriesTag() != "default" {
+	if len(defaultRows) != 1 || defaultRows[0].GetKey().GetSeriesTag() != "" {
 		t.Fatalf("explicit empty selector rows=%v", defaultRows)
 	}
 	okx := "venue:okx"

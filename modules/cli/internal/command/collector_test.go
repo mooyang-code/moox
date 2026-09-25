@@ -439,17 +439,13 @@ func TestResolveCollectorProbeExpectedCountUsesStockCNFleetConfig(t *testing.T) 
 func TestSelectCollectorProbeNodesKeepsCryptoSemanticsAndStockTimersOnly(t *testing.T) {
 	nodes := []adminclient.CloudNode{
 		{NodeID: "timer-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true}},
-		{NodeID: "instrument-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true, "function_mode": "instrument_snapshot"}},
 		{NodeID: "invoke-a", PackageID: "pkg", TriggerType: "invoke", Metadata: map[string]any{"deployment_ready": true}},
 	}
 
-	assert.Len(t, selectCollectorProbeNodes(nodes, false), 3)
+	assert.Len(t, selectCollectorProbeNodes(nodes, false), 2)
 	stockNodes := selectCollectorProbeNodes(nodes, true)
 	require.Len(t, stockNodes, 1)
 	assert.Equal(t, "timer-a", stockNodes[0].NodeID)
-	instrumentNodes := selectCollectorInstrumentSnapshotProbeNodes(nodes)
-	require.Len(t, instrumentNodes, 1)
-	assert.Equal(t, "instrument-a", instrumentNodes[0].NodeID)
 }
 
 func TestCollectorEgressProbeReportKeepsOnlyDiagnosticCounts(t *testing.T) {
@@ -513,9 +509,7 @@ func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 		}
 		seen[task.TaskID] = task.Enabled
 	}
-	assert.Contains(t, seen, "builtin-stockcn-instrument-1d")
 	assert.Contains(t, seen, "builtin-stockcn-kline-1m")
-	assert.False(t, seen["builtin-stockcn-instrument-1d"])
 	assert.False(t, seen["builtin-stockcn-kline-1m"])
 }
 
@@ -1197,12 +1191,12 @@ func TestBuildCollectorCreateNodeItemStandardManifestFitsTimerAndInvokeBudgets(t
 	}
 }
 
-func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyForInvoke(t *testing.T) {
+func TestBuildCollectorCreateNodeItemUsesLongStockCNInvokeTimeoutOnlyForInvoke(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	fetcher := &setupconfig.SCFFetcherSpace{
 		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
-		InstrumentInvokeTimeoutSeconds: 60,
-		RealtimeBatchSize:              10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		InvokeTimeoutSeconds: 60,
+		RealtimeBatchSize:    10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
 		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
 	}
 	timer := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
@@ -1217,7 +1211,7 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyF
 	assert.Equal(t, "60", invoke.Config["timeout"])
 	assert.Equal(t, "60", invoke.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 
-	fetcher.InstrumentInvokeTimeoutSeconds = 90
+	fetcher.InvokeTimeoutSeconds = 90
 	configured := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
 	}, "moox-collector-stockcn_dev")
@@ -1225,7 +1219,7 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInstrumentInvokeTimeoutOnlyF
 	assert.Equal(t, "90", configured.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 }
 
-func TestBuildCollectorCreateNodeItemUsesLongCryptoInstrumentInvokeTimeout(t *testing.T) {
+func TestBuildCollectorCreateNodeItemUsesLongCryptoInvokeTimeout(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	fetcher := &setupconfig.SCFFetcherSpace{
 		SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
@@ -1241,30 +1235,6 @@ func TestBuildCollectorCreateNodeItemUsesLongCryptoInstrumentInvokeTimeout(t *te
 	assert.Equal(t, "60", item.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 }
 
-func TestBuildCollectorCreateNodeItemUsesIndependentInstrumentTimerMode(t *testing.T) {
-	setCollectorCLSTestCredentials(t)
-	fetcher := &setupconfig.SCFFetcherSpace{
-		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
-		InstrumentSnapshotTimeoutSeconds: 300,
-		RealtimeBatchSize:                10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
-	}
-
-	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
-		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-shanghai", TriggerType: "timer",
-		InstrumentSnapshotTimer: true, FetcherConfig: fetcher,
-	}, "moox-collector-stockcn_dev")
-
-	assert.Equal(t, "300", item.Config["timeout"])
-	assert.Equal(t, "256", item.Config["memory_size"])
-	assert.Equal(t, "1", item.Config["max_instance_concurrency"])
-	assert.Equal(t, "300", item.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
-	assert.Equal(t, "instrument_snapshot", item.Environment["MOOX_MARKET_FETCH_MODE"])
-	assert.Equal(t, 300, item.Metadata["timeout_seconds"])
-	assert.Equal(t, 256, item.Metadata["memory_size"])
-	assert.Equal(t, "instrument_snapshot", item.Metadata["function_mode"])
-}
-
 func TestBuildCollectorCreateNodeItemRejectsConcurrentSCFInstances(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
@@ -1272,55 +1242,6 @@ func TestBuildCollectorCreateNodeItemRejectsConcurrentSCFInstances(t *testing.T)
 		Config: []string{"max_instance_concurrency=2"},
 	}, "moox-collector-stockcn_dev")
 	require.ErrorContains(t, err, "max_instance_concurrency is fixed at 1")
-}
-
-func TestCollectorInstrumentCanaryEventUsesIndependentSnapshotAction(t *testing.T) {
-	event := collectorInstrumentCanaryEvent(collectorPublishOptions{StorageRPCGatewayTarget: "ip://storage:11003", SpaceID: "stockcn", Region: "ap-singapore"}, "node-1", "batch-1", 0, stockInstrumentCanaryShardCount, "2026-08-30T00:00:00Z")
-
-	assert.Equal(t, "instrument_snapshot", event["action"])
-	assert.Equal(t, "ip://storage:11003", event["storage_rpc_gateway_target"])
-	data, ok := event["data"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "instrument_snapshot", data["batch_kind"])
-	assert.Equal(t, "dataset_stockcn_instruments", data["dataset_id"])
-	assert.Equal(t, "node-1", data["node_id"])
-	items, ok := data["items"].([]map[string]any)
-	require.True(t, ok)
-	require.Len(t, items, 1)
-	assert.Equal(t, stockInstrumentCanaryShardCount, items[0]["snapshot_shard_count"])
-}
-
-func TestCollectorInstrumentCanaryHasBoundedTotalTimeout(t *testing.T) {
-	started := make(chan struct{}, 4)
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		started <- struct{}{}
-		select {
-		case <-r.Context().Done():
-		case <-release:
-		}
-	}))
-	defer func() {
-		close(release)
-		server.Close()
-	}()
-
-	client := adminclient.New(server.URL)
-	originalHTTPClient := &http.Client{Timeout: 10 * time.Second}
-	client.HTTPClient = originalHTTPClient
-	start := time.Now()
-	err := runCollectorInstrumentCanaryWithControlTimeout(
-		context.Background(), client,
-		collectorPublishOptions{SpaceID: "stockcn", Region: "ap-chengdu"},
-		"instrument-node", 50*time.Millisecond,
-	)
-
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Same(t, originalHTTPClient, client.HTTPClient)
-	require.Eventually(t, func() bool { return len(started) > 0 }, time.Second, 5*time.Millisecond, "instrument canary request did not reach control server")
-	assert.Equal(t, 1, len(started), "a timed-out full snapshot must not be retried")
-	assert.Less(t, time.Since(start), time.Second)
 }
 
 func TestCollectorTimerRestorePatchesOnlyPreviouslyEnabledNodes(t *testing.T) {
@@ -1364,17 +1285,6 @@ func TestCollectorTimerEnablePatchesKeepCryptoAssignmentCron(t *testing.T) {
 	assert.Equal(t, "0 4 * * * * *", patches[0].TimerCron)
 	assert.Equal(t, "0 * * * * * *", patches[1].TimerCron)
 	assert.True(t, patches[0].TimerEnabled)
-}
-
-func TestCollectorStockCNInstrumentTimerEnablePatchesUseDailyCron(t *testing.T) {
-	patches := collectorStockCNInstrumentTimerEnablePatches([]adminclient.CloudNode{
-		{NodeID: "instrument-0", Metadata: map[string]any{"function_mode": "instrument_snapshot"}},
-	}, "0 0 0 * * * *")
-
-	require.Len(t, patches, 1)
-	assert.Equal(t, "instrument-0", patches[0].NodeID)
-	assert.True(t, patches[0].TimerEnabled)
-	assert.Equal(t, "0 0 0 * * * *", patches[0].TimerCron)
 }
 
 func TestCollectorTimerDisablePatchesCoverEveryPublishedNode(t *testing.T) {

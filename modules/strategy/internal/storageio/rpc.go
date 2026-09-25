@@ -371,13 +371,6 @@ func (c *RPCClient) ListSubjects(ctx context.Context, spaceID, viewID string) ([
 			break
 		}
 	}
-	if len(result) == 0 {
-		// Collector may intentionally omit one DatasetSubject row per K-line
-		// symbol. In that mode the authoritative Subject catalog is used as the
-		// immutable universe instead of treating an empty binding list as a
-		// permanently unavailable market.
-		return c.listCatalogSubjects(ctx, spaceID, datasetID)
-	}
 	return canonicalizeMergedCatalogSubjects(datasetID, result), nil
 }
 
@@ -566,24 +559,7 @@ func (c *RPCClient) selectorsForDataset(ctx context.Context, spaceID, datasetID,
 		}
 	}
 	if len(selectors) == 0 {
-		subjects, fallbackErr := c.listCatalogSubjects(ctx, spaceID, datasetID)
-		if fallbackErr != nil {
-			return nil, fallbackErr
-		}
-		for _, subject := range subjects {
-			if !subject.Active || subject.SubjectID == "" {
-				continue
-			}
-			selector := &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject.SubjectID, Freq: frequency}
-			if subject.SeriesTag != "" {
-				seriesTag := subject.SeriesTag
-				selector.SeriesTag = &seriesTag
-			}
-			selectors = append(selectors, selector)
-		}
-	}
-	if len(selectors) == 0 {
-		return nil, fmt.Errorf("%w: view dataset %s has no active subjects or catalog entries", input.ErrNotReady, datasetID)
+		return nil, fmt.Errorf("%w: view dataset %s has no active dataset subjects", input.ErrNotReady, datasetID)
 	}
 	return canonicalizeMergedSelectors(datasetID, selectors), nil
 }
@@ -600,44 +576,6 @@ func (c *RPCClient) subjectSeriesTag(ctx context.Context, spaceID, subjectID str
 		return subjectSeriesTag(subject.GetAttributes()), nil
 	}
 	return "", nil
-}
-
-func (c *RPCClient) listCatalogSubjects(ctx context.Context, spaceID, datasetID string) ([]input.Subject, error) {
-	marketType := ""
-	if rsp, err := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.metadataAuth(), SpaceId: spaceID, DatasetId: datasetID}); err == nil && rsp != nil {
-		if retErr := retError(rsp.GetRetInfo()); retErr == nil && rsp.GetDataset() != nil {
-			marketType = strings.ToLower(strings.TrimSpace(rsp.GetDataset().GetAttributes()["market_type"]))
-		}
-	}
-	var result []input.Subject
-	for page := uint32(1); ; page++ {
-		rsp, err := c.Metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{AuthInfo: c.metadataAuth(), SpaceId: spaceID, SubjectType: "crypto_pair", Market: marketType, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
-		if err != nil {
-			return nil, err
-		}
-		if retErr := retError(rsp.GetRetInfo()); retErr != nil {
-			return nil, retErr
-		}
-		for _, subject := range rsp.GetSubjects() {
-			if subject == nil || subject.GetStatus() != "active" || subject.GetSubjectId() == "" {
-				continue
-			}
-			attrs := subject.GetAttributes()
-			subjectMarketType := strings.ToLower(strings.TrimSpace(firstNonEmpty(attrs["market_type"], subject.GetMarket())))
-			if marketType != "" && subjectMarketType != "" && subjectMarketType != marketType {
-				continue
-			}
-			result = append(result, input.Subject{SubjectID: subject.GetSubjectId(), InstrumentID: firstNonEmpty(attrs["instrument_id"], subject.GetSubjectId()), Exchange: attrs["exchange"], Market: firstNonEmpty(attrs["market_type"], subject.GetMarket()), QuoteAsset: firstNonEmpty(attrs["quote_asset"], subject.GetCurrency()), SeriesTag: subjectSeriesTag(attrs), Active: true})
-		}
-		if !rsp.GetPageResult().GetHasMore() {
-			break
-		}
-	}
-	result = canonicalizeMergedCatalogSubjects(datasetID, result)
-	if len(result) == 0 {
-		return nil, fmt.Errorf("%w: view dataset %s has no active subjects or catalog entries", input.ErrNotReady, datasetID)
-	}
-	return result, nil
 }
 
 func subjectSeriesTag(attrs map[string]string) string {

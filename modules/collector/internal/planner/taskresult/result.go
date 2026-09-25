@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 // IDs are the stable metadata identities for one task result.
@@ -105,6 +107,7 @@ func ResultIDs(spaceID, taskID string) IDs { return resultIDs(spaceID, taskID) }
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
 	CreateDataset(context.Context, *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error)
+	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
 	GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error)
 	CreateView(context.Context, *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error)
@@ -122,6 +125,9 @@ func (p metadataProxy) GetDataset(ctx context.Context, req *storagepb.GetDataset
 }
 func (p metadataProxy) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	return p.client.CreateDataset(ctx, req)
+}
+func (p metadataProxy) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	return p.client.UpdateDataset(ctx, req)
 }
 func (p metadataProxy) DeleteDataset(ctx context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
 	return p.client.DeleteDataset(ctx, req)
@@ -200,6 +206,38 @@ type Config struct {
 	DataSourceID string
 	Frequency    string
 	Frequencies  []string
+	SubjectTags  []string
+}
+
+func normalizeSubjectTags(tags []string) []string {
+	seen := make(map[string]struct{}, len(tags))
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func sameSubjectTags(left, right []string) bool {
+	a, b := normalizeSubjectTags(left), normalizeSubjectTags(right)
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 const (
@@ -408,6 +446,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return IDs{}, err
 	}
 	attrs := map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": taskID, "market_type": strings.TrimSpace(marketType)}
+	subjectTags := normalizeSubjectTags(cfg.SubjectTags)
 	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
 		return IDs{}, fmt.Errorf("get result dataset: %w", err)
@@ -419,7 +458,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: resultDataSourceID(cfg.DataSourceID), DataNodeId: cfg.DataNodeID,
-			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freqs: nonEmptyFrequency(kind, cfg.Frequency, cfg.Frequencies), Attributes: attrs,
+			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freqs: nonEmptyFrequency(kind, cfg.Frequency, cfg.Frequencies), Attributes: attrs, SubjectTags: subjectTags,
 		}})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))
@@ -429,6 +468,27 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return IDs{}, metadataError("get result dataset", nil, get.GetRetInfo())
 	} else if !ownedByTask(get.GetDataset().GetAttributes(), taskID) {
 		return IDs{}, fmt.Errorf("result dataset %s is owned by another task", ids.DatasetID)
+	} else {
+		// Subject tags are no longer duplicated in collect_params. A bootstrap
+		// reconciliation therefore has no requested tags for an already-created
+		// result and must preserve the Dataset-owned scope instead of clearing it.
+		if len(subjectTags) == 0 {
+			subjectTags = normalizeSubjectTags(get.GetDataset().GetSubjectTags())
+		}
+		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) {
+			updated := proto.Clone(get.GetDataset()).(*storagepb.Dataset)
+			updated.SubjectTags = subjectTags
+			response, updateErr := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
+			if updateErr != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+				return IDs{}, metadataError("update result dataset subject tags", updateErr, func() *storagepb.RetInfo {
+					if response == nil {
+						return nil
+					}
+					return response.GetRetInfo()
+				}())
+			}
+			get = &storagepb.GetDatasetRsp{RetInfo: response.GetRetInfo(), Dataset: response.GetDataset()}
+		}
 	}
 	cleanupCreated := func(original error) (IDs, error) {
 		if !createdDataset {
@@ -486,6 +546,44 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		return cleanupCreated(err)
 	}
 	return ids, nil
+}
+
+// UpdateSubjectTags updates the scope of an existing task-owned result Dataset
+// without reprovisioning its columns, View, or physical rows.
+func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error {
+	if m == nil || m.metadata == nil || m.auth == nil {
+		return fmt.Errorf("task result metadata manager is not configured")
+	}
+	rsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return fmt.Errorf("get result dataset for subject tags: %w", err)
+	}
+	if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || rsp.GetDataset() == nil {
+		return metadataError("get result dataset for subject tags", nil, func() *storagepb.RetInfo {
+			if rsp == nil {
+				return nil
+			}
+			return rsp.GetRetInfo()
+		}())
+	}
+	updated := proto.Clone(rsp.GetDataset()).(*storagepb.Dataset)
+	updated.SubjectTags = normalizeSubjectTags(tags)
+	if sameSubjectTags(rsp.GetDataset().GetSubjectTags(), updated.GetSubjectTags()) {
+		return nil
+	}
+	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
+	if err != nil {
+		return fmt.Errorf("update result dataset subject tags: %w", err)
+	}
+	if result == nil || result.GetRetInfo() == nil || result.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return metadataError("update result dataset subject tags", nil, func() *storagepb.RetInfo {
+			if result == nil {
+				return nil
+			}
+			return result.GetRetInfo()
+		}())
+	}
+	return nil
 }
 
 func (m *Manager) cleanupCreatedDataset(ctx context.Context, spaceID, datasetID string) error {

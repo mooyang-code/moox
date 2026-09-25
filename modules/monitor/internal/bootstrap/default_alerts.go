@@ -63,6 +63,21 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 }
 
 func listDefaultAlertChecks(ctx context.Context, repositories *store.Repositories) ([]domain.Check, error) {
+	all, err := listAllMonitorChecks(ctx, repositories)
+	if err != nil {
+		return nil, err
+	}
+	checks := make([]domain.Check, 0, len(all))
+	for _, check := range all {
+		if !check.Enabled || retiredDatasetCheckID(check.CheckID) {
+			continue
+		}
+		checks = append(checks, check)
+	}
+	return checks, nil
+}
+
+func listAllMonitorChecks(ctx context.Context, repositories *store.Repositories) ([]domain.Check, error) {
 	if repositories == nil {
 		return nil, fmt.Errorf("default alerts require repositories")
 	}

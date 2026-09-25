@@ -36,8 +36,6 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 				},
 				{
 					SpaceID: "stockcn", FunctionPrefix: "moox-fetcher-stockcn",
-					InstrumentSnapshotFunctionPrefix: "moox-fetcher-stockcn-instrument",
-					InstrumentSnapshotRegion:         "ap-chengdu",
 					Regions: []setupconfig.SCFFetcherRegion{
 						{Region: "ap-chengdu", Enabled: true, FunctionCount: 32},
 					},
@@ -57,8 +55,8 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 	assert.False(t, hasGZ)
 	assert.Contains(t, regions["ap-hongkong"].Prefixes, "moox-fetcher-crypto-binance")
 	assert.Equal(t, "ip://43.132.204.177:12004", regions["ap-hongkong"].StorageAccessTarget)
-	assert.Contains(t, regions["ap-chengdu"].Prefixes, "moox-fetcher-stockcn-instrument")
-	assert.Equal(t, 33, regions["ap-chengdu"].FunctionCount)
+	assert.Contains(t, regions["ap-chengdu"].Prefixes, "moox-fetcher-stockcn")
+	assert.Equal(t, 32, regions["ap-chengdu"].FunctionCount)
 }
 
 func TestCollectSCFTargetsSplitsOverflowNamespaces(t *testing.T) {

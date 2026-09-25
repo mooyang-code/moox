@@ -256,9 +256,9 @@ storage_gateway_host = "203.0.113.11"
 # storage_access_target_nodes = { ap-nanjing = "storage-access-nanjing", ap-hongkong = "storage-access-hongkong" }
 memory_size = 64
 timeout_seconds = 15
-# Invoke nodes also refresh the full Binance symbol snapshot; give that
-# metadata write path a longer budget while Kline Timer nodes stay short-lived.
-instrument_invoke_timeout_seconds = 60
+# Invoke nodes have a longer deployment-canary budget while Kline Timer nodes
+# stay short-lived.
+invoke_timeout_seconds = 60
 realtime_batch_size = 10
 realtime_bar_limit = 10
 catchup_batch_size = 1
@@ -307,13 +307,6 @@ cls_cloud_account_id = "tencent-scf"
 namespace = "moox-stockcn"
 runtime = "Go1"
 function_prefix = "moox-fetcher-stockcn"
-# Full stock Instrument snapshot: one independent daily Timer SCF.
-instrument_snapshot_region = "ap-shanghai"
-instrument_snapshot_cloud_account_id = "tencent-scf"
-instrument_snapshot_function_prefix = "moox-fetcher-stockcn-instrument"
-instrument_snapshot_timer_cron = "0 0 0 * * * *"
-instrument_snapshot_timeout_seconds = 300
-instrument_snapshot_memory_size = 256
 timer_function_count = 170
 # 单个 stockcn Timer 的实测安全 subject 上限，超限时 Collector 拒绝发布。
 measured_safe_group_size = 40
@@ -322,8 +315,8 @@ storage_gateway_host = "203.0.113.11"
 # Storage 同地域的 SCF 自动使用私网 VPC 路径；跨地域自动回退到 storage_gateway_host。
 memory_size = 64
 timeout_seconds = 15
-# 全市场 Instrument 快照实测约 25 秒；仅 Invoke 辅助函数使用该独立超时。
-instrument_invoke_timeout_seconds = 60
+# 仅 Invoke 辅助函数使用该独立超时。
+invoke_timeout_seconds = 60
 realtime_batch_size = 10
 realtime_bar_limit = 10
 catchup_batch_size = 1

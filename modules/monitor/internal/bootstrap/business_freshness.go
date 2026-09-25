@@ -135,6 +135,9 @@ func buildBusinessFreshnessReporterWithInterval(
 				}
 			}
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
+			if retiredDatasetCheckID(checkID) {
+				continue
+			}
 			if dataset.Producer == "factor" {
 				if !factorExpectedKnown {
 					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "moox_factor")
@@ -204,6 +207,9 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 		}
 		for _, check := range existing {
+			if retiredDatasetCheckID(check.CheckID) {
+				continue
+			}
 			// Market canaries are evaluated by the dedicated watchdog below the
 			// scheduler. Business freshness must not synthesize a success for an
 			// absent overview item, otherwise a real canary failure is immediately

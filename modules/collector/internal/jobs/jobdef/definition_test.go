@@ -10,11 +10,11 @@ import (
 func TestJobDefinition_Matches_MatchingSupport_ShouldReturnTrue(t *testing.T) {
 	def := JobDefinition{
 		Supports: []Support{
-			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset_subjects"},
+			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset"},
 		},
 	}
 	params := &domain.CollectParams{
-		Source: domain.CollectSource{Kind: "dataset_subjects"},
+		Source: domain.CollectSource{Kind: "dataset"},
 		Collector: domain.CollectorSpec{
 			Exchange: " Binance ",
 			Market:   "SPOT",
@@ -27,7 +27,7 @@ func TestJobDefinition_Matches_MatchingSupport_ShouldReturnTrue(t *testing.T) {
 func TestJobDefinition_Matches_NonMatchingExchange_ShouldReturnFalse(t *testing.T) {
 	def := JobDefinition{
 		Supports: []Support{
-			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset_subjects"},
+			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset"},
 		},
 	}
 	params := &domain.CollectParams{
@@ -43,7 +43,7 @@ func TestJobDefinition_Matches_NonMatchingExchange_ShouldReturnFalse(t *testing.
 func TestJobDefinition_Matches_NilParams_ShouldReturnFalse(t *testing.T) {
 	def := JobDefinition{
 		Supports: []Support{
-			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset_subjects"},
+			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset"},
 		},
 	}
 	assert.False(t, def.Matches(nil))
@@ -51,7 +51,7 @@ func TestJobDefinition_Matches_NilParams_ShouldReturnFalse(t *testing.T) {
 
 func TestJobDefinition_Matches_NonMatchingSourceKind_ShouldReturnFalse(t *testing.T) {
 	def := JobDefinition{Supports: []Support{{
-		Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset_subjects",
+		Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset",
 	}}}
 	params := &domain.CollectParams{
 		Source: domain.CollectSource{Kind: "none"},

@@ -14,10 +14,11 @@ func BuildTaskSpecs(params *domain.CollectParams, subjects []domain.DatasetSubje
 	}
 	specs := make([]domain.TaskSpec, 0, len(subjects)*len(intervals))
 	for _, subject := range subjects {
-		symbol := strings.TrimSpace(subject.ExternalSymbol)
-		if symbol == "" {
+		subjectID := subject.SubjectID
+		if subjectID == "" {
 			continue
 		}
+		symbol := subjectID
 		for _, interval := range intervals {
 			if strings.TrimSpace(interval) == "" {
 				continue
@@ -27,7 +28,7 @@ func BuildTaskSpecs(params *domain.CollectParams, subjects []domain.DatasetSubje
 				Market:    params.Collector.Market,
 				DataType:  params.Collector.DataType,
 				DatasetID: params.Target.DatasetID,
-				SubjectID: subject.SubjectID,
+				SubjectID: subjectID,
 				Symbol:    symbol,
 				Interval:  interval,
 				Params: map[string]any{
@@ -35,7 +36,7 @@ func BuildTaskSpecs(params *domain.CollectParams, subjects []domain.DatasetSubje
 					"market":            params.Collector.Market,
 					"data_type":         params.Collector.DataType,
 					"dataset_id":        params.Target.DatasetID,
-					"subject_id":        subject.SubjectID,
+					"subject_id":        subjectID,
 					"symbol":            symbol,
 					"interval":          interval,
 					"schedule_interval": params.Schedule.Interval,

@@ -29,8 +29,8 @@ func TestCollectionTaskRepository_CRUD(t *testing.T) {
 	repo := s.Tasks()
 	ctx := context.Background()
 	rule := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"subject_tags":["binance_spot"],"frequency":"1m"}`, Enabled: true,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
 
@@ -44,8 +44,8 @@ func TestCollectionTaskRepository_CRUD(t *testing.T) {
 	assert.Len(t, rules, 1)
 
 	updated, err := repo.UpdateByTaskID(ctx, "crypto", "rule-1", domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "rule-1", DataType: "instrument", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"source":{"kind":"none"}}`, Creator: "updated", Enabled: true,
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"subject_tags":["binance_spot"],"frequency":"1m"}`, Creator: "updated", Enabled: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "updated", updated.Creator)
@@ -90,8 +90,8 @@ func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t 
 	ctx := context.Background()
 	require.NoError(t, repo.Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "original", Description: "before",
-		DataType: "instrument", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"dataset-original"}`,
+		DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset-original","frequency":"1m"}`,
 		Enabled:       true, Creator: "creator", PrepareState: domain.PrepareStateReady,
 		ResultDatasetID: "dataset-original", ResultViewID: "view-original",
 	}))
@@ -108,7 +108,7 @@ func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t 
 	assert.False(t, updated.Enabled)
 	assert.Equal(t, "crypto", updated.SpaceID)
 	assert.Equal(t, "task-1", updated.TaskID)
-	assert.Equal(t, "instrument", updated.DataType)
+	assert.Equal(t, "kline", updated.DataType)
 	assert.Equal(t, "binance", updated.Provider)
 	assert.Equal(t, "spot", updated.MarketType)
 	assert.Equal(t, "dataset-original", updated.ResultDatasetID)

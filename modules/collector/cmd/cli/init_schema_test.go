@@ -47,7 +47,7 @@ func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 func TestRunInitCommandSeedsBuiltInTasks(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	seedPath := filepath.Join(t.TempDir(), "tasks.yaml")
-	if err := os.WriteFile(seedPath, []byte("tasks:\n- space_id: crypto\n  task_id: builtin-task\n  task_name: Binance 标的任务\n  data_type: instrument\n  provider: binance\n  market_type: spot\n  enabled: true\n  collect_params:\n    provider: binance\n    market_type: spot\n    symbol_source: exchange\n    frequency: 1h\n"), 0o600); err != nil {
+	if err := os.WriteFile(seedPath, []byte("tasks:\n- space_id: crypto\n  task_id: builtin-task\n  task_name: Binance 行情任务\n  data_type: kline\n  provider: binance\n  market_type: spot\n  enabled: true\n  collect_params:\n    provider: binance\n    market_type: spot\n    subject_tags: [binance_spot]\n    frequency: 1h\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer

@@ -517,12 +517,19 @@ func restrictRangeChunkForTask(chunk *storageio.RangeChunk, startTime, endTime t
 		Rows:      make([][]any, 0, len(indices)),
 		DataTimes: make([]time.Time, 0, len(indices)),
 	}
+	hasSubjectIDs := len(frame.SubjectIDs) == len(frame.Rows)
+	if hasSubjectIDs {
+		filtered.SubjectIDs = make([]string, 0, len(indices))
+	}
 	if len(frame.SeriesTags) != 0 {
 		filtered.SeriesTags = make([]string, 0, len(indices))
 	}
 	for _, index := range indices {
 		filtered.Rows = append(filtered.Rows, append([]any(nil), frame.Rows[index]...))
 		filtered.DataTimes = append(filtered.DataTimes, frame.DataTimes[index])
+		if hasSubjectIDs {
+			filtered.SubjectIDs = append(filtered.SubjectIDs, frame.SubjectIDs[index])
+		}
 		if len(frame.SeriesTags) != 0 {
 			filtered.SeriesTags = append(filtered.SeriesTags, frame.SeriesTags[index])
 		}

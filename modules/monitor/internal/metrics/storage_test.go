@@ -43,6 +43,9 @@ func (f *fakeMetadata) ListDatasetSubjects(context.Context, *storagepb.ListDatas
 	f.subjectCalls++
 	return &storagepb.ListDatasetSubjectsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, DatasetSubjects: f.subjects}, nil
 }
+func (f *fakeMetadata) ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error) {
+	return &storagepb.ListTagsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+}
 
 type fakeAccess struct {
 	writes  []*storagepb.RowFieldUpsert

@@ -88,20 +88,7 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bundle.Spaces, 4)
 	require.NotEmpty(t, bundle.Calls)
-	require.Len(t, bundle.Datasets, 20)
-	assert.Contains(t, bundle.Datasets, seedDataset{
-		SpaceID:      "stockcn",
-		DatasetID:    "dataset_stockcn_instruments",
-		DataSourceID: "stockcn",
-		Name:         "A股全市场标的",
-		DataKind:     "record",
-		DataNodeID:   "storage-node-0",
-		KeepDuration: "0",
-		seedCommon: seedCommon{
-			Status:     "disabled",
-			Attributes: map[string]string{"instrument_type": "equity", "market_type": "equity", "storage_model": "wide_common_metrics"},
-		},
-	})
+	require.Len(t, bundle.Datasets, 17)
 	assert.Equal(t, "crypto", bundle.Spaces[0].SpaceID)
 	assert.Equal(t, "stockcn", bundle.Spaces[1].SpaceID)
 	assert.Equal(t, "stockhk", bundle.Spaces[2].SpaceID)

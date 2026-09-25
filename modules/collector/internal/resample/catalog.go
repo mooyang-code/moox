@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -35,8 +34,6 @@ type metadataAPI interface {
 	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
 	UpdateView(context.Context, *storagepb.UpdateViewReq, ...client.Option) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
-	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
-	BindDatasetSubject(context.Context, *storagepb.BindDatasetSubjectReq, ...client.Option) (*storagepb.BindDatasetSubjectRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
 	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq, ...client.Option) (*storagepb.CheckDatasetActivationRsp, error)
@@ -68,7 +65,7 @@ var klineFields = []struct {
 // PrepareTarget creates or validates the target Dataset, columns, subject
 // bindings and View. Existing resources with a mismatched immutable contract
 // are rejected instead of being silently overwritten.
-func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.DatasetSubject, keepDuration string) error {
+func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.Subject, keepDuration string) error {
 	if c == nil || c.Metadata == nil || c.Auth == nil {
 		return errors.New("resample catalog dependencies are required")
 	}
@@ -113,7 +110,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			// display text. Derive a short stable suffix from the target ID so
 			// independent resample targets do not collide on metadata creation.
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freqs: []string{targetFreq.Storage}, Status: "draft", Attributes: attrs, KeepDuration: keepDuration,
+			Freqs: []string{targetFreq.Storage}, Status: "draft", Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...), KeepDuration: keepDuration,
 		}})
 		if createErr != nil {
 			return fmt.Errorf("create target Dataset: %w", createErr)
@@ -132,66 +129,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, "crypto", source.DataNodeID); err != nil {
 		return compensate(err)
 	}
-	// Mirror the source subject snapshot before activation so the target has the
-	// same active subject set. Read existing memberships first so an unchanged target does
-	// not issue hundreds of redundant metadata writes on every timer tick.
-	existingSubjects := make(map[string]*storagepb.DatasetSubject)
-	for page := uint32(1); ; page++ {
-		bindings, listErr := c.Metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID, Page: &storagepb.Page{Page: page, Size: 500}})
-		if listErr != nil {
-			return compensate(fmt.Errorf("list target Dataset subjects: %w", listErr))
-		}
-		if err := ensureMetadataSuccess("list target Dataset subjects", bindings.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-		for _, binding := range bindings.GetDatasetSubjects() {
-			if binding != nil && strings.TrimSpace(binding.GetSubjectId()) != "" {
-				existingSubjects[binding.GetSubjectId()] = binding
-			}
-		}
-		if bindings.GetPageResult() == nil || !bindings.GetPageResult().GetHasMore() || len(bindings.GetDatasetSubjects()) == 0 {
-			break
-		}
-	}
-	desiredSubjects := make(map[string]struct{}, len(subjects))
-	for _, subject := range subjects {
-		if strings.TrimSpace(subject.SubjectID) == "" || (strings.TrimSpace(subject.Status) != "" && !strings.EqualFold(subject.Status, "active")) {
-			continue
-		}
-		desiredSubjects[subject.SubjectID] = struct{}{}
-		if current := existingSubjects[subject.SubjectID]; current != nil && strings.EqualFold(strings.TrimSpace(current.GetStatus()), "active") {
-			continue
-		}
-		binding := &storagepb.DatasetSubject{SpaceId: task.SpaceID, DatasetId: targetDatasetID, SubjectId: subject.SubjectID, SubjectRole: "normal", Status: "active"}
-		resp, bindErr := c.Metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{AuthInfo: c.Auth, DatasetSubject: binding})
-		if bindErr != nil {
-			return compensate(fmt.Errorf("bind target Dataset subject: %w", bindErr))
-		}
-		if err := ensureMetadataSuccess("bind target Dataset subject", resp.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-	}
-	// Disable memberships that disappeared from the source snapshot. Keeping
-	// the rows (rather than deleting them) preserves metadata history while
-	// preventing Planner and View from treating stale symbols as active.
-	for _, binding := range existingSubjects {
-		if binding == nil || !strings.EqualFold(strings.TrimSpace(binding.GetStatus()), "active") {
-			continue
-		}
-		if _, keep := desiredSubjects[binding.GetSubjectId()]; keep {
-			continue
-		}
-		copy, ok := proto.Clone(binding).(*storagepb.DatasetSubject)
-		if !ok {
-			return compensate(fmt.Errorf("clone stale target Dataset subject failed"))
-		}
-		copy.Status = "disabled"
-		if resp, bindErr := c.Metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{AuthInfo: c.Auth, DatasetSubject: copy}); bindErr != nil {
-			return compensate(fmt.Errorf("disable stale target Dataset subject: %w", bindErr))
-		} else if err := ensureMetadataSuccess("disable stale target Dataset subject", resp.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-	}
+	_ = subjects
 	for _, field := range klineFields {
 		resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: &storagepb.DatasetColumn{
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID, ColumnName: field.name,

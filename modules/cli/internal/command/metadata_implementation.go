@@ -51,18 +51,13 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 			return err
 		}
 	}
-	for _, item := range seed.SubjectSymbols {
-		if err := check("subject_symbols", item.SpaceID); err != nil {
+	for _, item := range seed.Tags {
+		if err := check("tags", item.SpaceID); err != nil {
 			return err
 		}
 	}
 	for _, item := range seed.Datasets {
 		if err := check("datasets", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.DatasetSubjects {
-		if err := check("dataset_subjects", item.SpaceID); err != nil {
 			return err
 		}
 	}
@@ -178,8 +173,9 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	for _, item := range seed.Subjects {
 		calls = append(calls, metadataImportCall{Resource: "subjects", Method: "UpsertSubject", Request: &pb.UpsertSubjectReq{Subject: item.toPB()}, Response: &pb.UpsertSubjectRsp{}})
 	}
-	for _, item := range seed.SubjectSymbols {
-		calls = append(calls, metadataImportCall{Resource: "subject_symbols", Method: "UpsertSubjectSymbol", Request: &pb.UpsertSubjectSymbolReq{SubjectSymbol: item.toPB()}, Response: &pb.UpsertSubjectSymbolRsp{}})
+	for _, item := range seed.Tags {
+		tag := item.toPB()
+		calls = append(calls, metadataImportCall{Resource: "tags", Method: "UpsertTag", Request: &pb.UpsertTagReq{Tag: tag}, Response: &pb.UpsertTagRsp{}})
 	}
 	for _, item := range seed.Datasets {
 		dataset, err := item.toPB()
@@ -197,9 +193,6 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 				Response: &pb.GetDatasetRsp{},
 			},
 		})
-	}
-	for _, item := range seed.DatasetSubjects {
-		calls = append(calls, metadataImportCall{Resource: "dataset_subjects", Method: "BindDatasetSubject", Request: &pb.BindDatasetSubjectReq{DatasetSubject: item.toPB()}, Response: &pb.BindDatasetSubjectRsp{}})
 	}
 	for _, item := range seed.FieldGroups {
 		group := item.toPB()
@@ -847,8 +840,8 @@ func (s seedSubject) toPB() *pb.Subject {
 	return &pb.Subject{SpaceId: s.SpaceID, SubjectId: s.SubjectID, SubjectType: s.SubjectType, Name: s.Name, Market: s.Market, Currency: s.Currency, Timezone: s.Timezone, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
-func (s seedSubjectSymbol) toPB() *pb.SubjectSymbol {
-	return &pb.SubjectSymbol{SpaceId: s.SpaceID, SubjectId: s.SubjectID, DataSourceId: s.DataSourceID, ExternalSymbol: s.ExternalSymbol, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+func (s seedTag) toPB() *pb.Tag {
+	return &pb.Tag{SpaceId: s.SpaceID, TagId: s.TagID, TagName: s.TagName, Description: s.Description, Mode: s.Mode, Builtin: s.Builtin, Sources: s.Sources, InstrumentType: s.InstrumentType, Cron: s.Cron, Timezone: s.Timezone}
 }
 
 func (s seedDataset) toPB() (*pb.Dataset, error) {
@@ -863,7 +856,7 @@ func (s seedDataset) toPB() (*pb.Dataset, error) {
 	if dataKind == pb.DataKind_DATA_KIND_RECORD && keepDuration != "0" {
 		return nil, fmt.Errorf("dataset %q: record keep_duration must be 0", s.DatasetID)
 	}
-	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), KeepDuration: keepDuration, Freqs: s.Freqs, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), KeepDuration: keepDuration, Freqs: s.Freqs, SubjectTags: s.SubjectTags, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func canonicalMetadataKeepDuration(value string) (string, error) {
@@ -876,10 +869,6 @@ func canonicalMetadataKeepDuration(value string) (string, error) {
 		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", value)
 	}
 	return duration.String(), nil
-}
-
-func (s seedDatasetSubject) toPB() *pb.DatasetSubject {
-	return &pb.DatasetSubject{SpaceId: s.SpaceID, DatasetId: s.DatasetID, SubjectId: s.SubjectID, SubjectRole: s.SubjectRole, EffectiveStartTime: s.EffectiveStartTime, EffectiveEndTime: s.EffectiveEndTime, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedField) toPB() (*pb.Field, error) {

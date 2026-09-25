@@ -221,9 +221,6 @@
         <a-tab-pane key="columns" title="列定义">
           <DatasetColumnPanel :space-id="selectedSpaceId" :dataset-id="activeDataset?.dataset_id || ''" />
         </a-tab-pane>
-        <a-tab-pane key="subjects" title="对象绑定">
-          <DatasetSubjectPanel :space-id="selectedSpaceId" :dataset-id="activeDataset?.dataset_id || ''" />
-        </a-tab-pane>
         <a-tab-pane key="indexes" title="索引">
           <ViewDefinitions
             v-if="activeDataset"
@@ -256,7 +253,6 @@ import {
 import type { DataNode, DataSource, Dataset, DatasetActivationCheck, DatasetMutation } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import DatasetColumnPanel from "./components/dataset-column-panel.vue";
-import DatasetSubjectPanel from "./components/dataset-subject-panel.vue";
 import ViewDefinitions from "@/views/data/views/index.vue";
 import { ensureDefaultView } from "./default-view";
 import {
@@ -327,10 +323,7 @@ const visibleRows = computed(() =>
 );
 const hasAttributionFilter = computed(() =>
   Boolean(
-    props.filterOwnerModules?.length ||
-      props.filterDatasetRoles?.length ||
-      props.includeUnowned ||
-      props.includeDatasetIdPrefix
+    props.filterOwnerModules?.length || props.filterDatasetRoles?.length || props.includeUnowned || props.includeDatasetIdPrefix
   )
 );
 const dataSources = ref<DataSource[]>([]);
@@ -361,6 +354,7 @@ const form = reactive<DatasetForm>({
   keep_duration: "",
   binding_locked: false,
   revision: 0,
+  subject_tags: [],
   attributes: {}
 });
 
@@ -521,6 +515,7 @@ function resetForm() {
     keep_duration: "",
     binding_locked: false,
     revision: 0,
+    subject_tags: [],
     attributes: {}
   });
 }
@@ -560,6 +555,7 @@ function buildDatasetPayload(spaceId: string): Dataset | DatasetMutation {
     data_kind: form.data_kind,
     freqs: splitList(form.freqs),
     keep_duration: form.keep_duration.trim(),
+    subject_tags: form.subject_tags || [],
     attributes: mergeDatasetAttribution(form.attributes, {
       ownerModule: props.ownerModule,
       datasetRole: props.datasetRole,

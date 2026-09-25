@@ -40,8 +40,8 @@ func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "11" {
-		t.Fatalf("fresh database schema version = %q, want 11", version)
+	if version != "12" {
+		t.Fatalf("fresh database schema version = %q, want 12", version)
 	}
 }
 
@@ -187,8 +187,8 @@ func TestInitSchemaMigratesV10SingleDatasetViews(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "11" {
-		t.Fatalf("migrated schema version = %q, want 11", version)
+	if version != "12" {
+		t.Fatalf("migrated schema version = %q, want 12", version)
 	}
 	var datasetID string
 	if err := store.db.QueryRowContext(ctx, `SELECT c_dataset_id FROM t_views WHERE c_space_id = 'crypto' AND c_view_id = 'view_spot'`).Scan(&datasetID); err != nil {

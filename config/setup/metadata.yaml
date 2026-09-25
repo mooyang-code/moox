@@ -182,19 +182,39 @@ data_sources:
   timezone: UTC
   status: active
 
-datasets:
+tags:
+- space_id: crypto
+  tag_id: binance_spot
+  tag_name: 币安现货
+  description: 币安现货全部标的
+  mode: auto
+  builtin: true
+  sources: [binance]
+  instrument_type: spot
+  cron: "0 * * * *"
+  timezone: UTC
+- space_id: crypto
+  tag_id: binance_swap
+  tag_name: 币安永续
+  description: 币安 U 本位永续全部标的
+  mode: auto
+  builtin: true
+  sources: [binance]
+  instrument_type: swap
+  cron: "0 * * * *"
+  timezone: UTC
 - space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  data_source_id: stockcn
-  name: A股全市场标的
-  data_kind: record
-  data_node_id: storage-node-0
-  keep_duration: '0'
-  status: disabled
-  attributes:
-    instrument_type: equity
-    market_type: equity
-    storage_model: wide_common_metrics
+  tag_id: cn_a_share
+  tag_name: A股全部股票
+  description: 沪深北交易所全部股票
+  mode: auto
+  builtin: true
+  sources: [sina, eastmoney]
+  instrument_type: equity
+  cron: "0 * * * *"
+  timezone: Asia/Shanghai
+
+datasets:
 - space_id: stockcn
   dataset_id: dataset_stockcn_equity_kline
   data_source_id: stockcn
@@ -299,28 +319,6 @@ datasets:
     instrument_type: equity
     storage_model: wide_common_metrics
 
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  data_source_id: binance
-  name: 加密现货交易对
-  data_kind: record
-  data_node_id: storage-node-0
-  keep_duration: '0'
-  status: active
-  attributes:
-    market_type: spot
-    storage_model: wide_common_metrics
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  data_source_id: binance
-  name: 加密永续交易对
-  data_kind: record
-  data_node_id: storage-node-0
-  keep_duration: '0'
-  status: active
-  attributes:
-    market_type: swap
-    storage_model: wide_common_metrics
 - space_id: crypto
   dataset_id: dataset_binance_spot_kline_1m
   data_source_id: binance
@@ -1420,201 +1418,6 @@ fields:
   status: active
 
 dataset_columns:
-- space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  column_name: security_code
-  origin_type: field
-  origin_id: security_code
-  value_type: string
-  required: true
-  status: active
-- space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  column_name: provider_symbol
-  origin_type: field
-  origin_id: provider_symbol
-  value_type: string
-  required: true
-  status: active
-- space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  column_name: exchange
-  origin_type: field
-  origin_id: exchange
-  value_type: string
-  required: true
-  status: active
-- space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  column_name: instrument_name
-  origin_type: field
-  origin_id: instrument_name
-  value_type: string
-  status: active
-- space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  column_name: instrument_status
-  origin_type: field
-  origin_id: instrument_status
-  value_type: string
-  status: active
-- space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  column_name: snapshot_id
-  origin_type: field
-  origin_id: snapshot_id
-  value_type: string
-  required: true
-  status: active
-- space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  column_name: source_provider
-  origin_type: field
-  origin_id: source_provider
-  value_type: string
-  required: true
-  status: active
-- space_id: stockcn
-  dataset_id: dataset_stockcn_instruments
-  column_name: fetched_at
-  origin_type: field
-  origin_id: fetched_at
-  value_type: time
-  required: true
-  status: active
-
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: symbol
-  origin_type: field
-  origin_id: symbol
-  value_type: string
-  required: true
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: symbol
-  origin_type: field
-  origin_id: symbol
-  value_type: string
-  required: true
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: external_symbol
-  origin_type: field
-  origin_id: external_symbol
-  value_type: string
-  required: true
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: base_asset
-  origin_type: field
-  origin_id: base_asset
-  value_type: string
-  required: true
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: quote_asset
-  origin_type: field
-  origin_id: quote_asset
-  value_type: string
-  required: true
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: status
-  origin_type: field
-  origin_id: status
-  value_type: string
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: min_qty
-  origin_type: field
-  origin_id: min_qty
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: max_qty
-  origin_type: field
-  origin_id: max_qty
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: tick_size
-  origin_type: field
-  origin_id: tick_size
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_swap_symbols
-  column_name: lot_size
-  origin_type: field
-  origin_id: lot_size
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: external_symbol
-  origin_type: field
-  origin_id: external_symbol
-  value_type: string
-  required: true
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: base_asset
-  origin_type: field
-  origin_id: base_asset
-  value_type: string
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: quote_asset
-  origin_type: field
-  origin_id: quote_asset
-  value_type: string
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: status
-  origin_type: field
-  origin_id: status
-  value_type: string
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: min_qty
-  origin_type: field
-  origin_id: min_qty
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: max_qty
-  origin_type: field
-  origin_id: max_qty
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: tick_size
-  origin_type: field
-  origin_id: tick_size
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_spot_symbols
-  column_name: lot_size
-  origin_type: field
-  origin_id: lot_size
-  value_type: double
-  status: active
 
 - space_id: crypto
   dataset_id: dataset_binance_spot_kline_1m

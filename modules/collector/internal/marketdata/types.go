@@ -13,7 +13,6 @@ type MarketID string
 type ProviderID string
 type SourceID string
 type ExchangeID string
-type ProductType string
 type InstrumentType string
 
 type SourceKey struct {
@@ -104,15 +103,6 @@ func (spec SourceSpec) Validate() error {
 	}
 	return nil
 }
-
-const (
-	ProductEquity          ProductType = "equity"
-	ProductETF             ProductType = "etf"
-	ProductIndex           ProductType = "index"
-	ProductConvertibleBond ProductType = "convertible_bond"
-	ProductSpot            ProductType = "spot"
-	ProductSwap            ProductType = "swap"
-)
 
 const (
 	InstrumentEquity          InstrumentType = "equity"
@@ -355,7 +345,6 @@ type MarketProvider interface {
 type KlineRequest struct {
 	MarketID       MarketID
 	ExchangeID     ExchangeID
-	ProductType    ProductType
 	InstrumentType InstrumentType
 	SubjectID      string
 	ProviderSymbol string
@@ -424,18 +413,13 @@ type InstrumentFetcher interface {
 }
 
 type Instrument struct {
-	SubjectID       string
-	CanonicalSymbol string
-	ProviderSymbol  string
-	Exchange        string
-	Name            string
-	Status          string
-	BaseAsset       string
-	QuoteAsset      string
-	MinQty          string
-	MaxQty          string
-	TickSize        string
-	LotSize         string
+	SubjectID      string
+	ProviderSymbol string
+	Exchange       string
+	Name           string
+	Status         string
+	BaseAsset      string
+	QuoteAsset     string
 }
 
 type InstrumentSnapshot struct {

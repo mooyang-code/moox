@@ -220,9 +220,6 @@ func (f fakeStorageImportMeta) ListDatasetColumns(context.Context, string, strin
 func (f fakeStorageImportMeta) ListDatasetSubjects(context.Context, string, string, string) ([]*pb.DatasetSubject, error) {
 	return nil, nil
 }
-func (f fakeStorageImportMeta) BindDatasetSubject(context.Context, *pb.DatasetSubject) error {
-	return nil
-}
 
 type fakeStorageWriter struct{}
 

@@ -888,6 +888,7 @@ func projectRangeChunk(chunk *storageio.RangeChunk, columns []string) (*storagei
 	frame := &engine.DataFrame{
 		Columns:    append([]string(nil), columns...),
 		Rows:       make([][]any, len(chunk.Frame.Rows)),
+		SubjectIDs: append([]string(nil), chunk.Frame.SubjectIDs...),
 		DataTimes:  append([]time.Time(nil), chunk.Frame.DataTimes...),
 		SeriesTags: append([]string(nil), chunk.Frame.SeriesTags...),
 	}

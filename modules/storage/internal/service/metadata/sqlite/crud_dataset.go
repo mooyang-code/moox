@@ -40,6 +40,10 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err := requireActiveDataNode(ctx, tx, item.GetDataNodeId()); err != nil {
 		return nil, err
 	}
+	item.SubjectTags = normalizeSubjectTags(item.GetSubjectTags())
+	if err := validateSubjectTagsExist(ctx, tx, item.GetSpaceId(), item.GetSubjectTags()); err != nil {
+		return nil, err
+	}
 	item.KeepDuration = keepDuration
 	item.Status = "disabled"
 	item.BindingLocked = false
@@ -55,14 +59,18 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err != nil {
 		return nil, err
 	}
+	subjectTags, err := marshalJSON(item.GetSubjectTags())
+	if err != nil {
+		return nil, err
+	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO t_datasets (
 			c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name,
 			c_description, c_data_kind, c_freqs_json, c_keep_duration,
-			c_binding_locked, c_revision, c_status, c_attrs_json, c_ctime, c_mtime
+			c_binding_locked, c_revision, c_status, c_attrs_json, c_subject_tags_json, c_ctime, c_mtime
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetDataSourceId(), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetKeepDuration(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, now, now)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetDatasetId(), item.GetDataSourceId(), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetKeepDuration(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +133,10 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	item.DataSourceId = existing.GetDataSourceId()
 	item.DataNodeId = existing.GetDataNodeId()
 	item.DataKind = existing.GetDataKind()
+	item.SubjectTags = normalizeSubjectTags(item.GetSubjectTags())
+	if err := validateSubjectTagsExist(ctx, tx, item.GetSpaceId(), item.GetSubjectTags()); err != nil {
+		return nil, err
+	}
 	item.KeepDuration = keepDuration
 	item.Status = status
 	item.BindingLocked = existing.GetBindingLocked()
@@ -139,12 +151,16 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err != nil {
 		return nil, err
 	}
+	subjectTags, err := marshalJSON(item.GetSubjectTags())
+	if err != nil {
+		return nil, err
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE t_datasets SET
 			c_name = ?, c_description = ?, c_freqs_json = ?, c_keep_duration = ?,
-			c_status = ?, c_attrs_json = ?, c_revision = c_revision + 1, c_mtime = ?
+			c_status = ?, c_attrs_json = ?, c_subject_tags_json = ?, c_revision = c_revision + 1, c_mtime = ?
 		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
-	`, item.GetName(), item.GetDescription(), freqs, item.GetKeepDuration(), item.GetStatus(), raw, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
+	`, item.GetName(), item.GetDescription(), freqs, item.GetKeepDuration(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
 	if err != nil {
 		return nil, err
 	}

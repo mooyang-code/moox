@@ -224,7 +224,9 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 }
 
 // migrateV11ToV12 replaces symbol mappings and dataset membership with tags.
-// The schema file creates the new tag tables after this migration completes.
+// The migration must create the tag tables itself because the primary Storage
+// role validates the schema version without executing the schema file on an
+// existing database.
 func (s *Store) migrateV11ToV12(ctx context.Context) error {
 	tx, err := beginImmediate(ctx, s.db)
 	if err != nil {
@@ -235,36 +237,104 @@ func (s *Store) migrateV11ToV12(ctx context.Context) error {
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM pragma_table_info('t_datasets') WHERE name = 'c_subject_tags_json'`).Scan(&hasColumn); err != nil {
 		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
 	}
+	var hasSubjects, hasDatasets int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 't_subjects'`).Scan(&hasSubjects); err != nil {
+		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 't_datasets'`).Scan(&hasDatasets); err != nil {
+		return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+	}
 	statements := []string{
 		`DROP TABLE IF EXISTS t_dataset_subject_set_staging`,
 		`DROP TABLE IF EXISTS t_dataset_subjects`,
 		`DROP TABLE IF EXISTS t_subject_symbols`,
-		`DELETE FROM t_datasets WHERE c_dataset_id IN ('dataset_binance_spot_symbols', 'dataset_binance_swap_symbols', 'dataset_stockcn_instruments')`,
-		`UPDATE t_subjects SET c_status = 'disabled' WHERE c_status NOT IN ('active', 'disabled')`,
-		`CREATE TABLE t_subjects_v12 (
-			c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-			c_space_id TEXT NOT NULL,
-			c_subject_id TEXT NOT NULL,
-			c_subject_type TEXT NOT NULL,
-			c_name TEXT NOT NULL DEFAULT '',
-			c_market TEXT NOT NULL DEFAULT '',
-			c_currency TEXT NOT NULL DEFAULT '',
-			c_timezone TEXT NOT NULL DEFAULT '',
-			c_status TEXT NOT NULL DEFAULT 'active',
-			c_attrs_json TEXT NOT NULL DEFAULT '{}',
-			c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			CHECK (c_status IN ('active', 'disabled')),
-			FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
-			UNIQUE (c_space_id, c_subject_id)
-		)`,
-		`INSERT INTO t_subjects_v12 SELECT c_id, c_space_id, c_subject_id, c_subject_type, c_name, c_market, c_currency, c_timezone, c_status, c_attrs_json, c_ctime, c_mtime FROM t_subjects`,
-		`DROP TABLE t_subjects`,
-		`ALTER TABLE t_subjects_v12 RENAME TO t_subjects`,
+	}
+	if hasDatasets != 0 {
+		statements = append(statements, `DELETE FROM t_datasets WHERE c_dataset_id IN ('dataset_binance_spot_symbols', 'dataset_binance_swap_symbols', 'dataset_stockcn_instruments')`)
+	}
+	if hasSubjects != 0 {
+		statements = append(statements,
+			`UPDATE t_subjects SET c_status = 'disabled' WHERE c_status NOT IN ('active', 'disabled')`,
+			`CREATE TABLE t_subjects_v12 (
+				c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+				c_space_id TEXT NOT NULL,
+				c_subject_id TEXT NOT NULL,
+				c_subject_type TEXT NOT NULL,
+				c_name TEXT NOT NULL DEFAULT '',
+				c_market TEXT NOT NULL DEFAULT '',
+				c_currency TEXT NOT NULL DEFAULT '',
+				c_timezone TEXT NOT NULL DEFAULT '',
+				c_status TEXT NOT NULL DEFAULT 'active',
+				c_attrs_json TEXT NOT NULL DEFAULT '{}',
+				c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				CHECK (c_status IN ('active', 'disabled')),
+				FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
+				UNIQUE (c_space_id, c_subject_id)
+			)`,
+			`INSERT INTO t_subjects_v12 SELECT c_id, c_space_id, c_subject_id, c_subject_type, c_name, c_market, c_currency, c_timezone, c_status, c_attrs_json, c_ctime, c_mtime FROM t_subjects`,
+			`DROP TABLE t_subjects`,
+			`ALTER TABLE t_subjects_v12 RENAME TO t_subjects`)
 	}
 	if hasColumn == 0 {
 		statements = append(statements, `ALTER TABLE t_datasets ADD COLUMN c_subject_tags_json TEXT NOT NULL DEFAULT '[]'`)
 	}
+	statements = append(statements,
+		`CREATE TABLE IF NOT EXISTS t_tags (
+			c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			c_space_id TEXT NOT NULL,
+			c_tag_id TEXT NOT NULL,
+			c_tag_name TEXT NOT NULL,
+			c_description TEXT NOT NULL DEFAULT '',
+			c_mode TEXT NOT NULL,
+			c_builtin INTEGER NOT NULL DEFAULT 0,
+			c_sources_json TEXT NOT NULL DEFAULT '[]',
+			c_instrument_type TEXT NOT NULL DEFAULT '',
+			c_cron TEXT NOT NULL DEFAULT '0 * * * *',
+			c_timezone TEXT NOT NULL DEFAULT 'UTC',
+			c_last_run_at DATETIME NOT NULL DEFAULT '',
+			c_last_status TEXT NOT NULL DEFAULT '',
+			c_last_error TEXT NOT NULL DEFAULT '',
+			c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			CHECK (c_mode IN ('auto', 'manual')),
+			CHECK (c_builtin IN (0, 1)),
+			CHECK (c_last_status IN ('', 'success', 'failed')),
+			FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
+			UNIQUE (c_space_id, c_tag_id),
+			UNIQUE (c_space_id, c_tag_name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS t_subject_tags (
+			c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			c_space_id TEXT NOT NULL,
+			c_tag_id TEXT NOT NULL,
+			c_subject_id TEXT NOT NULL,
+			c_status TEXT NOT NULL DEFAULT 'active',
+			c_inactive_at DATETIME NOT NULL DEFAULT '',
+			c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			CHECK (c_status IN ('active', 'inactive')),
+			FOREIGN KEY (c_space_id, c_tag_id) REFERENCES t_tags (c_space_id, c_tag_id) ON DELETE CASCADE ON UPDATE CASCADE,
+			FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
+			UNIQUE (c_space_id, c_tag_id, c_subject_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_t_subject_tags_status ON t_subject_tags (c_space_id, c_tag_id, c_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_t_subject_tags_subject ON t_subject_tags (c_space_id, c_subject_id)`,
+		`CREATE TRIGGER IF NOT EXISTS trg_t_tags_mtime
+			AFTER UPDATE ON t_tags
+			FOR EACH ROW
+			WHEN NEW.c_mtime = OLD.c_mtime AND NEW.c_last_run_at = OLD.c_last_run_at
+		BEGIN
+			UPDATE t_tags SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_mtime
+			AFTER UPDATE ON t_subject_tags
+			FOR EACH ROW
+			WHEN NEW.c_mtime = OLD.c_mtime
+		BEGIN
+			UPDATE t_subject_tags SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+		END`,
+	)
 	statements = append(statements, `UPDATE t_schema_meta SET c_value = '12' WHERE c_key = 'schema_version'`)
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {

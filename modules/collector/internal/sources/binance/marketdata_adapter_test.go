@@ -31,14 +31,13 @@ func TestMarketDataAdapterFetchesClosedKlineThroughTypedProvider(t *testing.T) {
 	}
 
 	adapter := NewMarketDataAdapter(AdapterConfig{
-		ProductType:    marketdata.ProductSpot,
+		InstrumentType: marketdata.InstrumentSpot,
 		KlineCollector: collector,
 		Now:            func() time.Time { return now },
 	})
 	rows, err := adapter.FetchKlines(context.Background(), marketdata.KlineRequest{
 		MarketID:       "crypto",
 		ExchangeID:     "binance",
-		ProductType:    marketdata.ProductSpot,
 		InstrumentType: marketdata.InstrumentSpot,
 		SubjectID:      "BTC-USDT-SPOT",
 		ProviderSymbol: "BTCUSDT",
@@ -60,7 +59,7 @@ func TestMarketDataAdapterFetchesClosedKlineThroughTypedProvider(t *testing.T) {
 func TestMarketDataAdapterUsesRuntimeKlineRequestTimeout(t *testing.T) {
 	t.Setenv("MOOX_FETCH_REQUEST_TIMEOUT_MS", "2000")
 
-	adapter := NewMarketDataAdapter(AdapterConfig{ProductType: marketdata.ProductSpot})
+	adapter := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSpot})
 	require.Equal(t, 2*time.Second, adapter.KlineSpec().RateLimit.RequestTimeout)
 }
 
@@ -74,9 +73,9 @@ func TestMarketDataAdapterNormalizesBinanceIntervalWithoutChangingStoredFrequenc
 		return []*exchange.Kline{testExchangeKline(start, start.Add(time.Hour-time.Millisecond), "100", "110", "90", "105", "12", "1234.56")}, nil
 	}
 
-	adapter := NewMarketDataAdapter(AdapterConfig{ProductType: marketdata.ProductSpot, KlineCollector: collector, Now: func() time.Time { return now }})
+	adapter := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSpot, KlineCollector: collector, Now: func() time.Time { return now }})
 	rows, err := adapter.FetchKlines(context.Background(), marketdata.KlineRequest{
-		MarketID: "crypto", ExchangeID: "binance", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot,
+		MarketID: "crypto", ExchangeID: "binance", InstrumentType: marketdata.InstrumentSpot,
 		SubjectID: "BTC-USDT-SPOT", ProviderSymbol: "BTCUSDT", Frequency: "1H", Limit: 1, RequestID: "req-binance-hour",
 	})
 
@@ -94,13 +93,13 @@ func TestMarketDataAdapterSupportsSwapHourlyRequestThroughRouter(t *testing.T) {
 		start := now.Add(-2 * time.Hour)
 		return []*exchange.Kline{testExchangeKline(start, start.Add(time.Hour-time.Millisecond), "100", "110", "90", "105", "12", "1234.56")}, nil
 	}
-	adapter := NewMarketDataAdapter(AdapterConfig{ProductType: marketdata.ProductSwap, KlineCollector: collector, Now: func() time.Time { return now }})
+	adapter := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSwap, KlineCollector: collector, Now: func() time.Time { return now }})
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(adapter))
 	router, err := marketdata.NewRouter(registry, 2, nil, nil)
 	require.NoError(t, err)
 	rows, err := router.FetchKlines(context.Background(), marketdata.KlineRequest{
-		MarketID: "crypto", ExchangeID: "binance", ProductType: marketdata.ProductSwap, InstrumentType: marketdata.InstrumentSwap,
+		MarketID: "crypto", ExchangeID: "binance", InstrumentType: marketdata.InstrumentSwap,
 		SubjectID: "1000BONK-USDT-SWAP", ProviderSymbol: "1000BONKUSDT", SourceID: "swap_http", Frequency: "1H", Limit: 1, RequestID: "req-binance-swap-hour",
 	}, []string{"binance"})
 
@@ -120,7 +119,7 @@ func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 	}
 
 	adapter := NewMarketDataAdapter(AdapterConfig{
-		ProductType:     marketdata.ProductSpot,
+		InstrumentType:  marketdata.InstrumentSpot,
 		SymbolCollector: collector,
 		Now:             func() time.Time { return snapshotAt.Add(time.Minute) },
 	})
@@ -136,7 +135,6 @@ func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 	assert.Equal(t, map[string]int{"binance": 1}, snapshot.ExchangeCounts)
 	require.Equal(t, []marketdata.Instrument{{
 		SubjectID:       "BTC-USDT",
-		CanonicalSymbol: "BTC-USDT",
 		ProviderSymbol:  "BTCUSDT",
 		Exchange:        "binance",
 		Name:            "BTC/USDT",

@@ -11,7 +11,7 @@ import (
 
 var shanghaiLocation = mustLoadLocation("Asia/Shanghai")
 
-func CanonicalSubjectID(code string) (string, error) {
+func SubjectID(code string) (string, error) {
 	code = strings.TrimSpace(code)
 	if len(code) != 6 {
 		return "", fmt.Errorf("%w: China security code must contain six digits", marketdata.ErrUnsupportedSymbol)
@@ -58,18 +58,18 @@ func DecodeProviderSymbol(symbol string) (string, error) {
 	code := symbol[2:]
 	switch symbol[:2] {
 	case "sh":
-		return CanonicalSubjectIDWithExchange(code, "XSHG")
+		return SubjectIDWithExchange(code, "XSHG")
 	case "sz":
-		return CanonicalSubjectIDWithExchange(code, "XSHE")
+		return SubjectIDWithExchange(code, "XSHE")
 	case "bj":
-		return CanonicalSubjectIDWithExchange(code, "XBSE")
+		return SubjectIDWithExchange(code, "XBSE")
 	default:
 		return "", fmt.Errorf("%w: invalid provider symbol prefix %q", marketdata.ErrUnsupportedSymbol, symbol[:2])
 	}
 }
 
-func CanonicalSubjectIDWithExchange(code, exchange string) (string, error) {
-	subjectID, err := CanonicalSubjectID(code)
+func SubjectIDWithExchange(code, exchange string) (string, error) {
+	subjectID, err := SubjectID(code)
 	if err != nil {
 		return "", err
 	}

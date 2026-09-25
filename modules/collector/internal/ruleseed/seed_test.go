@@ -26,8 +26,7 @@ const validSeed = `tasks:
     collect_params:
       provider: binance
       market_type: spot
-      symbol_source: dataset
-      symbol_dataset_id: dataset_binance_spot_symbols
+      subject_tags: [binance_spot]
       frequency: 1m
 `
 
@@ -82,8 +81,8 @@ func TestLoadTaskSeedRejectsInvalidContracts(t *testing.T) {
 	tests := map[string]string{
 		"duplicate":       strings.Replace(validSeed, "tasks:\n", "tasks:\n"+strings.TrimPrefix(validSeed, "tasks:\n"), 1),
 		"legacy exchange": strings.Replace(validSeed, "provider: binance\n", "exchange: binance\n", 1),
-		"caller result":   strings.Replace(validSeed, "    symbol_source: dataset\n", "    target_dataset_id: caller-target\n    symbol_source: dataset\n", 1),
-		"mismatch":        strings.Replace(validSeed, "market_type: spot\n      symbol_source", "market_type: swap\n      symbol_source", 1),
+		"caller result":   strings.Replace(validSeed, "    subject_tags: [binance_spot]\n", "    target_dataset_id: caller-target\n    subject_tags: [binance_spot]\n", 1),
+		"mismatch":        strings.Replace(validSeed, "market_type: spot\n      subject_tags", "market_type: swap\n      subject_tags", 1),
 		"bad frequency":   strings.Replace(validSeed, "frequency: 1m", "frequency: instant", 1),
 	}
 	for name, raw := range tests {

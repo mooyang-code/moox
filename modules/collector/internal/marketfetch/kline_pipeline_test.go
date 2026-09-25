@@ -359,9 +359,6 @@ type pipelineStorage struct {
 func (s *pipelineStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
 	return nil
 }
-func (s *pipelineStorage) RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error {
-	return nil
-}
 func (s *pipelineStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, source string) error {
 	s.rows = rows
 	s.sourceEventID = source
@@ -463,7 +460,7 @@ func TestKlinePipelineAcceptsCryptoHourFrequency(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 1, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
-	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", ProductType: marketdata.ProductSpot, InstrumentType: marketdata.InstrumentSpot, DatasetID: "binance_spot_kline_1h", Now: func() time.Time { return now }}
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", InstrumentType: marketdata.InstrumentSpot, DatasetID: "binance_spot_kline_1h", Now: func() time.Time { return now }}
 	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-hour", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Frequency: "1h", Provider: "binance", MarketType: "spot", RequestID: "request-hour", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "binance_spot_kline_1h", Frequency: "1h", StartTime: barStart.Format(time.RFC3339), BarLimit: 1}}})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
@@ -479,7 +476,7 @@ func TestKlinePipelinePassesDNSRoutesToProvider(t *testing.T) {
 			require.NoError(t, registry.Register(pipelineProvider{id: "binance", request: &observed, err: marketdata.ErrNoClosedBar}))
 			router, err := marketdata.NewRouter(registry, 2, nil, nil)
 			require.NoError(t, err)
-			pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", ProductType: marketdata.ProductType(marketType), InstrumentType: marketdata.InstrumentType(marketType), DatasetID: "kline"}
+			pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", InstrumentType: marketdata.InstrumentType(marketType), DatasetID: "kline"}
 			routes := map[string]sources.DNSResolution{
 				"api.binance.com":  {IPs: []string{"203.0.113.1", "203.0.113.2"}},
 				"fapi.binance.com": {IPs: []string{"203.0.113.3"}},
@@ -495,14 +492,14 @@ func TestKlinePipelinePassesDNSRoutesToProvider(t *testing.T) {
 
 func TestRequestKlineRouteIDUsesCryptoFrequency(t *testing.T) {
 	for _, test := range []struct {
-		product   marketdata.ProductType
+		product   marketdata.InstrumentType
 		frequency string
 		want      string
 	}{
-		{product: marketdata.ProductSpot, frequency: "1h", want: "binance_spot_kline_1h"},
-		{product: marketdata.ProductSwap, frequency: "1w", want: "binance_swap_kline_1w"},
+		{product: marketdata.InstrumentSpot, frequency: "1h", want: "binance_spot_kline_1h"},
+		{product: marketdata.InstrumentSwap, frequency: "1w", want: "binance_swap_kline_1w"},
 	} {
-		pipeline := &KlinePipeline{SpaceID: "crypto", MarketID: "crypto", ProductType: test.product}
+		pipeline := &KlinePipeline{SpaceID: "crypto", MarketID: "crypto", InstrumentType: test.product}
 		require.Equal(t, test.want, requestKlineRouteID(pipeline, test.frequency))
 	}
 }
@@ -573,7 +570,7 @@ func TestKlinePipelineAdvancesCandidateIndexAfterExhaustedChain(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
 	_, selected, next, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
-		MarketID: "stockcn", ExchangeID: "XSHG", ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
+		MarketID: "stockcn", ExchangeID: "XSHG", InstrumentType: marketdata.InstrumentEquity,
 		SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 1, RequestID: "candidate-index",
 	}, []string{"sina", "tencent", "eastmoney"}, 1)
 	require.Error(t, err)
@@ -598,7 +595,7 @@ func TestFetchKlinesFromChainFallsBackWhenRequestedIntervalIsEmpty(t *testing.T)
 	require.NoError(t, err)
 
 	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
-		MarketID: "stockcn", ExchangeID: "XSHG", ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
+		MarketID: "stockcn", ExchangeID: "XSHG", InstrumentType: marketdata.InstrumentEquity,
 		SubjectID: valid.SubjectID, ProviderSymbol: valid.ProviderSymbol, Frequency: "1m", Limit: 1,
 		StartTime: start, EndTime: end, Now: now, RequestID: "coverage-fallback",
 	}, []string{"sina", "tencent"}, 0)

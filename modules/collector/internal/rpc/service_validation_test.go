@@ -47,8 +47,8 @@ func (s validationDatasetSource) GetDataset(_ context.Context, _ string, dataset
 	return info, nil
 }
 
-func (validationDatasetSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
-	return nil, nil
+func (s validationDatasetSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
+	return []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}}, nil
 }
 
 type taskResultMetadataFake struct {
@@ -88,6 +88,11 @@ func (f *taskResultMetadataFake) CreateDataset(_ context.Context, req *storagepb
 	dataset := req.GetDataset()
 	f.datasets[dataset.GetDatasetId()] = dataset
 	return &storagepb.CreateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: dataset}, nil
+}
+
+func (f *taskResultMetadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
+	return &storagepb.UpdateDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: req.GetDataset()}, nil
 }
 
 func (f *taskResultMetadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
@@ -146,20 +151,20 @@ func TestValidateCollectionTaskDatasetsRejectsMarketAndFrequencyMismatch(t *test
 		"symbols": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
 		"bars":    {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}},
 	}}
-	task := domain.CollectionTask{SpaceID: "crypto", DataType: "kline", Provider: "binance", MarketType: "spot", CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"5m"}`}
+	task := domain.CollectionTask{SpaceID: "crypto", DataType: "kline", Provider: "binance", MarketType: "spot", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"5m"}`}
 	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), task), `does not enable frequency "5m"`)
 
-	task.CollectParams = `{"provider":"binance","market_type":"swap","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`
+	task.CollectParams = `{"provider":"binance","market_type":"swap","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`
 	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), task), "market_type=spot does not match task market_type=swap")
 }
 
-func TestValidateCollectionTaskDatasetsRejectsSymbolMarketMismatch(t *testing.T) {
+func TestValidateCollectionTaskDatasetsRejectsTargetMarketMismatch(t *testing.T) {
 	service := &Service{datasetSrc: validationDatasetSource{
-		"symbols": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "spot"}},
+		"bars": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"}},
 	}}
 	task := domain.CollectionTask{
-		SpaceID: "crypto", DataType: "instrument", Provider: "binance", MarketType: "swap",
-		CollectParams: `{"provider":"binance","market_type":"swap","symbol_source":"exchange","target_dataset_id":"symbols"}`,
+		SpaceID: "crypto", DataType: "kline", Provider: "binance", MarketType: "swap",
+		CollectParams: `{"provider":"binance","market_type":"swap","subject_tags":["binance_swap"],"target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), task), "market_type=spot does not match task market_type=swap")
 }
@@ -171,7 +176,7 @@ func TestValidateCollectionTaskDatasetsAcceptsStockSharedDataSource(t *testing.T
 	}}
 	task := domain.CollectionTask{
 		SpaceID: "stockcn", TaskID: "stock-bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity",
-		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","subject_tags":["binance_spot"],"target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
 	}
 	require.NoError(t, service.validateCollectionTaskDatasets(context.Background(), task))
 }
@@ -187,7 +192,7 @@ func TestValidateCollectionTaskAcceptsCollectorLocalResampleWithoutCloudRoute(t 
 func TestValidateCollectionTaskAcceptsBoundedStockHistoryMode(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "stockcn", TaskID: "stock-bars", TaskName: "stock bars", DataType: "kline", Provider: "stockcn_multi", MarketType: "equity",
-		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","subject_tags":["binance_spot"],"target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m","history_policy":{"mode":"lookback","lookback":5}}`,
 	}
 	require.NoError(t, validateCollectionTask(task))
 }
@@ -213,13 +218,13 @@ func TestValidateCreateTaskResultIdentityRejectsCallerOwnedResults(t *testing.T)
 		})
 	}
 
-	require.NoError(t, validateCreateTaskResultIdentity(`{"source_dataset_id":"source","symbol_dataset_id":"symbols"}`))
+	require.NoError(t, validateCreateTaskResultIdentity(`{"source_dataset_id":"source"}`))
 }
 
 func TestAssignGeneratedCollectionTaskResultKeepsInputSourceFields(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"frequency":"1m"}`,
 	}
 	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 	require.NoError(t, err)
@@ -233,7 +238,6 @@ func TestAssignGeneratedCollectionTaskResultKeepsInputSourceFields(t *testing.T)
 
 	assignedParams, err := domain.ParseCollectParams(assigned.CollectParams, assigned.Provider, assigned.MarketType, assigned.DataType)
 	require.NoError(t, err)
-	require.Equal(t, "symbols", assignedParams.SymbolDatasetID)
 	require.Equal(t, ids.DatasetID, assignedParams.TargetDatasetID)
 }
 
@@ -399,17 +403,18 @@ func TestCreateTaskRejectsCallerResultIdentityBeforeStorage(t *testing.T) {
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "result.view_id")
 }
 
-type acceptingRecordDatasetSource struct{}
+type acceptingKlineDatasetSource struct{}
 
-func (acceptingRecordDatasetSource) GetDataset(_ context.Context, _ string, _ string) (storagesource.DatasetInfo, error) {
+func (acceptingKlineDatasetSource) GetDataset(_ context.Context, _ string, _ string) (storagesource.DatasetInfo, error) {
 	return storagesource.DatasetInfo{
-		DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active",
-		Attributes: map[string]string{"market_type": "spot"},
+		DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"},
+		SubjectTags: []string{"binance_spot"},
+		Attributes:  map[string]string{"market_type": "spot"},
 	}, nil
 }
 
-func (acceptingRecordDatasetSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
-	return nil, nil
+func (acceptingKlineDatasetSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
+	return []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}}, nil
 }
 
 type failingDatasetSource struct{}
@@ -418,27 +423,88 @@ func (failingDatasetSource) GetDataset(context.Context, string, string) (storage
 	return storagesource.DatasetInfo{}, fmt.Errorf("dataset lookup failed")
 }
 
-func (failingDatasetSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
+func (failingDatasetSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
 	return nil, nil
+}
+
+type emptySubjectsDatasetSource struct{}
+
+func (emptySubjectsDatasetSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
+	return storagesource.DatasetInfo{}, nil
+}
+
+func (emptySubjectsDatasetSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
+	return nil, nil
+}
+
+func TestResolveSubjectTagsRequiresNonEmptyKlineTags(t *testing.T) {
+	service := &Service{datasetSrc: acceptingKlineDatasetSource{}}
+	task := domain.CollectionTask{
+		SpaceID: "crypto", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","frequency":"1m"}`,
+	}
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	require.NoError(t, err)
+	_, _, err = service.resolveSubjectTags(context.Background(), task, params, "")
+	require.ErrorContains(t, err, "请选择标的标签")
+}
+
+func TestResolveSubjectTagsRejectsEmptyStorageSubjectResolution(t *testing.T) {
+	service := &Service{datasetSrc: emptySubjectsDatasetSource{}}
+	task := domain.CollectionTask{
+		SpaceID: "crypto", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"frequency":"1m"}`,
+	}
+	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	require.NoError(t, err)
+	_, _, err = service.resolveSubjectTags(context.Background(), task, params, "")
+	require.ErrorContains(t, err, "所选标签没有有效标的")
+}
+
+func TestResolveSubjectTagsSupportsExplicitAndInheritedResampleTags(t *testing.T) {
+	source := validationDatasetSource{
+		"source": {SubjectTags: []string{"source_tag"}},
+	}
+	service := &Service{datasetSrc: source}
+
+	explicit := domain.CollectionTask{
+		SpaceID: "crypto", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+		CollectParams: `{"provider":"moox","market_type":"spot","subject_tags":["explicit_tag"],"source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"5m","alignment":"epoch_utc"}`,
+	}
+	explicitParams, err := domain.ParseCollectParams(explicit.CollectParams, explicit.Provider, explicit.MarketType, explicit.DataType)
+	require.NoError(t, err)
+	clean, tags, err := service.resolveSubjectTags(context.Background(), explicit, explicitParams, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"explicit_tag"}, tags)
+	require.NotContains(t, clean, "subject_tags")
+
+	inherited := explicit
+	inherited.CollectParams = strings.Replace(explicit.CollectParams, `"subject_tags":["explicit_tag"],`, "", 1)
+	inheritedParams, err := domain.ParseCollectParams(inherited.CollectParams, inherited.Provider, inherited.MarketType, inherited.DataType)
+	require.NoError(t, err)
+	clean, tags, err = service.resolveSubjectTags(context.Background(), inherited, inheritedParams, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"source_tag"}, tags)
+	require.NotContains(t, clean, "subject_tags")
 }
 
 func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	db := openCollectorTestStore(t)
 	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
 	params, err := structpb.NewStruct(map[string]any{
-		"provider": "binance", "market_type": "spot", "symbol_source": "exchange",
+		"provider": "binance", "market_type": "spot", "subject_tags": []any{"binance_spot"}, "frequency": "1m",
 	})
 	require.NoError(t, err)
 	service := &Service{
 		taskRepo:         db.Tasks(),
 		resultManager:    taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-		datasetSrc:       acceptingRecordDatasetSource{},
+		datasetSrc:       acceptingKlineDatasetSource{},
 		resultDataNodeID: "node-collector",
 	}
 
 	rsp, callErr := service.CreateTask(context.Background(), &pb.CreateTaskReq{
 		Task: &pb.CollectionTask{
-			SpaceId: "crypto", TaskName: "  Binance 现货标的  ", DataType: "instrument",
+			SpaceId: "crypto", TaskName: "  Binance 现货 K 线  ", DataType: "kline",
 			Provider: "binance", MarketType: "spot", CollectParams: params,
 		},
 	})
@@ -450,7 +516,7 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 
 	stored, getErr := db.Tasks().GetByTaskID(context.Background(), "crypto", rsp.GetTaskId())
 	require.NoError(t, getErr)
-	require.Equal(t, "Binance 现货标的", stored.TaskName)
+	require.Equal(t, "Binance 现货 K 线", stored.TaskName)
 	expected := taskresult.ResultIDs("crypto", rsp.GetTaskId())
 	require.Equal(t, expected.DatasetID, stored.ResultDatasetID)
 	require.Equal(t, expected.ViewID, stored.ResultViewID)
@@ -458,13 +524,51 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	require.Contains(t, metadata.views, expected.ViewID)
 	require.Equal(t, "collector", metadata.datasets[expected.DatasetID].GetAttributes()["owner_module"])
 	require.Equal(t, rsp.GetTaskId(), metadata.datasets[expected.DatasetID].GetAttributes()["collector_task_id"])
+	require.Equal(t, []string{"binance_spot"}, metadata.datasets[expected.DatasetID].GetSubjectTags())
+	require.NotContains(t, stored.CollectParams, "subject_tags")
+}
+
+func TestUpdateTaskPersistsSubjectTagsOnResultDatasetOnly(t *testing.T) {
+	db := openCollectorTestStore(t)
+	ids := taskresult.ResultIDs("crypto", "task-tags")
+	metadata := newTaskResultMetadataFake(ids, "task-tags")
+	metadata.datasets[ids.DatasetID].SubjectTags = []string{"old_tag"}
+	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-tags", TaskName: "标签任务", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: fmt.Sprintf(`{"provider":"binance","market_type":"spot","target_dataset_id":%q,"frequency":"1m"}`, ids.DatasetID),
+		Enabled:       true, ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+	}))
+
+	params, err := structpb.NewStruct(map[string]any{
+		"provider": "binance", "market_type": "spot", "subject_tags": []any{"new_tag"}, "frequency": "1m",
+	})
+	require.NoError(t, err)
+	service := &Service{
+		taskRepo:      db.Tasks(),
+		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		datasetSrc: validationDatasetSource{
+			ids.DatasetID: {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, SubjectTags: []string{"old_tag"}, Attributes: map[string]string{"market_type": "spot"}},
+		},
+	}
+
+	rsp, callErr := service.UpdateTask(context.Background(), &pb.UpdateTaskReq{
+		SpaceId: "crypto", TaskId: "task-tags",
+		Task: &pb.CollectionTask{SpaceId: "crypto", TaskId: "task-tags", TaskName: "标签任务", DataType: "kline", Provider: "binance", MarketType: "spot", CollectParams: params},
+	})
+	require.NoError(t, callErr)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+
+	updated, err := db.Tasks().GetByTaskID(context.Background(), "crypto", "task-tags")
+	require.NoError(t, err)
+	require.NotContains(t, updated.CollectParams, "subject_tags")
+	require.Equal(t, []string{"new_tag"}, metadata.datasets[ids.DatasetID].GetSubjectTags())
 }
 
 func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 	db := openCollectorTestStore(t)
 	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
 	params, err := structpb.NewStruct(map[string]any{
-		"provider": "binance", "market_type": "spot", "symbol_source": "exchange",
+		"provider": "binance", "market_type": "spot", "subject_tags": []any{"binance_spot"}, "frequency": "1m",
 	})
 	require.NoError(t, err)
 	service := &Service{
@@ -476,7 +580,7 @@ func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 
 	rsp, callErr := service.CreateTask(context.Background(), &pb.CreateTaskReq{
 		Task: &pb.CollectionTask{
-			SpaceId: "crypto", TaskName: "补偿任务", DataType: "instrument",
+			SpaceId: "crypto", TaskName: "补偿任务", DataType: "kline",
 			Provider: "binance", MarketType: "spot", CollectParams: params,
 		},
 	})
@@ -498,13 +602,13 @@ func TestCreateTaskRejectsDuplicateNameWithinSpace(t *testing.T) {
 	}))
 
 	params, err := structpb.NewStruct(map[string]any{
-		"provider": "binance", "market_type": "spot", "symbol_source": "exchange",
+		"provider": "binance", "market_type": "spot", "subject_tags": []any{"binance_spot"}, "frequency": "1m",
 	})
 	require.NoError(t, err)
-	service := &Service{taskRepo: db.Tasks()}
+	service := &Service{taskRepo: db.Tasks(), datasetSrc: acceptingKlineDatasetSource{}}
 	rsp, callErr := service.CreateTask(context.Background(), &pb.CreateTaskReq{
 		Task: &pb.CollectionTask{
-			SpaceId: "crypto", TaskName: " same name ", DataType: "instrument",
+			SpaceId: "crypto", TaskName: " same name ", DataType: "kline",
 			Provider: "binance", MarketType: "spot", CollectParams: params,
 		},
 	})
@@ -520,21 +624,21 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "original", Description: "before",
-		DataType: "instrument", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"dataset-original"}`,
+		DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-original","frequency":"1m"}`,
 		Enabled:       true, Creator: "creator", PrepareState: domain.PrepareStateReady,
 		ResultDatasetID: "dataset-original", ResultViewID: "view-original",
 	}))
 	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-2", TaskName: "occupied",
-		DataType: "instrument", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"dataset-occupied"}`,
+		DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-occupied","frequency":"1m"}`,
 		Enabled:       true, PrepareState: domain.PrepareStateReady,
 		ResultDatasetID: "dataset-occupied", ResultViewID: "view-occupied",
 	}))
 
 	params, err := structpb.NewStruct(map[string]any{
-		"provider": "binance", "market_type": "spot", "symbol_source": "exchange",
+		"provider": "binance", "market_type": "spot", "frequency": "1m",
 	})
 	require.NoError(t, err)
 	enabled := false
@@ -542,7 +646,7 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 		taskRepo: db.Tasks(),
 		datasetSrc: validationDatasetSource{
 			"dataset-original": {
-				DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active",
+				DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, SubjectTags: []string{"binance_spot"},
 				Attributes: map[string]string{"market_type": "spot"},
 			},
 		},
@@ -551,7 +655,7 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 		SpaceId: "crypto", TaskId: "task-1",
 		Task: &pb.CollectionTask{
 			SpaceId: "crypto", TaskId: "task-1", TaskName: " renamed ", Description: "after",
-			DataType: "instrument", Provider: "binance", MarketType: "spot",
+			DataType: "kline", Provider: "binance", MarketType: "spot",
 			CollectParams: params, Enabled: &enabled,
 		},
 	})
@@ -563,7 +667,7 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 	require.Equal(t, "renamed", updated.TaskName)
 	require.Equal(t, "after", updated.Description)
 	require.False(t, updated.Enabled)
-	require.Equal(t, "instrument", updated.DataType)
+	require.Equal(t, "kline", updated.DataType)
 	require.Equal(t, "binance", updated.Provider)
 	require.Equal(t, "spot", updated.MarketType)
 	require.Equal(t, "dataset-original", updated.ResultDatasetID)
@@ -574,7 +678,7 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 		SpaceId: "crypto", TaskId: "task-1",
 		Task: &pb.CollectionTask{
 			SpaceId: "crypto", TaskId: "task-1", TaskName: "occupied",
-			DataType: "instrument", Provider: "binance", MarketType: "spot",
+			DataType: "kline", Provider: "binance", MarketType: "spot",
 		},
 	})
 	require.NoError(t, callErr)
@@ -582,10 +686,17 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "task_name")
 
 	rsp, callErr = service.UpdateTask(context.Background(), &pb.UpdateTaskReq{
+		// A data type change is immutable; use a valid resample payload so the
+		// assertion reaches the task identity guard rather than JSON parsing.
 		SpaceId: "crypto", TaskId: "task-1",
 		Task: &pb.CollectionTask{
 			SpaceId: "crypto", TaskId: "task-1", TaskName: "renamed",
-			DataType: "kline", Provider: "binance", MarketType: "spot",
+			DataType: "kline_resample", Provider: "moox", MarketType: "spot",
+			CollectParams: func() *structpb.Struct {
+				value, structErr := structpb.NewStruct(map[string]any{"provider": "moox", "market_type": "spot", "source_dataset_id": "dataset-original", "source_frequency": "1m", "source_series_tag": "venue:binance", "target_frequency": "5m", "alignment": "epoch_utc"})
+				require.NoError(t, structErr)
+				return value
+			}(),
 		},
 	})
 	require.NoError(t, callErr)
@@ -634,6 +745,18 @@ func TestValidateCollectionTaskUpdateAllowsOnlyMutableFields(t *testing.T) {
 			require.ErrorContains(t, validateCollectionTaskUpdate(base, changed), "create a new task")
 		})
 	}
+}
+
+func TestValidateCollectionTaskUpdateIgnoresLegacySubjectTags(t *testing.T) {
+	existing := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-legacy-tags", TaskName: "legacy tags", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams:   `{"provider":"binance","market_type":"spot","subject_tags":["old_tag"],"target_dataset_id":"dataset-result","frequency":"1m"}`,
+		ResultDatasetID: "dataset-result", ResultViewID: "view-result",
+	}
+	desired := existing
+	desired.CollectParams = `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset-result","frequency":"1m"}`
+
+	require.NoError(t, validateCollectionTaskUpdate(existing, desired))
 }
 
 func TestValidateTaskResultIdentityUpdateRejectsViewChanges(t *testing.T) {

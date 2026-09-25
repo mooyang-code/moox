@@ -70,35 +70,7 @@ func (c *Client) ListMarketFetchers(ctx context.Context, spaceID string) ([]Node
 }
 
 func (c *Client) ListTimerMarketFetchers(ctx context.Context, spaceID string) ([]Node, error) {
-	// The daily stock Instrument snapshot also uses a Timer trigger, but it is
-	// not a Kline assignment target and must never consume one of the fixed N
-	// Kline groups.
-	nodes, err := c.listMarketFetchers(ctx, spaceID, "timer")
-	if err != nil {
-		return nil, err
-	}
-	filtered := nodes[:0]
-	for _, node := range nodes {
-		if IsInstrumentSnapshotNode(node) {
-			continue
-		}
-		filtered = append(filtered, node)
-	}
-	return filtered, nil
-}
-
-func (c *Client) ListInstrumentSnapshotTimers(ctx context.Context, spaceID string) ([]Node, error) {
-	nodes, err := c.listMarketFetchers(ctx, spaceID, "timer")
-	if err != nil {
-		return nil, err
-	}
-	filtered := nodes[:0]
-	for _, node := range nodes {
-		if IsInstrumentSnapshotNode(node) {
-			filtered = append(filtered, node)
-		}
-	}
-	return filtered, nil
+	return c.listMarketFetchers(ctx, spaceID, "timer")
 }
 
 func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType string) ([]Node, error) {
@@ -155,14 +127,6 @@ func nodeFromProto(item *cloudnodepb.CloudNode) Node {
 		metadata = item.GetMetadata().AsMap()
 	}
 	return Node{NodeID: item.GetNodeId(), FunctionName: item.GetFunctionName(), Region: item.GetRegion(), Namespace: item.GetNamespace(), PackageID: item.GetPackageId(), DeploymentID: item.GetDeploymentId(), BizType: item.GetBizType(), NodeType: item.GetNodeType(), TriggerType: item.GetTriggerType(), Metadata: metadata}
-}
-
-func IsInstrumentSnapshotNode(node Node) bool {
-	if strings.EqualFold(strings.TrimSpace(fmt.Sprint(node.Metadata["function_mode"])), "instrument_snapshot") {
-		return true
-	}
-	name := strings.ToLower(strings.TrimSpace(node.FunctionName))
-	return strings.Contains(name, "-instrument-") || strings.HasSuffix(name, "-instrument")
 }
 
 // SubmitRuntimeConfigs persists one asynchronous CloudNode reconciliation job.

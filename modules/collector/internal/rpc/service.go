@@ -62,7 +62,7 @@ const defaultResampleSettleDelay = 10 * time.Second
 
 type datasetSource interface {
 	GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error)
-	ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error)
+	ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error)
 }
 
 // New creates a collector management service.
@@ -250,6 +250,15 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	if err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	cleanParams, subjectTags, err := s.resolveSubjectTags(ctx, task, params, "")
+	if err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	task.CollectParams = cleanParams
+	params, err = domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	if err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
 	if err := validateCollectionTask(task); err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -308,7 +317,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
 		var err error
-		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Name: task.TaskName, Description: description, DataSourceID: task.Provider, Frequency: firstTaskFrequency(params), Frequencies: append([]string(nil), params.Collector.Intervals...)})
+		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Name: task.TaskName, Description: description, DataSourceID: task.Provider, Frequency: firstTaskFrequency(params), Frequencies: append([]string(nil), params.Collector.Intervals...), SubjectTags: subjectTags})
 		if err != nil {
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
@@ -418,6 +427,15 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 		}
 	}
+	requestedParams, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	if err != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	cleanParams, subjectTags, err := s.resolveSubjectTags(ctx, task, requestedParams, existing.ResultDatasetID)
+	if err != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	task.CollectParams = cleanParams
 	task.ResultDatasetID, task.ResultViewID = existing.ResultDatasetID, existing.ResultViewID
 	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -463,6 +481,18 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task_name %q already exists in space %q", task.TaskName, spaceID))}, nil
 		}
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	if s.resultManager != nil && !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		if err := s.resultManager.UpdateSubjectTags(ctx, task.SpaceID, task.ResultDatasetID, subjectTags); err != nil {
+			// The task row is the local source of truth. Restore it when the
+			// cross-service Dataset update fails so a retry cannot observe a task
+			// definition that points at an unapplied subject scope.
+			if _, rollbackErr := s.taskRepo.UpdateMutableByTaskID(ctx, spaceID, taskID, *existing); rollbackErr != nil {
+				log.ErrorContextf(ctx, "[Collector] rollback collection task after Dataset tag update failure: %v", rollbackErr)
+				return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("%v; task rollback failed: %v", err, rollbackErr))}, nil
+			}
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
 	}
 	s.refreshRealtimeInventory(ctx)
 	return &pb.UpdateTaskRsp{RetInfo: retOK(), Task: s.toPBTask(ctx, *updated)}, nil
@@ -916,6 +946,68 @@ func firstTaskFrequency(params *domain.CollectParams) string {
 	return params.TargetFrequency
 }
 
+// resolveSubjectTags removes the transient task parameter and validates that
+// the selected tags currently resolve to at least one active Subject. Existing
+// tasks keep their Dataset scope when an update omits collect_params; new
+// tasks must explicitly select tags except for resample tasks, which inherit
+// the source Dataset scope.
+func (s *Service) resolveSubjectTags(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, fallbackDatasetID string) (string, []string, error) {
+	clean, tags, err := domain.SplitSubjectTags(task.CollectParams)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(tags) == 0 {
+		if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+			if s.datasetSrc == nil {
+				return "", nil, errors.New("source Dataset metadata is unavailable")
+			}
+			info, sourceErr := s.datasetSrc.GetDataset(ctx, task.SpaceID, params.SourceDatasetID)
+			if sourceErr != nil {
+				return "", nil, fmt.Errorf("resolve source Dataset tags: %w", sourceErr)
+			}
+			tags = normalizeTagIDs(info.SubjectTags)
+		} else if fallbackDatasetID != "" && s.datasetSrc != nil {
+			info, sourceErr := s.datasetSrc.GetDataset(ctx, task.SpaceID, fallbackDatasetID)
+			if sourceErr != nil {
+				return "", nil, fmt.Errorf("resolve existing Dataset tags: %w", sourceErr)
+			}
+			tags = normalizeTagIDs(info.SubjectTags)
+		}
+	}
+	if len(tags) == 0 {
+		return "", nil, errors.New("请选择标的标签")
+	}
+	if s.datasetSrc == nil {
+		return "", nil, errors.New("subject metadata source is unavailable")
+	}
+	subjects, resolveErr := s.datasetSrc.ResolveSubjects(ctx, task.SpaceID, tags)
+	if resolveErr != nil {
+		return "", nil, fmt.Errorf("resolve selected subject tags: %w", resolveErr)
+	}
+	if len(subjects) == 0 {
+		return "", nil, errors.New("所选标签没有有效标的")
+	}
+	return clean, tags, nil
+}
+
+func normalizeTagIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func validateCollectionTask(task domain.CollectionTask) error {
 	if strings.TrimSpace(task.TaskID) == "" {
 		return fmt.Errorf("task_id is required")
@@ -944,9 +1036,8 @@ func validateCollectionTask(task domain.CollectionTask) error {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
 	if strings.EqualFold(params.Provider, "stockcn_multi") &&
-		!strings.EqualFold(params.Collector.DataType, "kline") &&
-		!strings.EqualFold(params.Collector.DataType, domain.InstrumentDataType) {
-		return fmt.Errorf("stockcn_multi only supports kline and instrument collectors")
+		!strings.EqualFold(params.Collector.DataType, "kline") {
+		return fmt.Errorf("stockcn_multi only supports kline collectors")
 	}
 	if !strings.EqualFold(params.Provider, "stockcn_multi") {
 		definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
@@ -1034,6 +1125,11 @@ func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error
 	if err != nil {
 		return fmt.Errorf("parse desired task collect_params: %w", err)
 	}
+	// subject_tags is a create/update input that lives on the result Dataset,
+	// not part of the task's immutable execution contract. Ignore the legacy
+	// copy here so a task can be updated once during bootstrap migration.
+	existingParams.SubjectTags = nil
+	desiredParams.SubjectTags = nil
 	existingCanonical, err := existingParams.CanonicalJSON()
 	if err != nil {
 		return fmt.Errorf("canonicalize existing task collect_params: %w", err)
@@ -1057,32 +1153,7 @@ func (s *Service) validateCollectionTaskDatasets(ctx context.Context, task domai
 	// the shared stock datasets belong to the stockcn data source.
 	datasetSourceID := collectorDatasetSourceID(params.Collector.Exchange)
 	switch params.Collector.DataType {
-	case domain.InstrumentDataType:
-		return s.validateDataset(
-			ctx,
-			task.SpaceID,
-			params.Target.DatasetID,
-			datasetSourceID,
-			storagepb.DataKind_DATA_KIND_RECORD,
-			"target",
-			false,
-			params.MarketType,
-			nil,
-		)
 	case "kline":
-		if err := s.validateDataset(
-			ctx,
-			task.SpaceID,
-			params.Source.DatasetID,
-			datasetSourceID,
-			storagepb.DataKind_DATA_KIND_RECORD,
-			"source",
-			false,
-			params.Collector.Market,
-			nil,
-		); err != nil {
-			return err
-		}
 		return s.validateDataset(
 			ctx,
 			task.SpaceID,

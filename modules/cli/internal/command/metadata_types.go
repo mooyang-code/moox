@@ -118,19 +118,18 @@ var metadataApplyCmd = &cobra.Command{
 }
 
 type metadataSeed struct {
-	Spaces          []seedSpace          `yaml:"spaces"`
-	DataSources     []seedDataSource     `yaml:"data_sources"`
-	Subjects        []seedSubject        `yaml:"subjects"`
-	SubjectSymbols  []seedSubjectSymbol  `yaml:"subject_symbols"`
-	Datasets        []seedDataset        `yaml:"datasets"`
-	DatasetSubjects []seedDatasetSubject `yaml:"dataset_subjects"`
-	FieldGroups     []seedFieldGroup     `yaml:"field_groups"`
-	Fields          []seedField          `yaml:"fields"`
-	Factors         []seedFactor         `yaml:"factors"`
-	DatasetColumns  []seedDatasetColumn  `yaml:"dataset_columns"`
-	Views           []seedView           `yaml:"views"`
-	ViewColumns     []seedViewColumn     `yaml:"view_columns"`
-	Devices         []seedDevice         `yaml:"devices"`
+	Spaces         []seedSpace         `yaml:"spaces"`
+	DataSources    []seedDataSource    `yaml:"data_sources"`
+	Subjects       []seedSubject       `yaml:"subjects"`
+	Tags           []seedTag           `yaml:"tags"`
+	Datasets       []seedDataset       `yaml:"datasets"`
+	FieldGroups    []seedFieldGroup    `yaml:"field_groups"`
+	Fields         []seedField         `yaml:"fields"`
+	Factors        []seedFactor        `yaml:"factors"`
+	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
+	Views          []seedView          `yaml:"views"`
+	ViewColumns    []seedViewColumn    `yaml:"view_columns"`
+	Devices        []seedDevice        `yaml:"devices"`
 }
 
 type seedCommon struct {
@@ -172,12 +171,17 @@ type seedSubject struct {
 	seedCommon  `yaml:",inline"`
 }
 
-type seedSubjectSymbol struct {
-	SpaceID        string `yaml:"space_id"`
-	SubjectID      string `yaml:"subject_id"`
-	DataSourceID   string `yaml:"data_source_id"`
-	ExternalSymbol string `yaml:"external_symbol"`
-	seedCommon     `yaml:",inline"`
+type seedTag struct {
+	SpaceID        string   `yaml:"space_id"`
+	TagID          string   `yaml:"tag_id"`
+	TagName        string   `yaml:"tag_name"`
+	Description    string   `yaml:"description"`
+	Mode           string   `yaml:"mode"`
+	Builtin        bool     `yaml:"builtin"`
+	Sources        []string `yaml:"sources"`
+	InstrumentType string   `yaml:"instrument_type"`
+	Cron           string   `yaml:"cron"`
+	Timezone       string   `yaml:"timezone"`
 }
 
 type seedDataset struct {
@@ -190,17 +194,8 @@ type seedDataset struct {
 	DataNodeID   string   `yaml:"data_node_id"`
 	KeepDuration string   `yaml:"keep_duration"`
 	Freqs        []string `yaml:"freqs"`
+	SubjectTags  []string `yaml:"subject_tags"`
 	seedCommon   `yaml:",inline"`
-}
-
-type seedDatasetSubject struct {
-	SpaceID            string `yaml:"space_id"`
-	DatasetID          string `yaml:"dataset_id"`
-	SubjectID          string `yaml:"subject_id"`
-	SubjectRole        string `yaml:"subject_role"`
-	EffectiveStartTime string `yaml:"effective_start_time"`
-	EffectiveEndTime   string `yaml:"effective_end_time"`
-	seedCommon         `yaml:",inline"`
 }
 
 type seedField struct {

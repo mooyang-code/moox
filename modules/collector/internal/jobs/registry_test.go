@@ -9,8 +9,8 @@ import (
 
 func TestListJobDefinitionsReturnsStableDataTypes(t *testing.T) {
 	defs := ListJobDefinitions()
-	if len(defs) != 3 || defs[0].DataType != "kline" || defs[1].DataType != "instrument" || defs[2].DataType != "kline_resample" {
-		t.Fatalf("data types = %#v; want kline, symbol, kline_resample", defs)
+	if len(defs) != 2 || defs[0].DataType != "kline" || defs[1].DataType != "kline_resample" {
+		t.Fatalf("data types = %#v; want kline, kline_resample", defs)
 	}
 	if defs[0].DataSourceOptions.Options[0].Value != "binance" {
 		t.Fatalf("first datasource = %q, want binance", defs[0].DataSourceOptions.Options[0].Value)
@@ -31,7 +31,7 @@ func TestResampleJobDefinitionRunsInsideCollector(t *testing.T) {
 }
 
 func TestExistingJobDefinitionsRemainCloudInvoked(t *testing.T) {
-	for _, dataType := range []string{"kline", "instrument"} {
+	for _, dataType := range []string{"kline"} {
 		def, ok := JobDefinitionByDataType(dataType)
 		if !ok || def.ExecutionMode != ExecutionModeCloudInvoke {
 			t.Fatalf("%s definition = %#v", dataType, def)
@@ -59,11 +59,11 @@ func TestJobDefinitionByDataTypeReturnsKlineFields(t *testing.T) {
 func TestBuildTaskSpecsDispatchesByCollectorParams(t *testing.T) {
 	params := &domain.CollectParams{}
 	params.Normalize("binance", "spot", "kline")
-	params.Source.Kind = "dataset_subjects"
+	params.Source.Kind = "dataset"
 	params.Collector.Market = "spot"
 	params.Collector.Intervals = []string{"1m"}
 	params.Target.DatasetID = "ds-1"
-	subjects := []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT"}}
+	subjects := []domain.DatasetSubject{{SubjectID: "BTC-USDT"}}
 
 	specs, err := BuildTaskSpecs(context.Background(), &domain.CollectionTask{TaskID: "r1"}, params, subjects)
 	if err != nil {

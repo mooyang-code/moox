@@ -25,7 +25,7 @@ var (
 )
 
 type AdapterConfig struct {
-	ProductType     marketdata.ProductType
+	InstrumentType  marketdata.InstrumentType
 	KlineCollector  *KlineCollector
 	SymbolCollector *SymbolCollector
 	Now             func() time.Time
@@ -35,15 +35,15 @@ type AdapterConfig struct {
 // typed marketdata contracts. Protocol parsing, retry behavior, symbol
 // filtering, and subject normalization stay owned by the existing collectors.
 type MarketDataAdapter struct {
-	defaultProductType marketdata.ProductType
-	klineCollector     *KlineCollector
-	symbolCollector    *SymbolCollector
-	now                func() time.Time
+	defaultInstrumentType marketdata.InstrumentType
+	klineCollector        *KlineCollector
+	symbolCollector       *SymbolCollector
+	now                   func() time.Time
 }
 
 func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
-	if cfg.ProductType == "" {
-		cfg.ProductType = marketdata.ProductSpot
+	if cfg.InstrumentType == "" {
+		cfg.InstrumentType = marketdata.InstrumentSpot
 	}
 	if cfg.KlineCollector == nil {
 		cfg.KlineCollector = NewKlineCollector()
@@ -55,16 +55,16 @@ func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
 		cfg.Now = time.Now
 	}
 	return &MarketDataAdapter{
-		defaultProductType: cfg.ProductType,
-		klineCollector:     cfg.KlineCollector,
-		symbolCollector:    cfg.SymbolCollector,
-		now:                cfg.Now,
+		defaultInstrumentType: cfg.InstrumentType,
+		klineCollector:        cfg.KlineCollector,
+		symbolCollector:       cfg.SymbolCollector,
+		now:                   cfg.Now,
 	}
 }
 
 func (a *MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
 	sourceID := "spot_http"
-	if a.defaultProductType == marketdata.ProductSwap {
+	if a.defaultInstrumentType == marketdata.InstrumentSwap {
 		sourceID = "swap_http"
 	}
 	return marketdata.ProviderDescriptor{
@@ -81,7 +81,7 @@ func (a *MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
 
 func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 	instrument := marketdata.InstrumentSpot
-	if a != nil && a.defaultProductType == marketdata.ProductSwap {
+	if a != nil && a.defaultInstrumentType == marketdata.InstrumentSwap {
 		instrument = marketdata.InstrumentSwap
 	}
 	return marketdata.KlineSpec{
@@ -146,11 +146,11 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	if err := validateBinanceRoute(req.MarketID, req.ExchangeID); err != nil {
 		return nil, err
 	}
-	productType := req.ProductType
+	productType := req.InstrumentType
 	if productType == "" {
-		productType = a.defaultProductType
+		productType = a.defaultInstrumentType
 	}
-	if productType != a.defaultProductType {
+	if productType != a.defaultInstrumentType {
 		return nil, fmt.Errorf("%w: product %s does not match source %s", marketdata.ErrInvalidRequest, productType, a.Descriptor().SourceID)
 	}
 	sourceID := a.Descriptor().SourceID
@@ -158,7 +158,7 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 		return nil, fmt.Errorf("%w: source %s does not match %s", marketdata.ErrInvalidRequest, req.SourceID, sourceID)
 	}
 	req.SourceID = sourceID
-	req.ProductType = productType
+	req.InstrumentType = productType
 	instType, err := InstTypeForMarket(string(productType))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrInvalidRequest, err)
@@ -219,7 +219,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 	if err := validateBinanceRoute(req.MarketID, req.ExchangeID); err != nil {
 		return marketdata.InstrumentSnapshot{}, err
 	}
-	instType, err := InstTypeForMarket(string(a.defaultProductType))
+	instType, err := InstTypeForMarket(string(a.defaultInstrumentType))
 	if err != nil {
 		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrInvalidRequest, err)
 	}
@@ -248,24 +248,46 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 	}
 
 	instruments := make([]marketdata.Instrument, 0, len(symbols))
+	index := make(map[string]int, len(symbols))
+	duplicated := make(map[string]bool)
+	skipped := 0
 	for _, symbol := range symbols {
 		if symbol == nil {
 			continue
 		}
+		subjectID, subjectErr := ToSubjectID(symbol)
+		if subjectErr != nil {
+			skipped++
+			continue
+		}
+		if _, ok := index[subjectID]; ok {
+			duplicated[subjectID] = true
+			continue
+		}
+		index[subjectID] = len(instruments)
 		instruments = append(instruments, marketdata.Instrument{
-			SubjectID:       normalizedSubjectID(symbol, instType),
-			CanonicalSymbol: symbol.Symbol,
-			ProviderSymbol:  externalSymbol(symbol),
-			Exchange:        "binance",
-			Name:            strings.TrimSpace(symbol.BaseAsset) + "/" + strings.TrimSpace(symbol.QuoteAsset),
-			Status:          symbol.Status,
-			BaseAsset:       symbol.BaseAsset,
-			QuoteAsset:      symbol.QuoteAsset,
-			MinQty:          symbol.MinQty,
-			MaxQty:          symbol.MaxQty,
-			TickSize:        symbol.TickSize,
-			LotSize:         symbol.LotSize,
+			SubjectID:      subjectID,
+			ProviderSymbol: externalSymbol(symbol),
+			Exchange:       "binance",
+			Name:           strings.TrimSpace(symbol.BaseAsset) + "/" + strings.TrimSpace(symbol.QuoteAsset),
+			Status:         symbol.Status,
+			BaseAsset:      symbol.BaseAsset,
+			QuoteAsset:     symbol.QuoteAsset,
 		})
+	}
+	if len(duplicated) > 0 {
+		kept := instruments[:0]
+		for _, instrument := range instruments {
+			if !duplicated[instrument.SubjectID] {
+				kept = append(kept, instrument)
+			}
+		}
+		instruments = kept
+	}
+	if skipped > 0 || len(duplicated) > 0 {
+		// Invalid or ambiguous exchange rows must never become durable IDs.
+		// The complete snapshot validator below still rejects an empty result.
+		_ = skipped
 	}
 	snapshot := marketdata.InstrumentSnapshot{
 		SnapshotID:     fetchedAt.Format(time.RFC3339Nano),
@@ -293,12 +315,12 @@ func validateBinanceRoute(marketID marketdata.MarketID, exchangeID marketdata.Ex
 	return nil
 }
 
-func validateInstrumentType(productType marketdata.ProductType, instrumentType marketdata.InstrumentType) error {
+func validateInstrumentType(productType marketdata.InstrumentType, instrumentType marketdata.InstrumentType) error {
 	if instrumentType == "" {
 		return nil
 	}
 	want := marketdata.InstrumentSpot
-	if productType == marketdata.ProductSwap {
+	if productType == marketdata.InstrumentSwap {
 		want = marketdata.InstrumentSwap
 	}
 	if instrumentType != want {
@@ -351,7 +373,7 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 	sourceID := strings.TrimSpace(req.SourceID)
 	if sourceID == "" {
 		sourceID = "spot_http"
-		if req.ProductType == marketdata.ProductSwap {
+		if req.InstrumentType == marketdata.InstrumentSwap {
 			sourceID = "swap_http"
 		}
 	}

@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
@@ -97,61 +96,6 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 	return &pb.UpsertSubjectRsp{RetInfo: retinfo.Success("success"), Subject: created}, nil
 }
 
-func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataSubjectReq) (*pb.RegisterDataSubjectRsp, error) {
-	item := req.GetSubject()
-	if req == nil || req.GetSpaceId() == "" || req.GetDataSourceId() == "" || req.GetExternalSymbol() == "" || item == nil || item.GetSubjectId() == "" {
-		return &pb.RegisterDataSubjectRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, data_source_id, external_symbol and subject.subject_id are required"))}, nil
-	}
-	for _, binding := range req.GetDatasetBindings() {
-		if binding == nil || binding.GetDatasetId() == "" {
-			return &pb.RegisterDataSubjectRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_bindings.dataset_id is required"))}, nil
-		}
-	}
-	item = proto.Clone(item).(*pb.Subject)
-	item.SpaceId = req.GetSpaceId()
-	if item.Status == "" {
-		item.Status = "active"
-	}
-	if item.SubjectType == "" {
-		item.SubjectType = "custom"
-	}
-	symbol := &pb.SubjectSymbol{
-		SpaceId:        req.GetSpaceId(),
-		SubjectId:      item.GetSubjectId(),
-		DataSourceId:   req.GetDataSourceId(),
-		ExternalSymbol: req.GetExternalSymbol(),
-		Status:         "active",
-	}
-
-	bindings := make([]*pb.DatasetSubject, 0, len(req.GetDatasetBindings()))
-	for _, binding := range req.GetDatasetBindings() {
-		copied := proto.Clone(binding).(*pb.DatasetSubject)
-		copied.SpaceId = req.GetSpaceId()
-		copied.SubjectId = item.GetSubjectId()
-		if copied.SubjectRole == "" {
-			copied.SubjectRole = "normal"
-		}
-		if copied.Status == "" {
-			copied.Status = "active"
-		}
-		bindings = append(bindings, copied)
-	}
-	created, bindings, err := s.metadata.RegisterDataSubject(ctx, item, symbol, bindings)
-	if err != nil {
-		code := retinfo.MetadataStoreCode(err)
-		if code == pb.ErrorCode_NOT_FOUND {
-			code = pb.ErrorCode_DATASET_NOT_FOUND
-		}
-		return &pb.RegisterDataSubjectRsp{RetInfo: retinfo.Error(code, err)}, nil
-	}
-	// Registration is idempotent and the SQLite transaction has already
-	// committed. A concurrent snapshot refresh must not turn that committed
-	// registration into a collector failure; the next cache publication will
-	// expose it to readers.
-	s.refreshMetadataCacheAfterCommit(ctx, "RegisterDataSubject")
-	return &pb.RegisterDataSubjectRsp{RetInfo: retinfo.Success("success"), Subject: created, DatasetBindings: bindings}, nil
-}
-
 func (s *Service) GetSubject(ctx context.Context, req *pb.GetSubjectReq) (*pb.GetSubjectRsp, error) {
 	item, err := s.metadata.GetSubject(ctx, req.GetSpaceId(), req.GetSubjectId())
 	if err != nil {
@@ -166,29 +110,6 @@ func (s *Service) ListSubjects(ctx context.Context, req *pb.ListSubjectsReq) (*p
 		return &pb.ListSubjectsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListSubjectsRsp{RetInfo: retinfo.Success("success"), Subjects: items, PageResult: page}, nil
-}
-
-func (s *Service) UpsertSubjectSymbol(ctx context.Context, req *pb.UpsertSubjectSymbolReq) (*pb.UpsertSubjectSymbolRsp, error) {
-	item := req.GetSubjectSymbol()
-	if item == nil || item.GetSpaceId() == "" || item.GetSubjectId() == "" || item.GetDataSourceId() == "" || item.GetExternalSymbol() == "" {
-		return &pb.UpsertSubjectSymbolRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, subject_id, data_source_id and external_symbol are required"))}, nil
-	}
-	created, err := s.metadata.UpsertSubjectSymbol(ctx, item)
-	if err != nil {
-		return &pb.UpsertSubjectSymbolRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpsertSubjectSymbolRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.UpsertSubjectSymbolRsp{RetInfo: retinfo.Success("success"), SubjectSymbol: created}, nil
-}
-
-func (s *Service) ListSubjectSymbols(ctx context.Context, req *pb.ListSubjectSymbolsReq) (*pb.ListSubjectSymbolsRsp, error) {
-	items, page, err := s.metadata.ListSubjectSymbols(ctx, req.GetSpaceId(), req.GetSubjectId(), req.GetDataSourceId(), req.GetExternalSymbol(), req.GetPage())
-	if err != nil {
-		return &pb.ListSubjectSymbolsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.ListSubjectSymbolsRsp{RetInfo: retinfo.Success("success"), SubjectSymbols: items, PageResult: page}, nil
 }
 
 func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (*pb.CreateDatasetRsp, error) {
@@ -350,57 +271,6 @@ func datasetReadRetInfo(err error) *pb.RetInfo {
 		code = pb.ErrorCode_INNER_ERR
 	}
 	return retinfo.Error(code, errors.New("Dataset metadata could not be read"))
-}
-
-func (s *Service) BindDatasetSubject(ctx context.Context, req *pb.BindDatasetSubjectReq) (*pb.BindDatasetSubjectRsp, error) {
-	item := req.GetDatasetSubject()
-	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetSubjectId() == "" {
-		return &pb.BindDatasetSubjectRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and subject_id are required"))}, nil
-	}
-	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
-		return &pb.BindDatasetSubjectRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
-	}
-	created, err := s.metadata.BindDatasetSubject(ctx, item)
-	if err != nil {
-		return &pb.BindDatasetSubjectRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.BindDatasetSubjectRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.BindDatasetSubjectRsp{RetInfo: retinfo.Success("success"), DatasetSubject: created}, nil
-}
-
-func (s *Service) StageDatasetSubjectSet(ctx context.Context, req *pb.StageDatasetSubjectSetReq) (*pb.StageDatasetSubjectSetRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetSetId()) == "" || len(req.GetDatasetSubjects()) == 0 {
-		return &pb.StageDatasetSubjectSetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, set_id and dataset_subjects are required"))}, nil
-	}
-	writer, ok := s.metadata.(coremetadata.DatasetSubjectSetWriter)
-	if !ok {
-		return &pb.StageDatasetSubjectSetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata store does not support dataset subject set staging"))}, nil
-	}
-	count, err := writer.StageDatasetSubjectSet(ctx, req.GetSpaceId(), req.GetSetId(), req.GetDatasetSubjects())
-	if err != nil {
-		return &pb.StageDatasetSubjectSetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.StageDatasetSubjectSetRsp{RetInfo: retinfo.Success("success"), SetId: req.GetSetId(), Count: uint32(count)}, nil
-}
-
-func (s *Service) ActivateDatasetSubjectSet(ctx context.Context, req *pb.ActivateDatasetSubjectSetReq) (*pb.ActivateDatasetSubjectSetRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetSetId()) == "" {
-		return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and set_id are required"))}, nil
-	}
-	writer, ok := s.metadata.(coremetadata.DatasetSubjectSetWriter)
-	if !ok {
-		return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata store does not support dataset subject set activation"))}, nil
-	}
-	count, err := writer.ActivateDatasetSubjectSet(ctx, req.GetSpaceId(), req.GetSetId())
-	if err != nil {
-		return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDatasetSubjectSet"); err != nil {
-		return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.ActivateDatasetSubjectSetRsp{RetInfo: retinfo.Success("success"), SetId: req.GetSetId(), Count: uint32(count)}, nil
 }
 
 func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSubjectsReq) (*pb.ListDatasetSubjectsRsp, error) {

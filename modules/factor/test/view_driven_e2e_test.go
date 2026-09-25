@@ -317,7 +317,7 @@ func (p *pipelinePeriodStorage) ReadPeriodChunk(ctx context.Context, key storage
 	}
 	return &storageio.RangeChunk{
 		Frame: &engine.DataFrame{
-			Columns: columns, Rows: [][]any{values}, DataTimes: []time.Time{start}, SeriesTags: []string{"venue:binance"},
+			Columns: columns, Rows: [][]any{values}, SubjectIDs: []string{key.SubjectID}, DataTimes: []time.Time{start}, SeriesTags: []string{"venue:binance"},
 		},
 		TargetPeriods: []time.Time{start}, Complete: true,
 	}, nil

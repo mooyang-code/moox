@@ -34,12 +34,11 @@ type taskSource interface {
 
 type datasetSource interface {
 	GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error)
-	ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error)
+	ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error)
 }
 
 type runtimeConfigClient interface {
 	ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
-	ListInstrumentSnapshotTimers(context.Context, string) ([]scfinvoker.Node, error)
 	SubmitRuntimeConfigs(context.Context, string, []*cloudnodepb.NodeRuntimeConfigPatch) (string, error)
 	GetRuntimeConfigBatchStatus(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, error)
 }
@@ -54,7 +53,6 @@ type Reconciler struct {
 	SCFRegionBlacklists           map[string][]string
 	ResolveSourceID               func(string, string) string
 	ResolveSymbol                 SymbolResolver
-	CompactSymbol                 SymbolResolver
 	Tasks                         taskSource
 	Symbols                       datasetSource
 	Nodes                         runtimeConfigClient
@@ -74,6 +72,7 @@ type Reconciler struct {
 	pendingJobs                   []string
 	pendingSince                  time.Time
 	pendingSubmissionIncomplete   bool
+	lastGroups                    map[string][]TaskGroup
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
@@ -133,21 +132,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	}
 	r.observeTimerStates(spaceID, nodes)
 	eligibleNodes, blockedNodes := filterSCFRegions(nodes, spaceID, r.SCFRegionBlacklists)
-	var blockedInstrumentNodes []scfinvoker.Node
-	spaceHasBlacklist := false
-	for configuredSpace, regions := range r.SCFRegionBlacklists {
-		if strings.EqualFold(strings.TrimSpace(configuredSpace), spaceID) && len(regions) > 0 {
-			spaceHasBlacklist = true
-		}
-	}
-	if spaceHasBlacklist {
-		instruments, listErr := r.Nodes.ListInstrumentSnapshotTimers(ctx, spaceID)
-		if listErr != nil {
-			return r.fail(spaceID, "cloudnode", fmt.Errorf("list instrument timers: %w", listErr))
-		}
-		_, blockedInstrumentNodes = filterSCFRegions(instruments, spaceID, r.SCFRegionBlacklists)
-	}
-	if submitted, disableErr := r.disableBlacklistedTimers(ctx, spaceID, append(blockedNodes, blockedInstrumentNodes...)); submitted || disableErr != nil {
+	if submitted, disableErr := r.disableBlacklistedTimers(ctx, spaceID, blockedNodes); submitted || disableErr != nil {
 		return disableErr
 	}
 	groups, err := r.groups(ctx, spaceID)
@@ -161,7 +146,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		// without inventing a fake market subject.
 		groups = []TaskGroup{{
 			Provider: "stockcn_multi", MarketType: "equity", MarketID: StockCNSpaceID,
-			InstrumentType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+			InstrumentType: "equity", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m",
 		}}
 	}
 	if !stockCN && len(groups) == 0 {
@@ -226,7 +211,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// routes can consume the remaining bytes, so split a group further before
 	// checking node capacity instead of retrying the same oversized patch.
 	if !stockCN {
-		groups, err = splitGroupsForEnvironment(groups, dns, r.maxSubjects(), r.CompactSymbol, managedBudget)
+		groups, err = splitGroupsForEnvironment(groups, dns, r.maxSubjects(), r.ResolveSymbol, managedBudget)
 		if err != nil {
 			return r.fail(spaceID, "environment", err)
 		}
@@ -271,7 +256,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(assignments))
 	pendingFingerprints := make(map[string]string, len(assignments))
 	for _, assignment := range assignments {
-		environment, envErr := buildManagedEnvironment(assignment, dns, managedBudget, r.CompactSymbol)
+		environment, envErr := buildManagedEnvironment(assignment, dns, managedBudget, r.ResolveSymbol)
 		if envErr != nil {
 			return r.fail(spaceID, "environment", envErr)
 		}
@@ -908,6 +893,9 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		return nil, fmt.Errorf("list enabled collection tasks: %w", err)
 	}
 	groups := make([]TaskGroup, 0)
+	if r.lastGroups == nil {
+		r.lastGroups = make(map[string][]TaskGroup)
+	}
 	for _, task := range tasks {
 		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
 		if parseErr != nil {
@@ -921,18 +909,24 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		if params.Collector.DataType != "kline" {
 			continue
 		}
-		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Source.DatasetID)
+		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID)
 		if datasetErr != nil {
-			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get symbol dataset %s: %v", task.TaskID, params.Source.DatasetID, datasetErr)
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, params.Target.DatasetID, datasetErr)
+			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+				groups = append(groups, previous...)
+			}
 			continue
 		}
-		subjects, subjectErr := r.Symbols.ListSubjects(ctx, spaceID, params.Source.DatasetID, dataset.DataSourceID)
+		subjects, subjectErr := r.Symbols.ResolveSubjects(ctx, spaceID, dataset.SubjectTags)
 		if subjectErr != nil {
-			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: list symbol dataset %s: %v", task.TaskID, params.Source.DatasetID, subjectErr)
-			continue
+			log.WarnContextf(ctx, "resolve subjects for collection task=%s tags=%v: %v", task.TaskID, dataset.SubjectTags, subjectErr)
 		}
 		if len(subjects) == 0 {
-			log.WarnContextf(ctx, "skip collection task=%s: no active subjects for symbol dataset %s", task.TaskID, params.Source.DatasetID)
+			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+				log.WarnContextf(ctx, "keep previous subjects for collection task=%s tags=%v", task.TaskID, dataset.SubjectTags)
+				groups = append(groups, previous...)
+			}
+			log.WarnContextf(ctx, "skip collection task=%s: no active subjects for tags %v", task.TaskID, dataset.SubjectTags)
 			continue
 		}
 		marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, params.Target.DatasetID)
@@ -948,12 +942,9 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		activeSubjectCount := 0
 		invalidSubjects := make([]string, 0)
 		for _, subject := range subjects {
-			if !strings.EqualFold(strings.TrimSpace(subject.Status), "active") {
-				continue
-			}
 			activeSubjectCount++
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			external, symbolErr := resolveProviderSymbol(r.ResolveSymbol, params.Provider, marketID, params.MarketType, subjectID, subject.ExternalSymbol)
+			external, symbolErr := resolveProviderSymbol(r.ResolveSymbol, params.Provider, marketID, params.MarketType, subjectID)
 			if symbolErr != nil {
 				invalidSubjects = append(invalidSubjects, subjectID)
 				continue
@@ -967,9 +958,12 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		if len(invalidSubjects) > 0 {
 			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s task=%s skipped=%d subjects=%s", spaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
 		}
+		taskGroups := make([]TaskGroup, 0, len(params.Collector.Intervals))
 		for _, frequency := range params.Collector.Intervals {
-			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
+			taskGroups = append(taskGroups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
 		}
+		r.lastGroups[task.TaskID] = append([]TaskGroup(nil), taskGroups...)
+		groups = append(groups, taskGroups...)
 	}
 	return mergeGroups(groups), nil
 }

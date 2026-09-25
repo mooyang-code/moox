@@ -15,7 +15,6 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -48,7 +47,7 @@ type Scheduler struct {
 	Batches             *store.FetchBatchRepository
 	Retries             *store.FetchRetryRepository
 	Invoker             MarketFetchInvoker
-	Storage             func(string, string, string) (StorageReader, error)
+	Storage             func(string, string, string) (Storage, error)
 	StorageTarget       string
 	// InvokeStorageTarget is sent in SCF invoke payloads. Leave empty to reuse
 	// StorageTarget. Collector on a mainland host may talk to Storage over a
@@ -60,8 +59,8 @@ type Scheduler struct {
 	Metrics             *Metrics
 	SpaceID             string
 	Symbols             datasetSource
-	// InvokeNonRealtimeOnly keeps the Invoke path for instrument snapshots and
-	// bounded catch-up while realtime K-lines run from Timer-triggered nodes.
+	// InvokeNonRealtimeOnly keeps realtime K-lines out of the Invoke path when
+	// Timer-triggered nodes own the live schedule.
 	InvokeNonRealtimeOnly bool
 	DNSCache              interface {
 		Snapshot() map[string]sources.DNSResolution
@@ -75,22 +74,8 @@ type Scheduler struct {
 	invokeSem        chan struct{}
 }
 
-// fullInstrumentSnapshotShards keeps stockcn's large metadata registration
-// small. Crypto symbol snapshots use one invocation because Binance returns a
-// complete exchange snapshot and there is no benefit in issuing the same
-// exchangeInfo request from every shard.
-const fullInstrumentSnapshotShards = 32
-
-func instrumentSnapshotShardCount(marketID string) int {
-	if strings.EqualFold(strings.TrimSpace(marketID), "crypto") {
-		return 1
-	}
-	return fullInstrumentSnapshotShards
-}
-
 const (
-	defaultBatchCompletionDeadline     = 70 * time.Second
-	instrumentSnapshotCompletionWindow = 6 * time.Minute
+	defaultBatchCompletionDeadline = 70 * time.Second
 )
 
 // MarketFetchInvoker is the CloudNode list/invoke surface used by the scheduler.
@@ -101,9 +86,7 @@ type MarketFetchInvoker interface {
 }
 
 func batchCompletionDeadline(kind domain.BatchKind) time.Duration {
-	if kind == domain.BatchKindInstrumentSnapshot {
-		return instrumentSnapshotCompletionWindow
-	}
+	_ = kind
 	return defaultBatchCompletionDeadline
 }
 
@@ -281,9 +264,6 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			}
 			batchItems := append([]domain.CollectionItem(nil), items...)
 			batchSize := s.realtimeBatchSize(len(batchItems), taskNodes)
-			if strings.EqualFold(task.DataType, domain.InstrumentDataType) {
-				batchSize = 1
-			}
 			for start, shard := 0, 0; start < len(batchItems); start, shard = start+batchSize, shard+1 {
 				end := start + batchSize
 				if end > len(batchItems) {
@@ -297,12 +277,6 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 					batchItems[index].TargetDataTime = target.Format(time.RFC3339Nano)
 					batchItems[index].Frequency = frequency
 					batchItems[index].BarLimit = MaxRealtimeRows
-					if strings.EqualFold(batchItems[index].DataType, domain.InstrumentDataType) {
-						// Every snapshot shard must use one generation timestamp. The
-						// provider response is fetched independently, so this field is
-						// the generation fence used by staged shard activation.
-						batchItems[index].SnapshotAt = now.Format(time.RFC3339Nano)
-					}
 				}
 				scheduleID := fmt.Sprintf("%s:%s:%s", task.TaskID, frequency, target.Format(time.RFC3339Nano))
 				batchKind := batchKindForTask(task)
@@ -483,9 +457,6 @@ func taskFingerprint(instanceIDs []string, params string) string {
 const stockCNHistoryMaxLookback = 24 * time.Hour
 
 func collectionItemInstanceID(spaceID, collectionTaskID string, item domain.CollectionItem, frequency string) string {
-	if strings.EqualFold(strings.TrimSpace(item.DataType), domain.InstrumentDataType) && item.SnapshotShardCount > 0 {
-		return stableID(spaceID, collectionTaskID, string(domain.BatchKindInstrumentSnapshot), item.DatasetID, strconv.Itoa(item.SnapshotShardIndex))
-	}
 	spec := domain.TaskSpec{RouteID: stableRouteID(item.MarketType, item.DatasetID, frequency), Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency}
 	return domain.StableTaskID(spaceID, collectionTaskID, spec)
 }
@@ -925,7 +896,7 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 	instrumentType := strings.ToLower(firstNonEmpty(params.InstrumentType, defaultInstrumentTypeForMarket(marketID, marketType)))
 	sourceID := strings.ToLower(strings.TrimSpace(params.SourceID))
 	dataType := strings.ToLower(firstNonEmpty(params.Collector.DataType, task.DataType))
-	targetDataset := firstNonEmpty(params.Target.DatasetID, params.Source.DatasetID)
+	targetDataset := params.Target.DatasetID
 	if targetDataset == "" {
 		return nil, nil, fmt.Errorf("target dataset is required")
 	}
@@ -933,95 +904,42 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 	if len(frequencies) == 0 && params.Schedule.Interval != "" {
 		frequencies = []string{params.Schedule.Interval}
 	}
-	if dataType == domain.InstrumentDataType {
-		if len(frequencies) == 0 {
-			frequencies = []string{"1h"}
-		}
-		if params.SymbolSource != "exchange" {
-			return nil, nil, fmt.Errorf("symbol task requires exchange snapshot source")
-		}
-		shardCount := instrumentSnapshotShardCount(marketID)
-		items := make([]domain.CollectionItem, shardCount)
-		for shard := range items {
-			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: domain.InstrumentDataType, DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: shardCount}
-		}
-		return items, frequencies[:1], nil
-	}
 	if dataType != "kline" {
 		return nil, nil, fmt.Errorf("unsupported data_type %q", dataType)
 	}
-	if params.Source.DatasetID == "" {
-		return nil, nil, fmt.Errorf("kline symbol dataset is required")
+	if s.Symbols == nil {
+		return nil, nil, fmt.Errorf("dataset subject resolver is not initialized")
 	}
-	items := make([]domain.CollectionItem, 0)
-	if s.Symbols != nil {
-		spaceID := strings.TrimSpace(task.SpaceID)
-		if spaceID == "" {
-			spaceID = strings.TrimSpace(s.SpaceID)
+	spaceID := strings.TrimSpace(task.SpaceID)
+	if spaceID == "" {
+		spaceID = strings.TrimSpace(s.SpaceID)
+	}
+	dataset, err := s.Symbols.GetDataset(ctx, spaceID, targetDataset)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get target dataset %s: %w", targetDataset, err)
+	}
+	subjects, err := s.Symbols.ResolveSubjects(ctx, spaceID, dataset.SubjectTags)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve target dataset subjects: %w", err)
+	}
+	items := make([]domain.CollectionItem, 0, len(subjects))
+	for _, subject := range subjects {
+		if strings.TrimSpace(subject.SubjectID) == "" {
+			continue
 		}
-		dataset, err := s.Symbols.GetDataset(ctx, spaceID, params.Source.DatasetID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("get symbol dataset %s: %w", params.Source.DatasetID, err)
+		subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
+		symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, provider, marketID, marketType, subjectID)
+		if symbolErr != nil {
+			log.WarnContextf(ctx, "skip market symbol without valid provider symbol subject=%q error=%v", subject.SubjectID, symbolErr)
+			continue
 		}
-		subjects, err := s.Symbols.ListSubjects(ctx, spaceID, params.Source.DatasetID, dataset.DataSourceID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("list symbol dataset subjects: %w", err)
-		}
-		for _, subject := range subjects {
-			if !strings.EqualFold(strings.TrimSpace(subject.Status), "active") || strings.TrimSpace(subject.SubjectID) == "" {
-				continue
-			}
-			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			if strings.EqualFold(marketID, "crypto") || strings.EqualFold(spaceID, "crypto") {
-				subjectID = marketdata.CanonicalCryptoSubjectID(subjectID)
-			}
-			symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, provider, marketID, marketType, subjectID, subject.ExternalSymbol)
-			if symbolErr != nil {
-				log.WarnContextf(ctx, "skip market symbol without valid external symbol subject=%q error=%v", subject.SubjectID, symbolErr)
-				continue
-			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
-		}
-	} else {
-		if s.Storage == nil {
-			return nil, nil, fmt.Errorf("storage reader is not initialized")
-		}
-		storage, err := s.Storage(s.StorageTarget, marketType, "")
-		if err != nil {
-			return nil, nil, err
-		}
-		memberships, err := storage.ListDatasetSubjects(ctx, task.SpaceID, params.Source.DatasetID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("list symbol dataset subjects: %w", err)
-		}
-		for _, membership := range memberships {
-			if membership == nil || !strings.EqualFold(strings.TrimSpace(membership.GetStatus()), "active") {
-				continue
-			}
-			subjectID := strings.TrimSpace(membership.GetSubjectId())
-			if subjectID == "" {
-				continue
-			}
-			if strings.EqualFold(marketID, "crypto") || strings.EqualFold(task.SpaceID, "crypto") {
-				subjectID = marketdata.CanonicalCryptoSubjectID(subjectID)
-			}
-			symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, provider, marketID, marketType, subjectID, "")
-			if symbolErr != nil {
-				continue
-			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
-		}
+		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].SubjectID < items[j].SubjectID })
 	return items, frequencies, nil
 }
 
-func batchKindForTask(task domain.CollectionTask) domain.BatchKind {
-	if strings.EqualFold(strings.TrimSpace(task.DataType), domain.InstrumentDataType) {
-		return domain.BatchKindInstrumentSnapshot
-	}
-	return domain.BatchKindRealtime
-}
+func batchKindForTask(domain.CollectionTask) domain.BatchKind { return domain.BatchKindRealtime }
 
 func targetDataTime(now time.Time, frequency string) (time.Time, error) {
 	times, err := report.RecentDatasetTimes(frequency, now.UTC(), 2)

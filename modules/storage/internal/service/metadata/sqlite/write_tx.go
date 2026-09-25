@@ -34,6 +34,10 @@ func (tx *immediateTx) QueryRowContext(ctx context.Context, query string, args .
 	return tx.conn.QueryRowContext(ctx, query, args...)
 }
 
+func (tx *immediateTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return tx.conn.QueryContext(ctx, query, args...)
+}
+
 func (tx *immediateTx) Commit() error {
 	if tx == nil || tx.closed {
 		return nil

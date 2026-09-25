@@ -208,7 +208,7 @@ func TestValidateSCFCapacitiesCountsUsedNamespaces(t *testing.T) {
 }
 
 func TestPlanSCFNamespaceShardsKeepsCanaryInPrimaryNamespace(t *testing.T) {
-	shards := PlanSCFNamespaceShards("moox-crypto", 54, 1, 0, 50)
+	shards := PlanSCFNamespaceShards("moox-crypto", 54, 1, 50)
 	require.Len(t, shards, 2)
 	assert.Equal(t, SCFNamespaceShard{Namespace: "moox-crypto", Timers: 49, Invokes: 1}, shards[0])
 	assert.Equal(t, SCFNamespaceShard{Namespace: "moox-crypto-ns2", Timers: 5}, shards[1])
@@ -359,7 +359,7 @@ func TestValidateSCFFetcherNormalizesMarketPublicNetworkStatus(t *testing.T) {
 
 	require.NoError(t, validateSCFFetcher(&cfg))
 	assert.Equal(t, "ENABLE", cfg.Spaces[0].PublicNetStatus)
-	assert.Equal(t, DefaultCryptoInstrumentInvokeTimeoutSeconds, cfg.Spaces[0].InstrumentInvokeTimeoutSeconds)
+	assert.Equal(t, DefaultCryptoInvokeTimeoutSeconds, cfg.Spaces[0].InvokeTimeoutSeconds)
 
 	cfg.Spaces[0].PublicNetStatus = "unknown"
 	require.ErrorContains(t, validateSCFFetcher(&cfg), "public_net_status must be ENABLE or DISABLE")
@@ -525,7 +525,7 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 			continue
 		}
 		assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, space.TimerFunctionCount)
-		assert.Equal(t, DefaultStockCNInstrumentInvokeTimeoutSeconds, space.InstrumentInvokeTimeoutSeconds)
+		assert.Equal(t, DefaultStockCNInvokeTimeoutSeconds, space.InvokeTimeoutSeconds)
 		require.Len(t, space.Regions, 4)
 		for _, region := range space.Regions {
 			assert.True(t, region.Enabled)
@@ -536,7 +536,7 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	t.Fatal("stockcn scf_fetcher config is missing")
 }
 
-func TestValidateSCFFetcherDefaultsAndBoundsStockCNInstrumentInvokeTimeout(t *testing.T) {
+func TestValidateSCFFetcherDefaultsAndBoundsStockCNInvokeTimeout(t *testing.T) {
 	base := SCFFetcherSpace{
 		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
 		TimerFunctionCount:      192,
@@ -553,35 +553,11 @@ func TestValidateSCFFetcherDefaultsAndBoundsStockCNInstrumentInvokeTimeout(t *te
 	}
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
 	assert.Equal(t, 15, base.TimeoutSeconds)
-	assert.Equal(t, DefaultStockCNInstrumentInvokeTimeoutSeconds, base.InstrumentInvokeTimeoutSeconds)
+	assert.Equal(t, DefaultStockCNInvokeTimeoutSeconds, base.InvokeTimeoutSeconds)
 
-	base.InstrumentInvokeTimeoutSeconds = 59
+	base.InvokeTimeoutSeconds = 59
 	err := validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]")
-	require.ErrorContains(t, err, "instrument_invoke_timeout_seconds")
-}
-
-func TestValidateSCFFetcherDefaultsIndependentStockInstrumentTimer(t *testing.T) {
-	base := SCFFetcherSpace{
-		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
-		TimerFunctionCount: 192, MeasuredSafeGroupSize: 30,
-		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
-		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
-		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000,
-		Regions: []SCFFetcherRegion{
-			{Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "tencent-scf-shanghai"},
-			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "tencent-scf-guangzhou"},
-			{Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "tencent-scf-beijing"},
-			{Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "tencent-scf-chengdu"},
-		},
-	}
-
-	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
-	assert.Equal(t, "ap-shanghai", base.InstrumentSnapshotRegion)
-	assert.Equal(t, "tencent-scf-shanghai", base.InstrumentSnapshotCloudAccountID)
-	assert.Equal(t, "moox-fetcher-stockcn-instrument", base.InstrumentSnapshotFunctionPrefix)
-	assert.Equal(t, "0 0 0 * * * *", base.InstrumentSnapshotTimerCron)
-	assert.Equal(t, 300, base.InstrumentSnapshotTimeoutSeconds)
-	assert.Equal(t, DefaultStockCNInstrumentSnapshotMemorySize, base.InstrumentSnapshotMemorySize)
+	require.ErrorContains(t, err, "invoke_timeout_seconds")
 }
 
 const validManifest = `[admin]

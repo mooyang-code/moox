@@ -2,21 +2,22 @@ package marketfetch
 
 import "testing"
 
-func TestFallbackCryptoSymbol(t *testing.T) {
+func TestDefaultProviderSymbolRejectsUnsupportedCryptoFallback(t *testing.T) {
 	tests := []struct {
 		subject string
 		market  string
-		want    string
+		wantErr bool
 	}{
-		{subject: "AAOIB-USDT-SPOT", market: "spot", want: "AAOIBUSDT"},
-		{subject: "1000CAT-USDT-SWAP", market: "swap", want: "1000CATUSDT"},
-		{subject: "BTC-USDT-SPOT", market: "swap", want: ""},
-		{subject: "BTC-USDT", market: "spot", want: "BTCUSDT"},
-		{subject: "BTC-USDT", market: "swap", want: "BTCUSDT"},
+		{subject: "AAOIB-USDT-SPOT", market: "spot", wantErr: false},
+		{subject: "1000CAT-USDT-SWAP", market: "swap", wantErr: false},
+		{subject: "BTC-USDT-SPOT", market: "swap", wantErr: true},
+		{subject: "BTC-USDT", market: "spot", wantErr: false},
+		{subject: "BTC-USDT", market: "swap", wantErr: false},
+		{subject: "BTCUSDT", market: "spot", wantErr: true},
 	}
 	for _, tt := range tests {
-		if got := fallbackCryptoSymbol(tt.subject, tt.market); got != tt.want {
-			t.Fatalf("fallbackCryptoSymbol(%q, %q) = %q, want %q", tt.subject, tt.market, got, tt.want)
+		if _, err := DefaultProviderSymbol("crypto", tt.market, tt.subject); (err != nil) != tt.wantErr {
+			t.Fatalf("DefaultProviderSymbol(%q, %q) error = %v, wantErr %v", tt.subject, tt.market, err, tt.wantErr)
 		}
 	}
 }

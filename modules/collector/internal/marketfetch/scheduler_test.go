@@ -34,29 +34,14 @@ func TestNormalizedBatchIdentityUsesNormalizedItemMarketType(t *testing.T) {
 	assert.Equal(t, "spot", marketType)
 }
 
-func TestCollectionItemInstanceIDSeparatesInstrumentSnapshotShards(t *testing.T) {
-	seen := make(map[string]struct{}, 32)
-	for shard := 0; shard < 32; shard++ {
-		id := collectionItemInstanceID("stockcn", "stockcn-symbols", domain.CollectionItem{
-			SubjectID: "stockcn", DataType: "instrument", DatasetID: "dataset_stockcn_instruments",
-			SnapshotShardIndex: shard, SnapshotShardCount: 32,
-		}, "")
-		require.NotEmpty(t, id)
-		_, duplicate := seen[id]
-		require.False(t, duplicate, "snapshot shard %d reused task id %q", shard, id)
-		seen[id] = struct{}{}
-	}
-
+func TestCollectionItemInstanceIDIsStableForKlineItems(t *testing.T) {
 	item := domain.CollectionItem{SubjectID: "BTC-USDT", DataType: "kline", DatasetID: "bars", Provider: "binance", MarketType: "spot"}
 	assert.Equal(t, collectionItemInstanceID("crypto", "kline", item, "1m"), collectionItemInstanceID("crypto", "kline", item, "1m"))
 }
 
 func TestFilterInvokeTasksDropsRealtimeKlineTasks(t *testing.T) {
-	tasks := filterInvokeTasks([]domain.CollectionTask{
-		{TaskID: "instruments", DataType: "instrument"},
-		{TaskID: "kline", DataType: "kline"},
-	})
-	assert.Equal(t, []string{"instruments"}, taskIDs(tasks))
+	tasks := filterInvokeTasks([]domain.CollectionTask{{TaskID: "resample", DataType: "kline_resample"}, {TaskID: "kline", DataType: "kline"}})
+	assert.Equal(t, []string{"resample"}, taskIDs(tasks))
 }
 
 func TestFilterNodesByTriggerKeepsInstrumentWorkOnInvokeFleet(t *testing.T) {
@@ -78,11 +63,8 @@ func nodeIDs(nodes []scfinvoker.Node) []string {
 }
 
 func TestFilterMarketFetchTasksDropsLocalResampleTasks(t *testing.T) {
-	tasks := filterMarketFetchTasks([]domain.CollectionTask{
-		{TaskID: "instruments", DataType: "instrument"},
-		{TaskID: "resample", DataType: "kline_resample"},
-	})
-	assert.Equal(t, []string{"instruments"}, taskIDs(tasks))
+	tasks := filterMarketFetchTasks([]domain.CollectionTask{{TaskID: "kline", DataType: "kline"}, {TaskID: "resample", DataType: "kline_resample"}})
+	assert.Equal(t, []string{"kline"}, taskIDs(tasks))
 }
 
 func TestTargetDataTimeUsesCalendarBoundariesForWeekAndMonth(t *testing.T) {
@@ -133,50 +115,19 @@ func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
 	assert.Equal(t, []string{"node-a"}, []string{invocationCandidates(nodes[0], nodes[:1])[0].NodeID})
 }
 
-func TestExpandTaskUsesOneShardForCryptoExchangeInstrumentSnapshot(t *testing.T) {
-	scheduler := &Scheduler{}
-	items, frequencies, err := scheduler.expandTask(t.Context(), domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "binance_spot_instruments", DataType: "instrument", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"dataset_binance_spot_symbols","frequency":"1h"}`,
-	})
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"1h"}, frequencies)
-	if assert.Len(t, items, 1) {
-		assert.Equal(t, "dataset_binance_spot_symbols", items[0].DatasetID)
-		assert.Equal(t, 0, items[0].SnapshotShardIndex)
-		assert.Equal(t, 1, items[0].SnapshotShardCount)
-	}
-}
-
-func TestExpandTaskKeepsStockCNInstrumentShards(t *testing.T) {
-	scheduler := &Scheduler{}
-	items, _, err := scheduler.expandTask(t.Context(), domain.CollectionTask{
-		SpaceID: "stockcn", TaskID: "stockcn_instruments", DataType: "instrument", Provider: "sina", MarketType: "equity",
-		CollectParams: `{"provider":"sina","market_type":"equity","symbol_source":"exchange","target_dataset_id":"dataset_stockcn_instruments","frequency":"1h"}`,
-	})
-	assert.NoError(t, err)
-	assert.Len(t, items, fullInstrumentSnapshotShards)
-	assert.Equal(t, fullInstrumentSnapshotShards, items[0].SnapshotShardCount)
-}
-
-func TestBatchKindForTaskUsesPublicInstrumentDataType(t *testing.T) {
-	assert.Equal(t, domain.BatchKindInstrumentSnapshot, batchKindForTask(domain.CollectionTask{DataType: domain.InstrumentDataType}))
+func TestBatchKindForTaskUsesRealtimeForKline(t *testing.T) {
 	assert.Equal(t, domain.BatchKindRealtime, batchKindForTask(domain.CollectionTask{DataType: "kline"}))
-}
-
-func TestBatchCompletionDeadlineAllowsInstrumentSnapshotProvidersToFinish(t *testing.T) {
-	assert.Equal(t, 6*time.Minute, batchCompletionDeadline(domain.BatchKindInstrumentSnapshot))
 	assert.Equal(t, 70*time.Second, batchCompletionDeadline(domain.BatchKindRealtime))
 }
 
 func TestExpandTaskUsesExplicitExternalSymbolForKline(t *testing.T) {
 	scheduler := &Scheduler{
 		SpaceID: "crypto",
-		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
 	}
 	items, frequencies, err := scheduler.expandTask(t.Context(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"1m"}, frequencies)
@@ -185,22 +136,18 @@ func TestExpandTaskUsesExplicitExternalSymbolForKline(t *testing.T) {
 	}
 }
 
-func TestExpandTaskAllowsUnicodeSubjectNames(t *testing.T) {
+func TestExpandTaskSkipsUnsupportedUnicodeSubjectNames(t *testing.T) {
 	scheduler := &Scheduler{
 		SpaceID: "crypto",
-		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "币安人生-USDT", ExternalSymbol: "BINANCELIFEUSDT", Status: "active"}}},
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "币安人生-USDT", Status: "active"}}},
 	}
 	items, frequencies, err := scheduler.expandTask(t.Context(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"1m"}, frequencies)
-	require.Len(t, items, 1)
-	if len(items) == 1 {
-		assert.Equal(t, "币安人生-USDT", items[0].SubjectID)
-		assert.Equal(t, "BINANCELIFEUSDT", items[0].Symbol)
-	}
+	require.Empty(t, items)
 }
 
 func TestPriorityCryptoMinuteItemsSelectsBTCAndETHOnOneMinute(t *testing.T) {
@@ -241,7 +188,7 @@ func TestTickInvokesPriorityCryptoMinuteWhenTimersOwnRealtime(t *testing.T) {
 	ctx := context.Background()
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "binance_spot_kline", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
 		Enabled:       true,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
@@ -258,9 +205,9 @@ func TestTickInvokesPriorityCryptoMinuteWhenTimersOwnRealtime(t *testing.T) {
 		SpaceID:               "crypto",
 		Now:                   func() time.Time { return now },
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
-			{SubjectID: "AAA-USDT", ExternalSymbol: "AAAUSDT", Status: "active"},
-			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
-			{SubjectID: "ETH-USDT", ExternalSymbol: "ETHUSDT", Status: "active"},
+			{SubjectID: "AAA-USDT", Status: "active"},
+			{SubjectID: "BTC-USDT", Status: "active"},
+			{SubjectID: "ETH-USDT", Status: "active"},
 		}},
 	}
 	require.NoError(t, scheduler.Tick(ctx, "crypto"))
@@ -288,7 +235,7 @@ func TestTickDoesNotDuplicatePriorityWhenInvokeOwnsRealtime(t *testing.T) {
 	ctx := context.Background()
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "binance_spot_kline", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
 		Enabled:       true,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
@@ -305,9 +252,9 @@ func TestTickDoesNotDuplicatePriorityWhenInvokeOwnsRealtime(t *testing.T) {
 		SpaceID:   "crypto",
 		Now:       func() time.Time { return now },
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
-			{SubjectID: "AAA-USDT", ExternalSymbol: "AAAUSDT", Status: "active"},
-			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
-			{SubjectID: "ETH-USDT", ExternalSymbol: "ETHUSDT", Status: "active"},
+			{SubjectID: "AAA-USDT", Status: "active"},
+			{SubjectID: "BTC-USDT", Status: "active"},
+			{SubjectID: "ETH-USDT", Status: "active"},
 		}},
 	}
 	require.NoError(t, scheduler.Tick(ctx, "crypto"))
@@ -331,7 +278,7 @@ func TestTickPrefersInvokeNodesForPriorityCryptoMinute(t *testing.T) {
 	ctx := context.Background()
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "binance_spot_kline", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
 		Enabled:       true,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
@@ -349,7 +296,7 @@ func TestTickPrefersInvokeNodesForPriorityCryptoMinute(t *testing.T) {
 		SpaceID:               "crypto",
 		Now:                   func() time.Time { return now },
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
-			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
+			{SubjectID: "BTC-USDT", Status: "active"},
 		}},
 	}
 	require.NoError(t, scheduler.Tick(ctx, "crypto"))
@@ -362,13 +309,13 @@ func TestExpandTaskSkipsMalformedSnapshotSubjects(t *testing.T) {
 	scheduler := &Scheduler{
 		SpaceID: "crypto",
 		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
-			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
-			{SubjectID: "币安人生-USDT", ExternalSymbol: "", Status: "active"},
+			{SubjectID: "BTC-USDT", Status: "active"},
+			{SubjectID: "币安人生-USDT", Status: "active"},
 		}},
 	}
 	items, _, err := scheduler.expandTask(t.Context(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`,
 	})
 	assert.NoError(t, err)
 	if assert.Len(t, items, 1) {
@@ -386,6 +333,14 @@ func (s datasetSourceStub) GetDataset(context.Context, string, string) (storages
 
 func (s datasetSourceStub) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
 	return append([]domain.DatasetSubject(nil), s.subjects...), nil
+}
+
+func (s datasetSourceStub) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
+	items := make([]domain.Subject, 0, len(s.subjects))
+	for _, subject := range s.subjects {
+		items = append(items, domain.Subject{SubjectID: subject.SubjectID, Name: subject.SubjectName, Status: subject.Status})
+	}
+	return items, nil
 }
 
 func taskIDs(tasks []domain.CollectionTask) []string {

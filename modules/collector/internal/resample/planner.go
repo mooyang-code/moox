@@ -16,15 +16,7 @@ const localResampleFunction = "collector_local_resample"
 
 type subjectSource interface {
 	GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error)
-	ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error)
-}
-
-type resampleSubjectSource interface {
-	ListResampleSubjects(context.Context, string, string) ([]domain.DatasetSubject, error)
-}
-
-type resampleTaskSubjectSource interface {
-	ListResampleSubjectsForTask(context.Context, string, string, string, string) ([]domain.DatasetSubject, error)
+	ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error)
 }
 
 // PlanTask expands a ready task into one durable TaskInstance per active source
@@ -51,14 +43,7 @@ func PlanTask(ctx context.Context, source subjectSource, instances *store.TaskIn
 	if err != nil {
 		return fmt.Errorf("get resample source Dataset: %w", err)
 	}
-	var subjects []domain.DatasetSubject
-	if sourceWithTaskSet, ok := source.(resampleTaskSubjectSource); ok {
-		subjects, err = sourceWithTaskSet.ListResampleSubjectsForTask(ctx, task.SpaceID, params.SourceDatasetID, task.Provider, params.SourceSeriesTag)
-	} else if sourceWithNativeSet, ok := source.(resampleSubjectSource); ok {
-		subjects, err = sourceWithNativeSet.ListResampleSubjects(ctx, task.SpaceID, params.SourceDatasetID)
-	} else {
-		subjects, err = source.ListSubjects(ctx, task.SpaceID, params.SourceDatasetID, info.DataSourceID)
-	}
+	subjects, err := source.ResolveSubjects(ctx, task.SpaceID, info.SubjectTags)
 	if err != nil {
 		return fmt.Errorf("list resample source subjects: %w", err)
 	}
@@ -67,7 +52,7 @@ func PlanTask(ctx context.Context, source subjectSource, instances *store.TaskIn
 	instancesToWrite := make([]domain.TaskInstance, 0, len(subjects))
 	activeIDs := make([]string, 0, len(subjects))
 	for _, subject := range subjects {
-		if strings.TrimSpace(subject.SubjectID) == "" || (strings.TrimSpace(subject.Status) != "" && !strings.EqualFold(subject.Status, "active")) {
+		if strings.TrimSpace(subject.SubjectID) == "" {
 			continue
 		}
 		spec := domain.TaskSpec{Provider: task.Provider, MarketType: task.MarketType, DataType: "kline_resample", DatasetID: params.TargetDatasetID, SubjectID: subject.SubjectID, Frequency: target.Storage}

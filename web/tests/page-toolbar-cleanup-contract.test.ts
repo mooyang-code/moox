@@ -45,7 +45,6 @@ describe("page toolbar cleanup contract", () => {
       "container/ssh-hosts/ssh-hosts.vue": ['@click="reset"'],
       "data/datasets/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">'],
       "data/datasets/components/dataset-column-panel.vue": ['<a-button :disabled="!datasetId" @click="load">'],
-      "data/datasets/components/dataset-subject-panel.vue": ['<a-button :disabled="!datasetId" @click="load">'],
       "data/subjects/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">', '<a-button @click="loadSymbols">'],
       "data/views/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">'],
       "data/views/components/view-column-panel.vue": ['<a-button :disabled="!viewId" @click="load">'],

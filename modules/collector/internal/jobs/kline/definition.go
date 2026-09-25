@@ -50,14 +50,14 @@ func NewJobDefinition() jobdef.JobDefinition {
 			},
 		},
 		Supports: []jobdef.Support{
-			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset_subjects"},
-			{Exchange: "binance", Market: "swap", DataType: "kline", SourceKind: "dataset_subjects"},
+			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset"},
+			{Exchange: "binance", Market: "swap", DataType: "kline", SourceKind: "dataset"},
 		},
 		Planner: func(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
 			_ = ctx
 			_ = rule
-			if params.Source.Kind != "dataset_subjects" {
-				return nil, fmt.Errorf("kline planner requires dataset_subjects source, got %s", params.Source.Kind)
+			if params.Source.Kind != "dataset" {
+				return nil, fmt.Errorf("kline planner requires dataset source, got %s", params.Source.Kind)
 			}
 			return BuildTaskSpecs(params, subjects), nil
 		},

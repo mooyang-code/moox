@@ -146,15 +146,42 @@ export interface Subject {
   attributes?: Record<string, string>;
 }
 
-export interface SubjectSymbol {
+export type TagMode = "auto" | "manual";
+export type TagMemberStatus = "active" | "inactive";
+
+export interface Tag {
   space_id: string;
-  subject_id: string;
-  data_source_id: string;
-  external_symbol: string;
-  status: string;
+  tag_id: string;
+  tag_name: string;
+  description?: string;
+  mode: TagMode;
+  builtin?: boolean;
+  sources?: string[];
+  instrument_type?: string;
+  cron?: string;
+  timezone?: string;
+  last_run_at?: string;
+  last_status?: "" | "success" | "failed";
+  last_error?: string;
+  active_count?: number;
+  inactive_count?: number;
   created_at?: string;
   updated_at?: string;
-  attributes?: Record<string, string>;
+}
+
+export interface TagMember {
+  space_id: string;
+  tag_id?: string;
+  status?: TagMemberStatus;
+  inactive_at?: string;
+  subject: Subject;
+  tag_ids?: string[];
+}
+
+export interface TagReference {
+  dataset_id: string;
+  dataset_name?: string;
+  collector_task_id?: string;
 }
 
 export interface Dataset {
@@ -170,6 +197,7 @@ export interface Dataset {
   keep_duration: string;
   binding_locked?: boolean;
   revision?: number | string;
+  subject_tags?: string[];
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
@@ -181,13 +209,7 @@ export interface DatasetSubject {
   space_id: string;
   dataset_id: string;
   subject_id: string;
-  subject_role: string;
-  effective_start_time?: string;
-  effective_end_time?: string;
   status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
 }
 
 export interface Field {

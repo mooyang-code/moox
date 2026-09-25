@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -206,7 +205,7 @@ func (s *PeriodReadinessService) ApplyRows(ctx context.Context, payload *storage
 
 func canonicalPeriodSubjectID(spaceID, subjectID string) string {
 	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
-		return marketdata.CanonicalCryptoSubjectID(subjectID)
+		return strings.ToUpper(strings.TrimSpace(subjectID))
 	}
 	return strings.TrimSpace(subjectID)
 }

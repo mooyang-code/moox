@@ -48,14 +48,8 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 		}
 		source, sourceErr := p.Source.GetDataset(ctx, task.SpaceID, params.SourceDatasetID)
 		if sourceErr == nil {
-			var subjects []domain.DatasetSubject
-			if sourceWithTaskSet, ok := p.Source.(resampleTaskSubjectSource); ok {
-				subjects, sourceErr = sourceWithTaskSet.ListResampleSubjectsForTask(ctx, task.SpaceID, params.SourceDatasetID, task.Provider, params.SourceSeriesTag)
-			} else if sourceWithNativeSet, ok := p.Source.(resampleSubjectSource); ok {
-				subjects, sourceErr = sourceWithNativeSet.ListResampleSubjects(ctx, task.SpaceID, params.SourceDatasetID)
-			} else {
-				subjects, sourceErr = p.Source.ListSubjects(ctx, task.SpaceID, params.SourceDatasetID, source.DataSourceID)
-			}
+			subjects, resolveErr := p.Source.ResolveSubjects(ctx, task.SpaceID, source.SubjectTags)
+			sourceErr = resolveErr
 			if sourceErr == nil {
 				sourceErr = p.Catalog.PrepareTarget(ctx, task, params, source, subjects, p.KeepDuration)
 			}

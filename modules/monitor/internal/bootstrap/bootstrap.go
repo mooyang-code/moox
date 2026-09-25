@@ -212,6 +212,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			log.InfoContextf(ctx, "monitor storage primary auth preflight passed")
 		}
 	}
+	if err := retireObsoleteBusinessChecks(runtimeCtx, runtime.Repositories, cfg); err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("retire obsolete monitor checks: %w", err)
+	}
 	if err := ensureDefaultCheckAlertRules(runtimeCtx, runtime.Repositories); err != nil {
 		_ = runtime.Close()
 		return nil, err

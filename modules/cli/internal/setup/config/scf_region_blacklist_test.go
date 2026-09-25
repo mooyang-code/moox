@@ -37,9 +37,6 @@ func TestSCFRegionBlacklistPreservesExplicitCapacityAndSpaceIsolation(t *testing
 	stock := SCFFetcherSpace{SpaceID: "stockcn", TimerFunctionCount: 10, Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 10}}}
 	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "stockcn"))
 	require.False(t, stock.IsRegionBlacklisted("ap-guangzhou"))
-	cfg.InstrumentSnapshotRegion = "ap-guangzhou"
-	require.ErrorContains(t, resolveSCFTimerFunctionCounts(&cfg, "crypto"), "instrument_snapshot_region")
-	cfg.InstrumentSnapshotRegion = ""
 	cfg.Regions[0].FunctionCount = 1
 	require.ErrorContains(t, resolveSCFTimerFunctionCounts(&cfg, "crypto"), "blacklisted")
 }

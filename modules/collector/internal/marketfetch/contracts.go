@@ -74,7 +74,7 @@ func (r *Request) validate() error {
 	maxItems := MaxRealtimeItems
 	switch r.BatchKind {
 	case domain.BatchKindRealtime:
-	case domain.BatchKindCatchup, domain.BatchKindBackfill, domain.BatchKindGapRepair, domain.BatchKindInstrumentSnapshot:
+	case domain.BatchKindCatchup, domain.BatchKindBackfill, domain.BatchKindGapRepair:
 		maxItems = 1
 	default:
 		return fmt.Errorf("unsupported batch_kind %q", r.BatchKind)
@@ -84,7 +84,7 @@ func (r *Request) validate() error {
 	}
 	seenInstanceIDs := make(map[string]struct{}, len(r.Items))
 	for index, item := range r.Items {
-		if r.BatchKind != domain.BatchKindInstrumentSnapshot && (strings.TrimSpace(item.SubjectID) == "" || strings.TrimSpace(item.Symbol) == "") {
+		if strings.TrimSpace(item.SubjectID) == "" || strings.TrimSpace(item.Symbol) == "" {
 			return fmt.Errorf("items[%d] subject_id and symbol are required", index)
 		}
 		if provider := strings.TrimSpace(r.Provider); provider != "" && strings.TrimSpace(item.Provider) != "" && !strings.EqualFold(provider, strings.TrimSpace(item.Provider)) {
@@ -113,11 +113,7 @@ func (r *Request) validate() error {
 		if !start.IsZero() && !end.IsZero() && !end.After(start) {
 			return fmt.Errorf("items[%d] end_time must be after start_time", index)
 		}
-		if r.BatchKind == domain.BatchKindInstrumentSnapshot {
-			if _, snapshotErr := parseRequestTime(item.SnapshotAt); snapshotErr != nil {
-				return fmt.Errorf("items[%d] snapshot_at is invalid: %w", index, snapshotErr)
-			}
-		} else if item.CandidateIndex < 0 {
+		if item.CandidateIndex < 0 {
 			return fmt.Errorf("items[%d] candidate_index must not be negative", index)
 		}
 		if math.IsNaN(item.RateBudgetRatio) || math.IsInf(item.RateBudgetRatio, 0) || item.RateBudgetRatio < 0 || item.RateBudgetRatio > 1 {
@@ -152,13 +148,6 @@ func parseRequestTime(raw string) (time.Time, error) {
 // Storage is the write boundary shared by the market pipelines.
 type Storage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
-	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
-}
-
-// StorageReader is the metadata and write surface used by collector planning.
-type StorageReader interface {
-	Storage
-	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
 }
 
 type sourceStorage interface {

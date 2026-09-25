@@ -573,10 +573,6 @@ func (c *metadataClientAdapter) ListDatasetSubjects(ctx context.Context, req *st
 	return c.client.ListDatasetSubjects(ctx, req)
 }
 
-func (c *metadataClientAdapter) BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
-	return c.client.BindDatasetSubject(ctx, req)
-}
-
 func (c *metadataClientAdapter) CreateView(ctx context.Context, req *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
 	return c.client.CreateView(ctx, req)
 }

@@ -65,7 +65,7 @@ func TestNewMarketKlinePipelineCreatesBinanceSpotSource(t *testing.T) {
 func TestNewMarketKlinePipelineCreatesBinanceSwapSource(t *testing.T) {
 	pipeline, err := NewMarketKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSwap, "binance", "swap_http")
 	require.NoError(t, err)
-	require.Equal(t, marketdata.ProductSwap, pipeline.ProductType)
+	require.Equal(t, marketdata.InstrumentSwap, pipeline.InstrumentType)
 	require.Equal(t, marketdata.InstrumentSwap, pipeline.InstrumentType)
 	require.Empty(t, pipeline.DatasetID)
 	require.Equal(t, "swap_http", pipeline.SourceID)

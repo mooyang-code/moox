@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -29,14 +28,9 @@ type Handler struct {
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
 	// contract without making an external exchange request.
-	Execute func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
-	// NewInstrumentPipeline is the market-agnostic InstrumentPipeline factory.
-	// The composition root selects the provider registry and metadata for the
-	// requested market; the Handler owns neither provider protocol nor Storage
-	// mutation details.
-	NewInstrumentPipeline  func(InstrumentStorage, string, marketdata.ProductType) (*InstrumentPipeline, error)
+	Execute                func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
 	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
-	NewCryptoKlinePipeline func(Storage, marketdata.ProductType) (*KlinePipeline, error)
+	NewCryptoKlinePipeline func(Storage, marketdata.InstrumentType) (*KlinePipeline, error)
 	NewStockKlinePipeline  func(Storage) (*KlinePipeline, error)
 	ResolveSourceID        func(string, string) string
 	ResolveSymbol          SymbolResolver
@@ -222,49 +216,6 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	var payload *marketfetchpb.MarketFetchBatchCompleted
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
-	} else if req.BatchKind == domain.BatchKindInstrumentSnapshot {
-		if h.NewInstrumentPipeline == nil {
-			return nil, fmt.Errorf("instrument pipeline factory is not configured")
-		}
-		if len(req.Items) != 1 {
-			return nil, fmt.Errorf("instrument snapshot requires exactly one item")
-		}
-		instrumentStorage, ok := storage.(InstrumentStorage)
-		if !ok {
-			return nil, fmt.Errorf("instrument snapshot storage does not support active-set operations")
-		}
-		productType := marketdata.ProductType(strings.ToLower(strings.TrimSpace(req.MarketType)))
-		pipeline, pipelineErr := h.NewInstrumentPipeline(instrumentStorage, req.SpaceID, productType)
-		if pipelineErr != nil {
-			return nil, pipelineErr
-		}
-		if strings.TrimSpace(req.DatasetID) != strings.TrimSpace(pipeline.DatasetID) {
-			pipeline.TargetDatasetID = strings.TrimSpace(req.DatasetID)
-		}
-		pipeline.Metrics = h.Metrics
-		snapshotAt := time.Now().UTC()
-		if h.Now != nil {
-			snapshotAt = h.Now().UTC()
-		}
-		if rawSnapshotAt := strings.TrimSpace(req.Items[0].SnapshotAt); rawSnapshotAt != "" {
-			parsed, parseErr := time.Parse(time.RFC3339Nano, rawSnapshotAt)
-			if parseErr != nil {
-				return nil, fmt.Errorf("parse instrument snapshot_at: %w", parseErr)
-			}
-			snapshotAt = parsed.UTC()
-		}
-		startedAt := time.Now()
-		_, pipelineErr = pipeline.Execute(budgetCtx, InstrumentPipelineRequest{
-			RequestID: req.RequestID, SnapshotAt: snapshotAt,
-			SnapshotShardIndex: req.Items[0].SnapshotShardIndex,
-			SnapshotShardCount: req.Items[0].SnapshotShardCount,
-		})
-		if pipelineErr != nil {
-			result := failureResult(req.Items[0], domain.ItemOutcomeStorageError, "instrument_snapshot", pipelineErr)
-			payload = buildCompletion(req, []domain.ItemResult{result}, snapshotAt, time.Since(startedAt))
-		} else {
-			payload = buildCompletion(req, []domain.ItemResult{successResult(req.Items[0])}, snapshotAt, time.Since(startedAt))
-		}
 	} else if req.SpaceID == StockCNSpaceID &&
 		(req.InstrumentType == "" || strings.EqualFold(req.InstrumentType, string(marketdata.InstrumentEquity))) {
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
@@ -369,12 +320,6 @@ func (s *reservedDeadlineStorage) UpsertFields(_ context.Context, rows []*storag
 	ctx, cancel := s.storageContext()
 	defer cancel()
 	return s.Storage.UpsertFields(ctx, rows)
-}
-
-func (s *reservedDeadlineStorage) RegisterDataSubject(_ context.Context, req *storagepb.RegisterDataSubjectReq) error {
-	ctx, cancel := s.storageContext()
-	defer cancel()
-	return s.Storage.RegisterDataSubject(ctx, req)
 }
 
 func (s *reservedDeadlineStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, source string) error {
@@ -533,12 +478,12 @@ func publishCompletion(ctx context.Context, req Request, payload proto.Message) 
 	return lastErr
 }
 
-func alignCryptoRequest(req *Request, product marketdata.ProductType) {
+func alignCryptoRequest(req *Request, product marketdata.InstrumentType) {
 	if req == nil {
 		return
 	}
 	sourceID, marketType, instrumentType := "spot_http", "spot", string(marketdata.InstrumentSpot)
-	if product == marketdata.ProductSwap {
+	if product == marketdata.InstrumentSwap {
 		sourceID, marketType, instrumentType = "swap_http", "swap", string(marketdata.InstrumentSwap)
 	}
 	req.SourceID = sourceID
@@ -550,13 +495,13 @@ func alignCryptoRequest(req *Request, product marketdata.ProductType) {
 	}
 }
 
-func cryptoKlineProduct(spaceID, marketID, marketType string, instrumentType marketdata.InstrumentType, datasetID string) (marketdata.ProductType, bool) {
+func cryptoKlineProduct(spaceID, marketID, marketType string, instrumentType marketdata.InstrumentType, datasetID string) (marketdata.InstrumentType, bool) {
 	if !strings.EqualFold(strings.TrimSpace(spaceID), "crypto") && !strings.EqualFold(strings.TrimSpace(marketID), "crypto") {
 		return "", false
 	}
 	dataset := strings.ToLower(strings.TrimSpace(datasetID))
 	if strings.EqualFold(strings.TrimSpace(marketType), "swap") || strings.EqualFold(string(instrumentType), string(marketdata.InstrumentSwap)) || strings.Contains(dataset, "_swap_") || strings.Contains(dataset, "swap_kline") {
-		return marketdata.ProductSwap, true
+		return marketdata.InstrumentSwap, true
 	}
-	return marketdata.ProductSpot, true
+	return marketdata.InstrumentSpot, true
 }

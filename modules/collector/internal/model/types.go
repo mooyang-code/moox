@@ -6,9 +6,8 @@ import "time"
 type EventAction string
 
 const (
-	EventActionMarketFetch        EventAction = "market_fetch"
-	EventActionEgressProbe        EventAction = "egress_probe"
-	EventActionInstrumentSnapshot EventAction = "instrument_snapshot"
+	EventActionMarketFetch EventAction = "market_fetch"
+	EventActionEgressProbe EventAction = "egress_probe"
 )
 
 // CloudFunctionEvent is the complete invocation contract for a short-lived SCF.

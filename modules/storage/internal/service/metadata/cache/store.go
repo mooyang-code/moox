@@ -25,21 +25,19 @@ const (
 )
 
 const (
-	kindSpace          = "space"
-	kindView           = "view"
-	kindViewColumn     = "view_column"
-	kindDataSource     = "data_source"
-	kindSubject        = "subject"
-	kindSubjectSymbol  = "subject_symbol"
-	kindDataset        = "dataset"
-	kindDatasetSubject = "dataset_subject"
-	kindFieldGroup     = "field_group"
-	kindField          = "field"
-	kindFactor         = "factor"
-	kindDatasetColumn  = "dataset_column"
-	kindDataNode       = "data_node"
-	kindDevice         = "device"
-	kindArchiveFile    = "archive_file"
+	kindSpace         = "space"
+	kindView          = "view"
+	kindViewColumn    = "view_column"
+	kindDataSource    = "data_source"
+	kindSubject       = "subject"
+	kindDataset       = "dataset"
+	kindFieldGroup    = "field_group"
+	kindField         = "field"
+	kindFactor        = "factor"
+	kindDatasetColumn = "dataset_column"
+	kindDataNode      = "data_node"
+	kindDevice        = "device"
+	kindArchiveFile   = "archive_file"
 )
 
 // Options 保存元数据缓存包装器配置。
@@ -70,7 +68,6 @@ type entry struct {
 	Market         string   `json:"market,omitempty"`
 	SubjectType    string   `json:"subject_type,omitempty"`
 	SubjectID      string   `json:"subject_id,omitempty"`
-	ExternalSymbol string   `json:"external_symbol,omitempty"`
 	DatasetID      string   `json:"dataset_id,omitempty"`
 	GroupID        string   `json:"group_id,omitempty"`
 	ParentGroupID  string   `json:"parent_group_id,omitempty"`
@@ -354,19 +351,6 @@ func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType st
 	return pageItems(items, page)
 }
 
-func (s *Store) ListSubjectSymbols(ctx context.Context, spaceID string, subjectID string, dataSourceID string, externalSymbol string, page *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindSubjectSymbol, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(subjectID == "" || item.SubjectID == subjectID) &&
-			(dataSourceID == "" || item.DataSourceID == dataSourceID) &&
-			(externalSymbol == "" || item.ExternalSymbol == externalSymbol)
-	}), func() *pb.SubjectSymbol { return &pb.SubjectSymbol{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
 func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
 	return getProto(s, ctx, kindDataset, spaceID, datasetID, func() *pb.Dataset { return &pb.Dataset{} })
 }
@@ -401,30 +385,7 @@ func (s *Store) ListDatasets(ctx context.Context, query metadata.DatasetQuery) (
 }
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
-	var raw []entry
-	if spaceID != "" && datasetID != "" {
-		raw = s.listByIndex(indexDataset, kindDatasetSubject, spaceID, datasetID)
-		if subjectID != "" {
-			filtered := make([]entry, 0, len(raw))
-			for _, item := range raw {
-				if item.SubjectID == subjectID {
-					filtered = append(filtered, item)
-				}
-			}
-			raw = filtered
-		}
-	} else {
-		raw = s.list(kindDatasetSubject, func(item entry) bool {
-			return (spaceID == "" || item.SpaceID == spaceID) &&
-				(datasetID == "" || item.DatasetID == datasetID) &&
-				(subjectID == "" || item.SubjectID == subjectID)
-		})
-	}
-	items, err := decodeEntries(raw, func() *pb.DatasetSubject { return &pb.DatasetSubject{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+	return s.base.ListDatasetSubjects(ctx, spaceID, datasetID, subjectID, page)
 }
 
 func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error) {
@@ -689,13 +650,7 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchSubjects(ctx, out); err != nil {
 		return nil, err
 	}
-	if out, err = s.fetchSubjectSymbols(ctx, out); err != nil {
-		return nil, err
-	}
 	if out, err = s.fetchDatasets(ctx, out); err != nil {
-		return nil, err
-	}
-	if out, err = s.fetchDatasetSubjects(ctx, out); err != nil {
 		return nil, err
 	}
 	if out, err = s.fetchFieldGroups(ctx, out); err != nil {
@@ -773,22 +728,6 @@ func (s *Store) fetchSubjects(ctx context.Context, out []entry) ([]entry, error)
 	return out, nil
 }
 
-func (s *Store) fetchSubjectSymbols(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error) {
-		return s.base.ListSubjectSymbols(ctx, "", "", "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindSubjectSymbol, SpaceID: item.GetSpaceId(), ID: subjectSymbolID(item), SubjectID: item.GetSubjectId(), DataSourceID: item.GetDataSourceId(), ExternalSymbol: item.GetExternalSymbol(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
 func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
 		return s.base.ListDatasets(ctx, metadata.DatasetQuery{Page: page})
@@ -798,22 +737,6 @@ func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error)
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freqs: item.GetFreqs(), KeepDuration: item.GetKeepDuration(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchDatasetSubjects(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
-		return s.base.ListDatasetSubjects(ctx, "", "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDatasetSubject, SpaceID: item.GetSpaceId(), ID: dataSetSubjectID(item), DatasetID: item.GetDatasetId(), SubjectID: item.GetSubjectId(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -975,14 +898,6 @@ func appendEntry(out []entry, item entry, message proto.Message) ([]entry, error
 	}
 	item.Payload = payload
 	return append(out, item), nil
-}
-
-func subjectSymbolID(item *pb.SubjectSymbol) string {
-	return item.GetSubjectId() + "\x00" + item.GetDataSourceId() + "\x00" + item.GetExternalSymbol()
-}
-
-func dataSetSubjectID(item *pb.DatasetSubject) string {
-	return item.GetDatasetId() + "\x00" + item.GetSubjectId()
 }
 
 func decodeEntry[T proto.Message](item entry, newMessage func() T) (T, error) {

@@ -32,10 +32,7 @@ func (s *registryStub) ReplaceExpected(items []report.DatasetExpectation) error 
 func (s *registryStub) ObserveInventoryRefreshError() { s.errors++ }
 
 func collectorRule(id string, enabled bool, dataType, target, frequency string) domain.CollectionTask {
-	params := `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
-	if dataType == "kline" {
-		params = `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
-	}
+	params := `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
 	return domain.CollectionTask{SpaceID: "crypto", TaskID: id, DataType: dataType, Provider: "binance", MarketType: "spot", CollectParams: params, Enabled: enabled}
 }
 
@@ -45,7 +42,6 @@ func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing
 		collectorRule("live-5m", true, "kline", "bars", "5m"),
 		collectorRule("duplicate", true, "kline", "bars", "1m"),
 		collectorRule("batch", true, "kline", "batch-bars", "1m"),
-		collectorRule("instrument", true, "instrument", "symbols", "1m"),
 		collectorRule("disabled", false, "kline", "disabled-bars", "1m"),
 	}}
 	registry := &registryStub{}

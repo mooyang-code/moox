@@ -60,16 +60,16 @@ func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	}
 	if marketID == "crypto" {
 		pipeline.DatasetID = ""
-		pipeline.ProductType = marketdata.ProductSpot
+		pipeline.InstrumentType = marketdata.InstrumentSpot
 		if instrumentType == marketdata.InstrumentSwap {
-			pipeline.ProductType = marketdata.ProductSwap
+			pipeline.InstrumentType = marketdata.InstrumentSwap
 		}
 	}
 	if marketID == marketfetch.StockCNSpaceID {
 		if instrumentType == marketdata.InstrumentIndex {
-			pipeline.ProductType = marketdata.ProductIndex
+			pipeline.InstrumentType = marketdata.InstrumentIndex
 		} else {
-			pipeline.ProductType = marketdata.ProductConvertibleBond
+			pipeline.InstrumentType = marketdata.InstrumentConvertibleBond
 		}
 		pipeline.Calendar, err = loadStockCNCalendar()
 		if err != nil {
@@ -81,18 +81,18 @@ func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 
 func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (marketdata.MarketProvider, error) {
 	if marketID == "crypto" && providerID == "binance" {
-		productType := marketdata.ProductSpot
+		productType := marketdata.InstrumentSpot
 		switch instrumentType {
 		case marketdata.InstrumentSpot:
 		case marketdata.InstrumentSwap:
-			productType = marketdata.ProductSwap
+			productType = marketdata.InstrumentSwap
 		default:
 			return nil, fmt.Errorf("unsupported crypto instrument source %s/%s", providerID, sourceID)
 		}
 		if sourceID != DefaultSourceID(providerID, string(instrumentType)) {
 			return nil, fmt.Errorf("unsupported crypto %s source %s/%s", instrumentType, providerID, sourceID)
 		}
-		return binance.NewMarketDataAdapter(binance.AdapterConfig{ProductType: productType}), nil
+		return binance.NewMarketDataAdapter(binance.AdapterConfig{InstrumentType: productType}), nil
 	}
 	if instrumentType == marketdata.InstrumentConvertibleBond {
 		switch {

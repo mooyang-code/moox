@@ -5,12 +5,10 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/kline"
-	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
 )
 
 const (
-	JobTypeCollectBinanceKline      = kline.JobType
-	JobTypeCollectBinanceInstrument = symbol.JobType
+	JobTypeCollectBinanceKline = kline.JobType
 )
 
 // JobRoute maps one collector provider/data type to its queue identity.
@@ -22,7 +20,6 @@ type JobRoute struct {
 
 var jobRoutes = []JobRoute{
 	{Exchange: "binance", DataType: "kline", JobType: JobTypeCollectBinanceKline},
-	{Exchange: "binance", DataType: "instrument", JobType: JobTypeCollectBinanceInstrument},
 }
 
 func init() {

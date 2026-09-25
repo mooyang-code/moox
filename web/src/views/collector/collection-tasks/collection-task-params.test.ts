@@ -10,24 +10,34 @@ import {
 } from "./collection-task-params";
 
 describe("collection task params", () => {
-  it("builds task-owned result input without a caller-selected result identity", () => {
+  it("builds kline input from selected subject tags", () => {
     const params = buildCollectionTaskParams({
       dataType: "kline",
       provider: " Binance ",
       market: "spot",
       frequency: "1h",
-      symbolSource: "dataset",
-      symbolSourceId: "symbols"
+      subjectTags: [" binance_spot "]
     });
 
     expect(params).toEqual({
       provider: "binance",
       market_type: "spot",
-      symbol_source: "dataset",
-      symbol_dataset_id: "symbols",
+      subject_tags: ["binance_spot"],
       frequency: "1h"
     });
     expect(params).not.toHaveProperty("target_dataset_id");
+  });
+
+  it("requires at least one subject tag for kline input", () => {
+    expect(() =>
+      buildCollectionTaskParams({
+        dataType: "kline",
+        provider: "binance",
+        market: "spot",
+        frequency: "1h",
+        subjectTags: []
+      })
+    ).toThrow("请选择标的标签");
   });
 
   it("builds resample inputs and preserves an explicit zero delay", () => {
@@ -54,10 +64,11 @@ describe("collection task params", () => {
   it("emits result_config separately from the task payload", () => {
     const task = buildCollectionTaskPayload(
       {
-        dataType: "instrument",
+        dataType: "kline",
         provider: "binance",
         market: "swap",
-        frequency: "6h"
+        frequency: "6h",
+        subjectTags: ["binance_swap"]
       },
       {
         task_name: "  标的同步  ",
@@ -71,7 +82,7 @@ describe("collection task params", () => {
     expect(task).toMatchObject({
       task_name: "标的同步",
       description: "同步任务",
-      data_type: "instrument",
+      data_type: "kline",
       provider: "binance",
       market_type: "swap",
       enabled: false
@@ -107,7 +118,7 @@ describe("collection task params", () => {
     });
   });
 
-  it("matches source options by market and supported frequency", () => {
+  it("matches resample source options by market and supported frequency", () => {
     const source = {
       source_id: "source-bars",
       data_source_id: "crypto",
@@ -119,18 +130,6 @@ describe("collection task params", () => {
     expect(collectionSourceMatches(source, "binance", "kline", "spot", "1h")).toBe(true);
     expect(collectionSourceMatches(source, "binance", "kline", "swap", "1h")).toBe(false);
     expect(collectionSourceMatches(source, "binance", "kline", "spot", "4h")).toBe(false);
-    expect(
-      collectionSourceMatches(
-        {
-          source_id: "symbols",
-          data_source_id: "binance",
-          data_kind: "DATA_KIND_RECORD",
-          attributes: { market_type: "spot" }
-        },
-        "binance",
-        "instrument",
-        "spot"
-      )
-    ).toBe(true);
+    expect(collectionSourceMatches(source, "binance", "kline_resample", "spot", "1h")).toBe(true);
   });
 });

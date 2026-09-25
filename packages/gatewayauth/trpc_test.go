@@ -17,9 +17,9 @@ func TestTRPCClientFilterSignsExactMapContainingWireBody(t *testing.T) {
 	clientFilter := NewTRPCClientFilter(credentials, targetNode, func() time.Time { return signedAt })
 
 	ctx, msg := codec.EnsureMessage(context.Background())
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/RegisterDataSubject")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertTag")
 	msg.WithCalleeServiceName("trpc.moox.storage.Metadata")
-	msg.WithCalleeMethod("RegisterDataSubject")
+	msg.WithCalleeMethod("UpsertTag")
 	msg.WithSerializationType(codec.SerializationTypePB)
 
 	req, err := structpb.NewStruct(map[string]any{
@@ -39,9 +39,9 @@ func TestTRPCClientFilterSignsExactMapContainingWireBody(t *testing.T) {
 			headers.Set(key, string(value))
 		}
 		if _, err := Verify(credentials, Request{
-			Method: http.MethodPost, Path: "/trpc.moox.storage.Metadata/RegisterDataSubject",
+			Method: http.MethodPost, Path: "/trpc.moox.storage.Metadata/UpsertTag",
 			TargetNode: targetNode, Callee: "trpc.moox.storage.Metadata",
-			Func: "RegisterDataSubject", Body: requestBody.Data,
+			Func: "UpsertTag", Body: requestBody.Data,
 		}, headers, signedAt); err != nil {
 			t.Fatalf("verify exact wire body: %v", err)
 		}

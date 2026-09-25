@@ -33,7 +33,3 @@ func LoadStockCNRoute() (StockCNRoute, error) { return loadStockCNRoute() }
 func LoadStockCNProviderRuntime(route StockCNRoute) (map[string]StockCNProviderRuntime, error) {
 	return loadStockCNProviderRuntime(route)
 }
-
-func InstrumentRouteID(marketID, instrumentType string) string {
-	return instrumentRouteID(marketID, instrumentType)
-}

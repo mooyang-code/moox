@@ -29,6 +29,7 @@ type MetadataClient interface {
 	GetDataNode(context.Context, *storagepb.GetDataNodeReq, ...client.Option) (*storagepb.GetDataNodeRsp, error)
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
 	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
+	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 }
 
 type StorageAdapter struct {
@@ -424,6 +425,37 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 	a.subjects[key] = cachedSubjectCatalog{loadedAt: now, ids: cloneSubjectSet(ids)}
 	a.subjectMu.Unlock()
 	return ids, nil
+}
+
+// ListTags returns the tag definitions and live member counters used by the
+// market canary. Tags are deliberately read through Metadata rather than
+// inferred from collector configuration so Monitor observes the same state as
+// the collector and the management UI.
+func (a *StorageAdapter) ListTags(ctx context.Context, spaceID string) ([]*storagepb.Tag, error) {
+	if a == nil || a.metadata == nil {
+		return nil, errors.New("metrics storage metadata client is not initialized")
+	}
+	items := make([]*storagepb.Tag, 0)
+	for page := uint32(1); ; page++ {
+		rsp, err := a.metadata.ListTags(ctx, &storagepb.ListTagsReq{
+			AuthInfo: a.auth,
+			SpaceId:  strings.TrimSpace(spaceID),
+			Page:     &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
+		}, client.WithFilter(trpcretry.ReadOnly()))
+		if err != nil {
+			return nil, fmt.Errorf("list monitored tags: %w", err)
+		}
+		if err := storageOK("list monitored tags", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		items = append(items, rsp.GetTags()...)
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			return items, nil
+		}
+		if len(rsp.GetTags()) == 0 {
+			return nil, errors.New("monitored tag pagination did not advance")
+		}
+	}
 }
 
 func cloneSubjectSet(input map[string]struct{}) map[string]struct{} {

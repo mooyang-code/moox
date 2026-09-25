@@ -83,7 +83,6 @@ type Reader interface {
 
 	GetSubject(ctx context.Context, spaceID string, subjectID string) (*pb.Subject, error)
 	ListSubjects(ctx context.Context, spaceID string, subjectType string, market string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error)
-	ListSubjectSymbols(ctx context.Context, spaceID string, subjectID string, dataSourceID string, externalSymbol string, page *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error)
 
 	GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error)
 	ListDatasets(ctx context.Context, query DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
@@ -136,11 +135,8 @@ type Writer interface {
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
 	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
-	UpsertSubjectSymbol(ctx context.Context, item *pb.SubjectSymbol) (*pb.SubjectSymbol, error)
-	RegisterDataSubject(ctx context.Context, subject *pb.Subject, symbol *pb.SubjectSymbol, bindings []*pb.DatasetSubject) (*pb.Subject, []*pb.DatasetSubject, error)
 	UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error)
 	DeleteDataset(ctx context.Context, spaceID string, datasetID string) error
-	BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject) (*pb.DatasetSubject, error)
 	UpsertFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
 	CreateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
 	UpdateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
@@ -160,14 +156,6 @@ type Writer interface {
 	RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error)
 }
 
-// DatasetSubjectSetWriter is the atomic publication contract for complete
-// instrument snapshots. Implementations must keep staged rows out of the
-// active DatasetSubject reader until activation commits.
-type DatasetSubjectSetWriter interface {
-	StageDatasetSubjectSet(ctx context.Context, spaceID, setID string, bindings []*pb.DatasetSubject) (int, error)
-	ActivateDatasetSubjectSet(ctx context.Context, spaceID, setID string) (int, error)
-}
-
 type ViewPeriodStateStore interface {
 	ListViewPeriodDatasetStates(ctx context.Context, spaceID, viewID, frequency string, periodTime int64) ([]*pb.ViewPeriodDatasetState, error)
 	MissingViewSyncPointDatasets(ctx context.Context, spaceID, viewID, requestID string, datasetIDs []string) ([]string, error)
@@ -183,6 +171,7 @@ type Store interface {
 	InitSchema(ctx context.Context) error
 	TableNames(ctx context.Context) ([]string, error)
 	Reader
+	TagStore
 	ViewRebuildLogReader
 	Writer
 	ViewPeriodStateStore

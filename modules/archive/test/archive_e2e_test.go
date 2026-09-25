@@ -101,7 +101,7 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 	go func() { runErr <- runner.Run(ctx) }()
 
 	publish := func(id, dataTime, tag, close string) {
-		event := &sharedpb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", Rows: []*sharedpb.RowUpsert{{Key: &sharedpb.RowKey{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", Kind: &sharedpb.RowKey_TimeSeries{TimeSeries: &sharedpb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: dataTime, SeriesTag: tag}}}, Fields: []*sharedpb.FieldValue{{FieldId: "close", Value: &sharedpb.TypedValue{Value: &sharedpb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
+		event := &sharedpb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", SourceNodeId: "node-1", SourceStoreId: "store-1", SourceSequence: 1, WriteSource: "test", Rows: []*sharedpb.RowUpsert{{Key: &sharedpb.RowKey{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", Kind: &sharedpb.RowKey_TimeSeries{TimeSeries: &sharedpb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: dataTime, SeriesTag: tag}}}, Fields: []*sharedpb.FieldValue{{FieldId: "close", Value: &sharedpb.TypedValue{Value: &sharedpb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
 		_, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, event, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
 		if err != nil {
 			t.Fatal(err)
@@ -191,20 +191,22 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 	requireArchiveRPCOK(t, "Metadata.CreateDataSource", dataSourceRsp.GetRetInfo(), callErr)
 	subjectRsp, callErr := metadataSetup.UpsertSubject(t.Context(), &storagepb.UpsertSubjectReq{AuthInfo: auth, Subject: &storagepb.Subject{SpaceId: "crypto", SubjectId: "APT-USDT", SubjectType: "custom", Name: "APT-USDT", Timezone: "UTC", Status: "active"}})
 	requireArchiveRPCOK(t, "Metadata.UpsertSubject", subjectRsp.GetRetInfo(), callErr)
+	tagRsp, callErr := metadataSetup.UpsertTag(t.Context(), &storagepb.UpsertTagReq{AuthInfo: auth, Tag: &storagepb.Tag{SpaceId: "crypto", TagId: "archive_e2e", TagName: "Archive E2E", Mode: "manual"}})
+	requireArchiveRPCOK(t, "Metadata.UpsertTag", tagRsp.GetRetInfo(), callErr)
+	membersRsp, callErr := metadataSetup.AddTagMembers(t.Context(), &storagepb.TagMembersReq{AuthInfo: auth, SpaceId: "crypto", TagId: "archive_e2e", SubjectIds: []string{"APT-USDT"}})
+	requireArchiveRPCOK(t, "Metadata.AddTagMembers", membersRsp.GetRetInfo(), callErr)
 	groupRsp, callErr := metadataSetup.CreateFieldGroup(t.Context(), &storagepb.CreateFieldGroupReq{AuthInfo: auth, FieldGroup: &storagepb.FieldGroup{SpaceId: "crypto", GroupId: "archive-e2e", Name: "ArchFields", Status: "active"}})
 	requireArchiveRPCOK(t, "Metadata.CreateFieldGroup", groupRsp.GetRetInfo(), callErr)
 	for _, fieldID := range []string{"open", "high", "low", "close", "volume"} {
 		fieldRsp, fieldErr := metadataSetup.CreateField(t.Context(), &storagepb.CreateFieldReq{AuthInfo: auth, Field: &storagepb.Field{SpaceId: "crypto", FieldId: fieldID, Name: fieldID, GroupId: "archive-e2e", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}})
 		requireArchiveRPCOK(t, "Metadata.CreateField "+fieldID, fieldRsp.GetRetInfo(), fieldErr)
 	}
-	datasetRsp, callErr := metadataSetup.CreateDataset(t.Context(), &storagepb.CreateDatasetReq{AuthInfo: auth, Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DataSourceId: "archive-e2e", Name: "归档数据", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, DataNodeId: dataNodeID, KeepDuration: "0", Status: "disabled"}})
+	datasetRsp, callErr := metadataSetup.CreateDataset(t.Context(), &storagepb.CreateDatasetReq{AuthInfo: auth, Dataset: &storagepb.Dataset{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DataSourceId: "archive-e2e", Name: "归档数据", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1h"}, DataNodeId: dataNodeID, KeepDuration: "0", Status: "disabled", SubjectTags: []string{"archive_e2e"}}})
 	requireArchiveRPCOK(t, "Metadata.CreateDataset", datasetRsp.GetRetInfo(), callErr)
 	for _, columnID := range []string{"open", "high", "low", "close", "volume"} {
 		columnRsp, columnErr := metadataSetup.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{AuthInfo: auth, Column: &storagepb.DatasetColumn{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", ColumnName: columnID, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: columnID, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"display_name": "字段" + columnID}}})
 		requireArchiveRPCOK(t, "Metadata.UpsertDatasetColumn "+columnID, columnRsp.GetRetInfo(), columnErr)
 	}
-	bindRsp, callErr := metadataSetup.BindDatasetSubject(t.Context(), &storagepb.BindDatasetSubjectReq{AuthInfo: auth, DatasetSubject: &storagepb.DatasetSubject{SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", SubjectId: "APT-USDT", SubjectRole: "normal", Status: "active"}})
-	requireArchiveRPCOK(t, "Metadata.BindDatasetSubject", bindRsp.GetRetInfo(), callErr)
 	checkRsp, callErr := metadataSetup.CheckDatasetActivation(t.Context(), &storagepb.CheckDatasetActivationReq{AuthInfo: auth, SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h"})
 	requireArchiveRPCOK(t, "Metadata.CheckDatasetActivation", checkRsp.GetRetInfo(), callErr)
 	require.True(t, checkRsp.GetReady(), "archive dataset activation checks: %v", checkRsp.GetChecks())

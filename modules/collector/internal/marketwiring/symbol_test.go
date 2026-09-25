@@ -12,14 +12,14 @@ func TestManagedEnvironmentAndTimerShareProviderSymbolCodec(t *testing.T) {
 	assignment := marketfetch.NodeAssignment{
 		Provider: "binance", MarketID: "crypto", InstrumentType: "swap", MarketType: "swap", SourceID: "swap_http",
 		DatasetID: "bars", Frequency: "1H", Enabled: true,
-		Subjects:        []string{"BTC-USDT-SWAP", "CUSTOM-USDT-SWAP"},
-		ExternalSymbols: map[string]string{"BTC-USDT-SWAP": "BTCUSDT", "CUSTOM-USDT-SWAP": "EXPLICIT"},
+		Subjects:        []string{"BTC-USDT", "CUSTOM-USDT"},
+		ExternalSymbols: map[string]string{"BTC-USDT": "BTCUSDT", "CUSTOM-USDT": "EXPLICIT"},
 	}
-	env, err := marketfetch.BuildManagedEnvironment(assignment, nil, CompactSymbol)
+	env, err := marketfetch.BuildManagedEnvironment(assignment, nil, ResolveSymbol)
 	require.NoError(t, err)
 	var symbols map[string]string
 	require.NoError(t, json.Unmarshal([]byte(env["MOOX_MARKET_FETCH_SYMBOLS_JSON"]), &symbols))
-	require.Equal(t, map[string]string{"CUSTOM-USDT-SWAP": "EXPLICIT"}, symbols)
+	require.Equal(t, map[string]string{"CUSTOM-USDT": "EXPLICIT"}, symbols)
 	for key, value := range env {
 		t.Setenv(key, value)
 	}
@@ -32,7 +32,7 @@ func TestManagedEnvironmentAndTimerShareProviderSymbolCodec(t *testing.T) {
 	require.Equal(t, "EXPLICIT", req.Items[1].Symbol)
 	require.Equal(t, "swap_http", req.Items[0].SourceID)
 	_, _, err = marketfetch.TimerRequestFromEnv("request", "function", time.Now())
-	require.Error(t, err, "a runtime without the codec cannot guess omitted wire symbols")
+	require.NoError(t, err, "the shared default codec is available to timer runtimes")
 }
 
 func TestEnvironmentKeepsOtherMarketSymbolsExplicit(t *testing.T) {
@@ -40,9 +40,9 @@ func TestEnvironmentKeepsOtherMarketSymbolsExplicit(t *testing.T) {
 		Provider: "eastmoney", MarketID: "stockhk", InstrumentType: "equity", MarketType: "equity", SourceID: "stockhk_http",
 		DatasetID: "bars", Frequency: "1m", Enabled: true, Subjects: []string{"00700.XHKG"},
 		ExternalSymbols: map[string]string{"00700.XHKG": "00700"},
-	}, nil, CompactSymbol)
+	}, nil, ResolveSymbol)
 	require.NoError(t, err)
-	require.Equal(t, `{"00700.XHKG":"00700"}`, env["MOOX_MARKET_FETCH_SYMBOLS_JSON"])
+	require.Equal(t, `{}`, env["MOOX_MARKET_FETCH_SYMBOLS_JSON"])
 }
 
 func TestMarketProviderSymbolForCryptoDerivesBinanceSymbols(t *testing.T) {
@@ -52,12 +52,12 @@ func TestMarketProviderSymbolForCryptoDerivesBinanceSymbols(t *testing.T) {
 		subject string
 		want    string
 	}{
-		{name: "spot", market: "spot", subject: "BTC-USDT-SPOT", want: "BTCUSDT"},
-		{name: "swap", market: "swap", subject: "1000BONK-USDT-SWAP", want: "1000BONKUSDT"},
+		{name: "spot", market: "spot", subject: "BTC-USDT", want: "BTCUSDT"},
+		{name: "swap", market: "swap", subject: "1000BONK-USDT", want: "1000BONKUSDT"},
 		{name: "legacy subject", market: "spot", subject: "BTC-USDT", want: "BTCUSDT"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := ResolveSymbol("binance", "crypto", test.market, test.subject, "")
+			got, err := ResolveSymbol("binance", "crypto", test.market, test.subject)
 			require.NoError(t, err)
 			require.Equal(t, test.want, got)
 		})

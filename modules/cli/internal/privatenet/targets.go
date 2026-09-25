@@ -142,15 +142,6 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), shard.Timers)
 			}
 		}
-		if prefix := strings.TrimSpace(space.InstrumentSnapshotFunctionPrefix); prefix != "" && strings.TrimSpace(space.InstrumentSnapshotRegion) != "" {
-			if includeIdle || !space.IsRegionBlacklisted(space.InstrumentSnapshotRegion) {
-				snapshotNS := namespace
-				if strings.TrimSpace(snapshotNS) == "" {
-					snapshotNS = setupconfig.ExpectedSCFNamespace(space.SpaceID)
-				}
-				add(space.InstrumentSnapshotRegion, snapshotNS, prefix, publicNet, space.StorageAccessTarget(space.InstrumentSnapshotRegion), 1)
-			}
-		}
 	}
 	out := make([]SCFTarget, 0, len(byKey))
 	for _, item := range byKey {

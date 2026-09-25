@@ -28,8 +28,5 @@ func normalizeSCFRegionBlacklist(cfg *SCFFetcherSpace, path string) error {
 		}
 	}
 	cfg.RegionBlacklist = regions
-	if cfg.IsRegionBlacklisted(cfg.InstrumentSnapshotRegion) {
-		return fmt.Errorf("config_invalid: %s.instrument_snapshot_region %q is blacklisted", path, cfg.InstrumentSnapshotRegion)
-	}
 	return nil
 }

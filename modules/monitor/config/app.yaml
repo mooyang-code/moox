@@ -53,19 +53,11 @@ market_canary:
   subjects:
     - space_id: crypto
       dataset_id: dataset_binance_spot_kline_1m
-      # Subject IDs are the canonical identifiers emitted by the active
-      # dataset catalog, including the product suffix.
-      symbol: OPG-USDT-SPOT
+      # Use a liquid, currently listed spot subject. The catalog may still
+      # store the unsuffixed identity; the canary resolver maps either form.
+      symbol: BTC-USDT
       frequency: 1m
       series_tag: venue:binance
-    - space_id: stockcn
-      dataset_id: dataset_stockcn_equity_kline
-      symbol: 600000.XSHG
-      frequency: 1m
-      series_tag: default
-      market_id: stockcn
-      calendar_path: ../collector/config/markets/stockcn/calendar.yaml
-      eligible_kline_providers: [sina, tencent, tdx, eastmoney]
 
 market_health:
   timer_coordination_stale_after: 15m
@@ -85,20 +77,10 @@ kline_freshness:
     - enabled: true
       space_id: crypto
       dataset_id: dataset_binance_spot_kline_1m
-      view_id: view_crypto_spot_kline_1m
+      view_id: view_binance_spot_kline_1m
       frequency: 1m
       market_id: crypto
       stale_after: 5m
-    - enabled: true
-      space_id: stockcn
-      dataset_id: dataset_stockcn_equity_kline
-      view_id: view_stockcn_equity_kline_1m
-      frequency: 1m
-      market_id: stockcn
-      calendar_id: cn_stock
-      timezone: Asia/Shanghai
-      sessions: ["09:30-11:30", "13:00-15:00"]
-      stale_after: 10m
 
 metrics:
   enabled: true

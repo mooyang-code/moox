@@ -236,7 +236,7 @@ func TestRunStorageImportWritePath(t *testing.T) {
 				{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Required: true, Status: "active"},
 			},
 		},
-		subjects: []*pb.DatasetSubject{},
+		subjects: []*pb.DatasetSubject{{SubjectId: "BTC", Status: "active"}},
 	}
 	writer := &trackingStorageWriter{}
 	summary, err := runStorageImport(context.Background(), storageImportOptions{
@@ -270,6 +270,7 @@ func newStorageImportMetaFull() *fakeStorageImportMetaFull {
 				{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Required: true, Status: "active"},
 			},
 		},
+		subjects: []*pb.DatasetSubject{{SubjectId: "BTC", Status: "active"}},
 	}
 }
 
@@ -305,13 +306,6 @@ func (f *fakeStorageImportMetaFull) ListDatasetSubjects(context.Context, string,
 	f.metadataCalls++
 	f.listDatasetSubjectsCalls++
 	return f.subjects, nil
-}
-
-func (f *fakeStorageImportMetaFull) BindDatasetSubject(context.Context, *pb.DatasetSubject) error {
-	f.metadataCalls++
-	f.bindDatasetSubjectCalls++
-	f.bound = true
-	return nil
 }
 
 type trackingStorageWriter struct{ writes int }

@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/baidu"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sina"
@@ -65,7 +64,7 @@ func NewStockKlinePipeline(storage marketfetch.Storage) (*marketfetch.KlinePipel
 	if err != nil {
 		return nil, err
 	}
-	return &marketfetch.KlinePipeline{Router: router, Storage: storage, CandidateChain: chain, AutoBindSource: true, RouteID: route.RouteID, SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID, ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity, DatasetID: marketfetch.StockCNDatasetID, Calendar: calendar, SettleDelay: 5 * time.Second}, nil
+	return &marketfetch.KlinePipeline{Router: router, Storage: storage, CandidateChain: chain, AutoBindSource: true, RouteID: route.RouteID, SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID, InstrumentType: marketdata.InstrumentEquity, DatasetID: marketfetch.StockCNDatasetID, Calendar: calendar, SettleDelay: 5 * time.Second}, nil
 }
 
 func NewStockKlinePipelineForSource(storage marketfetch.Storage, providerID, sourceID string) (*marketfetch.KlinePipeline, error) {
@@ -125,8 +124,8 @@ func NewStockKlinePipelineForSource(storage marketfetch.Storage, providerID, sou
 	return &marketfetch.KlinePipeline{
 		Router: router, Storage: storage, CandidateChain: route.KlineProviders(),
 		RouteID: route.RouteID, SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID,
-		ProductType: marketdata.ProductEquity, InstrumentType: marketdata.InstrumentEquity,
-		DatasetID: marketfetch.StockCNDatasetID, Calendar: calendar,
+		InstrumentType: marketdata.InstrumentEquity,
+		DatasetID:      marketfetch.StockCNDatasetID, Calendar: calendar,
 		SettleDelay: 5 * time.Second,
 	}, nil
 }
@@ -143,18 +142,18 @@ func stockCNSourceID(route marketfetch.StockCNRoute, providerID string) string {
 // NewCryptoKlinePipeline is the crypto composition root for the same common
 // KlinePipeline used by stockcn. Binance remains responsible only for HTTP
 // protocol parsing and normalization; marketfetch.Storage and routing stay market-agnostic.
-func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.ProductType) (*marketfetch.KlinePipeline, error) {
+func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.InstrumentType) (*marketfetch.KlinePipeline, error) {
 	if storage == nil {
 		return nil, fmt.Errorf("crypto kline storage is required")
 	}
 	if productType == "" {
-		productType = marketdata.ProductSpot
+		productType = marketdata.InstrumentSpot
 	}
-	if productType != marketdata.ProductSpot && productType != marketdata.ProductSwap {
+	if productType != marketdata.InstrumentSpot && productType != marketdata.InstrumentSwap {
 		return nil, fmt.Errorf("unsupported crypto product %q", productType)
 	}
 	instrumentType := marketdata.InstrumentSpot
-	if productType == marketdata.ProductSwap {
+	if productType == marketdata.InstrumentSwap {
 		instrumentType = marketdata.InstrumentSwap
 	}
 	// Keep the crypto composition root on the same provider/source factory as
@@ -169,7 +168,6 @@ func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.
 	// 1h datasets are different). Leave it request-bound instead of imposing
 	// the legacy route dataset ID selected by NewMarketKlinePipeline.
 	pipeline.DatasetID = ""
-	pipeline.ProductType = productType
 	pipeline.InstrumentType = instrumentType
 	return pipeline, nil
 }
@@ -192,39 +190,6 @@ func loadStockCNCalendar() (*stockmarket.Calendar, error) {
 		return calendar, nil
 	}
 	return nil, fmt.Errorf("stockcn calendar config was not found")
-}
-
-func NewStockInstrumentPipeline(storage marketfetch.InstrumentStorage) (*marketfetch.InstrumentPipeline, error) {
-	route, err := marketfetch.LoadStockCNRoute()
-	if err != nil {
-		return nil, err
-	}
-	providerConfigs, err := marketfetch.LoadStockCNProviderRuntime(route)
-	if err != nil {
-		return nil, err
-	}
-	registry := marketdata.NewRegistry()
-	for _, providerID := range route.InstrumentProviders() {
-		providerConfig, ok := providerConfigs[providerID]
-		if !ok || !providerConfig.InstrumentEnabled {
-			return nil, fmt.Errorf("stockcn instrument provider %q is not active in source config", providerID)
-		}
-		provider, providerErr := newStockCNProvider(providerID, providerConfig)
-		if providerErr != nil {
-			return nil, providerErr
-		}
-		if err := registry.Register(provider); err != nil {
-			return nil, err
-		}
-	}
-	chain := configuredStockCNProviderChain("MOOX_INSTRUMENT_PROVIDER_CHAIN", route.InstrumentProviders())
-	if len(chain) == 0 {
-		return nil, fmt.Errorf("stockcn instrument provider chain is empty")
-	}
-	if err := validateStockCNProviderChain(chain, providerConfigs, false); err != nil {
-		return nil, err
-	}
-	return &marketfetch.InstrumentPipeline{Registry: registry, Storage: storage, CandidateChain: chain, InstrumentProviderTimeout: 2 * time.Minute, SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID, DatasetID: marketfetch.StockCNInstrumentDatasetID, TargetDatasetID: marketfetch.StockCNDatasetID, DataSourceID: marketfetch.StockCNDataSourceID, RequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}, MinimumCount: 4000, RouteID: "stockcn_instrument_v1"}, nil
 }
 
 func validateStockCNProviderChain(chain []string, providers map[string]marketfetch.StockCNProviderRuntime, kline bool) error {
@@ -299,51 +264,4 @@ func configuredStockCNProviderChain(envKey string, fallback []string) []string {
 		chain = append(chain, provider)
 	}
 	return chain
-}
-
-// NewMarketInstrumentPipeline selects a market composition root while keeping
-// snapshot validation, active-set switching, and marketfetch.Storage writes in the common
-// marketfetch.InstrumentPipeline. A stock snapshot is deliberately not allowed to fall
-// through to Binance's product-type mapping.
-func NewMarketInstrumentPipeline(storage marketfetch.InstrumentStorage, marketID string, productType marketdata.ProductType) (*marketfetch.InstrumentPipeline, error) {
-	if strings.EqualFold(strings.TrimSpace(marketID), marketfetch.StockCNSpaceID) {
-		return NewStockInstrumentPipeline(storage)
-	}
-	if !strings.EqualFold(strings.TrimSpace(marketID), "crypto") {
-		return nil, fmt.Errorf("unsupported instrument market %q", marketID)
-	}
-	return NewCryptoInstrumentPipeline(storage, productType)
-}
-
-// NewCryptoInstrumentPipeline composes Binance's typed InstrumentFetcher with
-// the same snapshot/active-set pipeline used by stockcn. The target dataset is
-// intentionally optional for symbol snapshots: callers can stage the complete
-// instrument membership without implicitly activating a K-line dataset.
-func NewCryptoInstrumentPipeline(storage marketfetch.InstrumentStorage, productType marketdata.ProductType) (*marketfetch.InstrumentPipeline, error) {
-	if storage == nil {
-		return nil, fmt.Errorf("crypto instrument storage is required")
-	}
-	if productType == "" {
-		productType = marketdata.ProductSpot
-	}
-	if productType != marketdata.ProductSpot && productType != marketdata.ProductSwap {
-		return nil, fmt.Errorf("unsupported crypto product %q", productType)
-	}
-	adapter := binance.NewMarketDataAdapter(binance.AdapterConfig{ProductType: productType})
-	registry := marketdata.NewRegistry()
-	if err := registry.Register(adapter); err != nil {
-		return nil, fmt.Errorf("register Binance instrument provider: %w", err)
-	}
-	datasetID := "dataset_binance_spot_symbols"
-	instrumentType := "spot"
-	if productType == marketdata.ProductSwap {
-		datasetID = "dataset_binance_swap_symbols"
-		instrumentType = "swap"
-	}
-	return &marketfetch.InstrumentPipeline{
-		Registry: registry, Storage: storage, CandidateChain: []string{"binance"},
-		SpaceID: "crypto", MarketID: "crypto", DatasetID: datasetID, DataSourceID: "binance",
-		SubjectType: "crypto_pair", SubjectMarket: "CRYPTO", Currency: "USDT", Timezone: "UTC",
-		InstrumentType: instrumentType, RequiredExchanges: []string{"binance"}, MinimumCount: 1, RouteID: marketfetch.InstrumentRouteID("crypto", instrumentType),
-	}, nil
 }

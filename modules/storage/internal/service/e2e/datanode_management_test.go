@@ -448,10 +448,6 @@ func (s *countingPanicStore) ListSubjects(ctx context.Context, space, kind, mark
 	s.guard("ListSubjects")
 	return s.Store.ListSubjects(ctx, space, kind, market, ids, keyword, page)
 }
-func (s *countingPanicStore) ListSubjectSymbols(ctx context.Context, space, subject, source, external string, page *pb.Page) ([]*pb.SubjectSymbol, *pb.PageResult, error) {
-	s.guard("ListSubjectSymbols")
-	return s.Store.ListSubjectSymbols(ctx, space, subject, source, external, page)
-}
 func (s *countingPanicStore) GetDataset(ctx context.Context, space, dataset string) (*pb.Dataset, error) {
 	s.guard("GetDataset")
 	return s.Store.GetDataset(ctx, space, dataset)

@@ -51,12 +51,6 @@ func TestTimerRequestFromEnv(t *testing.T) {
 	require.Equal(t, []string{"203.0.113.1"}, req.DNSRoutes["api.binance.com"].IPs)
 }
 
-func TestMarketProviderSymbolForCryptoPrefersConfiguredSymbol(t *testing.T) {
-	got, err := marketProviderSymbolForMarket("crypto", "swap", "1000BONK-USDT-SWAP", "CUSTOM")
-	require.NoError(t, err)
-	require.Equal(t, "CUSTOM", got)
-}
-
 func TestTimerRequestFromEnvAllowsUnicodeSubjectNames(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")

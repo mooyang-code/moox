@@ -212,8 +212,14 @@ func TestMonitorAppConfigLoadsKlineFreshnessRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(app.yaml) error = %v", err)
 	}
-	if !cfg.KlineFreshness.Enabled || len(cfg.KlineFreshness.Rules) != 2 {
+	if !cfg.KlineFreshness.Enabled || len(cfg.KlineFreshness.Rules) != 1 {
 		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
+	}
+	if cfg.KlineFreshness.Rules[0].ViewID != "view_binance_spot_kline_1m" {
+		t.Fatalf("kline freshness view = %s", cfg.KlineFreshness.Rules[0].ViewID)
+	}
+	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].Symbol != "BTC-USDT" {
+		t.Fatalf("market canary subjects = %+v", cfg.MarketCanary.Subjects)
 	}
 }
 

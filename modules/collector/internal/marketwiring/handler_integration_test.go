@@ -56,7 +56,7 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 					client.HTTPClient = httpclient.NewHTTPClient(server.Client())
 					require.NoError(t, client.SetSpotBaseURL(server.URL))
 					require.NoError(t, client.SetSwapBaseURL(server.URL))
-					adapter := binance.NewMarketDataAdapter(binance.AdapterConfig{ProductType: marketdata.ProductType(product), KlineCollector: binance.NewKlineCollector(client), Now: func() time.Time { return now }})
+					adapter := binance.NewMarketDataAdapter(binance.AdapterConfig{InstrumentType: marketdata.InstrumentType(product), KlineCollector: binance.NewKlineCollector(client), Now: func() time.Time { return now }})
 					registry := marketdata.NewRegistry()
 					require.NoError(t, registry.Register(adapter))
 					router, err := marketdata.NewRouter(registry, 2, nil, nil)
@@ -74,7 +74,7 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 						}
 						return pipeline, err
 					}
-					h.NewCryptoKlinePipeline = func(s marketfetch.Storage, productType marketdata.ProductType) (*marketfetch.KlinePipeline, error) {
+					h.NewCryptoKlinePipeline = func(s marketfetch.Storage, productType marketdata.InstrumentType) (*marketfetch.KlinePipeline, error) {
 						pipeline, err := NewCryptoKlinePipeline(s, productType)
 						if err == nil {
 							pipeline.Router = router
@@ -82,7 +82,7 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 						return pipeline, err
 					}
 					t.Setenv("MOOX_SPACE_ID", "crypto")
-					subject := "BTC-USDT-" + strings.ToUpper(product)
+					subject := "BTC-USDT"
 					var response *model.Response
 					if mode == "timer" {
 						t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
@@ -127,6 +127,6 @@ func TestCompositionRejectsUnknownAndCrossProductSources(t *testing.T) {
 	}
 	_, err := NewMarketKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSwap, "unknown", "swap_http")
 	require.Error(t, err)
-	_, err = ResolveSymbol("unknown", "crypto", "swap", "BTC-USDT-SWAP", "")
+	_, err = ResolveSymbol("unknown", "crypto", "swap", "BTC-USDT-SWAP")
 	require.Error(t, err)
 }

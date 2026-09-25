@@ -30,6 +30,10 @@ func (resampleE2ESource) ListSubjects(context.Context, string, string, string) (
 	return []domain.DatasetSubject{{SubjectID: "BTC", Status: "active"}, {SubjectID: "ETH", Status: "active"}}, nil
 }
 
+func (resampleE2ESource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
+	return []domain.Subject{{SubjectID: "BTC", Status: "active"}, {SubjectID: "ETH", Status: "active"}}, nil
+}
+
 type resampleE2EPrimary struct {
 	mu      sync.Mutex
 	rows    map[string]*storagepb.RowFieldValues

@@ -29,18 +29,17 @@ type cliResult struct {
 }
 
 type importSummary struct {
-	Spaces          int `json:"spaces"`
-	DataSources     int `json:"data_sources"`
-	Subjects        int `json:"subjects"`
-	SubjectSymbols  int `json:"subject_symbols"`
-	Datasets        int `json:"datasets"`
-	DatasetSubjects int `json:"dataset_subjects"`
-	Fields          int `json:"fields"`
-	Factors         int `json:"factors"`
-	DatasetColumns  int `json:"dataset_columns"`
-	Views           int `json:"views"`
-	ViewColumns     int `json:"view_columns"`
-	Devices         int `json:"devices"`
+	Spaces         int `json:"spaces"`
+	DataSources    int `json:"data_sources"`
+	Subjects       int `json:"subjects"`
+	Tags           int `json:"tags"`
+	Datasets       int `json:"datasets"`
+	Fields         int `json:"fields"`
+	Factors        int `json:"factors"`
+	DatasetColumns int `json:"dataset_columns"`
+	Views          int `json:"views"`
+	ViewColumns    int `json:"view_columns"`
+	Devices        int `json:"devices"`
 }
 
 const storageDeployerAppID = "storage-deployer"
@@ -520,18 +519,17 @@ func runImportSeed(args []string, stdout io.Writer, stderr io.Writer) error {
 		DBPath: metadataDBPath(storage),
 		Seed:   seedPath,
 		Summary: importSummary{
-			Spaces:          result.Spaces,
-			DataSources:     result.DataSources,
-			Subjects:        result.Subjects,
-			SubjectSymbols:  result.SubjectSymbols,
-			Datasets:        result.Datasets,
-			DatasetSubjects: result.DatasetSubjects,
-			Fields:          result.Fields,
-			Factors:         result.Factors,
-			DatasetColumns:  result.DatasetColumns,
-			Views:           result.Views,
-			ViewColumns:     result.ViewColumns,
-			Devices:         result.Devices,
+			Spaces:         result.Spaces,
+			DataSources:    result.DataSources,
+			Subjects:       result.Subjects,
+			Tags:           result.Tags,
+			Datasets:       result.Datasets,
+			Fields:         result.Fields,
+			Factors:        result.Factors,
+			DatasetColumns: result.DatasetColumns,
+			Views:          result.Views,
+			ViewColumns:    result.ViewColumns,
+			Devices:        result.Devices,
 		},
 	})
 }

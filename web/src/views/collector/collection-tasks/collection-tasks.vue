@@ -9,7 +9,7 @@
           </a-button>
           <a-input v-model="filters.taskId" placeholder="按内部任务 ID 筛选" allow-clear style="width: 180px" />
           <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px">
-            <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
+            <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">
               {{ config.type_name }}
             </a-option>
           </a-select>
@@ -138,7 +138,7 @@
           <a-col :span="12">
             <a-form-item field="data_type" label="数据类型" required>
               <a-select v-model="editor.data_type" placeholder="请选择数据类型" :disabled="editing" @change="onDataTypeChange">
-                <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
+                <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">
                   {{ config.type_name }}
                 </a-option>
               </a-select>
@@ -178,21 +178,11 @@
         </a-row>
 
         <a-form-item v-if="editor.data_type === 'kline'" label="标的来源" required>
-          <a-select
-            v-model="symbolSourceId"
-            placeholder="请选择标的来源"
-            :loading="loadingSources"
-            allow-search
-            allow-clear
-            :disabled="editing"
-          >
-            <a-option v-for="source in symbolSourceOptions" :key="source.source_id" :value="source.source_id">
-              {{ source.name || "标的来源" }}
+          <a-select v-model="subjectTagIds" placeholder="请选择标的标签" :loading="loadingTags" multiple allow-search allow-clear>
+            <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
+              {{ tag.tag_name }}（{{ tag.tag_id }}）
             </a-option>
           </a-select>
-        </a-form-item>
-        <a-form-item v-else-if="editor.data_type === 'instrument'" label="标的来源">
-          <a-input model-value="交易所提供的全量标的" disabled />
         </a-form-item>
 
         <template v-if="editor.data_type === 'kline_resample'">
@@ -338,12 +328,13 @@ import {
   getKlineResampleBackfillStatus,
   type DataTypeConfig
 } from "@/api/collector";
-import { listDataNodes, listDatasets } from "@/api/storage/metadata";
-import type { DataNode } from "@/api/storage/types";
+import { getDataset, getView, listDataNodes, listDatasets, listTags } from "@/api/storage/metadata";
+import type { DataNode, Tag } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { storeToRefs } from "pinia";
 import {
+  buildCollectionTaskParams,
   buildCollectionTaskPayload,
   collectionSourceMatches,
   collectionTaskNameError,
@@ -377,10 +368,12 @@ const loading = ref(false);
 const submitLoading = ref(false);
 const loadingProviders = ref(false);
 const loadingSources = ref(false);
+const loadingTags = ref(false);
 const loadingDataNodes = ref(false);
 const taskList = ref<CollectionTaskRecord[]>([]);
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
 const sourceOptions = ref<CollectionSourceOption[]>([]);
+const tags = ref<Tag[]>([]);
 const dataNodes = ref<DataNode[]>([]);
 const editorVisible = ref(false);
 const editorMode = ref<EditorMode>("create");
@@ -396,7 +389,7 @@ const activeBackfill = ref<ResampleBackfillSummary | null>(null);
 const backfillTarget = ref<{ taskId: string; targetFrequency: string; sourceKeepDuration: string }>();
 
 const frequencyValue = ref("");
-const symbolSourceId = ref("");
+const subjectTagIds = ref<string[]>([]);
 const sourceIdValue = ref("");
 const sourceFrequencyValue = ref("");
 const sourceSeriesTagValue = ref("");
@@ -455,8 +448,8 @@ const providerOptions = computed(() => {
   return dataSourceOptionsFromConfig(options);
 });
 const editorProviderOptions = computed(() => dataSourceOptionsFromConfig(selectedDataTypeConfig.value?.data_source_options));
-const symbolSourceOptions = computed(() =>
-  sourceOptions.value.filter(source => collectionSourceMatches(source, editor.provider, "instrument", editor.market_type))
+const availableDataTypeConfigs = computed(() =>
+  dataTypeConfigs.value.filter(config => !["instrument", "symbol"].includes(config.data_type))
 );
 const resampleSourceOptions = computed(() =>
   sourceOptions.value.filter(source =>
@@ -551,7 +544,7 @@ function resetEditor() {
   editor.enabled = true;
   editor.creator = account.value?.user?.userName || "";
   frequencyValue.value = "";
-  symbolSourceId.value = "";
+  subjectTagIds.value = [];
   sourceIdValue.value = "";
   sourceFrequencyValue.value = "";
   sourceSeriesTagValue.value = "";
@@ -580,19 +573,20 @@ function onUpdate(record: CollectionTaskRecord) {
   editor.enabled = record.enabled;
   editor.creator = record.creator;
   frequencyValue.value = input.frequency;
-  symbolSourceId.value = input.symbolSourceId || "";
+  subjectTagIds.value = input.subjectTags || [];
   sourceIdValue.value = input.sourceId || "";
   sourceFrequencyValue.value = input.sourceFrequency || "";
   sourceSeriesTagValue.value = input.sourceSeriesTag || "";
   settleDelayMSValue.value = input.settleDelayMS;
   editorVisible.value = true;
+  void loadTaskSubjectTags(record);
 }
 
 function onDataTypeChange() {
   if (editing.value) return;
   editor.provider = "";
   frequencyValue.value = "";
-  symbolSourceId.value = "";
+  subjectTagIds.value = [];
   sourceIdValue.value = "";
   sourceFrequencyValue.value = "";
   sourceSeriesTagValue.value = "";
@@ -611,8 +605,7 @@ function currentTaskInput(): CollectionTaskInput {
     provider: editor.provider,
     market: editor.market_type,
     frequency: frequencyValue.value,
-    symbolSource: editor.data_type === "instrument" ? "exchange" : "dataset",
-    symbolSourceId: symbolSourceId.value,
+    subjectTags: subjectTagIds.value,
     sourceId: sourceIdValue.value,
     sourceFrequency: sourceFrequencyValue.value,
     sourceSeriesTag: sourceSeriesTagValue.value,
@@ -632,8 +625,8 @@ async function validateEditor() {
   }
   try {
     const input = currentTaskInput();
-    if (input.dataType === "kline" && !symbolSourceId.value.trim()) {
-      throw new Error("请选择标的来源");
+    if (input.dataType === "kline" && !subjectTagIds.value.length) {
+      throw new Error("请选择标的标签");
     }
     if (input.dataType === "kline_resample" && !sourceIdValue.value.trim()) {
       throw new Error("请选择源行情");
@@ -679,15 +672,18 @@ async function handleOk(): Promise<boolean> {
       });
       Message.success(`采集任务“${task.task_name}”已创建`);
     } else {
+      const input = currentTaskInput();
+      const mutableTask = {
+        task_id: editor.task_id,
+        task_name: editor.task_name.trim(),
+        description: editor.description.trim(),
+        enabled: editor.enabled,
+        collect_params: buildCollectionTaskParamsForUpdate(input)
+      };
       await UpdateTask({
         space_id: editor.space_id,
         task_id: editor.task_id,
-        task: {
-          task_id: editor.task_id,
-          task_name: editor.task_name.trim(),
-          description: editor.description.trim(),
-          enabled: editor.enabled
-        }
+        task: mutableTask as Parameters<typeof UpdateTask>[0]["task"]
       });
       Message.success("更新成功");
     }
@@ -777,6 +773,41 @@ async function loadSources() {
   } finally {
     loadingSources.value = false;
   }
+}
+
+async function loadTags() {
+  if (!selectedSpaceId.value) {
+    tags.value = [];
+    return;
+  }
+  loadingTags.value = true;
+  try {
+    const response = await listTags(selectedSpaceId.value);
+    tags.value = response.tags || [];
+  } catch (error) {
+    tags.value = [];
+    Message.error(error instanceof Error ? error.message : "获取标签失败");
+  } finally {
+    loadingTags.value = false;
+  }
+}
+
+async function loadTaskSubjectTags(record: CollectionTaskRecord) {
+  const viewId = record.result?.view_id;
+  if (!viewId || !record.space_id) return;
+  try {
+    const view = await getView({ space_id: record.space_id, view_id: viewId });
+    const datasetId = view.view?.dataset_id;
+    if (!datasetId) return;
+    const dataset = await getDataset({ space_id: record.space_id, dataset_id: datasetId });
+    subjectTagIds.value = dataset.dataset?.subject_tags || [];
+  } catch (error) {
+    Message.warning(error instanceof Error ? error.message : "读取任务标签失败");
+  }
+}
+
+function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
+  return buildCollectionTaskParams(input);
 }
 
 async function loadDataNodes() {
@@ -907,14 +938,12 @@ watch(selectedSpaceId, () => {
   pagination.current = 1;
   void getTaskList();
   void loadSources();
+  void loadTags();
 });
 
 watch(
   () => [editor.provider, editor.market_type, frequencyValue.value, sourceFrequencyValue.value],
   () => {
-    if (symbolSourceId.value && !symbolSourceOptions.value.some(source => source.source_id === symbolSourceId.value)) {
-      symbolSourceId.value = "";
-    }
     if (sourceIdValue.value && !resampleSourceOptions.value.some(source => source.source_id === sourceIdValue.value)) {
       sourceIdValue.value = "";
     }
@@ -925,6 +954,7 @@ onMounted(() => {
   void getTaskList();
   void getDataTypeConfigs();
   void loadSources();
+  void loadTags();
   void loadDataNodes();
 });
 </script>

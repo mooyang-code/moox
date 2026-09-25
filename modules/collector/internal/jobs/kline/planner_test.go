@@ -11,13 +11,13 @@ import (
 func TestKlinePlannerUsesSourceDatasetSubjectsAndTargetDatasetID(t *testing.T) {
 	params := &domain.CollectParams{}
 	params.Normalize("binance", "spot", "kline")
-	params.Source.Kind = "dataset_subjects"
+	params.Source.Kind = "dataset"
 	params.Source.DatasetID = "symbols"
 	params.Target.DatasetID = "kline_1m"
 	params.Collector.Intervals = []string{"1m"}
 	subjects := []domain.DatasetSubject{
-		{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
-		{SubjectID: "ETH-USDT", ExternalSymbol: "ETHUSDT", Status: "active"},
+		{SubjectID: "BTC-USDT", Status: "active"},
+		{SubjectID: "ETH-USDT", Status: "active"},
 	}
 
 	specs := BuildTaskSpecs(params, subjects)
@@ -27,20 +27,19 @@ func TestKlinePlannerUsesSourceDatasetSubjectsAndTargetDatasetID(t *testing.T) {
 		assert.Equal(t, "kline_1m", spec.DatasetID)
 		assert.Equal(t, "kline_1m", spec.Params["dataset_id"])
 		assert.Equal(t, subjects[i].SubjectID, spec.SubjectID)
-		assert.Equal(t, subjects[i].ExternalSymbol, spec.Symbol)
+		assert.Equal(t, subjects[i].SubjectID, spec.Symbol)
 		assert.Equal(t, "1m", spec.Interval)
 	}
 }
 
-func TestKlinePlannerSkipsSubjectWithoutExternalSymbol(t *testing.T) {
+func TestKlinePlannerSkipsSubjectWithoutSubjectID(t *testing.T) {
 	params := &domain.CollectParams{}
 	params.Normalize("binance", "spot", "kline")
 	params.Target.DatasetID = "kline_1m"
 	params.Collector.Intervals = []string{"1m"}
 
 	specs := BuildTaskSpecs(params, []domain.DatasetSubject{{
-		SubjectID: "BTC-USDT",
-		Status:    "active",
+		Status: "active",
 	}})
 
 	assert.Empty(t, specs)

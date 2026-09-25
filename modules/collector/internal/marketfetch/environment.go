@@ -98,7 +98,7 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		if resolver != nil {
 			// Only omit a symbol when the same injected codec can reconstruct it
 			// at invocation time. Explicit overrides remain in the environment.
-			defaultSymbol, defaultErr := resolveProviderSymbol(resolver, assignment.Provider, assignment.MarketID, assignment.MarketType, subject, "")
+			defaultSymbol, defaultErr := resolveProviderSymbol(resolver, assignment.Provider, assignment.MarketID, assignment.MarketType, subject)
 			if defaultErr == nil && defaultSymbol == external {
 				continue
 			}

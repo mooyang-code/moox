@@ -51,7 +51,12 @@ func TestMetadataSchemaV12Contract(t *testing.T) {
 			t.Errorf("metadata schema missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{
+	removedTables := []string{
+		"t_" + "subject" + "_symbols",
+		"t_" + "dataset" + "_subjects",
+		"t_" + "dataset_subject_set_staging",
+	}
+	for _, forbidden := range append([]string{
 		"t_" + "primary" + "_" + "store" + "_" + "nodes",
 		"t_" + "primary" + "_" + "store" + "_" + "routes",
 		"t_dataset_" + "topology" + "_locks",
@@ -64,7 +69,7 @@ func TestMetadataSchemaV12Contract(t *testing.T) {
 		"t_dataset_subject_set_staging",
 		"c_primary_dataset_id",
 		"c_dataset_ids_json",
-	} {
+	}, removedTables...) {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed schema element %q", forbidden)
 		}

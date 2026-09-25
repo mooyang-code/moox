@@ -267,7 +267,7 @@ func publishArchiveStorageEvent(t *testing.T, ctx context.Context, natsURL strin
 	publisher, err := events.NewPublisher(client, registry)
 	require.NoError(t, err)
 	payload := &storagepb.DatasetRowsUpserted{
-		SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h",
+		SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", SourceNodeId: "node-1", SourceStoreId: "store-1", SourceSequence: 1, WriteSource: "test",
 		Rows: []*storagepb.RowUpsert{{
 			Key: &storagepb.RowKey{
 				SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h",

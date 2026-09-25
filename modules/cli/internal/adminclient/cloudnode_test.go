@@ -132,7 +132,7 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 		assert.Equal(t, "builtin-stockcn-kline-1m", task["task_id"])
 		assert.Equal(t, "A 股 K 线 1m", task["task_name"])
 		assert.Equal(t, false, task["enabled"])
-		assert.Equal(t, "dataset_stockcn_instruments", task["collect_params"].(map[string]any)["symbol_dataset_id"])
+		assert.Equal(t, []any{"cn_a_share"}, task["collect_params"].(map[string]any)["subject_tags"])
 		assert.NotContains(t, task["collect_params"], "target_dataset_id")
 		resultConfig, ok := body["result_config"].(map[string]any)
 		require.True(t, ok)
@@ -144,11 +144,10 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 	defer server.Close()
 
 	require.NoError(t, New(server.URL).CreateTask(context.Background(), "stockcn", "builtin-stockcn-kline-1m", "A 股 K 线 1m", "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
-		"provider":          "stockcn_multi",
-		"market_type":       "equity",
-		"symbol_source":     "dataset",
-		"symbol_dataset_id": "dataset_stockcn_instruments",
-		"frequency":         "1m",
+		"provider":     "stockcn_multi",
+		"market_type":  "equity",
+		"subject_tags": []string{"cn_a_share"},
+		"frequency":    "1m",
 	}, &ResultConfig{DataNodeID: "node-1", KeepDuration: "30d", Description: "A 股 K 线结果"}))
 }
 
@@ -156,8 +155,7 @@ func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
 	err := New("http://127.0.0.1").CreateTask(context.Background(), "stockcn", "task-1", "任务一", "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
 		"provider":          "stockcn_multi",
 		"market_type":       "equity",
-		"symbol_source":     "dataset",
-		"symbol_dataset_id": "dataset_stockcn_instruments",
+		"subject_tags":      []string{"cn_a_share"},
 		"target_dataset_id": "dataset-user-selected",
 		"frequency":         "1m",
 	}, nil)

@@ -25,11 +25,6 @@ type activationMetadataStore struct {
 	beforeCommit func()
 }
 
-type registerDataSubjectMetadataStore struct {
-	metadata.Store
-	registered bool
-}
-
 type registerArchiveFileMetadataStore struct {
 	metadata.Store
 	registered bool
@@ -72,16 +67,6 @@ func (s *manualRebuildMetadataStore) RequestViewRebuild(context.Context, string,
 	s.requestCnt++
 	s.view.DesiredViewRevision++
 	return s.view, nil
-}
-
-func (s *registerDataSubjectMetadataStore) RegisterDataSubject(
-	_ context.Context,
-	subject *pb.Subject,
-	_ *pb.SubjectSymbol,
-	bindings []*pb.DatasetSubject,
-) (*pb.Subject, []*pb.DatasetSubject, error) {
-	s.registered = true
-	return subject, bindings, nil
 }
 
 func (s *registerArchiveFileMetadataStore) RegisterArchiveFile(_ context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error) {
@@ -228,25 +213,6 @@ func TestActivateDatasetReportsCommittedPublicationFailureAndRetryIsIdempotent(t
 	require.Equal(t, pb.ErrorCode_SUCCESS, retry.GetRetInfo().GetCode())
 	require.Equal(t, uint64(8), retry.GetDataset().GetRevision())
 	require.Equal(t, 1, store.commitCalls)
-}
-
-func TestRegisterDataSubjectSucceedsWhenCacheRefreshIsAlreadyRunning(t *testing.T) {
-	store := &registerDataSubjectMetadataStore{}
-	service, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
-	require.NoError(t, err)
-
-	rsp, err := service.RegisterDataSubject(context.Background(), &pb.RegisterDataSubjectReq{
-		SpaceId:        "crypto",
-		DataSourceId:   "binance",
-		ExternalSymbol: "BTCUSDT",
-		Subject:        &pb.Subject{SubjectId: "BTC-USDT", SubjectType: "crypto_pair"},
-		DatasetBindings: []*pb.DatasetSubject{{
-			DatasetId: "symbols",
-		}},
-	})
-	require.NoError(t, err)
-	require.True(t, store.registered)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestRegisterArchiveFileSucceedsWhenCachePublicationIsUnavailable(t *testing.T) {
@@ -423,9 +389,9 @@ func TestCreateAndUpdateViewRejectEmbeddedReservedColumns(t *testing.T) {
 	svc := &Service{}
 	newView := func() *pb.View {
 		return &pb.View{
-			SpaceId:          "space",
-			ViewId:           "view_test",
-			Name:             "测试视图",
+			SpaceId:   "space",
+			ViewId:    "view_test",
+			Name:      "测试视图",
 			DatasetId: "dataset",
 			Columns: []*pb.ViewColumn{
 				nil,

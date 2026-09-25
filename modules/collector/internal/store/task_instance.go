@@ -431,11 +431,15 @@ func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
 // that are no longer part of an enabled collection task from the stable
 // inventory.
 func (r *TaskInstanceRepository) DeactivateMissingMarketFetchTaskInstances(ctx context.Context, spaceID, collectionTaskID string, activeInstanceIDs []string) error {
+	if len(activeInstanceIDs) == 0 {
+		// An empty subject resolution is commonly a transient metadata/provider
+		// failure. Never turn that failure into a destructive delete of the last
+		// known-good task inventory.
+		return nil
+	}
 	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
 		Where("c_space_id = ? AND c_task_id = ? AND c_is_deleted = ?", spaceID, collectionTaskID, false)
-	if len(activeInstanceIDs) > 0 {
-		query = query.Where("c_instance_id NOT IN ?", activeInstanceIDs)
-	}
+	query = query.Where("c_instance_id NOT IN ?", activeInstanceIDs)
 	// Do not call Count on this statement before Updates. GORM's SQLite
 	// dialect retains the count source table and emits UPDATE ... FROM the
 	// same table, making unqualified c_* predicates ambiguous.
@@ -445,11 +449,12 @@ func (r *TaskInstanceRepository) DeactivateMissingMarketFetchTaskInstances(ctx c
 // DeactivateMissingResampleTaskInstances keeps resample reconciliation from
 // touching market-fetch instances that happen to share a collection task ID.
 func (r *TaskInstanceRepository) DeactivateMissingResampleTaskInstances(ctx context.Context, spaceID, collectionTaskID string, activeInstanceIDs []string) error {
+	if len(activeInstanceIDs) == 0 {
+		return nil
+	}
 	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
 		Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, collectionTaskID, "kline_resample", false)
-	if len(activeInstanceIDs) > 0 {
-		query = query.Where("c_instance_id NOT IN ?", activeInstanceIDs)
-	}
+	query = query.Where("c_instance_id NOT IN ?", activeInstanceIDs)
 	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
 }
 

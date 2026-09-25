@@ -90,8 +90,8 @@ func TestManagedDNSHashIgnoresLatencyOrderedIPChanges(t *testing.T) {
 
 func TestNormalizeDNSRoutesOmitsBinanceFuturesHosts(t *testing.T) {
 	routes, _, _ := normalizeDNSRoutes(map[string]sources.DNSResolution{
-		"api.binance.com":  {IPs: []string{"203.0.113.1"}},
-		"fapi.binance.com": {IPs: []string{"203.0.113.8"}},
+		"api.binance.com":   {IPs: []string{"203.0.113.1"}},
+		"fapi.binance.com":  {IPs: []string{"203.0.113.8"}},
 		"fapi1.binance.com": {IPs: []string{"203.0.113.9"}},
 	})
 	require.Equal(t, []string{"203.0.113.1"}, routes["api.binance.com"])

@@ -285,7 +285,7 @@ func TestStorageViewConfigFilesRouteStockCNDatasets(t *testing.T) {
 					}
 				}
 			}
-			if stockRoutes["stock_kline"] || !stockRoutes["dataset_stockcn_equity_kline"] || !stockRoutes["dataset_stockcn_instruments"] {
+			if stockRoutes["stock_kline"] || !stockRoutes["dataset_stockcn_equity_kline"] {
 				t.Fatalf("stockcn routes = %+v", stockRoutes)
 			}
 		})

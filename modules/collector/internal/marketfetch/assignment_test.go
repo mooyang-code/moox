@@ -59,15 +59,16 @@ func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable
 	}
 }
 
-func TestEligibleTimerNodesExcludesIndependentInstrumentSnapshotTimer(t *testing.T) {
+func TestEligibleTimerNodesIncludesAllMarketTimerNodes(t *testing.T) {
 	nodes := eligibleTimerNodes([]scfinvoker.Node{
 		{NodeID: "kline", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"function_mode": "kline"}},
 		{NodeID: "instrument", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"function_mode": "instrument_snapshot"}},
 		{NodeID: "invoke", NodeType: "scf-event", TriggerType: "invoke", Metadata: map[string]any{"function_mode": "kline"}},
 	})
 
-	require.Len(t, nodes, 1)
+	require.Len(t, nodes, 2)
 	require.Equal(t, "kline", nodes[0].NodeID)
+	require.Equal(t, "instrument", nodes[1].NodeID)
 }
 
 func TestBuildStockCNAssignmentsRequiresConfiguredNodeCount(t *testing.T) {

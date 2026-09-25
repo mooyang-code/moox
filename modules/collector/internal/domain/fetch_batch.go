@@ -5,11 +5,10 @@ import "time"
 type BatchKind string
 
 const (
-	BatchKindRealtime           BatchKind = "realtime"
-	BatchKindInstrumentSnapshot BatchKind = "instrument_snapshot"
-	BatchKindCatchup            BatchKind = "catchup"
-	BatchKindBackfill           BatchKind = "backfill"
-	BatchKindGapRepair          BatchKind = "gap_repair"
+	BatchKindRealtime  BatchKind = "realtime"
+	BatchKindCatchup   BatchKind = "catchup"
+	BatchKindBackfill  BatchKind = "backfill"
+	BatchKindGapRepair BatchKind = "gap_repair"
 )
 
 type BatchStatus string

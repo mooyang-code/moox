@@ -190,6 +190,20 @@ func TestTaskInstanceRepositoryDeactivatesMissingTaskInstances(t *testing.T) {
 	assert.False(t, kept.IsDeleted)
 }
 
+func TestTaskInstanceRepositoryKeepsInventoryWhenResolutionIsEmpty(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instances := []domain.TaskInstance{{
+		SpaceID: "crypto", InstanceID: "keep", CollectionTaskID: "rule-empty", Provider: "binance",
+		MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`,
+	}}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+	require.NoError(t, s.TaskInstances().DeactivateMissingMarketFetchTaskInstances(ctx, "crypto", "rule-empty", nil))
+	kept, err := s.TaskInstances().Get(ctx, "crypto", "keep")
+	require.NoError(t, err)
+	assert.False(t, kept.IsDeleted)
+}
+
 func TestResampleTaskClaimCompleteUsesStateVersionCAS(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()

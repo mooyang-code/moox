@@ -79,16 +79,34 @@ type MetadataService interface {
 	ListDataSources(ctx context.Context, req *ListDataSourcesReq) (*ListDataSourcesRsp, error)
 	// UpsertSubject 创建或更新数据对象。
 	UpsertSubject(ctx context.Context, req *UpsertSubjectReq) (*UpsertSubjectRsp, error)
-	// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
-	UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq) (*UpsertSubjectSymbolRsp, error)
-	// RegisterDataSubject 注册数据对象、来源侧代码映射和数据集绑定。
-	RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq) (*RegisterDataSubjectRsp, error)
 	// GetSubject 按 ID 获取数据对象。
 	GetSubject(ctx context.Context, req *GetSubjectReq) (*GetSubjectRsp, error)
 	// ListSubjects 列出数据对象。
 	ListSubjects(ctx context.Context, req *ListSubjectsReq) (*ListSubjectsRsp, error)
-	// ListSubjectSymbols 列出数据对象的来源侧代码映射。
-	ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq) (*ListSubjectSymbolsRsp, error)
+
+	UpsertTag(ctx context.Context, req *UpsertTagReq) (*UpsertTagRsp, error)
+
+	GetTag(ctx context.Context, req *GetTagReq) (*GetTagRsp, error)
+
+	ListTags(ctx context.Context, req *ListTagsReq) (*ListTagsRsp, error)
+
+	DeleteTag(ctx context.Context, req *DeleteTagReq) (*DeleteTagRsp, error)
+
+	ListTagMembers(ctx context.Context, req *ListTagMembersReq) (*ListTagMembersRsp, error)
+
+	AddTagMembers(ctx context.Context, req *TagMembersReq) (*TagMembersRsp, error)
+
+	RemoveTagMembers(ctx context.Context, req *TagMembersReq) (*TagMembersRsp, error)
+
+	SetTagMemberStatus(ctx context.Context, req *SetTagMemberStatusReq) (*TagMembersRsp, error)
+
+	ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq) (*ApplyTagSnapshotRsp, error)
+
+	ReportTagRunFailure(ctx context.Context, req *ReportTagRunFailureReq) (*ReportTagRunFailureRsp, error)
+
+	UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq) (*UpdateSubjectAttributesRsp, error)
+
+	ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq) (*ResolveSubjectsRsp, error)
 	// CreateDataset 创建数据集。
 	CreateDataset(ctx context.Context, req *CreateDatasetReq) (*CreateDatasetRsp, error)
 	// UpdateDataset 更新数据集。
@@ -105,12 +123,6 @@ type MetadataService interface {
 	CheckDatasetActivation(ctx context.Context, req *CheckDatasetActivationReq) (*CheckDatasetActivationRsp, error)
 	// ActivateDataset 使用 revision CAS 激活 Dataset。
 	ActivateDataset(ctx context.Context, req *ActivateDatasetReq) (*ActivateDatasetRsp, error)
-	// BindDatasetSubject 为 Dataset 绑定 Subject。
-	BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq) (*BindDatasetSubjectRsp, error)
-	// StageDatasetSubjectSet 原子 staging 完整 Dataset Subject 集合。
-	StageDatasetSubjectSet(ctx context.Context, req *StageDatasetSubjectSetReq) (*StageDatasetSubjectSetRsp, error)
-	// ActivateDatasetSubjectSet 原子激活已完整 staging 的 Dataset Subject 集合。
-	ActivateDatasetSubjectSet(ctx context.Context, req *ActivateDatasetSubjectSetReq) (*ActivateDatasetSubjectSetRsp, error)
 	// ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 	ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq) (*ListDatasetSubjectsRsp, error)
 	// CreateFieldGroup 创建普通字段。
@@ -709,42 +721,6 @@ func MetadataService_UpsertSubject_Handler(svr interface{}, ctx context.Context,
 	return rsp, nil
 }
 
-func MetadataService_UpsertSubjectSymbol_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpsertSubjectSymbolReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).UpsertSubjectSymbol(ctx, reqbody.(*UpsertSubjectSymbolReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_RegisterDataSubject_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RegisterDataSubjectReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).RegisterDataSubject(ctx, reqbody.(*RegisterDataSubjectReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func MetadataService_GetSubject_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetSubjectReq{}
 	filters, err := f(req)
@@ -781,14 +757,212 @@ func MetadataService_ListSubjects_Handler(svr interface{}, ctx context.Context, 
 	return rsp, nil
 }
 
-func MetadataService_ListSubjectSymbols_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListSubjectSymbolsReq{}
+func MetadataService_UpsertTag_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertTagReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).ListSubjectSymbols(ctx, reqbody.(*ListSubjectSymbolsReq))
+		return svr.(MetadataService).UpsertTag(ctx, reqbody.(*UpsertTagReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_GetTag_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetTagReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).GetTag(ctx, reqbody.(*GetTagReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ListTags_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListTagsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ListTags(ctx, reqbody.(*ListTagsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_DeleteTag_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteTagReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).DeleteTag(ctx, reqbody.(*DeleteTagReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ListTagMembers_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListTagMembersReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ListTagMembers(ctx, reqbody.(*ListTagMembersReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_AddTagMembers_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &TagMembersReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).AddTagMembers(ctx, reqbody.(*TagMembersReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_RemoveTagMembers_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &TagMembersReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).RemoveTagMembers(ctx, reqbody.(*TagMembersReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_SetTagMemberStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetTagMemberStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).SetTagMemberStatus(ctx, reqbody.(*SetTagMemberStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ApplyTagSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ApplyTagSnapshotReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ApplyTagSnapshot(ctx, reqbody.(*ApplyTagSnapshotReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ReportTagRunFailure_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReportTagRunFailureReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ReportTagRunFailure(ctx, reqbody.(*ReportTagRunFailureReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_UpdateSubjectAttributes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateSubjectAttributesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).UpdateSubjectAttributes(ctx, reqbody.(*UpdateSubjectAttributesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ResolveSubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ResolveSubjectsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ResolveSubjects(ctx, reqbody.(*ResolveSubjectsReq))
 	}
 
 	var rsp interface{}
@@ -933,60 +1107,6 @@ func MetadataService_ActivateDataset_Handler(svr interface{}, ctx context.Contex
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).ActivateDataset(ctx, reqbody.(*ActivateDatasetReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_BindDatasetSubject_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &BindDatasetSubjectReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).BindDatasetSubject(ctx, reqbody.(*BindDatasetSubjectReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_StageDatasetSubjectSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &StageDatasetSubjectSetReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).StageDatasetSubjectSet(ctx, reqbody.(*StageDatasetSubjectSetReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_ActivateDatasetSubjectSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ActivateDatasetSubjectSetReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).ActivateDatasetSubjectSet(ctx, reqbody.(*ActivateDatasetSubjectSetReq))
 	}
 
 	var rsp interface{}
@@ -1627,14 +1747,6 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_UpsertSubject_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Metadata/UpsertSubjectSymbol",
-			Func: MetadataService_UpsertSubjectSymbol_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/RegisterDataSubject",
-			Func: MetadataService_RegisterDataSubject_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.Metadata/GetSubject",
 			Func: MetadataService_GetSubject_Handler,
 		},
@@ -1643,8 +1755,52 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_ListSubjects_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Metadata/ListSubjectSymbols",
-			Func: MetadataService_ListSubjectSymbols_Handler,
+			Name: "/trpc.moox.storage.Metadata/UpsertTag",
+			Func: MetadataService_UpsertTag_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/GetTag",
+			Func: MetadataService_GetTag_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ListTags",
+			Func: MetadataService_ListTags_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/DeleteTag",
+			Func: MetadataService_DeleteTag_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ListTagMembers",
+			Func: MetadataService_ListTagMembers_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/AddTagMembers",
+			Func: MetadataService_AddTagMembers_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/RemoveTagMembers",
+			Func: MetadataService_RemoveTagMembers_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/SetTagMemberStatus",
+			Func: MetadataService_SetTagMemberStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ApplyTagSnapshot",
+			Func: MetadataService_ApplyTagSnapshot_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ReportTagRunFailure",
+			Func: MetadataService_ReportTagRunFailure_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/UpdateSubjectAttributes",
+			Func: MetadataService_UpdateSubjectAttributes_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ResolveSubjects",
+			Func: MetadataService_ResolveSubjects_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Metadata/CreateDataset",
@@ -1677,18 +1833,6 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.Metadata/ActivateDataset",
 			Func: MetadataService_ActivateDataset_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/BindDatasetSubject",
-			Func: MetadataService_BindDatasetSubject_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/StageDatasetSubjectSet",
-			Func: MetadataService_StageDatasetSubjectSet_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/ActivateDatasetSubjectSet",
-			Func: MetadataService_ActivateDatasetSubjectSet_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.Metadata/ListDatasetSubjects",
@@ -1956,16 +2100,6 @@ func (s *UnimplementedMetadata) UpsertSubject(ctx context.Context, req *UpsertSu
 	return nil, errors.New("rpc UpsertSubject of service Metadata is not implemented")
 }
 
-// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
-func (s *UnimplementedMetadata) UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq) (*UpsertSubjectSymbolRsp, error) {
-	return nil, errors.New("rpc UpsertSubjectSymbol of service Metadata is not implemented")
-}
-
-// RegisterDataSubject 注册数据对象、来源侧代码映射和数据集绑定。
-func (s *UnimplementedMetadata) RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq) (*RegisterDataSubjectRsp, error) {
-	return nil, errors.New("rpc RegisterDataSubject of service Metadata is not implemented")
-}
-
 // GetSubject 按 ID 获取数据对象。
 func (s *UnimplementedMetadata) GetSubject(ctx context.Context, req *GetSubjectReq) (*GetSubjectRsp, error) {
 	return nil, errors.New("rpc GetSubject of service Metadata is not implemented")
@@ -1975,10 +2109,41 @@ func (s *UnimplementedMetadata) GetSubject(ctx context.Context, req *GetSubjectR
 func (s *UnimplementedMetadata) ListSubjects(ctx context.Context, req *ListSubjectsReq) (*ListSubjectsRsp, error) {
 	return nil, errors.New("rpc ListSubjects of service Metadata is not implemented")
 }
-
-// ListSubjectSymbols 列出数据对象的来源侧代码映射。
-func (s *UnimplementedMetadata) ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq) (*ListSubjectSymbolsRsp, error) {
-	return nil, errors.New("rpc ListSubjectSymbols of service Metadata is not implemented")
+func (s *UnimplementedMetadata) UpsertTag(ctx context.Context, req *UpsertTagReq) (*UpsertTagRsp, error) {
+	return nil, errors.New("rpc UpsertTag of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) GetTag(ctx context.Context, req *GetTagReq) (*GetTagRsp, error) {
+	return nil, errors.New("rpc GetTag of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) ListTags(ctx context.Context, req *ListTagsReq) (*ListTagsRsp, error) {
+	return nil, errors.New("rpc ListTags of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) DeleteTag(ctx context.Context, req *DeleteTagReq) (*DeleteTagRsp, error) {
+	return nil, errors.New("rpc DeleteTag of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) ListTagMembers(ctx context.Context, req *ListTagMembersReq) (*ListTagMembersRsp, error) {
+	return nil, errors.New("rpc ListTagMembers of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) AddTagMembers(ctx context.Context, req *TagMembersReq) (*TagMembersRsp, error) {
+	return nil, errors.New("rpc AddTagMembers of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) RemoveTagMembers(ctx context.Context, req *TagMembersReq) (*TagMembersRsp, error) {
+	return nil, errors.New("rpc RemoveTagMembers of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) SetTagMemberStatus(ctx context.Context, req *SetTagMemberStatusReq) (*TagMembersRsp, error) {
+	return nil, errors.New("rpc SetTagMemberStatus of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq) (*ApplyTagSnapshotRsp, error) {
+	return nil, errors.New("rpc ApplyTagSnapshot of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) ReportTagRunFailure(ctx context.Context, req *ReportTagRunFailureReq) (*ReportTagRunFailureRsp, error) {
+	return nil, errors.New("rpc ReportTagRunFailure of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq) (*UpdateSubjectAttributesRsp, error) {
+	return nil, errors.New("rpc UpdateSubjectAttributes of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq) (*ResolveSubjectsRsp, error) {
+	return nil, errors.New("rpc ResolveSubjects of service Metadata is not implemented")
 }
 
 // CreateDataset 创建数据集。
@@ -2019,21 +2184,6 @@ func (s *UnimplementedMetadata) CheckDatasetActivation(ctx context.Context, req 
 // ActivateDataset 使用 revision CAS 激活 Dataset。
 func (s *UnimplementedMetadata) ActivateDataset(ctx context.Context, req *ActivateDatasetReq) (*ActivateDatasetRsp, error) {
 	return nil, errors.New("rpc ActivateDataset of service Metadata is not implemented")
-}
-
-// BindDatasetSubject 为 Dataset 绑定 Subject。
-func (s *UnimplementedMetadata) BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq) (*BindDatasetSubjectRsp, error) {
-	return nil, errors.New("rpc BindDatasetSubject of service Metadata is not implemented")
-}
-
-// StageDatasetSubjectSet 原子 staging 完整 Dataset Subject 集合。
-func (s *UnimplementedMetadata) StageDatasetSubjectSet(ctx context.Context, req *StageDatasetSubjectSetReq) (*StageDatasetSubjectSetRsp, error) {
-	return nil, errors.New("rpc StageDatasetSubjectSet of service Metadata is not implemented")
-}
-
-// ActivateDatasetSubjectSet 原子激活已完整 staging 的 Dataset Subject 集合。
-func (s *UnimplementedMetadata) ActivateDatasetSubjectSet(ctx context.Context, req *ActivateDatasetSubjectSetReq) (*ActivateDatasetSubjectSetRsp, error) {
-	return nil, errors.New("rpc ActivateDatasetSubjectSet of service Metadata is not implemented")
 }
 
 // ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
@@ -2244,16 +2394,34 @@ type MetadataClientProxy interface {
 	ListDataSources(ctx context.Context, req *ListDataSourcesReq, opts ...client.Option) (rsp *ListDataSourcesRsp, err error)
 	// UpsertSubject 创建或更新数据对象。
 	UpsertSubject(ctx context.Context, req *UpsertSubjectReq, opts ...client.Option) (rsp *UpsertSubjectRsp, err error)
-	// UpsertSubjectSymbol 创建或更新数据对象的来源侧代码映射。
-	UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq, opts ...client.Option) (rsp *UpsertSubjectSymbolRsp, err error)
-	// RegisterDataSubject 注册数据对象、来源侧代码映射和数据集绑定。
-	RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq, opts ...client.Option) (rsp *RegisterDataSubjectRsp, err error)
 	// GetSubject 按 ID 获取数据对象。
 	GetSubject(ctx context.Context, req *GetSubjectReq, opts ...client.Option) (rsp *GetSubjectRsp, err error)
 	// ListSubjects 列出数据对象。
 	ListSubjects(ctx context.Context, req *ListSubjectsReq, opts ...client.Option) (rsp *ListSubjectsRsp, err error)
-	// ListSubjectSymbols 列出数据对象的来源侧代码映射。
-	ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq, opts ...client.Option) (rsp *ListSubjectSymbolsRsp, err error)
+
+	UpsertTag(ctx context.Context, req *UpsertTagReq, opts ...client.Option) (rsp *UpsertTagRsp, err error)
+
+	GetTag(ctx context.Context, req *GetTagReq, opts ...client.Option) (rsp *GetTagRsp, err error)
+
+	ListTags(ctx context.Context, req *ListTagsReq, opts ...client.Option) (rsp *ListTagsRsp, err error)
+
+	DeleteTag(ctx context.Context, req *DeleteTagReq, opts ...client.Option) (rsp *DeleteTagRsp, err error)
+
+	ListTagMembers(ctx context.Context, req *ListTagMembersReq, opts ...client.Option) (rsp *ListTagMembersRsp, err error)
+
+	AddTagMembers(ctx context.Context, req *TagMembersReq, opts ...client.Option) (rsp *TagMembersRsp, err error)
+
+	RemoveTagMembers(ctx context.Context, req *TagMembersReq, opts ...client.Option) (rsp *TagMembersRsp, err error)
+
+	SetTagMemberStatus(ctx context.Context, req *SetTagMemberStatusReq, opts ...client.Option) (rsp *TagMembersRsp, err error)
+
+	ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq, opts ...client.Option) (rsp *ApplyTagSnapshotRsp, err error)
+
+	ReportTagRunFailure(ctx context.Context, req *ReportTagRunFailureReq, opts ...client.Option) (rsp *ReportTagRunFailureRsp, err error)
+
+	UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq, opts ...client.Option) (rsp *UpdateSubjectAttributesRsp, err error)
+
+	ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq, opts ...client.Option) (rsp *ResolveSubjectsRsp, err error)
 	// CreateDataset 创建数据集。
 	CreateDataset(ctx context.Context, req *CreateDatasetReq, opts ...client.Option) (rsp *CreateDatasetRsp, err error)
 	// UpdateDataset 更新数据集。
@@ -2270,12 +2438,6 @@ type MetadataClientProxy interface {
 	CheckDatasetActivation(ctx context.Context, req *CheckDatasetActivationReq, opts ...client.Option) (rsp *CheckDatasetActivationRsp, err error)
 	// ActivateDataset 使用 revision CAS 激活 Dataset。
 	ActivateDataset(ctx context.Context, req *ActivateDatasetReq, opts ...client.Option) (rsp *ActivateDatasetRsp, err error)
-	// BindDatasetSubject 为 Dataset 绑定 Subject。
-	BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq, opts ...client.Option) (rsp *BindDatasetSubjectRsp, err error)
-	// StageDatasetSubjectSet 原子 staging 完整 Dataset Subject 集合。
-	StageDatasetSubjectSet(ctx context.Context, req *StageDatasetSubjectSetReq, opts ...client.Option) (rsp *StageDatasetSubjectSetRsp, err error)
-	// ActivateDatasetSubjectSet 原子激活已完整 staging 的 Dataset Subject 集合。
-	ActivateDatasetSubjectSet(ctx context.Context, req *ActivateDatasetSubjectSetReq, opts ...client.Option) (rsp *ActivateDatasetSubjectSetRsp, err error)
 	// ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 	ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq, opts ...client.Option) (rsp *ListDatasetSubjectsRsp, err error)
 	// CreateFieldGroup 创建普通字段。
@@ -2943,46 +3105,6 @@ func (c *MetadataClientProxyImpl) UpsertSubject(ctx context.Context, req *Upsert
 	return rsp, nil
 }
 
-func (c *MetadataClientProxyImpl) UpsertSubjectSymbol(ctx context.Context, req *UpsertSubjectSymbolReq, opts ...client.Option) (*UpsertSubjectSymbolRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertSubjectSymbol")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("UpsertSubjectSymbol")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpsertSubjectSymbolRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) RegisterDataSubject(ctx context.Context, req *RegisterDataSubjectReq, opts ...client.Option) (*RegisterDataSubjectRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/RegisterDataSubject")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("RegisterDataSubject")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &RegisterDataSubjectRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *MetadataClientProxyImpl) GetSubject(ctx context.Context, req *GetSubjectReq, opts ...client.Option) (*GetSubjectRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -3023,20 +3145,240 @@ func (c *MetadataClientProxyImpl) ListSubjects(ctx context.Context, req *ListSub
 	return rsp, nil
 }
 
-func (c *MetadataClientProxyImpl) ListSubjectSymbols(ctx context.Context, req *ListSubjectSymbolsReq, opts ...client.Option) (*ListSubjectSymbolsRsp, error) {
+func (c *MetadataClientProxyImpl) UpsertTag(ctx context.Context, req *UpsertTagReq, opts ...client.Option) (*UpsertTagRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListSubjectSymbols")
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertTag")
 	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("ListSubjectSymbols")
+	msg.WithCalleeMethod("UpsertTag")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListSubjectSymbolsRsp{}
+	rsp := &UpsertTagRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) GetTag(ctx context.Context, req *GetTagReq, opts ...client.Option) (*GetTagRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetTag")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("GetTag")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetTagRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ListTags(ctx context.Context, req *ListTagsReq, opts ...client.Option) (*ListTagsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListTags")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ListTags")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListTagsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) DeleteTag(ctx context.Context, req *DeleteTagReq, opts ...client.Option) (*DeleteTagRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/DeleteTag")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("DeleteTag")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteTagRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ListTagMembers(ctx context.Context, req *ListTagMembersReq, opts ...client.Option) (*ListTagMembersRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListTagMembers")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ListTagMembers")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListTagMembersRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) AddTagMembers(ctx context.Context, req *TagMembersReq, opts ...client.Option) (*TagMembersRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/AddTagMembers")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("AddTagMembers")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &TagMembersRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) RemoveTagMembers(ctx context.Context, req *TagMembersReq, opts ...client.Option) (*TagMembersRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/RemoveTagMembers")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("RemoveTagMembers")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &TagMembersRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) SetTagMemberStatus(ctx context.Context, req *SetTagMemberStatusReq, opts ...client.Option) (*TagMembersRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/SetTagMemberStatus")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("SetTagMemberStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &TagMembersRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq, opts ...client.Option) (*ApplyTagSnapshotRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ApplyTagSnapshot")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ApplyTagSnapshot")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ApplyTagSnapshotRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ReportTagRunFailure(ctx context.Context, req *ReportTagRunFailureReq, opts ...client.Option) (*ReportTagRunFailureRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ReportTagRunFailure")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ReportTagRunFailure")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReportTagRunFailureRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq, opts ...client.Option) (*UpdateSubjectAttributesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateSubjectAttributes")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("UpdateSubjectAttributes")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateSubjectAttributesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq, opts ...client.Option) (*ResolveSubjectsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ResolveSubjects")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ResolveSubjects")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ResolveSubjectsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -3197,66 +3539,6 @@ func (c *MetadataClientProxyImpl) ActivateDataset(ctx context.Context, req *Acti
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ActivateDatasetRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) BindDatasetSubject(ctx context.Context, req *BindDatasetSubjectReq, opts ...client.Option) (*BindDatasetSubjectRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/BindDatasetSubject")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("BindDatasetSubject")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &BindDatasetSubjectRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) StageDatasetSubjectSet(ctx context.Context, req *StageDatasetSubjectSetReq, opts ...client.Option) (*StageDatasetSubjectSetRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/StageDatasetSubjectSet")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("StageDatasetSubjectSet")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &StageDatasetSubjectSetRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) ActivateDatasetSubjectSet(ctx context.Context, req *ActivateDatasetSubjectSetReq, opts ...client.Option) (*ActivateDatasetSubjectSetRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ActivateDatasetSubjectSet")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("ActivateDatasetSubjectSet")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ActivateDatasetSubjectSetRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

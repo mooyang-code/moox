@@ -43,7 +43,7 @@ func redactTaskResultDatasetID(raw string) string {
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
 		return raw
 	}
-	for _, key := range []string{"target_dataset_id", "result_dataset_id", "symbol_dataset_id", "source_dataset_id"} {
+	for _, key := range []string{"target_dataset_id", "result_dataset_id", "source_dataset_id", "subject_tags"} {
 		delete(values, key)
 	}
 	encoded, err := json.Marshal(values)
@@ -89,9 +89,7 @@ func resultName(taskName string) string {
 }
 
 func taskResultDataKind(dataType string) string {
-	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
-		return "record"
-	}
+	_ = dataType
 	return "time_series"
 }
 

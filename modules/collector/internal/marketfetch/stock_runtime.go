@@ -2,7 +2,6 @@ package marketfetch
 
 import (
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"strings"
 )
@@ -21,7 +20,7 @@ func NewMarketStorage(target, writeSource string) (Storage, error) {
 // authentication is shared by all market runtimes, while the stockcn market
 // uses the stock binding instead of interpreting "equity" as a Binance
 // product type.
-func NewMarketStorageForMarket(target, marketType, writeSource string) (StorageReader, error) {
+func NewMarketStorageForMarket(target, marketType, writeSource string) (Storage, error) {
 	var storage Storage
 	if strings.EqualFold(strings.TrimSpace(marketType), "equity") || strings.EqualFold(strings.TrimSpace(marketType), StockCNSpaceID) {
 		var err error
@@ -36,33 +35,5 @@ func NewMarketStorageForMarket(target, marketType, writeSource string) (StorageR
 			return nil, fmt.Errorf("create %s market storage: %w", strings.TrimSpace(marketType), err)
 		}
 	}
-	reader, ok := storage.(StorageReader)
-	if !ok {
-		return nil, fmt.Errorf("market storage %q does not support scheduler reads", strings.TrimSpace(marketType))
-	}
-	return reader, nil
-}
-
-func NewStockInstrumentStorage(target, writeSource string) (InstrumentStorage, error) {
-	storage, err := marketstorage.NewBatchStorageWithWriteSource(target, marketstorage.InstTypeSPOT, writeSource)
-	if err != nil {
-		return nil, fmt.Errorf("create stock instrument storage: %w", err)
-	}
 	return storage, nil
-}
-
-func NewCryptoInstrumentStorage(target, marketType, writeSource string) (InstrumentStorage, error) {
-	marketType = strings.ToLower(strings.TrimSpace(marketType))
-	if marketType != string(marketdata.ProductSpot) && marketType != string(marketdata.ProductSwap) {
-		marketType = string(marketdata.ProductSpot)
-	}
-	storage, err := marketstorage.NewBatchStorageWithWriteSource(target, marketType, writeSource)
-	if err != nil {
-		return nil, fmt.Errorf("create crypto instrument storage: %w", err)
-	}
-	instrumentStorage, ok := storage.(InstrumentStorage)
-	if !ok {
-		return nil, fmt.Errorf("crypto storage %q does not support instrument snapshots", marketType)
-	}
-	return instrumentStorage, nil
 }

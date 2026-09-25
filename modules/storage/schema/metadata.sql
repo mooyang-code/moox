@@ -3,7 +3,7 @@
 -- 设计目标：
 -- 1. Space 是业务命名空间；DataSource、Subject、Dataset、Field、Factor 和 View 都归属 Space。
 -- 2. Dataset 描述可写事实数据集，并且只绑定一个 DataSource。
--- 3. Subject 是 Space 内业务对象，不归属 DataSource；来源侧代码由 SubjectSymbol 管理。
+-- 3. Subject 是 Space 内业务对象，不归属 DataSource；来源侧代码由抓取适配器换算。
 -- 4. View 是查询入口，使用 keep_duration 控制 TimeSeries 行保留。
 -- 5. Dataset 直接绑定 DataNode；运行时路由只解析 Dataset 到 DataNode 的关系。
 -- 6. DuckDB、Bleve 和 Parquet 均从 Pebble 主存变更异步派生。

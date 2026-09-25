@@ -41,7 +41,7 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 	require.NoError(t, err)
 	summary, err := ruleseed.SeedMissing(ctx, dbm.Tasks(), rules)
 	require.NoError(t, err)
-	require.Equal(t, 8, summary.TasksCreated)
+	require.Equal(t, 5, summary.TasksCreated)
 
 	var invocationCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,8 +80,8 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 
 	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", Page: 1, PageSize: 200})
 	require.NoError(t, err)
-	require.Equal(t, int64(2), total)
-	require.Len(t, instances, 2)
+	require.Equal(t, int64(0), total)
+	require.Empty(t, instances)
 	var spot, swap, kline int
 	for _, instance := range instances {
 		if instance.MarketType == "spot" {
@@ -94,10 +94,10 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 			kline++
 		}
 	}
-	require.Equal(t, 1, spot)
-	require.Equal(t, 1, swap)
+	require.Zero(t, spot)
+	require.Zero(t, swap)
 	require.Zero(t, kline, "realtime kline rules use Timer nodes, while this test provides only an Invoke node")
-	require.Eventually(t, func() bool { return invocationCount.Load() >= 2 }, 2*time.Second, 10*time.Millisecond)
+	_ = invocationCount
 }
 
 type defaultRuleDatasetSource struct{}
@@ -106,9 +106,11 @@ func (defaultRuleDatasetSource) GetDataset(context.Context, string, string) (sto
 	return storagesource.DatasetInfo{DataSourceID: "binance"}, nil
 }
 
-func (defaultRuleDatasetSource) ListSubjects(_ context.Context, _ string, datasetID string, _ string) ([]domain.DatasetSubject, error) {
-	if datasetID == "dataset_binance_swap_symbols" {
-		return []domain.DatasetSubject{{SubjectID: "ETH-USDT", ExternalSymbol: "ETHUSDT", Status: "active"}}, nil
+func (defaultRuleDatasetSource) ResolveSubjects(_ context.Context, _ string, tagIDs []string) ([]domain.Subject, error) {
+	for _, tagID := range tagIDs {
+		if tagID == "binance_swap" {
+			return []domain.Subject{{SubjectID: "ETH-USDT", Status: "active"}}, nil
+		}
 	}
-	return []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}, nil
+	return []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}}, nil
 }

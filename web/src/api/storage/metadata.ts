@@ -16,7 +16,10 @@ import type {
   PageResult,
   RetInfo,
   Subject,
-  SubjectSymbol,
+  Tag,
+  TagMember,
+  TagMemberStatus,
+  TagReference,
   View,
   ViewColumn,
   ViewRebuildLog
@@ -66,19 +69,45 @@ export function listSubjects(params: {
   return callMetadata<typeof params, RetRsp & { subjects: Subject[]; page_result: PageResult }>("ListSubjects", params);
 }
 
-export async function upsertSubjectSymbol(subject_symbol: SubjectSymbol) {
-  const rsp = await callMetadata<{ subject_symbol: SubjectSymbol }, RetRsp & { subject_symbol: SubjectSymbol }>(
-    "UpsertSubjectSymbol",
-    { subject_symbol }
-  );
-  return rsp.subject_symbol;
+export async function upsertTag(tag: Tag) {
+  const rsp = await callMetadata<{ tag: Tag }, RetRsp & { tag: Tag }>("UpsertTag", { tag });
+  return rsp.tag;
 }
 
-export function listSubjectSymbols(params: { space_id: string; subject_id?: string; data_source_id?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { subject_symbols: SubjectSymbol[]; page_result: PageResult }>(
-    "ListSubjectSymbols",
-    params
-  );
+export function listTags(spaceId: string, page: Page = { page: 1, size: 200 }) {
+  return callMetadata<{ space_id: string; page: Page }, RetRsp & { tags: Tag[]; page_result: PageResult }>("ListTags", {
+    space_id: spaceId,
+    page
+  });
+}
+
+export function deleteTag(spaceId: string, tagId: string) {
+  return callMetadata<{ space_id: string; tag_id: string }, RetRsp & { references?: TagReference[] }>("DeleteTag", {
+    space_id: spaceId,
+    tag_id: tagId
+  });
+}
+
+export function listTagMembers(params: {
+  space_id: string;
+  tag_id?: string;
+  status?: TagMemberStatus;
+  keyword?: string;
+  page: Page;
+}) {
+  return callMetadata<typeof params, RetRsp & { members: TagMember[]; page_result: PageResult }>("ListTagMembers", params);
+}
+
+export function addTagMembers(spaceId: string, tagId: string, subjectIds: string[]) {
+  return callMetadata("AddTagMembers", { space_id: spaceId, tag_id: tagId, subject_ids: subjectIds });
+}
+
+export function removeTagMembers(spaceId: string, tagId: string, subjectIds: string[]) {
+  return callMetadata("RemoveTagMembers", { space_id: spaceId, tag_id: tagId, subject_ids: subjectIds });
+}
+
+export function setTagMemberStatus(spaceId: string, tagId: string, subjectIds: string[], status: TagMemberStatus) {
+  return callMetadata("SetTagMemberStatus", { space_id: spaceId, tag_id: tagId, subject_ids: subjectIds, status });
 }
 
 export async function createDataset(dataset: Dataset) {
@@ -103,14 +132,6 @@ export function listDatasets(params: {
   page?: Page;
 }) {
   return callMetadata<typeof params, RetRsp & { datasets: Dataset[]; page_result: PageResult }>("ListDatasets", params);
-}
-
-export async function bindDatasetSubject(dataset_subject: DatasetSubject) {
-  const rsp = await callMetadata<{ dataset_subject: DatasetSubject }, RetRsp & { dataset_subject: DatasetSubject }>(
-    "BindDatasetSubject",
-    { dataset_subject }
-  );
-  return rsp.dataset_subject;
 }
 
 export function listDatasetSubjects(params: { space_id: string; dataset_id?: string; subject_id?: string; page?: Page }) {
@@ -239,7 +260,13 @@ export function getView(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("GetView", params);
 }
 
-export function listViews(params: { space_id: string; dataset_id?: string; primary_dataset_id?: string; status?: string; page?: Page }) {
+export function listViews(params: {
+  space_id: string;
+  dataset_id?: string;
+  primary_dataset_id?: string;
+  status?: string;
+  page?: Page;
+}) {
   const { primary_dataset_id, dataset_id, ...rest } = params;
   return callMetadata<typeof rest & { dataset_id?: string }, RetRsp & { views: View[]; page_result: PageResult }>("ListViews", {
     ...rest,

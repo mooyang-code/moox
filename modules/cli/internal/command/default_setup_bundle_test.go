@@ -63,9 +63,8 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		}
 		if dataset.SpaceID == "crypto" {
 			switch dataset.DatasetID {
-			case "dataset_binance_spot_symbols", "dataset_binance_swap_symbols", "dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m":
-				// Binance 1m source datasets and their symbol records use their
-				// own granularities.
+			case "dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m":
+				// Binance 1m source datasets use their own granularity.
 			case "mdataset_binance_kline_1m":
 				require.Equal(t, []string{"1m"}, dataset.Freqs, dataset.DatasetID)
 			default:
@@ -74,9 +73,9 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		}
 		if dataset.SpaceID == "crypto" {
 			switch dataset.DatasetID {
-			case "dataset_binance_spot_symbols", "dataset_binance_spot_kline_1m", "dataset_spot_kline_1h":
+			case "dataset_binance_spot_kline_1m", "dataset_spot_kline_1h":
 				require.Equal(t, "spot", dataset.Attributes["market_type"], dataset.DatasetID)
-			case "dataset_binance_swap_symbols", "dataset_perpetual_kline_1h":
+			case "dataset_binance_swap_kline_1m", "dataset_perpetual_kline_1h":
 				require.Equal(t, "swap", dataset.Attributes["market_type"], dataset.DatasetID)
 			}
 		}
@@ -121,52 +120,8 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"dataset_stockcn_financial_statement_metric",
 		"dataset_stockcn_financial_summary",
 		"dataset_stockcn_index_kline",
-		"dataset_stockcn_instruments",
 	}, datasetsBySpace["stockcn"])
-	require.Equal(t, []string{"dataset_binance_spot_kline_1m", "dataset_binance_spot_symbols", "dataset_binance_swap_kline_1m", "dataset_binance_swap_symbols", "dataset_perpetual_kline_1h", "dataset_spot_kline_1h", "mdataset_binance_kline_1m"}, datasetsBySpace["crypto"])
-}
-
-func TestDefaultSetupBundleDefinesStockCNInstrumentsLikeSymbolDatasets(t *testing.T) {
-	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
-	require.NoError(t, err)
-
-	var instrumentDataset *seedDataset
-	for i := range seed.Datasets {
-		dataset := &seed.Datasets[i]
-		if dataset.SpaceID == "stockcn" && dataset.DatasetID == "dataset_stockcn_instruments" {
-			instrumentDataset = dataset
-			break
-		}
-	}
-	require.NotNil(t, instrumentDataset)
-	require.Equal(t, "stockcn", instrumentDataset.DataSourceID)
-	require.Equal(t, "record", instrumentDataset.DataKind)
-	require.Equal(t, "storage-node-0", instrumentDataset.DataNodeID)
-	require.Equal(t, "0", instrumentDataset.KeepDuration)
-	require.Equal(t, "disabled", instrumentDataset.Status)
-	require.Equal(t, "wide_common_metrics", instrumentDataset.Attributes["storage_model"])
-
-	type columnContract struct {
-		valueType string
-		required  bool
-	}
-	wantColumns := map[string]columnContract{
-		"security_code":     {valueType: "string", required: true},
-		"provider_symbol":   {valueType: "string", required: true},
-		"exchange":          {valueType: "string", required: true},
-		"instrument_name":   {valueType: "string"},
-		"instrument_status": {valueType: "string"},
-		"snapshot_id":       {valueType: "string", required: true},
-		"source_provider":   {valueType: "string", required: true},
-		"fetched_at":        {valueType: "time", required: true},
-	}
-	gotColumns := make(map[string]columnContract)
-	for _, column := range seed.DatasetColumns {
-		if column.SpaceID == "stockcn" && column.DatasetID == "dataset_stockcn_instruments" {
-			gotColumns[column.ColumnName] = columnContract{valueType: column.ValueType, required: column.Required}
-		}
-	}
-	require.Equal(t, wantColumns, gotColumns)
+	require.Equal(t, []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m", "dataset_perpetual_kline_1h", "dataset_spot_kline_1h", "mdataset_binance_kline_1m"}, datasetsBySpace["crypto"])
 }
 
 func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {

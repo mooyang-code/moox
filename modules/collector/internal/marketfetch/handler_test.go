@@ -28,10 +28,6 @@ func (timerHandlerStorage) UpsertFields(context.Context, []*storagepb.RowFieldUp
 	return nil
 }
 
-func (timerHandlerStorage) RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error {
-	return nil
-}
-
 func TestHandleTimerAtReportsMetricsForTimerExecution(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "stockcn")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
@@ -110,14 +106,14 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
-	var product marketdata.ProductType
+	var product marketdata.InstrumentType
 	handler := &Handler{
 		NewStorage: func(string, string, string) (Storage, error) { return storage, nil },
-		NewCryptoKlinePipeline: func(s Storage, got marketdata.ProductType) (*KlinePipeline, error) {
+		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType) (*KlinePipeline, error) {
 			product = got
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",
-				ProductType: got, InstrumentType: marketdata.InstrumentSwap, DatasetID: "dataset_binance_swap_kline_1m",
+				InstrumentType: got, DatasetID: "dataset_binance_swap_kline_1m",
 				SourceID: "swap_http", Now: func() time.Time { return now },
 			}, nil
 		},
@@ -136,7 +132,7 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 	response, err := handler.handleRequest(context.Background(), req, "storage", false)
 	require.NoError(t, err)
 	require.True(t, response.Success)
-	require.Equal(t, marketdata.ProductSwap, product)
+	require.Equal(t, marketdata.InstrumentSwap, product)
 	require.Len(t, storage.rows, 1)
 }
 
@@ -154,10 +150,10 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 	storage := &pipelineStorage{}
 	handler := &Handler{
 		NewStorage: func(string, string, string) (Storage, error) { return storage, nil },
-		NewCryptoKlinePipeline: func(s Storage, got marketdata.ProductType) (*KlinePipeline, error) {
+		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType) (*KlinePipeline, error) {
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",
-				ProductType: got, InstrumentType: marketdata.InstrumentSwap, DatasetID: "dataset_binance_swap_kline_1m",
+				InstrumentType: got, DatasetID: "dataset_binance_swap_kline_1m",
 				SourceID: "swap_http", Now: func() time.Time { return now },
 			}, nil
 		},

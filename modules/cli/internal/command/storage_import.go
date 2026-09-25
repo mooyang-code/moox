@@ -131,7 +131,6 @@ type storageImportMetadataClient interface {
 	GetSubject(context.Context, string, string) (*pb.Subject, error)
 	ListDatasetColumns(context.Context, string, string) ([]*pb.DatasetColumn, error)
 	ListDatasetSubjects(context.Context, string, string, string) ([]*pb.DatasetSubject, error)
-	BindDatasetSubject(context.Context, *pb.DatasetSubject) error
 }
 
 // storageDataWriter 定义数据导入写入 Storage 的接口。
@@ -254,17 +253,9 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		return summary, nil
 	}
 	if needsBind {
-		if err := meta.BindDatasetSubject(ctx, &pb.DatasetSubject{
-			SpaceId:     opts.SpaceID,
-			DatasetId:   opts.DatasetID,
-			SubjectId:   opts.SubjectID,
-			SubjectRole: "normal",
-			Status:      "active",
-		}); err != nil {
-			return storageImportSummary{}, err
-		}
-		summary.BoundSubject = true
+		return storageImportSummary{}, fmt.Errorf("subject %s/%s is not in dataset tag scope", opts.SpaceID, opts.SubjectID)
 	}
+	summary.BoundSubject = true
 	for start := 0; start < len(result.Rows); start += opts.BatchSize {
 		end := start + opts.BatchSize
 		if end > len(result.Rows) {
@@ -828,10 +819,6 @@ func (c httpStorageImportMetadataClient) ListDatasetSubjects(ctx context.Context
 		return nil, err
 	}
 	return rsp.GetDatasetSubjects(), nil
-}
-
-func (c httpStorageImportMetadataClient) BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject) error {
-	return postStorage(ctx, c.URL, metadataServiceName, "BindDatasetSubject", &pb.BindDatasetSubjectReq{DatasetSubject: item}, &pb.BindDatasetSubjectRsp{})
 }
 
 func (w httpStorageDataWriter) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) error {

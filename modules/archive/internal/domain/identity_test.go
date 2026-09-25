@@ -11,7 +11,7 @@ import (
 
 func TestPartitionPathCarriesAllIdentityFields(t *testing.T) {
 	key := PartitionKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
-	want := filepath.Join("crypto", "dataset_spot_kline_1h", "1h", "BTC-USDT", "series_tag=venue%3Abinance", "crypto__spot_kline_1h__BTC-USDT__1h__series_tag=venue%3Abinance__202606.parquet")
+	want := filepath.Join("crypto", "dataset_spot_kline_1h", "1h", "BTC-USDT", "series_tag=venue%3Abinance", "crypto__dataset_spot_kline_1h__BTC-USDT__1h__series_tag=venue%3Abinance__202606.parquet")
 	got, err := key.RelativePath()
 	if err != nil || got != want {
 		t.Fatalf("RelativePath() = %q, %v; want %q", got, err, want)

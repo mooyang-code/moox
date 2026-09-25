@@ -98,7 +98,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		runtimeHandler.MetricsReporter = invocationMetrics.Reporter
 	}
 	switch event.Action {
-	case model.EventActionMarketFetch, model.EventActionInstrumentSnapshot:
+	case model.EventActionMarketFetch:
 		if timerConfigured && isTimerAction(event.Action) {
 			if !timerEnvelope && len(event.Data) == 0 {
 				return failure("invalid_timer_event", "timer event identity or action data is required"), nil
@@ -128,14 +128,12 @@ func timerNow(event model.CloudFunctionEvent) time.Time {
 }
 
 func timerAction(mode string) model.EventAction {
-	if strings.EqualFold(strings.TrimSpace(mode), "instrument_snapshot") {
-		return model.EventActionInstrumentSnapshot
-	}
+	_ = mode
 	return model.EventActionMarketFetch
 }
 
 func isTimerAction(action model.EventAction) bool {
-	return action == model.EventActionMarketFetch || action == model.EventActionInstrumentSnapshot
+	return action == model.EventActionMarketFetch
 }
 
 func validateTimerEvent(event model.CloudFunctionEvent) error {

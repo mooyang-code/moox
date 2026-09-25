@@ -136,7 +136,6 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 		"dataset_stockcn_financial_summary":          false,
 		"dataset_stockcn_bond_kline":                 false,
 		"dataset_stockcn_index_kline":                false,
-		"dataset_stockcn_instruments":                false,
 		"dataset_stockcn_equity_kline":               false,
 	}
 	for _, dataset := range miscDatasets {

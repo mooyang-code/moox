@@ -1,8 +1,7 @@
 import type { CollectorTask, CollectionTaskPayload } from "@/api/collector";
 
-export type CollectionTaskDataType = "kline" | "instrument" | "kline_resample";
+export type CollectionTaskDataType = "kline" | "kline_resample";
 export type CollectionTaskMarket = "spot" | "swap";
-export type CollectionTaskSymbolSource = "dataset" | "exchange";
 
 export interface CollectionSourceOption {
   source_id: string;
@@ -19,8 +18,7 @@ export interface CollectionTaskInput {
   provider: string;
   market: CollectionTaskMarket;
   frequency: string;
-  symbolSource?: CollectionTaskSymbolSource;
-  symbolSourceId?: string;
+  subjectTags?: string[];
   sourceId?: string;
   sourceFrequency?: string;
   sourceSeriesTag?: string;
@@ -94,28 +92,20 @@ export function buildCollectionTaskParams(input: CollectionTaskInput): Record<st
       target_frequency: frequency,
       alignment: "epoch_utc"
     };
+    const subjectTags = normalizeSubjectTags(input.subjectTags);
+    if (subjectTags.length > 0) params.subject_tags = subjectTags;
     if (Number.isFinite(input.settleDelayMS) && (input.settleDelayMS as number) >= 0) {
       params.settle_delay_ms = Math.trunc(input.settleDelayMS as number);
     }
     return params;
   }
 
-  if (input.dataType === "instrument") {
-    return {
-      provider,
-      market_type: market,
-      symbol_source: "exchange",
-      frequency
-    };
-  }
-
-  const symbolSourceId = input.symbolSourceId?.trim();
-  if (!symbolSourceId) throw new Error("请选择标的来源");
+  const subjectTags = normalizeSubjectTags(input.subjectTags);
+  if (subjectTags.length === 0) throw new Error("请选择标的标签");
   return {
     provider,
     market_type: market,
-    symbol_source: "dataset",
-    symbol_dataset_id: symbolSourceId,
+    subject_tags: subjectTags,
     frequency
   };
 }
@@ -183,8 +173,7 @@ export function parseCollectionTaskInput(
     provider: stringValue(params.provider) || task.provider,
     market: normalizeMarket(stringValue(params.market_type) || task.market_type),
     frequency: stringValue(params.frequency),
-    symbolSource: dataType === "instrument" ? "exchange" : "dataset",
-    symbolSourceId: stringValue(params.symbol_dataset_id)
+    subjectTags: stringArrayValue(params.subject_tags)
   };
 }
 
@@ -221,7 +210,6 @@ export function collectionSourceMatches(
 }
 
 function normalizeDataType(value: string): CollectionTaskDataType {
-  if (value === "instrument" || value === "symbol") return "instrument";
   if (value === "kline_resample") return "kline_resample";
   return "kline";
 }
@@ -297,4 +285,12 @@ function stringValue(value: unknown): string {
 function numberValue(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : undefined;
+}
+
+function normalizeSubjectTags(tags?: string[]): string[] {
+  return [...new Set((tags || []).map(item => item.trim()).filter(Boolean))];
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(item => stringValue(item)).filter(Boolean) : [];
 }

@@ -263,6 +263,16 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		})
 		requireStorageOK(t, "UpsertSubject "+currentSubjectID, subjectRsp, subjectErr)
 	}
+	tagID := sourceID + "_scope"
+	tagRsp, tagErr := metadata.UpsertTag(ctx, &storagepb.UpsertTagReq{
+		AuthInfo: auth,
+		Tag:      &storagepb.Tag{SpaceId: spaceID, TagId: tagID, TagName: "验标" + displaySuffix, Mode: "manual"},
+	})
+	requireStorageOK(t, "UpsertTag", tagRsp, tagErr)
+	memberRsp, memberErr := metadata.AddTagMembers(ctx, &storagepb.TagMembersReq{
+		AuthInfo: auth, SpaceId: spaceID, TagId: tagID, SubjectIds: append([]string(nil), subjectIDs...),
+	})
+	requireStorageOK(t, "AddTagMembers", memberRsp, memberErr)
 	groupRsp, err := metadata.CreateFieldGroup(ctx, &storagepb.CreateFieldGroupReq{
 		AuthInfo: auth,
 		FieldGroup: &storagepb.FieldGroup{
@@ -289,7 +299,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: sourceID, DataSourceId: dataSourceID,
 			Name: "时序" + displaySuffix, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freqs: []string{freq}, DataNodeId: dataNodeID, KeepDuration: "0", Status: "disabled",
+			Freqs: []string{freq}, DataNodeId: dataNodeID, KeepDuration: "0", Status: "disabled", SubjectTags: []string{tagID},
 		},
 	})
 	require.NoError(t, err)
@@ -309,16 +319,6 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			},
 		})
 		requireStorageOK(t, "UpsertDatasetColumn "+column.id, columnRsp, columnErr)
-	}
-	for _, currentSubjectID := range subjectIDs {
-		subjectBindingRsp, bindSubjectErr := metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{
-			AuthInfo: auth,
-			DatasetSubject: &storagepb.DatasetSubject{
-				SpaceId: spaceID, DatasetId: sourceID, SubjectId: currentSubjectID,
-				SubjectRole: "normal", Status: "active",
-			},
-		})
-		requireStorageOK(t, "BindDatasetSubject "+currentSubjectID, subjectBindingRsp, bindSubjectErr)
 	}
 	checkRsp, err := metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{
 		AuthInfo: auth, SpaceId: spaceID, DatasetId: sourceID,

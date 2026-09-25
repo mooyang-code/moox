@@ -164,6 +164,58 @@ message DataSource {
   map<string, string> attributes = 11;
 }
 
+// Tag 是 Subject 的分组；auto 标签成员由 moox-collector-subject 同步。
+message Tag {
+  string space_id = 1;
+  string tag_id = 2;
+  string tag_name = 3;
+  string description = 4;
+  string mode = 5;
+  bool builtin = 6;
+  repeated string sources = 7;
+  string instrument_type = 8;
+  string cron = 9;
+  string timezone = 10;
+  string last_run_at = 11;
+  string last_status = 12;
+  string last_error = 13;
+  uint32 active_count = 14;
+  uint32 inactive_count = 15;
+  string created_at = 16;
+  string updated_at = 17;
+}
+
+// TagMember 是标签成员；tag_id 为空时 tag_ids 列出所属标签。
+message TagMember {
+  string space_id = 1;
+  string tag_id = 2;
+  string status = 3;
+  string inactive_at = 4;
+  Subject subject = 5;
+  repeated string tag_ids = 6;
+}
+
+message TagSnapshotItem {
+  string subject_id = 1;
+  string subject_type = 2;
+  string name = 3;
+  string market = 4;
+  string currency = 5;
+  string timezone = 6;
+}
+
+message SubjectAttributes {
+  string subject_id = 1;
+  string name = 2;
+  map<string, string> attributes = 3;
+}
+
+message TagReference {
+  string dataset_id = 1;
+  string dataset_name = 2;
+  string collector_task_id = 3;
+}
+
 // Subject 表示 Space 内的数据对象，交易标的只是其中一种。
 message Subject {
   // space_id 是 Subject 所属 Space。
@@ -180,7 +232,7 @@ message Subject {
   string currency = 6;
   // timezone 是该对象默认时区。
   string timezone = 7;
-  // status 表示启用、停用、构建中、归档或删除等状态。
+  // status 取值 active 或 disabled；disabled 仅表示人工停用。
   string status = 8;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 9;
@@ -188,26 +240,6 @@ message Subject {
   string updated_at = 10;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 11;
-}
-
-// SubjectSymbol 表示 Subject 在某个 DataSource 下的外部代码映射。
-message SubjectSymbol {
-  // space_id 是 SubjectSymbol 所属 Space。
-  string space_id = 1;
-  // subject_id 是 Space 内的数据对象 ID。
-  string subject_id = 2;
-  // data_source_id 是外部代码所属的数据来源 ID。
-  string data_source_id = 3;
-  // external_symbol 是数据来源使用的原始对象代码。
-  string external_symbol = 4;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 5;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 6;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 7;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 8;
 }
 
 // Dataset 是 Space 内可写的事实数据集，定义一类数据及其列契约。
@@ -242,6 +274,8 @@ message Dataset {
   bool binding_locked = 19;
   // revision 是 Dataset 元数据的单调递增修订号，用于并发控制。
   uint64 revision = 20;
+  // subject_tags 是数据集标的范围，取值为 tag_id。
+  repeated string subject_tags = 21;
 }
 
 // DatasetSubject 表示 Dataset 覆盖的 Subject 集合。
@@ -252,20 +286,7 @@ message DatasetSubject {
   string dataset_id = 2;
   // subject_id 是业务对象 ID。
   string subject_id = 3;
-  // subject_role 是 Subject 在数据集中的角色，例如 normal、benchmark、index、universe_member 或 record。
-  string subject_role = 4;
-  // effective_start_time 是 Subject 在数据集中的生效开始时间。
-  string effective_start_time = 5;
-  // effective_end_time 是 Subject 在数据集中的生效结束时间；为空表示仍然生效。
-  string effective_end_time = 6;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 7;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 8;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 9;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 10;
+  string status = 4;
 }
 
 // FieldGroup 是 Space 内普通字段的两级分类目录。
@@ -797,32 +818,6 @@ message UpsertSubjectRsp {
   Subject subject = 2;
 }
 
-// RegisterDataSubjectReq 表示采集侧注册数据对象、外部代码映射和数据集绑定的请求。
-message RegisterDataSubjectReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是数据对象所属 Space。
-  string space_id = 2;
-  // data_source_id 是外部代码所属的数据来源 ID。
-  string data_source_id = 3;
-  // external_symbol 是数据来源使用的原始对象代码。
-  string external_symbol = 4;
-  // subject 是待注册的数据对象元数据；服务端会强制使用 space_id。
-  Subject subject = 5;
-  // dataset_bindings 是该对象要绑定的数据集关系；服务端会补齐 space_id 和 subject_id。
-  repeated DatasetSubject dataset_bindings = 6;
-}
-
-// RegisterDataSubjectRsp 表示采集侧注册数据对象后的响应。
-message RegisterDataSubjectRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // subject 是写入后的数据对象元数据。
-  Subject subject = 2;
-  // dataset_bindings 是最终写入的数据集绑定关系。
-  repeated DatasetSubject dataset_bindings = 3;
-}
-
 // GetSubjectReq 表示获取数据对象的请求。
 message GetSubjectReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -869,47 +864,34 @@ message ListSubjectsRsp {
   common.PageResult page_result = 3;
 }
 
-// UpsertSubjectSymbolReq 表示创建或更新数据对象外部代码映射的请求。
-message UpsertSubjectSymbolReq {
-  // auth_info 是调用方身份和链路追踪信息。
+message UpsertTagReq { common.AuthInfo auth_info = 1; Tag tag = 2; }
+message UpsertTagRsp { common.RetInfo ret_info = 1; Tag tag = 2; }
+message GetTagReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; }
+message GetTagRsp { common.RetInfo ret_info = 1; Tag tag = 2; }
+message ListTagsReq { common.AuthInfo auth_info = 1; string space_id = 2; common.Page page = 3; }
+message ListTagsRsp { common.RetInfo ret_info = 1; repeated Tag tags = 2; common.PageResult page_result = 3; }
+message DeleteTagReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; }
+message DeleteTagRsp { common.RetInfo ret_info = 1; repeated TagReference references = 2; }
+message ListTagMembersReq {
   common.AuthInfo auth_info = 1;
-  // subject_symbol 是待写入的外部代码映射。
-  SubjectSymbol subject_symbol = 2;
-}
-
-// UpsertSubjectSymbolRsp 表示创建或更新数据对象外部代码映射的响应。
-message UpsertSubjectSymbolRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // subject_symbol 是写入后的外部代码映射。
-  SubjectSymbol subject_symbol = 2;
-}
-
-// ListSubjectSymbolsReq 表示列出数据对象外部代码映射的请求。
-message ListSubjectSymbolsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
-  // subject_id 是可选数据对象 ID 过滤条件。
-  string subject_id = 3;
-  // data_source_id 是可选数据来源 ID 过滤条件。
-  string data_source_id = 4;
-  // external_symbol 是可选外部对象代码过滤条件。
-  string external_symbol = 5;
-  // page 是分页参数。
+  string tag_id = 3;
+  string status = 4;
+  string keyword = 5;
   common.Page page = 6;
 }
-
-// ListSubjectSymbolsRsp 表示列出数据对象外部代码映射的响应。
-message ListSubjectSymbolsRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // subject_symbols 是外部代码映射列表。
-  repeated SubjectSymbol subject_symbols = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
+message ListTagMembersRsp { common.RetInfo ret_info = 1; repeated TagMember members = 2; common.PageResult page_result = 3; }
+message TagMembersReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; }
+message TagMembersRsp { common.RetInfo ret_info = 1; uint32 affected = 2; }
+message SetTagMemberStatusReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; string status = 5; }
+message ApplyTagSnapshotReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; string run_at = 4; repeated TagSnapshotItem items = 5; }
+message ApplyTagSnapshotRsp { common.RetInfo ret_info = 1; uint32 added = 2; uint32 activated = 3; uint32 inactivated = 4; }
+message ReportTagRunFailureReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; string run_at = 4; string error = 5; }
+message ReportTagRunFailureRsp { common.RetInfo ret_info = 1; }
+message UpdateSubjectAttributesReq { common.AuthInfo auth_info = 1; string space_id = 2; repeated SubjectAttributes items = 3; }
+message UpdateSubjectAttributesRsp { common.RetInfo ret_info = 1; uint32 updated = 2; uint32 skipped = 3; }
+message ResolveSubjectsReq { common.AuthInfo auth_info = 1; string space_id = 2; repeated string tag_ids = 3; }
+message ResolveSubjectsRsp { common.RetInfo ret_info = 1; repeated Subject subjects = 2; }
 
 // CreateDatasetReq 表示创建数据集的请求。
 message CreateDatasetReq {
@@ -999,52 +981,6 @@ message ListDatasetsRsp {
   repeated Dataset datasets = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
-}
-
-// BindDatasetSubjectReq 表示为 Dataset 绑定 Subject 的请求。
-message BindDatasetSubjectReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // dataset_subject 是数据集与对象的绑定关系。
-  DatasetSubject dataset_subject = 2;
-}
-
-// BindDatasetSubjectRsp 表示为 Dataset 绑定 Subject 的响应。
-message BindDatasetSubjectRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // dataset_subject 是绑定后的关系。
-  DatasetSubject dataset_subject = 2;
-}
-
-// StageDatasetSubjectSetReq stages a complete, inactive subject set. The
-// storage service keeps it out of t_dataset_subjects until activation.
-message StageDatasetSubjectSetReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string set_id = 3;
-  repeated DatasetSubject dataset_subjects = 4;
-}
-
-message StageDatasetSubjectSetRsp {
-  common.RetInfo ret_info = 1;
-  string set_id = 2;
-  uint32 count = 3;
-}
-
-// ActivateDatasetSubjectSet atomically replaces every Dataset covered by the
-// staged set and then removes the staging rows. Repeating the same set_id is
-// safe after a transport ambiguity because activation is idempotent.
-message ActivateDatasetSubjectSetReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  string set_id = 3;
-}
-
-message ActivateDatasetSubjectSetRsp {
-  common.RetInfo ret_info = 1;
-  string set_id = 2;
-  uint32 count = 3;
 }
 
 // ListDatasetSubjectsReq 表示列出 Dataset 覆盖对象的请求。
@@ -1816,16 +1752,22 @@ service Metadata {
 
   // 创建或更新数据对象。
   rpc UpsertSubject(UpsertSubjectReq) returns (UpsertSubjectRsp);
-  // 创建或更新数据对象的来源侧代码映射。
-  rpc UpsertSubjectSymbol(UpsertSubjectSymbolReq) returns (UpsertSubjectSymbolRsp);
-  // 注册数据对象、来源侧代码映射和数据集绑定。
-  rpc RegisterDataSubject(RegisterDataSubjectReq) returns (RegisterDataSubjectRsp);
   // 按 ID 获取数据对象。
   rpc GetSubject(GetSubjectReq) returns (GetSubjectRsp);
   // 列出数据对象。
   rpc ListSubjects(ListSubjectsReq) returns (ListSubjectsRsp);
-  // 列出数据对象的来源侧代码映射。
-  rpc ListSubjectSymbols(ListSubjectSymbolsReq) returns (ListSubjectSymbolsRsp);
+  rpc UpsertTag(UpsertTagReq) returns (UpsertTagRsp);
+  rpc GetTag(GetTagReq) returns (GetTagRsp);
+  rpc ListTags(ListTagsReq) returns (ListTagsRsp);
+  rpc DeleteTag(DeleteTagReq) returns (DeleteTagRsp);
+  rpc ListTagMembers(ListTagMembersReq) returns (ListTagMembersRsp);
+  rpc AddTagMembers(TagMembersReq) returns (TagMembersRsp);
+  rpc RemoveTagMembers(TagMembersReq) returns (TagMembersRsp);
+  rpc SetTagMemberStatus(SetTagMemberStatusReq) returns (TagMembersRsp);
+  rpc ApplyTagSnapshot(ApplyTagSnapshotReq) returns (ApplyTagSnapshotRsp);
+  rpc ReportTagRunFailure(ReportTagRunFailureReq) returns (ReportTagRunFailureRsp);
+  rpc UpdateSubjectAttributes(UpdateSubjectAttributesReq) returns (UpdateSubjectAttributesRsp);
+  rpc ResolveSubjects(ResolveSubjectsReq) returns (ResolveSubjectsRsp);
 
   // 创建数据集。
   rpc CreateDataset(CreateDatasetReq) returns (CreateDatasetRsp);
@@ -1843,12 +1785,6 @@ service Metadata {
   rpc CheckDatasetActivation(CheckDatasetActivationReq) returns (CheckDatasetActivationRsp);
   // 使用 revision CAS 激活 Dataset。
   rpc ActivateDataset(ActivateDatasetReq) returns (ActivateDatasetRsp);
-  // 为 Dataset 绑定 Subject。
-  rpc BindDatasetSubject(BindDatasetSubjectReq) returns (BindDatasetSubjectRsp);
-  // 原子 staging 完整 Dataset Subject 集合。
-  rpc StageDatasetSubjectSet(StageDatasetSubjectSetReq) returns (StageDatasetSubjectSetRsp);
-  // 原子激活已完整 staging 的 Dataset Subject 集合。
-  rpc ActivateDatasetSubjectSet(ActivateDatasetSubjectSetReq) returns (ActivateDatasetSubjectSetRsp);
   // 列出 Dataset 覆盖的 Subject。
   rpc ListDatasetSubjects(ListDatasetSubjectsReq) returns (ListDatasetSubjectsRsp);
 

@@ -387,7 +387,7 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 }
 
 func validateSetupMetadataDependencies(seed metadataSeed) error {
-	if len(seed.Subjects) > 0 || len(seed.SubjectSymbols) > 0 || len(seed.DatasetSubjects) > 0 {
+	if len(seed.Subjects) > 0 {
 		return fmt.Errorf("default setup metadata cannot contain runtime subject catalog entries")
 	}
 	spaces := make(map[string]struct{}, len(seed.Spaces))

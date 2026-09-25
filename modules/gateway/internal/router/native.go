@@ -155,7 +155,7 @@ func splitRPCName(rpcName string) (string, string, bool) {
 // would make an accidental write retry possible.
 func nativeReadOnlyMethod(method string) bool {
 	switch method {
-	case "GetSpace", "ListSpaces", "GetDataSource", "ListDataSources", "GetSubject", "ListSubjects", "ListSubjectSymbols",
+	case "GetSpace", "ListSpaces", "GetDataSource", "ListDataSources", "GetSubject", "ListSubjects", "GetTag", "ListTags", "ListTagMembers",
 		"GetDataset", "ListDatasets", "ListDatasetSubjects", "GetFieldGroup", "ListFieldGroups",
 		"GetField", "ListFields", "GetFactor", "ListFactors", "ListDatasetColumns", "GetView",
 		"ListViews", "ListViewColumns", "GetDataNode", "ListDataNodes", "CheckDatasetActivation",

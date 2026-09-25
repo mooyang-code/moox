@@ -25,7 +25,8 @@ const storageReadMethods = new Set([
   "ListDataSources",
   "GetSubject",
   "ListSubjects",
-  "ListSubjectSymbols",
+  "ListTags",
+  "ListTagMembers",
   "GetDataset",
   "ListDatasets",
   "ListDatasetSubjects",
@@ -106,7 +107,15 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
       auth_info: getStorageAuthInfo(),
       ...req
     });
-    assertSuccess(rsp.data.ret_info);
+    try {
+      assertSuccess(rsp.data.ret_info);
+    } catch (error) {
+      // DeleteTag returns the blocking dataset references alongside ret_info.
+      if (method === "DeleteTag" && error instanceof Error) {
+        Object.assign(error, { response: { data: rsp.data } });
+      }
+      throw error;
+    }
     if (readOnly && generation === storageReadGeneration) {
       storageReadCache.set(key, { expiresAt: Date.now() + STORAGE_READ_CACHE_TTL_MS, data: rsp.data });
     }

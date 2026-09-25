@@ -212,7 +212,7 @@ func normalizeSubjects(raw, feed string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		normalized, err := commonsrc.CanonicalSubjectIDWithExchange(code, exchange)
+		normalized, err := commonsrc.SubjectIDWithExchange(code, exchange)
 		if err != nil {
 			return nil, err
 		}

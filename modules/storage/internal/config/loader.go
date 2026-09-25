@@ -268,7 +268,7 @@ func (v *StorageView) applyConsumerPartitionDefaults() {
 			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
 			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
 				{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_disk", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_network", "dataset_mooxsys_host_resource"}},
-				{SpaceID: "stockcn", DatasetIDs: []string{"dataset_stockcn_financial_statement_metric", "dataset_stockcn_financial_summary", "dataset_stockcn_bond_kline", "dataset_stockcn_index_kline", "dataset_stockcn_instruments", "dataset_stockcn_equity_kline"}},
+				{SpaceID: "stockcn", DatasetIDs: []string{"dataset_stockcn_financial_statement_metric", "dataset_stockcn_financial_summary", "dataset_stockcn_bond_kline", "dataset_stockcn_index_kline", "dataset_stockcn_equity_kline"}},
 				{SpaceID: "stockhk", DatasetIDs: []string{"dataset_stockhk_equity_kline"}},
 				{SpaceID: "stockus", DatasetIDs: []string{"dataset_stockus_equity_kline"}},
 			}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 	"time"
 )
@@ -27,8 +28,7 @@ type CollectParams struct {
 	InstrumentType  string          `json:"instrument_type,omitempty"`
 	SourceID        string          `json:"source_id,omitempty"`
 	SeriesTag       string          `json:"series_tag,omitempty"`
-	SymbolSource    string          `json:"symbol_source,omitempty"`
-	SymbolDatasetID string          `json:"symbol_dataset_id,omitempty"`
+	SubjectTags     []string        `json:"subject_tags,omitempty"`
 	TargetDatasetID string          `json:"target_dataset_id,omitempty"`
 	Frequency       string          `json:"frequency,omitempty"`
 	SourceDatasetID string          `json:"source_dataset_id,omitempty"`
@@ -86,8 +86,6 @@ type CollectSchedule struct {
 	Interval string `json:"interval"`
 }
 
-const InstrumentDataType = "instrument"
-
 // ParseCollectParams parses rule JSON and normalizes the standard shape.
 func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType string, fallbackDataType string) (*CollectParams, error) {
 	raw = strings.TrimSpace(raw)
@@ -118,8 +116,7 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	p.InstrumentType = strings.ToLower(strings.TrimSpace(p.InstrumentType))
 	p.SourceID = strings.ToLower(strings.TrimSpace(p.SourceID))
 	p.SeriesTag = strings.TrimSpace(p.SeriesTag)
-	p.SymbolSource = strings.ToLower(strings.TrimSpace(p.SymbolSource))
-	p.SymbolDatasetID = strings.TrimSpace(p.SymbolDatasetID)
+	p.SubjectTags = normalizeTags(p.SubjectTags)
 	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
 	p.Frequency = strings.TrimSpace(p.Frequency)
 	p.SourceDatasetID = strings.TrimSpace(p.SourceDatasetID)
@@ -133,27 +130,15 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 			p.Alignment = ResampleAlignmentEpochUTC
 		}
 	}
-	if p.Frequency == "" && strings.EqualFold(strings.TrimSpace(fallbackDataType), InstrumentDataType) {
-		// Full Instrument snapshots use an hourly cadence unless a valid explicit
-		// frequency is supplied.
-		p.Frequency = "1h"
-	}
 	if dataType == "kline" {
 		p.HistoryPolicy = normalizeHistoryPolicy(p.HistoryPolicy)
 	}
 
-	sourceKind := ""
-	switch p.SymbolSource {
-	case "dataset":
-		sourceKind = "dataset_subjects"
-	case "exchange", "manual":
-		sourceKind = "none"
-	}
+	// The source is the target Dataset's subject range. It is no longer a
+	// separate symbol Dataset or a persisted subject-set relation.
+	p.Source = CollectSource{Kind: "dataset"}
 	if dataType == "kline_resample" {
-		sourceKind = "dataset_subjects"
-		p.Source = CollectSource{Kind: sourceKind, DatasetID: p.SourceDatasetID}
-	} else {
-		p.Source = CollectSource{Kind: sourceKind, DatasetID: p.SymbolDatasetID}
+		p.Source.DatasetID = p.SourceDatasetID
 	}
 	intervals := []string(nil)
 	if dataType == "kline_resample" && p.TargetFrequency != "" {
@@ -181,7 +166,7 @@ func validateCollectParamsShape(raw string, fallbackDataType string) error {
 		return nil // the strict struct decoder reports the useful JSON error first
 	}
 	resample := strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline_resample")
-	standardOnly := []string{"symbol_source", "symbol_dataset_id", "frequency", "history_policy"}
+	standardOnly := []string{"frequency", "history_policy"}
 	resampleOnly := []string{"source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment", "settle_delay_ms"}
 	for _, key := range standardOnly {
 		if _, exists := values[key]; exists && resample {
@@ -224,9 +209,6 @@ func (p *CollectParams) Validate() error {
 	}
 	switch p.Collector.DataType {
 	case "kline":
-		if p.Source.Kind != "dataset_subjects" || p.Source.DatasetID == "" {
-			return fmt.Errorf("kline source.dataset_id is required with source.kind=dataset_subjects")
-		}
 		if len(p.Collector.Intervals) == 0 {
 			return fmt.Errorf("collector.intervals is required for kline")
 		}
@@ -238,19 +220,51 @@ func (p *CollectParams) Validate() error {
 		if err := p.ValidateHistoryPolicy(); err != nil {
 			return err
 		}
-	case InstrumentDataType:
-		if p.Source.Kind != "none" {
-			return fmt.Errorf("instrument source.kind must be none")
-		}
-		if p.SymbolSource != "exchange" {
-			return fmt.Errorf("symbol_source must be exchange for instrument task")
-		}
 	case "kline_resample":
 		return p.ValidateKlineResample()
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)
 	}
 	return nil
+}
+
+// SplitSubjectTags extracts the transient task input. Tags are persisted on
+// the result Dataset rather than duplicated in the task's collect_params.
+func SplitSubjectTags(raw string) (string, []string, error) {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return "", nil, fmt.Errorf("parse collect params: %w", err)
+	}
+	var tags []string
+	if value, ok := values["subject_tags"]; ok {
+		if err := json.Unmarshal(value, &tags); err != nil {
+			return "", nil, fmt.Errorf("parse subject_tags: %w", err)
+		}
+		delete(values, "subject_tags")
+	}
+	clean, err := json.Marshal(values)
+	if err != nil {
+		return "", nil, err
+	}
+	return string(clean), normalizeTags(tags), nil
+}
+
+func normalizeTags(tags []string) []string {
+	seen := make(map[string]struct{}, len(tags))
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func normalizeHistoryPolicy(policy *HistoryPolicy) *HistoryPolicy {

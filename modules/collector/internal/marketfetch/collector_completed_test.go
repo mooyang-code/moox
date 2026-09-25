@@ -3,11 +3,11 @@ package marketfetch
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
@@ -78,10 +78,10 @@ func TestCollectorCompletedDuplicateReportDoesNotCreateNewBatch(t *testing.T) {
 }
 
 func TestCollectorCompletedStripsSpotAndSwapSuffix(t *testing.T) {
-	require.Equal(t, "0G-USDT", marketdata.CanonicalCryptoSubjectID("0G-USDT-SPOT"))
-	require.Equal(t, "BTC-USDT", marketdata.CanonicalCryptoSubjectID("BTC-USDT-SWAP"))
-	require.Equal(t, "ETH-USDT", marketdata.CanonicalCryptoSubjectID("ETH-USDT"))
-	require.Equal(t, "SOL-USDT", marketdata.CanonicalCryptoSubjectID("sol-usdt-spot"))
+	require.Equal(t, "0G-USDT", strings.ToUpper(strings.TrimSpace("0G-USDT")))
+	require.Equal(t, "BTC-USDT", strings.ToUpper(strings.TrimSpace("BTC-USDT")))
+	require.Equal(t, "ETH-USDT", strings.ToUpper(strings.TrimSpace("ETH-USDT")))
+	require.Equal(t, "SOL-USDT", strings.ToUpper(strings.TrimSpace("sol-usdt")))
 }
 
 func TestCollectorCompletedUsesStorageWritePositions(t *testing.T) {

@@ -13,12 +13,20 @@ const (
 	InstanceStatusFailed  = 3
 )
 
-// DatasetSubject is a storage dataset subject projected into Collector.
+// Subject is the small metadata projection used when expanding Dataset tags.
+type Subject struct {
+	SubjectID string
+	Name      string
+	Status    string
+}
+
+// DatasetSubject is the small compatibility projection used by the legacy job
+// registry. Provider symbols are derived from SubjectID by the selected source
+// adapter and are deliberately not persisted in this type.
 type DatasetSubject struct {
-	SubjectID      string
-	SubjectName    string
-	ExternalSymbol string
-	Status         string
+	SubjectID   string
+	SubjectName string
+	Status      string
 }
 
 // TaskSpec is an adapter output before persistence fields are added.
