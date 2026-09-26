@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dataKindOptions, statusLabel, validateDatasetId, validateViewId } from "./metadata-utils";
+import { dataKindOptions, displayFieldId, statusLabel, validateDatasetId, validateViewId } from "./metadata-utils";
 
 describe("statusLabel", () => {
   it("localizes enabled and disabled status values without changing API values", () => {
@@ -29,5 +29,20 @@ describe("validateViewId", () => {
   it("requires the view_ type prefix", () => {
     expect(validateViewId("view_stockcn_equity_kline_1m")).toBe("");
     expect(validateViewId("stockcn_equity_kline_1m")).toContain("view_");
+  });
+});
+
+describe("displayFieldId", () => {
+  it("strips the internal dataset prefix from merged field ids", () => {
+    expect(displayFieldId("dataset_binance_spot_kline_1m__close")).toBe("close");
+    expect(displayFieldId("mdataset_binance_kline_1m__volume")).toBe("volume");
+    expect(displayFieldId("dataset_a__b__close")).toBe("close");
+  });
+
+  it("keeps plain field ids untouched", () => {
+    expect(displayFieldId("close")).toBe("close");
+    expect(displayFieldId("volume_unit")).toBe("volume_unit");
+    expect(displayFieldId("")).toBe("");
+    expect(displayFieldId(undefined)).toBe("");
   });
 });

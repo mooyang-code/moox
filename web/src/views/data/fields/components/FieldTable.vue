@@ -21,7 +21,10 @@
         <template #cell="{ record }">
           <div class="field-name">
             <strong>{{ record.name }}</strong>
-            <span>{{ record.field_id }}</span>
+            <a-tooltip v-if="displayFieldId(record.field_id) !== record.field_id" :content="record.field_id">
+              <span>{{ displayFieldId(record.field_id) }}</span>
+            </a-tooltip>
+            <span v-else>{{ record.field_id }}</span>
           </div>
         </template>
       </a-table-column>
@@ -64,7 +67,7 @@
 
 <script setup lang="ts">
 import type { Field, FieldGroup } from "@/api/storage/types";
-import { fieldValueTypeOptions, formatTime, optionLabel, statusColor } from "@/views/data/shared/metadata-utils";
+import { displayFieldId, fieldValueTypeOptions, formatTime, optionLabel, statusColor } from "@/views/data/shared/metadata-utils";
 import { groupPath } from "../field-workbench";
 
 const props = defineProps<{

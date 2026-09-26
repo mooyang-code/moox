@@ -117,6 +117,16 @@ export function validateChineseDisplayName(value: string | undefined, maxLength 
   return "";
 }
 
+// 合并数据集会把源数据集字段登记为 "<dataset_id>__<field>" 形式的内部字段名，
+// 该前缀属于内部实现细节，外显给用户时统一剥离。
+const internalFieldPrefixPattern = /^m?dataset_[0-9a-z_]+__(.+)$/;
+
+export function displayFieldId(fieldId: string | undefined) {
+  const id = (fieldId || "").trim();
+  const matched = internalFieldPrefixPattern.exec(id);
+  return matched?.[1] || id;
+}
+
 export const statusOptions: SelectOption[] = [
   { label: "启用", value: "active" },
   { label: "禁用", value: "disabled" }
