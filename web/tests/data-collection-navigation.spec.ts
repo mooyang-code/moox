@@ -239,7 +239,7 @@ test("data subjects status filter behaves like a compact normal field", async ({
 
   const toolbar = page.locator(".data-subjects-page .filter-bar");
   const statusFilter = toolbar.locator(".status-select");
-  const queryButton = toolbar.locator(".status-select + .query-button");
+  const queryButton = toolbar.getByRole("button", { name: "查询" });
   await expect(statusFilter).toBeVisible();
   await expect(statusFilter).toContainText("全部");
 

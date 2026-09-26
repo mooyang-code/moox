@@ -13,15 +13,13 @@
           placeholder="搜索对象 ID、名称、类型或市场"
           @press-enter="onSearch"
         />
-        <div class="status-query">
-          <a-select v-model="statusFilter" class="status-select" placeholder="状态">
-            <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
-          </a-select>
-          <a-button class="query-button" type="primary" @click="onSearch">
-            <template #icon><icon-search /></template>
-            查询
-          </a-button>
-        </div>
+        <a-select v-model="statusFilter" class="status-select" placeholder="状态">
+          <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+        </a-select>
+        <a-button type="primary" @click="onSearch">
+          <template #icon><icon-search /></template>
+          查询
+        </a-button>
       </div>
       <a-space class="filter-actions">
         <a-button :loading="loading" @click="reload">
@@ -429,14 +427,6 @@ watch(
 
 .filter-query {
   display: flex;
-  flex: 0 1 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--moox-space-2);
-}
-
-.status-query {
-  display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: var(--moox-space-2);
@@ -459,10 +449,6 @@ watch(
 .keyword-input {
   width: 280px;
   flex: 0 0 280px;
-}
-
-.query-button {
-  flex: 0 0 auto;
 }
 
 .filter-actions {
