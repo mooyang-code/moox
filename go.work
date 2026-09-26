@@ -54,6 +54,7 @@ use (
 	./packages/timerjob
 	./packages/tradeeventpb
 	./packages/trpcretry
+	./tools/moox-mcp
 	./web-host
 )
 

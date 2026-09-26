@@ -39,6 +39,9 @@ skills/dev-helper/.env.local
 # User-owned initialization manifest. Keep the checked-in example only.
 /moox.toml
 
+# Local Cursor MCP config contains the remote bearer token.
+.cursor/mcp.json
+
 # Local skill credentials and production live probes. Never commit.
 skills/moox/config/data-access.yaml
 modules/cli/internal/command/live_collector_read_test.go

@@ -163,7 +163,7 @@ credentials to tracked examples, staged YAML, or command output.
 - Prefer the new protocol under `modules/storage/proto/*.proto`, `modules/admin/proto/*.proto`, `modules/collector/proto/*.proto`, and `modules/cloudnode/proto/*.proto`; shared response/auth/page types live in `packages/commonpb`.
 - Do not add new compatibility proto packages for deleted call paths; update callers to the current module proto instead.
 - Do not reintroduce `object_id` into public APIs. Use Space, DataSource, Subject, DataSet, View, Field, and Factor.
-- Use `subject_id` for normalized subject identity and `SubjectSymbol.external_symbol` for source-specific symbols.
+- Use `subject_id` for normalized subject identity. Source-specific symbols are derived by each collector adapter from the canonical subject ID; do not persist source symbol mappings in metadata.
 - Use `start_time`, `end_time`, and `snapshot_time`; avoid suffixes such as `_ms`.
 - Keep `series_tag` as one optional scalar user label and part of time-series identity, for example `venue:binance`. Do not reintroduce map-style dimensions.
 - Treat Pebble-backed PrimaryStore as the online ordered fact store. Treat DuckDB as analytical query and versioned wide view storage. Treat Parquet as cold archive. Treat Bleve as text search.

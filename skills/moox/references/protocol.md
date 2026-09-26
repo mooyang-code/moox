@@ -11,9 +11,9 @@ Use these names in new APIs:
 - Space
 - DataSource
 - Subject
-- SubjectSymbol
 - Dataset
-- DatasetSubject
+- Tag
+- TagMember
 - Field
 - Factor
 - View
@@ -28,7 +28,7 @@ Avoid these public API concepts:
 - Workspace as a business domain alias
 - Exchange as a public data-source concept
 - Instrument as a public subject concept
-- object aliases outside SubjectSymbol
+- object aliases for Subject identities
 - object_id
 - partition_key
 - DataAddress

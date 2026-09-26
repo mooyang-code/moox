@@ -3695,9 +3695,13 @@ Expected: PASS
 
 Run:
 ```bash
-rg -n 't_subject_symbols|t_dataset_subjects|dataset_subject_set_staging|SubjectSymbol|RegisterDataSubject|BindDatasetSubject|DatasetSubjectSet|symbol_dataset_id|symbol_source|InstrumentPipeline|ProductType|Canonical(Crypto)?SubjectID|dataset_binance_spot_symbols|dataset_binance_swap_symbols|dataset_stockcn_instruments' --glob '!docs/**' --glob '!web/node_modules/**' .
+rg -n 't_subject_symbols|t_dataset_subjects|dataset_subject_set_staging|SubjectSymbol|RegisterDataSubject|BindDatasetSubject|DatasetSubjectSet|symbol_dataset_id|symbol_source|InstrumentPipeline|ProductType|Canonical(Crypto)?SubjectID|dataset_binance_spot_symbols|dataset_binance_swap_symbols|dataset_stockcn_instruments' \
+  --glob '!docs/**' --glob '!web/node_modules/**' --glob '!skills/**' \
+  --glob '!modules/storage/internal/service/metadata/sqlite/store.go' \
+  --glob '!modules/storage/schema/metadata_schema_version_test.go' \
+  --glob '!modules/collector/internal/bootstrap/bootstrap.go' .
 ```
-Expected: 无输出。
+Expected: 无输出。上述排除项仅用于必要的旧 schema 迁移、schema forbidden 契约测试，以及升级后跳过旧 `symbol_*` 参数任务的兼容提示；这些位置不得包含运行时旧链路调用。
 
 ### Task 8.2：本地端到端
 

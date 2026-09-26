@@ -156,7 +156,7 @@ Search by `job_item_id` across the complete lifecycle:
 - Status callbacks: `collector_job_instance_reported`, `collector_job_cloudnode_reported`,
   `ReportTaskStatus`, and `ReportJobItemStatus`.
 - Delivery action: actual ACK, NAK, or TERM result.
-- Storage write: `WriteRecordRows`, `UpsertSubject`, `BindDatasetSubject`, `key.data_time`.
+- Storage write: `WriteRecordRows`, Dataset `subject_tags`, `ResolveSubjects`, `key.data_time`.
 
 Evidence table:
 
