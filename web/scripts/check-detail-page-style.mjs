@@ -35,7 +35,6 @@ const pageShellFiles = [
 const tableFiles = [
   ...pageShellFiles,
   "src/views/data/datasets/components/dataset-column-panel.vue",
-  "src/views/data/datasets/components/dataset-subject-panel.vue",
   "src/views/data/views/components/view-column-panel.vue",
   "src/views/collector/cloud-account/cloud-account-manage.vue"
 ];
