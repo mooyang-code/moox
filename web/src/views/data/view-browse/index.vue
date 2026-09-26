@@ -428,8 +428,10 @@ import {
   buildKlineChartRecords,
   buildKlineQuerySorts,
   buildViewColumnLabels,
+  buildViewFilterFieldOptions,
   buildViewFilterExprs,
   buildViewSorts,
+  type ViewFilterFieldOption,
   DEFAULT_KLINE_LIMIT,
   exactSeriesTagFromFilters,
   klineRowsHaveFreq,
@@ -491,7 +493,6 @@ const props = withDefaults(
 );
 
 type ViewBrowseTableRow = BrowseTableRow & { freq?: string };
-type FilterFieldOption = { label: string; value: string; valueType: FieldValueType };
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
@@ -648,31 +649,9 @@ const columnLabels = computed(() => {
   }
   return labels;
 });
-const filterFieldOptions = computed(() => {
-  const options: FilterFieldOption[] = [];
-  const seen = new Set<string>();
-  const push = (value: string, label: string, valueType: FieldValueType) => {
-    if (!value || seen.has(value)) return;
-    seen.add(value);
-    options.push({ value, label, valueType });
-  };
-  if (mode.value === "time_series") {
-    push("subject_id", "数据ID", "FIELD_VALUE_TYPE_STRING");
-    push("freq", "频率", "FIELD_VALUE_TYPE_STRING");
-    push("series_tag", "序列标签", "FIELD_VALUE_TYPE_STRING");
-    push("data_time", "时间", "FIELD_VALUE_TYPE_TIME");
-  } else if (mode.value === "record") {
-    push("record_id", "记录ID", "FIELD_VALUE_TYPE_STRING");
-    push("version", "版本", "FIELD_VALUE_TYPE_STRING");
-  }
-  for (const column of viewColumns.value) {
-    push(column.column_name, columnTitle(column.column_name), column.value_type || "FIELD_VALUE_TYPE_STRING");
-  }
-  for (const column of datasetColumns.value) {
-    push(column.column_name, columnTitle(column.column_name), column.value_type || "FIELD_VALUE_TYPE_STRING");
-  }
-  return options;
-});
+const filterFieldOptions = computed(() =>
+  buildViewFilterFieldOptions(mode.value, viewColumns.value, datasetColumns.value, columnLabels.value)
+);
 const detailColumns = computed(() => {
   const row = detailRow.value;
   if (!row) return [];
@@ -1045,8 +1024,6 @@ async function loadViewContext() {
     });
     const columnsRsp = await listViewColumns({ space_id, view_id: contextViewId, page: { page: 1, size: 1000 } });
     viewColumns.value = columnsRsp.columns || [];
-    // Collection result views often have few explicit View columns. Dataset
-    // columns supply the rest of the searchable fields in the filter bar.
     await datasetColumnsPromise;
     resetFilterRows();
     resetSortState();
@@ -1188,7 +1165,7 @@ function resetFilterRows() {
   filters.value = filterFieldOptions.value.map(option => createFilterState(option));
 }
 
-function createFilterState(option?: FilterFieldOption): ViewFilterState {
+function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
   const isStockCNKline = activeView.value?.dataset_id === "dataset_stockcn_equity_kline";
   return {
     fieldName: option?.value || "",

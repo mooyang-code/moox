@@ -10,6 +10,7 @@ import {
 import {
   buildKlineChartRecords,
   buildViewColumnLabels,
+  buildViewFilterFieldOptions,
   buildViewFilterExprs,
   exactSeriesTagFromFilters,
   viewBoundDatasetId,
@@ -156,6 +157,49 @@ describe("rowsToColumnNames", () => {
         }
       ])
     ).toEqual(["open", "close"]);
+  });
+});
+
+describe("buildViewFilterFieldOptions", () => {
+  it("keeps search fields aligned with the table projection", () => {
+    const labels = {
+      "dataset_binance_spot_kline_1m.open": "开盘价",
+      "dataset_binance_spot_kline_1m.close": "收盘价",
+      amount: "成交额"
+    };
+    const options = buildViewFilterFieldOptions(
+      "time_series",
+      [
+        { column_name: "dataset_binance_spot_kline_1m.open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+        { column_name: "dataset_binance_spot_kline_1m.close", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
+      ],
+      [
+        { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+        { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+        { column_name: "amount", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
+      ],
+      labels
+    );
+
+    expect(options.map(item => item.value)).toEqual([
+      "subject_id",
+      "freq",
+      "series_tag",
+      "data_time",
+      "dataset_binance_spot_kline_1m.open",
+      "dataset_binance_spot_kline_1m.close"
+    ]);
+    expect(options.map(item => item.label)).not.toContain("成交额");
+  });
+
+  it("falls back to dataset columns only when the view has no projection", () => {
+    const options = buildViewFilterFieldOptions(
+      "time_series",
+      [],
+      [{ column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" }],
+      { open: "开盘价" }
+    );
+    expect(options.map(item => item.value)).toEqual(["subject_id", "freq", "series_tag", "data_time", "open"]);
   });
 });
 

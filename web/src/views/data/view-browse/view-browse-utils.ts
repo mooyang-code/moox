@@ -70,6 +70,46 @@ const systemViewLabels: Record<string, string> = {
   version: "版本"
 };
 
+export type ViewFilterFieldOption = {
+  value: string;
+  label: string;
+  valueType: FieldValueType;
+};
+
+export function buildViewFilterFieldOptions(
+  mode: ViewBrowseMode,
+  viewColumns: Array<Pick<ViewColumn, "column_name" | "value_type">>,
+  datasetColumns: Array<Pick<DatasetColumn, "column_name" | "value_type">>,
+  labels: Record<string, string> = {}
+): ViewFilterFieldOption[] {
+  const options: ViewFilterFieldOption[] = [];
+  const seen = new Set<string>();
+  const push = (value: string, label: string, valueType: FieldValueType) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    options.push({ value, label, valueType });
+  };
+  if (mode === "time_series") {
+    push("subject_id", "数据ID", "FIELD_VALUE_TYPE_STRING");
+    push("freq", "频率", "FIELD_VALUE_TYPE_STRING");
+    push("series_tag", "序列标签", "FIELD_VALUE_TYPE_STRING");
+    push("data_time", "时间", "FIELD_VALUE_TYPE_TIME");
+  } else if (mode === "record") {
+    push("record_id", "记录ID", "FIELD_VALUE_TYPE_STRING");
+    push("version", "版本", "FIELD_VALUE_TYPE_STRING");
+  }
+  const projected = viewColumns.some(column => column.column_name) ? viewColumns : datasetColumns;
+  for (const column of projected) {
+    if (!column.column_name) continue;
+    push(
+      column.column_name,
+      labels[column.column_name] || column.column_name,
+      column.value_type || "FIELD_VALUE_TYPE_STRING"
+    );
+  }
+  return options;
+}
+
 export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   if (!view) return "";
   return view.name || view.view_id || "";
