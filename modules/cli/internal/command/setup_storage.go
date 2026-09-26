@@ -889,7 +889,7 @@ func readStorageSchemaVersion(ctx context.Context, transport setupssh.Client, st
 	return version, nil
 }
 
-const currentStorageMetadataSchemaVersion = 11
+const currentStorageMetadataSchemaVersion = 12
 
 func storageSchemaVersionCommand() string {
 	return `set -eu

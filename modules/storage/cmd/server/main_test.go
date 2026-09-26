@@ -369,6 +369,12 @@ func (*resolverRuntime) LookupWriteReceipt(context.Context, *pb.LookupWriteRecei
 	return &pb.LookupWriteReceiptRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 
+func TestDataNodeClientTimeoutCoversMaintenanceRPCs(t *testing.T) {
+	if dataNodeClientTimeout != 5*time.Minute {
+		t.Fatalf("dataNodeClientTimeout = %s, want 5m", dataNodeClientTimeout)
+	}
+}
+
 func TestResolveDataNodeUsesActiveDatasetNodeAndTargetOnly(t *testing.T) {
 	base := resolverSnapshot{
 		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "active"},

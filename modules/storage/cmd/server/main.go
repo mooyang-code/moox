@@ -923,6 +923,8 @@ func envOrDefault(name, fallback string) string {
 	return fallback
 }
 
+const dataNodeClientTimeout = 5 * time.Minute
+
 type dataNodeProxyKey struct {
 	NodeID        string
 	ServiceTarget string
@@ -931,7 +933,7 @@ type dataNodeProxyKey struct {
 func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) primarystore.NodeResolver {
 	if newProxy == nil {
 		newProxy = func(target string) pb.DataNodeRuntimeService {
-			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(dataNodeClientTimeout)}
 			return &dataNodeProxyAdapter{
 				proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
 				adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),

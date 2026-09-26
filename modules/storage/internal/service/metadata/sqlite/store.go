@@ -267,17 +267,50 @@ func (s *Store) migrateV11ToV12(ctx context.Context) error {
 		`DROP TABLE IF EXISTS t_subject_symbols`,
 	}
 	if hasDatasets != 0 {
-		const removedDatasets = `'dataset_binance_spot_symbols', 'dataset_binance_swap_symbols', 'dataset_stockcn_instruments'`
-		statements = append(statements,
-			`DELETE FROM t_view_columns WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
-			`DELETE FROM t_view_index_builds WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
-			`DELETE FROM t_view_rebuild_logs WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
-			`DELETE FROM t_view_period_dataset_states WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
-			`DELETE FROM t_view_sync_points WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`))`,
-			`DELETE FROM t_views WHERE c_dataset_id IN (`+removedDatasets+`)`,
-			`DELETE FROM t_dataset_columns WHERE c_dataset_id IN (`+removedDatasets+`)`,
-			`DELETE FROM t_archive_files WHERE c_dataset_id IN (`+removedDatasets+`)`,
-			`DELETE FROM t_datasets WHERE c_dataset_id IN (`+removedDatasets+`)`)
+		const removedDatasets = `'dataset_binance_spot_symbols', 'dataset_binance_swap_symbols', 'dataset_stockcn_instruments', 'dataset_stockcn_instrument_1d', 'dataset_stockcn_kline_1m'`
+		tableExists := func(name string) (bool, error) {
+			var n int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n); err != nil {
+				return false, err
+			}
+			return n != 0, nil
+		}
+		viewChildren := []struct {
+			table string
+			sql   string
+		}{
+			{"t_view_columns", `DELETE FROM t_view_columns WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (` + removedDatasets + `))`},
+			{"t_view_index_builds", `DELETE FROM t_view_index_builds WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (` + removedDatasets + `))`},
+			{"t_view_rebuild_logs", `DELETE FROM t_view_rebuild_logs WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (` + removedDatasets + `))`},
+			{"t_view_period_dataset_states", `DELETE FROM t_view_period_dataset_states WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (` + removedDatasets + `))`},
+			{"t_view_sync_points", `DELETE FROM t_view_sync_points WHERE (c_space_id, c_view_id) IN (SELECT c_space_id, c_view_id FROM t_views WHERE c_dataset_id IN (` + removedDatasets + `))`},
+		}
+		for _, child := range viewChildren {
+			exists, err := tableExists(child.table)
+			if err != nil {
+				return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+			}
+			if exists {
+				statements = append(statements, child.sql)
+			}
+		}
+		for _, item := range []struct {
+			table string
+			sql   string
+		}{
+			{"t_views", `DELETE FROM t_views WHERE c_dataset_id IN (` + removedDatasets + `)`},
+			{"t_dataset_columns", `DELETE FROM t_dataset_columns WHERE c_dataset_id IN (` + removedDatasets + `)`},
+			{"t_archive_files", `DELETE FROM t_archive_files WHERE c_dataset_id IN (` + removedDatasets + `)`},
+		} {
+			exists, err := tableExists(item.table)
+			if err != nil {
+				return fmt.Errorf("migrate metadata schema v11 to v12: %w", err)
+			}
+			if exists {
+				statements = append(statements, item.sql)
+			}
+		}
+		statements = append(statements, `DELETE FROM t_datasets WHERE c_dataset_id IN (`+removedDatasets+`)`)
 	}
 	if hasSubjects != 0 {
 		statements = append(statements,

@@ -9,7 +9,7 @@ SHARD_ARCHIVE="${TMP_ROOT}/storage-with-shard.tar.gz"
 SHARED_GATEWAY_ARCHIVE="${TMP_ROOT}/storage-shared-gateway.tar.gz"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
-mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
+mkdir -p "${FIXTURE_ROOT}/scripts/deploy" "${FIXTURE_ROOT}/scripts/runtime" "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/config" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
 cp "${ROOT}/scripts/runtime/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-storage-auth-check.sh"
 cp "${ROOT}/scripts/runtime/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-storage-auth-rotate.sh"
@@ -19,6 +19,7 @@ ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
 ln -s "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${FIXTURE_ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt"
 ln -s "${ROOT}/deploy/caddy" "${FIXTURE_ROOT}/deploy/caddy"
+ln -s "${ROOT}/config/setup" "${FIXTURE_ROOT}/config/setup"
 ln -s "${ROOT}/modules/storage" "${FIXTURE_ROOT}/modules/storage"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
 ln -s "${ROOT}/modules/gateway" "${FIXTURE_ROOT}/modules/gateway"
@@ -27,7 +28,7 @@ ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 ln -s "${ROOT}/scripts/runtime/reset-storage-view-indexes.sh" "${FIXTURE_ROOT}/scripts/runtime/reset-storage-view-indexes.sh"
 
-for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-gateway moox-gateway-cli moox-admin moox-admin-cli moox-cli; do
+for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-storage-node moox-storage-access moox-gateway moox-gateway-cli moox-admin moox-admin-cli moox-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done
@@ -45,7 +46,9 @@ EOF
   chmod +x "${TMP_ROOT}/fake-path/${command}"
 done
 
-PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
+PATH="${TMP_ROOT}/fake-path:${PATH}" \
+MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:20201 \
+"${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
   --profile storage --package-only --archive "${ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
   --goos linux --goarch amd64 --skip-build --node-id storage \
@@ -166,7 +169,9 @@ grep -q '^    activate_storage_datasets$' <<<"${bootstrap_body}"
 grep -q 'start_storage_view' <<<"${bootstrap_body}"
 grep -q 'defer Dataset activation' <<<"${doctor_body}"
 
-PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
+PATH="${TMP_ROOT}/fake-path:${PATH}" \
+MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=ip://127.0.0.1:11003 \
+"${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
   --profile storage --no-gateway --package-only --archive "${SHARED_GATEWAY_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-shared-gateway" --stage "${TMP_ROOT}/stage-shared-gateway" \
   --goos linux --goarch amd64 --skip-build --node-id storage \
@@ -195,6 +200,7 @@ grep -q 'credential_file: ""' "${TMP_ROOT}/unpacked-shard/storage/config/storage
 grep -q 'default_services+=(storage-node)' "${TMP_ROOT}/unpacked-shard/healthcheck.sh"
 grep -q 'service_name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage/config/storage.yaml"
 grep -q 'name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml"
+grep -A5 'name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml" | grep -q 'timeout: 300000'
 grep -q 'start_storage_node' "${TMP_ROOT}/unpacked-shard/start.sh"
 grep -q 'register-node' "${TMP_ROOT}/unpacked-shard/start.sh"
 if grep -q 'import-seed' "${TMP_ROOT}/unpacked-shard/start.sh"; then
@@ -226,8 +232,8 @@ tar -C "${TMP_ROOT}/unpacked-tls" -xzf "${TLS_ARCHIVE}"
 grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage/config/storage.yaml"
 grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage-view/config/trpc_go.yaml"
 grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage-node/config/storage.yaml"
-grep -Fq 'EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-tls://203.0.113.10:4222}"' "${TMP_ROOT}/unpacked-tls/start.sh"
-grep -Fq 'STORAGE_EVENTBUS_URL_ENV="${MOOX_STORAGE_EVENTBUS_URL:-tls://127.0.0.1:${MOOX_EVENTBUS_PORT}}"' "${TMP_ROOT}/unpacked-tls/start.sh"
+grep -Fq 'EVENTBUS_PUBLIC_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-tls://203.0.113.10:4222}"' "${TMP_ROOT}/unpacked-tls/start.sh"
+grep -Fq 'STORAGE_EVENTBUS_URL_ENV="${MOOX_STORAGE_EVENTBUS_URL:-tls://127.0.0.1:${MOOX_EVENTBUS_PORT:-4222}}"' "${TMP_ROOT}/unpacked-tls/start.sh"
 [[ "$(grep -Fc 'wait_nats storage "${STORAGE_EVENTBUS_URL_ENV}"' "${TMP_ROOT}/unpacked-tls/start.sh")" == "2" ]]
 
 echo 'storage deployment profile contract passed'

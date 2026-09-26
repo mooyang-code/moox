@@ -303,6 +303,67 @@ func TestValidateSchemaVersionRepairsV11ViewChildForeignKeys(t *testing.T) {
 	}
 }
 
+func TestValidateSchemaVersionMigratesV11WithMissingViewChildTables(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	store, err := Open(ctx, Options{Path: path, SchemaPath: metadataSchemaPath()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InitSchema(ctx); err != nil {
+		t.Fatalf("seed current schema: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		PRAGMA foreign_keys = OFF;
+		UPDATE t_schema_meta SET c_value = '11' WHERE c_key = 'schema_version';
+		DROP TABLE t_view_columns;
+		DROP TABLE t_view_index_builds;
+		DROP TABLE t_view_rebuild_logs;
+		DROP TABLE t_view_period_dataset_states;
+		DROP TABLE t_view_sync_points;
+		INSERT INTO t_spaces (c_space_id, c_name) VALUES ('crypto', 'Crypto');
+		INSERT INTO t_datasets (
+			c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name, c_data_kind, c_keep_duration
+		) VALUES
+			('crypto', 'dataset_binance_spot_symbols', 'source', 'node', 'Legacy Symbols', 'record', '0'),
+			('crypto', 'dataset_spot', 'source', 'node', 'Spot', 'time_series', '0');
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_dataset_id)
+		VALUES ('crypto', 'legacy_symbols', 'Legacy Symbols', 'dataset_binance_spot_symbols'),
+		       ('crypto', 'spot', 'Spot', 'dataset_spot');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(ctx, Options{Path: path, SchemaPath: metadataSchemaPath()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.InitSchema(ctx); err != nil {
+		t.Fatalf("InitSchema v11 migration with missing view children: %v", err)
+	}
+	if err := store.ValidateSchemaVersion(ctx); err != nil {
+		t.Fatalf("ValidateSchemaVersion after v11 migration: %v", err)
+	}
+	var legacyViews int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_views WHERE c_dataset_id = 'dataset_binance_spot_symbols'`).Scan(&legacyViews); err != nil {
+		t.Fatal(err)
+	}
+	if legacyViews != 0 {
+		t.Fatalf("legacy symbol views remain after v11 migration: %d", legacyViews)
+	}
+	var activeViews int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_views WHERE c_dataset_id = 'dataset_spot'`).Scan(&activeViews); err != nil {
+		t.Fatal(err)
+	}
+	if activeViews != 1 {
+		t.Fatalf("active view count after v11 migration = %d, want 1", activeViews)
+	}
+}
+
 func assertNoLegacyViewParent(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
 	var leftover int

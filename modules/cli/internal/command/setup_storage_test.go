@@ -82,7 +82,7 @@ func TestStorageVerificationUsesConfiguredRootAndCurrentSchema(t *testing.T) {
 
 	schemaCommand := storageSchemaVersionCommand()
 	require.Contains(t, schemaCommand, `"$storage_root/data/storage/metadata/storage_metadata.db"`)
-	require.Equal(t, 11, currentStorageMetadataSchemaVersion)
+	require.Equal(t, 12, currentStorageMetadataSchemaVersion)
 }
 
 func TestSetupStorageCommandsRejectMissingRequiredFlags(t *testing.T) {

@@ -578,7 +578,7 @@ func TestStorageInstallerUsesControlGatewayCredentials(t *testing.T) {
 	}
 }
 
-func TestStorageInstallerUpgradeKeepsKeysButActivatesPackagedGatewayRegistry(t *testing.T) {
+func TestStorageInstallerUpgradeKeepsCallerKeysButRefreshesPackagedSharedGatewayCredentials(t *testing.T) {
 	home := t.TempDir()
 	deploy := filepath.Join(home, "moox", "storage")
 	prepareOldGatewayDeployment(t, deploy, "storage")
@@ -592,7 +592,15 @@ func TestStorageInstallerUpgradeKeepsKeysButActivatesPackagedGatewayRegistry(t *
 	cmd.Env = storageInstallerEnv(t, home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
-	assertGatewayRegistryUpgrade(t, filepath.Join(deploy, "secrets"))
+	secrets := filepath.Join(deploy, "secrets")
+	require.Equal(t, "old-collector-key\n", string(requireFile(t, filepath.Join(secrets, "gateway-collector.key"))))
+	serviceEnv := string(requireFile(t, filepath.Join(secrets, "gateway-service.env")))
+	require.Contains(t, serviceEnv, "MOOX_GATEWAY_SERVICE_SECRET_KEY=new-root")
+	require.NotContains(t, serviceEnv, "old-root")
+	registry := string(requireFile(t, filepath.Join(secrets, "gateway-credentials.json")))
+	require.Contains(t, registry, `"key_id":"moox-skill"`)
+	_, err = gatewayauth.LoadCredentialRegistry(filepath.Join(secrets, "gateway-credentials.json"))
+	require.NoError(t, err)
 }
 
 func TestControlInstallerUpgradeKeepsKeysButActivatesPackagedGatewayRegistry(t *testing.T) {

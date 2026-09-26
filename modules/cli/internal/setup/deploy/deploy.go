@@ -1432,6 +1432,9 @@ install_storage() {
       [ -e "$secret" ] || continue
       case "$(basename "$secret")" in
         gateway-credentials.json) [ "$packaged_gateway_registry" = "1" ] && continue ;;
+        gateway-control.key|gateway-service.key|gateway-control.env|gateway-service.env)
+          [ "$use_control_gateway" = "0" ] && [ -s "$next/secrets/$(basename "$secret")" ] && continue
+          ;;
         storage-internal-auth.env) continue ;;
         health-auth.env) [ -s "$next/secrets/health-auth.env" ] && continue ;;
       esac
