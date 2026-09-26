@@ -1,10 +1,10 @@
 <template>
   <div class="tab-panel">
+    <a-tabs :active-key="activeTagKey" type="rounded" size="medium" class="tag-tabs" @change="onTagChange">
+      <a-tab-pane :key="ALL_TAG_KEY" title="全部" />
+      <a-tab-pane v-for="tag in tags" :key="tag.tag_id" :title="tag.tag_name" />
+    </a-tabs>
     <div class="filter-bar">
-      <a-select v-model="selectedTagId" class="tag-select" allow-search @change="onTagChange">
-        <a-option value="">全部标的</a-option>
-        <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id"> {{ tag.tag_name }}（{{ tag.tag_id }}） </a-option>
-      </a-select>
       <a-select v-if="selectedTagId" v-model="statusFilter" class="status-select" @change="reload">
         <a-option value="">全部状态</a-option>
         <a-option value="active">有效</a-option>
@@ -201,6 +201,8 @@ const subjectVisible = ref(false);
 const subjectEditing = ref(false);
 const subjectForm = reactive<Subject>(emptySubject());
 
+const ALL_TAG_KEY = "__all__";
+const activeTagKey = computed(() => selectedTagId.value || ALL_TAG_KEY);
 const selectedTag = computed(() => tags.value.find(tag => tag.tag_id === selectedTagId.value));
 const manualTags = computed(() => tags.value.filter(tag => tag.mode === "manual"));
 const canEditMembers = computed(() => selectedTag.value?.mode === "manual");
@@ -250,7 +252,9 @@ async function load() {
   await reload();
 }
 
-async function onTagChange() {
+async function onTagChange(key: string | number) {
+  const tagId = String(key);
+  selectedTagId.value = tagId === ALL_TAG_KEY ? "" : tagId;
   statusFilter.value = "";
   pagination.current = 1;
   await reload();
@@ -408,8 +412,13 @@ watch(
   margin-bottom: var(--moox-space-3);
 }
 
-.tag-select {
-  width: 250px;
+.tag-tabs {
+  min-width: 0;
+  margin-bottom: var(--moox-space-3);
+}
+
+.tag-tabs :deep(.arco-tabs-content) {
+  display: none;
 }
 
 .status-select {
