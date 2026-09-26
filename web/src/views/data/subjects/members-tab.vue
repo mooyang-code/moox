@@ -10,14 +10,17 @@
         <a-option value="active">有效</a-option>
         <a-option value="inactive">失效</a-option>
       </a-select>
-      <a-input-search
+      <a-input
         v-model="keyword"
         class="keyword-input"
         allow-clear
         placeholder="搜索对象 ID、名称、类型或市场"
-        @search="onSearch"
-        @clear="onSearch"
+        @press-enter="onSearch"
       />
+      <a-button type="primary" @click="onSearch">
+        <template #icon><icon-search /></template>
+        查询
+      </a-button>
       <a-space class="filter-actions">
         <a-button :loading="loading" @click="reload">
           <template #icon><icon-refresh /></template>

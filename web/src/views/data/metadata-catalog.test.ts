@@ -18,9 +18,10 @@ describe("metadata catalog pages", () => {
     expect(sources).toContain("keyword: searchKeyword.value.trim() || undefined");
 
     const subjects = fs.readFileSync(path.resolve(__dirname, "subjects/index.vue"), "utf8");
-    expect(subjects).toContain("<h2>数据对象</h2>");
-    expect(subjects).toContain('key="tags" title="标签"');
-    expect(subjects).toContain('key="members" title="标签成员"');
+    expect(subjects).not.toContain("<h2>数据对象</h2>");
+    expect(subjects).toContain("PageTitleTabs");
+    expect(subjects).toContain('label: "标签"');
+    expect(subjects).toContain('label: "标签成员"');
   });
 
   it("shows the field title in the search toolbar", () => {

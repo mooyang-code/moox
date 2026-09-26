@@ -156,7 +156,7 @@ test("data collection owns base assets and has no top-level data assets menu", a
   await page.goto("/#/data/sources");
   await expect(page.getByRole("heading", { name: "数据源" })).toBeVisible();
   await page.goto("/#/data/subjects");
-  await expect(page.getByRole("heading", { name: "数据对象" })).toBeVisible();
+  await expect(page.getByLabel("数据对象")).toBeVisible();
   await page.goto("/#/data/fields");
   await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
   await page.goto("/#/collector/tasks");

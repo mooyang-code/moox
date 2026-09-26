@@ -1,36 +1,44 @@
 <template>
-  <div class="moox-page">
+  <div class="moox-page data-subjects-page">
     <div class="moox-inner">
-      <div class="page-head">
-        <h2>数据对象</h2>
-        <span class="page-head__hint">用标签管理对象范围，并在采集任务中复用</span>
-      </div>
-
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
-      <a-tabs v-else v-model:active-key="activeTab" class="subject-tabs">
-        <a-tab-pane key="tags" title="标签">
-          <TagsTab :space-id="selectedSpaceId" @open-members="openMembers" />
-        </a-tab-pane>
-        <a-tab-pane key="members" title="标签成员">
-          <MembersTab :space-id="selectedSpaceId" :initial-tag-id="selectedTagId" />
-        </a-tab-pane>
-      </a-tabs>
+      <template v-else>
+        <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据对象" @change="onTabChange" />
+        <section class="subjects-content">
+          <keep-alive>
+            <TagsTab v-if="activeTab === 'tags'" :space-id="selectedSpaceId" @open-members="openMembers" />
+            <MembersTab v-else :space-id="selectedSpaceId" :initial-tag-id="selectedTagId" />
+          </keep-alive>
+        </section>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
 import MembersTab from "./members-tab.vue";
 import TagsTab from "./tags-tab.vue";
 
 defineOptions({ name: "DataSubjects" });
 
+type SubjectTab = "tags" | "members";
+
+const tabs = [
+  { key: "tags", label: "标签" },
+  { key: "members", label: "标签成员" }
+] as const;
+
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
-const activeTab = ref("tags");
+const activeTab = ref<SubjectTab>("tags");
 const selectedTagId = ref("");
+
+function onTabChange(value: string | number) {
+  activeTab.value = value === "members" ? "members" : "tags";
+}
 
 function openMembers(tagId: string) {
   selectedTagId.value = tagId;
@@ -44,25 +52,21 @@ watch(selectedSpaceId, () => {
 </script>
 
 <style scoped>
-.page-head {
+.data-subjects-page {
+  height: 100%;
+  min-height: 0;
+}
+
+.data-subjects-page > .moox-inner {
   display: flex;
-  align-items: baseline;
-  gap: var(--moox-space-3);
-  margin-bottom: var(--moox-space-2);
+  min-height: 100%;
+  flex-direction: column;
 }
 
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.page-head__hint {
-  color: var(--color-text-3);
-  font-size: 13px;
-}
-
-.subject-tabs {
+.subjects-content {
   min-width: 0;
+  min-height: 0;
+  flex: 1;
+  margin-top: var(--moox-space-3);
 }
 </style>

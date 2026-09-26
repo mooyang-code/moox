@@ -46,13 +46,11 @@ const expectStrictOrder = (source: string, markers: string[]) => {
 
 describe("page layout standards", () => {
   it("uses the compact single-tab header standard", () => {
-    const subjects = read("data/subjects/index.vue");
     const spaces = read("settings/spaces/index.vue");
     const secrets = read("settings/secrets/index.vue");
     const accounts = read("trading/account-overview/account-overview.vue");
     const accountWorkbench = read("trading/account-workbench/index.vue");
 
-    expectMargin(subjects, ".page-head", "margin-bottom", 8);
     expectMargin(spaces, ".page-head", "margin-bottom", 8);
     expect(spaces).toMatch(/\.page-head h2\s*\{[\s\S]*?margin:\s*0;/);
     expectMargin(accounts, ".page-head", "margin-bottom", 16);
@@ -102,6 +100,7 @@ describe("page layout standards", () => {
   });
 
   it("uses the multi-tab spacing standard", () => {
+    const subjects = read("data/subjects/index.vue");
     const taskManagement = read("collector/task-management/index.vue");
     const taskInstances = read("collector/task-instances/task-instances.vue");
     const collectorTasks = read("collector/collection-tasks/collection-tasks.vue");
@@ -113,6 +112,7 @@ describe("page layout standards", () => {
     const storageArchive = read("ops/storage/archive.vue");
     const tradeRecords = read("trading/trade-record/trade-record.vue");
 
+    expectMargin(subjects, ".subjects-content", "margin-top", 12);
     expectMargin(taskManagement, ".task-management-content", "margin-top", 12);
     expectMargin(taskInstances, ".task-toolbar", "margin-bottom", 8);
     expect(collectorTasks).toContain('class="task-toolbar"');
