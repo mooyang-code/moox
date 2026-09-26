@@ -55,6 +55,7 @@ type Client interface {
 	Check(ctx context.Context) error
 	ForwardLocal(ctx context.Context, remote string) (net.Listener, error)
 	Upload(ctx context.Context, src io.Reader, size int64, dst string, mode fs.FileMode) error
+	Download(ctx context.Context, src string, dst io.Writer) (int64, error)
 	Run(ctx context.Context, argv []string, stdin io.Reader) (Result, error)
 	Close() error
 }

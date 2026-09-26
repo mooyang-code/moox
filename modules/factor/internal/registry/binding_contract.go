@@ -34,6 +34,37 @@ func validateCandidateBindingSet(bindings []domain.FactorBinding) error {
 	return nil
 }
 
+// ValidateMergedFactorSourceView ensures the binding source View belongs to a
+// merged factor Dataset (dataset_role=merged_factor). Factor outputs are
+// written back into the source Dataset and View, so binding a raw collection
+// View would mix factor columns into raw K-line data. The check only requires
+// the dataset role; index readiness is enforced separately when enabling.
+func (s *MetadataSync) ValidateMergedFactorSourceView(ctx context.Context, spaceID, viewID string) error {
+	view, err := s.getView(ctx, spaceID, viewID)
+	if err != nil {
+		return fmt.Errorf("load source view %s/%s: %w", spaceID, viewID, err)
+	}
+	datasetID := strings.TrimSpace(view.GetDatasetId())
+	if datasetID == "" {
+		return fmt.Errorf("source view %s/%s dataset_id is required", spaceID, viewID)
+	}
+	dataset, err := s.getDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return fmt.Errorf("load source view dataset %s/%s: %w", spaceID, datasetID, err)
+	}
+	return requireMergedFactorDataset(spaceID, viewID, dataset)
+}
+
+func requireMergedFactorDataset(spaceID, viewID string, dataset *storagepb.Dataset) error {
+	if strings.TrimSpace(dataset.GetAttributes()["dataset_role"]) != "merged_factor" {
+		return fmt.Errorf(
+			"source view %s/%s dataset %s is not a merged factor dataset (dataset_role=merged_factor); bind the factor to the merged dataset view instead of a raw collection view",
+			spaceID, viewID, dataset.GetDatasetId(),
+		)
+	}
+	return nil
+}
+
 // ValidateEnabledBinding validates the active Source View read contract.
 func (s *MetadataSync) ValidateEnabledBinding(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
 	_, supportsView := s.client.(viewMetadataClient)
@@ -70,8 +101,8 @@ func (s *MetadataSync) ValidateEnabledBinding(ctx context.Context, binding domai
 		if loadErr != nil {
 			return fmt.Errorf("load source view dataset %s/%s: %w", binding.SpaceID, datasetID, loadErr)
 		}
-		if strings.TrimSpace(dataset.GetAttributes()["dataset_role"]) == "factor_result" {
-			return fmt.Errorf("source view %s/%s contains forbidden factor_result dataset %s", binding.SpaceID, binding.SourceViewID, datasetID)
+		if err := requireMergedFactorDataset(binding.SpaceID, binding.SourceViewID, dataset); err != nil {
+			return err
 		}
 		if dataset.GetStatus() != "active" {
 			return fmt.Errorf("source view dataset %s/%s must be active", binding.SpaceID, datasetID)

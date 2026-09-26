@@ -430,6 +430,9 @@ func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBinding
 					"resolve source View %s/%s: %w", binding.SpaceID, binding.SourceViewID, resolveErr,
 				))}, nil
 			}
+			if err := s.meta.ValidateMergedFactorSourceView(ctx, binding.SpaceID, binding.SourceViewID); err != nil {
+				return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}, nil
+			}
 			binding.ResultDatasetID = resultDatasetID
 			binding.ResultViewID = resultViewID
 		}

@@ -229,6 +229,76 @@ func TestValidateActiveViewInputsMapsMergedSourceSuffix(t *testing.T) {
 	}
 }
 
+func TestValidateMergedFactorSourceView(t *testing.T) {
+	newClient := func(role string) *fakeViewMetadataClient {
+		client := &fakeViewMetadataClient{
+			fakeMetadataClient: newFakeMetadataClient(),
+			views: map[string]*storagepb.View{
+				"view_src": {SpaceId: "crypto", ViewId: "view_src", DatasetId: "dataset_src"},
+			},
+		}
+		client.datasets["dataset_src"] = &storagepb.Dataset{
+			SpaceId: "crypto", DatasetId: "dataset_src", Status: "active",
+			DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Attributes: map[string]string{"dataset_role": role},
+		}
+		return client
+	}
+
+	t.Run("accepts merged factor dataset view", func(t *testing.T) {
+		err := NewMetadataSync(newClient("merged_factor"), nil).
+			ValidateMergedFactorSourceView(context.Background(), "crypto", "view_src")
+		require.NoError(t, err)
+	})
+
+	t.Run("rejects raw collection dataset view", func(t *testing.T) {
+		err := NewMetadataSync(newClient("raw_collection"), nil).
+			ValidateMergedFactorSourceView(context.Background(), "crypto", "view_src")
+		require.ErrorContains(t, err, "merged factor dataset")
+	})
+
+	t.Run("rejects dataset without role", func(t *testing.T) {
+		err := NewMetadataSync(newClient(""), nil).
+			ValidateMergedFactorSourceView(context.Background(), "crypto", "view_src")
+		require.ErrorContains(t, err, "merged factor dataset")
+	})
+
+	t.Run("rejects unknown source view", func(t *testing.T) {
+		err := NewMetadataSync(newClient("merged_factor"), nil).
+			ValidateMergedFactorSourceView(context.Background(), "crypto", "view_missing")
+		require.ErrorContains(t, err, "load source view")
+	})
+}
+
+func TestValidateEnabledBindingRejectsRawCollectionViewOnViewPath(t *testing.T) {
+	client := &fakeViewMetadataClient{
+		fakeMetadataClient: newFakeMetadataClient(),
+		views: map[string]*storagepb.View{
+			"view_binance_spot_kline_1m": {
+				SpaceId: "crypto", ViewId: "view_binance_spot_kline_1m", DatasetId: "dataset_binance_spot_kline_1m",
+				Status: "active", ActiveIndexId: "index-1", FilterJson: `{"freq":"1m"}`, KeepDuration: "720h",
+				ActiveColumns: []*storagepb.ViewColumn{
+					{ColumnName: "dataset_binance_spot_kline_1m.close", OriginId: "dataset_binance_spot_kline_1m.close"},
+					{ColumnName: "dataset_binance_spot_kline_1m.volume", OriginId: "dataset_binance_spot_kline_1m.volume"},
+				},
+			},
+		},
+	}
+	client.datasets["dataset_binance_spot_kline_1m"] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m", Status: "active",
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, KeepDuration: "720h",
+		Attributes: map[string]string{"market_type": "spot"},
+	}
+	binding := domain.FactorBinding{
+		BindingID: "bias-spot", FactorID: "bias", SpaceID: "crypto",
+		SourceViewID: "view_binance_spot_kline_1m", Freq: "1m", Status: domain.BindingStatusEnabled,
+	}
+	factor := domain.FactorDef{FactorID: "bias", InputColumns: []string{"close", "volume"}, LookbackPeriods: 20}
+
+	err := NewMetadataSync(client, nil).ValidateEnabledBinding(context.Background(), binding, factor)
+	require.ErrorContains(t, err, "merged factor dataset")
+}
+
 type bindingContractFake struct {
 	dataset         *storagepb.Dataset
 	views           []*storagepb.View
