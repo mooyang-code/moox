@@ -5,8 +5,8 @@
       <a-tab-pane v-for="tag in tags" :key="tag.tag_id" :title="tag.tag_name" />
     </a-tabs>
     <div class="filter-bar">
-      <a-select v-if="selectedTagId" v-model="statusFilter" class="status-select" @change="reload">
-        <a-option value="">全部状态</a-option>
+      <a-select v-if="selectedTagId" v-model="statusFilter" class="status-select" placeholder="状态">
+        <a-option value="">全部</a-option>
         <a-option value="active">有效</a-option>
         <a-option value="inactive">失效</a-option>
       </a-select>
@@ -422,7 +422,7 @@ watch(
 }
 
 .status-select {
-  width: 130px;
+  width: 120px;
 }
 
 .keyword-input {
