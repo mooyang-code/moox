@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { DatasetColumn, ViewColumn } from "@/api/storage/types";
-import { buildSubjectDataIdsFromRows, buildTimeSeriesBrowseSelector, sortBrowseTableRows, timeSeriesRowsToTableRows } from "./browse-utils";
+import {
+  buildSubjectDataIdsFromRows,
+  buildTimeSeriesBrowseSelector,
+  rowsToColumnNames,
+  sortBrowseTableRows,
+  timeSeriesRowsToTableRows
+} from "./browse-utils";
 import {
   buildKlineChartRecords,
   buildViewColumnLabels,
@@ -121,6 +127,35 @@ describe("Kline series tag isolation", () => {
       ],
       group_logical: "FILTER_LOGICAL_AND"
     });
+  });
+});
+
+describe("rowsToColumnNames", () => {
+  it("keeps an explicit projection and ignores leftover row fields", () => {
+    expect(
+      rowsToColumnNames(
+        [
+          {
+            fields: [
+              { field_id: "dataset_binance_spot_kline_1m.open" },
+              { field_id: "dataset_binance_spot_kline_1m.bias__bias_20" },
+              { field_id: "dataset_binance_spot_kline_1m.cci__cci" }
+            ]
+          }
+        ],
+        ["dataset_binance_spot_kline_1m.open", "dataset_binance_spot_kline_1m.close"]
+      )
+    ).toEqual(["dataset_binance_spot_kline_1m.open", "dataset_binance_spot_kline_1m.close"]);
+  });
+
+  it("discovers columns from rows only when no projection is declared", () => {
+    expect(
+      rowsToColumnNames([
+        {
+          fields: [{ field_id: "open" }, { field_id: "close" }]
+        }
+      ])
+    ).toEqual(["open", "close"]);
   });
 });
 

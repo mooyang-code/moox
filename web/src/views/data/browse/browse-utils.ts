@@ -169,6 +169,9 @@ export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, prefer
     seen.add(name);
     out.push(name);
   }
+  // A declared View/Dataset projection is the table schema. Do not append
+  // leftover field_ids from the live index (for example retired factor outputs).
+  if (out.length > 0) return out;
   for (const row of rows) {
     for (const field of row.fields || []) {
       if (!field.field_id || seen.has(field.field_id)) continue;
