@@ -6,7 +6,7 @@
         <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="数据对象" @change="onTabChange" />
         <section class="subjects-content">
           <keep-alive>
-            <TagsTab v-if="activeTab === 'tags'" :space-id="selectedSpaceId" @open-members="openMembers" />
+            <TagsTab v-if="activeTab === 'tags'" :space-id="selectedSpaceId" @openMembers="openMembers" />
             <MembersTab v-else :space-id="selectedSpaceId" :initial-tag-id="selectedTagId" />
           </keep-alive>
         </section>

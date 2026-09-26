@@ -85,6 +85,10 @@ func (s *Store) ListTagMembers(ctx context.Context, query metadatastore.TagMembe
 func (s *Store) listAllSubjectMembers(ctx context.Context, query metadatastore.TagMemberQuery, pageNo, size uint32, offset int) ([]*pb.TagMember, *pb.PageResult, error) {
 	where := []string{"s.c_space_id = ?"}
 	args := []any{query.SpaceID}
+	if strings.TrimSpace(query.Status) != "" {
+		where = append(where, "s.c_status = ?")
+		args = append(args, query.Status)
+	}
 	if keyword := strings.ToLower(strings.TrimSpace(query.Keyword)); keyword != "" {
 		where = append(where, `(instr(lower(s.c_subject_id), ?) > 0 OR instr(lower(s.c_name), ?) > 0 OR instr(lower(s.c_subject_type), ?) > 0 OR instr(lower(s.c_market), ?) > 0)`)
 		args = append(args, keyword, keyword, keyword, keyword)

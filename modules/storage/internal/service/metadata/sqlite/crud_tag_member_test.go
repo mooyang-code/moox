@@ -124,6 +124,27 @@ func TestListAllSubjectsIncludesUnassignedSubjects(t *testing.T) {
 	}
 }
 
+func TestListAllSubjectsFiltersBySubjectStatus(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	for _, subject := range []*pb.Subject{
+		{SpaceId: "space", SubjectId: "active-subject", SubjectType: "custom", Name: "Active", Status: "active"},
+		{SpaceId: "space", SubjectId: "disabled-subject", SubjectType: "custom", Name: "Disabled", Status: "disabled"},
+	} {
+		if _, err := store.UpsertSubject(ctx, subject); err != nil {
+			t.Fatal(err)
+		}
+	}
+	members, page, err := store.ListTagMembers(ctx, metadata.TagMemberQuery{SpaceID: "space", Status: "disabled", Page: &pb.Page{Page: 1, Size: 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.GetTotal() != 1 || len(members) != 1 || members[0].GetSubject().GetSubjectId() != "disabled-subject" {
+		t.Fatalf("disabled subject filter members=%v page=%v", members, page)
+	}
+}
+
 func TestUpdateSubjectAttributesDoesNotCreateOrChangeMembership(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)

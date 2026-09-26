@@ -5,22 +5,24 @@
       <a-tab-pane v-for="tag in tags" :key="tag.tag_id" :title="tag.tag_name" />
     </a-tabs>
     <div class="filter-bar">
-      <a-input
-        v-model="keyword"
-        class="keyword-input"
-        allow-clear
-        placeholder="搜索对象 ID、名称、类型或市场"
-        @press-enter="onSearch"
-      />
-      <a-select v-if="selectedTagId" v-model="statusFilter" class="status-select" placeholder="状态">
-        <a-option value="">全部</a-option>
-        <a-option value="active">有效</a-option>
-        <a-option value="inactive">失效</a-option>
-      </a-select>
-      <a-button type="primary" @click="onSearch">
-        <template #icon><icon-search /></template>
-        查询
-      </a-button>
+      <div class="filter-query">
+        <a-input
+          v-model="keyword"
+          class="keyword-input"
+          allow-clear
+          placeholder="搜索对象 ID、名称、类型或市场"
+          @press-enter="onSearch"
+        />
+        <div class="status-query">
+          <a-select v-model="statusFilter" class="status-select" placeholder="状态">
+            <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+          </a-select>
+          <a-button class="query-button" type="primary" @click="onSearch">
+            <template #icon><icon-search /></template>
+            查询
+          </a-button>
+        </div>
+      </div>
       <a-space class="filter-actions">
         <a-button :loading="loading" @click="reload">
           <template #icon><icon-refresh /></template>
@@ -189,7 +191,7 @@ const tags = ref<Tag[]>([]);
 const rows = ref<TagMember[]>([]);
 const loading = ref(false);
 const selectedTagId = ref(props.initialTagId || "");
-const statusFilter = ref<"" | "active" | "inactive">("");
+const statusFilter = ref("");
 const keyword = ref("");
 const selectedKeys = ref<string[]>([]);
 const pagination = reactive(defaultPagination());
@@ -207,6 +209,19 @@ const selectedTag = computed(() => tags.value.find(tag => tag.tag_id === selecte
 const manualTags = computed(() => tags.value.filter(tag => tag.mode === "manual"));
 const canEditMembers = computed(() => selectedTag.value?.mode === "manual");
 const probeEnabled = computed(() => Boolean(selectedTag.value?.mode === "auto" || selectedTag.value?.sources?.length));
+const statusOptions = computed(() =>
+  selectedTagId.value
+    ? [
+        { value: "", label: "全部" },
+        { value: "active", label: "有效" },
+        { value: "inactive", label: "失效" }
+      ]
+    : [
+        { value: "", label: "全部" },
+        { value: "active", label: "启用" },
+        { value: "disabled", label: "停用" }
+      ]
+);
 
 function emptySubject(): Subject {
   return {
@@ -235,7 +250,7 @@ async function reload() {
     const rsp = await listTagMembers({
       space_id: props.spaceId,
       tag_id: selectedTagId.value || undefined,
-      status: selectedTagId.value ? statusFilter.value || undefined : undefined,
+      status: statusFilter.value || undefined,
       keyword: keyword.value.trim() || undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
@@ -412,6 +427,21 @@ watch(
   margin-bottom: var(--moox-space-3);
 }
 
+.filter-query {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--moox-space-2);
+}
+
+.status-query {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--moox-space-2);
+}
+
 .tag-tabs {
   min-width: 0;
   margin-bottom: var(--moox-space-3);
@@ -423,10 +453,16 @@ watch(
 
 .status-select {
   width: 120px;
+  flex: 0 0 120px;
 }
 
 .keyword-input {
   width: 280px;
+  flex: 0 0 280px;
+}
+
+.query-button {
+  flex: 0 0 auto;
 }
 
 .filter-actions {

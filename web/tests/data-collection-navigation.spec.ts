@@ -2,6 +2,7 @@ import { expect, test, type Route } from "@playwright/test";
 import { installE2ESession } from "./e2e-session";
 
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
+const tagMemberRequests: Array<Record<string, unknown>> = [];
 
 async function mockGateway(route: Route) {
   const method = route.request().url().split("/").pop();
@@ -91,6 +92,36 @@ async function mockGateway(route: Route) {
       })
     });
   }
+  if (method === "ListTags") {
+    return route.fulfill({
+      json: ok({
+        tags: [{ space_id: "crypto", tag_id: "manual", tag_name: "手工标签", mode: "manual", active_count: 1, inactive_count: 0 }],
+        page_result: { page: 1, size: 200, total: 1, has_more: false }
+      })
+    });
+  }
+  if (method === "ListTagMembers") {
+    tagMemberRequests.push((route.request().postDataJSON() || {}) as Record<string, unknown>);
+    return route.fulfill({
+      json: ok({
+        members: [
+          {
+            space_id: "crypto",
+            subject: {
+              space_id: "crypto",
+              subject_id: "BTC-USDT",
+              subject_type: "crypto_pair",
+              name: "比特币",
+              market: "crypto",
+              status: "active"
+            },
+            tag_ids: ["manual"]
+          }
+        ],
+        page_result: { page: 1, size: 20, total: 1, has_more: false }
+      })
+    });
+  }
   if (method === "ListDatasetColumns") {
     return route.fulfill({
       json: ok({
@@ -143,6 +174,7 @@ async function mockGateway(route: Route) {
 }
 
 test.beforeEach(async ({ page }) => {
+  tagMemberRequests.length = 0;
   await installE2ESession(page, "crypto");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockGateway);
 });
@@ -199,6 +231,27 @@ test("shows task-owned real data and the K-line modal", async ({ page }) => {
   await seriesFilter.fill("venue:binance");
   await page.getByRole("button", { name: "K线", exact: true }).click();
   await expect(page.getByText("BTC-USDT K线", { exact: true })).toBeVisible();
+});
+
+test("data subjects status filter behaves like a compact normal field", async ({ page }) => {
+  await page.goto("/#/data/subjects");
+  await page.getByText("标签成员", { exact: true }).click();
+
+  const toolbar = page.locator(".data-subjects-page .filter-bar");
+  const statusFilter = toolbar.locator(".status-select");
+  const queryButton = toolbar.locator(".status-select + .query-button");
+  await expect(statusFilter).toBeVisible();
+  await expect(statusFilter).toContainText("全部");
+
+  const [statusBox, queryBox] = await Promise.all([statusFilter.boundingBox(), queryButton.boundingBox()]);
+  expect(statusBox && queryBox).toBeTruthy();
+  expect((statusBox?.x || 0) + (statusBox?.width || 0)).toBeLessThanOrEqual((queryBox?.x || 0) + 1);
+  expect(Math.abs((statusBox?.y || 0) - (queryBox?.y || 0))).toBeLessThan(8);
+
+  await statusFilter.click();
+  await page.locator(".arco-select-dropdown").getByText("停用", { exact: true }).first().click();
+  await queryButton.click();
+  await expect.poll(() => tagMemberRequests.at(-1)?.status).toBe("disabled");
 });
 
 test("desktop and mobile collection toolbars do not overlap", async ({ page }) => {

@@ -91,7 +91,7 @@ export function deleteTag(spaceId: string, tagId: string) {
 export function listTagMembers(params: {
   space_id: string;
   tag_id?: string;
-  status?: TagMemberStatus;
+  status?: string;
   keyword?: string;
   page: Page;
 }) {

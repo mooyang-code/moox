@@ -156,7 +156,7 @@ import { defaultPagination, formatTime } from "@/views/data/shared/metadata-util
 import { nextRuns, tagToFormState, toTagPayload, validateTagForm, type TagFormState } from "./tag-form";
 
 const props = defineProps<{ spaceId: string }>();
-const emit = defineEmits<{ (event: "open-members", tagId: string): void }>();
+const emit = defineEmits<{ (event: "openMembers", tagId: string): void }>();
 
 const rows = ref<Tag[]>([]);
 const dataSources = ref<DataSource[]>([]);
@@ -220,7 +220,7 @@ async function load() {
 }
 
 function openMembers(tag: Tag) {
-  emit("open-members", tag.tag_id);
+  emit("openMembers", tag.tag_id);
 }
 
 function openCreate() {
