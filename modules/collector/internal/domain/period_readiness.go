@@ -43,6 +43,7 @@ type PeriodReadinessItem struct {
 	ReadinessID int64 `gorm:"column:c_readiness_id;primaryKey"`
 	// InstanceID is the expected TaskInstance identity for this period.
 	InstanceID     string    `gorm:"column:c_instance_id;primaryKey"`
+	WriteTargetID  string    `gorm:"column:c_write_target_id"`
 	SubjectID      string    `gorm:"column:c_subject_id"`
 	FunctionName   string    `gorm:"column:c_function_name"`
 	WriteSource    string    `gorm:"column:c_write_source"`
@@ -58,6 +59,9 @@ type PeriodKey struct {
 	DatasetID  string
 	Frequency  string
 	PeriodTime time.Time
+	// WriteTargetID scopes readiness to one destination when a shared
+	// instance fans out to multiple datasets.
+	WriteTargetID string
 }
 
 type PeriodTaskSeed struct {
@@ -67,6 +71,7 @@ type PeriodTaskSeed struct {
 	FunctionName   string
 	WriteSource    string
 	RequiredFields string
+	WriteTargetID  string
 }
 
 type PeriodSeed struct {

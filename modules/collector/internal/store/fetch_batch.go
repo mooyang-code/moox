@@ -36,6 +36,9 @@ type MarketFetchRetrySupersede struct {
 	SubjectID      string
 	Frequency      string
 	TargetDataTime time.Time
+	InstanceID     string
+	WriteTargetID  string
+	RetryScope     string
 }
 
 type FetchCompletionEffects struct {
@@ -239,7 +242,18 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 		args := make([]any, 0, len(effects.SupersedePendingRetries)*5)
 		seen := make(map[string]struct{}, len(effects.SupersedePendingRetries))
 		for _, item := range effects.SupersedePendingRetries {
-			if item.SpaceID == "" || item.DatasetID == "" || item.SubjectID == "" || item.Frequency == "" || item.TargetDataTime.IsZero() {
+			if item.SpaceID == "" || item.SubjectID == "" || item.Frequency == "" || item.TargetDataTime.IsZero() {
+				continue
+			}
+			// Shared instances are retried per write target. Prefer the new
+			// identity when present; the legacy dataset key remains a fallback.
+			if item.WriteTargetID != "" {
+				if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_write_target_id = ? AND c_status = ?", item.SpaceID, item.WriteTargetID, "pending").Updates(map[string]any{"c_status": "superseded", "c_mtime": time.Now().UTC()}).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if item.DatasetID == "" {
 				continue
 			}
 			key := strings.Join([]string{item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, item.TargetDataTime.UTC().Format(time.RFC3339Nano)}, "\x00")

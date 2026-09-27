@@ -58,19 +58,22 @@ type CollectionItem struct {
 	// CandidateIndex is advanced when a retry has already exhausted the
 	// current provider window. Keeping it on the item makes retries resume at
 	// the next candidate instead of repeatedly starting at the same bad feed.
-	CandidateIndex     int     `json:"candidate_index,omitempty"`
-	RateBudgetRatio    float64 `json:"rate_budget_ratio,omitempty"`
-	SourceEventID      string  `json:"source_event_id,omitempty"`
-	Provider           string  `json:"provider"`
-	SourceID           string  `json:"source_id,omitempty"`
-	MarketID           string  `json:"market_id,omitempty"`
-	InstrumentType     string  `json:"instrument_type,omitempty"`
-	MarketType         string  `json:"market_type"`
-	DataType           string  `json:"data_type"`
-	DatasetID          string  `json:"dataset_id"`
-	Frequency          string  `json:"frequency,omitempty"`
-	SnapshotShardIndex int     `json:"snapshot_shard_index,omitempty"`
-	SnapshotShardCount int     `json:"snapshot_shard_count,omitempty"`
+	CandidateIndex  int     `json:"candidate_index,omitempty"`
+	RateBudgetRatio float64 `json:"rate_budget_ratio,omitempty"`
+	SourceEventID   string  `json:"source_event_id,omitempty"`
+	Provider        string  `json:"provider"`
+	SourceID        string  `json:"source_id,omitempty"`
+	MarketID        string  `json:"market_id,omitempty"`
+	InstrumentType  string  `json:"instrument_type,omitempty"`
+	MarketType      string  `json:"market_type"`
+	DataType        string  `json:"data_type"`
+	DatasetID       string  `json:"dataset_id"`
+	Frequency       string  `json:"frequency,omitempty"`
+	// OutputFields limits the fields persisted for each fetched row. An empty
+	// list preserves the legacy behavior and writes every normalized field.
+	OutputFields       []string `json:"output_fields,omitempty"`
+	SnapshotShardIndex int      `json:"snapshot_shard_index,omitempty"`
+	SnapshotShardCount int      `json:"snapshot_shard_count,omitempty"`
 }
 
 type ItemResult struct {
@@ -89,8 +92,13 @@ type BatchInvocation struct {
 	BatchKind     BatchKind `gorm:"column:c_batch_kind"`
 	ShardIndex    int       `gorm:"column:c_shard_index"`
 	// TaskID is the parent CollectionTask ID for this batch.
-	TaskID               string      `gorm:"column:c_task_id"`
-	DatasetID            string      `gorm:"column:c_dataset_id"`
+	TaskID    string `gorm:"column:c_task_id"`
+	DatasetID string `gorm:"column:c_dataset_id"`
+	// InstanceID and WriteTargetID identify the shared execution unit and its
+	// independent storage target. TaskID/DatasetID remain for old batches.
+	InstanceID           string      `gorm:"column:c_instance_id"`
+	WriteTargetID        string      `gorm:"column:c_write_target_id"`
+	RetryScope           string      `gorm:"column:c_retry_scope"`
 	Frequency            string      `gorm:"column:c_frequency"`
 	Region               string      `gorm:"column:c_region"`
 	NodeID               string      `gorm:"column:c_node_id"`
@@ -124,6 +132,9 @@ type RetryItem struct {
 	// TaskID is the parent CollectionTask ID for this retry item.
 	TaskID           string     `gorm:"column:c_task_id"`
 	DatasetID        string     `gorm:"column:c_dataset_id"`
+	InstanceID       string     `gorm:"column:c_instance_id"`
+	WriteTargetID    string     `gorm:"column:c_write_target_id"`
+	RetryScope       string     `gorm:"column:c_retry_scope"`
 	SubjectID        string     `gorm:"column:c_subject_id"`
 	Frequency        string     `gorm:"column:c_frequency"`
 	TargetDataTime   time.Time  `gorm:"column:c_target_data_time"`

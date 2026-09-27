@@ -32,6 +32,9 @@ func (r *FetchRetryRepository) Upsert(ctx context.Context, item *domain.RetryIte
 		DoUpdates: clause.Assignments(map[string]any{
 			"c_source_batch_id":    clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"},
 			"c_batch_kind":         clause.Expr{SQL: "excluded.c_batch_kind"},
+			"c_instance_id":        clause.Expr{SQL: "excluded.c_instance_id"},
+			"c_write_target_id":    clause.Expr{SQL: "excluded.c_write_target_id"},
+			"c_retry_scope":        clause.Expr{SQL: "excluded.c_retry_scope"},
 			"c_attempt":            clause.Expr{SQL: "excluded.c_attempt"},
 			"c_status":             clause.Expr{SQL: "excluded.c_status"},
 			"c_next_retry_at":      clause.Expr{SQL: "excluded.c_next_retry_at"},

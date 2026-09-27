@@ -70,7 +70,8 @@ func (r *PeriodReadinessRepository) EnsurePeriod(ctx context.Context, seed domai
 		for _, task := range seed.Tasks {
 			item := &domain.PeriodReadinessItem{
 				ReadinessID: parent.ID, InstanceID: task.InstanceID, SubjectID: task.SubjectID,
-				FunctionName: task.FunctionName, WriteSource: task.WriteSource,
+				WriteTargetID: task.WriteTargetID,
+				FunctionName:  task.FunctionName, WriteSource: task.WriteSource,
 				RequiredFields: task.RequiredFields, State: domain.PeriodItemPending,
 				UpdatedAt: time.Now().UTC(),
 			}
@@ -106,6 +107,9 @@ func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Con
 	}
 	var items []domain.PeriodReadinessItem
 	query := r.db.WithContext(ctx).Where("c_readiness_id IN (SELECT c_id FROM t_period_readiness WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?)", key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime.UTC()).Where("c_subject_id = ? AND c_state = ?", subjectID, domain.PeriodItemPending)
+	if strings.TrimSpace(key.WriteTargetID) != "" {
+		query = query.Where("c_write_target_id = ?", strings.TrimSpace(key.WriteTargetID))
+	}
 	if strings.TrimSpace(functionName) != "" {
 		// An empty function/source denotes a subject-level item created from
 		// overlapping rules; either writer may satisfy it.

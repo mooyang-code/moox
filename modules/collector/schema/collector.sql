@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_task_name TEXT NOT NULL,
     c_description TEXT NOT NULL DEFAULT '',
     c_data_type TEXT NOT NULL DEFAULT '',
+    c_tag_ids_json TEXT NOT NULL DEFAULT '[]',
+    c_definition_hash TEXT NOT NULL DEFAULT '',
     c_provider TEXT NOT NULL DEFAULT '',
     c_market_type TEXT NOT NULL DEFAULT '',
     c_collect_params TEXT NOT NULL DEFAULT '{}',
@@ -23,12 +25,50 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_task ON t_collector_tasks (c_space_id, c_task_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_name ON t_collector_tasks (c_space_id, c_task_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_definition ON t_collector_tasks (c_space_id, c_definition_hash) WHERE c_definition_hash <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_result_view ON t_collector_tasks (c_space_id, c_result_view_id) WHERE c_result_view_id <> '';
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_space ON t_collector_tasks (c_space_id);
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_provider ON t_collector_tasks (c_provider);
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_market_type ON t_collector_tasks (c_market_type);
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_type ON t_collector_tasks (c_data_type);
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_enabled ON t_collector_tasks (c_enabled);
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_prepare ON t_collector_tasks (c_data_type, c_prepare_state, c_enabled);
+
+CREATE TABLE IF NOT EXISTS t_collector_task_tags (
+    c_space_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_tag_id TEXT NOT NULL,
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_task_id, c_tag_id),
+    FOREIGN KEY (c_space_id, c_task_id) REFERENCES t_collector_tasks(c_space_id, c_task_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_collector_task_tags_tag ON t_collector_task_tags(c_space_id, c_tag_id);
+
+CREATE TABLE IF NOT EXISTS t_collector_runs (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_run_id TEXT NOT NULL,
+    c_run_key TEXT NOT NULL,
+    c_run_type TEXT NOT NULL DEFAULT 'scheduled',
+    c_frequency TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'planned',
+    c_target_time DATETIME,
+    c_error_summary TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(c_space_id, c_run_id),
+    UNIQUE(c_space_id, c_run_key)
+);
+CREATE INDEX IF NOT EXISTS idx_collector_runs_status ON t_collector_runs(c_space_id, c_status);
+
+CREATE TABLE IF NOT EXISTS t_collector_result_view_reservations (
+    c_space_id TEXT NOT NULL,
+    c_view_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_view_id),
+    UNIQUE (c_space_id, c_task_id)
+);
 
 CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -50,6 +90,8 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+    ,c_run_id TEXT NOT NULL DEFAULT ''
+    ,c_request_key TEXT NOT NULL DEFAULT ''
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_space_instance ON t_collector_task_instances (c_space_id, c_instance_id);
@@ -59,6 +101,29 @@ CREATE INDEX IF NOT EXISTS idx_collector_instances_function ON t_collector_task_
 CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_instances (c_last_exec_status);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_deleted ON t_collector_task_instances (c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_ctime ON t_collector_task_instances (c_ctime DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_run_request ON t_collector_task_instances(c_space_id, c_run_id, c_request_key) WHERE c_run_id <> '' AND c_request_key <> '';
+
+CREATE TABLE IF NOT EXISTS t_collector_instance_write_targets (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_write_target_id TEXT NOT NULL,
+    c_instance_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_view_id TEXT NOT NULL DEFAULT '',
+    c_output_fields_json TEXT NOT NULL DEFAULT '[]',
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_attempt INTEGER NOT NULL DEFAULT 0,
+    c_next_retry_at DATETIME,
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(c_space_id, c_write_target_id),
+    UNIQUE(c_space_id, c_instance_id, c_task_id),
+    FOREIGN KEY (c_space_id, c_task_id) REFERENCES t_collector_tasks(c_space_id, c_task_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_collector_write_targets_task ON t_collector_instance_write_targets(c_space_id, c_task_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset ON t_collector_instance_write_targets(c_space_id, c_dataset_id, c_status);
 
 CREATE TRIGGER IF NOT EXISTS update_collector_tasks_mtime
 AFTER UPDATE ON t_collector_tasks
@@ -82,6 +147,9 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_batches (
     c_shard_index INTEGER NOT NULL,
     c_task_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_write_target_id TEXT NOT NULL DEFAULT '',
+    c_retry_scope TEXT NOT NULL DEFAULT '',
     c_frequency TEXT NOT NULL,
     c_region TEXT NOT NULL,
     c_node_id TEXT NOT NULL,
@@ -104,6 +172,17 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_batches (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS t_collector_fetch_batch_items (
+    c_space_id TEXT NOT NULL,
+    c_batch_id TEXT NOT NULL,
+    c_instance_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_error TEXT NOT NULL DEFAULT '',
+    c_completed_at DATETIME,
+    PRIMARY KEY (c_space_id, c_batch_id, c_instance_id)
+);
+CREATE INDEX IF NOT EXISTS idx_collector_batch_items_instance ON t_collector_fetch_batch_items(c_space_id, c_instance_id);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_fetch_batch
 ON t_collector_fetch_batches (c_space_id, c_batch_id);
 
@@ -125,6 +204,9 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_retry_items (
     c_batch_kind TEXT NOT NULL DEFAULT 'realtime',
     c_task_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_write_target_id TEXT NOT NULL DEFAULT '',
+    c_retry_scope TEXT NOT NULL DEFAULT '',
     c_subject_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_target_data_time DATETIME NOT NULL,
@@ -143,6 +225,8 @@ ON t_collector_fetch_retry_items (c_space_id, c_retry_key);
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due
 ON t_collector_fetch_retry_items (c_status, c_next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_target
+ON t_collector_fetch_retry_items (c_space_id, c_write_target_id, c_status);
 
 -- Period readiness is the Collector's durable answer to whether all
 -- expected Storage writes for one market period have reached a terminal
@@ -175,6 +259,7 @@ ON t_period_readiness (c_report_state, c_deadline_at);
 CREATE TABLE IF NOT EXISTS t_period_readiness_items (
     c_readiness_id INTEGER NOT NULL,
     c_instance_id TEXT NOT NULL,
+    c_write_target_id TEXT NOT NULL DEFAULT '',
     c_subject_id TEXT NOT NULL,
     c_function_name TEXT NOT NULL DEFAULT '',
     c_write_source TEXT NOT NULL DEFAULT '',
@@ -189,3 +274,5 @@ CREATE TABLE IF NOT EXISTS t_period_readiness_items (
 
 CREATE INDEX IF NOT EXISTS idx_period_readiness_items_state
 ON t_period_readiness_items (c_readiness_id, c_state);
+CREATE INDEX IF NOT EXISTS idx_period_readiness_items_target
+ON t_period_readiness_items (c_readiness_id, c_write_target_id, c_state);
