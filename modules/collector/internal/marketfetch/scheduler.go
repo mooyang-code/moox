@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -45,6 +46,7 @@ type Scheduler struct {
 	Tasks               *store.TaskRepository
 	Instances           *store.TaskInstanceRepository
 	Batches             *store.FetchBatchRepository
+	Runs                *store.RunRepository
 	Retries             *store.FetchRetryRepository
 	Invoker             MarketFetchInvoker
 	Storage             func(string, string, string) (Storage, error)
@@ -121,6 +123,16 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
+	currentRunID := ""
+	if s.Runs != nil {
+		runTime := now.Truncate(time.Minute)
+		runKey := fmt.Sprintf("scheduled:%s", runTime.Format(time.RFC3339))
+		run, err := s.Runs.GetOrCreateScheduled(ctx, spaceID, runKey, "scheduled", "1m", runTime)
+		if err != nil {
+			return fmt.Errorf("create collector run: %w", err)
+		}
+		currentRunID = run.RunID
+	}
 	dnsRoutes := s.dnsSnapshot(ctx)
 	allTasks, err := s.Tasks.ListEnabled(ctx, spaceID)
 	if err != nil {
@@ -183,6 +195,10 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		log.WarnContextf(ctx, "dispatch market fetch retries failed: %v", err)
 	}
 	planned := 0
+	// A fetch request is shared across CollectionTasks when its source-side
+	// identity is identical.  The task-specific destination is recorded in
+	// WriteTarget; only the first task gets an executable batch in this pass.
+	sharedScheduled := make(map[string]struct{})
 	for _, task := range tasks {
 		if planned >= DefaultMaxPlan {
 			break
@@ -224,7 +240,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				for _, item := range items {
 					instanceID := collectionItemInstanceID(spaceID, task.TaskID, item, frequency)
 					activeInstanceIDs = append(activeInstanceIDs, instanceID)
-					instances = append(instances, domain.TaskInstance{SpaceID: spaceID, InstanceID: instanceID, CollectionTaskID: task.TaskID, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency, TaskParams: task.CollectParams})
+					instances = append(instances, domain.TaskInstance{SpaceID: spaceID, InstanceID: instanceID, RunID: currentRunID, RequestKey: sharedCollectionItemKey(item, frequency), CollectionTaskID: task.TaskID, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency, TaskParams: task.CollectParams})
 				}
 				frequencyFingerprint := taskFingerprint(frequencyInstanceIDs, task.CollectParams)
 				stateKey := task.TaskID + "\x00" + frequency
@@ -234,6 +250,29 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 					instancesChanged = true
 					if err := s.Instances.UpsertMany(ctx, instances); err != nil {
 						return fmt.Errorf("persist stable collection instances: %w", err)
+					}
+					// Keep the destination relation explicit even for the common
+					// one-task/one-dataset case. Shared-instance planning can then
+					// add another target without changing the executable instance.
+					targets := make([]domain.WriteTarget, 0, len(instances))
+					for _, instance := range instances {
+						outputFields := []string(nil)
+						if parsed, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType); parseErr == nil {
+							outputFields = append(outputFields, parsed.OutputFields...)
+						}
+						targets = append(targets, domain.WriteTarget{
+							ID:           stableID(spaceID, instance.InstanceID, task.TaskID, instance.DatasetID),
+							SpaceID:      spaceID,
+							InstanceID:   instance.InstanceID,
+							TaskID:       task.TaskID,
+							DatasetID:    instance.DatasetID,
+							ViewID:       task.ResultViewID,
+							OutputFields: stringSliceJSON(outputFields),
+							Status:       "pending",
+						})
+					}
+					if err := s.Instances.UpsertWriteTargets(ctx, targets); err != nil {
+						return fmt.Errorf("persist collection write targets: %w", err)
 					}
 				}
 			}
@@ -246,11 +285,16 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			state := s.planStates[stateKey]
 			frequencyFingerprint := taskFingerprint(frequencyInstanceIDs, task.CollectParams)
 			if s.InvokeNonRealtimeOnly && isKlineTask(task) {
+				priorityItems := filterSharedCollectionItems(priorityCryptoMinuteItems(items, frequency), frequency, sharedScheduled)
+				if len(priorityItems) == 0 {
+					s.planStates[stateKey] = scheduleState{target: target, fingerprint: frequencyFingerprint}
+					continue
+				}
 				priorityNodes := priorityNodesForTask(task, invokeNodes)
 				if len(priorityNodes) == 0 && !requiresOverseasEgress(TaskGroup{Provider: task.Provider, MarketType: task.MarketType, DatasetID: task.ResultDatasetID}) {
 					priorityNodes = taskNodes
 				}
-				if err := s.dispatchPriorityCryptoMinute(ctx, spaceID, task, items, frequency, target, priorityNodes); err != nil {
+				if err := s.dispatchPriorityCryptoMinute(ctx, spaceID, task, priorityItems, frequency, target, priorityNodes); err != nil {
 					return err
 				}
 				// Keep the TaskInstance inventory while realtime K-line execution is
@@ -262,7 +306,14 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			if !state.target.IsZero() && state.target.Equal(target) && state.fingerprint == frequencyFingerprint {
 				continue
 			}
-			batchItems := append([]domain.CollectionItem(nil), items...)
+			// Do not dispatch an identical source request twice when another
+			// CollectionTask already planned it during this scheduler pass. Its
+			// WriteTarget was persisted above and will be fanned out by the writer.
+			batchItems := filterSharedCollectionItems(items, frequency, sharedScheduled)
+			if len(batchItems) == 0 {
+				s.planStates[stateKey] = scheduleState{target: target, fingerprint: frequencyFingerprint}
+				continue
+			}
 			batchSize := s.realtimeBatchSize(len(batchItems), taskNodes)
 			for start, shard := 0, 0; start < len(batchItems); start, shard = start+batchSize, shard+1 {
 				end := start + batchSize
@@ -288,6 +339,13 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				// reject the whole batch before it can inspect the item.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], task)
 				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, MarketID: batchItems[start].MarketID, InstrumentType: batchItems[start].InstrumentType, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, SourceID: batchItems[start].SourceID, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
+				if s.Instances != nil {
+					for _, batchItem := range batchItems[start:end] {
+						if targets, targetErr := s.Instances.ListWriteTargets(ctx, spaceID, batchItem.InstanceID); targetErr == nil {
+							req.Targets = append(req.Targets, targets...)
+						}
+					}
+				}
 				created, err := s.planOne(ctx, task, req, node, taskNodes)
 				if err != nil {
 					return err
@@ -457,8 +515,48 @@ func taskFingerprint(instanceIDs []string, params string) string {
 const stockCNHistoryMaxLookback = 24 * time.Hour
 
 func collectionItemInstanceID(spaceID, collectionTaskID string, item domain.CollectionItem, frequency string) string {
-	spec := domain.TaskSpec{RouteID: stableRouteID(item.MarketType, item.DatasetID, frequency), Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency}
-	return domain.StableTaskID(spaceID, collectionTaskID, spec)
+	// collectionTaskID remains an argument for source compatibility with
+	// callers and tests.  Instance identity deliberately excludes it: one
+	// source fetch can serve multiple CollectionTasks and their WriteTargets.
+	_ = collectionTaskID
+	h := sha256.New()
+	for _, part := range []string{spaceID, item.Provider, item.SourceID, item.MarketType, item.DataType, item.SubjectID, frequency} {
+		_, _ = h.Write([]byte(strings.ToLower(strings.TrimSpace(part))))
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+func sharedCollectionItemKey(item domain.CollectionItem, frequency string) string {
+	parts := []string{item.Provider, item.SourceID, item.MarketType, item.DataType, item.SubjectID, frequency}
+	for i := range parts {
+		parts[i] = strings.ToLower(strings.TrimSpace(parts[i]))
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func filterSharedCollectionItems(items []domain.CollectionItem, frequency string, seen map[string]struct{}) []domain.CollectionItem {
+	unique := make([]domain.CollectionItem, 0, len(items))
+	for _, item := range items {
+		key := sharedCollectionItemKey(item, frequency)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, item)
+	}
+	return unique
+}
+
+func stringSliceJSON(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
 }
 
 func priorityCryptoMinuteItems(items []domain.CollectionItem, frequency string) []domain.CollectionItem {
@@ -918,22 +1016,81 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("get target dataset %s: %w", targetDataset, err)
 	}
-	subjects, err := s.Symbols.ResolveSubjects(ctx, spaceID, dataset.SubjectTags)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve target dataset subjects: %w", err)
+	// A collection task may contain tags owned by different providers. Resolve
+	// each tag independently so its source and market_type become the request
+	// identity; task-level provider/market values are only a legacy fallback for
+	// metadata clients that cannot load Tag definitions.
+	type taggedSubjects struct {
+		subjects []domain.Subject
+		source   string
+		market   string
 	}
-	items := make([]domain.CollectionItem, 0, len(subjects))
-	for _, subject := range subjects {
-		if strings.TrimSpace(subject.SubjectID) == "" {
-			continue
+	groups := make([]taggedSubjects, 0, len(dataset.SubjectTags))
+	if tagSource, ok := s.Symbols.(interface {
+		GetTag(context.Context, string, string) (*storagepb.Tag, error)
+	}); ok && len(dataset.SubjectTags) > 0 {
+		for _, tagID := range dataset.SubjectTags {
+			tagID = strings.TrimSpace(tagID)
+			if tagID == "" {
+				continue
+			}
+			tag, tagErr := tagSource.GetTag(ctx, spaceID, tagID)
+			if tagErr != nil {
+				return nil, nil, fmt.Errorf("get target tag %s: %w", tagID, tagErr)
+			}
+			subjects, resolveErr := s.Symbols.ResolveSubjects(ctx, spaceID, []string{tagID})
+			if resolveErr != nil {
+				return nil, nil, fmt.Errorf("resolve target tag %s subjects: %w", tagID, resolveErr)
+			}
+			source := strings.ToLower(strings.TrimSpace(tag.GetSource()))
+			market := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+			if source == "" {
+				return nil, nil, fmt.Errorf("target tag %s has no source", tagID)
+			}
+			if market == "" {
+				return nil, nil, fmt.Errorf("target tag %s has no market_type", tagID)
+			}
+			groups = append(groups, taggedSubjects{subjects: subjects, source: source, market: market})
 		}
-		subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-		symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, provider, marketID, marketType, subjectID)
-		if symbolErr != nil {
-			log.WarnContextf(ctx, "skip market symbol without valid provider symbol subject=%q error=%v", subject.SubjectID, symbolErr)
-			continue
+	} else {
+		subjects, resolveErr := s.Symbols.ResolveSubjects(ctx, spaceID, dataset.SubjectTags)
+		if resolveErr != nil {
+			return nil, nil, fmt.Errorf("resolve target dataset subjects: %w", resolveErr)
 		}
-		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: provider, SourceID: sourceID, MarketID: marketID, InstrumentType: instrumentType, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+		groups = append(groups, taggedSubjects{subjects: subjects, source: strings.ToLower(sourceID), market: marketType})
+	}
+	items := make([]domain.CollectionItem, 0)
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		groupProvider := provider
+		groupSource := group.source
+		groupMarket := group.market
+		if groupSource != "" {
+			// Source is the stable provider binding for a Tag in the current
+			// metadata model. This deliberately prevents task-level values from
+			// overriding a tag's routing identity.
+			groupProvider = groupSource
+		}
+		if groupMarket == "" {
+			groupMarket = marketType
+		}
+		for _, subject := range group.subjects {
+			if strings.TrimSpace(subject.SubjectID) == "" {
+				continue
+			}
+			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
+			identity := strings.Join([]string{groupProvider, groupSource, groupMarket, subjectID}, "\x00")
+			if _, exists := seen[identity]; exists {
+				continue
+			}
+			seen[identity] = struct{}{}
+			symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, groupProvider, marketID, groupMarket, subjectID)
+			if symbolErr != nil {
+				log.WarnContextf(ctx, "skip market symbol without valid provider symbol subject=%q error=%v", subject.SubjectID, symbolErr)
+				continue
+			}
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: groupProvider, SourceID: groupSource, MarketID: marketID, InstrumentType: instrumentType, MarketType: groupMarket, DataType: "kline", DatasetID: targetDataset, OutputFields: append([]string(nil), params.OutputFields...)})
+		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].SubjectID < items[j].SubjectID })
 	return items, frequencies, nil

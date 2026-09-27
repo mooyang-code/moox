@@ -30,6 +30,10 @@ type metadataClient interface {
 	ResolveSubjects(context.Context, *storagepb.ResolveSubjectsReq, ...client.Option) (*storagepb.ResolveSubjectsRsp, error)
 }
 
+type tagMetadataClient interface {
+	GetTag(context.Context, *storagepb.GetTagReq, ...client.Option) (*storagepb.GetTagRsp, error)
+}
+
 type datasetColumnClient interface {
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
 }
@@ -54,6 +58,27 @@ type DatasetInfo struct {
 // persisted; callers resolve them from the canonical SubjectID.
 type DatasetSource struct {
 	metadata metadataClient
+}
+
+// GetTag loads the tag definition when the backing metadata client exposes the
+// catalog API. It is intentionally an optional capability so older test and
+// embedded metadata clients can continue to provide dataset subject expansion.
+func (s *DatasetSource) GetTag(ctx context.Context, spaceID, tagID string) (*storagepb.Tag, error) {
+	client, ok := s.metadata.(tagMetadataClient)
+	if !ok {
+		return nil, fmt.Errorf("metadata client does not support get tag")
+	}
+	rsp, err := client.GetTag(ctx, &storagepb.GetTagReq{SpaceId: strings.TrimSpace(spaceID), TagId: strings.TrimSpace(tagID)})
+	if err != nil {
+		return nil, fmt.Errorf("get tag: %w", err)
+	}
+	if err := ensureStorageOK("get tag", rsp.GetRetInfo()); err != nil {
+		return nil, err
+	}
+	if rsp.GetTag() == nil {
+		return nil, fmt.Errorf("get tag: empty tag")
+	}
+	return rsp.GetTag(), nil
 }
 
 func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error) {
