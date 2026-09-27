@@ -37,4 +37,12 @@ message MarketFetchItemResult {
   string error_summary = 6;
   string source_event_id = 7;
   string instance_id = 8;
+  repeated MarketFetchTargetResult targets = 9;
+}
+
+message MarketFetchTargetResult {
+  string write_target_id = 1;
+  string dataset_id = 2;
+  string status = 3;
+  string error_summary = 4;
 }

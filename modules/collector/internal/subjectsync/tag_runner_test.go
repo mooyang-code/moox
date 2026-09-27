@@ -49,10 +49,10 @@ func TestTagDue(t *testing.T) {
 func TestRunOnceAppliesAndReports(t *testing.T) {
 	store := &fakeTagStore{
 		tags: []*pb.Tag{
-			{SpaceId: "crypto", TagId: "binance_spot", Mode: "auto", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "0 * * * *", Timezone: "UTC"},
-			{SpaceId: "crypto", TagId: "binance_swap", Mode: "auto", Sources: []string{"binance"}, InstrumentType: "swap", Cron: "0 * * * *", Timezone: "UTC"},
+			{SpaceId: "crypto", TagId: "binance_spot", Mode: "auto", Source: "binance", MarketType: "spot", Cron: "0 * * * *", Timezone: "UTC"},
+			{SpaceId: "crypto", TagId: "binance_swap", Mode: "auto", Source: "binance", MarketType: "swap", Cron: "0 * * * *", Timezone: "UTC"},
 			{SpaceId: "crypto", TagId: "watch", Mode: "manual", Cron: "0 * * * *", Timezone: "UTC"},
-			{SpaceId: "crypto", TagId: "manual_probe", Mode: "manual", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "0 * * * *", Timezone: "UTC"},
+			{SpaceId: "crypto", TagId: "manual_bound", Mode: "manual", Source: "binance", MarketType: "spot", Cron: "0 * * * *", Timezone: "UTC"},
 		},
 		applied: map[string]int{}, failures: map[string]string{},
 	}
@@ -71,7 +71,7 @@ func TestRunOnceAppliesAndReports(t *testing.T) {
 	if _, ok := store.applied["watch"]; ok {
 		t.Fatal("manual tag without probe must be skipped")
 	}
-	if store.applied["manual_probe"] != 1 {
-		t.Fatalf("manual probe should apply a validity snapshot: %v", store.applied)
+	if _, ok := store.applied["manual_bound"]; ok {
+		t.Fatalf("manual tag membership must remain operator-owned: %v", store.applied)
 	}
 }

@@ -79,7 +79,7 @@ func TestManualTagSnapshotDoesNotCreateMembers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.UpsertTag(ctx, &pb.Tag{SpaceId: "space", TagId: "manual", TagName: "Manual", Mode: metadata.TagModeManual}); err != nil {
+	if _, err := store.UpsertTag(ctx, &pb.Tag{SpaceId: "space", TagId: "manual", TagName: "Manual", Mode: metadata.TagModeManual, Source: "source", MarketType: "spot"}); err != nil {
 		t.Fatal(err)
 	}
 	if affected, err := store.AddTagMembers(ctx, "space", "manual", []string{"a", "b"}); err != nil || affected != 2 {
@@ -106,7 +106,7 @@ func TestListAllSubjectsIncludesUnassignedSubjects(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.UpsertTag(ctx, &pb.Tag{SpaceId: "space", TagId: "manual", TagName: "Manual", Mode: metadata.TagModeManual}); err != nil {
+	if _, err := store.UpsertTag(ctx, &pb.Tag{SpaceId: "space", TagId: "manual", TagName: "Manual", Mode: metadata.TagModeManual, Source: "source", MarketType: "spot"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AddTagMembers(ctx, "space", "manual", []string{"assigned"}); err != nil {
@@ -152,7 +152,7 @@ func TestUpdateSubjectAttributesDoesNotCreateOrChangeMembership(t *testing.T) {
 	if _, err := store.UpsertSubject(ctx, &pb.Subject{SpaceId: "space", SubjectId: "known", SubjectType: "crypto", Name: "Old"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpsertTag(ctx, &pb.Tag{SpaceId: "space", TagId: "manual", TagName: "Manual", Mode: metadata.TagModeManual}); err != nil {
+	if _, err := store.UpsertTag(ctx, &pb.Tag{SpaceId: "space", TagId: "manual", TagName: "Manual", Mode: metadata.TagModeManual, Source: "source", MarketType: "spot"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AddTagMembers(ctx, "space", "manual", []string{"known"}); err != nil {

@@ -219,6 +219,9 @@ case "${TARGET_MODULE}" in
     build_storage
     build_storage_cli
     ;;
+  storage-primary)
+    build_go modules/storage ./cmd/server moox-storage-primary 1
+    ;;
   storage-node)
     build_storage_node
     ;;

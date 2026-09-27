@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -52,6 +53,9 @@ type Request struct {
 	Concurrency    int                              `json:"concurrency,omitempty"`
 	DNSRoutes      map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
 	Items          []domain.CollectionItem          `json:"items"`
+	// Targets are the destinations attached to a shared acquisition instance.
+	// When present, one fetched result is fanned out to every target.
+	Targets []domain.WriteTarget `json:"targets,omitempty"`
 }
 
 func (r *Request) validate() error {
@@ -65,8 +69,31 @@ func (r *Request) validate() error {
 		return fmt.Errorf("items must not be empty")
 	}
 	r.DatasetID = strings.TrimSpace(r.DatasetID)
-	if r.DatasetID == "" {
+	if r.DatasetID == "" && len(r.Targets) == 0 {
 		return fmt.Errorf("dataset_id is required")
+	}
+	if len(r.Targets) > 0 {
+		seen := make(map[string]struct{}, len(r.Targets))
+		for i := range r.Targets {
+			r.Targets[i].DatasetID = strings.TrimSpace(r.Targets[i].DatasetID)
+			if r.Targets[i].DatasetID == "" {
+				return fmt.Errorf("targets[%d].dataset_id is required", i)
+			}
+			identity := r.Targets[i].InstanceID + "\x00" + r.Targets[i].TaskID + "\x00" + r.Targets[i].DatasetID
+			if _, ok := seen[identity]; ok {
+				return fmt.Errorf("targets[%d] target is duplicated", i)
+			}
+			seen[identity] = struct{}{}
+			if r.Targets[i].OutputFields != "" {
+				var fields []string
+				if err := json.Unmarshal([]byte(r.Targets[i].OutputFields), &fields); err != nil {
+					return fmt.Errorf("targets[%d].output_fields_json is invalid: %w", i, err)
+				}
+			}
+		}
+		if r.DatasetID == "" {
+			r.DatasetID = r.Targets[0].DatasetID
+		}
 	}
 	if r.BatchKind == "" {
 		r.BatchKind = domain.BatchKindRealtime
@@ -93,7 +120,7 @@ func (r *Request) validate() error {
 		if sourceID := strings.TrimSpace(r.SourceID); sourceID != "" && strings.TrimSpace(item.SourceID) != "" && !strings.EqualFold(sourceID, strings.TrimSpace(item.SourceID)) {
 			return fmt.Errorf("items[%d] source binding source_id %q differs from batch source_id %q", index, item.SourceID, sourceID)
 		}
-		if strings.TrimSpace(item.DatasetID) != r.DatasetID {
+		if len(r.Targets) == 0 && strings.TrimSpace(item.DatasetID) != r.DatasetID {
 			return fmt.Errorf("items[%d] dataset_id differs from batch dataset", index)
 		}
 		if strings.TrimSpace(item.InstanceID) != "" {

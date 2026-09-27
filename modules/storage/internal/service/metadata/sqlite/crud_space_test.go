@@ -44,7 +44,7 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		INSERT INTO t_storage_devices(c_device_id,c_name,c_engine) VALUES ('device','Device','duckdb');
 		INSERT INTO t_data_sources(c_space_id,c_data_source_id,c_name,c_kind) VALUES ('target','source','Source','internal');
 		INSERT INTO t_subjects(c_space_id,c_subject_id,c_subject_type,c_name) VALUES ('target','subject','fund','Subject');
-		INSERT INTO t_tags(c_space_id,c_tag_id,c_tag_name,c_mode) VALUES ('target','tag','Tag','manual');
+		INSERT INTO t_tags(c_space_id,c_tag_id,c_tag_name,c_mode,c_source_id,c_market_type) VALUES ('target','tag','Tag','manual','source','equity');
 		INSERT INTO t_subject_tags(c_space_id,c_tag_id,c_subject_id) VALUES ('target','tag','subject');
 		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name) VALUES ('target','root','Root');
 		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name,c_parent_group_id) VALUES ('target','child','Child','root');

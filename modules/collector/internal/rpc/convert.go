@@ -20,22 +20,30 @@ func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 		resultStatus = "error"
 	}
 	return &pb.CollectionTask{
-		SpaceId:       task.SpaceID,
-		TaskId:        task.TaskID,
-		TaskName:      task.TaskName,
-		Description:   task.Description,
-		DataType:      task.DataType,
-		Provider:      task.Provider,
-		MarketType:    task.MarketType,
-		CollectParams: structFromJSONString(redactTaskResultDatasetID(task.CollectParams)),
-		Enabled:       &enabled,
-		Creator:       task.Creator,
-		CreateTime:    formatTime(task.CreateTime),
-		ModifyTime:    formatTime(task.ModifyTime),
-		PrepareState:  string(task.PrepareState),
-		LastError:     task.LastError,
-		Result:        &pb.TaskResult{ResultName: resultName(task.TaskName), ViewId: task.ResultViewID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
+		SpaceId:        task.SpaceID,
+		TaskId:         task.TaskID,
+		TaskName:       task.TaskName,
+		Description:    task.Description,
+		DataType:       task.DataType,
+		TagIds:         append([]string(nil), task.TagIDs...),
+		DefinitionHash: task.DefinitionHash,
+		CollectParams:  structFromJSONString(redactTaskResultDatasetID(task.CollectParams)),
+		Enabled:        &enabled,
+		Creator:        task.Creator,
+		CreateTime:     formatTime(task.CreateTime),
+		ModifyTime:     formatTime(task.ModifyTime),
+		PrepareState:   string(task.PrepareState),
+		LastError:      task.LastError,
+		Result:         &pb.TaskResult{ResultName: resultName(task.TaskName), ViewId: task.ResultViewID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
 	}
+}
+
+func parseStringSlice(raw string) []string {
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	return values
 }
 
 func redactTaskResultDatasetID(raw string) string {
@@ -58,19 +66,24 @@ func fromPBTask(task *pb.CollectionTask) domain.CollectionTask {
 		return domain.CollectionTask{}
 	}
 	return domain.CollectionTask{
-		SpaceID:       task.GetSpaceId(),
-		TaskID:        task.GetTaskId(),
-		TaskName:      task.GetTaskName(),
-		Description:   task.GetDescription(),
-		DataType:      task.GetDataType(),
-		Provider:      task.GetProvider(),
-		MarketType:    task.GetMarketType(),
-		CollectParams: jsonStringFromStruct(task.GetCollectParams()),
-		Enabled:       taskEnabled(task),
-		Creator:       task.GetCreator(),
-		PrepareState:  domain.CollectionTaskPrepareState(task.GetPrepareState()),
-		LastError:     task.GetLastError(),
+		SpaceID:        task.GetSpaceId(),
+		TaskID:         task.GetTaskId(),
+		TaskName:       task.GetTaskName(),
+		Description:    task.GetDescription(),
+		DataType:       task.GetDataType(),
+		TagIDs:         append([]string(nil), task.GetTagIds()...),
+		DefinitionHash: task.GetDefinitionHash(),
+		CollectParams:  jsonStringFromStruct(task.GetCollectParams()),
+		Enabled:        taskEnabled(task),
+		Creator:        task.GetCreator(),
+		PrepareState:   domain.CollectionTaskPrepareState(task.GetPrepareState()),
+		LastError:      task.GetLastError(),
 	}
+}
+
+func stringSliceJSON(values []string) string {
+	b, _ := json.Marshal(values)
+	return string(b)
 }
 
 func taskEnabled(task *pb.CollectionTask) bool {
@@ -96,15 +109,18 @@ func taskResultDataKind(dataType string) string {
 func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 	return &pb.TaskInstance{
 		SpaceId:        instance.SpaceID,
-		TaskId:         instance.CollectionTaskID,
+		RunId:          instance.RunID,
 		InstanceId:     instance.InstanceID,
 		Provider:       instance.Provider,
+		ProviderSymbol: instance.ProviderSymbol,
 		MarketType:     instance.MarketType,
 		DataType:       instance.DataType,
-		DatasetId:      instance.DatasetID,
+		RequestKey:     instance.RequestKey,
 		SubjectId:      instance.SubjectID,
 		Frequency:      instance.Frequency,
+		TargetDataTime: formatPtrTime(instance.TargetDataTime),
 		SourceId:       instance.SourceID,
+		SeriesTag:      instance.SeriesTag,
 		FunctionName:   instance.FunctionName,
 		TaskParams:     structFromJSONString(instance.TaskParams),
 		LastExecStatus: toPBStatus(instance.LastExecStatus),
@@ -114,6 +130,10 @@ func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 		CreateTime:     formatTime(instance.CreateTime),
 		ModifyTime:     formatTime(instance.ModifyTime),
 	}
+}
+
+func toPBWriteTarget(target domain.WriteTarget) *pb.TaskWriteTarget {
+	return &pb.TaskWriteTarget{WriteTargetId: target.ID, TaskId: target.TaskID, DatasetId: target.DatasetID, ViewId: target.ViewID, OutputFields: parseStringSlice(target.OutputFields), Status: target.Status, LastError: target.LastError}
 }
 
 func toPBStatus(status int) pb.TaskInstanceStatus {

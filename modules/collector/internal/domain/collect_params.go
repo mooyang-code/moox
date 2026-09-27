@@ -29,6 +29,7 @@ type CollectParams struct {
 	SourceID        string          `json:"source_id,omitempty"`
 	SeriesTag       string          `json:"series_tag,omitempty"`
 	SubjectTags     []string        `json:"subject_tags,omitempty"`
+	OutputFields    []string        `json:"output_fields,omitempty"`
 	TargetDatasetID string          `json:"target_dataset_id,omitempty"`
 	Frequency       string          `json:"frequency,omitempty"`
 	SourceDatasetID string          `json:"source_dataset_id,omitempty"`
@@ -117,6 +118,7 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	p.SourceID = strings.ToLower(strings.TrimSpace(p.SourceID))
 	p.SeriesTag = strings.TrimSpace(p.SeriesTag)
 	p.SubjectTags = normalizeTags(p.SubjectTags)
+	p.OutputFields = normalizeTags(p.OutputFields)
 	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
 	p.Frequency = strings.TrimSpace(p.Frequency)
 	p.SourceDatasetID = strings.TrimSpace(p.SourceDatasetID)
@@ -131,6 +133,7 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 		}
 	}
 	if dataType == "kline" {
+		p.Frequency = normalizeFixedFrequency(p.Frequency)
 		p.HistoryPolicy = normalizeHistoryPolicy(p.HistoryPolicy)
 	}
 
@@ -193,13 +196,16 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// Validate checks the single supported rule JSON contract.
-func (p *CollectParams) Validate() error {
+// ValidateTaskDefinition validates task-level parameters that are independent
+// from a concrete Provider route. Direct collection tasks derive Provider and
+// market from each selected Tag, so those fields are intentionally not required
+// here.
+func (p *CollectParams) ValidateTaskDefinition() error {
 	if p == nil {
 		return fmt.Errorf("collect params are required")
 	}
-	if p.Collector.Exchange == "" || p.Collector.Market == "" || p.Collector.DataType == "" {
-		return fmt.Errorf("collector exchange, market and data_type are required")
+	if p.Collector.DataType == "" {
+		return fmt.Errorf("collector data_type is required")
 	}
 	if p.Target.DatasetID == "" {
 		return fmt.Errorf("target.dataset_id is required")
@@ -226,6 +232,17 @@ func (p *CollectParams) Validate() error {
 		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)
 	}
 	return nil
+}
+
+// Validate checks the single supported rule JSON contract.
+func (p *CollectParams) Validate() error {
+	if p == nil {
+		return fmt.Errorf("collect params are required")
+	}
+	if p.Collector.Exchange == "" || p.Collector.Market == "" {
+		return fmt.Errorf("collector exchange and market are required")
+	}
+	return p.ValidateTaskDefinition()
 }
 
 // SplitSubjectTags extracts the transient task input. Tags are persisted on

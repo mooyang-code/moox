@@ -29,7 +29,9 @@ func (r *TaskInstanceRepository) InitializeResampleTask(ctx context.Context, spa
 		return fmt.Errorf("space_id, collection_task_id and next_bucket are required")
 	}
 	var instance domain.TaskInstance
-	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, collectionTaskID, "kline_resample", false).First(&instance).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("t_collector_task_instances.c_space_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, "kline_resample", false).
+		Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_task_id = ?)`, collectionTaskID).
+		First(&instance).Error; err != nil {
 		return err
 	}
 	result, err := domain.ParseResampleTaskResult(instance.Result)
@@ -118,9 +120,10 @@ func (r *TaskInstanceRepository) claimDueResampleTasks(
 		var instances []domain.TaskInstance
 		query := tx.Where("t_collector_task_instances.c_data_type = ? AND t_collector_task_instances.c_is_deleted = ?", "kline_resample", false)
 		if requireReadyRule {
-			query = query.Where(`EXISTS (SELECT 1 FROM t_collector_tasks rules
-				WHERE rules.c_space_id = t_collector_task_instances.c_space_id
-				AND rules.c_task_id = t_collector_task_instances.c_task_id
+			query = query.Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets
+				JOIN t_collector_tasks rules ON rules.c_space_id = targets.c_space_id AND rules.c_task_id = targets.c_task_id
+				WHERE targets.c_space_id = t_collector_task_instances.c_space_id
+				AND targets.c_instance_id = t_collector_task_instances.c_instance_id
 				AND rules.c_data_type = 'kline_resample'
 				AND rules.c_enabled = 1
 				AND rules.c_prepare_state = 'ready')`)
@@ -521,7 +524,7 @@ func (r *TaskInstanceRepository) StartResampleBackfill(ctx context.Context, spac
 	var updated int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var instances []domain.TaskInstance
-		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(collectionTaskID), "kline_resample", false).Order("c_id ASC").Find(&instances).Error; err != nil {
+		if err := tx.Where("t_collector_task_instances.c_space_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), "kline_resample", false).Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_task_id = ?)`, strings.TrimSpace(collectionTaskID)).Order("c_id ASC").Find(&instances).Error; err != nil {
 			return err
 		}
 		if len(instances) == 0 {
@@ -624,7 +627,7 @@ func (r *TaskInstanceRepository) finishResampleBackfill(ctx context.Context, spa
 	var updated int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var instances []domain.TaskInstance
-		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), strings.TrimSpace(collectionTaskID), "kline_resample", false).Find(&instances).Error; err != nil {
+		if err := tx.Where("t_collector_task_instances.c_space_id = ? AND c_data_type = ? AND c_is_deleted = ?", strings.TrimSpace(spaceID), "kline_resample", false).Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_task_id = ?)`, strings.TrimSpace(collectionTaskID)).Find(&instances).Error; err != nil {
 			return err
 		}
 		matched := false

@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
+	sqlite "modernc.org/sqlite"
 )
 
 const viewWithTimestampsSQL = `json_set(c_attrs_json, '$.created_at', c_ctime, '$.updated_at', c_mtime)`
@@ -19,7 +22,13 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	// field has no portable presence bit, so a non-empty partial columns list
 	// must never be interpreted as a complete replacement. Callers that own the
 	// full desired schema use ReplaceViewColumns explicitly.
-	return s.upsertView(ctx, item, false)
+	return s.upsertView(ctx, item, false, false)
+}
+
+// CreateView inserts a View only if its identity is unused. The INSERT's
+// unique constraint is the atomic boundary shared by all Metadata clients.
+func (s *Store) CreateView(ctx context.Context, item *pb.View) (*pb.View, error) {
+	return s.upsertView(ctx, item, false, true)
 }
 
 // ReplaceViewColumns applies a complete desired column set, including an
@@ -27,7 +36,7 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 // repeated fields cannot preserve the distinction between omitted and empty
 // across an RPC boundary.
 func (s *Store) ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error) {
-	return s.upsertView(ctx, item, true)
+	return s.upsertView(ctx, item, true, false)
 }
 
 // DeleteView physically removes a View and all dependent metadata rows via
@@ -48,7 +57,7 @@ func (s *Store) DeleteView(ctx context.Context, spaceID, viewID string) error {
 	return nil
 }
 
-func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bool) (*pb.View, error) {
+func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, createOnly bool) (*pb.View, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetDatasetId() == "" {
 		return nil, errors.New("space_id, view_id, name and dataset_id are required")
 	}
@@ -102,9 +111,12 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 	); err != nil {
 		return nil, err
 	}
-	existing, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
+	var existing *pb.View
+	if !createOnly {
+		existing, err = getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
 	}
 	if existing != nil && existing.GetActiveIndexId() != "" {
 		if existing.GetEngine() != "" && existing.GetEngine() != next.GetEngine() {
@@ -120,9 +132,11 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.ExecContext(ctx, `
+	insertSQL := `
 		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_filter_json, c_engine, c_keep_duration, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	if !createOnly {
+		insertSQL += `
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
 			c_name = excluded.c_name,
 			c_description = excluded.c_description,
@@ -140,9 +154,14 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 			c_indexed_from = excluded.c_indexed_from,
 			c_indexed_to = excluded.c_indexed_to,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
+			c_attrs_json = excluded.c_attrs_json`
+	}
+	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
 	if err != nil {
+		var sqliteErr *sqlite.Error
+		if createOnly && errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555) {
+			return nil, fmt.Errorf("%w: %s/%s", metadatastore.ErrViewExists, item.GetSpaceId(), item.GetViewId())
+		}
 		return nil, err
 	}
 	if shapeChanged {

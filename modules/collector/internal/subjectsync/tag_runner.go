@@ -32,11 +32,9 @@ func probing(tag *pb.Tag) bool {
 	if tag == nil {
 		return false
 	}
-	// Auto tags always fetch their authoritative member snapshot. Manual tags
-	// only fetch when sources and instrument_type are both configured, which is
-	// the optional validity-probe mode.
-	return len(tag.GetSources()) > 0 && tag.GetInstrumentType() != "" &&
-		(strings.EqualFold(tag.GetMode(), "auto") || strings.EqualFold(tag.GetMode(), "manual"))
+	// Only auto tags synchronize their authoritative member snapshot. Manual
+	// tags still carry source/market identity, but membership remains operator-owned.
+	return strings.EqualFold(tag.GetMode(), "auto") && tag.GetSource() != "" && tag.GetMarketType() != ""
 }
 
 func parseTagTime(value string) (time.Time, error) {
@@ -103,12 +101,13 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) {
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	instruments, err := FetchSnapshot(fetchCtx, r.Listers, tag.GetSources(), tag.GetInstrumentType())
+	instruments, err := FetchSnapshot(fetchCtx, r.Listers, []string{tag.GetSource()}, tag.GetMarketType())
 	if err == nil {
 		items := make([]*pb.TagSnapshotItem, 0, len(instruments))
 		for _, item := range instruments {
 			items = append(items, snapshotItem(tag, item))
 		}
+		log.InfoContextf(ctx, "tag %s/%s applying snapshot subjects=%d", tag.GetSpaceId(), tag.GetTagId(), len(items))
 		err = r.Store.ApplyTagSnapshot(ctx, tag.GetSpaceId(), tag.GetTagId(), runAt, items)
 	}
 	if err != nil {

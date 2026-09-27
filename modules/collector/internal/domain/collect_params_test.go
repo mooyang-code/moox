@@ -28,6 +28,12 @@ func TestParseCollectParamsUsesSingleDatasetDrivenContract(t *testing.T) {
 	assert.Equal(t, "target-kline", params.Target.DatasetID)
 }
 
+func TestParseCollectParamsNormalizesSelectedOutputFields(t *testing.T) {
+	params, err := ParseCollectParams(`{"provider":"binance","market_type":"spot","frequency":"1m","output_fields":["close","open","close"]}`, "", "", "kline")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"close", "open"}, params.OutputFields)
+}
+
 func TestParseCollectParamsAddsExplicitDefaultKlineHistoryPolicy(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",

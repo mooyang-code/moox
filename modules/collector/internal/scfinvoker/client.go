@@ -63,9 +63,9 @@ func New(cfg Config) *Client {
 }
 
 func (c *Client) ListMarketFetchers(ctx context.Context, spaceID string) ([]Node, error) {
-	// Invoke is reserved for bounded catch-up and manual
-	// probes. Realtime K-line nodes are Timer-triggered and must not be selected
-	// by the legacy request scheduler.
+	// Invoke nodes are the Scheduler-owned execution pool. Crypto realtime K-line
+	// collection uses this path so every asynchronous execution can publish its
+	// durable completion event. Timer nodes remain available to Timer-owned spaces.
 	return c.listMarketFetchers(ctx, spaceID, "invoke")
 }
 

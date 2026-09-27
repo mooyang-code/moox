@@ -283,8 +283,8 @@ CREATE TABLE IF NOT EXISTS t_tags (
     c_description TEXT NOT NULL DEFAULT '',
     c_mode TEXT NOT NULL,
     c_builtin INTEGER NOT NULL DEFAULT 0,
-    c_sources_json TEXT NOT NULL DEFAULT '[]',
-    c_instrument_type TEXT NOT NULL DEFAULT '',
+    c_source_id TEXT NOT NULL,
+    c_market_type TEXT NOT NULL,
     c_cron TEXT NOT NULL DEFAULT '0 * * * *',
     c_timezone TEXT NOT NULL DEFAULT 'UTC',
     c_last_run_at DATETIME NOT NULL DEFAULT '',
@@ -296,8 +296,10 @@ CREATE TABLE IF NOT EXISTS t_tags (
     CHECK (c_builtin IN (0, 1)),
     CHECK (c_last_status IN ('', 'success', 'failed')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (c_space_id, c_source_id) REFERENCES t_data_sources (c_space_id, c_data_source_id) ON DELETE RESTRICT ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_tag_id),
-    UNIQUE (c_space_id, c_tag_name)
+    UNIQUE (c_space_id, c_tag_name),
+    UNIQUE (c_tag_id)
 );
 
 CREATE TRIGGER IF NOT EXISTS trg_t_tags_mtime
@@ -362,7 +364,7 @@ CREATE TABLE IF NOT EXISTS t_datasets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
-    c_data_source_id TEXT NOT NULL,
+    c_data_source_id TEXT,
     c_data_node_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_description TEXT NOT NULL DEFAULT '',

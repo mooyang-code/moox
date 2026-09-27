@@ -209,7 +209,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 			// Dataset. The generic result manager must not claim that Dataset as a
 			// raw collection result.
 			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-				_, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+				_, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 				if parseErr != nil {
 					if isLegacySubjectSelectionError(parseErr) {
 						log.WarnContextf(ctx, "skip legacy collection task=%s/%s result provisioning: %v; edit the task to select subject tags", task.SpaceID, task.TaskID, parseErr)
@@ -217,7 +217,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 					}
 					return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
 				}
-				ids := collectorresult.ResultIDs(task.SpaceID, task.TaskID)
+				ids := collectorresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
 				needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
 				// Only retire a previous result when the Dataset identity itself
 				// changed. A missing or mismatched View ID must not delete the
@@ -253,7 +253,7 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				}
 				continue
 			}
-			params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+			params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 			if parseErr != nil {
 				if isLegacySubjectSelectionError(parseErr) {
 					log.WarnContextf(ctx, "skip legacy collection task=%s/%s result provisioning: %v; edit the task to select subject tags", task.SpaceID, task.TaskID, parseErr)
@@ -262,23 +262,36 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
 			}
 			originalParams := task.CollectParams
-			cleanParams, subjectTags, splitErr := domain.SplitSubjectTags(originalParams)
+			cleanParams, _, splitErr := domain.SplitSubjectTags(originalParams)
 			if splitErr != nil {
 				return fmt.Errorf("split task %s/%s subject tags: %w", task.SpaceID, task.TaskID, splitErr)
 			}
 			paramsHadSubjectTags := cleanParams != originalParams
 			if paramsHadSubjectTags {
+				// task_tags is the sole acquisition scope. Remove any stale embedded
+				// copy if one exists, but never use it as the authoritative source.
 				task.CollectParams = cleanParams
 			}
+			subjectTags := append([]string(nil), task.TagIDs...)
+			if len(subjectTags) == 0 {
+				return fmt.Errorf("task %s/%s has no bound tags", task.SpaceID, task.TaskID)
+			}
 			oldIDs := collectorresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
-			ids, ensureErr := manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, collectorresult.Config{
-				DataNodeID:   dataNodeID,
-				Name:         task.TaskName,
-				Description:  task.Description,
-				DataSourceID: task.Provider,
+			frequency := params.Frequency
+			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+				frequency = params.TargetFrequency
+			}
+			logicalIDs := collectorresult.ResultIDsForTask(task.SpaceID, task.TaskID, "", task.DataType, frequency)
+			ids, ensureErr := manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, "", collectorresult.Config{
+				ViewID:      firstNonEmptyResultID(task.ResultViewID, logicalIDs.ViewID),
+				DataNodeID:  dataNodeID,
+				Name:        task.TaskName,
+				Description: task.Description,
+
 				Frequency:    taskResultFrequency(*params),
 				Frequencies:  append([]string(nil), params.Collector.Intervals...),
 				SubjectTags:  subjectTags,
+				OutputFields: params.OutputFields,
 			})
 			if ensureErr != nil {
 				return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, ensureErr)
@@ -315,6 +328,15 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 		}
 	}
 	return nil
+}
+
+func firstNonEmptyResultID(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func isLegacySubjectSelectionError(err error) bool {
@@ -533,6 +555,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	}
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
 	for _, spaceID := range spaceIDs {
+		stockCNTimerOwned := strings.EqualFold(spaceID, marketfetch.StockCNSpaceID)
 		reconciler := &marketfetch.Reconciler{
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSourceID:     marketwiring.DefaultSourceID,
@@ -546,19 +569,21 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 				WindowSeconds:      cfg.StockCN.StaggerWindowSeconds,
 				MaxStartsPerSecond: cfg.StockCN.StaggerMaxStartsPerSecond,
 			},
+			DisableTimerTriggers: !stockCNTimerOwned,
 		}
 		readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 		invokeScheduler := &marketfetch.Scheduler{
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
-			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
+			ResolveSourceID:     marketwiring.DefaultSourceID,
+			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(),
 			// Local Storage RPC uses the resolved Collector target (private IP
 			// when runtime.env was rewritten). SCF invoke payloads keep the
 			// discovered public native gateway so overseas functions still work.
 			Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget, InvokeStorageTarget: deps.InvokeStorageRPCGatewayTarget,
 			InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
 			Symbols:               plannerSource,
-			InvokeNonRealtimeOnly: true,
+			InvokeNonRealtimeOnly: stockCNTimerOwned,
 		}
 		if err := readiness.EnsureCurrentAndNext(trpc.BackgroundContext(), spaceID, time.Now().UTC()); err != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector period readiness prebuild failed space=%s: %v", spaceID, err)

@@ -203,14 +203,15 @@ type MarketFetchItemResult struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	SubjectId      string `protobuf:"bytes,1,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
-	Symbol         string `protobuf:"bytes,2,opt,name=symbol,proto3" json:"symbol,omitempty"`
-	TargetDataTime string `protobuf:"bytes,3,opt,name=target_data_time,json=targetDataTime,proto3" json:"target_data_time,omitempty"`
-	Outcome        string `protobuf:"bytes,4,opt,name=outcome,proto3" json:"outcome,omitempty"`
-	ErrorType      string `protobuf:"bytes,5,opt,name=error_type,json=errorType,proto3" json:"error_type,omitempty"`
-	ErrorSummary   string `protobuf:"bytes,6,opt,name=error_summary,json=errorSummary,proto3" json:"error_summary,omitempty"`
-	SourceEventId  string `protobuf:"bytes,7,opt,name=source_event_id,json=sourceEventId,proto3" json:"source_event_id,omitempty"`
-	InstanceId     string `protobuf:"bytes,8,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	SubjectId      string                     `protobuf:"bytes,1,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
+	Symbol         string                     `protobuf:"bytes,2,opt,name=symbol,proto3" json:"symbol,omitempty"`
+	TargetDataTime string                     `protobuf:"bytes,3,opt,name=target_data_time,json=targetDataTime,proto3" json:"target_data_time,omitempty"`
+	Outcome        string                     `protobuf:"bytes,4,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	ErrorType      string                     `protobuf:"bytes,5,opt,name=error_type,json=errorType,proto3" json:"error_type,omitempty"`
+	ErrorSummary   string                     `protobuf:"bytes,6,opt,name=error_summary,json=errorSummary,proto3" json:"error_summary,omitempty"`
+	SourceEventId  string                     `protobuf:"bytes,7,opt,name=source_event_id,json=sourceEventId,proto3" json:"source_event_id,omitempty"`
+	InstanceId     string                     `protobuf:"bytes,8,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Targets        []*MarketFetchTargetResult `protobuf:"bytes,9,rep,name=targets,proto3" json:"targets,omitempty"`
 }
 
 func (x *MarketFetchItemResult) Reset() {
@@ -301,6 +302,84 @@ func (x *MarketFetchItemResult) GetInstanceId() string {
 	return ""
 }
 
+func (x *MarketFetchItemResult) GetTargets() []*MarketFetchTargetResult {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+type MarketFetchTargetResult struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	WriteTargetId string `protobuf:"bytes,1,opt,name=write_target_id,json=writeTargetId,proto3" json:"write_target_id,omitempty"`
+	DatasetId     string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	Status        string `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
+	ErrorSummary  string `protobuf:"bytes,4,opt,name=error_summary,json=errorSummary,proto3" json:"error_summary,omitempty"`
+}
+
+func (x *MarketFetchTargetResult) Reset() {
+	*x = MarketFetchTargetResult{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_market_fetch_events_proto_msgTypes[2]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *MarketFetchTargetResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarketFetchTargetResult) ProtoMessage() {}
+
+func (x *MarketFetchTargetResult) ProtoReflect() protoreflect.Message {
+	mi := &file_market_fetch_events_proto_msgTypes[2]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarketFetchTargetResult.ProtoReflect.Descriptor instead.
+func (*MarketFetchTargetResult) Descriptor() ([]byte, []int) {
+	return file_market_fetch_events_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *MarketFetchTargetResult) GetWriteTargetId() string {
+	if x != nil {
+		return x.WriteTargetId
+	}
+	return ""
+}
+
+func (x *MarketFetchTargetResult) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+func (x *MarketFetchTargetResult) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *MarketFetchTargetResult) GetErrorSummary() string {
+	if x != nil {
+		return x.ErrorSummary
+	}
+	return ""
+}
+
 var File_market_fetch_events_proto protoreflect.FileDescriptor
 
 var file_market_fetch_events_proto_rawDesc = []byte{
@@ -350,7 +429,7 @@ var file_market_fetch_events_proto_rawDesc = []byte{
 	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x66,
 	0x65, 0x74, 0x63, 0x68, 0x2e, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x2e, 0x4d, 0x61, 0x72, 0x6b, 0x65,
 	0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x49, 0x74, 0x65, 0x6d, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74,
-	0x52, 0x05, 0x69, 0x74, 0x65, 0x6d, 0x73, 0x22, 0x9f, 0x02, 0x0a, 0x15, 0x4d, 0x61, 0x72, 0x6b,
+	0x52, 0x05, 0x69, 0x74, 0x65, 0x6d, 0x73, 0x22, 0xef, 0x02, 0x0a, 0x15, 0x4d, 0x61, 0x72, 0x6b,
 	0x65, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x49, 0x74, 0x65, 0x6d, 0x52, 0x65, 0x73, 0x75, 0x6c,
 	0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x5f, 0x69, 0x64, 0x18,
 	0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x49, 0x64,
@@ -368,7 +447,22 @@ var file_market_fetch_events_proto_rawDesc = []byte{
 	0x5f, 0x69, 0x64, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x73, 0x6f, 0x75, 0x72, 0x63,
 	0x65, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x49, 0x64, 0x12, 0x1f, 0x0a, 0x0b, 0x69, 0x6e, 0x73, 0x74,
 	0x61, 0x6e, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x08, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x69,
-	0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x49, 0x64, 0x42, 0x43, 0x5a, 0x41, 0x67, 0x69, 0x74,
+	0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x49, 0x64, 0x12, 0x4e, 0x0a, 0x07, 0x74, 0x61, 0x72,
+	0x67, 0x65, 0x74, 0x73, 0x18, 0x09, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x34, 0x2e, 0x74, 0x72, 0x70,
+	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x66, 0x65, 0x74,
+	0x63, 0x68, 0x2e, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x2e, 0x4d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x46,
+	0x65, 0x74, 0x63, 0x68, 0x54, 0x61, 0x72, 0x67, 0x65, 0x74, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74,
+	0x52, 0x07, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x73, 0x22, 0x9d, 0x01, 0x0a, 0x17, 0x4d, 0x61,
+	0x72, 0x6b, 0x65, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x54, 0x61, 0x72, 0x67, 0x65, 0x74, 0x52,
+	0x65, 0x73, 0x75, 0x6c, 0x74, 0x12, 0x26, 0x0a, 0x0f, 0x77, 0x72, 0x69, 0x74, 0x65, 0x5f, 0x74,
+	0x61, 0x72, 0x67, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d,
+	0x77, 0x72, 0x69, 0x74, 0x65, 0x54, 0x61, 0x72, 0x67, 0x65, 0x74, 0x49, 0x64, 0x12, 0x1d, 0x0a,
+	0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x09, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x49, 0x64, 0x12, 0x16, 0x0a, 0x06,
+	0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74,
+	0x61, 0x74, 0x75, 0x73, 0x12, 0x23, 0x0a, 0x0d, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x73, 0x75,
+	0x6d, 0x6d, 0x61, 0x72, 0x79, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x65, 0x72, 0x72,
+	0x6f, 0x72, 0x53, 0x75, 0x6d, 0x6d, 0x61, 0x72, 0x79, 0x42, 0x43, 0x5a, 0x41, 0x67, 0x69, 0x74,
 	0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d,
 	0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x70, 0x61, 0x63, 0x6b, 0x61, 0x67,
 	0x65, 0x73, 0x2f, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x66, 0x65, 0x74, 0x63, 0x68, 0x70, 0x62,
@@ -388,20 +482,22 @@ func file_market_fetch_events_proto_rawDescGZIP() []byte {
 	return file_market_fetch_events_proto_rawDescData
 }
 
-var file_market_fetch_events_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_market_fetch_events_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_market_fetch_events_proto_goTypes = []interface{}{
 	(*MarketFetchBatchCompleted)(nil), // 0: trpc.moox.marketfetch.event.MarketFetchBatchCompleted
 	(*MarketFetchItemResult)(nil),     // 1: trpc.moox.marketfetch.event.MarketFetchItemResult
-	(*timestamppb.Timestamp)(nil),     // 2: google.protobuf.Timestamp
+	(*MarketFetchTargetResult)(nil),   // 2: trpc.moox.marketfetch.event.MarketFetchTargetResult
+	(*timestamppb.Timestamp)(nil),     // 3: google.protobuf.Timestamp
 }
 var file_market_fetch_events_proto_depIdxs = []int32{
-	2, // 0: trpc.moox.marketfetch.event.MarketFetchBatchCompleted.completed_at:type_name -> google.protobuf.Timestamp
+	3, // 0: trpc.moox.marketfetch.event.MarketFetchBatchCompleted.completed_at:type_name -> google.protobuf.Timestamp
 	1, // 1: trpc.moox.marketfetch.event.MarketFetchBatchCompleted.items:type_name -> trpc.moox.marketfetch.event.MarketFetchItemResult
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 2: trpc.moox.marketfetch.event.MarketFetchItemResult.targets:type_name -> trpc.moox.marketfetch.event.MarketFetchTargetResult
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_market_fetch_events_proto_init() }
@@ -434,6 +530,18 @@ func file_market_fetch_events_proto_init() {
 				return nil
 			}
 		}
+		file_market_fetch_events_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*MarketFetchTargetResult); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -441,7 +549,7 @@ func file_market_fetch_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_market_fetch_events_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

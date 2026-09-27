@@ -71,6 +71,24 @@ func TestTimerRequestFromEnvAllowsUnicodeSubjectNames(t *testing.T) {
 	}
 }
 
+func TestTimerRequestFromEnvDerivesChineseSymbolWithoutExplicitMap(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
+	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "spot_http")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_ID", "crypto")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
+	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "币安人生-USDT")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://10.0.0.1:11003")
+
+	req, _, err := TimerRequestFromEnv("req", "node", time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC))
+	require.NoError(t, err)
+	require.Len(t, req.Items, 1)
+	require.Equal(t, "币安人生-USDT", req.Items[0].SubjectID)
+	require.Equal(t, "币安人生USDT", req.Items[0].Symbol)
+}
+
 func TestTimerRequestFromEnvAllowsConfiguredStockGroupAboveThirty(t *testing.T) {
 	subjects := make([]string, 0, 40)
 	symbols := make(map[string]string, 40)

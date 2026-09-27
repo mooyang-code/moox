@@ -55,6 +55,7 @@ func TestMarketProviderSymbolForCryptoDerivesBinanceSymbols(t *testing.T) {
 		{name: "spot", market: "spot", subject: "BTC-USDT", want: "BTCUSDT"},
 		{name: "swap", market: "swap", subject: "1000BONK-USDT", want: "1000BONKUSDT"},
 		{name: "legacy subject", market: "spot", subject: "BTC-USDT", want: "BTCUSDT"},
+		{name: "chinese swap", market: "swap", subject: "币安人生-USDT", want: "币安人生USDT"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := ResolveSymbol("binance", "crypto", test.market, test.subject)

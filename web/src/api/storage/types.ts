@@ -156,8 +156,8 @@ export interface Tag {
   description?: string;
   mode: TagMode;
   builtin?: boolean;
-  sources?: string[];
-  instrument_type?: string;
+  source: string;
+  market_type: string;
   cron?: string;
   timezone?: string;
   last_run_at?: string;

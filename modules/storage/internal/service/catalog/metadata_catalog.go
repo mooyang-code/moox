@@ -112,10 +112,20 @@ func (s *Service) ListSubjects(ctx context.Context, req *pb.ListSubjectsReq) (*p
 	return &pb.ListSubjectsRsp{RetInfo: retinfo.Success("success"), Subjects: items, PageResult: page}, nil
 }
 
+func collectorOwnedDataset(item *pb.Dataset) bool {
+	if item == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(item.GetAttributes()["owner_module"]), "collector")
+}
+
 func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (*pb.CreateDatasetRsp, error) {
 	item := req.GetDataset()
-	if item == nil || item.GetSpaceId() == "" || item.GetDataSourceId() == "" || (item.GetDatasetId() == "" && item.GetName() == "") {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, data_source_id and dataset_id or name are required"))}, nil
+	if item == nil || item.GetSpaceId() == "" || (item.GetDatasetId() == "" && item.GetName() == "") {
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id or name are required"))}, nil
+	}
+	if strings.TrimSpace(item.GetDataSourceId()) == "" && !collectorOwnedDataset(item) {
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("data_source_id is required unless owner_module is collector"))}, nil
 	}
 	if item.DatasetId == "" {
 		item.DatasetId = defaultID(item.GetName(), "dataset")

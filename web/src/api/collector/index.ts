@@ -26,6 +26,8 @@ export interface CollectorTask {
   description?: string;
   space_id?: string;
   data_type?: string;
+  tag_ids?: string[];
+  definition_hash?: string;
   provider?: string;
   market_type?: string;
   collect_params?: Record<string, unknown>;
@@ -44,6 +46,8 @@ export interface CollectionTaskPayload {
   task_name?: string;
   description?: string;
   data_type?: string;
+  tag_ids?: string[];
+  definition_hash?: string;
   provider?: string;
   market_type?: string;
   collect_params?: Record<string, unknown>;
@@ -122,6 +126,24 @@ export interface DataTypeConfig {
   modify_time: string;
 }
 
+export interface DataTypeFieldConfig {
+  id: number;
+  data_type: string;
+  field_key: string;
+  field_name: string;
+  field_type: string;
+  is_required: boolean;
+  default_value?: unknown;
+  field_options?: Record<string, unknown>;
+  data_source_options?: Record<string, unknown>;
+  sort_order: number;
+}
+
+export interface DataTypeConfigDetail {
+  config?: DataTypeConfig;
+  fields?: DataTypeFieldConfig[];
+}
+
 export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {
   return callControl<GetTaskListRequest, GetTaskListResponse>("collectmgr", "GetTaskList", params);
 }
@@ -144,6 +166,12 @@ export async function DeleteTask(params: DeleteTaskRequest): Promise<Record<stri
 
 export async function GetDataTypeConfigs(): Promise<{ configs?: DataTypeConfig[] }> {
   return callControl<Record<string, never>, { configs?: DataTypeConfig[] }>("collectmgr", "GetDataTypeConfigs", {});
+}
+
+export async function GetDataTypeConfigWithFields(dataType: string): Promise<{ detail?: DataTypeConfigDetail }> {
+  return callControl<{ data_type: string }, { detail?: DataTypeConfigDetail }>("collectmgr", "GetDataTypeConfigWithFields", {
+    data_type: dataType
+  });
 }
 
 export async function startKlineResampleBackfill(request: KlineResampleBackfillRequest) {

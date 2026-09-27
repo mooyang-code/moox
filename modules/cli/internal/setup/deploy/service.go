@@ -113,7 +113,17 @@ func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions
 		}
 	}()
 
-	if _, err := transport.Run(ctx, []string{"bash", "-lc", activateServiceScript, "moox-activate-service", deployDir, opts.ServiceName}, nil); err != nil {
+	if activation, err := transport.Run(ctx, []string{"bash", "-lc", activateServiceScript, "moox-activate-service", deployDir, opts.ServiceName}, nil); err != nil {
+		detail := strings.TrimSpace(activation.Stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(activation.Stdout)
+		}
+		if len(detail) > 2048 {
+			detail = detail[len(detail)-2048:]
+		}
+		if detail != "" {
+			return result, fmt.Errorf("service_activate_failed: %s", detail)
+		}
 		return result, fmt.Errorf("service_activate_failed")
 	}
 	// Keep .moox-service.previous until the caller has completed registry,

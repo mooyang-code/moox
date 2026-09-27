@@ -32,6 +32,7 @@ var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_SERIES_TAG":          {},
 	"MOOX_MARKET_FETCH_DATASET_ID":          {},
 	"MOOX_MARKET_FETCH_FREQUENCY":           {},
+	"MOOX_MARKET_FETCH_OUTPUT_FIELDS":       {},
 	"MOOX_MARKET_FETCH_SUBJECTS":            {},
 	"MOOX_MARKET_FETCH_SYMBOLS_JSON":        {},
 	"MOOX_MARKET_FETCH_ASSIGNMENT_HASH":     {},

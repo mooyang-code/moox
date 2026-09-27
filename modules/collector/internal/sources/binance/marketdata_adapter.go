@@ -259,6 +259,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 		subjectID, subjectErr := ToSubjectID(symbol)
 		if subjectErr != nil {
 			skipped++
+			log.WarnContextf(ctx, "binance symbol skipped symbol=%s base=%s quote=%s err=%v", symbol.Symbol, symbol.BaseAsset, symbol.QuoteAsset, subjectErr)
 			continue
 		}
 		if _, ok := index[subjectID]; ok {
@@ -303,6 +304,9 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 	}
 	if err := marketdata.ValidateInstrumentSnapshot(snapshot); err != nil {
 		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+	}
+	if skipped > 0 {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: skipped %d binance symbols; snapshot is not authoritative for tag removals", marketdata.ErrProtocol, skipped)
 	}
 	return snapshot, nil
 }

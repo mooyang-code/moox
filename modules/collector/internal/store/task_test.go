@@ -29,23 +29,27 @@ func TestCollectionTaskRepository_CRUD(t *testing.T) {
 	repo := s.Tasks()
 	ctx := context.Background()
 	rule := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"subject_tags":["binance_spot"],"frequency":"1m"}`, Enabled: true,
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", TagIDs: []string{"binance_swap", "binance_spot"},
+		CollectParams: `{"frequency":"1m"}`, Enabled: true,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
 
 	got, err := repo.GetByTaskID(ctx, "crypto", "rule-1")
 	require.NoError(t, err)
 	assert.Equal(t, "rule-1", got.TaskID)
+	assert.Equal(t, []string{"binance_spot", "binance_swap"}, got.TagIDs)
+	var relationCount int64
+	require.NoError(t, s.db.Table("t_collector_task_tags").Where("c_space_id = ? AND c_task_id = ?", "crypto", "rule-1").Count(&relationCount).Error)
+	assert.Equal(t, int64(2), relationCount)
 
 	rules, total, err := repo.List(ctx, TaskFilter{SpaceID: "crypto", Page: 1, PageSize: 10})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
 	assert.Len(t, rules, 1)
+	assert.Equal(t, []string{"binance_spot", "binance_swap"}, rules[0].TagIDs)
 
 	updated, err := repo.UpdateByTaskID(ctx, "crypto", "rule-1", domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"subject_tags":["binance_spot"],"frequency":"1m"}`, Creator: "updated", Enabled: true,
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", CollectParams: `{"subject_tags":["binance_spot"],"frequency":"1m"}`, Creator: "updated", Enabled: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "updated", updated.Creator)
@@ -90,16 +94,14 @@ func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t 
 	ctx := context.Background()
 	require.NoError(t, repo.Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "original", Description: "before",
-		DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset-original","frequency":"1m"}`,
-		Enabled:       true, Creator: "creator", PrepareState: domain.PrepareStateReady,
+		DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset-original","frequency":"1m"}`,
+		Enabled: true, Creator: "creator", PrepareState: domain.PrepareStateReady,
 		ResultDatasetID: "dataset-original", ResultViewID: "view-original",
 	}))
 
 	updated, err := repo.UpdateMutableByTaskID(ctx, "crypto", "task-1", domain.CollectionTask{
 		SpaceID: "other", TaskID: "other", TaskName: "renamed", Description: "after",
-		DataType: "kline", Provider: "other", MarketType: "swap",
-		CollectParams: `{"target_dataset_id":"dataset-other"}`, Enabled: false,
+		DataType: "kline", CollectParams: `{"target_dataset_id":"dataset-other"}`, Enabled: false,
 		Creator: "other", PrepareState: domain.PrepareStateReady, ResultDatasetID: "dataset-other", ResultViewID: "view-other",
 	})
 	require.NoError(t, err)
@@ -109,8 +111,6 @@ func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t 
 	assert.Equal(t, "crypto", updated.SpaceID)
 	assert.Equal(t, "task-1", updated.TaskID)
 	assert.Equal(t, "kline", updated.DataType)
-	assert.Equal(t, "binance", updated.Provider)
-	assert.Equal(t, "spot", updated.MarketType)
 	assert.Equal(t, "dataset-original", updated.ResultDatasetID)
 	assert.Equal(t, "view-original", updated.ResultViewID)
 	assert.Equal(t, "creator", updated.Creator)
@@ -122,8 +122,6 @@ func TestCollectionTaskCoverageStartHonorsEnabledAndStockCalendar(t *testing.T) 
 	lookback := domain.CollectionTask{
 		SpaceID:       "stockcn",
 		DataType:      "kline",
-		Provider:      "stockcn_multi",
-		MarketType:    "equity",
 		CollectParams: `{"history_policy":{"mode":"lookback","lookback":2}}`,
 	}
 	start, err := resolveCollectionTaskCoverageStart(&lookback, now)
@@ -148,8 +146,7 @@ func TestCollectionTaskReenableRecomputesCoverageStart(t *testing.T) {
 	repo := newCollectorStore(t).Tasks()
 	ctx := context.Background()
 	rule := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "re-enable", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"history_policy":{"mode":"live_only"}}`, Enabled: true,
+		SpaceID: "crypto", TaskID: "re-enable", DataType: "kline", CollectParams: `{"history_policy":{"mode":"live_only"}}`, Enabled: true,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
 	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -180,6 +177,7 @@ func TestCollectorRuleSchemaOmitsNodeAssignmentColumns(t *testing.T) {
 		columns[name] = true
 	}
 	for _, forbidden := range []string{
+		"c_tag_ids_json",
 		"c_" + "assignment" + "_type",
 		"c_" + "assigned" + "_nodes",
 		"c_" + "node" + "_pattern",
@@ -214,8 +212,7 @@ func TestCollectionTaskRepositoryUpdatesPrepareStateWithoutChangingDefinition(t 
 	repo := s.Tasks()
 	ctx := context.Background()
 	rule := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", Provider: "moox", MarketType: "spot",
-		CollectParams: `{"target_dataset_id":"derived"}`, Enabled: true, PrepareState: domain.PrepareStatePending,
+		SpaceID: "crypto", TaskID: "resample-1", DataType: "kline_resample", CollectParams: `{"target_dataset_id":"derived"}`, Enabled: true, PrepareState: domain.PrepareStatePending,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
 	require.NoError(t, repo.SetPrepareState(ctx, "crypto", "resample-1", domain.PrepareStateWaitingView, "view pending"))

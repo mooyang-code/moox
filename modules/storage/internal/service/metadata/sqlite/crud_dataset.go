@@ -70,7 +70,7 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 			c_binding_locked, c_revision, c_status, c_attrs_json, c_subject_tags_json, c_ctime, c_mtime
 		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetDataSourceId(), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetKeepDuration(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
+	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetKeepDuration(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -389,14 +389,31 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, string, error) {
 	item.DataSourceId = strings.TrimSpace(item.GetDataSourceId())
 	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
 	item.Name = strings.TrimSpace(item.GetName())
-	if item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetDataSourceId() == "" || item.GetDataNodeId() == "" || item.GetName() == "" {
-		return nil, "", errors.New("space_id, dataset_id, data_source_id, data_node_id and name are required")
+	if item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetDataNodeId() == "" || item.GetName() == "" {
+		return nil, "", errors.New("space_id, dataset_id, data_node_id and name are required")
+	}
+	if item.GetDataSourceId() == "" && !collectorOwnedDataset(item) {
+		return nil, "", errors.New("data_source_id is required unless owner_module is collector")
 	}
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return nil, "", errors.New("data_kind must be record or time_series")
 	}
 	keepDuration, err := normalizeKeepDuration(item.GetKeepDuration(), item.GetDataKind())
 	return item, keepDuration, err
+}
+
+func collectorOwnedDataset(item *pb.Dataset) bool {
+	if item == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(item.GetAttributes()["owner_module"]), "collector")
+}
+
+func nullableDatasetSource(sourceID string) any {
+	if sourceID = strings.TrimSpace(sourceID); sourceID != "" {
+		return sourceID
+	}
+	return nil
 }
 
 func validateDatasetStatus(status string) error {

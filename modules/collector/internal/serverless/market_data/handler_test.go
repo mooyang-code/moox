@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -53,6 +54,52 @@ func TestHandlerRoutesTimerToSourceBoundMarketFetch(t *testing.T) {
 	require.Equal(t, "tencent", observed.Provider)
 	require.Equal(t, "stockcn_http", observed.SourceID)
 	require.Equal(t, "stockcn_http", observed.Items[0].SourceID)
+}
+
+func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	// Presence of subjects makes the runtime look like an existing timer node.
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "BTC-USDT")
+	t.Setenv("MOOX_MARKET_FETCH_MODE", "kline")
+
+	published := 0
+	var observed marketfetch.Request
+	handler := &Handler{
+		NewMarketFetch: func() *marketfetch.Handler {
+			return &marketfetch.Handler{
+				NewStorage: func(string, string, string) (marketfetch.Storage, error) { return timerStorage{}, nil },
+				Publish: func(_ context.Context, request marketfetch.Request, _ proto.Message) error {
+					published++
+					observed = request
+					return nil
+				},
+				Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+					observed = request
+					return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
+				},
+			}
+		},
+	}
+
+	req := marketfetch.Request{
+		BatchID: "batch-shared", BatchKind: "realtime", SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m",
+		Provider: "binance", SourceID: "spot_http", MarketType: "spot",
+		Items: []domain.CollectionItem{{InstanceID: "instance-1", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars-a", Frequency: "1m", BarLimit: 1}},
+	}
+	rawReq, err := json.Marshal(req)
+	require.NoError(t, err)
+	var data map[string]any
+	require.NoError(t, json.Unmarshal(rawReq, &data))
+	raw, err := json.Marshal(model.CloudFunctionEvent{
+		Action: model.EventActionMarketFetch, Source: model.EventSourceCollectorScheduler,
+		RequestID: "request-shared", StorageRPCGatewayTarget: "ip://storage:11003", Data: data,
+	})
+	require.NoError(t, err)
+	response, err := handler.HandleRequest(context.Background(), raw)
+	require.NoError(t, err)
+	require.True(t, response.(*model.Response).Success)
+	require.Equal(t, 1, published, "durable scheduler invokes must publish BatchCompleted")
+	require.Equal(t, "batch-shared", observed.BatchID)
 }
 
 func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {

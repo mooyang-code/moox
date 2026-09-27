@@ -24,6 +24,13 @@ func TestBuildManagedEnvironmentPinsPriorityCryptoSubjectsFirst(t *testing.T) {
 	require.Equal(t, "BTC-USDT|ETH-USDT|AAA-USDT|ZZZ-USDT", env["MOOX_MARKET_FETCH_SUBJECTS"])
 }
 
+func TestBuildManagedEnvironmentCarriesSelectedOutputFields(t *testing.T) {
+	assignment := NodeAssignment{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"BTC-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": "BTCUSDT"}, OutputFields: []string{"volume", "close", "close"}, Enabled: true}
+	env, err := BuildManagedEnvironment(assignment, nil)
+	require.NoError(t, err)
+	require.Equal(t, "close|volume", env["MOOX_MARKET_FETCH_OUTPUT_FIELDS"])
+}
+
 func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
 	assignment := NodeAssignment{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "cn-equity", DatasetID: "bars", Frequency: "1m", Subjects: []string{"ETH-USDT", "BTC-USDT"}, ExternalSymbols: map[string]string{"ETH-USDT": "ETHUSDT", "BTC-USDT": "BTCUSDT"}, Enabled: true, AssignmentHash: "abc"}
 	env, err := BuildManagedEnvironment(assignment, map[string]sources.DNSResolution{
@@ -53,6 +60,7 @@ func TestTimerRequestFromEnvCarriesBoundSourceIDToEveryItem(t *testing.T) {
 	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", "")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
+	t.Setenv("MOOX_MARKET_FETCH_OUTPUT_FIELDS", "close|volume")
 
 	request, _, err := TimerRequestFromEnv("request-1", "function-1", time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
@@ -61,6 +69,7 @@ func TestTimerRequestFromEnvCarriesBoundSourceIDToEveryItem(t *testing.T) {
 	for _, item := range request.Items {
 		require.Equal(t, "tencent", item.Provider)
 		require.Equal(t, "stockcn_http", item.SourceID)
+		require.Equal(t, []string{"close", "volume"}, item.OutputFields)
 	}
 }
 

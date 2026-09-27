@@ -35,7 +35,7 @@
         </a-table-column>
         <a-table-column title="探测配置" :width="220">
           <template #cell="{ record }">
-            <span v-if="record.sources?.length">{{ record.sources.join(", ") }} · {{ record.instrument_type || "-" }}</span>
+            <span v-if="record.source">{{ record.source }} · {{ record.market_type || "-" }}</span>
             <span v-else class="muted">—</span>
           </template>
         </a-table-column>
@@ -95,19 +95,15 @@
             <a-radio value="auto">自动</a-radio>
           </a-radio-group>
         </a-form-item>
-        <a-form-item v-if="form.mode === 'manual'" field="probe" label="自动探测有效性">
-          <a-switch v-model="form.probe" />
-        </a-form-item>
-        <template v-if="needsSource">
-          <a-form-item field="sources" label="数据源" required>
-            <a-select v-model="form.sources" multiple allow-search placeholder="选择标的列表数据源">
+        <a-form-item field="source" label="数据源" required>
+            <a-select v-model="form.source" :disabled="editing" allow-search placeholder="选择标的列表数据源">
               <a-option v-for="source in listingSources" :key="source.data_source_id" :value="source.data_source_id">
                 {{ source.name || source.data_source_id }}（{{ source.data_source_id }}）
               </a-option>
             </a-select>
           </a-form-item>
-          <a-form-item field="instrument_type" label="产品类型" required>
-            <a-select v-model="form.instrument_type" placeholder="选择产品类型">
+        <a-form-item field="market_type" label="市场类型" required>
+            <a-select v-model="form.market_type" :disabled="editing" placeholder="选择市场类型">
               <a-option v-for="type in instrumentTypes" :key="type" :value="type">{{ type }}</a-option>
             </a-select>
           </a-form-item>
@@ -130,7 +126,6 @@
             <a-tag v-for="run in previewRuns" :key="run" size="small">{{ formatTime(run) }}</a-tag>
             <span v-if="!previewRuns.length" class="run-status--failed">Cron 表达式无效</span>
           </div>
-        </template>
       </a-form>
     </a-modal>
 
@@ -169,14 +164,13 @@ const referenceVisible = ref(false);
 const references = ref<TagReference[]>([]);
 const form = reactive<TagFormState>(emptyForm());
 
-const needsSource = computed(() => form.mode === "auto" || form.probe);
 const listingSources = computed(() => dataSources.value.filter(source => parseListing(source).length > 0));
 const instrumentTypes = computed(() => {
   const values = new Set<string>();
   for (const source of listingSources.value) parseListing(source).forEach(item => values.add(item));
   return [...values];
 });
-const previewRuns = computed(() => (needsSource.value ? nextRuns(form.cron, form.timezone, 3) : []));
+const previewRuns = computed(() => (form.mode === "auto" ? nextRuns(form.cron, form.timezone, 3) : []));
 const timezoneOptions = ["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Singapore", "America/New_York", "Europe/London"];
 
 function emptyForm(): TagFormState {
@@ -185,9 +179,8 @@ function emptyForm(): TagFormState {
     tag_name: "",
     description: "",
     mode: "manual",
-    probe: false,
-    sources: [],
-    instrument_type: "",
+    source: "",
+    market_type: "",
     cron: "0 * * * *",
     timezone: "UTC"
   };
@@ -243,7 +236,36 @@ async function submit(): Promise<boolean> {
     Message.warning(error);
     return false;
   }
-  await upsertTag(toTagPayload(props.spaceId, form));
+  if (!editing.value) {
+    const tagId = form.tag_id.trim().toLowerCase();
+    try {
+      for (let page = 1; ; page += 1) {
+        const response = await listTags(props.spaceId, { page, size: 500 });
+        if ((response.tags || []).some(tag => tag.tag_id.trim().toLowerCase() === tagId)) {
+          Message.warning(`标签 ID “${tagId}”已存在，请使用其他 ID`);
+          return false;
+        }
+        if (!response.page_result?.has_more || !(response.tags || []).length) break;
+      }
+    } catch (error) {
+      Message.error(error instanceof Error ? error.message : "检查标签 ID 是否重复失败");
+      return false;
+    }
+  }
+  try {
+    await upsertTag(toTagPayload(props.spaceId, form), !editing.value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "标签保存失败";
+    if (!editing.value && /tag name .* already exists/i.test(message)) {
+      Message.warning("标签名称已存在，请使用其他名称");
+      return false;
+    }
+    if (!editing.value && /tag .* already exists|tag_id already exists|already exists/i.test(message)) {
+      Message.warning(`标签 ID “${form.tag_id.trim().toLowerCase()}”已存在，请使用其他 ID`);
+      return false;
+    }
+    throw error;
+  }
   Message.success("标签已保存");
   visible.value = false;
   await load();

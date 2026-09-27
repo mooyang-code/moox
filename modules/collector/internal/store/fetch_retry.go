@@ -15,7 +15,10 @@ type FetchRetryRepository struct{ db *gorm.DB }
 func NewFetchRetryRepository(db *gorm.DB) *FetchRetryRepository { return &FetchRetryRepository{db: db} }
 
 func (r *FetchRetryRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
-	return r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.RetryItem{}).Error
+	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
+	// Only target-scoped retries are owned by one CollectionTask. Fetch retries
+	// belong to the shared instance and survive while another WriteTarget exists.
+	return r.db.WithContext(ctx).Where(`c_space_id = ? AND c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, spaceID, taskID).Delete(&domain.RetryItem{}).Error
 }
 
 func (r *FetchRetryRepository) Upsert(ctx context.Context, item *domain.RetryItem) error {
@@ -67,8 +70,11 @@ func (r *FetchRetryRepository) Get(ctx context.Context, spaceID, retryKey string
 func (r *FetchRetryRepository) CountPending(ctx context.Context, spaceID, datasetID, frequency string) (int64, error) {
 	var count int64
 	query := r.db.WithContext(ctx).Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_status = ?", spaceID, "pending")
-	if datasetID != "" {
-		query = query.Where("c_dataset_id = ?", datasetID)
+	if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
+		query = query.Where(`(
+			c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_dataset_id = ?)
+			OR (c_write_target_id = '' AND c_instance_id IN (SELECT c_instance_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_dataset_id = ?))
+		)`, spaceID, datasetID, spaceID, datasetID)
 	}
 	if frequency != "" {
 		query = query.Where("c_frequency = ?", frequency)

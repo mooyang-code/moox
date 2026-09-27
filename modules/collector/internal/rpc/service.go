@@ -3,6 +3,8 @@ package rpc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
@@ -21,6 +22,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/rs/xid"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -146,14 +148,12 @@ func (s *Service) GetTaskList(ctx context.Context, req *pb.GetTaskListReq) (*pb.
 	}
 	page, size := pageParams(req.GetPage())
 	tasks, total, err := s.taskRepo.List(ctx, store.TaskFilter{
-		SpaceID:    spaceID,
-		DataType:   req.GetDataType(),
-		Provider:   req.GetProvider(),
-		MarketType: req.GetMarketType(),
-		Enabled:    req.Enabled,
-		TaskID:     req.GetTaskId(),
-		Page:       page,
-		PageSize:   size,
+		SpaceID:  spaceID,
+		DataType: req.GetDataType(),
+		Enabled:  req.Enabled,
+		TaskID:   req.GetTaskId(),
+		Page:     page,
+		PageSize: size,
 	})
 	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] list collection tasks failed: %v", err)
@@ -192,7 +192,11 @@ func (s *Service) toPBTask(ctx context.Context, task domain.CollectionTask) *pb.
 	if s == nil || s.resultManager == nil || result == nil || result.Result == nil {
 		return result
 	}
-	inspection, err := s.resultManager.Inspect(ctx, task.SpaceID, task.TaskID)
+	ids, idsErr := collectionTaskResultIDs(task)
+	if idsErr != nil {
+		return result
+	}
+	inspection, err := s.resultManager.InspectIDs(ctx, task.SpaceID, task.TaskID, ids)
 	if err != nil {
 		log.WarnContextf(ctx, "[Collector] inspect task result failed space=%s task=%s: %v", task.SpaceID, task.TaskID, err)
 		result.Result.Status = taskresult.ResultStatusError
@@ -238,7 +242,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	var err error
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -246,7 +250,7 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	if err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	params, err = domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err = domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -255,8 +259,22 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	task.CollectParams = cleanParams
-	params, err = domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
+		task.CollectParams, err = stripCollectionTaskRouting(task.CollectParams)
+		if err != nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+	}
+	params, err = domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	// Subject tags are normalized into Dataset metadata and intentionally
+	// removed from the persisted collect_params document. Keep the resolved
+	// range on the in-memory params for result identity generation.
+	params.SubjectTags = append([]string(nil), subjectTags...)
+	task.TagIDs = normalizeTagIDs(subjectTags)
+	if err := s.validateCollectionTaskTagRoutes(ctx, task); err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if err := validateCollectionTask(task); err != nil {
@@ -266,6 +284,9 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	if err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	// Hash the normalized, persisted definition so duplicate checks include the
+	// resolved tag range and canonical collector parameters.
+	task.DefinitionHash = collectionTaskDefinitionHash(task)
 	if _, lookupErr := s.taskRepo.GetByTaskID(ctx, task.SpaceID, task.TaskID); lookupErr == nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task %s already exists", task.TaskID))}, nil
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -276,14 +297,23 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, lookupErr.Error())}, nil
 	}
+	if existing, lookupErr := s.taskRepo.GetByDefinitionHash(ctx, task.SpaceID, task.DefinitionHash); lookupErr == nil && existing != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("same tag, task type, frequency and parameters already exist in task %s", existing.TaskID))}, nil
+	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, lookupErr.Error())}, nil
+	}
 	if requestedTaskID != "" && s.resultManager != nil {
-		inspection, inspectErr := s.resultManager.Inspect(ctx, task.SpaceID, task.TaskID)
+		inspection, inspectErr := s.resultManager.InspectIDs(ctx, task.SpaceID, task.TaskID, taskresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID})
 		if inspectErr != nil {
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("inspect retained task result before create: %v", inspectErr))}, nil
 		}
 		if inspection.Dataset != nil || inspection.View != nil {
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id has retained result data; create the task with a new task_id")}, nil
 		}
+	}
+	task, resultIDs, err := assignGeneratedCollectionTaskResult(task, params)
+	if err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	resultConfig := req.GetResultConfig()
 	dataNodeID := s.resultDataNodeID
@@ -299,16 +329,14 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			description = strings.TrimSpace(resultConfig.GetDescription())
 		}
 	}
-	var resultIDs taskresult.IDs
 	var cleanupResult func(context.Context) error
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-		// Resample results use the same task-exclusive identity. Their
-		// Dataset/View are prepared asynchronously with source lineage.
-		resultIDs = taskresult.ResultIDs(task.SpaceID, task.TaskID)
+		// Resample results use the same logical View identity; their Dataset/View
+		// are prepared asynchronously with source lineage.
 		task.ResultDatasetID = resultIDs.DatasetID
 		task.ResultViewID = resultIDs.ViewID
 		task.CollectParams = setTaskResultDatasetID(task.CollectParams, resultIDs.DatasetID)
-		params, err = domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+		params, err = domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 		if err != nil {
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 		}
@@ -317,8 +345,11 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
 		var err error
-		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, task.MarketType, taskresult.Config{DataNodeID: dataNodeID, KeepDuration: keepDuration, Name: task.TaskName, Description: description, DataSourceID: task.Provider, Frequency: firstTaskFrequency(params), Frequencies: append([]string(nil), params.Collector.Intervals...), SubjectTags: subjectTags})
+		resultIDs, cleanupResult, err = s.resultManager.EnsureWithCleanup(ctx, task.SpaceID, task.TaskID, task.DataType, "", taskresult.Config{ViewID: resultIDs.ViewID, DataNodeID: dataNodeID, KeepDuration: keepDuration, Name: task.TaskName, Description: description, Frequency: firstTaskFrequency(params), Frequencies: append([]string(nil), params.Collector.Intervals...), SubjectTags: subjectTags, OutputFields: params.OutputFields})
 		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+				return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+			}
 			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
 		task.ResultDatasetID, task.ResultViewID = resultIDs.DatasetID, resultIDs.ViewID
@@ -409,12 +440,6 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if dataType := strings.TrimSpace(requested.DataType); dataType != "" {
 		task.DataType = dataType
 	}
-	if provider := strings.TrimSpace(requested.Provider); provider != "" {
-		task.Provider = provider
-	}
-	if marketType := strings.TrimSpace(requested.MarketType); marketType != "" {
-		task.MarketType = marketType
-	}
 	if creator := strings.TrimSpace(requested.Creator); creator != "" {
 		task.Creator = creator
 	}
@@ -427,7 +452,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 		}
 	}
-	requestedParams, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	requestedParams, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -435,9 +460,25 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	existingTags, err := s.existingCollectionSubjectTags(ctx, *existing)
+	if err != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	if !equalStringSlices(existingTags, subjectTags) {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "采集标的范围不可修改，请创建新任务")}, nil
+	}
 	task.CollectParams = cleanParams
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
+		task.CollectParams, err = stripCollectionTaskRouting(task.CollectParams)
+		if err != nil {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+	}
 	task.ResultDatasetID, task.ResultViewID = existing.ResultDatasetID, existing.ResultViewID
 	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if err := s.validateCollectionTaskTagRoutes(ctx, task); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if err := validateCollectionTaskUpdate(*existing, task); err != nil {
@@ -474,7 +515,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if err := s.validateCollectionTaskDatasets(ctx, task); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	updated, err := s.taskRepo.UpdateMutableByTaskID(ctx, spaceID, taskID, task)
+	updated, err := s.taskRepo.UpdateValidatedTaskByTaskID(ctx, spaceID, taskID, task)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] update collection task failed: %v", err)
 		if named, lookupErr := s.taskRepo.GetByTaskName(ctx, spaceID, task.TaskName); lookupErr == nil && named != nil && named.TaskID != existing.TaskID {
@@ -487,7 +528,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 			// The task row is the local source of truth. Restore it when the
 			// cross-service Dataset update fails so a retry cannot observe a task
 			// definition that points at an unapplied subject scope.
-			if _, rollbackErr := s.taskRepo.UpdateMutableByTaskID(ctx, spaceID, taskID, *existing); rollbackErr != nil {
+			if _, rollbackErr := s.taskRepo.UpdateValidatedTaskByTaskID(ctx, spaceID, taskID, *existing); rollbackErr != nil {
 				log.ErrorContextf(ctx, "[Collector] rollback collection task after Dataset tag update failure: %v", rollbackErr)
 				return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("%v; task rollback failed: %v", err, rollbackErr))}, nil
 			}
@@ -610,7 +651,13 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 	}
 	out := make([]*pb.TaskInstance, 0, len(instances))
 	for _, instance := range instances {
-		out = append(out, toPBInstance(instance))
+		item := toPBInstance(instance)
+		if targets, targetErr := s.instanceRepo.ListWriteTargets(ctx, instance.SpaceID, instance.InstanceID); targetErr == nil {
+			for _, target := range targets {
+				item.Targets = append(item.Targets, toPBWriteTarget(target))
+			}
+		}
+		out = append(out, item)
 	}
 	return &pb.GetTaskInstanceListRsp{RetInfo: retOK(), Instances: out, Page: pageResult(page, size, total)}, nil
 }
@@ -668,7 +715,7 @@ func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartK
 	if task.PrepareState != domain.PrepareStateReady {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task is not ready (prepare_state=%s)", task.PrepareState))}, nil
 	}
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -827,18 +874,59 @@ func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKline
 func normalizeCollectionTask(task domain.CollectionTask) domain.CollectionTask {
 	task.SpaceID = strings.TrimSpace(task.SpaceID)
 	task.TaskID = strings.TrimSpace(task.TaskID)
-	if task.TaskID == "" {
-		task.TaskID = "task_" + uuid.NewString()
-	}
+	// Task IDs are server identities; never accept a caller supplied format.
+	task.TaskID = xid.New().String()
 	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
 	task.Description = strings.TrimSpace(task.Description)
 	task.DataType = strings.TrimSpace(task.DataType)
-	task.Provider = strings.TrimSpace(task.Provider)
-	task.MarketType = strings.TrimSpace(task.MarketType)
+	// Persist one canonical representation so reads, uniqueness checks and
+	// scheduler joins all observe the same tag set.
+	task.TagIDs = normalizeTagIDs(task.TagIDs)
 	if strings.TrimSpace(task.CollectParams) == "" {
 		task.CollectParams = "{}"
 	}
+	task.DefinitionHash = collectionTaskDefinitionHash(task)
 	return task
+}
+
+func collectionTaskDefinitionHash(task domain.CollectionTask) string {
+	params := strings.TrimSpace(task.CollectParams)
+	if parsed, err := domain.ParseCollectParams(params, "", "", task.DataType); err == nil {
+		// Tag membership is hashed separately and task-owned result identity must
+		// never make otherwise identical definitions look different. Parse/Normalize
+		// also canonicalizes output-field ordering, frequency spelling and defaults.
+		parsed.SubjectTags = nil
+		parsed.TargetDatasetID = ""
+		if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
+			// Direct collection routing belongs to Tag/Space, never to the task.
+			parsed.Provider = ""
+			parsed.MarketType = ""
+			parsed.MarketID = ""
+			parsed.InstrumentType = ""
+			parsed.SourceID = ""
+			parsed.SeriesTag = ""
+		}
+		if encoded, encodeErr := parsed.CanonicalJSON(); encodeErr == nil {
+			params = encoded
+		}
+	} else {
+		var values map[string]json.RawMessage
+		if json.Unmarshal([]byte(params), &values) == nil {
+			for _, key := range []string{"target_dataset_id", "target_view_id", "result_dataset_id", "result_view_id"} {
+				delete(values, key)
+			}
+			if encoded, encodeErr := json.Marshal(values); encodeErr == nil {
+				params = string(encoded)
+			}
+		}
+	}
+	// Tag order is presentation-only. Canonicalize it before hashing so the
+	// same set of tags cannot create duplicate result metadata merely because
+	// the UI returned them in a different order.
+	tagIDs := stringSliceJSON(normalizeTagIDs(task.TagIDs))
+	canonical := strings.Join([]string{strings.TrimSpace(task.SpaceID), tagIDs, strings.TrimSpace(task.DataType), params}, "|")
+	sum := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(sum[:])
 }
 
 func validateCreateTaskResultIdentity(raw string) error {
@@ -870,7 +958,15 @@ func assignGeneratedCollectionTaskResult(task domain.CollectionTask, params *dom
 		return task, taskresult.IDs{}, fmt.Errorf("collect params are required")
 	}
 	var ids taskresult.IDs
-	ids = taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	frequency := params.Frequency
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		frequency = params.TargetFrequency
+	}
+	tagID := ""
+	if len(params.SubjectTags) > 0 {
+		tagID = params.SubjectTags[0]
+	}
+	ids = taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, tagID, task.DataType, frequency)
 	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
 	task.CollectParams = setTaskResultDatasetID(task.CollectParams, ids.DatasetID)
 	return task, ids, nil
@@ -917,7 +1013,22 @@ func validateTaskResultIdentityUpdate(existing domain.CollectionTask, requested 
 }
 
 func collectionTaskResultIDs(task domain.CollectionTask) (taskresult.IDs, error) {
-	return taskresult.ResultIDs(task.SpaceID, task.TaskID), nil
+	if strings.TrimSpace(task.ResultDatasetID) != "" && strings.TrimSpace(task.ResultViewID) != "" {
+		return taskresult.IDs{DatasetID: strings.TrimSpace(task.ResultDatasetID), ViewID: strings.TrimSpace(task.ResultViewID)}, nil
+	}
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+	if err != nil {
+		return taskresult.IDs{}, err
+	}
+	frequency := params.Frequency
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		frequency = params.TargetFrequency
+	}
+	tagID := ""
+	if len(params.SubjectTags) > 0 {
+		tagID = params.SubjectTags[0]
+	}
+	return taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, tagID, task.DataType, frequency), nil
 }
 
 func setTaskResultDatasetID(raw, datasetID string) string {
@@ -952,9 +1063,16 @@ func firstTaskFrequency(params *domain.CollectParams) string {
 // tasks must explicitly select tags except for resample tasks, which inherit
 // the source Dataset scope.
 func (s *Service) resolveSubjectTags(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, fallbackDatasetID string) (string, []string, error) {
-	clean, tags, err := domain.SplitSubjectTags(task.CollectParams)
+	clean, paramTags, err := domain.SplitSubjectTags(task.CollectParams)
 	if err != nil {
 		return "", nil, err
+	}
+	tags := normalizeTagIDs(task.TagIDs)
+	if len(tags) > 0 && len(paramTags) > 0 && !equalStringSlices(tags, paramTags) {
+		return "", nil, errors.New("tag_ids and collect_params.subject_tags must match")
+	}
+	if len(tags) == 0 {
+		tags = normalizeTagIDs(paramTags)
 	}
 	if len(tags) == 0 {
 		if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
@@ -1008,9 +1126,48 @@ func normalizeTagIDs(values []string) []string {
 	return result
 }
 
+func (s *Service) existingCollectionSubjectTags(ctx context.Context, task domain.CollectionTask) ([]string, error) {
+	if tags := normalizeTagIDs(task.TagIDs); len(tags) > 0 {
+		return tags, nil
+	}
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+	if err != nil {
+		return nil, err
+	}
+	datasetID := strings.TrimSpace(task.ResultDatasetID)
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		datasetID = strings.TrimSpace(params.SourceDatasetID)
+	}
+	if datasetID == "" || s.datasetSrc == nil {
+		return nil, nil
+	}
+	info, err := s.datasetSrc.GetDataset(ctx, task.SpaceID, datasetID)
+	if err != nil {
+		return nil, fmt.Errorf("read existing collection tag range: %w", err)
+	}
+	return normalizeTagIDs(info.SubjectTags), nil
+}
+
+func equalStringSlices(left, right []string) bool {
+	left = normalizeTagIDs(left)
+	right = normalizeTagIDs(right)
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func validateCollectionTask(task domain.CollectionTask) error {
 	if strings.TrimSpace(task.TaskID) == "" {
 		return fmt.Errorf("task_id is required")
+	}
+	if strings.Contains(task.TaskID, "::") {
+		return fmt.Errorf("task_id cannot contain the reserved delimiter ::")
 	}
 	if strings.TrimSpace(task.SpaceID) == "" {
 		return fmt.Errorf("space_id is required")
@@ -1021,10 +1178,11 @@ func validateCollectionTask(task domain.CollectionTask) error {
 	if strings.TrimSpace(task.DataType) == "" {
 		return fmt.Errorf("data_type is required")
 	}
-	if strings.TrimSpace(task.Provider) == "" {
-		return fmt.Errorf("provider is required")
+	tagIDs := normalizeTagIDs(task.TagIDs)
+	if len(tagIDs) == 0 && !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+		return fmt.Errorf("tag_ids are required")
 	}
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
@@ -1032,34 +1190,72 @@ func validateCollectionTask(task domain.CollectionTask) error {
 		if err := collectorresample.ValidateTaskParams(params); err != nil {
 			return fmt.Errorf("invalid collect_params: %w", err)
 		}
-	} else if err := params.Validate(); err != nil {
-		return fmt.Errorf("invalid collect_params: %w", err)
+	} else {
+		if err := params.ValidateTaskDefinition(); err != nil {
+			return fmt.Errorf("invalid collect_params: %w", err)
+		}
 	}
-	if strings.EqualFold(params.Provider, "stockcn_multi") &&
-		!strings.EqualFold(params.Collector.DataType, "kline") {
-		return fmt.Errorf("stockcn_multi only supports kline collectors")
+	if !strings.EqualFold(task.DataType, params.Collector.DataType) {
+		return fmt.Errorf("task data_type does not match collect_params")
 	}
-	if !strings.EqualFold(params.Provider, "stockcn_multi") {
-		definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
-		if !ok || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
-			return fmt.Errorf(
-				"unsupported collector: exchange=%s market=%s data_type=%s source_kind=%s",
-				params.Collector.Exchange,
-				params.Collector.Market,
-				params.Collector.DataType,
-				params.Source.Kind,
-			)
+	return nil
+}
+
+func stripCollectionTaskRouting(raw string) (string, error) {
+	values := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return "", fmt.Errorf("invalid collect_params: %w", err)
+	}
+	for _, key := range []string{"provider", "market_type", "market_id", "instrument_type", "source_id", "series_tag"} {
+		delete(values, key)
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("encode collect_params: %w", err)
+	}
+	return string(encoded), nil
+}
+
+type collectionTaskTagSource interface {
+	GetTag(context.Context, string, string) (*storagepb.Tag, error)
+}
+
+func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task domain.CollectionTask) error {
+	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
+		return nil
+	}
+	tagSource, ok := s.datasetSrc.(collectionTaskTagSource)
+	if !ok {
+		// Some focused unit fakes expose only Dataset/Subject resolution. The
+		// production DatasetSource implements GetTag and always takes this path.
+		return nil
+	}
+	for _, tagID := range normalizeTagIDs(task.TagIDs) {
+		tag, err := tagSource.GetTag(ctx, task.SpaceID, tagID)
+		if err != nil {
+			return fmt.Errorf("load tag %s: %w", tagID, err)
+		}
+		source := strings.ToLower(strings.TrimSpace(tag.GetSource()))
+		market := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+		if source == "" || market == "" {
+			return fmt.Errorf("tag %s must have immutable source and market_type", tagID)
+		}
+		params, err := domain.ParseCollectParams(task.CollectParams, source, market, task.DataType)
+		if err != nil {
+			return fmt.Errorf("validate tag %s route: %w", tagID, err)
+		}
+		if err := params.Validate(); err != nil {
+			return fmt.Errorf("tag %s route is invalid: %w", tagID, err)
+		}
+		definition, exists := jobs.JobDefinitionByDataType(params.Collector.DataType)
+		if !exists || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
+			return fmt.Errorf("tag %s route is unsupported: provider=%s market=%s data_type=%s", tagID, source, market, params.Collector.DataType)
 		}
 		if definition.ExecutionMode == jobs.ExecutionModeCloudInvoke {
-			if _, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType); !routeOK {
-				return fmt.Errorf("cloud collector route not found: exchange=%s data_type=%s", params.Collector.Exchange, params.Collector.DataType)
+			if _, routeOK := jobs.JobRouteFor(source, params.Collector.DataType); !routeOK {
+				return fmt.Errorf("tag %s provider route not found: provider=%s data_type=%s", tagID, source, params.Collector.DataType)
 			}
 		}
-	}
-	if !strings.EqualFold(task.Provider, params.Provider) ||
-		!strings.EqualFold(task.MarketType, params.MarketType) ||
-		!strings.EqualFold(task.DataType, params.Collector.DataType) {
-		return fmt.Errorf("task identity does not match collect_params")
 	}
 	return nil
 }
@@ -1083,7 +1279,7 @@ func canonicalizeCollectionTask(task domain.CollectionTask) (domain.CollectionTa
 		}
 		return task, nil
 	}
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return task, err
 	}
@@ -1100,12 +1296,8 @@ func canonicalizeCollectionTask(task domain.CollectionTask) (domain.CollectionTa
 }
 
 func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error {
-	if existing.SpaceID != desired.SpaceID ||
-		existing.TaskID != desired.TaskID ||
-		strings.TrimSpace(existing.DataType) != strings.TrimSpace(desired.DataType) ||
-		strings.TrimSpace(existing.Provider) != strings.TrimSpace(desired.Provider) ||
-		strings.TrimSpace(existing.MarketType) != strings.TrimSpace(desired.MarketType) {
-		return fmt.Errorf("task identity and data source cannot change; create a new task")
+	if existing.SpaceID != desired.SpaceID || existing.TaskID != desired.TaskID || strings.TrimSpace(existing.DataType) != strings.TrimSpace(desired.DataType) {
+		return fmt.Errorf("task identity cannot change; create a new task")
 	}
 	if strings.TrimSpace(existing.ResultDatasetID) != strings.TrimSpace(desired.ResultDatasetID) ||
 		strings.TrimSpace(existing.ResultViewID) != strings.TrimSpace(desired.ResultViewID) {
@@ -1117,11 +1309,24 @@ func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error
 	if err := domain.ValidateCollectionTaskName(desired.TaskName); err != nil {
 		return err
 	}
-	existingParams, err := domain.ParseCollectParams(existing.CollectParams, existing.Provider, existing.MarketType, existing.DataType)
+	existingRaw := existing.CollectParams
+	desiredRaw := desired.CollectParams
+	var err error
+	if strings.EqualFold(strings.TrimSpace(desired.DataType), "kline") {
+		existingRaw, err = stripCollectionTaskRouting(existingRaw)
+		if err != nil {
+			return fmt.Errorf("normalize existing task collect_params: %w", err)
+		}
+		desiredRaw, err = stripCollectionTaskRouting(desiredRaw)
+		if err != nil {
+			return fmt.Errorf("normalize desired task collect_params: %w", err)
+		}
+	}
+	existingParams, err := domain.ParseCollectParams(existingRaw, "", "", existing.DataType)
 	if err != nil {
 		return fmt.Errorf("parse existing task collect_params: %w", err)
 	}
-	desiredParams, err := domain.ParseCollectParams(desired.CollectParams, desired.Provider, desired.MarketType, desired.DataType)
+	desiredParams, err := domain.ParseCollectParams(desiredRaw, "", "", desired.DataType)
 	if err != nil {
 		return fmt.Errorf("parse desired task collect_params: %w", err)
 	}
@@ -1145,7 +1350,7 @@ func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error
 }
 
 func (s *Service) validateCollectionTaskDatasets(ctx context.Context, task domain.CollectionTask) error {
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return err
 	}
@@ -1194,8 +1399,8 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 		return fmt.Errorf("source Dataset %s cannot be another resample result", params.SourceDatasetID)
 	}
 	actualMarket := strings.ToLower(strings.TrimSpace(info.Attributes["market_type"]))
-	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(task.MarketType)) {
-		return fmt.Errorf("source Dataset %s market_type=%s does not match task market_type=%s", params.SourceDatasetID, actualMarket, task.MarketType)
+	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(params.MarketType)) {
+		return fmt.Errorf("source Dataset %s market_type=%s does not match collect_params market_type=%s", params.SourceDatasetID, actualMarket, params.MarketType)
 	}
 	wantedFrequency, normalizeErr := report.NormalizeDatasetFrequency(strings.TrimSpace(params.SourceFrequency))
 	if normalizeErr != nil {
@@ -1254,16 +1459,18 @@ func (s *Service) validateDataset(
 	if info.Status != "active" {
 		return fmt.Errorf("%s Dataset %s must be active", role, datasetID)
 	}
-	sourceMatches := strings.EqualFold(info.DataSourceID, exchange) ||
-		(allowSharedMarket && strings.EqualFold(info.DataSourceID, "crypto"))
-	if !sourceMatches {
-		return fmt.Errorf(
-			"%s Dataset %s data_source_id=%s does not match collector exchange=%s",
-			role,
-			datasetID,
-			info.DataSourceID,
-			exchange,
-		)
+	if exchange = strings.TrimSpace(exchange); exchange != "" {
+		sourceMatches := strings.EqualFold(info.DataSourceID, exchange) ||
+			(allowSharedMarket && strings.EqualFold(info.DataSourceID, "crypto"))
+		if !sourceMatches {
+			return fmt.Errorf(
+				"%s Dataset %s data_source_id=%s does not match collector exchange=%s",
+				role,
+				datasetID,
+				info.DataSourceID,
+				exchange,
+			)
+		}
 	}
 	if info.DataKind != expectedKind {
 		return fmt.Errorf(

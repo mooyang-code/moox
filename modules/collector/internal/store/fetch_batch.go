@@ -19,7 +19,6 @@ type MarketFetchInstanceUpdate struct {
 	SpaceID string
 	// InstanceID narrows the freshness update to one stable TaskInstance.
 	InstanceID     string
-	DatasetID      string
 	SubjectID      string
 	Frequency      string
 	TargetDataTime time.Time
@@ -32,7 +31,6 @@ type MarketFetchInstanceUpdate struct {
 // newer realtime bar for the same governed route was stored successfully.
 type MarketFetchRetrySupersede struct {
 	SpaceID        string
-	DatasetID      string
 	SubjectID      string
 	Frequency      string
 	TargetDataTime time.Time
@@ -58,10 +56,9 @@ type FetchCompletionEffects struct {
 
 func NewFetchBatchRepository(db *gorm.DB) *FetchBatchRepository { return &FetchBatchRepository{db: db} }
 
-func (r *FetchBatchRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
-	return r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.BatchInvocation{}).Error
-}
-
+// CreatePlanned persists a batch with no single task/Dataset owner. Production
+// scheduling should prefer CreatePlannedWithItemsForEnabledTargets so the batch
+// and its shared instance membership are committed under the same race barrier.
 func (r *FetchBatchRepository) CreatePlanned(ctx context.Context, batch *domain.BatchInvocation) (bool, error) {
 	if batch == nil {
 		return false, gorm.ErrInvalidData
@@ -78,21 +75,30 @@ func (r *FetchBatchRepository) CreatePlanned(ctx context.Context, batch *domain.
 	return result.RowsAffected == 1, result.Error
 }
 
-// CreatePlannedForEnabledTask makes the task-enabled check and batch insert a
-// single SQLite transaction. DeleteTask disables the task before clearing
-// runtime rows, so a planner racing that operation cannot recreate a batch
-// after the delete has committed.
-func (r *FetchBatchRepository) CreatePlannedForEnabledTask(ctx context.Context, batch *domain.BatchInvocation) (bool, error) {
+// CreatePlannedWithItemsForEnabledTargets atomically persists a batch and its
+// instance membership only when at least one attached WriteTarget still belongs
+// to an enabled CollectionTask. This is the shared-acquisition race barrier: a
+// disabled first task must not suppress another enabled target on the same batch.
+func (r *FetchBatchRepository) CreatePlannedWithItemsForEnabledTargets(ctx context.Context, batch *domain.BatchInvocation, instanceIDs []string) (bool, error) {
 	if batch == nil {
+		return false, gorm.ErrInvalidData
+	}
+	spaceID := strings.TrimSpace(batch.SpaceID)
+	batchID := strings.TrimSpace(batch.BatchID)
+	instanceIDs = uniqueNonEmptyStrings(instanceIDs)
+	if spaceID == "" || batchID == "" || len(instanceIDs) == 0 {
 		return false, gorm.ErrInvalidData
 	}
 	created := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var enabled bool
-		if err := tx.Raw("SELECT c_enabled FROM t_collector_tasks WHERE c_space_id = ? AND c_task_id = ?", strings.TrimSpace(batch.SpaceID), strings.TrimSpace(batch.TaskID)).Scan(&enabled).Error; err != nil {
+		var enabledTargets int64
+		if err := tx.Table("t_collector_instance_write_targets AS targets").
+			Joins("JOIN t_collector_tasks AS tasks ON tasks.c_space_id = targets.c_space_id AND tasks.c_task_id = targets.c_task_id").
+			Where("targets.c_space_id = ? AND targets.c_instance_id IN ? AND tasks.c_enabled = 1", spaceID, instanceIDs).
+			Count(&enabledTargets).Error; err != nil {
 			return err
 		}
-		if !enabled {
+		if enabledTargets == 0 {
 			return nil
 		}
 		now := time.Now().UTC()
@@ -108,9 +114,41 @@ func (r *FetchBatchRepository) CreatePlannedForEnabledTask(ctx context.Context, 
 			return result.Error
 		}
 		created = result.RowsAffected == 1
+		for _, instanceID := range instanceIDs {
+			if err := tx.Exec(`INSERT INTO t_collector_fetch_batch_items(c_space_id,c_batch_id,c_instance_id) VALUES(?,?,?) ON CONFLICT(c_space_id,c_batch_id,c_instance_id) DO NOTHING`, spaceID, batchID, instanceID).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	return created, err
+}
+
+// UpsertItems persists the shared TaskInstances contained in a batch. The
+// relation is deliberately independent of BatchInvocation.TaskID/DatasetID:
+// one batch can serve WriteTargets owned by multiple CollectionTasks.
+func (r *FetchBatchRepository) UpsertItems(ctx context.Context, spaceID, batchID string, instanceIDs []string) error {
+	spaceID, batchID = strings.TrimSpace(spaceID), strings.TrimSpace(batchID)
+	if spaceID == "" || batchID == "" {
+		return gorm.ErrInvalidData
+	}
+	seen := make(map[string]struct{}, len(instanceIDs))
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, instanceID := range instanceIDs {
+			instanceID = strings.TrimSpace(instanceID)
+			if instanceID == "" {
+				continue
+			}
+			if _, ok := seen[instanceID]; ok {
+				continue
+			}
+			seen[instanceID] = struct{}{}
+			if err := tx.Exec(`INSERT INTO t_collector_fetch_batch_items(c_space_id,c_batch_id,c_instance_id) VALUES(?,?,?) ON CONFLICT(c_space_id,c_batch_id,c_instance_id) DO NOTHING`, spaceID, batchID, instanceID).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *FetchBatchRepository) Get(ctx context.Context, spaceID, batchID string) (*domain.BatchInvocation, error) {
@@ -248,21 +286,21 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			// Shared instances are retried per write target. Prefer the new
 			// identity when present; the legacy dataset key remains a fallback.
 			if item.WriteTargetID != "" {
-				if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_write_target_id = ? AND c_status = ?", item.SpaceID, item.WriteTargetID, "pending").Updates(map[string]any{"c_status": "superseded", "c_mtime": time.Now().UTC()}).Error; err != nil {
+				if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_write_target_id = ? AND c_status IN ?", item.SpaceID, item.WriteTargetID, []string{"pending", "dispatched"}).Updates(map[string]any{"c_status": "superseded", "c_mtime": time.Now().UTC()}).Error; err != nil {
 					return err
 				}
 				continue
 			}
-			if item.DatasetID == "" {
+			if item.InstanceID == "" {
 				continue
 			}
-			key := strings.Join([]string{item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, item.TargetDataTime.UTC().Format(time.RFC3339Nano)}, "\x00")
+			key := strings.Join([]string{item.SpaceID, item.InstanceID, item.SubjectID, item.Frequency, item.TargetDataTime.UTC().Format(time.RFC3339Nano)}, "\x00")
 			if _, exists := seen[key]; exists {
 				continue
 			}
 			seen[key] = struct{}{}
-			conditions = append(conditions, "(c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_target_data_time <= ?)")
-			args = append(args, item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, item.TargetDataTime.UTC())
+			conditions = append(conditions, "(c_space_id = ? AND c_instance_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_target_data_time <= ?)")
+			args = append(args, item.SpaceID, item.InstanceID, item.SubjectID, item.Frequency, item.TargetDataTime.UTC())
 		}
 		if len(conditions) > 0 {
 			query := tx.Model(&domain.RetryItem{}).
@@ -273,7 +311,7 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			}
 		}
 		for _, item := range effects.InstanceUpdates {
-			query := tx.Model(&domain.TaskInstance{}).Where("c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_is_deleted = ?", item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, false)
+			query := tx.Model(&domain.TaskInstance{}).Where("t_collector_task_instances.c_space_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_is_deleted = ?", item.SpaceID, item.SubjectID, item.Frequency, false)
 			if item.InstanceID != "" {
 				query = query.Where("c_instance_id = ?", item.InstanceID)
 			}
@@ -305,22 +343,24 @@ func (r *FetchBatchRepository) ListDue(ctx context.Context, spaceID string, now 
 	return batches, err
 }
 
-// HasActiveTask reports planned/dispatched batches for one parent task.
-// The batch table stores the parent CollectionTask ID explicitly; do not infer
-// it from the per-item request JSON, whose instance_id fields have a different
-// identity.
+// HasActiveTask reports planned/dispatched batches that can still write for
+// one CollectionTask. Shared batches are discovered through
+// batch_items -> write_targets rather than only BatchInvocation.TaskID.
 func (r *FetchBatchRepository) HasActiveTask(ctx context.Context, spaceID, taskID string, kinds ...domain.BatchKind) (bool, error) {
-	taskID = strings.TrimSpace(taskID)
+	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	if taskID == "" {
 		return false, nil
 	}
-	query := r.db.WithContext(ctx).Model(&domain.BatchInvocation{}).
-		Where("c_space_id = ? AND c_task_id = ? AND c_status IN ?", spaceID, taskID, []domain.BatchStatus{domain.BatchStatusPlanned, domain.BatchStatusDispatched})
+	query := r.db.WithContext(ctx).
+		Table("t_collector_fetch_batches AS batches").
+		Joins(`LEFT JOIN t_collector_fetch_batch_items AS items ON items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id`).
+		Joins(`LEFT JOIN t_collector_instance_write_targets AS targets ON targets.c_space_id = items.c_space_id AND targets.c_instance_id = items.c_instance_id`).
+		Where("batches.c_space_id = ? AND batches.c_status IN ? AND targets.c_task_id = ?", spaceID, []domain.BatchStatus{domain.BatchStatusPlanned, domain.BatchStatusDispatched}, taskID)
 	if len(kinds) > 0 {
-		query = query.Where("c_batch_kind IN ?", kinds)
+		query = query.Where("batches.c_batch_kind IN ?", kinds)
 	}
 	var count int64
-	if err := query.Count(&count).Error; err != nil {
+	if err := query.Distinct("batches.c_batch_id").Count(&count).Error; err != nil {
 		return false, err
 	}
 	return count > 0, nil

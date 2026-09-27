@@ -33,14 +33,14 @@ func newSetupBuildLinuxCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&module, "module", "storage", "storage、factor 或 factor-engine")
+	cmd.Flags().StringVar(&module, "module", "storage", "storage、storage-primary、factor 或 factor-engine")
 	return cmd
 }
 
 func runSetupBuildLinux(ctx context.Context, snapshot *setupconfig.Snapshot, file, module string) error {
 	module = strings.TrimSpace(module)
 	switch module {
-	case "storage", "factor", "factor-engine":
+	case "storage", "storage-primary", "factor", "factor-engine":
 	default:
 		return fmt.Errorf("unsupported linux CGO module %q", module)
 	}

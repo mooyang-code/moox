@@ -20,6 +20,7 @@ type Store struct {
 	taskRepo     *TaskRepository
 	taskItems    *TaskInstanceRepository
 	fetchBatches *FetchBatchRepository
+	runs         *RunRepository
 	fetchRetries *FetchRetryRepository
 	periods      *PeriodReadinessRepository
 }
@@ -30,25 +31,30 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 	if s == nil || s.db == nil {
 		return fmt.Errorf("collector database is not open")
 	}
+	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(`DELETE FROM t_period_readiness_items WHERE c_instance_id IN (SELECT c_instance_id FROM t_collector_task_instances WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, taskID).Error; err != nil {
+		// Target-level retry/readiness state belongs to the target task. Remove
+		// it before deleting the WriteTarget relation itself.
+		if err := tx.Exec(`DELETE FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, spaceID, taskID).Error; err != nil {
 			return err
 		}
-		for _, query := range []struct {
-			sql  string
-			args []any
-		}{
-			{`DELETE FROM t_collector_task_instances WHERE c_space_id = ? AND c_task_id = ?`, []any{spaceID, taskID}},
-			{`DELETE FROM t_collector_fetch_batches WHERE c_space_id = ? AND c_task_id = ?`, []any{spaceID, taskID}},
-			{`DELETE FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_task_id = ?`, []any{spaceID, taskID}},
-		} {
-			if err := tx.Exec(query.sql, query.args...).Error; err != nil {
-				return err
-			}
+		if err := tx.Exec(`DELETE FROM t_period_readiness_items WHERE c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, taskID).Error; err != nil {
+			return err
 		}
+		if err := tx.Exec(`DELETE FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error; err != nil {
+			return err
+		}
+
+		// Resample instances are durable local work records, but their ownership
+		// also lives in WriteTarget. Once this task's target is removed, delete
+		// only resample instances that have become true orphans. Shared market
+		// fetch execution history is retained.
+		if err := tx.Exec(`DELETE FROM t_collector_task_instances WHERE c_space_id = ? AND c_data_type = 'kline_resample' AND NOT EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id)`, spaceID).Error; err != nil {
+			return err
+		}
+
 		// A readiness parent without items can otherwise be interpreted by the
-		// finalizer as an already-complete period. Runtime deletion must remove
-		// those empty snapshots before the task row is deleted.
+		// finalizer as an already-complete period.
 		if err := tx.Exec(`DELETE FROM t_period_readiness WHERE c_space_id = ? AND NOT EXISTS (SELECT 1 FROM t_period_readiness_items WHERE c_readiness_id = t_period_readiness.c_id)`, spaceID).Error; err != nil {
 			return err
 		}
@@ -115,6 +121,7 @@ func Open(opts *Options) (*Store, error) {
 	s.taskRepo = NewTaskRepository(db)
 	s.taskItems = NewTaskInstanceRepository(db)
 	s.fetchBatches = NewFetchBatchRepository(db)
+	s.runs = NewRunRepository(db)
 	s.fetchRetries = NewFetchRetryRepository(db)
 	s.periods = NewPeriodReadinessRepository(db)
 	applySQLitePoolConfig(db, opts)
@@ -144,6 +151,8 @@ func (s *Store) FetchBatches() *FetchBatchRepository {
 	}
 	return s.fetchBatches
 }
+
+func (s *Store) Runs() *RunRepository { return s.runs }
 
 func (s *Store) FetchRetries() *FetchRetryRepository {
 	if s == nil {
@@ -193,30 +202,44 @@ func (s *Store) rejectLegacySchema() error {
 	for table, columns := range map[string][]string{
 		"t_collector_tasks": {
 			"c_id", "c_space_id", "c_task_id", "c_task_name", "c_description",
-			"c_data_type", "c_provider", "c_market_type", "c_collect_params",
+			"c_data_type", "c_definition_hash", "c_collect_params",
 			"c_enabled", "c_creator", "c_prepare_state", "c_last_error",
 			"c_result_dataset_id", "c_result_view_id", "c_coverage_start_time",
 			"c_ctime", "c_mtime",
 		},
+		"t_collector_task_tags": {
+			"c_space_id", "c_task_id", "c_tag_id", "c_ctime",
+		},
+		"t_collector_runs": {
+			"c_id", "c_space_id", "c_run_id", "c_run_key", "c_run_type", "c_frequency",
+			"c_status", "c_target_time", "c_error_summary", "c_ctime", "c_mtime",
+		},
 		"t_collector_task_instances": {
-			"c_id", "c_space_id", "c_instance_id", "c_task_id", "c_provider",
-			"c_market_type", "c_data_type", "c_dataset_id", "c_subject_id",
-			"c_frequency", "c_source_id", "c_function_name", "c_last_exec_status",
-			"c_task_params", "c_last_exec_time", "c_result", "c_is_deleted",
-			"c_ctime", "c_mtime",
+			"c_id", "c_space_id", "c_instance_id", "c_run_id", "c_request_key", "c_provider", "c_provider_symbol",
+			"c_market_type", "c_data_type", "c_subject_id", "c_frequency", "c_target_data_time", "c_source_id", "c_series_tag",
+			"c_function_name", "c_last_exec_status", "c_task_params", "c_last_exec_time",
+			"c_result", "c_is_deleted", "c_ctime", "c_mtime",
+		},
+		"t_collector_instance_write_targets": {
+			"c_id", "c_space_id", "c_write_target_id", "c_instance_id", "c_task_id",
+			"c_dataset_id", "c_view_id", "c_output_fields_json", "c_status", "c_attempt",
+			"c_next_retry_at", "c_last_error", "c_ctime", "c_mtime",
 		},
 		"t_collector_fetch_batches": {
 			"c_id", "c_space_id", "c_batch_id", "c_parent_batch_id", "c_schedule_id",
-			"c_batch_kind", "c_shard_index", "c_task_id", "c_dataset_id", "c_frequency",
+			"c_batch_kind", "c_shard_index", "c_instance_id", "c_write_target_id", "c_retry_scope", "c_frequency",
 			"c_region", "c_node_id", "c_function_name", "c_status", "c_attempt",
 			"c_request_id", "c_request_json", "c_planned_count", "c_success_count",
 			"c_retry_count", "c_permanent_failed_count", "c_error_summary",
 			"c_late_completion", "c_planned_at", "c_dispatched_at", "c_deadline_at",
 			"c_completed_at", "c_ctime", "c_mtime",
 		},
+		"t_collector_fetch_batch_items": {
+			"c_space_id", "c_batch_id", "c_instance_id", "c_status", "c_error", "c_completed_at",
+		},
 		"t_collector_fetch_retry_items": {
 			"c_id", "c_space_id", "c_retry_key", "c_source_batch_id", "c_batch_kind",
-			"c_task_id", "c_dataset_id", "c_subject_id", "c_frequency",
+			"c_instance_id", "c_write_target_id", "c_retry_scope", "c_subject_id", "c_frequency",
 			"c_target_data_time", "c_task_json", "c_attempt", "c_status",
 			"c_next_retry_at", "c_last_error_type", "c_last_error_summary",
 			"c_ctime", "c_mtime",
@@ -228,7 +251,7 @@ func (s *Store) rejectLegacySchema() error {
 			"c_committed_positions_json", "c_ctime", "c_mtime",
 		},
 		"t_period_readiness_items": {
-			"c_readiness_id", "c_instance_id", "c_subject_id", "c_function_name",
+			"c_readiness_id", "c_instance_id", "c_write_target_id", "c_subject_id", "c_series_tag", "c_function_name",
 			"c_write_source", "c_required_fields_json", "c_state", "c_updated_at",
 		},
 	} {
@@ -246,6 +269,51 @@ func (s *Store) rejectLegacySchema() error {
 			}
 			if columnCount == 0 {
 				return fmt.Errorf("collector schema reset required: current task schema is incomplete (%s.%s missing)", table, column)
+			}
+		}
+	}
+	var instanceTableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 't_collector_task_instances'`).Scan(&instanceTableCount).Error; err != nil {
+		return fmt.Errorf("inspect collector task instance table: %w", err)
+	}
+	if instanceTableCount > 0 {
+		for _, column := range []string{"c_task_id", "c_dataset_id"} {
+			var columnCount int64
+			if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_task_instances') WHERE name = ?`, column).Scan(&columnCount).Error; err != nil {
+				return fmt.Errorf("inspect collector task instance legacy owner column %s: %w", column, err)
+			}
+			if columnCount > 0 {
+				return fmt.Errorf("collector schema reset required: task instance legacy owner column found (t_collector_task_instances.%s)", column)
+			}
+		}
+	}
+	var batchTableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 't_collector_fetch_batches'`).Scan(&batchTableCount).Error; err != nil {
+		return fmt.Errorf("inspect collector fetch batch table: %w", err)
+	}
+	if batchTableCount > 0 {
+		for _, column := range []string{"c_task_id", "c_dataset_id"} {
+			var columnCount int64
+			if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_fetch_batches') WHERE name = ?`, column).Scan(&columnCount).Error; err != nil {
+				return fmt.Errorf("inspect collector fetch batch legacy owner column %s: %w", column, err)
+			}
+			if columnCount > 0 {
+				return fmt.Errorf("collector schema reset required: fetch batch legacy owner column found (t_collector_fetch_batches.%s)", column)
+			}
+		}
+	}
+	var retryTableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 't_collector_fetch_retry_items'`).Scan(&retryTableCount).Error; err != nil {
+		return fmt.Errorf("inspect collector fetch retry table: %w", err)
+	}
+	if retryTableCount > 0 {
+		for _, column := range []string{"c_task_id", "c_dataset_id"} {
+			var columnCount int64
+			if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_fetch_retry_items') WHERE name = ?`, column).Scan(&columnCount).Error; err != nil {
+				return fmt.Errorf("inspect collector fetch retry legacy owner column %s: %w", column, err)
+			}
+			if columnCount > 0 {
+				return fmt.Errorf("collector schema reset required: fetch retry legacy owner column found (t_collector_fetch_retry_items.%s)", column)
 			}
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -116,7 +117,16 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	clearViewIndexRuntimeState(view)
-	created, err := s.metadata.UpsertView(ctx, view)
+	var created *pb.View
+	var err error
+	if req.GetCreateOnly() {
+		created, err = s.metadata.CreateView(ctx, view)
+		if errors.Is(err, metadatastore.ErrViewExists) {
+			return &pb.CreateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_CONFLICT, err)}, nil
+		}
+	} else {
+		created, err = s.metadata.UpsertView(ctx, view)
+	}
 	if err != nil {
 		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}

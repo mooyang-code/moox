@@ -58,6 +58,10 @@ func buildCompletion(req Request, results []domain.ItemResult, completed time.Ti
 			Outcome: string(result.Outcome), ErrorType: result.ErrorType, ErrorSummary: result.ErrorSummary,
 			SourceEventId: result.SourceEventID, InstanceId: result.InstanceID,
 		})
+		itemPayload := payload.Items[len(payload.Items)-1]
+		for _, target := range result.TargetResults {
+			itemPayload.Targets = append(itemPayload.Targets, &marketfetchpb.MarketFetchTargetResult{WriteTargetId: target.WriteTargetID, DatasetId: target.DatasetID, Status: target.Status, ErrorSummary: target.ErrorSummary})
+		}
 	}
 	switch {
 	case payload.SuccessCount == payload.PlannedCount:

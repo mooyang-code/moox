@@ -33,8 +33,8 @@ type CollectionTask struct {
 	TaskName          string                     `gorm:"column:c_task_name"`
 	Description       string                     `gorm:"column:c_description"`
 	DataType          string                     `gorm:"column:c_data_type"`
-	Provider          string                     `gorm:"column:c_provider"`
-	MarketType        string                     `gorm:"column:c_market_type"`
+	TagIDs            []string                   `gorm:"-"`
+	DefinitionHash    string                     `gorm:"column:c_definition_hash"`
 	CollectParams     string                     `gorm:"column:c_collect_params"`
 	Enabled           bool                       `gorm:"column:c_enabled"`
 	Creator           string                     `gorm:"column:c_creator"`

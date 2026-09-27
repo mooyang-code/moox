@@ -183,8 +183,9 @@ func (f catalogViewSyncFake) WaitViewSyncPoint(_ context.Context, _ *storagepb.W
 func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.Subject) {
 	metadata := newCatalogMetadataFake(failAt)
 	catalog := &Catalog{Metadata: metadata, Auth: &storagepb.AuthInfo{AppId: "collector"}, ViewSync: catalogViewSyncFake{metadata: metadata}}
-	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample", MarketType: "spot"}
+	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample"}
 	params := &domain.CollectParams{
+		Provider: "moox", MarketType: "spot",
 		SourceDatasetID: "source-bars", SourceFrequency: "1m", SourceSeriesTag: "venue:binance",
 		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m", Alignment: domain.ResampleAlignmentEpochUTC,
 	}
@@ -232,7 +233,7 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_column")
 	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
-		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID, DataSourceId: source.DataSourceID, DataNodeId: source.DataNodeID,
+		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID, DataNodeId: source.DataNodeID,
 		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"5m"}, Status: "active",
 		Attributes: map[string]string{
 			"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID,
@@ -306,31 +307,30 @@ func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
 		"alignment":             "epoch_utc",
 	}
 	dataset := &storagepb.Dataset{
-		DataSourceId: "crypto",
-		DataNodeId:   "storage-node-0",
-		DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Freqs:        []string{"5m"},
-		Attributes:   cloneStringMap(want),
+		DataNodeId: "storage-node-0",
+		DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,
+		Freqs:      []string{"5m"},
+		Attributes: cloneStringMap(want),
 	}
-	require.NoError(t, validateTargetDataset(dataset, want, "5m", "crypto", "storage-node-0"))
+	require.NoError(t, validateTargetDataset(dataset, want, "5m", "storage-node-0"))
 
 	for key, value := range want {
 		t.Run("attribute/"+key, func(t *testing.T) {
 			copy := proto.Clone(dataset).(*storagepb.Dataset)
 			copy.Attributes = cloneStringMap(dataset.Attributes)
 			copy.Attributes[key] = value + "-drift"
-			require.ErrorContains(t, validateTargetDataset(copy, want, "5m", "crypto", "storage-node-0"), "immutable lineage attribute")
+			require.ErrorContains(t, validateTargetDataset(copy, want, "5m", "storage-node-0"), "immutable lineage attribute")
 		})
 	}
 	wrongSource := proto.Clone(dataset).(*storagepb.Dataset)
 	wrongSource.DataSourceId = "binance"
-	require.ErrorContains(t, validateTargetDataset(wrongSource, want, "5m", "crypto", "storage-node-0"), "data source")
+	require.ErrorContains(t, validateTargetDataset(wrongSource, want, "5m", "storage-node-0"), "must not declare a single data source")
 	wrongNode := proto.Clone(dataset).(*storagepb.Dataset)
 	wrongNode.DataNodeId = "storage-node-1"
-	require.ErrorContains(t, validateTargetDataset(wrongNode, want, "5m", "crypto", "storage-node-0"), "data node")
+	require.ErrorContains(t, validateTargetDataset(wrongNode, want, "5m", "storage-node-0"), "data node")
 	monthly := proto.Clone(dataset).(*storagepb.Dataset)
 	monthly.Freqs = []string{"5M"}
-	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m", "crypto", "storage-node-0"), "does not enable frequency")
+	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m", "storage-node-0"), "does not enable frequency")
 }
 
 func TestPrepareTargetViewContractUsesFrequencyFilter(t *testing.T) {

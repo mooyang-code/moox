@@ -114,6 +114,7 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		"MOOX_MARKET_FETCH_MARKET_TYPE":     assignment.MarketType,
 		"MOOX_MARKET_FETCH_DATASET_ID":      assignment.DatasetID,
 		"MOOX_MARKET_FETCH_FREQUENCY":       assignment.Frequency,
+		"MOOX_MARKET_FETCH_OUTPUT_FIELDS":   strings.Join(normalizeOutputFields(assignment.OutputFields), "|"),
 		"MOOX_MARKET_FETCH_SUBJECTS":        strings.Join(subjects, "|"),
 		"MOOX_MARKET_FETCH_SYMBOLS_JSON":    string(rawSymbols),
 		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": hash,

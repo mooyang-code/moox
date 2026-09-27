@@ -41,7 +41,7 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 		return err
 	}
 	for _, task := range tasks {
-		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 		if parseErr != nil {
 			_ = p.Tasks.SetPrepareState(ctx, task.SpaceID, task.TaskID, domain.PrepareStateError, parseErr.Error())
 			continue

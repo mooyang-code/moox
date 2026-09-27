@@ -1,75 +1,47 @@
 # Built-in Collector tasks. This file contains no cloud credentials or node data.
 tasks:
 - space_id: crypto
-  task_id: builtin-binance-spot-kline-1m
+  task_id: dasftksvjhj2jom4vhd0
   task_name: Binance 现货 K 线 1m
   data_type: kline
-  provider: binance
-  market_type: spot
+  tag_ids: [binance_spot]
   enabled: true
   creator: moox-setup
   collect_params:
-    provider: binance
-    source_id: spot_http
-    instrument_type: spot
-    market_type: spot
-    subject_tags: [binance_spot]
     frequency: 1m
 - space_id: crypto
-  task_id: builtin-binance-swap-kline-1m
+  task_id: dasftksvjhj2jom4vhdg
   task_name: Binance 合约 K 线 1m
   data_type: kline
-  provider: binance
-  market_type: swap
+  tag_ids: [binance_swap]
   enabled: true
   creator: moox-setup
   collect_params:
-    provider: binance
-    source_id: swap_http
-    instrument_type: swap
-    market_type: swap
-    subject_tags: [binance_swap]
     frequency: 1m
 - space_id: crypto
-  task_id: builtin-binance-spot-kline-1h
+  task_id: dasftksvjhj2jom4vhe0
   task_name: Binance 现货 K 线 1H
   data_type: kline
-  provider: binance
-  market_type: spot
+  tag_ids: [binance_spot]
   enabled: true
   creator: moox-setup
   collect_params:
-    provider: binance
-    source_id: spot_http
-    instrument_type: spot
-    market_type: spot
-    subject_tags: [binance_spot]
     frequency: 1H
 - space_id: crypto
-  task_id: builtin-binance-swap-kline-1h
+  task_id: dasftksvjhj2jom4vheg
   task_name: Binance 合约 K 线 1H
   data_type: kline
-  provider: binance
-  market_type: swap
+  tag_ids: [binance_swap]
   enabled: true
   creator: moox-setup
   collect_params:
-    provider: binance
-    source_id: swap_http
-    instrument_type: swap
-    market_type: swap
-    subject_tags: [binance_swap]
     frequency: 1H
 - space_id: stockcn
-  task_id: builtin-stockcn-kline-1m
+  task_id: dasftksvjhj2jom4vhf0
   task_name: A 股 K 线 1m
   data_type: kline
-  provider: stockcn_multi
-  market_type: equity
+  tag_ids: [cn_a_share]
   enabled: false
   creator: moox-setup
   collect_params:
-    provider: stockcn_multi
-    market_type: equity
-    subject_tags: [cn_a_share]
     frequency: 1m

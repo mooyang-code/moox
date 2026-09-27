@@ -30,13 +30,13 @@ message CollectionTask {
   string task_name = 3;
   string description = 4;
   string data_type = 5;
-  string provider = 6;
+  repeated string tag_ids = 6;
   google.protobuf.Struct collect_params = 7;
   optional bool enabled = 8;
   string creator = 9;
   string create_time = 10;    // RFC3339
   string modify_time = 11;    // RFC3339
-  string market_type = 12;
+  string definition_hash = 12;
   string prepare_state = 13;  // pending/waiting_view/ready/error
   string last_error = 14;
   TaskResult result = 15;
@@ -63,11 +63,9 @@ message ResultConfig {
 message GetTaskListReq {
   string space_id = 1;
   string data_type = 2;
-  string provider = 3;
   optional bool enabled = 4;
   string task_id = 5;
   common.Page page = 6;
-  string market_type = 7;
 }
 
 message GetTaskListRsp {
@@ -130,12 +128,12 @@ message DeleteTaskRsp {
 // TaskInstance 任务实例。
 message TaskInstance {
   string space_id = 1;
-  string task_id = 2;
+  string run_id = 2;
   string instance_id = 3;
   string provider = 4;
   string market_type = 5;
   string data_type = 6;
-  string dataset_id = 7;
+  string request_key = 7;
   string subject_id = 8;
   string frequency = 9;
   google.protobuf.Struct task_params = 11;
@@ -147,6 +145,20 @@ message TaskInstance {
   string modify_time = 18;     // RFC3339
   string function_name = 19;   // 当前绑定的 SCF 函数名
   string source_id = 20;       // 当前绑定的 Provider 来源
+  repeated TaskWriteTarget targets = 21;
+  string provider_symbol = 22; // Provider 实际请求 symbol
+  string target_data_time = 23; // RFC3339，当前原子请求目标数据时间
+  string series_tag = 24;      // Storage/readiness 共享的 series identity
+}
+
+message TaskWriteTarget {
+  string write_target_id = 1;
+  string task_id = 2;
+  string dataset_id = 3;
+  string view_id = 4;
+  repeated string output_fields = 5;
+  string status = 6;
+  string last_error = 7;
 }
 
 // TaskInstanceFilter 任务实例筛选条件。

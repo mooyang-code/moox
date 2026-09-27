@@ -13,11 +13,13 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/ruleseed"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -72,16 +74,20 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 
 	scheduler := &marketfetch.Scheduler{
 		Tasks: dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
-		Invoker: scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: server.URL, Auth: runtime.AuthConfig{AccessKey: "test", SecretKey: "test", TargetNode: "test"}}),
-		Symbols: defaultRuleDatasetSource{}, SpaceID: "crypto", InvokeNonRealtimeOnly: true,
+		Invoker:           scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: server.URL, Auth: runtime.AuthConfig{AccessKey: "test", SecretKey: "test", TargetNode: "test"}}),
+		ResolveSymbol:     marketwiring.ResolveSymbol,
+		ResolveSourceID:   marketwiring.DefaultSourceID,
+		Symbols:           defaultRuleDatasetSource{},
+		SpaceID:           "crypto",
 		InvokeConcurrency: 1, Now: func() time.Time { return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC) },
 	}
 	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	require.Eventually(t, func() bool { return invocationCount.Load() > 0 }, 2*time.Second, 10*time.Millisecond)
 
 	instances, total, err := dbm.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", Page: 1, PageSize: 200})
 	require.NoError(t, err)
-	require.Equal(t, int64(0), total)
-	require.Empty(t, instances)
+	require.Equal(t, int64(4), total)
+	require.Len(t, instances, 4)
 	var spot, swap, kline int
 	for _, instance := range instances {
 		if instance.MarketType == "spot" {
@@ -94,16 +100,23 @@ func TestDefaultRuleInitAndSchedulerE2E(t *testing.T) {
 			kline++
 		}
 	}
-	require.Zero(t, spot)
-	require.Zero(t, swap)
-	require.Zero(t, kline, "realtime kline rules use Timer nodes, while this test provides only an Invoke node")
-	_ = invocationCount
+	require.Equal(t, 2, spot)
+	require.Equal(t, 2, swap)
+	require.Equal(t, 4, kline)
 }
 
 type defaultRuleDatasetSource struct{}
 
 func (defaultRuleDatasetSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
 	return storagesource.DatasetInfo{DataSourceID: "binance"}, nil
+}
+
+func (defaultRuleDatasetSource) GetTag(_ context.Context, spaceID, tagID string) (*storagepb.Tag, error) {
+	marketType := "spot"
+	if tagID == "binance_swap" {
+		marketType = "swap"
+	}
+	return &storagepb.Tag{SpaceId: spaceID, TagId: tagID, Source: "binance", MarketType: marketType}, nil
 }
 
 func (defaultRuleDatasetSource) ResolveSubjects(_ context.Context, _ string, tagIDs []string) ([]domain.Subject, error) {

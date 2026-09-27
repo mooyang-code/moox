@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -35,6 +36,10 @@ type taskSource interface {
 type datasetSource interface {
 	GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error)
 	ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error)
+}
+
+type tagRouteSource interface {
+	GetTag(context.Context, string, string) (*storagepb.Tag, error)
 }
 
 type runtimeConfigClient interface {
@@ -63,16 +68,20 @@ type Reconciler struct {
 	MeasuredSafeGroupSize         int
 	ExpectedStockCNTimerFunctions int
 	StockCNStagger                StockCNStaggerConfig
-	Now                           func() time.Time
-	mu                            sync.Mutex
-	reconcileMu                   sync.Mutex
-	pending                       map[string]string
-	pendingAt                     map[string]time.Time
-	pendingJob                    string
-	pendingJobs                   []string
-	pendingSince                  time.Time
-	pendingSubmissionIncomplete   bool
-	lastGroups                    map[string][]TaskGroup
+	// DisableTimerTriggers keeps the published timer-node fleet available for
+	// explicit Scheduler Invoke while preventing a second, static acquisition
+	// path from bypassing Run/TaskInstance/WriteTarget dedupe.
+	DisableTimerTriggers        bool
+	Now                         func() time.Time
+	mu                          sync.Mutex
+	reconcileMu                 sync.Mutex
+	pending                     map[string]string
+	pendingAt                   map[string]time.Time
+	pendingJob                  string
+	pendingJobs                 []string
+	pendingSince                time.Time
+	pendingSubmissionIncomplete bool
+	lastGroups                  map[string][]TaskGroup
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
@@ -273,6 +282,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if cron == "" {
 			cron = "0 * * * * * *"
 		}
+		desiredTimerEnabled := assignment.Enabled && !r.DisableTimerTriggers
 		dnsHash := environment["MOOX_MARKET_FETCH_DNS_HASH"]
 		if dnsHash == "" && !dnsAvailable {
 			// A failed refresh must not erase the last-known-good SCF route. Keep
@@ -288,11 +298,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if !assignment.Enabled {
 			dnsHash = ""
 		}
-		fingerprint := assignment.AssignmentHash + "\x00" + dnsHash + "\x00" + fmt.Sprint(assignment.Enabled) + "\x00" + cron
-		if !r.shouldPatch(assignment, nodes, fingerprint) {
+		fingerprint := assignment.AssignmentHash + "\x00" + dnsHash + "\x00" + fmt.Sprint(desiredTimerEnabled) + "\x00" + cron
+		if !r.shouldPatch(assignment, nodes, fingerprint, desiredTimerEnabled) {
 			continue
 		}
-		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: assignment.NodeID, ManagedEnvironment: environment, TimerEnabled: assignment.Enabled, TimerCron: cron})
+		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: assignment.NodeID, ManagedEnvironment: environment, TimerEnabled: desiredTimerEnabled, TimerCron: cron})
 		pendingFingerprints[assignment.NodeID] = fingerprint
 	}
 	if len(patches) == 0 {
@@ -460,7 +470,7 @@ func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.D
 					Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals, GroupID: environmentGroupCountProbe, GroupCount: environmentGroupCountProbe, Enabled: true,
 				}, snapshot, managedBudget, resolver)
 				if err == nil {
-					result = append(result, TaskGroup{Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals})
+					result = append(result, TaskGroup{Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID, Frequency: group.Frequency, OutputFields: append([]string(nil), group.OutputFields...), Subjects: chunk, ExternalSymbols: externals})
 					start += size
 					break
 				}
@@ -897,24 +907,79 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		r.lastGroups = make(map[string][]TaskGroup)
 	}
 	for _, task := range tasks {
-		params, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 		if parseErr != nil {
-			// A malformed or temporarily unavailable collection task must not prevent the
-			// other market/frequency groups from being reconciled. Scheduler.Tick
-			// already treats tasks independently; keep the Timer control plane
-			// consistent with that behavior.
 			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: parse task: %v", task.TaskID, parseErr)
 			continue
 		}
 		if params.Collector.DataType != "kline" {
 			continue
 		}
-		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID)
-		if datasetErr != nil {
+		if _, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID); datasetErr != nil {
 			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, params.Target.DatasetID, datasetErr)
 			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
 				groups = append(groups, previous...)
 			}
+			continue
+		}
+
+		// New tasks use task_tags as the authoritative acquisition scope. Each
+		// Tag owns immutable source/market routing, so a single CollectionTask can
+		// fan out to several Provider routes without task-level overrides.
+		if tagIDs := normalizedTaskTagIDs(task.TagIDs); len(tagIDs) > 0 {
+			tagSource, ok := r.Symbols.(tagRouteSource)
+			if !ok {
+				log.WarnContextf(ctx, "skip collection task=%s: metadata source does not expose tag routes", task.TaskID)
+				if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+					groups = append(groups, previous...)
+				}
+				continue
+			}
+			taskGroups := make([]TaskGroup, 0)
+			valid := true
+			for _, tagID := range tagIDs {
+				tag, tagErr := tagSource.GetTag(ctx, spaceID, tagID)
+				if tagErr != nil || tag == nil {
+					log.WarnContextf(ctx, "skip collection task=%s: load tag=%s: %v", task.TaskID, tagID, tagErr)
+					valid = false
+					break
+				}
+				provider := strings.ToLower(strings.TrimSpace(tag.GetSource()))
+				marketType := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+				if provider == "" || marketType == "" {
+					log.WarnContextf(ctx, "skip collection task=%s: tag=%s missing immutable source/market_type", task.TaskID, tagID)
+					valid = false
+					break
+				}
+				subjects, subjectErr := r.Symbols.ResolveSubjects(ctx, spaceID, []string{tagID})
+				if subjectErr != nil || len(subjects) == 0 {
+					log.WarnContextf(ctx, "skip collection task=%s: resolve tag=%s subjects: %v", task.TaskID, tagID, subjectErr)
+					valid = false
+					break
+				}
+				routeGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, "", subjects)
+				if routeErr != nil {
+					log.WarnContextf(ctx, "skip collection task=%s tag=%s route: %v", task.TaskID, tagID, routeErr)
+					valid = false
+					break
+				}
+				taskGroups = append(taskGroups, routeGroups...)
+			}
+			if !valid || len(taskGroups) == 0 {
+				if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+					groups = append(groups, previous...)
+				}
+				continue
+			}
+			r.lastGroups[task.TaskID] = append([]TaskGroup(nil), taskGroups...)
+			groups = append(groups, taskGroups...)
+			continue
+		}
+
+		// Compatibility path for built-in/legacy task fixtures that do not yet
+		// carry task_tags. New user-created kline tasks never depend on this path.
+		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID)
+		if datasetErr != nil {
 			continue
 		}
 		subjects, subjectErr := r.Symbols.ResolveSubjects(ctx, spaceID, dataset.SubjectTags)
@@ -923,49 +988,91 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		}
 		if len(subjects) == 0 {
 			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
-				log.WarnContextf(ctx, "keep previous subjects for collection task=%s tags=%v", task.TaskID, dataset.SubjectTags)
 				groups = append(groups, previous...)
 			}
-			log.WarnContextf(ctx, "skip collection task=%s: no active subjects for tags %v", task.TaskID, dataset.SubjectTags)
 			continue
 		}
-		marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, params.Target.DatasetID)
-		if instrumentType == "" {
-			instrumentType = defaultInstrumentTypeForMarket(marketID, params.MarketType)
-		}
-		sourceID := params.SourceID
-		if sourceID == "" && r.ResolveSourceID != nil {
-			sourceID = r.ResolveSourceID(params.Provider, instrumentType)
-		}
-		symbolIDs := make([]string, 0, len(subjects))
-		externalSymbols := make(map[string]string, len(subjects))
-		activeSubjectCount := 0
-		invalidSubjects := make([]string, 0)
-		for _, subject := range subjects {
-			activeSubjectCount++
-			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			external, symbolErr := resolveProviderSymbol(r.ResolveSymbol, params.Provider, marketID, params.MarketType, subjectID)
-			if symbolErr != nil {
-				invalidSubjects = append(invalidSubjects, subjectID)
-				continue
-			}
-			symbolIDs = append(symbolIDs, subjectID)
-			externalSymbols[subjectID] = external
-		}
-		if activeSubjectCount > 0 && len(symbolIDs) == 0 {
-			return nil, fmt.Errorf("all active %s subjects are invalid: %s", params.MarketType, strings.Join(invalidSubjects, ","))
-		}
-		if len(invalidSubjects) > 0 {
-			log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s task=%s skipped=%d subjects=%s", spaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
-		}
-		taskGroups := make([]TaskGroup, 0, len(params.Collector.Intervals))
-		for _, frequency := range params.Collector.Intervals {
-			taskGroups = append(taskGroups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, MarketID: marketID, InstrumentType: instrumentType, SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
+		provider := strings.ToLower(strings.TrimSpace(params.Provider))
+		marketType := strings.ToLower(strings.TrimSpace(params.MarketType))
+		sourceID := strings.TrimSpace(params.SourceID)
+		taskGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, sourceID, subjects)
+		if routeErr != nil {
+			return nil, routeErr
 		}
 		r.lastGroups[task.TaskID] = append([]TaskGroup(nil), taskGroups...)
 		groups = append(groups, taskGroups...)
 	}
 	return mergeGroups(groups), nil
+}
+
+func normalizedTaskTagIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func (r *Reconciler) taskGroupsForRoute(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, provider, marketType, sourceID string, subjects []domain.Subject) ([]TaskGroup, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	marketType = strings.ToLower(strings.TrimSpace(marketType))
+	if provider == "" || marketType == "" {
+		return nil, fmt.Errorf("provider and market_type are required")
+	}
+	marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, params.Target.DatasetID)
+	if instrumentType == "" {
+		instrumentType = defaultInstrumentTypeForMarket(marketID, marketType)
+	}
+	if sourceID = strings.TrimSpace(sourceID); sourceID == "" && r.ResolveSourceID != nil {
+		sourceID = r.ResolveSourceID(provider, instrumentType)
+	}
+	if sourceID == "" {
+		sourceID = provider
+	}
+	symbolIDs := make([]string, 0, len(subjects))
+	externalSymbols := make(map[string]string, len(subjects))
+	activeSubjectCount := 0
+	invalidSubjects := make([]string, 0)
+	for _, subject := range subjects {
+		activeSubjectCount++
+		subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
+		if subjectID == "" {
+			continue
+		}
+		external, symbolErr := resolveProviderSymbol(r.ResolveSymbol, provider, marketID, marketType, subjectID)
+		if symbolErr != nil {
+			invalidSubjects = append(invalidSubjects, subjectID)
+			continue
+		}
+		symbolIDs = append(symbolIDs, subjectID)
+		externalSymbols[subjectID] = external
+	}
+	if activeSubjectCount > 0 && len(symbolIDs) == 0 {
+		return nil, fmt.Errorf("all active %s subjects are invalid: %s", marketType, strings.Join(invalidSubjects, ","))
+	}
+	if len(invalidSubjects) > 0 {
+		log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s task=%s skipped=%d subjects=%s", task.SpaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
+	}
+	result := make([]TaskGroup, 0, len(params.Collector.Intervals))
+	for _, frequency := range params.Collector.Intervals {
+		result = append(result, TaskGroup{
+			Provider: provider, MarketType: marketType, MarketID: marketID, InstrumentType: instrumentType,
+			SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID,
+			Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
+			Subjects: symbolIDs, ExternalSymbols: externalSymbols,
+		})
+	}
+	return result, nil
 }
 
 func marketIdentity(marketID, instrumentType, datasetID string) (string, string) {
@@ -1000,6 +1107,7 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 		current.MarketID, current.InstrumentType = group.MarketID, group.InstrumentType
 		current.SourceID, current.SeriesTag = group.SourceID, group.SeriesTag
 		current.DatasetID, current.Frequency = group.DatasetID, group.Frequency
+		current.OutputFields = append([]string(nil), group.OutputFields...)
 		current.Subjects = append(current.Subjects, group.Subjects...)
 		if group.ExternalSymbols != nil {
 			if current.ExternalSymbols == nil {
@@ -1049,7 +1157,11 @@ func DefaultMaxSubjects(spaceID string) int {
 	return 40
 }
 
-func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.Node, fingerprint string) bool {
+func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.Node, fingerprint string, desiredTimerEnabled ...bool) bool {
+	wantTimerEnabled := assignment.Enabled
+	if len(desiredTimerEnabled) > 0 {
+		wantTimerEnabled = desiredTimerEnabled[0]
+	}
 	for _, node := range nodes {
 		if node.NodeID != assignment.NodeID {
 			continue
@@ -1063,7 +1175,7 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 		}
 		stored := fmt.Sprintf("%v\x00%v\x00%v\x00%v", metadata["assignment_hash"], storedDNSHash, metadata["timer_enabled"], metadata["timer_cron"])
 		if stored == fingerprint {
-			if timerTriggerNeedsRepair(assignment, metadata) {
+			if timerTriggerNeedsRepair(assignment, metadata, wantTimerEnabled) {
 				return true
 			}
 			return false
@@ -1077,7 +1189,11 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 	return true
 }
 
-func timerTriggerNeedsRepair(assignment NodeAssignment, metadata map[string]any) bool {
+func timerTriggerNeedsRepair(assignment NodeAssignment, metadata map[string]any, desiredTimerEnabled ...bool) bool {
+	wantTimerEnabled := assignment.Enabled
+	if len(desiredTimerEnabled) > 0 {
+		wantTimerEnabled = desiredTimerEnabled[0]
+	}
 	// A Tencent readback can be temporarily Unknown when the account-level API
 	// rate limit is hit. Do not immediately enqueue another full environment
 	// update for that node; the next bounded readback will recover the state.
@@ -1087,11 +1203,11 @@ func timerTriggerNeedsRepair(assignment NodeAssignment, metadata map[string]any)
 		return false
 	}
 	actualEnabled, hasActualEnabled := metadataBoolValue(metadata, "timer_actual_enabled")
-	if !hasActualEnabled || actualEnabled != assignment.Enabled {
+	if !hasActualEnabled || actualEnabled != wantTimerEnabled {
 		return true
 	}
 	status = strings.TrimSpace(status)
-	if assignment.Enabled && !strings.EqualFold(status, "available") {
+	if wantTimerEnabled && !strings.EqualFold(status, "available") {
 		return true
 	}
 	if actualType := strings.TrimSpace(fmt.Sprint(metadata["timer_actual_type"])); !strings.EqualFold(actualType, timerTriggerType) {

@@ -14,6 +14,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// disableCollectorTimerFleet disables every Timer-triggered market fetcher in
+// the Space. Crypto is Scheduler/Invoke-owned; leaving a legacy Timer trigger
+// enabled would execute the same collection range twice during rollout.
+func disableCollectorTimerFleet(ctx context.Context, client *adminclient.Client, cfg *setupconfig.SCFFetcherSpace) error {
+	if cfg == nil {
+		return nil
+	}
+	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{NodeType: "scf-event", BizType: "market_fetcher"})
+	if err != nil {
+		return fmt.Errorf("list Timer fleet for space %s: %w", cfg.SpaceID, err)
+	}
+	timers := make([]adminclient.CloudNode, 0)
+	for _, node := range nodes {
+		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || !strings.EqualFold(node.TriggerType, "timer") {
+			continue
+		}
+		timers = append(timers, node)
+	}
+	jobs, err := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(timers))
+	if err != nil {
+		return fmt.Errorf("disable Timer fleet for space %s: %w", cfg.SpaceID, err)
+	}
+	if err := waitCollectorBatches(ctx, client, jobs); err != nil {
+		return fmt.Errorf("wait for Timer fleet shutdown for space %s: %w", cfg.SpaceID, err)
+	}
+	return nil
+}
+
 // The caller supplies its Space-scoped control client. Disabling the old
 // fleet must finish before publishing or activating its replacement.
 func disableCollectorBlacklistedTimers(ctx context.Context, client *adminclient.Client, cfg *setupconfig.SCFFetcherSpace) error {

@@ -263,7 +263,7 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 		Spaces:         []seedSpace{{SpaceID: "crypto", Name: "Crypto"}},
 		DataSources:    []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange"}},
 		Subjects:       []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
-		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Sources: []string{"binance"}, InstrumentType: "spot"}},
+		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Source: "binance", MarketType: "spot"}},
 		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"}, SubjectTags: []string{"binance_spot"}}},
 		Fields:         []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
 		Factors:        []seedFactor{{SpaceID: "crypto", FactorID: "ma", ValueType: "DOUBLE"}},

@@ -8,6 +8,11 @@ type EventAction string
 const (
 	EventActionMarketFetch EventAction = "market_fetch"
 	EventActionEgressProbe EventAction = "egress_probe"
+
+	// EventSourceCollectorScheduler marks a durable Collector-planned invoke.
+	// It must publish MarketFetchBatchCompleted even when the SCF node also has
+	// timer-mode environment from an older/static assignment.
+	EventSourceCollectorScheduler = "collector_scheduler"
 )
 
 // CloudFunctionEvent is the complete invocation contract for a short-lived SCF.

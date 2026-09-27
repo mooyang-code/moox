@@ -16,17 +16,13 @@ import (
 
 const validSeed = `tasks:
   - space_id: crypto
-    task_id: builtin-binance-spot-kline-1m
+    task_id: dasftksvjhj2jom4vhd0
     task_name: Binance 现货 K 线 1m
     data_type: kline
-    provider: binance
-    market_type: spot
+    tag_ids: [binance_spot]
     enabled: true
     creator: moox-setup
     collect_params:
-      provider: binance
-      market_type: spot
-      subject_tags: [binance_spot]
       frequency: 1m
 `
 
@@ -36,17 +32,16 @@ func TestLoadTaskSeed(t *testing.T) {
 	require.Len(t, tasks, 1)
 	task := tasks[0]
 	assert.Equal(t, "crypto", task.SpaceID)
-	assert.Equal(t, "builtin-binance-spot-kline-1m", task.TaskID)
+	assert.Equal(t, "dasftksvjhj2jom4vhd0", task.TaskID)
 	assert.Equal(t, "Binance 现货 K 线 1m", task.TaskName)
 	assert.Equal(t, "kline", task.DataType)
-	assert.Equal(t, "binance", task.Provider)
-	assert.Equal(t, "spot", task.MarketType)
+	assert.Equal(t, []string{"binance_spot"}, task.TagIDs)
 	assert.Equal(t, "moox-setup", task.Creator)
 	assert.True(t, task.Enabled)
-	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	ids := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "binance_spot", "kline", "1m")
 	assert.Equal(t, ids.DatasetID, task.ResultDatasetID)
 	assert.Equal(t, ids.ViewID, task.ResultViewID)
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	require.NoError(t, err)
 	assert.Equal(t, ids.DatasetID, params.TargetDatasetID)
 }
@@ -79,11 +74,11 @@ func TestLoadTaskSeedRequiresTrimmedTaskName(t *testing.T) {
 
 func TestLoadTaskSeedRejectsInvalidContracts(t *testing.T) {
 	tests := map[string]string{
-		"duplicate":       strings.Replace(validSeed, "tasks:\n", "tasks:\n"+strings.TrimPrefix(validSeed, "tasks:\n"), 1),
-		"legacy exchange": strings.Replace(validSeed, "provider: binance\n", "exchange: binance\n", 1),
-		"caller result":   strings.Replace(validSeed, "    subject_tags: [binance_spot]\n", "    target_dataset_id: caller-target\n    subject_tags: [binance_spot]\n", 1),
-		"mismatch":        strings.Replace(validSeed, "market_type: spot\n      subject_tags", "market_type: swap\n      subject_tags", 1),
-		"bad frequency":   strings.Replace(validSeed, "frequency: 1m", "frequency: instant", 1),
+		"duplicate":         strings.Replace(validSeed, "tasks:\n", "tasks:\n"+strings.TrimPrefix(validSeed, "tasks:\n"), 1),
+		"legacy provider":   strings.Replace(validSeed, "    tag_ids: [binance_spot]\n", "    provider: binance\n    tag_ids: [binance_spot]\n", 1),
+		"caller result":     strings.Replace(validSeed, "      frequency: 1m\n", "      target_dataset_id: caller-target\n      frequency: 1m\n", 1),
+		"routing in params": strings.Replace(validSeed, "      frequency: 1m\n", "      provider: binance\n      market_type: spot\n      frequency: 1m\n", 1),
+		"bad frequency":     strings.Replace(validSeed, "frequency: 1m", "frequency: instant", 1),
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {

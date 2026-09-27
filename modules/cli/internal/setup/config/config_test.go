@@ -60,7 +60,7 @@ func TestTencentSCFRegionLimitOverrideIsUsedForFunctionCapacity(t *testing.T) {
 	limits.MaxFunctionsPerNamespace = DefaultSCFMaxFunctionsPerNamespace
 	require.NoError(t, ValidateSCFCapacities(cfg, limits))
 
-	cfg.Spaces[0].Regions[0].FunctionCount = 24
+	cfg.Spaces[0].Regions[0].FunctionCount = 25
 	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region 3")
 }
 
@@ -127,13 +127,13 @@ func TestResolveSCFTimerFunctionCountsUsesConfiguredFunctionLimit(t *testing.T) 
 	assert.Equal(t, 1, cfg.Regions[0].FunctionCount)
 	assert.Equal(t, 2, cfg.Regions[1].FunctionCount)
 
-	cfg.TimerFunctionCount = 5
+	cfg.TimerFunctionCount = 7
 	cfg.Regions[0].FunctionCount = 0
 	cfg.Regions[1].FunctionCount = 0
 	require.ErrorContains(t, resolveSCFTimerFunctionCountsWithLimit(&cfg, "scf", 2), "available Timer capacity")
 }
 
-func TestResolveSCFTimerFunctionCountsReservesInvokeBeforeAutoAllocation(t *testing.T) {
+func TestResolveSCFFunctionCountsUseFullCryptoInvokeCapacity(t *testing.T) {
 	cfg := SCFFetcherSpace{
 		SpaceID: "crypto", TimerFunctionCount: 60,
 		Regions: []SCFFetcherRegion{
@@ -142,8 +142,8 @@ func TestResolveSCFTimerFunctionCountsReservesInvokeBeforeAutoAllocation(t *test
 		},
 	}
 	require.NoError(t, resolveSCFTimerFunctionCountsWithCapacities(&cfg, "scf", 50, nil))
-	assert.Equal(t, 11, cfg.Regions[0].FunctionCount)
-	assert.Equal(t, 49, cfg.Regions[1].FunctionCount)
+	assert.Equal(t, 10, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 50, cfg.Regions[1].FunctionCount)
 }
 
 func TestValidateSCFCapacitiesReservesPublisherAuxiliaries(t *testing.T) {
@@ -175,17 +175,18 @@ func TestValidateSCFCapacitiesAllowsOverflowNamespacesInOneRegion(t *testing.T) 
 	shards := SpaceRegionNamespaceShards(cfg.Spaces[0], cfg.Spaces[0].Regions[0], limits)
 	require.Len(t, shards, 2)
 	assert.Equal(t, "moox-crypto", shards[0].Namespace)
-	assert.Equal(t, 49, shards[0].Timers)
-	assert.Equal(t, 1, shards[0].Invokes)
+	assert.Equal(t, 0, shards[0].Timers)
+	assert.Equal(t, 50, shards[0].Invokes)
 	assert.Equal(t, "moox-crypto-ns2", shards[1].Namespace)
-	assert.Equal(t, 5, shards[1].Timers)
+	assert.Equal(t, 0, shards[1].Timers)
+	assert.Equal(t, 4, shards[1].Invokes)
 }
 
 func TestValidateSCFCapacitiesRejectsOverflowBeyondRegionalNamespaces(t *testing.T) {
 	limits := defaultTencentSCFLimits()
 	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
 		SpaceID: "crypto", Namespace: "moox-crypto",
-		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 250}},
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 251}},
 	}}}
 	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region")
 }
@@ -452,8 +453,8 @@ func TestResolveSCFTimerFunctionCountsPrioritizesOverseasCryptoRegions(t *testin
 	}
 
 	require.NoError(t, resolveSCFTimerFunctionCounts(&cfg, "scf_fetcher.spaces[0]"))
-	assert.Equal(t, 10, cfg.Regions[0].FunctionCount)
-	assert.Equal(t, 50, cfg.Regions[1].FunctionCount)
+	assert.Equal(t, 9, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 51, cfg.Regions[1].FunctionCount)
 }
 
 func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {

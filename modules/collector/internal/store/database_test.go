@@ -38,7 +38,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 	if err := mgr.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatalf("ApplySchema() error = %v", err)
 	}
-	for _, table := range []string{"t_collector_tasks", "t_collector_task_instances"} {
+	for _, table := range []string{"t_collector_tasks", "t_collector_task_tags", "t_collector_runs", "t_collector_task_instances", "t_collector_instance_write_targets", "t_collector_fetch_batches", "t_collector_fetch_batch_items", "t_collector_fetch_retry_items", "t_period_readiness", "t_period_readiness_items"} {
 		var count int64
 		if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {
 			t.Fatalf("query table %s: %v", table, err)
@@ -48,8 +48,15 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 		}
 	}
 	for table, columns := range map[string][]string{
-		"t_collector_tasks":          {"c_task_name", "c_description", "c_result_dataset_id", "c_result_view_id", "c_coverage_start_time"},
-		"t_collector_task_instances": {"c_instance_id", "c_task_id", "c_function_name", "c_source_id"},
+		"t_collector_tasks":                  {"c_definition_hash", "c_result_dataset_id", "c_result_view_id"},
+		"t_collector_task_tags":              {"c_task_id", "c_tag_id"},
+		"t_collector_runs":                   {"c_run_id", "c_run_key", "c_run_type"},
+		"t_collector_task_instances":         {"c_instance_id", "c_run_id", "c_request_key", "c_source_id", "c_series_tag"},
+		"t_collector_instance_write_targets": {"c_write_target_id", "c_instance_id", "c_task_id", "c_dataset_id"},
+		"t_collector_fetch_batches":          {"c_instance_id", "c_write_target_id", "c_retry_scope"},
+		"t_collector_fetch_batch_items":      {"c_batch_id", "c_instance_id"},
+		"t_collector_fetch_retry_items":      {"c_instance_id", "c_write_target_id", "c_retry_scope"},
+		"t_period_readiness_items":           {"c_write_target_id", "c_series_tag"},
 	} {
 		for _, column := range columns {
 			var count int64
@@ -95,56 +102,107 @@ func TestApplySchemaRejectsIncompleteCurrentTaskSchema(t *testing.T) {
 	require.ErrorContains(t, err, "current task schema is incomplete")
 }
 
-func TestDeleteTaskRuntimeRemovesEmptyReadinessParents(t *testing.T) {
-	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = mgr.Close() })
-	if err := mgr.ApplySchema(schema.AllSQL()); err != nil {
-		t.Fatal(err)
-	}
-	_, err = mgr.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
-		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: time.Now().UTC()},
-		DeadlineAt: time.Now().UTC().Add(time.Minute),
-		Tasks:      []domain.PeriodTaskSeed{{InstanceID: "task-runtime", SubjectID: "BTC-USDT"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-runtime", CollectionTaskID: "task-runtime", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.DeleteTaskRuntime(context.Background(), "crypto", "task-runtime"); err != nil {
-		t.Fatal(err)
-	}
-	var count int64
-	if err := mgr.db.Raw(`SELECT count(*) FROM t_period_readiness`).Scan(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("empty readiness parents = %d, want 0", count)
-	}
-}
-
-func TestWaitTaskDrainUsesParentTaskIdentity(t *testing.T) {
+func TestDeleteTaskRuntimeRemovesOnlyOwnedWriteTargets(t *testing.T) {
 	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
 	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	ctx := context.Background()
+	for _, task := range []domain.CollectionTask{
+		{SpaceID: "crypto", TaskID: "task-a", TaskName: "A", DataType: "kline", Enabled: true},
+		{SpaceID: "crypto", TaskID: "task-b", TaskName: "B", DataType: "kline", Enabled: true},
+	} {
+		require.NoError(t, mgr.Tasks().Create(ctx, task))
+	}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "shared", CollectionTaskID: "task-a", DataType: "kline", DatasetID: "bars-a", SubjectID: "BTC-USDT", Frequency: "1m"}
+	require.NoError(t, mgr.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	require.NoError(t, mgr.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{
+		{ID: "target-a", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-a", DatasetID: "bars-a", Status: "pending"},
+		{ID: "target-b", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-b", DatasetID: "bars-b", Status: "pending"},
+	}))
+	period := time.Now().UTC().Truncate(time.Minute)
+	_, err = mgr.PeriodReadiness().EnsurePeriod(ctx, domain.PeriodSeed{
+		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m", PeriodTime: period},
+		DeadlineAt: period.Add(time.Minute),
+		Tasks:      []domain.PeriodTaskSeed{{InstanceID: "shared", WriteTargetID: "target-a", SubjectID: "BTC-USDT"}},
+	})
+	require.NoError(t, err)
 
-	_, err = mgr.FetchBatches().CreatePlanned(context.Background(), &domain.BatchInvocation{
-		SpaceID: "crypto", BatchID: "batch-1", ScheduleID: "schedule-1",
-		BatchKind: domain.BatchKindRealtime, TaskID: "task-1", DatasetID: "bars",
+	require.NoError(t, mgr.DeleteTaskRuntime(ctx, "crypto", "task-a"))
+	targets, err := mgr.TaskInstances().ListWriteTargets(ctx, "crypto", "shared")
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	require.Equal(t, "task-b", targets[0].TaskID)
+	_, err = mgr.TaskInstances().Get(ctx, "crypto", "shared")
+	require.NoError(t, err, "shared market-fetch instance must survive while task-b still references it")
+	var parentCount int64
+	require.NoError(t, mgr.db.Raw(`SELECT count(*) FROM t_period_readiness WHERE c_dataset_id = ?`, "bars-a").Scan(&parentCount).Error)
+	require.Zero(t, parentCount)
+}
+
+func TestCreateSharedBatchSurvivesOneDisabledTarget(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	ctx := context.Background()
+	for _, task := range []domain.CollectionTask{
+		{SpaceID: "crypto", TaskID: "task-a", TaskName: "A", DataType: "kline", Enabled: true},
+		{SpaceID: "crypto", TaskID: "task-b", TaskName: "B", DataType: "kline", Enabled: true},
+	} {
+		require.NoError(t, mgr.Tasks().Create(ctx, task))
+	}
+	require.NoError(t, mgr.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "shared", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m"}}))
+	require.NoError(t, mgr.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{
+		{ID: "target-a", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-a", DatasetID: "bars-a", Status: "pending"},
+		{ID: "target-b", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-b", DatasetID: "bars-b", Status: "pending"},
+	}))
+
+	require.NoError(t, mgr.Tasks().SetEnabled(ctx, "crypto", "task-a", false))
+	created, err := mgr.FetchBatches().CreatePlannedWithItemsForEnabledTargets(ctx, &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: "batch-one-target", ScheduleID: "schedule-one-target", BatchKind: domain.BatchKindRealtime,
 		Frequency: "1m", Status: domain.BatchStatusPlanned,
-	})
+	}, []string{"shared"})
 	require.NoError(t, err)
-	err = mgr.WaitTaskDrain(context.Background(), "crypto", "task-1", 20*time.Millisecond)
-	require.ErrorContains(t, err, "active fetch batch")
+	require.True(t, created, "task-b is still enabled, so the shared fetch must survive task-a disable")
 
-	_, err = mgr.FetchBatches().Complete(context.Background(), &domain.BatchInvocation{
-		SpaceID: "crypto", BatchID: "batch-1", Status: domain.BatchStatusSucceeded,
-	})
+	require.NoError(t, mgr.Tasks().SetEnabled(ctx, "crypto", "task-b", false))
+	created, err = mgr.FetchBatches().CreatePlannedWithItemsForEnabledTargets(ctx, &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: "batch-no-target", ScheduleID: "schedule-no-target", BatchKind: domain.BatchKindRealtime,
+		Frequency: "1m", Status: domain.BatchStatusPlanned,
+	}, []string{"shared"})
 	require.NoError(t, err)
-	require.NoError(t, mgr.WaitTaskDrain(context.Background(), "crypto", "task-1", 20*time.Millisecond))
+	require.False(t, created, "a shared instance with no enabled WriteTarget must not dispatch")
+}
+
+func TestWaitTaskDrainUsesSharedWriteTargetIdentity(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	ctx := context.Background()
+	for _, task := range []domain.CollectionTask{
+		{SpaceID: "crypto", TaskID: "task-a", TaskName: "A", DataType: "kline", Enabled: true},
+		{SpaceID: "crypto", TaskID: "task-b", TaskName: "B", DataType: "kline", Enabled: true},
+	} {
+		require.NoError(t, mgr.Tasks().Create(ctx, task))
+	}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "shared", CollectionTaskID: "task-a", DataType: "kline", DatasetID: "bars-a", SubjectID: "BTC-USDT", Frequency: "1m"}
+	require.NoError(t, mgr.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	require.NoError(t, mgr.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{
+		{ID: "target-a", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-a", DatasetID: "bars-a", Status: "pending"},
+		{ID: "target-b", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-b", DatasetID: "bars-b", Status: "pending"},
+	}))
+	created, err := mgr.FetchBatches().CreatePlannedWithItemsForEnabledTargets(ctx, &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: "batch-shared", ScheduleID: "schedule-shared", BatchKind: domain.BatchKindRealtime,
+		Frequency: "1m", Status: domain.BatchStatusPlanned,
+	}, []string{"shared"})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	err = mgr.WaitTaskDrain(ctx, "crypto", "task-b", 20*time.Millisecond)
+	require.ErrorContains(t, err, "active fetch batch")
+	_, err = mgr.FetchBatches().Complete(ctx, &domain.BatchInvocation{SpaceID: "crypto", BatchID: "batch-shared", Status: domain.BatchStatusSucceeded})
+	require.NoError(t, err)
+	require.NoError(t, mgr.WaitTaskDrain(ctx, "crypto", "task-b", 20*time.Millisecond))
 }

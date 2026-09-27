@@ -114,6 +114,7 @@ func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 		assert.Equal(t, InstTypeSPOT, params.InstType)
 		return []*exchange.SymbolInfo{
 			{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"},
+			{Symbol: "币安人生USDT", BaseAsset: "币安人生", QuoteAsset: "USDT", Status: "active"},
 			{Symbol: "ETH-USDT", BaseAsset: "ETH", QuoteAsset: "USDT", Status: "inactive"},
 		}, nil
 	}
@@ -132,17 +133,52 @@ func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, snapshotAt.Format(time.RFC3339Nano), snapshot.SnapshotID)
-	assert.Equal(t, map[string]int{"binance": 1}, snapshot.ExchangeCounts)
+	assert.Equal(t, map[string]int{"binance": 2}, snapshot.ExchangeCounts)
 	require.Equal(t, []marketdata.Instrument{{
-		SubjectID:       "BTC-USDT",
-		ProviderSymbol:  "BTCUSDT",
-		Exchange:        "binance",
-		Name:            "BTC/USDT",
-		Status:          "active",
-		BaseAsset:       "BTC",
-		QuoteAsset:      "USDT",
+		SubjectID:      "BTC-USDT",
+		ProviderSymbol: "BTCUSDT",
+		Exchange:       "binance",
+		Name:           "BTC/USDT",
+		Status:         "active",
+		BaseAsset:      "BTC",
+		QuoteAsset:     "USDT",
+	}, {
+		SubjectID:      "币安人生-USDT",
+		ProviderSymbol: "币安人生USDT",
+		Exchange:       "binance",
+		Name:           "币安人生/USDT",
+		Status:         "active",
+		BaseAsset:      "币安人生",
+		QuoteAsset:     "USDT",
 	}}, snapshot.Instruments)
 	require.NoError(t, marketdata.ValidateInstrumentSnapshot(snapshot))
+}
+
+func TestMarketDataAdapterRejectsSnapshotWhenSymbolsSkipped(t *testing.T) {
+	snapshotAt := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	collector := NewSymbolCollector()
+	collector.fetchSymbolPage = func(_ context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
+		return []*exchange.SymbolInfo{
+			{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"},
+			{Symbol: "BAD USDT", BaseAsset: "BAD COIN", QuoteAsset: "USDT", Status: "active"},
+		}, nil
+	}
+
+	adapter := NewMarketDataAdapter(AdapterConfig{
+		InstrumentType:  marketdata.InstrumentSpot,
+		SymbolCollector: collector,
+		Now:             func() time.Time { return snapshotAt.Add(time.Minute) },
+	})
+	_, err := adapter.FetchInstrumentSnapshot(context.Background(), marketdata.InstrumentRequest{
+		MarketID:   "crypto",
+		ExchangeID: "binance",
+		SnapshotAt: snapshotAt,
+		RequestID:  "req-skipped",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, marketdata.ErrProtocol)
+	assert.Contains(t, err.Error(), "skipped 1 binance symbols")
 }
 
 func TestKlineCollectorUsesOnePhysicalRequestPerFetcherCall(t *testing.T) {

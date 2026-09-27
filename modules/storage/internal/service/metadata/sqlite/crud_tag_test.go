@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -10,7 +11,7 @@ import (
 )
 
 func testAutoTag(id string) *pb.Tag {
-	return &pb.Tag{SpaceId: "space", TagId: id, TagName: id, Mode: metadata.TagModeAuto, Sources: []string{"binance"}, InstrumentType: "spot"}
+	return &pb.Tag{SpaceId: "space", TagId: id, TagName: id, Mode: metadata.TagModeAuto, Source: "source", MarketType: "spot"}
 }
 
 func TestUpsertTagDefaultsAndValidation(t *testing.T) {
@@ -27,18 +28,59 @@ func TestUpsertTagDefaultsAndValidation(t *testing.T) {
 	}
 
 	cases := map[string]*pb.Tag{
-		"bad id":               {SpaceId: "space", TagId: "Bad-ID", TagName: "x", Mode: metadata.TagModeManual},
-		"bad mode":             {SpaceId: "space", TagId: "x1", TagName: "x1", Mode: "sync"},
-		"auto without sources": {SpaceId: "space", TagId: "x2", TagName: "x2", Mode: metadata.TagModeAuto, InstrumentType: "spot"},
-		"manual half probe":    {SpaceId: "space", TagId: "x3", TagName: "x3", Mode: metadata.TagModeManual, Sources: []string{"binance"}},
-		"bad instrument type":  {SpaceId: "space", TagId: "x4", TagName: "x4", Mode: metadata.TagModeAuto, Sources: []string{"binance"}, InstrumentType: "option"},
-		"bad cron":             {SpaceId: "space", TagId: "x5", TagName: "x5", Mode: metadata.TagModeManual, Cron: "* * *"},
-		"bad timezone":         {SpaceId: "space", TagId: "x6", TagName: "x6", Mode: metadata.TagModeManual, Timezone: "Mars/Base"},
+		"bad id":          {SpaceId: "space", TagId: "Bad-ID", TagName: "x", Mode: metadata.TagModeManual},
+		"bad mode":        {SpaceId: "space", TagId: "x1", TagName: "x1", Mode: "sync"},
+		"missing source":  {SpaceId: "space", TagId: "x2", TagName: "x2", Mode: metadata.TagModeAuto, MarketType: "spot"},
+		"missing market":  {SpaceId: "space", TagId: "x3", TagName: "x3", Mode: metadata.TagModeManual, Source: "source"},
+		"bad market type": {SpaceId: "space", TagId: "x4", TagName: "x4", Mode: metadata.TagModeAuto, Source: "source", MarketType: "option"},
+		"bad cron":        {SpaceId: "space", TagId: "x5", TagName: "x5", Mode: metadata.TagModeManual, Source: "source", MarketType: "spot", Cron: "* * *"},
+		"bad timezone":    {SpaceId: "space", TagId: "x6", TagName: "x6", Mode: metadata.TagModeManual, Source: "source", MarketType: "spot", Timezone: "Mars/Base"},
+		"unknown source":  {SpaceId: "space", TagId: "x7", TagName: "x7", Mode: metadata.TagModeAuto, Source: "missing", MarketType: "spot"},
 	}
 	for name, item := range cases {
 		if _, err := store.UpsertTag(ctx, item); !errors.Is(err, metadata.ErrTagInvalid) {
 			t.Errorf("%s: err = %v, want ErrTagInvalid", name, err)
 		}
+	}
+}
+
+func TestCreateTagRejectsExistingTagWithoutReplacingIt(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	original := testAutoTag("unique_tag")
+	original.TagName = "Original"
+	if _, err := store.UpsertTag(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := testAutoTag("unique_tag")
+	duplicate.TagName = "Replacement"
+	duplicate.Builtin = true
+	if _, err := store.CreateTag(ctx, duplicate); err == nil {
+		t.Fatal("expected duplicate tag error")
+	}
+	got, err := store.GetTag(ctx, "space", "unique_tag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetTagName() != "Original" || got.GetBuiltin() {
+		t.Fatalf("existing tag was changed: %+v", got)
+	}
+}
+
+func TestCreateTagReportsDuplicateNameSeparatelyFromDuplicateID(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	first := testAutoTag("first_tag")
+	first.TagName = "Shared name"
+	if _, err := store.CreateTag(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := testAutoTag("second_tag")
+	second.TagName = "Shared name"
+	if _, err := store.CreateTag(ctx, second); err == nil || !strings.Contains(err.Error(), "tag name") {
+		t.Fatalf("err = %v, want duplicate tag name", err)
 	}
 }
 

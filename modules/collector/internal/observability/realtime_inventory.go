@@ -93,7 +93,7 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 		if !task.Enabled {
 			continue
 		}
-		params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 		if err != nil {
 			i.registry.ObserveInventoryRefreshError()
 			return fmt.Errorf("parse collector task %q: %w", task.TaskID, err)

@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -40,17 +41,34 @@ func (s *PeriodReadinessService) EnsureCurrentAndNext(ctx context.Context, space
 		return err
 	}
 	type groupKey struct{ dataset, frequency string }
-	groups := make(map[groupKey][]domain.TaskInstance)
+	groups := make(map[groupKey][]domain.PeriodTaskSeed)
 	for _, task := range tasks {
-		if task.IsDeleted || strings.TrimSpace(task.DatasetID) == "" || strings.TrimSpace(task.Frequency) == "" {
+		if task.IsDeleted || task.LastExecStatus == domain.InstanceStatusFailed || strings.TrimSpace(task.Frequency) == "" {
 			continue
 		}
 		frequency, normalizeErr := report.NormalizeDatasetFrequency(task.Frequency)
 		if normalizeErr != nil {
 			return fmt.Errorf("normalize task frequency %q: %w", task.Frequency, normalizeErr)
 		}
-		task.Frequency = frequency
-		groups[groupKey{dataset: task.DatasetID, frequency: frequency}] = append(groups[groupKey{dataset: task.DatasetID, frequency: frequency}], task)
+		targets, targetErr := s.instances.ListWriteTargets(ctx, strings.TrimSpace(spaceID), task.InstanceID)
+		if targetErr != nil {
+			return fmt.Errorf("list write targets for readiness instance=%s: %w", task.InstanceID, targetErr)
+		}
+		for _, target := range targets {
+			datasetID := strings.TrimSpace(target.DatasetID)
+			if datasetID == "" {
+				continue
+			}
+			groups[groupKey{dataset: datasetID, frequency: frequency}] = append(groups[groupKey{dataset: datasetID, frequency: frequency}], domain.PeriodTaskSeed{
+				InstanceID:     task.InstanceID,
+				WriteTargetID:  target.ID,
+				SubjectID:      canonicalPeriodSubjectID(spaceID, task.SubjectID),
+				SeriesTag:      readinessSeriesTag(task),
+				FunctionName:   task.FunctionName,
+				WriteSource:    writeSourceForFunctionName(task.FunctionName),
+				RequiredFields: requiredFieldsForWriteTarget(task, target),
+			})
+		}
 	}
 	keys := make([]groupKey, 0, len(groups))
 	for key := range groups {
@@ -67,28 +85,16 @@ func (s *PeriodReadinessService) EnsureCurrentAndNext(ctx context.Context, space
 		if windowErr != nil {
 			return windowErr
 		}
-		seedTasks := make([]domain.PeriodTaskSeed, 0, len(groups[key]))
-		seedBySubject := make(map[string]int, len(groups[key]))
-		for _, task := range groups[key] {
-			subjectID := canonicalPeriodSubjectID(spaceID, task.SubjectID)
-			seed := domain.PeriodTaskSeed{
-				InstanceID: task.InstanceID, SubjectID: subjectID,
-				FunctionName:   task.FunctionName,
-				WriteSource:    writeSourceForFunctionName(task.FunctionName),
-				RequiredFields: requiredFieldsJSON(task),
+		seedTasks := append([]domain.PeriodTaskSeed(nil), groups[key]...)
+		sort.Slice(seedTasks, func(i, j int) bool {
+			if seedTasks[i].SubjectID != seedTasks[j].SubjectID {
+				return seedTasks[i].SubjectID < seedTasks[j].SubjectID
 			}
-			if existing, ok := seedBySubject[subjectID]; ok {
-				// Two enabled rules may intentionally cover the same subject. A
-				// readiness item is subject-level, so accept either writer instead
-				// of rejecting the whole dataset group or waiting for one chosen rule.
-				seedTasks[existing].FunctionName = ""
-				seedTasks[existing].WriteSource = ""
-				continue
+			if seedTasks[i].SeriesTag != seedTasks[j].SeriesTag {
+				return seedTasks[i].SeriesTag < seedTasks[j].SeriesTag
 			}
-			seedBySubject[subjectID] = len(seedTasks)
-			seedTasks = append(seedTasks, seed)
-		}
-		sort.Slice(seedTasks, func(i, j int) bool { return seedTasks[i].SubjectID < seedTasks[j].SubjectID })
+			return seedTasks[i].WriteTargetID < seedTasks[j].WriteTargetID
+		})
 		for _, window := range windows {
 			grace := readinessGrace(key.frequency, s.grace)
 			if _, ensureErr := s.periods.EnsurePeriod(ctx, domain.PeriodSeed{
@@ -187,7 +193,7 @@ func (s *PeriodReadinessService) ApplyRows(ctx context.Context, payload *storage
 			}
 		}
 		periodKey := domain.PeriodKey{
-			SpaceID: payload.GetSpaceId(), DatasetID: payload.GetDatasetId(), Frequency: frequency, PeriodTime: dataTime.UTC(),
+			SpaceID: payload.GetSpaceId(), DatasetID: payload.GetDatasetId(), Frequency: frequency, PeriodTime: dataTime.UTC(), SeriesTag: strings.TrimSpace(key.GetSeriesTag()),
 		}
 		subjectID := canonicalPeriodSubjectID(payload.GetSpaceId(), key.GetSubjectId())
 		// Period snapshots freeze the assigned Timer. A later reassignment can
@@ -203,6 +209,29 @@ func (s *PeriodReadinessService) ApplyRows(ctx context.Context, payload *storage
 	return nil
 }
 
+func readinessSeriesTag(task domain.TaskInstance) string {
+	if tag := strings.TrimSpace(task.SeriesTag); tag != "" {
+		return tag
+	}
+	dataType := strings.ToLower(strings.TrimSpace(task.DataType))
+	if dataType == "kline_resample" {
+		if params, err := domain.ParseCollectParams(task.TaskParams, "", "", task.DataType); err == nil {
+			return strings.TrimSpace(params.SourceSeriesTag)
+		}
+		return ""
+	}
+	if dataType != "kline" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(task.SpaceID), StockCNSpaceID) {
+		return "default"
+	}
+	if strings.TrimSpace(task.Provider) == "" && strings.TrimSpace(task.SourceID) == "" {
+		return ""
+	}
+	return defaultMarketSeriesTag(task.Provider, task.SourceID, task.MarketType)
+}
+
 func canonicalPeriodSubjectID(spaceID, subjectID string) string {
 	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
 		return strings.ToUpper(strings.TrimSpace(subjectID))
@@ -210,8 +239,28 @@ func canonicalPeriodSubjectID(spaceID, subjectID string) string {
 	return strings.TrimSpace(subjectID)
 }
 
+func requiredFieldsForWriteTarget(task domain.TaskInstance, target domain.WriteTarget) string {
+	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
+		var fields []string
+		if raw := strings.TrimSpace(target.OutputFields); raw != "" && raw != "[]" && json.Unmarshal([]byte(raw), &fields) == nil && len(fields) > 0 {
+			encoded, err := json.Marshal(fields)
+			if err == nil {
+				return string(encoded)
+			}
+		}
+	}
+	return requiredFieldsJSON(task)
+}
+
 func requiredFieldsJSON(task domain.TaskInstance) string {
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
+		params, err := domain.ParseCollectParams(task.TaskParams, "", "", task.DataType)
+		if err == nil && len(params.OutputFields) > 0 {
+			encoded, marshalErr := json.Marshal(params.OutputFields)
+			if marshalErr == nil {
+				return string(encoded)
+			}
+		}
 		return `["open","high","low","close","volume","quote_volume","trade_num"]`
 	}
 	// Other providers may define their own field contract later. Keep the
@@ -224,7 +273,7 @@ func listAllTaskInstances(ctx context.Context, repo *store.TaskInstanceRepositor
 	var result []domain.TaskInstance
 	var afterID int
 	for {
-		rows, err := repo.ListAfterID(ctx, spaceID, afterID, pageSize)
+		rows, err := repo.ListReadinessInstances(ctx, spaceID, afterID, pageSize)
 		if err != nil {
 			return nil, err
 		}

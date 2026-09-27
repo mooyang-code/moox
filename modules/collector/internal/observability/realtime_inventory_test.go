@@ -33,7 +33,7 @@ func (s *registryStub) ObserveInventoryRefreshError() { s.errors++ }
 
 func collectorRule(id string, enabled bool, dataType, target, frequency string) domain.CollectionTask {
 	params := `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
-	return domain.CollectionTask{SpaceID: "crypto", TaskID: id, DataType: dataType, Provider: "binance", MarketType: "spot", CollectParams: params, Enabled: enabled}
+	return domain.CollectionTask{SpaceID: "crypto", TaskID: id, DataType: dataType, CollectParams: params, Enabled: enabled}
 }
 
 func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing.T) {

@@ -28,8 +28,8 @@ func TestValidateViewColumnNameAllowsMergedDataset(t *testing.T) {
 }
 
 func TestValidateViewIDAllowsFiftyCharacters(t *testing.T) {
-	require.NoError(t, validateViewID("view_"+"a"+strings.Repeat("b", 44)))
-	require.Error(t, validateViewID("view_"+"a"+strings.Repeat("b", 45)))
+	require.NoError(t, validateViewID("view_"+"a"+strings.Repeat("b", 122)))
+	require.Error(t, validateViewID("view_"+"a"+strings.Repeat("b", 123)))
 }
 
 func TestValidateColumnDisplayNameAllowsMatchingFactorOutput(t *testing.T) {

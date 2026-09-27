@@ -17,7 +17,7 @@ func TestPeriodReadinessFinalizesCompleteAndKeepsPayloadInputs(t *testing.T) {
 	_, err := repo.EnsurePeriod(ctx, domain.PeriodSeed{
 		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period},
 		DeadlineAt: period.Add(time.Minute),
-		Tasks:      []domain.PeriodTaskSeed{{InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "fetch-1", RequiredFields: `["close"]`}},
+		Tasks:      []domain.PeriodTaskSeed{{InstanceID: "task-btc", WriteTargetID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "fetch-1", RequiredFields: `["close"]`}},
 	})
 	require.NoError(t, err)
 	require.NoError(t, repo.MarkSubjectSuccess(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}, "BTC-USDT", "fetch-1", "fetch-1", period.Add(10*time.Second)))
@@ -46,8 +46,8 @@ func TestPeriodReadinessDeadlineMarksPendingDegraded(t *testing.T) {
 		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period},
 		DeadlineAt: period.Add(time.Minute),
 		Tasks: []domain.PeriodTaskSeed{
-			{InstanceID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "fetch-1"},
-			{InstanceID: "task-eth", SubjectID: "ETH-USDT", FunctionName: "fetch-1", WriteSource: "fetch-1"},
+			{InstanceID: "task-btc", WriteTargetID: "task-btc", SubjectID: "BTC-USDT", FunctionName: "fetch-1", WriteSource: "fetch-1"},
+			{InstanceID: "task-eth", WriteTargetID: "task-eth", SubjectID: "ETH-USDT", FunctionName: "fetch-1", WriteSource: "fetch-1"},
 		},
 	})
 	require.NoError(t, err)
@@ -74,8 +74,8 @@ func TestResampleReadinessSuppressesDeadlineUntilAllSubjectsSucceed(t *testing.T
 		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_resample_5m", Frequency: "5m", PeriodTime: period},
 		DeadlineAt: period.Add(time.Minute), WorkType: "resample",
 		Tasks: []domain.PeriodTaskSeed{
-			{InstanceID: "btc", SubjectID: "BTC", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"},
-			{InstanceID: "eth", SubjectID: "ETH", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"},
+			{InstanceID: "btc", WriteTargetID: "btc", SubjectID: "BTC", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"},
+			{InstanceID: "eth", WriteTargetID: "eth", SubjectID: "ETH", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"},
 		},
 	})
 	require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestResampleReadinessSuppressesTerminalFailedSource(t *testing.T) {
 	_, err := repo.EnsurePeriod(ctx, domain.PeriodSeed{
 		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_resample_5m", Frequency: "5m", PeriodTime: period},
 		DeadlineAt: period.Add(time.Minute), WorkType: "resample",
-		Tasks: []domain.PeriodTaskSeed{{InstanceID: "task-btc", SubjectID: "BTC", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"}},
+		Tasks: []domain.PeriodTaskSeed{{InstanceID: "task-btc", WriteTargetID: "task-btc", SubjectID: "BTC", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"}},
 	})
 	require.NoError(t, err)
 	failed := domain.NewResampleTaskResult(period)
@@ -133,7 +133,7 @@ func TestResampleReadinessSuppressesDeletedSourceTask(t *testing.T) {
 	_, err := repo.EnsurePeriod(ctx, domain.PeriodSeed{
 		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "dataset_spot_kline_resample_5m", Frequency: "5m", PeriodTime: period},
 		DeadlineAt: period.Add(time.Minute), WorkType: "resample",
-		Tasks: []domain.PeriodTaskSeed{{InstanceID: "task-eth", SubjectID: "ETH", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"}},
+		Tasks: []domain.PeriodTaskSeed{{InstanceID: "task-eth", WriteTargetID: "task-eth", SubjectID: "ETH", FunctionName: "collector_local_resample", WriteSource: "collector:kline_resample"}},
 	})
 	require.NoError(t, err)
 	result := domain.NewResampleTaskResult(period)
@@ -149,17 +149,21 @@ func TestResampleReadinessSuppressesDeletedSourceTask(t *testing.T) {
 	require.Equal(t, domain.PeriodReportReported, readiness.ReportState)
 }
 
-func TestPeriodReadinessRejectsDuplicateSubject(t *testing.T) {
+func TestPeriodReadinessAllowsSameSubjectAcrossSeries(t *testing.T) {
 	s := newCollectorStore(t)
+	period := time.Now().UTC().Truncate(time.Minute)
 	_, err := s.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
-		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: time.Now().UTC()},
-		DeadlineAt: time.Now().UTC().Add(time.Minute),
+		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period},
+		DeadlineAt: period.Add(time.Minute),
 		Tasks: []domain.PeriodTaskSeed{
-			{InstanceID: "task-a", SubjectID: "BTC-USDT"},
-			{InstanceID: "task-b", SubjectID: "BTC-USDT"},
+			{InstanceID: "task-a", WriteTargetID: "task-a", SubjectID: "BTC-USDT", SeriesTag: "venue:binance|market:spot|source:spot_http"},
+			{InstanceID: "task-b", WriteTargetID: "task-b", SubjectID: "BTC-USDT", SeriesTag: "venue:okx|market:spot|source:spot_http"},
 		},
 	})
-	require.ErrorContains(t, err, "duplicate period subject")
+	require.NoError(t, err)
+	var count int64
+	require.NoError(t, s.db.Model(&domain.PeriodReadinessItem{}).Count(&count).Error)
+	require.EqualValues(t, 2, count)
 }
 
 func TestEnsurePeriodDoesNotExpandExistingSnapshot(t *testing.T) {
@@ -167,10 +171,10 @@ func TestEnsurePeriodDoesNotExpandExistingSnapshot(t *testing.T) {
 	repo := s.PeriodReadiness()
 	ctx := context.Background()
 	period := time.Date(2026, 8, 9, 12, 3, 0, 0, time.UTC)
-	seed := domain.PeriodSeed{PeriodKey: domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}, DeadlineAt: period.Add(time.Minute), Tasks: []domain.PeriodTaskSeed{{InstanceID: "task-btc", SubjectID: "BTC-USDT"}}}
+	seed := domain.PeriodSeed{PeriodKey: domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}, DeadlineAt: period.Add(time.Minute), Tasks: []domain.PeriodTaskSeed{{InstanceID: "task-btc", WriteTargetID: "task-btc", SubjectID: "BTC-USDT"}}}
 	_, err := repo.EnsurePeriod(ctx, seed)
 	require.NoError(t, err)
-	seed.Tasks = append(seed.Tasks, domain.PeriodTaskSeed{InstanceID: "task-eth", SubjectID: "ETH-USDT"})
+	seed.Tasks = append(seed.Tasks, domain.PeriodTaskSeed{InstanceID: "task-eth", WriteTargetID: "task-eth", SubjectID: "ETH-USDT"})
 	_, err = repo.EnsurePeriod(ctx, seed)
 	require.NoError(t, err)
 	reports, err := repo.FinalizeDue(ctx, period.Add(time.Minute), 10)
@@ -190,7 +194,7 @@ func TestDeleteReportedItemsOutsideWindowKeepsNewestPeriods(t *testing.T) {
 		_, err := repo.EnsurePeriod(ctx, domain.PeriodSeed{
 			PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period},
 			DeadlineAt: period.Add(time.Minute),
-			Tasks:      []domain.PeriodTaskSeed{{InstanceID: "task-btc", SubjectID: "BTC-USDT"}},
+			Tasks:      []domain.PeriodTaskSeed{{InstanceID: "task-btc", WriteTargetID: "task-btc", SubjectID: "BTC-USDT"}},
 		})
 		require.NoError(t, err)
 		require.NoError(t, repo.MarkSubjectSuccess(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}, "BTC-USDT", "", "", period))

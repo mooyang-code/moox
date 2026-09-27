@@ -134,7 +134,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		}
 		if _, err := store.UpsertTag(ctx, &pb.Tag{
 			SpaceId: item.SpaceID, TagId: item.TagID, TagName: item.TagName, Description: item.Description,
-			Mode: item.Mode, Builtin: item.Builtin, Sources: item.Sources, InstrumentType: item.InstrumentType,
+			Mode: item.Mode, Builtin: item.Builtin, Source: item.Source, MarketType: item.MarketType,
 			Cron: item.Cron, Timezone: item.Timezone,
 		}); err != nil {
 			return result, seedErr("tag", item.TagID, err)
@@ -437,16 +437,16 @@ type seedSubject struct {
 
 // seedTag 描述静态标签定义；运行态成员由 subject collector 维护。
 type seedTag struct {
-	SpaceID        string   `yaml:"space_id"`
-	TagID          string   `yaml:"tag_id"`
-	TagName        string   `yaml:"tag_name"`
-	Description    string   `yaml:"description"`
-	Mode           string   `yaml:"mode"`
-	Builtin        bool     `yaml:"builtin"`
-	Sources        []string `yaml:"sources"`
-	InstrumentType string   `yaml:"instrument_type"`
-	Cron           string   `yaml:"cron"`
-	Timezone       string   `yaml:"timezone"`
+	SpaceID     string `yaml:"space_id"`
+	TagID       string `yaml:"tag_id"`
+	TagName     string `yaml:"tag_name"`
+	Description string `yaml:"description"`
+	Mode        string `yaml:"mode"`
+	Builtin     bool   `yaml:"builtin"`
+	Source      string `yaml:"source"`
+	MarketType  string `yaml:"market_type"`
+	Cron        string `yaml:"cron"`
+	Timezone    string `yaml:"timezone"`
 }
 
 // seedDataset 描述待初始化的 Dataset 元数据。

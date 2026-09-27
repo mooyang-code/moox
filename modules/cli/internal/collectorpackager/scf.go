@@ -54,7 +54,6 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	}
 
 	zw := zip.NewWriter(out)
-	defer zw.Close()
 
 	var entries []string
 	addFile := func(src, dst string) error {
@@ -123,8 +122,110 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 		}
 	}
 
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	if err := ValidateSCFPackageZip(opts.OutPath); err != nil {
+		return nil, err
+	}
 	sort.Strings(entries)
 	return &BuildSCFPackageResult{Path: opts.OutPath, Entries: entries}, nil
+}
+
+var placeholderStorageAppKeys = map[string]struct{}{
+	"binance-spot-collector": {},
+	"binance-swap-collector": {},
+}
+
+// ValidateSCFPackageZip rejects packages that still carry placeholder or empty
+// Storage Primary app_key values. Shell zip builders and `deploy --zip` must
+// pass the same HMAC-rendered credentials as `collector function package`.
+func ValidateSCFPackageZip(zipPath string) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("open scf package zip: %w", err)
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if filepath.ToSlash(file.Name) != "sources/market/binance.yaml" {
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("read Binance source config: %w", err)
+		}
+		content, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			return fmt.Errorf("read Binance source config: %w", err)
+		}
+		if err := validateRenderedStorageAuth(content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRenderedStorageAuth(content []byte) error {
+	var document yaml.Node
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		return fmt.Errorf("parse Binance source config: %w", err)
+	}
+	checked := 0
+	var visit func(*yaml.Node) error
+	visit = func(node *yaml.Node) error {
+		if node == nil {
+			return nil
+		}
+		if node.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				key, value := node.Content[i], node.Content[i+1]
+				if key.Value == "auth_info" && value.Kind == yaml.MappingNode {
+					appID, appKey := mappingValue(value, "app_id"), mappingValue(value, "app_key")
+					if appID == nil || strings.TrimSpace(appID.Value) == "" || appKey == nil {
+						return fmt.Errorf("Binance Storage auth_info requires app_id and app_key")
+					}
+					keyValue := strings.TrimSpace(appKey.Value)
+					if keyValue == "" {
+						return fmt.Errorf("Binance Storage app_key is empty; package with MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+					}
+					if _, placeholder := placeholderStorageAppKeys[keyValue]; placeholder {
+						return fmt.Errorf("scf package still contains placeholder Storage Primary app_key %q; package with MOOX_STORAGE_PRIMARY_AUTH_SECRET", keyValue)
+					}
+					if len(keyValue) != 64 || !isHex(keyValue) {
+						return fmt.Errorf("Binance Storage app_key must be a 64-character HMAC hex digest")
+					}
+					checked++
+				}
+				if err := visit(value); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, child := range node.Content {
+			if err := visit(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visit(&document); err != nil {
+		return err
+	}
+	if checked == 0 {
+		return fmt.Errorf("Binance source config contains no Storage auth_info")
+	}
+	return nil
+}
+
+func isHex(value string) bool {
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func stockCNCalendarPath(configDir string) (string, error) {

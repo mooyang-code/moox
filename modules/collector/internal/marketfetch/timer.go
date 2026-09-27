@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -83,8 +84,9 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time, runtimeR
 	hash := sha256.Sum256([]byte(strings.Join([]string{assignmentHash, minute}, "\x00")))
 	batchID := "timer-" + hex.EncodeToString(hash[:])[:24]
 	items := make([]domain.CollectionItem, 0, len(subjects))
+	outputFields := normalizeOutputFields(strings.Split(os.Getenv("MOOX_MARKET_FETCH_OUTPUT_FIELDS"), "|"))
 	for _, subject := range subjects {
-		items = append(items, domain.CollectionItem{SubjectID: subject, Symbol: externalSymbols[subject], Provider: provider, SourceID: sourceID, MarketType: marketType, DataType: "kline", DatasetID: datasetID, Frequency: frequency, BarLimit: MaxRealtimeRows})
+		items = append(items, domain.CollectionItem{SubjectID: subject, Symbol: externalSymbols[subject], Provider: provider, SourceID: sourceID, MarketType: marketType, DataType: "kline", DatasetID: datasetID, Frequency: frequency, OutputFields: append([]string(nil), outputFields...), BarLimit: MaxRealtimeRows})
 	}
 	concurrency := envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
 	groupID, groupCount, err := timerGroupIdentity(spaceID)
@@ -215,18 +217,23 @@ func marketProviderSymbolForMarket(marketID, marketType, subjectID string) (stri
 		}
 		canonical := strings.TrimSuffix(strings.TrimSuffix(value, "-SPOT"), "-SWAP")
 		parts := strings.Split(canonical, "-")
-		if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != "" {
-			for _, part := range parts {
-				for _, r := range part {
-					if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
-						return "", fmt.Errorf("subject %s contains unsupported crypto asset characters", subjectID)
-					}
-				}
-			}
+		if len(parts) == 2 && validCryptoAssetPart(parts[0]) && validCryptoAssetPart(parts[1]) {
 			return strings.ToUpper(parts[0] + parts[1]), nil
 		}
 	}
 	return "", fmt.Errorf("subject %s has no provider symbol codec for market %s", subjectID, marketID)
+}
+
+func validCryptoAssetPart(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && !unicode.Is(unicode.Han, r) {
+			return false
+		}
+	}
+	return true
 }
 
 func parseDNSRoutes(raw string) (map[string]sources.DNSResolution, error) {

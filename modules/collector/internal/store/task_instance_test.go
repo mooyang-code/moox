@@ -11,6 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func attachTestWriteTarget(t *testing.T, s *Store, ctx context.Context, spaceID, instanceID, taskID, datasetID string) {
+	t.Helper()
+	require.NoError(t, s.db.WithContext(ctx).Exec(`INSERT OR IGNORE INTO t_collector_tasks(c_space_id,c_task_id,c_task_name,c_data_type,c_enabled,c_prepare_state) VALUES(?,?,?,?,1,'ready')`, spaceID, taskID, taskID, "kline").Error)
+	require.NoError(t, s.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{
+		ID: "wt-" + instanceID + "-" + taskID, SpaceID: spaceID, InstanceID: instanceID,
+		TaskID: taskID, DatasetID: datasetID, Status: "pending",
+	}}))
+}
+
 func TestTaskInstanceRepositoryUpsertKeepsFreshnessForStableTask(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
@@ -30,6 +39,30 @@ func TestTaskInstanceRepositoryUpsertKeepsFreshnessForStableTask(t *testing.T) {
 	assert.Equal(t, first.LastExecTime, stored.LastExecTime)
 	assert.Equal(t, "1m", stored.Frequency)
 	assert.Equal(t, "binance", stored.Provider)
+}
+
+func TestMarkStorageWritesSeparatesSameSubjectBySeriesTag(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instances := []domain.TaskInstance{
+		{SpaceID: "crypto", InstanceID: "binance-btc", Provider: "binance", SourceID: "spot_http", SeriesTag: "venue:binance|market:spot|source:spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", FunctionName: "fetch-1"},
+		{SpaceID: "crypto", InstanceID: "okx-btc", Provider: "okx", SourceID: "spot_http", SeriesTag: "venue:okx|market:spot|source:spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", FunctionName: "fetch-1"},
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+	attachTestWriteTarget(t, s, ctx, "crypto", "binance-btc", "task-binance", "bars")
+	attachTestWriteTarget(t, s, ctx, "crypto", "okx-btc", "task-okx", "bars")
+	at := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	updated, err := s.TaskInstances().MarkStorageWrites(ctx, []StorageWriteObservation{
+		{SpaceID: "crypto", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", SeriesTag: "venue:binance|market:spot|source:spot_http", FunctionName: "fetch-1", At: at},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, updated)
+	binance, err := s.TaskInstances().Get(ctx, "crypto", "binance-btc")
+	require.NoError(t, err)
+	okx, err := s.TaskInstances().Get(ctx, "crypto", "okx-btc")
+	require.NoError(t, err)
+	require.NotNil(t, binance.LastExecTime)
+	require.Nil(t, okx.LastExecTime)
 }
 
 func TestTaskInstanceRepositoryPreservesAssignedSourceOnPlannerUpsert(t *testing.T) {
@@ -85,11 +118,37 @@ func TestTaskInstanceRepositoryUpsertBatchesLargeCatalogue(t *testing.T) {
 	assert.Equal(t, int64(len(instances)), total)
 }
 
+func TestTaskInstanceListFiltersSharedInstanceThroughWriteTargets(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instance := domain.TaskInstance{
+		SpaceID: "crypto", InstanceID: "shared-btc", RunID: "run-1", RequestKey: "request-btc",
+		Provider: "binance", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m",
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, "task-a", "bars-a")
+	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, "task-b", "bars-b")
+
+	for _, filter := range []TaskInstanceFilter{
+		{SpaceID: "crypto", CollectionTaskID: "task-a"},
+		{SpaceID: "crypto", CollectionTaskID: "task-b"},
+		{SpaceID: "crypto", DatasetID: "bars-a"},
+		{SpaceID: "crypto", DatasetID: "bars-b"},
+	} {
+		instances, total, err := s.TaskInstances().List(ctx, filter)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, total)
+		require.Len(t, instances, 1)
+		require.Equal(t, instance.InstanceID, instances[0].InstanceID)
+	}
+}
+
 func TestTaskInstanceRepositoryTracksSCFAssignmentAndStorageWrite(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	attachTestWriteTarget(t, s, ctx, "crypto", "task-1", "rule-1", "bars")
 	require.NoError(t, s.TaskInstances().AssignMarketFetchFunction(ctx, "crypto", "binance", "spot", "bars", "1m", "market-fetch-1", []string{"BTC-USDT"}))
 	at := time.Date(2026, 8, 5, 1, 2, 3, 0, time.UTC)
 	updated, err := s.TaskInstances().MarkStorageWrites(ctx, []StorageWriteObservation{{SpaceID: "crypto", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", FunctionName: "market-fetch-1", At: at}})
@@ -110,7 +169,7 @@ func TestTaskInstanceUpsertSkipsParentTaskDisabledDuringDelete(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task-disabled", TaskName: "Disabled", DataType: "kline", Provider: "binance", MarketType: "spot", Enabled: false, CollectParams: `{}`}))
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task-disabled", TaskName: "Disabled", DataType: "kline", Enabled: false, CollectParams: `{}`}))
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
 		SpaceID: "crypto", InstanceID: "instance-disabled", CollectionTaskID: "task-disabled", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", CreateTime: now,
 	}}))
@@ -124,6 +183,7 @@ func TestTaskInstanceRepositoryMatchesCanonicalStorageFrequency(t *testing.T) {
 	ctx := context.Background()
 	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-hour", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1h", TaskParams: `{}`}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	attachTestWriteTarget(t, s, ctx, "crypto", "task-hour", "rule-1", "bars")
 	require.NoError(t, s.TaskInstances().AssignMarketFetchFunction(ctx, "crypto", "binance", "spot", "bars", "1h", "market-fetch-hour", []string{"BTC-USDT"}))
 	at := time.Date(2026, 8, 5, 1, 2, 3, 0, time.UTC)
 	updated, err := s.TaskInstances().MarkStorageWrites(ctx, []StorageWriteObservation{{SpaceID: "crypto", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1H", FunctionName: "market-fetch-hour", At: at}})
@@ -138,6 +198,7 @@ func TestReplaceMarketFetchAssignmentsUsesRouteProviderAndChecksCoverage(t *test
 		SpaceID: "stockcn", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "stockcn_multi", MarketType: "equity",
 		DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`,
 	}}))
+	attachTestWriteTarget(t, s, ctx, "stockcn", "task-1", "rule-1", "dataset_stockcn_equity_kline")
 
 	err := s.TaskInstances().ReplaceMarketFetchAssignments(ctx, "stockcn", []string{"stock-fetch-000"}, []MarketFetchAssignment{{
 		Provider: "stockcn_multi", SourceID: "stockcn_http", MarketType: "equity", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m",
@@ -158,6 +219,8 @@ func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T)
 		{SpaceID: "stockcn", InstanceID: "task-2", CollectionTaskID: "rule-2", Provider: "stockcn_multi", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m", TaskParams: `{}`},
 	}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+	attachTestWriteTarget(t, s, ctx, "stockcn", "task-1", "rule-1", "dataset_stockcn_equity_kline")
+	attachTestWriteTarget(t, s, ctx, "stockcn", "task-2", "rule-2", "dataset_stockcn_equity_kline")
 
 	err := s.TaskInstances().ReplaceMarketFetchAssignments(ctx, "stockcn", []string{"stock-fetch-000"}, []MarketFetchAssignment{{
 		Provider: "stockcn_multi", SourceID: "stockcn_minute_http", MarketType: "equity", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m",
@@ -170,38 +233,6 @@ func TestReplaceMarketFetchAssignmentsUpdatesDuplicateSubjectRules(t *testing.T)
 		assert.Equal(t, "stock-fetch-000", stored.FunctionName)
 		assert.Equal(t, "stockcn_minute_http", stored.SourceID)
 	}
-}
-
-func TestTaskInstanceRepositoryDeactivatesMissingTaskInstances(t *testing.T) {
-	s := newCollectorStore(t)
-	ctx := context.Background()
-	instances := []domain.TaskInstance{
-		{SpaceID: "crypto", InstanceID: "keep", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
-		{SpaceID: "crypto", InstanceID: "remove", CollectionTaskID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "ETH-USDT", Frequency: "1m", TaskParams: `{}`},
-	}
-	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
-	require.NoError(t, s.TaskInstances().DeactivateMissingMarketFetchTaskInstances(ctx, "crypto", "rule-1", []string{"keep"}))
-
-	removed, err := s.TaskInstances().Get(ctx, "crypto", "remove")
-	require.NoError(t, err)
-	assert.True(t, removed.IsDeleted)
-	kept, err := s.TaskInstances().Get(ctx, "crypto", "keep")
-	require.NoError(t, err)
-	assert.False(t, kept.IsDeleted)
-}
-
-func TestTaskInstanceRepositoryKeepsInventoryWhenResolutionIsEmpty(t *testing.T) {
-	s := newCollectorStore(t)
-	ctx := context.Background()
-	instances := []domain.TaskInstance{{
-		SpaceID: "crypto", InstanceID: "keep", CollectionTaskID: "rule-empty", Provider: "binance",
-		MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`,
-	}}
-	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
-	require.NoError(t, s.TaskInstances().DeactivateMissingMarketFetchTaskInstances(ctx, "crypto", "rule-empty", nil))
-	kept, err := s.TaskInstances().Get(ctx, "crypto", "keep")
-	require.NoError(t, err)
-	assert.False(t, kept.IsDeleted)
 }
 
 func TestResampleTaskClaimCompleteUsesStateVersionCAS(t *testing.T) {
@@ -391,9 +422,11 @@ func TestResampleBackfillStartResetsRetentionExpiredRealtimeCursor(t *testing.T)
 	result.Backfill = &domain.ResampleBackfill{RequestID: "old", Start: old, End: old.Add(time.Hour), NextBucket: old.Add(time.Hour), State: domain.ResampleBackfillFailed}
 	raw, err := result.Marshal()
 	require.NoError(t, err)
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-1", TaskName: "rule-1", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady}))
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
 		SpaceID: "crypto", InstanceID: "resample-btc", CollectionTaskID: "rule-1", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC", Frequency: "5m", Result: raw,
 	}}))
+	attachTestWriteTarget(t, s, ctx, "crypto", "resample-btc", "rule-1", "derived")
 	now := time.Now().UTC().Truncate(5 * time.Minute)
 	request := domain.ResampleBackfillRequest{RequestID: "new", Start: now.Add(-10 * time.Minute), End: now}
 	updated, err := s.TaskInstances().StartResampleBackfill(ctx, "crypto", "rule-1", request)
@@ -471,10 +504,12 @@ func TestResampleBackfillStartIsIdempotentAndConflicts(t *testing.T) {
 	initialResult := domain.NewResampleTaskResult(time.Time{})
 	initial, err := initialResult.Marshal()
 	require.NoError(t, err)
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-1", TaskName: "rule-1", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady}))
 	for _, taskID := range []string{"btc", "eth"} {
 		require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
 			SpaceID: "crypto", InstanceID: taskID, CollectionTaskID: "rule-1", Provider: "moox", DataType: "kline_resample", DatasetID: "derived", SubjectID: taskID, Frequency: "4H", Result: initial,
 		}}))
+		attachTestWriteTarget(t, s, ctx, "crypto", taskID, "rule-1", "derived")
 	}
 	request := domain.ResampleBackfillRequest{
 		RequestID: "bf-1", Start: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
@@ -509,4 +544,48 @@ func TestResampleUpsertResetsCursorWhenSubjectIsReactivated(t *testing.T) {
 	current, err := s.TaskInstances().Get(ctx, "crypto", "btc")
 	require.NoError(t, err)
 	require.Equal(t, newResult, current.Result)
+}
+
+func TestPruneDisabledWriteTargetsWaitsForActiveBatchAndKeepsSibling(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	for _, task := range []domain.CollectionTask{
+		{SpaceID: "crypto", TaskID: "disabled", TaskName: "Disabled", Enabled: false},
+		{SpaceID: "crypto", TaskID: "enabled", TaskName: "Enabled", Enabled: true},
+	} {
+		require.NoError(t, s.Tasks().Create(ctx, task))
+	}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "shared-prune", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m"}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, "disabled", "bars-disabled")
+	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, "enabled", "bars-enabled")
+	targets, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
+	require.NoError(t, err)
+	var disabledTarget domain.WriteTarget
+	for _, target := range targets {
+		if target.TaskID == "disabled" {
+			disabledTarget = target
+		}
+	}
+	now := time.Now().UTC()
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "target-retry", InstanceID: instance.InstanceID, WriteTargetID: disabledTarget.ID, RetryScope: "write_target", Status: "pending", CreateTime: now}))
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "active-prune", ScheduleID: "schedule-prune", BatchKind: domain.BatchKindRealtime, ShardIndex: 0, Frequency: "1m", Status: domain.BatchStatusPlanned, PlannedAt: &now}
+	created, err := s.FetchBatches().CreatePlannedWithItemsForEnabledTargets(ctx, batch, []string{instance.InstanceID})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto")
+	require.NoError(t, err)
+	require.Zero(t, deleted, "active batch must keep the target until completion")
+
+	require.NoError(t, s.db.WithContext(ctx).Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Update("c_status", domain.BatchStatusSucceeded).Error)
+	deleted, err = s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+	remaining, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	require.Equal(t, "enabled", remaining[0].TaskID)
+	_, err = s.FetchRetries().Get(ctx, "crypto", "target-retry")
+	require.Error(t, err)
 }

@@ -2,10 +2,13 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
+
+var ErrViewExists = errors.New("view already exists")
 
 // FieldQuery contains the supported server-side field filters and ordering.
 type FieldQuery struct {
@@ -121,6 +124,7 @@ type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
+	CreateView(ctx context.Context, item *pb.View) (*pb.View, error)
 	ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error)
 	DeleteView(ctx context.Context, spaceID string, viewID string) error
 	RequestViewRebuild(ctx context.Context, spaceID string, viewID string) (*pb.View, error)

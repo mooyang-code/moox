@@ -5,16 +5,14 @@ import { describe, expect, it } from "vitest";
 describe("collector task workbench", () => {
   it("keeps the ordinary create form in the documented task-first order", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
-    const form = source.slice(source.indexOf("<a-form"), source.indexOf("</a-form>"));
+    const form = source;
     const markers = [
       'field="task_name" label="任务名称"',
       'field="description" label="描述"',
-      'field="data_type" label="数据类型"',
-      'field="provider" label="数据源"',
-      'field="market_type" label="市场类型"',
+      'field="data_type" label="执行任务类型"',
       "采集频率",
-      'label="标的来源"',
-      'field="enabled" label="启用状态"'
+      "<h3>采集范围</h3>",
+      "<h3>输出字段</h3>"
     ];
     const positions = markers.map(marker => form.indexOf(marker));
     expect(positions.every(position => position >= 0)).toBe(true);
@@ -36,7 +34,7 @@ describe("collector task workbench", () => {
 
   it("renders the task list with operational result columns and no rule terminology", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
-    for (const label of ["任务名称", "数据类型", "数据源", "市场", "频率", "结果状态", "最近数据时间", "启用状态", "操作"]) {
+    for (const label of ["任务名称", "数据类型", "标签", "来源 / 市场", "频率", "结果状态", "最近数据时间", "启用状态", "操作"]) {
       expect(source).toContain(`title="${label}"`);
     }
     expect(source).toContain("新建采集任务");

@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron"
+	sqlite "modernc.org/sqlite"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -34,19 +37,10 @@ func normalizeTag(item *pb.Tag) error {
 	item.TagId = strings.TrimSpace(item.GetTagId())
 	item.TagName = strings.TrimSpace(item.GetTagName())
 	item.Mode = strings.ToLower(strings.TrimSpace(item.GetMode()))
-	item.InstrumentType = strings.ToLower(strings.TrimSpace(item.GetInstrumentType()))
+	item.Source = strings.ToLower(strings.TrimSpace(item.GetSource()))
+	item.MarketType = strings.ToLower(strings.TrimSpace(item.GetMarketType()))
 	item.Cron = strings.TrimSpace(item.GetCron())
 	item.Timezone = strings.TrimSpace(item.GetTimezone())
-	sources := make([]string, 0, len(item.GetSources()))
-	seen := map[string]bool{}
-	for _, source := range item.GetSources() {
-		source = strings.ToLower(strings.TrimSpace(source))
-		if source != "" && !seen[source] {
-			seen[source] = true
-			sources = append(sources, source)
-		}
-	}
-	item.Sources = sources
 	if item.Cron == "" {
 		item.Cron = defaultTagCron
 	}
@@ -62,15 +56,12 @@ func normalizeTag(item *pb.Tag) error {
 		return fmt.Errorf("%w: tag_name is required", metadatastore.ErrTagInvalid)
 	case item.Mode != metadatastore.TagModeAuto && item.Mode != metadatastore.TagModeManual:
 		return fmt.Errorf("%w: mode must be auto or manual", metadatastore.ErrTagInvalid)
-	}
-	probe := len(item.Sources) > 0 || item.InstrumentType != ""
-	if item.Mode == metadatastore.TagModeAuto || probe {
-		if len(item.Sources) == 0 || item.InstrumentType == "" {
-			return fmt.Errorf("%w: sources and instrument_type must be set together", metadatastore.ErrTagInvalid)
-		}
-		if !instrumentTypes[item.InstrumentType] {
-			return fmt.Errorf("%w: unsupported instrument_type %q", metadatastore.ErrTagInvalid, item.InstrumentType)
-		}
+	case item.Source == "":
+		return fmt.Errorf("%w: source is required", metadatastore.ErrTagInvalid)
+	case item.MarketType == "":
+		return fmt.Errorf("%w: market_type is required", metadatastore.ErrTagInvalid)
+	case !instrumentTypes[item.MarketType]:
+		return fmt.Errorf("%w: unsupported market_type %q", metadatastore.ErrTagInvalid, item.MarketType)
 	}
 	if _, err := cron.ParseStandard(item.Cron); err != nil {
 		return fmt.Errorf("%w: cron: %v", metadatastore.ErrTagInvalid, err)
@@ -85,31 +76,107 @@ func (s *Store) UpsertTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
 	if err := normalizeTag(item); err != nil {
 		return nil, err
 	}
-	sources, err := marshalJSON(item.GetSources())
-	if err != nil {
+	if err := s.validateTagSource(ctx, item); err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_description, c_mode, c_builtin, c_sources_json, c_instrument_type, c_cron, c_timezone)
+	if existing, err := s.GetTag(ctx, item.GetSpaceId(), item.GetTagId()); err == nil {
+		if existing.GetSource() != item.GetSource() || existing.GetMarketType() != item.GetMarketType() {
+			return nil, fmt.Errorf("%w: source and market_type are immutable; create a new tag", metadatastore.ErrTagInvalid)
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_description, c_mode, c_builtin, c_source_id, c_market_type, c_cron, c_timezone)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_tag_id) DO UPDATE SET
 			c_tag_name = excluded.c_tag_name,
 			c_description = excluded.c_description,
 			c_mode = excluded.c_mode,
-			c_sources_json = excluded.c_sources_json,
-			c_instrument_type = excluded.c_instrument_type,
 			c_cron = excluded.c_cron,
 			c_timezone = excluded.c_timezone
-	`, item.GetSpaceId(), item.GetTagId(), item.GetTagName(), item.GetDescription(), item.GetMode(), boolInt(item.GetBuiltin()), sources, item.GetInstrumentType(), item.GetCron(), item.GetTimezone())
+		WHERE t_tags.c_source_id = excluded.c_source_id AND t_tags.c_market_type = excluded.c_market_type
+	`, item.GetSpaceId(), item.GetTagId(), item.GetTagName(), item.GetDescription(), item.GetMode(), boolInt(item.GetBuiltin()), item.GetSource(), item.GetMarketType(), item.GetCron(), item.GetTimezone())
 	if err != nil {
+		return nil, err
+	}
+	if affected, rowsErr := result.RowsAffected(); rowsErr != nil {
+		return nil, rowsErr
+	} else if affected == 0 {
+		return nil, fmt.Errorf("%w: source and market_type are immutable; create a new tag", metadatastore.ErrTagInvalid)
+	}
+	return s.GetTag(ctx, item.GetSpaceId(), item.GetTagId())
+}
+
+// CreateTag inserts a new tag without replacing an existing tag identity.
+func (s *Store) CreateTag(ctx context.Context, item *pb.Tag) (*pb.Tag, error) {
+	if err := normalizeTag(item); err != nil {
+		return nil, err
+	}
+	if err := s.validateTagSource(ctx, item); err != nil {
+		return nil, err
+	}
+	item.Builtin = false
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO t_tags (c_space_id, c_tag_id, c_tag_name, c_description, c_mode, c_builtin, c_source_id, c_market_type, c_cron, c_timezone)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetTagId(), item.GetTagName(), item.GetDescription(), item.GetMode(), boolInt(item.GetBuiltin()), item.GetSource(), item.GetMarketType(), item.GetCron(), item.GetTimezone())
+	if err != nil {
+		var sqliteErr *sqlite.Error
+		if errors.As(err, &sqliteErr) && sqliteErr.Code() == 2067 {
+			if strings.Contains(strings.ToLower(sqliteErr.Error()), "c_tag_name") {
+				return nil, fmt.Errorf("tag name %q already exists in space %s: %w", item.GetTagName(), item.GetSpaceId(), err)
+			}
+			return nil, fmt.Errorf("tag %s/%s already exists: %w", item.GetSpaceId(), item.GetTagId(), err)
+		}
+		return nil, err
+	}
+	if _, err := result.RowsAffected(); err != nil {
 		return nil, err
 	}
 	return s.GetTag(ctx, item.GetSpaceId(), item.GetTagId())
 }
 
+func (s *Store) validateTagSource(ctx context.Context, item *pb.Tag) error {
+	source, err := s.GetDataSource(ctx, item.GetSpaceId(), item.GetSource())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: data source %q does not exist in space %q", metadatastore.ErrTagInvalid, item.GetSource(), item.GetSpaceId())
+		}
+		return err
+	}
+	if status := strings.ToLower(strings.TrimSpace(source.GetStatus())); status != "active" {
+		return fmt.Errorf("%w: data source %q is not active", metadatastore.ErrTagInvalid, item.GetSource())
+	}
+	// When a source publishes subject-listing capabilities, enforce them here.
+	// Sources without capability metadata are still accepted; the Collector
+	// provider/lister performs the execution-time compatibility check.
+	if raw := strings.TrimSpace(source.GetAttributes()["subject_listing"]); raw != "" {
+		var listing struct {
+			InstrumentTypes []string `json:"instrument_types"`
+		}
+		if err := json.Unmarshal([]byte(raw), &listing); err != nil {
+			return fmt.Errorf("%w: data source %q has invalid subject_listing metadata", metadatastore.ErrTagInvalid, item.GetSource())
+		}
+		if len(listing.InstrumentTypes) > 0 {
+			matched := false
+			for _, instrumentType := range listing.InstrumentTypes {
+				if strings.EqualFold(strings.TrimSpace(instrumentType), item.GetMarketType()) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return fmt.Errorf("%w: data source %q does not support market_type %q", metadatastore.ErrTagInvalid, item.GetSource(), item.GetMarketType())
+			}
+		}
+	}
+	return nil
+}
+
 const tagSelect = `
 	SELECT t.c_space_id, t.c_tag_id, t.c_tag_name, t.c_description, t.c_mode, t.c_builtin,
-	       t.c_sources_json, t.c_instrument_type, t.c_cron, t.c_timezone,
+	       t.c_source_id, t.c_market_type, t.c_cron, t.c_timezone,
 	       t.c_last_run_at, t.c_last_status, t.c_last_error, t.c_ctime, t.c_mtime,
 	       (SELECT COUNT(1) FROM t_subject_tags m WHERE m.c_space_id = t.c_space_id AND m.c_tag_id = t.c_tag_id AND m.c_status = 'active'),
 	       (SELECT COUNT(1) FROM t_subject_tags m WHERE m.c_space_id = t.c_space_id AND m.c_tag_id = t.c_tag_id AND m.c_status = 'inactive')
@@ -118,16 +185,12 @@ const tagSelect = `
 func scanTag(row rowScanner) (*pb.Tag, error) {
 	item := &pb.Tag{}
 	var builtin int
-	var sources string
 	if err := row.Scan(&item.SpaceId, &item.TagId, &item.TagName, &item.Description, &item.Mode, &builtin,
-		&sources, &item.InstrumentType, &item.Cron, &item.Timezone, &item.LastRunAt, &item.LastStatus,
+		&item.Source, &item.MarketType, &item.Cron, &item.Timezone, &item.LastRunAt, &item.LastStatus,
 		&item.LastError, &item.CreatedAt, &item.UpdatedAt, &item.ActiveCount, &item.InactiveCount); err != nil {
 		return nil, err
 	}
 	item.Builtin = builtin == 1
-	if err := json.Unmarshal([]byte(sources), &item.Sources); err != nil {
-		return nil, fmt.Errorf("decode tag sources: %w", err)
-	}
 	return item, nil
 }
 

@@ -206,7 +206,7 @@ const activeTagKey = computed(() => selectedTagId.value || ALL_TAG_KEY);
 const selectedTag = computed(() => tags.value.find(tag => tag.tag_id === selectedTagId.value));
 const manualTags = computed(() => tags.value.filter(tag => tag.mode === "manual"));
 const canEditMembers = computed(() => selectedTag.value?.mode === "manual");
-const probeEnabled = computed(() => Boolean(selectedTag.value?.mode === "auto" || selectedTag.value?.sources?.length));
+const probeEnabled = computed(() => Boolean(selectedTag.value?.mode === "auto" || selectedTag.value?.source));
 const statusOptions = computed(() =>
   selectedTagId.value
     ? [

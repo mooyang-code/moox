@@ -146,6 +146,20 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		return fmt.Errorf("market fetch completion payload type is %T", delivery.Payload)
 	}
 	spaceID := delivery.Message.GetSpaceId()
+	// Target results are independent of the provider fetch result. Persist them
+	// before applying instance-level completion so one failed destination does
+	// not overwrite sibling target state.
+	for _, item := range payload.GetItems() {
+		for _, target := range item.GetTargets() {
+			status := target.GetStatus()
+			if status == "" {
+				status = "succeeded"
+			}
+			if err := instances.UpdateWriteTargetStatus(ctx, spaceID, target.GetWriteTargetId(), status, target.GetErrorSummary(), 0); err != nil {
+				return fmt.Errorf("update write target %s: %w", target.GetWriteTargetId(), err)
+			}
+		}
+	}
 	batch, err := batches.Get(ctx, spaceID, payload.GetBatchId())
 	if err != nil {
 		// Unknown completion is a poison message for this deployment, not a
@@ -211,7 +225,7 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) && batch.BatchKind == domain.BatchKindRealtime {
 			target, targetErr := time.Parse(time.RFC3339Nano, item.GetTargetDataTime())
 			if targetErr == nil {
-				effects.SupersedePendingRetries = append(effects.SupersedePendingRetries, store.MarketFetchRetrySupersede{SpaceID: spaceID, DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: target})
+				effects.SupersedePendingRetries = append(effects.SupersedePendingRetries, store.MarketFetchRetrySupersede{SpaceID: spaceID, InstanceID: item.GetInstanceId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: target})
 			}
 		}
 		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) && (item.GetSourceEventId() != "" || lateCompletion) {
@@ -228,6 +242,19 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 			continue
 		}
 		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) {
+			// Provider fetch succeeded, but individual destinations may still
+			// fail. Schedule only those targets for a write-scope retry.
+			for _, targetResult := range item.GetTargets() {
+				if targetResult.GetStatus() != "failed" {
+					continue
+				}
+				retryKey := fmt.Sprintf("%s:target:%s", item.GetInstanceId(), targetResult.GetWriteTargetId())
+				when := completedAt.Add(retryDelay(1))
+				collectionItem := retryCollectionItem(original, item, retryKey)
+				collectionItem.DatasetID = targetResult.GetDatasetId()
+				raw, _ := json.Marshal(collectionItem)
+				effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, InstanceID: item.GetInstanceId(), WriteTargetID: targetResult.GetWriteTargetId(), RetryScope: "write_target", SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: completedAt, TaskJSON: string(raw), Attempt: 1, Status: "pending", NextRetryAt: &when, LastErrorType: "storage", LastErrorSummary: targetResult.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
+			}
 			effects.InstanceUpdates = append(effects.InstanceUpdates, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusSuccess))
 			continue
 		}
@@ -283,7 +310,7 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		}
 		collectionItem := retryCollectionItem(original, item, key)
 		raw, _ := json.Marshal(collectionItem)
-		effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, DatasetID: collectionItem.DatasetID, SubjectID: collectionItem.SubjectID, Frequency: collectionItem.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: item.GetErrorType(), LastErrorSummary: item.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
+		effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, InstanceID: collectionItem.InstanceID, RetryScope: "fetch", SubjectID: collectionItem.SubjectID, Frequency: collectionItem.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: item.GetErrorType(), LastErrorSummary: item.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
 	}
 	updated, err := batches.CompleteWithEffects(ctx, batch, effects)
 	if err != nil {
@@ -339,7 +366,7 @@ func taskInstanceUpdate(spaceID string, payload *marketfetchpb.MarketFetchBatchC
 	}
 	result, _ := json.Marshal(resultData)
 	return store.MarketFetchInstanceUpdate{
-		SpaceID: spaceID, InstanceID: item.GetInstanceId(), DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime,
+		SpaceID: spaceID, InstanceID: item.GetInstanceId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime,
 		At: at, Status: status, Result: string(result),
 	}
 }
@@ -351,7 +378,6 @@ func completionIdentityMismatch(batch *domain.BatchInvocation, payload *marketfe
 	checks := []struct{ name, expected, actual string }{
 		{"schedule_id", batch.ScheduleID, payload.GetScheduleId()},
 		{"batch_kind", string(batch.BatchKind), payload.GetBatchKind()},
-		{"dataset_id", batch.DatasetID, payload.GetDatasetId()},
 		{"frequency", batch.Frequency, payload.GetFrequency()},
 	}
 	// NodeID is intentionally not part of the completion identity. An invoke

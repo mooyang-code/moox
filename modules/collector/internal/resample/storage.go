@@ -130,6 +130,19 @@ func resultRow(result Result) *storagepb.RowFieldUpsert {
 
 func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 	row := resultRow(result)
+	if len(spec.OutputFields) > 0 {
+		selected := make(map[string]struct{}, len(spec.OutputFields))
+		for _, name := range spec.OutputFields {
+			selected[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+		}
+		fields := row.Fields[:0]
+		for _, field := range row.Fields {
+			if _, ok := selected[strings.ToLower(strings.TrimSpace(field.GetFieldId()))]; ok {
+				fields = append(fields, field)
+			}
+		}
+		row.Fields = fields
+	}
 	row.Attributes["resample_task_id"] = stringValue(spec.InstanceID)
 	row.Attributes["source_dataset_id"] = stringValue(spec.SourceDatasetID)
 	row.Attributes["source_freq"] = stringValue(spec.SourceFrequency.Storage)

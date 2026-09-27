@@ -78,10 +78,13 @@ type CollectionItem struct {
 
 type ItemResult struct {
 	CollectionItem
-	Outcome      ItemOutcome `json:"outcome"`
-	ErrorType    string      `json:"error_type,omitempty"`
-	ErrorSummary string      `json:"error_summary,omitempty"`
+	Outcome       ItemOutcome    `json:"outcome"`
+	ErrorType     string         `json:"error_type,omitempty"`
+	ErrorSummary  string         `json:"error_summary,omitempty"`
+	TargetResults []TargetResult `json:"target_results,omitempty"`
 }
+
+type TargetResult struct{ WriteTargetID, DatasetID, Status, ErrorSummary string }
 
 type BatchInvocation struct {
 	ID            int       `gorm:"column:c_id;primaryKey;autoIncrement"`
@@ -91,11 +94,11 @@ type BatchInvocation struct {
 	ScheduleID    string    `gorm:"column:c_schedule_id"`
 	BatchKind     BatchKind `gorm:"column:c_batch_kind"`
 	ShardIndex    int       `gorm:"column:c_shard_index"`
-	// TaskID is the parent CollectionTask ID for this batch.
-	TaskID    string `gorm:"column:c_task_id"`
-	DatasetID string `gorm:"column:c_dataset_id"`
-	// InstanceID and WriteTargetID identify the shared execution unit and its
-	// independent storage target. TaskID/DatasetID remain for old batches.
+	// TaskID/DatasetID are deprecated compatibility projections. Batch ownership
+	// is represented by batch_items -> TaskInstance -> WriteTarget.
+	TaskID    string `gorm:"-"`
+	DatasetID string `gorm:"-"`
+	// InstanceID and WriteTargetID are retained for retry-batch diagnostics.
 	InstanceID           string      `gorm:"column:c_instance_id"`
 	WriteTargetID        string      `gorm:"column:c_write_target_id"`
 	RetryScope           string      `gorm:"column:c_retry_scope"`
@@ -124,14 +127,11 @@ type BatchInvocation struct {
 func (b *BatchInvocation) TableName() string { return "t_collector_fetch_batches" }
 
 type RetryItem struct {
-	ID            int       `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID       string    `gorm:"column:c_space_id"`
-	RetryKey      string    `gorm:"column:c_retry_key"`
-	SourceBatchID string    `gorm:"column:c_source_batch_id"`
-	BatchKind     BatchKind `gorm:"column:c_batch_kind"`
-	// TaskID is the parent CollectionTask ID for this retry item.
-	TaskID           string     `gorm:"column:c_task_id"`
-	DatasetID        string     `gorm:"column:c_dataset_id"`
+	ID               int        `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID          string     `gorm:"column:c_space_id"`
+	RetryKey         string     `gorm:"column:c_retry_key"`
+	SourceBatchID    string     `gorm:"column:c_source_batch_id"`
+	BatchKind        BatchKind  `gorm:"column:c_batch_kind"`
 	InstanceID       string     `gorm:"column:c_instance_id"`
 	WriteTargetID    string     `gorm:"column:c_write_target_id"`
 	RetryScope       string     `gorm:"column:c_retry_scope"`

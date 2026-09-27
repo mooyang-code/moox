@@ -42,7 +42,9 @@
             <slot name="status-extra" />
           </section>
 
-          <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
+          <a-alert v-if="queryError" class="query-alert" :type="viewIndexPreparing ? 'warning' : 'error'" show-icon>
+            {{ queryError }}
+          </a-alert>
           <a-alert v-else-if="hasQueried && !loading && tableRows.length === 0" class="query-alert" type="info" show-icon>
             {{ props.emptyRowsDescription }}
           </a-alert>
@@ -561,6 +563,18 @@ const metaLoading = ref(false);
 const contextLoading = ref(false);
 const loading = ref(false);
 const queryError = ref("");
+const queryErrorIsPreparing = ref(false);
+const viewIndexPreparing = computed(() => queryErrorIsPreparing.value);
+function isViewIndexNotReadyError(value: string) {
+  return /view index .* is not prepared: view index not ready/i.test(value);
+}
+
+function viewQueryErrorMessage(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : fallback;
+  queryErrorIsPreparing.value = isViewIndexNotReadyError(message);
+  return queryErrorIsPreparing.value ? "视图创建中，索引就绪后请刷新查看。" : message;
+}
+
 const hasQueried = ref(false);
 const previewHasMore = ref(false);
 const klineVisible = ref(false);
@@ -1090,11 +1104,11 @@ async function loadTimeSeriesViewRows() {
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
   } catch (error) {
-    queryError.value = error instanceof Error ? error.message : "查询时序视图失败";
+    queryError.value = viewQueryErrorMessage(error, "查询时序视图失败");
     tableRows.value = [];
     previewHasMore.value = false;
     hasQueried.value = true;
-    Message.error(queryError.value);
+    if (!viewIndexPreparing.value) Message.error(queryError.value);
   } finally {
     loading.value = false;
   }
@@ -1121,11 +1135,11 @@ async function loadRecordViewRows() {
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
   } catch (error) {
-    queryError.value = error instanceof Error ? error.message : "查询记录视图失败";
+    queryError.value = viewQueryErrorMessage(error, "查询记录视图失败");
     tableRows.value = [];
     previewHasMore.value = false;
     hasQueried.value = true;
-    Message.error(queryError.value);
+    if (!viewIndexPreparing.value) Message.error(queryError.value);
   } finally {
     loading.value = false;
   }

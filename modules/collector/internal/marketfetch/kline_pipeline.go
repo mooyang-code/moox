@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -222,6 +224,13 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", rowErr)
 					return
 				}
+				if len(req.Targets) == 0 {
+					row.Fields = selectOutputFields(row.Fields, item.OutputFields)
+					if len(row.Fields) == 0 {
+						results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("selected output fields contain no fields supported by the kline dataset"))
+						return
+					}
+				}
 				itemRows = append(itemRows, row)
 			}
 			if len(itemRows) == 0 {
@@ -235,7 +244,38 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			p.observeFeed(req, selectedProvider, "kline", result)
 			rowsMu.Lock()
-			rows = append(rows, itemRows...)
+			targets := req.Targets
+			if item.InstanceID != "" {
+				targets = make([]domain.WriteTarget, 0, len(req.Targets))
+				for _, candidate := range req.Targets {
+					if candidate.InstanceID == "" || candidate.InstanceID == item.InstanceID {
+						targets = append(targets, candidate)
+					}
+				}
+			}
+			for _, target := range targets {
+				for _, sourceRow := range itemRows {
+					row, ok := proto.Clone(sourceRow).(*storagepb.RowFieldUpsert)
+					if !ok || row.GetKey() == nil {
+						continue
+					}
+					row.GetKey().DatasetId = target.DatasetID
+					fields := item.OutputFields
+					if target.OutputFields != "" {
+						var selected []string
+						if json.Unmarshal([]byte(target.OutputFields), &selected) == nil {
+							fields = selected
+						}
+					}
+					row.Fields = selectOutputFields(row.Fields, fields)
+					if len(row.Fields) > 0 {
+						rows = append(rows, row)
+					}
+				}
+			}
+			if len(req.Targets) == 0 {
+				rows = append(rows, itemRows...)
+			}
 			rowsMu.Unlock()
 			results[index] = successResult(item)
 		}()
@@ -249,16 +289,47 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		return left.GetSubjectId() < right.GetSubjectId()
 	})
 	if len(rows) > 0 {
-		var err error
-		if storage, ok := p.Storage.(sourceStorage); ok {
-			err = storage.UpsertFieldsWithSource(ctx, rows, sourceEventID(req))
-		} else {
-			err = p.Storage.UpsertFields(ctx, rows)
+		// Write each destination independently. A failed target must not prevent
+		// successful targets of the same shared acquisition from committing.
+		targetRows := make(map[string][]*storagepb.RowFieldUpsert)
+		for _, row := range rows {
+			if row.GetKey() != nil {
+				targetRows[row.GetKey().GetDatasetId()] = append(targetRows[row.GetKey().GetDatasetId()], row)
+			}
 		}
-		if err != nil {
+		var writeErr error
+		writeSuccesses := 0
+		targetStatus := make(map[string]domain.TargetResult)
+		for datasetID, datasetRows := range targetRows {
+			var err error
+			if storage, ok := p.Storage.(sourceStorage); ok {
+				err = storage.UpsertFieldsWithSource(ctx, datasetRows, sourceEventID(req))
+			} else {
+				err = p.Storage.UpsertFields(ctx, datasetRows)
+			}
+			if err != nil && writeErr == nil {
+				writeErr = fmt.Errorf("dataset %s: %w", datasetID, err)
+				targetStatus[datasetID] = domain.TargetResult{DatasetID: datasetID, Status: "failed", ErrorSummary: err.Error()}
+			} else if err == nil {
+				writeSuccesses++
+				targetStatus[datasetID] = domain.TargetResult{DatasetID: datasetID, Status: "succeeded"}
+			}
+		}
+		for index := range results {
+			for _, target := range req.Targets {
+				if target.InstanceID != "" && target.InstanceID != results[index].InstanceID {
+					continue
+				}
+				if status, ok := targetStatus[target.DatasetID]; ok {
+					status.WriteTargetID = target.ID
+					results[index].TargetResults = append(results[index].TargetResults, status)
+				}
+			}
+		}
+		if writeErr != nil && writeSuccesses == 0 {
 			for index := range results {
 				if results[index].Outcome == domain.ItemOutcomeSuccess {
-					results[index] = failureResult(results[index].CollectionItem, domain.ItemOutcomeStorageError, "storage", err)
+					results[index] = failureResult(results[index].CollectionItem, domain.ItemOutcomeStorageError, "storage", writeErr)
 				}
 			}
 		}
@@ -333,6 +404,30 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 		lastErr = fmt.Errorf("kline provider chain exhausted")
 	}
 	return nil, lastProvider, (startIndex + attempts) % len(chain), lastErr
+}
+
+// selectOutputFields keeps the canonical row field order while dropping fields
+// not selected by the task. Empty selection deliberately preserves legacy rows.
+func selectOutputFields(fields []*storagepb.FieldValue, selected []string) []*storagepb.FieldValue {
+	if len(selected) == 0 {
+		return fields
+	}
+	wanted := make(map[string]struct{}, len(selected))
+	for _, fieldID := range selected {
+		if fieldID = strings.TrimSpace(fieldID); fieldID != "" {
+			wanted[fieldID] = struct{}{}
+		}
+	}
+	filtered := make([]*storagepb.FieldValue, 0, len(wanted))
+	for _, field := range fields {
+		if field == nil {
+			continue
+		}
+		if _, ok := wanted[field.GetFieldId()]; ok {
+			filtered = append(filtered, field)
+		}
+	}
+	return filtered
 }
 
 func stockSourceForSubject(sources []stockCNSource, routeVersion, subject string) (stockCNSource, bool) {
@@ -474,7 +569,7 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 	}
 	seriesTag := strings.TrimSpace(p.SeriesTag)
 	if seriesTag == "" {
-		seriesTag = "venue:" + strings.ToLower(strings.TrimSpace(bar.ProviderID))
+		seriesTag = defaultMarketSeriesTag(bar.ProviderID, firstNonEmptyString(bar.SourceID, req.SourceID), req.MarketType)
 	}
 	fields := []*storagepb.FieldValue{
 		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
@@ -498,6 +593,35 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 		}}},
 		Fields: fields,
 	}, nil
+}
+
+// defaultMarketSeriesTag builds the storage-series identity for Provider data.
+// The long-standing venue:<provider> form is retained for the common spot route
+// where source == provider. Non-default market/source dimensions are appended so
+// rows from one task-owned Dataset cannot overwrite each other when a task spans
+// multiple market routes. Storage treats this value as opaque.
+func defaultMarketSeriesTag(provider, source, market string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	source = strings.ToLower(strings.TrimSpace(source))
+	market = strings.ToLower(strings.TrimSpace(market))
+	if provider == "" {
+		provider = source
+	}
+	if source == "" {
+		source = provider
+	}
+	base := "venue:" + provider
+	if (market == "" || market == "spot") && source == provider {
+		return base
+	}
+	parts := []string{base}
+	if market != "" {
+		parts = append(parts, "market:"+market)
+	}
+	if source != "" && source != provider {
+		parts = append(parts, "source:"+source)
+	}
+	return strings.Join(parts, "|")
 }
 
 func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time, settleDelay time.Duration) (bool, error) {

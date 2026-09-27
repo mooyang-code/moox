@@ -48,21 +48,27 @@ type TaskSpec struct {
 	Interval string
 }
 
-// TaskInstance is the Collector-owned executable business task.
+// TaskInstance is one provider request execution. Task/Dataset ownership lives in WriteTarget.
 type TaskInstance struct {
 	ID      int    `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID string `gorm:"column:c_space_id"`
 	// InstanceID is the stable executable identity for one subject/frequency.
 	InstanceID string `gorm:"column:c_instance_id"`
-	// CollectionTaskID identifies the parent CollectionTask.
-	CollectionTaskID string     `gorm:"column:c_task_id"`
+	RunID      string `gorm:"column:c_run_id"`
+	RequestKey string `gorm:"column:c_request_key"`
+	// CollectionTaskID and DatasetID are deprecated compatibility projections.
+	// Ownership lives exclusively in WriteTarget and these fields are never persisted.
+	CollectionTaskID string     `gorm:"-"`
 	Provider         string     `gorm:"column:c_provider"`
+	ProviderSymbol   string     `gorm:"column:c_provider_symbol"`
 	MarketType       string     `gorm:"column:c_market_type"`
 	DataType         string     `gorm:"column:c_data_type"`
-	DatasetID        string     `gorm:"column:c_dataset_id"`
+	DatasetID        string     `gorm:"-"`
 	SubjectID        string     `gorm:"column:c_subject_id"`
 	Frequency        string     `gorm:"column:c_frequency"`
+	TargetDataTime   *time.Time `gorm:"column:c_target_data_time"`
 	SourceID         string     `gorm:"column:c_source_id"`
+	SeriesTag        string     `gorm:"column:c_series_tag"`
 	FunctionName     string     `gorm:"column:c_function_name"`
 	LastExecStatus   int        `gorm:"column:c_last_exec_status"`
 	TaskParams       string     `gorm:"column:c_task_params"`
@@ -73,6 +79,24 @@ type TaskInstance struct {
 	CreateTime       time.Time  `gorm:"column:c_ctime"`
 	ModifyTime       time.Time  `gorm:"column:c_mtime"`
 }
+
+// WriteTarget is the task-specific destination of a shared TaskInstance.
+// Fetch status belongs to TaskInstance; write/retry status belongs here.
+type WriteTarget struct {
+	ID           string     `gorm:"column:c_write_target_id;primaryKey"`
+	SpaceID      string     `gorm:"column:c_space_id"`
+	InstanceID   string     `gorm:"column:c_instance_id"`
+	TaskID       string     `gorm:"column:c_task_id"`
+	DatasetID    string     `gorm:"column:c_dataset_id"`
+	ViewID       string     `gorm:"column:c_view_id"`
+	OutputFields string     `gorm:"column:c_output_fields_json"`
+	Status       string     `gorm:"column:c_status"`
+	Attempt      int        `gorm:"column:c_attempt"`
+	LastError    string     `gorm:"column:c_last_error"`
+	NextRetryAt  *time.Time `gorm:"column:c_next_retry_at"`
+}
+
+func (w *WriteTarget) TableName() string { return "t_collector_instance_write_targets" }
 
 // TableName returns the Collector task instance table.
 func (i *TaskInstance) TableName() string {

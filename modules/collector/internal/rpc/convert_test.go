@@ -17,8 +17,7 @@ func TestToPBTaskAndFromPBTask_ShouldRoundTripCoreFields(t *testing.T) {
 	params, err := structpb.NewStruct(map[string]any{"source": map[string]any{"kind": "none"}})
 	require.NoError(t, err)
 	in := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
+		SpaceID: "crypto", TaskID: "rule-1", DataType: "kline", CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 		Creator: "tester", CreateTime: time.Unix(1, 0).UTC(), ModifyTime: time.Unix(2, 0).UTC(),
 	}
 	pbRule := toPBTask(in)
@@ -28,12 +27,10 @@ func TestToPBTaskAndFromPBTask_ShouldRoundTripCoreFields(t *testing.T) {
 	assert.Equal(t, "采集结果", pbRule.GetResult().GetResultName())
 
 	out := fromPBTask(&pb.CollectionTask{
-		SpaceId: "crypto", TaskId: "rule-2", DataType: "kline", Provider: "binance", MarketType: "spot",
-		CollectParams: params, Enabled: &enabled,
+		SpaceId: "crypto", TaskId: "rule-2", DataType: "kline", CollectParams: params, Enabled: &enabled,
 	})
 	assert.Equal(t, "crypto", out.SpaceID)
 	assert.Equal(t, "rule-2", out.TaskID)
-	assert.Equal(t, "binance", out.Provider)
 }
 
 func TestToPBTaskRedactsInternalDatasetIDsAndNamesResult(t *testing.T) {
@@ -81,11 +78,9 @@ func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
 func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 	now := time.Now().UTC()
 	instance := toPBInstance(domain.TaskInstance{
-		SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", Provider: "binance",
-		MarketType: "spot", DataType: "kline", LastExecStatus: domain.InstanceStatusSuccess,
+		SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", DataType: "kline", LastExecStatus: domain.InstanceStatusSuccess,
 		CreateTime: now, ModifyTime: now,
 	})
-	assert.Equal(t, "rule-1", instance.GetTaskId())
 	assert.Equal(t, "task-1", instance.GetInstanceId())
 	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS, instance.GetLastExecStatus())
 	encoded, err := protojson.Marshal(instance)

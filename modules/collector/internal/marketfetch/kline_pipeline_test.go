@@ -381,6 +381,14 @@ func (s *pipelineStorageWithInstrumentNames) ListInstrumentNames(_ context.Conte
 	return result, nil
 }
 
+func TestDefaultMarketSeriesTagDistinguishesMarketAndSource(t *testing.T) {
+	require.Equal(t, "venue:binance", defaultMarketSeriesTag("binance", "binance", "spot"))
+	require.Equal(t, "venue:okx", defaultMarketSeriesTag("OKX", "okx", "spot"))
+	require.Equal(t, "venue:binance|market:swap", defaultMarketSeriesTag("binance", "binance", "swap"))
+	require.Equal(t, "venue:binance|market:spot|source:binance-proxy", defaultMarketSeriesTag("binance", "binance-proxy", "spot"))
+	require.NotEqual(t, defaultMarketSeriesTag("binance", "binance", "spot"), defaultMarketSeriesTag("binance", "binance", "swap"))
+}
+
 func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-1"}
@@ -411,6 +419,32 @@ func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	require.Equal(t, int64(1), fields["route_rank"].GetIntValue())
 	require.Equal(t, "shares", fields["volume_unit"].GetStringValue())
 	require.Equal(t, "reported", fields["amount_quality"].GetStringValue())
+}
+
+func TestKlinePipelineWritesOnlySelectedOutputFields(t *testing.T) {
+	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-selected"}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "binance", rows: []marketdata.NormalizedKline{bar}}))
+	router, err := marketdata.NewRouter(registry, 1, pipelineClock{now}, func(time.Duration) {})
+	require.NoError(t, err)
+	storage := &pipelineStorage{}
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto", Now: func() time.Time { return now }}
+	_, err = pipeline.Execute(context.Background(), Request{BatchID: "batch-selected", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", Provider: "binance", MarketType: "spot", RequestID: "request-selected", Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", Frequency: "1m", StartTime: "2026-08-28T06:59:00Z", BarLimit: 1, OutputFields: []string{"close", "quote_volume"}}}})
+	require.NoError(t, err)
+	require.Len(t, storage.rows, 1)
+	fields := make([]string, 0, len(storage.rows[0].GetFields()))
+	for _, field := range storage.rows[0].GetFields() {
+		fields = append(fields, field.GetFieldId())
+	}
+	require.Equal(t, []string{"close", "quote_volume"}, fields)
+}
+
+func TestKlinePipelineEmptyOutputFieldsKeepsLegacyFullRow(t *testing.T) {
+	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "request-legacy"}
+	row, err := (&KlinePipeline{MarketID: "crypto"}).rowFor(bar, Request{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m"}, "route", 1)
+	require.NoError(t, err)
+	require.Len(t, row.GetFields(), 10)
 }
 
 func TestKlinePipelineUsesInstrumentNameFromStorageMetadata(t *testing.T) {

@@ -41,10 +41,12 @@ func (PeriodReadiness) TableName() string { return "t_period_readiness" }
 
 type PeriodReadinessItem struct {
 	ReadinessID int64 `gorm:"column:c_readiness_id;primaryKey"`
-	// InstanceID is the expected TaskInstance identity for this period.
-	InstanceID     string    `gorm:"column:c_instance_id;primaryKey"`
-	WriteTargetID  string    `gorm:"column:c_write_target_id"`
+	// WriteTargetID is the destination identity frozen for this period.
+	WriteTargetID string `gorm:"column:c_write_target_id;primaryKey"`
+	// InstanceID keeps the source request trace but is not the readiness identity.
+	InstanceID     string    `gorm:"column:c_instance_id"`
 	SubjectID      string    `gorm:"column:c_subject_id"`
+	SeriesTag      string    `gorm:"column:c_series_tag"`
 	FunctionName   string    `gorm:"column:c_function_name"`
 	WriteSource    string    `gorm:"column:c_write_source"`
 	RequiredFields string    `gorm:"column:c_required_fields_json"`
@@ -62,12 +64,14 @@ type PeriodKey struct {
 	// WriteTargetID scopes readiness to one destination when a shared
 	// instance fans out to multiple datasets.
 	WriteTargetID string
+	SeriesTag     string
 }
 
 type PeriodTaskSeed struct {
 	// InstanceID is the expected TaskInstance identity for this subject.
 	InstanceID     string
 	SubjectID      string
+	SeriesTag      string
 	FunctionName   string
 	WriteSource    string
 	RequiredFields string

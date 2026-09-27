@@ -235,11 +235,11 @@ func (r *Runner) completeBackfills(ctx context.Context, tasks []domain.Collectio
 }
 
 func (r *Runner) completeBackfillWithViewFence(ctx context.Context, task domain.CollectionTask, requestID string) error {
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return err
 	}
-	params.TargetDatasetID = taskresult.ResultIDs(task.SpaceID, task.TaskID).DatasetID
+	params.TargetDatasetID = taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID).DatasetID
 	syncer, ok := r.Primary.(SyncPointStorage)
 	if !ok {
 		return fmt.Errorf("resample backfill View fence is unavailable")
@@ -247,7 +247,7 @@ func (r *Runner) completeBackfillWithViewFence(ctx context.Context, task domain.
 	if err := syncer.AppendDatasetSyncPoint(ctx, task.SpaceID, params.TargetDatasetID, requestID, "catchup"); err != nil {
 		return fmt.Errorf("append resample backfill sync point: %w", err)
 	}
-	viewID := taskresult.ResultIDs(task.SpaceID, task.TaskID).ViewID
+	viewID := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID).ViewID
 	response, err := syncer.WaitViewSyncPoint(ctx, &storagepb.WaitViewSyncPointReq{
 		SpaceId: task.SpaceID, ViewId: viewID, RequestId: requestID,
 		DatasetIds: []string{params.TargetDatasetID}, WaitTimeoutMs: 5000,
@@ -313,7 +313,7 @@ func (r *Runner) scanRepair(scanCtx, workerCtx context.Context, tasks []domain.C
 		if !strings.EqualFold(task.DataType, "kline_resample") || task.PrepareState != domain.PrepareStateReady {
 			continue
 		}
-		params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 		if err != nil {
 			return err
 		}
@@ -442,6 +442,20 @@ func failResampleClaim(parent context.Context, instances *store.TaskInstanceRepo
 	}
 }
 
+func singleResampleWriteTarget(ctx context.Context, instances *store.TaskInstanceRepository, instance domain.TaskInstance) (domain.WriteTarget, error) {
+	if instances == nil {
+		return domain.WriteTarget{}, fmt.Errorf("task instance repository is not initialized")
+	}
+	targets, err := instances.ListWriteTargets(ctx, instance.SpaceID, instance.InstanceID)
+	if err != nil {
+		return domain.WriteTarget{}, err
+	}
+	if len(targets) != 1 {
+		return domain.WriteTarget{}, fmt.Errorf("resample instance %s must have exactly one write target, got %d", instance.InstanceID, len(targets))
+	}
+	return targets[0], nil
+}
+
 func processClaim(parent context.Context, claim store.ResampleTaskClaim, instances *store.TaskInstanceRepository, readiness *store.PeriodReadinessRepository, primary PrimaryStorage, source subjectSource, metrics *Metrics, cfg RunnerConfig) {
 	markError := func() {
 		if metrics != nil {
@@ -454,7 +468,13 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		failResampleClaim(parent, instances, claim, err.Error())
 		return
 	}
-	params.TargetDatasetID = taskresult.ResultIDs(claim.Instance.SpaceID, claim.Instance.CollectionTaskID).DatasetID
+	writeTarget, err := singleResampleWriteTarget(parent, instances, claim.Instance)
+	if err != nil {
+		markError()
+		failResampleClaim(parent, instances, claim, err.Error())
+		return
+	}
+	params.TargetDatasetID = strings.TrimSpace(writeTarget.DatasetID)
 	sourceFreq, err := ParseFixedFrequency(params.SourceFrequency)
 	if err != nil {
 		markError()
@@ -473,7 +493,7 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 		failResampleClaim(parent, instances, claim, "active bucket is missing")
 		return
 	}
-	spec := TaskSpec{InstanceID: claim.Instance.InstanceID, SpaceID: claim.Instance.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: sourceFreq, SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: targetFreq, Alignment: params.Alignment}
+	spec := TaskSpec{InstanceID: claim.Instance.InstanceID, SpaceID: claim.Instance.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: sourceFreq, SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: targetFreq, Alignment: params.Alignment, OutputFields: append([]string(nil), params.OutputFields...)}
 	if cfg.WorkerMaxSourceKeys > 0 {
 		sourceTimes, countErr := ExpectedSourceTimes(bucket, bucket.Add(targetFreq.Duration), sourceFreq)
 		if countErr != nil {
@@ -553,7 +573,7 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 	// crashes between these operations, lease recovery retries the same bucket;
 	// the readiness write is idempotent and no success marker is lost.
 	if readiness != nil && claim.Result.ActiveOrigin == domain.ResampleOriginRealtime {
-		if markErr := readiness.MarkSubjectSuccess(parent, domain.PeriodKey{SpaceID: result.SpaceID, DatasetID: result.DatasetID, Frequency: result.Frequency, PeriodTime: result.DataTime}, claim.Instance.SubjectID, localResampleFunction, writeSource, time.Now().UTC()); markErr != nil {
+		if markErr := readiness.MarkSubjectSuccess(parent, domain.PeriodKey{SpaceID: result.SpaceID, DatasetID: result.DatasetID, Frequency: result.Frequency, PeriodTime: result.DataTime, WriteTargetID: writeTarget.ID}, claim.Instance.SubjectID, localResampleFunction, writeSource, time.Now().UTC()); markErr != nil {
 			markError()
 			log.Printf("resample readiness state update failed instance=%s: %v", claim.Instance.InstanceID, markErr)
 			attempt := claim.Result.Attempt + 1
@@ -621,11 +641,11 @@ func sourceRetentionExpired(ctx context.Context, source subjectSource, spaceID, 
 }
 
 func (r *Runner) ensureReadiness(ctx context.Context, task domain.CollectionTask, now time.Time) error {
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return err
 	}
-	params.TargetDatasetID = taskresult.ResultIDs(task.SpaceID, task.TaskID).DatasetID
+	params.TargetDatasetID = taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID).DatasetID
 	target, err := ParseFixedFrequency(params.TargetFrequency)
 	if err != nil {
 		return err
@@ -641,7 +661,11 @@ func (r *Runner) ensureReadiness(ctx context.Context, task domain.CollectionTask
 	}
 	tasks := make([]domain.PeriodTaskSeed, 0, len(instances))
 	for _, instance := range instances {
-		tasks = append(tasks, domain.PeriodTaskSeed{InstanceID: instance.InstanceID, SubjectID: instance.SubjectID, FunctionName: localResampleFunction, WriteSource: writeSource, RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`})
+		writeTarget, targetErr := singleResampleWriteTarget(ctx, r.Instances, instance)
+		if targetErr != nil {
+			return targetErr
+		}
+		tasks = append(tasks, domain.PeriodTaskSeed{InstanceID: instance.InstanceID, WriteTargetID: writeTarget.ID, SubjectID: instance.SubjectID, SeriesTag: params.SourceSeriesTag, FunctionName: localResampleFunction, WriteSource: writeSource, RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`})
 	}
 	if len(tasks) == 0 {
 		return nil
@@ -690,18 +714,22 @@ func (r *Runner) ensureReadinessForClaims(ctx context.Context, claims []store.Re
 		if claim.Result.ActiveOrigin != domain.ResampleOriginRealtime || claim.Result.ActiveBucket == nil {
 			continue
 		}
-		task, ok := taskByID[claim.Instance.SpaceID+"\x00"+claim.Instance.CollectionTaskID]
+		claimTarget, err := singleResampleWriteTarget(ctx, r.Instances, claim.Instance)
+		if err != nil {
+			return err
+		}
+		task, ok := taskByID[claim.Instance.SpaceID+"\x00"+claimTarget.TaskID]
 		if !ok {
 			continue
 		}
 		key := task.SpaceID + "\x00" + task.TaskID
 		plan := plans[key]
 		if plan == nil {
-			params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+			params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 			if err != nil {
 				return err
 			}
-			params.TargetDatasetID = taskresult.ResultIDs(task.SpaceID, task.TaskID).DatasetID
+			params.TargetDatasetID = claimTarget.DatasetID
 			target, err := ParseFixedFrequency(params.TargetFrequency)
 			if err != nil {
 				return err
@@ -712,7 +740,11 @@ func (r *Runner) ensureReadinessForClaims(ctx context.Context, claims []store.Re
 			}
 			tasks := make([]domain.PeriodTaskSeed, 0, len(instances))
 			for _, instance := range instances {
-				tasks = append(tasks, domain.PeriodTaskSeed{InstanceID: instance.InstanceID, SubjectID: instance.SubjectID, FunctionName: localResampleFunction, WriteSource: writeSource, RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`})
+				target, targetErr := singleResampleWriteTarget(ctx, r.Instances, instance)
+				if targetErr != nil {
+					return targetErr
+				}
+				tasks = append(tasks, domain.PeriodTaskSeed{InstanceID: instance.InstanceID, WriteTargetID: target.ID, SubjectID: instance.SubjectID, SeriesTag: params.SourceSeriesTag, FunctionName: localResampleFunction, WriteSource: writeSource, RequiredFields: `["open","high","low","close","volume","quote_volume","trade_num"]`})
 			}
 			plan = &readinessPlan{task: task, params: params, target: target, tasks: tasks, period: make(map[time.Time]struct{})}
 			plans[key] = plan

@@ -16,6 +16,17 @@ func (s *Service) UpsertTag(ctx context.Context, req *pb.UpsertTagReq) (*pb.Upse
 	if req == nil || req.GetTag() == nil {
 		return &pb.UpsertTagRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("tag is required"))}, nil
 	}
+	if req.GetCreateOnly() {
+		tag, err := s.metadata.CreateTag(ctx, req.GetTag())
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+				return &pb.UpsertTagRsp{RetInfo: retinfo.Error(pb.ErrorCode_CONFLICT, err)}, nil
+			}
+			return &pb.UpsertTagRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		}
+		s.refreshMetadataCacheAfterCommit(ctx, "UpsertTag")
+		return &pb.UpsertTagRsp{RetInfo: retinfo.Success("success"), Tag: tag}, nil
+	}
 	if _, err := s.metadata.GetTag(ctx, req.GetTag().GetSpaceId(), req.GetTag().GetTagId()); errors.Is(err, sql.ErrNoRows) {
 		req.GetTag().Builtin = false
 	}

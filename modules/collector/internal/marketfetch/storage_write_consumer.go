@@ -194,7 +194,7 @@ func handleStorageWrite(ctx context.Context, instances *store.TaskInstanceReposi
 			log.WarnContextf(ctx, "ignore storage write event with invalid frequency dataset=%s subject=%s frequency=%s: %v", payload.GetDatasetId(), key.GetSubjectId(), key.GetFreq(), err)
 			continue
 		}
-		observations = append(observations, store.StorageWriteObservation{SpaceID: payload.GetSpaceId(), DatasetID: payload.GetDatasetId(), SubjectID: key.GetSubjectId(), Frequency: frequency, FunctionName: functionName, At: at})
+		observations = append(observations, store.StorageWriteObservation{SpaceID: payload.GetSpaceId(), DatasetID: payload.GetDatasetId(), SubjectID: key.GetSubjectId(), Frequency: frequency, SeriesTag: strings.TrimSpace(key.GetSeriesTag()), FunctionName: functionName, At: at})
 	}
 	if len(readiness) > 0 && readiness[0] != nil {
 		if err := readiness[0].ApplyRows(ctx, payload); err != nil {

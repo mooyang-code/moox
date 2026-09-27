@@ -39,8 +39,9 @@ describe("storage view browse workflows", () => {
   it("uses dataset columns for filters and keeps the query pane within the window", () => {
     const source = readFileSync(resolve(__dirname, "../src/views/data/view-browse/index.vue"), "utf8");
 
-    expect(source).toContain("for (const column of viewColumns.value)");
-    expect(source).toContain("for (const column of datasetColumns.value)");
+    expect(source).toContain(
+      "buildViewFilterFieldOptions(mode.value, viewColumns.value, datasetColumns.value, columnLabels.value)"
+    );
     expect(source).toContain("await datasetColumnsPromise");
     expect(source).toContain("repeat(auto-fit, minmax(min(220px, 100%), 1fr))");
     expect(source).toContain(":scroll=\"{ x: 'max-content', y: 500 }\"");

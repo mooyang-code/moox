@@ -69,8 +69,8 @@ export function listSubjects(params: {
   return callMetadata<typeof params, RetRsp & { subjects: Subject[]; page_result: PageResult }>("ListSubjects", params);
 }
 
-export async function upsertTag(tag: Tag) {
-  const rsp = await callMetadata<{ tag: Tag }, RetRsp & { tag: Tag }>("UpsertTag", { tag });
+export async function upsertTag(tag: Tag, createOnly = false) {
+  const rsp = await callMetadata<{ tag: Tag; create_only?: boolean }, RetRsp & { tag: Tag }>("UpsertTag", { tag, ...(createOnly ? { create_only: true } : {}) });
   return rsp.tag;
 }
 

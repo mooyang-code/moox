@@ -1,11 +1,21 @@
 package marketfetch
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRequestPayloadCarriesOutputFieldsOnCollectionItem(t *testing.T) {
+	req := Request{Items: []domain.CollectionItem{{OutputFields: []string{"close", "volume"}}}}
+	raw, err := json.Marshal(req)
+	require.NoError(t, err)
+	var decoded Request
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	require.Equal(t, []string{"close", "volume"}, decoded.Items[0].OutputFields)
+}
 
 func TestRequestValidateRejectsMalformedOrReversedCoverage(t *testing.T) {
 	base := Request{

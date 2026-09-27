@@ -27,8 +27,7 @@ type taskSeedItem struct {
 	TaskName      string         `yaml:"task_name"`
 	Description   string         `yaml:"description"`
 	DataType      string         `yaml:"data_type"`
-	Provider      string         `yaml:"provider"`
-	MarketType    string         `yaml:"market_type"`
+	TagIDs        []string       `yaml:"tag_ids"`
 	Enabled       bool           `yaml:"enabled"`
 	Creator       string         `yaml:"creator"`
 	CollectParams map[string]any `yaml:"collect_params"`
@@ -101,13 +100,15 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 	taskID := strings.TrimSpace(item.TaskID)
 	taskName := domain.NormalizeCollectionTaskName(item.TaskName)
 	dataType := strings.ToLower(strings.TrimSpace(item.DataType))
-	provider := strings.ToLower(strings.TrimSpace(item.Provider))
-	marketType := strings.ToLower(strings.TrimSpace(item.MarketType))
+	tagIDs := normalizeSeedTagIDs(item.TagIDs)
 	if err := domain.ValidateCollectionTaskName(taskName); err != nil {
 		return domain.CollectionTask{}, fmt.Errorf("task_name: %w", err)
 	}
-	if spaceID == "" || taskID == "" || dataType == "" || provider == "" || marketType == "" {
-		return domain.CollectionTask{}, fmt.Errorf("space_id, task_id, data_type, provider and market_type are required")
+	if spaceID == "" || taskID == "" || dataType == "" {
+		return domain.CollectionTask{}, fmt.Errorf("space_id, task_id and data_type are required")
+	}
+	if dataType != "kline_resample" && len(tagIDs) == 0 {
+		return domain.CollectionTask{}, fmt.Errorf("tag_ids are required for direct collection tasks")
 	}
 	if item.CollectParams == nil {
 		return domain.CollectionTask{}, fmt.Errorf("collect_params is required")
@@ -125,16 +126,27 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 	if err != nil {
 		return domain.CollectionTask{}, fmt.Errorf("marshal collect_params: %w", err)
 	}
-	params, err := domain.ParseCollectParams(string(rawParams), provider, marketType, dataType)
+	params, err := domain.ParseCollectParams(string(rawParams), "", "", dataType)
 	if err != nil {
 		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 	}
-	if err := params.Validate(); err != nil {
-		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
+	if dataType == "kline_resample" {
+		if err := params.Validate(); err != nil {
+			return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
+		}
+	} else {
+		if params.Provider != "" || params.MarketType != "" || params.SourceID != "" || params.InstrumentType != "" || len(params.SubjectTags) > 0 {
+			return domain.CollectionTask{}, fmt.Errorf("direct collection routing and subject scope must come from tag_ids")
+		}
+		if err := params.ValidateTaskDefinition(); err != nil {
+			return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
+		}
 	}
-	if params.Provider != provider || params.MarketType != marketType || params.Collector.DataType != dataType {
-		return domain.CollectionTask{}, fmt.Errorf("collect_params provider, market_type and data_type must match task fields")
+	frequency := params.Frequency
+	if strings.EqualFold(dataType, "kline_resample") {
+		frequency = params.TargetFrequency
 	}
+	resultIDs = taskresult.ResultIDsForTask(spaceID, taskID, "", dataType, frequency)
 	canonical, err := json.Marshal(params)
 	if err != nil {
 		return domain.CollectionTask{}, fmt.Errorf("marshal canonical collect_params: %w", err)
@@ -145,14 +157,30 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 		TaskName:        taskName,
 		Description:     strings.TrimSpace(item.Description),
 		DataType:        dataType,
-		Provider:        provider,
-		MarketType:      marketType,
+		TagIDs:          tagIDs,
 		CollectParams:   string(canonical),
 		Enabled:         item.Enabled,
 		Creator:         strings.TrimSpace(item.Creator),
 		ResultDatasetID: resultIDs.DatasetID,
 		ResultViewID:    resultIDs.ViewID,
 	}, nil
+}
+
+func normalizeSeedTagIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // SeedMissing inserts only absent (space_id, task_id) pairs. Existing rows are

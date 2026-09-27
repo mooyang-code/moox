@@ -10,13 +10,13 @@ import (
 
 func TestResultIDsUseReadableTaskSlug(t *testing.T) {
 	ids := ResultIDs("crypto", "builtin-binance-spot-kline-1m")
-	require.Equal(t, "dataset_binance_spot_kline_1m", ids.DatasetID)
-	require.Equal(t, "view_binance_spot_kline_1m", ids.ViewID)
+	require.Equal(t, "dataset_builtin_binance_spot_kline_1m", ids.DatasetID)
+	require.Equal(t, "view_builtin_binance_spot_kline_1m", ids.ViewID)
 	require.Equal(t, ids, ResultIDs("stockcn", "builtin-binance-spot-kline-1m"))
 
 	custom := ResultIDs("crypto", "builtin-custom-kline-1m")
-	require.Equal(t, "dataset_custom_kline_1m", custom.DatasetID)
-	require.Equal(t, "view_custom_kline_1m", custom.ViewID)
+	require.Equal(t, "dataset_builtin_custom_kline_1m", custom.DatasetID)
+	require.Equal(t, "view_builtin_custom_kline_1m", custom.ViewID)
 
 	fiveMinute := ResultIDs("crypto", "task-5m")
 	require.Equal(t, "dataset_task_5m", fiveMinute.DatasetID)
@@ -24,14 +24,25 @@ func TestResultIDsUseReadableTaskSlug(t *testing.T) {
 	require.NotEqual(t, fiveMinute, ResultIDs("crypto", "task-1h"))
 }
 
-func TestResultIDsUseCanonicalCryptoHourlyDatasets(t *testing.T) {
+func TestResultIDsUseTagTaskTypeFrequencyViewIdentity(t *testing.T) {
+	ids := ResultIDsForTask("crypto", "task-one", "binance_spot", "kline", "1m")
+	require.Equal(t, "dataset_task_one", ids.DatasetID)
+	require.Equal(t, "view_task_one_kline_1m", ids.ViewID)
+	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "binance_spot", "kline", "1m").ViewID)
+	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "binance_spot", "kline", "5m").ViewID)
+	require.Equal(t, "view_task_one_kline_1m", ResultIDsForTask("crypto", "task-one", "", "kline", "1m").ViewID)
+}
+
+func TestBuiltinResultIDsRemainTaskOwnedAndDoNotReuseCatalogIDs(t *testing.T) {
 	spot := ResultIDs("crypto", "builtin-binance-spot-kline-1h")
-	require.Equal(t, "dataset_spot_kline_1h", spot.DatasetID)
-	require.Equal(t, "view_crypto_spot_kline_1h", spot.ViewID)
+	require.Equal(t, "dataset_builtin_binance_spot_kline_1h", spot.DatasetID)
+	require.Equal(t, "view_builtin_binance_spot_kline_1h", spot.ViewID)
+	require.NotEqual(t, "dataset_spot_kline_1h", spot.DatasetID)
 
 	swap := ResultIDs("crypto", "builtin-binance-swap-kline-1h")
-	require.Equal(t, "dataset_perpetual_kline_1h", swap.DatasetID)
-	require.Equal(t, "view_crypto_swap_kline_1h", swap.ViewID)
+	require.Equal(t, "dataset_builtin_binance_swap_kline_1h", swap.DatasetID)
+	require.Equal(t, "view_builtin_binance_swap_kline_1h", swap.ViewID)
+	require.NotEqual(t, "dataset_perpetual_kline_1h", swap.DatasetID)
 }
 
 func TestResultDisplayNameUsesShortChinese(t *testing.T) {
@@ -52,6 +63,7 @@ type resultMetadataFake struct {
 	createDatasets int
 	createViews    int
 	failView       bool
+	columnNames    []string
 }
 
 func newResultMetadataFake() *resultMetadataFake {
@@ -121,7 +133,8 @@ func (f *resultMetadataFake) DeleteView(_ context.Context, req *storagepb.Delete
 	return &storagepb.DeleteViewRsp{RetInfo: resultOK()}, nil
 }
 
-func (f *resultMetadataFake) UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+func (f *resultMetadataFake) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	f.columnNames = append(f.columnNames, req.GetColumn().GetColumnName())
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: resultOK()}, nil
 }
 
@@ -144,7 +157,7 @@ func (f *resultMetadataFake) ActivateDataset(_ context.Context, req *storagepb.A
 func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	config := Config{DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1h", SubjectTags: []string{"binance_spot"}}
+	config := Config{DataNodeID: "node-1", Frequency: "1h", SubjectTags: []string{"binance_spot"}, OutputFields: []string{"close"}}
 	first, err := manager.Ensure(context.Background(), "crypto", "task-1", "kline", "spot", config)
 	require.NoError(t, err)
 	second, err := manager.Ensure(context.Background(), "crypto", "task-1", "kline", "spot", config)
@@ -155,6 +168,8 @@ func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	require.Equal(t, "task-1", fake.datasets[first.DatasetID].GetAttributes()["collector_task_id"])
 	require.Equal(t, "task-1", fake.views[first.ViewID].GetAttributes()["collector_task_id"])
 	require.Equal(t, []string{"binance_spot"}, fake.datasets[first.DatasetID].GetSubjectTags())
+	require.Equal(t, []string{"close", "close"}, fake.columnNames)
+	require.Equal(t, "view_task_1_kline_1h", first.ViewID)
 }
 
 func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
@@ -168,7 +183,7 @@ func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 
 	_, err := manager.Ensure(context.Background(), "crypto", "task-existing-tags", "kline", "spot", Config{
-		DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1h",
+		DataNodeID: "node-1", Frequency: "1h",
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"binance_spot"}, fake.datasets[ids.DatasetID].GetSubjectTags())
@@ -185,7 +200,7 @@ func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 
 	_, err := manager.Ensure(context.Background(), "crypto", "task-update-tags", "kline", "spot", Config{
-		DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1h", SubjectTags: []string{"new_tag"},
+		DataNodeID: "node-1", Frequency: "1h", SubjectTags: []string{"new_tag"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"new_tag"}, fake.datasets[ids.DatasetID].GetSubjectTags())
@@ -195,7 +210,7 @@ func TestEnsureDeclaresAllCollectionFrequencies(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	ids, err := manager.Ensure(context.Background(), "crypto", "task-multi-frequency", "kline", "spot", Config{
-		DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1m", Frequencies: []string{"1m", "5m", "1m"},
+		DataNodeID: "node-1", Frequency: "1m", Frequencies: []string{"1m", "5m", "1m"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"1m", "5m"}, fake.datasets[ids.DatasetID].GetFreqs())
@@ -221,7 +236,7 @@ func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
 	fake := newResultMetadataFake()
 	fake.failView = true
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	_, err := manager.Ensure(context.Background(), "crypto", "task-view-failure", "kline", "spot", Config{DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1h"})
+	_, err := manager.Ensure(context.Background(), "crypto", "task-view-failure", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "1h"})
 	require.Error(t, err)
 	ids := ResultIDs("crypto", "task-view-failure")
 	_, datasetExists := fake.datasets[ids.DatasetID]
@@ -293,68 +308,35 @@ func TestOwnedByTaskDoesNotAcceptConflictingLegacyOwner(t *testing.T) {
 	require.False(t, ownedByTask(map[string]string{"owner_module": "factor", "collector_task_id": "task-a"}, "task-a"))
 }
 
-func TestOwnedByTaskAdoptsCatalogDataset(t *testing.T) {
-	require.True(t, ownedByTask(map[string]string{"market_type": "spot"}, "builtin-binance-spot-kline-1m"))
-	require.True(t, ownedByTask(nil, "builtin-binance-spot-kline-1m"))
+func TestOwnedByTaskRejectsUnownedCatalogDataset(t *testing.T) {
+	require.False(t, ownedByTask(map[string]string{"market_type": "spot"}, "builtin-binance-spot-kline-1m"))
+	require.False(t, ownedByTask(nil, "builtin-binance-spot-kline-1m"))
 }
 
-func TestEnsureAdoptsCatalogDatasetAndCreatesTaskView(t *testing.T) {
+func TestEnsureRejectsUnownedDatasetCollision(t *testing.T) {
 	fake := newResultMetadataFake()
 	ids := ResultIDs("crypto", "builtin-binance-spot-kline-1m")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: ids.DatasetID, Name: "加密现货一分钟行情", Status: "active",
-		KeepDuration: "720h0m0s", Attributes: map[string]string{"market_type": "spot"},
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: map[string]string{"market_type": "spot"},
 	}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	got, err := manager.Ensure(context.Background(), "crypto", "builtin-binance-spot-kline-1m", "kline", "spot", Config{
-		DataNodeID: "node-1", Name: "Binance 现货 K 线 1m", DataSourceID: "binance", Frequency: "1m",
+	_, err := manager.Ensure(context.Background(), "crypto", "builtin-binance-spot-kline-1m", "kline", "spot", Config{
+		DataNodeID: "node-1", Frequency: "1m",
 	})
-	require.NoError(t, err)
-	require.Equal(t, ids, got)
-	require.Equal(t, 0, fake.createDatasets)
-	require.Equal(t, 1, fake.createViews)
-	require.Equal(t, "现货分钟K线", fake.views[ids.ViewID].GetName())
-	require.Equal(t, "720h0m0s", fake.views[ids.ViewID].GetKeepDuration())
+	require.ErrorContains(t, err, "owned by another task")
 }
 
-type restoreFailCleaner struct{}
-
-func (restoreFailCleaner) DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
-	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: resultOK()}, nil
-}
-
-func (restoreFailCleaner) RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
-	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "dataset is not a Collector task result"}}, nil
-}
-
-func TestEnsureSkipsRestoreForCatalogDataset(t *testing.T) {
+func TestDeleteRemovesTaskOwnedDatasetAndView(t *testing.T) {
 	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "builtin-binance-swap-kline-1m")
-	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
-		Attributes: map[string]string{"market_type": "swap"},
-	}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	manager.cleaner = restoreFailCleaner{}
-	got, err := manager.Ensure(context.Background(), "crypto", "builtin-binance-swap-kline-1m", "kline", "swap", Config{
-		DataNodeID: "node-1", DataSourceID: "binance", Frequency: "1m",
-	})
-	require.NoError(t, err)
-	require.Equal(t, ids, got)
-}
-
-func TestDeleteLeavesCatalogDataset(t *testing.T) {
-	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "builtin-binance-spot-kline-1m")
-	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
-		Attributes: map[string]string{"market_type": "spot"},
-	}
-	fake.views[ids.ViewID] = &storagepb.View{ViewId: ids.ViewID, DatasetId: ids.DatasetID, Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "builtin-binance-spot-kline-1m"}}
+	taskID := "builtin-binance-spot-kline-1m"
+	ids := ResultIDs("crypto", taskID)
+	attrs := map[string]string{"owner_module": "collector", "collector_task_id": taskID}
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
+	fake.views[ids.ViewID] = &storagepb.View{ViewId: ids.ViewID, DatasetId: ids.DatasetID, Attributes: attrs}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	require.NoError(t, manager.Delete(context.Background(), "crypto", ids))
 	_, datasetExists := fake.datasets[ids.DatasetID]
-	require.True(t, datasetExists)
+	require.False(t, datasetExists)
 	_, viewExists := fake.views[ids.ViewID]
 	require.False(t, viewExists)
 }

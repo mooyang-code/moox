@@ -1,6 +1,7 @@
 package command
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -1380,9 +1381,27 @@ func TestCollectorFunctionEnvironmentRejectsGatewayCallerOverride(t *testing.T) 
 	require.ErrorContains(t, err, "managed key MOOX_GATEWAY_CALLER")
 }
 
+func writeMinimalSCFZip(t *testing.T, zipPath string, files map[string]string) {
+	t.Helper()
+	out, err := os.Create(zipPath)
+	require.NoError(t, err)
+	zw := zip.NewWriter(out)
+	if len(files) == 0 {
+		files = map[string]string{"config.yaml": "system: {}\n", "main": "binary"}
+	}
+	for name, content := range files {
+		writer, err := zw.Create(name)
+		require.NoError(t, err)
+		_, err = writer.Write([]byte(content))
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	require.NoError(t, out.Close())
+}
+
 func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
-	require.NoError(t, os.WriteFile(zipPath, []byte("fake-zip"), 0o600))
+	writeMinimalSCFZip(t, zipPath, nil)
 
 	uploadBase := ""
 	var server *httptest.Server
@@ -1424,6 +1443,22 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	assert.Equal(t, "node-batch-1", summary.JobID)
 	assert.Equal(t, "deploy_nodes", summary.Operation)
 	assert.Equal(t, 1, summary.TotalCount)
+}
+
+func TestDeployCollectorFunctionRejectsPlaceholderAuth(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "collector.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{
+		"config.yaml":                 "system: {}\n",
+		"main":                        "binary",
+		"sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info:\n        app_id: \"moox-collector\"\n        app_key: \"binance-spot-collector\"\n",
+	})
+	_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{
+		ControlURL:     "http://127.0.0.1:1",
+		CloudAccountID: "account-a",
+		NodeID:         "node-1",
+		ZipPath:        zipPath,
+	})
+	require.ErrorContains(t, err, "placeholder Storage Primary app_key")
 }
 
 func TestResolveCollectorRootMissing(t *testing.T) {

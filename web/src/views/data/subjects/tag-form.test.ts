@@ -7,9 +7,8 @@ function form(overrides: Partial<TagFormState> = {}): TagFormState {
     tag_name: "加密现货",
     description: "",
     mode: "manual",
-    probe: false,
-    sources: [],
-    instrument_type: "",
+    source: "binance",
+    market_type: "spot",
     cron: "0 * * * *",
     timezone: "UTC",
     ...overrides
@@ -22,13 +21,13 @@ describe("subject tag form", () => {
     expect(validateTagForm(form({ tag_id: "Bad-ID" }), false)).toBeUndefined();
   });
 
-  it("clears probe settings for a manual tag without automatic probing", () => {
-    expect(
-      toTagPayload(
-        "crypto",
-        form({ sources: ["binance"], instrument_type: "spot", cron: "*/5 * * * *", timezone: "Asia/Shanghai" })
-      )
-    ).toMatchObject({ sources: [], instrument_type: "", cron: "*/5 * * * *", timezone: "Asia/Shanghai" });
+  it("requires one source and market type for manual and auto tags", () => {
+    expect(validateTagForm(form({ source: "" }), true)).toBe("请选择数据源与市场类型");
+    expect(validateTagForm(form({ market_type: "" }), true)).toBe("请选择数据源与市场类型");
+  });
+
+  it("persists the single authoritative source and market type", () => {
+    expect(toTagPayload("crypto", form())).toMatchObject({ source: "binance", market_type: "spot" });
   });
 
   it("returns the next scheduled runs in the selected timezone", () => {

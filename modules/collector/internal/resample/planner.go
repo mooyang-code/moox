@@ -2,6 +2,7 @@ package resample
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -25,11 +26,12 @@ func PlanTask(ctx context.Context, source subjectSource, instances *store.TaskIn
 	if source == nil || instances == nil {
 		return fmt.Errorf("resample planner dependencies are required")
 	}
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return err
 	}
-	params.TargetDatasetID = taskresult.ResultIDs(task.SpaceID, task.TaskID).DatasetID
+	resultIDs := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
+	params.TargetDatasetID = resultIDs.DatasetID
 	if err := ValidateTaskParams(params); err != nil {
 		return err
 	}
@@ -50,23 +52,32 @@ func PlanTask(ctx context.Context, source subjectSource, instances *store.TaskIn
 	target, _ := ParseFixedFrequency(params.TargetFrequency)
 	start, _ := BucketAt(now.UTC().Add(-params.SettleDelay()), time.Unix(0, 0).UTC(), target)
 	instancesToWrite := make([]domain.TaskInstance, 0, len(subjects))
+	targetsToWrite := make([]domain.WriteTarget, 0, len(subjects))
 	activeIDs := make([]string, 0, len(subjects))
+	outputFields, _ := json.Marshal(params.OutputFields)
 	for _, subject := range subjects {
 		if strings.TrimSpace(subject.SubjectID) == "" {
 			continue
 		}
-		spec := domain.TaskSpec{Provider: task.Provider, MarketType: task.MarketType, DataType: "kline_resample", DatasetID: params.TargetDatasetID, SubjectID: subject.SubjectID, Frequency: target.Storage}
+		spec := domain.TaskSpec{Provider: params.Provider, MarketType: params.MarketType, DataType: "kline_resample", SubjectID: subject.SubjectID, Frequency: target.Storage}
 		instanceID := domain.StableResampleTaskID(task.SpaceID, task.TaskID, spec, params.SourceSeriesTag)
 		result := domain.NewResampleTaskResult(start)
 		encoded, marshalErr := result.Marshal()
 		if marshalErr != nil {
 			return marshalErr
 		}
-		instancesToWrite = append(instancesToWrite, domain.TaskInstance{SpaceID: task.SpaceID, InstanceID: instanceID, CollectionTaskID: task.TaskID, Provider: task.Provider, MarketType: task.MarketType, DataType: "kline_resample", DatasetID: params.TargetDatasetID, SubjectID: subject.SubjectID, Frequency: target.Storage, FunctionName: localResampleFunction, LastExecStatus: domain.InstanceStatusPending, TaskParams: taskParams, Result: encoded})
+		instancesToWrite = append(instancesToWrite, domain.TaskInstance{SpaceID: task.SpaceID, InstanceID: instanceID, Provider: params.Provider, MarketType: params.MarketType, DataType: "kline_resample", SubjectID: subject.SubjectID, Frequency: target.Storage, SeriesTag: params.SourceSeriesTag, FunctionName: localResampleFunction, LastExecStatus: domain.InstanceStatusPending, TaskParams: taskParams, Result: encoded})
+		targetsToWrite = append(targetsToWrite, domain.WriteTarget{
+			ID: "wt_" + instanceID, SpaceID: task.SpaceID, InstanceID: instanceID, TaskID: task.TaskID,
+			DatasetID: params.TargetDatasetID, ViewID: resultIDs.ViewID, OutputFields: string(outputFields), Status: "pending",
+		})
 		activeIDs = append(activeIDs, instanceID)
 	}
 	if err := instances.UpsertMany(ctx, instancesToWrite); err != nil {
 		return fmt.Errorf("upsert resample task instances: %w", err)
+	}
+	if err := instances.UpsertWriteTargets(ctx, targetsToWrite); err != nil {
+		return fmt.Errorf("upsert resample write targets: %w", err)
 	}
 	return instances.DeactivateMissingResampleTaskInstances(ctx, task.SpaceID, task.TaskID, activeIDs)
 }

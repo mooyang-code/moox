@@ -20,8 +20,6 @@ describe("collection task params", () => {
     });
 
     expect(params).toEqual({
-      provider: "binance",
-      market_type: "spot",
       subject_tags: ["binance_spot"],
       frequency: "1h"
     });
@@ -83,10 +81,13 @@ describe("collection task params", () => {
       task_name: "标的同步",
       description: "同步任务",
       data_type: "kline",
-      provider: "binance",
-      market_type: "swap",
+      tag_ids: ["binance_swap"],
       enabled: false
     });
+    expect(task).not.toHaveProperty("provider");
+    expect(task).not.toHaveProperty("market_type");
+    expect(task.collect_params).not.toHaveProperty("provider");
+    expect(task.collect_params).not.toHaveProperty("market_type");
     expect(task.collect_params).not.toHaveProperty("target_dataset_id");
   });
 
@@ -101,6 +102,7 @@ describe("collection task params", () => {
       task_id: "task-1",
       task_name: "任务一",
       data_type: "kline_resample",
+      tag_ids: ["source_tag"],
       provider: "moox",
       market_type: "spot",
       enabled: "false",

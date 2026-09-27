@@ -59,7 +59,10 @@ func validateViewID(viewID string) error {
 	if !strings.HasPrefix(viewID, "view_") {
 		return errors.New("view_id must start with view_")
 	}
-	return validateLowerSnakeID("view_id", viewID, 50)
+	// Collector View IDs include the complete tag, task type, and frequency.
+	// Tag IDs may be 64 characters, so the View limit must leave room for those
+	// semantic components instead of rejecting otherwise valid tags at create.
+	return validateLowerSnakeID("view_id", viewID, 128)
 }
 
 func validateChineseDisplayName(field string, value string) error {

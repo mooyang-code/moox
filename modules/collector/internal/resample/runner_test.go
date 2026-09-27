@@ -39,7 +39,7 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":0}`
 	taskID := "rule-5m"
 	resultIDs := taskresult.ResultIDs("crypto", taskID)
-	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: taskID, DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, ResultDatasetID: resultIDs.DatasetID, ResultViewID: resultIDs.ViewID, PrepareState: domain.PrepareStateReady, Enabled: true}))
+	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: taskID, DataType: "kline_resample", CollectParams: params, ResultDatasetID: resultIDs.DatasetID, ResultViewID: resultIDs.ViewID, PrepareState: domain.PrepareStateReady, Enabled: true}))
 	start := time.Unix(300, 0).UTC()
 	now := start.Add(5 * time.Minute)
 	fake := &fakePrimary{}
@@ -61,6 +61,12 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 	instances, _, err := db.TaskInstances().List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto", CollectionTaskID: "rule-5m", Page: 1, PageSize: 10})
 	require.NoError(t, err)
 	require.Len(t, instances, 1)
+	targets, err := db.TaskInstances().ListWriteTargets(context.Background(), "crypto", instances[0].InstanceID)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	require.Equal(t, taskID, targets[0].TaskID)
+	require.Equal(t, resultIDs.DatasetID, targets[0].DatasetID)
+	require.Equal(t, resultIDs.ViewID, targets[0].ViewID)
 }
 
 func TestIsResampleSourceIncompleteUnwrapsRetryError(t *testing.T) {
@@ -74,7 +80,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
-	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}
+	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}
 	require.NoError(t, db.Tasks().Create(context.Background(), rule))
 	cursor := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 	result := domain.NewResampleTaskResult(cursor)
@@ -83,6 +89,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	resultIDs := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
 	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: rule.TaskID, Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: resultIDs.DatasetID, SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
 	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{instance}))
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{{ID: "wt-task-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: rule.TaskID, DatasetID: resultIDs.DatasetID, ViewID: resultIDs.ViewID, Status: "pending"}}))
 	stored, err := db.TaskInstances().Get(context.Background(), "crypto", "task-btc")
 	require.NoError(t, err)
 	claimResult, err := domain.ParseResampleTaskResult(stored.Result)
@@ -91,7 +98,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	claimResult.ActiveBucket = &cursor
 	runner := &Runner{Instances: db.TaskInstances(), Readiness: db.PeriodReadiness()}
 	require.NoError(t, runner.ensureReadinessForClaims(context.Background(), []store.ResampleTaskClaim{{Instance: stored, Result: claimResult}}, []domain.CollectionTask{rule}))
-	require.NoError(t, db.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{SpaceID: "crypto", DatasetID: resultIDs.DatasetID, Frequency: "5m", PeriodTime: cursor}, "BTC", localResampleFunction, writeSource, time.Now().UTC()))
+	require.NoError(t, db.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{SpaceID: "crypto", DatasetID: resultIDs.DatasetID, Frequency: "5m", PeriodTime: cursor, SeriesTag: "venue:binance"}, "BTC", localResampleFunction, writeSource, time.Now().UTC()))
 	reports, err := db.PeriodReadiness().FinalizeDue(context.Background(), time.Now().UTC(), 10)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -134,7 +141,7 @@ func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
-	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", Provider: "moox", MarketType: "spot", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
+	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
 	started := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 	result := domain.NewResampleTaskResult(started)
 	result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: started, End: started.Add(time.Hour), NextBucket: started.Add(time.Hour), State: domain.ResampleBackfillSyncing}
@@ -142,6 +149,7 @@ func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
 	require.NoError(t, err)
 	resultIDs := taskresult.ResultIDs("crypto", "rule-5m")
 	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: "rule-5m", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: resultIDs.DatasetID, SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{{ID: "wt-task-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule-5m", DatasetID: resultIDs.DatasetID, ViewID: resultIDs.ViewID, Status: "pending"}}))
 	primary := &syncPointPrimary{}
 	runner := &Runner{Instances: db.TaskInstances(), Primary: primary}
 	rule, err := db.Tasks().GetByTaskID(context.Background(), "crypto", "rule-5m")

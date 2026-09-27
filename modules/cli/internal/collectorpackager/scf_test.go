@@ -103,3 +103,55 @@ func TestBuildSCFPackageSetsOutputMode0600(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
+
+func TestBuildSCFPackageRendersStorageAuth(t *testing.T) {
+	tmp := t.TempDir()
+	binary := filepath.Join(tmp, "main")
+	config := filepath.Join(tmp, "config")
+	out := filepath.Join(tmp, "package.zip")
+	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources", "market"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(config, "sources", "market", "binance.yaml"), []byte(`
+storage:
+  bindings:
+    spot:
+      auth_info:
+        app_id: "moox-collector"
+        app_key: "binance-spot-collector"
+`), 0o644))
+
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out})
+	require.ErrorContains(t, err, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+
+	_, err = BuildSCFPackage(BuildSCFPackageOptions{
+		BinaryPath:               binary,
+		ConfigDir:                config,
+		OutPath:                  out,
+		StoragePrimaryAuthSecret: "test-storage-secret",
+	})
+	require.NoError(t, err)
+	require.NoError(t, ValidateSCFPackageZip(out))
+}
+
+func TestValidateSCFPackageZipRejectsPlaceholderAuth(t *testing.T) {
+	tmp := t.TempDir()
+	out := filepath.Join(tmp, "package.zip")
+	file, err := os.Create(out)
+	require.NoError(t, err)
+	zw := zip.NewWriter(file)
+	writer, err := zw.Create("sources/market/binance.yaml")
+	require.NoError(t, err)
+	_, err = writer.Write([]byte(`
+storage:
+  bindings:
+    spot:
+      auth_info:
+        app_id: "moox-collector"
+        app_key: "binance-spot-collector"
+`))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	require.NoError(t, file.Close())
+	require.ErrorContains(t, ValidateSCFPackageZip(out), "placeholder Storage Primary app_key")
+}

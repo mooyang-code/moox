@@ -33,15 +33,15 @@ func (r *PeriodReadinessRepository) EnsurePeriod(ctx context.Context, seed domai
 	if len(seed.Tasks) == 0 {
 		return 0, fmt.Errorf("period readiness requires at least one task")
 	}
-	seenSubjects := make(map[string]struct{}, len(seed.Tasks))
+	seenTargets := make(map[string]struct{}, len(seed.Tasks))
 	for _, task := range seed.Tasks {
-		if strings.TrimSpace(task.InstanceID) == "" || strings.TrimSpace(task.SubjectID) == "" {
-			return 0, fmt.Errorf("instance_id and subject_id are required")
+		if strings.TrimSpace(task.InstanceID) == "" || strings.TrimSpace(task.WriteTargetID) == "" || strings.TrimSpace(task.SubjectID) == "" {
+			return 0, fmt.Errorf("instance_id, write_target_id and subject_id are required")
 		}
-		if _, exists := seenSubjects[task.SubjectID]; exists {
-			return 0, fmt.Errorf("duplicate period subject %q", task.SubjectID)
+		if _, exists := seenTargets[task.WriteTargetID]; exists {
+			return 0, fmt.Errorf("duplicate period write target %q", task.WriteTargetID)
 		}
-		seenSubjects[task.SubjectID] = struct{}{}
+		seenTargets[task.WriteTargetID] = struct{}{}
 	}
 
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -69,7 +69,7 @@ func (r *PeriodReadinessRepository) EnsurePeriod(ctx context.Context, seed domai
 		}
 		for _, task := range seed.Tasks {
 			item := &domain.PeriodReadinessItem{
-				ReadinessID: parent.ID, InstanceID: task.InstanceID, SubjectID: task.SubjectID,
+				ReadinessID: parent.ID, InstanceID: task.InstanceID, SubjectID: task.SubjectID, SeriesTag: task.SeriesTag,
 				WriteTargetID: task.WriteTargetID,
 				FunctionName:  task.FunctionName, WriteSource: task.WriteSource,
 				RequiredFields: task.RequiredFields, State: domain.PeriodItemPending,
@@ -106,7 +106,7 @@ func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Con
 		return fmt.Errorf("period, subject_id and event time are required")
 	}
 	var items []domain.PeriodReadinessItem
-	query := r.db.WithContext(ctx).Where("c_readiness_id IN (SELECT c_id FROM t_period_readiness WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?)", key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime.UTC()).Where("c_subject_id = ? AND c_state = ?", subjectID, domain.PeriodItemPending)
+	query := r.db.WithContext(ctx).Where("c_readiness_id IN (SELECT c_id FROM t_period_readiness WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?)", key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime.UTC()).Where("c_subject_id = ? AND c_series_tag = ? AND c_state = ?", subjectID, strings.TrimSpace(key.SeriesTag), domain.PeriodItemPending)
 	if strings.TrimSpace(key.WriteTargetID) != "" {
 		query = query.Where("c_write_target_id = ?", strings.TrimSpace(key.WriteTargetID))
 	}
@@ -149,7 +149,7 @@ func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Con
 				continue
 			}
 		}
-		if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ? AND c_instance_id = ? AND c_state = ?", item.ReadinessID, item.InstanceID, domain.PeriodItemPending).Updates(map[string]any{"c_state": domain.PeriodItemSuccess, "c_updated_at": at.UTC()}).Error; err != nil {
+		if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ? AND c_write_target_id = ? AND c_state = ?", item.ReadinessID, item.WriteTargetID, domain.PeriodItemPending).Updates(map[string]any{"c_state": domain.PeriodItemSuccess, "c_updated_at": at.UTC()}).Error; err != nil {
 			return err
 		}
 	}

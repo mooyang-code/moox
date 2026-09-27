@@ -38,15 +38,16 @@ const (
 	// SCFFinalResponseReserveMilliseconds keeps the SCF runtime enough time to
 	// serialize and return its response after best-effort CLS logging.
 	SCFFinalResponseReserveMilliseconds = 500
-	// DefaultCryptoMarketTimerFunctionCount is the baseline Timer fleet size
-	// for the built-in crypto market Space.
+	// DefaultCryptoMarketTimerFunctionCount is the historical config name for the
+	// built-in crypto market function pool. Crypto now publishes this capacity
+	// as Scheduler-owned Invoke functions rather than Tencent Timer functions.
 	DefaultCryptoMarketTimerFunctionCount = 60
 	// DefaultStockCNMarketTimerFunctionCount is used by callers that need the
 	// release baseline. stockcn config validation still requires an explicit
 	// timer_function_count instead of applying this value implicitly.
 	DefaultStockCNMarketTimerFunctionCount = 170
-	// Invoke nodes need a larger budget than the regular Kline Timer fleet for
-	// the deployment canary and Storage acknowledgement path.
+	// Invoke execution needs a larger budget than stockcn Timer execution for the
+	// Storage acknowledgement and durable completion path.
 	DefaultStockCNInvokeTimeoutSeconds = 60
 	DefaultCryptoInvokeTimeoutSeconds  = 60
 	// Stock Timer groups are spread across this fixed second window. These are
@@ -498,21 +499,43 @@ func PlanSCFNamespaceShards(base string, timers, invokes, maxPerNS int) []SCFNam
 	return shards
 }
 
+// PlanSCFInvokeNamespaceShards spreads a Scheduler-owned Invoke pool across
+// namespaces without creating Timer-triggered functions. Crypto uses this
+// model so every execution can publish an asynchronous completion event.
+func PlanSCFInvokeNamespaceShards(base string, invokes, maxPerNS int) []SCFNamespaceShard {
+	if maxPerNS < 1 || invokes <= 0 {
+		return nil
+	}
+	shards := make([]SCFNamespaceShard, 0, (invokes+maxPerNS-1)/maxPerNS)
+	for index, remaining := 0, invokes; remaining > 0; index++ {
+		n := remaining
+		if n > maxPerNS {
+			n = maxPerNS
+		}
+		shards = append(shards, SCFNamespaceShard{Namespace: OverflowSCFNamespace(base, index), Invokes: n})
+		remaining -= n
+	}
+	return shards
+}
+
 func spaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, limits TencentSCFLimits) []SCFNamespaceShard {
 	namespace := strings.ToLower(strings.TrimSpace(space.Namespace))
 	if namespace == "" {
 		namespace = ExpectedSCFNamespace(space.SpaceID)
 	}
-	invoke := 1
 	maxPerNS := limits.ForRegion(region.Region).MaxFunctionsPerNamespace
 	if maxPerNS < 1 {
 		maxPerNS = DefaultSCFMaxFunctionsPerNamespace
 	}
-	return PlanSCFNamespaceShards(namespace, region.FunctionCount, invoke, maxPerNS)
+	if strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") {
+		return PlanSCFInvokeNamespaceShards(namespace, region.FunctionCount, maxPerNS)
+	}
+	return PlanSCFNamespaceShards(namespace, region.FunctionCount, 1, maxPerNS)
 }
 
 // SpaceRegionNamespaceShards returns the namespace slices the publisher will
-// create for one enabled regional Timer fleet, including the Invoke canary.
+// create for one enabled regional fleet. Crypto is Invoke-only; stockcn keeps
+// Timer functions plus one Invoke canary.
 func SpaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, limits TencentSCFLimits) []SCFNamespaceShard {
 	if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
 		return nil
@@ -592,7 +615,7 @@ type SCFFetcherSpace struct {
 	RegionBlacklist []string `toml:"region_blacklist"`
 	SpaceID         string   `toml:"space_id"`
 	Entrypoint      string   `toml:"entrypoint"`
-	// Market data Timer fleets carry this canonical identity in their static
+	// Market-data functions carry this canonical identity in their static
 	// environment. It is intentionally separate from the legacy crypto
 	// market_type label so a function cannot infer an asset class from a
 	// provider-specific spelling.
@@ -626,9 +649,9 @@ type SCFFetcherSpace struct {
 	// market providers need explicit public egress; VPC/NAT remains a separate
 	// deployment choice and must not be inferred from the region name.
 	PublicNetStatus string `toml:"public_net_status"`
-	// TimerFunctionCount is the total Timer fleet size for this Space. stockcn
-	// must set it explicitly to a positive value; other Spaces may use the
-	// built-in default when all enabled regional function_count values are zero.
+	// TimerFunctionCount is retained as the manifest field name for fleet capacity.
+	// It is a Timer count for stockcn and an Invoke-pool count for crypto. stockcn
+	// must set it explicitly; other Spaces may use the built-in default.
 	TimerFunctionCount             int    `toml:"timer_function_count"`
 	MeasuredSafeGroupSize          int    `toml:"measured_safe_group_size"`
 	StaggerStartSecond             int    `toml:"stagger_start_second"`
@@ -1844,10 +1867,9 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 		return fmt.Errorf("config_invalid: %s retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false", path)
 	}
 	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
-	// Standard config-driven publishing creates both the realtime Timer fleet
-	// and one Invoke auxiliary per region. Validate the stricter Invoke budget
-	// here, before uploading or submitting the Timer batch, so a bad manifest
-	// cannot leave a partially published fleet behind.
+	// Validate the execution budget before any package upload. Crypto uses the
+	// Scheduler-owned Invoke pool; stockcn still publishes Timer functions plus
+	// an Invoke canary. Both paths need enough time for Storage and observability.
 	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + SCFCompletionReserveMilliseconds + SCFCLSReserveMilliseconds + SCFFinalResponseReserveMilliseconds
 	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
 		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + completion, CLS and final response reserves must be less than timeout", path)
@@ -1857,12 +1879,15 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	for i := range cfg.Regions {
 		region := strings.TrimSpace(cfg.Regions[i].Region)
 		regionLimit := limits.ForRegion(region)
-		maxTimers := regionLimit.TimerCapacity(0)
-		if maxTimers < 1 && regionLimit.MaxFunctionsPerNamespace > 0 {
-			maxTimers = regionLimit.MaxFunctionsPerNamespace
+		maxFunctions := regionLimit.TimerCapacity(0)
+		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
+			maxFunctions = regionLimit.MaxFunctionsPerRegion()
 		}
-		if region == "" || cfg.Regions[i].FunctionCount < 0 || (maxTimers > 0 && cfg.Regions[i].FunctionCount > maxTimers) || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
-			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..%d are required (0 enables automatic allocation)", path, i, maxTimers)
+		if maxFunctions < 1 && regionLimit.MaxFunctionsPerNamespace > 0 {
+			maxFunctions = regionLimit.MaxFunctionsPerNamespace
+		}
+		if region == "" || cfg.Regions[i].FunctionCount < 0 || (maxFunctions > 0 && cfg.Regions[i].FunctionCount > maxFunctions) || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
+			return fmt.Errorf("config_invalid: %s.regions[%d] region and function_count 0..%d are required (0 enables automatic allocation)", path, i, maxFunctions)
 		}
 		if !supportedSCFRegion(region) {
 			return fmt.Errorf("config_invalid: %s.regions[%d] region %q is not supported", path, i, region)
@@ -1926,15 +1951,28 @@ func resolveSCFTimerFunctionCountsWithLimit(cfg *SCFFetcherSpace, path string, m
 // resolveSCFTimerFunctionCountsWithCapacities allocates Timer functions while
 // reserving the publisher-created Invoke canary for each region.
 func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path string, maxFunctionsPerNamespace int, reservedByRegion map[string]int) error {
+	auxiliary := 1
+	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
+		auxiliary = 0
+	}
 	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
-		return maxFunctionsPerNamespace - 1 - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
+		return maxFunctionsPerNamespace - auxiliary - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
 	})
 }
 
 func resolveSCFTimerFunctionCountsWithRegionalCapacities(cfg *SCFFetcherSpace, path string, limits TencentSCFLimits, reservedByRegion map[string]int) error {
 	limits.normalize()
 	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
-		return limits.ForRegion(region).TimerCapacity(reservedByRegion[strings.ToLower(strings.TrimSpace(region))])
+		reserved := reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
+		limit := limits.ForRegion(region)
+		if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
+			capacity := limit.MaxFunctionsPerRegion() - reserved
+			if capacity < 0 {
+				return 0
+			}
+			return capacity
+		}
+		return limit.TimerCapacity(reserved)
 	})
 }
 
@@ -2047,7 +2085,11 @@ func RebalanceSCFTimerFunctionCounts(cfg *SCFFetcherSpace, storageRegion string,
 	}
 	limits.normalize()
 	capacity := func(region string) int {
-		return limits.ForRegion(region).TimerCapacity(0)
+		limit := limits.ForRegion(region)
+		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
+			return limit.MaxFunctionsPerRegion()
+		}
+		return limit.TimerCapacity(0)
 	}
 	autoRegions := make([]int, 0)
 	explicitTotal := 0

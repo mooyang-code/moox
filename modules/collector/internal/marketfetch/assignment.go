@@ -24,6 +24,7 @@ type TaskGroup struct {
 	SeriesTag       string
 	DatasetID       string
 	Frequency       string
+	OutputFields    []string
 	Subjects        []string
 	ExternalSymbols map[string]string
 }
@@ -42,6 +43,7 @@ type NodeAssignment struct {
 	SeriesTag       string
 	DatasetID       string
 	Frequency       string
+	OutputFields    []string
 	Subjects        []string
 	ExternalSymbols map[string]string
 	ProviderChain   []string
@@ -120,6 +122,7 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 	group.MarketType = strings.ToLower(strings.TrimSpace(group.MarketType))
 	group.DatasetID = strings.TrimSpace(group.DatasetID)
 	group.Frequency = strings.ToLower(strings.TrimSpace(group.Frequency))
+	group.OutputFields = normalizeOutputFields(group.OutputFields)
 	group.Subjects = normalizeSubjects(group.Subjects)
 	if group.MarketType != "equity" || group.DatasetID != StockCNDatasetID || group.Frequency != "1m" {
 		return nil, fmt.Errorf("stockcn assignment requires equity/%s/1m", StockCNDatasetID)
@@ -172,9 +175,9 @@ func BuildStockCNAssignmentsWithStagger(group TaskGroup, nodes []scfinvoker.Node
 		assignments = append(assignments, NodeAssignment{
 			NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
 			Provider: provider, RouteProvider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: sourceID, DatasetID: group.DatasetID, Frequency: group.Frequency,
-			Subjects: append([]string(nil), subjects...), ExternalSymbols: externals, ProviderChain: []string{provider},
+			Subjects: append([]string(nil), subjects...), OutputFields: append([]string(nil), group.OutputFields...), ExternalSymbols: externals, ProviderChain: []string{provider},
 			RouteVersion: routeVersion, GroupID: groupID, GroupCount: expectedCount, Cron: stockCNStaggeredCron(groupID, stagger), Enabled: len(subjects) > 0,
-			AssignmentHash: AssignmentHash(provider, sourceID, routeVersion, strconv.Itoa(groupID), group.MarketType, group.MarketID, group.InstrumentType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
+			AssignmentHash: AssignmentHash(provider, sourceID, routeVersion, strconv.Itoa(groupID), group.MarketType, group.MarketID, group.InstrumentType, group.DatasetID, group.Frequency, strings.Join(group.OutputFields, ","), strings.Join(hashParts, "|")),
 		})
 	}
 	return assignments, nil
@@ -615,9 +618,9 @@ func assignmentFromChunk(group TaskGroup, subjects []string, node scfinvoker.Nod
 		NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region,
 		Provider: group.Provider, RouteProvider: group.Provider, MarketType: group.MarketType,
 		MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag,
-		DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals,
+		DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, OutputFields: append([]string(nil), group.OutputFields...),
 		GroupID: groupID, GroupCount: needed, Cron: assignmentCron(group, groupID), Enabled: true,
-		AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency, strings.Join(hashParts, "|")),
+		AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency, strings.Join(group.OutputFields, ","), strings.Join(hashParts, "|")),
 	}, nil
 }
 
@@ -896,7 +899,25 @@ func normalizeSubjects(subjects []string) []string {
 }
 
 func groupKey(group TaskGroup) string {
-	return strings.Join([]string{group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency}, "\x00")
+	return strings.Join([]string{group.Provider, group.MarketType, group.MarketID, group.InstrumentType, group.SourceID, group.SeriesTag, group.DatasetID, group.Frequency, strings.Join(normalizeOutputFields(group.OutputFields), ",")}, "\x00")
+}
+
+func normalizeOutputFields(fields []string) []string {
+	seen := make(map[string]struct{}, len(fields))
+	result := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.ToLower(strings.TrimSpace(field))
+		if field == "" {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		result = append(result, field)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func cryptoTimerGroupRank(frequency string) int {

@@ -106,6 +106,11 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 			if timerEnvelope {
 				return runtimeHandler.HandleTimerAt(ctx, event.RequestID, functionName, timerNow(event))
 			}
+			if strings.EqualFold(strings.TrimSpace(event.Source), model.EventSourceCollectorScheduler) {
+				return runtimeHandler.HandleWithFunctionName(ctx, event, functionName)
+			}
+			// Keep ad-hoc validation/canary invokes completion-free so they do
+			// not mutate durable scheduler state.
 			return runtimeHandler.HandleWithFunctionNameWithoutCompletion(ctx, event, functionName)
 		}
 		return runtimeHandler.HandleWithFunctionName(ctx, event, functionName)

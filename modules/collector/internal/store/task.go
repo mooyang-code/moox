@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,14 +20,12 @@ const MaxEnabledTasks = 1000
 
 // TaskFilter describes collection task list filters.
 type TaskFilter struct {
-	SpaceID    string
-	DataType   string
-	Provider   string
-	MarketType string
-	Enabled    *bool
-	TaskID     string
-	Page       int
-	PageSize   int
+	SpaceID  string
+	DataType string
+	Enabled  *bool
+	TaskID   string
+	Page     int
+	PageSize int
 }
 
 // TaskRepository persists collection tasks.
@@ -51,6 +50,9 @@ func (r *TaskRepository) List(ctx context.Context, filter TaskFilter) ([]domain.
 	if err := q.Order("c_id DESC").Limit(size).Offset((page - 1) * size).Find(&tasks).Error; err != nil {
 		return nil, 0, err
 	}
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, 0, err
+	}
 	return tasks, total, nil
 }
 
@@ -64,6 +66,9 @@ func (r *TaskRepository) ListEnabled(ctx context.Context, spaceID string) ([]dom
 		Find(&tasks).Error
 	if err == nil && len(tasks) > MaxEnabledTasks {
 		return nil, fmt.Errorf("enabled task count exceeds limit %d", MaxEnabledTasks)
+	}
+	if err == nil {
+		err = r.attachTaskTags(ctx, tasks)
 	}
 	return tasks, err
 }
@@ -86,6 +91,9 @@ func (r *TaskRepository) ListEnabledAll(ctx context.Context, limit int) ([]domai
 	if len(tasks) > limit {
 		return nil, fmt.Errorf("enabled task count exceeds limit %d", limit)
 	}
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, err
+	}
 	return tasks, nil
 }
 
@@ -99,7 +107,11 @@ func (r *TaskRepository) GetByTaskID(ctx context.Context, spaceID string, taskID
 	if err := q.First(&task).Error; err != nil {
 		return nil, err
 	}
-	return &task, nil
+	tasks := []domain.CollectionTask{task}
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, err
+	}
+	return &tasks[0], nil
 }
 
 // GetByTaskName returns a task by its display name within a space.
@@ -111,7 +123,29 @@ func (r *TaskRepository) GetByTaskName(ctx context.Context, spaceID string, task
 	if err != nil {
 		return nil, err
 	}
-	return &task, nil
+	tasks := []domain.CollectionTask{task}
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, err
+	}
+	return &tasks[0], nil
+}
+
+// GetByDefinitionHash returns the task that has the same normalized
+// collection definition in a space. It is used before provisioning result
+// metadata so duplicate requests cannot leave orphan datasets or views.
+func (r *TaskRepository) GetByDefinitionHash(ctx context.Context, spaceID, definitionHash string) (*domain.CollectionTask, error) {
+	var task domain.CollectionTask
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_definition_hash = ?", strings.TrimSpace(spaceID), strings.TrimSpace(definitionHash)).
+		First(&task).Error
+	if err != nil {
+		return nil, err
+	}
+	tasks := []domain.CollectionTask{task}
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, err
+	}
+	return &tasks[0], nil
 }
 
 // Create inserts a new collection task.
@@ -134,7 +168,14 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask)
 	}
 	task.CreateTime = now
 	task.ModifyTime = now
-	return r.db.WithContext(ctx).Create(&task).Error
+	tags := normalizeTaskTagIDs(task.TagIDs)
+	task.TagIDs = nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&task).Error; err != nil {
+			return err
+		}
+		return insertTaskTags(tx, task.SpaceID, task.TaskID, tags)
+	})
 }
 
 // ListResampleByPrepareStates returns bounded preparation work in stable order.
@@ -159,6 +200,9 @@ func (r *TaskRepository) ListResampleByPrepareStates(ctx context.Context, states
 		// catalogs. Otherwise a stable prefix of ready tasks can starve new or
 		// failed tasks once the inventory exceeds the per-tick bound.
 		Order("CASE WHEN c_prepare_state = 'ready' THEN 1 ELSE 0 END ASC, c_mtime ASC, c_id ASC").Limit(limit).Find(&tasks).Error
+	if err == nil {
+		err = r.attachTaskTags(ctx, tasks)
+	}
 	return tasks, err
 }
 
@@ -179,6 +223,77 @@ func (r *TaskRepository) SetPrepareState(ctx context.Context, spaceID, taskID st
 	}
 	if result.RowsAffected == 0 {
 		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+type taskTagRow struct {
+	SpaceID string `gorm:"column:c_space_id"`
+	TaskID  string `gorm:"column:c_task_id"`
+	TagID   string `gorm:"column:c_tag_id"`
+}
+
+func normalizeTaskTagIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func insertTaskTags(tx *gorm.DB, spaceID, taskID string, tagIDs []string) error {
+	for _, tagID := range normalizeTaskTagIDs(tagIDs) {
+		if err := tx.Table("t_collector_task_tags").Create(map[string]any{
+			"c_space_id": strings.TrimSpace(spaceID),
+			"c_task_id":  strings.TrimSpace(taskID),
+			"c_tag_id":   tagID,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *TaskRepository) attachTaskTags(ctx context.Context, tasks []domain.CollectionTask) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+	taskIDs := make([]string, 0, len(tasks))
+	seen := make(map[string]struct{}, len(tasks))
+	for i := range tasks {
+		tasks[i].TagIDs = nil
+		if _, ok := seen[tasks[i].TaskID]; ok {
+			continue
+		}
+		seen[tasks[i].TaskID] = struct{}{}
+		taskIDs = append(taskIDs, tasks[i].TaskID)
+	}
+	var rows []taskTagRow
+	if err := r.db.WithContext(ctx).Table("t_collector_task_tags").
+		Select("c_space_id, c_task_id, c_tag_id").
+		Where("c_task_id IN ?", taskIDs).
+		Order("c_space_id, c_task_id, c_tag_id").
+		Find(&rows).Error; err != nil {
+		return err
+	}
+	byTask := make(map[string][]string, len(tasks))
+	for _, row := range rows {
+		key := row.SpaceID + "\x00" + row.TaskID
+		byTask[key] = append(byTask[key], row.TagID)
+	}
+	for i := range tasks {
+		key := tasks[i].SpaceID + "\x00" + tasks[i].TaskID
+		tasks[i].TagIDs = append([]string(nil), byTask[key]...)
 	}
 	return nil
 }
@@ -215,8 +330,6 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 		"c_task_name":           task.TaskName,
 		"c_description":         task.Description,
 		"c_data_type":           task.DataType,
-		"c_provider":            task.Provider,
-		"c_market_type":         task.MarketType,
 		"c_collect_params":      task.CollectParams,
 		"c_enabled":             task.Enabled,
 		"c_creator":             task.Creator,
@@ -239,6 +352,18 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 // Collector-owned runtime state. Task identity, collection configuration, and
 // result identities are intentionally absent from the update set.
 func (r *TaskRepository) UpdateMutableByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
+	return r.updateMutableByTaskID(ctx, spaceID, taskID, task, false)
+}
+
+// UpdateValidatedTaskByTaskID is used after the RPC layer has validated that
+// the collection definition is semantically unchanged. It persists the
+// canonical collect_params in the same SQL update, allowing legacy kline
+// provider/market keys to be removed without exposing them as task identity.
+func (r *TaskRepository) UpdateValidatedTaskByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
+	return r.updateMutableByTaskID(ctx, spaceID, taskID, task, true)
+}
+
+func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask, persistCollectParams bool) (*domain.CollectionTask, error) {
 	task.TaskName = domain.NormalizeCollectionTaskName(task.TaskName)
 	if err := domain.ValidateCollectionTaskName(task.TaskName); err != nil {
 		return nil, err
@@ -250,17 +375,21 @@ func (r *TaskRepository) UpdateMutableByTaskID(ctx context.Context, spaceID, tas
 		task.CoverageStartTime = nil
 	}
 	now := time.Now().UTC()
+	updates := map[string]any{
+		"c_task_name":           task.TaskName,
+		"c_description":         task.Description,
+		"c_enabled":             task.Enabled,
+		"c_prepare_state":       task.PrepareState,
+		"c_last_error":          task.LastError,
+		"c_coverage_start_time": task.CoverageStartTime,
+		"c_mtime":               now,
+	}
+	if persistCollectParams {
+		updates["c_collect_params"] = task.CollectParams
+	}
 	result := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
 		Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).
-		Updates(map[string]any{
-			"c_task_name":           task.TaskName,
-			"c_description":         task.Description,
-			"c_enabled":             task.Enabled,
-			"c_prepare_state":       task.PrepareState,
-			"c_last_error":          task.LastError,
-			"c_coverage_start_time": task.CoverageStartTime,
-			"c_mtime":               now,
-		})
+		Updates(updates)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -297,7 +426,8 @@ func (r *TaskRepository) SetEnabled(ctx context.Context, spaceID, taskID string,
 }
 
 func (r *TaskRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
-	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.CollectionTask{})
+	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
+	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).Delete(&domain.CollectionTask{})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -313,12 +443,6 @@ func (r *TaskRepository) applyFilter(q *gorm.DB, filter TaskFilter) *gorm.DB {
 	}
 	if v := strings.TrimSpace(filter.DataType); v != "" {
 		q = q.Where("c_data_type = ?", v)
-	}
-	if v := strings.TrimSpace(filter.Provider); v != "" {
-		q = q.Where("c_provider = ?", v)
-	}
-	if v := strings.TrimSpace(filter.MarketType); v != "" {
-		q = q.Where("c_market_type = ?", v)
 	}
 	if filter.Enabled != nil {
 		q = q.Where("c_enabled = ?", *filter.Enabled)
@@ -356,7 +480,7 @@ func resolveCollectionTaskCoverageStart(task *domain.CollectionTask, now time.Ti
 		at := task.CoverageStartTime.UTC()
 		return &at, nil
 	}
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil || params == nil || params.HistoryPolicy == nil {
 		at := now.UTC().Truncate(time.Minute)
 		return &at, nil
@@ -393,7 +517,7 @@ func isStockCNTask(task *domain.CollectionTask) bool {
 	if task == nil {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(task.SpaceID), "stockcn") || strings.EqualFold(strings.TrimSpace(task.MarketType), "equity")
+	return strings.EqualFold(strings.TrimSpace(task.SpaceID), "stockcn")
 }
 
 func loadStockCNCalendarForTask() (*stockmarket.Calendar, error) {

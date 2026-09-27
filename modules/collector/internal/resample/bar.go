@@ -26,6 +26,7 @@ type TaskSpec struct {
 	TargetDatasetID string
 	TargetFrequency FixedFrequency
 	Alignment       string
+	OutputFields    []string
 }
 
 // SourceBar is one decoded source K-line. Pointer fields preserve whether a

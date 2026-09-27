@@ -851,7 +851,7 @@ func (s seedSubject) toPB() *pb.Subject {
 }
 
 func (s seedTag) toPB() *pb.Tag {
-	return &pb.Tag{SpaceId: s.SpaceID, TagId: s.TagID, TagName: s.TagName, Description: s.Description, Mode: s.Mode, Builtin: s.Builtin, Sources: s.Sources, InstrumentType: s.InstrumentType, Cron: s.Cron, Timezone: s.Timezone}
+	return &pb.Tag{SpaceId: s.SpaceID, TagId: s.TagID, TagName: s.TagName, Description: s.Description, Mode: s.Mode, Builtin: s.Builtin, Source: s.Source, MarketType: s.MarketType, Cron: s.Cron, Timezone: s.Timezone}
 }
 
 func (s seedDataset) toPB() (*pb.Dataset, error) {

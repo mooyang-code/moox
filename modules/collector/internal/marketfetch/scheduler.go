@@ -15,6 +15,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -43,6 +44,7 @@ type scheduleState struct {
 type Scheduler struct {
 	SCFRegionBlacklists map[string][]string
 	ResolveSymbol       SymbolResolver
+	ResolveSourceID     func(string, string) string
 	Tasks               *store.TaskRepository
 	Instances           *store.TaskInstanceRepository
 	Batches             *store.FetchBatchRepository
@@ -67,13 +69,12 @@ type Scheduler struct {
 	DNSCache              interface {
 		Snapshot() map[string]sources.DNSResolution
 	}
-	Now              func() time.Time
-	mu               sync.Mutex
-	lastTaskID       string
-	lastCleanup      time.Time
-	planStates       map[string]scheduleState
-	taskFingerprints map[string]string
-	invokeSem        chan struct{}
+	Now         func() time.Time
+	mu          sync.Mutex
+	lastTaskID  string
+	lastCleanup time.Time
+	planStates  map[string]scheduleState
+	invokeSem   chan struct{}
 }
 
 const (
@@ -92,7 +93,7 @@ func batchCompletionDeadline(kind domain.BatchKind) time.Duration {
 	return defaultBatchCompletionDeadline
 }
 
-func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
+func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	if s == nil || s.Tasks == nil || s.Batches == nil || s.Invoker == nil {
 		return fmt.Errorf("market fetch scheduler is not initialized")
 	}
@@ -110,14 +111,23 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s.planStates == nil {
 		s.planStates = make(map[string]scheduleState)
 	}
-	if s.taskFingerprints == nil {
-		s.taskFingerprints = make(map[string]string)
-	}
 	if strings.TrimSpace(spaceID) == "" {
 		spaceID = strings.TrimSpace(s.SpaceID)
 	}
 	if spaceID == "" {
 		return fmt.Errorf("space_id is required")
+	}
+	if s.Instances != nil {
+		if pruned, pruneErr := s.Instances.PruneDisabledWriteTargets(ctx, spaceID); pruneErr != nil {
+			log.WarnContextf(ctx, "prune disabled collector write targets failed space=%s: %v", spaceID, pruneErr)
+		} else if pruned > 0 {
+			log.InfoContextf(ctx, "pruned disabled collector write targets space=%s count=%d", spaceID, pruned)
+		}
+	}
+	if s.Runs != nil {
+		if reconcileErr := s.Runs.ReconcileOpenRuns(ctx, spaceID); reconcileErr != nil {
+			log.WarnContextf(ctx, "reconcile previous collector runs failed space=%s: %v", spaceID, reconcileErr)
+		}
 	}
 	now := time.Now().UTC()
 	if s.Now != nil {
@@ -127,11 +137,24 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s.Runs != nil {
 		runTime := now.Truncate(time.Minute)
 		runKey := fmt.Sprintf("scheduled:%s", runTime.Format(time.RFC3339))
-		run, err := s.Runs.GetOrCreateScheduled(ctx, spaceID, runKey, "scheduled", "1m", runTime)
-		if err != nil {
-			return fmt.Errorf("create collector run: %w", err)
+		run, runErr := s.Runs.GetOrCreateScheduled(ctx, spaceID, runKey, "scheduled", "1m", runTime)
+		if runErr != nil {
+			return fmt.Errorf("create collector run: %w", runErr)
 		}
 		currentRunID = run.RunID
+		defer func() {
+			finishCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err != nil {
+				if updateErr := s.Runs.UpdateStatus(finishCtx, spaceID, currentRunID, domain.RunStatusFailed, err.Error()); updateErr != nil {
+					log.WarnContextf(finishCtx, "mark collector run failed space=%s run=%s: %v", spaceID, currentRunID, updateErr)
+				}
+				return
+			}
+			if _, reconcileErr := s.Runs.Reconcile(finishCtx, spaceID, currentRunID); reconcileErr != nil {
+				log.WarnContextf(finishCtx, "reconcile current collector run failed space=%s run=%s: %v", spaceID, currentRunID, reconcileErr)
+			}
+		}()
 	}
 	dnsRoutes := s.dnsSnapshot(ctx)
 	allTasks, err := s.Tasks.ListEnabled(ctx, spaceID)
@@ -149,11 +172,6 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			}
 		}
 	}
-	for taskID := range s.taskFingerprints {
-		if _, exists := activeTaskIDs[taskID]; !exists {
-			delete(s.taskFingerprints, taskID)
-		}
-	}
 	if _, exists := activeTaskIDs[s.lastTaskID]; !exists {
 		s.lastTaskID = ""
 	}
@@ -161,12 +179,19 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	// own timer workers. The market-fetch scheduler only owns cloud-invoked
 	// collection tasks.
 	tasks := filterMarketFetchTasks(allTasks)
-	invokeTasks := filterInvokeTasks(tasks)
+	requiresInvoke := !s.InvokeNonRealtimeOnly && len(tasks) > 0
+	if s.InvokeNonRealtimeOnly {
+		for _, task := range tasks {
+			if !isKlineTask(task) {
+				requiresInvoke = true
+				break
+			}
+		}
+	}
 	tasks = rotateTasksAfter(tasks, s.lastTaskID)
-	// The scheduler still owns the durable TaskInstance inventory for Timer
-	// K-lines even when InvokeNonRealtimeOnly keeps realtime execution out of
-	// this path. ListMarketFetchers intentionally returns Invoke nodes only, so
-	// fetch the Timer fleet separately before expanding the task.
+	// Crypto and other Scheduler-owned tasks execute on Invoke nodes so their
+	// asynchronous completion can return through EventBus. stockcn keeps the
+	// Timer fleet for realtime K-lines and therefore still needs both catalogs.
 	invokeNodes, err := s.Invoker.ListMarketFetchers(ctx, spaceID)
 	if err != nil {
 		return fmt.Errorf("list market fetcher nodes: %w", err)
@@ -185,7 +210,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	})
 	invokeNodes = filterNodesByTrigger(nodes, "invoke")
 	timerNodes = filterNodesByTrigger(nodes, "timer")
-	if len(invokeNodes) == 0 && len(invokeTasks) > 0 {
+	if len(invokeNodes) == 0 && requiresInvoke {
 		return fmt.Errorf("no active Invoke market fetcher nodes")
 	}
 	if err := s.recoverDue(ctx, spaceID, invokeNodes, now); err != nil {
@@ -193,6 +218,14 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	}
 	if err := s.dispatchDueRetries(ctx, spaceID, invokeNodes, now); err != nil {
 		log.WarnContextf(ctx, "dispatch market fetch retries failed: %v", err)
+	}
+	// Planning is intentionally two-phase. Persist every task's destination
+	// before the first batch is dispatched so a shared source request can fan
+	// out to targets owned by tasks that appear later in the scheduler scan.
+	// Without this pre-pass the result depended on goroutine timing: task A
+	// could reach SCF before task B had attached its WriteTarget.
+	if err := s.primeSharedWriteTargets(ctx, spaceID, currentRunID, now, tasks); err != nil {
+		return err
 	}
 	planned := 0
 	// A fetch request is shared across CollectionTasks when its source-side
@@ -208,93 +241,46 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			log.WarnContextf(ctx, "skip invalid collection task=%s: %v", task.TaskID, err)
 			continue
 		}
-		taskNodes := timerNodes
-		if !isKlineTask(task) {
-			taskNodes = invokeNodes
+		taskNodes := invokeNodes
+		if s.InvokeNonRealtimeOnly && isKlineTask(task) {
+			taskNodes = timerNodes
 		}
 		if len(taskNodes) == 0 {
 			log.WarnContextf(ctx, "skip collection task=%s: no nodes for trigger type", task.TaskID)
 			continue
 		}
-		activeInstanceIDs := make([]string, 0, len(items)*len(frequencies))
-		taskFingerprintParts := make([]string, 0, len(items)*len(frequencies))
-		instancesChanged := false
 		for _, frequency := range frequencies {
-			frequencyInstanceIDs := make([]string, 0, len(items))
-			for index := range items {
-				items[index].InstanceID = collectionItemInstanceID(spaceID, task.TaskID, items[index], frequency)
-			}
-			for _, item := range items {
-				frequencyInstanceIDs = append(frequencyInstanceIDs, item.InstanceID)
-				taskFingerprintParts = append(taskFingerprintParts, item.InstanceID+"\x00"+task.CollectParams)
-			}
-			if s.Instances != nil {
-				enabled, enabledErr := s.taskEnabled(ctx, spaceID, task.TaskID)
-				if enabledErr != nil {
-					return fmt.Errorf("check collection task before persisting instances: %w", enabledErr)
-				}
-				if !enabled {
-					continue
-				}
-				instances := make([]domain.TaskInstance, 0, len(items))
-				for _, item := range items {
-					instanceID := collectionItemInstanceID(spaceID, task.TaskID, item, frequency)
-					activeInstanceIDs = append(activeInstanceIDs, instanceID)
-					instances = append(instances, domain.TaskInstance{SpaceID: spaceID, InstanceID: instanceID, RunID: currentRunID, RequestKey: sharedCollectionItemKey(item, frequency), CollectionTaskID: task.TaskID, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency, TaskParams: task.CollectParams})
-				}
-				frequencyFingerprint := taskFingerprint(frequencyInstanceIDs, task.CollectParams)
-				stateKey := task.TaskID + "\x00" + frequency
-				state := s.planStates[stateKey]
-				frequencyChanged := state.fingerprint != frequencyFingerprint
-				if frequencyChanged {
-					instancesChanged = true
-					if err := s.Instances.UpsertMany(ctx, instances); err != nil {
-						return fmt.Errorf("persist stable collection instances: %w", err)
-					}
-					// Keep the destination relation explicit even for the common
-					// one-task/one-dataset case. Shared-instance planning can then
-					// add another target without changing the executable instance.
-					targets := make([]domain.WriteTarget, 0, len(instances))
-					for _, instance := range instances {
-						outputFields := []string(nil)
-						if parsed, parseErr := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType); parseErr == nil {
-							outputFields = append(outputFields, parsed.OutputFields...)
-						}
-						targets = append(targets, domain.WriteTarget{
-							ID:           stableID(spaceID, instance.InstanceID, task.TaskID, instance.DatasetID),
-							SpaceID:      spaceID,
-							InstanceID:   instance.InstanceID,
-							TaskID:       task.TaskID,
-							DatasetID:    instance.DatasetID,
-							ViewID:       task.ResultViewID,
-							OutputFields: stringSliceJSON(outputFields),
-							Status:       "pending",
-						})
-					}
-					if err := s.Instances.UpsertWriteTargets(ctx, targets); err != nil {
-						return fmt.Errorf("persist collection write targets: %w", err)
-					}
-				}
-			}
 			target, err := targetDataTime(now, frequency)
 			if err != nil {
 				log.WarnContextf(ctx, "skip task=%s frequency=%s: %v", task.TaskID, frequency, err)
 				continue
 			}
+			frequencyInstanceIDs := make([]string, 0, len(items))
+			for index := range items {
+				items[index] = prepareCollectionItemRequest(items[index], frequency, target, MaxRealtimeRows)
+				items[index].InstanceID = collectionItemInstanceID(spaceID, currentRunID, task.TaskID, items[index], frequency, target)
+			}
+			for _, item := range items {
+				frequencyInstanceIDs = append(frequencyInstanceIDs, item.InstanceID)
+			}
 			stateKey := task.TaskID + "\x00" + frequency
 			state := s.planStates[stateKey]
 			frequencyFingerprint := taskFingerprint(frequencyInstanceIDs, task.CollectParams)
 			if s.InvokeNonRealtimeOnly && isKlineTask(task) {
-				priorityItems := filterSharedCollectionItems(priorityCryptoMinuteItems(items, frequency), frequency, sharedScheduled)
+				priorityItems := filterSharedCollectionItems(priorityCryptoMinuteItems(items, frequency), frequency, target, sharedScheduled)
 				if len(priorityItems) == 0 {
 					s.planStates[stateKey] = scheduleState{target: target, fingerprint: frequencyFingerprint}
 					continue
 				}
-				priorityNodes := priorityNodesForTask(task, invokeNodes)
-				if len(priorityNodes) == 0 && !requiresOverseasEgress(TaskGroup{Provider: task.Provider, MarketType: task.MarketType, DatasetID: task.ResultDatasetID}) {
-					priorityNodes = taskNodes
+				priorityNodes := priorityNodesForItems(priorityItems, invokeNodes)
+				if len(priorityNodes) == 0 {
+					// Reuse timer-capable nodes when there is no dedicated invoke fleet,
+					// but run them through the same egress filter. This keeps Binance
+					// on overseas nodes instead of disabling priority collection merely
+					// because the compatible node happens to be timer-classified.
+					priorityNodes = priorityNodesForItems(priorityItems, taskNodes)
 				}
-				if err := s.dispatchPriorityCryptoMinute(ctx, spaceID, task, priorityItems, frequency, target, priorityNodes); err != nil {
+				if err := s.dispatchPriorityCryptoMinute(ctx, spaceID, currentRunID, task, priorityItems, frequency, target, priorityNodes); err != nil {
 					return err
 				}
 				// Keep the TaskInstance inventory while realtime K-line execution is
@@ -309,35 +295,42 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			// Do not dispatch an identical source request twice when another
 			// CollectionTask already planned it during this scheduler pass. Its
 			// WriteTarget was persisted above and will be fanned out by the writer.
-			batchItems := filterSharedCollectionItems(items, frequency, sharedScheduled)
+			batchItems := filterSharedCollectionItems(items, frequency, target, sharedScheduled)
 			if len(batchItems) == 0 {
 				s.planStates[stateKey] = scheduleState{target: target, fingerprint: frequencyFingerprint}
 				continue
 			}
+			sort.SliceStable(batchItems, func(i, j int) bool {
+				left, right := collectionRouteKey(batchItems[i]), collectionRouteKey(batchItems[j])
+				if left != right {
+					return left < right
+				}
+				return batchItems[i].SubjectID < batchItems[j].SubjectID
+			})
 			batchSize := s.realtimeBatchSize(len(batchItems), taskNodes)
-			for start, shard := 0, 0; start < len(batchItems); start, shard = start+batchSize, shard+1 {
+			for start, shard := 0, 0; start < len(batchItems); shard++ {
 				end := start + batchSize
 				if end > len(batchItems) {
 					end = len(batchItems)
+				}
+				// A single SCF request must have one provider/source/market
+				// identity. Tag expansion can produce multiple identities in one
+				// task, so never let a shard straddle two groups.
+				groupKey := collectionRouteKey(batchItems[start])
+				for end > start+1 && collectionRouteKey(batchItems[end-1]) != groupKey {
+					end--
 				}
 				// planned is the global batch cursor. Do not add shard again: the
 				// loop already increments planned after every shard, and adding it
 				// would skip every other node when the fleet size is even.
 				node := taskNodes[planned%len(taskNodes)]
-				for index := start; index < end; index++ {
-					batchItems[index].TargetDataTime = target.Format(time.RFC3339Nano)
-					batchItems[index].Frequency = frequency
-					batchItems[index].BarLimit = MaxRealtimeRows
-				}
 				scheduleID := fmt.Sprintf("%s:%s:%s", task.TaskID, frequency, target.Format(time.RFC3339Nano))
 				batchKind := batchKindForTask(task)
 				batchID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "1")
 				syncPointID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "write")
-				// The item is the normalized source of truth. Older tasks may have an
-				// empty top-level market_type while collect_params already contains
-				// the canonical value; forwarding task.MarketType would make SCF
-				// reject the whole batch before it can inspect the item.
-				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], task)
+				// The expanded item is the normalized request identity. Provider and
+				// market routing come from the bound Tag, never from CollectionTask.
+				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start])
 				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, MarketID: batchItems[start].MarketID, InstrumentType: batchItems[start].InstrumentType, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, SourceID: batchItems[start].SourceID, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
 				if s.Instances != nil {
 					for _, batchItem := range batchItems[start:end] {
@@ -353,6 +346,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				if created {
 					planned++
 				}
+				start = end
 				if planned >= DefaultMaxPlan {
 					break
 				}
@@ -360,19 +354,6 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			s.planStates[stateKey] = scheduleState{target: target, fingerprint: frequencyFingerprint}
 			if planned >= DefaultMaxPlan {
 				break
-			}
-		}
-		if s.Instances != nil && instancesChanged {
-			taskFingerprintValue := taskFingerprint(taskFingerprintParts, "")
-			if s.taskFingerprints[task.TaskID] == taskFingerprintValue {
-				instancesChanged = false
-			} else {
-				s.taskFingerprints[task.TaskID] = taskFingerprintValue
-			}
-		}
-		if s.Instances != nil && instancesChanged {
-			if err := s.Instances.DeactivateMissingMarketFetchTaskInstances(ctx, spaceID, task.TaskID, activeInstanceIDs); err != nil {
-				return fmt.Errorf("deactivate removed collection instances: %w", err)
 			}
 		}
 		s.lastTaskID = task.TaskID
@@ -388,12 +369,78 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	return nil
 }
 
+func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID string, now time.Time, tasks []domain.CollectionTask) error {
+	if s == nil || s.Instances == nil {
+		return nil
+	}
+	for _, task := range tasks {
+		enabled, err := s.taskEnabled(ctx, spaceID, task.TaskID)
+		if err != nil {
+			return fmt.Errorf("check collection task before shared planning: %w", err)
+		}
+		if !enabled {
+			continue
+		}
+		items, frequencies, err := s.expandTask(ctx, task)
+		if err != nil {
+			// Keep the existing scheduler contract: one malformed task must not
+			// block unrelated tasks in the same run.
+			log.WarnContextf(ctx, "skip invalid collection task during shared planning task=%s: %v", task.TaskID, err)
+			continue
+		}
+		params, _ := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		outputFields := []string(nil)
+		if params != nil {
+			outputFields = append(outputFields, params.OutputFields...)
+		}
+		for _, frequency := range frequencies {
+			target, targetErr := targetDataTime(now, frequency)
+			if targetErr != nil {
+				log.WarnContextf(ctx, "skip task=%s frequency=%s during shared planning: %v", task.TaskID, frequency, targetErr)
+				continue
+			}
+			instances := make([]domain.TaskInstance, 0, len(items))
+			targets := make([]domain.WriteTarget, 0, len(items))
+			for _, item := range items {
+				item = prepareCollectionItemRequest(item, frequency, target, MaxRealtimeRows)
+				instanceID := collectionItemInstanceID(spaceID, runID, task.TaskID, item, frequency, target)
+				targetTime := target.UTC()
+				instances = append(instances, domain.TaskInstance{
+					SpaceID: spaceID, InstanceID: instanceID, RunID: runID,
+					RequestKey: sharedCollectionItemKey(item, frequency, target),
+					Provider:   item.Provider, ProviderSymbol: item.Symbol, SourceID: item.SourceID, MarketType: item.MarketType,
+					SeriesTag: collectionItemSeriesTag(spaceID, item),
+					DataType:  item.DataType, SubjectID: item.SubjectID,
+					Frequency: frequency, TargetDataTime: &targetTime, TaskParams: collectionItemRequestParams(item),
+				})
+				targets = append(targets, domain.WriteTarget{
+					ID:           stableID(spaceID, instanceID, task.TaskID, item.DatasetID),
+					SpaceID:      spaceID,
+					InstanceID:   instanceID,
+					TaskID:       task.TaskID,
+					DatasetID:    item.DatasetID,
+					ViewID:       task.ResultViewID,
+					OutputFields: stringSliceJSON(outputFields),
+					Status:       "pending",
+				})
+			}
+			if err := s.Instances.UpsertMany(ctx, instances); err != nil {
+				return fmt.Errorf("persist shared collection instances task=%s frequency=%s: %w", task.TaskID, frequency, err)
+			}
+			if err := s.Instances.UpsertWriteTargets(ctx, targets); err != nil {
+				return fmt.Errorf("persist shared write targets task=%s frequency=%s: %w", task.TaskID, frequency, err)
+			}
+		}
+	}
+	return nil
+}
+
 func filterMarketFetchTasks(tasks []domain.CollectionTask) []domain.CollectionTask {
 	filtered := make([]domain.CollectionTask, 0, len(tasks))
 	for _, task := range tasks {
 		dataType := strings.ToLower(strings.TrimSpace(task.DataType))
 		if dataType == "" {
-			params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+			params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 			if err == nil {
 				dataType = strings.ToLower(strings.TrimSpace(params.Collector.DataType))
 			}
@@ -402,23 +449,6 @@ func filterMarketFetchTasks(tasks []domain.CollectionTask) []domain.CollectionTa
 			continue
 		}
 		filtered = append(filtered, task)
-	}
-	return filtered
-}
-
-func filterInvokeTasks(tasks []domain.CollectionTask) []domain.CollectionTask {
-	filtered := make([]domain.CollectionTask, 0, len(tasks))
-	for _, task := range tasks {
-		dataType := strings.ToLower(strings.TrimSpace(task.DataType))
-		if dataType == "" {
-			params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
-			if err == nil {
-				dataType = strings.ToLower(strings.TrimSpace(params.Collector.DataType))
-			}
-		}
-		if dataType != "kline" {
-			filtered = append(filtered, task)
-		}
 	}
 	return filtered
 }
@@ -460,7 +490,7 @@ func isKlineTask(task domain.CollectionTask) bool {
 	if dataType != "" {
 		return dataType == "kline"
 	}
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	return err == nil && strings.EqualFold(strings.TrimSpace(params.Collector.DataType), "kline")
 }
 
@@ -490,10 +520,18 @@ func (s *Scheduler) dnsSnapshot(ctx context.Context) map[string]sources.DNSResol
 	return snapshot
 }
 
-func normalizedBatchIdentity(item domain.CollectionItem, task domain.CollectionTask) (string, string) {
-	provider := strings.ToLower(firstNonEmpty(item.Provider, task.Provider))
-	marketType := firstNonEmpty(item.MarketType, task.MarketType)
-	return provider, marketType
+func collectionItemSeriesTag(spaceID string, item domain.CollectionItem) string {
+	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+		return "default"
+	}
+	if strings.TrimSpace(item.Provider) == "" && strings.TrimSpace(item.SourceID) == "" {
+		return ""
+	}
+	return defaultMarketSeriesTag(item.Provider, item.SourceID, item.MarketType)
+}
+
+func normalizedBatchIdentity(item domain.CollectionItem) (string, string) {
+	return strings.ToLower(strings.TrimSpace(item.Provider)), strings.ToLower(strings.TrimSpace(item.MarketType))
 }
 
 func taskFingerprint(instanceIDs []string, params string) string {
@@ -514,31 +552,99 @@ func taskFingerprint(instanceIDs []string, params string) string {
 // requested start. A future cursor-paginated feed can raise this deliberately.
 const stockCNHistoryMaxLookback = 24 * time.Hour
 
-func collectionItemInstanceID(spaceID, collectionTaskID string, item domain.CollectionItem, frequency string) string {
-	// collectionTaskID remains an argument for source compatibility with
-	// callers and tests.  Instance identity deliberately excludes it: one
-	// source fetch can serve multiple CollectionTasks and their WriteTargets.
-	_ = collectionTaskID
-	h := sha256.New()
-	for _, part := range []string{spaceID, item.Provider, item.SourceID, item.MarketType, item.DataType, item.SubjectID, frequency} {
-		_, _ = h.Write([]byte(strings.ToLower(strings.TrimSpace(part))))
-		_, _ = h.Write([]byte{0})
+func prepareCollectionItemRequest(item domain.CollectionItem, frequency string, target time.Time, barLimit int) domain.CollectionItem {
+	item.TargetDataTime = target.UTC().Format(time.RFC3339Nano)
+	item.Frequency = strings.TrimSpace(frequency)
+	if barLimit > 0 {
+		item.BarLimit = barLimit
 	}
-	return hex.EncodeToString(h.Sum(nil))[:32]
+	return item
 }
 
-func sharedCollectionItemKey(item domain.CollectionItem, frequency string) string {
-	parts := []string{item.Provider, item.SourceID, item.MarketType, item.DataType, item.SubjectID, frequency}
+func collectionItemRequestParams(item domain.CollectionItem) string {
+	params := map[string]any{}
+	putString := func(key, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			params[key] = value
+		}
+	}
+	putString("market_id", item.MarketID)
+	putString("instrument_type", item.InstrumentType)
+	putString("start_time", item.StartTime)
+	putString("end_time", item.EndTime)
+	putString("snapshot_at", item.SnapshotAt)
+	if item.BarLimit != 0 {
+		params["bar_limit"] = item.BarLimit
+	}
+	if item.Canary {
+		params["canary"] = true
+	}
+	if item.SnapshotShardIndex != 0 || item.SnapshotShardCount != 0 {
+		params["snapshot_shard_index"] = item.SnapshotShardIndex
+		params["snapshot_shard_count"] = item.SnapshotShardCount
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func collectionItemInstanceID(spaceID, runID, collectionTaskID string, item domain.CollectionItem, frequency string, target time.Time) string {
+	// A market-fetch TaskInstance is one execution of one semantic request in
+	// one CollectorRun. The CollectionTask/Dataset are deliberately excluded;
+	// they are represented by WriteTargets.
+	_ = collectionTaskID
+	requestKey := sharedCollectionItemKey(item, frequency, target)
+	if strings.TrimSpace(runID) != "" {
+		return stableID(spaceID, runID, requestKey)
+	}
+	// Tests and maintenance callers may run without a Run repository. Keep a
+	// deterministic fallback while production scheduling always supplies runID.
+	return stableID(spaceID, requestKey)
+}
+
+func sharedCollectionItemKey(item domain.CollectionItem, frequency string, target time.Time) string {
+	// request_key identifies the Provider request semantics only. Target task,
+	// Dataset/View and output fields are deliberately excluded because they are
+	// represented by WriteTarget and must not prevent fetch sharing. Fields that
+	// can change the upstream response must be included. Retry-attempt state
+	// (candidate_index/source_event_id) is excluded so retries stay on the same
+	// logical TaskInstance.
+	parts := []string{
+		item.Provider,
+		item.SourceID,
+		item.MarketID,
+		item.InstrumentType,
+		item.MarketType,
+		item.DataType,
+		item.SubjectID,
+		item.Symbol,
+		frequency,
+		target.UTC().Format(time.RFC3339Nano),
+		item.StartTime,
+		item.EndTime,
+		item.SnapshotAt,
+		strconv.Itoa(item.BarLimit),
+		strconv.FormatBool(item.Canary),
+		strconv.Itoa(item.SnapshotShardIndex),
+		strconv.Itoa(item.SnapshotShardCount),
+	}
 	for i := range parts {
 		parts[i] = strings.ToLower(strings.TrimSpace(parts[i]))
 	}
-	return strings.Join(parts, "\x00")
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
 }
 
-func filterSharedCollectionItems(items []domain.CollectionItem, frequency string, seen map[string]struct{}) []domain.CollectionItem {
+func collectionRouteKey(item domain.CollectionItem) string {
+	return strings.Join([]string{strings.ToLower(strings.TrimSpace(item.Provider)), strings.ToLower(strings.TrimSpace(item.SourceID)), strings.ToLower(strings.TrimSpace(item.MarketType)), strings.ToLower(strings.TrimSpace(item.DataType))}, "\x00")
+}
+
+func filterSharedCollectionItems(items []domain.CollectionItem, frequency string, target time.Time, seen map[string]struct{}) []domain.CollectionItem {
 	unique := make([]domain.CollectionItem, 0, len(items))
 	for _, item := range items {
-		key := sharedCollectionItemKey(item, frequency)
+		key := sharedCollectionItemKey(item, frequency, target)
 		if _, exists := seen[key]; exists {
 			continue
 		}
@@ -577,8 +683,17 @@ func priorityCryptoMinuteItems(items []domain.CollectionItem, frequency string) 
 	return selected
 }
 
-func priorityNodesForTask(task domain.CollectionTask, nodes []scfinvoker.Node) []scfinvoker.Node {
-	if !requiresOverseasEgress(TaskGroup{Provider: task.Provider, MarketType: task.MarketType, DatasetID: task.ResultDatasetID}) {
+func itemsRequireOverseasEgress(items []domain.CollectionItem) bool {
+	for _, item := range items {
+		if requiresOverseasEgress(TaskGroup{Provider: item.Provider, MarketType: item.MarketType, DatasetID: item.DatasetID}) {
+			return true
+		}
+	}
+	return false
+}
+
+func priorityNodesForItems(items []domain.CollectionItem, nodes []scfinvoker.Node) []scfinvoker.Node {
+	if !itemsRequireOverseasEgress(items) {
 		return nodes
 	}
 	overseas := make([]scfinvoker.Node, 0, len(nodes))
@@ -590,7 +705,7 @@ func priorityNodesForTask(task domain.CollectionTask, nodes []scfinvoker.Node) [
 	return overseas
 }
 
-func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID string, task domain.CollectionTask, items []domain.CollectionItem, frequency string, target time.Time, nodes []scfinvoker.Node) error {
+func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID, runID string, task domain.CollectionTask, items []domain.CollectionItem, frequency string, target time.Time, nodes []scfinvoker.Node) error {
 	if s == nil || s.Batches == nil || len(nodes) == 0 {
 		return nil
 	}
@@ -600,19 +715,34 @@ func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID st
 	}
 	dnsRoutes := s.dnsSnapshot(ctx)
 	for index, item := range selected {
-		item.InstanceID = collectionItemInstanceID(spaceID, task.TaskID, item, frequency)
-		item.TargetDataTime = target.Format(time.RFC3339Nano)
-		item.Frequency = frequency
 		// Limit 1 is usually the still-open minute at :00, which Binance then
 		// rejects as "no closed bar". Two bars keep the last closed minute
-		// without dumping a 10-bar history page into Merge.
-		item.BarLimit = 2
+		// without dumping a 10-bar history page into Merge. Request identity is
+		// computed only after this response-affecting value is fixed.
+		item = prepareCollectionItemRequest(item, frequency, target, 2)
+		item.InstanceID = collectionItemInstanceID(spaceID, runID, task.TaskID, item, frequency, target)
+		if s.Instances != nil {
+			targetTime := target.UTC()
+			if err := s.Instances.UpsertMany(ctx, []domain.TaskInstance{{
+				SpaceID: spaceID, InstanceID: item.InstanceID, RunID: runID, RequestKey: sharedCollectionItemKey(item, frequency, target),
+				Provider: item.Provider, ProviderSymbol: item.Symbol, SourceID: item.SourceID, MarketType: item.MarketType, SeriesTag: collectionItemSeriesTag(spaceID, item),
+				DataType: item.DataType, SubjectID: item.SubjectID, Frequency: frequency, TargetDataTime: &targetTime, TaskParams: collectionItemRequestParams(item),
+			}}); err != nil {
+				return err
+			}
+			if err := s.Instances.UpsertWriteTargets(ctx, []domain.WriteTarget{{
+				ID: stableID(spaceID, item.InstanceID, task.TaskID, item.DatasetID), SpaceID: spaceID, InstanceID: item.InstanceID, TaskID: task.TaskID,
+				DatasetID: item.DatasetID, ViewID: task.ResultViewID, OutputFields: stringSliceJSON(item.OutputFields), Status: "pending",
+			}}); err != nil {
+				return err
+			}
+		}
 		node := nodes[index%len(nodes)]
 		scheduleID := fmt.Sprintf("%s:%s:%s:priority:%s", task.TaskID, frequency, target.Format(time.RFC3339Nano), item.SubjectID)
 		batchKind := batchKindForTask(task)
 		batchID := stableID(spaceID, scheduleID, string(batchKind), item.DatasetID, "1")
 		syncPointID := stableID(spaceID, scheduleID, string(batchKind), item.DatasetID, "write")
-		batchProvider, batchMarketType := normalizedBatchIdentity(item, task)
+		batchProvider, batchMarketType := normalizedBatchIdentity(item)
 		req := Request{
 			BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: 0,
 			SpaceID: spaceID, MarketID: item.MarketID, InstrumentType: item.InstrumentType, DatasetID: item.DatasetID,
@@ -630,12 +760,29 @@ func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID st
 }
 
 func (s *Scheduler) planOne(ctx context.Context, task domain.CollectionTask, req Request, node scfinvoker.Node, nodes []scfinvoker.Node) (bool, error) {
-	enabled, err := s.taskEnabled(ctx, req.SpaceID, task.TaskID)
-	if err != nil {
-		return false, fmt.Errorf("check collection task before planning: %w", err)
+	instanceIDs := make([]string, 0, len(req.Items))
+	for _, item := range req.Items {
+		if id := strings.TrimSpace(item.InstanceID); id != "" {
+			instanceIDs = append(instanceIDs, id)
+		}
 	}
-	if !enabled {
-		return false, nil
+	if s.Instances != nil {
+		targets, err := s.Instances.ListEnabledWriteTargetsForInstances(ctx, req.SpaceID, instanceIDs)
+		if err != nil {
+			return false, fmt.Errorf("load enabled write targets before planning: %w", err)
+		}
+		if len(targets) == 0 {
+			return false, nil
+		}
+		req.Targets = targets
+	} else {
+		enabled, err := s.taskEnabled(ctx, req.SpaceID, task.TaskID)
+		if err != nil {
+			return false, fmt.Errorf("check collection task before planning: %w", err)
+		}
+		if !enabled {
+			return false, nil
+		}
 	}
 	raw, err := json.Marshal(req)
 	if err != nil {
@@ -648,8 +795,13 @@ func (s *Scheduler) planOne(ctx context.Context, task domain.CollectionTask, req
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
-	batch := &domain.BatchInvocation{SpaceID: req.SpaceID, BatchID: req.BatchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: req.ShardIndex, TaskID: task.TaskID, DatasetID: req.DatasetID, Frequency: req.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw), PlannedCount: len(req.Items), PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
-	created, err := s.Batches.CreatePlannedForEnabledTask(ctx, batch)
+	batch := &domain.BatchInvocation{SpaceID: req.SpaceID, BatchID: req.BatchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: req.ShardIndex, Frequency: req.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw), PlannedCount: len(req.Items), PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
+	var created bool
+	if s.Instances != nil {
+		created, err = s.Batches.CreatePlannedWithItemsForEnabledTargets(ctx, batch, instanceIDs)
+	} else {
+		created, err = s.Batches.CreatePlanned(ctx, batch)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -658,7 +810,7 @@ func (s *Scheduler) planOne(ctx context.Context, task domain.CollectionTask, req
 	}
 	// Planning is the durable part of the timer tick. Invocation is bounded by
 	// a small semaphore so a slow control plane cannot block the next task.
-	go s.dispatchPlanned(req, task.TaskID, node, nodes)
+	go s.dispatchPlanned(req, node, nodes)
 	return true, nil
 }
 
@@ -674,7 +826,7 @@ func rotateTasksAfter(tasks []domain.CollectionTask, lastTaskID string) []domain
 	return tasks
 }
 
-func (s *Scheduler) dispatchPlanned(req Request, taskID string, node scfinvoker.Node, nodes []scfinvoker.Node) {
+func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []scfinvoker.Node) {
 	if s.invokeSem == nil {
 		s.invokeSem = make(chan struct{}, 20)
 	}
@@ -690,9 +842,16 @@ func (s *Scheduler) dispatchPlanned(req Request, taskID string, node scfinvoker.
 		return
 	}
 	for attempt, candidate := range invocationCandidates(node, nodes) {
-		enabled, err := s.taskEnabled(ctx, req.SpaceID, taskID)
-		if err != nil || !enabled {
-			return
+		if s.Instances != nil {
+			instanceIDs := make([]string, 0, len(req.Items))
+			for _, item := range req.Items {
+				instanceIDs = append(instanceIDs, item.InstanceID)
+			}
+			targets, err := s.Instances.ListEnabledWriteTargetsForInstances(ctx, req.SpaceID, instanceIDs)
+			if err != nil || len(targets) == 0 {
+				return
+			}
+			req.Targets = targets
 		}
 		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
 		if err != nil {
@@ -817,7 +976,7 @@ func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfi
 			if key == "" {
 				key = retryKey(batch.BatchID, item.SubjectID, item.TargetDataTime)
 			}
-			effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, TaskID: batch.TaskID, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: item.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: batch.Attempt, Status: "pending", NextRetryAt: &next, LastErrorType: "scf_completion_timeout", LastErrorSummary: "SCF completion event deadline exceeded", CreateTime: now, ModifyTime: now})
+			effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, InstanceID: item.InstanceID, RetryScope: "fetch", SubjectID: item.SubjectID, Frequency: item.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: batch.Attempt, Status: "pending", NextRetryAt: &next, LastErrorType: "scf_completion_timeout", LastErrorSummary: "SCF completion event deadline exceeded", CreateTime: now, ModifyTime: now})
 		}
 		updated, err := s.Batches.CompleteWithEffects(ctx, &batch, effects)
 		if err != nil {
@@ -831,11 +990,11 @@ func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfi
 				duration = now.Sub(batch.PlannedAt.UTC()).Milliseconds()
 			}
 			s.Metrics.Observe(spaceID, &marketfetchpb.MarketFetchBatchCompleted{
-				BatchId: batch.BatchID, DatasetId: batch.DatasetID, Frequency: batch.Frequency,
+				BatchId: batch.BatchID, DatasetId: request.DatasetID, Frequency: batch.Frequency,
 				Status: "timed_out", DurationMs: duration, CompletedAt: timestamppb.New(now.UTC()),
 			})
-			if count, countErr := s.Retries.CountPending(ctx, spaceID, batch.DatasetID, batch.Frequency); countErr == nil {
-				s.Metrics.SetRetryPending(spaceID, batch.DatasetID, batch.Frequency, int(count))
+			if count, countErr := s.Retries.CountPending(ctx, spaceID, request.DatasetID, batch.Frequency); countErr == nil {
+				s.Metrics.SetRetryPending(spaceID, request.DatasetID, batch.Frequency, int(count))
 			}
 		}
 	}
@@ -851,14 +1010,6 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		return err
 	}
 	for index, retry := range items {
-		enabled, enabledErr := s.taskEnabled(ctx, spaceID, retry.TaskID)
-		if enabledErr != nil {
-			return enabledErr
-		}
-		if !enabled {
-			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
-			continue
-		}
 		maxAttempts := s.MaxRetryAttempts
 		if maxAttempts <= 0 {
 			maxAttempts = envInt("MOOX_FETCH_MAX_RETRY_ATTEMPTS", 3)
@@ -875,20 +1026,46 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			continue
 		}
 		item.SourceEventID = retry.RetryKey
+		instanceID := strings.TrimSpace(retry.InstanceID)
+		if instanceID == "" {
+			instanceID = strings.TrimSpace(item.InstanceID)
+		}
+		if instanceID == "" || s.Instances == nil {
+			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
+			continue
+		}
+		item.InstanceID = instanceID
+		targets, targetErr := s.Instances.ListEnabledWriteTargetsForInstances(ctx, spaceID, []string{instanceID})
+		if targetErr != nil {
+			return targetErr
+		}
+		if retry.RetryScope == "write_target" {
+			filtered := targets[:0]
+			for _, target := range targets {
+				if target.ID == retry.WriteTargetID {
+					filtered = append(filtered, target)
+				}
+			}
+			targets = filtered
+		}
+		if len(targets) == 0 {
+			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
+			continue
+		}
 		node := nodes[index%len(nodes)]
 		batchID := stableID(spaceID, "retry", retry.RetryKey, fmt.Sprintf("%d", retry.Attempt+1))
 		batchKind := retry.BatchKind
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: targets[0].DatasetID, Frequency: item.Frequency, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}, Targets: targets}
 		raw, _ := json.Marshal(req)
 		if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
 			continue
 		}
-		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, TaskID: retry.TaskID, DatasetID: item.DatasetID, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
-		created, err := s.Batches.CreatePlannedForEnabledTask(ctx, batch)
+		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, InstanceID: instanceID, WriteTargetID: retry.WriteTargetID, RetryScope: retry.RetryScope, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
+		created, err := s.Batches.CreatePlannedWithItemsForEnabledTargets(ctx, batch, []string{instanceID})
 		if err != nil {
 			return err
 		}
@@ -984,12 +1161,12 @@ func requestForNode(req Request, node scfinvoker.Node) Request {
 }
 
 func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) ([]domain.CollectionItem, []string, error) {
-	params, err := domain.ParseCollectParams(task.CollectParams, task.Provider, task.MarketType, task.DataType)
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return nil, nil, err
 	}
-	provider := strings.ToLower(firstNonEmpty(params.Provider, task.Provider))
-	marketType := strings.ToLower(firstNonEmpty(params.MarketType, task.MarketType))
+	provider := strings.ToLower(strings.TrimSpace(params.Provider))
+	marketType := strings.ToLower(strings.TrimSpace(params.MarketType))
 	marketID := strings.ToLower(firstNonEmpty(params.MarketID, task.SpaceID, s.SpaceID))
 	instrumentType := strings.ToLower(firstNonEmpty(params.InstrumentType, defaultInstrumentTypeForMarket(marketID, marketType)))
 	sourceID := strings.ToLower(strings.TrimSpace(params.SourceID))
@@ -1018,18 +1195,22 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 	}
 	// A collection task may contain tags owned by different providers. Resolve
 	// each tag independently so its source and market_type become the request
-	// identity; task-level provider/market values are only a legacy fallback for
-	// metadata clients that cannot load Tag definitions.
+	// identity. Current tasks do not own Provider/market; params are used only as
+	// a compatibility fallback when an old metadata client cannot load Tag routes.
 	type taggedSubjects struct {
 		subjects []domain.Subject
 		source   string
 		market   string
 	}
-	groups := make([]taggedSubjects, 0, len(dataset.SubjectTags))
+	tagIDs := normalizedTaskTagIDs(task.TagIDs)
+	if len(tagIDs) == 0 {
+		tagIDs = normalizedTaskTagIDs(dataset.SubjectTags)
+	}
+	groups := make([]taggedSubjects, 0, len(tagIDs))
 	if tagSource, ok := s.Symbols.(interface {
 		GetTag(context.Context, string, string) (*storagepb.Tag, error)
-	}); ok && len(dataset.SubjectTags) > 0 {
-		for _, tagID := range dataset.SubjectTags {
+	}); ok && len(tagIDs) > 0 {
+		for _, tagID := range tagIDs {
 			tagID = strings.TrimSpace(tagID)
 			if tagID == "" {
 				continue
@@ -1053,7 +1234,7 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 			groups = append(groups, taggedSubjects{subjects: subjects, source: source, market: market})
 		}
 	} else {
-		subjects, resolveErr := s.Symbols.ResolveSubjects(ctx, spaceID, dataset.SubjectTags)
+		subjects, resolveErr := s.Symbols.ResolveSubjects(ctx, spaceID, tagIDs)
 		if resolveErr != nil {
 			return nil, nil, fmt.Errorf("resolve target dataset subjects: %w", resolveErr)
 		}
@@ -1062,34 +1243,38 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 	items := make([]domain.CollectionItem, 0)
 	seen := make(map[string]struct{})
 	for _, group := range groups {
-		groupProvider := provider
-		groupSource := group.source
-		groupMarket := group.market
-		if groupSource != "" {
-			// Source is the stable provider binding for a Tag in the current
-			// metadata model. This deliberately prevents task-level values from
-			// overriding a tag's routing identity.
-			groupProvider = groupSource
-		}
-		if groupMarket == "" {
-			groupMarket = marketType
-		}
+		// Tag.source is the immutable Provider/DataSource binding. source_id is
+		// the concrete adapter route (spot_http/swap_http/...) and is derived
+		// separately from provider + instrument type.
+		groupProvider := strings.ToLower(firstNonEmpty(group.source, provider))
+		groupMarket := strings.ToLower(firstNonEmpty(group.market, marketType))
 		for _, subject := range group.subjects {
 			if strings.TrimSpace(subject.SubjectID) == "" {
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			identity := strings.Join([]string{groupProvider, groupSource, groupMarket, subjectID}, "\x00")
-			if _, exists := seen[identity]; exists {
-				continue
-			}
-			seen[identity] = struct{}{}
 			symbol, symbolErr := resolveProviderSymbol(s.ResolveSymbol, groupProvider, marketID, groupMarket, subjectID)
 			if symbolErr != nil {
 				log.WarnContextf(ctx, "skip market symbol without valid provider symbol subject=%q error=%v", subject.SubjectID, symbolErr)
 				continue
 			}
-			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: groupProvider, SourceID: groupSource, MarketID: marketID, InstrumentType: instrumentType, MarketType: groupMarket, DataType: "kline", DatasetID: targetDataset, OutputFields: append([]string(nil), params.OutputFields...)})
+			groupInstrumentType := instrumentType
+			if strings.TrimSpace(params.InstrumentType) == "" {
+				groupInstrumentType = defaultInstrumentTypeForMarket(marketID, groupMarket)
+			}
+			groupSourceID := strings.TrimSpace(sourceID)
+			if groupSourceID == "" && s.ResolveSourceID != nil {
+				groupSourceID = strings.TrimSpace(s.ResolveSourceID(groupProvider, groupInstrumentType))
+			}
+			if groupSourceID == "" {
+				return nil, nil, fmt.Errorf("no source_id route for provider=%s instrument_type=%s", groupProvider, groupInstrumentType)
+			}
+			identity := strings.Join([]string{groupProvider, groupSourceID, groupMarket, subjectID}, "\x00")
+			if _, exists := seen[identity]; exists {
+				continue
+			}
+			seen[identity] = struct{}{}
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: groupProvider, SourceID: groupSourceID, MarketID: marketID, InstrumentType: groupInstrumentType, MarketType: groupMarket, DataType: "kline", DatasetID: targetDataset, OutputFields: append([]string(nil), params.OutputFields...)})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].SubjectID < items[j].SubjectID })
@@ -1151,6 +1336,7 @@ func marketFetchEvent(req Request, storageTarget string) (map[string]any, error)
 	}
 	event := map[string]any{
 		"action":                     "market_fetch",
+		"source":                     model.EventSourceCollectorScheduler,
 		"request_id":                 req.BatchID,
 		"timestamp":                  time.Now().UTC().Format(time.RFC3339Nano),
 		"storage_rpc_gateway_target": strings.TrimSpace(storageTarget),

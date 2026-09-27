@@ -76,11 +76,11 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if err != nil {
 		return err
 	}
-	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
 	params.TargetDatasetID = ids.DatasetID
 	targetDatasetID, targetViewID := ids.DatasetID, ids.ViewID
 	attrs := map[string]string{
-		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "market_type": strings.ToLower(task.MarketType),
+		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "market_type": strings.ToLower(params.MarketType),
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
@@ -105,7 +105,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	}
 	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.Auth, Dataset: &storagepb.Dataset{
-			SpaceId: task.SpaceID, DatasetId: targetDatasetID, DataSourceId: "crypto", DataNodeId: source.DataNodeID,
+			SpaceId: task.SpaceID, DatasetId: targetDatasetID, DataNodeId: source.DataNodeID,
 			// Dataset names are unique within a space and must contain Chinese
 			// display text. Derive a short stable suffix from the target ID so
 			// independent resample targets do not collide on metadata creation.
@@ -126,11 +126,14 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if target.GetDataset() == nil {
 		return compensate(errors.New("target Dataset is empty"))
 	}
-	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, "crypto", source.DataNodeID); err != nil {
+	if err := validateTargetDataset(target.GetDataset(), attrs, targetFreq.Storage, source.DataNodeID); err != nil {
 		return compensate(err)
 	}
 	_ = subjects
 	for _, field := range klineFields {
+		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
+			continue
+		}
 		resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: &storagepb.DatasetColumn{
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID, ColumnName: field.name,
 			OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
@@ -170,7 +173,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(errors.New("get target View: empty ret_info"))
 	}
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
-		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, View: &storagepb.View{
+		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, CreateOnly: true, View: &storagepb.View{
 			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
 			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", FilterJson: fmt.Sprintf(`{"freq":%q}`, targetFreq.Storage), KeepDuration: keepDuration, Status: "active",
 			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse", "route_ready_request_id": "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
@@ -202,11 +205,16 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		}
 		viewResp.View = updatedResp.GetView()
 	}
-	for index, field := range klineFields {
+	viewColumnIndex := 0
+	for _, field := range klineFields {
+		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
+			continue
+		}
+		viewColumnIndex++
 		originID := targetDatasetID + "." + field.name
 		resp, callErr := c.Metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: c.Auth, Column: &storagepb.ViewColumn{
 			SpaceId: task.SpaceID, ViewId: targetViewID, ColumnName: originID, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			OriginId: originID, ValueType: field.type_, SortOrder: uint32(index + 1), Attributes: map[string]string{"display_name": field.label},
+			OriginId: originID, ValueType: field.type_, SortOrder: uint32(viewColumnIndex), Attributes: map[string]string{"display_name": field.label},
 		}})
 		if callErr != nil {
 			return compensate(fmt.Errorf("upsert target View column %s: %w", field.name, callErr))
@@ -252,6 +260,15 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(err)
 	}
 	return nil
+}
+
+func containsOutputField(fields []string, name string) bool {
+	for _, field := range fields {
+		if strings.EqualFold(strings.TrimSpace(field), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) cleanupCreatedTarget(ctx context.Context, spaceID, datasetID, viewID string, deleteView, deleteDataset bool) error {
@@ -412,12 +429,12 @@ func cloneStringMap(input map[string]string) map[string]string {
 	return output
 }
 
-func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, frequency, dataSourceID, dataNodeID string) error {
+func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, frequency, dataNodeID string) error {
 	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return errors.New("target Dataset must be time_series")
 	}
-	if strings.TrimSpace(dataset.GetDataSourceId()) != strings.TrimSpace(dataSourceID) {
-		return fmt.Errorf("target Dataset data source does not match task: got %q want %q", dataset.GetDataSourceId(), dataSourceID)
+	if strings.TrimSpace(dataset.GetDataSourceId()) != "" {
+		return fmt.Errorf("collector-owned target Dataset must not declare a single data source: got %q", dataset.GetDataSourceId())
 	}
 	if strings.TrimSpace(dataNodeID) != "" && strings.TrimSpace(dataset.GetDataNodeId()) != strings.TrimSpace(dataNodeID) {
 		return fmt.Errorf("target Dataset data node does not match source: got %q want %q", dataset.GetDataNodeId(), dataNodeID)

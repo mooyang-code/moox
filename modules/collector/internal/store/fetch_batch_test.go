@@ -106,8 +106,8 @@ func TestFetchBatchCompletionSupersedesOlderPendingRetry(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 	for _, item := range []*domain.RetryItem{
-		{SpaceID: "crypto", RetryKey: "older", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: now.Add(-time.Minute), Status: "pending", CreateTime: now},
-		{SpaceID: "crypto", RetryKey: "newer", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: now.Add(time.Minute), Status: "pending", CreateTime: now},
+		{SpaceID: "crypto", RetryKey: "older", InstanceID: "shared-btc", RetryScope: "fetch", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: now.Add(-time.Minute), Status: "pending", CreateTime: now},
+		{SpaceID: "crypto", RetryKey: "newer", InstanceID: "shared-btc", RetryScope: "fetch", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: now.Add(time.Minute), Status: "pending", CreateTime: now},
 	} {
 		require.NoError(t, s.FetchRetries().Upsert(ctx, item))
 	}
@@ -116,7 +116,7 @@ func TestFetchBatchCompletionSupersedesOlderPendingRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, created)
 	batch.Status = domain.BatchStatusSucceeded
-	updated, err := s.FetchBatches().CompleteWithEffects(ctx, batch, FetchCompletionEffects{SupersedePendingRetries: []MarketFetchRetrySupersede{{SpaceID: "crypto", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: now}}})
+	updated, err := s.FetchBatches().CompleteWithEffects(ctx, batch, FetchCompletionEffects{SupersedePendingRetries: []MarketFetchRetrySupersede{{SpaceID: "crypto", InstanceID: "shared-btc", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: now}}})
 	require.NoError(t, err)
 	require.True(t, updated)
 	older, err := s.FetchRetries().Get(ctx, "crypto", "older")

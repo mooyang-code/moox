@@ -172,16 +172,16 @@ type seedSubject struct {
 }
 
 type seedTag struct {
-	SpaceID        string   `yaml:"space_id"`
-	TagID          string   `yaml:"tag_id"`
-	TagName        string   `yaml:"tag_name"`
-	Description    string   `yaml:"description"`
-	Mode           string   `yaml:"mode"`
-	Builtin        bool     `yaml:"builtin"`
-	Sources        []string `yaml:"sources"`
-	InstrumentType string   `yaml:"instrument_type"`
-	Cron           string   `yaml:"cron"`
-	Timezone       string   `yaml:"timezone"`
+	SpaceID     string `yaml:"space_id"`
+	TagID       string `yaml:"tag_id"`
+	TagName     string `yaml:"tag_name"`
+	Description string `yaml:"description"`
+	Mode        string `yaml:"mode"`
+	Builtin     bool   `yaml:"builtin"`
+	Source      string `yaml:"source"`
+	MarketType  string `yaml:"market_type"`
+	Cron        string `yaml:"cron"`
+	Timezone    string `yaml:"timezone"`
 }
 
 type seedDataset struct {

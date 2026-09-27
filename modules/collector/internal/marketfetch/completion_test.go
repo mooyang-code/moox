@@ -42,7 +42,7 @@ func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 	require.NoError(t, err)
 	require.True(t, created)
-	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{completionTestInstance()}))
+	persistCompletionTestInstance(t, db, ctx)
 
 	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
 		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
@@ -71,7 +71,7 @@ func TestHandleCompletionMarksTaskInstanceFailedWhenRetriesAreExhausted(t *testi
 	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 	require.NoError(t, err)
 	require.True(t, created)
-	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{completionTestInstance()}))
+	persistCompletionTestInstance(t, db, ctx)
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "retry-key", Attempt: 3, Status: "pending", CreateTime: completedAt.Add(-time.Minute)}))
 
 	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
@@ -130,7 +130,7 @@ func TestHandleCompletionKeepsSuccessfulTaskInstanceSuccessful(t *testing.T) {
 	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 	require.NoError(t, err)
 	require.True(t, created)
-	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{completionTestInstance()}))
+	persistCompletionTestInstance(t, db, ctx)
 	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", Outcome: string(domain.ItemOutcomeSuccess)}, time.Date(2026, time.August, 2, 8, 10, 0, 0, time.UTC))
 	payload.BatchId = batch.BatchID
 	payload.ScheduleId = batch.ScheduleID
@@ -146,11 +146,11 @@ func TestHandleCompletionKeepsSuccessfulTaskInstanceSuccessful(t *testing.T) {
 func TestHandleCompletionDoesNotRegressNewSuccessWithSupersededRetryFailure(t *testing.T) {
 	db := newCompletionTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{completionTestInstance()}))
+	persistCompletionTestInstance(t, db, ctx)
 	olderTarget := time.Date(2026, time.August, 2, 8, 0, 0, 0, time.UTC)
 	newerTarget := olderTarget.Add(time.Minute)
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
-		SpaceID: "crypto", RetryKey: "old-retry", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: olderTarget,
+		SpaceID: "crypto", RetryKey: "old-retry", InstanceID: "task-btc", RetryScope: "fetch", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: olderTarget,
 		Attempt: 3, Status: "dispatched", CreateTime: olderTarget,
 	}))
 	olderBatch := completionTestBatch("old-retry")
@@ -193,7 +193,7 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithSupersededRetryFailure(t *t
 func TestHandleCompletionDoesNotRegressNewSuccessWithOlderRealtimeFailure(t *testing.T) {
 	db := newCompletionTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{completionTestInstance()}))
+	persistCompletionTestInstance(t, db, ctx)
 	olderTarget := time.Date(2026, time.August, 2, 8, 0, 0, 0, time.UTC)
 	newerTarget := olderTarget.Add(time.Minute)
 	olderBatch := completionTestBatch("old-realtime")
@@ -236,7 +236,7 @@ func TestCompletionAcceptsFailoverNodeForSameBatch(t *testing.T) {
 	payload.BatchId = batch.BatchID
 	payload.ScheduleId = batch.ScheduleID
 	payload.BatchKind = string(batch.BatchKind)
-	payload.DatasetId = batch.DatasetID
+	payload.DatasetId = "bars"
 	payload.Frequency = batch.Frequency
 	payload.NodeId = "node-failover"
 	payload.PlannedCount = int32(batch.PlannedCount)
@@ -280,7 +280,17 @@ func completionTestBatch(suffix string) domain.BatchInvocation {
 }
 
 func completionTestInstance() domain.TaskInstance {
-	return domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	return domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", Provider: "binance", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+}
+
+func persistCompletionTestInstance(t *testing.T, db *store.Store, ctx context.Context) {
+	t.Helper()
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "rule", TaskName: "Rule", DataType: "kline", Enabled: true}))
+	instance := completionTestInstance()
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{
+		ID: "target-btc", SpaceID: "crypto", InstanceID: instance.InstanceID, TaskID: "rule", DatasetID: "bars", Status: "pending",
+	}}))
 }
 
 func completionTestPayload(item *marketfetchpb.MarketFetchItemResult, completedAt time.Time) *marketfetchpb.MarketFetchBatchCompleted {

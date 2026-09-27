@@ -66,7 +66,7 @@ message ViewIndexBuild {
 message View {
   // space_id 是 View 所属 Space。
   string space_id = 1;
-  // view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 50 字符。
+  // view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 128 字符。
   string view_id = 2;
   // name 是视图中文展示名，创建和更新时必须包含中文且不超过 10 个字符。
   string name = 3;
@@ -172,8 +172,10 @@ message Tag {
   string description = 4;
   string mode = 5;
   bool builtin = 6;
-  repeated string sources = 7;
-  string instrument_type = 8;
+  // source 是标签唯一且创建后不可修改的数据来源。
+  string source = 7;
+  // market_type 是标签唯一且创建后不可修改的市场/产品类型。
+  string market_type = 8;
   string cron = 9;
   string timezone = 10;
   string last_run_at = 11;
@@ -579,6 +581,8 @@ message CreateViewReq {
   common.AuthInfo auth_info = 1;
   // view 是待创建的查询视图元数据。
   View view = 2;
+  // create_only 为 true 时要求 View ID 不存在，且由存储层原子保证。
+  bool create_only = 3;
 }
 
 // CreateViewRsp 表示创建查询视图的响应。
@@ -864,7 +868,7 @@ message ListSubjectsRsp {
   common.PageResult page_result = 3;
 }
 
-message UpsertTagReq { common.AuthInfo auth_info = 1; Tag tag = 2; }
+message UpsertTagReq { common.AuthInfo auth_info = 1; Tag tag = 2; bool create_only = 3; }
 message UpsertTagRsp { common.RetInfo ret_info = 1; Tag tag = 2; }
 message GetTagReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; }
 message GetTagRsp { common.RetInfo ret_info = 1; Tag tag = 2; }

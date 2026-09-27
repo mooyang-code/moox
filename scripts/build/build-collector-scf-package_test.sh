@@ -22,16 +22,25 @@ done
 exit 1
 EOF
 chmod +x "${FAKE_BIN}/go"
+if PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="market_data" SCF_ENTRYPOINT="market_data" VERSION="contract-test" OUT_PATH="${TMP_ROOT}/missing-secret.zip" \
+  bash "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
+  echo "expected packaging to fail without MOOX_STORAGE_PRIMARY_AUTH_SECRET" >&2
+  exit 1
+fi
+
 package_path="${TMP_ROOT}/collector-scf.zip"
 (
   cd "${TMP_ROOT}"
-  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="market_data" SCF_ENTRYPOINT="market_data" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
+  PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="market_data" SCF_ENTRYPOINT="market_data" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
     bash "${ROOT}/scripts/build/build-collector-scf-package.sh"
 )
 listing_path="${TMP_ROOT}/listing.txt"
 unzip -l "${package_path}" >"${listing_path}"
 grep -q ' main$' "${listing_path}"
 ! grep -q 'trpc_go.yaml' "${listing_path}"
+unzip -p "${package_path}" sources/market/binance.yaml >"${TMP_ROOT}/binance.yaml"
+! grep -Eq 'binance-spot-collector|binance-swap-collector|app_key: ""' "${TMP_ROOT}/binance.yaml"
+grep -Eq 'app_key: "[0-9a-f]{64}"' "${TMP_ROOT}/binance.yaml"
 
 stock_package_path="${TMP_ROOT}/collector-stockcn-scf.zip"
 (
@@ -50,3 +59,6 @@ grep -q ' sources/market/baidu.yaml$' "${stock_listing_path}"
 grep -q ' markets/stockcn/calendar.yaml$' "${stock_listing_path}"
 grep -q ' markets/stockcn/route.yaml$' "${stock_listing_path}"
 ! grep -q 'trpc_go.yaml' "${stock_listing_path}"
+unzip -p "${stock_package_path}" sources/market/binance.yaml >"${TMP_ROOT}/stock-binance.yaml"
+! grep -Eq 'binance-spot-collector|binance-swap-collector|app_key: ""' "${TMP_ROOT}/stock-binance.yaml"
+grep -Eq 'app_key: "[0-9a-f]{64}"' "${TMP_ROOT}/stock-binance.yaml"

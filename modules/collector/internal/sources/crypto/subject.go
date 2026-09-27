@@ -4,6 +4,7 @@ package crypto
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 )
@@ -23,7 +24,7 @@ func validAsset(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !unicode.Is(unicode.Han, r) {
 			return false
 		}
 	}

@@ -52,13 +52,46 @@ func TestDisableCollectorBlacklistedTimersBeforePublishing(t *testing.T) {
 				require.ErrorContains(t, err, "FAILED")
 			}
 			require.True(t, waited)
-				require.Len(t, submitted, 2)
-				require.Equal(t, "blocked", submitted[0].NodeID)
-				require.Equal(t, "disabled", submitted[1].NodeID)
+			require.Len(t, submitted, 2)
+			require.Equal(t, "blocked", submitted[0].NodeID)
+			require.Equal(t, "disabled", submitted[1].NodeID)
 			for _, patch := range submitted {
 				require.False(t, patch.TimerEnabled)
 			}
 		})
+	}
+}
+
+func TestDisableCollectorTimerFleetLeavesInvokeNodesUntouched(t *testing.T) {
+	var submitted []collectorRuntimeConfigPatch
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/admin/cloudnode/GetNodeList":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": []adminclient.CloudNode{
+				{NodeID: "timer-a", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer"},
+				{NodeID: "timer-b", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer"},
+				{NodeID: "invoke-a", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke"},
+			}})
+		case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
+			var request struct {
+				Nodes []collectorRuntimeConfigPatch `json:"nodes"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			submitted = append(submitted, request.Nodes...)
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"disable-all"}`))
+		case "/api/admin/cloudnode/GetNodeBatchChange":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"disable-all","status":"SUCCESS"}}`))
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	require.NoError(t, disableCollectorTimerFleet(context.Background(), adminclient.New(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}))
+	require.Len(t, submitted, 2)
+	require.Equal(t, []string{"timer-a", "timer-b"}, []string{submitted[0].NodeID, submitted[1].NodeID})
+	for _, patch := range submitted {
+		require.False(t, patch.TimerEnabled)
 	}
 }
 

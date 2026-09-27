@@ -38,7 +38,6 @@ import (
 
 const (
 	defaultCollectorSCFTimeout = "15"
-	stockCNKlineTaskID         = "builtin-stockcn-kline-1m"
 	stockCNKlineTaskName       = "A 股 K 线 1m"
 	// Manifest deployments may spread a stockcn fleet across multiple regions;
 	// keep the ad-hoc guard above one normal 200-function release while the
@@ -763,7 +762,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
 	}
 	if fetcherConfig != nil && strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
-		enabledTasks, taskErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
+		enabledTasks, taskErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID)
 		if taskErr != nil {
 			return collectorPublishSummary{}, fmt.Errorf("stockcn publish requires a collection task readback before side effects: %w", taskErr)
 		}
@@ -777,6 +776,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	}
 	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
 		return collectorPublishSummary{}, err
+	}
+	if fetcherConfig != nil && strings.EqualFold(fetcherConfig.SpaceID, "crypto") {
+		if err := disableCollectorTimerFleet(ctx, client, fetcherConfig); err != nil {
+			return collectorPublishSummary{}, err
+		}
 	}
 	accounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
@@ -874,6 +878,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		opts.FetcherConfig = fetcherConfig
 		var jobs []string
 		var publishedTimerFleets []collectorPublishedTimerFleet
+		var publishedInvokeNodes []adminclient.CloudNode
 		regions := append([]setupconfig.SCFFetcherRegion(nil), fetcherConfig.Regions...)
 		if strings.TrimSpace(opts.Region) != "" {
 			// A manifest publish with --region is a deliberate single-region
@@ -935,9 +940,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					regionNodeLimit = regionalLimit.MaxFunctionsPerNamespace
 				}
 			}
-			if fetcherConfig != nil {
-				// Every active regional publication also creates one Invoke canary.
-				// Overflow namespaces are included in the regional ceiling.
+			if fetcherConfig != nil && !strings.EqualFold(fetcherConfig.SpaceID, "crypto") {
+				// Timer-owned spaces create one auxiliary Invoke canary per region.
+				// Crypto's configured function_count is already the Invoke pool.
 				regionNodeLimit--
 			}
 			if regionNodeLimit < 1 || regionOpts.NodeCount <= 0 || regionOpts.NodeCount > regionNodeLimit {
@@ -977,7 +982,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					// before any regional Timer fleet is changed.
 					invokeOpts := shardOpts
 					invokeOpts.TriggerType = "invoke"
-					invokeOpts.NodeCount = 1
+					invokeOpts.NodeCount = shard.Invokes
 					invokeOpts.IndexOffset = 0
 					invokeOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-invoke"
 					invokeNodes, inspectInvokeErr := inspectCollectorFleet(ctx, client, invokeOpts)
@@ -996,15 +1001,16 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 						return summary, fmt.Errorf("SCF invoke canary fleet for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
 					}
 					invokeNodes, inspectInvokeErr = inspectCollectorFleet(ctx, client, invokeOpts)
-					if inspectInvokeErr != nil || len(invokeNodes) != 1 {
+					if inspectInvokeErr != nil || len(invokeNodes) != invokeOpts.NodeCount {
 						if inspectInvokeErr != nil {
 							return summary, inspectInvokeErr
 						}
-						return summary, fmt.Errorf("SCF invoke canary fleet for region %s namespace %s has no ready node", regionOpts.Region, shard.Namespace)
+						return summary, fmt.Errorf("SCF invoke fleet for region %s namespace %s has %d ready nodes; expected %d", regionOpts.Region, shard.Namespace, len(invokeNodes), invokeOpts.NodeCount)
 					}
 					if err := runCollectorSCFCanary(ctx, client, invokeOpts, invokeNodes[0].NodeID); err != nil {
 						return summary, fmt.Errorf("SCF canary for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
 					}
+					publishedInvokeNodes = append(publishedInvokeNodes, invokeNodes...)
 					summary.TotalCount += invokeSummary.TotalCount
 					if invokeSummary.JobID != "" {
 						jobs = append(jobs, invokeSummary.JobID)
@@ -1068,9 +1074,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		}
 		if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
 			rollbackTaskID := ""
-			if opts.EnableStockCN {
-				rollbackTaskID = stockCNKlineTaskID
-			}
 			rollbackActivation := func(cause error) error {
 				rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, rollbackTaskID, allTimerNodes)
 				if rollbackErr != nil {
@@ -1082,16 +1085,18 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				// Enable the task before the Timer fleet. Collector assignment is
 				// reconciled from the active task, so waiting for assignments while
 				// the collection task is still disabled can never become ready.
-				if err := ensureStockCNKlineTask(ctx, client, fetcherConfig.SpaceID); err != nil {
-					return summary, rollbackActivation(fmt.Errorf("enable stock Kline task: %w", err))
+				taskID, ensureErr := ensureStockCNKlineTask(ctx, client, fetcherConfig.SpaceID)
+				if ensureErr != nil {
+					return summary, rollbackActivation(fmt.Errorf("enable stock Kline task: %w", ensureErr))
 				}
-				enabledTasks, taskErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
+				rollbackTaskID = taskID
+				enabledTasks, taskErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID)
 				if taskErr != nil {
 					return summary, rollbackActivation(fmt.Errorf("verify stock Kline task enabled: %w", taskErr))
 				}
 				found := false
 				for _, task := range enabledTasks {
-					if task.TaskID == stockCNKlineTaskID && task.Enabled {
+					if task.TaskID == taskID && task.Enabled {
 						found = true
 						break
 					}
@@ -1124,38 +1129,16 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			summary.JobID = strings.Join(summary.JobIDs, ",")
 		}
 		if strings.EqualFold(fetcherConfig.SpaceID, "crypto") {
-			if len(allTimerNodes) == 0 {
-				return summary, fmt.Errorf("crypto Kline Timer fleet is empty")
+			if len(publishedInvokeNodes) == 0 {
+				return summary, fmt.Errorf("crypto Invoke market fetcher fleet is empty")
 			}
-			enabledTasks, taskErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "spot")
-			if taskErr != nil {
-				return summary, fmt.Errorf("verify crypto Kline tasks before Timer activation: %w", taskErr)
-			}
-			spotKlineEnabled := false
-			for _, task := range enabledTasks {
-				if task.TaskID == "builtin-binance-spot-kline-1m" && task.Enabled {
-					spotKlineEnabled = true
-					break
-				}
-			}
-			if !spotKlineEnabled {
-				return summary, fmt.Errorf("crypto publish requires enabled collection task builtin-binance-spot-kline-1m")
-			}
-			enablePatches := collectorTimerEnablePatches(allTimerNodes, *fetcherConfig)
-			enableJobs, enableErr := submitCollectorTimerRuntimeConfigs(ctx, client, enablePatches)
-			if enableErr != nil {
-				return summary, fmt.Errorf("enable crypto Kline Timer fleet: %w", enableErr)
-			}
-			if err := waitCollectorBatches(ctx, client, enableJobs); err != nil {
-				return summary, fmt.Errorf("enable crypto Kline Timer fleet: %w", err)
-			}
-			if err := waitCollectorTimerFleetsEnabled(ctx, client, publishedTimerFleets); err != nil {
-				return summary, fmt.Errorf("verify crypto Kline Timer fleet enabled: %w", err)
-			}
-			jobs = append(jobs, enableJobs...)
+			// Crypto has no Tencent Timer trigger to activate. The Collector
+			// Scheduler dispatches work to this Invoke pool and consumes the
+			// EventBus completion emitted by each invocation.
 			summary.JobIDs = append([]string(nil), jobs...)
 			summary.JobID = strings.Join(summary.JobIDs, ",")
 		}
+
 		return summary, nil
 	}
 	packageID, err := upload(opts)
@@ -1194,7 +1177,7 @@ type collectorStockCNActivationSummary struct {
 // identity before enabling the Kline Timers and Kline task. Egress probing is
 // diagnostic only.
 func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivateOptions) (collectorStockCNActivationSummary, error) {
-	summary := collectorStockCNActivationSummary{SpaceID: opts.SpaceID, PackageVersion: opts.Version, TaskID: stockCNKlineTaskID}
+	summary := collectorStockCNActivationSummary{SpaceID: opts.SpaceID, PackageVersion: opts.Version}
 	if strings.TrimSpace(opts.ControlURL) == "" {
 		return summary, fmt.Errorf("--control-url is required")
 	}
@@ -1263,7 +1246,7 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
 		return summary, err
 	}
-	enabledTasks, err := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
+	enabledTasks, err := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID)
 	if err != nil {
 		return summary, fmt.Errorf("stockcn activation requires a collection task readback: %w", err)
 	}
@@ -1271,9 +1254,10 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	// Timer fleet rollback. Treat that state as resumable; unrelated equity
 	// tasks still block activation to avoid changing another workflow.
 	for _, task := range enabledTasks {
-		if task.TaskID != summary.TaskID {
-			return summary, fmt.Errorf("stockcn activation requires no unrelated equity collection tasks enabled; enabled task: %s", task.TaskID)
+		if !isStockCNKlineTask(task) {
+			return summary, fmt.Errorf("stockcn activation requires no unrelated collection tasks enabled; enabled task: %s", task.TaskID)
 		}
+		summary.TaskID = task.TaskID
 	}
 
 	var fleets []collectorPublishedTimerFleet
@@ -1340,10 +1324,12 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		}
 		return cause
 	}
-	if err := ensureStockCNKlineTask(ctx, client, fetcherConfig.SpaceID); err != nil {
-		return summary, rollbackActivation(fmt.Errorf("enable stock Kline task: %w", err))
+	taskID, ensureErr := ensureStockCNKlineTask(ctx, client, fetcherConfig.SpaceID)
+	if ensureErr != nil {
+		return summary, rollbackActivation(fmt.Errorf("enable stock Kline task: %w", ensureErr))
 	}
-	enabledTasks, err = client.ListEnabledTasks(ctx, fetcherConfig.SpaceID, "equity")
+	summary.TaskID = taskID
+	enabledTasks, err = client.ListEnabledTasks(ctx, fetcherConfig.SpaceID)
 	if err != nil {
 		return summary, rollbackActivation(fmt.Errorf("verify stock Kline task enabled: %w", err))
 	}
@@ -1370,24 +1356,43 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	return summary, rollbackActivation(fmt.Errorf("stock Kline task enable was not confirmed by control-plane readback"))
 }
 
-func ensureStockCNKlineTask(ctx context.Context, client *adminclient.Client, spaceID string) error {
-	if err := client.EnableCollectionTask(ctx, spaceID, stockCNKlineTaskID); err == nil {
-		return nil
-	} else if !strings.Contains(err.Error(), "record not found") {
-		return err
+func isStockCNKlineTask(task adminclient.CollectionTaskSummary) bool {
+	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline") || strings.TrimSpace(task.TaskName) != stockCNKlineTaskName {
+		return false
 	}
-	if err := client.CreateTask(ctx, spaceID, stockCNKlineTaskID, stockCNKlineTaskName, "kline", "stockcn_multi", "equity", "moox-cli", map[string]any{
-		"provider":     "stockcn_multi",
-		"market_type":  "equity",
-		"subject_tags": []string{"cn_a_share"},
-		"frequency":    "1m",
-	}, nil); err != nil {
-		return fmt.Errorf("create missing stock Kline task: %w", err)
+	if len(task.TagIDs) != 1 {
+		return false
 	}
-	if err := client.EnableCollectionTask(ctx, spaceID, stockCNKlineTaskID); err != nil {
-		return fmt.Errorf("enable newly created stock Kline task: %w", err)
+	return strings.TrimSpace(task.TagIDs[0]) == "cn_a_share"
+}
+
+func ensureStockCNKlineTask(ctx context.Context, client *adminclient.Client, spaceID string) (string, error) {
+	tasks, err := client.ListTasks(ctx, spaceID, "kline", nil)
+	if err != nil {
+		return "", fmt.Errorf("list stock Kline tasks: %w", err)
 	}
-	return nil
+	for _, task := range tasks {
+		if !isStockCNKlineTask(task) {
+			continue
+		}
+		if task.Enabled {
+			return task.TaskID, nil
+		}
+		if err := client.EnableCollectionTask(ctx, spaceID, task.TaskID); err != nil {
+			return "", err
+		}
+		return task.TaskID, nil
+	}
+	taskID, err := client.CreateTask(ctx, spaceID, stockCNKlineTaskName, "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+		"frequency": "1m",
+	}, nil)
+	if err != nil {
+		return "", fmt.Errorf("create missing stock Kline task: %w", err)
+	}
+	if err := client.EnableCollectionTask(ctx, spaceID, taskID); err != nil {
+		return "", fmt.Errorf("enable newly created stock Kline task: %w", err)
+	}
+	return taskID, nil
 }
 
 func ensureCollectorSpaceCloudAccounts(
@@ -3510,6 +3515,9 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 			return collectorDeploySummary{}, err
 		}
 		zipPath = result.Path
+	}
+	if err := collectorpackager.ValidateSCFPackageZip(zipPath); err != nil {
+		return collectorDeploySummary{}, err
 	}
 	data, err := os.ReadFile(zipPath)
 	if err != nil {

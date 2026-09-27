@@ -9,9 +9,12 @@ func TestSubjectID(t *testing.T) {
 	}{
 		{"BTC", "USDT", "BTC-USDT", true},
 		{"1000pepe", "usdt", "1000PEPE-USDT", true},
+		{"币安人生", "USDT", "币安人生-USDT", true},
+		{"哈基米", "usdt", "哈基米-USDT", true},
 		{"", "USDT", "", false},
 		{"BTC", "", "", false},
 		{"BT-C", "USDT", "", false},
+		{"币安 人生", "USDT", "", false},
 	}
 	for _, c := range cases {
 		got, err := SubjectID(c.base, c.quote)

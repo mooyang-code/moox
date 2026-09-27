@@ -23,6 +23,8 @@ export interface CollectionTaskInput {
   sourceFrequency?: string;
   sourceSeriesTag?: string;
   settleDelayMS?: number;
+  outputFields?: string[];
+  tagIds?: string[];
 }
 
 export interface CollectionTaskFields {
@@ -45,6 +47,7 @@ export interface CollectionTaskRecord {
   description: string;
   space_id: string;
   data_type: string;
+  tag_ids: string[];
   provider: string;
   market_type: string;
   collect_params: Record<string, unknown>;
@@ -72,8 +75,7 @@ export function buildCollectionTaskParams(input: CollectionTaskInput): Record<st
   const provider = input.provider.trim().toLowerCase();
   const market = input.market;
   const frequency = input.frequency.trim();
-  if (!provider) throw new Error("请选择 Provider");
-  if (!market) throw new Error("请选择市场");
+  const outputFields = [...new Set((input.outputFields || []).map(value => value.trim()).filter(Boolean))];
   if (!frequency) throw new Error("请输入采集频率");
 
   if (input.dataType === "kline_resample") {
@@ -84,8 +86,8 @@ export function buildCollectionTaskParams(input: CollectionTaskInput): Record<st
       throw new Error("请填写源行情、源周期和序列标签");
     }
     const params: Record<string, unknown> = {
-      provider,
-      market_type: market,
+      ...(provider ? { provider } : {}),
+      ...(market ? { market_type: market } : {}),
       source_dataset_id: sourceId,
       source_frequency: sourceFrequency,
       source_series_tag: sourceSeriesTag,
@@ -97,16 +99,16 @@ export function buildCollectionTaskParams(input: CollectionTaskInput): Record<st
     if (Number.isFinite(input.settleDelayMS) && (input.settleDelayMS as number) >= 0) {
       params.settle_delay_ms = Math.trunc(input.settleDelayMS as number);
     }
+    if (outputFields.length) params.output_fields = outputFields;
     return params;
   }
 
   const subjectTags = normalizeSubjectTags(input.subjectTags);
   if (subjectTags.length === 0) throw new Error("请选择标的标签");
   return {
-    provider,
-    market_type: market,
     subject_tags: subjectTags,
-    frequency
+    frequency,
+    ...(outputFields.length ? { output_fields: outputFields } : {})
   };
 }
 
@@ -121,8 +123,10 @@ export function buildCollectionTaskPayload(
     task_name: normalizeCollectionTaskName(fields.task_name),
     description: fields.description.trim(),
     data_type: input.dataType,
-    provider: input.provider.trim().toLowerCase(),
-    market_type: input.market,
+    tag_ids: normalizeSubjectTags(input.tagIds || input.subjectTags),
+    ...(input.dataType === "kline_resample"
+      ? { provider: input.provider.trim().toLowerCase(), market_type: input.market }
+      : {}),
     collect_params: buildCollectionTaskParams(input),
     enabled: fields.enabled,
     creator: fields.creator.trim()
@@ -138,6 +142,7 @@ export function normalizeCollectionTask(raw: unknown): CollectionTaskRecord {
     description: stringValue(value.description),
     space_id: stringValue(value.space_id),
     data_type: stringValue(value.data_type),
+    tag_ids: stringArrayValue(value.tag_ids),
     provider: stringValue(value.provider) || stringValue(value.data_source) || stringValue(value.exchange),
     market_type: stringValue(value.market_type),
     collect_params: normalizeObject(value.collect_params),
@@ -152,7 +157,7 @@ export function normalizeCollectionTask(raw: unknown): CollectionTaskRecord {
 }
 
 export function parseCollectionTaskInput(
-  task: Pick<CollectionTaskRecord, "data_type" | "provider" | "market_type" | "collect_params">
+  task: Pick<CollectionTaskRecord, "data_type" | "tag_ids" | "provider" | "market_type" | "collect_params">
 ): CollectionTaskInput {
   const params = task.collect_params;
   const dataType = normalizeDataType(task.data_type);
@@ -165,7 +170,8 @@ export function parseCollectionTaskInput(
       sourceId: stringValue(params.source_dataset_id),
       sourceFrequency: stringValue(params.source_frequency),
       sourceSeriesTag: stringValue(params.source_series_tag),
-      settleDelayMS: numberValue(params.settle_delay_ms)
+      settleDelayMS: numberValue(params.settle_delay_ms),
+      outputFields: stringArrayValue(params.output_fields)
     };
   }
   return {
@@ -173,7 +179,8 @@ export function parseCollectionTaskInput(
     provider: stringValue(params.provider) || task.provider,
     market: normalizeMarket(stringValue(params.market_type) || task.market_type),
     frequency: stringValue(params.frequency),
-    subjectTags: stringArrayValue(params.subject_tags)
+    subjectTags: task.tag_ids.length ? task.tag_ids.slice() : stringArrayValue(params.subject_tags),
+    outputFields: stringArrayValue(params.output_fields)
   };
 }
 

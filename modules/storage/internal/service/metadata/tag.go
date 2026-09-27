@@ -56,6 +56,7 @@ type TagSnapshotResult struct {
 
 type TagStore interface {
 	UpsertTag(context.Context, *pb.Tag) (*pb.Tag, error)
+	CreateTag(context.Context, *pb.Tag) (*pb.Tag, error)
 	GetTag(context.Context, string, string) (*pb.Tag, error)
 	ListTags(context.Context, string, *pb.Page) ([]*pb.Tag, *pb.PageResult, error)
 	DeleteTag(context.Context, string, string) error

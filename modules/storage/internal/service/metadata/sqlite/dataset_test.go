@@ -2,8 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -44,6 +46,40 @@ func TestDatasetCreateDefaultsAndRequiresActiveDataNode(t *testing.T) {
 	})
 	if !errors.Is(err, ErrDataNodeDisabled) {
 		t.Fatalf("create on disabled node error = %v, want %v", err, ErrDataNodeDisabled)
+	}
+}
+
+func TestCollectorOwnedDatasetMayOmitDataSource(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+
+	created, err := store.CreateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset_collector_result", DataNodeId: "node-a",
+		Name: "Collector Result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.GetDataSourceId() != "" {
+		t.Fatalf("collector result data_source_id = %q, want empty", created.GetDataSourceId())
+	}
+	var source sql.NullString
+	if err := store.db.QueryRowContext(ctx, `SELECT c_data_source_id FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, "space", created.GetDatasetId()).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	if source.Valid {
+		t.Fatalf("collector result source persisted as %q, want SQL NULL", source.String)
+	}
+
+	_, err = store.CreateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset_missing_source", DataNodeId: "node-a",
+		Name: "Missing Source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+	})
+	if err == nil || !strings.Contains(err.Error(), "data_source_id is required") {
+		t.Fatalf("ordinary dataset without source err = %v", err)
 	}
 }
 

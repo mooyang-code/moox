@@ -176,7 +176,7 @@ func datasetActivationStateReady(dataset *pb.Dataset) bool {
 }
 
 func validateDatasetActivationSchema(dataset *pb.Dataset) error {
-	if strings.TrimSpace(dataset.GetSpaceId()) == "" || strings.TrimSpace(dataset.GetDataSourceId()) == "" {
+	if strings.TrimSpace(dataset.GetSpaceId()) == "" || (strings.TrimSpace(dataset.GetDataSourceId()) == "" && !collectorOwnedDataset(dataset)) {
 		return errors.New("required Dataset fields are missing")
 	}
 	if err := validateChineseDisplayName("dataset name", dataset.GetName()); err != nil {

@@ -357,6 +357,36 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 	}
 }
 
+func TestSetupInitAllowsMappedMergeColumnOrigin(t *testing.T) {
+	seed := metadataSeed{
+		Spaces:      []seedSpace{{SpaceID: "crypto"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance"}},
+		Datasets: []seedDataset{
+			{
+				SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m",
+				DataSourceID: "binance", DataKind: "time_series", Freqs: []string{"1m"},
+			},
+			{
+				SpaceID: "crypto", DatasetID: "mdataset_binance_kline_1m",
+				DataSourceID: "binance", DataKind: "time_series", Freqs: []string{"1m"},
+			},
+		},
+		Fields: []seedField{{SpaceID: "crypto", FieldID: "open"}},
+		DatasetColumns: []seedDatasetColumn{{
+			SpaceID: "crypto", DatasetID: "mdataset_binance_kline_1m",
+			ColumnName: "dataset_binance_spot_kline_1m__open",
+			OriginType: "field", OriginID: "dataset_binance_spot_kline_1m__open",
+		}},
+	}
+	require.NoError(t, validateSetupMetadataDependencies(seed))
+
+	seed.DatasetColumns[0].OriginID = "dataset_binance_spot_kline_1m__missing"
+	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `undefined field "missing"`)
+
+	seed.DatasetColumns[0].OriginID = "dataset_missing_source__open"
+	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `undefined source dataset "dataset_missing_source"`)
+}
+
 func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 	base := metadataSeed{
 		Spaces:      []seedSpace{{SpaceID: "crypto"}},

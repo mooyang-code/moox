@@ -15,10 +15,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// IDs are the stable metadata identities for one task result.
-// Dataset and view IDs are derived from the task ID so they stay readable;
-// Storage still scopes them by space_id. A task never reuses another task's
-// dataset or view, even when task names match.
+// IDs are the stable metadata identities for one task result. Datasets and
+// views are task scoped; the view name is derived from taskID, type and
+// frequency so it cannot collide when tags overlap.
 type IDs struct {
 	DatasetID string
 	ViewID    string
@@ -26,31 +25,36 @@ type IDs struct {
 
 func resultIDs(_ string, taskID string) IDs {
 	slug := resultSlug(taskID)
-	datasetSlug, viewSlug := canonicalResultSlugs(slug)
-	return IDs{
-		DatasetID: "dataset_" + datasetSlug,
-		ViewID:    "view_" + viewSlug,
-	}
+	return IDs{DatasetID: "dataset_" + slug, ViewID: "view_" + slug}
 }
 
-// canonicalResultSlugs keeps task identities aligned with the setup catalog.
-// Hourly crypto bars are shared logical datasets, while minute bars remain
-// venue-specific collection datasets.
-func canonicalResultSlugs(slug string) (datasetSlug, viewSlug string) {
-	switch slug {
-	case "binance_spot_kline_1h":
-		return "spot_kline_1h", "crypto_spot_kline_1h"
-	case "binance_swap_kline_1h":
-		return "perpetual_kline_1h", "crypto_swap_kline_1h"
-	default:
-		return slug, slug
+// ResultIDsForTask derives both result identities exclusively from the task.
+// tagID is retained in the call signature for planner compatibility but never
+// participates in Dataset/View identity.
+func ResultIDsForTask(spaceID, taskID, tagID, taskType, frequency string) IDs {
+	ids := resultIDs(spaceID, taskID)
+	if strings.TrimSpace(taskType) == "" {
+		return ids
 	}
+	_ = tagID // retained in the call signature for planner compatibility
+	viewSlug := resultSlugForFields(taskID, taskType, frequency)
+	ids.ViewID = "view_" + viewSlug
+	return ids
+}
+
+func resultIDsForConfig(spaceID, taskID, taskType string, cfg Config) IDs {
+	frequency := strings.TrimSpace(cfg.Frequency)
+	if frequency == "" && len(cfg.Frequencies) > 0 {
+		frequency = strings.TrimSpace(cfg.Frequencies[0])
+	}
+	if strings.TrimSpace(taskType) == "" {
+		return resultIDs(spaceID, taskID)
+	}
+	return ResultIDsForTask(spaceID, taskID, "", taskType, frequency)
 }
 
 func resultSlug(taskID string) string {
 	slug := strings.ToLower(strings.TrimSpace(taskID))
-	slug = strings.TrimPrefix(slug, "builtin-")
-	slug = strings.TrimPrefix(slug, "builtin_")
 	var builder strings.Builder
 	builder.Grow(len(slug))
 	previousUnderscore := false
@@ -82,6 +86,14 @@ func resultSlug(taskID string) string {
 	return slug
 }
 
+func resultSlugForFields(parts ...string) string {
+	values := make([]string, len(parts))
+	for i, part := range parts {
+		values[i] = strings.ToLower(strings.TrimSpace(part))
+	}
+	return resultSlug(strings.Join(values, "_"))
+}
+
 // IsLegacyHashedIDs reports the previous hash-suffixed collector result identity.
 func IsLegacyHashedIDs(ids IDs) bool {
 	return isLegacyHashedID(ids.DatasetID, "dataset_collector_") &&
@@ -103,6 +115,15 @@ func isLegacyHashedID(id, prefix string) bool {
 
 // ResultIDs returns the stable metadata identities for a task result.
 func ResultIDs(spaceID, taskID string) IDs { return resultIDs(spaceID, taskID) }
+
+// PersistedResultIDs prefers identities already committed to a Collector task
+// row and falls back to the legacy task-derived identity for old callers.
+func PersistedResultIDs(spaceID, taskID, datasetID, viewID string) IDs {
+	if strings.TrimSpace(datasetID) != "" && strings.TrimSpace(viewID) != "" {
+		return IDs{DatasetID: strings.TrimSpace(datasetID), ViewID: strings.TrimSpace(viewID)}
+	}
+	return resultIDs(spaceID, taskID)
+}
 
 type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
@@ -199,14 +220,23 @@ func NewManagerWithAPI(metadata metadataAPI, auth *storagepb.AuthInfo) *Manager 
 }
 
 type Config struct {
+	ViewID       string
 	DataNodeID   string
 	KeepDuration string
 	Name         string
 	Description  string
-	DataSourceID string
 	Frequency    string
 	Frequencies  []string
 	SubjectTags  []string
+	OutputFields []string
+}
+
+func configuredResultIDs(spaceID, taskID, dataType string, cfg Config) IDs {
+	ids := resultIDsForConfig(spaceID, taskID, dataType, cfg)
+	if strings.TrimSpace(cfg.ViewID) != "" {
+		ids.ViewID = strings.TrimSpace(cfg.ViewID)
+	}
+	return ids
 }
 
 func normalizeSubjectTags(tags []string) []string {
@@ -265,8 +295,14 @@ type Inspection struct {
 // are returned as errors so callers cannot mistake another task's result for
 // this task's result.
 func (m *Manager) Inspect(ctx context.Context, spaceID, taskID string) (Inspection, error) {
+	return m.InspectIDs(ctx, spaceID, taskID, resultIDs(spaceID, taskID))
+}
+
+// InspectIDs inspects an explicitly persisted result identity while keeping
+// its metadata ownership tied to the collector task.
+func (m *Manager) InspectIDs(ctx context.Context, spaceID, taskID string, ids IDs) (Inspection, error) {
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
-	inspection := Inspection{IDs: resultIDs(spaceID, taskID), Status: ResultStatusPending}
+	inspection := Inspection{IDs: ids, Status: ResultStatusPending}
 	if m == nil || m.metadata == nil || m.auth == nil {
 		return inspectionWithError(inspection, fmt.Errorf("task result metadata manager is not configured"))
 	}
@@ -432,7 +468,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if spaceID == "" || taskID == "" || strings.TrimSpace(cfg.DataNodeID) == "" {
 		return IDs{}, fmt.Errorf("space_id, task_id and result data_node_id are required")
 	}
-	ids := resultIDs(spaceID, taskID)
+	ids := configuredResultIDs(spaceID, taskID, dataType, cfg)
 	kind := storagepb.DataKind_DATA_KIND_TIME_SERIES
 	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
 		kind = storagepb.DataKind_DATA_KIND_RECORD
@@ -445,7 +481,10 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if err != nil {
 		return IDs{}, err
 	}
-	attrs := map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": taskID, "market_type": strings.TrimSpace(marketType)}
+	attrs := map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": taskID}
+	if marketType = strings.TrimSpace(marketType); marketType != "" {
+		attrs["market_type"] = marketType
+	}
 	subjectTags := normalizeSubjectTags(cfg.SubjectTags)
 	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
@@ -457,7 +496,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	}
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
-			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: resultDataSourceID(cfg.DataSourceID), DataNodeId: cfg.DataNodeID,
+			SpaceId: spaceID, DatasetId: ids.DatasetID, DataNodeId: cfg.DataNodeID,
 			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freqs: nonEmptyFrequency(kind, cfg.Frequency, cfg.Frequencies), Attributes: attrs, SubjectTags: subjectTags,
 		}})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
@@ -499,7 +538,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		}
 		return IDs{}, original
 	}
-	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, ids.ViewID, kind); err != nil {
+	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, ids.ViewID, kind, cfg.OutputFields); err != nil {
 		return cleanupCreated(err)
 	}
 	check, err := m.metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
@@ -525,9 +564,8 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	// CreateDataset intentionally starts disabled. Restore must run only after
 	// activation because Primary resolves the DataNode from active metadata.
 	// For an existing result this also clears a prior physical-delete tombstone
-	// before the next collection batch is allowed to write. Catalog datasets
-	// are shared setup resources and must not go through Collector restore.
-	if m.cleaner != nil && !isCatalogDataset(get.GetDataset().GetAttributes()) {
+	// before the next collection batch is allowed to write.
+	if m.cleaner != nil {
 		restored, restoreErr := m.cleaner.RestoreDatasetRows(ctx, &storagepb.PrimaryRestoreDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 		if restoreErr != nil || restored == nil || restored.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return cleanupCreated(metadataError("restore result dataset rows", restoreErr, func() *storagepb.RetInfo {
@@ -543,6 +581,9 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		viewKeep = datasetKeep
 	}
 	if err := m.ensureView(ctx, spaceID, taskID, ids, kind, viewKeep, cfg); err != nil {
+		return cleanupCreated(err)
+	}
+	if err := m.ensureViewColumns(ctx, spaceID, ids, cfg.OutputFields); err != nil {
 		return cleanupCreated(err)
 	}
 	return ids, nil
@@ -616,7 +657,7 @@ func (m *Manager) cleanupCreatedDataset(ctx context.Context, spaceID, datasetID 
 // for callers that have not yet committed the owning task row. Existing
 // task-owned resources are never removed by that action.
 func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataType, marketType string, cfg Config) (IDs, func(context.Context) error, error) {
-	ids := resultIDs(spaceID, taskID)
+	ids := configuredResultIDs(spaceID, taskID, dataType, cfg)
 	datasetExists, viewExists, err := m.resultMetadataState(ctx, spaceID, taskID, ids)
 	if err != nil {
 		return IDs{}, nil, err
@@ -626,12 +667,42 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 			return nil
 		}
 		if !viewExists {
+			current, getErr := m.metadata.GetView(cleanupCtx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+			if getErr != nil {
+				return fmt.Errorf("recheck result view ownership before cleanup: %w", getErr)
+			}
+			if current == nil || current.GetRetInfo() == nil {
+				return fmt.Errorf("recheck result view ownership before cleanup: empty response")
+			}
+			if current.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
+				if current.GetView() == nil || !ownedByTask(current.GetView().GetAttributes(), taskID) || current.GetView().GetDatasetId() != ids.DatasetID {
+					return nil
+				}
+				if datasetExists {
+					return nil
+				}
+			} else if current.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && current.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
+				return metadataError("recheck result view ownership before cleanup", nil, current.GetRetInfo())
+			}
 			view, deleteErr := m.metadata.DeleteView(cleanupCtx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 			if deleteErr != nil || !resultDeleteAccepted(retInfoViewDelete(view)) {
 				return metadataError("cleanup result view", deleteErr, retInfoViewDelete(view))
 			}
 		}
 		if !datasetExists {
+			current, getErr := m.metadata.GetDataset(cleanupCtx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
+			if getErr != nil {
+				return fmt.Errorf("recheck result dataset ownership before cleanup: %w", getErr)
+			}
+			if current == nil || current.GetRetInfo() == nil {
+				return fmt.Errorf("recheck result dataset ownership before cleanup: empty response")
+			}
+			if current.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS && (current.GetDataset() == nil || !ownedByTask(current.GetDataset().GetAttributes(), taskID)) {
+				return nil
+			}
+			if current.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && current.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && current.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
+				return metadataError("recheck result dataset ownership before cleanup", nil, current.GetRetInfo())
+			}
 			if m.cleaner != nil {
 				physical, cleanErr := m.cleaner.DeleteDatasetRows(cleanupCtx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 				if cleanErr != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
@@ -652,9 +723,6 @@ func (m *Manager) EnsureWithCleanup(ctx context.Context, spaceID, taskID, dataTy
 	}
 	ensured, err := m.Ensure(ctx, spaceID, taskID, dataType, marketType, cfg)
 	if err != nil {
-		if cleanupErr := cleanup(ctx); cleanupErr != nil {
-			return IDs{}, nil, fmt.Errorf("%w; result compensation failed: %v", err, cleanupErr)
-		}
 		return IDs{}, nil, err
 	}
 	return ensured, cleanup, nil
@@ -683,8 +751,11 @@ func (m *Manager) resultMetadataState(ctx context.Context, spaceID, taskID strin
 		return false, false, fmt.Errorf("get result view: empty response")
 	}
 	viewExists := view.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS
-	if viewExists && (view.GetView() == nil || !ownedByTask(view.GetView().GetAttributes(), taskID) || view.GetView().GetDatasetId() != ids.DatasetID) {
-		return false, false, fmt.Errorf("result view %s is owned by another task", ids.ViewID)
+	if viewExists && view.GetView() != nil && !ownedByTask(view.GetView().GetAttributes(), taskID) {
+		return false, false, fmt.Errorf("view %q already exists for another collection configuration", ids.ViewID)
+	}
+	if viewExists && (view.GetView() == nil || view.GetView().GetDatasetId() != ids.DatasetID) {
+		return false, false, fmt.Errorf("result view %s does not reference task dataset %s", ids.ViewID, ids.DatasetID)
 	}
 	if !viewExists && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND {
 		return false, false, metadataError("get result view", nil, view.GetRetInfo())
@@ -692,7 +763,7 @@ func (m *Manager) resultMetadataState(ctx context.Context, spaceID, taskID strin
 	return datasetExists, viewExists, nil
 }
 
-func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID string, kind storagepb.DataKind) error {
+func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID string, kind storagepb.DataKind, outputFields []string) error {
 	fields := []struct {
 		name string
 		kind storagepb.FieldValueType
@@ -786,10 +857,77 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 			}{"amount_quality", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		)
 	}
+	if len(outputFields) > 0 {
+		selected := make(map[string]struct{}, len(outputFields))
+		for _, name := range outputFields {
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name != "" {
+				selected[name] = struct{}{}
+			}
+		}
+		filtered := fields[:0]
+		for _, field := range fields {
+			if _, ok := selected[field.name]; ok {
+				filtered = append(filtered, field)
+				delete(selected, field.name)
+			}
+		}
+		if len(selected) > 0 {
+			unknown := make([]string, 0, len(selected))
+			for name := range selected {
+				unknown = append(unknown, name)
+			}
+			sort.Strings(unknown)
+			return fmt.Errorf("unsupported output fields: %s", strings.Join(unknown, ", "))
+		}
+		if len(filtered) == 0 {
+			return fmt.Errorf("at least one supported output field is required")
+		}
+		fields = filtered
+	}
 	for _, field := range fields {
 		resp, err := m.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: m.auth, Column: &storagepb.DatasetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name, ValueType: field.kind, Required: true, Status: "active", Attributes: map[string]string{"display_name": resultColumnDisplayName(field.name)}}})
 		if err != nil || resp == nil || resp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result dataset column", err, retInfoDatasetColumn(resp))
+		}
+	}
+	return nil
+}
+
+func (m *Manager) ensureViewColumns(ctx context.Context, spaceID string, ids IDs, outputFields []string) error {
+	fields := make(map[string]storagepb.FieldValueType, len(outputFields))
+	for _, name := range outputFields {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			continue
+		}
+		switch name {
+		case "open", "high", "low", "close", "volume", "quote_volume", "amount":
+			fields[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+		case "trade_num":
+			fields[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
+		case "provider_id", "source_id", "provider_symbol", "instrument_name":
+			fields[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING
+		}
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	ordered := make([]string, 0, len(fields))
+	for name := range fields {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+	for i, name := range ordered {
+		column := &storagepb.ViewColumn{SpaceId: spaceID, ViewId: ids.ViewID, ColumnName: name, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: ids.DatasetID + "." + name, ValueType: fields[name], SortOrder: uint32(i + 1), Attributes: map[string]string{"display_name": resultColumnDisplayName(name)}}
+		response, err := m.metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: m.auth, Column: column})
+		if err != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return metadataError("create result view column", err, func() *storagepb.RetInfo {
+				if response == nil {
+					return nil
+				}
+				return response.GetRetInfo()
+			}())
 		}
 	}
 	return nil
@@ -828,7 +966,7 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 			}
 			filterJSON = string(encoded)
 		}
-		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, FilterJson: filterJSON, KeepDuration: keep, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}})
+		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, FilterJson: filterJSON, KeepDuration: keep, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result view", createErr, retInfoView(created))
 		}
@@ -841,16 +979,6 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		return fmt.Errorf("result view %s is owned by another task", ids.ViewID)
 	}
 	return nil
-}
-
-func resultDataSourceID(provider string) string {
-	if strings.EqualFold(strings.TrimSpace(provider), "stockcn_multi") {
-		return "stockcn"
-	}
-	if strings.TrimSpace(provider) == "" {
-		return "collector"
-	}
-	return strings.TrimSpace(provider)
 }
 
 func normalizeKeepDuration(raw string) (string, error) {
@@ -883,6 +1011,9 @@ func resultDisplayName(cfg Config, taskID string) string {
 	if name := shortChineseResultName(resultSlug(taskID)); name != "" {
 		return name
 	}
+	if name := shortChineseResultNameForTaskName(cfg.Name); name != "" {
+		return name
+	}
 	for _, candidate := range []string{cfg.Name, cfg.Description} {
 		if name := strings.TrimSpace(candidate); isChineseDisplayName(name) {
 			return name
@@ -891,7 +1022,25 @@ func resultDisplayName(cfg Config, taskID string) string {
 	return "采集结果"
 }
 
+func shortChineseResultNameForTaskName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case strings.ToLower("Binance 现货 K 线 1m"):
+		return "现货分钟K线"
+	case strings.ToLower("Binance 合约 K 线 1m"):
+		return "合约分钟K线"
+	case strings.ToLower("Binance 现货 K 线 1H"):
+		return "现货小时K线"
+	case strings.ToLower("Binance 合约 K 线 1H"):
+		return "合约小时K线"
+	case strings.ToLower("A 股 K 线 1m"):
+		return "A股分钟K线"
+	default:
+		return ""
+	}
+}
+
 func shortChineseResultName(slug string) string {
+	slug = strings.TrimPrefix(strings.TrimSpace(slug), "builtin_")
 	switch slug {
 	case "binance_spot_kline_1m":
 		return "现货分钟K线"
@@ -927,30 +1076,16 @@ func isChineseDisplayName(value string) bool {
 }
 
 func ownedByTask(attributes map[string]string, taskID string) bool {
-	ownerModule := strings.TrimSpace(attributes["owner_module"])
-	ownerTask := strings.TrimSpace(attributes["collector_task_id"])
-	if ownerTask == "" && ownerModule != "collector" {
-		// Setup catalog datasets have no collector owner. The deterministic ID
-		// is the binding between a builtin task and that catalog resource.
-		return true
-	}
-	return ownerModule == "collector" && ownerTask == strings.TrimSpace(taskID)
-}
-
-func isCatalogDataset(attributes map[string]string) bool {
-	return strings.TrimSpace(attributes["collector_task_id"]) == "" && strings.TrimSpace(attributes["owner_module"]) != "collector"
+	return strings.TrimSpace(attributes["owner_module"]) == "collector" &&
+		strings.TrimSpace(attributes["collector_task_id"]) == strings.TrimSpace(taskID)
 }
 
 func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	if m == nil || m.metadata == nil || m.auth == nil {
 		return fmt.Errorf("task result metadata manager is not configured")
 	}
-	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
-	if err != nil {
+	if _, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID}); err != nil {
 		return fmt.Errorf("get result dataset: %w", err)
-	}
-	if dataset != nil && dataset.GetRetInfo() != nil && dataset.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS && dataset.GetDataset() != nil && isCatalogDataset(dataset.GetDataset().GetAttributes()) {
-		return m.deleteViewOnly(ctx, spaceID, ids.ViewID)
 	}
 	if m.cleaner != nil {
 		physical, err := m.cleaner.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
@@ -970,14 +1105,6 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	removed, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil || !resultDeleteAccepted(retInfoDatasetDelete(removed)) {
 		return metadataError("delete result dataset", err, retInfoDatasetDelete(removed))
-	}
-	return nil
-}
-
-func (m *Manager) deleteViewOnly(ctx context.Context, spaceID, viewID string) error {
-	view, err := m.metadata.DeleteView(ctx, &storagepb.DeleteViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: viewID})
-	if err != nil || !resultDeleteAccepted(retInfoViewDelete(view)) {
-		return metadataError("delete result view", err, retInfoViewDelete(view))
 	}
 	return nil
 }
@@ -1021,8 +1148,8 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 		return fmt.Errorf("task_id is required")
 	}
 	base := resultIDs(spaceID, taskID)
-	if ids != base {
-		return fmt.Errorf("result identity is not the deterministic result of task %s", taskID)
+	if ids.DatasetID != base.DatasetID || strings.TrimSpace(ids.ViewID) == "" {
+		return fmt.Errorf("result Dataset identity is not the deterministic result of task %s", taskID)
 	}
 	dataset, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {

@@ -2,14 +2,36 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestCreateViewIsAtomicAndDoesNotReplaceExistingIdentity(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	original, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "替代视图", DatasetId: "fundamentals", Engine: "duckdb", KeepDuration: "24h"})
+	if !errors.Is(err, metadatastore.ErrViewExists) {
+		t.Fatalf("CreateView error = %v, want ErrViewExists", err)
+	}
+	after, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GetName() != original.GetName() || after.GetDatasetId() != original.GetDatasetId() {
+		t.Fatalf("create-only call replaced existing view: before=%v after=%v", original, after)
+	}
+}
 
 func TestViewKeepDurationChangeDoesNotRequireABRebuild(t *testing.T) {
 	existing := &pb.View{DatasetId: "prices", Engine: "duckdb", KeepDuration: "24h"}

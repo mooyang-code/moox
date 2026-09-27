@@ -189,8 +189,8 @@ tags:
   description: 币安现货全部标的
   mode: auto
   builtin: true
-  sources: [binance]
-  instrument_type: spot
+  source: binance
+  market_type: spot
   cron: "0 * * * *"
   timezone: UTC
 - space_id: crypto
@@ -199,8 +199,8 @@ tags:
   description: 币安 U 本位永续全部标的
   mode: auto
   builtin: true
-  sources: [binance]
-  instrument_type: swap
+  source: binance
+  market_type: swap
   cron: "0 * * * *"
   timezone: UTC
 - space_id: stockcn
@@ -209,8 +209,8 @@ tags:
   description: 沪深北交易所全部股票
   mode: auto
   builtin: true
-  sources: [sina, eastmoney]
-  instrument_type: equity
+  source: eastmoney
+  market_type: equity
   cron: "0 * * * *"
   timezone: Asia/Shanghai
 
@@ -1103,94 +1103,6 @@ fields:
   sort_order: 10
   status: active
 
-# Canonical prefixed fields for the optional merged Binance Kline Dataset.
-# The mdataset stores source values under dataset-id prefixes to avoid
-# collisions while keeping the metadata contract explicit.
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_spot_kline_1m__open
-  name: 现货开盘价（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_spot_kline_1m__high
-  name: 现货最高价（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_spot_kline_1m__low
-  name: 现货最低价（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_spot_kline_1m__close
-  name: 现货收盘价（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_spot_kline_1m__volume
-  name: 现货成交量（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_spot_kline_1m__quote_volume
-  name: 现货报价量（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_spot_kline_1m__trade_num
-  name: 现货成交笔数（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_swap_kline_1m__open
-  name: 永续开盘价（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_swap_kline_1m__high
-  name: 永续最高价（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_swap_kline_1m__low
-  name: 永续最低价（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_swap_kline_1m__close
-  name: 永续收盘价（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_swap_kline_1m__volume
-  name: 永续成交量（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_swap_kline_1m__quote_volume
-  name: 永续报价量（合并）
-  value_type: double
-  status: active
-- space_id: crypto
-  group_id: quote
-  field_id: dataset_binance_swap_kline_1m__trade_num
-  name: 永续成交笔数（合并）
-  value_type: double
-  status: active
-
 - space_id: mooxsys
   field_id: host_agent_id
   name: Host agent ID
@@ -1590,6 +1502,8 @@ dataset_columns:
   origin_id: provider_symbol
   value_type: string
   status: active
+# Merge mappings, not Field catalog entries. column_name/origin_id use
+# dataset_<source>__<field>; the trailing field must exist in t_fields.
 - space_id: crypto
   dataset_id: mdataset_binance_kline_1m
   column_name: dataset_binance_spot_kline_1m__open
