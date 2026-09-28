@@ -9,6 +9,7 @@ trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 command -v jq >/dev/null 2>&1 || { echo 'jq is required' >&2; exit 1; }
 ! grep -Fq '106.53.107.122' "${SCRIPT}"
+grep -Fq 'REMOTE_ROOT="${REMOTE_ROOT:-moox-build}"' "${SCRIPT}"
 grep -Fq '$(dirname "${BASH_SOURCE[0]}")/../.."' "${SCRIPT}"
 grep -Fq '"${ROOT}/scripts/build/build-storage-linux.sh"' "${DEPLOY_SCRIPT}"
 grep -Fq '"${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1' "${DEPLOY_SCRIPT}"
@@ -103,7 +104,7 @@ grep -Fq -- '2200' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'BatchMode=no' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'GIT_COMMIT=' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'TARGET_GOARCH=' "${TMP_ROOT}/ssh.log"
-grep -Fq -- 'GOTMPDIR=/tmp/moox-build-contract/.gotmp' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'GOTMPDIR="$PWD/.gotmp"' "${TMP_ROOT}/ssh.log"
 ! grep -Fq -- 'fixture-password' "${TMP_ROOT}/rsync.log" "${TMP_ROOT}/scp.log" "${TMP_ROOT}/ssh.log"
 for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
   test -s "${TMP_ROOT}/output/${binary}"

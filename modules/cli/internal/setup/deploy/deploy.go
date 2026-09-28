@@ -653,7 +653,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	_ = os.Remove(archive)
-	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"),
+	args := []string{
 		"--profile", "control", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", opts.ControlRoot, "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
 		// The control deployment is the non-trading application stack. Archive
@@ -666,7 +666,11 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		"--tls-mode", string(resolveTLSMode(opts.TLSMode, opts.PublicHost)),
 		"--node-id", "control", "--gateway-control-url", "http://127.0.0.1:11000",
 		"--monitor-instance-id", "monitor-control",
-	)
+	}
+	if os.Getenv("MOOX_SKIP_CONTROL_BUILD") == "1" {
+		args = append(args, "--skip-build")
+	}
+	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy", "deploy-moox.sh"), args...)
 	command.Dir = root
 	var packageOutput bytes.Buffer
 	packageWriter := io.MultiWriter(os.Stderr, &packageOutput)

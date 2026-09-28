@@ -1217,6 +1217,12 @@ func (f *fakeTransport) Upload(_ context.Context, src io.Reader, _ int64, dst st
 	_, _ = io.Copy(&f.uploaded, src)
 	return nil
 }
+func (f *fakeTransport) Download(_ context.Context, _ string, dst io.Writer) (int64, error) {
+	if dst == nil {
+		return 0, nil
+	}
+	return 0, nil
+}
 func (f *fakeTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	f.commands = append(f.commands, append([]string(nil), argv...))
 	if len(argv) == 2 && argv[0] == "uname" && argv[1] == "-s" {

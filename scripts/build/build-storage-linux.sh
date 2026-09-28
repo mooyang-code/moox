@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG="${CONFIG:-${ROOT}/moox.toml}"
-REMOTE_ROOT="${REMOTE_ROOT:-/tmp/moox-build}"
+REMOTE_ROOT="${REMOTE_ROOT:-moox-build}"
 MOOX_CLI="${MOOX_CLI:-${ROOT}/bin/moox-cli}"
 BIN_DIR="${BIN_DIR:-${ROOT}/bin}"
 KNOWN_HOSTS_PATH="${KNOWN_HOSTS_PATH:-${HOME}/.config/moox/known_hosts}"
@@ -50,7 +50,6 @@ git_commit="${GIT_COMMIT:-$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo 
 version="${VERSION:-${git_commit}}"
 remote="${username}@${address}"
 remote_root_q="$(shell_quote "${REMOTE_ROOT}")"
-gotmp_dir_q="$(shell_quote "${REMOTE_ROOT}/.gotmp")"
 version_q="$(shell_quote "${version}")"
 git_commit_q="$(shell_quote "${git_commit}")"
 known_hosts_q="$(shell_quote "${KNOWN_HOSTS_PATH}")"
@@ -159,7 +158,7 @@ run_rsync -az --delete \
 
 echo "==> build ${linux_cgo_target} on ${name} (${version})"
 run_ssh "${remote}" \
-	  "cd ${remote_root_q} && mkdir -p bin ${gotmp_dir_q} && rm -f bin/moox-storage-primary bin/moox-storage-node bin/moox-storage-view bin/moox-storage-access bin/moox-storage-cli && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOTMPDIR=${gotmp_dir_q} GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh ${linux_cgo_target_q}"
+	  "cd ${remote_root_q} && mkdir -p bin .gotmp && rm -f bin/moox-storage-primary bin/moox-storage-node bin/moox-storage-view bin/moox-storage-access bin/moox-storage-cli && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOTMPDIR="\$PWD/.gotmp" GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh ${linux_cgo_target_q}"
 
 mkdir -p "${BIN_DIR}"
 echo "==> download Linux ${linux_cgo_target} binaries from ${name}"
@@ -174,7 +173,17 @@ for binary in "${linux_cgo_binaries[@]}"; do
   [[ "${remote_size}" =~ ^[0-9]+$ && "${remote_size}" -gt 0 ]] || die "remote build returned invalid size for ${binary}"
   remote_sha256="$(run_ssh "${remote}" "sha256sum ${remote_binary_q} | awk '{print \$1}'")"
   [[ "${remote_sha256}" =~ ^[0-9a-fA-F]{64}$ ]] || die "remote build returned invalid checksum for ${binary}"
+  local_final="${BIN_DIR}/${binary}"
+  if [[ -s "${local_final}" ]]; then
+    local_size="$(local_file_size "${local_final}" 2>/dev/null || true)"
+    local_sha256_value="$(local_sha256 "${local_final}" 2>/dev/null || true)"
+    if [[ "${local_size}" == "${remote_size}" && "${local_sha256_value}" == "${remote_sha256}" ]]; then
+      echo "==> reuse verified Linux ${binary}"
+      continue
+    fi
+  fi
   local_tmp="${BIN_DIR}/.${binary}.tmp"
+  rm -f "${local_tmp}"
   run_scp "${remote}:${remote_binary}" "${local_tmp}" &
   copy_pid=$!
   copy_done=0

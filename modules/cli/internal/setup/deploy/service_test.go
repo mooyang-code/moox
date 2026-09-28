@@ -339,6 +339,12 @@ func (f *fakeServiceTransport) Upload(_ context.Context, src io.Reader, _ int64,
 	_, _ = io.Copy(&f.uploaded, src)
 	return nil
 }
+func (f *fakeServiceTransport) Download(_ context.Context, _ string, dst io.Writer) (int64, error) {
+	if dst == nil {
+		return 0, nil
+	}
+	return 0, nil
+}
 func (f *fakeServiceTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	command := strings.Join(argv, " ")
 	switch {
