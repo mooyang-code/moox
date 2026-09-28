@@ -146,20 +146,6 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		return fmt.Errorf("market fetch completion payload type is %T", delivery.Payload)
 	}
 	spaceID := delivery.Message.GetSpaceId()
-	// Target results are independent of the provider fetch result. Persist them
-	// before applying instance-level completion so one failed destination does
-	// not overwrite sibling target state.
-	for _, item := range payload.GetItems() {
-		for _, target := range item.GetTargets() {
-			status := target.GetStatus()
-			if status == "" {
-				status = "succeeded"
-			}
-			if err := instances.UpdateWriteTargetStatus(ctx, spaceID, target.GetWriteTargetId(), status, target.GetErrorSummary(), 0); err != nil {
-				return fmt.Errorf("update write target %s: %w", target.GetWriteTargetId(), err)
-			}
-		}
-	}
 	batch, err := batches.Get(ctx, spaceID, payload.GetBatchId())
 	if err != nil {
 		// Unknown completion is a poison message for this deployment, not a
@@ -196,6 +182,24 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		batch.LateCompletion = true
 	}
 	effects := store.FetchCompletionEffects{}
+	for _, item := range payload.GetItems() {
+		if item == nil {
+			continue
+		}
+		for _, target := range item.GetTargets() {
+			if target == nil {
+				continue
+			}
+			status := strings.TrimSpace(target.GetStatus())
+			if status == "" {
+				status = "succeeded"
+			}
+			effects.WriteTargetUpdates = append(effects.WriteTargetUpdates, store.WriteTargetStatusEffect{
+				SpaceID: spaceID, InstanceID: item.GetInstanceId(), WriteTargetID: target.GetWriteTargetId(), DatasetID: target.GetDatasetId(),
+				Status: status, LastError: target.GetErrorSummary(),
+			})
+		}
+	}
 	var original Request
 	_ = json.Unmarshal([]byte(batch.RequestJSON), &original)
 	if mismatch := completionItemIdentityMismatch(original, payload); mismatch != "" {

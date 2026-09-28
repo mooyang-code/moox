@@ -582,6 +582,13 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 		if err := s.resultManager.ValidateOwnedForTask(ctx, spaceID, taskID, resultIDs); err != nil {
 			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("delete task result preflight failed; task remains enabled: %v", err))}, nil
 		}
+		shared, err := s.persistence.HasOtherDatasetWriteTargets(ctx, spaceID, resultIDs.DatasetID, taskID)
+		if err != nil {
+			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("delete task result reference check failed; task remains enabled: %v", err))}, nil
+		}
+		if shared {
+			return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("result dataset %s is still referenced by another task; task remains enabled", resultIDs.DatasetID))}, nil
+		}
 	}
 	if err := s.taskRepo.SetEnabled(ctx, spaceID, taskID, false); err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil

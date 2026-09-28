@@ -140,3 +140,55 @@ func TestDeleteTagProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCreateTagAllowsMissingSubjectListingCapabilityFailOpen(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+
+	// Bootstrap seeds DataSources/Tags before collector-subject has published
+	// subject_listing. Missing capability metadata is therefore fail-open; the
+	// planner/provider still validates the concrete route before dispatch.
+	if _, err := store.CreateTag(ctx, &pb.Tag{
+		SpaceId: "space", TagId: "legacy_spot", TagName: "legacy spot", Mode: metadata.TagModeAuto, Source: "source", MarketType: "spot",
+	}); err != nil {
+		t.Fatalf("missing subject_listing metadata must remain fail-open: %v", err)
+	}
+}
+
+func TestCreateTagEnforcesPublishedSubjectListingCapabilities(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	_, err := store.UpsertDataSource(ctx, &pb.DataSource{
+		SpaceId: "space", DataSourceId: "capable", Name: "capable", Kind: "internal", Status: "active",
+		Attributes: map[string]string{"subject_listing": `{"instrument_types":["spot"]}`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTag(ctx, &pb.Tag{SpaceId: "space", TagId: "capable_spot", TagName: "capable spot", Mode: metadata.TagModeAuto, Source: "capable", MarketType: "spot"}); err != nil {
+		t.Fatalf("supported market type rejected: %v", err)
+	}
+	_, err = store.CreateTag(ctx, &pb.Tag{SpaceId: "space", TagId: "capable_swap", TagName: "capable swap", Mode: metadata.TagModeAuto, Source: "capable", MarketType: "swap"})
+	if !errors.Is(err, metadata.ErrTagInvalid) || !strings.Contains(err.Error(), "does not support market_type") {
+		t.Fatalf("unsupported market type err=%v, want ErrTagInvalid capability diagnostic", err)
+	}
+}
+
+func TestCreateTagRejectsCorruptPublishedSubjectListingCapabilities(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	_, err := store.UpsertDataSource(ctx, &pb.DataSource{
+		SpaceId: "space", DataSourceId: "broken", Name: "broken", Kind: "internal", Status: "active",
+		Attributes: map[string]string{"subject_listing": `{not-json}`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.CreateTag(ctx, &pb.Tag{SpaceId: "space", TagId: "broken_spot", TagName: "broken spot", Mode: metadata.TagModeAuto, Source: "broken", MarketType: "spot"})
+	if !errors.Is(err, metadata.ErrTagInvalid) || !strings.Contains(err.Error(), "invalid subject_listing") {
+		t.Fatalf("corrupt capability err=%v, want ErrTagInvalid", err)
+	}
+}

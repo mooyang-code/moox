@@ -302,7 +302,17 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		targetStatus := make(map[string]domain.TargetResult)
 		for datasetID, datasetRows := range targetRows {
 			var err error
-			if storage, ok := p.Storage.(sourceStorage); ok {
+			expectation, periodItems, periodEnabled, periodErr := periodCommitForDataset(req, datasetID, datasetRows)
+			if periodErr != nil {
+				err = periodErr
+			} else if periodEnabled {
+				storage, ok := p.Storage.(periodStorage)
+				if !ok {
+					err = fmt.Errorf("dataset %s requires CommitTimeSeriesBatch but storage client does not support period commits", datasetID)
+				} else {
+					err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems, sourceEventID(req))
+				}
+			} else if storage, ok := p.Storage.(sourceStorage); ok {
 				err = storage.UpsertFieldsWithSource(ctx, datasetRows, sourceEventID(req))
 			} else {
 				err = p.Storage.UpsertFields(ctx, datasetRows)
@@ -339,6 +349,67 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		completed = p.Now()
 	}
 	return buildCompletion(req, results, completed, completed.Sub(started)), nil
+}
+
+func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.RowFieldUpsert) (*storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, bool, error) {
+	type binding struct {
+		index      uint32
+		hash       string
+		count      uint32
+		targetTime string
+	}
+	bindings := make(map[string]binding)
+	for _, item := range req.Items {
+		seriesTag := collectionItemSeriesTag(req.SpaceID, item)
+		if len(req.Targets) == 0 {
+			if item.DatasetID == datasetID && item.SeriesHash != "" && item.ExpectedCount > 0 {
+				bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: item.SeriesIndex, hash: item.SeriesHash, count: item.ExpectedCount, targetTime: item.TargetDataTime}
+			}
+			continue
+		}
+		for _, target := range req.Targets {
+			if target.DatasetID != datasetID || target.SeriesHash == "" || target.ExpectedCount == 0 {
+				continue
+			}
+			if target.InstanceID != "" && item.InstanceID != "" && target.InstanceID != item.InstanceID {
+				continue
+			}
+			bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: target.SeriesIndex, hash: target.SeriesHash, count: target.ExpectedCount, targetTime: item.TargetDataTime}
+		}
+	}
+	if len(bindings) == 0 {
+		return nil, nil, false, nil
+	}
+	items := make([]*storagepb.TimeSeriesBatchRow, 0, len(rows))
+	var expectation *storagepb.DatasetPeriodExpectation
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
+			return nil, nil, false, fmt.Errorf("period commit row is not time-series")
+		}
+		ts := row.GetKey().GetTimeSeries()
+		binding, ok := bindings[periodRowBindingKey(datasetID, ts.GetSubjectId(), ts.GetSeriesTag())]
+		if !ok {
+			return nil, nil, false, fmt.Errorf("dataset %s row %s/%s has no series_index binding", datasetID, ts.GetSubjectId(), ts.GetSeriesTag())
+		}
+		target, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(binding.targetTime))
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("dataset %s target_data_time is invalid: %w", datasetID, err)
+		}
+		if expectation == nil {
+			expectation = &storagepb.DatasetPeriodExpectation{SpaceId: req.SpaceID, DatasetId: datasetID, Frequency: strings.ToLower(strings.TrimSpace(req.Frequency)), PeriodTime: target.UTC().Unix(), SeriesHash: binding.hash, ExpectedCount: binding.count}
+		} else if expectation.GetSeriesHash() != binding.hash || expectation.GetExpectedCount() != binding.count || expectation.GetPeriodTime() != target.UTC().Unix() {
+			return nil, nil, false, fmt.Errorf("dataset %s has mixed period expectation in one SCF request", datasetID)
+		}
+		items = append(items, &storagepb.TimeSeriesBatchRow{SeriesIndex: binding.index, Row: row})
+	}
+	if expectation == nil || len(items) == 0 {
+		return nil, nil, false, nil
+	}
+	return expectation, items, true, nil
+}
+
+func periodRowBindingKey(datasetID, subjectID, seriesTag string) string {
+	return strings.Join([]string{strings.TrimSpace(datasetID), strings.ToUpper(strings.TrimSpace(subjectID)), strings.TrimSpace(seriesTag)}, "\x00")
 }
 
 func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, error) {

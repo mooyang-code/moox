@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -39,7 +40,18 @@ type MarketFetchRetrySupersede struct {
 	RetryScope     string
 }
 
+type WriteTargetStatusEffect struct {
+	SpaceID       string
+	InstanceID    string
+	WriteTargetID string
+	DatasetID     string
+	Status        string
+	LastError     string
+	Attempt       int
+}
+
 type FetchCompletionEffects struct {
+	WriteTargetUpdates []WriteTargetStatusEffect
 	Retries            []*domain.RetryItem
 	SucceededRetryKeys []string
 	// CancelPendingRetryKeys resolves a late success only when the retry is
@@ -235,6 +247,20 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			return nil
 		}
 		updated = true
+		if err := validateCompletionScope(tx, batch, effects); err != nil {
+			return err
+		}
+		for _, item := range effects.WriteTargetUpdates {
+			result := tx.Model(&domain.WriteTarget{}).
+				Where("c_space_id = ? AND c_write_target_id = ? AND c_instance_id = ? AND c_dataset_id = ?", item.SpaceID, item.WriteTargetID, item.InstanceID, item.DatasetID).
+				Updates(map[string]any{"c_status": strings.TrimSpace(item.Status), "c_last_error": item.LastError, "c_attempt": item.Attempt, "c_mtime": time.Now().UTC()})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("completion write target %s changed during transaction", item.WriteTargetID)
+			}
+		}
 		for _, item := range effects.Retries {
 			if item == nil {
 				continue
@@ -329,7 +355,76 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 		}
 		return nil
 	})
-	return updated, err
+	if err != nil {
+		// The Batch CAS and every effect live in the same transaction. A
+		// validation/effect error rolls the CAS back as well, so callers must
+		// observe updated=false whenever nothing committed.
+		return false, err
+	}
+	return updated, nil
+}
+
+func validateCompletionScope(tx *gorm.DB, batch *domain.BatchInvocation, effects FetchCompletionEffects) error {
+	if tx == nil || batch == nil {
+		return gorm.ErrInvalidData
+	}
+	validatedInstances := make(map[string]struct{})
+	validateInstance := func(spaceID, instanceID string) error {
+		spaceID, instanceID = strings.TrimSpace(spaceID), strings.TrimSpace(instanceID)
+		if spaceID == "" {
+			spaceID = strings.TrimSpace(batch.SpaceID)
+		}
+		if instanceID == "" {
+			return gorm.ErrInvalidData
+		}
+		key := spaceID + "\x00" + instanceID
+		if _, ok := validatedInstances[key]; ok {
+			return nil
+		}
+		var count int64
+		if err := tx.Table("t_collector_fetch_batch_items").
+			Where("c_space_id = ? AND c_batch_id = ? AND c_instance_id = ?", spaceID, batch.BatchID, instanceID).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("completion instance %s is not attached to batch %s", instanceID, batch.BatchID)
+		}
+		validatedInstances[key] = struct{}{}
+		return nil
+	}
+	for _, item := range effects.InstanceUpdates {
+		if err := validateInstance(item.SpaceID, item.InstanceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range effects.Retries {
+		if item == nil || strings.TrimSpace(item.InstanceID) == "" {
+			continue
+		}
+		if err := validateInstance(item.SpaceID, item.InstanceID); err != nil {
+			return err
+		}
+	}
+	for _, item := range effects.WriteTargetUpdates {
+		spaceID := strings.TrimSpace(item.SpaceID)
+		if spaceID == "" {
+			spaceID = strings.TrimSpace(batch.SpaceID)
+		}
+		if err := validateInstance(spaceID, item.InstanceID); err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Table("t_collector_instance_write_targets AS targets").
+			Where("targets.c_space_id = ? AND targets.c_write_target_id = ? AND targets.c_instance_id = ? AND targets.c_dataset_id = ?", spaceID, strings.TrimSpace(item.WriteTargetID), strings.TrimSpace(item.InstanceID), strings.TrimSpace(item.DatasetID)).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("completion target %s is not attached to instance %s/dataset %s", item.WriteTargetID, item.InstanceID, item.DatasetID)
+		}
+	}
+	return nil
 }
 
 func (r *FetchBatchRepository) ListDue(ctx context.Context, spaceID string, now time.Time, limit int) ([]domain.BatchInvocation, error) {

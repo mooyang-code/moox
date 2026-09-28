@@ -83,17 +83,20 @@ type TaskInstance struct {
 // WriteTarget is the task-specific destination of a shared TaskInstance.
 // Fetch status belongs to TaskInstance; write/retry status belongs here.
 type WriteTarget struct {
-	ID           string     `gorm:"column:c_write_target_id;primaryKey"`
-	SpaceID      string     `gorm:"column:c_space_id"`
-	InstanceID   string     `gorm:"column:c_instance_id"`
-	TaskID       string     `gorm:"column:c_task_id"`
-	DatasetID    string     `gorm:"column:c_dataset_id"`
-	ViewID       string     `gorm:"column:c_view_id"`
-	OutputFields string     `gorm:"column:c_output_fields_json"`
-	Status       string     `gorm:"column:c_status"`
-	Attempt      int        `gorm:"column:c_attempt"`
-	LastError    string     `gorm:"column:c_last_error"`
-	NextRetryAt  *time.Time `gorm:"column:c_next_retry_at"`
+	ID            string     `gorm:"column:c_write_target_id;primaryKey"`
+	SpaceID       string     `gorm:"column:c_space_id"`
+	InstanceID    string     `gorm:"column:c_instance_id"`
+	TaskID        string     `gorm:"column:c_task_id"`
+	DatasetID     string     `gorm:"column:c_dataset_id"`
+	ViewID        string     `gorm:"column:c_view_id"`
+	OutputFields  string     `gorm:"column:c_output_fields_json"`
+	SeriesIndex   uint32     `gorm:"column:c_series_index"`
+	SeriesHash    string     `gorm:"column:c_series_hash"`
+	ExpectedCount uint32     `gorm:"column:c_expected_count"`
+	Status        string     `gorm:"column:c_status"`
+	Attempt       int        `gorm:"column:c_attempt"`
+	LastError     string     `gorm:"column:c_last_error"`
+	NextRetryAt   *time.Time `gorm:"column:c_next_retry_at"`
 }
 
 func (w *WriteTarget) TableName() string { return "t_collector_instance_write_targets" }

@@ -526,7 +526,10 @@ function taskTagSummary(task: CollectionTaskRecord): string {
 function taskRouteSummary(task: CollectionTaskRecord): string {
   const routes = [...new Set(tagsForTask(task).map(tag => `${tag.source || "-"} / ${tag.market_type || "-"}`))];
   if (routes.length) return routes.join("；");
-  if (task.data_type === "kline_resample" && (task.provider || task.market_type)) return `${task.provider || "-"} / ${task.market_type || "-"}`;
+  if (task.data_type === "kline_resample") {
+    const input = parseCollectionTaskInput(task);
+    if (input.provider || input.market) return `${input.provider || "-"} / ${input.market || "-"}`;
+  }
   return "-";
 }
 
@@ -801,7 +804,7 @@ async function handleOk(): Promise<boolean> {
           description: resultConfig.description.trim()
         }
       });
-      Message.success(`采集任务“${task.task_name}”已创建`);
+      Message.success(`采集任务“${task.task_name}”已创建，将从下一采集周期开始生效`);
     } else {
       const input = currentTaskInput();
       const mutableTask = {
@@ -816,7 +819,7 @@ async function handleOk(): Promise<boolean> {
         task_id: editor.task_id,
         task: mutableTask as Parameters<typeof UpdateTask>[0]["task"]
       });
-      Message.success("更新成功");
+      Message.success("变更成功，将从下一采集周期开始生效");
     }
     editorVisible.value = false;
     await getTaskList();

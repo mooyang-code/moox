@@ -133,7 +133,29 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
+	dnsRoutes := s.dnsSnapshot(ctx)
+	allTasks, err := s.Tasks.ListEnabled(ctx, spaceID)
+	if err != nil {
+		return fmt.Errorf("list enabled collection tasks: %w", err)
+	}
+	// Refresh the single durable TaskSeries copy before establishing this
+	// scheduler round's cutoff. If another scheduler already created the Run,
+	// a changed series set receives c_mtime > run.CreateTime and is therefore
+	// deferred to the next Run instead of being appended to this one.
+	for _, task := range filterMarketFetchTasks(allTasks) {
+		if _, _, refreshErr := s.expandTask(ctx, task); refreshErr != nil {
+			if invalidateErr := s.Tasks.InvalidateTaskSeries(ctx, task.SpaceID, task.TaskID); invalidateErr != nil {
+				return fmt.Errorf("invalidate task series after expansion failure task=%s: %w", task.TaskID, invalidateErr)
+			}
+			log.WarnContextf(ctx, "collection task series refresh failed task=%s; defer until a later run: %v", task.TaskID, refreshErr)
+		}
+	}
+	allTasks, err = s.Tasks.ListEnabled(ctx, spaceID)
+	if err != nil {
+		return fmt.Errorf("reload enabled collection tasks after series refresh: %w", err)
+	}
 	currentRunID := ""
+	runCutoff := time.Now().UTC()
 	if s.Runs != nil {
 		runTime := now.Truncate(time.Minute)
 		runKey := fmt.Sprintf("scheduled:%s", runTime.Format(time.RFC3339))
@@ -142,6 +164,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 			return fmt.Errorf("create collector run: %w", runErr)
 		}
 		currentRunID = run.RunID
+		runCutoff = run.CreateTime.UTC()
 		defer func() {
 			finishCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -155,11 +178,6 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 				log.WarnContextf(finishCtx, "reconcile current collector run failed space=%s run=%s: %v", spaceID, currentRunID, reconcileErr)
 			}
 		}()
-	}
-	dnsRoutes := s.dnsSnapshot(ctx)
-	allTasks, err := s.Tasks.ListEnabled(ctx, spaceID)
-	if err != nil {
-		return fmt.Errorf("list enabled collection tasks: %w", err)
 	}
 	activeTaskIDs := make(map[string]struct{}, len(allTasks))
 	for _, task := range allTasks {
@@ -177,8 +195,10 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	}
 	// Local collector jobs (for example kline_resample) are driven by their
 	// own timer workers. The market-fetch scheduler only owns cloud-invoked
-	// collection tasks.
-	tasks := filterMarketFetchTasks(allTasks)
+	// collection tasks. Run membership is fixed by the immutable create-time
+	// cutoff; later creates, re-enables, definition changes and series changes
+	// are intentionally deferred to the next scheduled Run.
+	tasks := filterTasksForRunCutoff(filterMarketFetchTasks(allTasks), runCutoff)
 	requiresInvoke := !s.InvokeNonRealtimeOnly && len(tasks) > 0
 	if s.InvokeNonRealtimeOnly {
 		for _, task := range tasks {
@@ -224,7 +244,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	// out to targets owned by tasks that appear later in the scheduler scan.
 	// Without this pre-pass the result depended on goroutine timing: task A
 	// could reach SCF before task B had attached its WriteTarget.
-	if err := s.primeSharedWriteTargets(ctx, spaceID, currentRunID, now, tasks); err != nil {
+	if err := s.primeSharedWriteTargets(ctx, spaceID, currentRunID, runCutoff, now, tasks); err != nil {
 		return err
 	}
 	planned := 0
@@ -236,7 +256,14 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 		if planned >= DefaultMaxPlan {
 			break
 		}
-		items, frequencies, err := s.expandTask(ctx, task)
+		matches, matchErr := s.taskIdentityMatchesRun(ctx, spaceID, task, runCutoff)
+		if matchErr != nil {
+			return matchErr
+		}
+		if !matches {
+			return fmt.Errorf("collector run %s became stale before dispatch planning for task %s", currentRunID, task.TaskID)
+		}
+		items, frequencies, err := s.expandTaskForPlanning(ctx, task)
 		if err != nil {
 			log.WarnContextf(ctx, "skip invalid collection task=%s: %v", task.TaskID, err)
 			continue
@@ -369,19 +396,19 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	return nil
 }
 
-func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID string, now time.Time, tasks []domain.CollectionTask) error {
+func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID string, runCutoff, now time.Time, tasks []domain.CollectionTask) error {
 	if s == nil || s.Instances == nil {
 		return nil
 	}
 	for _, task := range tasks {
-		enabled, err := s.taskEnabled(ctx, spaceID, task.TaskID)
+		matches, err := s.taskIdentityMatchesRun(ctx, spaceID, task, runCutoff)
 		if err != nil {
 			return fmt.Errorf("check collection task before shared planning: %w", err)
 		}
-		if !enabled {
-			continue
+		if !matches {
+			return fmt.Errorf("collector run %s became stale before planning task %s", runID, task.TaskID)
 		}
-		items, frequencies, err := s.expandTask(ctx, task)
+		items, frequencies, err := s.expandTaskForPlanning(ctx, task)
 		if err != nil {
 			// Keep the existing scheduler contract: one malformed task must not
 			// block unrelated tasks in the same run.
@@ -399,6 +426,16 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 				log.WarnContextf(ctx, "skip task=%s frequency=%s during shared planning: %v", task.TaskID, frequency, targetErr)
 				continue
 			}
+			matches, matchErr := s.taskIdentityMatchesRun(ctx, spaceID, task, runCutoff)
+			if matchErr != nil {
+				return matchErr
+			}
+			if !matches {
+				return fmt.Errorf("collector run %s became stale before period initialization for task %s", runID, task.TaskID)
+			}
+			if err := s.ensureDatasetPeriod(ctx, task, items, frequency, target, now); err != nil {
+				return fmt.Errorf("ensure dataset period task=%s frequency=%s: %w", task.TaskID, frequency, err)
+			}
 			instances := make([]domain.TaskInstance, 0, len(items))
 			targets := make([]domain.WriteTarget, 0, len(items))
 			for _, item := range items {
@@ -414,14 +451,17 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 					Frequency: frequency, TargetDataTime: &targetTime, TaskParams: collectionItemRequestParams(item),
 				})
 				targets = append(targets, domain.WriteTarget{
-					ID:           stableID(spaceID, instanceID, task.TaskID, item.DatasetID),
-					SpaceID:      spaceID,
-					InstanceID:   instanceID,
-					TaskID:       task.TaskID,
-					DatasetID:    item.DatasetID,
-					ViewID:       task.ResultViewID,
-					OutputFields: stringSliceJSON(outputFields),
-					Status:       "pending",
+					ID:            stableID(spaceID, instanceID, task.TaskID, item.DatasetID),
+					SpaceID:       spaceID,
+					InstanceID:    instanceID,
+					TaskID:        task.TaskID,
+					DatasetID:     item.DatasetID,
+					ViewID:        task.ResultViewID,
+					OutputFields:  stringSliceJSON(outputFields),
+					SeriesIndex:   item.SeriesIndex,
+					SeriesHash:    item.SeriesHash,
+					ExpectedCount: item.ExpectedCount,
+					Status:        "pending",
 				})
 			}
 			if err := s.Instances.UpsertMany(ctx, instances); err != nil {
@@ -433,6 +473,75 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 		}
 	}
 	return nil
+}
+
+func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.CollectionTask, items []domain.CollectionItem, frequency string, period, now time.Time) error {
+	if len(items) == 0 || strings.TrimSpace(items[0].SeriesHash) == "" || items[0].ExpectedCount == 0 {
+		return fmt.Errorf("task %s has no materialized series expectation", task.TaskID)
+	}
+	if s.Storage == nil || strings.TrimSpace(s.StorageTarget) == "" {
+		// Lightweight scheduler unit tests may not wire Storage. Production
+		// bootstrap always provides it and integration tests cover this boundary.
+		return nil
+	}
+	client, err := s.Storage(s.StorageTarget, items[0].MarketType, "collector")
+	if err != nil {
+		return err
+	}
+	periodClient, ok := client.(periodStorage)
+	if !ok {
+		return fmt.Errorf("storage client does not support dataset period commits")
+	}
+	deadline := now.UTC().Add(2 * batchCompletionDeadline(batchKindForTask(task)))
+	return periodClient.EnsureDatasetPeriod(ctx, &storagepb.DatasetPeriodExpectation{
+		SpaceId: task.SpaceID, DatasetId: items[0].DatasetID, Frequency: strings.ToLower(strings.TrimSpace(frequency)),
+		PeriodTime: period.UTC().Unix(), SeriesHash: items[0].SeriesHash, ExpectedCount: items[0].ExpectedCount, DeadlineAt: deadline.Unix(),
+	})
+}
+
+func filterTasksForRunCutoff(tasks []domain.CollectionTask, cutoff time.Time) []domain.CollectionTask {
+	if cutoff.IsZero() {
+		return append([]domain.CollectionTask(nil), tasks...)
+	}
+	cutoff = cutoff.UTC()
+	filtered := make([]domain.CollectionTask, 0, len(tasks))
+	for _, task := range tasks {
+		if strings.TrimSpace(task.SeriesHash) == "" {
+			continue
+		}
+		if !task.CreateTime.IsZero() && task.CreateTime.UTC().After(cutoff) {
+			continue
+		}
+		if !task.ModifyTime.IsZero() && task.ModifyTime.UTC().After(cutoff) {
+			continue
+		}
+		filtered = append(filtered, task)
+	}
+	return filtered
+}
+
+func (s *Scheduler) taskIdentityMatchesRun(ctx context.Context, spaceID string, snapshot domain.CollectionTask, cutoff time.Time) (bool, error) {
+	if s == nil || s.Tasks == nil {
+		return true, nil
+	}
+	current, err := s.Tasks.GetByTaskID(ctx, spaceID, snapshot.TaskID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !current.Enabled || strings.TrimSpace(current.SeriesHash) == "" {
+		return false, nil
+	}
+	if !cutoff.IsZero() {
+		if (!current.CreateTime.IsZero() && current.CreateTime.UTC().After(cutoff.UTC())) ||
+			(!current.ModifyTime.IsZero() && current.ModifyTime.UTC().After(cutoff.UTC())) {
+			return false, nil
+		}
+	}
+	return strings.TrimSpace(current.DefinitionHash) == strings.TrimSpace(snapshot.DefinitionHash) &&
+		strings.TrimSpace(current.SeriesHash) == strings.TrimSpace(snapshot.SeriesHash), nil
 }
 
 func filterMarketFetchTasks(tasks []domain.CollectionTask) []domain.CollectionTask {
@@ -732,7 +841,7 @@ func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID, r
 			}
 			if err := s.Instances.UpsertWriteTargets(ctx, []domain.WriteTarget{{
 				ID: stableID(spaceID, item.InstanceID, task.TaskID, item.DatasetID), SpaceID: spaceID, InstanceID: item.InstanceID, TaskID: task.TaskID,
-				DatasetID: item.DatasetID, ViewID: task.ResultViewID, OutputFields: stringSliceJSON(item.OutputFields), Status: "pending",
+				DatasetID: item.DatasetID, ViewID: task.ResultViewID, OutputFields: stringSliceJSON(item.OutputFields), SeriesIndex: item.SeriesIndex, SeriesHash: item.SeriesHash, ExpectedCount: item.ExpectedCount, Status: "pending",
 			}}); err != nil {
 				return err
 			}
@@ -1277,7 +1386,124 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: symbol, Provider: groupProvider, SourceID: groupSourceID, MarketID: marketID, InstrumentType: groupInstrumentType, MarketType: groupMarket, DataType: "kline", DatasetID: targetDataset, OutputFields: append([]string(nil), params.OutputFields...)})
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].SubjectID < items[j].SubjectID })
+	items, seriesHash, err := s.materializeTaskSeries(ctx, task, items)
+	if err != nil {
+		return nil, nil, err
+	}
+	_ = seriesHash
+	return items, frequencies, nil
+}
+
+func (s *Scheduler) materializeTaskSeries(ctx context.Context, task domain.CollectionTask, items []domain.CollectionItem) ([]domain.CollectionItem, string, error) {
+	series := make([]domain.TaskSeries, 0, len(items))
+	for _, item := range items {
+		series = append(series, domain.TaskSeries{
+			SpaceID: task.SpaceID, TaskID: task.TaskID, SubjectID: item.SubjectID, Provider: item.Provider, SourceID: item.SourceID,
+			MarketType: item.MarketType, ProviderSymbol: item.Symbol, SeriesTag: collectionItemSeriesTag(task.SpaceID, item),
+		})
+	}
+	// Canonicalize locally even when the scheduler is used in a unit test
+	// without a TaskRepository. Production additionally persists the materialized
+	// union so later planning never needs to infer Dataset membership from a Batch.
+	byKey := make(map[string]domain.TaskSeries, len(series))
+	for _, row := range series {
+		row.SeriesKey = domain.CanonicalSeriesKey(row.Provider, row.SourceID, row.MarketType, row.SubjectID, row.SeriesTag)
+		byKey[row.SeriesKey] = row
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return nil, "", fmt.Errorf("collection task %s expands to no series", task.TaskID)
+	}
+	hash := domain.SeriesSetHash(keys)
+	if s.Tasks != nil && strings.TrimSpace(task.TaskID) != "" {
+		persisted := make([]domain.TaskSeries, 0, len(keys))
+		for _, key := range keys {
+			persisted = append(persisted, byKey[key])
+		}
+		persistedHash, _, persistErr := s.Tasks.ReplaceTaskSeries(ctx, task.SpaceID, task.TaskID, persisted)
+		if persistErr != nil {
+			return nil, "", fmt.Errorf("materialize task series task=%s: %w", task.TaskID, persistErr)
+		}
+		hash = persistedHash
+	}
+	indexByKey := make(map[string]uint32, len(keys))
+	for index, key := range keys {
+		indexByKey[key] = uint32(index)
+	}
+	count := uint32(len(keys))
+	for i := range items {
+		key := domain.CanonicalSeriesKey(items[i].Provider, items[i].SourceID, items[i].MarketType, items[i].SubjectID, collectionItemSeriesTag(task.SpaceID, items[i]))
+		items[i].SeriesIndex = indexByKey[key]
+		items[i].SeriesHash = hash
+		items[i].ExpectedCount = count
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].SeriesIndex != items[j].SeriesIndex {
+			return items[i].SeriesIndex < items[j].SeriesIndex
+		}
+		return items[i].SubjectID < items[j].SubjectID
+	})
+	return items, hash, nil
+}
+
+func (s *Scheduler) expandTaskForPlanning(ctx context.Context, task domain.CollectionTask) ([]domain.CollectionItem, []string, error) {
+	if s == nil || s.Tasks == nil {
+		return s.expandTask(ctx, task)
+	}
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+	if err != nil {
+		return nil, nil, err
+	}
+	dataType := strings.ToLower(firstNonEmpty(params.Collector.DataType, task.DataType))
+	if dataType != "kline" {
+		return nil, nil, fmt.Errorf("unsupported data_type %q", dataType)
+	}
+	targetDataset := firstNonEmpty(params.Target.DatasetID, task.ResultDatasetID)
+	if strings.TrimSpace(targetDataset) == "" {
+		return nil, nil, fmt.Errorf("target dataset is required")
+	}
+	frequencies := append([]string(nil), params.Collector.Intervals...)
+	if len(frequencies) == 0 && params.Schedule.Interval != "" {
+		frequencies = []string{params.Schedule.Interval}
+	}
+	rows, err := s.Tasks.ListTaskSeries(ctx, task.SpaceID, task.TaskID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load materialized task series: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil, fmt.Errorf("collection task %s has no materialized task series", task.TaskID)
+	}
+	keys := make([]string, 0, len(rows))
+	for index, row := range rows {
+		if row.SeriesIndex != uint32(index) {
+			return nil, nil, fmt.Errorf("collection task %s has non-dense series_index at %d: %d", task.TaskID, index, row.SeriesIndex)
+		}
+		key := domain.CanonicalSeriesKey(row.Provider, row.SourceID, row.MarketType, row.SubjectID, row.SeriesTag)
+		if key != row.SeriesKey {
+			return nil, nil, fmt.Errorf("collection task %s series key mismatch at index %d", task.TaskID, index)
+		}
+		keys = append(keys, key)
+	}
+	hash := domain.SeriesSetHash(keys)
+	if strings.TrimSpace(task.SeriesHash) == "" || hash != strings.TrimSpace(task.SeriesHash) {
+		return nil, nil, fmt.Errorf("collection task %s series_hash changed during planning", task.TaskID)
+	}
+	marketID := strings.ToLower(firstNonEmpty(params.MarketID, task.SpaceID, s.SpaceID))
+	count := uint32(len(rows))
+	items := make([]domain.CollectionItem, 0, len(rows))
+	for _, row := range rows {
+		instrumentType := strings.ToLower(firstNonEmpty(params.InstrumentType, defaultInstrumentTypeForMarket(marketID, row.MarketType)))
+		items = append(items, domain.CollectionItem{
+			SubjectID: row.SubjectID, Symbol: row.ProviderSymbol, Provider: row.Provider, SourceID: row.SourceID,
+			MarketID: marketID, InstrumentType: instrumentType, MarketType: row.MarketType, DataType: dataType,
+			DatasetID: targetDataset, OutputFields: append([]string(nil), params.OutputFields...), SeriesIndex: row.SeriesIndex,
+			SeriesHash: hash, ExpectedCount: count,
+		})
+	}
 	return items, frequencies, nil
 }
 

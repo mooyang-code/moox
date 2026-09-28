@@ -19,6 +19,8 @@ const datasetSubjectPageSize = 1000
 type BatchStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
+	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) error
+	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
 }
 
 // ResampleStorage is the narrow exact-read/write surface used by the local
@@ -96,6 +98,32 @@ func StorageGatewayNodeID() string { return collectorStorageGatewayNodeID() }
 
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
 	return w.UpsertFieldsWithSource(ctx, rows, "")
+}
+
+func (w *storageWriter) EnsureDatasetPeriod(ctx context.Context, expectation *storagepb.DatasetPeriodExpectation) error {
+	if expectation == nil {
+		return fmt.Errorf("ensure dataset period: expectation is required")
+	}
+	return retryStorage(ctx, func() error {
+		response, err := w.access.EnsureDatasetPeriod(ctx, &storagepb.PrimaryEnsureDatasetPeriodReq{AuthInfo: w.authInfo, Expectation: expectation})
+		if err != nil {
+			return fmt.Errorf("ensure dataset period: %w", err)
+		}
+		return ensureStorageOK("ensure dataset period", response.GetRetInfo())
+	})
+}
+
+func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *storagepb.DatasetPeriodExpectation, items []*storagepb.TimeSeriesBatchRow, sourceEventID string) error {
+	if expectation == nil || len(items) == 0 {
+		return fmt.Errorf("commit time-series batch: expectation and items are required")
+	}
+	return retryStorage(ctx, func() error {
+		response, err := w.access.CommitTimeSeriesBatch(ctx, &storagepb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: w.authInfo, Expectation: expectation, Items: items, SourceEventId: sourceEventID, WriteSource: w.writeSource})
+		if err != nil {
+			return fmt.Errorf("commit time-series batch: %w", err)
+		}
+		return ensureStorageOK("commit time-series batch", response.GetRetInfo())
+	})
 }
 
 func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {

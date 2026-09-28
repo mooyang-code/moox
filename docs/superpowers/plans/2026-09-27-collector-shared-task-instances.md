@@ -1,5 +1,8 @@
 # 采集任务与共享采集实例实施计划
 
+> **后续一致性说明（2026-09-28）：** 本计划中的 shared TaskInstance / WriteTarget 模型仍有效；其中 Dataset period readiness 与 Run 成员快照/生效边界已由 `2026-09-27-collector-consistency-lifecycle-optimization.md` 收敛为 **TaskSeries + CollectorRun planning cutoff + Storage DataNode bitmap barrier**。实现与验收以该后续计划和 `2026-09-27-collector-tag-provider-shared-acquisition-design.md` 的最新描述为准。
+
+
 > **实施要求：** 按阶段逐项执行并勾选。每个阶段先补充失败测试，再实现最小改动并运行该阶段验证。该计划覆盖 Storage、Collector 调度/持久化、前端和正式发布准备。
 
 **目标：** 调整标签、采集任务与任务实例的数据模型，使单个采集任务可以跨多个 Provider；相同采集请求全局只执行一次，并将结果写入多个任务各自的 Dataset/View。

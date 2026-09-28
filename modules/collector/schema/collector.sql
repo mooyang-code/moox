@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_description TEXT NOT NULL DEFAULT '',
     c_data_type TEXT NOT NULL DEFAULT '',
     c_definition_hash TEXT NOT NULL DEFAULT '',
+    c_series_hash TEXT NOT NULL DEFAULT '',
     c_collect_params TEXT NOT NULL DEFAULT '{}',
     c_enabled INTEGER NOT NULL DEFAULT 1,
     c_creator TEXT NOT NULL DEFAULT '',
@@ -38,6 +39,27 @@ CREATE TABLE IF NOT EXISTS t_collector_task_tags (
     FOREIGN KEY (c_space_id, c_task_id) REFERENCES t_collector_tasks(c_space_id, c_task_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_collector_task_tags_tag ON t_collector_task_tags(c_space_id, c_tag_id);
+
+
+CREATE TABLE IF NOT EXISTS t_collector_task_series (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_series_index INTEGER NOT NULL,
+    c_series_key TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_provider TEXT NOT NULL DEFAULT '',
+    c_source_id TEXT NOT NULL DEFAULT '',
+    c_market_type TEXT NOT NULL DEFAULT '',
+    c_provider_symbol TEXT NOT NULL DEFAULT '',
+    c_series_tag TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(c_space_id, c_task_id, c_series_key),
+    UNIQUE(c_space_id, c_task_id, c_series_index),
+    FOREIGN KEY (c_space_id, c_task_id) REFERENCES t_collector_tasks(c_space_id, c_task_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_collector_task_series_subject ON t_collector_task_series(c_space_id, c_subject_id);
 
 CREATE TABLE IF NOT EXISTS t_collector_runs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +122,9 @@ CREATE TABLE IF NOT EXISTS t_collector_instance_write_targets (
     c_dataset_id TEXT NOT NULL,
     c_view_id TEXT NOT NULL DEFAULT '',
     c_output_fields_json TEXT NOT NULL DEFAULT '[]',
+    c_series_index INTEGER NOT NULL DEFAULT 0,
+    c_series_hash TEXT NOT NULL DEFAULT '',
+    c_expected_count INTEGER NOT NULL DEFAULT 0,
     c_status TEXT NOT NULL DEFAULT 'pending',
     c_attempt INTEGER NOT NULL DEFAULT 0,
     c_next_retry_at DATETIME,
@@ -116,14 +141,16 @@ CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset ON t_collector_in
 
 CREATE TRIGGER IF NOT EXISTS update_collector_tasks_mtime
 AFTER UPDATE ON t_collector_tasks
+WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+    UPDATE t_collector_tasks SET c_mtime = STRFTIME('%Y-%m-%d %H:%M:%f', 'now') WHERE rowid = NEW.rowid;
 END;
 
 CREATE TRIGGER IF NOT EXISTS update_collector_instances_mtime
 AFTER UPDATE ON t_collector_task_instances
+WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+    UPDATE t_collector_task_instances SET c_mtime = STRFTIME('%Y-%m-%d %H:%M:%f', 'now') WHERE rowid = NEW.rowid;
 END;
 
 CREATE TABLE IF NOT EXISTS t_collector_fetch_batches (

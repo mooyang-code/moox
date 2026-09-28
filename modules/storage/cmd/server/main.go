@@ -938,6 +938,7 @@ func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newPr
 				proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
 				adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
 				markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+				periodProxy:  pb.NewDataNodePeriodRuntimeClientProxy(opts...),
 				historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
 			}
 		}
@@ -1022,7 +1023,21 @@ type dataNodeProxyAdapter struct {
 	proxy        pb.DataNodeRuntimeClientProxy
 	adminProxy   pb.DataNodeDatasetAdminRuntimeClientProxy
 	markerProxy  pb.DataNodeMarkerRuntimeClientProxy
+	periodProxy  pb.DataNodePeriodRuntimeClientProxy
 	historyProxy pb.DataNodeHistoryRuntimeClientProxy
+}
+
+func (a *dataNodeProxyAdapter) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
+	if a == nil || a.periodProxy == nil {
+		return nil, errors.New("DataNode period runtime is unavailable")
+	}
+	return a.periodProxy.EnsureDatasetPeriod(ctx, req)
+}
+func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
+	if a == nil || a.periodProxy == nil {
+		return nil, errors.New("DataNode period runtime is unavailable")
+	}
+	return a.periodProxy.CommitTimeSeriesBatch(ctx, req)
 }
 
 func (a *dataNodeProxyAdapter) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -1147,6 +1162,7 @@ func runDataNodeRole() error {
 		return errors.New("DataNode listener is not configured")
 	}
 	pb.RegisterDataNodeRuntimeService(listener, svc)
+	pb.RegisterDataNodePeriodRuntimeService(listener, svc)
 	pb.RegisterDataNodeDatasetAdminRuntimeService(listener, svc)
 	pb.RegisterDataNodeMarkerRuntimeService(listener, svc)
 	pb.RegisterDataNodeHistoryRuntimeService(listener, svc)

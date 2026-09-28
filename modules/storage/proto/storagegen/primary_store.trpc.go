@@ -22,6 +22,10 @@ type PrimaryStoreService interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq) (*PrimaryUpsertFieldsRsp, error)
 
+	EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq) (*PrimaryEnsureDatasetPeriodRsp, error)
+
+	CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq) (*PrimaryCommitTimeSeriesBatchRsp, error)
+
 	CommitInput(ctx context.Context, req *PrimaryCommitInputReq) (*PrimaryCommitInputRsp, error)
 
 	PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq) (*PrimaryPatchFactorRsp, error)
@@ -59,6 +63,42 @@ func PrimaryStoreService_UpsertFields_Handler(svr interface{}, ctx context.Conte
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(PrimaryStoreService).UpsertFields(ctx, reqbody.(*PrimaryUpsertFieldsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_EnsureDatasetPeriod_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryEnsureDatasetPeriodReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).EnsureDatasetPeriod(ctx, reqbody.(*PrimaryEnsureDatasetPeriodReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_CommitTimeSeriesBatch_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryCommitTimeSeriesBatchReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).CommitTimeSeriesBatch(ctx, reqbody.(*PrimaryCommitTimeSeriesBatchReq))
 	}
 
 	var rsp interface{}
@@ -331,6 +371,14 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_UpsertFields_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.PrimaryStore/EnsureDatasetPeriod",
+			Func: PrimaryStoreService_EnsureDatasetPeriod_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
+			Func: PrimaryStoreService_CommitTimeSeriesBatch_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.PrimaryStore/CommitInput",
 			Func: PrimaryStoreService_CommitInput_Handler,
 		},
@@ -404,6 +452,12 @@ type UnimplementedPrimaryStore struct{}
 func (s *UnimplementedPrimaryStore) UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq) (*PrimaryUpsertFieldsRsp, error) {
 	return nil, errors.New("rpc UpsertFields of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq) (*PrimaryEnsureDatasetPeriodRsp, error) {
+	return nil, errors.New("rpc EnsureDatasetPeriod of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq) (*PrimaryCommitTimeSeriesBatchRsp, error) {
+	return nil, errors.New("rpc CommitTimeSeriesBatch of service PrimaryStore is not implemented")
+}
 func (s *UnimplementedPrimaryStore) CommitInput(ctx context.Context, req *PrimaryCommitInputReq) (*PrimaryCommitInputRsp, error) {
 	return nil, errors.New("rpc CommitInput of service PrimaryStore is not implemented")
 }
@@ -458,6 +512,10 @@ type PrimaryStoreClientProxy interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq, opts ...client.Option) (rsp *PrimaryUpsertFieldsRsp, err error)
 
+	EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq, opts ...client.Option) (rsp *PrimaryEnsureDatasetPeriodRsp, err error)
+
+	CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq, opts ...client.Option) (rsp *PrimaryCommitTimeSeriesBatchRsp, err error)
+
 	CommitInput(ctx context.Context, req *PrimaryCommitInputReq, opts ...client.Option) (rsp *PrimaryCommitInputRsp, err error)
 
 	PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq, opts ...client.Option) (rsp *PrimaryPatchFactorRsp, err error)
@@ -510,6 +568,46 @@ func (c *PrimaryStoreClientProxyImpl) UpsertFields(ctx context.Context, req *Pri
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PrimaryUpsertFieldsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq, opts ...client.Option) (*PrimaryEnsureDatasetPeriodRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/EnsureDatasetPeriod")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("EnsureDatasetPeriod")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrimaryEnsureDatasetPeriodRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq, opts ...client.Option) (*PrimaryCommitTimeSeriesBatchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("CommitTimeSeriesBatch")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrimaryCommitTimeSeriesBatchRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

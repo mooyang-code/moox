@@ -62,6 +62,27 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 	})
 }
 
+// HasOtherDatasetWriteTargets reports whether another CollectionTask still
+// references a result Dataset. Task-owned result Datasets are normally
+// isolated, but this guard prevents destructive metadata deletion if corrupted
+// or hand-written runtime state introduced a shared reference.
+func (s *Store) HasOtherDatasetWriteTargets(ctx context.Context, spaceID, datasetID, taskID string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("collector database is not open")
+	}
+	spaceID, datasetID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(datasetID), strings.TrimSpace(taskID)
+	if spaceID == "" || datasetID == "" || taskID == "" {
+		return false, fmt.Errorf("space_id, dataset_id and task_id are required")
+	}
+	var count int64
+	if err := s.db.WithContext(ctx).Table("t_collector_instance_write_targets").
+		Where("c_space_id = ? AND c_dataset_id = ? AND c_task_id <> ?", spaceID, datasetID, taskID).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // WaitTaskDrain waits until no planned or dispatched batch still references a
 // task. Disabling a task prevents new planning, but an already invoked SCF may
 // still write to Storage; destructive result deletion must fail closed until
@@ -202,13 +223,17 @@ func (s *Store) rejectLegacySchema() error {
 	for table, columns := range map[string][]string{
 		"t_collector_tasks": {
 			"c_id", "c_space_id", "c_task_id", "c_task_name", "c_description",
-			"c_data_type", "c_definition_hash", "c_collect_params",
+			"c_data_type", "c_definition_hash", "c_series_hash", "c_collect_params",
 			"c_enabled", "c_creator", "c_prepare_state", "c_last_error",
 			"c_result_dataset_id", "c_result_view_id", "c_coverage_start_time",
 			"c_ctime", "c_mtime",
 		},
 		"t_collector_task_tags": {
 			"c_space_id", "c_task_id", "c_tag_id", "c_ctime",
+		},
+		"t_collector_task_series": {
+			"c_id", "c_space_id", "c_task_id", "c_series_index", "c_series_key", "c_subject_id",
+			"c_provider", "c_source_id", "c_market_type", "c_provider_symbol", "c_series_tag", "c_ctime", "c_mtime",
 		},
 		"t_collector_runs": {
 			"c_id", "c_space_id", "c_run_id", "c_run_key", "c_run_type", "c_frequency",

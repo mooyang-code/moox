@@ -31,6 +31,7 @@
 - **CollectorRun（采集轮次）**：一次逻辑调度/执行上下文，对应 `t_collector_runs`。定时调度、手工重放、补采或修复都先创建一个 Run；同一逻辑定时轮次由数据库唯一键仲裁并复用同一个 `run_id`。Run 由 Collector Scheduler/Planner 创建，由 Dispatcher 标记进入活动态，由 Reconciler 根据子实例和目标状态汇总为完成或降级；SCF/Provider Worker/Storage Writer 不直接更新 Run。
 - **TaskInstance（采集实例）**：某个 CollectorRun 内的原子 Provider 请求。同一 Run 中语义相同的请求全局去重后只保留一个实例；该实例可以写入多个任务的目标 Dataset。
 - **WriteTarget**：一次采集结果需要落入的目标任务 Dataset。一个 TaskInstance 可关联多个 WriteTarget。
+- **TaskSeries**：CollectionTask 当前全部 Tag 成员按规范 series identity 求并集后的持久化集合。集合 canonical sort 后分配稠密 `series_index`，并由有序 `series_key` 计算 `series_hash`；它是 Dataset period expected set 与 Scheduler planning 的共同成员来源，不为每个 Run 重复复制。
 
 ## 数据模型
 
@@ -58,9 +59,11 @@
 
 - `t_tags` 使用单值 `c_source_id` 和唯一 `c_market_type`；`c_tag_id` 全局唯一。Tag 与 DataSource 在同 Space 建复合外键，防止来源被删除或引用到其他 Space。
 - `t_collector_tasks` 不保存 Provider/market；用 `t_collector_task_tags` 关系表保存一个任务的多个 Tag。
+- `t_collector_task_series` 保存任务当前 Tag 并集的规范 series 集合，包含 `series_key/series_index/subject/provider/source/market/provider_symbol/series_tag`；任务行保存当前 `series_hash`。集合不变时不重写 hash/index，集合变化时原子替换 TaskSeries 并更新 task mtime/hash。
 - `t_collector_runs` 保存一次逻辑采集轮次。定时轮次以 `(space_id, run_type, frequency, target_time)` 或等价的规范逻辑键唯一，多个 Scheduler 并发触发同一轮时必须取得同一个 `run_id`；manual replay/backfill/repair 创建新的 Run。
 - `t_collector_task_instances` 保存某个 Run 内去重后的单 Provider 请求，不直接拥有单一 task 或 Dataset；实例通过 `run_id` 归属执行轮次。`t_collector_instance_write_targets` 保存其各任务写入目标和目标级状态。
-- Batch 与 Instance 通过 batch-item 表关联；RetryItem 通过 instance 关联 fetch retry，或通过 write_target 关联目标写入 retry。周期就绪项按 WriteTarget 跟踪，不能仅按共享 TaskInstance 跟踪。
+- Batch 与 Instance 通过 batch-item 表关联；RetryItem 通过 instance 关联 fetch retry，或通过 write_target 关联目标写入 retry。
+- Dataset period 完成不由 Batch/Instance/WriteTarget 状态推导。Collector 将 TaskSeries 的 `series_hash + expected_count` 初始化到目标 Dataset 所在 DataNode，实际 Storage 写入以 `series_index` 推进该 Dataset/period 的 bitmap barrier。
 - Collector 结果 Dataset 不应被标记为单一 Provider/DataSource 的数据集；Storage Dataset 来源列需要支持 Collector-owned 输出的无单一来源语义。
 
 ### CollectionTask
@@ -105,7 +108,11 @@
 
 ## 全局采集分组与去重
 
-每轮调度先创建或取得一个 `CollectorRun`，再展开所有启用 CollectionTask：读取其标签，按各自固定来源解析成员，并结合标签的市场类型和数据对象，为每个可执行原子项生成候选 TaskInstance 与目标写入关系，再按采集语义全局去重；每个唯一 TaskInstance 关联一个或多个 WriteTarget。TaskInstance 的数据库唯一性按 `(space_id, run_id, request_key)` 保证，仅约束同一逻辑轮次，不把历史轮次永久锁死。
+Scheduler 在创建当前 scheduled Run 前刷新启用任务的 `t_collector_task_series`；随后以该 Run 不可变 `c_ctime` 作为 planning cutoff。当前 Run 只接纳 `create_time/modify_time <= cutoff` 且 `definition_hash/series_hash` 与 planning 初始读取一致的任务。cutoff 后新建、重新启用、定义变化或 Tag 成员变化的任务统一从下一 Run 生效。
+
+Run 创建后 planning **只读取持久化 TaskSeries**，不再重新展开 Tag，也不向同一 Run 追加新成员。若 planning 期间检测到 task 的 definition/series hash 已变化，则当前 Run 视为 stale/failed，由下一轮重新规划；已经进入 planned/dispatched Batch 的旧 hash 请求按其持久化 Instance/WriteTarget/period expectation 收尾。这样避免为每分钟 Run 复制几千条成员，同时保证一个 Run 不混用新旧对象集合。
+
+基于固定的 TaskSeries，为每个可执行原子项生成候选 TaskInstance 与目标写入关系，再按采集语义全局去重；每个唯一 TaskInstance 关联一个或多个 WriteTarget。TaskInstance 的数据库唯一性按 `(space_id, run_id, request_key)` 保证，仅约束同一逻辑轮次，不把历史轮次永久锁死。
 
 **采集请求键**至少包含：
 
@@ -139,6 +146,16 @@
 5. 不持久化 Provider 原始响应用于跨重试复用。由此，同一正常调度轮次的成功路径去重；网络错误、进程退出或 Storage 写入失败后可能发生重复 Provider 请求。手工重放、补采或修复通过创建新的 CollectorRun 表达，可再次生成相同 `request_key` 的新 TaskInstance。
 6. TaskInstance 的可观测状态同时展示请求结果和目标扇出摘要，例如 `fetch=success, targets=2/3`；目标失败需能定位到 Task、Dataset 和错误。
 
+
+## Dataset Period 完成屏障
+
+- 一个 CollectionTask 对应一个结果 Dataset；该 Dataset 的 expected set 是任务全部 Tag 展开后的 **规范 series 并集**，由 `t_collector_task_series` 表达。重叠 Tag 产生的同一规范 series 只计一次；同一 Subject 在不同 Provider/Source/Market 下仍是不同 series。
+- Scheduler 在 dispatch 前调用 `EnsureDatasetPeriod`，向目标 Dataset 所在 DataNode 写入 `DatasetPeriodExpectation(space,dataset,frequency,period,series_hash,expected_count,deadline)`。相同 expectation 重试幂等；同一 Dataset/frequency/period 出现不同 hash/count 必须拒绝。
+- WriteTarget 保存该 Dataset 自己的 `series_index/series_hash/expected_count`。共享 Provider fetch 扇出到多个 Dataset 时，同一 BTC 可以在 Dataset A/B 使用不同 index/hash；这些字段不进入 Provider `request_key`。
+- SCF 只携带本批负责的 item，不携带 Dataset 全量成员。成功写入通过 `CommitTimeSeriesBatch` 携带 `series_index`，DataNode 在同一个 Pebble Batch 中提交 K 线 KV/history 与 bitmap OR Merge。bitmap 是 period 进度的唯一真相，不持久化 SuccessCount，也不扫描全部 K 线。
+- rows+bitmap 提交后，DataNode 读取合并 bitmap 并 popcount；全部 bit 就绪时幂等 finalize 为 `complete` 并写 completion outbox。deadline 到达但仍缺数据时 finalize 为 `degraded`。后台 finalizer 负责 crash 后补齐“bitmap 已满但 outbox 未生成”的窗口。
+- `DatasetRowsUpserted` 可继续服务 freshness/其它异步功能，但 **不再参与 market-fetch Dataset complete 判定**；BatchCompleted 也只能更新执行状态，不能直接产生 Dataset complete。
+
 ## 输出字段
 
 - 字段目录继续展示当前空间的全部启用字段；可按需求配置每个目标任务的输出字段。
@@ -166,7 +183,7 @@
 - CollectorRun 由 Scheduler 写入并由 Collector 进程持续收敛状态：有待执行实例、活动 batch 或 retry 时为 active；所有实例/目标终态后汇总 succeeded/partial_failed/failed。Timer-owned stockcn 没有 BatchCompleted 时允许以实例 freshness 收敛。
 - 禁用任务的 WriteTarget 在没有 planned/dispatched batch 后安全 detach；目标级 retry 同步清理，不删除仍被其它任务引用的共享 TaskInstance。
 - 采集执行记录与目标映射必须保留足够时间，覆盖批次回调、目标重试和任务实例详情查询。
-- `series_tag` 是实例、Storage 行和 period readiness 的共同 series identity 投影。同一 Dataset 中相同 Subject 通过不同 Provider/Source/Market 进入时，readiness 与 freshness 必须按 `subject_id + series_tag` 精确匹配，禁止一条 Binance 写入把 OKX 对应实例误标成功。
+- `series_tag` 是实例与 Storage 行的 series identity 投影；TaskSeries 的规范 `series_key` 同时包含 Provider/Source/Market/Subject/series_tag。同一 Dataset 中相同 Subject 通过不同 Provider/Source/Market 进入时必须占用不同 series_index，禁止一条 Binance 写入满足 OKX 的 Dataset period bit。
 
 ## 执行节点模型
 
@@ -190,4 +207,6 @@
 - 一个 TaskInstance 能写入多个 Dataset，目标行的 Dataset ID、输出字段、View 关系各自正确。
 - 某一个目标写入失败时，其它目标成功状态不回滚；重试仅处理失败目标，可再次抓取 Provider。
 - 任务 ID 冲突、目标 Dataset 写入失败、Provider 请求失败、部分扇出失败和重复调度均能恢复且状态可观测。
-- 全新数据库初始化得到的 Tag、CollectionTask、TaskInstance、WriteTarget 结构完整，无旧字段兼容依赖。
+- 全新数据库初始化得到的 Tag、CollectionTask、TaskSeries、CollectorRun、TaskInstance、WriteTarget 结构完整，无旧字段兼容依赖，且不存在 per-Run `RunTaskSnapshot/RunSeriesSnapshot` 成员表。
+- CollectionTask/Tag 成员变化只从下一 CollectorRun 生效；同一 Run 不混用不同 `definition_hash/series_hash`。
+- Dataset period complete 仅在 Storage DataNode bitmap 覆盖全部 `expected_count` series 后产生；重复/并发 commit、重启恢复和 deadline degraded 均保持幂等。

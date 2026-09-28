@@ -42,7 +42,7 @@ func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 	require.NoError(t, err)
 	require.True(t, created)
-	persistCompletionTestInstance(t, db, ctx)
+	persistCompletionTestInstance(t, db, ctx, batch.BatchID)
 
 	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
 		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
@@ -71,7 +71,7 @@ func TestHandleCompletionMarksTaskInstanceFailedWhenRetriesAreExhausted(t *testi
 	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 	require.NoError(t, err)
 	require.True(t, created)
-	persistCompletionTestInstance(t, db, ctx)
+	persistCompletionTestInstance(t, db, ctx, batch.BatchID)
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "retry-key", Attempt: 3, Status: "pending", CreateTime: completedAt.Add(-time.Minute)}))
 
 	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
@@ -96,12 +96,14 @@ func TestHandleCompletionPreservesLogicalSyncPointAcrossRetryGenerations(t *test
 	ctx := context.Background()
 	completedAt := time.Date(2026, time.August, 2, 8, 6, 0, 0, time.UTC)
 	const retryID = "batch-b0|BTC-USDT|2026-08-02T07:59:00Z"
+	persistCompletionTestInstance(t, db, ctx)
 	for _, batchID := range []string{"b0", "b1"} {
 		batch := completionTestBatch(batchID)
 		batch.BatchKind = domain.BatchKindCatchup
 		created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 		require.NoError(t, err)
 		require.True(t, created)
+		require.NoError(t, db.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{"task-btc"}))
 		payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
 			InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
 			SourceEventId: func() string {
@@ -130,7 +132,7 @@ func TestHandleCompletionKeepsSuccessfulTaskInstanceSuccessful(t *testing.T) {
 	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 	require.NoError(t, err)
 	require.True(t, created)
-	persistCompletionTestInstance(t, db, ctx)
+	persistCompletionTestInstance(t, db, ctx, batch.BatchID)
 	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", Outcome: string(domain.ItemOutcomeSuccess)}, time.Date(2026, time.August, 2, 8, 10, 0, 0, time.UTC))
 	payload.BatchId = batch.BatchID
 	payload.ScheduleId = batch.ScheduleID
@@ -146,7 +148,6 @@ func TestHandleCompletionKeepsSuccessfulTaskInstanceSuccessful(t *testing.T) {
 func TestHandleCompletionDoesNotRegressNewSuccessWithSupersededRetryFailure(t *testing.T) {
 	db := newCompletionTestStore(t)
 	ctx := context.Background()
-	persistCompletionTestInstance(t, db, ctx)
 	olderTarget := time.Date(2026, time.August, 2, 8, 0, 0, 0, time.UTC)
 	newerTarget := olderTarget.Add(time.Minute)
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
@@ -161,6 +162,7 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithSupersededRetryFailure(t *t
 	created, err = db.FetchBatches().CreatePlanned(ctx, &newerBatch)
 	require.NoError(t, err)
 	require.True(t, created)
+	persistCompletionTestInstance(t, db, ctx, olderBatch.BatchID, newerBatch.BatchID)
 
 	newerCompletedAt := newerTarget.Add(time.Minute)
 	newerPayload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
@@ -193,7 +195,6 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithSupersededRetryFailure(t *t
 func TestHandleCompletionDoesNotRegressNewSuccessWithOlderRealtimeFailure(t *testing.T) {
 	db := newCompletionTestStore(t)
 	ctx := context.Background()
-	persistCompletionTestInstance(t, db, ctx)
 	olderTarget := time.Date(2026, time.August, 2, 8, 0, 0, 0, time.UTC)
 	newerTarget := olderTarget.Add(time.Minute)
 	olderBatch := completionTestBatch("old-realtime")
@@ -204,6 +205,7 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithOlderRealtimeFailure(t *tes
 	created, err = db.FetchBatches().CreatePlanned(ctx, &newerBatch)
 	require.NoError(t, err)
 	require.True(t, created)
+	persistCompletionTestInstance(t, db, ctx, olderBatch.BatchID, newerBatch.BatchID)
 
 	newerCompletedAt := newerTarget.Add(time.Minute)
 	newerPayload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
@@ -283,7 +285,7 @@ func completionTestInstance() domain.TaskInstance {
 	return domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", Provider: "binance", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
 }
 
-func persistCompletionTestInstance(t *testing.T, db *store.Store, ctx context.Context) {
+func persistCompletionTestInstance(t *testing.T, db *store.Store, ctx context.Context, batchIDs ...string) {
 	t.Helper()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "rule", TaskName: "Rule", DataType: "kline", Enabled: true}))
 	instance := completionTestInstance()
@@ -291,6 +293,9 @@ func persistCompletionTestInstance(t *testing.T, db *store.Store, ctx context.Co
 	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{
 		ID: "target-btc", SpaceID: "crypto", InstanceID: instance.InstanceID, TaskID: "rule", DatasetID: "bars", Status: "pending",
 	}}))
+	for _, batchID := range batchIDs {
+		require.NoError(t, db.FetchBatches().UpsertItems(ctx, "crypto", batchID, []string{instance.InstanceID}))
+	}
 }
 
 func completionTestPayload(item *marketfetchpb.MarketFetchItemResult, completedAt time.Time) *marketfetchpb.MarketFetchBatchCompleted {
@@ -299,4 +304,66 @@ func completionTestPayload(item *marketfetchpb.MarketFetchItemResult, completedA
 
 func completionTestDelivery(payload *marketfetchpb.MarketFetchBatchCompleted) *events.EventDelivery {
 	return &events.EventDelivery{Message: &eventpb.EventMessage{SpaceId: "crypto"}, Payload: payload}
+}
+
+func TestHandleCompletionRejectsUnknownBatchWithoutSideEffects(t *testing.T) {
+	db := newCompletionTestStore(t)
+	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Outcome: string(domain.ItemOutcomeSuccess),
+	}, time.Now().UTC())
+	payload.BatchId = "missing-batch"
+	payload.ScheduleId = "missing-schedule"
+
+	err := handleCompletion(context.Background(), db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload))
+	require.ErrorIs(t, err, errUnknownCompletionBatch)
+	_, retryErr := db.FetchRetries().Get(context.Background(), "crypto", retryKey(payload.GetBatchId(), "BTC-USDT", payload.GetItems()[0].GetTargetDataTime()))
+	require.Error(t, retryErr)
+}
+
+func TestHandleCompletionRejectsEnvelopeIdentityMismatchWithoutSideEffects(t *testing.T) {
+	db := newCompletionTestStore(t)
+	ctx := context.Background()
+	batch := completionTestBatch("identity-mismatch")
+	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Outcome: string(domain.ItemOutcomeSuccess),
+	}, time.Now().UTC())
+	payload.BatchId = batch.BatchID
+	payload.ScheduleId = "forged-schedule"
+	payload.Frequency = batch.Frequency
+
+	err = handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload))
+	require.ErrorIs(t, err, errCompletionIdentityMismatch)
+	stored, getErr := db.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+	require.NoError(t, getErr)
+	require.Equal(t, domain.BatchStatusPlanned, stored.Status)
+}
+
+func TestHandleCompletionRejectsItemNotInOriginalRequestWithoutSideEffects(t *testing.T) {
+	db := newCompletionTestStore(t)
+	ctx := context.Background()
+	batch := completionTestBatch("item-mismatch")
+	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	persistCompletionTestInstance(t, db, ctx, batch.BatchID)
+
+	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+		InstanceId: "forged-instance", SubjectId: "BTC-USDT", Outcome: string(domain.ItemOutcomeSuccess),
+	}, time.Now().UTC())
+	payload.BatchId = batch.BatchID
+	payload.ScheduleId = batch.ScheduleID
+	payload.Frequency = batch.Frequency
+
+	err = handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload))
+	require.ErrorIs(t, err, errCompletionIdentityMismatch)
+	stored, getErr := db.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+	require.NoError(t, getErr)
+	require.Equal(t, domain.BatchStatusPlanned, stored.Status)
+	target, targetErr := db.TaskInstances().GetWriteTarget(ctx, "crypto", "target-btc")
+	require.NoError(t, targetErr)
+	require.Equal(t, "pending", target.Status)
 }

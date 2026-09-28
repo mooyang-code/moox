@@ -417,3 +417,63 @@ func TestDatasetMetadataHasNoSeriesTagRegistry(t *testing.T) {
 		require.Nil(t, fields.ByName(protoreflect.Name(forbidden)), forbidden)
 	}
 }
+
+type deleteDatasetMetadataStore struct {
+	metadata.Store
+	dataset *pb.Dataset
+	deleted int
+}
+
+func (s *deleteDatasetMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
+	if s.dataset == nil {
+		return nil, sql.ErrNoRows
+	}
+	return s.dataset, nil
+}
+
+func (s *deleteDatasetMetadataStore) DeleteDataset(context.Context, string, string) error {
+	if s.dataset == nil {
+		return sql.ErrNoRows
+	}
+	s.deleted++
+	s.dataset = nil
+	return nil
+}
+
+func TestDeleteCollectorDatasetRequiresSignedCollectorIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		auth *pb.AuthInfo
+		want pb.ErrorCode
+	}{
+		{name: "missing", auth: nil, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "app id only", auth: &pb.AuthInfo{AppId: "moox-collector"}, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "wrong hmac", auth: &pb.AuthInfo{AppId: "moox-collector", AppKey: "wrong"}, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "other signed service", auth: &pb.AuthInfo{AppId: "admin-gateway", AppKey: serviceAuthKey("secret", "admin-gateway")}, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "signed collector", auth: &pb.AuthInfo{AppId: "moox-collector", AppKey: serviceAuthKey("secret", "moox-collector")}, want: pb.ErrorCode_SUCCESS},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &deleteDatasetMetadataStore{dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "dataset-task", Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-a"}}}
+			svc, err := NewMetadataService(store, nil, Options{OperatorAuthSecret: "secret"})
+			require.NoError(t, err)
+			rsp, err := svc.DeleteDataset(context.Background(), &pb.DeleteDatasetReq{AuthInfo: test.auth, SpaceId: "crypto", DatasetId: "dataset-task"})
+			require.NoError(t, err)
+			require.Equal(t, test.want, rsp.GetRetInfo().GetCode())
+			if test.want == pb.ErrorCode_SUCCESS {
+				require.Equal(t, 1, store.deleted)
+			} else {
+				require.Zero(t, store.deleted)
+			}
+		})
+	}
+}
+
+func TestDeleteOrdinaryDatasetPreservesExistingBehavior(t *testing.T) {
+	store := &deleteDatasetMetadataStore{dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "ordinary", DataSourceId: "binance"}}
+	svc, err := NewMetadataService(store, nil, Options{OperatorAuthSecret: "secret"})
+	require.NoError(t, err)
+	rsp, err := svc.DeleteDataset(context.Background(), &pb.DeleteDatasetReq{SpaceId: "crypto", DatasetId: "ordinary"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, 1, store.deleted)
+}

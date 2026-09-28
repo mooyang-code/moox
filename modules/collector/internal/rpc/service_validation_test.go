@@ -838,3 +838,29 @@ func TestStripCollectionTaskRoutingRemovesAllKlineRouteOverrides(t *testing.T) {
 	require.Contains(t, clean, `"frequency":"1m"`)
 	require.Contains(t, clean, `"output_fields":["close"]`)
 }
+
+func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T) {
+	db := openCollectorTestStore(t)
+	ctx := context.Background()
+	owner := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-owner", TaskName: "owner", DataType: "kline", Enabled: true}
+	ids := taskresult.ResultIDs(owner.SpaceID, owner.TaskID)
+	owner.ResultDatasetID, owner.ResultViewID = ids.DatasetID, ids.ViewID
+	require.NoError(t, db.Tasks().Create(ctx, owner))
+	other := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-other", TaskName: "other", DataType: "kline", Enabled: true}
+	require.NoError(t, db.Tasks().Create(ctx, other))
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "shared-dataset-ref", Provider: "binance", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m"}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{ID: "other-target", SpaceID: "crypto", InstanceID: instance.InstanceID, TaskID: other.TaskID, DatasetID: ids.DatasetID, Status: "pending"}}))
+
+	metadata := newTaskResultMetadataFake(ids, owner.TaskID)
+	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}
+	rsp, err := service.DeleteTask(ctx, &pb.DeleteTaskReq{SpaceId: owner.SpaceID, TaskId: owner.TaskID, DeleteResultData: true})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "still referenced by another task")
+	require.Equal(t, 0, metadata.deleteViews)
+	require.Equal(t, 0, metadata.deleteDatasets)
+	stored, err := db.Tasks().GetByTaskID(ctx, owner.SpaceID, owner.TaskID)
+	require.NoError(t, err)
+	require.True(t, stored.Enabled, "preflight rejection must leave the task enabled")
+}

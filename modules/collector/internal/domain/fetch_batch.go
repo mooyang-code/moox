@@ -74,6 +74,12 @@ type CollectionItem struct {
 	OutputFields       []string `json:"output_fields,omitempty"`
 	SnapshotShardIndex int      `json:"snapshot_shard_index,omitempty"`
 	SnapshotShardCount int      `json:"snapshot_shard_count,omitempty"`
+	// Series identity belongs to the Dataset/WriteTarget side. These fields are
+	// populated while materializing one task's Tag union and are deliberately
+	// excluded from Provider request_key calculation.
+	SeriesIndex   uint32 `json:"series_index,omitempty"`
+	SeriesHash    string `json:"series_hash,omitempty"`
+	ExpectedCount uint32 `json:"expected_count,omitempty"`
 }
 
 type ItemResult struct {

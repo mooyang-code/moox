@@ -181,6 +181,11 @@ type sourceStorage interface {
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
 }
 
+type periodStorage interface {
+	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) error
+	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
+}
+
 // ItemReporter receives final per-item outcomes from the common invocation
 // handler. It is deliberately small so CLS remains an optional boundary.
 type ItemReporter interface{ Report(clsreporter.Entry) }

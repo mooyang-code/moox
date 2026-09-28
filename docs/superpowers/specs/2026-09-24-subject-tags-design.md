@@ -224,7 +224,9 @@ attributes:
 
 ### 支持的抓取源登记
 
-启动时将自身支持标的列表的抓取源及各源支持的 `instrument_type` 写入 `t_data_sources.c_attrs_json.subject_listing`，前端标签表单的数据源、产品类型下拉框据此展示。
+启动时将自身支持标的列表的抓取源及各源支持的 `market_type` 写入 `t_data_sources.c_attrs_json.subject_listing`，前端标签表单的数据源、产品类型下拉框据此展示。
+
+Capability 校验采用 **fail-open + 已声明时强校验**：Storage bootstrap 会先创建 DataSource/Tag，而 `collector-subject` 随后才登记 `subject_listing`，因此 capability 缺失时不能阻塞 Tag 创建；此时必须输出可观测 warning，并在 Collector planning 阶段继续校验实际 Provider/source route。若 `subject_listing` 已存在，则其 JSON 必须可解析，且 Tag 的 `market_type` 必须被声明支持，否则拒绝创建/更新 Tag。当前内建 Tag 使用的 `binance`（spot/swap）和 `eastmoney`（equity）均由 subject lister 注册 capability；其它 seed DataSource 在未接入 subject lister 前保持 fail-open。
 
 ### 标签维护流程
 

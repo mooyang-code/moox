@@ -8,6 +8,32 @@ import "moox_common.proto";
 import "common.proto";
 import "rows.proto";
 import "dataset_markers.proto";
+import "data_node.proto";
+
+
+message PrimaryEnsureDatasetPeriodReq {
+  common.AuthInfo auth_info = 1;
+  DatasetPeriodExpectation expectation = 2;
+}
+
+message PrimaryEnsureDatasetPeriodRsp {
+  common.RetInfo ret_info = 1;
+  string status = 2;
+}
+
+message PrimaryCommitTimeSeriesBatchReq {
+  common.AuthInfo auth_info = 1;
+  DatasetPeriodExpectation expectation = 2;
+  repeated TimeSeriesBatchRow items = 3;
+  string source_event_id = 4;
+  string write_source = 5;
+}
+
+message PrimaryCommitTimeSeriesBatchRsp {
+  common.RetInfo ret_info = 1;
+  repeated RowKey keys = 2;
+  string period_status = 3;
+}
 
 message PrimaryCommitInputReq {
   common.AuthInfo auth_info = 1;
@@ -171,6 +197,8 @@ message WaitViewSyncPointRsp {
 service PrimaryStore {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
+  rpc EnsureDatasetPeriod(PrimaryEnsureDatasetPeriodReq) returns (PrimaryEnsureDatasetPeriodRsp);
+  rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
   rpc CommitInput(PrimaryCommitInputReq) returns (PrimaryCommitInputRsp);
   rpc PatchFactor(PrimaryPatchFactorReq) returns (PrimaryPatchFactorRsp);
   rpc LookupWriteReceipt(PrimaryLookupWriteReceiptReq) returns (PrimaryLookupWriteReceiptRsp);

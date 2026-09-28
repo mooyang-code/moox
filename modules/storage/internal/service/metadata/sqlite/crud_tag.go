@@ -16,6 +16,7 @@ import (
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -148,10 +149,18 @@ func (s *Store) validateTagSource(ctx context.Context, item *pb.Tag) error {
 	if status := strings.ToLower(strings.TrimSpace(source.GetStatus())); status != "active" {
 		return fmt.Errorf("%w: data source %q is not active", metadatastore.ErrTagInvalid, item.GetSource())
 	}
-	// When a source publishes subject-listing capabilities, enforce them here.
-	// Sources without capability metadata are still accepted; the Collector
-	// provider/lister performs the execution-time compatibility check.
-	if raw := strings.TrimSpace(source.GetAttributes()["subject_listing"]); raw != "" {
+	// Capability policy is deliberately fail-open while bootstrap metadata is
+	// incomplete. The subject-sync process publishes authoritative
+	// subject_listing metadata for sources it can enumerate; when that metadata
+	// exists we enforce it strictly. Missing metadata is observable and the
+	// Collector planner still revalidates the concrete provider/source route
+	// before execution, so an unsupported Tag cannot silently dispatch.
+	raw := strings.TrimSpace(source.GetAttributes()["subject_listing"])
+	if raw == "" {
+		log.WarnContextf(ctx, "tag source capability metadata is missing; accepting fail-open space=%s source=%s market_type=%s", item.GetSpaceId(), item.GetSource(), item.GetMarketType())
+		return nil
+	}
+	{
 		var listing struct {
 			InstrumentTypes []string `json:"instrument_types"`
 		}

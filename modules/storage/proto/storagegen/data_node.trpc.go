@@ -204,6 +204,72 @@ func RegisterDataNodeRuntimeService(s server.Service, svr DataNodeRuntimeService
 	}
 }
 
+// DataNodePeriodRuntimeService defines service.
+type DataNodePeriodRuntimeService interface {
+	EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq) (*EnsureDatasetPeriodRsp, error)
+
+	CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq) (*CommitTimeSeriesBatchRsp, error)
+}
+
+func DataNodePeriodRuntimeService_EnsureDatasetPeriod_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &EnsureDatasetPeriodReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodePeriodRuntimeService).EnsureDatasetPeriod(ctx, reqbody.(*EnsureDatasetPeriodReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodePeriodRuntimeService_CommitTimeSeriesBatch_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CommitTimeSeriesBatchReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodePeriodRuntimeService).CommitTimeSeriesBatch(ctx, reqbody.(*CommitTimeSeriesBatchReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodePeriodRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var DataNodePeriodRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataNodePeriodRuntime",
+	HandlerType: ((*DataNodePeriodRuntimeService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.storage.DataNodePeriodRuntime/EnsureDatasetPeriod",
+			Func: DataNodePeriodRuntimeService_EnsureDatasetPeriod_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodePeriodRuntime/CommitTimeSeriesBatch",
+			Func: DataNodePeriodRuntimeService_CommitTimeSeriesBatch_Handler,
+		},
+	},
+}
+
+// RegisterDataNodePeriodRuntimeService registers service.
+func RegisterDataNodePeriodRuntimeService(s server.Service, svr DataNodePeriodRuntimeService) {
+	if err := s.Register(&DataNodePeriodRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataNodePeriodRuntime register error:%v", err))
+	}
+}
+
 // DataNodeDatasetAdminRuntimeService defines service.
 type DataNodeDatasetAdminRuntimeService interface {
 	DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq) (*DeleteDatasetRowsRsp, error)
@@ -477,6 +543,15 @@ func (s *UnimplementedDataNodeRuntime) CleanupExpiredBuckets(ctx context.Context
 	return nil, errors.New("rpc CleanupExpiredBuckets of service DataNodeRuntime is not implemented")
 }
 
+type UnimplementedDataNodePeriodRuntime struct{}
+
+func (s *UnimplementedDataNodePeriodRuntime) EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq) (*EnsureDatasetPeriodRsp, error) {
+	return nil, errors.New("rpc EnsureDatasetPeriod of service DataNodePeriodRuntime is not implemented")
+}
+func (s *UnimplementedDataNodePeriodRuntime) CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq) (*CommitTimeSeriesBatchRsp, error) {
+	return nil, errors.New("rpc CommitTimeSeriesBatch of service DataNodePeriodRuntime is not implemented")
+}
+
 type UnimplementedDataNodeDatasetAdminRuntime struct{}
 
 func (s *UnimplementedDataNodeDatasetAdminRuntime) DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq) (*DeleteDatasetRowsRsp, error) {
@@ -677,6 +752,62 @@ func (c *DataNodeRuntimeClientProxyImpl) CleanupExpiredBuckets(ctx context.Conte
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CleanupExpiredBucketsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodePeriodRuntimeClientProxy defines service client proxy
+type DataNodePeriodRuntimeClientProxy interface {
+	EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq, opts ...client.Option) (rsp *EnsureDatasetPeriodRsp, err error)
+
+	CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq, opts ...client.Option) (rsp *CommitTimeSeriesBatchRsp, err error)
+}
+
+type DataNodePeriodRuntimeClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewDataNodePeriodRuntimeClientProxy = func(opts ...client.Option) DataNodePeriodRuntimeClientProxy {
+	return &DataNodePeriodRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *DataNodePeriodRuntimeClientProxyImpl) EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq, opts ...client.Option) (*EnsureDatasetPeriodRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/EnsureDatasetPeriod")
+	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodePeriodRuntime")
+	msg.WithCalleeMethod("EnsureDatasetPeriod")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &EnsureDatasetPeriodRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodePeriodRuntimeClientProxyImpl) CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq, opts ...client.Option) (*CommitTimeSeriesBatchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/CommitTimeSeriesBatch")
+	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodePeriodRuntime")
+	msg.WithCalleeMethod("CommitTimeSeriesBatch")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CommitTimeSeriesBatchRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

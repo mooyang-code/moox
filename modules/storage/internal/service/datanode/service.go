@@ -36,6 +36,7 @@ func ServiceAuthKey(secret, appID string) string {
 }
 
 var _ pb.DataNodeRuntimeService = (*Service)(nil)
+var _ pb.DataNodePeriodRuntimeService = (*Service)(nil)
 var _ pb.DataNodeDatasetAdminRuntimeService = (*Service)(nil)
 var _ pb.DataNodeHistoryRuntimeService = (*Service)(nil)
 
@@ -323,6 +324,10 @@ func errorCode(err error) pb.ErrorCode {
 	}
 	var commitConflict pebble.CommitConflictError
 	if errors.As(err, &commitConflict) {
+		return pb.ErrorCode_CONFLICT
+	}
+	var periodConflict pebble.PeriodConflictError
+	if errors.As(err, &periodConflict) {
 		return pb.ErrorCode_CONFLICT
 	}
 	return pb.ErrorCode_INNER_ERR

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
+  parseKlineResampleParams,
   collectionSourceMatches,
   collectionTaskNameError,
   normalizeCollectionTask,
@@ -57,6 +58,49 @@ describe("collection task params", () => {
       settle_delay_ms: 0
     });
     expect(params).not.toHaveProperty("target_dataset_id");
+
+    const payload = buildCollectionTaskPayload(
+      {
+        dataType: "kline_resample",
+        provider: "moox",
+        market: "spot",
+        frequency: "5m",
+        sourceId: "source-bars",
+        sourceFrequency: "1m",
+        sourceSeriesTag: "venue:binance"
+      },
+      { task_name: "重采样", description: "", space_id: "crypto", creator: "admin", enabled: true }
+    );
+    expect(payload).not.toHaveProperty("provider");
+    expect(payload).not.toHaveProperty("market_type");
+    expect(payload.collect_params).toMatchObject({ provider: "moox", market_type: "spot" });
+  });
+
+  it("parses resample routing only from collect_params", () => {
+    const task = normalizeCollectionTask({
+      task_id: "resample-routing",
+      data_type: "kline_resample",
+      provider: "legacy-top-level",
+      market_type: "swap",
+      collect_params: {
+        provider: "moox",
+        market_type: "spot",
+        source_dataset_id: "source-bars",
+        source_frequency: "1m",
+        source_series_tag: "venue:binance",
+        target_frequency: "5m",
+        alignment: "epoch_utc"
+      }
+    });
+
+    expect(parseKlineResampleParams(task.collect_params)).toMatchObject({
+      provider: "moox",
+      market_type: "spot",
+      source_dataset_id: "source-bars",
+      source_series_tag: "venue:binance",
+      target_frequency: "5m"
+    });
+    expect(parseCollectionTaskInput(task)).toMatchObject({ provider: "moox", market: "spot" });
   });
 
   it("emits result_config separately from the task payload", () => {
@@ -103,10 +147,10 @@ describe("collection task params", () => {
       task_name: "任务一",
       data_type: "kline_resample",
       tag_ids: ["source_tag"],
-      provider: "moox",
-      market_type: "spot",
+      provider: "legacy-provider-must-be-ignored",
+      market_type: "swap",
       enabled: "false",
-      collect_params: '{"target_frequency":"5m"}',
+      collect_params: '{"provider":"moox","market_type":"spot","target_frequency":"5m"}',
       result: { view_id: "view-1", status: "ready" }
     });
 

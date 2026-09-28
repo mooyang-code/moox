@@ -28,8 +28,6 @@ export interface CollectorTask {
   data_type?: string;
   tag_ids?: string[];
   definition_hash?: string;
-  provider?: string;
-  market_type?: string;
   collect_params?: Record<string, unknown>;
   enabled?: boolean | string;
   creator?: string;
@@ -48,8 +46,6 @@ export interface CollectionTaskPayload {
   data_type?: string;
   tag_ids?: string[];
   definition_hash?: string;
-  provider?: string;
-  market_type?: string;
   collect_params?: Record<string, unknown>;
   enabled?: boolean;
   creator?: string;
@@ -64,8 +60,6 @@ export interface CollectionTaskResultConfig {
 export interface GetTaskListRequest {
   space_id: string;
   data_type?: string;
-  provider?: string;
-  market_type?: string;
   enabled?: boolean;
   task_id?: string;
   page?: { page?: number; size?: number; cursor?: string };

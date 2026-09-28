@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/hmac"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -174,11 +175,38 @@ func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
+	current, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if collectorOwnedDataset(current) {
+		if err := s.validateCollectorDatasetDeleteAuth(req.GetAuthInfo()); err != nil {
+			return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		}
+	}
 	if err := s.metadata.DeleteDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataset")
 	return &pb.DeleteDatasetRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
+func (s *Service) validateCollectorDatasetDeleteAuth(auth *pb.AuthInfo) error {
+	if strings.TrimSpace(s.operatorSecret) == "" {
+		return errors.New("storage auth secret is not configured")
+	}
+	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
+		return errors.New("collector service auth is required")
+	}
+	appID := strings.TrimSpace(auth.GetAppId())
+	if appID != "moox-collector" {
+		return errors.New("collector service identity required")
+	}
+	expected := serviceAuthKey(s.operatorSecret, appID)
+	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
+		return errors.New("invalid collector service HMAC")
+	}
+	return nil
 }
 
 func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {

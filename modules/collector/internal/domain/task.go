@@ -35,6 +35,7 @@ type CollectionTask struct {
 	DataType          string                     `gorm:"column:c_data_type"`
 	TagIDs            []string                   `gorm:"-"`
 	DefinitionHash    string                     `gorm:"column:c_definition_hash"`
+	SeriesHash        string                     `gorm:"column:c_series_hash"`
 	CollectParams     string                     `gorm:"column:c_collect_params"`
 	Enabled           bool                       `gorm:"column:c_enabled"`
 	Creator           string                     `gorm:"column:c_creator"`

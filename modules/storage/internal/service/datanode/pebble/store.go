@@ -64,6 +64,7 @@ type Store struct {
 	processedEventRetention time.Duration
 	datasetWriteMu          sync.RWMutex
 	outboxMu                sync.Mutex
+	periodMu                sync.Mutex
 	outboxPending           atomic.Int64
 	outboxRevision          atomic.Uint64
 	outboxHintKnown         atomic.Bool
@@ -97,7 +98,7 @@ func Open(opts Options) (*Store, error) {
 	if err := ensureLayout(opts.Path); err != nil {
 		return nil, err
 	}
-	db, err := cpebble.Open(opts.Path, &cpebble.Options{})
+	db, err := cpebble.Open(opts.Path, &cpebble.Options{Merger: BitmapORMerger})
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +112,9 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	historyCtx, historyCancel := context.WithCancel(context.Background())
-	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}, nil
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}
+	store.startPeriodFinalizer()
+	return store, nil
 }
 
 func (s *Store) Close() error {

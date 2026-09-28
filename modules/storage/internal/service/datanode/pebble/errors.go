@@ -45,3 +45,12 @@ type CommitConflictError struct{ CommitID string }
 func (e CommitConflictError) Error() string {
 	return fmt.Sprintf("commit_id %q already exists with a different payload", e.CommitID)
 }
+
+type PeriodConflictError struct {
+	SpaceID, DatasetID, Frequency string
+	PeriodTime                    int64
+}
+
+func (e PeriodConflictError) Error() string {
+	return fmt.Sprintf("dataset period %s/%s/%s/%d already exists with a different expectation", e.SpaceID, e.DatasetID, e.Frequency, e.PeriodTime)
+}

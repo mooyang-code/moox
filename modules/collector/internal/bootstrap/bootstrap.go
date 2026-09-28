@@ -548,9 +548,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	type marketFetchRuntime struct {
 		spaceID     string
 		reconciler  *marketfetch.Reconciler
-		readiness   *marketfetch.PeriodReadinessService
 		scheduler   *marketfetch.Scheduler
-		replayReady <-chan struct{}
 		tickRunning atomic.Bool
 	}
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
@@ -571,7 +569,6 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			},
 			DisableTimerTriggers: !stockCNTimerOwned,
 		}
-		readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 		invokeScheduler := &marketfetch.Scheduler{
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
@@ -585,17 +582,13 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			Symbols:               plannerSource,
 			InvokeNonRealtimeOnly: stockCNTimerOwned,
 		}
-		if err := readiness.EnsureCurrentAndNext(trpc.BackgroundContext(), spaceID, time.Now().UTC()); err != nil {
-			log.WarnContextf(trpc.BackgroundContext(), "collector period readiness prebuild failed space=%s: %v", spaceID, err)
-		}
 		if err := marketfetch.StartCompletionConsumer(trpc.BackgroundContext(), spaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics); err != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector market fetch completion consumer disabled space=%s: %v", spaceID, err)
 		}
-		replayReady, err := marketfetch.StartStorageWriteConsumerReady(trpc.BackgroundContext(), spaceID, dbm.TaskInstances(), readiness)
-		if err != nil {
+		if err := marketfetch.StartStorageWriteConsumer(trpc.BackgroundContext(), spaceID, dbm.TaskInstances()); err != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector storage write consumer disabled space=%s: %v", spaceID, err)
 		}
-		runtimes = append(runtimes, marketFetchRuntime{spaceID: spaceID, reconciler: reconciler, readiness: readiness, scheduler: invokeScheduler, replayReady: replayReady})
+		runtimes = append(runtimes, marketFetchRuntime{spaceID: spaceID, reconciler: reconciler, scheduler: invokeScheduler})
 	}
 	// Resampling owns a dedicated minute timer. Its callback only schedules a
 	// bounded background scan, so slow source/target Storage I/O cannot delay the
@@ -649,25 +642,15 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			log.WarnContextf(trpc.BackgroundContext(), "collector Storage adapter does not support period readiness reports space=%s", runtime.spaceID)
 			continue
 		}
-		if runtime.replayReady == nil {
-			log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled space=%s because storage replay did not start", runtime.spaceID)
-			continue
-		}
+		// The legacy readiness repository remains only for local resample jobs.
+		// Direct market-fetch Dataset completion is finalized inside Storage
+		// DataNode and no longer waits for DatasetRowsUpserted replay.
 		periodReporter := marketfetch.NewPeriodReporter(dbm.PeriodReadiness(), reporter, runtime.spaceID, cfg.PeriodReadiness.ParentRetention)
 		periodReporter.SetItemRetention(cfg.PeriodReadiness.ItemRetention)
 		periodReporter.SetMetrics(metrics)
-		// DeliverAll replay is a one-time migration/readiness projection. Do
-		// not finalize deadlines until the replay has drained, otherwise a
-		// slow startup can publish degraded before its historical rows arrive.
-		go func(spaceID string, replayReady <-chan struct{}, periodReporter *marketfetch.PeriodReporter) {
-			// A DeliverAll replay is part of the readiness evidence. Do not
-			// fail open after a wall-clock timeout: starting FinalizeDue while
-			// the row tail is still pending would permanently publish degraded.
-			<-replayReady
-			if err := marketfetch.StartPeriodReporter(trpc.BackgroundContext(), periodReporter, cfg.PeriodReadiness.ReportInterval); err != nil {
-				log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled space=%s: %v", spaceID, err)
-			}
-		}(runtime.spaceID, runtime.replayReady, periodReporter)
+		if err := marketfetch.StartPeriodReporter(trpc.BackgroundContext(), periodReporter, cfg.PeriodReadiness.ReportInterval); err != nil {
+			log.WarnContextf(trpc.BackgroundContext(), "collector resample period reporter disabled space=%s: %v", runtime.spaceID, err)
+		}
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
@@ -694,9 +677,6 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 					} else {
 						log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
 					}
-				}
-				if err := runtime.readiness.EnsureCurrentAndNext(tickCtx, spaceID, time.Now().UTC()); err != nil {
-					log.WarnContextf(tickCtx, "collector period readiness prebuild failed space=%s: %v", spaceID, err)
 				}
 			}(runtime)
 		}
