@@ -101,12 +101,7 @@ func runPrimaryRole() error {
 	}
 	resolver := newDataNodeResolver(cached.RequestSnapshot, func(target string) pb.DataNodeRuntimeService {
 		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
-		return &dataNodeProxyAdapter{
-			proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
-			adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
-			markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
-			historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
-		}
+		return newDataNodeProxyAdapter(opts...)
 	})
 	viewTarget := os.Getenv("MOOX_STORAGE_VIEW_TARGET")
 	if viewTarget == "" {
@@ -934,13 +929,7 @@ func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newPr
 	if newProxy == nil {
 		newProxy = func(target string) pb.DataNodeRuntimeService {
 			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(dataNodeClientTimeout)}
-			return &dataNodeProxyAdapter{
-				proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
-				adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
-				markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
-				periodProxy:  pb.NewDataNodePeriodRuntimeClientProxy(opts...),
-				historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
-			}
+			return newDataNodeProxyAdapter(opts...)
 		}
 	}
 	proxies := make(map[dataNodeProxyKey]pb.DataNodeRuntimeService)
@@ -1025,6 +1014,16 @@ type dataNodeProxyAdapter struct {
 	markerProxy  pb.DataNodeMarkerRuntimeClientProxy
 	periodProxy  pb.DataNodePeriodRuntimeClientProxy
 	historyProxy pb.DataNodeHistoryRuntimeClientProxy
+}
+
+func newDataNodeProxyAdapter(opts ...client.Option) *dataNodeProxyAdapter {
+	return &dataNodeProxyAdapter{
+		proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
+		adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
+		markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+		periodProxy:  pb.NewDataNodePeriodRuntimeClientProxy(opts...),
+		historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
+	}
 }
 
 func (a *dataNodeProxyAdapter) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {

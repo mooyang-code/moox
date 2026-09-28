@@ -375,6 +375,13 @@ func TestDataNodeClientTimeoutCoversMaintenanceRPCs(t *testing.T) {
 	}
 }
 
+func TestDataNodeProxyAdapterIncludesPeriodRuntime(t *testing.T) {
+	proxy := newDataNodeProxyAdapter()
+	if proxy.proxy == nil || proxy.adminProxy == nil || proxy.markerProxy == nil || proxy.periodProxy == nil || proxy.historyProxy == nil {
+		t.Fatalf("data node proxy adapter is missing a runtime proxy: %+v", proxy)
+	}
+}
+
 func TestResolveDataNodeUsesActiveDatasetNodeAndTargetOnly(t *testing.T) {
 	base := resolverSnapshot{
 		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "active"},
