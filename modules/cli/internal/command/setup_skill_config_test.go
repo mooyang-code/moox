@@ -614,6 +614,9 @@ func (localSkillSSH) Check(context.Context) error { return nil }
 func (localSkillSSH) ForwardLocal(context.Context, string) (net.Listener, error) {
 	return nil, errors.New("not implemented")
 }
+func (localSkillSSH) Download(context.Context, string, io.Writer) (int64, error) {
+	return 0, errors.New("not implemented")
+}
 func (localSkillSSH) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error {
 	return errors.New("not implemented")
 }

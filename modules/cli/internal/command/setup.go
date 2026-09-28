@@ -1168,7 +1168,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return err
 	}
-	var storageEventBusCredential, storageEventBusCA, storageMetricsEventBusCredential []byte
+	var storageEventBusCredential, storageEventBusCA, storageMetricsEventBusCredential, storageAdminEventBusCredential []byte
 	if !useControlGateway {
 		storageEventBusCredential, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/storage-eventbus.yaml")
 		if err != nil {
@@ -1181,6 +1181,10 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		storageMetricsEventBusCredential, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/metrics-publisher.yaml")
 		if err != nil {
 			return fmt.Errorf("read control metrics EventBus credential for Storage: %w", err)
+		}
+		storageAdminEventBusCredential, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/internal-admin.yaml")
+		if err != nil {
+			return fmt.Errorf("read control EventBus admin credential for Storage maintenance: %w", err)
 		}
 	}
 	if !useControlGateway {
@@ -1226,6 +1230,16 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		TLSMode:                          controlTLSMode,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
+	}
+	if !useControlGateway && len(storageAdminEventBusCredential) > 0 {
+		if _, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
+umask 077
+dir="$HOME/.config/moox/eventbus"
+mkdir -p "$dir"
+cat >"$dir/internal-admin.yaml"
+chmod 600 "$dir/internal-admin.yaml"`}, bytes.NewReader(storageAdminEventBusCredential)); err != nil {
+			return fmt.Errorf("sync control EventBus admin credential to Storage: %w", err)
+		}
 	}
 	if !useControlGateway {
 		if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Name, host.Address); err != nil {

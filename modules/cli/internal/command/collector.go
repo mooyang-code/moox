@@ -139,6 +139,7 @@ type collectorPublishStatusOptions struct {
 	AccessToken      string
 	ServiceAccessKey string
 	ServiceSecretKey string
+	File             string
 	SpaceID          string
 	JobID            string
 }
@@ -173,6 +174,7 @@ type collectorDeleteOptions struct {
 	AccessToken      string
 	ServiceAccessKey string
 	ServiceSecretKey string
+	File             string
 	SpaceID          string
 	Namespace        string
 	Region           string
@@ -417,6 +419,7 @@ func init() {
 	deleteFlags.StringVar(&collectorDeleteFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
 	deleteFlags.StringVar(&collectorDeleteFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
 	deleteFlags.StringVar(&collectorDeleteFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
+	deleteFlags.StringVar(&collectorDeleteFlags.File, "file", "", "optional moox.toml; enables manifest-backed service auth/CA")
 	deleteFlags.StringVar(&collectorDeleteFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	deleteFlags.StringVar(&collectorDeleteFlags.Namespace, "namespace", "", "只删除指定 SCF 命名空间中的节点")
 	deleteFlags.StringVar(&collectorDeleteFlags.Region, "region", "", "只删除指定地域的 SCF 节点")
@@ -472,6 +475,7 @@ func init() {
 	statusFlags.StringVar(&collectorPublishStatusFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
 	statusFlags.StringVar(&collectorPublishStatusFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id")
 	statusFlags.StringVar(&collectorPublishStatusFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key")
+	statusFlags.StringVar(&collectorPublishStatusFlags.File, "file", "", "optional moox.toml; enables manifest-backed service auth/CA")
 	statusFlags.StringVar(&collectorPublishStatusFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	statusFlags.StringVar(&collectorPublishStatusFlags.JobID, "job-id", "", "node batch job id")
 }
@@ -2175,13 +2179,53 @@ func publishCollectorFunctionStatus(ctx context.Context, opts collectorPublishSt
 	if strings.TrimSpace(opts.JobID) == "" {
 		return nil, fmt.Errorf("--job-id is required")
 	}
-	client := newControlClient(
-		opts.ControlURL,
-		opts.AccessToken,
-		opts.ServiceAccessKey,
-		opts.ServiceSecretKey,
-		opts.SpaceID,
-	)
+	serviceGatewayCAFile := ""
+	manifestServiceAuth := false
+	var manifest *setupconfig.Snapshot
+	spaceID := strings.TrimSpace(defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
+	if strings.TrimSpace(opts.File) != "" {
+		_, loadedManifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, spaceID)
+		if err != nil {
+			return nil, err
+		}
+		manifest = loadedManifest
+		if manifest != nil && strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
+			trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+			if trustErr != nil {
+				return nil, trustErr
+			}
+			opts.ServiceAccessKey = "moox-cli"
+			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
+			manifestServiceAuth = true
+			if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
+				file, writeErr := os.CreateTemp("", "moox-collector-status-service-ca-")
+				if writeErr != nil {
+					return nil, fmt.Errorf("create control service CA: %w", writeErr)
+				}
+				serviceGatewayCAFile = file.Name()
+				if writeErr = file.Chmod(0o600); writeErr == nil {
+					_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
+				}
+				closeErr := file.Close()
+				if writeErr == nil {
+					writeErr = closeErr
+				}
+				if writeErr != nil {
+					_ = os.Remove(serviceGatewayCAFile)
+					return nil, fmt.Errorf("write control service CA: %w", writeErr)
+				}
+				defer os.Remove(serviceGatewayCAFile)
+			}
+		}
+	}
+	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
+	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
+		client.ServiceAuth.CAFile = serviceGatewayCAFile
+	}
+	if manifestServiceAuth && client.ServiceAuth != nil && manifest != nil {
+		client.ServiceAuth.Caller = "moox-cli"
+		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
+	}
 	jobIDs := splitJobIDs(opts.JobID)
 	if len(jobIDs) == 1 {
 		return client.GetNodeBatchChange(ctx, jobIDs[0])
@@ -2258,7 +2302,52 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		return nil, fmt.Errorf("refusing to delete SCF nodes without --confirm (use --dry-run to inspect targets)")
 	}
 
+	serviceGatewayCAFile := ""
+	manifestServiceAuth := false
+	var manifest *setupconfig.Snapshot
+	if strings.TrimSpace(opts.File) != "" {
+		_, loadedManifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, spaceID)
+		if err != nil {
+			return nil, err
+		}
+		manifest = loadedManifest
+		if manifest != nil && strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
+			trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+			if trustErr != nil {
+				return nil, trustErr
+			}
+			opts.ServiceAccessKey = "moox-cli"
+			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
+			manifestServiceAuth = true
+			if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
+				file, writeErr := os.CreateTemp("", "moox-collector-delete-service-ca-")
+				if writeErr != nil {
+					return nil, fmt.Errorf("create control service CA: %w", writeErr)
+				}
+				serviceGatewayCAFile = file.Name()
+				if writeErr = file.Chmod(0o600); writeErr == nil {
+					_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
+				}
+				closeErr := file.Close()
+				if writeErr == nil {
+					writeErr = closeErr
+				}
+				if writeErr != nil {
+					_ = os.Remove(serviceGatewayCAFile)
+					return nil, fmt.Errorf("write control service CA: %w", writeErr)
+				}
+				defer os.Remove(serviceGatewayCAFile)
+			}
+		}
+	}
 	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
+	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
+		client.ServiceAuth.CAFile = serviceGatewayCAFile
+	}
+	if manifestServiceAuth && client.ServiceAuth != nil && manifest != nil {
+		client.ServiceAuth.Caller = "moox-cli"
+		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
+	}
 	namespace := strings.TrimSpace(opts.Namespace)
 	region := strings.TrimSpace(opts.Region)
 	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{

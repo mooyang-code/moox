@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func TestValidateSCFPublishOverrideCapacityIncludesOtherSpaces(t *testing.T) {
 		},
 	}}}
 	require.NoError(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-guangzhou", 24))
-	require.ErrorContains(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-guangzhou", 25), "above max_functions_per_namespace")
+	require.ErrorContains(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-guangzhou", 26), "above max_functions_per_namespace")
 }
 
 func TestValidateSCFPublishOverrideCapacityAllowsOverflowNamespaces(t *testing.T) {
@@ -71,7 +72,7 @@ func TestValidateSCFPublishOverrideCapacityAllowsOverflowNamespaces(t *testing.T
 		},
 	}}}
 	require.NoError(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-nanjing", 54))
-	require.ErrorContains(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-nanjing", 250), "above max_namespaces_per_region")
+	require.ErrorContains(t, validateSCFPublishOverrideCapacity(snapshot, "crypto", "ap-nanjing", 251), "above max_namespaces_per_region")
 }
 
 func TestValidateSCFPublishOverrideCanRepairOriginalQuotaOverflow(t *testing.T) {
@@ -497,21 +498,26 @@ func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 	require.NoError(t, err)
 	var bundle struct {
 		Tasks []struct {
-			SpaceID string `yaml:"space_id"`
-			TaskID  string `yaml:"task_id"`
-			Enabled bool   `yaml:"enabled"`
+			SpaceID       string         `yaml:"space_id"`
+			DataType      string         `yaml:"data_type"`
+			TagIDs        []string       `yaml:"tag_ids"`
+			Enabled       bool           `yaml:"enabled"`
+			CollectParams map[string]any `yaml:"collect_params"`
 		} `yaml:"tasks"`
 	}
 	require.NoError(t, yaml.Unmarshal(content, &bundle))
-	seen := map[string]bool{}
+	found := false
 	for _, task := range bundle.Tasks {
-		if task.SpaceID != "stockcn" {
+		if task.SpaceID != "stockcn" || task.DataType != "kline" || !slices.Contains(task.TagIDs, "cn_a_share") {
 			continue
 		}
-		seen[task.TaskID] = task.Enabled
+		if fmt.Sprint(task.CollectParams["frequency"]) != "1m" {
+			continue
+		}
+		found = true
+		assert.False(t, task.Enabled)
 	}
-	assert.Contains(t, seen, "builtin-stockcn-kline-1m")
-	assert.False(t, seen["builtin-stockcn-kline-1m"])
+	assert.True(t, found, "default stockcn 1m task should exist and remain disabled until explicit activation")
 }
 
 func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {

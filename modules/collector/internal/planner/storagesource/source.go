@@ -240,6 +240,31 @@ func (c *metadataFailoverClient) ResolveSubjects(ctx context.Context, req *stora
 	return nil, fmt.Errorf("gateway: %w; direct metadata: %v", err, secondaryErr)
 }
 
+func (c *metadataFailoverClient) GetTag(ctx context.Context, req *storagepb.GetTagReq, opts ...client.Option) (*storagepb.GetTagRsp, error) {
+	primary, ok := c.primary.(tagMetadataClient)
+	if !ok {
+		return nil, fmt.Errorf("get tag: primary metadata client does not support tags")
+	}
+	primaryCtx, cancel := context.WithTimeout(ctx, metadataPrimaryTimeout)
+	rsp, err := primary.GetTag(primaryCtx, req, opts...)
+	cancel()
+	if err == nil || c.secondary == nil {
+		return rsp, err
+	}
+	secondary, ok := c.secondary.(tagMetadataClient)
+	if !ok {
+		return nil, err
+	}
+	fallbackCtx, fallbackCancel := context.WithTimeout(context.WithoutCancel(ctx), metadataFallbackTimeout)
+	defer fallbackCancel()
+	secondaryRsp, secondaryErr := secondary.GetTag(fallbackCtx, req)
+	if secondaryErr == nil {
+		log.WarnContextf(ctx, "storage metadata gateway failed, used direct Metadata fallback action=get_tag error=%v", err)
+		return secondaryRsp, nil
+	}
+	return nil, fmt.Errorf("gateway: %w; direct metadata: %v", err, secondaryErr)
+}
+
 func (c *metadataFailoverClient) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq, opts ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
 	primary, ok := c.primary.(datasetColumnClient)
 	if !ok {

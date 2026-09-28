@@ -12,10 +12,19 @@ import (
 type fakeMetadataClient struct {
 	dataset  *storagepb.Dataset
 	subjects []*storagepb.Subject
+	tag      *storagepb.Tag
+	tagErr   error
 }
 
 func (f *fakeMetadataClient) GetDataset(_ context.Context, _ *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {
 	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: f.dataset}, nil
+}
+
+func (f *fakeMetadataClient) GetTag(_ context.Context, _ *storagepb.GetTagReq, _ ...client.Option) (*storagepb.GetTagRsp, error) {
+	if f.tagErr != nil {
+		return nil, f.tagErr
+	}
+	return &storagepb.GetTagRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Tag: f.tag}, nil
 }
 
 func (f *fakeMetadataClient) ResolveSubjects(_ context.Context, _ *storagepb.ResolveSubjectsReq, _ ...client.Option) (*storagepb.ResolveSubjectsRsp, error) {
@@ -54,6 +63,16 @@ func TestDatasetSourceResolveSubjectsDerivesFromTagsWithoutSymbolMapping(t *test
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, "BTC-USDT", items[0].SubjectID)
+}
+
+func TestMetadataFailoverClientSupportsGetTag(t *testing.T) {
+	primary := &fakeMetadataClient{tagErr: context.DeadlineExceeded}
+	secondary := &fakeMetadataClient{tag: &storagepb.Tag{SpaceId: "crypto", TagId: "binance_spot", Source: "binance", MarketType: "spot"}}
+	src := &DatasetSource{metadata: &metadataFailoverClient{primary: primary, secondary: secondary}}
+	tag, err := src.GetTag(context.Background(), "crypto", "binance_spot")
+	require.NoError(t, err)
+	require.Equal(t, "binance_spot", tag.GetTagId())
+	require.Equal(t, "binance", tag.GetSource())
 }
 
 func TestNormalizeTRPCTargetRawFormats(t *testing.T) {

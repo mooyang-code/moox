@@ -32,7 +32,7 @@ const (
 	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
 	adminSpaceRemoteAddress      = "127.0.0.1:11107"
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
-	storageLocalProvenanceFile   = "release/deploy-stage/moox/build-provenance.json"
+	storageLocalProvenanceFile   = "release/storage-artifacts/build-provenance.json"
 	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
 	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
 	storageDeploymentNodeID      = "storage-node-0"
@@ -956,9 +956,10 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 		return storageE2EResult{}, err
 	}
 	result = storageE2EResult{Status: "running", Namespace: namespace, Assertions: []string{}, Cleanup: "pending"}
-	spaceID := namespace + "_space"
-	sourceID := namespace + "_source"
-	datasetID := "dataset_" + namespace
+	idToken := strings.ReplaceAll(namespace, "-", "_")
+	spaceID := idToken + "_space"
+	sourceID := idToken + "_source"
+	datasetID := "dataset_" + idToken
 	var space *storagepb.Space
 	var source *storagepb.DataSource
 	var dataset *storagepb.Dataset

@@ -734,7 +734,7 @@ func persistStorageReleaseArtifacts(_ context.Context, repositoryRoot, archive s
 			return fmt.Errorf("storage build provenance is missing %s", name)
 		}
 	}
-	artifactDir := filepath.Join(repositoryRoot, "release", "deploy-stage", "moox")
+	artifactDir := filepath.Join(repositoryRoot, "release", "storage-artifacts")
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		return fmt.Errorf("create storage release artifact directory: %w", err)
 	}
@@ -759,7 +759,7 @@ func persistStorageReleaseArtifacts(_ context.Context, repositoryRoot, archive s
 		return fmt.Errorf("close storage release archive: %w", closeErr)
 	}
 	manifest := fmt.Sprintf("schema_version=1\ncommit=%s\narchive=%s\narchive_sha256=%s\nmoox-storage-primary=%s\nmoox-storage-node=%s\nmoox-storage-view=%s\n",
-		strings.ToLower(build.Commit), filepath.ToSlash(filepath.Join("release", "deploy-stage", "moox", "storage.tar.gz")), archiveHash,
+		strings.ToLower(build.Commit), filepath.ToSlash(filepath.Join("release", "storage-artifacts", "storage.tar.gz")), archiveHash,
 		build.BinaryHashes["moox-storage-primary"], build.BinaryHashes["moox-storage-node"], build.BinaryHashes["moox-storage-view"])
 	artifactPath := filepath.Join(repositoryRoot, "artifacts", "storage-datanode-release-sha256.txt")
 	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {

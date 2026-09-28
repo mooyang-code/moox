@@ -484,6 +484,9 @@ func (localReadSSH) Check(context.Context) error { return nil }
 func (localReadSSH) ForwardLocal(context.Context, string) (net.Listener, error) {
 	return nil, errors.New("not implemented")
 }
+func (localReadSSH) Download(context.Context, string, io.Writer) (int64, error) {
+	return 0, errors.New("not implemented")
+}
 func (localReadSSH) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error {
 	return errors.New("not implemented")
 }

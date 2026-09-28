@@ -111,6 +111,15 @@ func (f *factorEngineSSH) Check(context.Context) error { return nil }
 func (f *factorEngineSSH) ForwardLocal(context.Context, string) (net.Listener, error) {
 	return nil, nil
 }
+func (f *factorEngineSSH) Download(_ context.Context, src string, dst io.Writer) (int64, error) {
+	data, ok := f.files[src]
+	if !ok {
+		return 0, fs.ErrNotExist
+	}
+	n, err := dst.Write(data)
+	return int64(n), err
+}
+
 func (f *factorEngineSSH) Upload(_ context.Context, src io.Reader, _ int64, dst string, mode fs.FileMode) error {
 	if f.uploads == nil {
 		f.uploads = map[string][]byte{}
