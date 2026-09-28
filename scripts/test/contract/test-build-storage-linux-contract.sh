@@ -103,6 +103,7 @@ grep -Fq -- '2200' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'BatchMode=no' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'GIT_COMMIT=' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'TARGET_GOARCH=' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'GOTMPDIR=/tmp/moox-build-contract/.gotmp' "${TMP_ROOT}/ssh.log"
 ! grep -Fq -- 'fixture-password' "${TMP_ROOT}/rsync.log" "${TMP_ROOT}/scp.log" "${TMP_ROOT}/ssh.log"
 for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
   test -s "${TMP_ROOT}/output/${binary}"

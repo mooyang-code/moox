@@ -50,6 +50,7 @@ git_commit="${GIT_COMMIT:-$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo 
 version="${VERSION:-${git_commit}}"
 remote="${username}@${address}"
 remote_root_q="$(shell_quote "${REMOTE_ROOT}")"
+gotmp_dir_q="$(shell_quote "${REMOTE_ROOT}/.gotmp")"
 version_q="$(shell_quote "${version}")"
 git_commit_q="$(shell_quote "${git_commit}")"
 known_hosts_q="$(shell_quote "${KNOWN_HOSTS_PATH}")"
@@ -158,7 +159,7 @@ run_rsync -az --delete \
 
 echo "==> build ${linux_cgo_target} on ${name} (${version})"
 run_ssh "${remote}" \
-	  "cd ${remote_root_q} && mkdir -p bin && rm -f bin/moox-storage-primary bin/moox-storage-node bin/moox-storage-view bin/moox-storage-access bin/moox-storage-cli && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh ${linux_cgo_target_q}"
+	  "cd ${remote_root_q} && mkdir -p bin ${gotmp_dir_q} && rm -f bin/moox-storage-primary bin/moox-storage-node bin/moox-storage-view bin/moox-storage-access bin/moox-storage-cli && if ! command -v go >/dev/null 2>&1; then for go_bin in \"\$HOME\"/.local/go*/bin; do if [ -x \"\$go_bin/go\" ]; then export PATH=\"\$go_bin:\$PATH\"; break; fi; done; fi && command -v go >/dev/null 2>&1 || { echo 'Go is not installed on storage build host' >&2; exit 1; } && GOTMPDIR=${gotmp_dir_q} GOFLAGS=-buildvcs=false VERSION=${version_q} GIT_COMMIT=${git_commit_q} CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=${target_goarch_q} bash ./scripts/build/build.sh ${linux_cgo_target_q}"
 
 mkdir -p "${BIN_DIR}"
 echo "==> download Linux ${linux_cgo_target} binaries from ${name}"
