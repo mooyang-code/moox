@@ -98,9 +98,18 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 			i.registry.ObserveInventoryRefreshError()
 			return fmt.Errorf("parse collector task %q: %w", task.TaskID, err)
 		}
-		if err := params.Validate(); err != nil {
+		var validateErr error
+		if params.Collector.DataType == "kline_resample" {
+			validateErr = params.Validate()
+		} else {
+			// Direct collection tasks derive Provider/market routing from their
+			// selected Tags. The task definition itself must therefore be valid
+			// without task-level exchange/market fields.
+			validateErr = params.ValidateTaskDefinition()
+		}
+		if validateErr != nil {
 			i.registry.ObserveInventoryRefreshError()
-			return fmt.Errorf("validate collector task %q: %w", task.TaskID, err)
+			return fmt.Errorf("validate collector task %q: %w", task.TaskID, validateErr)
 		}
 		if params.Collector.DataType == "kline_resample" {
 			if !i.resampleEnabled {

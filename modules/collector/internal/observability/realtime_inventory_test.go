@@ -36,11 +36,20 @@ func collectorRule(id string, enabled bool, dataType, target, frequency string) 
 	return domain.CollectionTask{SpaceID: "crypto", TaskID: id, DataType: dataType, CollectParams: params, Enabled: enabled}
 }
 
+func tagOnlyCollectorRule(id, target, frequency string) domain.CollectionTask {
+	params := `{"target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
+	return domain.CollectionTask{
+		SpaceID: "crypto", TaskID: id, DataType: "kline", TagIDs: []string{"binance_spot"},
+		CollectParams: params, Enabled: true,
+	}
+}
+
 func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing.T) {
 	source := &ruleSourceStub{rules: []domain.CollectionTask{
 		collectorRule("live", true, "kline", "bars", "1m"),
 		collectorRule("live-5m", true, "kline", "bars", "5m"),
 		collectorRule("duplicate", true, "kline", "bars", "1m"),
+		tagOnlyCollectorRule("tag-only", "tag-only-bars", "1m"),
 		collectorRule("batch", true, "kline", "batch-bars", "1m"),
 		collectorRule("disabled", false, "kline", "disabled-bars", "1m"),
 	}}
@@ -52,6 +61,7 @@ func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing
 		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1m"}, Interval: time.Minute},
 		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "5m"}, Interval: 5 * time.Minute},
 		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "batch-bars", Freq: "1m"}, Interval: time.Minute},
+		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "tag-only-bars", Freq: "1m"}, Interval: time.Minute},
 	}, registry.items)
 	require.False(t, inventory.Due(time.Now()))
 }
