@@ -3,6 +3,7 @@ package taskresult
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -14,6 +15,8 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
+
+var ErrUnsupportedOutputFields = errors.New("unsupported output fields")
 
 // IDs are the stable metadata identities for one task result. Datasets and
 // views are task scoped; the view name is derived from taskID, type and
@@ -132,6 +135,7 @@ type metadataAPI interface {
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
 	GetView(context.Context, *storagepb.GetViewReq) (*storagepb.GetViewRsp, error)
 	CreateView(context.Context, *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error)
+	UpdateView(context.Context, *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
 	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error)
@@ -158,6 +162,9 @@ func (p metadataProxy) GetView(ctx context.Context, req *storagepb.GetViewReq) (
 }
 func (p metadataProxy) CreateView(ctx context.Context, req *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
 	return p.client.CreateView(ctx, req)
+}
+func (p metadataProxy) UpdateView(ctx context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
+	return p.client.UpdateView(ctx, req)
 }
 func (p metadataProxy) DeleteView(ctx context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	return p.client.DeleteView(ctx, req)
@@ -627,6 +634,67 @@ func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID stri
 	return nil
 }
 
+// EnsureOutputFields adds the Dataset columns required by a task-specific
+// output projection and appends missing columns to an explicitly projected
+// result View without replacing its existing projection.
+func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datasetID, viewID, dataType string, outputFields []string) error {
+	if m == nil || m.metadata == nil || m.auth == nil {
+		return fmt.Errorf("task result metadata manager is not configured")
+	}
+	if len(outputFields) == 0 {
+		return fmt.Errorf("at least one output field is required")
+	}
+	ids := IDs{DatasetID: strings.TrimSpace(datasetID), ViewID: strings.TrimSpace(viewID)}
+	if ids.DatasetID == "" || ids.ViewID == "" {
+		return fmt.Errorf("result dataset_id and view_id are required")
+	}
+	datasetExists, viewExists, err := m.resultMetadataState(ctx, spaceID, taskID, ids)
+	if err != nil {
+		return err
+	}
+	if !datasetExists || !viewExists {
+		return fmt.Errorf("task result Dataset/View is unavailable")
+	}
+	viewResponse, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
+	if err != nil || viewResponse == nil || viewResponse.GetRetInfo() == nil || viewResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || viewResponse.GetView() == nil {
+		return metadataError("get result view for output fields", err, func() *storagepb.RetInfo {
+			if viewResponse == nil {
+				return nil
+			}
+			return viewResponse.GetRetInfo()
+		}())
+	}
+	view := viewResponse.GetView()
+	kind := storagepb.DataKind_DATA_KIND_TIME_SERIES
+	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
+		kind = storagepb.DataKind_DATA_KIND_RECORD
+	}
+	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, ids.ViewID, kind, outputFields); err != nil {
+		return err
+	}
+	// output_fields is the complete user-facing projection contract. Replacing
+	// the View columns removes stale fields (for example provider_id) when a
+	// task narrows its projection; append-only updates leave metadata pointing
+	// at fields that new rows no longer persist and cause "not projected"
+	// query failures after the next View rebuild.
+	columns, err := resultViewColumns(spaceID, ids, outputFields)
+	if err != nil {
+		return err
+	}
+	nextView := proto.Clone(view).(*storagepb.View)
+	nextView.Columns = columns
+	updated, err := m.metadata.UpdateView(ctx, &storagepb.UpdateViewReq{AuthInfo: m.auth, View: nextView, ReplaceColumns: true})
+	if err != nil || updated == nil || updated.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return metadataError("replace result view output fields", err, func() *storagepb.RetInfo {
+			if updated == nil {
+				return nil
+			}
+			return updated.GetRetInfo()
+		}())
+	}
+	return nil
+}
+
 func (m *Manager) cleanupCreatedDataset(ctx context.Context, spaceID, datasetID string) error {
 	// A newly-created Dataset is disabled until the activation step. Remove its
 	// metadata first so compensation also works when activation never happened;
@@ -878,10 +946,10 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 				unknown = append(unknown, name)
 			}
 			sort.Strings(unknown)
-			return fmt.Errorf("unsupported output fields: %s", strings.Join(unknown, ", "))
+			return fmt.Errorf("%w: %s", ErrUnsupportedOutputFields, strings.Join(unknown, ", "))
 		}
 		if len(filtered) == 0 {
-			return fmt.Errorf("at least one supported output field is required")
+			return fmt.Errorf("%w: at least one supported output field is required", ErrUnsupportedOutputFields)
 		}
 		fields = filtered
 	}
@@ -895,34 +963,14 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 }
 
 func (m *Manager) ensureViewColumns(ctx context.Context, spaceID string, ids IDs, outputFields []string) error {
-	fields := make(map[string]storagepb.FieldValueType, len(outputFields))
-	for _, name := range outputFields {
-		name = strings.ToLower(strings.TrimSpace(name))
-		if name == "" {
-			continue
-		}
-		switch name {
-		case "open", "high", "low", "close", "volume", "quote_volume", "amount":
-			fields[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
-		case "trade_num":
-			fields[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
-		case "provider_id", "source_id", "provider_symbol", "instrument_name":
-			fields[name] = storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING
-		}
+	columns, err := resultViewColumns(spaceID, ids, outputFields)
+	if err != nil {
+		return err
 	}
-	if len(fields) == 0 {
-		return nil
-	}
-	ordered := make([]string, 0, len(fields))
-	for name := range fields {
-		ordered = append(ordered, name)
-	}
-	sort.Strings(ordered)
-	for i, name := range ordered {
-		column := &storagepb.ViewColumn{SpaceId: spaceID, ViewId: ids.ViewID, ColumnName: name, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: ids.DatasetID + "." + name, ValueType: fields[name], SortOrder: uint32(i + 1), Attributes: map[string]string{"display_name": resultColumnDisplayName(name)}}
-		response, err := m.metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: m.auth, Column: column})
-		if err != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-			return metadataError("create result view column", err, func() *storagepb.RetInfo {
+	for _, column := range columns {
+		response, callErr := m.metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: m.auth, Column: column})
+		if callErr != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return metadataError("create result view column", callErr, func() *storagepb.RetInfo {
 				if response == nil {
 					return nil
 				}
@@ -931,6 +979,59 @@ func (m *Manager) ensureViewColumns(ctx context.Context, spaceID string, ids IDs
 		}
 	}
 	return nil
+}
+
+func resultViewColumns(spaceID string, ids IDs, outputFields []string) ([]*storagepb.ViewColumn, error) {
+	if len(outputFields) == 0 {
+		return nil, nil
+	}
+	ordered := make([]string, 0, len(outputFields))
+	seen := make(map[string]struct{}, len(outputFields))
+	for _, rawName := range outputFields {
+		name := strings.ToLower(strings.TrimSpace(rawName))
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		if _, ok := resultViewColumnType(name); !ok {
+			return nil, fmt.Errorf("%w: %s", ErrUnsupportedOutputFields, name)
+		}
+		seen[name] = struct{}{}
+		ordered = append(ordered, name)
+	}
+	if len(ordered) == 0 {
+		return nil, fmt.Errorf("%w: at least one supported output field is required", ErrUnsupportedOutputFields)
+	}
+	sort.Strings(ordered)
+	columns := make([]*storagepb.ViewColumn, 0, len(ordered))
+	for i, name := range ordered {
+		valueType, _ := resultViewColumnType(name)
+		originID := ids.DatasetID + "." + name
+		columns = append(columns, &storagepb.ViewColumn{
+			SpaceId: spaceID, ViewId: ids.ViewID, ColumnName: originID,
+			OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+			OriginId:   originID, ValueType: valueType, SortOrder: uint32(i + 1),
+			Attributes: map[string]string{"display_name": resultColumnDisplayName(name)},
+		})
+	}
+	return columns, nil
+}
+
+func resultViewColumnType(name string) (storagepb.FieldValueType, bool) {
+	switch name {
+	case "open", "high", "low", "close", "volume", "quote_volume", "amount":
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, true
+	case "trade_num", "route_rank":
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, true
+	case "provider_id", "source_id", "provider_symbol", "instrument_name", "volume_unit", "amount_unit", "request_id", "route_id", "source_provider", "quality_status", "amount_quality":
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, true
+	case "trade_date", "close_time", "provider_timestamp", "fetched_at":
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, true
+	default:
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, false
+	}
 }
 
 func resultColumnDisplayName(name string) string {

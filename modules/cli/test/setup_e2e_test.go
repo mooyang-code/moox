@@ -202,6 +202,9 @@ func (c *captureTransport) Upload(_ context.Context, reader io.Reader, _ int64, 
 	_, err := io.Copy(&c.uploaded, reader)
 	return err
 }
+func (c *captureTransport) Download(_ context.Context, _ string, _ io.Writer) (int64, error) {
+	return 0, nil
+}
 func (c *captureTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	c.commands = append(c.commands, strings.Join(argv, " "))
 	return setupssh.Result{}, nil

@@ -69,15 +69,26 @@ func (r *FetchRetryRepository) Get(ctx context.Context, spaceID, retryKey string
 
 func (r *FetchRetryRepository) CountPending(ctx context.Context, spaceID, datasetID, frequency string) (int64, error) {
 	var count int64
-	query := r.db.WithContext(ctx).Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_status = ?", spaceID, "pending")
+	query := r.db.WithContext(ctx).Table("t_collector_fetch_retry_items AS retries").
+		Where("retries.c_space_id = ? AND retries.c_status = ?", spaceID, "pending")
 	if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
 		query = query.Where(`(
-			c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_dataset_id = ?)
-			OR (c_write_target_id = '' AND c_instance_id IN (SELECT c_instance_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_dataset_id = ?))
-		)`, spaceID, datasetID, spaceID, datasetID)
+			EXISTS (
+				SELECT 1 FROM t_collector_instance_write_targets targets
+				WHERE targets.c_space_id = retries.c_space_id
+				  AND targets.c_dataset_id = ?
+				  AND targets.c_write_target_id = retries.c_write_target_id
+			)
+			OR (retries.c_write_target_id = '' AND EXISTS (
+				SELECT 1 FROM t_collector_instance_write_targets targets
+				WHERE targets.c_space_id = retries.c_space_id
+				  AND targets.c_dataset_id = ?
+				  AND targets.c_instance_id = retries.c_instance_id
+			))
+		)`, datasetID, datasetID)
 	}
 	if frequency != "" {
-		query = query.Where("c_frequency = ?", frequency)
+		query = query.Where("retries.c_frequency = ?", frequency)
 	}
 	if err := query.Count(&count).Error; err != nil {
 		return 0, err

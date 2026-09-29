@@ -139,7 +139,11 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 				continue
 			}
 			for _, shard := range shards {
-				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), shard.Timers)
+				poolCount := shard.Timers
+				if strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") {
+					poolCount = shard.Invokes
+				}
+				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), poolCount)
 			}
 		}
 	}

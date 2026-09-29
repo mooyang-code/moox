@@ -493,6 +493,43 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 	assert.Equal(t, map[string]any{"data-api.binance.vision": map[string]any{"ips": []any{"203.0.113.10"}}}, cryptoData["dns_routes"])
 }
 
+func TestDefaultCryptoCollectorTasksSelectOnlyKlineFields(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
+	require.NoError(t, err)
+	var bundle struct {
+		Tasks []struct {
+			SpaceID       string `yaml:"space_id"`
+			TaskName      string `yaml:"task_name"`
+			DataType      string `yaml:"data_type"`
+			CollectParams struct {
+				Frequency    string   `yaml:"frequency"`
+				OutputFields []string `yaml:"output_fields"`
+			} `yaml:"collect_params"`
+		} `yaml:"tasks"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &bundle))
+	wantFields := []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"}
+	wantTasks := map[string]bool{
+		"Binance 现货 K 线 1m": false,
+		"Binance 合约 K 线 1m": false,
+		"Binance 现货 K 线 1H": false,
+		"Binance 合约 K 线 1H": false,
+	}
+	for _, task := range bundle.Tasks {
+		if task.SpaceID != "crypto" || task.DataType != "kline" {
+			continue
+		}
+		if _, ok := wantTasks[task.TaskName]; !ok {
+			continue
+		}
+		wantTasks[task.TaskName] = true
+		assert.Equal(t, wantFields, task.CollectParams.OutputFields, task.TaskName)
+	}
+	for name, found := range wantTasks {
+		assert.True(t, found, "missing default task %s", name)
+	}
+}
+
 func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
 	require.NoError(t, err)

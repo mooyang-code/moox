@@ -8,6 +8,7 @@ tasks:
   enabled: true
   creator: moox-setup
   collect_params:
+    output_fields: [open, high, low, close, volume, quote_volume, trade_num]
     frequency: 1m
 - space_id: crypto
   task_id: dasftksvjhj2jom4vhdg
@@ -17,6 +18,7 @@ tasks:
   enabled: true
   creator: moox-setup
   collect_params:
+    output_fields: [open, high, low, close, volume, quote_volume, trade_num]
     frequency: 1m
 - space_id: crypto
   task_id: dasftksvjhj2jom4vhe0
@@ -26,6 +28,7 @@ tasks:
   enabled: true
   creator: moox-setup
   collect_params:
+    output_fields: [open, high, low, close, volume, quote_volume, trade_num]
     frequency: 1H
 - space_id: crypto
   task_id: dasftksvjhj2jom4vheg
@@ -35,6 +38,7 @@ tasks:
   enabled: true
   creator: moox-setup
   collect_params:
+    output_fields: [open, high, low, close, volume, quote_volume, trade_num]
     frequency: 1H
 - space_id: stockcn
   task_id: dasftksvjhj2jom4vhf0

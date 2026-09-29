@@ -139,6 +139,10 @@ CREATE TABLE IF NOT EXISTS t_collector_instance_write_targets (
 );
 CREATE INDEX IF NOT EXISTS idx_collector_write_targets_task ON t_collector_instance_write_targets(c_space_id, c_task_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset ON t_collector_instance_write_targets(c_space_id, c_dataset_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset_target
+ON t_collector_instance_write_targets (c_space_id, c_dataset_id, c_write_target_id);
+CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset_instance
+ON t_collector_instance_write_targets (c_space_id, c_dataset_id, c_instance_id);
 
 CREATE TRIGGER IF NOT EXISTS update_collector_tasks_mtime
 AFTER UPDATE ON t_collector_tasks
@@ -208,6 +212,8 @@ ON t_collector_fetch_batches
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_deadline
 ON t_collector_fetch_batches (c_status, c_deadline_at);
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_due_scope
+ON t_collector_fetch_batches (c_space_id, c_status, c_deadline_at);
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_schedule
 ON t_collector_fetch_batches (c_space_id, c_schedule_id);
@@ -241,6 +247,10 @@ CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due
 ON t_collector_fetch_retry_items (c_status, c_next_retry_at);
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_target
 ON t_collector_fetch_retry_items (c_space_id, c_write_target_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_pending_scope
+ON t_collector_fetch_retry_items (c_space_id, c_status, c_frequency, c_write_target_id, c_instance_id);
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due_scope
+ON t_collector_fetch_retry_items (c_space_id, c_status, c_next_retry_at);
 
 -- Period readiness is the Collector's durable answer to whether all
 -- expected Storage writes for one market period have reached a terminal
@@ -269,6 +279,10 @@ CREATE TABLE IF NOT EXISTS t_period_readiness (
 
 CREATE INDEX IF NOT EXISTS idx_period_readiness_report
 ON t_period_readiness (c_report_state, c_deadline_at);
+CREATE INDEX IF NOT EXISTS idx_period_readiness_pending_scope
+ON t_period_readiness (c_space_id, c_report_state, c_dataset_id, c_frequency);
+CREATE INDEX IF NOT EXISTS idx_period_readiness_waiting_scope
+ON t_period_readiness (c_space_id, c_report_state, c_deadline_at, c_id);
 
 CREATE TABLE IF NOT EXISTS t_period_readiness_items (
     c_readiness_id INTEGER NOT NULL,

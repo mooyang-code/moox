@@ -348,9 +348,9 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 	return r.GetByTaskID(ctx, spaceID, taskID)
 }
 
-// UpdateMutableByTaskID updates only the public mutable task fields and
-// Collector-owned runtime state. Task identity, collection configuration, and
-// result identities are intentionally absent from the update set.
+// UpdateMutableByTaskID updates only public mutable task fields. Task identity,
+// collection configuration, result identities, and preparer-owned runtime
+// state are intentionally absent from the update set.
 func (r *TaskRepository) UpdateMutableByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
 	return r.updateMutableByTaskID(ctx, spaceID, taskID, task, false)
 }
@@ -379,17 +379,16 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 		"c_task_name":           task.TaskName,
 		"c_description":         task.Description,
 		"c_enabled":             task.Enabled,
-		"c_prepare_state":       task.PrepareState,
-		"c_last_error":          task.LastError,
 		"c_coverage_start_time": task.CoverageStartTime,
 		"c_mtime":               now,
 	}
 	if persistCollectParams {
 		updates["c_collect_params"] = task.CollectParams
+		updates["c_definition_hash"] = task.DefinitionHash
 	}
-	result := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
-		Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).
-		Updates(updates)
+	query := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+		Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID))
+	result := query.Updates(updates)
 	if result.Error != nil {
 		return nil, result.Error
 	}

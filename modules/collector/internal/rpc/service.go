@@ -58,6 +58,46 @@ type Service struct {
 	resultManager              *taskresult.Manager
 	resultDataNodeID           string
 	createTaskMu               sync.Mutex
+	taskMutationLocks          keyedTaskLocker
+}
+
+type keyedTaskLocker struct {
+	mu    sync.Mutex
+	locks map[string]*taskMutationLock
+}
+
+type taskMutationLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (l *keyedTaskLocker) lock(key string) func() {
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = make(map[string]*taskMutationLock)
+	}
+	entry := l.locks[key]
+	if entry == nil {
+		entry = &taskMutationLock{}
+		l.locks[key] = entry
+	}
+	entry.refs++
+	l.mu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		l.mu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(l.locks, key)
+		}
+		l.mu.Unlock()
+	}
+}
+
+func taskMutationKey(spaceID, taskID string) string {
+	return strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(taskID)
 }
 
 const defaultResampleSettleDelay = 10 * time.Second
@@ -159,10 +199,7 @@ func (s *Service) GetTaskList(ctx context.Context, req *pb.GetTaskListReq) (*pb.
 		log.ErrorContextf(ctx, "[Collector] list collection tasks failed: %v", err)
 		return &pb.GetTaskListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	out := make([]*pb.CollectionTask, 0, len(tasks))
-	for _, task := range tasks {
-		out = append(out, s.toPBTask(ctx, task))
-	}
+	out := s.toPBTaskList(ctx, tasks)
 	return &pb.GetTaskListRsp{RetInfo: retOK(), Tasks: out, Page: pageResult(page, size, total)}, nil
 }
 
@@ -189,12 +226,48 @@ func (s *Service) GetTaskDetail(ctx context.Context, req *pb.GetTaskDetailReq) (
 // while readiness and indexed watermarks are derived from Storage.
 func (s *Service) toPBTask(ctx context.Context, task domain.CollectionTask) *pb.CollectionTask {
 	result := toPBTask(task)
+	s.enrichPBTaskResult(ctx, task, result)
+	return result
+}
+
+func (s *Service) toPBTaskList(ctx context.Context, tasks []domain.CollectionTask) []*pb.CollectionTask {
+	out := make([]*pb.CollectionTask, len(tasks))
+	for i, task := range tasks {
+		out[i] = toPBTask(task)
+	}
+	if s == nil || s.resultManager == nil || len(tasks) == 0 {
+		return out
+	}
+	workerCount := len(tasks)
+	if workerCount > 4 {
+		workerCount = 4
+	}
+	indices := make(chan int)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer workers.Done()
+			for index := range indices {
+				s.enrichPBTaskResult(ctx, tasks[index], out[index])
+			}
+		}()
+	}
+	for index := range tasks {
+		indices <- index
+	}
+	close(indices)
+	workers.Wait()
+	return out
+}
+
+func (s *Service) enrichPBTaskResult(ctx context.Context, task domain.CollectionTask, result *pb.CollectionTask) {
 	if s == nil || s.resultManager == nil || result == nil || result.Result == nil {
-		return result
+		return
 	}
 	ids, idsErr := collectionTaskResultIDs(task)
 	if idsErr != nil {
-		return result
+		return
 	}
 	inspection, err := s.resultManager.InspectIDs(ctx, task.SpaceID, task.TaskID, ids)
 	if err != nil {
@@ -203,11 +276,11 @@ func (s *Service) toPBTask(ctx context.Context, task domain.CollectionTask) *pb.
 		if result.LastError == "" {
 			result.LastError = inspection.Error
 		}
-		return result
+		return
 	}
 	if task.PrepareState == domain.PrepareStateError || strings.TrimSpace(task.LastError) != "" {
 		result.Result.Status = taskresult.ResultStatusError
-		return result
+		return
 	}
 	result.Result.Status = inspection.Status
 	result.Result.LastDataTime = inspection.LastDataTime
@@ -216,7 +289,6 @@ func (s *Service) toPBTask(ctx context.Context, task domain.CollectionTask) *pb.
 	if inspection.Error != "" && result.LastError == "" {
 		result.LastError = inspection.Error
 	}
-	return result
 }
 
 // CreateTask creates a collection task through the independent collector service.
@@ -393,6 +465,9 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if req == nil || req.GetTask() == nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is required")}, nil
 	}
+	// Serialize all mutations of this task through metadata preparation and
+	// compensation. The task definition's unique index arbitrates create/update
+	// races without holding the global create lock during remote metadata calls.
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	taskID := strings.TrimSpace(req.GetTaskId())
 	requested := fromPBTask(req.GetTask())
@@ -416,6 +491,8 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if taskID == "" {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
+	unlockTask := s.taskMutationLocks.lock(taskMutationKey(spaceID, taskID))
+	defer unlockTask()
 	if err := validateTaskResultConfigUpdate(req.GetResultConfig()); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -495,15 +572,11 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	}
 	if strings.EqualFold(existing.DataType, "kline_resample") {
 		task.Creator = existing.Creator
-		// Re-running preparation on an enabled update also recovers a transient
-		// metadata/storage error without requiring a second operator-only API.
-		if task.Enabled {
-			task.PrepareState = domain.PrepareStateWaitingView
-			task.LastError = ""
-		} else {
-			task.PrepareState = existing.PrepareState
-			task.LastError = existing.LastError
-		}
+		// Preparation state is asynchronous runtime state and remains owned by
+		// the resample preparer. Enabled tasks in ready/error/waiting states are
+		// periodically reconciled there, including after being re-enabled.
+		task.PrepareState = existing.PrepareState
+		task.LastError = existing.LastError
 	}
 	if task.TaskName != existing.TaskName {
 		if named, lookupErr := s.taskRepo.GetByTaskName(ctx, spaceID, task.TaskName); lookupErr == nil && named.TaskID != existing.TaskID {
@@ -515,11 +588,45 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if err := s.validateCollectionTaskDatasets(ctx, task); err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	existingParams, err := domain.ParseCollectParams(existing.CollectParams, "", "", existing.DataType)
+	if err != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("parse existing task collect_params: %v", err))}, nil
+	}
+	outputFieldsChanged := !equalStringSlices(existingParams.OutputFields, requestedParams.OutputFields)
+	if outputFieldsChanged && len(requestedParams.OutputFields) == 0 {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "output_fields cannot be cleared; specify the fields to persist")}, nil
+	}
+	task.DefinitionHash = collectionTaskDefinitionHash(task)
+	if duplicate, lookupErr := s.taskRepo.GetByDefinitionHash(ctx, task.SpaceID, task.DefinitionHash); lookupErr == nil {
+		if duplicate != nil && duplicate.TaskID != task.TaskID {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("same tag, task type, frequency and parameters already exist in task %s", duplicate.TaskID))}, nil
+		}
+	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, lookupErr.Error())}, nil
+	}
+	if outputFieldsChanged {
+		if s.resultManager == nil {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
+		}
+		// Provision result metadata before changing the active task definition.
+		// These additions are idempotent; this avoids exposing a projection that
+		// refers to columns the Dataset/View cannot yet accept.
+		if err := s.resultManager.EnsureOutputFields(ctx, task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID, task.DataType, requestedParams.OutputFields); err != nil {
+			code := pb.ErrorCode_INNER_ERR
+			if errors.Is(err, taskresult.ErrUnsupportedOutputFields) {
+				code = pb.ErrorCode_INVALID_PARAM
+			}
+			return &pb.UpdateTaskRsp{RetInfo: retErr(code, err.Error())}, nil
+		}
+	}
 	updated, err := s.taskRepo.UpdateValidatedTaskByTaskID(ctx, spaceID, taskID, task)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] update collection task failed: %v", err)
 		if named, lookupErr := s.taskRepo.GetByTaskName(ctx, spaceID, task.TaskName); lookupErr == nil && named != nil && named.TaskID != existing.TaskID {
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task_name %q already exists in space %q", task.TaskName, spaceID))}, nil
+		}
+		if duplicate, lookupErr := s.taskRepo.GetByDefinitionHash(ctx, spaceID, task.DefinitionHash); lookupErr == nil && duplicate != nil && duplicate.TaskID != existing.TaskID {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("same tag, task type, frequency and parameters already exist in task %s", duplicate.TaskID))}, nil
 		}
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -528,7 +635,9 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 			// The task row is the local source of truth. Restore it when the
 			// cross-service Dataset update fails so a retry cannot observe a task
 			// definition that points at an unapplied subject scope.
-			if _, rollbackErr := s.taskRepo.UpdateValidatedTaskByTaskID(ctx, spaceID, taskID, *existing); rollbackErr != nil {
+			rollbackCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancelRollback()
+			if _, rollbackErr := s.taskRepo.UpdateValidatedTaskByTaskID(rollbackCtx, spaceID, taskID, *existing); rollbackErr != nil {
 				log.ErrorContextf(ctx, "[Collector] rollback collection task after Dataset tag update failure: %v", rollbackErr)
 				return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, fmt.Sprintf("%v; task rollback failed: %v", err, rollbackErr))}, nil
 			}
@@ -550,6 +659,8 @@ func (s *Service) DisableTask(ctx context.Context, req *pb.DisableTaskReq) (*pb.
 	if strings.TrimSpace(req.GetTaskId()) == "" {
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
+	unlockTask := s.taskMutationLocks.lock(taskMutationKey(req.GetSpaceId(), req.GetTaskId()))
+	defer unlockTask()
 	if err := s.taskRepo.SetEnabled(ctx, req.GetSpaceId(), req.GetTaskId(), false); err != nil {
 		log.ErrorContextf(ctx, "[Collector] disable collection task failed: %v", err)
 		return &pb.DisableTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -566,6 +677,8 @@ func (s *Service) DeleteTask(ctx context.Context, req *pb.DeleteTaskReq) (*pb.De
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id and task_id are required")}, nil
 	}
 	spaceID, taskID := strings.TrimSpace(req.GetSpaceId()), strings.TrimSpace(req.GetTaskId())
+	unlockTask := s.taskMutationLocks.lock(taskMutationKey(spaceID, taskID))
+	defer unlockTask()
 	task, err := s.taskRepo.GetByTaskID(ctx, spaceID, taskID)
 	if err != nil {
 		return &pb.DeleteTaskRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
@@ -1342,6 +1455,10 @@ func validateCollectionTaskUpdate(existing, desired domain.CollectionTask) error
 	// copy here so a task can be updated once during bootstrap migration.
 	existingParams.SubjectTags = nil
 	desiredParams.SubjectTags = nil
+	// output_fields is a per-target projection. It changes which fields are
+	// persisted, but not the provider request or the task's series scope.
+	existingParams.OutputFields = nil
+	desiredParams.OutputFields = nil
 	existingCanonical, err := existingParams.CanonicalJSON()
 	if err != nil {
 		return fmt.Errorf("canonicalize existing task collect_params: %w", err)

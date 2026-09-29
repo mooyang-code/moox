@@ -181,7 +181,7 @@
           </template>
         </section>
 
-        <section v-if="!editing" class="editor-section editor-section--output">
+        <section class="editor-section editor-section--output">
           <header class="editor-section__header"><h3>输出字段</h3><span>选择任务结果要保存的字段</span></header>
           <div class="output-selection-summary">
             <a-button type="outline" @click="openOutputFieldPicker">管理输出字段</a-button>
@@ -261,6 +261,14 @@
         <a-descriptions-item label="来源 / 市场">{{ taskRouteSummary(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="频率">{{ taskFrequency(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="结果状态">{{ resultStatusLabel(detailData) }}</a-descriptions-item>
+        <a-descriptions-item label="输出字段" :span="2">
+          <div v-if="detailOutputFieldLabels.length" class="selected-output-tags">
+            <a-tag v-for="field in detailOutputFieldLabels" :key="field.id" color="arcoblue" :title="field.id">
+              {{ field.name }}
+            </a-tag>
+          </div>
+          <span v-else>-</span>
+        </a-descriptions-item>
         <a-descriptions-item label="最近数据时间">{{ formatDateTime(detailData.result?.last_data_time) }}</a-descriptions-item>
         <a-descriptions-item label="启用状态">{{ detailData.enabled ? "启用" : "禁用" }}</a-descriptions-item>
         <a-descriptions-item label="创建人">{{ detailData.creator || "-" }}</a-descriptions-item>
@@ -427,6 +435,14 @@ const selectedOutputFieldLabels = computed(() => selectedOutputFields.value.map(
   const field = outputFieldCatalog.value.find(item => item.field_id === id);
   return { id, name: field?.name || id };
 }));
+const detailOutputFieldLabels = computed(() => {
+  if (!detailData.value) return [];
+  const outputFields = parseCollectionTaskInput(detailData.value).outputFields || [];
+  return outputFields.map(id => {
+    const field = outputFieldCatalog.value.find(item => item.field_id === id);
+    return { id, name: field?.name || id };
+  });
+});
 const sourceIdValue = ref("");
 const sourceFrequencyValue = ref("");
 const sourceSeriesTagValue = ref("");
@@ -1032,6 +1048,7 @@ async function handleEnableChange(record: CollectionTaskRecord, enabled: boolean
 function onViewDetails(record: CollectionTaskRecord) {
   detailData.value = record;
   detailVisible.value = true;
+  void loadOutputFieldCatalog();
 }
 
 function openDelete(record: CollectionTaskRecord) {

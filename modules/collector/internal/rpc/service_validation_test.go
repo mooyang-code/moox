@@ -120,6 +120,12 @@ func (f *taskResultMetadataFake) CreateView(_ context.Context, req *storagepb.Cr
 	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
 }
 
+func (f *taskResultMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
+	view := req.GetView()
+	f.views[view.GetViewId()] = view
+	return &storagepb.UpdateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
+}
+
 func (f *taskResultMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	f.deleteViews++
 	if _, ok := f.views[req.GetViewId()]; !ok {

@@ -118,7 +118,7 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	p.SourceID = strings.ToLower(strings.TrimSpace(p.SourceID))
 	p.SeriesTag = strings.TrimSpace(p.SeriesTag)
 	p.SubjectTags = normalizeTags(p.SubjectTags)
-	p.OutputFields = normalizeTags(p.OutputFields)
+	p.OutputFields = normalizeOutputFields(p.OutputFields)
 	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
 	p.Frequency = strings.TrimSpace(p.Frequency)
 	p.SourceDatasetID = strings.TrimSpace(p.SourceDatasetID)
@@ -282,6 +282,13 @@ func normalizeTags(tags []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func normalizeOutputFields(fields []string) []string {
+	for i := range fields {
+		fields[i] = strings.ToLower(strings.TrimSpace(fields[i]))
+	}
+	return normalizeTags(fields)
 }
 
 func normalizeHistoryPolicy(policy *HistoryPolicy) *HistoryPolicy {

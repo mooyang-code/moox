@@ -234,7 +234,12 @@ func (r *PeriodReadinessRepository) finalizeDue(ctx context.Context, spaceID str
 		limit = 100
 	}
 	var parents []domain.PeriodReadiness
-	query := r.db.WithContext(ctx).Where("c_report_state = ? AND (c_deadline_at <= ? OR c_id IN (SELECT c_readiness_id FROM t_period_readiness_items GROUP BY c_readiness_id HAVING SUM(CASE WHEN c_state = 'pending' THEN 1 ELSE 0 END) = 0))", domain.PeriodReportWaiting, now.UTC())
+	query := r.db.WithContext(ctx).Where(`c_report_state = ? AND (
+		c_deadline_at <= ? OR (
+			EXISTS (SELECT 1 FROM t_period_readiness_items items WHERE items.c_readiness_id = t_period_readiness.c_id)
+			AND NOT EXISTS (SELECT 1 FROM t_period_readiness_items pending_items WHERE pending_items.c_readiness_id = t_period_readiness.c_id AND pending_items.c_state = ?)
+		)
+	)`, domain.PeriodReportWaiting, now.UTC(), domain.PeriodItemPending)
 	if spaceID != "" {
 		query = query.Where("c_space_id = ?", spaceID)
 	}

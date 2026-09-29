@@ -128,6 +128,12 @@ func (f *resultMetadataFake) CreateView(_ context.Context, req *storagepb.Create
 	return &storagepb.CreateViewRsp{RetInfo: resultOK(), View: req.GetView()}, nil
 }
 
+func (f *resultMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
+	view := req.GetView()
+	f.views[view.GetViewId()] = view
+	return &storagepb.UpdateViewRsp{RetInfo: resultOK(), View: view}, nil
+}
+
 func (f *resultMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
 	delete(f.views, req.GetViewId())
 	return &storagepb.DeleteViewRsp{RetInfo: resultOK()}, nil
@@ -170,6 +176,33 @@ func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	require.Equal(t, []string{"binance_spot"}, fake.datasets[first.DatasetID].GetSubjectTags())
 	require.Equal(t, []string{"close", "close"}, fake.columnNames)
 	require.Equal(t, "view_task_1_kline_1h", first.ViewID)
+}
+
+func TestEnsureOutputFieldsReplacesExplicitViewProjection(t *testing.T) {
+	fake := newResultMetadataFake()
+	ids := ResultIDs("crypto", "task-projection")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection"},
+	}
+	fake.views[ids.ViewID] = &storagepb.View{
+		SpaceId: "crypto", ViewId: ids.ViewID, Name: "任务结果", DatasetId: ids.DatasetID, Status: "active",
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection", "moox.columns_explicit": "true"},
+		Columns: []*storagepb.ViewColumn{
+			{ColumnName: ids.DatasetID + ".close", OriginId: ids.DatasetID + ".close"},
+			{ColumnName: ids.DatasetID + ".provider_id", OriginId: ids.DatasetID + ".provider_id"},
+		},
+	}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	require.NoError(t, manager.EnsureOutputFields(context.Background(), "crypto", "task-projection", ids.DatasetID, ids.ViewID, "kline", []string{"open", "close"}))
+
+	got := fake.views[ids.ViewID].GetColumns()
+	require.Len(t, got, 2)
+	require.Equal(t, ids.DatasetID+".close", got[0].GetColumnName())
+	require.Equal(t, ids.DatasetID+".open", got[1].GetColumnName())
+	for _, column := range got {
+		require.NotContains(t, column.GetColumnName(), "provider_id")
+	}
 }
 
 func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {

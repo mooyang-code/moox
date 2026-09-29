@@ -58,4 +58,14 @@ describe("collector task workbench", () => {
     expect(backfill).toContain("内部行情 `crypto`");
     expect(backfill).not.toContain("ruleId");
   });
+  it("shows output fields in both task detail and edit surfaces", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    expect(source).toContain('<section class="editor-section editor-section--output">');
+    expect(source).not.toContain('<section v-if="!editing" class="editor-section editor-section--output">');
+    expect(source).toContain('label="输出字段" :span="2"');
+    expect(source).toContain("detailOutputFieldLabels");
+    expect(source).toContain("selectedOutputFields.value = input.outputFields || []");
+    expect(source).toContain("outputFields: selectedOutputFields.value");
+  });
+
 });
