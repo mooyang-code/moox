@@ -589,3 +589,19 @@ func TestPruneDisabledWriteTargetsWaitsForActiveBatchAndKeepsSibling(t *testing.
 	_, err = s.FetchRetries().Get(ctx, "crypto", "target-retry")
 	require.Error(t, err)
 }
+
+func TestPruneDisabledWriteTargetsSkipsEnabledOnlySpace(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "enabled-only", TaskName: "Enabled", Enabled: true}))
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "enabled-instance", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m"}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, "enabled-only", "bars-enabled")
+
+	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto")
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+	targets, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+}

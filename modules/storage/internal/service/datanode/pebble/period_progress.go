@@ -107,7 +107,11 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 		if err != nil {
 			return "", err
 		}
-		if !samePeriodExpectation(current, exp) {
+		// DeadlineAt is a scheduling/finalization hint, not part of the immutable
+		// Dataset period identity. A retry in a later scheduler tick can carry a
+		// newer deadline for the same series snapshot; keep the first persisted
+		// deadline so retries cannot indefinitely extend a waiting period.
+		if !samePeriodCommitIdentity(current, exp) {
 			return "", PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
 		}
 		return status, nil
@@ -407,10 +411,6 @@ func validatePeriodRow(exp DatasetPeriodExpectation, row *pb.RowFieldUpsert) (bo
 		return false, invalidf("period batch data_time is invalid: %v", err)
 	}
 	return at.UTC().Unix() == exp.PeriodTime, nil
-}
-
-func samePeriodExpectation(left, right DatasetPeriodExpectation) bool {
-	return left.SpaceID == right.SpaceID && left.DatasetID == right.DatasetID && left.Frequency == right.Frequency && left.PeriodTime == right.PeriodTime && left.SeriesHash == right.SeriesHash && left.ExpectedCount == right.ExpectedCount && left.DeadlineAt == right.DeadlineAt
 }
 
 func samePeriodCommitIdentity(left, right DatasetPeriodExpectation) bool {

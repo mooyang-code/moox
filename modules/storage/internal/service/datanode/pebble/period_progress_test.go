@@ -67,6 +67,26 @@ func TestDatasetPeriodExpectationConflictIsRejected(t *testing.T) {
 	require.ErrorAs(t, err, &conflict)
 }
 
+func TestDatasetPeriodEnsureRetryKeepsOriginalDeadline(t *testing.T) {
+	store := newPeriodTestStore(t)
+	ctx := context.Background()
+	exp := periodExpectationForTest(time.Now().UTC().Truncate(time.Second), 2)
+	originalDeadline := exp.DeadlineAt
+	status, err := store.EnsureDatasetPeriod(ctx, exp)
+	require.NoError(t, err)
+	require.Equal(t, "waiting", status)
+
+	retry := exp
+	retry.DeadlineAt += int64(time.Minute.Seconds())
+	status, err = store.EnsureDatasetPeriod(ctx, retry)
+	require.NoError(t, err)
+	require.Equal(t, "waiting", status)
+
+	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
+	require.NoError(t, err)
+	require.Equal(t, originalDeadline, progress.DeadlineAt)
+}
+
 func TestDatasetPeriodConcurrentBitmapMergeDoesNotLoseBits(t *testing.T) {
 	store := newPeriodTestStore(t)
 	ctx := context.Background()

@@ -69,6 +69,15 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 			}
 		}
 	}
+	for _, index := range []string{"idx_collector_instances_run", "idx_collector_batch_items_instance_batch"} {
+		var count int64
+		if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?", index).Scan(&count).Error; err != nil {
+			t.Fatalf("query index %s: %v", index, err)
+		}
+		if count != 1 {
+			t.Fatalf("index %s count = %d, want 1", index, count)
+		}
+	}
 	if _, _, err := mgr.TaskInstances().List(context.Background(), TaskInstanceFilter{Page: 1, PageSize: 1}); err != nil {
 		t.Fatalf("query current task instances: %v", err)
 	}

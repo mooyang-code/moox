@@ -63,6 +63,23 @@ func TestRunRepositoryReconcilesInvokeFanoutTargets(t *testing.T) {
 	require.Equal(t, domain.RunStatusSucceeded, status)
 }
 
+func TestRunRepositoryReconcileOpenRunsExpiresStaleScheduledActiveRun(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	run, err := s.Runs().GetOrCreateScheduled(ctx, "crypto", "scheduled:stale-active", "scheduled", "1m", time.Now().UTC().Add(-time.Hour))
+	require.NoError(t, err)
+	require.NoError(t, s.Runs().UpdateStatus(ctx, "crypto", run.RunID, domain.RunStatusActive, ""))
+	require.NoError(t, s.db.WithContext(ctx).Model(&domain.CollectionRun{}).
+		Where("c_space_id = ? AND c_run_id = ?", "crypto", run.RunID).
+		Updates(map[string]any{"c_ctime": time.Now().UTC().Add(-11 * time.Minute), "c_mtime": time.Now().UTC().Add(-11 * time.Minute)}).Error)
+
+	require.NoError(t, s.Runs().ReconcileOpenRuns(ctx, "crypto"))
+	stored, err := s.Runs().Get(ctx, "crypto", run.RunID)
+	require.NoError(t, err)
+	require.Equal(t, domain.RunStatusFailed, stored.Status)
+	require.Contains(t, stored.ErrorSummary, "stale scheduled run")
+}
+
 func TestRunRepositoryManualRunsAllowSameRequestKey(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
@@ -82,4 +99,27 @@ func TestRunRepositoryManualRunsAllowSameRequestKey(t *testing.T) {
 	var count int64
 	require.NoError(t, s.db.WithContext(ctx).Model(&domain.TaskInstance{}).Where("c_space_id = ? AND c_request_key = ?", "crypto", "same-provider-request").Count(&count).Error)
 	require.EqualValues(t, 2, count)
+}
+
+func TestRunRepositoryReconcileOpenRunsExpiresStaleEmptyPlannedRuns(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	stale, err := s.Runs().GetOrCreateScheduled(ctx, "crypto", "scheduled:stale-empty", "scheduled", "1m", now.Add(-3*time.Minute))
+	require.NoError(t, err)
+	recent, err := s.Runs().GetOrCreateScheduled(ctx, "crypto", "scheduled:recent-empty", "scheduled", "1m", now)
+	require.NoError(t, err)
+	require.NoError(t, s.db.WithContext(ctx).Model(&domain.CollectionRun{}).
+		Where("c_space_id = ? AND c_run_id = ?", "crypto", stale.RunID).
+		Updates(map[string]any{"c_ctime": now.Add(-3 * time.Minute), "c_mtime": now.Add(-3 * time.Minute)}).Error)
+
+	require.NoError(t, s.Runs().ReconcileOpenRuns(ctx, "crypto"))
+
+	staleAfter, err := s.Runs().Get(ctx, "crypto", stale.RunID)
+	require.NoError(t, err)
+	require.Equal(t, domain.RunStatusFailed, staleAfter.Status)
+	require.Equal(t, "stale planned run has no instances", staleAfter.ErrorSummary)
+	recentAfter, err := s.Runs().Get(ctx, "crypto", recent.RunID)
+	require.NoError(t, err)
+	require.Equal(t, domain.RunStatusPlanned, recentAfter.Status)
 }

@@ -37,6 +37,25 @@ type scheduleState struct {
 	fingerprint string
 }
 
+type plannedDispatch struct {
+	req   Request
+	node  scfinvoker.Node
+	nodes []scfinvoker.Node
+}
+
+type taskExpansionCache struct {
+	tags     map[string]*storagepb.Tag
+	subjects map[string][]domain.Subject
+}
+
+func newTaskExpansionCache() *taskExpansionCache {
+	return &taskExpansionCache{tags: make(map[string]*storagepb.Tag), subjects: make(map[string][]domain.Subject)}
+}
+
+func expansionCacheKey(spaceID string, tagIDs []string) string {
+	return strings.TrimSpace(spaceID) + "\x00" + strings.Join(normalizedTaskTagIDs(tagIDs), "\x00")
+}
+
 // Scheduler scans enabled tasks and creates stable SCF batches. Realtime work
 // fans out across the available SCF fleet before the per-function item limit
 // applies. It is intentionally a single process timer handler; SQLite unique
@@ -142,10 +161,17 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	// scheduler round's cutoff. If another scheduler already created the Run,
 	// a changed series set receives c_mtime > run.CreateTime and is therefore
 	// deferred to the next Run instead of being appended to this one.
+	expansionCache := newTaskExpansionCache()
 	for _, task := range filterMarketFetchTasks(allTasks) {
-		if _, _, refreshErr := s.expandTask(ctx, task); refreshErr != nil {
-			if invalidateErr := s.Tasks.InvalidateTaskSeries(ctx, task.SpaceID, task.TaskID); invalidateErr != nil {
-				return fmt.Errorf("invalidate task series after expansion failure task=%s: %w", task.TaskID, invalidateErr)
+		if _, _, refreshErr := s.expandTaskWithCache(ctx, task, expansionCache); refreshErr != nil {
+			// Metadata failover may finish after the scheduler budget has expired.
+			// Invalidation must still fail closed, so give that small local write an
+			// independent bounded context instead of reusing an already-cancelled one.
+			invalidateCtx, invalidateCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			invalidateErr := s.Tasks.InvalidateTaskSeries(invalidateCtx, task.SpaceID, task.TaskID)
+			invalidateCancel()
+			if invalidateErr != nil {
+				return fmt.Errorf("refresh task series task=%s: %v; invalidate after refresh failure: %w", task.TaskID, refreshErr, invalidateErr)
 			}
 			log.WarnContextf(ctx, "collection task series refresh failed task=%s; defer until a later run: %v", task.TaskID, refreshErr)
 		}
@@ -248,6 +274,15 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 		return err
 	}
 	planned := 0
+	deferredDispatches := make([]plannedDispatch, 0, 256)
+	// Do not let SCF completions contend with SQLite while this tick is still
+	// persisting its batch plan. Preserve the old partial-plan semantics on
+	// errors by launching every successfully persisted batch when Tick returns.
+	defer func() {
+		for _, dispatch := range deferredDispatches {
+			go s.dispatchPlanned(dispatch.req, dispatch.node, dispatch.nodes)
+		}
+	}()
 	// A fetch request is shared across CollectionTasks when its source-side
 	// identity is identical.  The task-specific destination is recorded in
 	// WriteTarget; only the first task gets an executable batch in this pass.
@@ -282,17 +317,15 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 				log.WarnContextf(ctx, "skip task=%s frequency=%s: %v", task.TaskID, frequency, err)
 				continue
 			}
-			frequencyInstanceIDs := make([]string, 0, len(items))
+			frequencyRequestKeys := make([]string, 0, len(items))
 			for index := range items {
 				items[index] = prepareCollectionItemRequest(items[index], frequency, target, MaxRealtimeRows)
+				frequencyRequestKeys = append(frequencyRequestKeys, sharedCollectionItemKey(items[index], frequency, target))
 				items[index].InstanceID = collectionItemInstanceID(spaceID, currentRunID, task.TaskID, items[index], frequency, target)
-			}
-			for _, item := range items {
-				frequencyInstanceIDs = append(frequencyInstanceIDs, item.InstanceID)
 			}
 			stateKey := task.TaskID + "\x00" + frequency
 			state := s.planStates[stateKey]
-			frequencyFingerprint := taskFingerprint(frequencyInstanceIDs, task.CollectParams)
+			frequencyFingerprint := taskFingerprint(frequencyRequestKeys, task.CollectParams)
 			if s.InvokeNonRealtimeOnly && isKlineTask(task) {
 				priorityItems := filterSharedCollectionItems(priorityCryptoMinuteItems(items, frequency), frequency, target, sharedScheduled)
 				if len(priorityItems) == 0 {
@@ -353,25 +386,27 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 				node := taskNodes[planned%len(taskNodes)]
 				scheduleID := fmt.Sprintf("%s:%s:%s", task.TaskID, frequency, target.Format(time.RFC3339Nano))
 				batchKind := batchKindForTask(task)
-				batchID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "1")
-				syncPointID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "write")
+				// Batch identity is scoped to the CollectorRun. A scheduler restart may
+				// legitimately revisit the same closed higher-frequency target once,
+				// but its completion must never be shared with TaskInstances from a
+				// different Run.
+				batchID := stableID(spaceID, currentRunID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "1")
+				syncPointID := stableID(spaceID, currentRunID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "write")
 				// The expanded item is the normalized request identity. Provider and
 				// market routing come from the bound Tag, never from CollectionTask.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start])
 				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, MarketID: batchItems[start].MarketID, InstrumentType: batchItems[start].InstrumentType, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, SourceID: batchItems[start].SourceID, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
-				if s.Instances != nil {
-					for _, batchItem := range batchItems[start:end] {
-						if targets, targetErr := s.Instances.ListWriteTargets(ctx, spaceID, batchItem.InstanceID); targetErr == nil {
-							req.Targets = append(req.Targets, targets...)
-						}
-					}
-				}
-				created, err := s.planOne(ctx, task, req, node, taskNodes)
+				// planOne loads all enabled WriteTargets for this shard in one query
+				// immediately before the durable batch race barrier. Do not pre-load
+				// them one instance at a time here: that N+1 query is redundant and
+				// can consume the entire scheduler budget for full-market runs.
+				created, err := s.planOneDeferred(ctx, task, &req, node)
 				if err != nil {
 					return err
 				}
 				if created {
 					planned++
+					deferredDispatches = append(deferredDispatches, plannedDispatch{req: req, node: node, nodes: taskNodes})
 				}
 				start = end
 				if planned >= DefaultMaxPlan {
@@ -424,6 +459,12 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 			target, targetErr := targetDataTime(now, frequency)
 			if targetErr != nil {
 				log.WarnContextf(ctx, "skip task=%s frequency=%s during shared planning: %v", task.TaskID, frequency, targetErr)
+				continue
+			}
+			stateKey := task.TaskID + "\x00" + frequency
+			frequencyFingerprint := taskScheduleFingerprint(items, frequency, target, task.CollectParams)
+			state := s.planStates[stateKey]
+			if !state.target.IsZero() && state.target.Equal(target) && state.fingerprint == frequencyFingerprint {
 				continue
 			}
 			matches, matchErr := s.taskIdentityMatchesRun(ctx, spaceID, task, runCutoff)
@@ -641,6 +682,15 @@ func collectionItemSeriesTag(spaceID string, item domain.CollectionItem) string 
 
 func normalizedBatchIdentity(item domain.CollectionItem) (string, string) {
 	return strings.ToLower(strings.TrimSpace(item.Provider)), strings.ToLower(strings.TrimSpace(item.MarketType))
+}
+
+func taskScheduleFingerprint(items []domain.CollectionItem, frequency string, target time.Time, params string) string {
+	requestKeys := make([]string, 0, len(items))
+	for _, item := range items {
+		item = prepareCollectionItemRequest(item, frequency, target, MaxRealtimeRows)
+		requestKeys = append(requestKeys, sharedCollectionItemKey(item, frequency, target))
+	}
+	return taskFingerprint(requestKeys, params)
 }
 
 func taskFingerprint(instanceIDs []string, params string) string {
@@ -869,6 +919,18 @@ func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID, r
 }
 
 func (s *Scheduler) planOne(ctx context.Context, task domain.CollectionTask, req Request, node scfinvoker.Node, nodes []scfinvoker.Node) (bool, error) {
+	created, err := s.planOneDeferred(ctx, task, &req, node)
+	if err != nil || !created {
+		return created, err
+	}
+	go s.dispatchPlanned(req, node, nodes)
+	return true, nil
+}
+
+func (s *Scheduler) planOneDeferred(ctx context.Context, task domain.CollectionTask, req *Request, node scfinvoker.Node) (bool, error) {
+	if req == nil {
+		return false, errors.New("market fetch request is nil")
+	}
 	instanceIDs := make([]string, 0, len(req.Items))
 	for _, item := range req.Items {
 		if id := strings.TrimSpace(item.InstanceID); id != "" {
@@ -897,7 +959,7 @@ func (s *Scheduler) planOne(ctx context.Context, task domain.CollectionTask, req
 	if err != nil {
 		return false, err
 	}
-	if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
+	if _, err := marketFetchEvent(*req, s.eventStorageTarget()); err != nil {
 		return false, err
 	}
 	now := time.Now().UTC()
@@ -917,9 +979,6 @@ func (s *Scheduler) planOne(ctx context.Context, task domain.CollectionTask, req
 	if !created {
 		return false, nil
 	}
-	// Planning is the durable part of the timer tick. Invocation is bounded by
-	// a small semaphore so a slow control plane cannot block the next task.
-	go s.dispatchPlanned(req, node, nodes)
 	return true, nil
 }
 
@@ -1270,6 +1329,10 @@ func requestForNode(req Request, node scfinvoker.Node) Request {
 }
 
 func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) ([]domain.CollectionItem, []string, error) {
+	return s.expandTaskWithCache(ctx, task, nil)
+}
+
+func (s *Scheduler) expandTaskWithCache(ctx context.Context, task domain.CollectionTask, cache *taskExpansionCache) ([]domain.CollectionItem, []string, error) {
 	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	if err != nil {
 		return nil, nil, err
@@ -1298,10 +1361,6 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 	if spaceID == "" {
 		spaceID = strings.TrimSpace(s.SpaceID)
 	}
-	dataset, err := s.Symbols.GetDataset(ctx, spaceID, targetDataset)
-	if err != nil {
-		return nil, nil, fmt.Errorf("get target dataset %s: %w", targetDataset, err)
-	}
 	// A collection task may contain tags owned by different providers. Resolve
 	// each tag independently so its source and market_type become the request
 	// identity. Current tasks do not own Provider/market; params are used only as
@@ -1313,6 +1372,13 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 	}
 	tagIDs := normalizedTaskTagIDs(task.TagIDs)
 	if len(tagIDs) == 0 {
+		// Current CollectionTasks persist their Tag relation directly. Dataset
+		// lookup is only a compatibility fallback for legacy tasks; avoiding it
+		// on the normal path removes one cross-node Metadata RPC per task/tick.
+		dataset, datasetErr := s.Symbols.GetDataset(ctx, spaceID, targetDataset)
+		if datasetErr != nil {
+			return nil, nil, fmt.Errorf("get target dataset %s: %w", targetDataset, datasetErr)
+		}
 		tagIDs = normalizedTaskTagIDs(dataset.SubjectTags)
 	}
 	groups := make([]taggedSubjects, 0, len(tagIDs))
@@ -1324,13 +1390,38 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 			if tagID == "" {
 				continue
 			}
-			tag, tagErr := tagSource.GetTag(ctx, spaceID, tagID)
-			if tagErr != nil {
-				return nil, nil, fmt.Errorf("get target tag %s: %w", tagID, tagErr)
+			cacheKey := expansionCacheKey(spaceID, []string{tagID})
+			var tag *storagepb.Tag
+			if cache != nil {
+				tag = cache.tags[cacheKey]
 			}
-			subjects, resolveErr := s.Symbols.ResolveSubjects(ctx, spaceID, []string{tagID})
-			if resolveErr != nil {
-				return nil, nil, fmt.Errorf("resolve target tag %s subjects: %w", tagID, resolveErr)
+			if tag == nil {
+				var tagErr error
+				tag, tagErr = tagSource.GetTag(ctx, spaceID, tagID)
+				if tagErr != nil {
+					return nil, nil, fmt.Errorf("get target tag %s: %w", tagID, tagErr)
+				}
+				if cache != nil {
+					cache.tags[cacheKey] = tag
+				}
+			}
+			var subjects []domain.Subject
+			subjectsCached := false
+			if cache != nil {
+				if cached, ok := cache.subjects[cacheKey]; ok {
+					subjects = append([]domain.Subject(nil), cached...)
+					subjectsCached = true
+				}
+			}
+			if !subjectsCached {
+				var resolveErr error
+				subjects, resolveErr = s.Symbols.ResolveSubjects(ctx, spaceID, []string{tagID})
+				if resolveErr != nil {
+					return nil, nil, fmt.Errorf("resolve target tag %s subjects: %w", tagID, resolveErr)
+				}
+				if cache != nil {
+					cache.subjects[cacheKey] = append([]domain.Subject(nil), subjects...)
+				}
 			}
 			source := strings.ToLower(strings.TrimSpace(tag.GetSource()))
 			market := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
@@ -1343,9 +1434,24 @@ func (s *Scheduler) expandTask(ctx context.Context, task domain.CollectionTask) 
 			groups = append(groups, taggedSubjects{subjects: subjects, source: source, market: market})
 		}
 	} else {
-		subjects, resolveErr := s.Symbols.ResolveSubjects(ctx, spaceID, tagIDs)
-		if resolveErr != nil {
-			return nil, nil, fmt.Errorf("resolve target dataset subjects: %w", resolveErr)
+		cacheKey := expansionCacheKey(spaceID, tagIDs)
+		var subjects []domain.Subject
+		subjectsCached := false
+		if cache != nil {
+			if cached, ok := cache.subjects[cacheKey]; ok {
+				subjects = append([]domain.Subject(nil), cached...)
+				subjectsCached = true
+			}
+		}
+		if !subjectsCached {
+			var resolveErr error
+			subjects, resolveErr = s.Symbols.ResolveSubjects(ctx, spaceID, tagIDs)
+			if resolveErr != nil {
+				return nil, nil, fmt.Errorf("resolve target dataset subjects: %w", resolveErr)
+			}
+			if cache != nil {
+				cache.subjects[cacheKey] = append([]domain.Subject(nil), subjects...)
+			}
 		}
 		groups = append(groups, taggedSubjects{subjects: subjects, source: strings.ToLower(sourceID), market: marketType})
 	}

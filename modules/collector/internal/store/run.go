@@ -82,9 +82,39 @@ func (r *RunRepository) ReconcileOpenRuns(ctx context.Context, spaceID string) e
 	if r == nil || r.db == nil {
 		return fmt.Errorf("run repository is not initialized")
 	}
+	spaceID = strings.TrimSpace(spaceID)
+	// A scheduled Run is created only after the scheduler has refreshed the
+	// task snapshot. If it is still planned with zero instances two minutes
+	// later, the originating tick can no longer attach work to it. Leaving such
+	// rows open forever makes every future tick repeatedly aggregate historical
+	// empty Runs, so converge them once to a visible terminal failure.
+	now := time.Now().UTC()
+	staleBefore := now.Add(-2 * time.Minute)
+	if err := r.db.WithContext(ctx).Exec(`UPDATE t_collector_runs
+		SET c_status = ?, c_error_summary = ?, c_mtime = ?
+		WHERE c_space_id = ? AND c_status = ? AND c_ctime < ?
+		AND NOT EXISTS (
+			SELECT 1 FROM t_collector_task_instances instances
+			WHERE instances.c_space_id = t_collector_runs.c_space_id
+			AND instances.c_run_id = t_collector_runs.c_run_id
+		)`, domain.RunStatusFailed, "stale planned run has no instances", now, spaceID, domain.RunStatusPlanned, staleBefore).Error; err != nil {
+		return err
+	}
+	// A scheduled minute Run is bounded by a 70s batch deadline plus at most
+	// three short retries. If it is still active ten minutes later, no healthy
+	// completion path can be waiting on it. Terminalize it in bulk before the
+	// per-Run aggregates below so historical stuck Runs cannot consume the next
+	// scheduler tick's entire context budget. Manual replay/backfill Runs are
+	// intentionally excluded because they may have a longer operator-owned life.
+	activeStaleBefore := now.Add(-10 * time.Minute)
+	if err := r.db.WithContext(ctx).Model(&domain.CollectionRun{}).
+		Where("c_space_id = ? AND c_run_type = ? AND c_status = ? AND c_ctime < ?", spaceID, "scheduled", domain.RunStatusActive, activeStaleBefore).
+		Updates(map[string]any{"c_status": domain.RunStatusFailed, "c_error_summary": "stale scheduled run exceeded terminal deadline", "c_mtime": now}).Error; err != nil {
+		return err
+	}
 	var runs []domain.CollectionRun
 	if err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_status IN ?", strings.TrimSpace(spaceID), []domain.RunStatus{domain.RunStatusPlanned, domain.RunStatusActive}).
+		Where("c_space_id = ? AND c_status IN ?", spaceID, []domain.RunStatus{domain.RunStatusPlanned, domain.RunStatusActive}).
 		Order("c_id ASC").Limit(500).Find(&runs).Error; err != nil {
 		return err
 	}
@@ -166,8 +196,10 @@ func (r *RunRepository) aggregate(ctx context.Context, spaceID, runID string) (r
 		COALESCE(SUM(CASE WHEN LOWER(targets.c_status) IN ('failed','error','permanent_failed') THEN 1 ELSE 0 END), 0) AS target_failed,
 		COALESCE(SUM(CASE WHEN LOWER(targets.c_status) NOT IN ('succeeded','success','completed','failed','error','permanent_failed') THEN 1 ELSE 0 END), 0) AS target_pending
 		FROM t_collector_instance_write_targets targets
-		JOIN t_collector_task_instances instances ON instances.c_space_id = targets.c_space_id AND instances.c_instance_id = targets.c_instance_id
-		WHERE instances.c_space_id = ? AND instances.c_run_id = ?`, spaceID, runID).Scan(&targets).Error; err != nil {
+		WHERE targets.c_space_id = ? AND targets.c_instance_id IN (
+			SELECT instances.c_instance_id FROM t_collector_task_instances instances
+			WHERE instances.c_space_id = ? AND instances.c_run_id = ?
+		)`, spaceID, spaceID, runID).Scan(&targets).Error; err != nil {
 		return out, err
 	}
 	out.TargetTotal, out.TargetSuccess, out.TargetFailed, out.TargetPending = targets.Total, targets.Success, targets.Failed, targets.Pending
@@ -180,11 +212,13 @@ func (r *RunRepository) aggregate(ctx context.Context, spaceID, runID string) (r
 		COUNT(*) AS batches,
 		COALESCE(SUM(CASE WHEN batches.c_status NOT IN ('succeeded','partial_failed','failed','timed_out') THEN 1 ELSE 0 END), 0) AS batch_active
 		FROM t_collector_fetch_batches batches
-		WHERE batches.c_space_id = ? AND EXISTS (
-			SELECT 1 FROM t_collector_fetch_batch_items items
-			JOIN t_collector_task_instances instances ON instances.c_space_id = items.c_space_id AND instances.c_instance_id = items.c_instance_id
-			WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id AND instances.c_run_id = ?
-		)`, spaceID, runID).Scan(&batches).Error; err != nil {
+		WHERE batches.c_space_id = ? AND batches.c_batch_id IN (
+			SELECT DISTINCT items.c_batch_id FROM t_collector_fetch_batch_items items
+			WHERE items.c_space_id = ? AND items.c_instance_id IN (
+				SELECT instances.c_instance_id FROM t_collector_task_instances instances
+				WHERE instances.c_space_id = ? AND instances.c_run_id = ?
+			)
+		)`, spaceID, spaceID, spaceID, runID).Scan(&batches).Error; err != nil {
 		return out, err
 	}
 	out.Batches, out.BatchActive = batches.Total, batches.Active

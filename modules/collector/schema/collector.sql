@@ -112,6 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_inst
 CREATE INDEX IF NOT EXISTS idx_collector_instances_deleted ON t_collector_task_instances (c_is_deleted);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_ctime ON t_collector_task_instances (c_ctime DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_run_request ON t_collector_task_instances(c_space_id, c_run_id, c_request_key) WHERE c_run_id <> '' AND c_request_key <> '';
+CREATE INDEX IF NOT EXISTS idx_collector_instances_run ON t_collector_task_instances(c_space_id, c_run_id, c_instance_id, c_last_exec_status);
 
 CREATE TABLE IF NOT EXISTS t_collector_instance_write_targets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -196,6 +197,7 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_batch_items (
     PRIMARY KEY (c_space_id, c_batch_id, c_instance_id)
 );
 CREATE INDEX IF NOT EXISTS idx_collector_batch_items_instance ON t_collector_fetch_batch_items(c_space_id, c_instance_id);
+CREATE INDEX IF NOT EXISTS idx_collector_batch_items_instance_batch ON t_collector_fetch_batch_items(c_space_id, c_instance_id, c_batch_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_fetch_batch
 ON t_collector_fetch_batches (c_space_id, c_batch_id);

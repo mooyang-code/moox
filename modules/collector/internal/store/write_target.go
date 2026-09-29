@@ -98,6 +98,18 @@ func (r *TaskInstanceRepository) PruneDisabledWriteTargets(ctx context.Context, 
 	if spaceID == "" {
 		return 0, nil
 	}
+	// The expensive safety query joins every WriteTarget against batch state.
+	// Most scheduler ticks have no disabled CollectionTask at all, so avoid
+	// scanning the growing runtime tables unless there is actually something
+	// that could be pruned.
+	var disabledTasks int64
+	if err := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+		Where("c_space_id = ? AND c_enabled = ?", spaceID, false).Count(&disabledTasks).Error; err != nil {
+		return 0, err
+	}
+	if disabledTasks == 0 {
+		return 0, nil
+	}
 	var deleted int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		safeTargets := `SELECT targets.c_write_target_id

@@ -290,6 +290,31 @@ func TestTickSharesOneFetchAcrossTaskWriteTargets(t *testing.T) {
 	require.ElementsMatch(t, []string{"bars_a", "bars_b"}, []string{targets[0].DatasetID, targets[1].DatasetID})
 }
 
+func TestSchedulerExpansionCachesSharedTagAndSkipsDatasetLookup(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	for _, task := range []domain.CollectionTask{
+		{SpaceID: "crypto", TaskID: "task-a", TaskName: "A", DataType: "kline", TagIDs: []string{"shared"}, CollectParams: `{"target_dataset_id":"bars-a","frequency":"1m"}`, Enabled: true},
+		{SpaceID: "crypto", TaskID: "task-b", TaskName: "B", DataType: "kline", TagIDs: []string{"shared"}, CollectParams: `{"target_dataset_id":"bars-b","frequency":"1m"}`, Enabled: true},
+	} {
+		require.NoError(t, db.Tasks().Create(ctx, task))
+	}
+	source := &countingTagDatasetSource{
+		tag:      &storagepb.Tag{SpaceId: "crypto", TagId: "shared", Source: "binance", MarketType: "spot"},
+		subjects: []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}},
+	}
+	now := time.Date(2026, 9, 29, 3, 10, 5, 0, time.UTC)
+	scheduler := &Scheduler{
+		Tasks: db.Tasks(), Instances: db.TaskInstances(), Batches: db.FetchBatches(), Runs: db.Runs(),
+		Invoker: &recordingMarketFetchInvoker{invokeNodes: []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}}},
+		SpaceID: "crypto", Now: func() time.Time { return now }, ResolveSourceID: testSourceID, Symbols: source,
+	}
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	require.Zero(t, source.getDatasetCalls, "task-owned tags must avoid the legacy Dataset lookup")
+	require.Equal(t, 1, source.getTagCalls, "tasks sharing one tag should resolve its route once per scheduler tick")
+	require.Equal(t, 1, source.resolveSubjectsCalls, "tasks sharing one tag should resolve its members once per scheduler tick")
+}
+
 func TestSharedFetchKeepsDatasetSpecificSeriesIndexAndHash(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
@@ -565,6 +590,55 @@ func TestSchedulerTickAdvancesRunLifecycle(t *testing.T) {
 	}
 }
 
+func TestSchedulerSkipsUnchangedHourlyTargetInNextMinuteRun(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	for _, task := range []domain.CollectionTask{
+		{SpaceID: "crypto", TaskID: "bars-1m", TaskName: "Minute bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"bars-1m","frequency":"1m"}`},
+		{SpaceID: "crypto", TaskID: "bars-1h", TaskName: "Hourly bars", DataType: "kline", Enabled: true, CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"bars-1h","frequency":"1H"}`},
+	} {
+		require.NoError(t, db.Tasks().Create(ctx, task))
+	}
+	invoker := &recordingMarketFetchInvoker{invokeNodes: []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fn-invoke-1", Region: "ap-hongkong", TriggerType: "invoke"}}}
+	now := time.Date(2026, 9, 28, 18, 5, 30, 0, time.UTC)
+	scheduler := &Scheduler{
+		Tasks: db.Tasks(), Instances: db.TaskInstances(), Batches: db.FetchBatches(), Runs: db.Runs(), Retries: db.FetchRetries(),
+		Invoker: invoker, SpaceID: "crypto", Now: func() time.Time { return now }, ResolveSourceID: testSourceID,
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+	}
+
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	firstKey := fmt.Sprintf("scheduled:%s", now.Truncate(time.Minute).Format(time.RFC3339))
+	firstRun, err := db.Runs().GetOrCreateScheduled(ctx, "crypto", firstKey, "scheduled", "1m", now.Truncate(time.Minute))
+	require.NoError(t, err)
+	instances, err := db.TaskInstances().ListAll(ctx, "crypto", 100)
+	require.NoError(t, err)
+	require.Equal(t, 2, countInstancesForRun(instances, firstRun.RunID))
+
+	now = now.Add(time.Minute)
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	secondKey := fmt.Sprintf("scheduled:%s", now.Truncate(time.Minute).Format(time.RFC3339))
+	secondRun, err := db.Runs().GetOrCreateScheduled(ctx, "crypto", secondKey, "scheduled", "1m", now.Truncate(time.Minute))
+	require.NoError(t, err)
+	instances, err = db.TaskInstances().ListAll(ctx, "crypto", 100)
+	require.NoError(t, err)
+	require.Equal(t, 1, countInstancesForRun(instances, secondRun.RunID), "unchanged 1H target must not create a new pending instance every minute")
+	for _, instance := range instances {
+		if instance.RunID == secondRun.RunID {
+			require.Equal(t, "1m", instance.Frequency)
+		}
+	}
+
+	now = time.Date(2026, 9, 28, 19, 0, 30, 0, time.UTC)
+	require.NoError(t, scheduler.Tick(ctx, "crypto"))
+	thirdKey := fmt.Sprintf("scheduled:%s", now.Truncate(time.Minute).Format(time.RFC3339))
+	thirdRun, err := db.Runs().GetOrCreateScheduled(ctx, "crypto", thirdKey, "scheduled", "1m", now.Truncate(time.Minute))
+	require.NoError(t, err)
+	instances, err = db.TaskInstances().ListAll(ctx, "crypto", 100)
+	require.NoError(t, err)
+	require.Equal(t, 2, countInstancesForRun(instances, thirdRun.RunID), "new closed 1H target must be scheduled on the hour")
+}
+
 func TestSchedulerRunCutoffDefersNewTaskToNextRun(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
@@ -686,6 +760,29 @@ func (s datasetSourceStub) ResolveSubjects(context.Context, string, []string) ([
 		items = append(items, domain.Subject{SubjectID: subject.SubjectID, Name: subject.SubjectName, Status: subject.Status})
 	}
 	return items, nil
+}
+
+type countingTagDatasetSource struct {
+	tag                  *storagepb.Tag
+	subjects             []domain.Subject
+	getDatasetCalls      int
+	getTagCalls          int
+	resolveSubjectsCalls int
+}
+
+func (s *countingTagDatasetSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
+	s.getDatasetCalls++
+	return storagesource.DatasetInfo{DataSourceID: "symbols"}, nil
+}
+
+func (s *countingTagDatasetSource) GetTag(context.Context, string, string) (*storagepb.Tag, error) {
+	s.getTagCalls++
+	return s.tag, nil
+}
+
+func (s *countingTagDatasetSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
+	s.resolveSubjectsCalls++
+	return append([]domain.Subject(nil), s.subjects...), nil
 }
 
 type tagAwareDatasetSourceStub struct {

@@ -547,6 +547,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	}
 	type marketFetchRuntime struct {
 		spaceID     string
+		timerOwned  bool
 		reconciler  *marketfetch.Reconciler
 		scheduler   *marketfetch.Scheduler
 		tickRunning atomic.Bool
@@ -588,7 +589,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		if err := marketfetch.StartStorageWriteConsumer(trpc.BackgroundContext(), spaceID, dbm.TaskInstances()); err != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector storage write consumer disabled space=%s: %v", spaceID, err)
 		}
-		runtimes = append(runtimes, marketFetchRuntime{spaceID: spaceID, reconciler: reconciler, scheduler: invokeScheduler})
+		runtimes = append(runtimes, marketFetchRuntime{spaceID: spaceID, timerOwned: stockCNTimerOwned, reconciler: reconciler, scheduler: invokeScheduler})
 	}
 	// Resampling owns a dedicated minute timer. Its callback only schedules a
 	// bounded background scan, so slow source/target Storage I/O cannot delay the
@@ -668,6 +669,12 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 					log.WarnContextf(scheduleCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 				}
 				scheduleCancel()
+				// Crypto is Scheduler/Invoke-owned. Its legacy Timer fleet is retired
+				// during SCF publication, so reconciling Timer assignments here would
+				// incorrectly require a second fleet and emit a false capacity error.
+				if !runtime.timerOwned {
+					return
+				}
 
 				tickCtx, tickCancel := context.WithTimeout(trpc.BackgroundContext(), marketFetchReconcileTimeout)
 				defer tickCancel()

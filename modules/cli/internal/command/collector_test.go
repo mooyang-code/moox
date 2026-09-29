@@ -784,6 +784,23 @@ func TestBuildCollectorFleetCreateItemsContinuesOverflowIndexes(t *testing.T) {
 	assert.Equal(t, 59, items[10].Metadata["index"])
 }
 
+func TestCollectorShardIndexOffsetsKeepIndexesUniqueAcrossNamespaces(t *testing.T) {
+	shards := []setupconfig.SCFNamespaceShard{
+		{Namespace: "moox-crypto", Invokes: 50},
+		{Namespace: "moox-crypto-ns2", Invokes: 30},
+		{Namespace: "timer-a", Timers: 49, Invokes: 1},
+		{Namespace: "timer-b", Timers: 5},
+	}
+
+	offsets := collectorShardIndexOffsets(shards)
+	require.Equal(t, []collectorShardIndexOffset{
+		{Timer: 0, Invoke: 0},
+		{Timer: 0, Invoke: 50},
+		{Timer: 0, Invoke: 80},
+		{Timer: 49, Invoke: 81},
+	}, offsets)
+}
+
 func TestSelectCollectorFleetNodesMapsOverflowIndexes(t *testing.T) {
 	nodes := []adminclient.CloudNode{
 		{NodeID: "fleet-49", Namespace: "moox-crypto-ns2", TriggerType: "timer", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(49)}},

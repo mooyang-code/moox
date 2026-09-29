@@ -974,12 +974,12 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					Invokes:   1,
 				}}
 			}
-			timerIndexOffset := 0
-			for _, shard := range shards {
+			shardOffsets := collectorShardIndexOffsets(shards)
+			for shardIndex, shard := range shards {
 				shardOpts := regionOpts
 				shardOpts.Namespace = shard.Namespace
 				shardOpts.NodeCount = shard.Timers
-				shardOpts.IndexOffset = timerIndexOffset
+				shardOpts.IndexOffset = shardOffsets[shardIndex].Timer
 				if shard.Invokes > 0 {
 					// The auxiliary Invoke node is deployed and exercised first. A
 					// successful market_fetch canary proves the Kline SCF -> Storage path
@@ -987,7 +987,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					invokeOpts := shardOpts
 					invokeOpts.TriggerType = "invoke"
 					invokeOpts.NodeCount = shard.Invokes
-					invokeOpts.IndexOffset = 0
+					invokeOpts.IndexOffset = shardOffsets[shardIndex].Invoke
 					invokeOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-invoke"
 					invokeNodes, inspectInvokeErr := inspectCollectorFleet(ctx, client, invokeOpts)
 					if inspectInvokeErr != nil {
@@ -1023,7 +1023,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				if shard.Timers <= 0 {
 					continue
 				}
-				timerIndexOffset += shard.Timers
 				fleetNodes, inspectErr := inspectCollectorFleet(ctx, client, shardOpts)
 				if inspectErr != nil {
 					return summary, inspectErr
@@ -2882,6 +2881,23 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 			"storage_timeout_ms":       effectiveInt("storage_timeout_ms", defaultInt(fetcher.StorageTimeoutMS, 5000)),
 		},
 	}, nil
+}
+
+type collectorShardIndexOffset struct {
+	Timer  int
+	Invoke int
+}
+
+func collectorShardIndexOffsets(shards []setupconfig.SCFNamespaceShard) []collectorShardIndexOffset {
+	offsets := make([]collectorShardIndexOffset, len(shards))
+	timerOffset := 0
+	invokeOffset := 0
+	for index, shard := range shards {
+		offsets[index] = collectorShardIndexOffset{Timer: timerOffset, Invoke: invokeOffset}
+		timerOffset += shard.Timers
+		invokeOffset += shard.Invokes
+	}
+	return offsets
 }
 
 func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID string) ([]adminclient.NodeCreateItem, error) {
