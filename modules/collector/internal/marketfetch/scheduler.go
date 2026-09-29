@@ -98,6 +98,7 @@ type Scheduler struct {
 
 const (
 	defaultBatchCompletionDeadline = 70 * time.Second
+	defaultSCFInvokeAttemptTimeout = 10 * time.Second
 )
 
 // MarketFetchInvoker is the CloudNode list/invoke surface used by the scheduler.
@@ -1026,7 +1027,7 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 			log.WarnContextf(ctx, "build SCF market fetch failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
 		}
-		invokeCtx, invokeCancel := context.WithTimeout(ctx, 5*time.Second)
+		invokeCtx, invokeCancel := context.WithTimeout(ctx, defaultSCFInvokeAttemptTimeout)
 		result, invokeErr := s.Invoker.Invoke(invokeCtx, req.SpaceID, candidate.NodeID, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT)
 		invokeCancel()
 		if invokeErr != nil {
@@ -1263,7 +1264,7 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 			log.WarnContextf(ctx, "build SCF market fetch retry failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
 		}
-		invokeCtx, invokeCancel := context.WithTimeout(ctx, 5*time.Second)
+		invokeCtx, invokeCancel := context.WithTimeout(ctx, defaultSCFInvokeAttemptTimeout)
 		result, invokeErr := s.Invoker.Invoke(invokeCtx, req.SpaceID, candidate.NodeID, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT)
 		invokeCancel()
 		if invokeErr != nil {

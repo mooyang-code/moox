@@ -151,6 +151,7 @@ func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
 func TestBatchKindForTaskUsesRealtimeForKline(t *testing.T) {
 	assert.Equal(t, domain.BatchKindRealtime, batchKindForTask(domain.CollectionTask{DataType: "kline"}))
 	assert.Equal(t, 70*time.Second, batchCompletionDeadline(domain.BatchKindRealtime))
+	assert.Equal(t, 10*time.Second, defaultSCFInvokeAttemptTimeout)
 }
 
 func TestExpandTaskUsesExplicitExternalSymbolForKline(t *testing.T) {
