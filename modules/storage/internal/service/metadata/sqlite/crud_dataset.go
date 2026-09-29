@@ -659,16 +659,6 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 		return nil, errors.New("dataset column value_type must be declared")
 	}
 	item.Status = defaultStatus(item.GetStatus())
-	newColumn := false
-	if existing, getErr := s.GetDatasetColumn(ctx, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()); getErr == nil {
-		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
-			return nil, errors.New("dataset column identity and value_type are immutable")
-		}
-	} else if !errors.Is(getErr, sql.ErrNoRows) {
-		return nil, getErr
-	} else {
-		newColumn = true
-	}
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err
@@ -677,7 +667,25 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	existing, getErr := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`,
+		[]any{item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	newColumn := errors.Is(getErr, sql.ErrNoRows)
+	if getErr == nil {
+		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
+			return nil, errors.New("dataset column identity and value_type are immutable")
+		}
+	} else if !newColumn {
+		return nil, getErr
+	}
+	wasActive := getErr == nil && (existing.GetStatus() == "" || existing.GetStatus() == "active")
+	isActive := item.GetStatus() == "active"
+	projectionChanged := wasActive != isActive
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_aliases_json, c_status, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_dataset_id, c_column_name) DO UPDATE SET
@@ -691,26 +699,37 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 	if err != nil {
 		return nil, err
 	}
-	if newColumn {
-		if err := s.bumpViewsForDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
+	if projectionChanged {
+		if err := bumpViewsForDataset(ctx, tx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
 			return nil, err
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return item, nil
 }
 
-func (s *Store) bumpViewsForDataset(ctx context.Context, spaceID, datasetID string) error {
-	_, err := s.db.ExecContext(ctx, `
+func bumpViewsForDataset(ctx context.Context, db execQueryRower, spaceID, datasetID string) error {
+	_, err := db.ExecContext(ctx, `
 		UPDATE t_views
-		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END
-		WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID)
+		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END,
+			c_attrs_json = json_set(c_attrs_json, '$.desired_view_revision', CAST(CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END AS TEXT))
+		WHERE c_space_id = ? AND c_dataset_id = ?
+		  AND COALESCE(json_extract(c_attrs_json, '$.attributes."moox.columns_explicit"'), '') <> 'true'
+		  AND NOT EXISTS (
+			SELECT 1 FROM t_view_columns view_column
+			WHERE view_column.c_space_id = t_views.c_space_id
+			  AND view_column.c_view_id = t_views.c_view_id
+		  )`, spaceID, datasetID)
 	return err
 }
 
 func (s *Store) bumpViewsForField(ctx context.Context, spaceID, fieldID string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE t_views
-		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END
+		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END,
+			c_attrs_json = json_set(c_attrs_json, '$.desired_view_revision', CAST(CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END AS TEXT))
 		WHERE c_space_id = ? AND EXISTS (
 			SELECT 1
 			FROM t_dataset_columns column_ref

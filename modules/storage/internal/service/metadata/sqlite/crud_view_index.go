@@ -64,10 +64,16 @@ func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 }
 
 func viewIndexShapeChanged(existing *pb.View, next *pb.View) bool {
+	existingColumnsExplicit := existing.GetAttributes()["moox.columns_explicit"] == "true"
+	nextColumnsExplicit := existingColumnsExplicit
+	if value, ok := next.GetAttributes()["moox.columns_explicit"]; ok {
+		nextColumnsExplicit = value == "true"
+	}
 	return existing.GetDatasetId() != next.GetDatasetId() ||
 		!slices.Equal(existing.GetGrainKeys(), next.GetGrainKeys()) ||
 		existing.GetFilterJson() != next.GetFilterJson() ||
-		existing.GetEngine() != next.GetEngine()
+		existing.GetEngine() != next.GetEngine() ||
+		existingColumnsExplicit != nextColumnsExplicit
 }
 
 func bumpViewVersion(ctx context.Context, tx *sql.Tx, spaceID, viewID string) error {
@@ -196,8 +202,7 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	if view.GetDesiredViewRevision() != build.GetTargetViewVersion() {
 		return nil, ErrViewIndexBuildConflict
 	}
-	columns, err := queryMessages(ctx, tx, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? ORDER BY c_sort_order, c_column_name`,
-		[]any{view.GetSpaceId(), view.GetViewId()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
+	columns, err := activationViewColumns(ctx, tx, view)
 	if err != nil {
 		return nil, err
 	}
@@ -246,6 +251,39 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 		return nil, err
 	}
 	return s.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+}
+
+func activationViewColumns(ctx context.Context, tx *sql.Tx, view *pb.View) ([]*pb.ViewColumn, error) {
+	columns, err := queryMessages(ctx, tx, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? ORDER BY c_sort_order, c_column_name`,
+		[]any{view.GetSpaceId(), view.GetViewId()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
+	if err != nil {
+		return nil, err
+	}
+	if len(columns) > 0 || view.GetAttributes()["moox.columns_explicit"] == "true" {
+		return columns, nil
+	}
+
+	// An empty t_view_columns set means "use every active dataset column"
+	// unless the caller explicitly requested an empty projection. Keep the
+	// persisted active contract identical to the columns the View Maintainer
+	// used when it prepared the physical index.
+	datasetColumns, err := queryMessages(ctx, tx, `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? ORDER BY c_column_name`,
+		[]any{view.GetSpaceId(), view.GetDatasetId()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	if err != nil {
+		return nil, err
+	}
+	for _, column := range datasetColumns {
+		if column == nil || (column.GetStatus() != "" && column.GetStatus() != "active") {
+			continue
+		}
+		columns = append(columns, &pb.ViewColumn{
+			SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ColumnName: column.GetColumnName(),
+			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+			OriginId:   view.GetDatasetId() + "." + column.GetColumnName(),
+			ValueType:  column.GetValueType(),
+		})
+	}
+	return columns, nil
 }
 
 func (s *Store) FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error) {
