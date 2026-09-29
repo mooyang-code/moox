@@ -87,10 +87,10 @@
         <a-table-column title="所属标签" :width="220">
           <template #cell="{ record }">
             <a-space wrap>
-              <a-tag v-for="tagId in record.tag_ids || (record.tag_id ? [record.tag_id] : [])" :key="tagId" size="small">
+              <a-tag v-for="tagId in memberTagIDs(record)" :key="tagId" size="small">
                 {{ tagName(tagId) }}
               </a-tag>
-              <span v-if="!(record.tag_ids || []).length && !record.tag_id" class="muted">—</span>
+              <span v-if="!memberTagIDs(record).length" class="muted">—</span>
             </a-space>
           </template>
         </a-table-column>
@@ -280,6 +280,10 @@ function onSearch() {
 
 function tagName(tagId: string) {
   return tags.value.find(tag => tag.tag_id === tagId)?.tag_name || tagId;
+}
+
+function memberTagIDs(record: TagMember): string[] {
+  return record.tag_ids?.length ? record.tag_ids : record.tag_id ? [record.tag_id] : [];
 }
 
 function subjectAttributes(record: TagMember): Array<[string, string]> {

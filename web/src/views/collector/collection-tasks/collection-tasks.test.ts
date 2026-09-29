@@ -34,7 +34,7 @@ describe("collector task workbench", () => {
 
   it("renders the task list with operational result columns and no rule terminology", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
-    for (const label of ["任务名称", "数据类型", "标签", "来源 / 市场", "频率", "结果状态", "最近数据时间", "启用状态", "操作"]) {
+    for (const label of ["任务名称", "数据类型", "数据范围标签", "来源 / 市场", "频率", "结果状态", "最近数据时间", "启用状态", "操作"]) {
       expect(source).toContain(`title="${label}"`);
     }
     expect(source).toContain("新建采集任务");

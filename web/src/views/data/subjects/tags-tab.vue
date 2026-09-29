@@ -109,7 +109,7 @@
           </a-form-item>
           <a-row :gutter="16">
             <a-col :span="12">
-              <a-form-item field="cron" label="Cron" required>
+              <a-form-item field="cron" label="定时更新" required>
                 <a-input v-model="form.cron" placeholder="0 * * * *" />
               </a-form-item>
             </a-col>
@@ -124,7 +124,7 @@
           <div class="next-runs">
             <span class="muted">接下来运行</span>
             <a-tag v-for="run in previewRuns" :key="run" size="small">{{ formatTime(run) }}</a-tag>
-            <span v-if="!previewRuns.length" class="run-status--failed">Cron 表达式无效</span>
+            <span v-if="!previewRuns.length" class="run-status--failed">定时更新表达式无效</span>
           </div>
       </a-form>
     </a-modal>

@@ -682,12 +682,13 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	}
 	if activeInvalidErr != nil {
 		// A stale/corrupt active file must never be exposed. If there is no
-		// already-attached runtime from which to backfill, fail closed and leave
-		// an audit row rather than activating an empty replacement.
+		// already-attached runtime, rebuild only when the authoritative Primary
+		// history readers are available. The inactive build can then be fully
+		// populated from Primary before Metadata atomically activates it.
 		s.mu.RLock()
 		runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
 		s.mu.RUnlock()
-		if runtime == nil {
+		if runtime == nil && !canRebuildInvalidViewFromPrimary(view, opts, lookbackPeriods) {
 			s.recordFailedRebuild(ctx, opts, auth, view, triggerReason, activeInvalidErr, stats)
 			return activeInvalidErr
 		}
@@ -916,6 +917,16 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, entriesWritten, nil)
 	}
 	return err
+}
+
+func canRebuildInvalidViewFromPrimary(view *pb.View, opts MaintenanceOptions, lookbackPeriods uint64) bool {
+	if view == nil || opts.Primary == nil || opts.PrimaryRange == nil || viewFrequencyValue(view) == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(view.GetEngine()), "bleve") {
+		return false
+	}
+	return lookbackPeriods > 0 || opts.RebuildLookback > 0
 }
 
 func isCapacityMaintenanceOnly(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions, activeInvalidErr error, coverageRepair, manualRequested, seriesCapacityExceeded bool) bool {

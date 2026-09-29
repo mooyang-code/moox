@@ -18,7 +18,7 @@ export function validateTagForm(state: TagFormState, creating: boolean): string 
   if (creating && !TAG_ID_PATTERN.test(state.tag_id.trim())) return "标签 ID 须为小写字母开头的 snake_case";
   if (!state.tag_name.trim()) return "请输入标签名称";
   if (!state.source.trim() || !state.market_type) return "请选择数据源与市场类型";
-  if (state.mode === "auto" && nextRuns(state.cron, state.timezone, 1).length === 0) return "cron 表达式无效";
+  if (state.mode === "auto" && nextRuns(state.cron, state.timezone, 1).length === 0) return "定时更新表达式无效";
   return undefined;
 }
 

@@ -30,7 +30,7 @@
           :data="taskList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: 1380 }"
+          :scroll="{ x: 1450 }"
           :pagination="paginationConfig"
           @page-change="onPageChange"
           @page-size-change="onPageSizeChange"
@@ -41,16 +41,16 @@
                 <a-link @click="onViewDetails(record)">{{ record.task_name || record.task_id }}</a-link>
               </template>
             </a-table-column>
-            <a-table-column title="数据类型" :width="120">
+            <a-table-column title="数据类型" :width="100">
               <template #cell="{ record }">{{ dataTypeLabel(record.data_type) }}</template>
             </a-table-column>
-            <a-table-column title="标签" :width="220">
+            <a-table-column title="数据范围标签" :width="220">
               <template #cell="{ record }">{{ taskTagSummary(record) }}</template>
             </a-table-column>
             <a-table-column title="来源 / 市场" :width="180">
               <template #cell="{ record }">{{ taskRouteSummary(record) }}</template>
             </a-table-column>
-            <a-table-column title="频率" :width="100">
+            <a-table-column title="频率" :width="90">
               <template #cell="{ record }">{{ taskFrequency(record) }}</template>
             </a-table-column>
             <a-table-column title="结果状态" :width="120" align="center">
@@ -68,7 +68,7 @@
                 </a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="260" align="center" fixed="right">
+            <a-table-column title="操作" :width="220" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space wrap>
                   <a-button
