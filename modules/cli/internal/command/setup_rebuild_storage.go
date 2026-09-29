@@ -336,7 +336,9 @@ if command -v "$crontab_command" >/dev/null 2>&1; then
 fi
 for service in collector factor strategy trade; do
   if pgrep -f -- "$root/bin/moox-$service([[:space:]]|$)" >/dev/null 2>&1; then
-    "$root/stop.sh" "$service"
+    # stop.sh is intentionally chatty; stdout is the machine-readable list
+    # consumed by resumeStorageWriters, so keep lifecycle logs out of it.
+    "$root/stop.sh" "$service" >/dev/null
     printf '%s\n' "$service"
   fi
 done

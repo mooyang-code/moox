@@ -86,6 +86,7 @@ func TestParseStorageResetOperationResult(t *testing.T) {
 func TestStorageRebuildScriptsPauseAndRestoreHealthchecks(t *testing.T) {
 	assert.Contains(t, storageRebuildQuiesceScript, "# moox-healthchecks")
 	assert.Contains(t, storageRebuildQuiesceScript, "storage-rebuild-healthchecks.crontab")
+	assert.Contains(t, storageRebuildQuiesceScript, `"$root/stop.sh" "$service" >/dev/null`)
 	assert.Contains(t, storageRebuildResumeScript, "trap restore_healthchecks EXIT")
 	assert.Contains(t, storageRebuildRemoteScript, "trap restore_healthchecks EXIT")
 	assert.Contains(t, storageRebuildRemoteScript, "storage-rebuild-healthchecks.crontab")
