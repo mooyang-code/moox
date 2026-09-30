@@ -312,12 +312,16 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_retry_items (
     c_failure_targets_json TEXT NOT NULL DEFAULT '[]',
     c_attempt INTEGER NOT NULL DEFAULT 1,
     c_status TEXT NOT NULL,
-    c_period_failure_reported INTEGER NOT NULL DEFAULT 0,
+    c_period_failure_report_state TEXT NOT NULL DEFAULT 'pending',
+    c_period_failure_results_json TEXT NOT NULL DEFAULT '[]',
+    c_period_failure_last_error TEXT NOT NULL DEFAULT '',
+    c_period_failure_deadline_exceeded_at DATETIME,
     c_next_retry_at DATETIME,
     c_last_error_type TEXT NOT NULL DEFAULT '',
     c_last_error_summary TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_period_failure_report_state IN ('pending', 'acknowledged', 'missed_deadline'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_fetch_retry ON t_collector_fetch_retry_items (c_space_id, c_retry_key);
@@ -334,7 +338,7 @@ CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due_scope
 ON t_collector_fetch_retry_items (c_space_id, c_status, c_next_retry_at);
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_period_failure
-ON t_collector_fetch_retry_items (c_space_id, c_status, c_period_failure_reported, c_mtime);
+ON t_collector_fetch_retry_items (c_space_id, c_status, c_period_failure_report_state, c_retry_key);
 
 -- Period readiness is the Collector's durable answer to whether all
 -- expected Storage writes for one market period have reached a terminal

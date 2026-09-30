@@ -153,6 +153,43 @@ func TestCommitTimeSeriesBatchRequiresExactAcceptedIndexSet(t *testing.T) {
 	}
 }
 
+func TestRecordDatasetPeriodFailuresRequiresExactAuthoritativeReceipts(t *testing.T) {
+	expectation := validStorageExpectation(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
+	want := []uint32{1, 2}
+	valid := &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{
+		RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting,
+		Results: []*storagepb.DatasetPeriodFailureResult{
+			{SeriesIndex: 2, Disposition: storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED},
+			{SeriesIndex: 1, Disposition: storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_ALREADY_SUCCEEDED},
+		},
+	}
+	results, err := (&storageWriter{period: &periodAccessStub{record: valid}}).RecordDatasetPeriodFailures(context.Background(), expectation, []uint32{2, 1, 2})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	access := &periodAccessStub{record: valid}
+	_, err = (&storageWriter{period: access}).RecordDatasetPeriodFailures(context.Background(), expectation, []uint32{2, 1, 2})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{1, 2}, access.recordReq.GetSeriesIndexes(), "RPC input must use sorted, deduplicated indexes")
+
+	for _, test := range []struct {
+		name string
+		rsp  *storagepb.PrimaryRecordDatasetPeriodFailuresRsp
+	}{
+		{name: "empty response"},
+		{name: "non-success ret info", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR}, PeriodStatus: domain.PeriodStatusWaiting, Results: valid.Results}},
+		{name: "invalid period status", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: "unknown", Results: valid.Results}},
+		{name: "missing index", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting, Results: valid.Results[:1]}},
+		{name: "extra index", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting, Results: append(append([]*storagepb.DatasetPeriodFailureResult(nil), valid.Results...), &storagepb.DatasetPeriodFailureResult{SeriesIndex: 3, Disposition: storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED})}},
+		{name: "duplicate index", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting, Results: []*storagepb.DatasetPeriodFailureResult{valid.Results[0], valid.Results[0]}}},
+		{name: "unknown disposition", rsp: &storagepb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: storageSuccess(), PeriodStatus: domain.PeriodStatusWaiting, Results: []*storagepb.DatasetPeriodFailureResult{{SeriesIndex: 1, Disposition: storagepb.PeriodFailureDisposition(99)}, valid.Results[0]}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := (&storageWriter{period: &periodAccessStub{record: test.rsp}}).RecordDatasetPeriodFailures(context.Background(), expectation, want)
+			require.Error(t, err)
+		})
+	}
+}
+
 func validStorageExpectation(period time.Time) *storagepb.DatasetPeriodExpectation {
 	return &storagepb.DatasetPeriodExpectation{
 		SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(),
@@ -169,6 +206,8 @@ type periodAccessStub struct {
 	ensureErr   error
 	status      *storagepb.PrimaryGetDatasetPeriodStatusRsp
 	commit      *storagepb.PrimaryCommitTimeSeriesBatchRsp
+	record      *storagepb.PrimaryRecordDatasetPeriodFailuresRsp
+	recordReq   *storagepb.PrimaryRecordDatasetPeriodFailuresReq
 	ensureCalls int
 	statusCalls int
 }
@@ -187,6 +226,7 @@ func (s *periodAccessStub) CommitTimeSeriesBatch(context.Context, *storagepb.Pri
 	return s.commit, nil
 }
 
-func (s *periodAccessStub) RecordDatasetPeriodFailures(context.Context, *storagepb.PrimaryRecordDatasetPeriodFailuresReq, ...client.Option) (*storagepb.PrimaryRecordDatasetPeriodFailuresRsp, error) {
-	return nil, nil
+func (s *periodAccessStub) RecordDatasetPeriodFailures(_ context.Context, req *storagepb.PrimaryRecordDatasetPeriodFailuresReq, _ ...client.Option) (*storagepb.PrimaryRecordDatasetPeriodFailuresRsp, error) {
+	s.recordReq = req
+	return s.record, nil
 }

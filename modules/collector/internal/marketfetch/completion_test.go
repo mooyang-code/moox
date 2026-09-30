@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 func TestRetryCollectionItemUsesExactInstanceIDBeforeSubjectFallback(t *testing.T) {
@@ -51,7 +53,16 @@ func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	}, completedAt)
 	payload.BatchId = batch.BatchID
 	payload.ScheduleId = batch.ScheduleID
-	require.NoError(t, handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload)))
+	wakeCalls := 0
+	wake := func() {
+		wakeCalls++
+		key := retryKey(batch.BatchID, "BTC-USDT", "2026-08-02T07:59:00Z")
+		row, getErr := db.FetchRetries().Get(ctx, "crypto", key)
+		require.NoError(t, getErr, "completion must wake only after its permanent-failure outbox row is durable")
+		require.Equal(t, "permanent_failed", row.Status)
+	}
+	require.NoError(t, handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload), wake))
+	require.Equal(t, 1, wakeCalls)
 
 	instance, err := db.TaskInstances().Get(ctx, "crypto", "task-btc")
 	require.NoError(t, err)
@@ -62,6 +73,37 @@ func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(instance.Result), &result))
 	assert.Equal(t, "invalid_symbol", result["error_type"])
 	assert.Equal(t, "symbol is delisted", result["error_summary"])
+}
+
+func TestHandleCompletionDoesNotWakeWhenPermanentFailurePersistenceFails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	db, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	triggerDB, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := triggerDB.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	ctx := context.Background()
+	completedAt := time.Date(2026, time.August, 2, 8, 0, 0, 0, time.UTC)
+	batch := completionTestBatch("invalid-persist-failure")
+	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	persistCompletionTestInstance(t, db, ctx, batch.BatchID)
+	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+		InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
+		Outcome: string(domain.ItemOutcomeInvalid), ErrorType: "invalid_symbol", ErrorSummary: "symbol is delisted",
+	}, completedAt)
+	payload.BatchId = batch.BatchID
+	payload.ScheduleId = batch.ScheduleID
+	require.NoError(t, triggerDB.Exec("CREATE TRIGGER fail_failure_retry BEFORE INSERT ON t_collector_fetch_retry_items BEGIN SELECT RAISE(ABORT, 'retry insert failure'); END").Error)
+	wakeCalls := 0
+	err = handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload), func() { wakeCalls++ })
+	require.Error(t, err)
+	require.Zero(t, wakeCalls, "the reporter must not wake before a failed completion transaction commits")
 }
 
 func TestHandleCompletionMarksTaskInstanceFailedWhenRetriesAreExhausted(t *testing.T) {

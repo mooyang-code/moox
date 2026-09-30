@@ -37,7 +37,7 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Target-level retry/readiness state belongs to the target task. Remove
 		// it before deleting the WriteTarget relation itself.
-		if err := tx.Exec(`DELETE FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, spaceID, taskID).Error; err != nil {
+		if err := tx.Exec(`DELETE FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?) AND NOT (c_status = 'permanent_failed' AND c_period_failure_report_state = 'pending')`, spaceID, spaceID, taskID).Error; err != nil {
 			return err
 		}
 		if err := tx.Exec(`DELETE FROM t_period_readiness_items WHERE c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, taskID).Error; err != nil {
@@ -221,7 +221,10 @@ func (s *Store) ApplySchema(sql string) error {
 	if err := s.rejectLegacySchema(); err != nil {
 		return err
 	}
-	return s.db.Exec(sql).Error
+	if err := s.db.Exec(sql).Error; err != nil {
+		return err
+	}
+	return s.validatePeriodFailureSchema()
 }
 
 // rejectLegacySchema deliberately fails closed for the pre-task model. There
@@ -294,7 +297,8 @@ func (s *Store) rejectLegacySchema() error {
 		"t_collector_fetch_retry_items": {
 			"c_id", "c_space_id", "c_retry_key", "c_source_batch_id", "c_batch_kind",
 			"c_instance_id", "c_write_target_id", "c_retry_scope", "c_subject_id", "c_frequency",
-			"c_target_data_time", "c_task_json", "c_failure_targets_json", "c_attempt", "c_status", "c_period_failure_reported",
+			"c_target_data_time", "c_task_json", "c_failure_targets_json", "c_attempt", "c_status",
+			"c_period_failure_report_state", "c_period_failure_results_json", "c_period_failure_last_error", "c_period_failure_deadline_exceeded_at",
 			"c_next_retry_at", "c_last_error_type", "c_last_error_summary",
 			"c_ctime", "c_mtime",
 		},
@@ -361,6 +365,13 @@ func (s *Store) rejectLegacySchema() error {
 		return fmt.Errorf("inspect collector fetch retry table: %w", err)
 	}
 	if retryTableCount > 0 {
+		var legacyReceiptCount int64
+		if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_fetch_retry_items') WHERE name = 'c_period_failure_reported'`).Scan(&legacyReceiptCount).Error; err != nil {
+			return fmt.Errorf("inspect obsolete period failure acknowledgement column: %w", err)
+		}
+		if legacyReceiptCount > 0 {
+			return fmt.Errorf("collector schema reset required: obsolete period failure boolean found (t_collector_fetch_retry_items.c_period_failure_reported)")
+		}
 		for _, column := range []string{"c_task_id", "c_dataset_id"} {
 			var columnCount int64
 			if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_fetch_retry_items') WHERE name = ?`, column).Scan(&columnCount).Error; err != nil {
@@ -370,6 +381,31 @@ func (s *Store) rejectLegacySchema() error {
 				return fmt.Errorf("collector schema reset required: fetch retry legacy owner column found (t_collector_fetch_retry_items.%s)", column)
 			}
 		}
+	}
+	return nil
+}
+
+func (s *Store) validatePeriodFailureSchema() error {
+	var tableSQL string
+	if err := s.db.Raw(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 't_collector_fetch_retry_items'`).Scan(&tableSQL).Error; err != nil {
+		return fmt.Errorf("inspect period failure schema constraint: %w", err)
+	}
+	if !strings.Contains(strings.ToLower(tableSQL), "check (c_period_failure_report_state in ('pending', 'acknowledged', 'missed_deadline'))") {
+		return fmt.Errorf("collector schema reset required: period failure report state CHECK constraint is missing")
+	}
+	var invalidStates int64
+	if err := s.db.Raw(`SELECT count(*) FROM t_collector_fetch_retry_items WHERE c_period_failure_report_state NOT IN ('pending', 'acknowledged', 'missed_deadline')`).Scan(&invalidStates).Error; err != nil {
+		return fmt.Errorf("validate period failure report states: %w", err)
+	}
+	if invalidStates > 0 {
+		return fmt.Errorf("collector schema contains %d invalid period failure report states", invalidStates)
+	}
+	var indexCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_collector_fetch_retry_period_failure'`).Scan(&indexCount).Error; err != nil {
+		return fmt.Errorf("inspect period failure report index: %w", err)
+	}
+	if indexCount != 1 {
+		return fmt.Errorf("collector schema reset required: period failure report index is missing")
 	}
 	return nil
 }

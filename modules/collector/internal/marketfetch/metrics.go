@@ -10,29 +10,32 @@ import (
 )
 
 type Metrics struct {
-	assignmentRequired     *prometheus.GaugeVec
-	assignmentActive       *prometheus.GaugeVec
-	assignmentLastSuccess  *prometheus.GaugeVec
-	assignmentHealthy      *prometheus.GaugeVec
-	assignmentFailure      *prometheus.GaugeVec
-	assignmentPending      *prometheus.GaugeVec
-	assignmentPendingSince *prometheus.GaugeVec
-	timerAvailable         *prometheus.GaugeVec
-	timerCapacityTotal     *prometheus.GaugeVec
-	timerCapacityRequired  *prometheus.GaugeVec
-	timerCapacityActive    *prometheus.GaugeVec
-	timerCapacityHeadroom  *prometheus.GaugeVec
-	assignmentErrors       *prometheus.CounterVec
-	periodPending          *prometheus.GaugeVec
-	periodReportRetry      *prometheus.CounterVec
-	feedResults            *prometheus.CounterVec
-	configuredGroups       *prometheus.GaugeVec
-	configuredGroupIDs     *prometheus.GaugeVec
-	egressFunctions        *prometheus.GaugeVec
-	instrumentActive       *prometheus.GaugeVec
-	instrumentExchange     *prometheus.GaugeVec
-	instrumentLastSnapshot *prometheus.GaugeVec
-	feedObservations       *prometheus.CounterVec
+	assignmentRequired       *prometheus.GaugeVec
+	assignmentActive         *prometheus.GaugeVec
+	assignmentLastSuccess    *prometheus.GaugeVec
+	assignmentHealthy        *prometheus.GaugeVec
+	assignmentFailure        *prometheus.GaugeVec
+	assignmentPending        *prometheus.GaugeVec
+	assignmentPendingSince   *prometheus.GaugeVec
+	timerAvailable           *prometheus.GaugeVec
+	timerCapacityTotal       *prometheus.GaugeVec
+	timerCapacityRequired    *prometheus.GaugeVec
+	timerCapacityActive      *prometheus.GaugeVec
+	timerCapacityHeadroom    *prometheus.GaugeVec
+	assignmentErrors         *prometheus.CounterVec
+	periodPending            *prometheus.GaugeVec
+	periodReportRetry        *prometheus.CounterVec
+	periodFailurePending     *prometheus.GaugeVec
+	periodFailureMissed      *prometheus.CounterVec
+	periodFailureReportRetry *prometheus.CounterVec
+	feedResults              *prometheus.CounterVec
+	configuredGroups         *prometheus.GaugeVec
+	configuredGroupIDs       *prometheus.GaugeVec
+	egressFunctions          *prometheus.GaugeVec
+	instrumentActive         *prometheus.GaugeVec
+	instrumentExchange       *prometheus.GaugeVec
+	instrumentLastSnapshot   *prometheus.GaugeVec
+	feedObservations         *prometheus.CounterVec
 }
 
 type FeedMetric struct {
@@ -51,28 +54,31 @@ func (m *Metrics) SetDatasetRunObserver(any) {}
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics := &Metrics{
-		assignmentRequired:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_required", Help: "Required Timer SCF assignments."}, []string{"space_id", "dataset_id", "frequency"}),
-		assignmentActive:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_active", Help: "Active Timer SCF assignments."}, []string{"space_id", "dataset_id", "frequency"}),
-		assignmentLastSuccess:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", Help: "Last successful Timer assignment reconciliation timestamp."}, []string{"space_id"}),
-		assignmentHealthy:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_healthy", Help: "Whether the latest Timer assignment reconciliation completed (1 healthy, 0 failed)."}, []string{"space_id"}),
-		assignmentFailure:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_failure", Help: "Current Timer coordination failure reason (1 current, 0 inactive)."}, []string{"space_id", "reason"}),
-		assignmentPending:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending", Help: "Whether a Timer assignment reconciliation batch is pending or running (1 pending, 0 idle)."}, []string{"space_id"}),
-		assignmentPendingSince: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", Help: "Unix timestamp when the current Timer assignment reconciliation batch started."}, []string{"space_id"}),
-		timerAvailable:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_available", Help: "Tencent Timer trigger availability for Collector nodes (1 available, 0 unavailable, -1 unknown)."}, []string{"space_id", "node_id", "enabled"}),
-		timerCapacityTotal:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_capacity_total", Help: "Total Timer SCF nodes currently visible to Collector."}, []string{"space_id"}),
-		timerCapacityRequired:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_capacity_required", Help: "Timer SCF nodes required by the current dataset/frequency shard plan."}, []string{"space_id"}),
-		timerCapacityActive:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_capacity_active", Help: "Timer SCF nodes included in the current active shard assignment."}, []string{"space_id"}),
-		timerCapacityHeadroom:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_capacity_headroom", Help: "Timer SCF capacity headroom: total nodes minus required nodes; negative means capacity is insufficient."}, []string{"space_id"}),
-		assignmentErrors:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_fetch_assignment_errors_total", Help: "Timer assignment reconciliation errors."}, []string{"space_id", "reason"}),
-		periodPending:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_period_pending_total", Help: "Collector periods waiting to be reported."}, []string{"dataset", "frequency"}),
-		periodReportRetry:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_period_report_retry_total", Help: "Collector period report attempts that need retry."}, []string{"dataset", "frequency"}),
-		feedResults:            prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_results_total", Help: "Bounded market feed outcomes; subject, function, IP, and candidate chain are intentionally excluded."}, []string{"market_id", "route_id", "provider_id", "feed_kind", "group_id", "batch_kind", "result"}),
-		configuredGroups:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_configured_groups", Help: "Expected and actual Timer group counts."}, []string{"market_id", "route_id", "kind"}),
-		configuredGroupIDs:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_configured_group_id", Help: "Configured Timer Group identity counts; a value other than one means missing or duplicate identity."}, []string{"market_id", "route_id", "group_id"}),
-		egressFunctions:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "route_id", "kind"}),
-		instrumentActive:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_active", Help: "Active instruments in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
-		instrumentExchange:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_exchange", Help: "Instrument count by bounded exchange in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "exchange"}),
-		instrumentLastSnapshot: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_last_snapshot_timestamp_seconds", Help: "Fetch timestamp of the latest complete instrument snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
+		assignmentRequired:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_required", Help: "Required Timer SCF assignments."}, []string{"space_id", "dataset_id", "frequency"}),
+		assignmentActive:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_active", Help: "Active Timer SCF assignments."}, []string{"space_id", "dataset_id", "frequency"}),
+		assignmentLastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", Help: "Last successful Timer assignment reconciliation timestamp."}, []string{"space_id"}),
+		assignmentHealthy:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_healthy", Help: "Whether the latest Timer assignment reconciliation completed (1 healthy, 0 failed)."}, []string{"space_id"}),
+		assignmentFailure:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_failure", Help: "Current Timer coordination failure reason (1 current, 0 inactive)."}, []string{"space_id", "reason"}),
+		assignmentPending:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending", Help: "Whether a Timer assignment reconciliation batch is pending or running (1 pending, 0 idle)."}, []string{"space_id"}),
+		assignmentPendingSince:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", Help: "Unix timestamp when the current Timer assignment reconciliation batch started."}, []string{"space_id"}),
+		timerAvailable:           prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_available", Help: "Tencent Timer trigger availability for Collector nodes (1 available, 0 unavailable, -1 unknown)."}, []string{"space_id", "node_id", "enabled"}),
+		timerCapacityTotal:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_capacity_total", Help: "Total Timer SCF nodes currently visible to Collector."}, []string{"space_id"}),
+		timerCapacityRequired:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_capacity_required", Help: "Timer SCF nodes required by the current dataset/frequency shard plan."}, []string{"space_id"}),
+		timerCapacityActive:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_capacity_active", Help: "Timer SCF nodes included in the current active shard assignment."}, []string{"space_id"}),
+		timerCapacityHeadroom:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_capacity_headroom", Help: "Timer SCF capacity headroom: total nodes minus required nodes; negative means capacity is insufficient."}, []string{"space_id"}),
+		assignmentErrors:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_fetch_assignment_errors_total", Help: "Timer assignment reconciliation errors."}, []string{"space_id", "reason"}),
+		periodPending:            prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_period_pending_total", Help: "Collector periods waiting to be reported."}, []string{"dataset", "frequency"}),
+		periodReportRetry:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_period_report_retry_total", Help: "Collector period report attempts that need retry."}, []string{"dataset", "frequency"}),
+		periodFailurePending:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_period_failure_pending", Help: "Permanent period failure receipts awaiting an authoritative Storage disposition."}, []string{"space_id", "frequency"}),
+		periodFailureMissed:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_period_failure_missed_deadline_total", Help: "Permanent period failure receipts explicitly rejected after the Storage deadline."}, []string{"space_id", "frequency"}),
+		periodFailureReportRetry: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_period_failure_report_retries_total", Help: "Permanent period failure report attempts that need retry."}, []string{"space_id", "frequency", "outcome"}),
+		feedResults:              prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_results_total", Help: "Bounded market feed outcomes; subject, function, IP, and candidate chain are intentionally excluded."}, []string{"market_id", "route_id", "provider_id", "feed_kind", "group_id", "batch_kind", "result"}),
+		configuredGroups:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_configured_groups", Help: "Expected and actual Timer group counts."}, []string{"market_id", "route_id", "kind"}),
+		configuredGroupIDs:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_configured_group_id", Help: "Configured Timer Group identity counts; a value other than one means missing or duplicate identity."}, []string{"market_id", "route_id", "group_id"}),
+		egressFunctions:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "route_id", "kind"}),
+		instrumentActive:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_active", Help: "Active instruments in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
+		instrumentExchange:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_exchange", Help: "Instrument count by bounded exchange in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "exchange"}),
+		instrumentLastSnapshot:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_last_snapshot_timestamp_seconds", Help: "Fetch timestamp of the latest complete instrument snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
 		feedObservations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_observations_total", Help: "Bounded market feed observations with source, route, and egress dimensions."}, []string{
 			"market_id", "instrument_type", "provider_id", "source_id", "frequency", "source_kind", "transport",
 			"remote_host", "remote_port", "scf_region", "egress_scope", "egress_ip", "connection_attempt",
@@ -94,6 +100,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics.assignmentErrors = registerCounterVec(reg, metrics.assignmentErrors)
 	metrics.periodPending = registerGaugeVec(reg, metrics.periodPending)
 	metrics.periodReportRetry = registerCounterVec(reg, metrics.periodReportRetry)
+	metrics.periodFailurePending = registerGaugeVec(reg, metrics.periodFailurePending)
+	metrics.periodFailureMissed = registerCounterVec(reg, metrics.periodFailureMissed)
+	metrics.periodFailureReportRetry = registerCounterVec(reg, metrics.periodFailureReportRetry)
 	metrics.feedResults = registerCounterVec(reg, metrics.feedResults)
 	metrics.configuredGroups = registerGaugeVec(reg, metrics.configuredGroups)
 	metrics.configuredGroupIDs = registerGaugeVec(reg, metrics.configuredGroupIDs)
@@ -318,6 +327,54 @@ func (m *Metrics) ObservePeriodReportRetry(dataset, frequency string) {
 		return
 	}
 	m.periodReportRetry.WithLabelValues(dataset, frequency).Inc()
+}
+
+func (m *Metrics) ObservePeriodFailurePending(spaceID, frequency string, pending int) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	frequency = boundedPeriodFrequency(frequency)
+	if frequency == "unknown" {
+		return
+	}
+	if pending < 0 {
+		pending = 0
+	}
+	m.periodFailurePending.WithLabelValues(strings.TrimSpace(spaceID), frequency).Set(float64(pending))
+}
+
+func (m *Metrics) ObservePeriodFailureMissedDeadline(spaceID, frequency string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	frequency = boundedPeriodFrequency(frequency)
+	if frequency == "unknown" {
+		return
+	}
+	m.periodFailureMissed.WithLabelValues(strings.TrimSpace(spaceID), frequency).Inc()
+}
+
+func (m *Metrics) ObservePeriodFailureReportRetry(spaceID, frequency, outcome string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	frequency = boundedPeriodFrequency(frequency)
+	if frequency == "unknown" {
+		return
+	}
+	outcome = boundedValue(outcome, []string{"timeout", "canceled", "storage_error", "storage_client_error"}, "unknown")
+	if outcome == "unknown" {
+		return
+	}
+	m.periodFailureReportRetry.WithLabelValues(strings.TrimSpace(spaceID), frequency, outcome).Inc()
+}
+
+func boundedPeriodFrequency(value string) string {
+	frequency, err := marketdata.ParseFrequency(strings.TrimSpace(value))
+	if err != nil {
+		return "unknown"
+	}
+	return string(frequency)
 }
 
 // ObserveFeedResult exposes only dimensions with a bounded operational

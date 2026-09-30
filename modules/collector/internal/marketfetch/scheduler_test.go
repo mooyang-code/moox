@@ -1067,11 +1067,11 @@ func (s *recordingPeriodFailureStorage) GetDatasetPeriodStatus(_ context.Context
 func (s *recordingPeriodFailureStorage) CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error {
 	return nil
 }
-func (s *recordingPeriodFailureStorage) RecordDatasetPeriodFailures(_ context.Context, exp *storagepb.DatasetPeriodExpectation, indexes []uint32) error {
+func (s *recordingPeriodFailureStorage) RecordDatasetPeriodFailures(_ context.Context, exp *storagepb.DatasetPeriodExpectation, indexes []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
 	s.calls++
 	s.expectations = append(s.expectations, exp)
 	s.indexes = append(s.indexes, append([]uint32(nil), indexes...))
-	return nil
+	return recordedFailureResults(indexes, storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED), nil
 }
 
 func TestSchedulerEnsurePeriodUsesPersistedSeriesTags(t *testing.T) {
@@ -1180,7 +1180,7 @@ func assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T, freq
 	require.Equal(t, frequency, rows[0].GetRow().GetKey().GetTimeSeries().GetFreq())
 }
 
-func TestSchedulerReportsPermanentRetryPeriodFailureExactlyOnce(t *testing.T) {
+func TestPeriodFailureReporterReportsPermanentRetryExactlyOnce(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
 	period := time.Date(2026, 9, 30, 11, 59, 0, 0, time.UTC)
@@ -1204,11 +1204,8 @@ func TestSchedulerReportsPermanentRetryPeriodFailureExactlyOnce(t *testing.T) {
 	}))
 
 	storage := &recordingPeriodFailureStorage{}
-	scheduler := &Scheduler{
-		Retries: db.FetchRetries(), StorageTarget: "storage.local:11003",
-		Storage: func(string, string, string) (Storage, error) { return storage, nil },
-	}
-	require.NoError(t, scheduler.reportPendingPeriodFailures(ctx, "crypto"))
+	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string, string) (Storage, error) { return storage, nil }, "storage.local:11003", "crypto")
+	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
 	require.Equal(t, 1, storage.calls)
 	require.Len(t, storage.expectations, 1)
 	exp := storage.expectations[0]
@@ -1223,10 +1220,10 @@ func TestSchedulerReportsPermanentRetryPeriodFailureExactlyOnce(t *testing.T) {
 
 	stored, err := db.FetchRetries().Get(ctx, "crypto", "retry-eth")
 	require.NoError(t, err)
-	require.True(t, stored.PeriodFailureReported)
+	require.Equal(t, domain.PeriodFailureReportAcknowledged, stored.PeriodFailureReportState)
 	require.Equal(t, "permanent_failed", stored.Status)
 
-	require.NoError(t, scheduler.reportPendingPeriodFailures(ctx, "crypto"))
+	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
 	require.Equal(t, 1, storage.calls, "reported terminal failure must not be sent again")
 }
 
@@ -1250,8 +1247,12 @@ func assertSchedulerRetryFailureKeepsFrequencyIdentity(t *testing.T, frequency s
 	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "retry-btc-period", SourceBatchID: "sync-period", BatchKind: domain.BatchKindRealtime, InstanceID: item.InstanceID, RetryScope: "fetch", SubjectID: item.SubjectID, Frequency: frequency, TargetDataTime: period, TaskJSON: string(taskRaw), FailureTargetsJSON: string(targetRaw), Attempt: 3, Status: "permanent_failed", LastErrorType: "http_5xx", LastErrorSummary: "provider unavailable"}))
 
 	storage := &recordingPeriodFailureStorage{}
-	scheduler := &Scheduler{Retries: db.FetchRetries(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
-	require.NoError(t, scheduler.reportPendingPeriodFailures(ctx, "crypto"))
+	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string, string) (Storage, error) { return storage, nil }, "storage.local:11003", "crypto")
+	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
 	require.Len(t, storage.expectations, 1)
-	require.Equal(t, frequency, storage.expectations[0].GetFrequency())
+	wantFrequency := frequency
+	if frequency == "1H" {
+		wantFrequency = "1h"
+	}
+	require.Equal(t, wantFrequency, storage.expectations[0].GetFrequency())
 }

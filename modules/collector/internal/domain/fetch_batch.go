@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type BatchKind string
 
@@ -133,27 +136,84 @@ type BatchInvocation struct {
 func (b *BatchInvocation) TableName() string { return "t_collector_fetch_batches" }
 
 type RetryItem struct {
-	ID               int        `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID          string     `gorm:"column:c_space_id"`
-	RetryKey         string     `gorm:"column:c_retry_key"`
-	SourceBatchID    string     `gorm:"column:c_source_batch_id"`
-	BatchKind        BatchKind  `gorm:"column:c_batch_kind"`
-	InstanceID       string     `gorm:"column:c_instance_id"`
-	WriteTargetID    string     `gorm:"column:c_write_target_id"`
-	RetryScope       string     `gorm:"column:c_retry_scope"`
-	SubjectID        string     `gorm:"column:c_subject_id"`
-	Frequency        string     `gorm:"column:c_frequency"`
-	TargetDataTime   time.Time  `gorm:"column:c_target_data_time"`
-	TaskJSON         string     `gorm:"column:c_task_json"`
-	FailureTargetsJSON string   `gorm:"column:c_failure_targets_json"`
-	Attempt          int        `gorm:"column:c_attempt"`
-	Status           string     `gorm:"column:c_status"`
-	PeriodFailureReported bool  `gorm:"column:c_period_failure_reported"`
-	NextRetryAt      *time.Time `gorm:"column:c_next_retry_at"`
-	LastErrorType    string     `gorm:"column:c_last_error_type"`
-	LastErrorSummary string     `gorm:"column:c_last_error_summary"`
-	CreateTime       time.Time  `gorm:"column:c_ctime"`
-	ModifyTime       time.Time  `gorm:"column:c_mtime"`
+	ID                              int                      `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID                         string                   `gorm:"column:c_space_id"`
+	RetryKey                        string                   `gorm:"column:c_retry_key"`
+	SourceBatchID                   string                   `gorm:"column:c_source_batch_id"`
+	BatchKind                       BatchKind                `gorm:"column:c_batch_kind"`
+	InstanceID                      string                   `gorm:"column:c_instance_id"`
+	WriteTargetID                   string                   `gorm:"column:c_write_target_id"`
+	RetryScope                      string                   `gorm:"column:c_retry_scope"`
+	SubjectID                       string                   `gorm:"column:c_subject_id"`
+	Frequency                       string                   `gorm:"column:c_frequency"`
+	TargetDataTime                  time.Time                `gorm:"column:c_target_data_time"`
+	TaskJSON                        string                   `gorm:"column:c_task_json"`
+	FailureTargetsJSON              string                   `gorm:"column:c_failure_targets_json"`
+	Attempt                         int                      `gorm:"column:c_attempt"`
+	Status                          string                   `gorm:"column:c_status"`
+	PeriodFailureReportState        PeriodFailureReportState `gorm:"column:c_period_failure_report_state"`
+	PeriodFailureResultsJSON        string                   `gorm:"column:c_period_failure_results_json"`
+	PeriodFailureLastError          string                   `gorm:"column:c_period_failure_last_error"`
+	PeriodFailureDeadlineExceededAt *time.Time               `gorm:"column:c_period_failure_deadline_exceeded_at"`
+	NextRetryAt                     *time.Time               `gorm:"column:c_next_retry_at"`
+	LastErrorType                   string                   `gorm:"column:c_last_error_type"`
+	LastErrorSummary                string                   `gorm:"column:c_last_error_summary"`
+	CreateTime                      time.Time                `gorm:"column:c_ctime"`
+	ModifyTime                      time.Time                `gorm:"column:c_mtime"`
 }
 
 func (r *RetryItem) TableName() string { return "t_collector_fetch_retry_items" }
+
+type PeriodFailureReportState string
+
+const (
+	PeriodFailureReportPending        PeriodFailureReportState = "pending"
+	PeriodFailureReportAcknowledged   PeriodFailureReportState = "acknowledged"
+	PeriodFailureReportMissedDeadline PeriodFailureReportState = "missed_deadline"
+)
+
+type PeriodFailureTargetResult struct {
+	WriteTargetID string    `json:"write_target_id"`
+	SpaceID       string    `json:"space_id"`
+	DatasetID     string    `json:"dataset_id"`
+	Frequency     string    `json:"frequency"`
+	PeriodTime    time.Time `json:"period_time"`
+	SeriesHash    string    `json:"series_hash"`
+	ExpectedCount uint32    `json:"expected_count"`
+	SeriesIndex   uint32    `json:"series_index"`
+	Disposition   string    `json:"disposition"`
+	ObservedAt    time.Time `json:"observed_at"`
+}
+
+// AggregatePeriodFailureReportState derives the receipt state from durable
+// targets. Missing and unknown outcomes stay pending; a transport error can
+// never be interpreted as an acknowledgement.
+func AggregatePeriodFailureReportState(targets []WriteTarget, results []PeriodFailureTargetResult) PeriodFailureReportState {
+	if len(targets) == 0 {
+		return PeriodFailureReportPending
+	}
+	byTarget := make(map[string]PeriodFailureTargetResult, len(results))
+	for _, result := range results {
+		if strings.TrimSpace(result.WriteTargetID) != "" {
+			byTarget[result.WriteTargetID] = result
+		}
+	}
+	missed := false
+	for _, target := range targets {
+		result, ok := byTarget[target.ID]
+		if !ok {
+			return PeriodFailureReportPending
+		}
+		switch result.Disposition {
+		case "recorded", "already_succeeded":
+		case "missed_deadline":
+			missed = true
+		default:
+			return PeriodFailureReportPending
+		}
+	}
+	if missed {
+		return PeriodFailureReportMissedDeadline
+	}
+	return PeriodFailureReportAcknowledged
+}

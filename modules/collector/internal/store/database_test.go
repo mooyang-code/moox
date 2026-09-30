@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,7 +63,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 		"t_collector_instance_write_targets": {"c_write_target_id", "c_instance_id", "c_task_id", "c_dataset_id", "c_series_index", "c_series_hash", "c_expected_count"},
 		"t_collector_fetch_batches":          {"c_instance_id", "c_write_target_id", "c_retry_scope"},
 		"t_collector_fetch_batch_items":      {"c_batch_id", "c_instance_id"},
-		"t_collector_fetch_retry_items":      {"c_instance_id", "c_write_target_id", "c_retry_scope", "c_failure_targets_json", "c_period_failure_reported"},
+		"t_collector_fetch_retry_items":      {"c_instance_id", "c_write_target_id", "c_retry_scope", "c_failure_targets_json", "c_period_failure_report_state", "c_period_failure_results_json", "c_period_failure_last_error", "c_period_failure_deadline_exceeded_at"},
 		"t_period_readiness_items":           {"c_write_target_id", "c_series_tag"},
 	} {
 		for _, column := range columns {
@@ -84,6 +85,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 			t.Fatalf("index %s count = %d, want 1", index, count)
 		}
 	}
+	require.Error(t, mgr.db.Exec(`INSERT INTO t_collector_fetch_retry_items (c_space_id, c_retry_key, c_source_batch_id, c_subject_id, c_frequency, c_target_data_time, c_status, c_period_failure_report_state) VALUES ('crypto', 'invalid', '', 'ETH-USDT', '1m', '2026-09-30T09:10:00Z', 'permanent_failed', 'unknown')`).Error)
 	if _, _, err := mgr.TaskInstances().List(context.Background(), TaskInstanceFilter{Page: 1, PageSize: 1}); err != nil {
 		t.Fatalf("query current task instances: %v", err)
 	}
@@ -176,6 +178,19 @@ func TestDeleteTaskRuntimeRemovesOnlyOwnedWriteTargets(t *testing.T) {
 		{ID: "target-a", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-a", DatasetID: "bars-a", Status: "pending"},
 		{ID: "target-b", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-b", DatasetID: "bars-b", Status: "pending"},
 	}))
+	pendingTargets, err := json.Marshal([]domain.WriteTarget{{ID: "target-a", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-a", DatasetID: "bars-a", SeriesHash: "hash-a", ExpectedCount: 1}})
+	require.NoError(t, err)
+	settledTargets, err := json.Marshal([]domain.WriteTarget{{ID: "target-a", SpaceID: "crypto", InstanceID: "shared", TaskID: "task-a", DatasetID: "bars-a", SeriesHash: "hash-a", ExpectedCount: 1}})
+	require.NoError(t, err)
+	require.NoError(t, mgr.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "pending-period-failure", WriteTargetID: "target-a", Frequency: "1m",
+		FailureTargetsJSON: string(pendingTargets), Status: "permanent_failed", PeriodFailureReportState: domain.PeriodFailureReportPending,
+	}))
+	require.NoError(t, mgr.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "settled-period-failure", WriteTargetID: "target-a", Frequency: "1m",
+		FailureTargetsJSON: string(settledTargets), Status: "permanent_failed", PeriodFailureReportState: domain.PeriodFailureReportAcknowledged,
+	}))
+	require.NoError(t, mgr.FetchRetries().DeleteByTaskID(ctx, "crypto", "task-a"))
 	period := time.Now().UTC().Truncate(time.Minute)
 	_, err = mgr.PeriodReadiness().EnsurePeriod(ctx, domain.PeriodSeed{
 		PeriodKey:  domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars-a", Frequency: "1m", PeriodTime: period},
@@ -185,6 +200,11 @@ func TestDeleteTaskRuntimeRemovesOnlyOwnedWriteTargets(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.DeleteTaskRuntime(ctx, "crypto", "task-a"))
+	pendingRetry, err := mgr.FetchRetries().Get(ctx, "crypto", "pending-period-failure")
+	require.NoError(t, err, "task deletion must preserve unresolved durable Storage reporting work")
+	require.Equal(t, domain.PeriodFailureReportPending, pendingRetry.PeriodFailureReportState)
+	_, err = mgr.FetchRetries().Get(ctx, "crypto", "settled-period-failure")
+	require.Error(t, err, "settled receipts may be cleaned up with their deleted target")
 	targets, err := mgr.TaskInstances().ListWriteTargets(ctx, "crypto", "shared")
 	require.NoError(t, err)
 	require.Len(t, targets, 1)

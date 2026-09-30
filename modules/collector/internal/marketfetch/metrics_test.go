@@ -1,9 +1,13 @@
 package marketfetch
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
@@ -21,6 +25,9 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 	metrics.ObserveAssignmentFailure("crypto", "submit_timeout")
 	metrics.ObservePeriodPending("bars", "1m", 2)
 	metrics.ObservePeriodReportRetry("bars", "1m")
+	metrics.ObservePeriodFailurePending("crypto", "1m", 2)
+	metrics.ObservePeriodFailureMissedDeadline("crypto", "1m")
+	metrics.ObservePeriodFailureReportRetry("crypto", "1m", "timeout")
 	families, err := registry.Gather()
 	require.NoError(t, err)
 
@@ -44,6 +51,9 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 		"moox_collector_market_fetch_assignment_errors_total":                      {},
 		"moox_collector_period_pending_total":                                      {},
 		"moox_collector_period_report_retry_total":                                 {},
+		"moox_collector_period_failure_pending":                                    {},
+		"moox_collector_period_failure_missed_deadline_total":                      {},
+		"moox_collector_period_failure_report_retries_total":                       {},
 	}
 	for name := range want {
 		if _, ok := got[name]; !ok {
@@ -55,6 +65,115 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 			t.Fatalf("legacy completion metric %q should not be registered", name)
 		}
 	}
+}
+
+func TestPeriodFailureMetricsUseOnlyBoundedLabels(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := NewMetrics(registry)
+	metrics.ObservePeriodFailurePending("crypto", "1m", 1)
+	metrics.ObservePeriodFailureReportRetry("crypto", "1m", "timeout")
+	metrics.ObservePeriodFailureReportRetry("crypto", "1m", "canceled")
+	metrics.ObservePeriodFailureReportRetry("crypto", "1m", "storage_error")
+	metrics.ObservePeriodFailureReportRetry("crypto", "1m", "storage_client_error")
+	metrics.ObservePeriodFailureMissedDeadline("crypto", "1m")
+	// Adding or deleting task-generated Dataset targets leaves metric identity
+	// unchanged because no dataset, subject, task, or retry key is a label.
+	metrics.ObservePeriodFailurePending("crypto", "1m", 2)
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	pending := metricFamily(t, families, "moox_collector_period_failure_pending")
+	require.Len(t, pending.GetMetric(), 1)
+	require.Equal(t, map[string]string{"space_id": "crypto", "frequency": "1m"}, metricLabels(pending.GetMetric()[0]))
+	require.Equal(t, float64(2), pending.GetMetric()[0].GetGauge().GetValue())
+	retries := metricFamily(t, families, "moox_collector_period_failure_report_retries_total")
+	require.Len(t, retries.GetMetric(), 4)
+	gotOutcomes := make(map[string]float64, len(retries.GetMetric()))
+	for _, metric := range retries.GetMetric() {
+		labels := metricLabels(metric)
+		require.Equal(t, "crypto", labels["space_id"])
+		require.Equal(t, "1m", labels["frequency"])
+		gotOutcomes[labels["outcome"]] = metric.GetCounter().GetValue()
+	}
+	require.Equal(t, map[string]float64{"timeout": 1, "canceled": 1, "storage_error": 1, "storage_client_error": 1}, gotOutcomes)
+	missed := metricFamily(t, families, "moox_collector_period_failure_missed_deadline_total")
+	require.Len(t, missed.GetMetric(), 1)
+	require.Equal(t, map[string]string{"space_id": "crypto", "frequency": "1m"}, metricLabels(missed.GetMetric()[0]))
+	require.Equal(t, float64(1), missed.GetMetric()[0].GetCounter().GetValue())
+
+	metrics.ObservePeriodFailurePending("crypto", "2m", 1)
+	metrics.ObservePeriodFailureReportRetry("crypto", "1m", "retry-key-secret")
+	families, err = registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() == "moox_collector_period_failure_pending" {
+			require.Len(t, family.GetMetric(), 1, "invalid frequency must not add a label combination")
+		}
+		if family.GetName() == "moox_collector_period_failure_report_retries_total" {
+			require.Len(t, family.GetMetric(), 4, "unbounded outcome must not add a label combination")
+		}
+	}
+}
+
+func TestPeriodFailureReporterMetricsTrackDatasetTasksWithoutDatasetLabels(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	registry := prometheus.NewRegistry()
+	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string, string) (Storage, error) { return nil, nil }, "storage", "crypto")
+	reporter.SetMetrics(NewMetrics(registry))
+	period := time.Now().UTC().Truncate(time.Minute)
+	targetA, retryA := addMetricFailureTask(t, db, "task-a", "dataset-a", "target-a", period)
+	require.NoError(t, reporter.refreshPendingMetrics(ctx, "crypto"))
+	assertPendingFailureMetric(t, registry, 1)
+
+	_, retryB := addMetricFailureTask(t, db, "task-b", "dataset-b", "target-b", period)
+	require.NoError(t, reporter.refreshPendingMetrics(ctx, "crypto"))
+	assertPendingFailureMetric(t, registry, 2)
+
+	require.NoError(t, db.FetchRetries().ApplyPeriodFailureReportResults(ctx, "crypto", retryA.RetryKey, []domain.PeriodFailureTargetResult{{
+		WriteTargetID: targetA.ID, SpaceID: "crypto", DatasetID: targetA.DatasetID, Frequency: "1m", PeriodTime: period,
+		SeriesHash: targetA.SeriesHash, ExpectedCount: targetA.ExpectedCount, SeriesIndex: targetA.SeriesIndex, Disposition: "recorded", ObservedAt: period,
+	}}, ""))
+	require.NoError(t, db.DeleteTaskRuntime(ctx, "crypto", "task-a"))
+	require.NoError(t, db.Tasks().DeleteByTaskID(ctx, "crypto", "task-a"))
+	require.NoError(t, reporter.refreshPendingMetrics(ctx, "crypto"))
+	assertPendingFailureMetric(t, registry, 1)
+	stored, err := db.FetchRetries().Get(ctx, "crypto", retryB.RetryKey)
+	require.NoError(t, err)
+	require.Equal(t, domain.PeriodFailureReportPending, stored.PeriodFailureReportState)
+}
+
+func addMetricFailureTask(t *testing.T, db *store.Store, taskID, datasetID, targetID string, period time.Time) (domain.WriteTarget, domain.RetryItem) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true}))
+	instanceID := "instance-" + taskID
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", InstanceID: instanceID, CollectionTaskID: taskID, DataType: "kline", DatasetID: datasetID,
+		SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`,
+	}}))
+	target := domain.WriteTarget{ID: targetID, SpaceID: "crypto", InstanceID: instanceID, TaskID: taskID, DatasetID: datasetID, SeriesIndex: 0, SeriesHash: "hash-" + taskID, ExpectedCount: 1, Status: "failed"}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{target}))
+	targetsJSON, err := json.Marshal([]domain.WriteTarget{target})
+	require.NoError(t, err)
+	item := domain.CollectionItem{InstanceID: instanceID, SubjectID: "BTC-USDT", DatasetID: datasetID, Frequency: "1m", MarketType: "spot", TargetDataTime: period.Format(time.RFC3339Nano)}
+	itemJSON, err := json.Marshal(item)
+	require.NoError(t, err)
+	retry := domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "retry-" + taskID, InstanceID: instanceID, SubjectID: item.SubjectID, Frequency: "1m",
+		TargetDataTime: period, TaskJSON: string(itemJSON), FailureTargetsJSON: string(targetsJSON), Status: "permanent_failed",
+	}
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &retry))
+	return target, retry
+}
+
+func assertPendingFailureMetric(t *testing.T, registry *prometheus.Registry, want float64) {
+	t.Helper()
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	metric := metricFamily(t, families, "moox_collector_period_failure_pending")
+	require.Len(t, metric.GetMetric(), 1, "adding/removing task-generated datasets must not add label combinations")
+	require.Equal(t, map[string]string{"space_id": "crypto", "frequency": "1m"}, metricLabels(metric.GetMetric()[0]))
+	require.Equal(t, want, metric.GetMetric()[0].GetGauge().GetValue())
 }
 
 func TestMetricsClearAssignmentPending(t *testing.T) {

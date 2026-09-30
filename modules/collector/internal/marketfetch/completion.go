@@ -25,7 +25,7 @@ var errCompletionIdentityMismatch = errors.New("market fetch completion identity
 // StartCompletionConsumer binds the governed batch-completion family and
 // returns immediately. The loop is best effort: if EventBus is unavailable,
 // the timer's deadline recovery remains the source of truth.
-func StartCompletionConsumer(ctx context.Context, spaceID string, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics) error {
+func StartCompletionConsumer(ctx context.Context, spaceID string, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, wake ...func()) error {
 	if batches == nil || retries == nil || instances == nil {
 		return fmt.Errorf("completion repositories are required")
 	}
@@ -66,7 +66,7 @@ func StartCompletionConsumer(ctx context.Context, spaceID string, batches *store
 				continue
 			}
 			backoff = time.Second
-			runCompletionConsumer(ctx, consumer, batches, retries, instances, metrics)
+			runCompletionConsumer(ctx, consumer, batches, retries, instances, metrics, wake...)
 			consumer.Close()
 			client.Close()
 			if ctx.Err() == nil {
@@ -90,7 +90,7 @@ func completionConsumerName(spaceID string) string {
 	return name.String()
 }
 
-func runCompletionConsumer(ctx context.Context, consumer *events.Consumer, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics) {
+func runCompletionConsumer(ctx context.Context, consumer *events.Consumer, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, wake ...func()) {
 	for ctx.Err() == nil {
 		deliveries, fetchErr := consumer.FetchEvents(ctx, 16)
 		if fetchErr != nil && len(deliveries) == 0 {
@@ -107,7 +107,7 @@ func runCompletionConsumer(ctx context.Context, consumer *events.Consumer, batch
 			if delivery == nil || delivery.Delivery == nil {
 				continue
 			}
-			if err := handleCompletion(ctx, batches, retries, instances, metrics, delivery); err != nil {
+			if err := handleCompletion(ctx, batches, retries, instances, metrics, delivery, wake...); err != nil {
 				if delivery.Err != nil || errors.Is(err, errUnknownCompletionBatch) {
 					_ = delivery.Delivery.Term(ctx)
 					continue
@@ -137,7 +137,7 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, delivery *events.EventDelivery) error {
+func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, delivery *events.EventDelivery, wake ...func()) error {
 	if delivery.Err != nil {
 		return fmt.Errorf("decode market fetch completion: %w", delivery.Err)
 	}
@@ -397,6 +397,13 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		updated, err = batches.CompleteWithEffects(ctx, batch, effects)
 		if err != nil || !updated {
 			return err
+		}
+	}
+	if updated && len(effects.PermanentRetryKeys) > 0 {
+		for _, notify := range wake {
+			if notify != nil {
+				notify()
+			}
 		}
 	}
 	if metrics != nil {

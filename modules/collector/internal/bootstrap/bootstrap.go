@@ -174,7 +174,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
 	}
 	registerDNSRefreshSchedule(s, dnsSnapshot)
-	registerMarketFetchSchedule(s, cfg, deps, dbm, dnsSnapshot, marketFetchMetrics)
+	registerMarketFetchSchedule(ctx, s, cfg, deps, dbm, dnsSnapshot, marketFetchMetrics)
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
 		return nil, err
 	}
@@ -486,14 +486,13 @@ func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter) {
 	})
 }
 
-func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
+func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
 	service := s.Service("trpc.moox.collector.schedule.timer")
 	if service == nil {
-		log.Warn("collector market fetch timer service is not configured, skip register")
-		return
+		log.Warn("collector market fetch timer service is not configured, scheduler registration skipped")
 	}
 	auth := runtimeAuth(deps.ServiceAuth)
 	// CloudNode control calls are service-gateway requests.  The admin gateway
@@ -584,7 +583,12 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			Symbols:               plannerSource,
 			InvokeNonRealtimeOnly: stockCNTimerOwned,
 		}
-		if err := marketfetch.StartCompletionConsumer(trpc.BackgroundContext(), spaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics); err != nil {
+		failureReporter := marketfetch.NewPeriodFailureReporter(dbm.FetchRetries(), marketfetch.NewMarketStorageForMarket, deps.StorageRPCGatewayTarget, spaceID)
+		failureReporter.SetMetrics(metrics)
+		if err := marketfetch.StartPeriodFailureReporter(ctx, failureReporter, spaceID, time.Second); err != nil {
+			log.WarnContextf(ctx, "collector permanent period failure reporter disabled space=%s: %v", spaceID, err)
+		}
+		if err := marketfetch.StartCompletionConsumer(trpc.BackgroundContext(), spaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics, failureReporter.Wake); err != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector market fetch completion consumer disabled space=%s: %v", spaceID, err)
 		}
 		if err := marketfetch.StartStorageWriteConsumer(trpc.BackgroundContext(), spaceID, dbm.TaskInstances()); err != nil {
@@ -659,6 +663,9 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		if err := marketfetch.StartPeriodReporter(trpc.BackgroundContext(), periodReporter, cfg.PeriodReadiness.ReportInterval); err != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector resample period reporter disabled space=%s: %v", runtime.spaceID, err)
 		}
+	}
+	if service == nil {
+		return
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {

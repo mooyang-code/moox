@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ type BatchStorage interface {
 	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
 	GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
 	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
-	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) error
+	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error)
 }
 
 type periodStorageAccess interface {
@@ -228,20 +229,49 @@ func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *
 	})
 }
 
-func (w *storageWriter) RecordDatasetPeriodFailures(ctx context.Context, expectation *storagepb.DatasetPeriodExpectation, seriesIndexes []uint32) error {
+func (w *storageWriter) RecordDatasetPeriodFailures(ctx context.Context, expectation *storagepb.DatasetPeriodExpectation, seriesIndexes []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
 	if expectation == nil || len(seriesIndexes) == 0 {
-		return fmt.Errorf("record dataset period failures: expectation and series_indexes are required")
+		return nil, fmt.Errorf("record dataset period failures: expectation and series_indexes are required")
 	}
-	return retryStorage(ctx, func() error {
-		response, err := w.period.RecordDatasetPeriodFailures(ctx, &storagepb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: w.authInfo, Expectation: expectation, SeriesIndexes: seriesIndexes})
+	dedupedIndexes := make([]uint32, 0, len(seriesIndexes))
+	seenIndexes := make(map[uint32]struct{}, len(seriesIndexes))
+	for _, index := range seriesIndexes {
+		if _, exists := seenIndexes[index]; exists {
+			continue
+		}
+		seenIndexes[index] = struct{}{}
+		dedupedIndexes = append(dedupedIndexes, index)
+	}
+	sort.Slice(dedupedIndexes, func(i, j int) bool { return dedupedIndexes[i] < dedupedIndexes[j] })
+	var confirmed []*storagepb.DatasetPeriodFailureResult
+	err := retryStorage(ctx, func() error {
+		response, err := w.period.RecordDatasetPeriodFailures(ctx, &storagepb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: w.authInfo, Expectation: expectation, SeriesIndexes: dedupedIndexes})
 		if err != nil {
 			return fmt.Errorf("record dataset period failures: %w", err)
+		}
+		if response == nil {
+			return fmt.Errorf("record dataset period failures: empty response")
 		}
 		if ret := response.GetRetInfo(); ret != nil && ret.GetCode() == storagepb.ErrorCode_CONFLICT {
 			return fmt.Errorf("%w: %s", ErrDatasetPeriodConflict, ret.GetMsg())
 		}
-		return ensureStorageOK("record dataset period failures", response.GetRetInfo())
+		if err := ensureStorageOK("record dataset period failures", response.GetRetInfo()); err != nil {
+			return err
+		}
+		status := strings.ToLower(strings.TrimSpace(response.GetPeriodStatus()))
+		if status != domain.PeriodStatusWaiting && status != domain.PeriodStatusComplete && status != domain.PeriodStatusDegraded {
+			return fmt.Errorf("record dataset period failures: Storage returned invalid period status %q", status)
+		}
+		if err := validatePeriodFailureResults(dedupedIndexes, response.GetResults()); err != nil {
+			return fmt.Errorf("record dataset period failures: %w", err)
+		}
+		confirmed = append([]*storagepb.DatasetPeriodFailureResult(nil), response.GetResults()...)
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return confirmed, nil
 }
 
 func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {
@@ -462,6 +492,38 @@ func validateAcceptedSeriesIndexes(items []*storagepb.TimeSeriesBatchRow, accept
 	}
 	if len(seen) != len(expected) {
 		return fmt.Errorf("Storage accepted %d unique series indexes, want %d", len(seen), len(expected))
+	}
+	return nil
+}
+
+func validatePeriodFailureResults(requested []uint32, results []*storagepb.DatasetPeriodFailureResult) error {
+	expected := make(map[uint32]struct{}, len(requested))
+	for _, index := range requested {
+		expected[index] = struct{}{}
+	}
+	seen := make(map[uint32]struct{}, len(results))
+	for _, result := range results {
+		if result == nil {
+			return fmt.Errorf("Storage returned a nil failure result")
+		}
+		index := result.GetSeriesIndex()
+		if _, duplicate := seen[index]; duplicate {
+			return fmt.Errorf("Storage returned duplicate failure series index %d", index)
+		}
+		seen[index] = struct{}{}
+		if _, exists := expected[index]; !exists {
+			return fmt.Errorf("Storage returned unexpected failure series index %d", index)
+		}
+		switch result.GetDisposition() {
+		case storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED,
+			storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_ALREADY_SUCCEEDED,
+			storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_MISSED_DEADLINE:
+		default:
+			return fmt.Errorf("Storage returned unknown failure disposition %d for series index %d", result.GetDisposition(), index)
+		}
+	}
+	if len(seen) != len(expected) {
+		return fmt.Errorf("Storage returned %d unique failure results, want %d", len(seen), len(expected))
 	}
 	return nil
 }

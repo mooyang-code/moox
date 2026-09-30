@@ -235,7 +235,7 @@ WHERE snapshots.c_space_id = ? AND snapshots.c_period_time < ?
         AND retry_snapshot.c_dataset_id = snapshots.c_dataset_id
         AND retry_snapshot.c_frequency = snapshots.c_frequency
         AND retry_snapshot.c_period_time = snapshots.c_period_time
-        AND (retries.c_status IN ('pending', 'dispatched') OR (retries.c_status = 'permanent_failed' AND retries.c_period_failure_reported = 0))
+        AND (retries.c_status IN ('pending', 'dispatched') OR (retries.c_status = 'permanent_failed' AND retries.c_period_failure_report_state = 'pending'))
   )
   AND NOT EXISTS (
       SELECT 1
@@ -298,7 +298,7 @@ WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time 
        AND retry_snapshot.c_period_time = retries.c_target_data_time
        AND retry_snapshot.c_subject_id = retries.c_subject_id
       WHERE retry_snapshot.c_space_id = ? AND retry_snapshot.c_dataset_id = ? AND retry_snapshot.c_frequency = ? AND retry_snapshot.c_period_time = ?
-        AND (retries.c_status IN ('pending', 'dispatched') OR (retries.c_status = 'permanent_failed' AND retries.c_period_failure_reported = 0))
+        AND (retries.c_status IN ('pending', 'dispatched') OR (retries.c_status = 'permanent_failed' AND retries.c_period_failure_report_state = 'pending'))
   )
   AND NOT EXISTS (
       SELECT 1

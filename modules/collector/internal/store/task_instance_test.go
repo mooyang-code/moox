@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -569,6 +570,13 @@ func TestPruneDisabledWriteTargetsWaitsForActiveBatchAndKeepsSibling(t *testing.
 	}
 	now := time.Now().UTC()
 	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "target-retry", InstanceID: instance.InstanceID, WriteTargetID: disabledTarget.ID, RetryScope: "write_target", Status: "pending", CreateTime: now}))
+	failureTargetsJSON, err := json.Marshal([]domain.WriteTarget{disabledTarget})
+	require.NoError(t, err)
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "period-receipt", InstanceID: instance.InstanceID, WriteTargetID: disabledTarget.ID,
+		RetryScope: "write_target", Frequency: "1m", TargetDataTime: now, FailureTargetsJSON: string(failureTargetsJSON),
+		Status: "permanent_failed", PeriodFailureReportState: domain.PeriodFailureReportPending,
+	}))
 	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "active-prune", ScheduleID: "schedule-prune", BatchKind: domain.BatchKindRealtime, ShardIndex: 0, Frequency: "1m", Status: domain.BatchStatusPlanned, PlannedAt: &now}
 	created, err := s.FetchBatches().CreatePlannedWithItemsForEnabledTargets(ctx, batch, []string{instance.InstanceID})
 	require.NoError(t, err)
@@ -588,6 +596,9 @@ func TestPruneDisabledWriteTargetsWaitsForActiveBatchAndKeepsSibling(t *testing.
 	require.Equal(t, "enabled", remaining[0].TaskID)
 	_, err = s.FetchRetries().Get(ctx, "crypto", "target-retry")
 	require.Error(t, err)
+	receipt, err := s.FetchRetries().Get(ctx, "crypto", "period-receipt")
+	require.NoError(t, err, "disabled target pruning must preserve pending period failure outbox work")
+	require.Equal(t, domain.PeriodFailureReportPending, receipt.PeriodFailureReportState)
 }
 
 func TestPruneDisabledWriteTargetsSkipsEnabledOnlySpace(t *testing.T) {

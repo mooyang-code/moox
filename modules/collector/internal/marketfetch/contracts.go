@@ -185,7 +185,7 @@ type periodStorage interface {
 	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
 	GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
 	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
-	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) error
+	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error)
 }
 
 // ItemReporter receives final per-item outcomes from the common invocation

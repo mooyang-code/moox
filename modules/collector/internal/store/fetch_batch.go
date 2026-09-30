@@ -271,6 +271,12 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			if item == nil {
 				continue
 			}
+			if item.PeriodFailureReportState == "" {
+				item.PeriodFailureReportState = domain.PeriodFailureReportPending
+			}
+			if item.PeriodFailureResultsJSON == "" {
+				item.PeriodFailureResultsJSON = "[]"
+			}
 			if item.CreateTime.IsZero() {
 				item.CreateTime = time.Now().UTC()
 			}
@@ -291,14 +297,22 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			}
 		}
 		for _, key := range effects.SucceededRetryKeys {
-			if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_retry_key = ?", batch.SpaceID, key).Updates(map[string]any{"c_status": "succeeded", "c_mtime": time.Now().UTC()}).Error; err != nil {
+			if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_retry_key = ?", batch.SpaceID, key).Updates(map[string]any{
+				"c_status": "succeeded", "c_period_failure_report_state": domain.PeriodFailureReportPending,
+				"c_period_failure_results_json": "[]", "c_period_failure_last_error": "",
+				"c_period_failure_deadline_exceeded_at": nil, "c_mtime": time.Now().UTC(),
+			}).Error; err != nil {
 				return err
 			}
 		}
 		for _, key := range effects.CancelPendingRetryKeys {
 			if err := tx.Model(&domain.RetryItem{}).
 				Where("c_space_id = ? AND c_retry_key = ? AND c_status = ?", batch.SpaceID, key, "pending").
-				Updates(map[string]any{"c_status": "succeeded", "c_mtime": time.Now().UTC()}).Error; err != nil {
+				Updates(map[string]any{
+					"c_status": "succeeded", "c_period_failure_report_state": domain.PeriodFailureReportPending,
+					"c_period_failure_results_json": "[]", "c_period_failure_last_error": "",
+					"c_period_failure_deadline_exceeded_at": nil, "c_mtime": time.Now().UTC(),
+				}).Error; err != nil {
 				return err
 			}
 		}

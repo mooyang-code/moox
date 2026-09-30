@@ -122,7 +122,7 @@ func (r *TaskInstanceRepository) PruneDisabledWriteTargets(ctx context.Context, 
 				WHERE items.c_space_id = targets.c_space_id AND items.c_instance_id = targets.c_instance_id
 				AND batches.c_status IN ('planned','dispatched')
 			)`
-		if err := tx.Exec(`DELETE FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_write_target_id IN (`+safeTargets+`)`, spaceID, spaceID).Error; err != nil {
+		if err := tx.Exec(`DELETE FROM t_collector_fetch_retry_items WHERE c_space_id = ? AND c_write_target_id IN (`+safeTargets+`) AND NOT (c_status = 'permanent_failed' AND c_period_failure_report_state = 'pending')`, spaceID, spaceID).Error; err != nil {
 			return err
 		}
 		result := tx.Exec(`DELETE FROM t_collector_instance_write_targets WHERE c_write_target_id IN (`+safeTargets+`)`, spaceID)

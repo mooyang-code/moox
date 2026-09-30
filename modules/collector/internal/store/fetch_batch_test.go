@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -109,9 +110,11 @@ func TestPermanentRetryFailurePersistsUntilReportedAndMarksRuntimeFailed(t *test
 	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task-a", TaskName: "Task A", DataType: "kline", Enabled: true}))
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "instance-a", SubjectID: "ETH-USDT", Frequency: "1m", TaskParams: `{}`}}))
 	require.NoError(t, s.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{ID: "target-a", SpaceID: "crypto", InstanceID: "instance-a", TaskID: "task-a", DatasetID: "bars", Status: "pending"}}))
+	failureTargetsJSON, err := json.Marshal([]domain.WriteTarget{{ID: "target-a", SpaceID: "crypto", InstanceID: "instance-a", TaskID: "task-a", DatasetID: "bars", SeriesIndex: 0, SeriesHash: "hash", ExpectedCount: 1}})
+	require.NoError(t, err)
 	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
 		SpaceID: "crypto", RetryKey: "retry-a", InstanceID: "instance-a", SubjectID: "ETH-USDT", Frequency: "1m",
-		TargetDataTime: now, FailureTargetsJSON: `[{"dataset_id":"bars"}]`, Status: "pending", Attempt: 3,
+		TargetDataTime: now, FailureTargetsJSON: string(failureTargetsJSON), Status: "pending", Attempt: 3,
 	}))
 
 	require.NoError(t, s.FetchRetries().MarkPermanent(ctx, "crypto", "retry-a", "retry_budget_exhausted", "upstream timed out"))
@@ -132,7 +135,10 @@ func TestPermanentRetryFailurePersistsUntilReportedAndMarksRuntimeFailed(t *test
 	require.NoError(t, s.FetchRetries().Cleanup(ctx, now.Add(-7*24*time.Hour)))
 	_, err = s.FetchRetries().Get(ctx, "crypto", "retry-a")
 	require.NoError(t, err)
-	require.NoError(t, s.FetchRetries().MarkPeriodFailureReported(ctx, "crypto", "retry-a"))
+	require.NoError(t, s.FetchRetries().ApplyPeriodFailureReportResults(ctx, "crypto", "retry-a", []domain.PeriodFailureTargetResult{{
+		WriteTargetID: "target-a", SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: now,
+		SeriesHash: "hash", ExpectedCount: 1, SeriesIndex: 0, Disposition: "recorded", ObservedAt: now,
+	}}, ""))
 	require.NoError(t, s.FetchRetries().Cleanup(ctx, now.Add(time.Hour)))
 	_, err = s.FetchRetries().Get(ctx, "crypto", "retry-a")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
