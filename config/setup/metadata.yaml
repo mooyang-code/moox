@@ -228,6 +228,8 @@ datasets:
   attributes:
     market_type: equity
     source_directories: plan-3.6-stockcn-kline
+    owner_module: collector
+    dataset_role: raw_collection
 - space_id: stockcn
   dataset_id: dataset_stockcn_index_kline
   data_source_id: market_data
@@ -242,6 +244,8 @@ datasets:
   attributes:
     market_type: index
     source_directories: 主要指数历史日线数据|指数1小时K线数据
+    owner_module: collector
+    dataset_role: raw_collection
 - space_id: stockcn
   dataset_id: dataset_stockcn_bond_kline
   data_source_id: market_data
@@ -257,6 +261,8 @@ datasets:
     market_id: stockcn
     instrument_type: convertible_bond
     storage_model: wide_common_metrics
+    owner_module: collector
+    dataset_role: raw_collection
 - space_id: stockcn
   dataset_id: dataset_stockcn_financial_statement_metric
   data_source_id: quantclass_stock
@@ -301,6 +307,8 @@ datasets:
     market_id: stockhk
     instrument_type: equity
     storage_model: wide_common_metrics
+    owner_module: collector
+    dataset_role: raw_collection
 - space_id: stockus
   dataset_id: dataset_stockus_equity_kline
   data_source_id: market_data
@@ -318,6 +326,8 @@ datasets:
     market_id: stockus
     instrument_type: equity
     storage_model: wide_common_metrics
+    owner_module: collector
+    dataset_role: raw_collection
 
 - space_id: crypto
   dataset_id: dataset_binance_spot_kline_1m
@@ -332,6 +342,8 @@ datasets:
   attributes:
     market_type: spot
     storage_model: wide_common_metrics
+    owner_module: collector
+    dataset_role: raw_collection
 - space_id: crypto
   dataset_id: dataset_binance_swap_kline_1m
   data_source_id: binance
@@ -345,6 +357,8 @@ datasets:
   attributes:
     market_type: swap
     storage_model: wide_common_metrics
+    owner_module: collector
+    dataset_role: raw_collection
 - space_id: crypto
   dataset_id: mdataset_binance_kline_1m
   data_source_id: binance
@@ -370,6 +384,8 @@ datasets:
   attributes:
     market_type: spot
     source_directories: 现货1小时数据-币对分类|OKX现货1小时数据-币对分类
+    owner_module: collector
+    dataset_role: raw_collection
 - space_id: crypto
   dataset_id: dataset_perpetual_kline_1h
   data_source_id: crypto
@@ -383,6 +399,8 @@ datasets:
   attributes:
     market_type: swap
     source_directories: 永续合约1小时数据-币对分类|OKX永续合约1小时数据-币对分类
+    owner_module: collector
+    dataset_role: raw_collection
 
 - space_id: mooxsys
   dataset_id: dataset_mooxsys_host_resource

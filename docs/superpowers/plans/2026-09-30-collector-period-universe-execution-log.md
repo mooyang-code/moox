@@ -69,3 +69,13 @@ Admin sysdeploy 2.349s、Gateway router 2.105s；`make test-gateway-deploy` 完�
 提交分别为 `34da1414`（Task 1）、`396683ae`（Task 3 默认路由部分）、`391e4b2a`（Task 9 门禁前置部分）；计划更新通过 `510c14ac` 合并，只解决两处文档措辞冲突。主 checkout 尚未合入业务实现，不进行部分发布。
 
 用户已授权正式发布和线上验证；精确范围的数据重建/清理仍待另行确认。最终交付必须包括编码后新 Agent 审查、全部本地门禁、正式版本实际生效及真实 1m/1h 端到端证据，不能以本记录中的局部成功替代。
+
+## Task 3 Dataset 归属前置契约
+
+独立 explorer 核对实际 seed 17 个 Dataset：仅 9 个原始市场 Kline 添加 `owner_module=collector`、`dataset_role=raw_collection`，保留全部原频率和 attributes；2 个财务 record、1 个 merged-factor、5 个 mooxsys 不变。默认任务已生成任务专属结果 Dataset，不能因此声称当前线上仍使用这些固定 catalog ID。
+
+新增 `TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners`，直接解析实际 YAML，首先观察 9 个正向条目均因缺 owner 失败（exit 1），非 Collector 条目保持通过；补齐属性后 Storage schema 全包 PASS（0.890s）。已存在的任务结果创建逻辑增加 owner/role 断言，taskresult/rpc 聚焦 PASS（1.234s/1.926s）；CLI 默认 seed 聚焦 PASS（1.751s）。
+
+新 `codeCR` 分项审查 PASS，主 Agent 核验完整 4 文件 diff，`git diff --check` PASS。此项仅补 metadata 和真实 seed 合约，不代替 Task 3 四 RPC 的服务层鉴权、生产 resolver 测试或线上存量 metadata 的有界更新。
+
+Task 2 worker 已报告实际 RED：七个精确测试分别暴露逾期 Record 仍 waiting、缺逐 index 回执、终态非法 index 未拒绝、缺 Commit accepted index、空 tag 被非空 tag 冒用、同物理序列占两 index、查询 hash 冲突未拒绝。正在按统一时钟与锁内 fence 实施，不提前勾选 Task 2。

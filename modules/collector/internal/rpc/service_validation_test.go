@@ -584,6 +584,7 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	datasetCountBeforeDuplicate := len(metadata.datasets)
 	require.Contains(t, metadata.views, expected.ViewID)
 	require.Equal(t, "collector", metadata.datasets[expected.DatasetID].GetAttributes()["owner_module"])
+	require.Equal(t, "raw_collection", metadata.datasets[expected.DatasetID].GetAttributes()["dataset_role"])
 	require.Equal(t, rsp.GetTaskId(), metadata.datasets[expected.DatasetID].GetAttributes()["collector_task_id"])
 	require.Equal(t, []string{"binance_spot"}, metadata.datasets[expected.DatasetID].GetSubjectTags())
 	require.NotContains(t, stored.CollectParams, "subject_tags")

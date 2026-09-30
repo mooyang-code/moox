@@ -171,6 +171,8 @@ func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	require.Equal(t, first, second)
 	require.Equal(t, 1, fake.createDatasets)
 	require.Equal(t, 1, fake.createViews)
+	require.Equal(t, "collector", fake.datasets[first.DatasetID].GetAttributes()["owner_module"])
+	require.Equal(t, "raw_collection", fake.datasets[first.DatasetID].GetAttributes()["dataset_role"])
 	require.Equal(t, "task-1", fake.datasets[first.DatasetID].GetAttributes()["collector_task_id"])
 	require.Equal(t, "task-1", fake.views[first.ViewID].GetAttributes()["collector_task_id"])
 	require.Equal(t, []string{"binance_spot"}, fake.datasets[first.DatasetID].GetSubjectTags())
