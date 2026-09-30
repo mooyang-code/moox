@@ -3,9 +3,11 @@ package primarystore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +23,186 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestPrimaryPeriodReceiptsDeadlineAndReadonlyStatus(t *testing.T) {
+	ctx := context.Background()
+	deadline := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	var now atomic.Int64
+	now.Store(deadline.Add(-time.Nanosecond).UnixNano())
+	const secret = "period-status-secret"
+	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: secret, Pebble: pebble.Options{
+		NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node"), PeriodNow: func() time.Time { return time.Unix(0, now.Load()).UTC() },
+	}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, node.Close()) })
+	service, err := New(Options{Node: node, AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+		return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
+	}})
+	require.NoError(t, err)
+	auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
+	exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: deadline.Add(-time.Minute).Unix(), SeriesHash: "hash", ExpectedCount: 2, DeadlineAt: deadline.Unix(), SeriesSnapshot: []*pb.DatasetPeriodSeries{
+		{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "okx"}, {SeriesIndex: 1, SubjectId: "BTC-USDT", SeriesTag: "binance"},
+	}}
+	query := proto.Clone(exp).(*pb.DatasetPeriodExpectation)
+	query.SeriesSnapshot = nil
+	status, err := service.GetDatasetPeriodStatus(ctx, &pb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: query})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, status.GetRetInfo().GetCode())
+	require.Empty(t, status.GetStatus())
+	ensured, err := service.EnsureDatasetPeriod(ctx, &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: exp})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, ensured.GetRetInfo().GetCode())
+	require.Equal(t, deadline.Unix(), ensured.GetDeadlineAt())
+	retry := proto.Clone(exp).(*pb.DatasetPeriodExpectation)
+	retry.DeadlineAt += 3600
+	ensured, err = service.EnsureDatasetPeriod(ctx, &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: retry})
+	require.NoError(t, err)
+	require.Equal(t, deadline.Unix(), ensured.GetDeadlineAt())
+	assertStatus := func(expectation *pb.DatasetPeriodExpectation, want string) {
+		t.Helper()
+		response, err := service.GetDatasetPeriodStatus(ctx, &pb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: expectation})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
+		require.Equal(t, want, response.GetStatus())
+		require.Equal(t, exp.GetSeriesHash(), response.GetSeriesHash())
+		require.Equal(t, exp.GetExpectedCount(), response.GetExpectedCount())
+		require.Equal(t, deadline.Unix(), response.GetDeadlineAt())
+	}
+	assertStatus(query, "waiting")
+	for _, change := range []func(*pb.DatasetPeriodExpectation){func(x *pb.DatasetPeriodExpectation) { x.SeriesHash = "wrong" }, func(x *pb.DatasetPeriodExpectation) { x.ExpectedCount++ }} {
+		bad := proto.Clone(query).(*pb.DatasetPeriodExpectation)
+		change(bad)
+		status, err = service.GetDatasetPeriodStatus(ctx, &pb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: bad})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_CONFLICT, status.GetRetInfo().GetCode())
+	}
+	failed, err := service.RecordDatasetPeriodFailures(ctx, &pb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: auth, Expectation: query, SeriesIndexes: []uint32{1, 0, 1}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, failed.GetRetInfo().GetCode())
+	require.Len(t, failed.GetResults(), 2)
+	for index, result := range failed.GetResults() {
+		require.Equal(t, uint32(index), result.GetSeriesIndex())
+		require.Equal(t, pb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED, result.GetDisposition())
+	}
+	items := []*pb.TimeSeriesBatchRow{}
+	for index, tag := range []string{"okx", "binance"} {
+		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: uint32(index), Row: primaryPeriodRow(exp, tag)})
+	}
+	committed, err := service.CommitTimeSeriesBatch(ctx, &pb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: auth, Expectation: query, Items: items, WriteSource: "collector"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, committed.GetRetInfo().GetCode())
+	require.Equal(t, []uint32{0, 1}, committed.GetAcceptedSeriesIndexes())
+	assertStatus(query, "complete")
+	failed, err = service.RecordDatasetPeriodFailures(ctx, &pb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: auth, Expectation: query, SeriesIndexes: []uint32{1, 0}})
+	require.NoError(t, err)
+	for _, result := range failed.GetResults() {
+		require.Equal(t, pb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_ALREADY_SUCCEEDED, result.GetDisposition())
+	}
+	degraded := proto.Clone(exp).(*pb.DatasetPeriodExpectation)
+	degraded.PeriodTime -= 60
+	_, err = service.EnsureDatasetPeriod(ctx, &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: degraded})
+	require.NoError(t, err)
+	now.Store(deadline.UnixNano())
+	assertStatus(degraded, "waiting")
+	committed, err = service.CommitTimeSeriesBatch(ctx, &pb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: auth, Expectation: degraded, Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: primaryPeriodRow(degraded, "okx")}}, WriteSource: "collector"})
+	require.NoError(t, err)
+	require.Equal(t, "degraded", committed.GetPeriodStatus())
+	require.Empty(t, committed.GetAcceptedSeriesIndexes())
+	failed, err = service.RecordDatasetPeriodFailures(ctx, &pb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: auth, Expectation: degraded, SeriesIndexes: []uint32{0, 1}})
+	require.NoError(t, err)
+	for _, result := range failed.GetResults() {
+		require.Equal(t, pb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_MISSED_DEADLINE, result.GetDisposition())
+	}
+	assertStatus(degraded, "degraded")
+}
+
+func primaryPeriodRow(exp *pb.DatasetPeriodExpectation, tag string) *pb.RowFieldUpsert {
+	return &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: exp.GetSpaceId(), DatasetId: exp.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", SeriesTag: tag, Freq: exp.GetFrequency(), DataTime: time.Unix(exp.GetPeriodTime(), 0).UTC().Format(time.RFC3339Nano)}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
+}
+
+func TestPrimaryPeriodRejectsNilSnapshotSlots(t *testing.T) {
+	for _, count := range []uint32{2, 3} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			ctx := context.Background()
+			period := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+			const secret = "nil-snapshot-secret"
+			node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: secret, Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node"), PeriodNow: func() time.Time { return period }}})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, node.Close()) })
+			service, err := New(Options{Node: node, AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+				return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
+			}})
+			require.NoError(t, err)
+			auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
+			exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), SeriesHash: "hash", ExpectedCount: count, DeadlineAt: period.Add(time.Hour).Unix(), SeriesSnapshot: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "okx"}, nil, {SeriesIndex: 1, SubjectId: "ETH-USDT", SeriesTag: "okx"}}}
+			rsp, err := service.EnsureDatasetPeriod(ctx, &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: exp})
+			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+			exp.SeriesSnapshot = nil
+			status, err := service.GetDatasetPeriodStatus(ctx, &pb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: exp})
+			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_NOT_FOUND, status.GetRetInfo().GetCode())
+			entries, err := node.Store().ListOutbox(ctx, 0, 100)
+			require.NoError(t, err)
+			require.Empty(t, entries)
+		})
+	}
+}
+
+type emptyPeriodNode struct {
+	DataNodeClient
+	nilResponse bool
+}
+
+func (n emptyPeriodNode) EnsureDatasetPeriod(context.Context, *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
+	if n.nilResponse {
+		return nil, nil
+	}
+	return &pb.EnsureDatasetPeriodRsp{}, nil
+}
+
+func (n emptyPeriodNode) GetDatasetPeriodStatus(context.Context, *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error) {
+	if n.nilResponse {
+		return nil, nil
+	}
+	return &pb.GetDatasetPeriodStatusRsp{}, nil
+}
+
+func (n emptyPeriodNode) CommitTimeSeriesBatch(context.Context, *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
+	if n.nilResponse {
+		return nil, nil
+	}
+	return &pb.CommitTimeSeriesBatchRsp{}, nil
+}
+
+func (n emptyPeriodNode) RecordDatasetPeriodFailures(context.Context, *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error) {
+	if n.nilResponse {
+		return nil, nil
+	}
+	return &pb.RecordDatasetPeriodFailuresRsp{}, nil
+}
+
+func TestPrimaryPeriodRejectsMissingRPCResponses(t *testing.T) {
+	for _, nilResponse := range []bool{false, true} {
+		service, err := New(Options{Node: emptyPeriodNode{nilResponse: nilResponse}, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) { return auth, nil }})
+		require.NoError(t, err)
+		ctx := context.Background()
+		auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
+		exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: 1, SeriesHash: "hash", ExpectedCount: 1}
+		ensured, err := service.EnsureDatasetPeriod(ctx, &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: exp})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_INNER_ERR, ensured.GetRetInfo().GetCode())
+		status, err := service.GetDatasetPeriodStatus(ctx, &pb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: exp})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_INNER_ERR, status.GetRetInfo().GetCode())
+		committed, err := service.CommitTimeSeriesBatch(ctx, &pb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: auth, Expectation: exp, Items: []*pb.TimeSeriesBatchRow{{Row: primaryPeriodRow(exp, "")}}, WriteSource: "collector"})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_INNER_ERR, committed.GetRetInfo().GetCode())
+		failed, err := service.RecordDatasetPeriodFailures(ctx, &pb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: auth, Expectation: exp, SeriesIndexes: []uint32{0}})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_INNER_ERR, failed.GetRetInfo().GetCode())
+	}
+}
 
 type recordingNode struct {
 	write func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)

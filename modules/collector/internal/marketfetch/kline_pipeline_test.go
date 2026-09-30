@@ -32,6 +32,62 @@ type pipelineProvider struct {
 	errFor    func() error
 }
 
+func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
+	period := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		instrument marketdata.InstrumentType
+		subject    string
+		dataset    string
+	}{
+		{marketdata.InstrumentEquity, "600000.XSHG", StockCNDatasetID},
+		{marketdata.InstrumentIndex, "000001.XSHG", "dataset_stockcn_index_kline"},
+		{marketdata.InstrumentConvertibleBond, "113001.XSHG", "dataset_stockcn_bond_kline"},
+	} {
+		t.Run(string(test.instrument), func(t *testing.T) {
+			item := domain.CollectionItem{SubjectID: test.subject, Symbol: "sh" + test.subject[:6], DatasetID: test.dataset, Provider: "sina", SourceID: "stockcn_http", MarketType: string(test.instrument), TargetDataTime: period.Format(time.RFC3339Nano), SeriesHash: "one-logical-series", ExpectedCount: 1}
+			storage := &recordingPeriodFailureStorage{}
+			scheduler := &Scheduler{StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+			require.NoError(t, scheduler.ensureDatasetPeriod(context.Background(), domain.CollectionTask{SpaceID: StockCNSpaceID}, []domain.CollectionItem{item}, "1m", period, period.Add(time.Minute)))
+			require.Len(t, storage.ensured, 1)
+			ensured := storage.ensured[0]
+			require.Equal(t, uint32(1), ensured.GetExpectedCount())
+			// Match the composition root: no explicit SeriesTag for index or bond.
+			pipeline := &KlinePipeline{SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, InstrumentType: test.instrument, DatasetID: test.dataset, SourceID: item.SourceID}
+			req := Request{SpaceID: StockCNSpaceID, DatasetID: test.dataset, Frequency: "1m", SourceID: item.SourceID, MarketType: string(test.instrument), Items: []domain.CollectionItem{item}}
+			for rank, provider := range []string{"sina", "tencent", "tdx", "eastmoney"} {
+				bar := marketdata.NormalizedKline{SubjectID: test.subject, ProviderID: provider, SourceID: provider + "_http", ProviderSymbol: item.Symbol, Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: period.Add(time.Minute), FetchedAt: period.Add(2 * time.Minute), RequestID: "row-period-binding"}
+				row, err := pipeline.rowFor(bar, req, "stockcn-route", rank+1)
+				require.NoError(t, err)
+				expectation, rows, enabled, err := periodCommitForDataset(req, test.dataset, []*storagepb.RowFieldUpsert{row})
+				require.NoError(t, err, "actual rowFor output must bind to the Ensure index even after a provider fallback")
+				require.True(t, enabled)
+				require.Equal(t, "default", row.GetKey().GetTimeSeries().GetSeriesTag())
+				require.Equal(t, ensured.GetSeriesSnapshot()[0].GetSeriesTag(), row.GetKey().GetTimeSeries().GetSeriesTag())
+				require.Equal(t, ensured.GetSeriesHash(), expectation.GetSeriesHash())
+				require.Equal(t, uint32(1), expectation.GetExpectedCount())
+				require.Len(t, rows, 1)
+				require.Zero(t, rows[0].GetSeriesIndex())
+			}
+		})
+	}
+}
+
+func TestKlinePipelineNonStockCNRowPreservesProviderSourceTag(t *testing.T) {
+	period := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", SourceID: "spot_http", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: period.Add(time.Minute), FetchedAt: period.Add(2 * time.Minute), RequestID: "non-stock-period-tag"}
+	req := Request{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", SourceID: bar.SourceID, MarketType: "spot"}
+	pipeline := &KlinePipeline{MarketID: "crypto", InstrumentType: marketdata.InstrumentSpot, SourceID: bar.SourceID}
+	row, err := pipeline.rowFor(bar, req, "binance-spot", 1)
+	require.NoError(t, err)
+	require.Equal(t, defaultMarketSeriesTag(bar.ProviderID, bar.SourceID, req.MarketType), row.GetKey().GetTimeSeries().GetSeriesTag())
+	bar.ProviderID = "okx"
+	bar.SourceID = "okx_spot_http"
+	fallback, err := pipeline.rowFor(bar, req, "okx-spot", 2)
+	require.NoError(t, err)
+	require.Equal(t, defaultMarketSeriesTag(bar.ProviderID, bar.SourceID, req.MarketType), fallback.GetKey().GetTimeSeries().GetSeriesTag())
+	require.NotEqual(t, row.GetKey().GetTimeSeries().GetSeriesTag(), fallback.GetKey().GetTimeSeries().GetSeriesTag())
+}
+
 func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.T) {
 	var firstCalls, fallbackCalls int32
 	registry := marketdata.NewRegistry()

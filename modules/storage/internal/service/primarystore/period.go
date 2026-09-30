@@ -11,6 +11,7 @@ import (
 
 type periodDataNodeClient interface {
 	EnsureDatasetPeriod(context.Context, *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error)
+	GetDatasetPeriodStatus(context.Context, *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error)
 	CommitTimeSeriesBatch(context.Context, *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error)
 	RecordDatasetPeriodFailures(context.Context, *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error)
 }
@@ -43,7 +44,44 @@ func (s *Service) EnsureDatasetPeriod(ctx context.Context, req *pb.PrimaryEnsure
 	if err != nil {
 		return &pb.PrimaryEnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	return &pb.PrimaryEnsureDatasetPeriodRsp{RetInfo: rsp.GetRetInfo(), Status: rsp.GetStatus()}, nil
+	if rsp == nil || rsp.GetRetInfo() == nil {
+		return &pb.PrimaryEnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no period response"))}, nil
+	}
+	return &pb.PrimaryEnsureDatasetPeriodRsp{RetInfo: rsp.GetRetInfo(), Status: rsp.GetStatus(), DeadlineAt: rsp.GetDeadlineAt()}, nil
+}
+
+func (s *Service) GetDatasetPeriodStatus(ctx context.Context, req *pb.PrimaryGetDatasetPeriodStatusReq) (*pb.PrimaryGetDatasetPeriodStatusRsp, error) {
+	if req == nil || req.GetExpectation() == nil {
+		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("expectation is required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	exp := req.GetExpectation()
+	if strings.TrimSpace(exp.GetSpaceId()) == "" || strings.TrimSpace(exp.GetDatasetId()) == "" {
+		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	ctx = s.requestContext(ctx)
+	node, err := s.resolve(ctx, exp.GetSpaceId(), exp.GetDatasetId())
+	if err != nil {
+		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	periodNode, ok := node.(periodDataNodeClient)
+	if !ok {
+		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode period RPC is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := periodNode.GetDatasetPeriodStatus(ctx, &pb.GetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: exp})
+	if err != nil {
+		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	if rsp == nil || rsp.GetRetInfo() == nil {
+		return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no period response"))}, nil
+	}
+	return &pb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: rsp.GetRetInfo(), Status: rsp.GetStatus(), SeriesHash: rsp.GetSeriesHash(), ExpectedCount: rsp.GetExpectedCount(), DeadlineAt: rsp.GetDeadlineAt()}, nil
 }
 
 func (s *Service) RecordDatasetPeriodFailures(ctx context.Context, req *pb.PrimaryRecordDatasetPeriodFailuresReq) (*pb.PrimaryRecordDatasetPeriodFailuresRsp, error) {
@@ -84,7 +122,10 @@ func (s *Service) RecordDatasetPeriodFailures(ctx context.Context, req *pb.Prima
 	if err != nil {
 		return &pb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	return &pb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: rsp.GetRetInfo(), PeriodStatus: rsp.GetPeriodStatus()}, nil
+	if rsp == nil || rsp.GetRetInfo() == nil {
+		return &pb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no period response"))}, nil
+	}
+	return &pb.PrimaryRecordDatasetPeriodFailuresRsp{RetInfo: rsp.GetRetInfo(), PeriodStatus: rsp.GetPeriodStatus(), Results: rsp.GetResults()}, nil
 }
 
 func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryCommitTimeSeriesBatchReq) (*pb.PrimaryCommitTimeSeriesBatchRsp, error) {
@@ -150,5 +191,8 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	if err != nil {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: rsp.GetRetInfo(), Keys: rsp.GetKeys(), PeriodStatus: rsp.GetPeriodStatus()}, nil
+	if rsp == nil || rsp.GetRetInfo() == nil {
+		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no period response"))}, nil
+	}
+	return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: rsp.GetRetInfo(), Keys: rsp.GetKeys(), PeriodStatus: rsp.GetPeriodStatus(), AcceptedSeriesIndexes: rsp.GetAcceptedSeriesIndexes()}, nil
 }

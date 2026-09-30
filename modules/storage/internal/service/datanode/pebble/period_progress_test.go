@@ -26,24 +26,24 @@ func TestDatasetPeriodCommitBitmapIsIdempotentAndCompletesOnce(t *testing.T) {
 	exp := periodExpectationForTest(period, 2)
 	status, err := store.EnsureDatasetPeriod(ctx, exp)
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status)
+	require.Equal(t, "waiting", status.Status)
 	status, err = store.EnsureDatasetPeriod(ctx, exp)
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status)
+	require.Equal(t, "waiting", status.Status)
 
 	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "source-btc", "collector")
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status)
+	require.Equal(t, "waiting", status.Status)
 	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "source-btc", "collector")
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status)
+	require.Equal(t, "waiting", status.Status)
 	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
 	require.NoError(t, err)
 	require.Equal(t, 1, bitmapCount(progress.Bitmap))
 
 	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}}, "source-eth", "collector")
 	require.NoError(t, err)
-	require.Equal(t, "complete", status)
+	require.Equal(t, "complete", status.Status)
 	progress, err = store.GetDatasetPeriodProgress(ctx, exp)
 	require.NoError(t, err)
 	require.Equal(t, "complete", progress.Status)
@@ -53,7 +53,7 @@ func TestDatasetPeriodCommitBitmapIsIdempotentAndCompletesOnce(t *testing.T) {
 	// bitmap nor append another completion marker.
 	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}}, "source-eth-retry", "collector")
 	require.NoError(t, err)
-	require.Equal(t, "complete", status)
+	require.Equal(t, "complete", status.Status)
 	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
 }
 
@@ -133,6 +133,7 @@ func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testin
 	ctx := context.Background()
 	period := time.Date(2026, 9, 28, 4, 5, 0, 0, time.UTC)
 	exp := periodExpectationForTest(period, 3, "BTC-USDT", "ETH-USDT", "ETH-USDT")
+	exp.SeriesSnapshot[2].SeriesTag = "alternate"
 	deadline := time.Now().UTC().Add(time.Minute)
 	exp.DeadlineAt = deadline.Unix()
 	_, err := store.EnsureDatasetPeriod(ctx, exp)
@@ -142,26 +143,26 @@ func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testin
 	require.Error(t, err, "failure indices outside the persisted series snapshot must be rejected")
 	status, err := store.RecordDatasetPeriodFailures(ctx, exp, []uint32{1, 2, 2})
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status)
+	require.Equal(t, "waiting", status.Status)
 	status, err = store.RecordDatasetPeriodFailures(ctx, exp, []uint32{1, 2})
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status, "repeated failure reports remain idempotent")
+	require.Equal(t, "waiting", status.Status, "repeated failure reports remain idempotent")
 	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
 	require.NoError(t, err)
 	require.Equal(t, "waiting", progress.Status)
 	require.Zero(t, bitmapCount(progress.Bitmap), "failures must not set success bits")
 	require.Equal(t, []uint32{1, 2}, progress.FailedSeriesIndexes)
 
-	status, err = store.FinalizeDatasetPeriod(ctx, exp, deadline.Add(-time.Second))
+	status.Status, err = store.FinalizeDatasetPeriod(ctx, exp, deadline.Add(-time.Second))
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status, "failure recording must not finalize before the deadline")
+	require.Equal(t, "waiting", status.Status, "failure recording must not finalize before the deadline")
 
-	status, err = store.FinalizeDatasetPeriod(ctx, exp, deadline)
+	status.Status, err = store.FinalizeDatasetPeriod(ctx, exp, deadline)
 	require.NoError(t, err)
-	require.Equal(t, "degraded", status)
-	status, err = store.FinalizeDatasetPeriod(ctx, exp, deadline.Add(time.Minute))
+	require.Equal(t, "degraded", status.Status)
+	status.Status, err = store.FinalizeDatasetPeriod(ctx, exp, deadline.Add(time.Minute))
 	require.NoError(t, err)
-	require.Equal(t, "degraded", status)
+	require.Equal(t, "degraded", status.Status)
 	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
 
 	marker := collectorPeriodMarkerFromOutbox(t, store)
@@ -184,22 +185,26 @@ func TestDatasetPeriodDeadlineWinsAgainstConcurrentLateCommit(t *testing.T) {
 	// Hold the outbox mutex so a late commit and explicit finalizer contend on
 	// the same period state before either can publish its terminal marker.
 	store.outboxMu.Lock()
+	commitStarted := make(chan struct{})
 	commitResult := make(chan string, 1)
 	commitErr := make(chan error, 1)
 	go func() {
+		close(commitStarted)
 		status, commitErrValue := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "source-late", "collector")
-		commitResult <- status
+		commitResult <- status.Status
 		commitErr <- commitErrValue
 	}()
-	time.Sleep(10 * time.Millisecond)
+	<-commitStarted
+	finalizeStarted := make(chan struct{})
 	finalizeResult := make(chan string, 1)
 	finalizeErr := make(chan error, 1)
 	go func() {
+		close(finalizeStarted)
 		status, finalizeErrValue := store.FinalizeDatasetPeriod(ctx, exp, time.Now().UTC())
 		finalizeResult <- status
 		finalizeErr <- finalizeErrValue
 	}()
-	time.Sleep(10 * time.Millisecond)
+	<-finalizeStarted
 	store.outboxMu.Unlock()
 
 	select {
@@ -235,10 +240,10 @@ func TestDatasetPeriodLateSuccessClearsFailureAndCompletes(t *testing.T) {
 	require.NoError(t, err)
 	status, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "source-btc", "collector")
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status)
+	require.Equal(t, "waiting", status.Status)
 	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}}, "source-eth-late", "collector")
 	require.NoError(t, err)
-	require.Equal(t, "complete", status)
+	require.Equal(t, "complete", status.Status)
 
 	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
 	require.NoError(t, err)
@@ -258,13 +263,13 @@ func TestDatasetPeriodEnsureRetryKeepsOriginalDeadline(t *testing.T) {
 	originalDeadline := exp.DeadlineAt
 	status, err := store.EnsureDatasetPeriod(ctx, exp)
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status)
+	require.Equal(t, "waiting", status.Status)
 
 	retry := exp
 	retry.DeadlineAt += int64(time.Minute.Seconds())
 	status, err = store.EnsureDatasetPeriod(ctx, retry)
 	require.NoError(t, err)
-	require.Equal(t, "waiting", status)
+	require.Equal(t, "waiting", status.Status)
 
 	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
 	require.NoError(t, err)

@@ -11,6 +11,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -825,7 +826,7 @@ func TestSchedulerReusesPeriodSeriesSnapshotAfterTagMembershipChangesAndRestart(
 	require.NoError(t, newScheduler(now).Tick(ctx, "crypto"))
 	firstPeriod, err := targetDataTime(now, "1h")
 	require.NoError(t, err)
-	firstSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: firstPeriod})
+	firstSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1H", PeriodTime: firstPeriod})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, uint32(2), firstSnapshot.ExpectedCount)
@@ -847,7 +848,7 @@ func TestSchedulerReusesPeriodSeriesSnapshotAfterTagMembershipChangesAndRestart(
 	nextPeriod, err := targetDataTime(nextNow, "1h")
 	require.NoError(t, err)
 	require.NotEqual(t, firstPeriod, nextPeriod)
-	nextSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: nextPeriod})
+	nextSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1H", PeriodTime: nextPeriod})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, uint32(1), nextSnapshot.ExpectedCount)
@@ -1091,12 +1092,14 @@ type recordingPeriodFailureStorage struct {
 	calls        int
 	expectations []*storagepb.DatasetPeriodExpectation
 	indexes      [][]uint32
+	ensured      []*storagepb.DatasetPeriodExpectation
 }
 
 func (s *recordingPeriodFailureStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
 	return nil
 }
-func (s *recordingPeriodFailureStorage) EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) error {
+func (s *recordingPeriodFailureStorage) EnsureDatasetPeriod(_ context.Context, exp *storagepb.DatasetPeriodExpectation) error {
+	s.ensured = append(s.ensured, exp)
 	return nil
 }
 func (s *recordingPeriodFailureStorage) CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error {
@@ -1107,6 +1110,106 @@ func (s *recordingPeriodFailureStorage) RecordDatasetPeriodFailures(_ context.Co
 	s.expectations = append(s.expectations, exp)
 	s.indexes = append(s.indexes, append([]uint32(nil), indexes...))
 	return nil
+}
+
+func TestSchedulerEnsurePeriodUsesPersistedSeriesTags(t *testing.T) {
+	for _, space := range []string{"crypto", StockCNSpaceID} {
+		t.Run(space, func(t *testing.T) {
+			db := newTestMarketFetchStore(t)
+			ctx := context.Background()
+			period := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+			task := domain.CollectionTask{SpaceID: space, TaskID: "series-tag-task", DataType: "kline", CollectParams: `{"target_dataset_id":"bars","frequency":"1m"}`}
+			items := []domain.CollectionItem{{SubjectID: "BTC-USDT", DatasetID: "bars", Provider: "okx", SourceID: "okx", MarketType: "spot", Symbol: "BTC-USDT"}, {SubjectID: "BTC-USDT", DatasetID: "bars", Provider: "binance", SourceID: "binance", MarketType: "spot", Symbol: "BTCUSDT"}}
+			if space == StockCNSpaceID {
+				items = []domain.CollectionItem{{SubjectID: "600000.XSHG", DatasetID: "bars", Provider: "sina", SourceID: "stockcn", MarketType: "equity", Symbol: "sh600000"}}
+			}
+			storage := &recordingPeriodFailureStorage{}
+			scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+			materialized, _, err := scheduler.materializeTaskSeries(ctx, task, items)
+			require.NoError(t, err)
+			snapshot, err := periodSeriesSnapshotFromItems(task, "bars", "1m", period, materialized)
+			require.NoError(t, err)
+			_, _, err = db.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
+			require.NoError(t, err)
+			loaded, err := scheduler.expandTaskForPeriod(ctx, task, "1m", period)
+			require.NoError(t, err)
+			require.NoError(t, scheduler.ensureDatasetPeriod(ctx, task, loaded, "1m", period, period.Add(time.Minute)))
+			require.Len(t, storage.ensured, 1)
+			expectation := storage.ensured[0]
+			require.Equal(t, snapshot.ExpectedCount, expectation.GetExpectedCount())
+			require.Equal(t, snapshot.SeriesHash, expectation.GetSeriesHash())
+			require.Len(t, expectation.GetSeriesSnapshot(), len(snapshot.Entries))
+			for index, series := range expectation.GetSeriesSnapshot() {
+				require.Equal(t, uint32(index), series.GetSeriesIndex())
+				require.Equal(t, snapshot.Entries[index].SubjectID, series.GetSubjectId())
+				require.Equal(t, snapshot.Entries[index].SeriesTag, series.GetSeriesTag())
+				require.Equal(t, collectionItemSeriesTag(space, loaded[index]), series.GetSeriesTag(), "Ensure and the final RowKey must use the same series tag")
+			}
+			if space == StockCNSpaceID {
+				require.Equal(t, uint32(1), expectation.GetExpectedCount(), "fallback providers are one logical default series, not new expected indexes")
+				require.Equal(t, "default", expectation.GetSeriesSnapshot()[0].GetSeriesTag())
+				for _, provider := range []string{"sina", "tencent", "tdx", "eastmoney"} {
+					fallback := loaded[0]
+					fallback.Provider = provider
+					require.Equal(t, "default", collectionItemSeriesTag(space, fallback))
+				}
+			} else {
+				require.NotEqual(t, expectation.GetSeriesSnapshot()[0].GetSeriesTag(), expectation.GetSeriesSnapshot()[1].GetSeriesTag())
+			}
+		})
+	}
+}
+
+func TestMonthlyPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T) {
+	assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t, "1M", "1M", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), func(start time.Time) time.Time {
+		return start.AddDate(0, 1, 0)
+	})
+}
+
+func TestHourlyPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T) {
+	for _, providerFrequency := range []string{"1H", "1h"} {
+		t.Run(providerFrequency, func(t *testing.T) {
+			assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t, "1H", providerFrequency, time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), func(start time.Time) time.Time {
+				return start.Add(time.Hour)
+			})
+		})
+	}
+}
+
+func assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T, frequency, providerFrequency string, period time.Time, periodEnd func(time.Time) time.Time) {
+	ctx := context.Background()
+	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "period-frequency-task", DataType: "kline", CollectParams: fmt.Sprintf(`{"target_dataset_id":"bars","frequency":%q}`, frequency)}
+	item := domain.CollectionItem{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", Provider: "binance", SourceID: "binance_http", MarketType: "spot", DataType: "kline", Frequency: frequency, TargetDataTime: period.Format(time.RFC3339Nano)}
+	db := newTestMarketFetchStore(t)
+	storage := &recordingPeriodFailureStorage{}
+	scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+	materialized, _, err := scheduler.materializeTaskSeries(ctx, task, []domain.CollectionItem{item})
+	require.NoError(t, err)
+	snapshot, err := periodSeriesSnapshotFromItems(task, "bars", frequency, period, materialized)
+	require.NoError(t, err)
+	require.Equal(t, frequency, snapshot.Key.Frequency)
+	require.Equal(t, frequency, snapshot.Entries[0].Frequency)
+	_, _, err = db.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
+	require.NoError(t, err)
+	loaded, err := scheduler.expandTaskForPeriod(ctx, task, frequency, period)
+	require.NoError(t, err)
+	require.NoError(t, scheduler.ensureDatasetPeriod(ctx, task, loaded, frequency, period, period.Add(time.Minute)))
+	require.Equal(t, frequency, storage.ensured[0].GetFrequency())
+	for index := range loaded {
+		loaded[index] = prepareCollectionItemRequest(loaded[index], frequency, period, MaxRealtimeRows)
+	}
+
+	end := periodEnd(period)
+	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", SourceID: item.SourceID, ProviderSymbol: item.Symbol, Frequency: providerFrequency, BarStart: period, BarEnd: end, Open: 100, High: 101, Low: 99, Close: 100.5, VolumeShares: 10, AmountCNY: 1005, ProviderTimestamp: end, FetchedAt: end, RequestID: "period-frequency-binding"}
+	pipeline := &KlinePipeline{MarketID: "crypto", InstrumentType: marketdata.InstrumentSpot, DatasetID: "bars", SourceID: item.SourceID}
+	req := Request{SpaceID: "crypto", DatasetID: "bars", Frequency: frequency, SourceID: item.SourceID, MarketType: "spot", Items: loaded}
+	row, err := pipeline.rowFor(bar, req, "binance-spot", 1)
+	require.NoError(t, err)
+	expectation, rows, enabled, err := periodCommitForDataset(req, "bars", []*storagepb.RowFieldUpsert{row})
+	require.NoError(t, err)
+	require.True(t, enabled)
+	require.Equal(t, frequency, expectation.GetFrequency())
+	require.Equal(t, frequency, rows[0].GetRow().GetKey().GetTimeSeries().GetFreq())
 }
 
 func TestSchedulerReportsPermanentRetryPeriodFailureExactlyOnce(t *testing.T) {
@@ -1157,4 +1260,30 @@ func TestSchedulerReportsPermanentRetryPeriodFailureExactlyOnce(t *testing.T) {
 
 	require.NoError(t, scheduler.reportPendingPeriodFailures(ctx, "crypto"))
 	require.Equal(t, 1, storage.calls, "reported terminal failure must not be sent again")
+}
+
+func TestSchedulerRetryFailureKeepsFrequencyIdentity(t *testing.T) {
+	for _, frequency := range []string{"1M", "1H"} {
+		t.Run(frequency, func(t *testing.T) {
+			assertSchedulerRetryFailureKeepsFrequencyIdentity(t, frequency)
+		})
+	}
+}
+
+func assertSchedulerRetryFailureKeepsFrequencyIdentity(t *testing.T, frequency string) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	period := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	item := domain.CollectionItem{InstanceID: "instance-btc", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: period.Format(time.RFC3339Nano), Provider: "binance", SourceID: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", Frequency: frequency, SeriesIndex: 0, SeriesHash: "period-hash", ExpectedCount: 1}
+	taskRaw, err := json.Marshal(item)
+	require.NoError(t, err)
+	targetRaw, err := json.Marshal([]domain.WriteTarget{{ID: "target-btc", SpaceID: "crypto", InstanceID: item.InstanceID, TaskID: "period-task", DatasetID: "bars", SeriesIndex: 0, SeriesHash: item.SeriesHash, ExpectedCount: item.ExpectedCount}})
+	require.NoError(t, err)
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "retry-btc-period", SourceBatchID: "sync-period", BatchKind: domain.BatchKindRealtime, InstanceID: item.InstanceID, RetryScope: "fetch", SubjectID: item.SubjectID, Frequency: frequency, TargetDataTime: period, TaskJSON: string(taskRaw), FailureTargetsJSON: string(targetRaw), Attempt: 3, Status: "permanent_failed", LastErrorType: "http_5xx", LastErrorSummary: "provider unavailable"}))
+
+	storage := &recordingPeriodFailureStorage{}
+	scheduler := &Scheduler{Retries: db.FetchRetries(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+	require.NoError(t, scheduler.reportPendingPeriodFailures(ctx, "crypto"))
+	require.Len(t, storage.expectations, 1)
+	require.Equal(t, frequency, storage.expectations[0].GetFrequency())
 }

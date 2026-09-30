@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble"
+
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -313,6 +315,9 @@ func (s *Service) validateAuth(auth *pb.AuthInfo) error {
 func errorCode(err error) pb.ErrorCode {
 	if err == nil {
 		return pb.ErrorCode_SUCCESS
+	}
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return pb.ErrorCode_NOT_FOUND
 	}
 	var validation pebble.ValidationError
 	if errors.As(err, &validation) {

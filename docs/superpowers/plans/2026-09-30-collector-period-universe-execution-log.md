@@ -13,7 +13,7 @@
 | 任务 | 状态 | 证据 |
 | --- | --- | --- |
 | Task 1 命名与快照对象 | 完成并提交 `34da1414` | 规格/质量审查均 PASS，主 Agent 七包测试、三个入口 build 复跑通过；本实施分支清单已勾选 |
-| Task 2 Storage 回执/截止/查询 | 实施中 | 新 worker 从精确 Store RED 测试开始 |
+| Task 2 Storage 回执/截止/查询 | 实现完成，规格/质量审查 PASS，待提交 | 逐 index 回执、硬截止、查询、series tag、精确频率身份均已实现；主 Agent Storage/Collector 全包、Pebble focused race、proto 生成与 build 通过 |
 | Task 3 生产代理/Gateway/鉴权 | Gateway 部分已实现，整体未完成 | YAML/defaults 四方法 Collector-only 路由及实际 seed 派生契约已由失败转通过；adapter/授权仍待 Task 2 协议后实施 |
 | Task 4 权威状态与清理 | 未开始 | 依赖 Storage 查询协议 |
 | Task 5 持久逐目标失败回执 | 未开始 | 依赖 Task 2、4 |
@@ -79,3 +79,21 @@ Admin sysdeploy 2.349s、Gateway router 2.105s；`make test-gateway-deploy` 完�
 新 `codeCR` 分项审查 PASS，主 Agent 核验完整 4 文件 diff，`git diff --check` PASS。此项仅补 metadata 和真实 seed 合约，不代替 Task 3 四 RPC 的服务层鉴权、生产 resolver 测试或线上存量 metadata 的有界更新。
 
 Task 2 worker 已报告实际 RED：七个精确测试分别暴露逾期 Record 仍 waiting、缺逐 index 回执、终态非法 index 未拒绝、缺 Commit accepted index、空 tag 被非空 tag 冒用、同物理序列占两 index、查询 hash 冲突未拒绝。正在按统一时钟与锁内 fence 实施，不提前勾选 Task 2。
+
+## 全量门禁前置检查
+
+Admin、Gateway、CLI、CloudNode 全模块 `go test -count=1 ./...` 均实际 PASS，module boundary 检查 PASS。随后 Workspace 门禁仍 FAIL：CLI vet 暴露五个 protobuf 请求值拷贝内部 mutex；greenfield 门禁仍 FAIL：Trade event 历史 deprecated 协议和 Collector 主表宽度断言漂移。不能将这些分模块成功记为 Task 9 完成。
+
+CLI 新增深拷贝回归，transport 改写 ListDatasets/ListViews 的 Page 后，原请求由 1 变 99，RED exit 1。五个 wrapper 改用 `proto.Clone` 后，主 Agent focused test PASS（1.850s）、`go vet` exit 0；新 codeCR 独立完整 command 包测试（13.506s）、vet、diff-check PASS，无阻断。不执行任何真实 purge。
+
+Task 2 worker 完成协议生成和指定四包/race/build，主 Agent 独立阅读 Pebble 与两层服务后，Storage/Collector 全模块 `go test -count=1` exit 0，Pebble 完整包 13.969s，focused race 4.370s。七项精确 RED 和显式 finalizer hash/count 校验 RED 由实现者记录；尚待两阶段独立审查，不提前提交或勾选。
+
+发布手册经独立 codeCR 指出并修正 Storage 版本变量传递、Timer 目录与实际云侧状态的盘点区别。复核 PASS；正式编译/发布/E2E 授权已核验，线上运行态数据重建仍须精确范围另行确认。手册是准备文件，不是已发布证据。
+
+Collector 主表回归用 DOMParser 检查实际 11 列宽度合计 1600，先观察 source 的 scroll 1660 与列合计不一致（定向 RED exit 1），再将 source 和两份漂移断言统一 1600。不改列、分页或禁止 planned-node/激活调用的检查。定向 3 tests、两项 Node gate 均 PASS；主 Agent 前端全量 72 文件、280 tests PASS（9.32s），新 codeCR 独立复跑与审查 PASS。只证明结构契约，未做浏览器视觉截图验收。
+
+CLI 修复后再次执行真实 `test-go-workspace.sh`：Admin/Archive/CLI/CloudNode/Collector 全包通过，CLI vet 已通过；当前仍停在 Collector bootstrap vet（637 行 range 值拷贝含 atomic.Bool 的 runtime）。沿用相邻调度循环的索引取指针修复，待针对性复跑与分项审查，不将 Workspace 记为整体 PASS。
+
+Task 2 规格审查新增阻断：StockCN index/bond 实际 RowKey tag 与 default snapshot 不同；Ensure 转换跳过 nil entry；实际物理 RowKey 未规范化的 Subject/freq/tag 被宽松 trim/case 比较接纳。需补真实 row -> period binding 与非法身份零副作用回归再关闭本任务，先前全包通过没有覆盖这些缺口。
+
+Task 2 后续审查再发现月线 `1M` 与分钟 `1m`、目录历史小时 `1H` 与 provider 规范值 `1h` 的身份折叠风险。修正为只校验频率语义，持久 period key/Ensure/Commit/failure report 保留 trim 后的 Dataset spelling；`rowFor` 验证 provider/request 频率语义一致后，以 request spelling 写 RowKey。补充 `1M`/`1m`、`1H`/`1h` Store、snapshot、Ensure、Commit、failure report 回归；Storage 质量与规格复审均 PASS。最终复跑 `go test -count=1 ./modules/storage/... ./modules/collector/...`、Task 2 六包测试、Pebble focused race、`make -C modules/storage/proto all`、Storage server build 及 `git diff --check` 均 PASS。Task 3 尚未补齐生产 Record adapter 和四 RPC 授权，因此本阶段不代表生产链路已可发布。

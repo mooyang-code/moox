@@ -63,7 +63,7 @@
 | Task 1 命名与完整快照对象 | 待合入 | 已完成并提交 `34da1414`，规格/质量审查及主 Agent 七包复跑、三个入口 build 通过 | 本实施分支 Task 1 已勾选；最终合入前随完整链路再验证 |
 | Task 3 Gateway 默认路由 | 待实施/合入 | 四方法 Collector-only 路由与真实 seed 派生测试提交 `396683ae`，分项审查及主 Agent Admin/Gateway 复跑通过 | 完成生产 adapter、服务鉴权和真实 resolver 测试，不能仅凭路由测试勾选 Task 3 |
 | Task 9 门禁前置项 | 待完成 | 架构模块清单、事件名和空可选 placement 修复提交 `391e4b2a`，分项审查与两项完整门禁复跑通过 | 所有最终门禁重新执行，不以局部修复推断整体验收 PASS |
-| Task 2 | 实施中 | Storage worker 已开始精确失败测试 | 完成回执、硬截止、查询与两阶段审查 |
+| Task 2 | 实现完成，独立审查 PASS，待提交 | 回执、硬截止、查询、series tag 与精确 RowKey frequency spelling 已实现；主 Agent Storage/Collector 全模块测试、focused race、proto 生成、Storage build 通过 | Task 3 仍需补生产 Record adapter 和四 RPC 鉴权；Task 2 单项不证明完整生产链路 |
 | Task 4、5、6、7、8 | 待实施 | 无可验收的完整实现 | 严格按第 3 节依赖顺序实施 |
 
 若独立工作区已被修改，先重新读取本表涉及文件并按实际 diff 更新执行记录；不撤销已有工作，也不把未完成改动直接发布。每项任务完成必须同时具备实现、针对性测试、审查闭环和提交记录。
@@ -659,6 +659,11 @@ git diff --check
 - Modify: `docs/架构总览.md`、`scripts/test/contract/test-docs-architecture.sh`，只修复已核验的 Workspace 模块清单及其数量断言漂移
 - Modify: `docs/策略模块架构设计.md`，仅补回当前发布事件 `LogicalAccountTargetWeightRequested` 的精确名称，不改 Strategy/Trade 行为
 - Modify: `scripts/deploy/deploy-moox.sh`、`scripts/test/contract/test-deploy-moox-gateway.sh`，修复合法空可选 Trade placement 导致 overlay/Admin 启动 `read` EOF 退出；非法配置仍须拒绝
+- Modify: `modules/cli/internal/command/collector_task_purge.go`；Create: `collector_task_purge_proxy_test.go`，修复 Workspace vet 暴露的 protobuf 锁浅拷贝及嵌套 Page 共享，不执行 purge
+- Modify: `packages/tradeeventpb/trade_events.proto` 及生成文件、直接依赖的测试 fixture（包含 `reporter_test.go`、`target_timeout_test.go` 的 helper 调用），移除无生产调用的历史兼容消息/字段，不改 Trade store 业务字段；新增 descriptor 回归，不放宽 greenfield 门禁
+- Modify: `modules/strategy/internal/trigger/modern_test.go`，仅将已过 7 天去重 TTL 的固定旧日期 fixture 改为当前时钟的相同 17 分钟过期距离，不改生产 TTL 或拒绝/确认断言
+- Modify: `modules/collector/internal/bootstrap/bootstrap.go`，修复 Workspace vet 发现的 runtime range 值拷贝 atomic.Bool，沿用相邻调度循环的索引取指针方式
+- Modify: `web/src/views/collector/task-instances/task-instances.vue` 及测试、`scripts/check/check-collector-planned-node-removal.mjs`、`web/scripts/check-collector-task-style.mjs`，以实际 11 列合计 1600 校准 scroll 与两份断言，保留全部禁用 token 检查
 - Create: `docs/ops/collector-period-universe-release.md`
 - Modify: 本计划，逐项附实际执行证据，不提前勾选
 

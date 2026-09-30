@@ -41,6 +41,7 @@ type Options struct {
 	MaxEventBytes           int
 	ProcessedEventRetention time.Duration
 	DisableSyncWrites       bool
+	PeriodNow               func() time.Time
 }
 
 type OutboxEntry struct {
@@ -65,6 +66,7 @@ type Store struct {
 	datasetWriteMu          sync.RWMutex
 	outboxMu                sync.Mutex
 	periodMu                sync.Mutex
+	periodNow               func() time.Time
 	outboxPending           atomic.Int64
 	outboxRevision          atomic.Uint64
 	outboxHintKnown         atomic.Bool
@@ -95,6 +97,9 @@ func Open(opts Options) (*Store, error) {
 	if opts.ProcessedEventRetention <= 0 {
 		opts.ProcessedEventRetention = defaultProcessedEventRetention
 	}
+	if opts.PeriodNow == nil {
+		opts.PeriodNow = time.Now
+	}
 	if err := ensureLayout(opts.Path); err != nil {
 		return nil, err
 	}
@@ -112,7 +117,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	historyCtx, historyCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, periodNow: opts.PeriodNow, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}
 	store.startPeriodFinalizer()
 	return store, nil
 }

@@ -19,6 +19,20 @@ message PrimaryEnsureDatasetPeriodReq {
 message PrimaryEnsureDatasetPeriodRsp {
   common.RetInfo ret_info = 1;
   string status = 2;
+  int64 deadline_at = 3;
+}
+
+message PrimaryGetDatasetPeriodStatusReq {
+  common.AuthInfo auth_info = 1;
+  DatasetPeriodExpectation expectation = 2;
+}
+
+message PrimaryGetDatasetPeriodStatusRsp {
+  common.RetInfo ret_info = 1;
+  string status = 2;
+  string series_hash = 3;
+  uint32 expected_count = 4;
+  int64 deadline_at = 5;
 }
 
 message PrimaryCommitTimeSeriesBatchReq {
@@ -33,6 +47,7 @@ message PrimaryCommitTimeSeriesBatchRsp {
   common.RetInfo ret_info = 1;
   repeated RowKey keys = 2;
   string period_status = 3;
+  repeated uint32 accepted_series_indexes = 4;
 }
 
 message PrimaryRecordDatasetPeriodFailuresReq {
@@ -44,6 +59,7 @@ message PrimaryRecordDatasetPeriodFailuresReq {
 message PrimaryRecordDatasetPeriodFailuresRsp {
   common.RetInfo ret_info = 1;
   string period_status = 2;
+  repeated DatasetPeriodFailureResult results = 3;
 }
 
 message PrimaryCommitInputReq {
@@ -209,6 +225,7 @@ service PrimaryStore {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
   rpc EnsureDatasetPeriod(PrimaryEnsureDatasetPeriodReq) returns (PrimaryEnsureDatasetPeriodRsp);
+  rpc GetDatasetPeriodStatus(PrimaryGetDatasetPeriodStatusReq) returns (PrimaryGetDatasetPeriodStatusRsp);
   rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
   rpc RecordDatasetPeriodFailures(PrimaryRecordDatasetPeriodFailuresReq) returns (PrimaryRecordDatasetPeriodFailuresRsp);
   rpc CommitInput(PrimaryCommitInputReq) returns (PrimaryCommitInputRsp);

@@ -208,6 +208,8 @@ func RegisterDataNodeRuntimeService(s server.Service, svr DataNodeRuntimeService
 type DataNodePeriodRuntimeService interface {
 	EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq) (*EnsureDatasetPeriodRsp, error)
 
+	GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq) (*GetDatasetPeriodStatusRsp, error)
+
 	CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq) (*CommitTimeSeriesBatchRsp, error)
 
 	RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq) (*RecordDatasetPeriodFailuresRsp, error)
@@ -221,6 +223,24 @@ func DataNodePeriodRuntimeService_EnsureDatasetPeriod_Handler(svr interface{}, c
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(DataNodePeriodRuntimeService).EnsureDatasetPeriod(ctx, reqbody.(*EnsureDatasetPeriodReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodePeriodRuntimeService_GetDatasetPeriodStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetDatasetPeriodStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodePeriodRuntimeService).GetDatasetPeriodStatus(ctx, reqbody.(*GetDatasetPeriodStatusReq))
 	}
 
 	var rsp interface{}
@@ -275,6 +295,10 @@ var DataNodePeriodRuntimeServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataNodePeriodRuntime/EnsureDatasetPeriod",
 			Func: DataNodePeriodRuntimeService_EnsureDatasetPeriod_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodePeriodRuntime/GetDatasetPeriodStatus",
+			Func: DataNodePeriodRuntimeService_GetDatasetPeriodStatus_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.DataNodePeriodRuntime/CommitTimeSeriesBatch",
@@ -572,6 +596,9 @@ type UnimplementedDataNodePeriodRuntime struct{}
 func (s *UnimplementedDataNodePeriodRuntime) EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq) (*EnsureDatasetPeriodRsp, error) {
 	return nil, errors.New("rpc EnsureDatasetPeriod of service DataNodePeriodRuntime is not implemented")
 }
+func (s *UnimplementedDataNodePeriodRuntime) GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq) (*GetDatasetPeriodStatusRsp, error) {
+	return nil, errors.New("rpc GetDatasetPeriodStatus of service DataNodePeriodRuntime is not implemented")
+}
 func (s *UnimplementedDataNodePeriodRuntime) CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq) (*CommitTimeSeriesBatchRsp, error) {
 	return nil, errors.New("rpc CommitTimeSeriesBatch of service DataNodePeriodRuntime is not implemented")
 }
@@ -789,6 +816,8 @@ func (c *DataNodeRuntimeClientProxyImpl) CleanupExpiredBuckets(ctx context.Conte
 type DataNodePeriodRuntimeClientProxy interface {
 	EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq, opts ...client.Option) (rsp *EnsureDatasetPeriodRsp, err error)
 
+	GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq, opts ...client.Option) (rsp *GetDatasetPeriodStatusRsp, err error)
+
 	CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq, opts ...client.Option) (rsp *CommitTimeSeriesBatchRsp, err error)
 
 	RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq, opts ...client.Option) (rsp *RecordDatasetPeriodFailuresRsp, err error)
@@ -817,6 +846,26 @@ func (c *DataNodePeriodRuntimeClientProxyImpl) EnsureDatasetPeriod(ctx context.C
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &EnsureDatasetPeriodRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodePeriodRuntimeClientProxyImpl) GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq, opts ...client.Option) (*GetDatasetPeriodStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/GetDatasetPeriodStatus")
+	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodePeriodRuntime")
+	msg.WithCalleeMethod("GetDatasetPeriodStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetDatasetPeriodStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

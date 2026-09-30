@@ -15,6 +15,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
@@ -558,6 +559,10 @@ func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.Collect
 	if len(items) == 0 || strings.TrimSpace(items[0].SeriesHash) == "" || items[0].ExpectedCount == 0 {
 		return fmt.Errorf("task %s has no materialized series expectation", task.TaskID)
 	}
+	if _, err := marketdata.ParseFrequency(frequency); err != nil {
+		return fmt.Errorf("task %s has invalid period frequency %q: %w", task.TaskID, frequency, err)
+	}
+	periodFrequency := strings.TrimSpace(frequency)
 	if s.Storage == nil || strings.TrimSpace(s.StorageTarget) == "" {
 		// Lightweight scheduler unit tests may not wire Storage. Production
 		// bootstrap always provides it and integration tests cover this boundary.
@@ -577,10 +582,10 @@ func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.Collect
 		if item.SeriesIndex != uint32(index) || item.SeriesHash != items[0].SeriesHash || item.ExpectedCount != items[0].ExpectedCount || strings.TrimSpace(item.SubjectID) == "" {
 			return fmt.Errorf("task %s has invalid immutable period series snapshot at index %d", task.TaskID, index)
 		}
-		snapshot = append(snapshot, &storagepb.DatasetPeriodSeries{SeriesIndex: item.SeriesIndex, SubjectId: item.SubjectID})
+		snapshot = append(snapshot, &storagepb.DatasetPeriodSeries{SeriesIndex: item.SeriesIndex, SubjectId: item.SubjectID, SeriesTag: collectionItemSeriesTag(task.SpaceID, item)})
 	}
 	return periodClient.EnsureDatasetPeriod(ctx, &storagepb.DatasetPeriodExpectation{
-		SpaceId: task.SpaceID, DatasetId: items[0].DatasetID, Frequency: strings.ToLower(strings.TrimSpace(frequency)),
+		SpaceId: task.SpaceID, DatasetId: items[0].DatasetID, Frequency: periodFrequency,
 		PeriodTime: period.UTC().Unix(), SeriesHash: items[0].SeriesHash, ExpectedCount: items[0].ExpectedCount, DeadlineAt: deadline.Unix(), SeriesSnapshot: snapshot,
 	})
 }
@@ -1293,10 +1298,10 @@ func (s *Scheduler) reportPendingPeriodFailures(ctx context.Context, spaceID str
 			retryCanReport[retry.RetryKey] = false
 			continue
 		}
-		frequency := strings.ToLower(strings.TrimSpace(firstNonEmpty(retry.Frequency, item.Frequency)))
-		if frequency == "" {
+		frequency := strings.TrimSpace(firstNonEmpty(retry.Frequency, item.Frequency))
+		if _, frequencyErr := marketdata.ParseFrequency(frequency); frequencyErr != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("permanent retry %s has no frequency", retry.RetryKey)
+				firstErr = fmt.Errorf("permanent retry %s has invalid frequency: %w", retry.RetryKey, frequencyErr)
 			}
 			retryCanReport[retry.RetryKey] = false
 			continue
@@ -1835,8 +1840,12 @@ func periodSeriesSnapshotFromItems(task domain.CollectionTask, datasetID, freque
 	if len(items) == 0 {
 		return domain.PeriodSeriesSnapshot{}, fmt.Errorf("collection task %s expands to no series", task.TaskID)
 	}
+	if _, err := marketdata.ParseFrequency(frequency); err != nil {
+		return domain.PeriodSeriesSnapshot{}, fmt.Errorf("collection task %s has invalid period frequency %q: %w", task.TaskID, frequency, err)
+	}
+	periodFrequency := strings.TrimSpace(frequency)
 	snapshot := domain.PeriodSeriesSnapshot{
-		Key:        domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: strings.ToLower(strings.TrimSpace(frequency)), PeriodTime: period.UTC()},
+		Key:        domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: periodFrequency, PeriodTime: period.UTC()},
 		SeriesHash: items[0].SeriesHash, ExpectedCount: uint32(len(items)),
 		Entries: make([]domain.PeriodSeriesSnapshotEntry, 0, len(items)),
 	}

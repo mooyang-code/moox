@@ -13,6 +13,7 @@ import "dataset_markers.proto";
 message DatasetPeriodSeries {
   uint32 series_index = 1;
   string subject_id = 2;
+  string series_tag = 3;
 }
 
 message DatasetPeriodExpectation {
@@ -35,6 +36,21 @@ message EnsureDatasetPeriodReq {
 message EnsureDatasetPeriodRsp {
   common.RetInfo ret_info = 1;
   string status = 2;
+  int64 deadline_at = 3;
+}
+
+message GetDatasetPeriodStatusReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  DatasetPeriodExpectation expectation = 3;
+}
+
+message GetDatasetPeriodStatusRsp {
+  common.RetInfo ret_info = 1;
+  string status = 2;
+  string series_hash = 3;
+  uint32 expected_count = 4;
+  int64 deadline_at = 5;
 }
 
 message TimeSeriesBatchRow {
@@ -55,6 +71,7 @@ message CommitTimeSeriesBatchRsp {
   common.RetInfo ret_info = 1;
   repeated RowKey keys = 2;
   string period_status = 3;
+  repeated uint32 accepted_series_indexes = 4;
 }
 
 message RecordDatasetPeriodFailuresReq {
@@ -67,6 +84,19 @@ message RecordDatasetPeriodFailuresReq {
 message RecordDatasetPeriodFailuresRsp {
   common.RetInfo ret_info = 1;
   string period_status = 2;
+  repeated DatasetPeriodFailureResult results = 3;
+}
+
+enum PeriodFailureDisposition {
+  PERIOD_FAILURE_DISPOSITION_UNSPECIFIED = 0;
+  PERIOD_FAILURE_DISPOSITION_RECORDED = 1;
+  PERIOD_FAILURE_DISPOSITION_ALREADY_SUCCEEDED = 2;
+  PERIOD_FAILURE_DISPOSITION_MISSED_DEADLINE = 3;
+}
+
+message DatasetPeriodFailureResult {
+  uint32 series_index = 1;
+  PeriodFailureDisposition disposition = 2;
 }
 
 message CommitInputReq {
@@ -263,6 +293,7 @@ service DataNodeRuntime {
 // from the general row RPC so existing DataNodeRuntime clients remain narrow.
 service DataNodePeriodRuntime {
   rpc EnsureDatasetPeriod(EnsureDatasetPeriodReq) returns (EnsureDatasetPeriodRsp);
+  rpc GetDatasetPeriodStatus(GetDatasetPeriodStatusReq) returns (GetDatasetPeriodStatusRsp);
   rpc CommitTimeSeriesBatch(CommitTimeSeriesBatchReq) returns (CommitTimeSeriesBatchRsp);
   rpc RecordDatasetPeriodFailures(RecordDatasetPeriodFailuresReq) returns (RecordDatasetPeriodFailuresRsp);
 }

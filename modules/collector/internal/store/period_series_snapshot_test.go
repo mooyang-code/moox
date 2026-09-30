@@ -47,6 +47,60 @@ func TestPeriodSeriesSnapshotIsImmutableAndNextPeriodUsesNewMembership(t *testin
 	require.Equal(t, uint32(1), next.ExpectedCount)
 }
 
+func TestPeriodSeriesSnapshotSeparatesMonthAndMinuteFrequency(t *testing.T) {
+	ctx := context.Background()
+	s := newCollectorStore(t)
+	period := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	month := testPeriodSnapshot(period, "BTC-USDT")
+	month.Key.Frequency = "1M"
+	month.Entries[0].Frequency = "1M"
+	minute := testPeriodSnapshot(period, "BTC-USDT")
+
+	storedMonth, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, month)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, "1M", storedMonth.Key.Frequency)
+	storedMinute, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, minute)
+	require.NoError(t, err)
+	require.True(t, created, "a minute snapshot at the same timestamp must not collide with a month snapshot")
+	require.Equal(t, "1m", storedMinute.Key.Frequency)
+
+	loadedMonth, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1M", PeriodTime: period})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "1M", loadedMonth.Entries[0].Frequency)
+	loadedMinute, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "1m", loadedMinute.Entries[0].Frequency)
+}
+
+func TestPeriodSeriesSnapshotPreservesHourlyFrequencyIdentity(t *testing.T) {
+	ctx := context.Background()
+	s := newCollectorStore(t)
+	period := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	historical := testPeriodSnapshot(period, "BTC-USDT")
+	historical.Key.Frequency = "1H"
+	historical.Entries[0].Frequency = "1H"
+	canonical := testPeriodSnapshot(period, "BTC-USDT")
+	canonical.Key.Frequency = "1h"
+	canonical.Entries[0].Frequency = "1h"
+
+	storedHistorical, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, historical)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, "1H", storedHistorical.Key.Frequency)
+	storedCanonical, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, canonical)
+	require.NoError(t, err)
+	require.True(t, created, "the canonical 1h key must not alias the catalog's historical 1H spelling")
+	require.Equal(t, "1h", storedCanonical.Key.Frequency)
+
+	loaded, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, historical.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "1H", loaded.Entries[0].Frequency)
+}
+
 func TestCreatePeriodSeriesSnapshotIfAbsentIsIdempotentForConcurrentSameSnapshot(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	firstStore := openCollectorStoreAt(t, dbPath)
@@ -194,12 +248,17 @@ func TestPeriodSeriesSnapshotContractValidatesEnvelopeAndDistinguishesAbsent(t *
 	input.Key.SpaceID = " crypto "
 	input.Key.DatasetID = " bars "
 	input.Key.Frequency = " 1M "
+	for index := range input.Entries {
+		input.Entries[index].Frequency = " 1M "
+	}
 	input.Key.PeriodTime = period.In(time.FixedZone("UTC+8", 8*60*60))
 	input.SeriesHash = strings.ToUpper(input.SeriesHash)
 	snapshot, created, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, input)
 	require.NoError(t, err)
 	require.True(t, created)
-	require.Equal(t, testPeriodSnapshot(period, "BTC-USDT", "ETH-USDT").Key, snapshot.Key)
+	wantKey := testPeriodSnapshot(period, "BTC-USDT", "ETH-USDT").Key
+	wantKey.Frequency = "1M"
+	require.Equal(t, wantKey, snapshot.Key)
 	require.Equal(t, uint32(len(snapshot.Entries)), snapshot.ExpectedCount)
 	require.Equal(t, snapshot.Entries[0].SeriesHash, snapshot.SeriesHash)
 	for _, entry := range snapshot.Entries {

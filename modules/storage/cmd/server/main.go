@@ -1032,6 +1032,12 @@ func (a *dataNodeProxyAdapter) EnsureDatasetPeriod(ctx context.Context, req *pb.
 	}
 	return a.periodProxy.EnsureDatasetPeriod(ctx, req)
 }
+func (a *dataNodeProxyAdapter) GetDatasetPeriodStatus(ctx context.Context, req *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error) {
+	if a == nil || a.periodProxy == nil {
+		return nil, errors.New("DataNode period runtime is unavailable")
+	}
+	return a.periodProxy.GetDatasetPeriodStatus(ctx, req)
+}
 func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
 	if a == nil || a.periodProxy == nil {
 		return nil, errors.New("DataNode period runtime is unavailable")

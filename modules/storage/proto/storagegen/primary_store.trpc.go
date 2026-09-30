@@ -24,6 +24,8 @@ type PrimaryStoreService interface {
 
 	EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq) (*PrimaryEnsureDatasetPeriodRsp, error)
 
+	GetDatasetPeriodStatus(ctx context.Context, req *PrimaryGetDatasetPeriodStatusReq) (*PrimaryGetDatasetPeriodStatusRsp, error)
+
 	CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq) (*PrimaryCommitTimeSeriesBatchRsp, error)
 
 	RecordDatasetPeriodFailures(ctx context.Context, req *PrimaryRecordDatasetPeriodFailuresReq) (*PrimaryRecordDatasetPeriodFailuresRsp, error)
@@ -83,6 +85,24 @@ func PrimaryStoreService_EnsureDatasetPeriod_Handler(svr interface{}, ctx contex
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(PrimaryStoreService).EnsureDatasetPeriod(ctx, reqbody.(*PrimaryEnsureDatasetPeriodReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_GetDatasetPeriodStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryGetDatasetPeriodStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).GetDatasetPeriodStatus(ctx, reqbody.(*PrimaryGetDatasetPeriodStatusReq))
 	}
 
 	var rsp interface{}
@@ -395,6 +415,10 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_EnsureDatasetPeriod_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.PrimaryStore/GetDatasetPeriodStatus",
+			Func: PrimaryStoreService_GetDatasetPeriodStatus_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
 			Func: PrimaryStoreService_CommitTimeSeriesBatch_Handler,
 		},
@@ -479,6 +503,9 @@ func (s *UnimplementedPrimaryStore) UpsertFields(ctx context.Context, req *Prima
 func (s *UnimplementedPrimaryStore) EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq) (*PrimaryEnsureDatasetPeriodRsp, error) {
 	return nil, errors.New("rpc EnsureDatasetPeriod of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) GetDatasetPeriodStatus(ctx context.Context, req *PrimaryGetDatasetPeriodStatusReq) (*PrimaryGetDatasetPeriodStatusRsp, error) {
+	return nil, errors.New("rpc GetDatasetPeriodStatus of service PrimaryStore is not implemented")
+}
 func (s *UnimplementedPrimaryStore) CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq) (*PrimaryCommitTimeSeriesBatchRsp, error) {
 	return nil, errors.New("rpc CommitTimeSeriesBatch of service PrimaryStore is not implemented")
 }
@@ -540,6 +567,8 @@ type PrimaryStoreClientProxy interface {
 	UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq, opts ...client.Option) (rsp *PrimaryUpsertFieldsRsp, err error)
 
 	EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq, opts ...client.Option) (rsp *PrimaryEnsureDatasetPeriodRsp, err error)
+
+	GetDatasetPeriodStatus(ctx context.Context, req *PrimaryGetDatasetPeriodStatusReq, opts ...client.Option) (rsp *PrimaryGetDatasetPeriodStatusRsp, err error)
 
 	CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq, opts ...client.Option) (rsp *PrimaryCommitTimeSeriesBatchRsp, err error)
 
@@ -617,6 +646,26 @@ func (c *PrimaryStoreClientProxyImpl) EnsureDatasetPeriod(ctx context.Context, r
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PrimaryEnsureDatasetPeriodRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) GetDatasetPeriodStatus(ctx context.Context, req *PrimaryGetDatasetPeriodStatusReq, opts ...client.Option) (*PrimaryGetDatasetPeriodStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/GetDatasetPeriodStatus")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("GetDatasetPeriodStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrimaryGetDatasetPeriodStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -396,7 +396,10 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 			return nil, nil, false, fmt.Errorf("dataset %s target_data_time is invalid: %w", datasetID, err)
 		}
 		if expectation == nil {
-			expectation = &storagepb.DatasetPeriodExpectation{SpaceId: req.SpaceID, DatasetId: datasetID, Frequency: strings.ToLower(strings.TrimSpace(req.Frequency)), PeriodTime: target.UTC().Unix(), SeriesHash: binding.hash, ExpectedCount: binding.count}
+			if _, err := marketdata.ParseFrequency(req.Frequency); err != nil {
+				return nil, nil, false, fmt.Errorf("dataset %s period frequency is invalid: %w", datasetID, err)
+			}
+			expectation = &storagepb.DatasetPeriodExpectation{SpaceId: req.SpaceID, DatasetId: datasetID, Frequency: strings.TrimSpace(req.Frequency), PeriodTime: target.UTC().Unix(), SeriesHash: binding.hash, ExpectedCount: binding.count}
 		} else if expectation.GetSeriesHash() != binding.hash || expectation.GetExpectedCount() != binding.count || expectation.GetPeriodTime() != target.UTC().Unix() {
 			return nil, nil, false, fmt.Errorf("dataset %s has mixed period expectation in one SCF request", datasetID)
 		}
@@ -624,6 +627,17 @@ func stockProviderExchange(subjectID string) marketdata.ExchangeID {
 }
 
 func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {
+	if strings.TrimSpace(req.Frequency) != "" {
+		requestedFrequency, err := marketdata.ParseFrequency(req.Frequency)
+		if err != nil {
+			return nil, fmt.Errorf("request frequency is invalid: %w", err)
+		}
+		barFrequency, err := marketdata.ParseFrequency(bar.Frequency)
+		if err != nil || requestedFrequency != barFrequency {
+			return nil, fmt.Errorf("provider frequency %q does not match request frequency %q", bar.Frequency, req.Frequency)
+		}
+		bar.Frequency = strings.TrimSpace(req.Frequency)
+	}
 	if (p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID) &&
 		(p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity) {
 		name := ""
@@ -639,7 +653,9 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 		bar.SubjectID = strings.ToUpper(strings.TrimSpace(bar.SubjectID))
 	}
 	seriesTag := strings.TrimSpace(p.SeriesTag)
-	if seriesTag == "" {
+	if p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID {
+		seriesTag = "default"
+	} else if seriesTag == "" {
 		seriesTag = defaultMarketSeriesTag(bar.ProviderID, firstNonEmptyString(bar.SourceID, req.SourceID), req.MarketType)
 	}
 	fields := []*storagepb.FieldValue{
