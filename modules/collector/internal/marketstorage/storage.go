@@ -133,28 +133,35 @@ func (w *storageWriter) EnsureDatasetPeriod(ctx context.Context, expectation *st
 			return domain.PeriodStorageState{}, err
 		}
 		response, err := w.period.EnsureDatasetPeriod(ctx, &storagepb.PrimaryEnsureDatasetPeriodReq{AuthInfo: w.authInfo, Expectation: expectation})
-		if err == nil {
+		var unknownOutcomeErr error
+		if err != nil {
+			unknownOutcomeErr = fmt.Errorf("ensure dataset period: %w", err)
+		} else {
 			if response == nil {
 				return domain.PeriodStorageState{}, fmt.Errorf("ensure dataset period: empty response")
 			}
-			if ret := response.GetRetInfo(); ret != nil && ret.GetCode() == storagepb.ErrorCode_CONFLICT {
+			ret := response.GetRetInfo()
+			if ret != nil && ret.GetCode() == storagepb.ErrorCode_CONFLICT {
 				return domain.PeriodStorageState{}, fmt.Errorf("%w: %s", ErrDatasetPeriodConflict, ret.GetMsg())
 			}
-			if err := ensureStorageOK("ensure dataset period", response.GetRetInfo()); err != nil {
-				return domain.PeriodStorageState{}, err
+			if ret != nil && ret.GetCode() == storagepb.ErrorCode_INNER_ERR {
+				unknownOutcomeErr = ensureStorageOK("ensure dataset period", ret)
+			} else {
+				if err := ensureStorageOK("ensure dataset period", ret); err != nil {
+					return domain.PeriodStorageState{}, err
+				}
+				state, err := periodStorageStateFromEnsure(expectation, response)
+				if err != nil {
+					return domain.PeriodStorageState{}, err
+				}
+				return state, nil
 			}
-			state, err := periodStorageStateFromEnsure(expectation, response)
-			if err != nil {
-				return domain.PeriodStorageState{}, err
-			}
-			return state, nil
 		}
-		ensureErr := fmt.Errorf("ensure dataset period: %w", err)
 		state, statusErr := w.GetDatasetPeriodStatus(ctx, expectation)
 		if statusErr == nil {
 			return state, nil
 		}
-		lastErr = errors.Join(ensureErr, fmt.Errorf("read status after Ensure acknowledgement loss: %w", statusErr))
+		lastErr = errors.Join(unknownOutcomeErr, fmt.Errorf("read status after Ensure unknown outcome: %w", statusErr))
 		if err := ctx.Err(); err != nil {
 			return domain.PeriodStorageState{}, err
 		}

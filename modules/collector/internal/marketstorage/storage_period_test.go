@@ -34,6 +34,67 @@ func TestEnsureDatasetPeriodRecoversLostAckWithOriginalStorageDeadline(t *testin
 	require.NotZero(t, state.ConfirmedAt)
 }
 
+func TestEnsureDatasetPeriodRecoversInnerErrorWithAuthoritativeStatus(t *testing.T) {
+	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	expectation := validStorageExpectation(period)
+	access := &periodAccessStub{
+		ensure: &storagepb.PrimaryEnsureDatasetPeriodRsp{
+			RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "DataNode internal RPC failed"},
+		},
+		status: &storagepb.PrimaryGetDatasetPeriodStatusRsp{
+			RetInfo: storageSuccess(), Status: domain.PeriodStatusWaiting, SeriesHash: expectation.SeriesHash,
+			ExpectedCount: expectation.ExpectedCount, DeadlineAt: period.Add(time.Minute).Unix(),
+		},
+	}
+
+	state, err := (&storageWriter{period: access}).EnsureDatasetPeriod(context.Background(), expectation)
+	require.NoError(t, err)
+	require.Equal(t, 1, access.ensureCalls)
+	require.Equal(t, 1, access.statusCalls, "retryable INNER_ERR is an unknown outcome and must be checked with read-only GetStatus")
+	require.Equal(t, domain.PeriodStatusWaiting, state.Status)
+	require.Equal(t, period.Add(time.Minute), state.DeadlineAt)
+}
+
+func TestEnsureDatasetPeriodDoesNotProbeNonRetryableStorageErrors(t *testing.T) {
+	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name         string
+		code         storagepb.ErrorCode
+		wantConflict bool
+	}{
+		{name: "invalid parameter", code: storagepb.ErrorCode_INVALID_PARAM},
+		{name: "permission denied", code: storagepb.ErrorCode_NO_PERMISSION},
+		{name: "conflict", code: storagepb.ErrorCode_CONFLICT, wantConflict: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			access := &periodAccessStub{ensure: &storagepb.PrimaryEnsureDatasetPeriodRsp{
+				RetInfo: &storagepb.RetInfo{Code: tc.code, Msg: "rejected"},
+			}}
+			_, err := (&storageWriter{period: access}).EnsureDatasetPeriod(context.Background(), validStorageExpectation(period))
+			require.Error(t, err)
+			if tc.wantConflict {
+				require.ErrorIs(t, err, ErrDatasetPeriodConflict)
+			}
+			require.Equal(t, 1, access.ensureCalls)
+			require.Zero(t, access.statusCalls, "non-retryable rejection must not be treated as an unknown write outcome")
+		})
+	}
+}
+
+func TestEnsureDatasetPeriodBoundsRetriesWhenInnerErrorStatusIsNotFound(t *testing.T) {
+	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	access := &periodAccessStub{
+		ensure: &storagepb.PrimaryEnsureDatasetPeriodRsp{
+			RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "DataNode internal RPC failed"},
+		},
+		status: &storagepb.PrimaryGetDatasetPeriodStatusRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_NOT_FOUND}},
+	}
+	_, err := (&storageWriter{period: access}).EnsureDatasetPeriod(context.Background(), validStorageExpectation(period))
+	require.Error(t, err)
+	require.Equal(t, 3, access.ensureCalls, "Ensure retries remain bounded")
+	require.Equal(t, 3, access.statusCalls, "each unknown outcome is checked before retrying Ensure")
+}
+
 func TestEnsureDatasetPeriodRejectsInvalidStorageResponse(t *testing.T) {
 	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
