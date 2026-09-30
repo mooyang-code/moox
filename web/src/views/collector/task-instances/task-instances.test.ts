@@ -3,6 +3,23 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("shared collector task instances", () => {
+  it("matches the main table scroll width to its fixed columns", () => {
+    const source = readFileSync(resolve(__dirname, "task-instances.vue"), "utf8");
+    const document = new DOMParser().parseFromString(source, "text/html");
+    const template = document.querySelector("template") as HTMLTemplateElement;
+    const table = template.content.querySelector("a-table")!;
+    const columns = table.querySelector("template") as HTMLTemplateElement;
+    const widths = Array.from(columns.content.querySelectorAll("a-table-column"), (column) =>
+      Number(column.getAttribute(":width")),
+    );
+
+    expect(widths).toHaveLength(11);
+    expect(widths.every((width) => Number.isFinite(width) && width > 0)).toBe(true);
+    const totalWidth = widths.reduce((total, width) => total + width, 0);
+    expect(totalWidth).toBe(1600);
+    expect(table.getAttribute(":scroll")).toBe(`{ x: ${totalWidth} }`);
+  });
+
   it("renders one provider request with independent write targets", () => {
     const source = readFileSync(resolve(__dirname, "task-instances.vue"), "utf8");
 

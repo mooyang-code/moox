@@ -27,7 +27,7 @@ const forbidden = ['planned_exec_node', 'PlannedExecNode', 'c_planned_exec_node'
 const remaining = forbidden.filter((token) => joined.includes(token));
 const requirements = [
   [web.includes('pageSize: 20'), 'frontend default page size 20'],
-  [web.includes(':scroll="{ x: 1350 }"'), 'reduced table scroll width'],
+  [web.includes(':scroll="{ x: 1600 }"'), 'table scroll width matches shared-instance columns'],
   [!proto.includes('reserved'), 'protobuf reservations removed'],
   [!proto.includes('string planned_exec_node = 12;'), 'removed protobuf field declaration'],
   [
