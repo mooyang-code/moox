@@ -63,7 +63,7 @@
 | Task 1 命名与完整快照对象 | 待合入 | 已完成并提交 `34da1414`，规格/质量审查及主 Agent 七包复跑、三个入口 build 通过 | 本实施分支 Task 1 已勾选；最终合入前随完整链路再验证 |
 | Task 3 Gateway 默认路由 | 待实施/合入 | 四方法 Collector-only 路由与真实 seed 派生测试提交 `396683ae`，分项审查及主 Agent Admin/Gateway 复跑通过 | 完成生产 adapter、服务鉴权和真实 resolver 测试，不能仅凭路由测试勾选 Task 3 |
 | Task 9 门禁前置项 | 待完成 | 架构模块清单、事件名和空可选 placement 修复提交 `391e4b2a`，分项审查与两项完整门禁复跑通过 | 所有最终门禁重新执行，不以局部修复推断整体验收 PASS |
-| Task 2 | 实现完成，独立审查 PASS，待提交 | 回执、硬截止、查询、series tag 与精确 RowKey frequency spelling 已实现；主 Agent Storage/Collector 全模块测试、focused race、proto 生成、Storage build 通过 | Task 3 仍需补生产 Record adapter 和四 RPC 鉴权；Task 2 单项不证明完整生产链路 |
+| Task 2 | 完成并提交 `caea6e1c` | 规格/质量审查均 PASS；主 Agent Storage/Collector 全模块测试、Pebble focused race、Proto 生成、Storage build 通过 | Task 3 仍需补生产 Record adapter 和四 RPC 鉴权；Task 2 单项不证明完整生产链路 |
 | Task 4、5、6、7、8 | 待实施 | 无可验收的完整实现 | 严格按第 3 节依赖顺序实施 |
 
 若独立工作区已被修改，先重新读取本表涉及文件并按实际 diff 更新执行记录；不撤销已有工作，也不把未完成改动直接发布。每项任务完成必须同时具备实现、针对性测试、审查闭环和提交记录。
@@ -182,9 +182,9 @@ git diff --check
 - Modify: `modules/collector/internal/marketfetch/scheduler.go`、`modules/collector/internal/marketfetch/scheduler_test.go`，在 Ensure 中携带最终 storage-series tag
 - Modify: `modules/storage/cmd/server/main.go` 中新增查询转发，使本任务协议可编译；完整代理契约在 Task 3 验证
 
-- [ ] **2.1 先补 Store 层失败测试。** 新增 `TestPeriodFailureDeadlineFence`、`TestPeriodFailureReplayAfterFinalization`、`TestPeriodFailureTerminalValidatesIndexes`、`TestPeriodCommitAcceptedIndexes`、`TestPeriodCommitRejectsWrongSeriesBinding`、`TestPeriodSeriesSnapshotStorageIdentity`、`TestPeriodStatusQueryDoesNotCreate`。Commit/Record/finalizer 共用可注入时钟，分别测试 deadline 前一刻、恰好 deadline、之后；测试 Record/finalizer 两种锁顺序，不能靠 sleep 控制竞态。
-- [ ] **2.2 运行失败测试。** `go test -count=1 ./modules/storage/internal/service/datanode/pebble -run 'TestPeriod(Failure|CommitAccepted|CommitRejects|SeriesSnapshot|StatusQuery)'`。当前代码应出现终态错误 ACK、截止后接收失败、无写入却宣称 Commit 成功、错绑 storage series 或缺查询方法的失败；记录具体断言。
-- [ ] **2.3 定义逐 index 回执。** 两层 Record 响应在字段 3 增加相同结果列表；仅返回请求中去重后的 index，稳定按 index 排序。成功响应必须完整覆盖请求，不能用 `UNSPECIFIED` 表示成功。
+- [x] **2.1 先补 Store 层失败测试。** 新增 `TestPeriodFailureDeadlineFence`、`TestPeriodFailureReplayAfterFinalization`、`TestPeriodFailureTerminalValidatesIndexes`、`TestPeriodCommitAcceptedIndexes`、`TestPeriodCommitRejectsWrongSeriesBinding`、`TestPeriodSeriesSnapshotStorageIdentity`、`TestPeriodStatusQueryDoesNotCreate`。Commit/Record/finalizer 共用可注入时钟，分别测试 deadline 前一刻、恰好 deadline、之后；测试 Record/finalizer 两种锁顺序，不能靠 sleep 控制竞态。
+- [x] **2.2 运行失败测试。** `go test -count=1 ./modules/storage/internal/service/datanode/pebble -run 'TestPeriod(Failure|CommitAccepted|CommitRejects|SeriesSnapshot|StatusQuery)'`。当前代码应出现终态错误 ACK、截止后接收失败、无写入却宣称 Commit 成功、错绑 storage series 或缺查询方法的失败；记录具体断言。
+- [x] **2.3 定义逐 index 回执。** 两层 Record 响应在字段 3 增加相同结果列表；仅返回请求中去重后的 index，稳定按 index 排序。成功响应必须完整覆盖请求，不能用 `UNSPECIFIED` 表示成功。
 
 本任务同时补全每个 index 的行身份。保留已有字段编号，`DatasetPeriodSeries` 新增 `series_tag = 3`；Pebble snapshot 条目同步持久化。Ensure 校验 index 连续及 `(subject_id, series_tag)` 唯一，重复 Ensure 同时匹配 tag，不能仅匹配 Subject。Collector 从同一 `collectionItemSeriesTag` 生成 tag；写入校验使用实际 RowKey 的完整 identity，空 tag 只表示真实默认序列，不是通配符。
 
@@ -222,7 +222,7 @@ message PrimaryRecordDatasetPeriodFailuresRsp {
 }
 ```
 
-- [ ] **2.4 在持有 `periodMu` 时实现统一 fence。** 先校验完整 identity 和所有 index，再读取 bitmap；到截止点先按既有 bitmap finalize，再分类，绝不把本次新失败补入 marker。抽取锁内 finalize helper，维持现有 datasetWriteMu/periodMu 顺序，禁止嵌套重入锁。分类规则为：
+- [x] **2.4 在持有 `periodMu` 时实现统一 fence。** 先校验完整 identity 和所有 index，再读取 bitmap；到截止点先按既有 bitmap finalize，再分类，绝不把本次新失败补入 marker。抽取锁内 finalize helper，维持现有 datasetWriteMu/periodMu 顺序，禁止嵌套重入锁。分类规则为：
 
 ```text
 success[index]                       => already_succeeded
@@ -231,11 +231,11 @@ status == waiting && now < deadline  => 持久化 failure[index] 后 recorded
 其他                                 => missed_deadline
 ```
 
-- [ ] **2.5 维持原有原子性并返回真实 Commit 证据。** status、marker、outbox 继续同一个 Pebble batch 提交；新 failure 变更持久化成功才返回 `recorded`。任一非法 index 或错绑 series 使整个请求失败，不能先写合法部分。迟到成功在截止前清除对应 failure，终态 replay 返回 `already_succeeded`，不需要额外“曾失败”历史 bitmap。Commit 两层响应在字段 4 增加 `repeated uint32 accepted_series_indexes`：只返回请求中目标成功 bit 已持久化的去重 index；截止后首次未写入的 index 不返回，已成功的幂等重放可返回。Store 在同一锁内校验请求 index/Subject/series_tag/目标周期绑定并生成回执，DataNode 不再仅把请求 keys 当接受证明。补 `TestPeriodCommitRejectsWrongSeriesBinding`：同 Subject 的 Binance row 冒用 OKX index、同一 row 冒用两个 index，以及终态错绑重放均拒绝且零副作用；合法两个 tag 分别推进各自 bit。
-- [ ] **2.6 返回首次真实 deadline。** `EnsureDatasetPeriodRsp`、`PrimaryEnsureDatasetPeriodRsp` 在字段 3 增加 `int64 deadline_at`；新建或重复 Ensure 都返回已保存 deadline，Primary 原样转发，不返回本次请求的 deadline hint。
-- [ ] **2.7 新增只读查询 RPC。** DataNode request 字段为 `auth_info=1, node_id=2, expectation=3`，Primary request 为 `auth_info=1, expectation=2`；两层 response 为 `ret_info=1, status=2, series_hash=3, expected_count=4, deadline_at=5`。在 `DataNodePeriodRuntime` 与 `PrimaryStore` 增加 `GetDatasetPeriodStatus`。查询 expectation 只携带 key/hash/count，不要求整份 snapshot；锁内一致读取并校验 hash/count，不创建 period、不改 deadline、不调用 Ensure。不存在返回 `NOT_FOUND`，不冒充 waiting 或终态。
-- [ ] **2.8 补全服务映射测试。** DataNode/Primary 均验证逐 index 回执和 deadline 未丢失；查询合法等待/完整/降级、hash/count 冲突、NOT_FOUND。截止后两种锁顺序的 status、event ID、payload 必须相同；marker/outbox 数量保持 1。
-- [ ] **2.9 生成、验证、提交。** 预期以下全部 PASS；提交 `fix(storage): acknowledge period failures with deadline fencing`。
+- [x] **2.5 维持原有原子性并返回真实 Commit 证据。** status、marker、outbox 继续同一个 Pebble batch 提交；新 failure 变更持久化成功才返回 `recorded`。任一非法 index 或错绑 series 使整个请求失败，不能先写合法部分。迟到成功在截止前清除对应 failure，终态 replay 返回 `already_succeeded`，不需要额外“曾失败”历史 bitmap。Commit 两层响应在字段 4 增加 `repeated uint32 accepted_series_indexes`：只返回请求中目标成功 bit 已持久化的去重 index；截止后首次未写入的 index 不返回，已成功的幂等重放可返回。Store 在同一锁内校验请求 index/Subject/series_tag/目标周期绑定并生成回执，DataNode 不再仅把请求 keys 当接受证明。补 `TestPeriodCommitRejectsWrongSeriesBinding`：同 Subject 的 Binance row 冒用 OKX index、同一 row 冒用两个 index，以及终态错绑重放均拒绝且零副作用；合法两个 tag 分别推进各自 bit。
+- [x] **2.6 返回首次真实 deadline。** `EnsureDatasetPeriodRsp`、`PrimaryEnsureDatasetPeriodRsp` 在字段 3 增加 `int64 deadline_at`；新建或重复 Ensure 都返回已保存 deadline，Primary 原样转发，不返回本次请求的 deadline hint。
+- [x] **2.7 新增只读查询 RPC。** DataNode request 字段为 `auth_info=1, node_id=2, expectation=3`，Primary request 为 `auth_info=1, expectation=2`；两层 response 为 `ret_info=1, status=2, series_hash=3, expected_count=4, deadline_at=5`。在 `DataNodePeriodRuntime` 与 `PrimaryStore` 增加 `GetDatasetPeriodStatus`。查询 expectation 只携带 key/hash/count，不要求整份 snapshot；锁内一致读取并校验 hash/count，不创建 period、不改 deadline、不调用 Ensure。不存在返回 `NOT_FOUND`，不冒充 waiting 或终态。
+- [x] **2.8 补全服务映射测试。** DataNode/Primary 均验证逐 index 回执和 deadline 未丢失；查询合法等待/完整/降级、hash/count 冲突、NOT_FOUND。截止后两种锁顺序的 status、event ID、payload 必须相同；marker/outbox 数量保持 1。
+- [x] **2.9 生成、验证、提交。** 预期以下全部 PASS；提交 `fix(storage): acknowledge period failures with deadline fencing`。
 
 ```bash
 make -C modules/storage/proto all
