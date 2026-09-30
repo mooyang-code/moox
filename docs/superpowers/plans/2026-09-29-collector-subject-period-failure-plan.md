@@ -1,5 +1,7 @@
 # Collector 标签标的与周期降级优化实施计划
 
+> 本文保留为历史实施记录。当前补齐范围、未完成项及无历史兼容的协调切换要求，以 [Collector 周期标的池快照与降级链路补齐执行计划](2026-09-30-collector-period-universe-remediation-plan.md) 为准；本文已有勾选不能替代新计划的验收证据。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal：** 让 `moox-collector-subject` 成为外部标的列表的唯一刷新者；Collector 只读取 Storage 标签成员生成采集任务；SCF 标的请求在初次请求及最多 3 次重试后终态失败，但不提前结束周期，周期到 deadline 后发布 `degraded` 事件并列出失败标的。
