@@ -25,7 +25,7 @@ CLI，不再是占位模块。
 
 部署必须显式提供节点 ID、中央控制面 URL、只含公钥证书的 peer CA bundle，以及权限为 `0600` 的集群 control/service key 文件。control key 在 Admin 和所有 Gateway 间相同，service key 在所有 Gateway 和调用方间相同。
 
-提交前统一运行 `make verify`。它会检查模块和 package 依赖边界、tRPC Context、gofmt、Prettier 与零 warning ESLint，遍历 `go.work` 执行所有 Go 测试和 vet，并完成管理台测试、生产构建、文档构建、发布契约、Gateway/Strategy 部署和 Caddy 契约检查；所有格式与 lint 门禁都是只读检查，不在 CI 中执行 `--fix` 或 `--write`。
+提交前统一运行 `make verify`：遍历 `go.work` 执行所有 Go 单元测试，要求整体语句覆盖率严格大于 60%，并执行前端零 warning ESLint 检查。覆盖率按所有模块的有效语句加权汇总，无测试的业务代码计入分母，带有 `Code generated … DO NOT EDIT` 标记的生成代码不计入；合并后的报告写入 `coverage.out`。测试禁用缓存，不再单独执行 `go vet`。前端依赖使用 frozen lockfile 安装，ESLint 只读检查。模块边界、Storage 契约、格式、前端测试/构建、文档、发布和部署契约检查保留为可手动执行的 Make 目标，不属于 `make verify`。PR 仍需通过独立的 `Secret scan` 密钥扫描。
 
 Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进制，启动时自动应用；部署包只保留 Storage metadata 初始化所需的 `storage/schema/metadata.sql`。
 

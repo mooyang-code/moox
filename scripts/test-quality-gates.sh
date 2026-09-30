@@ -7,7 +7,7 @@ cd "${ROOT}"
 grep -Eq '^check-boundaries:.*check-module-boundaries.*check-package-boundaries' Makefile
 grep -Eq '^check-format:' Makefile
 grep -Eq '^check-lint:' Makefile
-grep -Eq '^verify:.*check-format.*check-lint' Makefile
+grep -Fxq 'verify: test-go check-lint' Makefile
 
 node - <<'NODE'
 const pkg = require('./web/package.json')
