@@ -15,6 +15,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -124,8 +125,7 @@ func (c *collectorStorageMetadataProxy) ListDatasets(ctx context.Context, req *s
 	}
 	request := &storagepb.ListDatasetsReq{}
 	if req != nil {
-		copy := *req
-		request = &copy
+		request = proto.Clone(req).(*storagepb.ListDatasetsReq)
 	}
 	request.AuthInfo = c.auth
 	return c.proxy.ListDatasets(ctx, request, c.options...)
@@ -137,8 +137,7 @@ func (c *collectorStorageMetadataProxy) ListViews(ctx context.Context, req *stor
 	}
 	request := &storagepb.ListViewsReq{}
 	if req != nil {
-		copy := *req
-		request = &copy
+		request = proto.Clone(req).(*storagepb.ListViewsReq)
 	}
 	request.AuthInfo = c.auth
 	return c.proxy.ListViews(ctx, request, c.options...)
@@ -150,8 +149,7 @@ func (c *collectorStorageMetadataProxy) DeleteDataset(ctx context.Context, req *
 	}
 	request := &storagepb.DeleteDatasetReq{}
 	if req != nil {
-		copy := *req
-		request = &copy
+		request = proto.Clone(req).(*storagepb.DeleteDatasetReq)
 	}
 	request.AuthInfo = c.auth
 	return c.proxy.DeleteDataset(ctx, request, c.options...)
@@ -163,8 +161,7 @@ func (c *collectorStorageMetadataProxy) DeleteView(ctx context.Context, req *sto
 	}
 	request := &storagepb.DeleteViewReq{}
 	if req != nil {
-		copy := *req
-		request = &copy
+		request = proto.Clone(req).(*storagepb.DeleteViewReq)
 	}
 	request.AuthInfo = c.auth
 	return c.proxy.DeleteView(ctx, request, c.options...)
@@ -176,8 +173,7 @@ func (c *collectorStorageMetadataProxy) DeleteDatasetRows(ctx context.Context, r
 	}
 	request := &storagepb.PrimaryDeleteDatasetRowsReq{}
 	if req != nil {
-		copy := *req
-		request = &copy
+		request = proto.Clone(req).(*storagepb.PrimaryDeleteDatasetRowsReq)
 	}
 	request.AuthInfo = c.auth
 	return c.primary.DeleteDatasetRows(ctx, request, c.options...)
