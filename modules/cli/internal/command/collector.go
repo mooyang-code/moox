@@ -636,6 +636,15 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 	if manifest != nil && fetcherConfig != nil {
+		if !strings.EqualFold(fetcherConfig.SpaceID, "crypto") {
+			target, node, err := setupconfig.CollectorRuntimeTarget(&manifest.Manifest.SCFFetcher)
+			if err != nil {
+				return collectorPublishSummary{}, err
+			}
+			if target == "" || node == "" {
+				return collectorPublishSummary{}, fmt.Errorf("Collector Timer manifest requires collector_rpc_gateway_target and collector_gateway_target_node before publication")
+			}
+		}
 		// Cross-Space SCF quota is a publication-plan invariant. Keep ordinary
 		// read-only manifest consumers usable, but fail before any upload or
 		// CloudNode mutation when the complete plan exceeds Tencent's quota. A
@@ -817,14 +826,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, fmt.Errorf("stockcn publish requires all equity collection tasks disabled; enabled tasks: %s", strings.Join(ids, ","))
 		}
 	}
-	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
-		return collectorPublishSummary{}, err
-	}
-	if fetcherConfig != nil && strings.EqualFold(fetcherConfig.SpaceID, "crypto") {
-		if err := disableCollectorTimerFleet(ctx, client, fetcherConfig); err != nil {
-			return collectorPublishSummary{}, err
-		}
-	}
 	accounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return collectorPublishSummary{}, err
@@ -833,9 +834,22 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	for _, account := range accounts {
 		accountsByID[account.AccountID] = account
 	}
+	registeredAccountsByID := make(map[string]adminclient.CloudAccount, len(accountsByID))
+	for id, account := range accountsByID {
+		registeredAccountsByID[id] = account
+	}
 	if fetcherConfig != nil {
-		if err := ensureCollectorSpaceCloudAccounts(ctx, client, fetcherConfig, accountsByID); err != nil {
-			return collectorPublishSummary{}, err
+		// Missing accounts can be resolved from their manifest metadata for
+		// read-only CLS credential/resource lookup. Register them only after the
+		// package and complete regional environment plans have passed preflight.
+		for _, region := range fetcherConfig.Regions {
+			if accountsByID[region.CloudAccountID].AccountID == "" {
+				accountsByID[region.CloudAccountID] = adminclient.CloudAccount{
+					AccountID: region.CloudAccountID, AccountName: region.CloudAccountName, Provider: "tencent",
+					CredentialSecretID: region.CredentialSecretID, AppID: region.AppID,
+					COSRegion: region.COSRegion, COSBucket: region.COSBucket,
+				}
+			}
 		}
 	}
 	if fetcherConfig == nil && accountsByID[opts.CloudAccountID].AccountID == "" {
@@ -1016,6 +1030,17 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				return summary, fmt.Errorf("validate collector fleet before package upload for region %s: %w", regionOpts.Region, err)
 			}
 			plans = append(plans, collectorRegionalPublishPlan{opts: regionOpts, shards: shards})
+		}
+		if err := ensureCollectorSpaceCloudAccounts(ctx, client, fetcherConfig, registeredAccountsByID); err != nil {
+			return summary, err
+		}
+		if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
+			return summary, err
+		}
+		if strings.EqualFold(fetcherConfig.SpaceID, "crypto") {
+			if err := disableCollectorTimerFleet(ctx, client, fetcherConfig); err != nil {
+				return summary, err
+			}
 		}
 		// Regional publication is deliberately synchronous. The Storage region
 		// finishes its canary and complete fleet before any other region deploys.
@@ -3884,11 +3909,10 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 	if err := validateCollectorZipLogging(zipPath, opts.CLSTopicID); err != nil {
 		return collectorDeploySummary{}, err
 	}
-	preflightEnvironment, err := collectorFunctionEnvironment(publication, collectorPreflightPackageID(publication))
+	// A deploy is an environment patch for an existing node. CloudNode merges
+	// its remote configuration and validates the complete map before code upload.
+	_, err := collectorFunctionEnvironment(publication, collectorPreflightPackageID(publication))
 	if err != nil {
-		return collectorDeploySummary{}, err
-	}
-	if err := validateCollectorFleetRuntimeEnvironment(preflightEnvironment, true, true); err != nil {
 		return collectorDeploySummary{}, err
 	}
 	data, err := os.ReadFile(zipPath)

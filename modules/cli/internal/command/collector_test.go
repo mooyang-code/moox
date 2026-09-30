@@ -1574,6 +1574,7 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "config.yaml": "system: {}\n", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
 
 	uploadBase := ""
+	deployedEnvironments := make(chan map[string]string, 2)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -1589,6 +1590,14 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 		case "/api/admin/cloudnode/CompletePackageUpload":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0, "msg": "ok"}})
 		case "/api/admin/cloudnode/SubmitDeployNodes":
+			var request struct {
+				Nodes []struct {
+					Environment map[string]string `json:"environment"`
+				} `json:"deployments"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			require.Len(t, request.Nodes, 1)
+			deployedEnvironments <- request.Nodes[0].Environment
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ret_info":    map[string]any{"code": 0, "msg": "ok"},
 				"job_id":      "node-batch-1",
@@ -1615,6 +1624,18 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	assert.Equal(t, "node-batch-1", summary.JobID)
 	assert.Equal(t, "deploy_nodes", summary.Operation)
 	assert.Equal(t, 1, summary.TotalCount)
+	require.Contains(t, <-deployedEnvironments, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
+	t.Run("preserves remote routes when absent locally", func(t *testing.T) {
+		for _, key := range []string{"MOOX_STORAGE_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "MOOX_GATEWAY_NODE_ID", "MOOX_GATEWAY_TARGET_NODE", "MOOX_SCF_STORAGE_GATEWAY_NODE_ID", "MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"} {
+			t.Setenv(key, "")
+		}
+		_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{ControlURL: server.URL, CloudAccountID: "account-a", NodeID: "node-1", ZipPath: zipPath, EventBusCredentialFile: credentialFile})
+		require.NoError(t, err)
+		deployedEnvironment := <-deployedEnvironments
+		for _, key := range []string{"MOOX_STORAGE_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "MOOX_GATEWAY_NODE_ID", "MOOX_GATEWAY_TARGET_NODE", "MOOX_GATEWAY_SERVICE_KEY_ID", "MOOX_GATEWAY_SERVICE_SECRET_KEY"} {
+			assert.NotContains(t, deployedEnvironment, key, "missing local values must not replace complete remote environment")
+		}
+	})
 }
 
 func TestDeployCollectorFunctionBudgetAndMissingMasterFailBeforeUpload(t *testing.T) {

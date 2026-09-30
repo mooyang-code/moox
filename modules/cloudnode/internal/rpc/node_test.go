@@ -181,6 +181,48 @@ func TestExecuteCreateTimerMarketFetcherKeepsAuthoritativeTimeout(t *testing.T) 
 	assert.Equal(t, int64(60), fake.created[0].Timeout)
 }
 
+func TestExecuteCreateDurableTimerRejectsRuntimeTimeoutMismatchBeforeCloudAPI(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	factoryCalls := 0
+	svc := &Service{catalog: catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { factoryCalls++; return &fakeSCFClient{} },
+	}
+	metadata, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher", "function_mode": "kline"})
+	require.NoError(t, err)
+	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
+		CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
+		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "15"},
+		Environment: map[string]string{"MOOX_SPACE_ID": "crypto", "MOOX_FETCH_TIMEOUT_SECONDS": "60"}, Metadata: metadata,
+	}, 0)
+	require.ErrorContains(t, err, "Timer runtime timeout")
+	require.Zero(t, factoryCalls)
+}
+
+func TestMarketFetchTimerTimeoutContract(t *testing.T) {
+	for _, test := range []struct {
+		name, mode, outer, runtime string
+		wantError                  bool
+	}{
+		{"matching durable", "kline", "60", "60", false},
+		{"missing durable runtime", "kline", "60", "", true},
+		{"malformed durable runtime", "kline", "60", "invalid", true},
+		{"runtime marked durable", "", "15", "60", true},
+		{"legacy instrument snapshot", "instrument_snapshot", "15", "60", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node := &store.CloudNode{TriggerType: "timer", Metadata: fmt.Sprintf(`{"biz_type":"market_fetcher","function_mode":%q}`, test.mode)}
+			err := validateMarketFetchTimerTimeout(node, &pb.NodeCreateItem{Config: map[string]string{"timeout": test.outer}, Environment: map[string]string{"MOOX_FETCH_TIMEOUT_SECONDS": test.runtime}})
+			if test.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestExecuteCreateLegacyInstrumentModeUsesTimerTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
@@ -256,7 +298,11 @@ func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "account-a", PackageID: "old-package", NodeType: "scf-event", Provider: "tencent-scf",
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-0", Metadata: `{"biz_type":"market_fetcher","handler":"main"}`,
 	}))
-	fake := &fakeSCFClient{currentEnvironment: map[string]string{"MOOX_CODE_PACKAGE_ID": "old-package"}}
+	remote := map[string]string{"MOOX_CODE_PACKAGE_ID": "old-package",
+		"MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11004", "MOOX_COLLECTOR_NODE_ID": "collector-node",
+		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://storage.example:11003", "MOOX_STORAGE_NODE_ID": "storage-node",
+		"MOOX_RPC_SERVICE_ID": "moox-collector", "MOOX_RPC_SERVICE_SECRET": "private-test-secret"}
+	fake := &fakeSCFClient{currentEnvironment: remote}
 	svc := &Service{
 		catalog:            catalog,
 		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
@@ -272,6 +318,11 @@ func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 	assert.Equal(t, int64(64), fake.configured[0].MemorySize)
 	assert.Equal(t, int64(15), fake.configured[0].Timeout)
 	assert.Equal(t, "moox-collector_dev", fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"])
+	for key, value := range remote {
+		if key != "MOOX_CODE_PACKAGE_ID" {
+			assert.Equal(t, value, fake.configured[0].Environment[key], "partial deploy preserves managed runtime route and credentials")
+		}
+	}
 }
 
 func TestExecuteDeployNodeItemRejectsMergedTimerEnvironmentOverLimit(t *testing.T) {

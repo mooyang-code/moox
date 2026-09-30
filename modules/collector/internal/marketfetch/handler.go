@@ -58,11 +58,12 @@ const (
 	// several seconds on a cold path, so leave a bounded reserve for one
 	// reconnect attempt after the initial connection attempt.
 	// Two cold connects and ACKs (3s each), plus a 300ms retry backoff.
-	completionPublishReserve  = 13 * time.Second
-	completionConnectTimeout  = 3 * time.Second
-	completionConnectAttempts = 2
-	defaultStorageTimeout     = 5 * time.Second
-	metricsResponseReserve    = 750 * time.Millisecond
+	completionPublishReserve   = 13 * time.Second
+	completionConnectTimeout   = 3 * time.Second
+	completionConnectAttempts  = 2
+	defaultStorageTimeout      = 5 * time.Second
+	instrumentNamesReadTimeout = 250 * time.Millisecond
+	metricsResponseReserve     = 750 * time.Millisecond
 )
 
 func NewHandler() *Handler {
@@ -421,7 +422,7 @@ func (s *reservedDeadlineStorage) ListInstrumentNames(ctx context.Context, space
 	if !ok {
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	ctx, cancel := context.WithTimeout(ctx, instrumentNamesReadTimeout)
 	defer cancel()
 	return reader.ListInstrumentNames(ctx, spaceID, subjectIDs)
 }
@@ -521,6 +522,17 @@ func decodeRequest(data map[string]interface{}, request *Request) error {
 }
 
 func publishCompletion(ctx context.Context, req Request, payload proto.Message) error {
+	return publishCompletionWithClient(ctx, req, payload, func(ctx context.Context, config jetstream.Config) (completionClient, error) {
+		return jetstream.Connect(ctx, config)
+	}, 2*completionConnectTimeout, 300*time.Millisecond)
+}
+
+type completionClient interface {
+	events.RawPublisher
+	Close() error
+}
+
+func publishCompletionWithClient(ctx context.Context, req Request, payload proto.Message, connect func(context.Context, jetstream.Config) (completionClient, error), attemptTimeout, backoff time.Duration) error {
 	if strings.TrimSpace(req.SpaceID) == "" {
 		return fmt.Errorf("space_id is required")
 	}
@@ -536,23 +548,26 @@ func publishCompletion(ctx context.Context, req Request, payload proto.Message) 
 	config.ConnectTimeout = completionConnectTimeout
 	var lastErr error
 	for attempt := 1; attempt <= completionConnectAttempts; attempt++ {
-		client, connectErr := jetstream.Connect(ctx, config)
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, attemptTimeout)
+		client, connectErr := connect(attemptCtx, config)
 		if connectErr == nil {
 			publisher, publisherErr := events.NewPublisher(client, registry)
 			if publisherErr == nil {
-				_, lastErr = publisher.Publish(ctx, events.MarketFetchBatchCompleted, payload, events.PublishOptions{EventID: req.BatchID, OccurredAt: time.Now().UTC(), SpaceID: req.SpaceID, SubjectID: subjectID})
+				_, lastErr = publisher.Publish(attemptCtx, events.MarketFetchBatchCompleted, payload, events.PublishOptions{EventID: req.BatchID, OccurredAt: time.Now().UTC(), SpaceID: req.SpaceID, SubjectID: subjectID})
 			} else {
 				lastErr = publisherErr
 			}
 			_ = client.Close()
 			if lastErr == nil {
+				cancelAttempt()
 				return nil
 			}
 		} else {
 			lastErr = connectErr
 		}
+		cancelAttempt()
 		if attempt < completionConnectAttempts {
-			timer := time.NewTimer(300 * time.Millisecond)
+			timer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
 				timer.Stop()

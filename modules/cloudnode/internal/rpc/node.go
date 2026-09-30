@@ -282,6 +282,9 @@ func (s *Service) executeCreateNodeItem(
 	if strings.TrimSpace(node.PackageID) == "" {
 		return "", fmt.Errorf("package_id is required")
 	}
+	if err := validateMarketFetchTimerTimeout(&node, item); err != nil {
+		return "", err
+	}
 	if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
 		return "", err
 	}
@@ -294,6 +297,23 @@ func (s *Service) executeCreateNodeItem(
 		return "", err
 	}
 	return fmt.Sprintf("created function %s", node.FunctionName), nil
+}
+
+func validateMarketFetchTimerTimeout(node *store.CloudNode, item *pb.NodeCreateItem) error {
+	if !isMarketFetchNode(node) || node.TriggerType != "timer" {
+		return nil
+	}
+	mode := metadataString(parseJSONMap(node.Metadata), "function_mode")
+	runtimeValue := strings.TrimSpace(item.GetEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"])
+	if mode == "instrument_snapshot" || (mode != "kline" && runtimeValue == "") {
+		return nil
+	}
+	runtimeTimeout, err := strconv.ParseInt(runtimeValue, 10, 64)
+	outerTimeout := configInt64(item.GetConfig(), "timeout", defaultSCFTimeoutSeconds)
+	if err != nil || runtimeTimeout <= 0 || runtimeTimeout != outerTimeout {
+		return fmt.Errorf("Timer runtime timeout MOOX_FETCH_TIMEOUT_SECONDS must match config.timeout (%d)", outerTimeout)
+	}
+	return nil
 }
 
 func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.BatchDeleteNodesRsp, error) {

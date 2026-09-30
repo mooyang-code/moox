@@ -38,14 +38,29 @@ func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
 	t.Setenv("GOCACHE", paths["GOCACHE"])
 	t.Setenv("HOME", t.TempDir())
 	ca := mustTestEventBusCAPEM(t)
-	host := startCollectorPublicationSSH(t, ca)
-	var uploads, creates atomic.Int32
+	host := startCollectorPublicationSSH(t, ca, "ap-nanjing")
+	var uploads, creates, mutations, reads atomic.Int32
+	var accountMissing, legacyTimer atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
 		switch r.URL.Path {
 		case "/api/admin/collectmgr/GetTaskList", "/api/service/collectmgr/GetTaskList":
 			_, _ = io.WriteString(w, `{"ret_info":{"code":0},"tasks":[]}`)
 		case "/api/admin/cloudnode/ListCloudAccounts", "/api/service/cloudnode/ListCloudAccounts":
+			if accountMissing.Load() {
+				_, _ = io.WriteString(w, `{"ret_info":{"code":0},"accounts":[]}`)
+				return
+			}
 			_, _ = io.WriteString(w, `{"ret_info":{"code":0},"accounts":[{"account_id":"tencent-scf","credential_secret_id":"tencent-default"}]}`)
+		case "/api/admin/cloudnode/GetNodeList", "/api/service/cloudnode/GetNodeList":
+			if legacyTimer.Load() {
+				_, _ = io.WriteString(w, `{"ret_info":{"code":0},"items":[{"node_id":"legacy-timer","region":"ap-nanjing","node_type":"scf-event","biz_type":"market_fetcher","trigger_type":"timer"}]}`)
+			} else {
+				_, _ = io.WriteString(w, `{"ret_info":{"code":0},"items":[]}`)
+			}
+		case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs", "/api/service/cloudnode/SubmitUpdateNodeRuntimeConfigs", "/api/admin/cloudnode/CreateCloudAccount", "/api/service/cloudnode/CreateCloudAccount":
+			mutations.Add(1)
+			http.Error(w, "must not mutate", http.StatusInternalServerError)
 		case "/api/service/secret/GetSecretValue":
 			_, _ = io.WriteString(w, `{"ret_info":{"code":0},"secret":{"category":"cloud","provider":"tencent","status":"active","key_id":"cls-id","secret_value":"cls-secret"}}`)
 		case "/api/admin/cloudnode/InitPackageUpload", "/api/service/cloudnode/InitPackageUpload":
@@ -112,6 +127,7 @@ package_config_dir = "scf/stockcn"
 package_name = "moox-collector-stockcn"
 function_prefix = "moox-fetcher-stockcn"
 timer_function_count = 2
+region_blacklist = ["ap-nanjing"]
 measured_safe_group_size = 1
 memory_size = 64
 timeout_seconds = 60
@@ -148,19 +164,48 @@ function_count = 1
 	item, err := buildCollectorCreateNodeItem(base, collectorPreflightPackageID(base))
 	require.NoError(t, err)
 	padding := strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(item.Environment)-len("PADDING")-2-64)
-	for _, tc := range []struct{ name, packageName, padding, failingRegion string }{
-		{"first region overflow", strings.Repeat("n", 4096), "", "ap-guangzhou"},
-		{"second region overflow", "moox-collector", padding, "ap-singapore"},
+	for _, tc := range []struct {
+		name, packageName, padding, failingRegion, spaceID string
+		missingRoute, missingAccount, legacyTimer          bool
+	}{
+		{"first region overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "stockcn", false, false, true},
+		{"second region overflow", "moox-collector", padding, "ap-singapore", "stockcn", false, false, true},
+		{"unregistered account overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "stockcn", false, true, false},
+		{"crypto legacy Timer overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "crypto", false, false, true},
+		{"missing claim route", "moox-collector", "", "", "stockcn", true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			mutations.Store(0)
+			reads.Store(0)
+			accountMissing.Store(tc.missingAccount)
+			legacyTimer.Store(tc.legacyTimer)
+			content := manifest
+			if tc.spaceID == "crypto" {
+				content = strings.ReplaceAll(content, "stockcn", "crypto")
+				content = strings.ReplaceAll(content, "package_config_dir = \"scf/crypto\"", "package_config_dir = \"scf/market_data\"")
+				content = strings.ReplaceAll(content, "measured_safe_group_size = 1\n", "")
+				content = strings.ReplaceAll(content, "instrument_type = \"equity\"", "instrument_type = \"spot\"")
+				content = strings.ReplaceAll(content, "provider_id = \"eastmoney\"", "provider_id = \"binance\"")
+			}
+			if tc.missingRoute {
+				content = strings.ReplaceAll(content, "collector_rpc_gateway_target = \"ip://203.0.113.10:11003\"\n", "")
+				content = strings.ReplaceAll(content, "collector_gateway_target_node = \"collector\"\n", "")
+			}
+			require.NoError(t, os.WriteFile(manifestPath, []byte(content), 0o600))
 			opts := collectorPublishOptions{
 				collectorPackageOptions: collectorPackageOptions{CollectorRoot: collectorRoot, Out: filepath.Join(t.TempDir(), "package.zip")},
-				ControlURL:              server.URL, File: manifestPath, SpaceID: "stockcn", PackageName: tc.packageName,
+				ControlURL:              server.URL, File: manifestPath, SpaceID: tc.spaceID, PackageName: tc.packageName,
 			}
 			if tc.padding != "" {
 				opts.Env = []string{"PADDING=" + tc.padding}
 			}
 			_, err := publishCollectorFunction(context.Background(), opts)
+			require.Zero(t, mutations.Load(), "invalid publication must not change existing fleets or register accounts")
+			if tc.missingRoute {
+				require.ErrorContains(t, err, "Collector")
+				require.Zero(t, reads.Load(), "missing Collector route must fail before cloud API access")
+				return
+			}
 			require.ErrorContains(t, err, "4096")
 			require.ErrorContains(t, err, "region "+tc.failingRegion)
 			require.Zero(t, uploads.Load())
@@ -170,7 +215,7 @@ function_count = 1
 	}
 }
 
-func startCollectorPublicationSSH(t *testing.T, ca []byte) setupconfig.Host {
+func startCollectorPublicationSSH(t *testing.T, ca []byte, blacklists ...string) setupconfig.Host {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -225,7 +270,7 @@ func startCollectorPublicationSSH(t *testing.T, ca []byte) setupconfig.Host {
 							var stdout string
 							switch {
 							case strings.Contains(payload.Command, "moox-collector-blacklist-preflight"):
-								raw := "scf_region_blacklists:\n  stockcn: []\n"
+								raw := "scf_region_blacklists:\n  stockcn: [" + strings.Join(blacklists, ", ") + "]\n  crypto: [" + strings.Join(blacklists, ", ") + "]\n"
 								stdout = fmt.Sprintf("sha256:%x\n/data/moox/bin/moox-collector\n%s", sha256.Sum256([]byte(raw)), raw)
 							case strings.Contains(payload.Command, "market-fetch-publisher.yaml"):
 								stdout = "version: 1\nurls: [tls://203.0.113.10:4222]\nusername: publisher\npassword: publisher-secret\n"

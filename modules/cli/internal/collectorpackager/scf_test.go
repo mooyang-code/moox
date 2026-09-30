@@ -366,6 +366,17 @@ func TestValidateEventBusCAPEMRejectsExpiredAndFutureCA(t *testing.T) {
 	}
 }
 
+func TestValidateEventBusCAPEMRequiresCertificateSigningUsage(t *testing.T) {
+	for _, usage := range []x509.KeyUsage{0, x509.KeyUsageDigitalSignature} {
+		pub, private, err := ed25519.GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		template := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: usage}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, pub, private)
+		require.NoError(t, err)
+		require.ErrorContains(t, ValidateEventBusCAPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), "certificate signing")
+	}
+}
+
 func testCAPEM(t *testing.T) []byte {
 	t.Helper()
 	pub, private, err := ed25519.GenerateKey(rand.Reader)

@@ -4,7 +4,7 @@ package config
 // is one shared write window, not one timeout per destination Dataset.
 func MarketFetchBudgetMS(items, inflight, providers, attempts, requestTimeoutMS, storageTimeoutMS int, timer bool) int {
 	waves := (items + inflight - 1) / inflight
-	budget := waves*providers*attempts*requestTimeoutMS + storageTimeoutMS + SCFColdCompletionReserveMilliseconds + SCFCLSReserveMilliseconds + SCFMetricsResponseReserveMilliseconds + SCFFinalResponseReserveMilliseconds
+	budget := waves*providers*attempts*requestTimeoutMS + storageTimeoutMS + SCFInstrumentNamesReserveMilliseconds + SCFColdCompletionReserveMilliseconds + SCFCLSReserveMilliseconds + SCFMetricsResponseReserveMilliseconds + SCFFinalResponseReserveMilliseconds
 	if timer {
 		budget += SCFTimerClaimReserveMilliseconds
 	}

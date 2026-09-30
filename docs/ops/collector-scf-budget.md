@@ -17,5 +17,6 @@ metrics/response work and 500 milliseconds for the final response. Completion
 covers two attempts, each with a 3 second cold connection and 3 second publish
 ACK, plus a 300 millisecond backoff. Timer additionally reserves 3 seconds for
 Claim. Configuration validation rejects a budget equal to or exceeding the
-applicable timeout before publication. Early instrument-name reads do not start
-the shared Storage write window.
+applicable timeout before publication. Best-effort instrument-name reads have
+an independent 250 millisecond timeout included in both conservative budgets;
+they do not start the shared Storage write window.

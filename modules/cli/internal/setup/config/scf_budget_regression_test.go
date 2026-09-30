@@ -49,8 +49,22 @@ func TestStockSCFBudgetUsesIndependentTimerAndInvokeChains(t *testing.T) {
 }
 
 func TestMarketFetchBudgetIncludesEveryReserveAndWholeWaves(t *testing.T) {
-	require.Equal(t, 70250, MarketFetchBudgetMS(30, 10, 4, 4, 1000, 5000, false))
-	require.Equal(t, 41250, MarketFetchBudgetMS(40, 10, 1, 4, 1000, 5000, true))
-	require.Equal(t, 41250, MarketFetchBudgetMS(31, 10, 1, 4, 1000, 5000, true))
-	require.Equal(t, 37250, MarketFetchBudgetMS(30, 10, 1, 4, 1000, 5000, true))
+	require.Equal(t, 70500, MarketFetchBudgetMS(30, 10, 4, 4, 1000, 5000, false))
+	require.Equal(t, 41500, MarketFetchBudgetMS(40, 10, 1, 4, 1000, 5000, true))
+	require.Equal(t, 41500, MarketFetchBudgetMS(31, 10, 1, 4, 1000, 5000, true))
+	require.Equal(t, 37500, MarketFetchBudgetMS(30, 10, 1, 4, 1000, 5000, true))
+}
+
+func TestStockTimerBudgetIncludesBestEffortNameReadAtTimeoutBoundary(t *testing.T) {
+	// Forty bound-source items need four waves of four attempts. The read
+	// reserve moves the maximum safe millisecond request timeout to 2156.
+	require.Equal(t, 59996, MarketFetchBudgetMS(40, 10, 1, 4, 2156, 5000, true))
+	require.Equal(t, 60012, MarketFetchBudgetMS(40, 10, 1, 4, 2157, 5000, true))
+	space := SCFFetcherSpace{SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 60, InvokeTimeoutSeconds: 200,
+		TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, StorageRPCGatewayTarget: "ip://storage.example:11003",
+		RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 2156, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
+	require.NoError(t, validateSCFFetcherSpace(&space, "stock"))
+	space.RequestTimeoutMS++
+	require.ErrorContains(t, validateSCFFetcherSpace(&space, "stock"), "Timer")
 }

@@ -38,6 +38,7 @@ const (
 	SCFCompletionReserveMilliseconds      = 13000
 	SCFTimerClaimReserveMilliseconds      = 3000
 	SCFColdCompletionReserveMilliseconds  = 13000
+	SCFInstrumentNamesReserveMilliseconds = 250
 	SCFMetricsResponseReserveMilliseconds = 750
 	DefaultSCFTimerTimeoutSeconds         = tencent.CollectorTimerTimeoutSeconds
 	// SCFFinalResponseReserveMilliseconds keeps the SCF runtime enough time to

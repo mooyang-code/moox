@@ -13,6 +13,25 @@ type deadlineRecordingStorage struct {
 	remaining time.Duration
 }
 
+type stalledInstrumentNamesStorage struct{ deadlineRecordingStorage }
+
+func (*stalledInstrumentNamesStorage) ListInstrumentNames(ctx context.Context, _ string, _ []string) (map[string]string, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestInstrumentNamesReadHasShortIndependentBudget(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	storage := &reservedDeadlineStorage{Storage: &stalledInstrumentNamesStorage{}, parent: parent, timeout: 5 * time.Second}
+	start := time.Now()
+	_, err := storage.ListInstrumentNames(parent, StockCNSpaceID, []string{"600000.XSHG"})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 400*time.Millisecond)
+	require.NoError(t, parent.Err())
+	require.True(t, storage.writeDeadline.IsZero(), "best-effort presentation lookup must not spend the write window")
+}
+
 type slowDeadlineCommitStorage struct {
 	recordingPeriodFailureStorage
 }
