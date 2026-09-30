@@ -16,6 +16,8 @@
 
 **本轮交付边界：** 只完善执行计划与审查依据，不继续业务编码、不部署、不重置。独立工作区中已有部分实现，Task 1 与门禁前置改动已有分项独立审查结论，但未提交、未合入，也未完成整条链路的审查及验收，不视为主工作区已完成。实施前先核验实际 diff 和验证证据，禁止依据改名后的文件存在或子任务的本地测试回报就勾选整项任务。
 
+**实施授权更新（2026-09-30）：** 用户随后明确要求按本计划编码、编码完成后新起 Agent 审查、编译发布正式环境并做线上端到端验证。因此最终交付包括正式发布及真实 1m/1h 周期验证，不以本地门禁或运行手册代替。上述“只写计划”仅描述文档编写阶段；线上数据清理/重建仍须列出精确范围、备份并另行取得确认，不因发布授权自动执行。
+
 本计划补充 `docs/superpowers/plans/2026-09-29-collector-subject-period-failure-plan.md`。旧文档保留为历史记录；其中已勾选的任务不能作为本次补齐项已完成的证据，旧“Storage 先升级、旧周期继续收尾”的发布假设由本计划替代。
 
 已有周期快照表、canonical series hash、dense index、并发首建、Invoke 重试、Pebble 失败 bitmap 和 marker/outbox 主体逻辑予以复用，不重新实现整套状态机。
@@ -58,10 +60,11 @@
 
 | 范围 | 主工作区状态 | 独立工作区已有内容 | 下一步 |
 | --- | --- | --- | --- |
-| Task 1 命名与完整快照对象 | 待实施/合入 | 已回报 Proto 生成、定向测试和三个入口 build 通过；规格与代码质量分项审查均通过，尚未提交/合入 | 核对实际 diff 与完整测试日志、完成主 Agent 核验后提交；不重新盲替换名称，不提前勾选 |
-| Task 3 Gateway 默认路由 | 待实施/合入 | 四个 period 方法的 Collector-only 路由及默认值测试有部分修改，路由分项审查通过 | 验证两份路由来源，再完成生产 adapter、服务鉴权和真实 resolver 测试，不能仅凭路由测试勾选 Task 3 |
-| Task 9 门禁前置项 | 待完成 | 有架构模块清单、数量断言、Gateway fixture 和合法空可选 placement 修复，前置改动分项审查通过 | 核对并提交前置改动，保留生产校验；所有门禁重新执行，不以局部修复推断整体验收 PASS |
-| Task 2、4、5、6、7、8 | 待实施 | 无可验收的完整实现 | 严格按第 3 节依赖顺序实施 |
+| Task 1 命名与完整快照对象 | 待合入 | 已完成并提交 `34da1414`，规格/质量审查及主 Agent 七包复跑、三个入口 build 通过 | 本实施分支 Task 1 已勾选；最终合入前随完整链路再验证 |
+| Task 3 Gateway 默认路由 | 待实施/合入 | 四方法 Collector-only 路由与真实 seed 派生测试提交 `396683ae`，分项审查及主 Agent Admin/Gateway 复跑通过 | 完成生产 adapter、服务鉴权和真实 resolver 测试，不能仅凭路由测试勾选 Task 3 |
+| Task 9 门禁前置项 | 待完成 | 架构模块清单、事件名和空可选 placement 修复提交 `391e4b2a`，分项审查与两项完整门禁复跑通过 | 所有最终门禁重新执行，不以局部修复推断整体验收 PASS |
+| Task 2 | 实施中 | Storage worker 已开始精确失败测试 | 完成回执、硬截止、查询与两阶段审查 |
+| Task 4、5、6、7、8 | 待实施 | 无可验收的完整实现 | 严格按第 3 节依赖顺序实施 |
 
 若独立工作区已被修改，先重新读取本表涉及文件并按实际 diff 更新执行记录；不撤销已有工作，也不把未完成改动直接发布。每项任务完成必须同时具备实现、针对性测试、审查闭环和提交记录。
 
@@ -72,7 +75,7 @@
 - 不重写 subject-sync：外部列表刷新继续只由 `moox-collector-subject` 发起。
 - 不改写已终结 marker，不延长已固定 deadline，不以失败上报触发提前终结。
 - 不新建另一套 Completion RPC、消息中间件或前端页面，不全仓替换无关领域的 Universe/Series 名称。
-- 本计划编写及后续代码实施均不自动授权线上部署、云资源修改或数据重置；这些操作须另行明确授权。
+- 计划编写本身不授权线上操作；本次实施已另获正式发布及线上验证授权。数据清理/重建不在自动授权范围，须按第 1 节的精确范围确认执行。
 
 ## 2. 统一契约
 
@@ -135,9 +138,9 @@ Timer 只决定何时运行，不再自己决定该周期的标的集合。Colle
 - Modify: `modules/storage/internal/service/datanode/period.go`、`modules/storage/internal/service/datanode/pebble/period_progress.go`、`modules/storage/internal/service/datanode/pebble/period_progress_test.go`
 - Modify: `modules/collector/internal/marketstorage/storage.go` 及编译暴露的同协议调用方/测试
 
-- [ ] **1.1 固定重命名前后的等价性测试。** 使用现有两个 Subject、其中一个 Subject 含两个 Provider/Source 的 fixture，断言 series count=3、Universe count=2；固定 canonical key、hash 与 index 的预期值。已有并发首建、重启读取和冲突测试保留，禁止因改名删除测试。
-- [ ] **1.2 执行基线测试并记录 PASS。** `go test -count=1 ./modules/collector/internal/store ./modules/collector/internal/marketfetch ./modules/storage/internal/service/datanode/pebble`。命名任务不伪造行为失败；新模型/接口引用的编译失败应随重命名一次性消除。
-- [ ] **1.3 更新模型和仓储契约。** 单行仍保留当前所有 GORM 字段；保持 `TableName()` 为 `t_collector_task_period_series`，不为命名进行无收益的表重建。完整快照对象与仓储签名为：
+- [x] **1.1 固定重命名前后的等价性测试。** 使用现有两个 Subject、其中一个 Subject 含两个 Provider/Source 的 fixture，断言 series count=3、Universe count=2；固定 canonical key、hash 与 index 的预期值。已有并发首建、重启读取和冲突测试保留，禁止因改名删除测试。
+- [x] **1.2 执行基线测试并记录 PASS。** `go test -count=1 ./modules/collector/internal/store ./modules/collector/internal/marketfetch ./modules/storage/internal/service/datanode/pebble`。命名任务不伪造行为失败；新模型/接口引用的编译失败应随重命名一次性消除。
+- [x] **1.3 更新模型和仓储契约。** 单行仍保留当前所有 GORM 字段；保持 `TableName()` 为 `t_collector_task_period_series`，不为命名进行无收益的表重建。完整快照对象与仓储签名为：
 
 ```go
 type PeriodSeriesSnapshot struct {
@@ -157,9 +160,9 @@ func (*PeriodSeriesSnapshotRepository) CreatePeriodSeriesSnapshotIfAbsent(contex
 
 继续使用现有具体仓储依赖，不为改名新增 consumer interface；Get 仅在周期不存在时返回 `found=false`，损坏、不完整或身份冲突返回 error。补任务创建拒绝调用方指定结果 Dataset、不同 TaskID 生成不同结果身份、任务更新拒绝更换 Dataset 的回归测试。Store 对相同周期不同快照返回冲突，不做标签合并或静默覆盖。
 
-- [ ] **1.4 更新跨进程和 Pebble 名称。** 保留 Proto 字段编号 8，将 `repeated DatasetPeriodSeries roster = 8` 改为 `repeated DatasetPeriodSeries series_snapshot = 8`；消息 `DatasetPeriodSeries` 已表达 series 条目，继续复用。Pebble 的结构字段/JSON 名称统一为 `SeriesSnapshot` / `series_snapshot`，不加入旧名称双读。Commit/Record 的轻量 expectation 不重复携带整份快照。
-- [ ] **1.5 更新局部变量、错误文本、构造函数与引用。** 完整集合用 `snapshot` / `seriesSnapshot`，Subject 去重集合用 `universe`；更新 `Store.PeriodSeriesSnapshot()` 和 Scheduler 依赖，删除本次替换后无调用方的旧接口，不全仓盲替换历史文档。
-- [ ] **1.6 重新生成并验证。** 执行以下命令，预期全部 PASS，canonical fixture 未变；提交 `refactor(collector): unify period series snapshot terminology`。
+- [x] **1.4 更新跨进程和 Pebble 名称。** 保留 Proto 字段编号 8，将 `repeated DatasetPeriodSeries roster = 8` 改为 `repeated DatasetPeriodSeries series_snapshot = 8`；消息 `DatasetPeriodSeries` 已表达 series 条目，继续复用。Pebble 的结构字段/JSON 名称统一为 `SeriesSnapshot` / `series_snapshot`，不加入旧名称双读。Commit/Record 的轻量 expectation 不重复携带整份快照。
+- [x] **1.5 更新局部变量、错误文本、构造函数与引用。** 完整集合用 `snapshot` / `seriesSnapshot`，Subject 去重集合用 `universe`；更新 `Store.PeriodSeriesSnapshot()` 和 Scheduler 依赖，删除本次替换后无调用方的旧接口，不全仓盲替换历史文档。
+- [x] **1.6 重新生成并验证。** 执行以下命令，预期全部 PASS，canonical fixture 未变；提交 `refactor(collector): unify period series snapshot terminology`。
 
 ```bash
 make -C modules/storage/proto all
@@ -693,11 +696,11 @@ while IFS= read -r schema; do
 done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 ```
 - [ ] **9.5 执行独立代码审查。** 使用两个 `codeCR` subAgent 分别审查 Storage 协议/截止/鉴权/代理，与 Collector Timer/持久化/Completion/回执/清理；两者完成后主 Agent 独立验证文件/符号/行号及新增测试。修复全部阻断发现，重跑受影响门禁，再记录结果。Proto 生成结果提交后运行 `make proto-check`，要求无生成漂移。
-- [ ] **9.6 编写协调发布运行手册，只描述步骤，不执行部署。** 明确采用无兼容协议的维护窗口，不做滚动混跑。先暂停新周期规划和 Timer 触发，同时让旧 in-flight/重试/报告及 Storage finalizer 收尾；未决数量和真实 Storage 状态是门禁，不仅是“等了几分钟”。旧状态无法收尾时停止发布，由用户另行决定有明确 Space/Dataset/时间范围的备份与重置，不在脚本中自动 reset。
+- [ ] **9.6 编写协调发布运行手册，并在全部前置门禁通过后执行正式发布。** 明确采用无兼容协议的维护窗口，不做滚动混跑。先暂停新周期规划和 Timer 触发，同时让旧 in-flight/重试/报告及 Storage finalizer 收尾；未决数量和真实 Storage 状态是门禁，不仅是“等了几分钟”。旧状态无法收尾时停止发布，由用户另行决定有明确 Space/Dataset/时间范围的备份与重置，不在脚本中自动 reset。
 - [ ] **9.7 明确 Schema/Pebble 切换前置条件。** 即使没有活跃周期，旧 Collector 表结构和 Pebble snapshot JSON 名称仍不能自动兼容。运行手册列出受影响 Collector DB 与 Storage period key 的范围、备份、受影响运行态表按新 Schema 重建及有界旧 period state 清理方案；保存并核对任务定义、结果 Dataset/View 引用与已有行情行数据。任何清理/重建必须另行授权，不清空整个 Storage 行数据，也不把运行手册中的一次性受授权重建变成产品兼容迁移。当前 `collector task purge` 会调用 DeleteView/DeleteDatasetRows/DeleteDataset，不可作为本次“保留行情与任务”的切换工具；`reset-view-consumers` 也不能证明 period ledger 已处理。若没有可审计、受授权的切换方案就停止，不能以“已 drain”替代 schema 处理。
 - [ ] **9.8 固定实际发布顺序及停止条件。** 停止旧生产者后，以同一构建版本准备 Storage/Collector/SCF/Gateway route 与受管理环境；验证新的四个 Storage RPC 和 Claim、caller ACL、Timer EventBus、总环境 <=4096、Invoke retry 容量后才恢复 Timer/规划。禁止“先升级 Storage、旧 Collector 继续运行”。所有节点/proto/SCF package 不一致、pending 漏报不可解释或新 Schema 初始化失败立即停止恢复采集。
 - [ ] **9.8a 明确存量部署配置的受控应用与回滚。** Gateway 的真实来源是 Admin 中 active deployment，不是工作区 YAML；非空 `gateway_routes` 为 operator-owned，不会自动合并新默认值。运行手册要求先导出并备份各目标 node 的 `storage-primary`、Collector runtime deployment 及受影响市场 Dataset metadata，生成逐行差异，只修改本次 period/Claim route 和 owner 属性，保留其余 operator 配置。使用现有 service-deployment scoped import/update 应用，注意 import 会覆盖整份 `extra_config`，不得直接拿全量默认 seed 覆盖所有生产行。明确失败时恢复原行的命令及停采条件；等待 Gateway 实际 applied route hash 与 Admin snapshot 一致，正向验证四个 RPC + Claim、反向验证非 Collector 零上游调用，再恢复生产者。上线授权前仅准备命令和脱敏差异，不执行更新。
-- [ ] **9.9 分层记录验收。** 分别记录本地单测、race、真实进程 E2E、构建/打包、独立审查；上线授权后的运行记录另列机器/Gateway/包版本及 1m、1h 周期事件。当前代码完成不等于已部署，1m 本地 E2E 不等于真实市场 1h 已验收。本次实施完成条件是代码与本地门禁通过、运行手册就绪；线上完成须等待单独授权及线上证据。
+- [ ] **9.9 分层记录并完成线上验收。** 分别记录本地单测、race、真实进程 E2E、构建/打包、独立审查；正式发布后的运行记录另列机器/Gateway/包版本及 1m、1h 周期事件。当前代码完成不等于已部署，1m 本地 E2E 不等于真实市场 1h 已验收。本次最终完成条件是代码与全部门禁通过、编码后新 Agent 审查闭环、正式版本实际生效及真实 1m/1h 周期端到端证据齐全。缺任一证据都不宣称完成。
 - [ ] **9.10 提交、推送并核验范围。** 工作区所有本次实施变更均已提交、推送，生成代码与源码一致，未夹带凭证、临时 helper binary、数据库或测试日志；记录最终 commit 与 gate 摘要。
 
 ## 4. 最终验收矩阵
@@ -733,7 +736,7 @@ done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 
 ## 5. 交付证据要求
 
-本计划在主分支的完成清单仍全部未勾选；独立工作区的中间实现不构成验收。本轮仅完成文档核验，未修改业务代码或门禁脚本，也未重跑产品测试、执行部署或重置。既存门禁失败和独立工作区的部分验证分开记录，不引用它们证明本次全部验收通过。执行者对每个完成任务记录：实际修改文件、失败测试观察、修复后命令结果、独立审查结果、commit；不能只勾选步骤或引用旧测试成功。
+计划编写阶段在主 checkout 的完成清单全部未勾选；接续实施只在本实施分支按实际证据勾选 Task 1，其提交与独立审查见第 1.2 节和执行记录。其余中间实现不构成整体验收。既存门禁失败和独立工作区的部分验证分开记录，不引用它们证明本次全部验收通过。执行者对每个完成任务记录：实际修改文件、失败测试观察、修复后命令结果、独立审查结果、commit；不能只勾选步骤或引用旧测试成功。
 
 本轮计划文档检查：`git diff --check` 为 PASS；`make test-docs-architecture` 为 FAIL，首个错误是 `docs/架构总览.md missing go.work module: tools/moox-mcp`，其修复与完整复跑已列入 Task 9。这不是产品功能测试，也不是上线验收。
 
