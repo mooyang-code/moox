@@ -17,6 +17,17 @@ func TestManagedEnvironmentRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestManagedEnvironmentAcceptsTimerClaimRouting(t *testing.T) {
+	for _, key := range []string{"MOOX_MARKET_FETCH_BINDING_HASH", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE"} {
+		_, ok := managedEnvironmentKeys[key]
+		require.True(t, ok, "missing Timer Claim key %s", key)
+	}
+	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_STORAGE_PRIMARY_AUTH_SECRET", "MOOX_EVENTBUS_NATS_PASSWORD"} {
+		_, ok := managedEnvironmentKeys[key]
+		require.False(t, ok, "assignment patches must not replace credentials: %s", key)
+	}
+}
+
 func TestManagedEnvironmentAcceptsMarketIdentityKeys(t *testing.T) {
 	for _, key := range []string{
 		"MOOX_MARKET_FETCH_MARKET_ID",

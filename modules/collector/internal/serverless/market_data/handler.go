@@ -51,7 +51,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		return failure("invalid_event", fmt.Sprintf("decode event: %v", err)), nil
 	}
 	timerMode := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MODE")))
-	timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS")) != "" || timerMode != ""
+	timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_BINDING_HASH")) != "" || timerMode != ""
 	timerEnvelope := event.Type != "" || event.TriggerName != "" || event.Message != ""
 	if timerEnvelope {
 		if err := validateTimerEvent(event); err != nil {

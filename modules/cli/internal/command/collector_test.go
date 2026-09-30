@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,7 +114,8 @@ func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
 	t.Setenv("MOOX_SERVICE_GATEWAY_CA_FILE", gatewayCAFile)
 
 	eventBusCAFile := filepath.Join(dir, "eventbus-ca.pem")
-	require.NoError(t, os.WriteFile(eventBusCAFile, []byte("eventbus-ca"), 0o600))
+	require.NoError(t, os.WriteFile(eventBusCAFile, mustTestEventBusCAPEM(t), 0o600))
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "test-primary-secret")
 	credentialFile := filepath.Join(dir, "eventbus.yaml")
 	require.NoError(t, os.WriteFile(credentialFile, []byte(
 		"version: 1\nurls: [tls://203.0.113.10:4222]\nusername: worker\npassword: worker-secret\nca_file: eventbus-ca.pem\n",
@@ -154,12 +156,13 @@ func TestCollectorFunctionEnvironmentUsesResolvedControlTrustMaterial(t *testing
 			Password: "publisher-secret",
 			CAFile:   "ca.pem",
 		},
-		EventBusCAPEM:       []byte("eventbus-control-ca"),
-		GatewayCAPEM:        controlCA,
-		ServiceGatewayCAPEM: controlCA,
+		collectorPackageOptions: collectorPackageOptions{EventBusCAPEM: mustTestEventBusCAPEM(t)},
+		GatewayCAPEM:            controlCA,
+		ServiceGatewayCAPEM:     controlCA,
 	}, "package-control")
 	require.NoError(t, err)
-	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("eventbus-control-ca")), env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"])
+	assert.Equal(t, "certs/eventbus-ca.pem", env["MOOX_EVENTBUS_NATS_TLS_CA_FILE"])
+	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	assert.Equal(t, base64.StdEncoding.EncodeToString(controlCA), env["MOOX_GATEWAY_CA_PEM_B64"])
 	assert.Equal(t, base64.StdEncoding.EncodeToString(controlCA), env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
 }
@@ -230,7 +233,42 @@ func TestCollectorStoragePrimaryAuthSecretUsesNormalizedControlFile(t *testing.T
 	assert.Error(t, err)
 }
 
-func TestCollectorTimerEnvironmentOmitsControlPlaneCredentials(t *testing.T) {
+func TestCollectorPublicationDerivesOnlyAllowedBindingAppIDs(t *testing.T) {
+	raw := []byte("storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n    swap:\n      auth_info: {app_id: moox-collector, app_key: ''}\n")
+	encoded, err := collectorStorageBindingAppKeys(raw, "test-master-secret")
+	require.NoError(t, err)
+	var keys map[string]string
+	require.NoError(t, json.Unmarshal([]byte(encoded), &keys))
+	require.Len(t, keys, 1)
+	require.Len(t, keys["moox-collector"], 64)
+	require.NotContains(t, encoded, "test-master-secret")
+	_, err = collectorStorageBindingAppKeys(raw, "")
+	require.ErrorContains(t, err, "Primary auth secret")
+	_, err = collectorStorageBindingAppKeys([]byte("storage:\n  bindings:\n    x:\n      auth_info: {app_id: administrator, app_key: ''}\n"), "test-master-secret")
+	require.ErrorContains(t, err, "allowed")
+}
+
+func TestCollectorZipUploadRejectsCredentialsBeforeControlAccess(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	t.Setenv("MOOX_CLS_TOPIC_ID", "test-topic")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "storage-node")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "test-service-secret")
+	zipPath := filepath.Join(t.TempDir(), "external.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{"config.yaml": "password: leaked-test-password\n", "main": "binary", "certs/eventbus-ca.pem": string(mustTestEventBusCAPEM(t))})
+	called := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
+	defer server.Close()
+	_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{ControlURL: server.URL, SpaceID: "stockcn", StorageRPCGatewayTarget: "ip://storage.example:11003", CloudAccountID: "account", Region: "ap-singapore", NodeCount: 1, AccessToken: "test-token", ZipPath: zipPath})
+	require.ErrorContains(t, err, "password")
+	require.NotContains(t, err.Error(), "leaked-test-password")
+	require.Zero(t, called)
+	_, err = deployCollectorFunction(context.Background(), collectorDeployOptions{ControlURL: server.URL, CloudAccountID: "account", NodeID: "node", ZipPath: zipPath})
+	require.Error(t, err)
+	require.Zero(t, called)
+}
+
+func TestCollectorTimerEnvironmentOmitsUnrelatedHTTPSCAs(t *testing.T) {
 	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
 	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
 	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
@@ -238,10 +276,40 @@ func TestCollectorTimerEnvironmentOmitsControlPlaneCredentials(t *testing.T) {
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{TriggerType: "timer", StorageRPCGatewayTarget: "ip://storage:11003"}, "pkg-timer")
 	require.NoError(t, err)
 	assert.Equal(t, "ip://storage:11003", env["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
-	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_URL")
-	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_PASSWORD")
 	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
 	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
+}
+
+func TestCollectorTimerEnvironmentIncludesDurableCredentialsAndCAPath(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	ca := mustTestEventBusCAPEM(t)
+	opts := collectorPublishOptions{
+		TriggerType: "timer", BizType: "market_fetcher", SpaceID: "stockcn",
+		CollectorRPCGatewayTarget: "ip://collector.example:11003", CollectorGatewayTargetNode: "collector-node",
+		StorageRPCGatewayTarget: "ip://storage:11003", StorageAppKeysJSON: `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
+		EventBusCredential:      &jetstream.CredentialFile{URLs: []string{"tls://eventbus.example:4222"}, Username: "publisher", Password: "test-password"},
+		collectorPackageOptions: collectorPackageOptions{EventBusCAPEM: ca},
+	}
+	env, err := collectorFunctionEnvironment(opts, "pkg-timer")
+	require.NoError(t, err)
+	require.Equal(t, "test-password", env["MOOX_EVENTBUS_NATS_PASSWORD"])
+	require.Equal(t, "certs/eventbus-ca.pem", env["MOOX_EVENTBUS_NATS_TLS_CA_FILE"])
+	require.Equal(t, opts.StorageAppKeysJSON, env["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"])
+	require.NotContains(t, env, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+	require.NotContains(t, env, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+	require.Equal(t, "60", env["MOOX_FETCH_TIMEOUT_SECONDS"])
+	require.Equal(t, "ip://collector.example:11003", env["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"])
+	require.Equal(t, "collector-node", env["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"])
+	require.LessOrEqual(t, tencent.SCFEnvironmentBytes(env), 4096)
+	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_STORAGE_PRIMARY_AUTH_SECRET", "MOOX_EVENTBUS_NATS_TLS_CA_FILE", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE"} {
+		opts.Env = []string{key + "=forbidden-value"}
+		_, err := collectorFunctionEnvironment(opts, "pkg-timer")
+		require.ErrorContains(t, err, "managed key "+key)
+	}
+	opts.Env = []string{"PROVIDER_EXTRA=" + strings.Repeat("private-value", 400)}
+	_, err = collectorFunctionEnvironment(opts, "pkg-timer")
+	require.ErrorContains(t, err, "4096")
+	require.NotContains(t, err.Error(), "private-value")
 }
 
 func TestCollectorEnvironmentUsesPublicStorageTargetForAllSCF(t *testing.T) {
@@ -264,8 +332,8 @@ func TestCollectorInvokeMarketFetcherKeepsEventBusButOmitsHTTPSCAs(t *testing.T)
 	setCollectorCLSTestCredentials(t)
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{
 		TriggerType: "invoke", BizType: "market_fetcher", StorageRPCGatewayTarget: "ip://storage:11003",
-		EventBusCredential: &jetstream.CredentialFile{URLs: []string{"tls://eventbus.example:4222"}, Username: "worker", Password: "secret"},
-		EventBusCAPEM:      []byte("eventbus-ca"), GatewayCAPEM: []byte("gateway-ca"), ServiceGatewayCAPEM: []byte("service-ca"),
+		EventBusCredential:      &jetstream.CredentialFile{URLs: []string{"tls://eventbus.example:4222"}, Username: "worker", Password: "secret"},
+		collectorPackageOptions: collectorPackageOptions{EventBusCAPEM: mustTestEventBusCAPEM(t)}, GatewayCAPEM: []byte("gateway-ca"), ServiceGatewayCAPEM: []byte("service-ca"),
 	}, "pkg-invoke")
 	require.NoError(t, err)
 	assert.Equal(t, "tls://eventbus.example:4222", env["MOOX_EVENTBUS_NATS_URL"])
@@ -612,7 +680,7 @@ func TestCollectorFunctionEnvironmentRejectsCloudCredentialOverrides(t *testing.
 
 func TestCollectorFunctionEnvironmentInjectsManagedEventBusCredential(t *testing.T) {
 	dir := t.TempDir()
-	ca := []byte("test-ca-pem")
+	ca := mustTestEventBusCAPEM(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ca.pem"), ca, 0o600))
 	credentialPath := filepath.Join(dir, "cloudnode-worker.yaml")
 	require.NoError(t, os.WriteFile(credentialPath, []byte(
@@ -627,9 +695,9 @@ func TestCollectorFunctionEnvironmentInjectsManagedEventBusCredential(t *testing
 	assert.Equal(t, "tls://203.0.113.10:4222", env["MOOX_EVENTBUS_NATS_URL"])
 	assert.Equal(t, "cloudnode-worker", env["MOOX_EVENTBUS_NATS_USERNAME"])
 	assert.Equal(t, "worker-token", env["MOOX_EVENTBUS_NATS_PASSWORD"])
-	assert.Equal(t, base64.StdEncoding.EncodeToString(ca), env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"])
+	assert.Equal(t, "certs/eventbus-ca.pem", env["MOOX_EVENTBUS_NATS_TLS_CA_FILE"])
 	assert.Equal(t, "pkg-1", env["MOOX_CODE_PACKAGE_ID"])
-	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_TLS_CA_FILE")
+	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 
 	_, err = collectorFunctionEnvironment(collectorPublishOptions{
 		EventBusCredentialFile: credentialPath,
@@ -706,7 +774,7 @@ func TestBuildCollectorCreateNodeItemUsesManagedShortLivedConfiguration(t *testi
 	if item.CloudAccountID != "account-a" || item.Region != "ap-guangzhou" || item.PackageID != "moox-collector_dev" {
 		t.Fatalf("routing fields = %#v", item)
 	}
-	if item.Config["timeout"] != "15" || item.Config["memory_size"] != "64" {
+	if item.Config["timeout"] != "60" || item.Config["memory_size"] != "64" {
 		t.Fatalf("config = %#v", item.Config)
 	}
 	assert.NotContains(t, item.Config, "cls_logset_id")
@@ -1106,14 +1174,15 @@ func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 	}))
 	defer server.Close()
 	_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{
-		ControlURL:             server.URL,
-		AccessToken:            "token",
-		SpaceID:                "crypto",
-		CloudAccountID:         "account-a",
-		Region:                 "ap-guangzhou",
-		NodeCount:              50,
-		FunctionNamePrefix:     "fleet",
-		EventBusCredentialFile: credentialFile,
+		collectorPackageOptions: collectorPackageOptions{CollectorRoot: filepath.Join("..", "..", "..", "collector")},
+		ControlURL:              server.URL,
+		AccessToken:             "token",
+		SpaceID:                 "crypto",
+		CloudAccountID:          "account-a",
+		Region:                  "ap-guangzhou",
+		NodeCount:               50,
+		FunctionNamePrefix:      "fleet",
+		EventBusCredentialFile:  credentialFile,
 	})
 	require.ErrorContains(t, err, `fleet prefix "fleet" has invalid index metadata`)
 	assert.False(t, uploadCalled)
@@ -1235,7 +1304,7 @@ func TestBuildCollectorCreateNodeItemReservesCLSFlushWindow(t *testing.T) {
 		Config: []string{
 			"realtime_batch_size=30",
 			"max_inflight_requests=32",
-			"request_timeout_ms=6500",
+			"request_timeout_ms=11000",
 		},
 	}, "moox-collector_dev")
 	require.ErrorContains(t, err, "configured reserves")
@@ -1263,8 +1332,8 @@ func TestBuildCollectorCreateNodeItemUsesLongStockCNInvokeTimeoutOnlyForInvoke(t
 	timer := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "timer", FetcherConfig: fetcher,
 	}, "moox-collector-stockcn_dev")
-	assert.Equal(t, "15", timer.Config["timeout"])
-	assert.Equal(t, "15", timer.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
+	assert.Equal(t, "60", timer.Config["timeout"])
+	assert.Equal(t, "60", timer.Environment["MOOX_FETCH_TIMEOUT_SECONDS"])
 
 	invoke := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
 		SpaceID: "stockcn", CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: "invoke", FetcherConfig: fetcher,
@@ -1460,8 +1529,12 @@ func writeMinimalSCFZip(t *testing.T, zipPath string, files map[string]string) {
 }
 
 func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	_, ca, err := collectorEventBusCredentialMaterial(collectorPublishOptions{EventBusCredentialFile: credentialFile})
+	require.NoError(t, err)
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
-	writeMinimalSCFZip(t, zipPath, nil)
+	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "config.yaml": "system: {}\n", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
 
 	uploadBase := ""
 	var server *httptest.Server
@@ -1492,10 +1565,11 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	defer server.Close()
 
 	summary, err := deployCollectorFunction(context.Background(), collectorDeployOptions{
-		ControlURL:     server.URL,
-		CloudAccountID: "account-a",
-		NodeID:         "node-1",
-		ZipPath:        zipPath,
+		ControlURL:             server.URL,
+		CloudAccountID:         "account-a",
+		NodeID:                 "node-1",
+		ZipPath:                zipPath,
+		EventBusCredentialFile: credentialFile,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, zipPath, summary.ZipPath)
@@ -1503,6 +1577,28 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	assert.Equal(t, "node-batch-1", summary.JobID)
 	assert.Equal(t, "deploy_nodes", summary.Operation)
 	assert.Equal(t, 1, summary.TotalCount)
+}
+
+func TestDeployCollectorFunctionBudgetAndMissingMasterFailBeforeUpload(t *testing.T) {
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	_, ca, err := collectorEventBusCredentialMaterial(collectorPublishOptions{EventBusCredentialFile: credentialFile})
+	require.NoError(t, err)
+	zipPath := filepath.Join(t.TempDir(), "collector.zip")
+	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "config.yaml": "system: {}\n", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
+	called := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
+	defer server.Close()
+	opts := collectorDeployOptions{ControlURL: server.URL, CloudAccountID: "account", NodeID: "node", ZipPath: zipPath, EventBusCredentialFile: credentialFile}
+	require.NoError(t, os.WriteFile(credentialFile, []byte("version: 1\nurls: [tls://203.0.113.10:4222]\nusername: publisher\npassword: "+strings.Repeat("private-value", 400)+"\nca_file: eventbus-ca.pem\n"), 0o600))
+	_, err = deployCollectorFunction(context.Background(), opts)
+	require.ErrorContains(t, err, "4096")
+	require.NotContains(t, err.Error(), "private-value")
+	require.Zero(t, called)
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
+	t.Setenv("HOME", t.TempDir())
+	_, err = deployCollectorFunction(context.Background(), opts)
+	require.ErrorContains(t, err, "Storage Primary auth secret")
+	require.Zero(t, called)
 }
 
 func TestDeployCollectorFunctionRejectsPlaceholderAuth(t *testing.T) {
@@ -1518,7 +1614,7 @@ func TestDeployCollectorFunctionRejectsPlaceholderAuth(t *testing.T) {
 		NodeID:         "node-1",
 		ZipPath:        zipPath,
 	})
-	require.ErrorContains(t, err, "placeholder Storage Primary app_key")
+	require.ErrorContains(t, err, "nonempty credential field app_key")
 }
 
 func TestResolveCollectorRootMissing(t *testing.T) {

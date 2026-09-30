@@ -320,7 +320,7 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 		cfg := base()
 		cfg.Spaces[0].RealtimeBatchSize = 30
 		cfg.Spaces[0].MaxInflightRequests = 32
-		cfg.Spaces[0].RequestTimeoutMS = 5000
+		cfg.Spaces[0].RequestTimeoutMS = 11000
 		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)
@@ -553,12 +553,37 @@ func TestValidateSCFFetcherDefaultsAndBoundsStockCNInvokeTimeout(t *testing.T) {
 		},
 	}
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
-	assert.Equal(t, 15, base.TimeoutSeconds)
+	assert.Equal(t, DefaultSCFTimerTimeoutSeconds, base.TimeoutSeconds)
 	assert.Equal(t, DefaultStockCNInvokeTimeoutSeconds, base.InvokeTimeoutSeconds)
 
 	base.InvokeTimeoutSeconds = 59
 	err := validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]")
 	require.ErrorContains(t, err, "invoke_timeout_seconds")
+}
+
+func TestValidateSCFTimerClaimCompletionBudget(t *testing.T) {
+	base := SCFFetcherSpace{SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 60,
+		StorageRPCGatewayTarget: "ip://storage.example:11003", RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 3, StorageTimeoutMS: 5000,
+		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+	base.RequestTimeoutMS = 4000
+	// 3 waves * 4 attempts * 4 seconds + Claim + Storage + Completion +
+	// CLS/metrics/final reserves exceeds 60 seconds.
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "reserves")
+}
+
+func TestValidateSCFCollectorClaimEndpointPair(t *testing.T) {
+	base := SCFFetcherSpace{SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 60,
+		StorageRPCGatewayTarget: "ip://storage.example:11003", RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 3, StorageTimeoutMS: 5000,
+		CollectorRPCGatewayTarget: "ip://collector.example:11003",
+		Regions:                   []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf"), "collector_gateway_target_node")
+	base.CollectorGatewayTargetNode = "collector-node"
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf"))
+	base.CollectorRPCGatewayTarget = "https://collector.example"
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf"), "collector_rpc_gateway_target")
 }
 
 const validManifest = `[admin]

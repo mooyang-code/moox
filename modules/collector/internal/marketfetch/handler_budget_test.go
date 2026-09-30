@@ -35,8 +35,24 @@ func TestContextWithReserveEndsFetchBeforeStorageAndCLSWindow(t *testing.T) {
 
 func TestStorageAndPublishReservesColdEventBusConnection(t *testing.T) {
 	commit, publish := storageAndPublishReserves(5*time.Second, 0, true)
-	require.Equal(t, 8*time.Second, commit)
-	require.Equal(t, 3*time.Second, publish)
+	require.Equal(t, 9750*time.Millisecond, commit)
+	require.Equal(t, 4*time.Second, publish)
+}
+
+func TestTimerBudgetLeavesBoundedStorageEventBusAndCLSWindows(t *testing.T) {
+	t.Setenv("MOOX_FETCH_TIMEOUT_SECONDS", "")
+	t.Setenv("MOOX_MARKET_FETCH_TIMEOUT_SECONDS", "")
+	claim := timerClaimTimeout
+	commit, publish := storageAndPublishReserves(5*time.Second, 0, true)
+	ctx, cancel := executionContext(context.Background())
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	budget := time.Until(deadline)
+	require.Equal(t, 4*time.Second, publish)
+	require.Equal(t, metricsResponseReserve, commit-5*time.Second-publish)
+	provider := 3 * 4 * time.Second // 30 subjects / 10 inflight * four attempts.
+	require.Greater(t, budget-claim-commit-3*time.Second, provider, "Timer must preserve Claim, provider attempts, Storage, Completion and CLS")
 }
 
 func TestReservedDeadlineStorageUsesReservedParentBudget(t *testing.T) {

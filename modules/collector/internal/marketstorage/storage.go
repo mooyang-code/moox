@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -72,12 +71,16 @@ func NewBatchStorageWithWriteSource(accessTarget, instType, writeSource string) 
 	if err != nil {
 		return nil, err
 	}
+	auth, err := storageAuthInfo(binding)
+	if err != nil {
+		return nil, err
+	}
 	target := normalizeStorageTarget(accessTarget, "11003")
 	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
 	primary := storagepb.NewPrimaryStoreClientProxy(options...)
 	return &storageWriter{
 		access: primary, period: primary, metadata: storagepb.NewMetadataClientProxy(options...),
-		authInfo: storageAuthInfo(binding), writeSource: strings.TrimSpace(writeSource),
+		authInfo: auth, writeSource: strings.TrimSpace(writeSource),
 	}, nil
 }
 
@@ -86,13 +89,21 @@ func NewResampleMetadataClient(accessTarget, instType string) (*ResampleMetadata
 	if err != nil {
 		return nil, err
 	}
+	auth, err := storageAuthInfo(binding)
+	if err != nil {
+		return nil, err
+	}
 	target := normalizeStorageTarget(accessTarget, "11003")
 	options := gatewayauth.NewTRPCClientOptions(target, collectorStorageGatewayNodeID(), gatewayauth.CredentialsFromEnv())
-	return &ResampleMetadataClient{Client: storagepb.NewMetadataClientProxy(options...), Primary: storagepb.NewPrimaryStoreClientProxy(options...), Auth: storageAuthInfo(binding)}, nil
+	return &ResampleMetadataClient{Client: storagepb.NewMetadataClientProxy(options...), Primary: storagepb.NewPrimaryStoreClientProxy(options...), Auth: auth}, nil
 }
 
 func NewResampleStorage(accessTarget, instType, writeSource string) (ResampleStorage, error) {
 	binding, err := ResolveStorageBinding(instType)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := storageAuthInfo(binding)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +112,7 @@ func NewResampleStorage(accessTarget, instType, writeSource string) (ResampleSto
 	primary := storagepb.NewPrimaryStoreClientProxy(options...)
 	return &storageWriter{
 		access: primary, period: primary, metadata: storagepb.NewMetadataClientProxy(options...),
-		authInfo: storageAuthInfo(binding), writeSource: strings.TrimSpace(writeSource),
+		authInfo: auth, writeSource: strings.TrimSpace(writeSource),
 	}, nil
 }
 
@@ -528,14 +539,6 @@ func validatePeriodFailureResults(requested []uint32, results []*storagepb.Datas
 	return nil
 }
 
-func storageAuthInfo(binding StorageBinding) *storagepb.AuthInfo {
-	appKey := binding.AuthInfo.AppKey
-	if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
-		appKey = mooxsecurity.HMACSHA256Hex(secret, []byte(binding.AuthInfo.AppID))
-	}
-	return &storagepb.AuthInfo{AppId: binding.AuthInfo.AppID, AppKey: appKey, Operator: binding.AuthInfo.Operator, RequestId: binding.AuthInfo.RequestID}
-}
-
 // StorageAuthInfo returns the metadata caller identity for a configured market
 // binding. The subject synchronizer uses the spot binding as its control-plane
 // identity for both crypto and stock metadata calls.
@@ -544,7 +547,7 @@ func ResolveStorageAuthInfo(instType string) (*storagepb.AuthInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return storageAuthInfo(binding), nil
+	return storageAuthInfo(binding)
 }
 
 func normalizeStorageTarget(raw, defaultPort string) string {

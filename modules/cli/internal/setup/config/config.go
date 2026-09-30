@@ -34,7 +34,11 @@ const (
 	SCFCLSReserveMilliseconds = 3000
 	// SCFCompletionReserveMilliseconds leaves enough time for the durable
 	// completion event after Storage has accepted the aggregate write.
-	SCFCompletionReserveMilliseconds = 3000
+	SCFCompletionReserveMilliseconds      = 3000
+	SCFTimerClaimReserveMilliseconds      = 3000
+	SCFColdCompletionReserveMilliseconds  = 4000
+	SCFMetricsResponseReserveMilliseconds = 750
+	DefaultSCFTimerTimeoutSeconds         = tencent.CollectorTimerTimeoutSeconds
 	// SCFFinalResponseReserveMilliseconds keeps the SCF runtime enough time to
 	// serialize and return its response after best-effort CLS logging.
 	SCFFinalResponseReserveMilliseconds = 500
@@ -660,6 +664,8 @@ type SCFFetcherSpace struct {
 	StorageGatewayNodeID           string `toml:"storage_gateway_node_id"`
 	StorageGatewayHost             string `toml:"storage_gateway_host"`
 	StorageRPCGatewayTarget        string `toml:"-"`
+	CollectorRPCGatewayTarget      string `toml:"collector_rpc_gateway_target"`
+	CollectorGatewayTargetNode     string `toml:"collector_gateway_target_node"`
 	StoragePrivateGatewayHost      string `toml:"storage_private_gateway_host"`
 	StoragePrivateRPCGatewayTarget string `toml:"-"`
 	// StorageAccessTargets overrides the central Storage gateway per SCF
@@ -1717,6 +1723,16 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	if err := validateStorageRPCTarget(cfg.StorageRPCGatewayTarget, path+".storage_rpc_gateway_target"); err != nil {
 		return err
 	}
+	cfg.CollectorRPCGatewayTarget = strings.TrimSpace(cfg.CollectorRPCGatewayTarget)
+	cfg.CollectorGatewayTargetNode = strings.TrimSpace(cfg.CollectorGatewayTargetNode)
+	if cfg.CollectorRPCGatewayTarget != "" || cfg.CollectorGatewayTargetNode != "" {
+		if cfg.CollectorGatewayTargetNode == "" || !hostNamePattern.MatchString(cfg.CollectorGatewayTargetNode) {
+			return fmt.Errorf("config_invalid: %s.collector_gateway_target_node must be a valid Collector node", path)
+		}
+		if err := validateStorageRPCTarget(cfg.CollectorRPCGatewayTarget, path+".collector_rpc_gateway_target"); err != nil {
+			return err
+		}
+	}
 	if len(cfg.StorageAccessTargets) > 0 {
 		normalizedAccessTargets := make(map[string]string, len(cfg.StorageAccessTargets))
 		for rawRegion, rawTarget := range cfg.StorageAccessTargets {
@@ -1772,8 +1788,13 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	if cfg.MemorySize != 64 {
 		return fmt.Errorf("config_invalid: %s.memory_size must be 64", path)
 	}
-	if cfg.TimeoutSeconds != 15 {
-		return fmt.Errorf("config_invalid: %s.timeout_seconds must be 15", path)
+	// Legacy manifests used the pre-Claim 15-second Timer budget. Upgrade that
+	// value at the trusted configuration boundary rather than deploying it.
+	if cfg.TimeoutSeconds == 0 || cfg.TimeoutSeconds == 15 {
+		cfg.TimeoutSeconds = DefaultSCFTimerTimeoutSeconds
+	}
+	if cfg.TimeoutSeconds != DefaultSCFTimerTimeoutSeconds {
+		return fmt.Errorf("config_invalid: %s.timeout_seconds must be %d", path, DefaultSCFTimerTimeoutSeconds)
 	}
 	stockCN := strings.EqualFold(cfg.SpaceID, "stockcn")
 	if stockCN {
@@ -1870,7 +1891,7 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	// Validate the execution budget before any package upload. Crypto uses the
 	// Scheduler-owned Invoke pool; stockcn still publishes Timer functions plus
 	// an Invoke canary. Both paths need enough time for Storage and observability.
-	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + SCFCompletionReserveMilliseconds + SCFCLSReserveMilliseconds + SCFFinalResponseReserveMilliseconds
+	requestBudgetMS := SCFTimerClaimReserveMilliseconds + requestWaves*cfg.HTTPMaxAttempts*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + SCFColdCompletionReserveMilliseconds + SCFCLSReserveMilliseconds + SCFMetricsResponseReserveMilliseconds + SCFFinalResponseReserveMilliseconds
 	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
 		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + completion, CLS and final response reserves must be less than timeout", path)
 	}

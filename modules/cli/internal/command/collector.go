@@ -2,6 +2,7 @@ package command
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -32,12 +34,14 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricsreport "github.com/mooyang-code/moox/packages/report"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 const (
-	defaultCollectorSCFTimeout = "15"
+	defaultCollectorSCFTimeout = "60"
 	stockCNKlineTaskName       = "A 股 K 线 1m"
 	// Manifest deployments may spread a stockcn fleet across multiple regions;
 	// keep the ad-hoc guard above one normal 200-function release while the
@@ -59,16 +63,17 @@ type collectorPublishedTimerFleet struct {
 }
 
 type collectorPackageOptions struct {
-	CollectorRoot            string
-	SpaceID                  string
-	PackageConfigDir         string
-	Version                  string
-	Out                      string
-	ConfigDir                string
-	Entrypoint               string
-	CLSLogsetID              string
-	CLSTopicID               string
-	StoragePrimaryAuthSecret string
+	CollectorRoot    string
+	SpaceID          string
+	PackageConfigDir string
+	Version          string
+	Out              string
+	ConfigDir        string
+	Entrypoint       string
+	CLSLogsetID      string
+	CLSTopicID       string
+	EventBusCAPEM    []byte
+	EventBusCAFile   string
 }
 
 type collectorPublishOptions struct {
@@ -92,6 +97,8 @@ type collectorPublishOptions struct {
 	TriggerType                    string
 	EnableStockCN                  bool
 	StorageRPCGatewayTarget        string
+	CollectorRPCGatewayTarget      string
+	CollectorGatewayTargetNode     string
 	StoragePrivateRPCGatewayTarget string
 	StorageVPCID                   string
 	StorageSubnetID                string
@@ -116,12 +123,13 @@ type collectorPublishOptions struct {
 	// immediately before a fleet is published. They must not come from the
 	// operator machine, which may still hold an old CA after a control-plane
 	// certificate rotation.
-	EventBusCredential      *jetstream.CredentialFile
-	EventBusCAPEM           []byte
-	GatewayCAPEM            []byte
-	ServiceGatewayCAPEM     []byte
-	RuntimeServiceKeyID     string
-	RuntimeServiceSecretKey string
+	EventBusCredential       *jetstream.CredentialFile
+	StoragePrimaryAuthSecret string
+	StorageAppKeysJSON       string
+	GatewayCAPEM             []byte
+	ServiceGatewayCAPEM      []byte
+	RuntimeServiceKeyID      string
+	RuntimeServiceSecretKey  string
 }
 
 type collectorSCFTrustMaterial struct {
@@ -156,17 +164,19 @@ type collectorStockCNActivateOptions struct {
 
 type collectorDeployOptions struct {
 	collectorPackageOptions
-	ControlURL       string
-	ServiceAccessKey string
-	ServiceSecretKey string
-	SpaceID          string
-	CloudAccountID   string
-	NodeID           string
-	ZipPath          string
-	PackageName      string
-	PackageType      string
-	BizType          string
-	Runtime          string
+	StoragePrimaryAuthSecret string
+	EventBusCredentialFile   string
+	ControlURL               string
+	ServiceAccessKey         string
+	ServiceSecretKey         string
+	SpaceID                  string
+	CloudAccountID           string
+	NodeID                   string
+	ZipPath                  string
+	PackageName              string
+	PackageType              string
+	BizType                  string
+	Runtime                  string
 }
 
 type collectorDeleteOptions struct {
@@ -409,6 +419,7 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.NodeID, "node-id", "", "existing cloud node id / function name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ZipPath, "zip", "", "existing SCF zip path")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/market-fetch-publisher.yaml", "0600 EventBus publisher credential YAML")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageName, "package-name", "moox-collector", "function package name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageType, "package-type", "data_collector", "function package type")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.BizType, "biz-type", "market_fetcher", "business type")
@@ -463,6 +474,8 @@ func init() {
 	submitFlags.BoolVar(&collectorPublishFlags.EnableStockCN, "enable-stockcn", false, "通过全部 stockcn 发布门禁后启用正式 Kline Timer 和采集任务")
 	submitFlags.BoolVar(&collectorPublishFlags.SameRegionFirst, "same-region-first", true, "先完整占满 Storage 同地域配置的节点数，再发布其他地域；同地域函数使用私网网关")
 	submitFlags.StringVar(&collectorPublishFlags.StorageRPCGatewayTarget, "storage-rpc-gateway-target", "", "SCF 固定访问的 Storage tRPC 地址")
+	submitFlags.StringVar(&collectorPublishFlags.CollectorRPCGatewayTarget, "collector-rpc-gateway-target", "", "Collector Claim native tRPC endpoint, independent of Storage")
+	submitFlags.StringVar(&collectorPublishFlags.CollectorGatewayTargetNode, "collector-gateway-target-node", "", "Collector Claim gateway node identity")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
 	submitFlags.StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/market-fetch-publisher.yaml", "0600 market-fetch-publisher EventBus credential YAML")
@@ -486,9 +499,20 @@ func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions)
 	cmd.Flags().StringVar(&opts.Out, "out", "", "output zip path")
 	cmd.Flags().StringVar(&opts.ConfigDir, "config", "", "collector config directory")
 	cmd.Flags().StringVar(&opts.CLSTopicID, "cls-topic-id", "", "central CLS topic id used by SCF warning/error logs")
+	cmd.Flags().StringVar(&opts.EventBusCAFile, "eventbus-ca-file", "", "public EventBus CA PEM to package (no credentials)")
 }
 
 func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions) (*collectorpackager.BuildSCFPackageResult, error) {
+	if len(opts.EventBusCAPEM) == 0 && strings.TrimSpace(opts.EventBusCAFile) != "" {
+		var err error
+		opts.EventBusCAPEM, err = os.ReadFile(opts.EventBusCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read public EventBus CA file: %w", err)
+		}
+	}
+	if err := collectorpackager.ValidateEventBusCAPEM(opts.EventBusCAPEM); err != nil {
+		return nil, fmt.Errorf("public EventBus CA is required before SCF build: %w", err)
+	}
 	collectorRoot, err := resolveCollectorRoot(opts.CollectorRoot)
 	if err != nil {
 		return nil, err
@@ -524,10 +548,10 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		return nil, err
 	}
 	return collectorpackager.BuildSCFPackage(collectorpackager.BuildSCFPackageOptions{
-		BinaryPath:               binaryPath,
-		ConfigDir:                configDir,
-		OutPath:                  outPath,
-		StoragePrimaryAuthSecret: firstNonEmpty(opts.StoragePrimaryAuthSecret, os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")),
+		BinaryPath:    binaryPath,
+		ConfigDir:     configDir,
+		OutPath:       outPath,
+		EventBusCAPEM: opts.EventBusCAPEM,
 	})
 }
 
@@ -582,6 +606,14 @@ func resolveCollectorCLSSink(ctx context.Context, control *adminclient.Client, a
 }
 
 func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions) (collectorPublishSummary, error) {
+	if opts.ZipPath != "" {
+		if err := collectorpackager.ValidateSCFPackageZip(opts.ZipPath); err != nil {
+			return collectorPublishSummary{}, err
+		}
+		if err := validateCollectorZipLogging(opts.ZipPath, opts.CLSTopicID); err != nil {
+			return collectorPublishSummary{}, err
+		}
+	}
 	if opts.ControlURL == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--control-url is required")
 	}
@@ -716,9 +748,8 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		if trustErr != nil {
 			return collectorPublishSummary{}, trustErr
 		}
-		// The SCF package signs Binance Storage requests. Always take the
-		// Primary secret from the control host's authoritative auth file rather
-		// than inheriting a possibly stale operator environment.
+		// Derive per-app runtime credentials at publication, never in the package.
+		// The control host's auth file overrides a stale operator environment.
 		opts.StoragePrimaryAuthSecret = trustMaterial.StoragePrimaryAuthSecret
 		opts.EventBusCredential = &trustMaterial.EventBusCredential
 		opts.EventBusCAPEM = trustMaterial.EventBusCAPEM
@@ -743,6 +774,10 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		opts.StoragePrivateRPCGatewayTarget = defaultFlag(opts.StoragePrivateRPCGatewayTarget, fetcherConfig.StoragePrivateRPCGatewayTarget)
 		opts.RuntimeServiceKeyID = "collector"
 		opts.RuntimeServiceSecretKey = trustMaterial.CollectorServiceKey
+		if fetcherConfig.CollectorRPCGatewayTarget == "" && fetcherConfig.CollectorGatewayTargetNode == "" {
+			fetcherConfig.CollectorRPCGatewayTarget = "ip://" + net.JoinHostPort(manifest.Manifest.ControlHost.Address, "11003")
+			fetcherConfig.CollectorGatewayTargetNode = manifest.Manifest.ControlHost.Name
+		}
 		if opts.PackageName == "moox-collector" {
 			opts.PackageName = fetcherConfig.PackageName
 		}
@@ -752,6 +787,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		prefixDefault = defaultFlag(fetcherConfig.FunctionPrefix, prefixDefault)
 	}
 	opts.FunctionNamePrefix = defaultFlag(opts.FunctionNamePrefix, prefixDefault)
+	if err := prepareCollectorPublicationTrust(&opts); err != nil {
+		return collectorPublishSummary{}, err
+	}
 	if fetcherConfig == nil {
 		if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
 			return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before control-plane access: %w", err)
@@ -849,7 +887,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, err
 		}
 		zipPath = result.Path
-	} else if err := validateCollectorZipLogging(zipPath, opts.CLSTopicID); err != nil {
+	}
+	if err := collectorpackager.ValidateSCFPackageZip(zipPath); err != nil {
+		return collectorPublishSummary{}, err
+	}
+	if err := validateCollectorZipLogging(zipPath, opts.CLSTopicID); err != nil {
 		return collectorPublishSummary{}, err
 	}
 	if fetcherConfig == nil {
@@ -1631,6 +1673,130 @@ func collectorStoragePrimaryAuthSecret(raw []byte) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("primary auth secret is missing")
+}
+
+func collectorStorageBindingAppKeys(raw []byte, secret string) (string, error) {
+	if strings.TrimSpace(secret) == "" {
+		return "", fmt.Errorf("Storage Primary auth secret is required before publication")
+	}
+	var config struct {
+		Storage struct {
+			Bindings map[string]struct {
+				AuthInfo struct {
+					AppID string `yaml:"app_id"`
+				} `yaml:"auth_info"`
+			} `yaml:"bindings"`
+		} `yaml:"storage"`
+	}
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		return "", fmt.Errorf("invalid publication Storage binding configuration")
+	}
+	keys := make(map[string]string)
+	for _, binding := range config.Storage.Bindings {
+		appID := binding.AuthInfo.AppID
+		if appID != "moox-collector" {
+			return "", fmt.Errorf("publication Storage binding app ID is not allowed")
+		}
+		keys[appID] = mooxsecurity.HMACSHA256Hex(secret, []byte(appID))
+	}
+	if len(keys) == 0 {
+		return "", fmt.Errorf("publication requires Storage binding app IDs")
+	}
+	encoded, err := json.Marshal(keys)
+	return string(encoded), err
+}
+
+func prepareCollectorPublicationTrust(opts *collectorPublishOptions) error {
+	if opts.ZipPath != "" {
+		if err := collectorpackager.ValidateSCFPackageZip(opts.ZipPath); err != nil {
+			return err
+		}
+		if err := validateCollectorZipLogging(opts.ZipPath, opts.CLSTopicID); err != nil {
+			return err
+		}
+	}
+	if opts.EventBusCredential == nil && opts.EventBusCredentialFile == "" {
+		opts.EventBusCredentialFile = "~/.config/moox/eventbus/market-fetch-publisher.yaml"
+	}
+	credential, ca, err := collectorEventBusCredentialMaterial(*opts)
+	if err != nil {
+		return err
+	}
+	if err := validateCollectorEventBusCredential(credential); err != nil {
+		return err
+	}
+	if err := collectorpackager.ValidateEventBusCAPEM(ca); err != nil {
+		return err
+	}
+	opts.EventBusCredential = &credential
+	opts.EventBusCAPEM = ca
+	secret := opts.StoragePrimaryAuthSecret
+	if secret == "" {
+		secret = strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
+	}
+	if secret == "" {
+		directory, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("trusted local Storage Primary auth configuration is unavailable")
+		}
+		raw, err := os.ReadFile(filepath.Join(directory, ".config/moox/collector/storage-internal-auth.env"))
+		if err == nil {
+			secret, err = collectorStoragePrimaryAuthSecret(raw)
+		}
+		if err != nil || secret == "" {
+			return fmt.Errorf("trusted local Storage Primary auth secret is required before publication")
+		}
+	}
+	var config []byte
+	if opts.ZipPath != "" {
+		config, err = readCollectorZipEntry(opts.ZipPath, "sources/market/binance.yaml")
+		if err != nil {
+			return err
+		}
+		packagedCA, err := readCollectorZipEntry(opts.ZipPath, "certs/eventbus-ca.pem")
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(bytes.TrimSpace(packagedCA), bytes.TrimSpace(ca)) {
+			return fmt.Errorf("external SCF package EventBus CA does not match trusted publisher CA")
+		}
+	} else {
+		configDir := opts.ConfigDir
+		if configDir == "" {
+			root, rootErr := resolveCollectorRoot(opts.CollectorRoot)
+			if rootErr != nil {
+				return rootErr
+			}
+			spaceID := firstNonEmpty(opts.SpaceID, opts.collectorPackageOptions.SpaceID)
+			configDir = filepath.Join(root, "configs", filepath.FromSlash(defaultFlag(opts.PackageConfigDir, defaultCollectorPackageConfigDir(spaceID))))
+		}
+		config, err = os.ReadFile(filepath.Join(configDir, "sources/market/binance.yaml"))
+	}
+	if err != nil {
+		return fmt.Errorf("read publication Storage binding configuration: %w", err)
+	}
+	opts.StorageAppKeysJSON, err = collectorStorageBindingAppKeys(config, secret)
+	return err
+}
+
+func readCollectorZipEntry(zipPath, name string) ([]byte, error) {
+	archive, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, err
+	}
+	defer archive.Close()
+	for _, file := range archive.File {
+		if file.Name != name {
+			continue
+		}
+		reader, err := file.Open()
+		if err != nil {
+			return nil, err
+		}
+		defer reader.Close()
+		return io.ReadAll(io.LimitReader(reader, 4*1024*1024))
+	}
+	return nil, fmt.Errorf("SCF package requires %s", name)
 }
 
 func validateCollectorPublishAuth(opts collectorPublishOptions) error {
@@ -2757,11 +2923,8 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if len(opts.JobTypes) > 0 {
 		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher does not consume CloudNode JobItem workloads")
 	}
-	// Timer functions do not use the EventBus or the HTTPS service gateway: they
-	// call the native Storage tRPC gateway directly. Set the effective trigger
-	// before building the environment so those large CA/EventBus values are not
-	// accidentally copied into every Timer function and exceed Tencent's 4KB
-	// environment limit.
+	// Timer and Invoke both publish durable Completion. Their public EventBus
+	// CA is packaged rather than consuming the SCF environment budget.
 	envOpts := opts
 	envOpts.TriggerType = defaultFlag(opts.TriggerType, "timer")
 	envOpts.BizType = bizType
@@ -2797,7 +2960,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 		delete(config, "clear_vpc")
 	}
 	triggerType := defaultFlag(opts.TriggerType, "timer")
-	effectiveTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
+	effectiveTimeoutSeconds := collectorTimerTimeoutSeconds(fetcher.TimeoutSeconds)
 	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID, opts.collectorPackageOptions.SpaceID)
 	if strings.EqualFold(triggerType, "invoke") && (strings.EqualFold(spaceID, "stockcn") || strings.EqualFold(spaceID, "crypto")) {
 		invokeTimeout := setupconfig.DefaultStockCNInvokeTimeoutSeconds
@@ -2853,6 +3016,9 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	}
 	effectiveInt := func(key string, fallback int) int {
 		return collectorConfigInt(config, key, fallback)
+	}
+	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
+		return adminclient.NodeCreateItem{}, err
 	}
 	return adminclient.NodeCreateItem{
 		CloudAccountID: opts.CloudAccountID,
@@ -3168,7 +3334,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_MARKET_FETCH_INSTRUMENT_TYPE", fetcher.InstrumentType)
 	setDefaultEnv(env, "MOOX_MARKET_FETCH_PROVIDER", fetcher.ProviderID)
 	setDefaultEnv(env, "MOOX_MARKET_FETCH_SOURCE_ID", fetcher.SourceID)
-	executionTimeoutSeconds := defaultInt(fetcher.TimeoutSeconds, 15)
+	executionTimeoutSeconds := collectorTimerTimeoutSeconds(fetcher.TimeoutSeconds)
 	spaceID := firstNonEmpty(opts.SpaceID, fetcher.SpaceID)
 	if strings.EqualFold(strings.TrimSpace(opts.TriggerType), "invoke") && (strings.EqualFold(spaceID, "stockcn") || strings.EqualFold(spaceID, "crypto")) {
 		// Deployment canaries use the invoke fleet. Keep the
@@ -3195,6 +3361,9 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_FETCH_STORAGE_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.StorageTimeoutMS, 5000)))
 	setDefaultEnv(env, "MOOX_FETCH_MAX_RETRY_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.MaxRetryAttempts, 3)))
 	setDefaultEnv(env, "MOOX_STORAGE_RPC_GATEWAY_TARGET", collectorStorageRPCGatewayTarget(opts))
+	setDefaultEnv(env, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", firstNonEmpty(opts.CollectorRPCGatewayTarget, fetcher.CollectorRPCGatewayTarget, os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET")))
+	setDefaultEnv(env, "MOOX_COLLECTOR_GATEWAY_TARGET_NODE", firstNonEmpty(opts.CollectorGatewayTargetNode, fetcher.CollectorGatewayTargetNode, os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE")))
+	setDefaultEnv(env, "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", opts.StorageAppKeysJSON)
 	gatewayNodeID := firstNonEmpty(fetcher.StorageAccessTargetNode(opts.Region), os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_TARGET_NODE", gatewayNodeID)
@@ -3217,65 +3386,70 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_GATEWAY_CALLER", "collector")
 	overrides := parseCollectorOverrides(opts.Env)
 	managed := map[string]struct{}{
-		"MOOX_EVENTBUS_NATS_URL":            {},
-		"MOOX_EVENTBUS_NATS_USERNAME":       {},
-		"MOOX_EVENTBUS_NATS_PASSWORD":       {},
-		"MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64": {},
-		"MOOX_CODE_PACKAGE_ID":              {},
-		"MOOX_GATEWAY_SERVICE_KEY_ID":       {},
-		"MOOX_GATEWAY_SERVICE_SECRET_KEY":   {},
-		"MOOX_GATEWAY_CALLER":               {},
-		"MOOX_GATEWAY_NODE_ID":              {},
-		"MOOX_GATEWAY_TARGET_NODE":          {},
-		"MOOX_GATEWAY_CA_PEM_B64":           {},
-		"MOOX_SERVICE_GATEWAY_CA_PEM_B64":   {},
-		"MOOX_SPACE_ID":                     {},
-		"MOOX_FETCH_TIMEOUT_SECONDS":        {},
-		"MOOX_FETCH_MAX_INFLIGHT_REQUESTS":  {},
-		"MOOX_FETCH_REQUEST_TIMEOUT_MS":     {},
-		"MOOX_FETCH_HTTP_MAX_ATTEMPTS":      {},
-		"MOOX_FETCH_STORAGE_MAX_ATTEMPTS":   {},
-		"MOOX_FETCH_REALTIME_BATCH_SIZE":    {},
-		"MOOX_FETCH_REALTIME_BAR_LIMIT":     {},
-		"MOOX_FETCH_CATCHUP_BATCH_SIZE":     {},
-		"MOOX_FETCH_CATCHUP_BAR_LIMIT":      {},
-		"MOOX_FETCH_STORAGE_TIMEOUT_MS":     {},
-		"MOOX_FETCH_MAX_RETRY_ATTEMPTS":     {},
-		"MOOX_MARKET_FETCH_MODE":            {},
-		"MOOX_MARKET_FETCH_MARKET_ID":       {},
-		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE": {},
-		"MOOX_MARKET_FETCH_PROVIDER":        {},
-		"MOOX_MARKET_FETCH_SOURCE_ID":       {},
-		"MOOX_CLS_SECRET_ID":                {},
-		"MOOX_CLS_SECRET_KEY":               {},
-		"MOOX_CLS_ENABLED":                  {},
-		"MOOX_CLS_ENDPOINT":                 {},
-		"MOOX_CLS_LOGSET_ID":                {},
-		"MOOX_CLS_TOPIC_ID":                 {},
-		"MOOX_CLS_TIMEOUT_MS":               {},
-		"TENCENTCLOUD_SECRET_ID":            {},
-		"TENCENTCLOUD_SECRET_KEY":           {},
-		"TENCENT_SECRET_ID":                 {},
-		"TENCENT_SECRET_KEY":                {},
+		"MOOX_EVENTBUS_NATS_TLS_CA_FILE":          {},
+		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": {},
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET":        {},
+		"MOOX_STORAGE_RPC_GATEWAY_TARGET":         {},
+		"MOOX_COLLECTOR_RPC_GATEWAY_TARGET":       {},
+		"MOOX_COLLECTOR_GATEWAY_TARGET_NODE":      {},
+		"MOOX_MARKET_FETCH_BINDING_HASH":          {},
+		"MOOX_MARKET_FETCH_SUBJECTS":              {},
+		"MOOX_MARKET_FETCH_SYMBOLS_JSON":          {},
+		"MOOX_EVENTBUS_NATS_URL":                  {},
+		"MOOX_EVENTBUS_NATS_USERNAME":             {},
+		"MOOX_EVENTBUS_NATS_PASSWORD":             {},
+		"MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64":       {},
+		"MOOX_CODE_PACKAGE_ID":                    {},
+		"MOOX_GATEWAY_SERVICE_KEY_ID":             {},
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY":         {},
+		"MOOX_GATEWAY_CALLER":                     {},
+		"MOOX_GATEWAY_NODE_ID":                    {},
+		"MOOX_GATEWAY_TARGET_NODE":                {},
+		"MOOX_GATEWAY_CA_PEM_B64":                 {},
+		"MOOX_SERVICE_GATEWAY_CA_PEM_B64":         {},
+		"MOOX_SPACE_ID":                           {},
+		"MOOX_FETCH_TIMEOUT_SECONDS":              {},
+		"MOOX_FETCH_MAX_INFLIGHT_REQUESTS":        {},
+		"MOOX_FETCH_REQUEST_TIMEOUT_MS":           {},
+		"MOOX_FETCH_HTTP_MAX_ATTEMPTS":            {},
+		"MOOX_FETCH_STORAGE_MAX_ATTEMPTS":         {},
+		"MOOX_FETCH_REALTIME_BATCH_SIZE":          {},
+		"MOOX_FETCH_REALTIME_BAR_LIMIT":           {},
+		"MOOX_FETCH_CATCHUP_BATCH_SIZE":           {},
+		"MOOX_FETCH_CATCHUP_BAR_LIMIT":            {},
+		"MOOX_FETCH_STORAGE_TIMEOUT_MS":           {},
+		"MOOX_FETCH_MAX_RETRY_ATTEMPTS":           {},
+		"MOOX_MARKET_FETCH_MODE":                  {},
+		"MOOX_MARKET_FETCH_MARKET_ID":             {},
+		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE":       {},
+		"MOOX_MARKET_FETCH_PROVIDER":              {},
+		"MOOX_MARKET_FETCH_SOURCE_ID":             {},
+		"MOOX_CLS_SECRET_ID":                      {},
+		"MOOX_CLS_SECRET_KEY":                     {},
+		"MOOX_CLS_ENABLED":                        {},
+		"MOOX_CLS_ENDPOINT":                       {},
+		"MOOX_CLS_LOGSET_ID":                      {},
+		"MOOX_CLS_TOPIC_ID":                       {},
+		"MOOX_CLS_TIMEOUT_MS":                     {},
+		"TENCENTCLOUD_SECRET_ID":                  {},
+		"TENCENTCLOUD_SECRET_KEY":                 {},
+		"TENCENT_SECRET_ID":                       {},
+		"TENCENT_SECRET_KEY":                      {},
 	}
 	for key := range overrides {
 		if _, ok := managed[key]; ok {
 			return nil, fmt.Errorf("--env must not override managed key %s", key)
 		}
 	}
-	// Timer market-fetcher SCFs are self-contained and do not need EventBus.
-	// Invoke market-fetchers publish their completion event so the scheduler
-	// can advance the batch, therefore they retain NATS materials but not the
-	// unrelated HTTPS gateway certificates (the 4KB SCF environment limit is
-	// otherwise exceeded by the two RSA CA bundles).
+	// Both Timer and Invoke publish durable Completion. Native tRPC callers do
+	// not use unrelated HTTPS gateway certificates.
 	isTimer := strings.EqualFold(strings.TrimSpace(opts.TriggerType), "timer")
 	isMarketFetcher := strings.EqualFold(strings.TrimSpace(opts.BizType), "market_fetcher")
-	useEventBus := !isTimer
 	useServiceGateway := !isTimer && !isMarketFetcher
 	if packageID != "" {
 		env["MOOX_CODE_PACKAGE_ID"] = packageID
 	}
-	if packageID != "" && useEventBus && (opts.EventBusCredential != nil || opts.EventBusCredentialFile != "") {
+	if packageID != "" && (opts.EventBusCredential != nil || opts.EventBusCredentialFile != "") {
 		credential, caPEM, err := collectorEventBusCredentialMaterial(opts)
 		if err != nil {
 			return nil, err
@@ -3283,14 +3457,14 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		if err := validateCollectorEventBusCredential(credential); err != nil {
 			return nil, err
 		}
+		if err := collectorpackager.ValidateEventBusCAPEM(caPEM); err != nil {
+			return nil, fmt.Errorf("invalid EventBus public CA: %w", err)
+		}
 		env["MOOX_EVENTBUS_NATS_URL"] = credential.URLs[0]
 		env["MOOX_EVENTBUS_NATS_USERNAME"] = credential.Username
 		env["MOOX_EVENTBUS_NATS_PASSWORD"] = credential.Password
-		env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = base64.StdEncoding.EncodeToString(caPEM)
+		env["MOOX_EVENTBUS_NATS_TLS_CA_FILE"] = "certs/eventbus-ca.pem"
 		env["MOOX_CODE_PACKAGE_ID"] = packageID
-	}
-	if strings.TrimSpace(overrides["MOOX_EVENTBUS_NATS_TLS_CA_FILE"]) != "" {
-		return nil, fmt.Errorf("serverless environment must not contain MOOX_EVENTBUS_NATS_TLS_CA_FILE")
 	}
 	if strings.TrimSpace(overrides["MOOX_GATEWAY_CA_FILE"]) != "" {
 		return nil, fmt.Errorf("serverless environment must not contain MOOX_GATEWAY_CA_FILE")
@@ -3362,6 +3536,9 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	}
 	if len(env) == 0 {
 		return nil, nil
+	}
+	if err := tencent.ValidateSCFEnvironment(env); err != nil {
+		return nil, err
 	}
 	return env, nil
 }
@@ -3525,7 +3702,7 @@ func defaultInt(value, fallback int) int {
 func defaultCollectorSCFFetcherSpace() *setupconfig.SCFFetcherSpace {
 	return &setupconfig.SCFFetcherSpace{
 		MemorySize:          64,
-		TimeoutSeconds:      15,
+		TimeoutSeconds:      setupconfig.DefaultSCFTimerTimeoutSeconds,
 		PublicNetStatus:     "ENABLE",
 		RealtimeBatchSize:   30,
 		RealtimeBarLimit:    10,
@@ -3581,14 +3758,21 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if storageTimeoutMS != 5000 {
 		return fmt.Errorf("market_fetcher storage_timeout_ms is fixed at 5000")
 	}
-	reserve := setupconfig.SCFCLSReserveMilliseconds + setupconfig.SCFFinalResponseReserveMilliseconds
-	if !timer {
-		reserve += setupconfig.SCFCompletionReserveMilliseconds
+	reserve := setupconfig.SCFCLSReserveMilliseconds + setupconfig.SCFFinalResponseReserveMilliseconds + setupconfig.SCFColdCompletionReserveMilliseconds + setupconfig.SCFMetricsResponseReserveMilliseconds
+	if timer {
+		reserve += setupconfig.SCFTimerClaimReserveMilliseconds
 	}
-	if requestWaves*requestTimeoutMS+storageTimeoutMS+reserve >= timeoutSeconds*1000 {
+	if requestWaves*defaultInt(fetcher.HTTPMaxAttempts, 4)*requestTimeoutMS+storageTimeoutMS+reserve >= timeoutSeconds*1000 {
 		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + configured reserves must be less than the %d-second timeout", timeoutSeconds)
 	}
 	return nil
+}
+
+func collectorTimerTimeoutSeconds(value int) int {
+	if value == 0 || value == 15 {
+		return setupconfig.DefaultSCFTimerTimeoutSeconds
+	}
+	return value
 }
 
 func collectorRuntimeConfigInt(values map[string]string, key string, fallback, minimum int) (int, error) {
@@ -3613,6 +3797,15 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 	if opts.NodeID == "" {
 		return collectorDeploySummary{}, fmt.Errorf("--node-id is required")
 	}
+	publication := collectorPublishOptions{
+		collectorPackageOptions: opts.collectorPackageOptions, SpaceID: opts.SpaceID, ZipPath: opts.ZipPath,
+		StoragePrimaryAuthSecret: opts.StoragePrimaryAuthSecret, EventBusCredentialFile: opts.EventBusCredentialFile,
+		BizType: defaultFlag(opts.BizType, "market_fetcher"), TriggerType: "timer",
+	}
+	if err := prepareCollectorPublicationTrust(&publication); err != nil {
+		return collectorDeploySummary{}, err
+	}
+	opts.collectorPackageOptions = publication.collectorPackageOptions
 	zipPath := opts.ZipPath
 	if zipPath == "" {
 		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)
@@ -3622,6 +3815,12 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		zipPath = result.Path
 	}
 	if err := collectorpackager.ValidateSCFPackageZip(zipPath); err != nil {
+		return collectorDeploySummary{}, err
+	}
+	if err := validateCollectorZipLogging(zipPath, opts.CLSTopicID); err != nil {
+		return collectorDeploySummary{}, err
+	}
+	if _, err := collectorFunctionEnvironment(publication, "preflight-package-id"); err != nil {
 		return collectorDeploySummary{}, err
 	}
 	data, err := os.ReadFile(zipPath)
@@ -3646,10 +3845,16 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		ZipPath:   zipPath,
 		PackageID: uploadResp.PackageID,
 	}
+	environment, err := collectorFunctionEnvironment(publication, uploadResp.PackageID)
+	if err != nil {
+		return summary, err
+	}
 
 	deployResp, err := client.SubmitDeployNodes(ctx, []adminclient.NodeDeployItem{{
-		NodeID:    opts.NodeID,
-		PackageID: uploadResp.PackageID,
+		NodeID:      opts.NodeID,
+		PackageID:   uploadResp.PackageID,
+		Environment: environment,
+		Config:      map[string]string{"timeout": strconv.Itoa(setupconfig.DefaultSCFTimerTimeoutSeconds)},
 	}})
 	if err != nil {
 		return summary, err

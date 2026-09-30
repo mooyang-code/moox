@@ -1,8 +1,6 @@
 package marketfetch
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,93 +10,59 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// TimerRequestFromEnv turns the static per-function assignment into the same
-// bounded request used by the manual/egress paths. No control-plane request is
-// made from SCF.
-func TimerRequestFromEnv(requestID, functionName string, now time.Time, runtimeResolvers ...RuntimeResolvers) (Request, string, error) {
-	var resolvers RuntimeResolvers
-	if len(runtimeResolvers) > 0 {
-		resolvers = runtimeResolvers[0]
-	}
-	provider := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_PROVIDER")))
-	sourceID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SOURCE_ID")))
-	marketType := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MARKET_TYPE")))
-	marketID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MARKET_ID")))
-	instrumentType := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_INSTRUMENT_TYPE")))
-	datasetID := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DATASET_ID"))
-	frequency := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_FREQUENCY"))
+// TimerInvocationFromEnv parses only the managed identity and endpoints used
+// to Claim frozen work. Membership and write bindings come from Collector.
+type TimerInvocation struct {
+	Claim                *collectorpb.ClaimTimerBatchReq
+	RuntimeGatewayTarget string
+	RuntimeGatewayNodeID string
+	StorageGatewayTarget string
+	DNSRoutes            map[string]sources.DNSResolution
+}
+
+func TimerRequestFromEnv(requestID, functionName string, now time.Time) (TimerInvocation, error) {
 	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
-	if provider == "" || marketType == "" || datasetID == "" || frequency == "" || spaceID == "" {
-		return Request{}, "", fmt.Errorf("timer market fetch environment is incomplete")
+	functionName = strings.TrimSpace(functionName)
+	if functionName == "" {
+		functionName = strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
 	}
-	if sourceID == "" {
-		if resolvers.SourceID != nil {
-			sourceID = resolvers.SourceID(provider, marketType)
-		}
-		if sourceID == "" {
-			return Request{}, "", fmt.Errorf("timer market fetch source_id is required")
-		}
-	}
-	if marketID == "" {
-		marketID = spaceID
-	}
-	if instrumentType == "" {
-		instrumentType = defaultInstrumentTypeForMarket(marketID, marketType)
-	}
-	_, err := CronForFrequency(frequency)
+	requestID = strings.TrimSpace(requestID)
+	groupID, groupCount, err := timerGroupIdentity(spaceID)
 	if err != nil {
-		return Request{}, "", err
+		return TimerInvocation{}, err
 	}
-	subjects := normalizeSubjects(strings.Split(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS"), "|"))
-	if isCryptoKlineGroup(TaskGroup{MarketType: marketType, MarketID: marketID}) {
-		subjects = pinPriorityCryptoSubjects(subjects)
+	bindingHash := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_BINDING_HASH"))
+	runtimeTarget := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET"))
+	runtimeNodeID := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE"))
+	if spaceID == "" || functionName == "" || requestID == "" || bindingHash == "" ||
+		groupCount <= 0 || groupID < 0 || groupID >= groupCount {
+		return TimerInvocation{}, fmt.Errorf("timer claim identity is incomplete")
 	}
-	if len(subjects) == 0 {
-		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain at least one value")
-	}
-	if !strings.EqualFold(spaceID, StockCNSpaceID) && len(subjects) > MaxRealtimeItems {
-		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain 1..%d values", MaxRealtimeItems)
-	}
-	dnsRoutes, err := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON"))
-	if err != nil {
-		return Request{}, "", err
+	if runtimeTarget == "" || runtimeNodeID == "" {
+		return TimerInvocation{}, fmt.Errorf("collector runtime gateway target and node are required")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	assignmentHash := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_ASSIGNMENT_HASH"))
-	if assignmentHash == "" {
-		assignmentHash = AssignmentHash(provider, marketType, datasetID, frequency, strings.Join(subjects, "|"))
-	}
-	externalSymbols, err := parseExternalSymbols(os.Getenv("MOOX_MARKET_FETCH_SYMBOLS_JSON"), subjects, spaceID, marketID, marketType, provider, resolvers.Symbol)
+	dnsRoutes, err := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON"))
 	if err != nil {
-		return Request{}, "", err
+		return TimerInvocation{}, err
 	}
-	minute := now.UTC().Truncate(time.Minute).Format(time.RFC3339)
-	hash := sha256.Sum256([]byte(strings.Join([]string{assignmentHash, minute}, "\x00")))
-	batchID := "timer-" + hex.EncodeToString(hash[:])[:24]
-	items := make([]domain.CollectionItem, 0, len(subjects))
-	outputFields := normalizeOutputFields(strings.Split(os.Getenv("MOOX_MARKET_FETCH_OUTPUT_FIELDS"), "|"))
-	for _, subject := range subjects {
-		items = append(items, domain.CollectionItem{SubjectID: subject, Symbol: externalSymbols[subject], Provider: provider, SourceID: sourceID, MarketType: marketType, DataType: "kline", DatasetID: datasetID, Frequency: frequency, OutputFields: append([]string(nil), outputFields...), BarLimit: MaxRealtimeRows})
-	}
-	concurrency := envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
-	groupID, groupCount, err := timerGroupIdentity(spaceID)
-	if err != nil {
-		return Request{}, "", err
-	}
-	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, MarketID: marketID, InstrumentType: instrumentType, DatasetID: datasetID, Frequency: frequency, Provider: provider, SourceID: sourceID, MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID, GroupID: groupID, GroupCount: groupCount, DNSRoutes: dnsRoutes, Items: items, Concurrency: concurrency}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
-}
-
-func sha256Hex(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
+	return TimerInvocation{
+		Claim: &collectorpb.ClaimTimerBatchReq{
+			SpaceId: spaceID, FunctionName: functionName, RequestId: requestID,
+			GroupId: uint32(groupID), GroupCount: uint32(groupCount), BindingHash: bindingHash, TickTime: now.UTC().Unix(),
+		},
+		RuntimeGatewayTarget: runtimeTarget, RuntimeGatewayNodeID: runtimeNodeID,
+		StorageGatewayTarget: strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")),
+		DNSRoutes:            dnsRoutes,
+	}, nil
 }
 
 func defaultInstrumentTypeForMarket(marketID, marketType string) string {
@@ -132,15 +96,10 @@ func timerGroupIdentity(spaceID string) (int, int, error) {
 		}
 		*target = parsed
 	}
-	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
-		if groupCount <= 0 {
-			return 0, 0, fmt.Errorf("stockcn timer group count is required")
-		}
-		if groupID < 0 || groupID >= groupCount {
-			return 0, 0, fmt.Errorf("stockcn timer group id %d is outside [0,%d)", groupID, groupCount)
-		}
+	if groupCount <= 0 {
+		return 0, 0, fmt.Errorf("timer group count is required")
 	}
-	if groupCount > 0 && groupID >= groupCount {
+	if groupID >= groupCount {
 		return 0, 0, fmt.Errorf("timer group id %d is outside [0,%d)", groupID, groupCount)
 	}
 	return groupID, groupCount, nil

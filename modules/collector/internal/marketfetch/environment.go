@@ -46,10 +46,6 @@ func ManagedDNSHash(snapshot map[string]sources.DNSResolution) string {
 }
 
 func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution, maxSize int, resolvers ...SymbolResolver) (map[string]string, error) {
-	var resolver SymbolResolver
-	if len(resolvers) > 0 {
-		resolver = resolvers[0]
-	}
 	if maxSize <= 0 {
 		return nil, fmt.Errorf("timer managed environment budget must be positive")
 	}
@@ -77,37 +73,18 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	if hash == "" {
 		hash = AssignmentHash(assignment.Provider, assignment.MarketType, assignment.MarketID, assignment.InstrumentType, assignment.SourceID, assignment.SeriesTag, assignment.DatasetID, assignment.Frequency, strings.Join(subjects, "|"))
 	}
-	symbols := make(map[string]string, len(subjects))
 	for _, subject := range subjects {
 		external := strings.TrimSpace(assignment.ExternalSymbols[subject])
 		if isStockCNAssignment(assignment) {
-			strict, err := stocksource.ProviderSymbol(subject)
+			_, err := stocksource.ProviderSymbol(subject)
 			if err != nil {
 				return nil, fmt.Errorf("assignment subject %s has no valid stock symbol: %w", subject, err)
-			}
-			// Ordinary A-share symbols are derived from the exchange suffix at
-			// invocation time. Only explicit exceptions consume environment bytes.
-			if external != "" && external != strict {
-				symbols[subject] = external
 			}
 			continue
 		}
 		if external == "" {
 			return nil, fmt.Errorf("assignment subject %s has no external symbol", subject)
 		}
-		if resolver != nil {
-			// Only omit a symbol when the same injected codec can reconstruct it
-			// at invocation time. Explicit overrides remain in the environment.
-			defaultSymbol, defaultErr := resolveProviderSymbol(resolver, assignment.Provider, assignment.MarketID, assignment.MarketType, subject)
-			if defaultErr == nil && defaultSymbol == external {
-				continue
-			}
-		}
-		symbols[subject] = external
-	}
-	rawSymbols, err := json.Marshal(symbols)
-	if err != nil {
-		return nil, fmt.Errorf("encode external symbols: %w", err)
 	}
 	environment := map[string]string{
 		"MOOX_MARKET_FETCH_PROVIDER":        assignment.Provider,
@@ -115,8 +92,6 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		"MOOX_MARKET_FETCH_DATASET_ID":      assignment.DatasetID,
 		"MOOX_MARKET_FETCH_FREQUENCY":       assignment.Frequency,
 		"MOOX_MARKET_FETCH_OUTPUT_FIELDS":   strings.Join(normalizeOutputFields(assignment.OutputFields), "|"),
-		"MOOX_MARKET_FETCH_SUBJECTS":        strings.Join(subjects, "|"),
-		"MOOX_MARKET_FETCH_SYMBOLS_JSON":    string(rawSymbols),
 		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": hash,
 		"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": string(rawRoutes),
 		"MOOX_MARKET_FETCH_DNS_HASH":        dnsHash,
@@ -141,6 +116,7 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	if assignment.GroupCount > 0 {
 		environment["MOOX_MARKET_FETCH_GROUP_ID"] = fmt.Sprint(assignment.GroupID)
 		environment["MOOX_MARKET_FETCH_GROUP_COUNT"] = fmt.Sprint(assignment.GroupCount)
+		environment["MOOX_MARKET_FETCH_BINDING_HASH"] = timerPeriodBindingHash(assignment)
 	}
 	// The SCF metrics bridge is optional and deployment-owned. A host process
 	// commonly has MOOX_METRICS_EVENTBUS_URL pointing at its loopback broker

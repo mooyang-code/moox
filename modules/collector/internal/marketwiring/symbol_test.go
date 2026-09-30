@@ -1,48 +1,50 @@
 package marketwiring
 
 import (
-	"encoding/json"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/stretchr/testify/require"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/stretchr/testify/require"
 )
 
-func TestManagedEnvironmentAndTimerShareProviderSymbolCodec(t *testing.T) {
+func TestManagedEnvironmentMembershipIsNotTimerClaimPayload(t *testing.T) {
 	assignment := marketfetch.NodeAssignment{
 		Provider: "binance", MarketID: "crypto", InstrumentType: "swap", MarketType: "swap", SourceID: "swap_http",
 		DatasetID: "bars", Frequency: "1H", Enabled: true,
+		GroupID: 0, GroupCount: 1, NodeID: "node-1", FunctionName: "function-1", Region: "ap-guangzhou",
 		Subjects:        []string{"BTC-USDT", "CUSTOM-USDT"},
 		ExternalSymbols: map[string]string{"BTC-USDT": "BTCUSDT", "CUSTOM-USDT": "EXPLICIT"},
 	}
 	env, err := marketfetch.BuildManagedEnvironment(assignment, nil, ResolveSymbol)
 	require.NoError(t, err)
-	var symbols map[string]string
-	require.NoError(t, json.Unmarshal([]byte(env["MOOX_MARKET_FETCH_SYMBOLS_JSON"]), &symbols))
-	require.Equal(t, map[string]string{"CUSTOM-USDT": "EXPLICIT"}, symbols)
 	for key, value := range env {
 		t.Setenv(key, value)
 	}
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "")
-	req, _, err := marketfetch.TimerRequestFromEnv("request", "function", time.Now(), marketfetch.RuntimeResolvers{SourceID: DefaultSourceID, Symbol: ResolveSymbol})
+	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime.local:11003")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
+	invocation, err := marketfetch.TimerRequestFromEnv("request", "function", time.Now())
 	require.NoError(t, err)
-	require.Len(t, req.Items, 2)
-	require.Equal(t, "BTCUSDT", req.Items[0].Symbol)
-	require.Equal(t, "EXPLICIT", req.Items[1].Symbol)
-	require.Equal(t, "swap_http", req.Items[0].SourceID)
-	_, _, err = marketfetch.TimerRequestFromEnv("request", "function", time.Now())
-	require.NoError(t, err, "the shared default codec is available to timer runtimes")
+	require.Equal(t, "function", invocation.Claim.GetFunctionName())
+	require.Equal(t, "runtime.local:11003", invocation.RuntimeGatewayTarget)
+	require.NotContains(t, invocation.Claim.String(), "BTC-USDT")
+	require.NotContains(t, invocation.Claim.String(), "CUSTOM-USDT")
+	require.NotContains(t, invocation.Claim.String(), "EXPLICIT")
+	require.NotContains(t, strings.Join([]string{invocation.Claim.String()}, ""), "symbols")
 }
 
-func TestEnvironmentKeepsOtherMarketSymbolsExplicit(t *testing.T) {
+func TestEnvironmentDoesNotCarryOtherMarketMembership(t *testing.T) {
 	env, err := marketfetch.BuildManagedEnvironment(marketfetch.NodeAssignment{
 		Provider: "eastmoney", MarketID: "stockhk", InstrumentType: "equity", MarketType: "equity", SourceID: "stockhk_http",
 		DatasetID: "bars", Frequency: "1m", Enabled: true, Subjects: []string{"00700.XHKG"},
 		ExternalSymbols: map[string]string{"00700.XHKG": "00700"},
 	}, nil, ResolveSymbol)
 	require.NoError(t, err)
-	require.Equal(t, `{}`, env["MOOX_MARKET_FETCH_SYMBOLS_JSON"])
+	require.NotContains(t, env, "MOOX_MARKET_FETCH_SYMBOLS_JSON")
+	require.NotContains(t, env, "MOOX_MARKET_FETCH_SUBJECTS")
 }
 
 func TestMarketProviderSymbolForCryptoDerivesBinanceSymbols(t *testing.T) {

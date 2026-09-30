@@ -8,6 +8,11 @@ while [[ -h "${SOURCE}" ]]; do
   [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
 done
 ROOT="$(cd -P "$(dirname "${SOURCE}")/../.." && pwd)"
+if [[ "${1:-}" == "--help" ]]; then
+  echo "Usage: SCF_SPACE_ID=<space> $0 --eventbus-ca-file <public-ca.pem>"
+  echo "Requires: go, zip, python3 with PyYAML, openssl. Credentials are never read or packaged."
+  exit 0
+fi
 SCF_SPACE_ID="${SCF_SPACE_ID:?SCF_SPACE_ID is required (for example: crypto)}"
 SCF_ENTRYPOINT="${SCF_ENTRYPOINT:-market_data}"
 [[ "${SCF_ENTRYPOINT}" == "market_data" ]] || { echo "unsupported SCF entrypoint: ${SCF_ENTRYPOINT}" >&2; exit 1; }
@@ -15,6 +20,20 @@ CONFIG_DIR="${ROOT}/modules/collector/configs/scf/${SCF_SPACE_ID}"
 if [[ ! -d "${CONFIG_DIR}" ]]; then
   CONFIG_DIR="${ROOT}/modules/collector/configs/scf/market_data"
 fi
+EVENTBUS_CA_FILE=""
+while (($#)); do
+  case "$1" in
+    --eventbus-ca-file)
+      [[ $# -ge 2 ]] || { echo "--eventbus-ca-file requires a public PEM file" >&2; exit 1; }
+      EVENTBUS_CA_FILE="$2"
+      shift 2
+      ;;
+    *) echo "unsupported package parameter: $1" >&2; exit 1 ;;
+  esac
+done
+[[ -f "${EVENTBUS_CA_FILE}" ]] || { echo "--eventbus-ca-file is required" >&2; exit 1; }
+python3 -c 'import yaml' 2>/dev/null || { echo "SCF packaging requires python3 with PyYAML" >&2; exit 1; }
+command -v openssl >/dev/null || { echo "SCF packaging requires openssl" >&2; exit 1; }
 VERSION="${VERSION:-v$(date +%Y%m%d%H%M%S)}"
 OUT_DIR="${OUT_DIR:-${ROOT}/release/scf}"
 OUT_PATH="${OUT_PATH:-${OUT_DIR}/collector-scf-${SCF_SPACE_ID}-${VERSION}.zip}"
@@ -44,7 +63,10 @@ echo "==> build moox-collector-scf for linux/amd64"
 )
 
 echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
-cp -R "${CONFIG_DIR}/." "${BUILD_DIR}/package/"
+cp "${CONFIG_DIR}/config.yaml" "${BUILD_DIR}/package/config.yaml"
+if [[ -d "${CONFIG_DIR}/sources" ]]; then
+  cp -R "${CONFIG_DIR}/sources" "${BUILD_DIR}/package/sources"
+fi
 if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
   mkdir -p "${BUILD_DIR}/package/markets/stockcn"
   cp "${ROOT}/modules/collector/config/markets/stockcn/calendar.yaml" "${BUILD_DIR}/package/markets/stockcn/calendar.yaml"
@@ -52,47 +74,74 @@ if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
 fi
 rm -f "${BUILD_DIR}/package/trpc_go.yaml" "${BUILD_DIR}/package/example_trpc_go.yaml"
 
-render_storage_auth() {
-  local file="$1"
-  if [[ -z "${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" ]]; then
-    echo "MOOX_STORAGE_PRIMARY_AUTH_SECRET is required to package Binance Storage credentials" >&2
-    exit 1
-  fi
-  python3 - "${file}" <<'PY'
-import hmac
-import hashlib
-import os
+python3 - "${BUILD_DIR}/package" "${EVENTBUS_CA_FILE}" <<'PY'
+import pathlib
 import re
+import subprocess
 import sys
-from pathlib import Path
 
-path = Path(sys.argv[1])
-secret = os.environ["MOOX_STORAGE_PRIMARY_AUTH_SECRET"]
-text = path.read_text()
-pattern = re.compile(r'(app_id:\s*")([^"]+)("\s*\n)([ \t]+app_key:\s*")[^"]*(")')
+try:
+    import yaml
+except ImportError:
+    raise SystemExit("credential-free SCF packaging requires Python PyYAML")
 
+root = pathlib.Path(sys.argv[1])
+ca = pathlib.Path(sys.argv[2]).read_bytes()
+remaining = ca.strip()
+count = 0
+while remaining:
+    match = re.match(br"-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----", remaining)
+    if not match:
+        raise SystemExit("EventBus CA must contain only public CA certificates")
+    cert = match.group(0)
+    result = subprocess.run(["openssl", "x509", "-noout", "-text"], input=cert, capture_output=True)
+    if result.returncode or b"CA:TRUE" not in result.stdout:
+        raise SystemExit("EventBus CA contains an invalid CA certificate")
+    count += 1
+    remaining = remaining[match.end():].strip()
+if not count:
+    raise SystemExit("EventBus CA requires a public CA certificate")
 
-def key_for(app_id: str) -> str:
-    return hmac.new(secret.encode(), app_id.encode(), hashlib.sha256).hexdigest()
+class UniqueLoader(yaml.SafeLoader):
+    def construct_mapping(self, node, deep=False):
+        keys = [self.construct_object(key, deep=deep) for key, _ in node.value]
+        if len(set(keys)) != len(keys):
+            raise ValueError("duplicate configuration key")
+        return super().construct_mapping(node, deep=deep)
 
+def check(value, path=""):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            name = str(key).lower().replace("-", "_")
+            field_path = path + "." + str(key)
+            sensitive = name in ("app_key", "key", "token") or any(part in name for part in ("secret", "password", "private_key")) or name.endswith(("api_key", "app_keys_json", "hmac_key_file", "_token")) or (name.endswith("access_key") and field_path != ".system.service_auth.access_key")
+            if sensitive and child not in (None, ""):
+                raise ValueError("nonempty credential field is not permitted")
+            check(child, field_path)
+    elif isinstance(value, list):
+        for child in value:
+            check(child, path)
+    elif isinstance(value, str) and "PRIVATE KEY" in value.upper():
+        raise ValueError("private key payload is not permitted")
 
-rendered, count = pattern.subn(
-    lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}{match.group(4)}{key_for(match.group(2))}{match.group(5)}",
-    text,
-)
-if count == 0:
-    raise SystemExit(f"{path}: Binance source config contains no Storage auth_info")
-if 'binance-spot-collector' in rendered or 'binance-swap-collector' in rendered or re.search(r'app_key:\s*""', rendered):
-    raise SystemExit(f"{path}: Storage Primary app_key is still a placeholder")
-path.write_text(rendered)
-print(f"rendered {count} Storage Primary app_key value(s) in {path}")
+for path in root.rglob("*"):
+    if path.is_symlink():
+        raise SystemExit("SCF package symlinks are not permitted")
+    if not path.is_file() or path.name == "main":
+        continue
+    if path.suffix not in (".yaml", ".yml"):
+        raise SystemExit("unexpected SCF configuration payload")
+    try:
+        content = path.read_text()
+        if any(isinstance(token, (yaml.tokens.AliasToken, yaml.tokens.AnchorToken)) for token in yaml.scan(content)):
+            raise ValueError("configuration aliases are not permitted")
+        for document in yaml.load_all(content, Loader=UniqueLoader):
+            check(document)
+    except Exception:
+        raise SystemExit("SCF configuration must be valid and credential-free: " + str(path.relative_to(root)))
+(root / "certs").mkdir()
+(root / "certs" / "eventbus-ca.pem").write_bytes(ca)
 PY
-}
-
-if [[ -f "${BUILD_DIR}/package/sources/market/binance.yaml" ]]; then
-  echo "==> render Storage Primary auth into sources/market/binance.yaml"
-  render_storage_auth "${BUILD_DIR}/package/sources/market/binance.yaml"
-fi
 
 echo "==> package ${OUT_PATH}"
 rm -f "${OUT_PATH}"
@@ -102,12 +151,5 @@ rm -f "${OUT_PATH}"
   zip -qr "${OUT_PATH}" .
 )
 chmod 0600 "${OUT_PATH}"
-
-if unzip -p "${OUT_PATH}" sources/market/binance.yaml >"${BUILD_DIR}/binance-check.yaml" 2>/dev/null; then
-  if grep -Eq 'app_key: ""|binance-spot-collector|binance-swap-collector' "${BUILD_DIR}/binance-check.yaml"; then
-    echo "scf package still contains placeholder Storage Primary app_key" >&2
-    exit 1
-  fi
-fi
 
 echo "==> SCF package written to ${OUT_PATH}"

@@ -2,6 +2,9 @@ package collectorpackager
 
 import (
 	"archive/zip"
+	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
@@ -9,16 +12,15 @@ import (
 	"sort"
 	"strings"
 
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gopkg.in/yaml.v3"
 )
 
 // BuildSCFPackageOptions configures a Tencent SCF package build.
 type BuildSCFPackageOptions struct {
-	BinaryPath               string
-	ConfigDir                string
-	OutPath                  string
-	StoragePrimaryAuthSecret string
+	BinaryPath    string
+	ConfigDir     string
+	OutPath       string
+	EventBusCAPEM []byte
 }
 
 // BuildSCFPackageResult describes the created package.
@@ -41,6 +43,9 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	if opts.OutPath == "" {
 		return nil, fmt.Errorf("output path is required")
 	}
+	if err := validatePublicCA(opts.EventBusCAPEM); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(opts.OutPath), 0o755); err != nil {
 		return nil, err
 	}
@@ -54,8 +59,13 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	}
 
 	zw := zip.NewWriter(out)
+	defer zw.Close()
 
 	var entries []string
+	if err := addZipBytes(zw, opts.EventBusCAPEM, "certs/eventbus-ca.pem", 0o644); err != nil {
+		return nil, err
+	}
+	entries = append(entries, "certs/eventbus-ca.pem")
 	addFile := func(src, dst string) error {
 		if err := addZipFile(zw, src, dst); err != nil {
 			return err
@@ -85,13 +95,6 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 			rel, err := filepath.Rel(opts.ConfigDir, path)
 			if err != nil {
 				return err
-			}
-			if filepath.ToSlash(rel) == "sources/market/binance.yaml" {
-				if err := addRenderedStorageAuthConfig(zw, path, rel, opts.StoragePrimaryAuthSecret); err != nil {
-					return err
-				}
-				entries = append(entries, filepath.ToSlash(rel))
-				return nil
 			}
 			return addFile(path, rel)
 		})
@@ -132,100 +135,148 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	return &BuildSCFPackageResult{Path: opts.OutPath, Entries: entries}, nil
 }
 
-var placeholderStorageAppKeys = map[string]struct{}{
-	"binance-spot-collector": {},
-	"binance-swap-collector": {},
-}
-
-// ValidateSCFPackageZip rejects packages that still carry placeholder or empty
-// Storage Primary app_key values. Shell zip builders and `deploy --zip` must
-// pass the same HMAC-rendered credentials as `collector function package`.
+// ValidateSCFPackageZip gates built and external packages before upload.
 func ValidateSCFPackageZip(zipPath string) error {
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("open scf package zip: %w", err)
 	}
 	defer reader.Close()
+	seen := make(map[string]bool)
+	validCA := false
 	for _, file := range reader.File {
-		if filepath.ToSlash(file.Name) != "sources/market/binance.yaml" {
+		name := file.Name
+		if name != filepath.ToSlash(name) || strings.Contains(name, "\\") || strings.HasPrefix(name, "/") ||
+			filepath.ToSlash(filepath.Clean(name)) != strings.TrimSuffix(name, "/") || strings.HasPrefix(name, "../") {
+			return fmt.Errorf("invalid scf package entry path")
+		}
+		if seen[name] {
+			return fmt.Errorf("duplicate scf package entry %s", name)
+		}
+		seen[name] = true
+		if file.FileInfo().IsDir() {
 			continue
+		}
+		if file.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("scf package symlinks are not permitted")
+		}
+		if name == "main" {
+			continue
+		}
+		if name != "certs/eventbus-ca.pem" && name != "config.yaml" &&
+			!((strings.HasPrefix(name, "sources/") || strings.HasPrefix(name, "markets/")) && (strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml"))) {
+			return fmt.Errorf("unexpected scf package payload %s", name)
 		}
 		rc, err := file.Open()
 		if err != nil {
-			return fmt.Errorf("read Binance source config: %w", err)
+			return fmt.Errorf("read scf package entry %s: %w", name, err)
 		}
-		content, err := io.ReadAll(rc)
+		content, err := io.ReadAll(io.LimitReader(rc, 4*1024*1024+1))
 		_ = rc.Close()
-		if err != nil {
-			return fmt.Errorf("read Binance source config: %w", err)
+		if err != nil || len(content) > 4*1024*1024 {
+			return fmt.Errorf("cannot validate scf package entry %s", name)
 		}
-		if err := validateRenderedStorageAuth(content); err != nil {
-			return err
+		if name == "certs/eventbus-ca.pem" {
+			if err := validatePublicCA(content); err != nil {
+				return err
+			}
+			validCA = true
+		} else if err := validateCredentialFreeYAML(content); err != nil {
+			return fmt.Errorf("scf package entry %s: %w", name, err)
 		}
+	}
+	if !validCA {
+		return fmt.Errorf("scf package requires certs/eventbus-ca.pem")
 	}
 	return nil
 }
 
-func validateRenderedStorageAuth(content []byte) error {
-	var document yaml.Node
-	if err := yaml.Unmarshal(content, &document); err != nil {
-		return fmt.Errorf("parse Binance source config: %w", err)
-	}
-	checked := 0
-	var visit func(*yaml.Node) error
-	visit = func(node *yaml.Node) error {
-		if node == nil {
-			return nil
+func ValidateEventBusCAPEM(content []byte) error {
+	return validatePublicCA(content)
+}
+
+func validatePublicCA(content []byte) error {
+	count := 0
+	for remaining := bytes.TrimSpace(content); len(remaining) != 0; {
+		if !bytes.HasPrefix(remaining, []byte("-----BEGIN CERTIFICATE-----")) {
+			return fmt.Errorf("certs/eventbus-ca.pem must contain only public CA certificates")
 		}
-		if node.Kind == yaml.MappingNode {
-			for i := 0; i+1 < len(node.Content); i += 2 {
-				key, value := node.Content[i], node.Content[i+1]
-				if key.Value == "auth_info" && value.Kind == yaml.MappingNode {
-					appID, appKey := mappingValue(value, "app_id"), mappingValue(value, "app_key")
-					if appID == nil || strings.TrimSpace(appID.Value) == "" || appKey == nil {
-						return fmt.Errorf("Binance Storage auth_info requires app_id and app_key")
+		endMarker := []byte("-----END CERTIFICATE-----")
+		end := bytes.Index(remaining, endMarker)
+		if end < 0 {
+			return fmt.Errorf("certs/eventbus-ca.pem contains a malformed certificate")
+		}
+		end += len(endMarker)
+		block, rest := pem.Decode(remaining[:end])
+		if block == nil || len(bytes.TrimSpace(rest)) != 0 || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			return fmt.Errorf("certs/eventbus-ca.pem must contain only public CA certificates")
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil || !cert.IsCA || !cert.BasicConstraintsValid {
+			return fmt.Errorf("certs/eventbus-ca.pem contains an invalid CA certificate")
+		}
+		count++
+		remaining = bytes.TrimSpace(remaining[end:])
+	}
+	if count == 0 {
+		return fmt.Errorf("certs/eventbus-ca.pem requires a public CA certificate")
+	}
+	return nil
+}
+
+func validateCredentialFreeYAML(content []byte) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	for {
+		var document yaml.Node
+		if err := decoder.Decode(&document); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("invalid configuration YAML")
+		}
+		var visit func(*yaml.Node, string) error
+		visit = func(node *yaml.Node, path string) error {
+			if node.Kind == yaml.AliasNode {
+				return fmt.Errorf("configuration YAML aliases are not permitted")
+			}
+			if node.Kind == yaml.ScalarNode && strings.Contains(strings.ToUpper(node.Value), "PRIVATE KEY") {
+				return fmt.Errorf("private key payload is not permitted")
+			}
+			if node.Kind == yaml.MappingNode {
+				keys := make(map[string]bool)
+				for i := 0; i+1 < len(node.Content); i += 2 {
+					key, value := node.Content[i], node.Content[i+1]
+					if keys[key.Value] {
+						return fmt.Errorf("duplicate configuration key")
 					}
-					keyValue := strings.TrimSpace(appKey.Value)
-					if keyValue == "" {
-						return fmt.Errorf("Binance Storage app_key is empty; package with MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+					keys[key.Value] = true
+					name := strings.ToLower(strings.ReplaceAll(key.Value, "-", "_"))
+					fieldPath := path + "." + key.Value
+					sensitive := name == "app_key" || name == "key" || name == "token" ||
+						strings.Contains(name, "secret") || strings.Contains(name, "password") ||
+						strings.Contains(name, "private_key") || strings.HasSuffix(name, "api_key") ||
+						strings.HasSuffix(name, "hmac_key_file") || strings.HasSuffix(name, "app_keys_json") ||
+						strings.HasSuffix(name, "_token") || (strings.HasSuffix(name, "access_key") && fieldPath != ".system.service_auth.access_key")
+					if sensitive && (value.Kind != yaml.ScalarNode || strings.TrimSpace(value.Value) != "" && value.Tag != "!!null") {
+						return fmt.Errorf("nonempty credential field %s is not permitted", key.Value)
 					}
-					if _, placeholder := placeholderStorageAppKeys[keyValue]; placeholder {
-						return fmt.Errorf("scf package still contains placeholder Storage Primary app_key %q; package with MOOX_STORAGE_PRIMARY_AUTH_SECRET", keyValue)
+					if err := visit(value, fieldPath); err != nil {
+						return err
 					}
-					if len(keyValue) != 64 || !isHex(keyValue) {
-						return fmt.Errorf("Binance Storage app_key must be a 64-character HMAC hex digest")
-					}
-					checked++
 				}
-				if err := visit(value); err != nil {
+				return nil
+			}
+			for _, child := range node.Content {
+				if err := visit(child, path); err != nil {
 					return err
 				}
 			}
 			return nil
 		}
-		for _, child := range node.Content {
-			if err := visit(child); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if err := visit(&document); err != nil {
-		return err
-	}
-	if checked == 0 {
-		return fmt.Errorf("Binance source config contains no Storage auth_info")
-	}
-	return nil
-}
-
-func isHex(value string) bool {
-	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
-			return false
+		if err := visit(&document, ""); err != nil {
+			return err
 		}
 	}
-	return true
 }
 
 func stockCNCalendarPath(configDir string) (string, error) {
@@ -256,72 +307,6 @@ func stockCNRoutePath(configDir string) (string, error) {
 		return "", fmt.Errorf("stockcn route is required at %s: path is a directory", candidate)
 	}
 	return candidate, nil
-}
-
-func addRenderedStorageAuthConfig(zw *zip.Writer, src, dst, secret string) error {
-	if strings.TrimSpace(secret) == "" {
-		return fmt.Errorf("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required to package Binance Storage credentials")
-	}
-	content, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	var document yaml.Node
-	if err := yaml.Unmarshal(content, &document); err != nil {
-		return fmt.Errorf("parse Binance source config: %w", err)
-	}
-	rendered := 0
-	var visit func(*yaml.Node) error
-	visit = func(node *yaml.Node) error {
-		if node.Kind == yaml.MappingNode {
-			for i := 0; i+1 < len(node.Content); i += 2 {
-				key, value := node.Content[i], node.Content[i+1]
-				if key.Value == "auth_info" && value.Kind == yaml.MappingNode {
-					appID, appKey := mappingValue(value, "app_id"), mappingValue(value, "app_key")
-					if appID == nil || strings.TrimSpace(appID.Value) == "" || appKey == nil {
-						return fmt.Errorf("Binance Storage auth_info requires app_id and app_key")
-					}
-					appKey.Value = mooxsecurity.HMACSHA256Hex(secret, []byte(strings.TrimSpace(appID.Value)))
-					rendered++
-				}
-				if err := visit(value); err != nil {
-					return err
-				}
-			}
-		} else {
-			for _, child := range node.Content {
-				if err := visit(child); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	if err := visit(&document); err != nil {
-		return err
-	}
-	if rendered == 0 {
-		return fmt.Errorf("Binance source config contains no Storage auth_info")
-	}
-	var output strings.Builder
-	encoder := yaml.NewEncoder(&output)
-	encoder.SetIndent(2)
-	if err := encoder.Encode(&document); err != nil {
-		return fmt.Errorf("render Binance source config: %w", err)
-	}
-	if err := encoder.Close(); err != nil {
-		return err
-	}
-	return addZipBytes(zw, []byte(output.String()), dst, 0o644)
-}
-
-func mappingValue(node *yaml.Node, key string) *yaml.Node {
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
-			return node.Content[i+1]
-		}
-	}
-	return nil
 }
 
 func addZipFile(zw *zip.Writer, src, dst string) error {

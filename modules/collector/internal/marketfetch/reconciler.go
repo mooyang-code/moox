@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -58,6 +59,8 @@ type Reconciler struct {
 	SCFRegionBlacklists           map[string][]string
 	ResolveSourceID               func(string, string) string
 	ResolveSymbol                 SymbolResolver
+	CollectorRuntimeGatewayTarget string
+	CollectorRuntimeGatewayNodeID string
 	Tasks                         taskSource
 	Symbols                       datasetSource
 	Nodes                         runtimeConfigClient
@@ -270,6 +273,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if envErr != nil {
 			return r.fail(spaceID, "environment", envErr)
 		}
+		if r.CollectorRuntimeGatewayTarget != "" || r.CollectorRuntimeGatewayNodeID != "" {
+			if strings.TrimSpace(r.CollectorRuntimeGatewayTarget) == "" || strings.TrimSpace(r.CollectorRuntimeGatewayNodeID) == "" {
+				return r.fail(spaceID, "environment", fmt.Errorf("collector runtime gateway target and node must be configured together"))
+			}
+			environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = strings.TrimSpace(r.CollectorRuntimeGatewayTarget)
+			environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"] = strings.TrimSpace(r.CollectorRuntimeGatewayNodeID)
+			if environmentBytes(environment) > managedBudget {
+				return r.fail(spaceID, "environment", fmt.Errorf("timer assignment environment is %d bytes after Collector runtime routing before provider variables (managed budget %d)", environmentBytes(environment), managedBudget))
+			}
+		}
 		if !dnsAvailable {
 			// A Collector restart can reach this tick before its first DNS
 			// refresh succeeds. Omit DNS-owned keys rather than sending an empty
@@ -299,7 +312,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if !assignment.Enabled {
 			dnsHash = ""
 		}
+		environment["MOOX_FETCH_TIMEOUT_SECONDS"] = strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)
 		fingerprint := assignment.AssignmentHash + "\x00" + dnsHash + "\x00" + fmt.Sprint(desiredTimerEnabled) + "\x00" + cron
+		fingerprint += "\x00" + environment["MOOX_MARKET_FETCH_BINDING_HASH"] + "\x00" + environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] + "\x00" + environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"] + "\x00" + environment["MOOX_FETCH_TIMEOUT_SECONDS"]
 		if !r.shouldPatch(assignment, nodes, fingerprint, desiredTimerEnabled) {
 			continue
 		}
@@ -1209,6 +1224,9 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 			storedDNSHash = ""
 		}
 		stored := fmt.Sprintf("%v\x00%v\x00%v\x00%v", metadata["assignment_hash"], storedDNSHash, metadata["timer_enabled"], metadata["timer_cron"])
+		if strings.Count(fingerprint, "\x00") > 3 {
+			stored += "\x00" + metadataStringValue(metadata, "binding_hash") + "\x00" + metadataStringValue(metadata, "collector_rpc_gateway_target") + "\x00" + metadataStringValue(metadata, "collector_gateway_target_node") + "\x00" + metadataStringValue(metadata, "fetch_timeout_seconds")
+		}
 		if stored == fingerprint {
 			if timerTriggerNeedsRepair(assignment, metadata, wantTimerEnabled) {
 				return true
@@ -1222,6 +1240,11 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 		return false
 	}
 	return true
+}
+
+func metadataStringValue(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
 }
 
 func timerTriggerNeedsRepair(assignment NodeAssignment, metadata map[string]any, desiredTimerEnabled ...bool) bool {

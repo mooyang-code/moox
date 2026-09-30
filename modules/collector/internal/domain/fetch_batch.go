@@ -58,6 +58,9 @@ type CollectionItem struct {
 	// bundled trading calendar to resolve the latest closed session rather
 	// than treating a weekend or holiday as a missing-data failure.
 	Canary bool `json:"canary,omitempty"`
+	// RequirePeriodCommit is carried into durable retry records so retries keep
+	// the same Storage commit contract as their source batch.
+	RequirePeriodCommit bool `json:"require_period_commit,omitempty"`
 	// CandidateIndex is advanced when a retry has already exhausted the
 	// current provider window. Keeping it on the item makes retries resume at
 	// the next candidate instead of repeatedly starting at the same bad feed.

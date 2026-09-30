@@ -101,6 +101,21 @@ func TestRenderCollectorDNSResolverConfigIncludesStockCapacity(t *testing.T) {
 	require.Equal(t, 6, stock["stagger_max_starts_per_second"])
 }
 
+func TestRenderCollectorRuntimeClaimTargetDistinctFromStorage(t *testing.T) {
+	snapshot := &Snapshot{Manifest: Manifest{SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "stockcn", CollectorRPCGatewayTarget: "ip://collector.example:11003", CollectorGatewayTargetNode: "collector-node",
+		StorageRPCGatewayTarget: "ip://storage.example:11003", StorageGatewayNodeID: "storage-node",
+	}}}}}
+	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("storage:\n  gateway_target: ip://storage.example:11003\n"))
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(rendered, &got))
+	runtime, ok := got["collector_runtime"].(map[string]any)
+	require.True(t, ok, "Collector Claim endpoint must be rendered separately")
+	require.Equal(t, "ip://collector.example:11003", runtime["gateway_target"])
+	require.Equal(t, "collector-node", runtime["node_id"])
+}
+
 func TestRenderDisabledResolverReplacesStaleSettings(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{DNSResolver: DNSResolver{Enabled: false}}}
 	rendered, err := RenderTradeDNSResolverConfig(snapshot, []byte("dns_resolver:\n  enabled: true\n  domains: [fapi.binance.com]\n"))

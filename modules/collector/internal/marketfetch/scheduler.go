@@ -59,16 +59,17 @@ type retryDispatchCandidate struct {
 }
 
 type retryDispatchGroup struct {
-	key           string
-	batchKind     domain.BatchKind
-	attempt       int
-	retryScope    string
-	writeTargetID string
-	retries       []domain.RetryItem
-	items         []domain.CollectionItem
-	targets       []domain.WriteTarget
-	instanceIDs   []string
-	seenInstances map[string]struct{}
+	key                 string
+	batchKind           domain.BatchKind
+	requirePeriodCommit bool
+	attempt             int
+	retryScope          string
+	writeTargetID       string
+	retries             []domain.RetryItem
+	items               []domain.CollectionItem
+	targets             []domain.WriteTarget
+	instanceIDs         []string
+	seenInstances       map[string]struct{}
 }
 
 type taskExpansionCache struct {
@@ -109,13 +110,14 @@ type Scheduler struct {
 	// InvokeStorageTarget is sent in SCF invoke payloads. Leave empty to reuse
 	// StorageTarget. Collector on a mainland host may talk to Storage over a
 	// private IP while overseas functions still need the public native gateway.
-	InvokeStorageTarget string
-	BatchSize           int
-	InvokeConcurrency   int
-	MaxRetryAttempts    int
-	Metrics             *Metrics
-	SpaceID             string
-	Symbols             datasetSource
+	InvokeStorageTarget       string
+	BatchSize                 int
+	InvokeConcurrency         int
+	MaxRetryAttempts          int
+	WakePeriodFailureReporter func()
+	Metrics                   *Metrics
+	SpaceID                   string
+	Symbols                   datasetSource
 	// InvokeNonRealtimeOnly keeps realtime K-lines out of the Invoke path when
 	// Timer-triggered nodes own the live schedule.
 	InvokeNonRealtimeOnly bool
@@ -519,7 +521,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 				// The expanded item is the normalized request identity. Provider and
 				// market routing come from the bound Tag, never from CollectionTask.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start])
-				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, MarketID: batchItems[start].MarketID, InstrumentType: batchItems[start].InstrumentType, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, SourceID: batchItems[start].SourceID, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
+				req := Request{BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, MarketID: batchItems[start].MarketID, InstrumentType: batchItems[start].InstrumentType, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, SourceID: batchItems[start].SourceID, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, RequirePeriodCommit: true, Items: batchItems[start:end]}
 				// planOne loads all enabled WriteTargets for this shard in one query
 				// immediately before the durable batch race barrier. Do not pre-load
 				// them one instance at a time here: that N+1 query is redundant and
@@ -884,7 +886,7 @@ func (s *Scheduler) planTimerPeriodForAssignments(ctx context.Context, spaceID, 
 			Provider: firstNonEmpty(assignment.Provider, assignment.RouteProvider), SourceID: assignment.SourceID,
 			MarketType: assignment.MarketType, Region: assignment.Region, NodeID: assignment.NodeID,
 			FunctionName: assignment.FunctionName, ShardIndex: assignment.GroupID, GroupID: assignment.GroupID,
-			GroupCount: assignment.GroupCount, RouteVersion: assignment.RouteVersion, RunID: runID,
+			GroupCount: assignment.GroupCount, RouteVersion: assignment.RouteVersion, RunID: runID, RequirePeriodCommit: true,
 			DNSRoutes: s.dnsSnapshot(ctx), Items: requestItems, Targets: targets,
 		}
 		plans = append(plans, TimerPeriodPlan{Task: task, RunID: runID, RunCutoff: runCutoff, TaskModifyTime: task.ModifyTime, Snapshot: snapshot, Assignment: assignment,
@@ -1290,7 +1292,7 @@ func (s *Scheduler) dispatchPriorityCryptoMinute(ctx context.Context, spaceID, r
 			BatchID: batchID, SyncPointID: syncPointID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: 0,
 			SpaceID: spaceID, MarketID: item.MarketID, InstrumentType: item.InstrumentType, DatasetID: item.DatasetID,
 			Frequency: frequency, Provider: batchProvider, SourceID: item.SourceID, MarketType: batchMarketType,
-			Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes,
+			Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, RequirePeriodCommit: true,
 			Items: []domain.CollectionItem{item},
 		}
 		if created, err := s.planOne(ctx, task, req, node, nodes); err != nil {
@@ -1330,6 +1332,7 @@ func (s *Scheduler) planOneDeferred(ctx context.Context, task domain.CollectionT
 			return false, nil
 		}
 		req.Targets = targets
+		bindRequestTargetPeriodIdentity(req)
 	} else {
 		enabled, err := s.taskEnabled(ctx, req.SpaceID, task.TaskID)
 		if err != nil {
@@ -1402,6 +1405,7 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 				return
 			}
 			req.Targets = targets
+			bindRequestTargetPeriodIdentity(&req)
 		}
 		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
 		if err != nil {
@@ -1564,30 +1568,47 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 	if err != nil {
 		return err
 	}
+	maxAttempts := s.MaxRetryAttempts
+	if maxAttempts <= 0 || maxAttempts > maxRetryAttempts() {
+		maxAttempts = maxRetryAttempts()
+	}
+	markPermanent := func(retryKey, reason, summary string) error {
+		if err := s.Retries.MarkPermanent(ctx, spaceID, retryKey, reason, summary); err != nil {
+			return err
+		}
+		if s.WakePeriodFailureReporter != nil {
+			s.WakePeriodFailureReporter()
+		}
+		return nil
+	}
 	if len(nodes) == 0 {
-		if len(due) > 0 {
-			log.WarnContextf(ctx, "market fetch retries remain queued because no Invoke or Timer capacity is available space=%s count=%d", spaceID, len(due))
+		queued := 0
+		for _, retry := range due {
+			if retry.Attempt > maxAttempts {
+				if err := markPermanent(retry.RetryKey, "retry_budget_exhausted", retry.LastErrorSummary); err != nil {
+					return err
+				}
+				continue
+			}
+			queued++
+		}
+		if queued > 0 {
+			log.WarnContextf(ctx, "market fetch retries remain queued because no Invoke or Timer capacity is available space=%s count=%d", spaceID, queued)
 		}
 		return nil
 	}
 	candidates := make([]retryDispatchCandidate, 0, len(due))
 	instanceIDs := make([]string, 0, len(due))
 	for _, retry := range due {
-		maxAttempts := s.MaxRetryAttempts
-		if maxAttempts <= 0 {
-			maxAttempts = maxRetryAttempts()
-		} else if maxAttempts > maxRetryAttempts() {
-			maxAttempts = maxRetryAttempts()
-		}
 		if retry.Attempt > maxAttempts {
-			if err := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "retry_budget_exhausted", retry.LastErrorSummary); err != nil {
+			if err := markPermanent(retry.RetryKey, "retry_budget_exhausted", retry.LastErrorSummary); err != nil {
 				return err
 			}
 			continue
 		}
 		var item domain.CollectionItem
 		if err := json.Unmarshal([]byte(retry.TaskJSON), &item); err != nil {
-			if markErr := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "invalid_retry_payload", err.Error()); markErr != nil {
+			if markErr := markPermanent(retry.RetryKey, "invalid_retry_payload", err.Error()); markErr != nil {
 				return markErr
 			}
 			continue
@@ -1598,7 +1619,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			instanceID = strings.TrimSpace(item.InstanceID)
 		}
 		if instanceID == "" || s.Instances == nil {
-			if err := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "invalid_retry_identity", "retry instance is unavailable"); err != nil {
+			if err := markPermanent(retry.RetryKey, "invalid_retry_identity", "retry instance is unavailable"); err != nil {
 				return err
 			}
 			continue
@@ -1626,7 +1647,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			targets = filtered
 		}
 		if len(targets) == 0 {
-			if err := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "retry_target_unavailable", "no enabled write target remains"); err != nil {
+			if err := markPermanent(retry.RetryKey, "retry_target_unavailable", "no enabled write target remains"); err != nil {
 				return err
 			}
 			continue
@@ -1637,6 +1658,9 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		}
 		scope := firstNonEmpty(retry.RetryScope, "fetch")
 		key := retryDispatchCompatibilityKey(retry, item, targets, scope, batchKind)
+		if item.RequirePeriodCommit {
+			key += "\x00period-commit:true"
+		}
 		groupIndex, exists := lastGroupByKey[key]
 		maxItems := MaxRealtimeItems
 		if batchKind != domain.BatchKindRealtime {
@@ -1655,7 +1679,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			}
 			groupIndex = len(groups)
 			groups = append(groups, retryDispatchGroup{
-				key: key, batchKind: batchKind, attempt: retry.Attempt, retryScope: scope,
+				key: key, batchKind: batchKind, requirePeriodCommit: item.RequirePeriodCommit, attempt: retry.Attempt, retryScope: scope,
 				writeTargetID: retry.WriteTargetID, seenInstances: make(map[string]struct{}),
 			})
 			lastGroupByKey[key] = groupIndex
@@ -1694,12 +1718,13 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			BatchKind: group.batchKind, SpaceID: spaceID, DatasetID: group.targets[0].DatasetID,
 			Frequency: group.items[0].Frequency, Provider: group.items[0].Provider, SourceID: group.items[0].SourceID,
 			MarketID: group.items[0].MarketID, InstrumentType: group.items[0].InstrumentType, MarketType: group.items[0].MarketType,
-			Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx),
+			Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), RequirePeriodCommit: group.requirePeriodCommit,
 			ShardIndex: index, Items: group.items, Targets: group.targets,
 		}
+		bindRequestTargetPeriodIdentity(&req)
 		if err := req.validate(); err != nil {
 			for _, retryKey := range retryKeys {
-				if markErr := s.Retries.MarkPermanent(ctx, spaceID, retryKey, "invalid_retry_request", err.Error()); markErr != nil {
+				if markErr := markPermanent(retryKey, "invalid_retry_request", err.Error()); markErr != nil {
 					return markErr
 				}
 			}
@@ -1711,7 +1736,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		}
 		if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
 			for _, retryKey := range retryKeys {
-				if markErr := s.Retries.MarkPermanent(ctx, spaceID, retryKey, "invalid_retry_request", err.Error()); markErr != nil {
+				if markErr := markPermanent(retryKey, "invalid_retry_request", err.Error()); markErr != nil {
 					return markErr
 				}
 			}

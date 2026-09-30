@@ -333,6 +333,31 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 	require.Empty(t, fake.configured, "unchanged managed environment must not call UpdateFunctionConfiguration")
 }
 
+func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "stockcn", NodeID: "timer-node", CloudAccountID: "account-a", NodeType: "scf-event", TriggerType: "timer",
+		Region: "ap-guangzhou", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher"}`,
+	}))
+	fake := &fakeSCFClient{currentEnvironment: map[string]string{"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECTS": strings.Repeat("old-subject|", 80), "MOOX_EVENTBUS_NATS_PASSWORD": "keep-password"}}
+	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
+	patch := &pb.NodeRuntimeConfigPatch{NodeId: "timer-node", TimerCron: "5 * * * * * *", TimerEnabled: true, ManagedEnvironment: map[string]string{
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11002", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "control-a", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+	}}
+	require.Nil(t, svc.preflightRuntimeConfig(context.Background(), "stockcn", patch))
+	_, err := svc.executeRuntimeConfigItem(context.Background(), "stockcn", patch)
+	require.NoError(t, err)
+	require.Len(t, fake.configured, 1)
+	require.EqualValues(t, 60, fake.configured[0].Timeout)
+	require.Equal(t, "keep-password", fake.currentEnvironment["MOOX_EVENTBUS_NATS_PASSWORD"])
+	require.NotContains(t, fake.currentEnvironment, "MOOX_MARKET_FETCH_SUBJECTS")
+	node, err := catalog.GetNode(context.Background(), "stockcn", "timer-node")
+	require.NoError(t, err)
+	require.Contains(t, node.Metadata, "collector_rpc_gateway_target")
+	require.Contains(t, node.Metadata, `"timeout_seconds":60`, "later redeploys must not restore the legacy catalog timeout")
+}
+
 func TestReconcileSCFPublicNetworkClearsPreviousVPC(t *testing.T) {
 	fake := &fakeSCFClient{}
 	info := &tencentscf.FunctionInfo{Status: "Active", VpcID: "vpc-old", SubnetID: "subnet-old", Environment: map[string]string{}}
@@ -357,6 +382,7 @@ type fakeSCFClient struct {
 	updated              []tencentscf.UpdateFunctionCodeRequest
 	configured           []tencentscf.UpdateFunctionConfigurationRequest
 	currentEnvironment   map[string]string
+	currentTimeout       int64
 	timerEnsures         int
 	timerInfoSet         bool
 	timerInfo            *tencentscf.TimerTriggerInfo
@@ -396,7 +422,11 @@ func (f *fakeSCFClient) GetFunction(ctx context.Context, _ tencentscf.FunctionRe
 		}
 		return result.info, result.err
 	}
-	return &tencentscf.FunctionInfo{Status: "Active", Environment: f.currentEnvironment, MemorySize: 64, Timeout: 15, MaxInstanceConcurrency: 1}, nil
+	timeout := f.currentTimeout
+	if timeout == 0 {
+		timeout = 15
+	}
+	return &tencentscf.FunctionInfo{Status: "Active", Environment: f.currentEnvironment, MemorySize: 64, Timeout: timeout, MaxInstanceConcurrency: 1}, nil
 }
 func (f *fakeSCFClient) CreateFunction(ctx context.Context, req tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error) {
 	f.created = append(f.created, req)
@@ -417,6 +447,9 @@ func (f *fakeSCFClient) UpdateFunctionCode(_ context.Context, req tencentscf.Upd
 func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error) {
 	f.configured = append(f.configured, req)
 	f.currentEnvironment = req.Environment
+	if req.Timeout > 0 {
+		f.currentTimeout = req.Timeout
+	}
 	return &tencentscf.UpdateFunctionConfigurationResponse{}, nil
 }
 func (f *fakeSCFClient) InvokeFunction(context.Context, tencentscf.InvokeFunctionRequest) (*tencentscf.InvokeFunctionResponse, error) {

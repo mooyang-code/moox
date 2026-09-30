@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -24,6 +24,10 @@ const (
 )
 
 var managedEnvironmentKeys = map[string]struct{}{
+	"MOOX_MARKET_FETCH_BINDING_HASH":        {},
+	"MOOX_COLLECTOR_RPC_GATEWAY_TARGET":     {},
+	"MOOX_COLLECTOR_GATEWAY_TARGET_NODE":    {},
+	"MOOX_FETCH_TIMEOUT_SECONDS":            {},
 	"MOOX_MARKET_FETCH_PROVIDER":            {},
 	"MOOX_MARKET_FETCH_MARKET_TYPE":         {},
 	"MOOX_MARKET_FETCH_MARKET_ID":           {},
@@ -109,6 +113,9 @@ func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, it
 			return retErr(pb.ErrorCode_INVALID_PARAM, "environment key is not managed: "+key)
 		}
 	}
+	if value, ok := item.GetManagedEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"]; ok && value != strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
+		return retErr(pb.ErrorCode_INVALID_PARAM, "Timer runtime timeout must be 60 seconds")
+	}
 	return nil
 }
 
@@ -173,12 +180,23 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	for key, value := range item.GetManagedEnvironment() {
 		environment[key] = value
 	}
-	if size := scfEnvironmentBytes(environment); size > maxSCFEnvironmentBytes {
-		return "", fmt.Errorf("scf function %s environment is %d bytes; limit is %d", ref.FunctionName, size, maxSCFEnvironmentBytes)
+	if environment["MOOX_MARKET_FETCH_BINDING_HASH"] != "" {
+		_, oldSubjects := environment["MOOX_MARKET_FETCH_SUBJECTS"]
+		_, oldSymbols := environment["MOOX_MARKET_FETCH_SYMBOLS_JSON"]
+		needsEnvironmentUpdate = needsEnvironmentUpdate || oldSubjects || oldSymbols
+		delete(environment, "MOOX_MARKET_FETCH_SUBJECTS")
+		delete(environment, "MOOX_MARKET_FETCH_SYMBOLS_JSON")
+	}
+	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
+		return "", fmt.Errorf("scf function %s %w", ref.FunctionName, err)
 	}
 	verified := info
-	if needsEnvironmentUpdate {
-		if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{FunctionRef: ref, Environment: environment}); err != nil {
+	timeout := int64(0)
+	if environment["MOOX_FETCH_TIMEOUT_SECONDS"] == strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
+		timeout = tencent.CollectorTimerTimeoutSeconds
+	}
+	if needsEnvironmentUpdate || (timeout > 0 && info.Timeout != timeout) {
+		if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{FunctionRef: ref, Environment: environment, Timeout: timeout}); err != nil {
 			return "", fmt.Errorf("update scf function %s environment: %w", ref.FunctionName, err)
 		}
 		if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
@@ -189,6 +207,9 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 			return "", fmt.Errorf("verify scf function %s environment: %w", ref.FunctionName, err)
 		}
 	}
+	if timeout > 0 && verified.Timeout != timeout {
+		return "", fmt.Errorf("scf function %s Timer timeout did not verify", ref.FunctionName)
+	}
 	for key, expected := range item.GetManagedEnvironment() {
 		if verified.Environment[key] != expected {
 			return "", fmt.Errorf("scf function %s environment %q did not verify", ref.FunctionName, key)
@@ -198,7 +219,10 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	if err != nil {
 		return "", fmt.Errorf("ensure timer trigger for %s: %w", ref.FunctionName, err)
 	}
-	metadata := map[string]any{"assignment_hash": environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "assignment_count": strings.Count(environment["MOOX_MARKET_FETCH_SUBJECTS"], "|") + boolToInt(environment["MOOX_MARKET_FETCH_SUBJECTS"] != ""), "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	metadata := map[string]any{"assignment_hash": environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "binding_hash": environment["MOOX_MARKET_FETCH_BINDING_HASH"], "collector_rpc_gateway_target": environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"], "collector_gateway_target_node": environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	if timeout > 0 {
+		metadata["timeout_seconds"] = timeout
+	}
 	if err := s.catalog.UpdateNodeRuntimeMetadata(ctx, spaceID, node.NodeID, metadata); err != nil {
 		return "", err
 	}
@@ -206,16 +230,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 }
 
 func scfEnvironmentBytes(values map[string]string) int {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	total := 0
-	for _, key := range keys {
-		total += len(key) + 1 + len(values[key]) + 1
-	}
-	return total
+	return tencent.SCFEnvironmentBytes(values)
 }
 
 func scfManagedEnvironmentBudget(values map[string]string) int {

@@ -17,18 +17,47 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type capturedStorage struct {
 	timerHandlerStorage
-	rows []*storagepb.RowFieldUpsert
+	rows      []*storagepb.RowFieldUpsert
+	committed []*storagepb.TimeSeriesBatchRow
 }
 
 func (s *capturedStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	s.rows = append(s.rows, rows...)
 	return nil
+}
+
+func (s *capturedStorage) EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
+	return domain.PeriodStorageState{}, nil
+}
+
+func (s *capturedStorage) GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
+	return domain.PeriodStorageState{}, nil
+}
+
+func (s *capturedStorage) CommitTimeSeriesBatch(_ context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, _ string) error {
+	s.committed = append(s.committed, rows...)
+	for _, row := range rows {
+		s.rows = append(s.rows, row.GetRow())
+	}
+	return nil
+}
+
+func (s *capturedStorage) RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
+	return nil, nil
+}
+
+type composedTimerRuntimeClientFunc func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error)
+
+func (f composedTimerRuntimeClientFunc) ClaimTimerBatch(ctx context.Context, req *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
+	return f(ctx, req)
 }
 
 func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
@@ -85,17 +114,34 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 					subject := "BTC-USDT"
 					var response *model.Response
 					if mode == "timer" {
-						t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
-						t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "")
-						t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", product)
-						t.Setenv("MOOX_MARKET_FETCH_MARKET_ID", "crypto")
-						t.Setenv("MOOX_MARKET_FETCH_INSTRUMENT_TYPE", product)
-						t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
-						t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", frequency)
-						t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", subject)
-						t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", "{}")
-						t.Setenv("MOOX_MARKET_FETCH_MODE", "")
+						h.Publish = func(context.Context, marketfetch.Request, proto.Message) error { return nil }
+						t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
+						t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
+						t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
+						t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime")
+						t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
 						t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage")
+						period := start.UTC().Format(time.RFC3339Nano)
+						claimed, marshalErr := json.Marshal(marketfetch.Request{
+							BatchID: "timer-batch", RequestID: "request", BatchKind: domain.BatchKindRealtime,
+							SpaceID: "crypto", MarketID: "crypto", InstrumentType: product, DatasetID: "bars", Frequency: frequency,
+							Provider: "binance", SourceID: product + "_http", MarketType: product, FunctionName: "function",
+							GroupID: 0, GroupCount: 1, BindingHash: "binding-hash", RequirePeriodCommit: true,
+							Items: []domain.CollectionItem{{
+								InstanceID: "timer-instance", SubjectID: subject, Symbol: "BTCUSDT", Provider: "binance", SourceID: product + "_http",
+								MarketID: "crypto", InstrumentType: product, MarketType: product, DataType: "kline", DatasetID: "bars",
+								Frequency: frequency, TargetDataTime: period, BarLimit: 1, SeriesIndex: 0, SeriesHash: "timer-series", ExpectedCount: 1,
+								RequirePeriodCommit: true,
+							}},
+							Targets: []domain.WriteTarget{{
+								ID: "timer-target", SpaceID: "crypto", InstanceID: "timer-instance", TaskID: "timer-task", DatasetID: "bars",
+								SeriesIndex: 0, SeriesHash: "timer-series", ExpectedCount: 1, Frequency: frequency, TargetDataTime: period,
+							}},
+						})
+						require.NoError(t, marshalErr)
+						h.TimerRuntimeClient = composedTimerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
+							return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: claimed}, nil
+						})
 						response, err = h.HandleTimerAt(context.Background(), "request", "function", now)
 					} else {
 						req := marketfetch.Request{BatchID: "batch", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", MarketID: "crypto", InstrumentType: product, DatasetID: "bars", Frequency: frequency, Provider: "binance", SourceID: product + "_http", MarketType: product, RequestID: "request", Items: []domain.CollectionItem{{SubjectID: subject, Symbol: "BTCUSDT", Provider: "binance", SourceID: product + "_http", MarketType: product, DataType: "kline", DatasetID: "bars", Frequency: frequency, BarLimit: 1}}}
@@ -108,6 +154,10 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 					require.NoError(t, err)
 					require.True(t, response.Success, "%+v", response)
 					require.Len(t, storage.rows, 1, "%+v", response)
+					if mode == "timer" {
+						require.Len(t, storage.committed, 1)
+						require.Equal(t, uint32(0), storage.committed[0].GetSeriesIndex())
+					}
 					require.Equal(t, expectedPath+"?"+strings.ToLower(frequency)+"&BTCUSDT", <-requests)
 					fields := map[string]*storagepb.TypedValue{}
 					for _, field := range storage.rows[0].GetFields() {

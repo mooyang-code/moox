@@ -406,6 +406,68 @@ func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {
 	require.Contains(t, payload.GetErrorSummary(), "coverage")
 }
 
+func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *testing.T) {
+	now := time.Date(2026, 8, 28, 8, 30, 0, 0, time.UTC) // Friday 16:30 Asia/Shanghai.
+	period := time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 1, High: 1, Low: 1, Close: 1, VolumeShares: 1, AmountCNY: 1, ProviderTimestamp: period.Add(time.Minute), FetchedAt: now, RequestID: "historical-target"}
+	var observed marketdata.KlineRequest
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}, request: &observed}))
+	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
+	require.NoError(t, err)
+	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
+	require.NoError(t, err)
+	storage := &recordingTimerPeriodCommitStorage{}
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina"}, Calendar: calendar, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
+	item := domain.CollectionItem{InstanceID: "instance-1", SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", TargetDataTime: period.Format(time.RFC3339Nano), SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true}
+	target := domain.WriteTarget{ID: "target-1", SpaceID: StockCNSpaceID, InstanceID: item.InstanceID, TaskID: "task-1", DatasetID: StockCNDatasetID, SeriesIndex: 0, SeriesHash: item.SeriesHash, ExpectedCount: item.ExpectedCount, Frequency: "1m", TargetDataTime: item.TargetDataTime}
+	payload, err := pipeline.Execute(context.Background(), Request{
+		BatchID: "historical-target", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
+		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Equal(t, period, observed.StartTime)
+	require.Equal(t, period.Add(time.Minute), observed.EndTime)
+	require.Equal(t, 1, storage.commits)
+	require.Equal(t, []uint32{0}, storage.indexes)
+
+	registry = marketdata.NewRegistry()
+	recent := bar
+	recent.BarStart = period.Add(time.Minute)
+	recent.BarEnd = recent.BarStart.Add(time.Minute)
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{recent}}))
+	router, err = marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
+	require.NoError(t, err)
+	missingStorage := &recordingTimerPeriodCommitStorage{}
+	pipeline.Router, pipeline.Storage = router, missingStorage
+	payload, err = pipeline.Execute(context.Background(), Request{
+		BatchID: "missing-target", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
+		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "failed", payload.GetStatus())
+	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.GetItems()[0].GetOutcome())
+	require.Zero(t, missingStorage.commits, "a later bar must not count as evidence for the frozen target")
+}
+
+type recordingTimerPeriodCommitStorage struct {
+	recordingPeriodFailureStorage
+	commits int
+	indexes []uint32
+}
+
+func (s *recordingTimerPeriodCommitStorage) CommitTimeSeriesBatch(_ context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, _ string) error {
+	s.commits++
+	s.indexes = make([]uint32, 0, len(rows))
+	for _, row := range rows {
+		s.indexes = append(s.indexes, row.GetSeriesIndex())
+	}
+	return nil
+}
+
 type pipelineStorage struct {
 	rows          []*storagepb.RowFieldUpsert
 	sourceEventID string

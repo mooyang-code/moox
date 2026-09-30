@@ -582,10 +582,12 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		stockCNTimerOwned := strings.EqualFold(spaceID, marketfetch.StockCNSpaceID)
 		invokeConcurrency := marketFetchInvokeConcurrency(spaceID)
 		reconciler := &marketfetch.Reconciler{
-			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
-			ResolveSourceID:     marketwiring.DefaultSourceID,
-			ResolveSymbol:       marketwiring.ResolveSymbol,
-			Tasks:               dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
+			SCFRegionBlacklists:           cfg.SCFRegionBlacklists,
+			ResolveSourceID:               marketwiring.DefaultSourceID,
+			ResolveSymbol:                 marketwiring.ResolveSymbol,
+			CollectorRuntimeGatewayTarget: deps.CollectorRuntimeGatewayTarget,
+			CollectorRuntimeGatewayNodeID: deps.CollectorRuntimeGatewayNodeID,
+			Tasks:                         dbm.Tasks(), Symbols: plannerSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache,
 			Metrics: metrics, MaxSubjects: marketfetch.DefaultMaxSubjects(spaceID),
 			ExpectedStockCNTimerFunctions: cfg.StockCN.ExpectedTimerFunctionCount,
 			MeasuredSafeGroupSize:         cfg.StockCN.MeasuredSafeGroupSize,
@@ -625,6 +627,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		}
 		failureReporter := marketfetch.NewPeriodFailureReporter(dbm.FetchRetries(), marketfetch.NewMarketStorageForMarket, deps.StorageRPCGatewayTarget, spaceID)
 		failureReporter.SetMetrics(metrics)
+		invokeScheduler.WakePeriodFailureReporter = failureReporter.Wake
 		if err := marketfetch.StartPeriodFailureReporter(ctx, failureReporter, spaceID, time.Second); err != nil {
 			log.WarnContextf(ctx, "collector permanent period failure reporter disabled space=%s: %v", spaceID, err)
 		}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/clsreporter"
@@ -32,33 +33,66 @@ type Request struct {
 	BatchID string `json:"batch_id"`
 	// SyncPointID is the stable logical catchup fence identity. Retry batches
 	// get a new BatchID for outbox/write idempotency, but keep the same fence.
-	SyncPointID    string                           `json:"sync_point_id,omitempty"`
-	ScheduleID     string                           `json:"schedule_id,omitempty"`
-	BatchKind      domain.BatchKind                 `json:"batch_kind"`
-	SpaceID        string                           `json:"space_id"`
-	MarketID       string                           `json:"market_id,omitempty"`
-	InstrumentType string                           `json:"instrument_type,omitempty"`
-	DatasetID      string                           `json:"dataset_id,omitempty"`
-	Frequency      string                           `json:"frequency,omitempty"`
-	Provider       string                           `json:"provider"`
-	SourceID       string                           `json:"source_id,omitempty"`
-	MarketType     string                           `json:"market_type"`
-	Region         string                           `json:"region"`
-	NodeID         string                           `json:"node_id"`
-	FunctionName   string                           `json:"function_name,omitempty"`
-	RequestID      string                           `json:"request_id,omitempty"`
-	ShardIndex     int                              `json:"shard_index,omitempty"`
-	GroupID        int                              `json:"group_id,omitempty"`
-	GroupCount     int                              `json:"group_count,omitempty"`
-	BindingHash    string                           `json:"binding_hash,omitempty"`
-	RouteVersion   string                           `json:"route_version,omitempty"`
-	RunID          string                           `json:"-"`
-	Concurrency    int                              `json:"concurrency,omitempty"`
-	DNSRoutes      map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
-	Items          []domain.CollectionItem          `json:"items"`
+	SyncPointID         string                           `json:"sync_point_id,omitempty"`
+	ScheduleID          string                           `json:"schedule_id,omitempty"`
+	BatchKind           domain.BatchKind                 `json:"batch_kind"`
+	SpaceID             string                           `json:"space_id"`
+	MarketID            string                           `json:"market_id,omitempty"`
+	InstrumentType      string                           `json:"instrument_type,omitempty"`
+	DatasetID           string                           `json:"dataset_id,omitempty"`
+	Frequency           string                           `json:"frequency,omitempty"`
+	Provider            string                           `json:"provider"`
+	SourceID            string                           `json:"source_id,omitempty"`
+	MarketType          string                           `json:"market_type"`
+	Region              string                           `json:"region"`
+	NodeID              string                           `json:"node_id"`
+	FunctionName        string                           `json:"function_name,omitempty"`
+	RequestID           string                           `json:"request_id,omitempty"`
+	ShardIndex          int                              `json:"shard_index,omitempty"`
+	GroupID             int                              `json:"group_id,omitempty"`
+	GroupCount          int                              `json:"group_count,omitempty"`
+	BindingHash         string                           `json:"binding_hash,omitempty"`
+	RouteVersion        string                           `json:"route_version,omitempty"`
+	RequirePeriodCommit bool                             `json:"require_period_commit,omitempty"`
+	RunID               string                           `json:"-"`
+	Concurrency         int                              `json:"concurrency,omitempty"`
+	DNSRoutes           map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
+	Items               []domain.CollectionItem          `json:"items"`
 	// Targets are the destinations attached to a shared acquisition instance.
 	// When present, one fetched result is fanned out to every target.
 	Targets []domain.WriteTarget `json:"targets,omitempty"`
+}
+
+func bindRequestTargetPeriodIdentity(request *Request) {
+	if request == nil {
+		return
+	}
+	for index := range request.Items {
+		request.Items[index].RequirePeriodCommit = request.RequirePeriodCommit
+	}
+	if !request.RequirePeriodCommit || len(request.Targets) == 0 {
+		return
+	}
+	itemByInstance := make(map[string]domain.CollectionItem, len(request.Items))
+	for _, item := range request.Items {
+		itemByInstance[strings.TrimSpace(item.InstanceID)] = item
+	}
+	for index := range request.Targets {
+		target := &request.Targets[index]
+		item, ok := itemByInstance[strings.TrimSpace(target.InstanceID)]
+		if !ok {
+			continue
+		}
+		if target.SpaceID == "" {
+			target.SpaceID = request.SpaceID
+		}
+		if target.Frequency == "" {
+			target.Frequency = request.Frequency
+		}
+		if target.TargetDataTime == "" {
+			target.TargetDataTime = item.TargetDataTime
+		}
+	}
 }
 
 func (r *Request) validate() error {
@@ -70,6 +104,11 @@ func (r *Request) validate() error {
 	}
 	if len(r.Items) == 0 {
 		return fmt.Errorf("items must not be empty")
+	}
+	for index, item := range r.Items {
+		if item.RequirePeriodCommit != r.RequirePeriodCommit {
+			return fmt.Errorf("items[%d] require_period_commit differs from request", index)
+		}
 	}
 	r.DatasetID = strings.TrimSpace(r.DatasetID)
 	if r.DatasetID == "" && len(r.Targets) == 0 {
@@ -96,6 +135,59 @@ func (r *Request) validate() error {
 		}
 		if r.DatasetID == "" {
 			r.DatasetID = r.Targets[0].DatasetID
+		}
+	}
+	if r.RequirePeriodCommit {
+		if _, err := marketdata.ParseFrequency(r.Frequency); err != nil {
+			return fmt.Errorf("period commit frequency is required and must be valid: %w", err)
+		}
+		if len(r.Targets) == 0 {
+			return fmt.Errorf("period commit requires at least one bound write target")
+		}
+		itemByID := make(map[string]domain.CollectionItem, len(r.Items))
+		periods := make(map[string]time.Time, len(r.Items))
+		for index, item := range r.Items {
+			instanceID := strings.TrimSpace(item.InstanceID)
+			if instanceID == "" {
+				return fmt.Errorf("items[%d] instance_id is required for period commit", index)
+			}
+			target, err := parseRequestTime(item.TargetDataTime)
+			if err != nil || target.IsZero() {
+				return fmt.Errorf("items[%d] target_data_time is required for period commit", index)
+			}
+			if strings.TrimSpace(item.SeriesHash) == "" || item.ExpectedCount == 0 || item.SeriesIndex >= item.ExpectedCount {
+				return fmt.Errorf("items[%d] series index/hash/count are required for period commit", index)
+			}
+			itemByID[instanceID] = item
+			periods[instanceID] = target.UTC()
+		}
+		boundInstances := make(map[string]struct{}, len(r.Items))
+		for index, target := range r.Targets {
+			instanceID := strings.TrimSpace(target.InstanceID)
+			item, ok := itemByID[instanceID]
+			if !ok || strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.TaskID) == "" || strings.TrimSpace(target.DatasetID) == "" {
+				return fmt.Errorf("targets[%d] write target identity is required for period commit", index)
+			}
+			if strings.TrimSpace(target.SpaceID) != strings.TrimSpace(r.SpaceID) {
+				return fmt.Errorf("targets[%d] space_id differs from period request", index)
+			}
+			if strings.TrimSpace(target.SeriesHash) == "" || target.ExpectedCount == 0 || target.SeriesIndex >= target.ExpectedCount ||
+				target.SeriesIndex != item.SeriesIndex || target.SeriesHash != item.SeriesHash || target.ExpectedCount != item.ExpectedCount {
+				return fmt.Errorf("targets[%d] series index/hash/count are required for period commit", index)
+			}
+			if strings.TrimSpace(target.Frequency) != strings.TrimSpace(r.Frequency) {
+				return fmt.Errorf("targets[%d] frequency differs from period request", index)
+			}
+			targetTime, err := parseRequestTime(target.TargetDataTime)
+			if err != nil || targetTime.IsZero() || !targetTime.UTC().Equal(periods[instanceID]) {
+				return fmt.Errorf("targets[%d] target_data_time is required and must match its item", index)
+			}
+			boundInstances[instanceID] = struct{}{}
+		}
+		for instanceID := range itemByID {
+			if _, ok := boundInstances[instanceID]; !ok {
+				return fmt.Errorf("period item %s has no bound write target", instanceID)
+			}
 		}
 	}
 	if r.BatchKind == "" {

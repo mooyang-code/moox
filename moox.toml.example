@@ -241,7 +241,9 @@ region_blacklist = ["ap-guangzhou"]
 # 被禁地域的 function_count 必须为 0；总容量在允许的地域中分配。
 # 南京承载现货和 Storage 同地域私网；香港承载 Binance 合约（国内 SCF 到不了 fapi）。
 timer_function_count = 80
-# SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。
+# Timer 先向 Collector Claim 冻结批次，再访问独立配置的 Storage 数据面。
+collector_rpc_gateway_target = "ip://203.0.113.11:11003"
+collector_gateway_target_node = "control"
 storage_gateway_node_id = "control"
 storage_gateway_host = "203.0.113.11"
 # storage_gateway_host 是跨地域回源和故障回退地址；同地域 SCF 会自动使用
@@ -255,9 +257,8 @@ storage_gateway_host = "203.0.113.11"
 # nonce/replay 语义互相混用；未配置的地域回退到 storage_gateway_node_id。
 # storage_access_target_nodes = { ap-nanjing = "storage-access-nanjing", ap-hongkong = "storage-access-hongkong" }
 memory_size = 64
-timeout_seconds = 15
-# Invoke nodes have a longer deployment-canary budget while Kline Timer nodes
-# stay short-lived.
+timeout_seconds = 60
+# Timer and Invoke both reserve time for Storage and durable Completion.
 invoke_timeout_seconds = 60
 realtime_batch_size = 10
 realtime_bar_limit = 10
@@ -311,10 +312,12 @@ timer_function_count = 170
 # 单个 stockcn Timer 的实测安全 subject 上限，超限时 Collector 拒绝发布。
 measured_safe_group_size = 40
 storage_gateway_node_id = "control"
+collector_rpc_gateway_target = "ip://203.0.113.11:11003"
+collector_gateway_target_node = "control"
 storage_gateway_host = "203.0.113.11"
 # Storage 同地域的 SCF 自动使用私网 VPC 路径；跨地域自动回退到 storage_gateway_host。
 memory_size = 64
-timeout_seconds = 15
+timeout_seconds = 60
 # 仅 Invoke 辅助函数使用该独立超时。
 invoke_timeout_seconds = 60
 realtime_batch_size = 10

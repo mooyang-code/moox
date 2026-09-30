@@ -90,7 +90,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	if p.Now != nil {
 		started = p.Now()
 	}
-	if req.BatchKind == domain.BatchKindRealtime && p.Calendar != nil && frequency == marketdata.FrequencyMinute {
+	if req.BatchKind == domain.BatchKindRealtime && !req.RequirePeriodCommit && p.Calendar != nil && frequency == marketdata.FrequencyMinute {
 		shouldCollect, err := stockCNShouldCollectMinute(p.Calendar, started, p.SettleDelay)
 		if err != nil {
 			return nil, err
@@ -171,8 +171,20 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			coverageStart := parseOptionalTime(item.StartTime)
 			coverageEnd := parseOptionalTime(item.EndTime)
+			requiredTarget := time.Time{}
+			if req.RequirePeriodCommit {
+				var targetErr error
+				requiredTarget, targetErr = parseRequestTime(item.TargetDataTime)
+				if targetErr != nil || requiredTarget.IsZero() {
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "period_identity", fmt.Errorf("period commit target_data_time is required"))
+					return
+				}
+				coverageStart = requiredTarget.UTC()
+				coverageEnd = frequency.BarEnd(coverageStart)
+				limit = 1
+			}
 			historyAsOf := started.UTC()
-			if item.Canary && isStock && p.Calendar != nil {
+			if item.Canary && isStock && p.Calendar != nil && !req.RequirePeriodCommit {
 				canaryStart, canaryEnd, calendarErr := p.Calendar.LatestClosedMinute(started.UTC(), p.SettleDelay)
 				if calendarErr != nil {
 					results[index] = failureResult(item, domain.ItemOutcomeProviderError, "calendar", calendarErr)
@@ -202,6 +214,9 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
 			for _, bar := range fetched {
+				if req.RequirePeriodCommit && !bar.BarStart.UTC().Equal(requiredTarget.UTC()) {
+					continue
+				}
 				// The scheduler normally selects a settled target bar, but the
 				// provider response is still an untrusted boundary. Realtime rows
 				// must remain outside the settle window even when a feed returns a
@@ -235,7 +250,13 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			if len(itemRows) == 0 {
 				p.observeFeed(req, selectedProvider, "kline", "invalid")
-				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "coverage", fmt.Errorf("provider returned no bars inside the requested coverage"))
+				outcome := domain.ItemOutcomeInvalid
+				errorValue := error(fmt.Errorf("provider returned no bars inside the requested coverage"))
+				if req.RequirePeriodCommit {
+					outcome = domain.ItemOutcomeProviderError
+					errorValue = marketdata.ErrHistoryCoverage
+				}
+				results[index] = failureResult(item, outcome, "coverage", errorValue)
 				return
 			}
 			result := "success"
@@ -378,6 +399,9 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 		}
 	}
 	if len(bindings) == 0 {
+		if req.RequirePeriodCommit {
+			return nil, nil, false, fmt.Errorf("dataset %s requires period bindings but none are available", datasetID)
+		}
 		return nil, nil, false, nil
 	}
 	items := make([]*storagepb.TimeSeriesBatchRow, 0, len(rows))
@@ -394,6 +418,12 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 		target, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(binding.targetTime))
 		if err != nil {
 			return nil, nil, false, fmt.Errorf("dataset %s target_data_time is invalid: %w", datasetID, err)
+		}
+		if req.RequirePeriodCommit {
+			rowTime, timeErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(ts.GetDataTime()))
+			if timeErr != nil || !rowTime.UTC().Equal(target.UTC()) {
+				return nil, nil, false, fmt.Errorf("dataset %s row %s does not cover target_data_time", datasetID, ts.GetDataTime())
+			}
 		}
 		if expectation == nil {
 			if _, err := marketdata.ParseFrequency(req.Frequency); err != nil {

@@ -621,6 +621,50 @@ func TestDispatchDueRetriesRespectsRetryScopeTargets(t *testing.T) {
 	}
 }
 
+func TestDispatchDuePeriodRetryPreservesPeriodCommitRequirement(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, taskID, instanceID = "crypto", "period-retry-task", "period-retry-instance"
+	period := time.Date(2026, 9, 27, 8, 20, 0, 0, time.UTC)
+	item := domain.CollectionItem{
+		InstanceID: instanceID, SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http",
+		MarketType: "spot", DataType: "kline", DatasetID: "bars", Frequency: "1m",
+		TargetDataTime: period.Format(time.RFC3339Nano), SeriesIndex: 0, SeriesHash: "period-hash", ExpectedCount: 1,
+		RequirePeriodCommit: true,
+	}
+	target := domain.WriteTarget{
+		ID: "period-retry-target", SpaceID: spaceID, InstanceID: instanceID, TaskID: taskID, DatasetID: "bars",
+		SeriesIndex: 0, SeriesHash: item.SeriesHash, ExpectedCount: item.ExpectedCount, Status: "pending",
+	}
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: spaceID, TaskID: taskID, DataType: "kline", Enabled: true}))
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: spaceID, InstanceID: instanceID, SubjectID: item.SubjectID, Frequency: item.Frequency, TaskParams: `{}`,
+	}}))
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{target}))
+	itemJSON, err := json.Marshal(item)
+	require.NoError(t, err)
+	now := period.Add(time.Minute)
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: spaceID, RetryKey: "period-retry", SourceBatchID: "period-retry-source", BatchKind: domain.BatchKindRealtime,
+		InstanceID: instanceID, RetryScope: "fetch", SubjectID: item.SubjectID, Frequency: item.Frequency,
+		TargetDataTime: period, TaskJSON: string(itemJSON), Attempt: 1, Status: "pending", NextRetryAt: &now,
+	}))
+	invoker := &recordingMarketFetchInvoker{}
+	scheduler := &Scheduler{Instances: db.TaskInstances(), Batches: db.FetchBatches(), Retries: db.FetchRetries(), Invoker: invoker, Now: func() time.Time { return now }}
+	nodes := []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}}
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
+	require.Eventually(t, func() bool { return len(invoker.snapshot()) == 1 }, 2*time.Second, 10*time.Millisecond)
+	data, ok := invoker.snapshot()[0].event["data"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, data["require_period_commit"])
+	requestItems, ok := data["items"].([]any)
+	require.True(t, ok)
+	require.Len(t, requestItems, 1)
+	requestItem, ok := requestItems[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, requestItem["require_period_commit"])
+}
+
 func TestRecoverDuePreservesWriteTargetRetryScopeAndAttempt(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
@@ -796,6 +840,23 @@ func TestDispatchDueRetriesKeepsQueueWhenNoCapacityExists(t *testing.T) {
 	dueBatches, err := db.FetchBatches().ListDue(ctx, "crypto", now, 10)
 	require.NoError(t, err)
 	require.Empty(t, dueBatches)
+}
+
+func TestDispatchDueRetriesMarksExhaustedAttemptPermanentAndWakesReporterWithoutCapacity(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	retry := &domain.RetryItem{SpaceID: "crypto", RetryKey: "exhausted", Status: "pending", Attempt: 4, NextRetryAt: &now, CreateTime: now}
+	require.NoError(t, db.FetchRetries().Upsert(ctx, retry))
+	wakeCalls := 0
+	scheduler := &Scheduler{Retries: db.FetchRetries(), Batches: db.FetchBatches(), MaxRetryAttempts: 3, WakePeriodFailureReporter: func() { wakeCalls++ }}
+
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, "crypto", nil, now))
+	stored, err := db.FetchRetries().Get(ctx, "crypto", retry.RetryKey)
+	require.NoError(t, err)
+	require.Equal(t, "permanent_failed", stored.Status)
+	require.Equal(t, "retry_budget_exhausted", stored.LastErrorType)
+	require.Equal(t, 1, wakeCalls, "the durable permanent failure must wake its reporter immediately")
 }
 
 func TestSchedulerRecoversAndDispatchesConfiguredTimerWavesWithinCapacity(t *testing.T) {

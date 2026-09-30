@@ -26,6 +26,28 @@ func TestDefaultMaxSubjectsUsesSmallerCryptoShards(t *testing.T) {
 	require.Equal(t, 40, DefaultMaxSubjects("stockcn"))
 }
 
+func TestReconcilerUpgradesSameAssignmentClaimRouting(t *testing.T) {
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer", FunctionName: "timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}}}
+	r := &Reconciler{
+		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}}, Nodes: nodes,
+		CollectorRuntimeGatewayTarget: "ip://collector.example:11002", CollectorRuntimeGatewayNodeID: "control-a",
+	}
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, 1, nodes.submits)
+	// Keep assignment, DNS and actual Timer metadata unchanged, but remove the
+	// new runtime metadata to model a pre-period fleet.
+	delete(nodes.nodes[0].Metadata, "binding_hash")
+	delete(nodes.nodes[0].Metadata, "collector_rpc_gateway_target")
+	delete(nodes.nodes[0].Metadata, "collector_gateway_target_node")
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, 2, nodes.submits, "existing assignments must receive the Claim routing upgrade")
+	require.Equal(t, "control-a", nodes.patches[0].GetManagedEnvironment()["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"])
+	r.CollectorRuntimeGatewayTarget = "ip://new-control.example:11002"
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, 3, nodes.submits, "routing changes must repatch even when assignment is unchanged")
+}
+
 func TestDisableBlacklistedTimersHandlesMissingObservation(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -264,6 +286,10 @@ func (s *reconcilerNodesStub) SubmitRuntimeConfigs(_ context.Context, _ string, 
 				s.nodes[index].Metadata = map[string]any{}
 			}
 			s.nodes[index].Metadata["assignment_hash"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
+			s.nodes[index].Metadata["binding_hash"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_BINDING_HASH"]
+			s.nodes[index].Metadata["collector_rpc_gateway_target"] = patch.GetManagedEnvironment()["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"]
+			s.nodes[index].Metadata["collector_gateway_target_node"] = patch.GetManagedEnvironment()["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"]
+			s.nodes[index].Metadata["fetch_timeout_seconds"] = patch.GetManagedEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"]
 			s.nodes[index].Metadata["dns_hash"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_DNS_HASH"]
 			s.nodes[index].Metadata["timer_enabled"] = patch.GetTimerEnabled()
 			s.nodes[index].Metadata["timer_cron"] = patch.GetTimerCron()
@@ -452,7 +478,7 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 	for _, patch := range nodes.patches {
 		env := patch.GetManagedEnvironment()
 		require.Equal(t, firstDNS, env["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"])
-		require.NotEmpty(t, env["MOOX_MARKET_FETCH_SYMBOLS_JSON"])
+		require.NotContains(t, env, "MOOX_MARKET_FETCH_SYMBOLS_JSON")
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 	}
 
@@ -497,7 +523,9 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 			{SubjectID: "600000.XSHG", Status: "active"},
 			{SubjectID: "000001.XSHE", Status: "active"},
 		}},
-		Nodes: nodes,
+		Nodes:                         nodes,
+		CollectorRuntimeGatewayTarget: "ip://collector-runtime:11003",
+		CollectorRuntimeGatewayNodeID: "collector-runtime-node",
 		DNS: reconcilerDNSStub{routes: map[string]sources.DNSResolution{
 			"api.binance.com": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 29, 1, 2, 0, 0, time.UTC)},
 		}},
@@ -515,6 +543,9 @@ func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {
 		require.Equal(t, StockCNRouteID, env["MOOX_MARKET_FETCH_ROUTE_VERSION"])
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_PROVIDER_CHAIN"])
 		require.NotEmpty(t, env["MOOX_MARKET_FETCH_GROUP_ID"])
+		require.Equal(t, "ip://collector-runtime:11003", env["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"])
+		require.Equal(t, "collector-runtime-node", env["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"])
+		require.NotEmpty(t, env["MOOX_MARKET_FETCH_BINDING_HASH"])
 		_, hasDNSRoutes := env["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"]
 		_, hasDNSHash := env["MOOX_MARKET_FETCH_DNS_HASH"]
 		require.False(t, hasDNSRoutes, "stock assignments must not inherit unrelated Binance DNS snapshots")
@@ -541,7 +572,9 @@ func TestReconcilerSkipsMalformedActiveStockSubjectWithoutBlockingValidSubjects(
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
 	require.Len(t, nodes.patches, 1)
-	require.Equal(t, "600000.XSHG", nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECTS"])
+	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
+	require.Equal(t, []string{"600000.XSHG"}, reconciler.lastAssignments[0].Subjects)
+	require.NotContains(t, nodes.patches[0].GetManagedEnvironment(), "MOOX_MARKET_FETCH_SUBJECTS")
 }
 
 func TestReconcilerFailsClosedWhenAllActiveStockSubjectsAreMalformed(t *testing.T) {
@@ -646,9 +679,10 @@ func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *te
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
 	require.Len(t, nodes.patches, 3)
+	require.NoError(t, reconciler.Reconcile(context.Background(), StockCNSpaceID))
 	seenSubjects := 0
-	for _, patch := range nodes.patches {
-		seenSubjects += strings.Count(patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECTS"], "|") + 1
+	for _, assignment := range reconciler.lastAssignments {
+		seenSubjects += len(assignment.Subjects)
 	}
 	require.Equal(t, 40, seenSubjects)
 }
@@ -798,7 +832,7 @@ func TestReconcilerIgnoresDNSRotationForDisabledAssignments(t *testing.T) {
 	require.False(t, (&Reconciler{}).shouldPatch(assignment, nodes, fingerprint), "disabled nodes must not be repatched when only DNS rotates")
 }
 
-func TestReconcilerSplitsLongSubjectsBeforeEnvironmentFailure(t *testing.T) {
+func TestReconcilerLongSubjectsDoNotConsumeRuntimeEnvironment(t *testing.T) {
 	group := TaskGroup{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", ExternalSymbols: map[string]string{}}
 	for index := 0; index < 30; index++ {
 		subject := fmt.Sprintf("%s%d-USDT", strings.Repeat("A", 25), index)
@@ -807,7 +841,7 @@ func TestReconcilerSplitsLongSubjectsBeforeEnvironmentFailure(t *testing.T) {
 	}
 	groups, err := splitGroupsForEnvironment([]TaskGroup{group}, nil, 30, nil)
 	require.NoError(t, err)
-	require.Greater(t, len(groups), 1)
+	require.Len(t, groups, 1)
 	for _, split := range groups {
 		_, err := BuildManagedEnvironment(NodeAssignment{
 			Provider: split.Provider, MarketType: split.MarketType, DatasetID: split.DatasetID,

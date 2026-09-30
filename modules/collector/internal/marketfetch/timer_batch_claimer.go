@@ -35,8 +35,8 @@ func (c *TimerBatchClaimer) Claim(ctx context.Context, input store.TimerPeriodBa
 		completionTimeout = 70 * time.Second
 	}
 	input.CompletionTimeout = completionTimeout
-	input.ValidateRequestJSON = func(raw []byte) error {
-		return validatePersistedTimerRequest(raw, input)
+	input.ValidateRequestJSON = func(batchID string, raw []byte) error {
+		return validatePersistedTimerRequest(raw, input, batchID)
 	}
 	claimed, err := c.Batches.Claim(ctx, input)
 	if err != nil {
@@ -54,13 +54,19 @@ func (c *TimerBatchClaimer) Claim(ctx context.Context, input store.TimerPeriodBa
 	}, nil
 }
 
-func validatePersistedTimerRequest(raw []byte, input store.TimerPeriodBatchClaimInput) error {
+func validatePersistedTimerRequest(raw []byte, input store.TimerPeriodBatchClaimInput, batchID string) error {
 	if len(raw) == 0 || len(raw) > maxTimerBatchResponseBytes {
 		return fmt.Errorf("persisted timer request is empty or exceeds %d bytes", maxTimerBatchResponseBytes)
 	}
 	var request Request
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return err
+	}
+	if strings.TrimSpace(batchID) == "" || request.BatchID != batchID {
+		return fmt.Errorf("persisted request batch_id does not match claimed batch")
+	}
+	if !request.RequirePeriodCommit {
+		return fmt.Errorf("persisted timer request must require period commit")
 	}
 	if err := request.validate(); err != nil {
 		return err

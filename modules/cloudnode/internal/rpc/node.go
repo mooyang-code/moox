@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -482,8 +483,8 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		environment = make(map[string]string)
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
-	if size := scfEnvironmentBytes(environment); size > maxSCFEnvironmentBytes {
-		return fmt.Errorf("scf function %s environment is %d bytes; limit is %d", ref.FunctionName, size, maxSCFEnvironmentBytes)
+	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
+		return fmt.Errorf("scf function %s %w", ref.FunctionName, err)
 	}
 	createCtx, createCancel := context.WithTimeout(ctx, scfCreateAttemptTimeout)
 	_, err = client.CreateFunction(createCtx, tencentscf.CreateFunctionRequest{
@@ -690,8 +691,8 @@ func (s *Service) updateSCFFunctionCode(
 		environment[key] = value
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
-	if size := scfEnvironmentBytes(environment); size > maxSCFEnvironmentBytes {
-		return fmt.Errorf("scf function %s environment is %d bytes; limit is %d", ref.FunctionName, size, maxSCFEnvironmentBytes)
+	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
+		return fmt.Errorf("scf function %s %w", ref.FunctionName, err)
 	}
 	if !codeCurrent {
 		_, err = client.UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{

@@ -8,28 +8,39 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
-func TestHandlerRoutesTimerToSourceBoundMarketFetch(t *testing.T) {
+func TestHandlerRoutesTimerToClaimedMarketFetch(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "stockcn")
-	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "tencent")
-	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_http")
-	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
-	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "dataset_stockcn_equity_kline")
-	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
-	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG")
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage:11003")
+	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage.local:11003")
+	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "runtime.local:11003")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
+	t.Setenv("MOOX_SCF_FUNCTION_NAME", "function-1")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
 	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
 
 	var observed marketfetch.Request
+	period := "2026-09-01T07:59:00Z"
+	claimed, err := json.Marshal(marketfetch.Request{
+		BatchID: "claimed-batch", BatchKind: domain.BatchKindRealtime, SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline",
+		Frequency: "1m", Provider: "tencent", SourceID: "stockcn_http", MarketType: "equity", FunctionName: "function-1",
+		GroupID: 0, GroupCount: 1, BindingHash: "binding-hash", RequirePeriodCommit: true,
+		Items:   []domain.CollectionItem{{InstanceID: "instance-1", SubjectID: "600000.XSHG", Symbol: "600000", Provider: "tencent", SourceID: "stockcn_http", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m", TargetDataTime: period, SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true}},
+		Targets: []domain.WriteTarget{{ID: "target-1", SpaceID: "stockcn", InstanceID: "instance-1", TaskID: "task-1", DatasetID: "dataset_stockcn_equity_kline", SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, Frequency: "1m", TargetDataTime: period}},
+	})
+	require.NoError(t, err)
 	handler := &Handler{
 		NewMarketFetch: func() *marketfetch.Handler {
 			return &marketfetch.Handler{
+				TimerRuntimeClient: serverlessTimerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
+					return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: claimed}, nil
+				}),
 				NewStorage: func(string, string, string) (marketfetch.Storage, error) {
 					return timerStorage{}, nil
 				},
@@ -54,12 +65,14 @@ func TestHandlerRoutesTimerToSourceBoundMarketFetch(t *testing.T) {
 	require.Equal(t, "tencent", observed.Provider)
 	require.Equal(t, "stockcn_http", observed.SourceID)
 	require.Equal(t, "stockcn_http", observed.Items[0].SourceID)
+	require.Equal(t, "claimed-batch", observed.BatchID)
 }
 
 func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
-	// Presence of subjects makes the runtime look like an existing timer node.
-	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "BTC-USDT")
+	// The static binding identifies a managed Timer-capable node; subjects are
+	// never the source of execution membership.
+	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "kline")
 
 	published := 0
@@ -117,3 +130,9 @@ func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {
 type timerStorage struct{}
 
 func (timerStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }
+
+type serverlessTimerRuntimeClientFunc func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error)
+
+func (f serverlessTimerRuntimeClientFunc) ClaimTimerBatch(ctx context.Context, req *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
+	return f(ctx, req)
+}

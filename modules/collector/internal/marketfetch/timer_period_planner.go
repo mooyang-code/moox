@@ -139,6 +139,10 @@ func buildTimerPeriodBatchPlan(plan TimerPeriodPlan, snapshot domain.PeriodSerie
 	request.SpaceID = periodKey.SpaceID
 	request.DatasetID = periodKey.DatasetID
 	request.Frequency = periodKey.Frequency
+	request.RequirePeriodCommit = true
+	for index := range request.Items {
+		request.Items[index].RequirePeriodCommit = true
+	}
 	request.Provider = firstNonEmpty(assignment.Provider, assignment.RouteProvider)
 	request.SourceID = assignment.SourceID
 	request.MarketID = assignment.MarketID

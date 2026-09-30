@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildManagedEnvironmentPinsPriorityCryptoSubjectsFirst(t *testing.T) {
+func TestBuildManagedEnvironmentRetainsAssignmentIdentityWithoutMembership(t *testing.T) {
 	assignment := NodeAssignment{
 		Provider: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot",
 		SourceID: "spot_http", DatasetID: "bars", Frequency: "1m", Enabled: true,
@@ -21,7 +21,8 @@ func TestBuildManagedEnvironmentPinsPriorityCryptoSubjectsFirst(t *testing.T) {
 	}
 	env, err := BuildManagedEnvironment(assignment, nil)
 	require.NoError(t, err)
-	require.Equal(t, "BTC-USDT|ETH-USDT|AAA-USDT|ZZZ-USDT", env["MOOX_MARKET_FETCH_SUBJECTS"])
+	require.NotContains(t, env, "MOOX_MARKET_FETCH_SUBJECTS")
+	require.NotEmpty(t, env["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 }
 
 func TestBuildManagedEnvironmentCarriesSelectedOutputFields(t *testing.T) {
@@ -37,7 +38,7 @@ func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
 		"API.BINANCE.COM.": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "BTC-USDT|ETH-USDT", env["MOOX_MARKET_FETCH_SUBJECTS"])
+	require.NotContains(t, env, "MOOX_MARKET_FETCH_SUBJECTS")
 	require.Equal(t, `{"api.binance.com":["203.0.113.1","203.0.113.2"]}`, env["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"])
 	require.Equal(t, ManagedDNSHash(map[string]sources.DNSResolution{
 		"API.BINANCE.COM.": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)},
@@ -49,28 +50,17 @@ func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
 	require.Equal(t, "cn-equity", env["MOOX_MARKET_FETCH_SERIES_TAG"])
 }
 
-func TestTimerRequestFromEnvCarriesBoundSourceIDToEveryItem(t *testing.T) {
-	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "tencent")
-	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_http")
-	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
-	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", StockCNDatasetID)
-	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
-	t.Setenv("MOOX_SPACE_ID", StockCNSpaceID)
-	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG|000001.XSHE")
-	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", "")
-	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "1")
-	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "0")
-	t.Setenv("MOOX_MARKET_FETCH_OUTPUT_FIELDS", "close|volume")
-
-	request, _, err := TimerRequestFromEnv("request-1", "function-1", time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	require.Equal(t, "stockcn_http", request.SourceID)
-	require.Len(t, request.Items, 2)
-	for _, item := range request.Items {
-		require.Equal(t, "tencent", item.Provider)
-		require.Equal(t, "stockcn_http", item.SourceID)
-		require.Equal(t, []string{"close", "volume"}, item.OutputFields)
+func TestTimerEnvironmentCarriesBindingHashWithoutMembership(t *testing.T) {
+	assignment := NodeAssignment{
+		Provider: "tencent", SourceID: "stockcn_http", MarketType: "equity", DatasetID: StockCNDatasetID,
+		Frequency: "1m", Subjects: []string{"600000.XSHG", "000001.XSHE"}, GroupID: 0, GroupCount: 1,
+		NodeID: "node-1", FunctionName: "function-1", Region: "ap-guangzhou", Enabled: true,
 	}
+	env, err := BuildManagedEnvironment(assignment, nil)
+	require.NoError(t, err)
+	require.Equal(t, timerPeriodBindingHash(assignment), env["MOOX_MARKET_FETCH_BINDING_HASH"])
+	require.NotContains(t, env, "MOOX_MARKET_FETCH_SUBJECTS")
+	require.NotContains(t, env, "MOOX_MARKET_FETCH_SYMBOLS_JSON")
 }
 
 func TestManagedDNSHashIgnoresLatencyOrderedIPChanges(t *testing.T) {
@@ -139,14 +129,14 @@ func TestBuildManagedEnvironmentAllowsStockGroupAboveThirty(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestBuildManagedEnvironmentUsesCompactStockSymbolOverrides(t *testing.T) {
+func TestBuildManagedEnvironmentOmitsStockSymbolOverrides(t *testing.T) {
 	env, err := buildManagedEnvironment(NodeAssignment{
 		Provider: "sina", RouteProvider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID,
 		Frequency: "1m", Subjects: []string{"000001.XSHE", "600000.XSHG"},
 		ExternalSymbols: map[string]string{"600000.XSHG": "custom-sh600000"}, RouteVersion: StockCNRouteID, Enabled: true,
 	}, nil, stockCNMaxManagedEnvironmentSize)
 	require.NoError(t, err)
-	require.Equal(t, `{"600000.XSHG":"custom-sh600000"}`, env["MOOX_MARKET_FETCH_SYMBOLS_JSON"])
+	require.NotContains(t, env, "MOOX_MARKET_FETCH_SYMBOLS_JSON")
 }
 
 func TestBuildManagedEnvironmentDoesNotRequireStockSymbolMapping(t *testing.T) {
@@ -165,7 +155,7 @@ func TestBuildManagedEnvironmentRejectsOversizedManagedAssignment(t *testing.T) 
 		externals[subjects[index]] = strings.Repeat("X", 32)
 	}
 	_, err := BuildManagedEnvironment(NodeAssignment{
-		Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals,
+		Provider: "binance", MarketType: "spot", DatasetID: strings.Repeat("long-dataset", 200), Frequency: "1m", Subjects: subjects, ExternalSymbols: externals,
 		AssignmentHash: "hash",
 	}, nil)
 	require.ErrorContains(t, err, "reduce symbols or split")

@@ -2,17 +2,20 @@ package marketfetch
 
 import (
 	"context"
+	"encoding/json"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type timerMetricsReporter struct{ calls atomic.Int32 }
@@ -29,26 +32,23 @@ func (timerHandlerStorage) UpsertFields(context.Context, []*storagepb.RowFieldUp
 }
 
 func TestHandleTimerAtReportsMetricsForTimerExecution(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "stockcn")
-	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "sina")
-	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_minute_http")
-	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "equity")
-	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "dataset_stockcn_equity_kline")
-	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
-	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "600000.XSHG")
-	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"600000.XSHG":"sh600000"}`)
-	t.Setenv("MOOX_MARKET_FETCH_GROUP_ID", "3")
-	t.Setenv("MOOX_MARKET_FETCH_GROUP_COUNT", "4")
-	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage:11003")
+	setTimerClaimEnvironment(t)
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "storage.local:11003")
+	requestJSON, err := json.Marshal(validClaimedTimerRequest())
+	require.NoError(t, err)
 	reporter := &timerMetricsReporter{}
 	handler := &Handler{
+		TimerRuntimeClient: timerRuntimeClientFunc(func(context.Context, *collectorpb.ClaimTimerBatchReq) (*collectorpb.ClaimTimerBatchRsp, error) {
+			return &collectorpb.ClaimTimerBatchRsp{RetInfo: &collectorpb.RetInfo{Code: collectorpb.ErrorCode_SUCCESS}, Claimed: true, RequestJson: requestJSON}, nil
+		}),
 		NewStorage: func(string, string, string) (Storage, error) { return timerHandlerStorage{}, nil },
 		Execute: func(_ context.Context, req Request, _ Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 			require.Equal(t, domain.BatchKindRealtime, req.BatchKind)
 			require.Equal(t, 3, req.GroupID)
-			require.Equal(t, 4, req.GroupCount)
+			require.Equal(t, 200, req.GroupCount)
 			return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil
 		},
+		Publish:         func(context.Context, Request, proto.Message) error { return nil },
 		MetricsReporter: reporter,
 	}
 

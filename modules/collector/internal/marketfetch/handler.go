@@ -9,10 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -23,8 +25,9 @@ import (
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	NewStorage func(string, string, string) (Storage, error)
-	Publish    func(context.Context, Request, proto.Message) error
+	NewStorage         func(string, string, string) (Storage, error)
+	Publish            func(context.Context, Request, proto.Message) error
+	TimerRuntimeClient TimerRuntimeClient
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
 	// contract without making an external exchange request.
@@ -51,14 +54,13 @@ type MetricsReporter interface {
 const (
 	// A fresh SCF invocation establishes a TLS connection to EventBus before
 	// publishing the only completion fact. The first connection can take
-	// several seconds on a cold path, so leave a three-second reserve and allow
-	// one bounded reconnect attempt. Invoke functions use the longer instrument
-	// timeout; Timer invocations do not publish completion events.
-	completionPublishReserve  = 3 * time.Second
-	completionConnectTimeout  = 4 * time.Second
+	// several seconds on a cold path, so leave a bounded reserve for one
+	// reconnect attempt after the initial connection attempt.
+	completionPublishReserve  = 4 * time.Second
+	completionConnectTimeout  = 3 * time.Second
 	completionConnectAttempts = 2
 	defaultStorageTimeout     = 5 * time.Second
-	metricsResponseReserve    = 500 * time.Millisecond
+	metricsResponseReserve    = 750 * time.Millisecond
 )
 
 func NewHandler() *Handler {
@@ -79,15 +81,11 @@ func (h *Handler) HandleWithFunctionName(ctx context.Context, event model.CloudF
 
 // HandleWithFunctionNameWithoutCompletion handles a direct validation or
 // diagnostic invocation without publishing a scheduler completion event.
-// Timer-backed canaries use this path because their runtime deliberately has
-// no EventBus material.
 func (h *Handler) HandleWithFunctionNameWithoutCompletion(ctx context.Context, event model.CloudFunctionEvent, functionName string) (*model.Response, error) {
 	return h.handleWithFunctionName(ctx, event, false, functionName)
 }
 
-// HandleTimer executes a Tencent Timer invocation. Timer work intentionally
-// skips EventBus completion publication; Storage freshness and CLS are the
-// runtime evidence, and the next timer naturally retries the latest bars.
+// HandleTimer executes one durable batch claimed from the Collector runtime.
 func (h *Handler) HandleTimer(ctx context.Context, requestID, nodeID string) (*model.Response, error) {
 	now := time.Now().UTC()
 	if h != nil && h.Now != nil {
@@ -100,12 +98,33 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 	if h == nil {
 		return nil, fmt.Errorf("market fetch handler is nil")
 	}
-	defer h.reportMetrics(ctx)
-	req, storageTarget, err := TimerRequestFromEnv(requestID, nodeID, now, RuntimeResolvers{SourceID: h.ResolveSourceID, Symbol: h.ResolveSymbol})
+	budgetCtx, cancel := executionContext(ctx)
+	defer func() {
+		h.reportMetrics(budgetCtx)
+		cancel()
+	}()
+	invocation, err := TimerRequestFromEnv(requestID, nodeID, now)
 	if err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
-	return h.handleRequest(ctx, req, storageTarget, false)
+	runtimeClient := h.TimerRuntimeClient
+	if runtimeClient == nil {
+		runtimeClient = newTimerRuntimeRPCClient(invocation.RuntimeGatewayTarget, invocation.RuntimeGatewayNodeID)
+	}
+	req, claimed, err := claimTimerRequest(budgetCtx, runtimeClient, invocation)
+	if err != nil {
+		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	if !claimed {
+		return &model.Response{Success: true, Message: "no_work", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	if invocation.StorageGatewayTarget == "" {
+		return &model.Response{Success: false, Message: "storage_rpc_gateway_target is required", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	if h.Publish == nil {
+		return &model.Response{Success: false, Message: "completion publisher is not configured", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	return h.handleRequest(budgetCtx, req, invocation.StorageGatewayTarget, true)
 }
 
 func (h *Handler) handle(ctx context.Context, event model.CloudFunctionEvent, publish bool) (*model.Response, error) {
@@ -205,6 +224,9 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	if storageTarget == "" {
 		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
 	}
+	if publish && h.Publish == nil {
+		return nil, fmt.Errorf("completion publisher is not configured")
+	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
 	storage, err := h.NewStorage(storageTarget, req.MarketType, writeSourceForFunctionName(req.FunctionName))
@@ -279,9 +301,16 @@ func (h *Handler) reportMetrics(parent context.Context) {
 	if h == nil || h.MetricsReporter == nil {
 		return
 	}
-	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", 750)) * time.Millisecond
+	reserve := h.CLSReserve
+	if reserve < metricsResponseReserve {
+		reserve = metricsResponseReserve
+	}
+	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", int(reserve/time.Millisecond))) * time.Millisecond
+	if timeout > reserve {
+		timeout = reserve
+	}
 	if deadline, ok := parent.Deadline(); ok {
-		remaining := time.Until(deadline) - metricsResponseReserve
+		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return
 		}
@@ -316,6 +345,8 @@ type reservedDeadlineStorage struct {
 	timeout time.Duration
 }
 
+var _ periodStorage = (*reservedDeadlineStorage)(nil)
+
 func (s *reservedDeadlineStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	ctx, cancel := s.storageContext()
 	defer cancel()
@@ -329,6 +360,54 @@ func (s *reservedDeadlineStorage) UpsertFieldsWithSource(_ context.Context, rows
 		return storage.UpsertFieldsWithSource(ctx, rows, source)
 	}
 	return s.Storage.UpsertFields(ctx, rows)
+}
+
+func (s *reservedDeadlineStorage) EnsureDatasetPeriod(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
+	storage, err := s.periodStorage("EnsureDatasetPeriod")
+	if err != nil {
+		return domain.PeriodStorageState{}, err
+	}
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return storage.EnsureDatasetPeriod(ctx, expectation)
+}
+
+func (s *reservedDeadlineStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, sourceEventID string) error {
+	storage, err := s.periodStorage("CommitTimeSeriesBatch")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return storage.CommitTimeSeriesBatch(ctx, expectation, rows, sourceEventID)
+}
+
+func (s *reservedDeadlineStorage) RecordDatasetPeriodFailures(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, indexes []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
+	storage, err := s.periodStorage("RecordDatasetPeriodFailures")
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return storage.RecordDatasetPeriodFailures(ctx, expectation, indexes)
+}
+
+func (s *reservedDeadlineStorage) GetDatasetPeriodStatus(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
+	storage, err := s.periodStorage("GetDatasetPeriodStatus")
+	if err != nil {
+		return domain.PeriodStorageState{}, err
+	}
+	ctx, cancel := s.storageContext()
+	defer cancel()
+	return storage.GetDatasetPeriodStatus(ctx, expectation)
+}
+
+func (s *reservedDeadlineStorage) periodStorage(method string) (periodStorage, error) {
+	storage, ok := s.Storage.(periodStorage)
+	if !ok {
+		return nil, fmt.Errorf("%s requires a Storage client with the complete period commit contract", method)
+	}
+	return storage, nil
 }
 
 func (s *reservedDeadlineStorage) ListInstrumentNames(_ context.Context, spaceID string, subjectIDs []string) (map[string]string, error) {
@@ -360,21 +439,17 @@ func storageAndPublishReserves(storage time.Duration, cls time.Duration, complet
 	if storage <= 0 {
 		storage = defaultStorageTimeout
 	}
-	if cls < 0 {
-		cls = 0
+	if cls < metricsResponseReserve {
+		cls = metricsResponseReserve
 	}
 	if !completion {
-		// Timer invocations do not publish a completion event. Do not reserve
-		// three seconds for a path that is deliberately absent; that budget is
-		// needed by the 30-symbol HTTP fan-out before the five-second Storage
-		// write and best-effort CLS flush.
 		return storage + cls, 0
 	}
 	return storage + completionPublishReserve + cls, completionPublishReserve
 }
 
 func executionContext(parent context.Context) (context.Context, context.CancelFunc) {
-	seconds := envInt("MOOX_FETCH_TIMEOUT_SECONDS", envInt("MOOX_MARKET_FETCH_TIMEOUT_SECONDS", 15))
+	seconds := envInt("MOOX_FETCH_TIMEOUT_SECONDS", envInt("MOOX_MARKET_FETCH_TIMEOUT_SECONDS", tencent.CollectorTimerTimeoutSeconds))
 	budget := time.Duration(seconds) * time.Second
 	if deadline, ok := parent.Deadline(); ok {
 		remaining := time.Until(deadline)

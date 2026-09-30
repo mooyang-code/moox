@@ -51,7 +51,7 @@ type TimerPeriodBatchClaimInput struct {
 	NodeID              string
 	Region              string
 	CompletionTimeout   time.Duration
-	ValidateRequestJSON func([]byte) error
+	ValidateRequestJSON func(batchID string, requestJSON []byte) error
 }
 
 type TimerPeriodBatchClaimResult struct {
@@ -363,7 +363,7 @@ func (r *TimerPeriodBatchRepository) claimOnce(ctx context.Context, input TimerP
 				return err
 			}
 			if input.ValidateRequestJSON != nil {
-				if err := input.ValidateRequestJSON([]byte(batch.RequestJSON)); err != nil {
+				if err := input.ValidateRequestJSON(batch.BatchID, []byte(batch.RequestJSON)); err != nil {
 					return fmt.Errorf("validate persisted timer request_json: %w", err)
 				}
 			}
@@ -398,7 +398,7 @@ func (r *TimerPeriodBatchRepository) claimOnce(ctx context.Context, input TimerP
 			return err
 		}
 		if input.ValidateRequestJSON != nil {
-			if err := input.ValidateRequestJSON([]byte(batch.RequestJSON)); err != nil {
+			if err := input.ValidateRequestJSON(batch.BatchID, []byte(batch.RequestJSON)); err != nil {
 				return fmt.Errorf("validate persisted timer request_json: %w", err)
 			}
 		}

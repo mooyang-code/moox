@@ -32,11 +32,11 @@ storage:
       subject_market: "spot"
       auth_info:
         app_id: "moox-collector"
-        app_key: "binance-spot-collector"
+        app_key: ""
     swap:
       data_source_id: "binance"
       subject_type: "crypto_pair"
       subject_market: "swap"
       auth_info:
         app_id: "moox-collector"
-        app_key: "binance-swap-collector"
+        app_key: ""
