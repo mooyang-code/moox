@@ -239,7 +239,7 @@ func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewaypr
 	case "storage-period":
 	case "storage-metadata":
 		servicePath = "trpc.moox.storage.Metadata"
-		required = []string{"ApplyTagSnapshot", "GetTag", "ResolveSubjects"}
+		required = []string{"ApplyTagSnapshot", "GetTag", "ListSubjects", "ResolveSubjects"}
 	case "collector-runtime":
 		serviceID, servicePath = "collector-market-runtime", "trpc.moox.collector.MarketFetchRuntime"
 		required = []string{"ClaimTimerBatch"}

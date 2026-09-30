@@ -29,7 +29,7 @@ func TestCollectorPeriodRoutesProduction(t *testing.T) {
 	require.Equal(t, []string{"collector"}, runtime[0].AllowedCallers)
 	metadata, err := loadCollectorPeriodRoutes(path, "storage-metadata", "127.0.0.1:23458")
 	require.NoError(t, err)
-	require.Len(t, metadata, 2)
+	require.Len(t, metadata, 3)
 	methods := map[string]int{}
 	for _, route := range metadata {
 		require.Equal(t, "storage-primary", route.ServiceID)
@@ -43,6 +43,7 @@ func TestCollectorPeriodRoutesProduction(t *testing.T) {
 	}
 	require.Equal(t, 1, methods["ApplyTagSnapshot"])
 	require.Equal(t, 1, methods["GetTag"])
+	require.Equal(t, 1, methods["ListSubjects"])
 	require.Equal(t, 1, methods["ResolveSubjects"])
 }
 
@@ -51,7 +52,7 @@ func TestCollectorPeriodRoutesCombineStorageAndMetadata(t *testing.T) {
 	require.NoError(t, err)
 	routes, err := loadCollectorPeriodRoutesWithMetadata(path, "storage-period", "127.0.0.1:23456", "127.0.0.1:23458")
 	require.NoError(t, err)
-	require.Len(t, routes, 3)
+	require.Len(t, routes, 4)
 	methods := map[string]int{}
 	for _, route := range routes {
 		for _, method := range route.AllowedMethods {
@@ -64,7 +65,7 @@ func TestCollectorPeriodRoutesCombineStorageAndMetadata(t *testing.T) {
 			require.Equal(t, "127.0.0.1:23456", route.Address)
 		}
 	}
-	for _, method := range []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus", "ApplyTagSnapshot", "GetTag", "ResolveSubjects"} {
+	for _, method := range []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus", "ApplyTagSnapshot", "GetTag", "ListSubjects", "ResolveSubjects"} {
 		require.Equal(t, 1, methods[method], method)
 	}
 	_, err = loadCollectorPeriodRoutesWithMetadata(path, "collector-runtime", "127.0.0.1:23456", "127.0.0.1:23458")
