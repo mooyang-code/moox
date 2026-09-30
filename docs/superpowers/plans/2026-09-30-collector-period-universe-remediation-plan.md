@@ -12,9 +12,9 @@
 
 ## 1. 范围与基线
 
-工作目录为仓库根目录 `moox`；下文命令均在该目录执行，文件清单使用仓库相对路径。业务代码审计基线为 `593a51cab886ef6f9362765ac7730470cd0f29d2`；本轮复核时主工作区为 `feature/mooyang`，HEAD 为 `e8c5b4d2`，工作区干净。业务基线之后的两次已提交变更 `80291a16`、`e8c5b4d2` 均只修改计划文档，未改变该业务实现。
+工作目录为仓库根目录 `moox`；下文命令均在该目录执行，文件清单使用仓库相对路径。业务代码审计基线为 `593a51cab886ef6f9362765ac7730470cd0f29d2`；本轮复核开始时主工作区为 `feature/mooyang`，HEAD 为 `06972d14`，工作区干净。业务基线之后的三次已提交变更 `80291a16`、`e8c5b4d2`、`06972d14` 均只修改计划文档，未改变该业务实现。
 
-**本轮交付边界：** 只完善执行计划与审查依据，不继续业务编码、不部署、不重置。独立工作区中已有部分实现，但未提交、未合入、未完成独立代码审查，不视为主工作区已完成。实施前先核验实际 diff 和验证证据，禁止依据改名后的文件存在或子任务的本地测试回报就勾选整项任务。
+**本轮交付边界：** 只完善执行计划与审查依据，不继续业务编码、不部署、不重置。独立工作区中已有部分实现，Task 1 与门禁前置改动已有分项独立审查结论，但未提交、未合入，也未完成整条链路的审查及验收，不视为主工作区已完成。实施前先核验实际 diff 和验证证据，禁止依据改名后的文件存在或子任务的本地测试回报就勾选整项任务。
 
 本计划补充 `docs/superpowers/plans/2026-09-29-collector-subject-period-failure-plan.md`。旧文档保留为历史记录；其中已勾选的任务不能作为本次补齐项已完成的证据，旧“Storage 先升级、旧周期继续收尾”的发布假设由本计划替代。
 
@@ -58,9 +58,9 @@
 
 | 范围 | 主工作区状态 | 独立工作区已有内容 | 下一步 |
 | --- | --- | --- | --- |
-| Task 1 命名与完整快照对象 | 待实施/合入 | 子任务已回报 Proto 生成、定向测试和三个入口 build 通过；未提交、未审查 | 核对修改范围与日志，独立审查，补齐发现后提交；不重新盲替换名称 |
-| Task 3 Gateway 默认路由 | 待实施/合入 | 四个 period 方法的 Collector-only 路由及默认值测试有部分修改 | 验证两份路由来源，再完成生产 adapter、服务鉴权和真实 resolver 测试，不能仅凭路由测试勾选 Task 3 |
-| Task 9 门禁前置项 | 待完成 | 有架构模块清单、数量断言及 Gateway 测试 fixture 调整 | 保留生产校验，定位并修复 fixture 漂移；所有门禁重新执行，不以局部修复推断 PASS |
+| Task 1 命名与完整快照对象 | 待实施/合入 | 已回报 Proto 生成、定向测试和三个入口 build 通过；规格与代码质量分项审查均通过，尚未提交/合入 | 核对实际 diff 与完整测试日志、完成主 Agent 核验后提交；不重新盲替换名称，不提前勾选 |
+| Task 3 Gateway 默认路由 | 待实施/合入 | 四个 period 方法的 Collector-only 路由及默认值测试有部分修改，路由分项审查通过 | 验证两份路由来源，再完成生产 adapter、服务鉴权和真实 resolver 测试，不能仅凭路由测试勾选 Task 3 |
+| Task 9 门禁前置项 | 待完成 | 有架构模块清单、数量断言、Gateway fixture 和合法空可选 placement 修复，前置改动分项审查通过 | 核对并提交前置改动，保留生产校验；所有门禁重新执行，不以局部修复推断整体验收 PASS |
 | Task 2、4、5、6、7、8 | 待实施 | 无可验收的完整实现 | 严格按第 3 节依赖顺序实施 |
 
 若独立工作区已被修改，先重新读取本表涉及文件并按实际 diff 更新执行记录；不撤销已有工作，也不把未完成改动直接发布。每项任务完成必须同时具备实现、针对性测试、审查闭环和提交记录。
@@ -174,6 +174,7 @@ git diff --check
 - Modify: `modules/storage/proto/data_node.proto`、`modules/storage/proto/primary_store.proto`、`modules/storage/proto/storagegen/`
 - Modify: `modules/storage/internal/service/datanode/period.go`、`modules/storage/internal/service/datanode/service.go`、`modules/storage/internal/service/datanode/service_test.go`
 - Modify: `modules/storage/internal/service/datanode/pebble/period_progress.go`、`modules/storage/internal/service/datanode/pebble/period_progress_test.go`
+- Modify: `modules/storage/internal/service/datanode/pebble/store.go`，用现有 Options 注入统一周期时钟，默认生产时间不变
 - Modify: `modules/storage/internal/service/primarystore/period.go`、`modules/storage/internal/service/primarystore/service_test.go`
 - Modify: `modules/collector/internal/marketfetch/scheduler.go`、`modules/collector/internal/marketfetch/scheduler_test.go`，在 Ensure 中携带最终 storage-series tag
 - Modify: `modules/storage/cmd/server/main.go` 中新增查询转发，使本任务协议可编译；完整代理契约在 Task 3 验证
@@ -654,6 +655,7 @@ git diff --check
 - Modify: `modules/collector/README.md`、`modules/storage/README.md`
 - Modify: `docs/架构总览.md`、`scripts/test/contract/test-docs-architecture.sh`，只修复已核验的 Workspace 模块清单及其数量断言漂移
 - Modify: `docs/策略模块架构设计.md`，仅补回当前发布事件 `LogicalAccountTargetWeightRequested` 的精确名称，不改 Strategy/Trade 行为
+- Modify: `scripts/deploy/deploy-moox.sh`、`scripts/test/contract/test-deploy-moox-gateway.sh`，修复合法空可选 Trade placement 导致 overlay/Admin 启动 `read` EOF 退出；非法配置仍须拒绝
 - Create: `docs/ops/collector-period-universe-release.md`
 - Modify: 本计划，逐项附实际执行证据，不提前勾选
 
@@ -664,6 +666,8 @@ git diff --check
 本轮文档检查已发现既存前置失败：`make test-docs-architecture` 报 `docs/架构总览.md missing go.work module: tools/moox-mcp`；当前 `go.work` 实际含 55 个 module，脚本仍要求 54 个。实施时先同步真实模块清单和严格数量断言，保留逐模块覆盖检查；不得删除检查、跳过该门禁或把当前结果记为 PASS。
 
 同一门禁还要求 Strategy 文档出现 `LogicalAccountTargetWeightRequested`，当前文档仅写“完整目标权重事件”；该名称由 `packages/tradeeventpb/trade_events.proto`、`packages/events/registry.go` 和 `modules/strategy/internal/trigger/processor.go` 的实际发布路径共同确认。只补文档名称，不改交易协议。Gateway 部署门禁的固定健康地址断言与实际 `gateway_health_addr` 已漂移，gateway-only fixture 也必须显式关闭独立的 Storage Access、HostAgent；修复测试 fixture 后重新执行完整脚本。不得放宽部署脚本的凭据、组件依赖、健康检查或回滚保护。
+
+独立工作区的实跑还定位到两处真实部署缺陷：`patch_configs` 和生成的 `start_admin` 在合法空可选 `trade-gateway.json` 时，Python 不输出、`read` EOF 返回 1，触发 `set -e`。按现有 `import_trade_owner_route` 的模式捕获 producer 结果与退出码，仅合法空配置跳过 `read`；半缺失字段、非法 JSON/URL/node 仍 fail closed。用生成 Admin placement block 与真实 overlay 的空/合法/非法 fixture 做红绿回归，不能填假 Trade node 掩盖缺陷；这是门禁前置修复，不改变 Strategy/Trade 业务规则。
 
 ```bash
 go -C modules/collector test -count=1 ./...
@@ -740,3 +744,5 @@ done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 本轮计划核验已分别由两位独立 `codeCR` Agent 检查 Storage 和 Collector 路径；主 Agent 随后核验了 RowKey/index 绑定、Collector owner 属性、operator-owned route 更新、两套 packager 与 runtime 凭据/CA 消费入口，修订已纳入相应任务。这是计划审查，不替代 Task 9.5 要求的编码完成后新 Agent 代码审查。
 
 本轮最终计划复核还指出 Timer 积压领取顺序、普通 JSON map 无法查重、Dataset 标签无界三项；主 Agent 已核验 assignment、Storage 凭据入口、任务结果身份和标准 JSON decoder 的实际行为，分别补入 Task 6、7、5 及验收矩阵。没有增加另一个运行协议、迁移体系或监控子系统。
+
+本次接续更新在主工作区 `06972d14` 上再次由 Storage、Collector 两路 `codeCR` 分别只读复核，均为 PASS、无新增阻断项；主 Agent 独立核验了生产 adapter、Ensure 授权、终态 Record 分支、Timer 请求与 Completion、Storage 包装器、失败适配器、清理 SQL 和任务结果身份约束。仅更新文档基线、分项实施状态与门禁前置文件清单，未继续业务编码；全部实施复选框仍未勾选。上述计划复核不替代编码完成后的独立审查或端到端验收。
