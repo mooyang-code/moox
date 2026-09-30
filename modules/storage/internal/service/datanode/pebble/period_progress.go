@@ -65,14 +65,14 @@ type DatasetPeriodSeries struct {
 }
 
 type DatasetPeriodExpectation struct {
-	SpaceID       string
-	DatasetID     string
-	Frequency     string
-	PeriodTime    int64
-	SeriesHash    string
-	ExpectedCount uint32
-	DeadlineAt    int64
-	Roster        []DatasetPeriodSeries
+	SpaceID        string
+	DatasetID      string
+	Frequency      string
+	PeriodTime     int64
+	SeriesHash     string
+	ExpectedCount  uint32
+	DeadlineAt     int64
+	SeriesSnapshot []DatasetPeriodSeries `json:"series_snapshot"`
 }
 
 type TimeSeriesBatchItem struct {
@@ -88,7 +88,7 @@ type DatasetPeriodProgress struct {
 }
 
 func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpectation) (string, error) {
-	exp, err := normalizePeriodExpectationWithRoster(exp)
+	exp, err := normalizePeriodExpectationWithSeriesSnapshot(exp)
 	if err != nil {
 		return "", err
 	}
@@ -120,7 +120,7 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 		// Dataset period identity. A retry in a later scheduler tick can carry a
 		// newer deadline for the same series snapshot; keep the first persisted
 		// deadline so retries cannot indefinitely extend a waiting period.
-		if !samePeriodCommitIdentity(current, exp) || !samePeriodRoster(current.Roster, exp.Roster) {
+		if !samePeriodCommitIdentity(current, exp) || !samePeriodSeriesSnapshot(current.SeriesSnapshot, exp.SeriesSnapshot) {
 			return "", PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
 		}
 		return status, nil
@@ -133,11 +133,11 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 	if err := batch.Set(periodFieldKey(base, "expected_count"), uint32Bytes(exp.ExpectedCount), s.writeOptions); err != nil {
 		return "", err
 	}
-	rosterRaw, err := json.Marshal(exp.Roster)
+	seriesSnapshotRaw, err := json.Marshal(exp.SeriesSnapshot)
 	if err != nil {
 		return "", err
 	}
-	if err := batch.Set(periodFieldKey(base, "roster"), rosterRaw, s.writeOptions); err != nil {
+	if err := batch.Set(periodFieldKey(base, "series_snapshot"), seriesSnapshotRaw, s.writeOptions); err != nil {
 		return "", err
 	}
 	if err := batch.Set(periodFieldKey(base, "deadline"), int64Bytes(exp.DeadlineAt), s.writeOptions); err != nil {
@@ -318,8 +318,8 @@ func (s *Store) RecordDatasetPeriodFailures(ctx context.Context, exp DatasetPeri
 	if status != "waiting" {
 		return status, nil
 	}
-	if len(current.Roster) != int(current.ExpectedCount) {
-		return "", invalid("dataset period roster is unavailable for failure reporting")
+	if len(current.SeriesSnapshot) != int(current.ExpectedCount) {
+		return "", invalid("dataset period series snapshot is unavailable for failure reporting")
 	}
 	success, err := s.readPeriodBitmap(base)
 	if err != nil {
@@ -330,8 +330,8 @@ func (s *Store) RecordDatasetPeriodFailures(ctx context.Context, exp DatasetPeri
 		return "", err
 	}
 	for _, index := range seriesIndexes {
-		if index >= current.ExpectedCount || int(index) >= len(current.Roster) || current.Roster[index].SeriesIndex != index || strings.TrimSpace(current.Roster[index].SubjectID) == "" {
-			return "", invalidf("series_index %d is not in the period roster", index)
+		if index >= current.ExpectedCount || int(index) >= len(current.SeriesSnapshot) || current.SeriesSnapshot[index].SeriesIndex != index || strings.TrimSpace(current.SeriesSnapshot[index].SubjectID) == "" {
+			return "", invalidf("series_index %d is not in the period series snapshot", index)
 		}
 		if bitmapBitSet(success, index) {
 			continue
@@ -585,27 +585,27 @@ func normalizePeriodExpectation(exp DatasetPeriodExpectation) (DatasetPeriodExpe
 	return exp, nil
 }
 
-func normalizePeriodExpectationWithRoster(exp DatasetPeriodExpectation) (DatasetPeriodExpectation, error) {
+func normalizePeriodExpectationWithSeriesSnapshot(exp DatasetPeriodExpectation) (DatasetPeriodExpectation, error) {
 	exp, err := normalizePeriodExpectation(exp)
 	if err != nil {
 		return exp, err
 	}
-	if len(exp.Roster) != int(exp.ExpectedCount) {
-		return exp, invalid("period roster size must equal expected_count")
+	if len(exp.SeriesSnapshot) != int(exp.ExpectedCount) {
+		return exp, invalid("period series snapshot size must equal expected_count")
 	}
-	for index := range exp.Roster {
-		exp.Roster[index].SubjectID = strings.TrimSpace(exp.Roster[index].SubjectID)
-		if exp.Roster[index].SeriesIndex != uint32(index) {
-			return exp, invalid("period roster series_index must be dense from zero")
+	for index := range exp.SeriesSnapshot {
+		exp.SeriesSnapshot[index].SubjectID = strings.TrimSpace(exp.SeriesSnapshot[index].SubjectID)
+		if exp.SeriesSnapshot[index].SeriesIndex != uint32(index) {
+			return exp, invalid("period series snapshot series_index must be dense from zero")
 		}
-		if exp.Roster[index].SubjectID == "" {
-			return exp, invalid("period roster subject_id is required")
+		if exp.SeriesSnapshot[index].SubjectID == "" {
+			return exp, invalid("period series snapshot subject_id is required")
 		}
 	}
 	return exp, nil
 }
 
-func samePeriodRoster(left, right []DatasetPeriodSeries) bool {
+func samePeriodSeriesSnapshot(left, right []DatasetPeriodSeries) bool {
 	if len(left) != len(right) {
 		return false
 	}
@@ -626,12 +626,12 @@ func validatePeriodRow(exp DatasetPeriodExpectation, seriesIndex uint32, row *pb
 	if strings.TrimSpace(key.GetSpaceId()) != exp.SpaceID || strings.TrimSpace(key.GetDatasetId()) != exp.DatasetID || !strings.EqualFold(strings.TrimSpace(series.GetFreq()), exp.Frequency) {
 		return false, invalid("period batch row identity does not match expectation")
 	}
-	if len(exp.Roster) > 0 {
-		if int(seriesIndex) >= len(exp.Roster) || exp.Roster[seriesIndex].SeriesIndex != seriesIndex {
-			return false, invalidf("series_index %d is not in the period roster", seriesIndex)
+	if len(exp.SeriesSnapshot) > 0 {
+		if int(seriesIndex) >= len(exp.SeriesSnapshot) || exp.SeriesSnapshot[seriesIndex].SeriesIndex != seriesIndex {
+			return false, invalidf("series_index %d is not in the period series snapshot", seriesIndex)
 		}
-		if strings.TrimSpace(series.GetSubjectId()) != strings.TrimSpace(exp.Roster[seriesIndex].SubjectID) {
-			return false, invalidf("series_index %d subject_id does not match the period roster", seriesIndex)
+		if strings.TrimSpace(series.GetSubjectId()) != strings.TrimSpace(exp.SeriesSnapshot[seriesIndex].SubjectID) {
+			return false, invalidf("series_index %d subject_id does not match the period series snapshot", seriesIndex)
 		}
 	}
 	at, err := time.Parse(time.RFC3339Nano, series.GetDataTime())
@@ -666,13 +666,13 @@ func (s *Store) readPeriodExpectation(base string) (DatasetPeriodExpectation, er
 		return DatasetPeriodExpectation{}, errors.New("dataset period expectation is corrupted")
 	}
 	exp := DatasetPeriodExpectation{SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: periodTime, SeriesHash: string(seriesHash), ExpectedCount: binary.BigEndian.Uint32(expectedRaw), DeadlineAt: int64(binary.BigEndian.Uint64(deadlineRaw))}
-	rosterRaw, rosterErr := s.readPeriodValue(periodFieldKey(base, "roster"))
-	if rosterErr == nil {
-		if err := json.Unmarshal(rosterRaw, &exp.Roster); err != nil {
-			return DatasetPeriodExpectation{}, fmt.Errorf("dataset period roster is corrupted: %w", err)
+	seriesSnapshotRaw, seriesSnapshotErr := s.readPeriodValue(periodFieldKey(base, "series_snapshot"))
+	if seriesSnapshotErr == nil {
+		if err := json.Unmarshal(seriesSnapshotRaw, &exp.SeriesSnapshot); err != nil {
+			return DatasetPeriodExpectation{}, fmt.Errorf("dataset period series snapshot is corrupted: %w", err)
 		}
-	} else if !errors.Is(rosterErr, cpebble.ErrNotFound) {
-		return DatasetPeriodExpectation{}, rosterErr
+	} else if !errors.Is(seriesSnapshotErr, cpebble.ErrNotFound) {
+		return DatasetPeriodExpectation{}, seriesSnapshotErr
 	}
 	return exp, nil
 }
@@ -762,11 +762,11 @@ func periodCompleteKey(base string) []byte {
 	return []byte(periodCompletePrefix + hex.EncodeToString([]byte(base)))
 }
 func periodMarkerSubjects(exp DatasetPeriodExpectation, success, failures []byte) ([]string, []string) {
-	universe := make([]string, 0, len(exp.Roster))
+	universe := make([]string, 0, len(exp.SeriesSnapshot))
 	failed := make([]string, 0)
-	universeSeen := make(map[string]struct{}, len(exp.Roster))
+	universeSeen := make(map[string]struct{}, len(exp.SeriesSnapshot))
 	failedSeen := make(map[string]struct{})
-	for index, series := range exp.Roster {
+	for index, series := range exp.SeriesSnapshot {
 		subjectID := strings.TrimSpace(series.SubjectID)
 		if subjectID == "" {
 			continue

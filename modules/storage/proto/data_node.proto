@@ -23,7 +23,7 @@ message DatasetPeriodExpectation {
   string series_hash = 5;
   uint32 expected_count = 6;
   int64 deadline_at = 7;
-  repeated DatasetPeriodSeries roster = 8;
+  repeated DatasetPeriodSeries series_snapshot = 8;
 }
 
 message EnsureDatasetPeriodReq {

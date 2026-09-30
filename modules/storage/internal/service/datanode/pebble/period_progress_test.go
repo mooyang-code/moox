@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -69,26 +70,62 @@ func TestDatasetPeriodExpectationConflictIsRejected(t *testing.T) {
 	require.ErrorAs(t, err, &conflict)
 }
 
-func TestDatasetPeriodExpectationRosterIsValidatedAndImmutable(t *testing.T) {
+func TestDatasetPeriodExpectationSeriesSnapshotIsValidatedAndImmutable(t *testing.T) {
 	store := newPeriodTestStore(t)
 	ctx := context.Background()
 	period := time.Date(2026, 9, 28, 4, 4, 0, 0, time.UTC)
 	exp := periodExpectationForTest(period, 2)
 	_, err := store.EnsureDatasetPeriod(ctx, exp)
 	require.NoError(t, err)
+	base := periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)
+	raw, err := store.readPeriodValue(periodFieldKey(base, "series_snapshot"))
+	require.NoError(t, err)
+	var persisted []DatasetPeriodSeries
+	require.NoError(t, json.Unmarshal(raw, &persisted))
+	require.Equal(t, exp.SeriesSnapshot, persisted)
+	_, err = store.readPeriodValue(periodFieldKey(base, "roster"))
+	require.ErrorIs(t, err, cpebble.ErrNotFound, "the renamed persisted field must not also write the old name")
+	encoded, err := json.Marshal(exp)
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &fields))
+	require.Contains(t, fields, "series_snapshot")
+	require.NotContains(t, fields, "Roster")
+	require.NotContains(t, fields, "roster")
+	field := (&pb.DatasetPeriodExpectation{}).ProtoReflect().Descriptor().Fields().ByNumber(8)
+	require.Equal(t, "series_snapshot", string(field.Name()), "the snapshot rename preserves Proto field number 8")
 
 	changed := exp
-	changed.Roster = append([]DatasetPeriodSeries(nil), exp.Roster...)
-	changed.Roster[1].SubjectID = "SOL-USDT"
+	changed.SeriesSnapshot = append([]DatasetPeriodSeries(nil), exp.SeriesSnapshot...)
+	changed.SeriesSnapshot[1].SubjectID = "SOL-USDT"
 	_, err = store.EnsureDatasetPeriod(ctx, changed)
 	var conflict PeriodConflictError
 	require.ErrorAs(t, err, &conflict)
 
 	invalid := exp
-	invalid.Roster = append([]DatasetPeriodSeries(nil), exp.Roster...)
-	invalid.Roster[1].SeriesIndex = 2
+	invalid.SeriesSnapshot = append([]DatasetPeriodSeries(nil), exp.SeriesSnapshot...)
+	invalid.SeriesSnapshot[1].SeriesIndex = 2
 	_, err = newPeriodTestStore(t).EnsureDatasetPeriod(ctx, invalid)
 	require.Error(t, err)
+}
+
+func TestDatasetPeriodExpectationDoesNotReadOldSnapshotField(t *testing.T) {
+	store := newPeriodTestStore(t)
+	exp := periodExpectationForTest(time.Date(2026, 9, 28, 4, 4, 0, 0, time.UTC), 2)
+	_, err := store.EnsureDatasetPeriod(context.Background(), exp)
+	require.NoError(t, err)
+	base := periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)
+	raw, err := json.Marshal(exp.SeriesSnapshot)
+	require.NoError(t, err)
+	batch := store.db.NewBatch()
+	defer batch.Close()
+	require.NoError(t, batch.Set(periodFieldKey(base, "roster"), raw, store.writeOptions))
+	require.NoError(t, batch.Delete(periodFieldKey(base, "series_snapshot"), store.writeOptions))
+	require.NoError(t, batch.Commit(store.writeOptions))
+
+	loaded, err := store.readPeriodExpectation(base)
+	require.NoError(t, err)
+	require.Empty(t, loaded.SeriesSnapshot, "old snapshot fields are not an implicit compatibility source")
 }
 
 func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testing.T) {
@@ -102,7 +139,7 @@ func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testin
 	require.NoError(t, err)
 
 	_, err = store.RecordDatasetPeriodFailures(ctx, exp, []uint32{3})
-	require.Error(t, err, "failure indices outside the persisted roster must be rejected")
+	require.Error(t, err, "failure indices outside the persisted series snapshot must be rejected")
 	status, err := store.RecordDatasetPeriodFailures(ctx, exp, []uint32{1, 2, 2})
 	require.NoError(t, err)
 	require.Equal(t, "waiting", status)
@@ -129,6 +166,8 @@ func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testin
 
 	marker := collectorPeriodMarkerFromOutbox(t, store)
 	require.Equal(t, "degraded", marker.GetStatus())
+	require.Len(t, exp.SeriesSnapshot, 3)
+	require.Len(t, marker.GetUniverseSubjectIds(), 2)
 	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetUniverseSubjectIds(), "universe must deduplicate provider series")
 	require.Equal(t, []string{"ETH-USDT"}, marker.GetFailedSubjects())
 }
@@ -246,7 +285,7 @@ func TestDatasetPeriodConcurrentBitmapMergeDoesNotLoseBits(t *testing.T) {
 		wg.Add(1)
 		go func(index uint32) {
 			defer wg.Done()
-			_, commitErr := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: index, Row: periodRowForTest(period, exp.Roster[index].SubjectID)}}, "", "collector")
+			_, commitErr := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: index, Row: periodRowForTest(period, exp.SeriesSnapshot[index].SubjectID)}}, "", "collector")
 			errs <- commitErr
 		}(i)
 	}
@@ -356,11 +395,11 @@ func periodExpectationForTest(period time.Time, expected uint32, subjects ...str
 			}
 		}
 	}
-	roster := make([]DatasetPeriodSeries, 0, len(subjects))
+	seriesSnapshot := make([]DatasetPeriodSeries, 0, len(subjects))
 	for index, subject := range subjects {
-		roster = append(roster, DatasetPeriodSeries{SeriesIndex: uint32(index), SubjectID: subject})
+		seriesSnapshot = append(seriesSnapshot, DatasetPeriodSeries{SeriesIndex: uint32(index), SubjectID: subject})
 	}
-	return DatasetPeriodExpectation{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period.Unix(), SeriesHash: "series-hash", ExpectedCount: expected, DeadlineAt: time.Now().UTC().Add(time.Hour).Unix(), Roster: roster}
+	return DatasetPeriodExpectation{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period.Unix(), SeriesHash: "series-hash", ExpectedCount: expected, DeadlineAt: time.Now().UTC().Add(time.Hour).Unix(), SeriesSnapshot: seriesSnapshot}
 }
 
 func collectorPeriodMarkerFromOutbox(t *testing.T, store *Store) *storageeventpb.CollectorPeriodCompleted {

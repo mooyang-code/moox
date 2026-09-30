@@ -42,9 +42,9 @@ import (
 var collectorStartedAt = time.Now()
 
 const (
-	marketFetchScheduleTimeout  = 30 * time.Second
-	marketFetchReconcileTimeout = 30 * time.Second
-	periodSeriesRetention       = 30 * 24 * time.Hour
+	marketFetchScheduleTimeout    = 30 * time.Second
+	marketFetchReconcileTimeout   = 30 * time.Second
+	periodSeriesSnapshotRetention = 30 * 24 * time.Hour
 )
 
 // Initialize loads config, initializes persistence, and registers RPC services.
@@ -84,10 +84,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 collector schema 失败: %v", err)
 		return nil, err
 	}
-	if deleted, err := dbm.PeriodSeries().CleanupReportedBefore(ctx, time.Now().UTC().Add(-periodSeriesRetention), 1000); err != nil {
-		log.WarnContextf(ctx, "清理 Collector 过期周期 roster 失败: %v", err)
+	if deleted, err := dbm.PeriodSeriesSnapshot().CleanupReportedBefore(ctx, time.Now().UTC().Add(-periodSeriesSnapshotRetention), 1000); err != nil {
+		log.WarnContextf(ctx, "清理 Collector 过期周期采集序列快照 失败: %v", err)
 	} else if deleted > 0 {
-		log.Infof("清理 Collector 过期周期 roster 行数: %d", deleted)
+		log.Infof("清理 Collector 过期周期采集序列快照 行数: %d", deleted)
 	}
 	deps, err := Resolve(ctx, cfg)
 	if err != nil {
@@ -580,7 +580,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
 			ResolveSourceID:     marketwiring.DefaultSourceID,
-			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeries: dbm.PeriodSeries(),
+			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeriesSnapshot: dbm.PeriodSeriesSnapshot(),
 			// Local Storage RPC uses the resolved Collector target (private IP
 			// when runtime.env was rewritten). SCF invoke payloads keep the
 			// discovered public native gateway so overseas functions still work.

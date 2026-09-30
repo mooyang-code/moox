@@ -382,17 +382,20 @@ func TestCreateTaskRejectsInvalidNamesBeforeStorage(t *testing.T) {
 }
 
 func TestCreateTaskRejectsCallerResultIdentityBeforeStorage(t *testing.T) {
-	params, err := structpb.NewStruct(map[string]any{"target_dataset_id": "existing"})
-	require.NoError(t, err)
+	for _, field := range []string{"target_dataset_id", "result_dataset_id", "result_view_id", "target_view_id"} {
+		t.Run(field, func(t *testing.T) {
+			params, err := structpb.NewStruct(map[string]any{field: "existing"})
+			require.NoError(t, err)
+			rsp, callErr := (&Service{}).CreateTask(context.Background(), &pb.CreateTaskReq{
+				Task: &pb.CollectionTask{TaskName: "new task", CollectParams: params},
+			})
+			require.NoError(t, callErr)
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+			require.Contains(t, rsp.GetRetInfo().GetMsg(), field)
+		})
+	}
 
 	rsp, callErr := (&Service{}).CreateTask(context.Background(), &pb.CreateTaskReq{
-		Task: &pb.CollectionTask{TaskName: "new task", CollectParams: params},
-	})
-	require.NoError(t, callErr)
-	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "target_dataset_id")
-
-	rsp, callErr = (&Service{}).CreateTask(context.Background(), &pb.CreateTaskReq{
 		Task: &pb.CollectionTask{
 			TaskName: "new task",
 			Result:   &pb.TaskResult{ViewId: "existing-view"},
@@ -401,6 +404,67 @@ func TestCreateTaskRejectsCallerResultIdentityBeforeStorage(t *testing.T) {
 	require.NoError(t, callErr)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "result.view_id")
+}
+
+func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
+	db := openCollectorTestStore(t)
+	ctx := context.Background()
+	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+	service := &Service{
+		taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		datasetSrc: acceptingKlineDatasetSource{}, resultDataNodeID: "node-collector",
+	}
+	var datasets []string
+	var taskIDs []string
+	for index, taskName := range []string{"task-owned-first", "task-owned-second"} {
+		params, err := structpb.NewStruct(map[string]any{
+			"subject_tags": []any{"binance_spot"}, "frequency": "1m", "output_fields": []any{[]string{"close", "volume"}[index]},
+		})
+		require.NoError(t, err)
+		rsp, err := service.CreateTask(ctx, &pb.CreateTaskReq{Task: &pb.CollectionTask{
+			SpaceId: "crypto", TaskName: taskName, DataType: "kline", CollectParams: params,
+		}})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+		taskID := rsp.GetTaskId()
+		require.NotEmpty(t, taskID)
+		stored, err := db.Tasks().GetByTaskID(ctx, "crypto", taskID)
+		require.NoError(t, err)
+		require.Equal(t, taskresult.ResultIDsForTask("crypto", taskID, "binance_spot", "kline", "1m").DatasetID, stored.ResultDatasetID)
+		require.Equal(t, stored.ResultDatasetID, mustParseCollectParams(t, *stored).TargetDatasetID)
+		require.Equal(t, taskID, metadata.datasets[stored.ResultDatasetID].GetAttributes()["collector_task_id"])
+		datasets = append(datasets, stored.ResultDatasetID)
+		taskIDs = append(taskIDs, taskID)
+	}
+	require.NotEqual(t, taskIDs[0], taskIDs[1])
+	require.NotEqual(t, datasets[0], datasets[1])
+	require.Len(t, metadata.datasets, 2, "each task provisions its own result Dataset instead of sharing the snapshot target")
+}
+
+func TestUpdateTaskRejectsResultDatasetReplacement(t *testing.T) {
+	db := openCollectorTestStore(t)
+	ctx := context.Background()
+	existing := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned result", DataType: "kline", Enabled: true,
+		CollectParams:   `{"target_dataset_id":"dataset-original","frequency":"1m"}`,
+		ResultDatasetID: "dataset-original", ResultViewID: "view-original", PrepareState: domain.PrepareStateReady,
+	}
+	require.NoError(t, db.Tasks().Create(ctx, existing))
+	before, err := db.Tasks().GetByTaskID(ctx, existing.SpaceID, existing.TaskID)
+	require.NoError(t, err)
+	params, err := structpb.NewStruct(map[string]any{"target_dataset_id": "dataset-other", "frequency": "1m"})
+	require.NoError(t, err)
+	service := &Service{taskRepo: db.Tasks(), datasetSrc: acceptingKlineDatasetSource{}}
+	rsp, err := service.UpdateTask(ctx, &pb.UpdateTaskReq{
+		SpaceId: existing.SpaceID, TaskId: existing.TaskID,
+		Task: &pb.CollectionTask{TaskName: existing.TaskName, DataType: existing.DataType, CollectParams: params},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "create a new task")
+	after, err := db.Tasks().GetByTaskID(ctx, existing.SpaceID, existing.TaskID)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "a rejected target change must not alter the owning Dataset or persisted task")
 }
 
 type acceptingKlineDatasetSource struct{}

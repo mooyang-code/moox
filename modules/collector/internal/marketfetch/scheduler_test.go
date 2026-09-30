@@ -800,11 +800,11 @@ func TestSchedulerRunCutoffDefersSeriesChangeToNextRun(t *testing.T) {
 	require.Equal(t, 2, countInstancesForRun(instances, nextRun.RunID))
 }
 
-func TestSchedulerReusesPeriodRosterAfterTagMembershipChangesAndRestart(t *testing.T) {
+func TestSchedulerReusesPeriodSeriesSnapshotAfterTagMembershipChangesAndRestart(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
 	task := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "bars-period-roster", TaskName: "Period roster", DataType: "kline",
+		SpaceID: "crypto", TaskID: "bars-period-snapshot", TaskName: "Period series snapshot", DataType: "kline",
 		TagIDs: []string{"binance-spot"}, CollectParams: `{"target_dataset_id":"bars","frequency":"1h"}`, Enabled: true,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
@@ -817,7 +817,7 @@ func TestSchedulerReusesPeriodRosterAfterTagMembershipChangesAndRestart(t *testi
 	newScheduler := func(at time.Time) *Scheduler {
 		return &Scheduler{
 			Tasks: db.Tasks(), Instances: db.TaskInstances(), Batches: db.FetchBatches(), Runs: db.Runs(), Retries: db.FetchRetries(),
-			PeriodSeries: db.PeriodSeries(), Invoker: invoker, SpaceID: "crypto", Now: func() time.Time { return at },
+			PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), Invoker: invoker, SpaceID: "crypto", Now: func() time.Time { return at },
 			ResolveSourceID: testSourceID, Symbols: source,
 		}
 	}
@@ -825,18 +825,21 @@ func TestSchedulerReusesPeriodRosterAfterTagMembershipChangesAndRestart(t *testi
 	require.NoError(t, newScheduler(now).Tick(ctx, "crypto"))
 	firstPeriod, err := targetDataTime(now, "1h")
 	require.NoError(t, err)
-	firstRoster, err := db.PeriodSeries().GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: firstPeriod})
+	firstSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: firstPeriod})
 	require.NoError(t, err)
-	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, periodSeriesSubjectsForScheduler(firstRoster))
+	require.True(t, found)
+	require.Equal(t, uint32(2), firstSnapshot.ExpectedCount)
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, periodSeriesSubjectsForScheduler(firstSnapshot))
 	require.Equal(t, 1, source.resolveSubjectsCalls)
 
 	source.subjects = []domain.Subject{{SubjectID: "BTC-USDT", Status: "active"}}
-	// A new scheduler instance models process restart. The period roster is
+	// A new scheduler instance models process restart. The period snapshot is
 	// persistent, so current Tag members are not resolved for this same period.
 	require.NoError(t, newScheduler(now.Add(time.Minute)).Tick(ctx, "crypto"))
-	loadedRoster, err := db.PeriodSeries().GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: firstPeriod})
+	loadedSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, firstSnapshot.Key)
 	require.NoError(t, err)
-	require.Equal(t, firstRoster, loadedRoster)
+	require.True(t, found)
+	require.Equal(t, firstSnapshot, loadedSnapshot)
 	require.Equal(t, 1, source.resolveSubjectsCalls, "existing periods must not re-resolve Storage tag members")
 
 	nextNow := now.Add(time.Hour)
@@ -844,51 +847,58 @@ func TestSchedulerReusesPeriodRosterAfterTagMembershipChangesAndRestart(t *testi
 	nextPeriod, err := targetDataTime(nextNow, "1h")
 	require.NoError(t, err)
 	require.NotEqual(t, firstPeriod, nextPeriod)
-	nextRoster, err := db.PeriodSeries().GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: nextPeriod})
+	nextSnapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1h", PeriodTime: nextPeriod})
 	require.NoError(t, err)
-	require.Equal(t, []string{"BTC-USDT"}, periodSeriesSubjectsForScheduler(nextRoster))
+	require.True(t, found)
+	require.Equal(t, uint32(1), nextSnapshot.ExpectedCount)
+	require.Equal(t, []string{"BTC-USDT"}, periodSeriesSubjectsForScheduler(nextSnapshot))
 	require.Equal(t, 2, source.resolveSubjectsCalls, "the next period must use the refreshed Storage Tag members")
 }
 
-func TestSchedulerPeriodRosterCleanupRunsAgainAfterItsInterval(t *testing.T) {
+func TestSchedulerPeriodSeriesSnapshotCleanupRunsAgainAfterItsInterval(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
 	now := time.Date(2026, 9, 30, 9, 10, 0, 0, time.UTC)
-	makeRoster := func(period time.Time) []domain.TaskPeriodSeries {
+	makeSnapshot := func(period time.Time) domain.PeriodSeriesSnapshot {
 		tag := "venue:binance|market:spot|source:spot_http"
 		key := domain.CanonicalSeriesKey("binance", "spot_http", "spot", "BTC-USDT", tag)
 		hash := domain.SeriesSetHash([]string{key})
-		return []domain.TaskPeriodSeries{{
-			SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period,
-			SeriesIndex: 0, SeriesKey: key, SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http",
-			MarketType: "spot", ProviderSymbol: "BTCUSDT", SeriesTag: tag, SeriesHash: hash, ExpectedCount: 1,
-		}}
+		return domain.PeriodSeriesSnapshot{
+			Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period},
+			SeriesHash: hash, ExpectedCount: 1, Entries: []domain.PeriodSeriesSnapshotEntry{{
+				SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period,
+				SeriesIndex: 0, SeriesKey: key, SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http",
+				MarketType: "spot", ProviderSymbol: "BTCUSDT", SeriesTag: tag, SeriesHash: hash, ExpectedCount: 1,
+			}}}
 	}
 	oldPeriod := now.Add(-31 * 24 * time.Hour)
-	_, _, err := db.PeriodSeries().CreatePeriodSeriesIfAbsent(ctx, makeRoster(oldPeriod))
+	_, _, err := db.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, makeSnapshot(oldPeriod))
 	require.NoError(t, err)
-	scheduler := &Scheduler{PeriodSeries: db.PeriodSeries(), SpaceID: "crypto"}
-	scheduler.cleanupExpiredPeriodSeries(ctx, now)
-	rows, err := db.PeriodSeries().GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: oldPeriod})
+	scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), SpaceID: "crypto"}
+	scheduler.cleanupExpiredPeriodSeriesSnapshots(ctx, now)
+	snapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: oldPeriod})
 	require.NoError(t, err)
-	require.Empty(t, rows)
+	require.False(t, found)
+	require.Empty(t, snapshot.Entries)
 
 	secondOldPeriod := now.Add(-32 * 24 * time.Hour)
-	_, _, err = db.PeriodSeries().CreatePeriodSeriesIfAbsent(ctx, makeRoster(secondOldPeriod))
+	_, _, err = db.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, makeSnapshot(secondOldPeriod))
 	require.NoError(t, err)
-	scheduler.cleanupExpiredPeriodSeries(ctx, now.Add(30*time.Second))
-	rows, err = db.PeriodSeries().GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: secondOldPeriod})
+	scheduler.cleanupExpiredPeriodSeriesSnapshots(ctx, now.Add(30*time.Second))
+	snapshot, found, err = db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: secondOldPeriod})
 	require.NoError(t, err)
-	require.Len(t, rows, 1, "cleanup stays throttled between bounded hourly passes")
-	scheduler.cleanupExpiredPeriodSeries(ctx, now.Add(time.Minute))
-	rows, err = db.PeriodSeries().GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: secondOldPeriod})
+	require.True(t, found)
+	require.Len(t, snapshot.Entries, 1, "cleanup stays throttled between bounded hourly passes")
+	scheduler.cleanupExpiredPeriodSeriesSnapshots(ctx, now.Add(time.Minute))
+	snapshot, found, err = db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: secondOldPeriod})
 	require.NoError(t, err)
-	require.Empty(t, rows, "period rosters are reclaimed by subsequent scheduler ticks")
+	require.False(t, found)
+	require.Empty(t, snapshot.Entries, "period snapshots are reclaimed by subsequent scheduler ticks")
 }
 
-func periodSeriesSubjectsForScheduler(rows []domain.TaskPeriodSeries) []string {
-	subjects := make([]string, 0, len(rows))
-	for _, row := range rows {
+func periodSeriesSubjectsForScheduler(snapshot domain.PeriodSeriesSnapshot) []string {
+	subjects := make([]string, 0, len(snapshot.Entries))
+	for _, row := range snapshot.Entries {
 		subjects = append(subjects, row.SubjectID)
 	}
 	return subjects
@@ -1137,7 +1147,7 @@ func TestSchedulerReportsPermanentRetryPeriodFailureExactlyOnce(t *testing.T) {
 	require.Equal(t, period.Unix(), exp.GetPeriodTime())
 	require.Equal(t, "series-hash", exp.GetSeriesHash())
 	require.Equal(t, uint32(2), exp.GetExpectedCount())
-	require.Empty(t, exp.GetRoster(), "failure reporting uses the lightweight immutable identity")
+	require.Empty(t, exp.GetSeriesSnapshot(), "failure reporting uses the lightweight immutable identity")
 	require.Equal(t, []uint32{1}, storage.indexes[0])
 
 	stored, err := db.FetchRetries().Get(ctx, "crypto", "retry-eth")

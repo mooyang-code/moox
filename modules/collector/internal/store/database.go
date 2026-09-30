@@ -16,14 +16,14 @@ import (
 
 // Store owns the Collector SQLite connection and repositories.
 type Store struct {
-	db           *gorm.DB
-	taskRepo     *TaskRepository
-	taskItems    *TaskInstanceRepository
-	fetchBatches *FetchBatchRepository
-	runs         *RunRepository
-	fetchRetries *FetchRetryRepository
-	periods      *PeriodReadinessRepository
-	periodSeries *TaskPeriodSeriesRepository
+	db                   *gorm.DB
+	taskRepo             *TaskRepository
+	taskItems            *TaskInstanceRepository
+	fetchBatches         *FetchBatchRepository
+	runs                 *RunRepository
+	fetchRetries         *FetchRetryRepository
+	periods              *PeriodReadinessRepository
+	periodSeriesSnapshot *PeriodSeriesSnapshotRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -146,7 +146,7 @@ func Open(opts *Options) (*Store, error) {
 	s.runs = NewRunRepository(db)
 	s.fetchRetries = NewFetchRetryRepository(db)
 	s.periods = NewPeriodReadinessRepository(db)
-	s.periodSeries = NewTaskPeriodSeriesRepository(db)
+	s.periodSeriesSnapshot = NewPeriodSeriesSnapshotRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -192,12 +192,12 @@ func (s *Store) PeriodReadiness() *PeriodReadinessRepository {
 	return s.periods
 }
 
-// PeriodSeries returns the immutable Dataset period roster repository.
-func (s *Store) PeriodSeries() *TaskPeriodSeriesRepository {
+// PeriodSeriesSnapshot returns the immutable Dataset period series snapshot repository.
+func (s *Store) PeriodSeriesSnapshot() *PeriodSeriesSnapshotRepository {
 	if s == nil {
 		return nil
 	}
-	return s.periodSeries
+	return s.periodSeriesSnapshot
 }
 
 // ApplySchema applies schema SQL during service startup.

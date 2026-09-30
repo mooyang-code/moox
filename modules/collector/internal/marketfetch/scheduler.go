@@ -62,18 +62,18 @@ func expansionCacheKey(spaceID string, tagIDs []string) string {
 // applies. It is intentionally a single process timer handler; SQLite unique
 // indexes provide the only idempotency needed by this single-user system.
 type Scheduler struct {
-	SCFRegionBlacklists map[string][]string
-	ResolveSymbol       SymbolResolver
-	ResolveSourceID     func(string, string) string
-	Tasks               *store.TaskRepository
-	Instances           *store.TaskInstanceRepository
-	Batches             *store.FetchBatchRepository
-	Runs                *store.RunRepository
-	Retries             *store.FetchRetryRepository
-	PeriodSeries        *store.TaskPeriodSeriesRepository
-	Invoker             MarketFetchInvoker
-	Storage             func(string, string, string) (Storage, error)
-	StorageTarget       string
+	SCFRegionBlacklists  map[string][]string
+	ResolveSymbol        SymbolResolver
+	ResolveSourceID      func(string, string) string
+	Tasks                *store.TaskRepository
+	Instances            *store.TaskInstanceRepository
+	Batches              *store.FetchBatchRepository
+	Runs                 *store.RunRepository
+	Retries              *store.FetchRetryRepository
+	PeriodSeriesSnapshot *store.PeriodSeriesSnapshotRepository
+	Invoker              MarketFetchInvoker
+	Storage              func(string, string, string) (Storage, error)
+	StorageTarget        string
 	// InvokeStorageTarget is sent in SCF invoke payloads. Leave empty to reuse
 	// StorageTarget. Collector on a mainland host may talk to Storage over a
 	// private IP while overseas functions still need the public native gateway.
@@ -90,21 +90,21 @@ type Scheduler struct {
 	DNSCache              interface {
 		Snapshot() map[string]sources.DNSResolution
 	}
-	Now                     func() time.Time
-	mu                      sync.Mutex
-	lastTaskID              string
-	lastCleanup             time.Time
-	lastPeriodSeriesCleanup time.Time
-	planStates              map[string]scheduleState
-	invokeSem               chan struct{}
+	Now                             func() time.Time
+	mu                              sync.Mutex
+	lastTaskID                      string
+	lastCleanup                     time.Time
+	lastPeriodSeriesSnapshotCleanup time.Time
+	planStates                      map[string]scheduleState
+	invokeSem                       chan struct{}
 }
 
 const (
-	defaultBatchCompletionDeadline = 70 * time.Second
-	defaultSCFInvokeAttemptTimeout = 10 * time.Second
-	periodFailureReportingSlack    = 4 * time.Minute
-	periodSeriesRetention          = 30 * 24 * time.Hour
-	periodSeriesCleanupInterval    = time.Minute
+	defaultBatchCompletionDeadline      = 70 * time.Second
+	defaultSCFInvokeAttemptTimeout      = 10 * time.Second
+	periodFailureReportingSlack         = 4 * time.Minute
+	periodSeriesSnapshotRetention       = 30 * 24 * time.Hour
+	periodSeriesSnapshotCleanupInterval = time.Minute
 )
 
 // MarketFetchInvoker is the CloudNode list/invoke surface used by the scheduler.
@@ -166,7 +166,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
-	s.cleanupExpiredPeriodSeries(ctx, now)
+	s.cleanupExpiredPeriodSeriesSnapshots(ctx, now)
 	if reportErr := s.reportPendingPeriodFailures(ctx, spaceID); reportErr != nil {
 		log.WarnContextf(ctx, "report permanent market fetch period failures failed space=%s: %v", spaceID, reportErr)
 	}
@@ -179,7 +179,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	// Existing periods are loaded without resolving Tags again, so membership
 	// changes can only affect a period that has not been created yet.
 	expansionCache := newTaskExpansionCache()
-	if err := s.prepareCurrentPeriodRosters(ctx, now, filterMarketFetchTasks(allTasks), expansionCache); err != nil {
+	if err := s.prepareCurrentPeriodSeriesSnapshots(ctx, now, filterMarketFetchTasks(allTasks), expansionCache); err != nil {
 		return err
 	}
 	allTasks, err = s.Tasks.ListEnabled(ctx, spaceID)
@@ -572,16 +572,16 @@ func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.Collect
 		return fmt.Errorf("storage client does not support dataset period commits")
 	}
 	deadline := now.UTC().Add(datasetPeriodCompletionWindow(batchKindForTask(task)))
-	roster := make([]*storagepb.DatasetPeriodSeries, 0, len(items))
+	snapshot := make([]*storagepb.DatasetPeriodSeries, 0, len(items))
 	for index, item := range items {
 		if item.SeriesIndex != uint32(index) || item.SeriesHash != items[0].SeriesHash || item.ExpectedCount != items[0].ExpectedCount || strings.TrimSpace(item.SubjectID) == "" {
-			return fmt.Errorf("task %s has invalid immutable period roster at index %d", task.TaskID, index)
+			return fmt.Errorf("task %s has invalid immutable period series snapshot at index %d", task.TaskID, index)
 		}
-		roster = append(roster, &storagepb.DatasetPeriodSeries{SeriesIndex: item.SeriesIndex, SubjectId: item.SubjectID})
+		snapshot = append(snapshot, &storagepb.DatasetPeriodSeries{SeriesIndex: item.SeriesIndex, SubjectId: item.SubjectID})
 	}
 	return periodClient.EnsureDatasetPeriod(ctx, &storagepb.DatasetPeriodExpectation{
 		SpaceId: task.SpaceID, DatasetId: items[0].DatasetID, Frequency: strings.ToLower(strings.TrimSpace(frequency)),
-		PeriodTime: period.UTC().Unix(), SeriesHash: items[0].SeriesHash, ExpectedCount: items[0].ExpectedCount, DeadlineAt: deadline.Unix(), Roster: roster,
+		PeriodTime: period.UTC().Unix(), SeriesHash: items[0].SeriesHash, ExpectedCount: items[0].ExpectedCount, DeadlineAt: deadline.Unix(), SeriesSnapshot: snapshot,
 	})
 }
 
@@ -1388,18 +1388,18 @@ func (s *Scheduler) reportPendingPeriodFailures(ctx context.Context, spaceID str
 	return firstErr
 }
 
-func (s *Scheduler) cleanupExpiredPeriodSeries(ctx context.Context, now time.Time) {
-	if s == nil || s.PeriodSeries == nil || (!s.lastPeriodSeriesCleanup.IsZero() && now.Sub(s.lastPeriodSeriesCleanup) < periodSeriesCleanupInterval) {
+func (s *Scheduler) cleanupExpiredPeriodSeriesSnapshots(ctx context.Context, now time.Time) {
+	if s == nil || s.PeriodSeriesSnapshot == nil || (!s.lastPeriodSeriesSnapshotCleanup.IsZero() && now.Sub(s.lastPeriodSeriesSnapshotCleanup) < periodSeriesSnapshotCleanupInterval) {
 		return
 	}
-	deleted, err := s.PeriodSeries.CleanupReportedBefore(ctx, now.Add(-periodSeriesRetention), 1000)
+	deleted, err := s.PeriodSeriesSnapshot.CleanupReportedBefore(ctx, now.Add(-periodSeriesSnapshotRetention), 1000)
 	if err != nil {
-		log.WarnContextf(ctx, "cleanup expired Collector period rosters failed space=%s: %v", s.SpaceID, err)
+		log.WarnContextf(ctx, "cleanup expired Collector period series snapshots failed space=%s: %v", s.SpaceID, err)
 		return
 	}
-	s.lastPeriodSeriesCleanup = now
+	s.lastPeriodSeriesSnapshotCleanup = now
 	if deleted > 0 {
-		log.InfoContextf(ctx, "cleaned expired Collector period roster rows space=%s count=%d", s.SpaceID, deleted)
+		log.InfoContextf(ctx, "cleaned expired Collector period series snapshot rows space=%s count=%d", s.SpaceID, deleted)
 	}
 }
 
@@ -1831,30 +1831,34 @@ func (s *Scheduler) taskFrequencies(task domain.CollectionTask) ([]string, error
 	return frequencies, err
 }
 
-func periodRosterFromItems(task domain.CollectionTask, datasetID, frequency string, period time.Time, items []domain.CollectionItem) ([]domain.TaskPeriodSeries, error) {
+func periodSeriesSnapshotFromItems(task domain.CollectionTask, datasetID, frequency string, period time.Time, items []domain.CollectionItem) (domain.PeriodSeriesSnapshot, error) {
 	if len(items) == 0 {
-		return nil, fmt.Errorf("collection task %s expands to no series", task.TaskID)
+		return domain.PeriodSeriesSnapshot{}, fmt.Errorf("collection task %s expands to no series", task.TaskID)
 	}
-	rows := make([]domain.TaskPeriodSeries, 0, len(items))
+	snapshot := domain.PeriodSeriesSnapshot{
+		Key:        domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: strings.ToLower(strings.TrimSpace(frequency)), PeriodTime: period.UTC()},
+		SeriesHash: items[0].SeriesHash, ExpectedCount: uint32(len(items)),
+		Entries: make([]domain.PeriodSeriesSnapshotEntry, 0, len(items)),
+	}
 	for _, item := range items {
 		if item.SeriesHash == "" || item.ExpectedCount != uint32(len(items)) {
-			return nil, fmt.Errorf("collection task %s has invalid materialized series expectation", task.TaskID)
+			return domain.PeriodSeriesSnapshot{}, fmt.Errorf("collection task %s has invalid materialized series expectation", task.TaskID)
 		}
 		seriesTag := collectionItemSeriesTag(task.SpaceID, item)
-		rows = append(rows, domain.TaskPeriodSeries{
-			SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: strings.ToLower(strings.TrimSpace(frequency)), PeriodTime: period.UTC(),
+		snapshot.Entries = append(snapshot.Entries, domain.PeriodSeriesSnapshotEntry{
+			SpaceID: snapshot.Key.SpaceID, DatasetID: snapshot.Key.DatasetID, Frequency: snapshot.Key.Frequency, PeriodTime: snapshot.Key.PeriodTime,
 			SeriesIndex: item.SeriesIndex, SeriesKey: domain.CanonicalSeriesKey(item.Provider, item.SourceID, item.MarketType, item.SubjectID, seriesTag),
 			SubjectID: item.SubjectID, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType,
 			ProviderSymbol: item.Symbol, SeriesTag: seriesTag, SeriesHash: item.SeriesHash, ExpectedCount: int(item.ExpectedCount),
 		})
 	}
-	return rows, nil
+	return snapshot, nil
 }
 
-func (s *Scheduler) prepareCurrentPeriodRosters(ctx context.Context, now time.Time, tasks []domain.CollectionTask, cache *taskExpansionCache) error {
+func (s *Scheduler) prepareCurrentPeriodSeriesSnapshots(ctx context.Context, now time.Time, tasks []domain.CollectionTask, cache *taskExpansionCache) error {
 	// Unit tests that do not wire persistence retain the previous in-memory
-	// behavior. Production bootstrap always provides PeriodSeries.
-	if s.PeriodSeries == nil {
+	// behavior. Production bootstrap always provides PeriodSeriesSnapshot.
+	if s.PeriodSeriesSnapshot == nil {
 		for _, task := range tasks {
 			if _, _, err := s.expandTaskWithCache(ctx, task, cache); err != nil {
 				log.WarnContextf(ctx, "collection task series refresh failed task=%s: %v", task.TaskID, err)
@@ -1879,11 +1883,11 @@ func (s *Scheduler) prepareCurrentPeriodRosters(ctx context.Context, now time.Ti
 				log.WarnContextf(ctx, "skip invalid collection period task=%s frequency=%s: %v", task.TaskID, frequency, periodErr)
 				continue
 			}
-			rows, readErr := s.PeriodSeries.GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: period})
+			_, found, readErr := s.PeriodSeriesSnapshot.GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: period})
 			if readErr != nil {
-				return fmt.Errorf("load period roster task=%s frequency=%s: %w", task.TaskID, frequency, readErr)
+				return fmt.Errorf("load period series snapshot task=%s frequency=%s: %w", task.TaskID, frequency, readErr)
 			}
-			if len(rows) == 0 {
+			if !found {
 				missing = append(missing, missingPeriod{frequency: frequency, period: period})
 			}
 		}
@@ -1894,21 +1898,21 @@ func (s *Scheduler) prepareCurrentPeriodRosters(ctx context.Context, now time.Ti
 		if expandErr != nil {
 			// One malformed/empty task must not stop unrelated tasks. Existing
 			// periods remain usable because they never reach this branch.
-			log.WarnContextf(ctx, "collection task period roster creation deferred task=%s: %v", task.TaskID, expandErr)
+			log.WarnContextf(ctx, "collection task period series snapshot creation deferred task=%s: %v", task.TaskID, expandErr)
 			continue
 		}
 		for _, entry := range missing {
-			roster, rosterErr := periodRosterFromItems(task, datasetID, entry.frequency, entry.period, items)
-			if rosterErr != nil {
-				log.WarnContextf(ctx, "skip invalid period roster task=%s frequency=%s: %v", task.TaskID, entry.frequency, rosterErr)
+			snapshot, snapshotErr := periodSeriesSnapshotFromItems(task, datasetID, entry.frequency, entry.period, items)
+			if snapshotErr != nil {
+				log.WarnContextf(ctx, "skip invalid period series snapshot task=%s frequency=%s: %v", task.TaskID, entry.frequency, snapshotErr)
 				continue
 			}
-			if _, _, createErr := s.PeriodSeries.CreatePeriodSeriesIfAbsent(ctx, roster); createErr != nil {
-				if errors.Is(createErr, store.ErrPeriodSeriesConflict) {
-					log.WarnContextf(ctx, "period roster race kept existing immutable winner task=%s dataset=%s frequency=%s period=%s", task.TaskID, datasetID, entry.frequency, entry.period.UTC().Format(time.RFC3339))
+			if _, _, createErr := s.PeriodSeriesSnapshot.CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot); createErr != nil {
+				if errors.Is(createErr, store.ErrPeriodSeriesSnapshotConflict) {
+					log.WarnContextf(ctx, "period series snapshot race kept existing immutable winner task=%s dataset=%s frequency=%s period=%s", task.TaskID, datasetID, entry.frequency, entry.period.UTC().Format(time.RFC3339))
 					continue
 				}
-				return fmt.Errorf("create period roster task=%s frequency=%s: %w", task.TaskID, entry.frequency, createErr)
+				return fmt.Errorf("create period series snapshot task=%s frequency=%s: %w", task.TaskID, entry.frequency, createErr)
 			}
 		}
 	}
@@ -1916,7 +1920,7 @@ func (s *Scheduler) prepareCurrentPeriodRosters(ctx context.Context, now time.Ti
 }
 
 func (s *Scheduler) expandTaskForPeriod(ctx context.Context, task domain.CollectionTask, frequency string, period time.Time) ([]domain.CollectionItem, error) {
-	if s.PeriodSeries == nil {
+	if s.PeriodSeriesSnapshot == nil {
 		items, _, err := s.expandTaskForPlanning(ctx, task)
 		return items, err
 	}
@@ -1924,26 +1928,26 @@ func (s *Scheduler) expandTaskForPeriod(ctx context.Context, task domain.Collect
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.PeriodSeries.GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: period})
+	snapshot, found, err := s.PeriodSeriesSnapshot.GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: period})
 	if err != nil {
-		return nil, fmt.Errorf("load immutable period roster: %w", err)
+		return nil, fmt.Errorf("load immutable period series snapshot: %w", err)
 	}
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("immutable period roster is missing")
+	if !found {
+		return nil, fmt.Errorf("immutable period series snapshot is missing")
 	}
 	marketID := strings.ToLower(firstNonEmpty(params.MarketID, task.SpaceID, s.SpaceID))
 	dataType := strings.ToLower(firstNonEmpty(params.Collector.DataType, task.DataType))
-	items := make([]domain.CollectionItem, 0, len(rows))
-	for index, row := range rows {
-		if row.SeriesIndex != uint32(index) || row.ExpectedCount != len(rows) || row.SeriesHash != rows[0].SeriesHash {
-			return nil, fmt.Errorf("immutable period roster failed dense/hash/count validation")
+	items := make([]domain.CollectionItem, 0, len(snapshot.Entries))
+	for index, row := range snapshot.Entries {
+		if row.SeriesIndex != uint32(index) || uint32(row.ExpectedCount) != snapshot.ExpectedCount || row.SeriesHash != snapshot.SeriesHash {
+			return nil, fmt.Errorf("immutable period series snapshot failed dense/hash/count validation")
 		}
 		instrumentType := strings.ToLower(firstNonEmpty(params.InstrumentType, defaultInstrumentTypeForMarket(marketID, row.MarketType)))
 		items = append(items, domain.CollectionItem{
 			SubjectID: row.SubjectID, Symbol: row.ProviderSymbol, Provider: row.Provider, SourceID: row.SourceID,
 			MarketID: marketID, InstrumentType: instrumentType, MarketType: row.MarketType, DataType: dataType,
 			DatasetID: row.DatasetID, Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
-			SeriesIndex: row.SeriesIndex, SeriesHash: row.SeriesHash, ExpectedCount: uint32(row.ExpectedCount),
+			SeriesIndex: row.SeriesIndex, SeriesHash: snapshot.SeriesHash, ExpectedCount: snapshot.ExpectedCount,
 		})
 	}
 	return items, nil

@@ -19,6 +19,9 @@ func TestInitializeDoesNotCreateSchema(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	t.Cleanup(func() { _ = mgr.Close() })
+	require.NotNil(t, mgr.PeriodSeriesSnapshot())
+	var absent *Store
+	require.Nil(t, absent.PeriodSeriesSnapshot())
 	var count int64
 	if err := mgr.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 't_collector_%'`).Scan(&count).Error; err != nil {
 		t.Fatalf("query table count: %v", err)
@@ -38,6 +41,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 	if err := mgr.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatalf("ApplySchema() error = %v", err)
 	}
+	require.Equal(t, "t_collector_task_period_series", (&domain.PeriodSeriesSnapshotEntry{}).TableName())
 	for _, table := range []string{"t_collector_tasks", "t_collector_task_tags", "t_collector_task_series", "t_collector_task_period_series", "t_collector_runs", "t_collector_task_instances", "t_collector_instance_write_targets", "t_collector_fetch_batches", "t_collector_fetch_batch_items", "t_collector_fetch_retry_items", "t_period_readiness", "t_period_readiness_items"} {
 		var count int64
 		if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {

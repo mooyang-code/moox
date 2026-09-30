@@ -73,15 +73,15 @@ func periodExpectation(in *pb.DatasetPeriodExpectation) pebble.DatasetPeriodExpe
 	if in == nil {
 		return pebble.DatasetPeriodExpectation{}
 	}
-	roster := make([]pebble.DatasetPeriodSeries, 0, len(in.GetRoster()))
-	for _, row := range in.GetRoster() {
+	seriesSnapshot := make([]pebble.DatasetPeriodSeries, 0, len(in.GetSeriesSnapshot()))
+	for _, row := range in.GetSeriesSnapshot() {
 		if row == nil {
 			continue
 		}
-		roster = append(roster, pebble.DatasetPeriodSeries{SeriesIndex: row.GetSeriesIndex(), SubjectID: row.GetSubjectId()})
+		seriesSnapshot = append(seriesSnapshot, pebble.DatasetPeriodSeries{SeriesIndex: row.GetSeriesIndex(), SubjectID: row.GetSubjectId()})
 	}
 	return pebble.DatasetPeriodExpectation{
 		SpaceID: in.GetSpaceId(), DatasetID: in.GetDatasetId(), Frequency: in.GetFrequency(), PeriodTime: in.GetPeriodTime(),
-		SeriesHash: in.GetSeriesHash(), ExpectedCount: in.GetExpectedCount(), DeadlineAt: in.GetDeadlineAt(), Roster: roster,
+		SeriesHash: in.GetSeriesHash(), ExpectedCount: in.GetExpectedCount(), DeadlineAt: in.GetDeadlineAt(), SeriesSnapshot: seriesSnapshot,
 	}
 }

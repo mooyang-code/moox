@@ -13,65 +13,63 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const maxPeriodSeriesCleanupPeriods = 1000
+const maxPeriodSeriesSnapshotCleanupPeriods = 1000
 
-// ErrPeriodSeriesConflict means a period already has a different immutable
-// roster.
-var ErrPeriodSeriesConflict = errors.New("collector period series roster conflict")
+// ErrPeriodSeriesSnapshotConflict means a period already has a different immutable
+// snapshot.
+var ErrPeriodSeriesSnapshotConflict = errors.New("collector period series snapshot conflict")
 
-// TaskPeriodSeriesRepository persists immutable Dataset period rosters.
-type TaskPeriodSeriesRepository struct {
+// PeriodSeriesSnapshotRepository persists immutable Dataset period series snapshots.
+type PeriodSeriesSnapshotRepository struct {
 	db *gorm.DB
 }
 
-func NewTaskPeriodSeriesRepository(db *gorm.DB) *TaskPeriodSeriesRepository {
-	return &TaskPeriodSeriesRepository{db: db}
+func NewPeriodSeriesSnapshotRepository(db *gorm.DB) *PeriodSeriesSnapshotRepository {
+	return &PeriodSeriesSnapshotRepository{db: db}
 }
 
-// GetPeriodSeries returns the saved roster ordered by its stable dense index.
-// An unknown period is represented by an empty slice.
-func (r *TaskPeriodSeriesRepository) GetPeriodSeries(ctx context.Context, key domain.PeriodKey) ([]domain.TaskPeriodSeries, error) {
+// GetPeriodSeriesSnapshot returns the saved snapshot ordered by its stable dense index.
+// found is false only when no entries exist for the period.
+func (r *PeriodSeriesSnapshotRepository) GetPeriodSeriesSnapshot(ctx context.Context, key domain.PeriodKey) (domain.PeriodSeriesSnapshot, bool, error) {
 	if r == nil || r.db == nil {
-		return nil, fmt.Errorf("period series repository is not initialized")
+		return domain.PeriodSeriesSnapshot{}, false, fmt.Errorf("period series snapshot repository is not initialized")
 	}
-	key, err := normalizePeriodSeriesKey(key)
+	key, err := normalizePeriodSeriesSnapshotKey(key)
 	if err != nil {
-		return nil, err
+		return domain.PeriodSeriesSnapshot{}, false, err
 	}
-	var rows []domain.TaskPeriodSeries
-	err = r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime).
-		Order("c_series_index ASC").Find(&rows).Error
-	if rows == nil {
-		rows = []domain.TaskPeriodSeries{}
+	entries, err := loadPeriodSeriesSnapshotEntries(r.db.WithContext(ctx), key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime)
+	if err != nil {
+		return domain.PeriodSeriesSnapshot{}, false, err
 	}
-	if err == nil && len(rows) > 0 {
-		if _, err = normalizeAndValidatePeriodSeries(rows); err != nil {
-			return nil, fmt.Errorf("stored period roster is invalid: %w", err)
-		}
+	if len(entries) == 0 {
+		return domain.PeriodSeriesSnapshot{}, false, nil
 	}
-	return rows, err
+	if _, err = normalizeAndValidatePeriodSeriesSnapshotEntries(entries); err != nil {
+		return domain.PeriodSeriesSnapshot{}, true, fmt.Errorf("stored period series snapshot is invalid: %w", err)
+	}
+	return periodSeriesSnapshotFromEntries(key, entries), true, nil
 }
 
-// CreatePeriodSeriesIfAbsent atomically installs a roster. The unique
+// CreatePeriodSeriesSnapshotIfAbsent atomically installs a snapshot. The unique
 // period/index index arbitrates concurrent creators; the winning index-zero
 // insert and all remaining rows commit in one transaction. A later caller
 // receives the stored rows if every immutable field matches, or a conflict if
-// the roster differs.
-func (r *TaskPeriodSeriesRepository) CreatePeriodSeriesIfAbsent(ctx context.Context, input []domain.TaskPeriodSeries) ([]domain.TaskPeriodSeries, bool, error) {
+// the snapshot differs.
+func (r *PeriodSeriesSnapshotRepository) CreatePeriodSeriesSnapshotIfAbsent(ctx context.Context, input domain.PeriodSeriesSnapshot) (domain.PeriodSeriesSnapshot, bool, error) {
 	if r == nil || r.db == nil {
-		return nil, false, fmt.Errorf("period series repository is not initialized")
+		return domain.PeriodSeriesSnapshot{}, false, fmt.Errorf("period series snapshot repository is not initialized")
 	}
-	desired, err := normalizeAndValidatePeriodSeries(input)
+	desired, err := normalizeAndValidatePeriodSeriesSnapshot(input)
 	if err != nil {
-		return nil, false, err
+		return domain.PeriodSeriesSnapshot{}, false, err
 	}
-	key := domain.PeriodKey{SpaceID: desired[0].SpaceID, DatasetID: desired[0].DatasetID, Frequency: desired[0].Frequency, PeriodTime: desired[0].PeriodTime}
+	key := desired.Key
 	created := false
-	var persisted []domain.TaskPeriodSeries
+	var persisted []domain.PeriodSeriesSnapshotEntry
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now().UTC()
-		rows := append([]domain.TaskPeriodSeries(nil), desired...)
+		rows := append([]domain.PeriodSeriesSnapshotEntry(nil), desired.Entries...)
 		for i := range rows {
 			rows[i].CreateTime = now
 		}
@@ -79,30 +77,53 @@ func (r *TaskPeriodSeriesRepository) CreatePeriodSeriesIfAbsent(ctx context.Cont
 		if result.Error != nil {
 			return result.Error
 		}
-		current, err := loadPeriodSeries(tx, key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime)
+		current, err := loadPeriodSeriesSnapshotEntries(tx, key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime)
 		if err != nil {
 			return err
 		}
-		if !samePeriodSeriesRoster(current, desired) {
-			return ErrPeriodSeriesConflict
+		if !samePeriodSeriesSnapshotEntries(current, desired.Entries) {
+			return ErrPeriodSeriesSnapshotConflict
 		}
-		if result.RowsAffected != 0 && result.RowsAffected != int64(len(desired)) {
-			return ErrPeriodSeriesConflict
+		if result.RowsAffected != 0 && result.RowsAffected != int64(len(desired.Entries)) {
+			return ErrPeriodSeriesSnapshotConflict
 		}
-		created = result.RowsAffected == int64(len(desired))
+		created = result.RowsAffected == int64(len(desired.Entries))
 		persisted = current
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrPeriodSeriesConflict) {
-			return nil, false, err
-		}
-		return nil, false, err
+		return domain.PeriodSeriesSnapshot{}, false, err
 	}
-	return persisted, created, nil
+	return periodSeriesSnapshotFromEntries(key, persisted), created, nil
 }
 
-func (r *TaskPeriodSeriesRepository) CleanupReportedBefore(ctx context.Context, before time.Time, limit int) (int64, error) {
+func periodSeriesSnapshotFromEntries(key domain.PeriodKey, entries []domain.PeriodSeriesSnapshotEntry) domain.PeriodSeriesSnapshot {
+	return domain.PeriodSeriesSnapshot{Key: key, SeriesHash: entries[0].SeriesHash, ExpectedCount: uint32(entries[0].ExpectedCount), Entries: entries}
+}
+
+func normalizeAndValidatePeriodSeriesSnapshot(input domain.PeriodSeriesSnapshot) (domain.PeriodSeriesSnapshot, error) {
+	key, err := normalizePeriodSeriesSnapshotKey(input.Key)
+	if err != nil {
+		return domain.PeriodSeriesSnapshot{}, err
+	}
+	entries, err := normalizeAndValidatePeriodSeriesSnapshotEntries(input.Entries)
+	if err != nil {
+		return domain.PeriodSeriesSnapshot{}, err
+	}
+	first := entries[0]
+	if key.SpaceID != first.SpaceID || key.DatasetID != first.DatasetID || key.Frequency != first.Frequency || !key.PeriodTime.Equal(first.PeriodTime) {
+		return domain.PeriodSeriesSnapshot{}, fmt.Errorf("period series snapshot key must match its entries")
+	}
+	if input.ExpectedCount != uint32(len(entries)) {
+		return domain.PeriodSeriesSnapshot{}, fmt.Errorf("period series snapshot expected_count must equal entry count")
+	}
+	if strings.ToLower(strings.TrimSpace(input.SeriesHash)) != first.SeriesHash {
+		return domain.PeriodSeriesSnapshot{}, fmt.Errorf("period series snapshot hash must match its entries")
+	}
+	return periodSeriesSnapshotFromEntries(key, entries), nil
+}
+
+func (r *PeriodSeriesSnapshotRepository) CleanupReportedBefore(ctx context.Context, before time.Time, limit int) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, fmt.Errorf("period series repository is not initialized")
 	}
@@ -112,12 +133,12 @@ func (r *TaskPeriodSeriesRepository) CleanupReportedBefore(ctx context.Context, 
 	if limit <= 0 {
 		limit = 100
 	}
-	if limit > maxPeriodSeriesCleanupPeriods {
-		limit = maxPeriodSeriesCleanupPeriods
+	if limit > maxPeriodSeriesSnapshotCleanupPeriods {
+		limit = maxPeriodSeriesSnapshotCleanupPeriods
 	}
 	cutoff := before.UTC()
 	// The retention cutoff is deliberately supplied by bootstrap (30 days) so
-	// period rosters outlive SCF callbacks, retries, and upstream recovery. A
+	// period series snapshots outlive SCF callbacks, retries, and upstream recovery. A
 	// direct Storage period has no Collector readiness row; for those periods,
 	// the age cutoff plus absence of in-flight work is the terminal evidence.
 	// Keep any period with unreported readiness or retry failure state.
@@ -150,15 +171,15 @@ WHERE (c_space_id, c_dataset_id, c_frequency, c_period_time) IN (
       AND NOT EXISTS (
           SELECT 1
           FROM t_collector_fetch_retry_items AS retries
-          JOIN t_collector_task_period_series AS roster
-            ON roster.c_space_id = retries.c_space_id
-           AND roster.c_frequency = retries.c_frequency
-           AND roster.c_period_time = retries.c_target_data_time
-           AND roster.c_subject_id = retries.c_subject_id
-          WHERE roster.c_space_id = candidates.c_space_id
-            AND roster.c_dataset_id = candidates.c_dataset_id
-            AND roster.c_frequency = candidates.c_frequency
-            AND roster.c_period_time = candidates.c_period_time
+          JOIN t_collector_task_period_series AS snapshot
+            ON snapshot.c_space_id = retries.c_space_id
+           AND snapshot.c_frequency = retries.c_frequency
+           AND snapshot.c_period_time = retries.c_target_data_time
+           AND snapshot.c_subject_id = retries.c_subject_id
+          WHERE snapshot.c_space_id = candidates.c_space_id
+            AND snapshot.c_dataset_id = candidates.c_dataset_id
+            AND snapshot.c_frequency = candidates.c_frequency
+            AND snapshot.c_period_time = candidates.c_period_time
             AND (
                 retries.c_status IN ('pending', 'dispatched')
                 OR (retries.c_status = 'permanent_failed' AND retries.c_period_failure_reported = 0)
@@ -171,15 +192,15 @@ WHERE (c_space_id, c_dataset_id, c_frequency, c_period_time) IN (
             ON batch_items.c_space_id = batches.c_space_id AND batch_items.c_batch_id = batches.c_batch_id
           JOIN t_collector_task_instances AS instances
             ON instances.c_space_id = batch_items.c_space_id AND instances.c_instance_id = batch_items.c_instance_id
-          JOIN t_collector_task_period_series AS roster
-            ON roster.c_space_id = instances.c_space_id
-           AND roster.c_frequency = instances.c_frequency
-           AND roster.c_period_time = instances.c_target_data_time
-           AND roster.c_subject_id = instances.c_subject_id
-          WHERE roster.c_space_id = candidates.c_space_id
-            AND roster.c_dataset_id = candidates.c_dataset_id
-            AND roster.c_frequency = candidates.c_frequency
-            AND roster.c_period_time = candidates.c_period_time
+          JOIN t_collector_task_period_series AS snapshot
+            ON snapshot.c_space_id = instances.c_space_id
+           AND snapshot.c_frequency = instances.c_frequency
+           AND snapshot.c_period_time = instances.c_target_data_time
+           AND snapshot.c_subject_id = instances.c_subject_id
+          WHERE snapshot.c_space_id = candidates.c_space_id
+            AND snapshot.c_dataset_id = candidates.c_dataset_id
+            AND snapshot.c_frequency = candidates.c_frequency
+            AND snapshot.c_period_time = candidates.c_period_time
             AND batches.c_status IN ('planned', 'dispatched')
       )
     GROUP BY candidates.c_space_id, candidates.c_dataset_id, candidates.c_frequency, candidates.c_period_time
@@ -189,14 +210,14 @@ WHERE (c_space_id, c_dataset_id, c_frequency, c_period_time) IN (
 	return result.RowsAffected, result.Error
 }
 
-func loadPeriodSeries(tx *gorm.DB, spaceID, datasetID, frequency string, period time.Time) ([]domain.TaskPeriodSeries, error) {
-	var rows []domain.TaskPeriodSeries
+func loadPeriodSeriesSnapshotEntries(tx *gorm.DB, spaceID, datasetID, frequency string, period time.Time) ([]domain.PeriodSeriesSnapshotEntry, error) {
+	var rows []domain.PeriodSeriesSnapshotEntry
 	err := tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", spaceID, datasetID, frequency, period.UTC()).
 		Order("c_series_index ASC").Find(&rows).Error
 	return rows, err
 }
 
-func normalizePeriodSeriesKey(key domain.PeriodKey) (domain.PeriodKey, error) {
+func normalizePeriodSeriesSnapshotKey(key domain.PeriodKey) (domain.PeriodKey, error) {
 	key.SpaceID = strings.TrimSpace(key.SpaceID)
 	key.DatasetID = strings.TrimSpace(key.DatasetID)
 	key.Frequency = strings.ToLower(strings.TrimSpace(key.Frequency))
@@ -207,11 +228,11 @@ func normalizePeriodSeriesKey(key domain.PeriodKey) (domain.PeriodKey, error) {
 	return key, nil
 }
 
-func normalizeAndValidatePeriodSeries(input []domain.TaskPeriodSeries) ([]domain.TaskPeriodSeries, error) {
+func normalizeAndValidatePeriodSeriesSnapshotEntries(input []domain.PeriodSeriesSnapshotEntry) ([]domain.PeriodSeriesSnapshotEntry, error) {
 	if len(input) == 0 {
-		return nil, fmt.Errorf("period series roster must not be empty")
+		return nil, fmt.Errorf("period series snapshot must not be empty")
 	}
-	rows := append([]domain.TaskPeriodSeries(nil), input...)
+	rows := append([]domain.PeriodSeriesSnapshotEntry(nil), input...)
 	now := time.Now().UTC()
 	for i := range rows {
 		row := &rows[i]
@@ -253,7 +274,7 @@ func normalizeAndValidatePeriodSeries(input []domain.TaskPeriodSeries) ([]domain
 			return nil, fmt.Errorf("period series indices must be dense from zero")
 		}
 		if row.ExpectedCount != len(rows) {
-			return nil, fmt.Errorf("period series expected_count must equal roster size")
+			return nil, fmt.Errorf("period series expected_count must equal snapshot size")
 		}
 		if _, exists := seen[row.SeriesKey]; exists {
 			return nil, fmt.Errorf("period series keys must be unique")
@@ -271,13 +292,13 @@ func normalizeAndValidatePeriodSeries(input []domain.TaskPeriodSeries) ([]domain
 	hash := domain.SeriesSetHash(sortedKeys)
 	for i := range rows {
 		if rows[i].SeriesHash != hash {
-			return nil, fmt.Errorf("period series hash does not match canonical roster")
+			return nil, fmt.Errorf("period series hash does not match canonical snapshot")
 		}
 	}
 	return rows, nil
 }
 
-func samePeriodSeriesRoster(left, right []domain.TaskPeriodSeries) bool {
+func samePeriodSeriesSnapshotEntries(left, right []domain.PeriodSeriesSnapshotEntry) bool {
 	if len(left) != len(right) {
 		return false
 	}

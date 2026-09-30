@@ -742,7 +742,7 @@ func TestPrimaryAndDataNodeRecordPeriodFailuresThroughDeadlineMarker(t *testing.
 	expectation := &pb.DatasetPeriodExpectation{
 		SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: time.Now().UTC().Truncate(time.Minute).Unix(),
 		SeriesHash: "period-rpc-hash", ExpectedCount: 1, DeadlineAt: deadline,
-		Roster: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "ETH-USDT"}},
+		SeriesSnapshot: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "ETH-USDT"}},
 	}
 	auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
 	ensured, err := service.EnsureDatasetPeriod(context.Background(), &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: expectation})
@@ -767,7 +767,7 @@ func TestPrimaryAndDataNodeRecordPeriodFailuresThroughDeadlineMarker(t *testing.
 	periodExpectation := pebble.DatasetPeriodExpectation{
 		SpaceID: expectation.GetSpaceId(), DatasetID: expectation.GetDatasetId(), Frequency: expectation.GetFrequency(),
 		PeriodTime: expectation.GetPeriodTime(), SeriesHash: expectation.GetSeriesHash(), ExpectedCount: expectation.GetExpectedCount(),
-		DeadlineAt: expectation.GetDeadlineAt(), Roster: []pebble.DatasetPeriodSeries{{SeriesIndex: 0, SubjectID: "ETH-USDT"}},
+		DeadlineAt: expectation.GetDeadlineAt(), SeriesSnapshot: []pebble.DatasetPeriodSeries{{SeriesIndex: 0, SubjectID: "ETH-USDT"}},
 	}
 	progress, err := periodStore.GetDatasetPeriodProgress(context.Background(), periodExpectation)
 	require.NoError(t, err)

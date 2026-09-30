@@ -2,9 +2,16 @@ package domain
 
 import "time"
 
-// TaskPeriodSeries is the immutable Dataset series roster for one frequency period.
-// A roster is created once and never changes even when the task's Tag membership does.
-type TaskPeriodSeries struct {
+// PeriodSeriesSnapshot is the immutable ordered series set for one Dataset period.
+type PeriodSeriesSnapshot struct {
+	Key           PeriodKey
+	SeriesHash    string
+	ExpectedCount uint32
+	Entries       []PeriodSeriesSnapshotEntry
+}
+
+// PeriodSeriesSnapshotEntry persists one series in a PeriodSeriesSnapshot.
+type PeriodSeriesSnapshotEntry struct {
 	ID             int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID        string    `gorm:"column:c_space_id"`
 	DatasetID      string    `gorm:"column:c_dataset_id"`
@@ -23,4 +30,4 @@ type TaskPeriodSeries struct {
 	CreateTime     time.Time `gorm:"column:c_ctime"`
 }
 
-func (*TaskPeriodSeries) TableName() string { return "t_collector_task_period_series" }
+func (*PeriodSeriesSnapshotEntry) TableName() string { return "t_collector_task_period_series" }
