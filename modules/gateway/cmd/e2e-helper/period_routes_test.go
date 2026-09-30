@@ -27,6 +27,50 @@ func TestCollectorPeriodRoutesProduction(t *testing.T) {
 	require.Equal(t, "collector-market-runtime", runtime[0].ServiceID)
 	require.Equal(t, []string{"ClaimTimerBatch"}, runtime[0].AllowedMethods)
 	require.Equal(t, []string{"collector"}, runtime[0].AllowedCallers)
+	metadata, err := loadCollectorPeriodRoutes(path, "storage-metadata", "127.0.0.1:23458")
+	require.NoError(t, err)
+	require.Len(t, metadata, 2)
+	methods := map[string]int{}
+	for _, route := range metadata {
+		require.Equal(t, "storage-primary", route.ServiceID)
+		require.Equal(t, "trpc.moox.storage.Metadata", route.ServicePath)
+		require.True(t, route.AllowsCaller("collector"))
+		require.Equal(t, "127.0.0.1:23458", route.Address)
+		for _, method := range route.AllowedMethods {
+			methods[method]++
+		}
+		require.NotContains(t, route.AllowedMethods, "UpsertTag")
+	}
+	require.Equal(t, 1, methods["ApplyTagSnapshot"])
+	require.Equal(t, 1, methods["GetTag"])
+	require.Equal(t, 1, methods["ResolveSubjects"])
+}
+
+func TestCollectorPeriodRoutesCombineStorageAndMetadata(t *testing.T) {
+	path, err := filepath.Abs("../../../../config/setup/service-deployments.yaml")
+	require.NoError(t, err)
+	routes, err := loadCollectorPeriodRoutesWithMetadata(path, "storage-period", "127.0.0.1:23456", "127.0.0.1:23458")
+	require.NoError(t, err)
+	require.Len(t, routes, 3)
+	methods := map[string]int{}
+	for _, route := range routes {
+		for _, method := range route.AllowedMethods {
+			methods[method]++
+		}
+		if route.ServicePath == "trpc.moox.storage.Metadata" {
+			require.Equal(t, "127.0.0.1:23458", route.Address)
+		} else {
+			require.Equal(t, "trpc.moox.storage.PrimaryStore", route.ServicePath)
+			require.Equal(t, "127.0.0.1:23456", route.Address)
+		}
+	}
+	for _, method := range []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus", "ApplyTagSnapshot", "GetTag", "ResolveSubjects"} {
+		require.Equal(t, 1, methods[method], method)
+	}
+	_, err = loadCollectorPeriodRoutesWithMetadata(path, "collector-runtime", "127.0.0.1:23456", "127.0.0.1:23458")
+	require.Error(t, err)
+	_, err = loadCollectorPeriodRoutesWithMetadata(path, "storage-period", "127.0.0.1:23456", "example.com:23458")
+	require.Error(t, err)
 }
 
 const runtimeSeed = `services:
@@ -112,7 +156,7 @@ func TestCollectorPeriodNativeRejectsRoutesBeforeReady(t *testing.T) {
 	seed := filepath.Join(dir, "deployment.yaml")
 	ready := filepath.Join(dir, "ready")
 	require.NoError(t, os.WriteFile(seed, []byte("services: []"), 0600))
-	err := runCollectorPeriodNative(seed, "storage-period", "storage-test", "127.0.0.1:23456", "127.0.0.1:0", ready, filepath.Join(dir, "nonces"), "key", "secret")
+	err := runCollectorPeriodNative(seed, "storage-period", "127.0.0.1:23456", "", "storage-test", "127.0.0.1:0", ready, filepath.Join(dir, "nonces"), "key", "secret")
 	require.Error(t, err)
 	_, err = os.Stat(ready)
 	require.ErrorIs(t, err, os.ErrNotExist)

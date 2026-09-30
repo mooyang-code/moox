@@ -30,17 +30,18 @@ import (
 func main() {
 	mode := flag.String("mode", "monitor-http", "helper mode: monitor-http, kline-native or collector-period-native")
 	deploymentYAML := flag.String("deployment-yaml", "", "absolute production deployment YAML path")
-	routeScope := flag.String("route-scope", "", "collector-period-native scope: storage-period or collector-runtime")
+	routeScope := flag.String("route-scope", "", "collector-period-native scope: storage-period, storage-metadata or collector-runtime")
 	nodeID := flag.String("node-id", "", "target Gateway node ID")
 	upstreamURL := flag.String("upstream-url", "", "loopback Monitor upstream URL")
 	upstreamAddress := flag.String("upstream-addr", "", "loopback native tRPC upstream address")
+	metadataUpstreamAddress := flag.String("metadata-upstream-addr", "", "optional loopback Metadata upstream for storage-period scope")
 	listenAddress := flag.String("listen-addr", "127.0.0.1:0", "native gateway listen address")
 	readyFile := flag.String("ready-file", "", "file receiving the service URL")
 	nonceDirectory := flag.String("nonce-dir", "", "persistent nonce directory")
 	keyID := flag.String("key-id", "", "service HMAC key ID")
 	flag.Parse()
 	if *mode == "collector-period-native" {
-		err := runCollectorPeriodNative(*deploymentYAML, *routeScope, *nodeID, *upstreamAddress, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+		err := runCollectorPeriodNative(*deploymentYAML, *routeScope, *upstreamAddress, *metadataUpstreamAddress, *nodeID, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -198,12 +199,30 @@ type deploymentRoutePolicy struct {
 	GatewayCallers []string `yaml:"gateway_callers"`
 }
 
-func runCollectorPeriodNative(path, scope, nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
-	routes, err := loadCollectorPeriodRoutes(path, scope, upstreamAddress)
+func runCollectorPeriodNative(path, scope, upstreamAddress, metadataUpstreamAddress, nodeID, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	routes, err := loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadataUpstreamAddress)
 	if err != nil {
 		return err
 	}
 	return runNativeRoutes(nodeID, routes, "collector", listenAddress, readyFile, nonceDirectory, keyID, secret)
+}
+
+func loadCollectorPeriodRoutesWithMetadata(path, scope, upstreamAddress, metadataUpstreamAddress string) ([]gatewayproxy.Route, error) {
+	routes, err := loadCollectorPeriodRoutes(path, scope, upstreamAddress)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(metadataUpstreamAddress) == "" {
+		return routes, nil
+	}
+	if scope != "storage-period" {
+		return nil, fmt.Errorf("metadata-upstream-addr requires storage-period route-scope")
+	}
+	metadataRoutes, err := loadCollectorPeriodRoutes(path, "storage-metadata", metadataUpstreamAddress)
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, metadataRoutes...), nil
 }
 
 func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewayproxy.Route, error) {
@@ -218,6 +237,9 @@ func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewaypr
 	required := []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"}
 	switch scope {
 	case "storage-period":
+	case "storage-metadata":
+		servicePath = "trpc.moox.storage.Metadata"
+		required = []string{"ApplyTagSnapshot", "GetTag", "ResolveSubjects"}
 	case "collector-runtime":
 		serviceID, servicePath = "collector-market-runtime", "trpc.moox.collector.MarketFetchRuntime"
 		required = []string{"ClaimTimerBatch"}
