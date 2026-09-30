@@ -257,8 +257,8 @@ git diff --check
 - Modify: `modules/gateway/internal/router/router_test.go`
 - Modify: `scripts/test/contract/test-deploy-moox-gateway.sh`
 
-- [ ] **3.1 先补实际 resolver 回归测试。** 新增 `TestDataNodeResolverPeriodRPCContract`，通过生产 `newDataNodeResolver` 获取默认 `dataNodeProxyAdapter`，分别执行 Ensure/Commit/Record/GetStatus 的生成客户端转发；禁止直接注入 DataNode Service 替代 adapter。修复前 Record 及整组接口断言应失败。
-- [ ] **3.2 增加不可遗漏的编译期契约。** adapter 转发 Record 和 GetStatus，透传 context、auth、expectation、indexes、响应和错误，不构造假的成功返回：
+- [x] **3.1 先补实际 resolver 回归测试。** 新增 `TestDataNodeResolverPeriodRPCContract`，通过生产 `newDataNodeResolver` 获取默认 `dataNodeProxyAdapter`，分别执行 Ensure/Commit/Record/GetStatus 的生成客户端转发；禁止直接注入 DataNode Service 替代 adapter。修复前 Record 及整组接口断言应失败。
+- [x] **3.2 增加不可遗漏的编译期契约。** adapter 转发 Record 和 GetStatus，透传 context、auth、expectation、indexes、响应和错误，不构造假的成功返回：
 
 ```go
 var _ pb.DataNodePeriodRuntimeService = (*dataNodeProxyAdapter)(nil)
@@ -272,10 +272,10 @@ func (a *dataNodeProxyAdapter) GetDatasetPeriodStatus(ctx context.Context, req *
 }
 ```
 
-- [ ] **3.3 先补四个 period RPC 的 Collector 授权测试。** 新增 `TestEnsureDatasetPeriodWriteAuthorization` 和 Commit/Record/GetStatus 对应表驱动测试，覆盖 `moox-skill`、`scf-market-canary`、Factor/其他模块、Collector 请求非 Collector Dataset、未知 Dataset、缺 Metadata snapshot、合法 Collector owner；非法情况拒绝且 resolver/Store 无副作用。增加窄 helper `validateCollectorPeriodDataset`：通用 HMAC 验证后要求 `isOwnedAppID(appID, "collector")`，从 request snapshot 精确读取 Space/Dataset，并要求 `owner_module=collector`、`dataset_role=raw_collection`、time-series kind 及频率有效。Ensure/Commit/Record 与 GetStatus 均使用该 helper，写接口再保留只读拒绝；不扩大非 period Upsert 的授权改动。内置市场 Dataset 在 seed 明确归属，任务结果复用已有 owner 属性；无属性不默认为 Collector。共享服务凭据不提供独立 TaskID 权限，不宣称 AuthInfo 已含 Space/Dataset scope。
-- [ ] **3.4 修改两份生产路由来源。** YAML 与 `sysdeploy/defaults.go` 同步建立四方法 `EnsureDatasetPeriod / CommitTimeSeriesBatch / RecordDatasetPeriodFailures / GetDatasetPeriodStatus` 的独立 Primary route，显式 `gateway_callers: [collector]`；从旧宽 caller route 删除 Ensure/Commit，避免绕过窄路由。当前真实 period 调用方只有 Collector，不为无调用方保留宽权限；服务层授权仍不可依赖 Gateway 替代。
-- [ ] **3.5 用生产默认值生成测试路由。** `defaults_test.go` / `routes_test.go` 检查 YAML 与 DefaultDeployments 的方法/caller 等价；Gateway 通过生成的 route snapshot 验证合法 Collector 四个 RPC 可达，非法 caller 四个 period RPC 均不到上游。不能手写一个包含缺失方法的测试路由后宣称 seed 已覆盖。补内置 period Dataset 与任务生成 Dataset 的 owner metadata fixture，避免只 mock 一个“已允许”的 helper。
-- [ ] **3.6 验证并提交。** 预期下列全部 PASS；提交 `fix(storage): complete collector period gateway and proxy contracts`。
+- [x] **3.3 先补四个 period RPC 的 Collector 授权测试。** 新增 `TestEnsureDatasetPeriodWriteAuthorization` 和 Commit/Record/GetStatus 对应表驱动测试，覆盖 `moox-skill`、`scf-market-canary`、Factor/其他模块、Collector 请求非 Collector Dataset、未知 Dataset、缺 Metadata snapshot、合法 Collector owner；非法情况拒绝且 resolver/Store 无副作用。增加窄 helper `validateCollectorPeriodDataset`：通用 HMAC 验证后要求 `isOwnedAppID(appID, "collector")`，从 request snapshot 精确读取 Space/Dataset，并要求 `owner_module=collector`、`dataset_role=raw_collection`、time-series kind 及频率有效。Ensure/Commit/Record 与 GetStatus 均使用该 helper，写接口再保留只读拒绝；不扩大非 period Upsert 的授权改动。内置市场 Dataset 在 seed 明确归属，任务结果复用已有 owner 属性；无属性不默认为 Collector。共享服务凭据不提供独立 TaskID 权限，不宣称 AuthInfo 已含 Space/Dataset scope。
+- [x] **3.4 修改两份生产路由来源。** YAML 与 `sysdeploy/defaults.go` 同步建立四方法 `EnsureDatasetPeriod / CommitTimeSeriesBatch / RecordDatasetPeriodFailures / GetDatasetPeriodStatus` 的独立 Primary route，显式 `gateway_callers: [collector]`；从旧宽 caller route 删除 Ensure/Commit，避免绕过窄路由。当前真实 period 调用方只有 Collector，不为无调用方保留宽权限；服务层授权仍不可依赖 Gateway 替代。
+- [x] **3.5 用生产默认值生成测试路由。** `defaults_test.go` / `routes_test.go` 检查 YAML 与 DefaultDeployments 的方法/caller 等价；Gateway 通过生成的 route snapshot 验证合法 Collector 四个 RPC 可达，非法 caller 四个 period RPC 均不到上游。不能手写一个包含缺失方法的测试路由后宣称 seed 已覆盖。补内置 period Dataset 与任务生成 Dataset 的 owner metadata fixture，避免只 mock 一个“已允许”的 helper。
+- [x] **3.6 验证并提交。** 实际提交：`396683ae`（Collector-only Gateway routes）、`b31b4169`（Collector market Dataset ownership）、`b058c9e9`（Primary auth/proxy contract）、`3c3fc602`（real Gateway ACL integration test）。
 
 ```bash
 go test -count=1 ./modules/storage/cmd/server ./modules/storage/internal/service/primarystore ./modules/admin/internal/service/sysdeploy ./modules/gateway/internal/router
@@ -283,6 +283,8 @@ make test-gateway-deploy
 go build ./modules/storage/cmd/server ./modules/gateway/cmd/server
 git diff --check
 ```
+
+Task 3 验证记录：四包单测、`make test-gateway-deploy`、Storage/Gateway build、Storage metadata seed/Collector taskresult/rpc 测试、resolver/auth focused race（`-count=3`）、Gateway route race（`-count=3`）和 `git diff --check` 均通过。两阶段独立审查：规格审查发现并要求补齐 Gateway 实际调用/零上游测试，复审 PASS；code quality review PASS。主 Agent 在审查后独立重跑上述门禁。Task 9 的存量 Admin active route/metadata 受控应用与部署态 E2E 尚未执行。
 
 ### Task 4：持久 Storage 权威状态并据此清理快照
 
