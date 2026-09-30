@@ -274,7 +274,9 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					}
 				}
 			}
+			var missingTargets []domain.TargetResult
 			for _, target := range targets {
+				targetRowCount := 0
 				for _, sourceRow := range itemRows {
 					row, ok := proto.Clone(sourceRow).(*storagepb.RowFieldUpsert)
 					if !ok || row.GetKey() == nil {
@@ -291,14 +293,23 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					row.Fields = selectOutputFields(row.Fields, fields)
 					if len(row.Fields) > 0 {
 						rows = append(rows, row)
+						targetRowCount++
 					}
+				}
+				if req.RequirePeriodCommit && targetRowCount == 0 {
+					missingTargets = append(missingTargets, domain.TargetResult{WriteTargetID: target.ID, DatasetID: target.DatasetID, Status: "failed", ErrorSummary: "required period target has no supported output rows"})
 				}
 			}
 			if len(req.Targets) == 0 {
 				rows = append(rows, itemRows...)
 			}
 			rowsMu.Unlock()
-			results[index] = successResult(item)
+			if len(missingTargets) > 0 {
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("required period target has no supported output rows"))
+				results[index].TargetResults = missingTargets
+			} else {
+				results[index] = successResult(item)
+			}
 		}()
 	}
 	wg.Wait()
@@ -338,8 +349,10 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			} else {
 				err = p.Storage.UpsertFields(ctx, datasetRows)
 			}
-			if err != nil && writeErr == nil {
-				writeErr = fmt.Errorf("dataset %s: %w", datasetID, err)
+			if err != nil {
+				if writeErr == nil {
+					writeErr = fmt.Errorf("dataset %s: %w", datasetID, err)
+				}
 				targetStatus[datasetID] = domain.TargetResult{DatasetID: datasetID, Status: "failed", ErrorSummary: err.Error()}
 			} else if err == nil {
 				writeSuccesses++
@@ -347,13 +360,31 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 		}
 		for index := range results {
+			if results[index].Outcome != domain.ItemOutcomeSuccess && len(results[index].TargetResults) == 0 {
+				continue
+			}
 			for _, target := range req.Targets {
 				if target.InstanceID != "" && target.InstanceID != results[index].InstanceID {
+					continue
+				}
+				alreadyFailed := false
+				for _, prior := range results[index].TargetResults {
+					if prior.WriteTargetID == target.ID {
+						alreadyFailed = true
+						break
+					}
+				}
+				if alreadyFailed {
 					continue
 				}
 				if status, ok := targetStatus[target.DatasetID]; ok {
 					status.WriteTargetID = target.ID
 					results[index].TargetResults = append(results[index].TargetResults, status)
+					if req.RequirePeriodCommit && status.Status != "succeeded" {
+						results[index].Outcome = domain.ItemOutcomeStorageError
+						results[index].ErrorType = "storage"
+						results[index].ErrorSummary = status.ErrorSummary
+					}
 				}
 			}
 		}
@@ -373,6 +404,9 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 }
 
 func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.RowFieldUpsert) (*storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, bool, error) {
+	if !req.RequirePeriodCommit {
+		return nil, nil, false, nil
+	}
 	type binding struct {
 		index      uint32
 		hash       string

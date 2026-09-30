@@ -157,12 +157,12 @@ func TestExecuteCreateInvokeMarketFetcherPreservesConfiguredTimeout(t *testing.T
 	assert.Equal(t, int64(60), fake.created[0].Timeout)
 }
 
-func TestExecuteCreateTimerMarketFetcherKeepsFifteenSecondTimeout(t *testing.T) {
+func TestExecuteCreateTimerMarketFetcherKeepsAuthoritativeTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{err: errors.New("ResourceNotFound.FunctionName")},
-		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 15, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "crypto"}}},
+		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "crypto"}}},
 	}}
 	svc := &Service{
 		catalog:            catalog,
@@ -178,7 +178,7 @@ func TestExecuteCreateTimerMarketFetcherKeepsFifteenSecondTimeout(t *testing.T) 
 	}, 0)
 	require.NoError(t, err)
 	require.Len(t, fake.created, 1)
-	assert.Equal(t, int64(15), fake.created[0].Timeout)
+	assert.Equal(t, int64(60), fake.created[0].Timeout)
 }
 
 func TestExecuteCreateLegacyInstrumentModeUsesTimerTimeout(t *testing.T) {

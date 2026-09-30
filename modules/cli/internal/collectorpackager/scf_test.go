@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"debug/elf"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +29,7 @@ func TestBuildSCFPackageRequiresBinaryAndConfig(t *testing.T) {
 func TestBuildSCFPackageExcludesTRPCAndCLSCredentials(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
-	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	config := filepath.Join(tmp, "config")
 	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources", "example"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
@@ -49,7 +51,7 @@ func TestBuildSCFPackageExcludesTRPCAndCLSCredentials(t *testing.T) {
 func TestBuildSCFPackageIncludesStockCNCalendar(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
-	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stockcn")
 	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
@@ -87,7 +89,7 @@ func TestBuildSCFPackageIncludesStockCNCalendar(t *testing.T) {
 func TestBuildSCFPackageRequiresStockCNCalendar(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
-	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stockcn")
 	require.NoError(t, os.MkdirAll(config, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
@@ -101,7 +103,7 @@ func TestBuildSCFPackageSetsOutputMode0600(t *testing.T) {
 	binary := filepath.Join(tmp, "main")
 	config := filepath.Join(tmp, "config")
 	out := filepath.Join(tmp, "package.zip")
-	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	require.NoError(t, os.MkdirAll(config, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
 	require.NoError(t, os.WriteFile(out, []byte("old"), 0o644))
@@ -118,7 +120,7 @@ func TestBuildSCFPackageDoesNotRenderStorageAuth(t *testing.T) {
 	binary := filepath.Join(tmp, "main")
 	config := filepath.Join(tmp, "config")
 	out := filepath.Join(tmp, "package.zip")
-	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources", "market"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "sources", "market", "binance.yaml"), []byte(`
@@ -198,13 +200,13 @@ func TestValidateSCFPackageZipRejectsSecretsAndInvalidCA(t *testing.T) {
 }
 
 func TestValidateSCFPackageZipRequiresCA(t *testing.T) {
-	require.ErrorContains(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{"main": []byte("binary")})), "certs/eventbus-ca.pem")
+	require.ErrorContains(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{"main": testfixture.LinuxExecutable(elf.EM_X86_64)})), "certs/eventbus-ca.pem")
 }
 
 func TestBuildSCFPackageIncludesExactPublicCA(t *testing.T) {
 	tmp := t.TempDir()
 	binary, config := filepath.Join(tmp, "main"), filepath.Join(tmp, "config")
-	require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	require.NoError(t, os.MkdirAll(config, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("system: {}\n"), 0o644))
 	ca := testCAPEM(t)
@@ -241,7 +243,7 @@ func TestBuildSCFPackageRealProfilesAreCredentialFree(t *testing.T) {
 			t.Setenv("MOOX_EVENTBUS_NATS_PASSWORD", "test-profile-eventbus-password")
 			tmp := t.TempDir()
 			binary := filepath.Join(tmp, "main")
-			require.NoError(t, os.WriteFile(binary, []byte("binary"), 0o755))
+			require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 			config := filepath.Join("..", "..", "..", "collector", "configs", "scf", profile)
 			result, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: filepath.Join(tmp, "package.zip"), EventBusCAPEM: testCAPEM(t)})
 			require.NoError(t, err)
@@ -298,6 +300,72 @@ func TestValidateSCFPackageZipRequiresCAFileNotDirectory(t *testing.T) {
 	require.Error(t, ValidateSCFPackageZip(path))
 }
 
+func TestValidateSCFPackageZipRequiresExecutableLinuxMain(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content []byte
+		mode    os.FileMode
+	}{
+		{"text", []byte("binary"), 0o755},
+		{"empty", nil, 0o755},
+		{"not executable", testfixture.LinuxExecutable(elf.EM_X86_64), 0o644},
+		{"wrong architecture", testfixture.LinuxExecutable(elf.EM_386), 0o755},
+		{"directory", nil, os.ModeDir | 0o755},
+		{"private PEM", append(testfixture.LinuxExecutable(elf.EM_X86_64), []byte("\n-----BEGIN PRIVATE KEY-----\nprivate-test-secret\n-----END PRIVATE KEY-----\n")...), 0o755},
+		{"credential assignment", append(testfixture.LinuxExecutable(elf.EM_X86_64), []byte("\nMOOX_EVENTBUS_NATS_PASSWORD=private-test-secret\n")...), 0o755},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "package.zip")
+			file, err := os.Create(path)
+			require.NoError(t, err)
+			zw := zip.NewWriter(file)
+			require.NoError(t, addZipBytes(zw, tc.content, "main", tc.mode))
+			require.NoError(t, addZipBytes(zw, testCAPEM(t), "certs/eventbus-ca.pem", 0o644))
+			require.NoError(t, zw.Close())
+			require.NoError(t, file.Close())
+			err = ValidateSCFPackageZip(path)
+			require.ErrorContains(t, err, "main")
+			require.NotContains(t, err.Error(), "private-test-secret")
+		})
+	}
+	for _, machine := range []elf.Machine{elf.EM_X86_64, elf.EM_AARCH64} {
+		t.Run(machine.String(), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "package.zip")
+			file, err := os.Create(path)
+			require.NoError(t, err)
+			zw := zip.NewWriter(file)
+			require.NoError(t, addZipBytes(zw, testfixture.LinuxExecutable(machine), "main", 0o755))
+			require.NoError(t, addZipBytes(zw, testCAPEM(t), "certs/eventbus-ca.pem", 0o644))
+			require.NoError(t, zw.Close())
+			require.NoError(t, file.Close())
+			require.NoError(t, ValidateSCFPackageZip(path))
+		})
+	}
+}
+
+func TestValidateSCFPackageZipRequiresMain(t *testing.T) {
+	require.ErrorContains(t, ValidateSCFPackageZip(writeTestPackage(t, map[string][]byte{"certs/eventbus-ca.pem": testCAPEM(t)})), "main")
+}
+
+func TestValidateEventBusCAPEMRejectsExpiredAndFutureCA(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after time.Time
+	}{
+		{"expired", time.Now().Add(-2 * time.Hour), time.Now().Add(-time.Hour)},
+		{"future", time.Now().Add(time.Hour), time.Now().Add(2 * time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pub, private, err := ed25519.GenerateKey(rand.Reader)
+			require.NoError(t, err)
+			template := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: tc.before, NotAfter: tc.after, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+			der, err := x509.CreateCertificate(rand.Reader, template, template, pub, private)
+			require.NoError(t, err)
+			require.ErrorContains(t, ValidateEventBusCAPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), "validity")
+		})
+	}
+}
+
 func testCAPEM(t *testing.T) []byte {
 	t.Helper()
 	pub, private, err := ed25519.GenerateKey(rand.Reader)
@@ -315,7 +383,11 @@ func writeTestPackage(t *testing.T, files map[string][]byte) string {
 	require.NoError(t, err)
 	zw := zip.NewWriter(file)
 	for name, content := range files {
-		require.NoError(t, addZipBytes(zw, content, name, 0o644))
+		mode := os.FileMode(0o644)
+		if name == "main" {
+			mode = 0o755
+		}
+		require.NoError(t, addZipBytes(zw, content, name, mode))
 	}
 	require.NoError(t, zw.Close())
 	require.NoError(t, file.Close())

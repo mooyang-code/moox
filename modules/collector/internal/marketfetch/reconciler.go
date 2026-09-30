@@ -273,6 +273,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if envErr != nil {
 			return r.fail(spaceID, "environment", envErr)
 		}
+		if assignment.Enabled && !r.DisableTimerTriggers && (strings.TrimSpace(r.CollectorRuntimeGatewayTarget) == "" || strings.TrimSpace(r.CollectorRuntimeGatewayNodeID) == "") {
+			return r.fail(spaceID, "environment", fmt.Errorf("collector runtime gateway target and node are required before enabling Timer"))
+		}
 		if r.CollectorRuntimeGatewayTarget != "" || r.CollectorRuntimeGatewayNodeID != "" {
 			if strings.TrimSpace(r.CollectorRuntimeGatewayTarget) == "" || strings.TrimSpace(r.CollectorRuntimeGatewayNodeID) == "" {
 				return r.fail(spaceID, "environment", fmt.Errorf("collector runtime gateway target and node must be configured together"))

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,9 +35,9 @@ const (
 	SCFCLSReserveMilliseconds = 3000
 	// SCFCompletionReserveMilliseconds leaves enough time for the durable
 	// completion event after Storage has accepted the aggregate write.
-	SCFCompletionReserveMilliseconds      = 3000
+	SCFCompletionReserveMilliseconds      = 13000
 	SCFTimerClaimReserveMilliseconds      = 3000
-	SCFColdCompletionReserveMilliseconds  = 4000
+	SCFColdCompletionReserveMilliseconds  = 13000
 	SCFMetricsResponseReserveMilliseconds = 750
 	DefaultSCFTimerTimeoutSeconds         = tencent.CollectorTimerTimeoutSeconds
 	// SCFFinalResponseReserveMilliseconds keeps the SCF runtime enough time to
@@ -52,8 +53,11 @@ const (
 	DefaultStockCNMarketTimerFunctionCount = 170
 	// Invoke execution needs a larger budget than stockcn Timer execution for the
 	// Storage acknowledgement and durable completion path.
-	DefaultStockCNInvokeTimeoutSeconds = 60
-	DefaultCryptoInvokeTimeoutSeconds  = 60
+	DefaultStockCNInvokeTimeoutSeconds = 90
+	// Synchronized with active Kline providers in stockcn/route.yaml.
+	StockCNInvokeProviderChainLength  = 4
+	StockCNMaxRealtimeItems           = 40
+	DefaultCryptoInvokeTimeoutSeconds = 60
 	// Stock Timer groups are spread across this fixed second window. These are
 	// release defaults; changing them requires a new rendered configuration.
 	DefaultStockCNStaggerStartSecond        = 5
@@ -1439,6 +1443,14 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	if cfg == nil {
 		return nil
 	}
+	collectorTarget, collectorNode, err := CollectorRuntimeTarget(cfg)
+	if err != nil {
+		return err
+	}
+	for index := range cfg.Spaces {
+		cfg.Spaces[index].CollectorRPCGatewayTarget = collectorTarget
+		cfg.Spaces[index].CollectorGatewayTargetNode = collectorNode
+	}
 	cfg.TencentLimits.normalize()
 	if !cfg.Enabled {
 		return nil
@@ -1501,6 +1513,51 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 		if accountID != account.AccountID {
 			return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].cls_cloud_account_id must match scf_fetcher.cloud_account.account_id", index)
 		}
+	}
+	return nil
+}
+
+// CollectorRuntimeTarget resolves the one process-wide Claim route. Empty
+// Spaces inherit it; explicit routes must agree because Collector has one
+// collector_runtime configuration for all Spaces.
+func CollectorRuntimeTarget(cfg *SCFFetcher) (string, string, error) {
+	if cfg == nil {
+		return "", "", nil
+	}
+	target, node := "", ""
+	for index, space := range cfg.Spaces {
+		spaceTarget := strings.TrimSpace(space.CollectorRPCGatewayTarget)
+		spaceNode := strings.TrimSpace(space.CollectorGatewayTargetNode)
+		if spaceTarget == "" && spaceNode == "" {
+			continue
+		}
+		if spaceTarget == "" || spaceNode == "" {
+			return "", "", fmt.Errorf("config_invalid: Collector gateway target and node must be configured together for scf_fetcher.spaces[%d]", index)
+		}
+		if err := ValidateCollectorRuntimeRoute(spaceTarget, spaceNode); err != nil {
+			return "", "", err
+		}
+		if target != "" && (target != spaceTarget || node != spaceNode) {
+			return "", "", fmt.Errorf("config_invalid: Collector gateway target and node must be identical across all Spaces")
+		}
+		target, node = spaceTarget, spaceNode
+	}
+	return target, node, nil
+}
+
+// ValidateCollectorRuntimeRoute validates the Collector-owned Claim endpoint
+// separately from the Storage WriteBatch route.
+func ValidateCollectorRuntimeRoute(target, node string) error {
+	if !hostNamePattern.MatchString(strings.TrimSpace(node)) {
+		return fmt.Errorf("config_invalid: collector_gateway_target_node must be a valid Collector node")
+	}
+	if err := validateStorageRPCTarget(target, "collector_rpc_gateway_target"); err != nil {
+		return err
+	}
+	parsed, _ := url.Parse(strings.TrimSpace(target))
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("config_invalid: collector_rpc_gateway_target must be an ip://host:port target without credentials, path, query, or fragment")
 	}
 	return nil
 }
@@ -1887,12 +1944,19 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 	if len(cfg.RetryDelays) != 3 || cfg.RetryDelays[0] != "5s" || cfg.RetryDelays[1] != "30s" || cfg.RetryDelays[2] != "2m" || cfg.StaggerEnabled {
 		return fmt.Errorf("config_invalid: %s retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false", path)
 	}
-	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
-	// Validate the execution budget before any package upload. Crypto uses the
-	// Scheduler-owned Invoke pool; stockcn still publishes Timer functions plus
-	// an Invoke canary. Both paths need enough time for Storage and observability.
-	requestBudgetMS := SCFTimerClaimReserveMilliseconds + requestWaves*cfg.HTTPMaxAttempts*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + SCFColdCompletionReserveMilliseconds + SCFCLSReserveMilliseconds + SCFMetricsResponseReserveMilliseconds + SCFFinalResponseReserveMilliseconds
-	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
+	if stockCN {
+		// Invoke can traverse every active provider; Timer is source-bound and
+		// capped by both measured group capacity and the runtime request limit.
+		invokeBudget := MarketFetchBudgetMS(cfg.RealtimeBatchSize, cfg.MaxInflightRequests, StockCNInvokeProviderChainLength, cfg.HTTPMaxAttempts, cfg.RequestTimeoutMS, cfg.StorageTimeoutMS, false)
+		if invokeBudget >= cfg.InvokeTimeoutSeconds*1000 {
+			return fmt.Errorf("config_invalid: %s Invoke request waves across active providers + storage and completion/CLS reserves must be less than invoke_timeout_seconds", path)
+		}
+		timerItems := min(cfg.MeasuredSafeGroupSize, StockCNMaxRealtimeItems)
+		timerBudget := MarketFetchBudgetMS(timerItems, cfg.MaxInflightRequests, 1, cfg.HTTPMaxAttempts, cfg.RequestTimeoutMS, cfg.StorageTimeoutMS, true)
+		if timerBudget >= cfg.TimeoutSeconds*1000 {
+			return fmt.Errorf("config_invalid: %s Timer request waves at measured_safe_group_size + Claim/storage/completion/CLS reserves must be less than timeout_seconds", path)
+		}
+	} else if MarketFetchBudgetMS(cfg.RealtimeBatchSize, cfg.MaxInflightRequests, 1, cfg.HTTPMaxAttempts, cfg.RequestTimeoutMS, cfg.StorageTimeoutMS, true) >= cfg.TimeoutSeconds*1000 {
 		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + completion, CLS and final response reserves must be less than timeout", path)
 	}
 	seen := make(map[string]struct{}, len(cfg.Regions))

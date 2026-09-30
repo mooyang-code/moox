@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -56,7 +57,8 @@ const (
 	// publishing the only completion fact. The first connection can take
 	// several seconds on a cold path, so leave a bounded reserve for one
 	// reconnect attempt after the initial connection attempt.
-	completionPublishReserve  = 4 * time.Second
+	// Two cold connects and ACKs (3s each), plus a 300ms retry backoff.
+	completionPublishReserve  = 13 * time.Second
 	completionConnectTimeout  = 3 * time.Second
 	completionConnectAttempts = 2
 	defaultStorageTimeout     = 5 * time.Second
@@ -235,6 +237,9 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	}
 	storageTimeout := time.Duration(envInt("MOOX_FETCH_STORAGE_TIMEOUT_MS", int(defaultStorageTimeout/time.Millisecond))) * time.Millisecond
 	commitReserve, publishReserve := storageAndPublishReserves(storageTimeout, h.CLSReserve, publish)
+	writeCtx, writeCancel := contextWithReserve(budgetCtx, commitReserve-storageTimeout)
+	defer writeCancel()
+	storage = &reservedDeadlineStorage{Storage: storage, parent: writeCtx, timeout: storageTimeout}
 	var payload *marketfetchpb.MarketFetchBatchCompleted
 	if h.Execute != nil {
 		payload, err = h.Execute(budgetCtx, req, storage)
@@ -242,12 +247,11 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		(req.InstrumentType == "" || strings.EqualFold(req.InstrumentType, string(marketdata.InstrumentEquity))) {
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
 		defer workCancel()
-		stockStorage := &reservedDeadlineStorage{Storage: storage, parent: budgetCtx, timeout: storageTimeout}
 		newPipeline := h.NewStockKlinePipeline
 		if newPipeline == nil {
 			return nil, fmt.Errorf("stock kline pipeline factory is not configured")
 		}
-		pipeline, pipelineErr := newPipeline(stockStorage)
+		pipeline, pipelineErr := newPipeline(storage)
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}
@@ -341,8 +345,10 @@ func contextWithReserve(parent context.Context, reserve time.Duration) (context.
 
 type reservedDeadlineStorage struct {
 	Storage
-	parent  context.Context
-	timeout time.Duration
+	parent        context.Context
+	timeout       time.Duration
+	mu            sync.Mutex
+	writeDeadline time.Time
 }
 
 var _ periodStorage = (*reservedDeadlineStorage)(nil)
@@ -410,17 +416,19 @@ func (s *reservedDeadlineStorage) periodStorage(method string) (periodStorage, e
 	return storage, nil
 }
 
-func (s *reservedDeadlineStorage) ListInstrumentNames(_ context.Context, spaceID string, subjectIDs []string) (map[string]string, error) {
+func (s *reservedDeadlineStorage) ListInstrumentNames(ctx context.Context, spaceID string, subjectIDs []string) (map[string]string, error) {
 	reader, ok := s.Storage.(instrumentNameReader)
 	if !ok {
 		return nil, nil
 	}
-	ctx, cancel := s.storageContext()
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	return reader.ListInstrumentNames(ctx, spaceID, subjectIDs)
 }
 
 func (s *reservedDeadlineStorage) storageContext() (context.Context, context.CancelFunc) {
+	// Provider work has an earlier deadline than this reserved write phase.
+	// Keep parent cancellation, but share one write deadline across all RPCs.
 	parent := s.parent
 	if parent == nil {
 		parent = context.Background()
@@ -428,7 +436,13 @@ func (s *reservedDeadlineStorage) storageContext() (context.Context, context.Can
 	if s.timeout <= 0 {
 		return context.WithCancel(parent)
 	}
-	return context.WithTimeout(parent, s.timeout)
+	s.mu.Lock()
+	if s.writeDeadline.IsZero() {
+		s.writeDeadline = time.Now().Add(s.timeout)
+	}
+	deadline := s.writeDeadline
+	s.mu.Unlock()
+	return context.WithDeadline(parent, deadline)
 }
 
 // storageAndPublishReserves keeps the Storage RPC's full configured timeout,

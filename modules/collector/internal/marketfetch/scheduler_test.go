@@ -2181,7 +2181,7 @@ func assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T, freq
 	end := periodEnd(period)
 	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", SourceID: item.SourceID, ProviderSymbol: item.Symbol, Frequency: providerFrequency, BarStart: period, BarEnd: end, Open: 100, High: 101, Low: 99, Close: 100.5, VolumeShares: 10, AmountCNY: 1005, ProviderTimestamp: end, FetchedAt: end, RequestID: "period-frequency-binding"}
 	pipeline := &KlinePipeline{MarketID: "crypto", InstrumentType: marketdata.InstrumentSpot, DatasetID: "bars", SourceID: item.SourceID}
-	req := Request{SpaceID: "crypto", DatasetID: "bars", Frequency: frequency, SourceID: item.SourceID, MarketType: "spot", Items: loaded}
+	req := Request{SpaceID: "crypto", DatasetID: "bars", Frequency: frequency, SourceID: item.SourceID, MarketType: "spot", Items: loaded, RequirePeriodCommit: true}
 	row, err := pipeline.rowFor(bar, req, "binance-spot", 1)
 	require.NoError(t, err)
 	expectation, rows, enabled, err := periodCommitForDataset(req, "bars", []*storagepb.RowFieldUpsert{row})

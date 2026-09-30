@@ -116,6 +116,45 @@ func TestRenderCollectorRuntimeClaimTargetDistinctFromStorage(t *testing.T) {
 	require.Equal(t, "collector-node", runtime["node_id"])
 }
 
+func TestRenderCollectorRuntimeRejectsConflictsAndClearsStaleRoute(t *testing.T) {
+	snapshot := &Snapshot{Manifest: Manifest{SCFFetcher: SCFFetcher{Spaces: []SCFFetcherSpace{
+		{SpaceID: "crypto", CollectorRPCGatewayTarget: "ip://first.example:11003", CollectorGatewayTargetNode: "first"},
+		{SpaceID: "stockcn", CollectorRPCGatewayTarget: "ip://second.example:11003", CollectorGatewayTargetNode: "second"},
+	}}}}
+	_, err := RenderCollectorDNSResolverConfig(snapshot, nil)
+	require.ErrorContains(t, err, "Collector gateway")
+	snapshot.Manifest.SCFFetcher.Spaces[1].CollectorRPCGatewayTarget = ""
+	snapshot.Manifest.SCFFetcher.Spaces[1].CollectorGatewayTargetNode = "second"
+	_, err = RenderCollectorDNSResolverConfig(snapshot, nil)
+	require.ErrorContains(t, err, "configured together")
+	snapshot.Manifest.SCFFetcher.Spaces = nil
+	rendered, err := RenderCollectorDNSResolverConfig(snapshot, []byte("collector_runtime:\n  gateway_target: ip://stale.example:11003\n  node_id: stale\ndatabase:\n  path: keep.db\n"))
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(rendered, &got))
+	runtime := got["collector_runtime"].(map[string]any)
+	require.Empty(t, runtime["gateway_target"])
+	require.Empty(t, runtime["node_id"])
+	require.Equal(t, "keep.db", got["database"].(map[string]any)["path"])
+}
+
+func TestRenderCollectorRuntimeGlobalPairIsOrderIndependent(t *testing.T) {
+	configured := SCFFetcherSpace{SpaceID: "crypto", CollectorRPCGatewayTarget: "ip://collector.example:11003", CollectorGatewayTargetNode: "collector"}
+	inherited := SCFFetcherSpace{SpaceID: "stockcn"}
+	matching := configured
+	matching.SpaceID = "stockcn"
+	for _, spaces := range [][]SCFFetcherSpace{{configured, inherited}, {inherited, configured}, {configured, matching}} {
+		snapshot := &Snapshot{Manifest: Manifest{SCFFetcher: SCFFetcher{Spaces: spaces}}}
+		rendered, err := RenderCollectorDNSResolverConfig(snapshot, nil)
+		require.NoError(t, err)
+		var got map[string]any
+		require.NoError(t, yaml.Unmarshal(rendered, &got))
+		runtime := got["collector_runtime"].(map[string]any)
+		require.Equal(t, configured.CollectorRPCGatewayTarget, runtime["gateway_target"])
+		require.Equal(t, configured.CollectorGatewayTargetNode, runtime["node_id"])
+	}
+}
+
 func TestRenderDisabledResolverReplacesStaleSettings(t *testing.T) {
 	snapshot := &Snapshot{Manifest: Manifest{DNSResolver: DNSResolver{Enabled: false}}}
 	rendered, err := RenderTradeDNSResolverConfig(snapshot, []byte("dns_resolver:\n  enabled: true\n  domains: [fapi.binance.com]\n"))

@@ -62,6 +62,11 @@ type collectorPublishedTimerFleet struct {
 	nodes []adminclient.CloudNode
 }
 
+type collectorRegionalPublishPlan struct {
+	opts   collectorPublishOptions
+	shards []setupconfig.SCFNamespaceShard
+}
+
 type collectorPackageOptions struct {
 	CollectorRoot    string
 	SpaceID          string
@@ -774,10 +779,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		opts.StoragePrivateRPCGatewayTarget = defaultFlag(opts.StoragePrivateRPCGatewayTarget, fetcherConfig.StoragePrivateRPCGatewayTarget)
 		opts.RuntimeServiceKeyID = "collector"
 		opts.RuntimeServiceSecretKey = trustMaterial.CollectorServiceKey
-		if fetcherConfig.CollectorRPCGatewayTarget == "" && fetcherConfig.CollectorGatewayTargetNode == "" {
-			fetcherConfig.CollectorRPCGatewayTarget = "ip://" + net.JoinHostPort(manifest.Manifest.ControlHost.Address, "11003")
-			fetcherConfig.CollectorGatewayTargetNode = manifest.Manifest.ControlHost.Name
-		}
 		if opts.PackageName == "moox-collector" {
 			opts.PackageName = fetcherConfig.PackageName
 		}
@@ -791,7 +792,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 	if fetcherConfig == nil {
-		if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
+		if _, err := buildCollectorFleetCreateItems(opts, collectorPreflightPackageID(opts)); err != nil {
 			return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before control-plane access: %w", err)
 		}
 	}
@@ -895,7 +896,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 	if fetcherConfig == nil {
-		if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
+		if _, err := buildCollectorFleetCreateItems(opts, collectorPreflightPackageID(opts)); err != nil {
 			return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before package upload: %w", err)
 		}
 	}
@@ -958,10 +959,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			storageRegion := strings.ToLower(strings.TrimSpace(storageRoutePlan.Storage.Instance.Region))
 			regions = orderCollectorPublishRegions(regions, storageRegion, true)
 		}
-		// Regional publication is deliberately synchronous. The Storage region is
-		// sorted first; its Invoke canary and the complete configured Timer fleet
-		// must finish (including readback) before this loop can reach any other
-		// region. This keeps as much write traffic as possible on the private path.
+		// Validate every regional Timer/Invoke shard with the complete merged
+		// environment before any region uploads a package.
+		plans := make([]collectorRegionalPublishPlan, 0, len(regions))
 		for _, region := range regions {
 			if !region.Enabled || fetcherConfig.IsRegionBlacklisted(region.Region) {
 				continue
@@ -1000,10 +1000,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if !ok || account.IsDeleted {
 				return summary, fmt.Errorf("Tencent cloud account %q for region %s not found", regionOpts.CloudAccountID, regionOpts.Region)
 			}
-			packageID, uploadErr := upload(regionOpts)
-			if uploadErr != nil {
-				return summary, uploadErr
-			}
 			publishLimits := setupconfig.TencentSCFLimits{}
 			if manifest != nil {
 				publishLimits = manifest.Manifest.SCFFetcher.TencentLimits
@@ -1015,6 +1011,19 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					Timers:    regionOpts.NodeCount,
 					Invokes:   1,
 				}}
+			}
+			if err := preflightCollectorRegionalEnvironment(regionOpts, shards); err != nil {
+				return summary, fmt.Errorf("validate collector fleet before package upload for region %s: %w", regionOpts.Region, err)
+			}
+			plans = append(plans, collectorRegionalPublishPlan{opts: regionOpts, shards: shards})
+		}
+		// Regional publication is deliberately synchronous. The Storage region
+		// finishes its canary and complete fleet before any other region deploys.
+		for _, plan := range plans {
+			regionOpts, shards := plan.opts, plan.shards
+			packageID, uploadErr := upload(regionOpts)
+			if uploadErr != nil {
+				return summary, uploadErr
 			}
 			shardOffsets := collectorShardIndexOffsets(shards)
 			for shardIndex, shard := range shards {
@@ -2995,7 +3004,9 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if maxInstanceConcurrency != 1 {
 		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher max_instance_concurrency is fixed at 1")
 	}
-	if err := validateCollectorRuntimeConfig(config, fetcher, strings.EqualFold(triggerType, "timer"), effectiveTimeoutSeconds); err != nil {
+	runtimeFetcher := *fetcher
+	runtimeFetcher.SpaceID = spaceID
+	if err := validateCollectorRuntimeConfig(config, &runtimeFetcher, strings.EqualFold(triggerType, "timer"), effectiveTimeoutSeconds); err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
 	for configKey, environmentKey := range map[string]string{
@@ -3066,6 +3077,49 @@ func collectorShardIndexOffsets(shards []setupconfig.SCFNamespaceShard) []collec
 	return offsets
 }
 
+func preflightCollectorRegionalEnvironment(opts collectorPublishOptions, shards []setupconfig.SCFNamespaceShard) error {
+	offsets := collectorShardIndexOffsets(shards)
+	packageID := collectorPreflightPackageID(opts)
+	for index, shard := range shards {
+		shardOpts := opts
+		shardOpts.Namespace = shard.Namespace
+		shardOpts.NodeCount = shard.Timers
+		shardOpts.IndexOffset = offsets[index].Timer
+		if shard.Timers > 0 {
+			if _, err := buildCollectorFleetCreateItems(shardOpts, packageID); err != nil {
+				return fmt.Errorf("namespace %s Timer: %w", shard.Namespace, err)
+			}
+		}
+		if shard.Invokes > 0 {
+			shardOpts.TriggerType = "invoke"
+			shardOpts.NodeCount = shard.Invokes
+			shardOpts.IndexOffset = offsets[index].Invoke
+			shardOpts.FunctionNamePrefix = strings.TrimSuffix(opts.FunctionNamePrefix, "-") + "-invoke"
+			if _, err := buildCollectorFleetCreateItems(shardOpts, packageID); err != nil {
+				return fmt.Errorf("namespace %s Invoke: %w", shard.Namespace, err)
+			}
+		}
+	}
+	return nil
+}
+
+// Match CloudNode buildPackageID/sanitizePackagePathSegment, including the
+// 36-byte upload UUID, so preflight has the exact final environment size.
+func collectorPreflightPackageID(opts collectorPublishOptions) string {
+	sanitize := func(value string) string {
+		var result strings.Builder
+		for _, r := range strings.TrimSpace(value) {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+				result.WriteRune(r)
+			} else {
+				result.WriteByte('_')
+			}
+		}
+		return strings.Trim(result.String(), "_.-")
+	}
+	return sanitize(defaultFlag(opts.PackageName, "moox-collector")) + "_" + sanitize(defaultFlag(opts.Version, "dev")) + "_00000000-0000-0000-0000-000000000000"
+}
+
 func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID string) ([]adminclient.NodeCreateItem, error) {
 	if opts.NodeCount <= 0 {
 		return nil, fmt.Errorf("node count must be positive")
@@ -3118,6 +3172,12 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string, tim
 		}
 	}
 	if timer {
+		if strings.TrimSpace(environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"]) == "" || strings.TrimSpace(environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"]) == "" {
+			return fmt.Errorf("collector timer runtime environment requires MOOX_COLLECTOR_RPC_GATEWAY_TARGET and MOOX_COLLECTOR_GATEWAY_TARGET_NODE")
+		}
+		if err := setupconfig.ValidateCollectorRuntimeRoute(environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"], environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"]); err != nil {
+			return fmt.Errorf("invalid MOOX_COLLECTOR_RPC_GATEWAY_TARGET or MOOX_COLLECTOR_GATEWAY_TARGET_NODE: %w", err)
+		}
 		if err := validateTimerStorageTarget(environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"]); err != nil {
 			return err
 		}
@@ -3754,15 +3814,18 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if err != nil {
 		return err
 	}
-	requestWaves := (batchSize + inflight - 1) / inflight
 	if storageTimeoutMS != 5000 {
 		return fmt.Errorf("market_fetcher storage_timeout_ms is fixed at 5000")
 	}
-	reserve := setupconfig.SCFCLSReserveMilliseconds + setupconfig.SCFFinalResponseReserveMilliseconds + setupconfig.SCFColdCompletionReserveMilliseconds + setupconfig.SCFMetricsResponseReserveMilliseconds
-	if timer {
-		reserve += setupconfig.SCFTimerClaimReserveMilliseconds
+	providers := 1
+	if strings.EqualFold(fetcher.SpaceID, "stockcn") {
+		if timer {
+			batchSize = min(defaultInt(fetcher.MeasuredSafeGroupSize, setupconfig.StockCNMaxRealtimeItems), setupconfig.StockCNMaxRealtimeItems)
+		} else {
+			providers = setupconfig.StockCNInvokeProviderChainLength
+		}
 	}
-	if requestWaves*defaultInt(fetcher.HTTPMaxAttempts, 4)*requestTimeoutMS+storageTimeoutMS+reserve >= timeoutSeconds*1000 {
+	if setupconfig.MarketFetchBudgetMS(batchSize, inflight, providers, defaultInt(fetcher.HTTPMaxAttempts, 4), requestTimeoutMS, storageTimeoutMS, timer) >= timeoutSeconds*1000 {
 		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + configured reserves must be less than the %d-second timeout", timeoutSeconds)
 	}
 	return nil
@@ -3801,6 +3864,7 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		collectorPackageOptions: opts.collectorPackageOptions, SpaceID: opts.SpaceID, ZipPath: opts.ZipPath,
 		StoragePrimaryAuthSecret: opts.StoragePrimaryAuthSecret, EventBusCredentialFile: opts.EventBusCredentialFile,
 		BizType: defaultFlag(opts.BizType, "market_fetcher"), TriggerType: "timer",
+		PackageName: opts.PackageName,
 	}
 	if err := prepareCollectorPublicationTrust(&publication); err != nil {
 		return collectorDeploySummary{}, err
@@ -3820,7 +3884,11 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 	if err := validateCollectorZipLogging(zipPath, opts.CLSTopicID); err != nil {
 		return collectorDeploySummary{}, err
 	}
-	if _, err := collectorFunctionEnvironment(publication, "preflight-package-id"); err != nil {
+	preflightEnvironment, err := collectorFunctionEnvironment(publication, collectorPreflightPackageID(publication))
+	if err != nil {
+		return collectorDeploySummary{}, err
+	}
+	if err := validateCollectorFleetRuntimeEnvironment(preflightEnvironment, true, true); err != nil {
 		return collectorDeploySummary{}, err
 	}
 	data, err := os.ReadFile(zipPath)

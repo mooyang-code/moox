@@ -53,7 +53,7 @@ func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
 			require.Equal(t, uint32(1), ensured.GetExpectedCount())
 			// Match the composition root: no explicit SeriesTag for index or bond.
 			pipeline := &KlinePipeline{SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, InstrumentType: test.instrument, DatasetID: test.dataset, SourceID: item.SourceID}
-			req := Request{SpaceID: StockCNSpaceID, DatasetID: test.dataset, Frequency: "1m", SourceID: item.SourceID, MarketType: string(test.instrument), Items: []domain.CollectionItem{item}}
+			req := Request{SpaceID: StockCNSpaceID, DatasetID: test.dataset, Frequency: "1m", SourceID: item.SourceID, MarketType: string(test.instrument), Items: []domain.CollectionItem{item}, RequirePeriodCommit: true}
 			for rank, provider := range []string{"sina", "tencent", "tdx", "eastmoney"} {
 				bar := marketdata.NormalizedKline{SubjectID: test.subject, ProviderID: provider, SourceID: provider + "_http", ProviderSymbol: item.Symbol, Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: period.Add(time.Minute), FetchedAt: period.Add(2 * time.Minute), RequestID: "row-period-binding"}
 				row, err := pipeline.rowFor(bar, req, "stockcn-route", rank+1)
@@ -70,6 +70,13 @@ func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPeriodCommitDisabledIgnoresResidualBindings(t *testing.T) {
+	req := Request{Items: []domain.CollectionItem{{DatasetID: "bars", SubjectID: "BTC-USDT", SeriesHash: "old", ExpectedCount: 1}}}
+	_, _, enabled, err := periodCommitForDataset(req, "bars", []*storagepb.RowFieldUpsert{{}})
+	require.NoError(t, err)
+	require.False(t, enabled)
 }
 
 func TestKlinePipelineNonStockCNRowPreservesProviderSourceTag(t *testing.T) {
@@ -413,7 +420,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 	var observed marketdata.KlineRequest
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}, request: &observed}))
-	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
+	router, err := marketdata.NewRouter(registry, 2, nil, nil)
 	require.NoError(t, err)
 	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)
@@ -432,6 +439,45 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 	require.Equal(t, period.Add(time.Minute), observed.EndTime)
 	require.Equal(t, 1, storage.commits)
 	require.Equal(t, []uint32{0}, storage.indexes)
+
+	target.OutputFields = `["unsupported"]`
+	noRowsStorage := &recordingTimerPeriodCommitStorage{}
+	pipeline.Storage = noRowsStorage
+	payload, err = pipeline.Execute(context.Background(), Request{
+		BatchID: "unsupported-fields", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
+		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "failed", payload.GetStatus(), "a required target without any supported fields cannot succeed")
+	require.Zero(t, noRowsStorage.commits)
+	target.OutputFields = ""
+	secondTarget := target
+	secondTarget.ID, secondTarget.DatasetID = "target-2", "second-bars"
+	target.OutputFields = `["unsupported"]`
+	mixedFieldsStorage := &recordingTimerPeriodCommitStorage{}
+	pipeline.Storage = mixedFieldsStorage
+	payload, err = pipeline.Execute(context.Background(), Request{
+		BatchID: "mixed-output-targets", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
+		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target, secondTarget},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "failed", payload.GetStatus())
+	require.Equal(t, 1, mixedFieldsStorage.commits, "unsupported output must not prevent an independent valid target from committing")
+	require.Equal(t, "failed", payload.GetItems()[0].GetTargets()[0].GetStatus())
+	require.Equal(t, "succeeded", payload.GetItems()[0].GetTargets()[1].GetStatus())
+	target.OutputFields = ""
+	partialStorage := &recordingTimerPeriodCommitStorage{failDataset: target.DatasetID}
+	pipeline.Storage = partialStorage
+	payload, err = pipeline.Execute(context.Background(), Request{
+		BatchID: "two-targets", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
+		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target, secondTarget},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "failed", payload.GetStatus(), "one accepted Dataset cannot mask a rejected required target")
+	require.Len(t, payload.GetItems()[0].GetTargets(), 2)
 
 	registry = marketdata.NewRegistry()
 	recent := bar
@@ -455,15 +501,19 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 
 type recordingTimerPeriodCommitStorage struct {
 	recordingPeriodFailureStorage
-	commits int
-	indexes []uint32
+	commits     int
+	indexes     []uint32
+	failDataset string
 }
 
-func (s *recordingTimerPeriodCommitStorage) CommitTimeSeriesBatch(_ context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, _ string) error {
+func (s *recordingTimerPeriodCommitStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, _ string) error {
 	s.commits++
 	s.indexes = make([]uint32, 0, len(rows))
 	for _, row := range rows {
 		s.indexes = append(s.indexes, row.GetSeriesIndex())
+	}
+	if expectation.GetDatasetId() == s.failDataset {
+		return fmt.Errorf("target was not accepted")
 	}
 	return nil
 }
@@ -517,7 +567,7 @@ func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-1", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-1", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: "2026-08-28T06:59:00Z", BarLimit: 3}}})
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-1", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-1", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: "2026-08-28T06:59:00Z", BarLimit: 3, TargetDataTime: "2026-08-28T06:59:00Z", SeriesHash: "residual-period-hash", ExpectedCount: 1}}})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Equal(t, 1, storage.writes)

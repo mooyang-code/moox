@@ -75,20 +75,15 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 	if err != nil {
 		return nil, err
 	}
-	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
-		if space.CollectorRPCGatewayTarget == "" && space.CollectorGatewayTargetNode == "" {
-			continue
-		}
-		if space.CollectorRPCGatewayTarget == "" || space.CollectorGatewayTargetNode == "" {
-			return nil, fmt.Errorf("runtime_config: Collector gateway target and node must be configured together")
-		}
-		rendered, err = replaceYAMLMapping(rendered, "collector_runtime", orderedMapping(
-			mappingField{"gateway_target", space.CollectorRPCGatewayTarget}, mappingField{"node_id", space.CollectorGatewayTargetNode},
-		))
-		if err != nil {
-			return nil, err
-		}
-		break
+	collectorTarget, collectorNode, err := CollectorRuntimeTarget(&snapshot.Manifest.SCFFetcher)
+	if err != nil {
+		return nil, err
+	}
+	rendered, err = replaceYAMLMapping(rendered, "collector_runtime", orderedMapping(
+		mappingField{"gateway_target", collectorTarget}, mappingField{"node_id", collectorNode},
+	))
+	if err != nil {
+		return nil, err
 	}
 	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
 		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") {

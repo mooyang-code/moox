@@ -415,15 +415,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	memorySize := configInt64(config, "memory_size", 256)
 	timeoutSeconds := configInt64(config, "timeout", defaultSCFTimeoutSeconds)
 	effectiveConfig := config
-	// Kline Timer functions are intentionally capped at 15 seconds.
+	// Keep the submitted Timer timeout authoritative from initial creation.
 	if isMarketFetchNode(node) && node.TriggerType == "timer" {
 		memorySize = 64
-		timeoutSeconds = 15
-		effectiveConfig = copyStringMap(config)
-		if effectiveConfig == nil {
-			effectiveConfig = make(map[string]string)
-		}
-		effectiveConfig["timeout"] = "15"
 	}
 	metadata["runtime"] = firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime"))
 	metadata["handler"] = firstString(item.GetHandler(), metadataString(metadata, "handler"), "main")

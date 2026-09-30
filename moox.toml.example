@@ -319,7 +319,7 @@ storage_gateway_host = "203.0.113.11"
 memory_size = 64
 timeout_seconds = 60
 # 仅 Invoke 辅助函数使用该独立超时。
-invoke_timeout_seconds = 60
+invoke_timeout_seconds = 90
 realtime_batch_size = 10
 realtime_bar_limit = 10
 catchup_batch_size = 1
