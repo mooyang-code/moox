@@ -12,9 +12,9 @@
 
 ## 1. 范围与基线
 
-工作目录为仓库根目录 `moox`；下文命令均在该目录执行，文件清单使用仓库相对路径。业务代码审计基线为 `593a51cab886ef6f9362765ac7730470cd0f29d2`；主分支 `80291a163b7c717d88af76bbf3a7165b5f30115b` 仅增加本计划，未改变该业务实现。
+工作目录为仓库根目录 `moox`；下文命令均在该目录执行，文件清单使用仓库相对路径。业务代码审计基线为 `593a51cab886ef6f9362765ac7730470cd0f29d2`；本轮复核时主工作区为 `feature/mooyang`，HEAD 为 `e8c5b4d2`，工作区干净。业务基线之后的两次已提交变更 `80291a16`、`e8c5b4d2` 均只修改计划文档，未改变该业务实现。
 
-**本轮交付边界：** 只完善执行计划与审查依据，不继续业务编码、不部署、不重置。独立工作区中未生成协议、未验证的中间改动不视为任何任务完成；实施前先核验工作区并恢复完整编译闭环，禁止依据改名后的文件存在就勾选 Task 1。
+**本轮交付边界：** 只完善执行计划与审查依据，不继续业务编码、不部署、不重置。独立工作区中已有部分实现，但未提交、未合入、未完成独立代码审查，不视为主工作区已完成。实施前先核验实际 diff 和验证证据，禁止依据改名后的文件存在或子任务的本地测试回报就勾选整项任务。
 
 本计划补充 `docs/superpowers/plans/2026-09-29-collector-subject-period-failure-plan.md`。旧文档保留为历史记录；其中已勾选的任务不能作为本次补齐项已完成的证据，旧“Storage 先升级、旧周期继续收尾”的发布假设由本计划替代。
 
@@ -51,6 +51,19 @@
 | 同 Dataset 被多任务按不同标签采集 | 不实现动态合并；当前 RPC 创建任务专属结果 Dataset，更新禁止更换结果身份。补 API 和 Store 回归断言，发现绕过约束的输入则拒绝，不复用首个任务的快照 |
 | 清理缺 Storage 终态依据 | 成立；新增只读查询与权威状态记录，未知、waiting、查询错误和未决工作均禁止删除 |
 | 原测试通过不能证明完整验收 | 成立；新增真实进程、实际 Gateway/adapter、Timer/Completion 的端到端门禁，分别记录本地与上线证据 |
+
+### 1.2 实施状态与接续入口
+
+以下状态仅用于避免重复劳动，不替代任务清单和验收。主工作区尚未合入任何本计划的业务变更；独立工作区为 `.worktrees/collector-period-universe-remediation`，实施分支为 `codex/collector-period-universe-remediation`。
+
+| 范围 | 主工作区状态 | 独立工作区已有内容 | 下一步 |
+| --- | --- | --- | --- |
+| Task 1 命名与完整快照对象 | 待实施/合入 | 子任务已回报 Proto 生成、定向测试和三个入口 build 通过；未提交、未审查 | 核对修改范围与日志，独立审查，补齐发现后提交；不重新盲替换名称 |
+| Task 3 Gateway 默认路由 | 待实施/合入 | 四个 period 方法的 Collector-only 路由及默认值测试有部分修改 | 验证两份路由来源，再完成生产 adapter、服务鉴权和真实 resolver 测试，不能仅凭路由测试勾选 Task 3 |
+| Task 9 门禁前置项 | 待完成 | 有架构模块清单、数量断言及 Gateway 测试 fixture 调整 | 保留生产校验，定位并修复 fixture 漂移；所有门禁重新执行，不以局部修复推断 PASS |
+| Task 2、4、5、6、7、8 | 待实施 | 无可验收的完整实现 | 严格按第 3 节依赖顺序实施 |
+
+若独立工作区已被修改，先重新读取本表涉及文件并按实际 diff 更新执行记录；不撤销已有工作，也不把未完成改动直接发布。每项任务完成必须同时具备实现、针对性测试、审查闭环和提交记录。
 
 **不在本次范围：**
 
@@ -98,6 +111,14 @@ Timer 只决定何时运行，不再自己决定该周期的标的集合。Colle
 依赖顺序：Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5 -> Task 6 -> Task 7 -> Task 8 -> Task 9。各任务先写精确失败测试，再实现和验证；涉及同一 `scheduler.go`、Proto 或 Schema 的任务不得由不同 worker 同时修改。
 
 每个任务验证通过后提交该任务相关文件，使用 Conventional Commit；不通过测试不得标记完成。全部任务结束后按仓库 `AGENTS.md` 提交本次实施所有变更并推送。执行阶段的代码审查使用 `codeCR` subAgent，所有审查完成后由主 Agent 独立核验。
+
+| 阶段 | 任务 | 可验收的交付结果 |
+| --- | --- | --- |
+| 基础契约 | Task 1 | Universe 与 Series 含义分离，canonical key/hash/index 不变，完整快照仓储可恢复 |
+| Storage 正确性与授权 | Task 2、3 | 四个真实 period RPC、逐 index 权威回执、硬 deadline、series 绑定和 Collector-only 权限 |
+| Collector 状态与恢复 | Task 4、5 | 权威终态清理、逐 WriteTarget 持久回执、独立且有界的公平上报循环 |
+| StockCN Timer 接入 | Task 6、7 | 持久 initial batch、Claim CAS、period Commit、Completion 和最多 3 次 Invoke retry |
+| 完整验证与交付准备 | Task 8、9 | 真实进程 E2E、全量门禁、新 Agent 审查及可审计的协调发布手册 |
 
 ### Task 1：统一快照命名，不改变集合算法
 
@@ -228,6 +249,7 @@ git diff --check
 - Modify: `config/setup/service-deployments.yaml`
 - Modify: `config/setup/metadata.yaml`，给仍用于 Collector period 的内置市场 Dataset 明确 `owner_module: collector` 和 `dataset_role: raw_collection`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`、`modules/admin/internal/service/sysdeploy/defaults_test.go`、`modules/admin/internal/service/sysdeploy/routes_test.go`
+- Create: `modules/admin/internal/service/sysdeploy/period_gateway_contract_test.go`，从实际 YAML 与 DefaultDeployments 派生路由并验证四方法 ACL
 - Modify: `modules/gateway/internal/router/router_test.go`
 - Modify: `scripts/test/contract/test-deploy-moox-gateway.sh`
 
@@ -396,7 +418,7 @@ func TestAggregatePeriodFailureReportState(t *testing.T) {
 ```
 - [ ] **5.6 将报告从 Tick 拆到独立循环。** `PeriodFailureReporter.RunOnce(ctx, spaceID)` 复用永久失败 retry 行作为持久 outbox，按 retry key 分页、单轮最多 1000 条、整轮共用 5 秒 context 预算，单个 RPC 的现有超时不得越过该预算；bootstrap 启动每秒触发、无重叠、支持 cancel 的循环。每次已尝试的行推进分页游标，到尾部回绕；失败仍 pending，但不能让最前面的失败行永久饿死后面的报告。Completion 永久失败落库后唤醒循环；CloudNode 列表/规划失败不能阻断报告。没有另建 broker 或 in-memory-only 队列。新增超过一页、首行持续超时而后页可达，以及单轮预算到期退出的测试。
 - [ ] **5.7 逾期保持可恢复。** 对 canonical deadline 已到但传输未确认的目标记录一次 `deadline_exceeded_at` 与最后错误，仍 pending 并重放；不能按本地钟永久停止。恢复后 Storage 的 recorded/already_succeeded 可将其收敛为 acknowledged，未接受则收敛为 missed_deadline。清理保护 pending 行直到拿到权威结论。
-- [ ] **5.8 补可观测性。** 在现有 metrics 增加 bounded label 的 pending、missed-deadline 与上报重试计数，label 只包含已有 Space/Dataset/frequency，不用 subject/retryKey 产生高基数；结构化日志携带 period、retry key 和 outcome，不打印凭证。持久 JSON 提供逐目标原因，无需新前端页面。
+- [ ] **5.8 补可观测性。** 在现有 metrics 增加 pending、missed-deadline 与上报重试计数，新增指标的 label 仅使用已配置 Space、有效 frequency 和有限枚举 outcome；Dataset 是按 Task 生成的身份，不能把它误当作 bounded label。subject、dataset、taskID、retryKey 均只放结构化日志和持久 JSON，不进入新增指标标签。新增任务增删测试，断言不同 Dataset 不产生新的指标标签组合，并通过已有 metrics registry 验证各 outcome 计数；不借此重写无关监控。日志携带 period 和 outcome，不打印凭证，无需新前端页面。
 - [ ] **5.9 验证并提交。** 预期全部 PASS，包括报告无节点可用时仍运行、schema 空库及 race；提交 `fix(collector): persist authoritative period failure acknowledgements`。
 
 ```bash
@@ -423,9 +445,9 @@ git diff --check
 - Modify: `config/setup/service-deployments.yaml`、`modules/admin/internal/service/sysdeploy/defaults.go`、`modules/admin/internal/service/sysdeploy/defaults_test.go`、`modules/admin/internal/service/sysdeploy/routes.go`、`modules/admin/internal/service/sysdeploy/routes_test.go`
 - Modify: `modules/admin/internal/gateway/gateway.go`、`modules/admin/internal/gateway/gateway_test.go`
 
-- [ ] **6.1 先补计划与 CAS 测试。** 同周期两个 tick、Collector 重启、午休/节假日都只能保留一个 initial manifest、同一 owning Run/BatchItems；首次 Ensure 失败零 batch。两个不同 requestID 并发 Claim 只有一个首次领取成功；相同 requestID 丢响应重放返回相同请求，terminal batch 重放 no_work。
+- [ ] **6.1 先补计划与 CAS 测试。** 同周期两个 tick、Collector 重启、午休/节假日都只能保留一个 initial manifest、同一 owning Run/BatchItems；首次 Ensure 失败零 batch。单个候选时两个不同 requestID 并发 Claim 只有一个首次领取成功；相同 requestID 丢响应重放返回相同请求，terminal batch 重放 no_work。另建同 function/group/binding 的两个有效周期，断言先领旧周期、再领新周期；重启、持续新周期入队和并发 Claim 不能饿死旧周期。同 requestID 并发遇到两个候选仍只绑定同一个 batch，不因 CAS 失败领取下一批。
 - [ ] **6.2 执行失败测试。** `go test -count=1 ./modules/collector/internal/marketfetch ./modules/collector/internal/store -run 'TestTimer(Period|BatchClaim)'`。旧 Timer 分支缺批次/Claim，应编译或断言失败。
-- [ ] **6.3 定义持久 Timer manifest。** 表名 `t_collector_timer_period_batches`；模型 `TimerPeriodBatch` 字段为 key、TaskID、FirstRunID、SeriesHash、ExpectedCount、GroupID、GroupCount、ShardIndex、BindingHash、RouteVersion、BatchID、FunctionName、NodeID、Region、ClaimRequestID、ClaimedAt、CreateTime。唯一约束 `(space_id,dataset_id,frequency,period_time,shard_index)` 和 `(space_id,batch_id)`；ClaimRequestID/ClaimedAt 在 CAS 成功时写入，其余身份字段不可更新。
+- [ ] **6.3 定义持久 Timer manifest。** 表名 `t_collector_timer_period_batches`；模型 `TimerPeriodBatch` 字段为 key、TaskID、FirstRunID、SeriesHash、ExpectedCount、GroupID、GroupCount、ShardIndex、BindingHash、RouteVersion、BatchID、FunctionName、NodeID、Region、ClaimRequestID、ClaimedAt、CreateTime。唯一约束 `(space_id,dataset_id,frequency,period_time,shard_index)` 和 `(space_id,batch_id)`；另加 `(space_id,function_name,claim_request_id)` 的部分唯一索引，仅索引非空 claim request ID，防止同一次运行绑定两个 batch。ClaimRequestID/ClaimedAt 在 CAS 成功时写入，其余身份字段不可更新。
 - [ ] **6.4 冻结分组而非每轮重算。** 使用 snapshot 内的 series、现有 Provider/Source route 及 rendezvous/stagger 规则生成 shard，单 batch 不跨 Provider/Source、遵守请求 item 上限。GroupCount、route version 与静态 binding hash 首次固定；binding hash 不包含当前标签成员或当前 tick。进行中的 manifest 不因 Reconciler 当前标签或新 Run 追加 Instance。
 - [ ] **6.5 固定首次持久化顺序。** 先创建/读取 snapshot，再用完整 snapshot Ensure Storage，保存 canonical state，成功后一个 SQLite 事务创建 owning Instance/WriteTarget、manifest、batch、batch items、RequestJSON。首次 batch ID 为 `stableID(spaceID,datasetID,frequency,periodUTC,shardIndex,"timer-initial")`，不含 RunID/requestID/tick/动态 assignment hash；sync point ID 同样稳定。已有 manifest 只读复用，不能执行现有 duplicate insert 后仍追加 BatchItems 的分支。
 - [ ] **6.6 拒绝重复/过期首次计划。** 初次创建前按市场 Calendar 确认有效 TargetDataTime；终态或 canonical deadline 已过的周期不新建 initial batch。标签变化只影响下一周期。Task 修改/停用时，未领取批次按现有任务控制语义取消；已持久 owning 关系不静默替换为新 Run。
@@ -455,6 +477,8 @@ service MarketFetchRuntime {
 ```
 
 - [ ] **6.8 实现领取事务。** Gateway 负责验证既有 Collector credential 与 caller，runtime 在可信 loopback 边界内验证 Space、function/group/binding 与 manifest 一致、目标仍启用，然后 CAS `planned -> dispatched`，同事务保存 claim requestID/node/region 与完成超时。返回已冻结 RequestJSON，其中每项含 InstanceID、TargetDataTime、SeriesIndex/Hash/Count，每个 WriteTarget 携带自己的 period identity；request ID 从本次已持久 claim 填入，不重建 Items/Targets。无可领取批次返回 `claimed=false`、空 payload；超过请求体/响应 item 限制拒绝而非拆出未持久的新批次。已领取请求的同 requestID 重放是幂等交付，不承诺网络层 exactly-once 执行。
+
+领取顺序必须确定：先查 `(space_id,function_name,request_id)` 的已持久 claim，核验本次 group/count/binding 与原 claim 一致；非终态返回原 payload，终态返回 no_work，均不改领另一个周期。没有已持久 claim 时，只选择匹配静态身份、任务仍启用、尚未过 canonical deadline 的 planned manifest，按 `(period_time,dataset_id,frequency,shard_index)` 稳定 oldest-first；不把 tick_time 当成“只查最新周期”的过滤条件。CAS 竞争失败先重新查本 requestID，再有界重选下一候选，受本次 RPC context 约束，不无限自旋。唯一冲突回查原 claim，不静默覆盖。一次 Claim 最多返回一个已持久 batch；已过期 planned manifest 由 6.11 的超时恢复收尾，不能永远占据活动工作保护。
 - [ ] **6.9 接入 server 与 Gateway。** 增加独立 runtime listener，HTTP 为 loopback `127.0.0.1:11418`、native tRPC 为 loopback `127.0.0.1:11422`；实施时先确认配置和运行端口无占用，冲突时停止并调整配置与测试，不抢占已有服务。注册同一 runtime handler，Gateway 显式 alias/method/caller；`sysdeploy/routes.go` 的 native 端口映射为 `collector-market-runtime -> 11422`，不能把 tRPC 发往 deployment 的 HTTP 11418。BFF 同时拒绝 runtime alias 及解析后的 service path，避免通过别名绕过机器 ACL；保留旧 CollectMgr 管理接口，不扩大 wildcard。
 
 新增部署条目是 Collector 进程内 endpoint，不是第二个独立进程；YAML 与 DefaultDeployments 同步：
@@ -478,7 +502,7 @@ service MarketFetchRuntime {
 
 `Dependencies.CollectorRuntimeGatewayTarget` 与 `CollectorRuntimeGatewayNodeID` 从 Collector 所在节点的 native service gateway 解析，支持显式配置；缺值时 Claim 配置失败，不能回退 Storage 的节点。测试包含 Collector/Storage 不同节点的路由，避免仅单机通过。
 - [ ] **6.10 校验 Timer Completion 身份。** initial Timer batch 在既有 Completion 原子事务前验证持久 claim 的 Batch/Node/Function/RequestID/Region，错误事件零副作用。Invoke retry 仍沿用现有 failover identity 规则，不能把 Timer 的固定 node 校验套到合法重试。继续使用 Batch terminal CAS + 所有 ownership 校验 + effects 的事务，不新增 Complete RPC。
-- [ ] **6.11 拆开超时恢复与节点派发。** `recoverDue` 无 Invoke node 也要持久 timed_out 与 retry effects；`dispatchDueRetries` 无容量时保留队列并报警，不重新创建 Timer initial。StockCN 重试节点纳入可 Invoke 的 Timer fleet/实际可用 catalog，发布前验证该容量；不因为保留 Timer 初始触发就把重试也交给“下次 Timer”。同时扩展 Task 4 清理事务：仅已确认终态且无未决工作时删除同周期 manifest，再删除 snapshot/state；未领取 planned manifest 也属于活动工作保护。
+- [ ] **6.11 拆开超时恢复与节点派发。** `recoverDue` 无 Invoke node 也要持久 timed_out 与 retry effects；同时扫描已到 canonical deadline 的未领取 planned manifest，使其按有界 timeout/retry 规则收尾，不能因 Claim 排除过期候选而永久保持 planned。`dispatchDueRetries` 无容量时保留队列并报警，不重新创建 Timer initial；失败报告的 pending/missed 仍由 Task 5 的权威回执决定，不由本地过期推断。StockCN 重试节点纳入可 Invoke 的 Timer fleet/实际可用 catalog，发布前验证该容量；不因为保留 Timer 初始触发就把重试也交给“下次 Timer”。同时扩展 Task 4 清理事务：仅已确认终态且无未决工作时删除同周期 manifest，再删除 snapshot/state；未领取 planned manifest 也属于活动工作保护。
 - [ ] **6.12 生成、验证、提交。** 预期全部 PASS；提交 `feat(collector): claim durable timer period batches`。
 
 ```bash
@@ -504,6 +528,7 @@ git diff --check
 - Modify: `scripts/build/build-collector-scf-package.sh`、`scripts/build/build-collector-scf-package_test.sh`
 - Modify: `modules/cli/internal/collectorpackager/scf.go`、`modules/cli/internal/collectorpackager/scf_test.go`，同步 Go 打包入口和外部 ZIP 校验
 - Modify: `modules/collector/internal/marketstorage/storage.go`、`modules/collector/internal/marketstorage/storage_period_test.go`，在运行时解析受管理的 Storage 凭据，缺失时拒绝写入
+- Create: `modules/collector/internal/marketstorage/storage_auth.go`、`modules/collector/internal/marketstorage/storage_auth_test.go`，严格解析 app-key 对象并拒绝重复键
 - Modify: `modules/collector/configs/scf/market_data/sources/market/binance.yaml`、`modules/collector/configs/scf/stockcn/sources/market/binance.yaml`，SCF binding 只保留 app ID，app key 为空
 - Modify: `modules/collector/internal/subjectsync/storage_client_test.go` 及现有 marketwiring Storage 测试，验证 host 凭据路径及错误传播不被 SCF 契约破坏
 
@@ -518,7 +543,75 @@ git diff --check
 - [ ] **7.8a 同步消除两个打包入口的凭据渲染。** shell 删除 `render_storage_auth`，Go packager 删除 `addRenderedStorageAuthConfig` 及仅服务于打包的 `StoragePrimaryAuthSecret` 选项；配置包只保留非敏感 app ID 和空 app key。`ValidateSCFPackageZip` 改为拒绝非空 app key、密钥和密码载荷，不再要求 ZIP 携带 64 位 HMAC。运行时从受管理环境解析调用凭据，缺值/缺 app ID 映射在创建 writer 前报错；发布环境的派生与校验独立于无凭据打包，不能退回使用配置里的占位 key。新增 shell/Go 两路无密钥可打包测试、注入测试凭据后 ZIP 内容仍无该凭据测试、外部 ZIP 含凭据拒绝测试，以及 runtime 凭据缺失零 RPC 和合法凭据完成 period RPC 的测试。
 - [ ] **7.8b 固定派生、注入和消费契约。** `collectorSCFTrustMaterial.StoragePrimaryAuthSecret` 只供受信发布端派生，不交给 packager、不注入 SCF；从 `collectorPackageOptions` 移到发布专用选项。发布端按配置中受允许的 binding app ID 去重，使用现有 HMAC 算法生成受管理的 `MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON`，当前 `moox-collector` 只占一项。`collectorFunctionEnvironment` 将它放入基础环境，拒绝 `--env` 覆盖并参与最终 4096 字节校验，不由 Timer assignment patch 重写。非 manifest 的 publish/deploy 在上传前必须从现有受信本地配置取得主密钥并完成派生，缺值提前失败；无凭据的单独 package 命令不要求主密钥。SCF 环境不得出现 `MOOX_STORAGE_PRIMARY_AUTH_SECRET`。
 
-运行时 `storageAuthInfo(binding)` 改为 `(*storagepb.AuthInfo, error)`：JSON 一旦存在就是权威来源，结构化解析为 `map[string]string`，按 `binding.AuthInfo.AppID` 精确取值；非法 JSON、重复 app ID、缺项或非 64 位 hex 报错且不回退。JSON 不存在时保留 host 的现有主密钥派生路径；SCF binding 的 key 为空，因此 SCF 缺受管 JSON 时 fail closed。错误从 `NewBatchStorageWithWriteSource`、`NewResampleMetadataClient`、`NewResampleStorage`、`ResolveStorageAuthInfo` 传播，验证 subject-sync 的 host 用法仍正常。所有 ZIP 上传入口，包括 `publish --zip` 和 `function deploy --zip`，均先执行相同的无凭据校验，再执行现有 CLS 校验；不能因外部 ZIP 跳过门禁。
+运行时 `storageAuthInfo(binding)` 改为 `(*storagepb.AuthInfo, error)`：通过 `os.LookupEnv` 判断 JSON 是否存在，存在但为空也必须报错，不能回退。JSON 一旦存在就是权威来源，使用 `json.Decoder.Token` 先检查顶层对象及重复 app ID，再构造 `map[string]string`；禁止直接 `json.Unmarshal` 到 map 后声称已检测重复键。按 `binding.AuthInfo.AppID` 精确取值；非法 JSON、重复 app ID、缺项、非字符串/非 64 位 hex、顶层 null/数组或尾随第二段 JSON 均报错且不回退，错误不携带凭据值。JSON 不存在时保留 host 的现有主密钥派生路径；SCF binding 的 key 为空，因此 SCF 缺受管 JSON 时 fail closed。错误从 `NewBatchStorageWithWriteSource`、`NewResampleMetadataClient`、`NewResampleStorage`、`ResolveStorageAuthInfo` 传播，验证 subject-sync 的 host 用法仍正常。所有 ZIP 上传入口，包括 `publish --zip` 和 `function deploy --zip`，均先执行相同的无凭据校验，再执行现有 CLS 校验；不能因外部 ZIP 跳过门禁。
+
+严格解析器的实现与重复键回归为：
+
+```go
+package marketstorage
+
+import (
+    "encoding/hex"
+    "encoding/json"
+    "errors"
+    "io"
+    "strings"
+)
+
+func parseStoragePrimaryAppKeys(raw string) (map[string]string, error) {
+    decoder := json.NewDecoder(strings.NewReader(raw))
+    token, err := decoder.Token()
+    if err != nil || token != json.Delim('{') {
+        return nil, errors.New("storage app keys must be a JSON object")
+    }
+    keys := make(map[string]string)
+    for decoder.More() {
+        token, err := decoder.Token()
+        appID, ok := token.(string)
+        if err != nil || !ok || strings.TrimSpace(appID) == "" {
+            return nil, errors.New("invalid storage app ID")
+        }
+        if _, duplicate := keys[appID]; duplicate {
+            return nil, errors.New("duplicate storage app ID")
+        }
+        var appKey string
+        if err := decoder.Decode(&appKey); err != nil || len(appKey) != 64 {
+            return nil, errors.New("storage app key must be 64 hex characters")
+        }
+        if _, err := hex.DecodeString(appKey); err != nil {
+            return nil, errors.New("storage app key must be 64 hex characters")
+        }
+        keys[appID] = appKey
+    }
+    if token, err = decoder.Token(); err != nil || token != json.Delim('}') {
+        return nil, errors.New("invalid storage app-key object")
+    }
+    if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+        return nil, errors.New("trailing storage app-key JSON")
+    }
+    return keys, nil
+}
+```
+
+```go
+package marketstorage
+
+import (
+    "strings"
+    "testing"
+)
+
+func TestStoragePrimaryAppKeysRejectDuplicateAppID(t *testing.T) {
+    raw := `{"moox-collector":"` + strings.Repeat("a", 64) +
+        `","moox-collector":"` + strings.Repeat("b", 64) + `"}`
+    keys, err := parseStoragePrimaryAppKeys(raw)
+    if err == nil || keys != nil {
+        t.Fatal("duplicate app ID must fail closed")
+    }
+}
+```
+
+在 writer 构造测试中设置上述重复对象、一个看似合法的 host 主密钥以及计数型 fake client，断言构造失败、没有回退且 RPC 次数为 0；对空值、null、数组、尾随 JSON、非字符串值和缺少 binding app ID 执行相同零 RPC 断言。这里只使用测试凭据，不把真实主密钥写入 fixture。
 - [ ] **7.8c 固定公开 CA 的打包数据路径。** 两套 packager 仅接受公开证书材料，将 EventBus CA 写入 `certs/eventbus-ca.pem`；Go options 新增公开 `EventBusCAPEM`，发布端从已核验的 trust material 显式传入。shell 使用公开 CA 文件参数，不读取私钥或 credential 文件并直接整包复制。环境使用受管 `MOOX_EVENTBUS_NATS_TLS_CA_FILE=certs/eventbus-ca.pem`，不再同时塞同份 Base64 CA；复用 JetStream 已有 file 支持。CLI 删除对这个受管固定路径的无条件拒绝，但继续拒绝 `--env` 指定任意 CA 路径。外部 ZIP 必须包含该路径及合法公开 CA，缺失/私钥 PEM/密码载荷上传前失败。新增两种打包方式的 CA 内容与路径测试、外部 ZIP 缺 CA 拒绝测试，以及最终环境含全部非敏感路径和派生凭据后的预算测试。
 - [ ] **7.9 验证并提交。** 同步修订原“不发布 Completion”及“无 EventBus”断言。预期全部 PASS；提交 `fix(collector): route stockcn timer through period completion lifecycle`。
 
@@ -543,7 +636,7 @@ git diff --check
 - [ ] **8.3 启动真实 Collector SQLite、Runtime 与嵌入式 JetStream。** 测试放在 marketfetch 包内，调用私有 reporter/reconciler 而不新增测试专用生产导出 API。只 fake 外部行情 provider 与 CloudNode Invoke transport；Tag Metadata、Storage、Gateway、period state、Claim 和 Completion consumer 使用真实实现。动态 loopback 端口、全新 DB、不加载生产凭证、不访问云网络，退出等待所有子进程和 goroutine。
 - [ ] **8.4 覆盖成员冻结场景。** 初始 Universe `{BTC, ETH}`，周期中通过真实 Metadata 标签快照改为 `{BTC}`；当前周期 series snapshot/hash/index/count 不变，下个周期只有 BTC。增加一个 Subject 的双 Provider/Source fixture，验证 series count 与 Universe 去重不同，Marker payload 按 Subject 去重。通过真实 Gateway 发出错绑 series_tag/index 的 Commit，必须拒绝且 bitmap 不推进、不能提前 complete。
 - [ ] **8.5 覆盖失败与 ACK 场景。** ETH 初始 + 3 次失败、BTC 成功，截止前 waiting、截止后仅一个 degraded；ETH failure 必须通过 Gateway/adapter recorded。另测 lost ACK 后跨截止重放 recorded、首次报告超过截止 missed、一个目标 accepted 一个目标 missed、断网 pending 恢复，不允许把 nil error 当整组 ACK。
-- [ ] **8.6 覆盖 Timer 场景。** StockCN 两次 tick 和重启只一个 initial batch；真实 Claim -> wrapped Storage Commit -> EventBus Completion -> 持久 effects。错误 runtime 身份 Completion 零副作用；Collector Claim 不可达零普通 Upsert；publish 失败后超时恢复并最多 3 次 Invoke retry；非交易当前时刻的有效历史目标照常 Commit，空 bars 不算成功。截止后首次 Commit 未接受不能产生 worker success，已成功 bit 的 replay 可以幂等成功。
+- [ ] **8.6 覆盖 Timer 场景。** StockCN 两次 tick 和重启只一个 initial batch；同 function 多个有效周期积压时 oldest-first，两个相同 requestID 的并发 Claim 只返回同一 batch，过期未领取批次可收尾。真实 Claim -> wrapped Storage Commit -> EventBus Completion -> 持久 effects。错误 runtime 身份 Completion 零副作用；Collector Claim 不可达零普通 Upsert；publish 失败后超时恢复并最多 3 次 Invoke retry；非交易当前时刻的有效历史目标照常 Commit，空 bars 不算成功。截止后首次 Commit 未接受不能产生 worker success，已成功 bit 的 replay 可以幂等成功。
 - [ ] **8.7 覆盖终态清理与 marker 不变。** 查询 waiting/NOT_FOUND/网络错误保留 snapshot，真实 complete/degraded 且过期无未决工作才删除。deadline 后重复 Record/Commit/finalizer 不改变 event ID、marker payload、outbox 条数；查询不会创建缺失 period。
 - [ ] **8.8 用脚本强制执行，不接受跳过。** 新脚本用 `mktemp`、trap、启动超时和最终 Wait 管理 helpers；编译二进制到临时目录，设置本地 E2E 开关后运行 `TestPeriodStorageRPCE2E`，检查实际执行并记录每个子场景。测试时使用可控时钟推进截止，不等待真实小时。预期以下 PASS；提交 `test(collector): verify period universe over production rpc boundaries`。
 
@@ -560,6 +653,7 @@ git diff --check
 - Modify: `docs/内置市场行情采集架构.md`、`docs/采集任务管理.md`、`docs/architecture/collector-task-result.md`
 - Modify: `modules/collector/README.md`、`modules/storage/README.md`
 - Modify: `docs/架构总览.md`、`scripts/test/contract/test-docs-architecture.sh`，只修复已核验的 Workspace 模块清单及其数量断言漂移
+- Modify: `docs/策略模块架构设计.md`，仅补回当前发布事件 `LogicalAccountTargetWeightRequested` 的精确名称，不改 Strategy/Trade 行为
 - Create: `docs/ops/collector-period-universe-release.md`
 - Modify: 本计划，逐项附实际执行证据，不提前勾选
 
@@ -568,6 +662,8 @@ git diff --check
 - [ ] **9.3 执行模块级和跨模块门禁。** 当前 review baseline 的局部测试/build 成功不替代新增验收。以下命令必须全部成功并保留日志：
 
 本轮文档检查已发现既存前置失败：`make test-docs-architecture` 报 `docs/架构总览.md missing go.work module: tools/moox-mcp`；当前 `go.work` 实际含 55 个 module，脚本仍要求 54 个。实施时先同步真实模块清单和严格数量断言，保留逐模块覆盖检查；不得删除检查、跳过该门禁或把当前结果记为 PASS。
+
+同一门禁还要求 Strategy 文档出现 `LogicalAccountTargetWeightRequested`，当前文档仅写“完整目标权重事件”；该名称由 `packages/tradeeventpb/trade_events.proto`、`packages/events/registry.go` 和 `modules/strategy/internal/trigger/processor.go` 的实际发布路径共同确认。只补文档名称，不改交易协议。Gateway 部署门禁的固定健康地址断言与实际 `gateway_health_addr` 已漂移，gateway-only fixture 也必须显式关闭独立的 Storage Access、HostAgent；修复测试 fixture 后重新执行完整脚本。不得放宽部署脚本的凭据、组件依赖、健康检查或回滚保护。
 
 ```bash
 go -C modules/collector test -count=1 ./...
@@ -618,6 +714,7 @@ done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 | 网络持续不可用 | pending + 逾期诊断，绝不假 ACK、不声称保证 marker 收录 | Task 5、8 |
 | 部分 WriteTarget missed，其他未决 | 保留逐目标事实，聚合 pending；全确认后才最终归类 | Task 5、8 |
 | Timer 双 tick/重启/午休/周末 | 同有效周期一个 initial manifest，无新 Run 追加 BatchItems | Task 6、8 |
+| Timer 多周期积压与同 requestID 并发 | 有效旧周期优先、同 requestID 只绑定一个 batch；过期 planned 不永久悬挂 | Task 6、8 |
 | Claim 不可达/no_work/身份非法 | 零抓取、零普通 Upsert；已有合法 Claim 可独立完成写入 | Task 6、7、8 |
 | Timer Completion 身份非法 | Batch/Instance/Target/Retry 全部零副作用 | Task 6、8 |
 | wrapped Storage/收盘后有效目标 | 真 period Commit；空 bars 不成功，当前非交易时刻不吞掉重试 | Task 7、8 |
@@ -625,15 +722,21 @@ done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 | 30 天旧快照且 Storage 未确认终态 | 保留；只有匹配终态且无未决工作才有界删除 | Task 4、5、8 |
 | deadline 后任意重复请求 | marker event ID/payload 不变，逻辑 marker/outbox 各一条 | Task 2、8 |
 | SCF 实际合并环境 | 含 EventBus/Gateway/CLS/provider 的最终总字节 <=4096，凭证不入包 | Task 7 |
+| SCF 凭据 JSON 重复键/空值/非法对象 | writer 构造失败、零 RPC、不回退主密钥或占位 app key | Task 7 |
+| 任务持续增删 | 新增失败回执指标不含 Dataset/Task/Subject/retryKey 标签，诊断细节仍持久化 | Task 5 |
 | 无兼容协调切换 | 旧生产者停止、状态和 Schema 前置条件确认，新版本全链路就绪后恢复 | Task 9；需单独上线授权 |
 | 已有 Admin deployment 配置 | 有界差异更新、保留 operator 配置、实际 applied route hash 和正反向 RPC 验证通过 | Task 9；需单独上线授权 |
 
 ## 5. 交付证据要求
 
-本计划在主分支的完成清单仍全部未勾选；独立工作区的中间实现不构成验收。本轮仅完成文档核验，`git diff --check` 通过；上述既存架构文档门禁失败已记录，未在本轮修改业务代码或门禁脚本。执行者对每个完成任务记录：实际修改文件、失败测试观察、修复后命令结果、commit；不能只勾选步骤或引用旧测试成功。
+本计划在主分支的完成清单仍全部未勾选；独立工作区的中间实现不构成验收。本轮仅完成文档核验，未修改业务代码或门禁脚本，也未重跑产品测试、执行部署或重置。既存门禁失败和独立工作区的部分验证分开记录，不引用它们证明本次全部验收通过。执行者对每个完成任务记录：实际修改文件、失败测试观察、修复后命令结果、独立审查结果、commit；不能只勾选步骤或引用旧测试成功。
+
+本轮计划文档检查：`git diff --check` 为 PASS；`make test-docs-architecture` 为 FAIL，首个错误是 `docs/架构总览.md missing go.work module: tools/moox-mcp`，其修复与完整复跑已列入 Task 9。这不是产品功能测试，也不是上线验收。
 
 本地验收报告至少列出 snapshot 身份、三个失败回执分类、Timer first batch 与 retry 次数、Storage 终态和 marker 载荷、清理前后记录数、真实 Gateway/adapter 经过证明。日志必须脱敏。
 
 上线观察与本地执行报告分开保存；没有运行证据的门禁保持未勾选并说明阻断原因，不以构建成功推断生产链路达标。
 
 本轮计划核验已分别由两位独立 `codeCR` Agent 检查 Storage 和 Collector 路径；主 Agent 随后核验了 RowKey/index 绑定、Collector owner 属性、operator-owned route 更新、两套 packager 与 runtime 凭据/CA 消费入口，修订已纳入相应任务。这是计划审查，不替代 Task 9.5 要求的编码完成后新 Agent 代码审查。
+
+本轮最终计划复核还指出 Timer 积压领取顺序、普通 JSON map 无法查重、Dataset 标签无界三项；主 Agent 已核验 assignment、Storage 凭据入口、任务结果身份和标准 JSON decoder 的实际行为，分别补入 Task 6、7、5 及验收矩阵。没有增加另一个运行协议、迁移体系或监控子系统。
