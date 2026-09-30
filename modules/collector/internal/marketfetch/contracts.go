@@ -182,7 +182,8 @@ type sourceStorage interface {
 }
 
 type periodStorage interface {
-	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) error
+	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
+	GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
 	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
 	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) error
 }

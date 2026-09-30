@@ -42,9 +42,8 @@ import (
 var collectorStartedAt = time.Now()
 
 const (
-	marketFetchScheduleTimeout    = 30 * time.Second
-	marketFetchReconcileTimeout   = 30 * time.Second
-	periodSeriesSnapshotRetention = 30 * 24 * time.Hour
+	marketFetchScheduleTimeout  = 30 * time.Second
+	marketFetchReconcileTimeout = 30 * time.Second
 )
 
 // Initialize loads config, initializes persistence, and registers RPC services.
@@ -83,11 +82,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := dbm.ApplySchema(collectorschema.AllSQL()); err != nil {
 		log.ErrorContextf(ctx, "初始化 collector schema 失败: %v", err)
 		return nil, err
-	}
-	if deleted, err := dbm.PeriodSeriesSnapshot().CleanupReportedBefore(ctx, time.Now().UTC().Add(-periodSeriesSnapshotRetention), 1000); err != nil {
-		log.WarnContextf(ctx, "清理 Collector 过期周期采集序列快照 失败: %v", err)
-	} else if deleted > 0 {
-		log.Infof("清理 Collector 过期周期采集序列快照 行数: %d", deleted)
 	}
 	deps, err := Resolve(ctx, cfg)
 	if err != nil {
@@ -552,11 +546,12 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		}
 	}
 	type marketFetchRuntime struct {
-		spaceID     string
-		timerOwned  bool
-		reconciler  *marketfetch.Reconciler
-		scheduler   *marketfetch.Scheduler
-		tickRunning atomic.Bool
+		spaceID              string
+		timerOwned           bool
+		reconciler           *marketfetch.Reconciler
+		scheduler            *marketfetch.Scheduler
+		periodStorageCleanup *marketfetch.PeriodStorageReconciler
+		tickRunning          atomic.Bool
 	}
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
 	for _, spaceID := range spaceIDs {
@@ -580,7 +575,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSymbol:       marketwiring.ResolveSymbol,
 			ResolveSourceID:     marketwiring.DefaultSourceID,
-			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeriesSnapshot: dbm.PeriodSeriesSnapshot(),
+			Tasks:               dbm.Tasks(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Runs: dbm.Runs(), Retries: dbm.FetchRetries(), PeriodSeriesSnapshot: dbm.PeriodSeriesSnapshot(), PeriodStorageStates: dbm.PeriodStorageStates(),
 			// Local Storage RPC uses the resolved Collector target (private IP
 			// when runtime.env was rewritten). SCF invoke payloads keep the
 			// discovered public native gateway so overseas functions still work.
@@ -634,15 +629,21 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			return nil
 		})
 	}
-	for _, runtime := range runtimes {
+	for index := range runtimes {
+		runtime := &runtimes[index]
 		periodMarketType := "spot"
 		if strings.EqualFold(runtime.spaceID, marketfetch.StockCNSpaceID) {
 			periodMarketType = "equity"
 		}
 		periodStorage, storageErr := marketfetch.NewMarketStorageForMarket(deps.StorageRPCGatewayTarget, periodMarketType, "collector")
 		if storageErr != nil {
-			log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled space=%s: %v", runtime.spaceID, storageErr)
+			log.WarnContextf(trpc.BackgroundContext(), "collector Storage period reporter and cleanup disabled space=%s: %v", runtime.spaceID, storageErr)
 			continue
+		}
+		if statusClient, ok := periodStorage.(marketfetch.PeriodStorageStatusClient); ok {
+			runtime.periodStorageCleanup = marketfetch.NewPeriodStorageReconciler(dbm.PeriodSeriesSnapshot(), dbm.PeriodStorageStates(), statusClient, runtime.spaceID)
+		} else {
+			log.WarnContextf(trpc.BackgroundContext(), "collector Storage adapter does not support period status queries; cleanup disabled space=%s", runtime.spaceID)
 		}
 		reporter, ok := periodStorage.(marketfetch.DatasetPeriodReporter)
 		if !ok {
@@ -675,6 +676,16 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 					log.WarnContextf(scheduleCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 				}
 				scheduleCancel()
+				if runtime.periodStorageCleanup != nil {
+					storageCtx, storageCancel := context.WithTimeout(trpc.BackgroundContext(), marketFetchReconcileTimeout)
+					deleted, err := runtime.periodStorageCleanup.Reconcile(storageCtx, time.Now().UTC())
+					if err != nil {
+						log.WarnContextf(storageCtx, "collector Storage period reconciliation failed space=%s: %v", spaceID, err)
+					} else if deleted > 0 {
+						log.Infof("cleaned terminal Collector period snapshots space=%s periods=%d", spaceID, deleted)
+					}
+					storageCancel()
+				}
 				// Crypto is Scheduler/Invoke-owned. Its legacy Timer fleet is retired
 				// during SCF publication, so reconciling Timer assignments here would
 				// incorrectly require a second fleet and emit a false capacity error.

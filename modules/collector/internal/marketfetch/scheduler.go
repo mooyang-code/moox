@@ -72,6 +72,7 @@ type Scheduler struct {
 	Runs                 *store.RunRepository
 	Retries              *store.FetchRetryRepository
 	PeriodSeriesSnapshot *store.PeriodSeriesSnapshotRepository
+	PeriodStorageStates  *store.PeriodStorageStateRepository
 	Invoker              MarketFetchInvoker
 	Storage              func(string, string, string) (Storage, error)
 	StorageTarget        string
@@ -91,21 +92,18 @@ type Scheduler struct {
 	DNSCache              interface {
 		Snapshot() map[string]sources.DNSResolution
 	}
-	Now                             func() time.Time
-	mu                              sync.Mutex
-	lastTaskID                      string
-	lastCleanup                     time.Time
-	lastPeriodSeriesSnapshotCleanup time.Time
-	planStates                      map[string]scheduleState
-	invokeSem                       chan struct{}
+	Now         func() time.Time
+	mu          sync.Mutex
+	lastTaskID  string
+	lastCleanup time.Time
+	planStates  map[string]scheduleState
+	invokeSem   chan struct{}
 }
 
 const (
-	defaultBatchCompletionDeadline      = 70 * time.Second
-	defaultSCFInvokeAttemptTimeout      = 10 * time.Second
-	periodFailureReportingSlack         = 4 * time.Minute
-	periodSeriesSnapshotRetention       = 30 * 24 * time.Hour
-	periodSeriesSnapshotCleanupInterval = time.Minute
+	defaultBatchCompletionDeadline = 70 * time.Second
+	defaultSCFInvokeAttemptTimeout = 10 * time.Second
+	periodFailureReportingSlack    = 4 * time.Minute
 )
 
 // MarketFetchInvoker is the CloudNode list/invoke surface used by the scheduler.
@@ -167,7 +165,6 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
-	s.cleanupExpiredPeriodSeriesSnapshots(ctx, now)
 	if reportErr := s.reportPendingPeriodFailures(ctx, spaceID); reportErr != nil {
 		log.WarnContextf(ctx, "report permanent market fetch period failures failed space=%s: %v", spaceID, reportErr)
 	}
@@ -584,10 +581,24 @@ func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.Collect
 		}
 		snapshot = append(snapshot, &storagepb.DatasetPeriodSeries{SeriesIndex: item.SeriesIndex, SubjectId: item.SubjectID, SeriesTag: collectionItemSeriesTag(task.SpaceID, item)})
 	}
-	return periodClient.EnsureDatasetPeriod(ctx, &storagepb.DatasetPeriodExpectation{
+	expectation := &storagepb.DatasetPeriodExpectation{
 		SpaceId: task.SpaceID, DatasetId: items[0].DatasetID, Frequency: periodFrequency,
 		PeriodTime: period.UTC().Unix(), SeriesHash: items[0].SeriesHash, ExpectedCount: items[0].ExpectedCount, DeadlineAt: deadline.Unix(), SeriesSnapshot: snapshot,
-	})
+	}
+	state, err := periodClient.EnsureDatasetPeriod(ctx, expectation)
+	if err != nil {
+		return err
+	}
+	expectedKey := domain.PeriodKey{SpaceID: strings.TrimSpace(task.SpaceID), DatasetID: strings.TrimSpace(items[0].DatasetID), Frequency: periodFrequency, PeriodTime: period.UTC()}
+	if strings.TrimSpace(state.Key.SpaceID) != expectedKey.SpaceID || strings.TrimSpace(state.Key.DatasetID) != expectedKey.DatasetID || strings.TrimSpace(state.Key.Frequency) != expectedKey.Frequency || !state.Key.PeriodTime.Equal(expectedKey.PeriodTime) || strings.ToLower(strings.TrimSpace(state.SeriesHash)) != strings.ToLower(strings.TrimSpace(items[0].SeriesHash)) || state.ExpectedCount != items[0].ExpectedCount || state.DeadlineAt.IsZero() {
+		return fmt.Errorf("Storage returned period state that does not match the requested snapshot")
+	}
+	if s.PeriodStorageStates != nil {
+		if err := s.PeriodStorageStates.ObservePeriodStorageState(ctx, state); err != nil {
+			return fmt.Errorf("persist authoritative Storage period state: %w", err)
+		}
+	}
+	return nil
 }
 
 func filterTasksForRunCutoff(tasks []domain.CollectionTask, cutoff time.Time) []domain.CollectionTask {
@@ -1391,21 +1402,6 @@ func (s *Scheduler) reportPendingPeriodFailures(ctx context.Context, spaceID str
 		}
 	}
 	return firstErr
-}
-
-func (s *Scheduler) cleanupExpiredPeriodSeriesSnapshots(ctx context.Context, now time.Time) {
-	if s == nil || s.PeriodSeriesSnapshot == nil || (!s.lastPeriodSeriesSnapshotCleanup.IsZero() && now.Sub(s.lastPeriodSeriesSnapshotCleanup) < periodSeriesSnapshotCleanupInterval) {
-		return
-	}
-	deleted, err := s.PeriodSeriesSnapshot.CleanupReportedBefore(ctx, now.Add(-periodSeriesSnapshotRetention), 1000)
-	if err != nil {
-		log.WarnContextf(ctx, "cleanup expired Collector period series snapshots failed space=%s: %v", s.SpaceID, err)
-		return
-	}
-	s.lastPeriodSeriesSnapshotCleanup = now
-	if deleted > 0 {
-		log.InfoContextf(ctx, "cleaned expired Collector period series snapshot rows space=%s count=%d", s.SpaceID, deleted)
-	}
 }
 
 func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, nodes []scfinvoker.Node, now time.Time) error {

@@ -277,42 +277,174 @@ func TestPeriodSeriesSnapshotContractValidatesEnvelopeAndDistinguishesAbsent(t *
 	require.ErrorContains(t, err, "stored period series snapshot is invalid", "a partial persisted snapshot must not look absent")
 }
 
-func TestCleanupPeriodSeriesSnapshotsDeletesOnlyOldQuiescentPeriodsAndIsBounded(t *testing.T) {
+func TestPeriodSeriesSnapshotCleanupRequiresStorageTerminalState(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
-	oldPeriod := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	recentPeriod := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	_, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(oldPeriod, "BTC-USDT", "ETH-USDT"))
+	oldWithoutReadiness := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	oldWithReadiness := oldWithoutReadiness.Add(time.Minute)
+	_, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(oldWithoutReadiness, "BTC-USDT"))
 	require.NoError(t, err)
-	_, _, err = s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(recentPeriod, "BTC-USDT"))
+	_, _, err = s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(oldWithReadiness, "ETH-USDT"))
 	require.NoError(t, err)
+	// Readiness and age are local signals, not evidence that Storage finalized the period.
+	require.NoError(t, s.db.Exec(`INSERT INTO t_period_readiness (c_space_id, c_dataset_id, c_frequency, c_work_type, c_period_time, c_deadline_at, c_status, c_report_state, c_collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "crypto", "bars", "1m", "collection", oldWithReadiness, oldWithReadiness.Add(time.Minute), domain.PeriodStatusComplete, domain.PeriodReportReported, oldWithReadiness.Add(time.Hour)).Error)
 
-	// An old terminal failure that has not reached Storage must retain its snapshot.
-	oldUnreported := oldPeriod.Add(time.Minute)
-	_, _, err = s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(oldUnreported, "SOL-USDT"))
+	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", oldWithReadiness.Add(24*time.Hour), 1000)
 	require.NoError(t, err)
+	require.Zero(t, deleted)
+	for _, period := range []time.Time{oldWithoutReadiness, oldWithReadiness} {
+		snapshot, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period})
+		require.NoError(t, err)
+		require.True(t, found, "period %s must survive without matching terminal Storage state", period)
+		require.Len(t, snapshot.Entries, 1)
+	}
+}
+
+func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	periods := map[string]time.Time{
+		"complete":          base,
+		"degraded":          base.Add(time.Minute),
+		"waiting":           base.Add(2 * time.Minute),
+		"hash-mismatch":     base.Add(3 * time.Minute),
+		"count-mismatch":    base.Add(4 * time.Minute),
+		"pending-retry":     base.Add(5 * time.Minute),
+		"failed-unreported": base.Add(6 * time.Minute),
+		"planned-batch":     base.Add(7 * time.Minute),
+		"dispatched-batch":  base.Add(8 * time.Minute),
+		"other-space":       base.Add(9 * time.Minute),
+		"recent":            base.Add(48 * time.Hour),
+	}
+	snapshots := make(map[string]domain.PeriodSeriesSnapshot, len(periods))
+	for name, period := range periods {
+		spaceID := "crypto"
+		if name == "other-space" {
+			spaceID = "research"
+		}
+		snapshot := testPeriodSnapshot(period, "BTC-USDT")
+		snapshot.Key.SpaceID = spaceID
+		snapshot.Entries[0].SpaceID = spaceID
+		stored, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
+		require.NoError(t, err)
+		snapshots[name] = stored
+	}
+	for _, name := range []string{"complete", "degraded", "waiting", "hash-mismatch", "count-mismatch", "other-space", "recent", "pending-retry", "failed-unreported", "planned-batch", "dispatched-batch"} {
+		status := domain.PeriodStatusComplete
+		if name == "degraded" {
+			status = domain.PeriodStatusDegraded
+		}
+		if name == "waiting" {
+			status = domain.PeriodStatusWaiting
+		}
+		state := storageStateForSnapshot(snapshots[name], status)
+		switch name {
+		case "hash-mismatch":
+			state.SeriesHash = "different"
+		case "count-mismatch":
+			state.ExpectedCount++
+		}
+		require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, state))
+	}
 	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
-		SpaceID: "crypto", RetryKey: "unreported-period-failure", SubjectID: "SOL-USDT", Frequency: "1m",
-		TargetDataTime: oldUnreported, Status: "permanent_failed", FailureTargetsJSON: "[]", CreateTime: oldUnreported,
+		SpaceID: "crypto", RetryKey: "pending-period", SubjectID: "BTC-USDT", Frequency: "1m",
+		TargetDataTime: periods["pending-retry"], Status: "pending", FailureTargetsJSON: "[]", CreateTime: base,
 	}))
-	require.NoError(t, s.db.Exec(`INSERT INTO t_period_readiness (c_space_id, c_dataset_id, c_frequency, c_work_type, c_period_time, c_deadline_at, c_status, c_report_state, c_collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "crypto", "bars", "1m", "collection", oldPeriod, oldPeriod.Add(time.Minute), domain.PeriodStatusComplete, domain.PeriodReportReported, oldPeriod.Add(time.Hour)).Error)
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "failed-period", SubjectID: "BTC-USDT", Frequency: "1m",
+		TargetDataTime: periods["failed-unreported"], Status: "permanent_failed", FailureTargetsJSON: "[]", CreateTime: base,
+	}))
+	for index, name := range []string{"planned-batch", "dispatched-batch"} {
+		instanceID := "instance-" + name
+		batchID := "batch-" + name
+		targetTime := periods[name]
+		require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+			SpaceID: "crypto", InstanceID: instanceID, SubjectID: "BTC-USDT", Frequency: "1m",
+			TargetDataTime: &targetTime, TaskParams: `{}`,
+		}}))
+		created, err := s.FetchBatches().CreatePlanned(ctx, &domain.BatchInvocation{SpaceID: "crypto", BatchID: batchID, ScheduleID: batchID, BatchKind: domain.BatchKindRealtime, Frequency: "1m", Status: domain.BatchStatusPlanned})
+		require.NoError(t, err)
+		require.True(t, created)
+		require.NoError(t, s.FetchBatches().UpsertItems(ctx, "crypto", batchID, []string{instanceID}))
+		if index == 1 {
+			updated, err := s.FetchBatches().MarkDispatchedToNode(ctx, "crypto", batchID, "req", base.Add(time.Minute), "region", "node", "fn")
+			require.NoError(t, err)
+			require.True(t, updated)
+		}
+	}
 
-	deleted, err := s.PeriodSeriesSnapshot().CleanupReportedBefore(ctx, oldPeriod.Add(24*time.Hour), 1)
+	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", base.Add(24*time.Hour), 1)
 	require.NoError(t, err)
-	require.EqualValues(t, 2, deleted, "the row limit applies to periods so a snapshot is never partially deleted")
-
-	snapshot, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: oldPeriod})
+	require.EqualValues(t, 1, deleted, "limit and return value are measured in whole periods, not snapshot rows")
+	deleted, err = s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", base.Add(24*time.Hour), 1000)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted, "both complete and degraded Storage states permit cleanup")
+	for _, name := range []string{"waiting", "hash-mismatch", "count-mismatch", "pending-retry", "failed-unreported", "planned-batch", "dispatched-batch", "other-space", "recent"} {
+		_, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, snapshots[name].Key)
+		require.NoError(t, err)
+		require.True(t, found, "period %s must remain", name)
+	}
+	_, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, snapshots["complete"].Key)
 	require.NoError(t, err)
 	require.False(t, found)
-	require.Empty(t, snapshot.Entries)
-	snapshot, found, err = s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: oldUnreported})
+	_, found, err = s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, snapshots["degraded"].Key)
 	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, snapshot.Entries, 1)
-	snapshot, found, err = s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: recentPeriod})
+	require.False(t, found)
+	_, found, err = s.PeriodStorageStates().GetPeriodStorageState(ctx, snapshots["complete"].Key)
 	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, snapshot.Entries, 1)
+	require.False(t, found, "terminal state is removed atomically with its period snapshot")
+}
+
+func storageStateForSnapshot(snapshot domain.PeriodSeriesSnapshot, status string) domain.PeriodStorageState {
+	return domain.PeriodStorageState{
+		Key: snapshot.Key, SeriesHash: snapshot.SeriesHash, ExpectedCount: snapshot.ExpectedCount,
+		DeadlineAt: snapshot.Key.PeriodTime.Add(time.Minute), Status: status, ConfirmedAt: snapshot.Key.PeriodTime.Add(2 * time.Minute),
+	}
+}
+
+func TestListPeriodSeriesSnapshotCleanupCandidatesUsesSpaceScopedStableKeyset(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	create := func(spaceID, datasetID, frequency string, at time.Time) {
+		snapshot := testPeriodSnapshot(at, "BTC-USDT")
+		snapshot.Key.SpaceID = spaceID
+		snapshot.Key.DatasetID = datasetID
+		snapshot.Key.Frequency = frequency
+		snapshot.Entries[0].SpaceID = spaceID
+		snapshot.Entries[0].DatasetID = datasetID
+		snapshot.Entries[0].Frequency = frequency
+		_, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
+		require.NoError(t, err)
+	}
+	create("crypto", "bars-b", "1m", period)
+	create("crypto", "bars-a", "1h", period)
+	create("crypto", "bars-a", "1m", period)
+	create("research", "bars-a", "1m", period)
+	create("crypto", "bars-new", "1m", period.Add(48*time.Hour))
+
+	first, err := s.PeriodSeriesSnapshot().ListCleanupCandidates(ctx, "crypto", period.Add(24*time.Hour), nil, 2)
+	require.NoError(t, err)
+	require.Len(t, first.Snapshots, 2)
+	require.NotNil(t, first.Next)
+	require.Equal(t, []string{"bars-a/1h", "bars-a/1m"}, cleanupSnapshotKeys(first.Snapshots))
+	second, err := s.PeriodSeriesSnapshot().ListCleanupCandidates(ctx, "crypto", period.Add(24*time.Hour), first.Next, 2)
+	require.NoError(t, err)
+	require.Equal(t, []string{"bars-b/1m"}, cleanupSnapshotKeys(second.Snapshots))
+	require.NotNil(t, second.Next)
+	wrapped, err := s.PeriodSeriesSnapshot().ListCleanupCandidates(ctx, "crypto", period.Add(24*time.Hour), second.Next, 2)
+	require.NoError(t, err)
+	require.Empty(t, wrapped.Snapshots)
+	require.Nil(t, wrapped.Next)
+}
+
+func cleanupSnapshotKeys(snapshots []domain.PeriodSeriesSnapshot) []string {
+	keys := make([]string, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		keys = append(keys, snapshot.Key.DatasetID+"/"+snapshot.Key.Frequency)
+	}
+	return keys
 }
 
 func testPeriodSnapshot(period time.Time, subjectIDs ...string) domain.PeriodSeriesSnapshot {

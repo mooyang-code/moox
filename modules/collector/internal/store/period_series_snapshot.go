@@ -16,6 +16,17 @@ import (
 
 const maxPeriodSeriesSnapshotCleanupPeriods = 1000
 
+type PeriodSeriesSnapshotCursor struct {
+	PeriodTime time.Time
+	DatasetID  string
+	Frequency  string
+}
+
+type PeriodSeriesSnapshotPage struct {
+	Snapshots []domain.PeriodSeriesSnapshot
+	Next      *PeriodSeriesSnapshotCursor
+}
+
 // ErrPeriodSeriesSnapshotConflict means a period already has a different immutable
 // snapshot.
 var ErrPeriodSeriesSnapshotConflict = errors.New("collector period series snapshot conflict")
@@ -124,12 +135,16 @@ func normalizeAndValidatePeriodSeriesSnapshot(input domain.PeriodSeriesSnapshot)
 	return periodSeriesSnapshotFromEntries(key, entries), nil
 }
 
-func (r *PeriodSeriesSnapshotRepository) CleanupReportedBefore(ctx context.Context, before time.Time, limit int) (int64, error) {
+// ListCleanupCandidates returns expired snapshots in stable per-space keyset
+// order. The cursor points to the last returned key and can be retained in
+// memory by a reconciler between rounds.
+func (r *PeriodSeriesSnapshotRepository) ListCleanupCandidates(ctx context.Context, spaceID string, before time.Time, cursor *PeriodSeriesSnapshotCursor, limit int) (PeriodSeriesSnapshotPage, error) {
 	if r == nil || r.db == nil {
-		return 0, fmt.Errorf("period series repository is not initialized")
+		return PeriodSeriesSnapshotPage{}, fmt.Errorf("period series repository is not initialized")
 	}
-	if before.IsZero() {
-		return 0, fmt.Errorf("period series cleanup cutoff is required")
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" || before.IsZero() {
+		return PeriodSeriesSnapshotPage{}, fmt.Errorf("space_id and period series cleanup cutoff are required")
 	}
 	if limit <= 0 {
 		limit = 100
@@ -137,78 +152,196 @@ func (r *PeriodSeriesSnapshotRepository) CleanupReportedBefore(ctx context.Conte
 	if limit > maxPeriodSeriesSnapshotCleanupPeriods {
 		limit = maxPeriodSeriesSnapshotCleanupPeriods
 	}
-	cutoff := before.UTC()
-	// The retention cutoff is deliberately supplied by bootstrap (30 days) so
-	// period series snapshots outlive SCF callbacks, retries, and upstream recovery. A
-	// direct Storage period has no Collector readiness row; for those periods,
-	// the age cutoff plus absence of in-flight work is the terminal evidence.
-	// Keep any period with unreported readiness or retry failure state.
-	result := r.db.WithContext(ctx).Exec(`
+	query := `SELECT DISTINCT c_space_id, c_dataset_id, c_frequency, c_period_time
+FROM t_collector_task_period_series
+WHERE c_space_id = ? AND c_period_time < ?`
+	args := []any{spaceID, before.UTC()}
+	if cursor != nil {
+		query += ` AND (c_period_time > ? OR (c_period_time = ? AND c_dataset_id > ?) OR (c_period_time = ? AND c_dataset_id = ? AND c_frequency > ?))`
+		args = append(args, cursor.PeriodTime.UTC(), cursor.PeriodTime.UTC(), cursor.DatasetID, cursor.PeriodTime.UTC(), cursor.DatasetID, cursor.Frequency)
+	}
+	query += ` ORDER BY c_period_time, c_dataset_id, c_frequency LIMIT ?`
+	args = append(args, limit)
+	var keys []periodSeriesSnapshotKeyRow
+	if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&keys).Error; err != nil {
+		return PeriodSeriesSnapshotPage{}, err
+	}
+	page := PeriodSeriesSnapshotPage{Snapshots: make([]domain.PeriodSeriesSnapshot, 0, len(keys))}
+	for _, key := range keys {
+		snapshot, found, err := r.GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: key.SpaceID, DatasetID: key.DatasetID, Frequency: key.Frequency, PeriodTime: key.PeriodTime})
+		if err != nil {
+			return PeriodSeriesSnapshotPage{}, err
+		}
+		if !found {
+			continue
+		}
+		page.Snapshots = append(page.Snapshots, snapshot)
+	}
+	if len(page.Snapshots) > 0 {
+		last := page.Snapshots[len(page.Snapshots)-1].Key
+		page.Next = &PeriodSeriesSnapshotCursor{PeriodTime: last.PeriodTime, DatasetID: last.DatasetID, Frequency: last.Frequency}
+	}
+	return page, nil
+}
+
+type periodSeriesSnapshotKeyRow struct {
+	SpaceID    string    `gorm:"column:c_space_id"`
+	DatasetID  string    `gorm:"column:c_dataset_id"`
+	Frequency  string    `gorm:"column:c_frequency"`
+	PeriodTime time.Time `gorm:"column:c_period_time"`
+}
+
+// CleanupTerminalBefore deletes whole old periods only when Storage has
+// confirmed a matching complete/degraded state and no Collector work remains.
+// limit and the returned count are measured in periods, not snapshot rows.
+func (r *PeriodSeriesSnapshotRepository) CleanupTerminalBefore(ctx context.Context, spaceID string, before time.Time, limit int) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("period series repository is not initialized")
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" || before.IsZero() {
+		return 0, fmt.Errorf("space_id and period series cleanup cutoff are required")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > maxPeriodSeriesSnapshotCleanupPeriods {
+		limit = maxPeriodSeriesSnapshotCleanupPeriods
+	}
+	deletedPeriods := int64(0)
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var candidates []periodSeriesSnapshotKeyRow
+		err := tx.Raw(`
+SELECT snapshots.c_space_id, snapshots.c_dataset_id, snapshots.c_frequency, snapshots.c_period_time
+FROM t_collector_task_period_series AS snapshots
+JOIN t_collector_period_storage_states AS storage_state
+  ON storage_state.c_space_id = snapshots.c_space_id
+ AND storage_state.c_dataset_id = snapshots.c_dataset_id
+ AND storage_state.c_frequency = snapshots.c_frequency
+ AND storage_state.c_period_time = snapshots.c_period_time
+ AND storage_state.c_series_hash = snapshots.c_series_hash
+ AND storage_state.c_expected_count = snapshots.c_expected_count
+WHERE snapshots.c_space_id = ? AND snapshots.c_period_time < ?
+  AND storage_state.c_status IN (?, ?)
+  AND NOT EXISTS (
+      SELECT 1
+      FROM t_collector_fetch_retry_items AS retries
+      JOIN t_collector_task_period_series AS retry_snapshot
+        ON retry_snapshot.c_space_id = retries.c_space_id
+       AND retry_snapshot.c_frequency = retries.c_frequency
+       AND retry_snapshot.c_period_time = retries.c_target_data_time
+       AND retry_snapshot.c_subject_id = retries.c_subject_id
+      WHERE retry_snapshot.c_space_id = snapshots.c_space_id
+        AND retry_snapshot.c_dataset_id = snapshots.c_dataset_id
+        AND retry_snapshot.c_frequency = snapshots.c_frequency
+        AND retry_snapshot.c_period_time = snapshots.c_period_time
+        AND (retries.c_status IN ('pending', 'dispatched') OR (retries.c_status = 'permanent_failed' AND retries.c_period_failure_reported = 0))
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM t_collector_fetch_batches AS batches
+      JOIN t_collector_fetch_batch_items AS batch_items
+        ON batch_items.c_space_id = batches.c_space_id AND batch_items.c_batch_id = batches.c_batch_id
+      JOIN t_collector_task_instances AS instances
+        ON instances.c_space_id = batch_items.c_space_id AND instances.c_instance_id = batch_items.c_instance_id
+      JOIN t_collector_task_period_series AS batch_snapshot
+        ON batch_snapshot.c_space_id = instances.c_space_id
+       AND batch_snapshot.c_frequency = instances.c_frequency
+       AND batch_snapshot.c_period_time = instances.c_target_data_time
+       AND batch_snapshot.c_subject_id = instances.c_subject_id
+      WHERE batch_snapshot.c_space_id = snapshots.c_space_id
+        AND batch_snapshot.c_dataset_id = snapshots.c_dataset_id
+        AND batch_snapshot.c_frequency = snapshots.c_frequency
+        AND batch_snapshot.c_period_time = snapshots.c_period_time
+        AND batches.c_status IN ('planned', 'dispatched')
+  )
+GROUP BY snapshots.c_space_id, snapshots.c_dataset_id, snapshots.c_frequency, snapshots.c_period_time,
+         storage_state.c_series_hash, storage_state.c_expected_count
+HAVING COUNT(*) = storage_state.c_expected_count
+ORDER BY snapshots.c_period_time, snapshots.c_dataset_id, snapshots.c_frequency
+LIMIT ?`, spaceID, before.UTC(), domain.PeriodStatusComplete, domain.PeriodStatusDegraded, limit).Scan(&candidates).Error
+		if err != nil {
+			return err
+		}
+		for _, candidate := range candidates {
+			key := domain.PeriodKey{SpaceID: candidate.SpaceID, DatasetID: candidate.DatasetID, Frequency: candidate.Frequency, PeriodTime: candidate.PeriodTime}
+			entries, err := loadPeriodSeriesSnapshotEntries(tx, key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime)
+			if err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				continue
+			}
+			entries, err = normalizeAndValidatePeriodSeriesSnapshotEntries(entries)
+			if err != nil {
+				return fmt.Errorf("stored period series snapshot is invalid: %w", err)
+			}
+			snapshot := periodSeriesSnapshotFromEntries(key, entries)
+			if int(snapshot.ExpectedCount) != len(snapshot.Entries) {
+				return fmt.Errorf("period snapshot %s/%s/%s has inconsistent count", key.SpaceID, key.DatasetID, key.Frequency)
+			}
+			result := tx.Exec(`
 DELETE FROM t_collector_task_period_series
-WHERE (c_space_id, c_dataset_id, c_frequency, c_period_time) IN (
-    SELECT candidates.c_space_id, candidates.c_dataset_id, candidates.c_frequency, candidates.c_period_time
-    FROM t_collector_task_period_series AS candidates
-    WHERE candidates.c_period_time < ?
-      AND (
-          NOT EXISTS (
-              SELECT 1 FROM t_period_readiness AS readiness
-              WHERE readiness.c_space_id = candidates.c_space_id
-                AND readiness.c_dataset_id = candidates.c_dataset_id
-                AND readiness.c_frequency = candidates.c_frequency
-                AND readiness.c_period_time = candidates.c_period_time
-          )
-          OR EXISTS (
-              SELECT 1 FROM t_period_readiness AS readiness
-              WHERE readiness.c_space_id = candidates.c_space_id
-                AND readiness.c_dataset_id = candidates.c_dataset_id
-                AND readiness.c_frequency = candidates.c_frequency
-                AND readiness.c_period_time = candidates.c_period_time
-                AND readiness.c_status IN (?, ?)
-                AND readiness.c_report_state = ?
-                AND readiness.c_collected_at IS NOT NULL
-                AND readiness.c_collected_at < ?
-          )
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM t_collector_fetch_retry_items AS retries
-          JOIN t_collector_task_period_series AS snapshot
-            ON snapshot.c_space_id = retries.c_space_id
-           AND snapshot.c_frequency = retries.c_frequency
-           AND snapshot.c_period_time = retries.c_target_data_time
-           AND snapshot.c_subject_id = retries.c_subject_id
-          WHERE snapshot.c_space_id = candidates.c_space_id
-            AND snapshot.c_dataset_id = candidates.c_dataset_id
-            AND snapshot.c_frequency = candidates.c_frequency
-            AND snapshot.c_period_time = candidates.c_period_time
-            AND (
-                retries.c_status IN ('pending', 'dispatched')
-                OR (retries.c_status = 'permanent_failed' AND retries.c_period_failure_reported = 0)
-            )
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM t_collector_fetch_batches AS batches
-          JOIN t_collector_fetch_batch_items AS batch_items
-            ON batch_items.c_space_id = batches.c_space_id AND batch_items.c_batch_id = batches.c_batch_id
-          JOIN t_collector_task_instances AS instances
-            ON instances.c_space_id = batch_items.c_space_id AND instances.c_instance_id = batch_items.c_instance_id
-          JOIN t_collector_task_period_series AS snapshot
-            ON snapshot.c_space_id = instances.c_space_id
-           AND snapshot.c_frequency = instances.c_frequency
-           AND snapshot.c_period_time = instances.c_target_data_time
-           AND snapshot.c_subject_id = instances.c_subject_id
-          WHERE snapshot.c_space_id = candidates.c_space_id
-            AND snapshot.c_dataset_id = candidates.c_dataset_id
-            AND snapshot.c_frequency = candidates.c_frequency
-            AND snapshot.c_period_time = candidates.c_period_time
-            AND batches.c_status IN ('planned', 'dispatched')
-      )
-    GROUP BY candidates.c_space_id, candidates.c_dataset_id, candidates.c_frequency, candidates.c_period_time
-    ORDER BY MIN(candidates.c_period_time), MIN(candidates.c_ctime)
-    LIMIT ?
-)`, cutoff, domain.PeriodStatusComplete, domain.PeriodStatusDegraded, domain.PeriodReportReported, cutoff, limit)
-	return result.RowsAffected, result.Error
+WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?
+  AND c_series_hash = ? AND c_expected_count = ?
+  AND EXISTS (
+      SELECT 1 FROM t_collector_period_storage_states AS state
+      WHERE state.c_space_id = ? AND state.c_dataset_id = ? AND state.c_frequency = ? AND state.c_period_time = ?
+        AND state.c_series_hash = ? AND state.c_expected_count = ? AND state.c_status IN (?, ?)
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM t_collector_fetch_retry_items AS retries
+      JOIN t_collector_task_period_series AS retry_snapshot
+        ON retry_snapshot.c_space_id = retries.c_space_id
+       AND retry_snapshot.c_frequency = retries.c_frequency
+       AND retry_snapshot.c_period_time = retries.c_target_data_time
+       AND retry_snapshot.c_subject_id = retries.c_subject_id
+      WHERE retry_snapshot.c_space_id = ? AND retry_snapshot.c_dataset_id = ? AND retry_snapshot.c_frequency = ? AND retry_snapshot.c_period_time = ?
+        AND (retries.c_status IN ('pending', 'dispatched') OR (retries.c_status = 'permanent_failed' AND retries.c_period_failure_reported = 0))
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM t_collector_fetch_batches AS batches
+      JOIN t_collector_fetch_batch_items AS batch_items
+        ON batch_items.c_space_id = batches.c_space_id AND batch_items.c_batch_id = batches.c_batch_id
+      JOIN t_collector_task_instances AS instances
+        ON instances.c_space_id = batch_items.c_space_id AND instances.c_instance_id = batch_items.c_instance_id
+      JOIN t_collector_task_period_series AS batch_snapshot
+        ON batch_snapshot.c_space_id = instances.c_space_id
+       AND batch_snapshot.c_frequency = instances.c_frequency
+       AND batch_snapshot.c_period_time = instances.c_target_data_time
+       AND batch_snapshot.c_subject_id = instances.c_subject_id
+      WHERE batch_snapshot.c_space_id = ? AND batch_snapshot.c_dataset_id = ? AND batch_snapshot.c_frequency = ? AND batch_snapshot.c_period_time = ?
+        AND batches.c_status IN ('planned', 'dispatched')
+  )`,
+				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime, snapshot.SeriesHash, snapshot.ExpectedCount,
+				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime, snapshot.SeriesHash, snapshot.ExpectedCount, domain.PeriodStatusComplete, domain.PeriodStatusDegraded,
+				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime,
+				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime,
+			)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				continue
+			}
+			if result.RowsAffected != int64(len(snapshot.Entries)) {
+				return fmt.Errorf("period snapshot cleanup deleted %d rows, expected %d", result.RowsAffected, len(snapshot.Entries))
+			}
+			stateDelete := tx.Exec(`DELETE FROM t_collector_period_storage_states WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ? AND c_series_hash = ? AND c_expected_count = ? AND c_status IN (?, ?)`,
+				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime, snapshot.SeriesHash, snapshot.ExpectedCount, domain.PeriodStatusComplete, domain.PeriodStatusDegraded)
+			if stateDelete.Error != nil {
+				return stateDelete.Error
+			}
+			if stateDelete.RowsAffected != 1 {
+				return fmt.Errorf("period snapshot cleanup could not remove confirmed Storage state")
+			}
+			deletedPeriods++
+		}
+		return nil
+	})
+	return deletedPeriods, err
 }
 
 func loadPeriodSeriesSnapshotEntries(tx *gorm.DB, spaceID, datasetID, frequency string, period time.Time) ([]domain.PeriodSeriesSnapshotEntry, error) {

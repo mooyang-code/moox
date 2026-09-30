@@ -27,10 +27,14 @@ func (*periodFailureRecorderStub) UpsertFields(context.Context, []*storagepb.Row
 	return nil
 }
 
-func (s *periodFailureRecorderStub) EnsureDatasetPeriod(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) error {
+func (s *periodFailureRecorderStub) EnsureDatasetPeriod(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
 	s.ensureCalls++
 	s.ensured = expectation
-	return nil
+	return testPeriodStorageStateFromExpectation(expectation), nil
+}
+
+func (s *periodFailureRecorderStub) GetDatasetPeriodStatus(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
+	return testPeriodStorageStateFromExpectation(expectation), nil
 }
 
 func (*periodFailureRecorderStub) CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error {
@@ -61,6 +65,14 @@ func (s *periodFailureRecorderStub) RecordDatasetPeriodFailures(_ context.Contex
 	s.lastIndexes = append([]uint32(nil), indexes...)
 	s.allIndexes = append(s.allIndexes, indexes...)
 	return s.err
+}
+
+func testPeriodStorageStateFromExpectation(expectation *storagepb.DatasetPeriodExpectation) domain.PeriodStorageState {
+	return domain.PeriodStorageState{
+		Key:        domain.PeriodKey{SpaceID: expectation.GetSpaceId(), DatasetID: expectation.GetDatasetId(), Frequency: expectation.GetFrequency(), PeriodTime: time.Unix(expectation.GetPeriodTime(), 0).UTC()},
+		SeriesHash: expectation.GetSeriesHash(), ExpectedCount: expectation.GetExpectedCount(), DeadlineAt: time.Unix(expectation.GetDeadlineAt(), 0).UTC(),
+		Status: domain.PeriodStatusWaiting, ConfirmedAt: time.Now().UTC(),
+	}
 }
 
 func TestReportPendingPeriodFailuresDrainsLargePeriodBeforeFinalization(t *testing.T) {

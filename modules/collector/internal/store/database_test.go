@@ -42,7 +42,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 		t.Fatalf("ApplySchema() error = %v", err)
 	}
 	require.Equal(t, "t_collector_task_period_series", (&domain.PeriodSeriesSnapshotEntry{}).TableName())
-	for _, table := range []string{"t_collector_tasks", "t_collector_task_tags", "t_collector_task_series", "t_collector_task_period_series", "t_collector_runs", "t_collector_task_instances", "t_collector_instance_write_targets", "t_collector_fetch_batches", "t_collector_fetch_batch_items", "t_collector_fetch_retry_items", "t_period_readiness", "t_period_readiness_items"} {
+	for _, table := range []string{"t_collector_tasks", "t_collector_task_tags", "t_collector_task_series", "t_collector_task_period_series", "t_collector_period_storage_states", "t_collector_runs", "t_collector_task_instances", "t_collector_instance_write_targets", "t_collector_fetch_batches", "t_collector_fetch_batch_items", "t_collector_fetch_retry_items", "t_period_readiness", "t_period_readiness_items"} {
 		var count int64
 		if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {
 			t.Fatalf("query table %s: %v", table, err)
@@ -56,6 +56,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 		"t_collector_task_tags":              {"c_task_id", "c_tag_id"},
 		"t_collector_task_series":            {"c_task_id", "c_series_index", "c_series_key", "c_subject_id", "c_provider", "c_source_id", "c_market_type", "c_provider_symbol", "c_series_tag"},
 		"t_collector_task_period_series":     {"c_space_id", "c_dataset_id", "c_frequency", "c_period_time", "c_series_index", "c_series_key", "c_subject_id", "c_provider", "c_source_id", "c_market_type", "c_provider_symbol", "c_series_tag", "c_series_hash", "c_expected_count", "c_ctime"},
+		"t_collector_period_storage_states":  {"c_space_id", "c_dataset_id", "c_frequency", "c_period_time", "c_series_hash", "c_expected_count", "c_deadline_at", "c_status", "c_confirmed_at"},
 		"t_collector_runs":                   {"c_run_id", "c_run_key", "c_run_type"},
 		"t_collector_task_instances":         {"c_instance_id", "c_run_id", "c_request_key", "c_source_id", "c_series_tag"},
 		"t_collector_instance_write_targets": {"c_write_target_id", "c_instance_id", "c_task_id", "c_dataset_id", "c_series_index", "c_series_hash", "c_expected_count"},
@@ -74,7 +75,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 			}
 		}
 	}
-	for _, index := range []string{"idx_collector_instances_run", "idx_collector_batch_items_instance_batch", "idx_collector_task_period_series_lookup", "idx_collector_task_period_series_key", "idx_collector_task_period_series_retention", "idx_collector_fetch_retry_period_failure"} {
+	for _, index := range []string{"idx_collector_instances_run", "idx_collector_batch_items_instance_batch", "idx_collector_task_period_series_lookup", "idx_collector_task_period_series_key", "idx_collector_task_period_series_retention", "idx_collector_task_period_series_space_retention", "idx_collector_fetch_retry_period_failure"} {
 		var count int64
 		if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?", index).Scan(&count).Error; err != nil {
 			t.Fatalf("query index %s: %v", index, err)

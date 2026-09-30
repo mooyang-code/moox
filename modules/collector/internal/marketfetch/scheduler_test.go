@@ -856,47 +856,6 @@ func TestSchedulerReusesPeriodSeriesSnapshotAfterTagMembershipChangesAndRestart(
 	require.Equal(t, 2, source.resolveSubjectsCalls, "the next period must use the refreshed Storage Tag members")
 }
 
-func TestSchedulerPeriodSeriesSnapshotCleanupRunsAgainAfterItsInterval(t *testing.T) {
-	db := newTestMarketFetchStore(t)
-	ctx := context.Background()
-	now := time.Date(2026, 9, 30, 9, 10, 0, 0, time.UTC)
-	makeSnapshot := func(period time.Time) domain.PeriodSeriesSnapshot {
-		tag := "venue:binance|market:spot|source:spot_http"
-		key := domain.CanonicalSeriesKey("binance", "spot_http", "spot", "BTC-USDT", tag)
-		hash := domain.SeriesSetHash([]string{key})
-		return domain.PeriodSeriesSnapshot{
-			Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period},
-			SeriesHash: hash, ExpectedCount: 1, Entries: []domain.PeriodSeriesSnapshotEntry{{
-				SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period,
-				SeriesIndex: 0, SeriesKey: key, SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http",
-				MarketType: "spot", ProviderSymbol: "BTCUSDT", SeriesTag: tag, SeriesHash: hash, ExpectedCount: 1,
-			}}}
-	}
-	oldPeriod := now.Add(-31 * 24 * time.Hour)
-	_, _, err := db.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, makeSnapshot(oldPeriod))
-	require.NoError(t, err)
-	scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), SpaceID: "crypto"}
-	scheduler.cleanupExpiredPeriodSeriesSnapshots(ctx, now)
-	snapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: oldPeriod})
-	require.NoError(t, err)
-	require.False(t, found)
-	require.Empty(t, snapshot.Entries)
-
-	secondOldPeriod := now.Add(-32 * 24 * time.Hour)
-	_, _, err = db.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, makeSnapshot(secondOldPeriod))
-	require.NoError(t, err)
-	scheduler.cleanupExpiredPeriodSeriesSnapshots(ctx, now.Add(30*time.Second))
-	snapshot, found, err = db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: secondOldPeriod})
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, snapshot.Entries, 1, "cleanup stays throttled between bounded hourly passes")
-	scheduler.cleanupExpiredPeriodSeriesSnapshots(ctx, now.Add(time.Minute))
-	snapshot, found, err = db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: secondOldPeriod})
-	require.NoError(t, err)
-	require.False(t, found)
-	require.Empty(t, snapshot.Entries, "period snapshots are reclaimed by subsequent scheduler ticks")
-}
-
 func periodSeriesSubjectsForScheduler(snapshot domain.PeriodSeriesSnapshot) []string {
 	subjects := make([]string, 0, len(snapshot.Entries))
 	for _, row := range snapshot.Entries {
@@ -1098,9 +1057,12 @@ type recordingPeriodFailureStorage struct {
 func (s *recordingPeriodFailureStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
 	return nil
 }
-func (s *recordingPeriodFailureStorage) EnsureDatasetPeriod(_ context.Context, exp *storagepb.DatasetPeriodExpectation) error {
+func (s *recordingPeriodFailureStorage) EnsureDatasetPeriod(_ context.Context, exp *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
 	s.ensured = append(s.ensured, exp)
-	return nil
+	return testPeriodStorageStateFromExpectation(exp), nil
+}
+func (s *recordingPeriodFailureStorage) GetDatasetPeriodStatus(_ context.Context, exp *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
+	return testPeriodStorageStateFromExpectation(exp), nil
 }
 func (s *recordingPeriodFailureStorage) CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error {
 	return nil
@@ -1124,7 +1086,7 @@ func TestSchedulerEnsurePeriodUsesPersistedSeriesTags(t *testing.T) {
 				items = []domain.CollectionItem{{SubjectID: "600000.XSHG", DatasetID: "bars", Provider: "sina", SourceID: "stockcn", MarketType: "equity", Symbol: "sh600000"}}
 			}
 			storage := &recordingPeriodFailureStorage{}
-			scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+			scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
 			materialized, _, err := scheduler.materializeTaskSeries(ctx, task, items)
 			require.NoError(t, err)
 			snapshot, err := periodSeriesSnapshotFromItems(task, "bars", "1m", period, materialized)
@@ -1136,6 +1098,12 @@ func TestSchedulerEnsurePeriodUsesPersistedSeriesTags(t *testing.T) {
 			require.NoError(t, scheduler.ensureDatasetPeriod(ctx, task, loaded, "1m", period, period.Add(time.Minute)))
 			require.Len(t, storage.ensured, 1)
 			expectation := storage.ensured[0]
+			persisted, found, err := db.PeriodStorageStates().GetPeriodStorageState(ctx, domain.PeriodKey{SpaceID: space, DatasetID: "bars", Frequency: "1m", PeriodTime: period})
+			require.NoError(t, err)
+			require.True(t, found, "a successful Ensure response is persisted as authoritative Storage state")
+			require.Equal(t, expectation.GetSeriesHash(), persisted.SeriesHash)
+			require.Equal(t, expectation.GetExpectedCount(), persisted.ExpectedCount)
+			require.Equal(t, time.Unix(expectation.GetDeadlineAt(), 0).UTC(), persisted.DeadlineAt)
 			require.Equal(t, snapshot.ExpectedCount, expectation.GetExpectedCount())
 			require.Equal(t, snapshot.SeriesHash, expectation.GetSeriesHash())
 			require.Len(t, expectation.GetSeriesSnapshot(), len(snapshot.Entries))
@@ -1182,7 +1150,7 @@ func assertPeriodFrequencyIsPreservedAcrossCollectorContracts(t *testing.T, freq
 	item := domain.CollectionItem{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", Provider: "binance", SourceID: "binance_http", MarketType: "spot", DataType: "kline", Frequency: frequency, TargetDataTime: period.Format(time.RFC3339Nano)}
 	db := newTestMarketFetchStore(t)
 	storage := &recordingPeriodFailureStorage{}
-	scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
+	scheduler := &Scheduler{PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(), StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
 	materialized, _, err := scheduler.materializeTaskSeries(ctx, task, []domain.CollectionItem{item})
 	require.NoError(t, err)
 	snapshot, err := periodSeriesSnapshotFromItems(task, "bars", frequency, period, materialized)

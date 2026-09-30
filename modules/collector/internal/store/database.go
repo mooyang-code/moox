@@ -24,6 +24,7 @@ type Store struct {
 	fetchRetries         *FetchRetryRepository
 	periods              *PeriodReadinessRepository
 	periodSeriesSnapshot *PeriodSeriesSnapshotRepository
+	periodStorageStates  *PeriodStorageStateRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -147,6 +148,7 @@ func Open(opts *Options) (*Store, error) {
 	s.fetchRetries = NewFetchRetryRepository(db)
 	s.periods = NewPeriodReadinessRepository(db)
 	s.periodSeriesSnapshot = NewPeriodSeriesSnapshotRepository(db)
+	s.periodStorageStates = NewPeriodStorageStateRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -200,6 +202,14 @@ func (s *Store) PeriodSeriesSnapshot() *PeriodSeriesSnapshotRepository {
 	return s.periodSeriesSnapshot
 }
 
+// PeriodStorageStates returns the authoritative Storage observation repository.
+func (s *Store) PeriodStorageStates() *PeriodStorageStateRepository {
+	if s == nil {
+		return nil
+	}
+	return s.periodStorageStates
+}
+
 // ApplySchema applies schema SQL during service startup.
 func (s *Store) ApplySchema(sql string) error {
 	if s == nil || s.db == nil {
@@ -249,6 +259,10 @@ func (s *Store) rejectLegacySchema() error {
 			"c_id", "c_space_id", "c_dataset_id", "c_frequency", "c_period_time", "c_series_index", "c_series_key",
 			"c_subject_id", "c_provider", "c_source_id", "c_market_type", "c_provider_symbol", "c_series_tag",
 			"c_series_hash", "c_expected_count", "c_ctime",
+		},
+		"t_collector_period_storage_states": {
+			"c_space_id", "c_dataset_id", "c_frequency", "c_period_time", "c_series_hash",
+			"c_expected_count", "c_deadline_at", "c_status", "c_confirmed_at",
 		},
 		"t_collector_runs": {
 			"c_id", "c_space_id", "c_run_id", "c_run_key", "c_run_type", "c_frequency",

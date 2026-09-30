@@ -99,6 +99,24 @@ ON t_collector_task_period_series (c_space_id, c_dataset_id, c_frequency, c_peri
 CREATE INDEX IF NOT EXISTS idx_collector_task_period_series_retention
 ON t_collector_task_period_series (c_period_time, c_space_id, c_dataset_id, c_frequency);
 
+CREATE INDEX IF NOT EXISTS idx_collector_task_period_series_space_retention
+ON t_collector_task_period_series (c_space_id, c_period_time, c_dataset_id, c_frequency);
+
+CREATE TABLE IF NOT EXISTS t_collector_period_storage_states (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_period_time DATETIME NOT NULL,
+    c_series_hash TEXT NOT NULL,
+    c_expected_count INTEGER NOT NULL,
+    c_deadline_at DATETIME NOT NULL,
+    c_status TEXT NOT NULL,
+    c_confirmed_at DATETIME NOT NULL,
+    CHECK (c_expected_count > 0),
+    CHECK (c_status IN ('waiting', 'complete', 'degraded')),
+    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_period_time)
+);
+
 CREATE TABLE IF NOT EXISTS t_collector_runs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
