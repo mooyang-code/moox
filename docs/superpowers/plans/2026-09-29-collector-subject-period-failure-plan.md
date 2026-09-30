@@ -1,6 +1,6 @@
 # Collector 标签标的与周期降级优化实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal：** 让 `moox-collector-subject` 成为外部标的列表的唯一刷新者；Collector 只读取 Storage 标签成员生成采集任务；SCF 标的请求在初次请求及最多 3 次重试后终态失败，但不提前结束周期，周期到 deadline 后发布 `degraded` 事件并列出失败标的。
 
@@ -42,11 +42,11 @@
 - Modify: `modules/collector/internal/store/task_series_test.go`
 - Modify: `modules/storage/internal/service/datanode/pebble/period_progress_test.go`
 
-- [ ] 增加验证场景：Storage 标签成员在周期中从 `{BTC, ETH}` 变为 `{BTC}` 后，已存在的该周期 roster、series hash、index 和 expected count 不变。
-- [ ] 增加验证场景：下一个周期首次创建 roster 时读取更新后的 `{BTC}` 集合。
-- [ ] 增加验证场景：同一周期并发创建只保留一个 roster；重复创建相同 roster 幂等；不同 roster 不得静默覆盖已创建周期。
-- [ ] 增加验证场景：SCF 重试耗尽的标的被记录为失败，但 period 状态在 deadline 前仍是 `waiting`；到 deadline 发出且仅发出一次 `degraded` marker。
-- [ ] 增加验证场景：失败标的在 deadline 前迟到成功后，从失败集合清除；若所有 series 成功，周期以 `complete` 结束。
+- [x] 增加验证场景：Storage 标签成员在周期中从 `{BTC, ETH}` 变为 `{BTC}` 后，已存在的该周期 roster、series hash、index 和 expected count 不变。
+- [x] 增加验证场景：下一个周期首次创建 roster 时读取更新后的 `{BTC}` 集合。
+- [x] 增加验证场景：同一周期并发创建只保留一个 roster；重复创建相同 roster 幂等；不同 roster 不得静默覆盖已创建周期。
+- [x] 增加验证场景：SCF 重试耗尽的标的被记录为失败，但 period 状态在 deadline 前仍是 `waiting`；到 deadline 发出且仅发出一次 `degraded` marker。
+- [x] 增加验证场景：失败标的在 deadline 前迟到成功后，从失败集合清除；若所有 series 成功，周期以 `complete` 结束。
 
 ### Task 2：持久化 Collector 周期 roster
 
@@ -59,10 +59,10 @@
 - Modify: `modules/collector/internal/store/database.go`
 - Modify: `modules/collector/internal/store/database_test.go`
 
-- [ ] 新增 period series row，字段至少包括 `space_id`、`dataset_id`、`frequency`、`period_time`、`series_index`、`series_key`、`subject_id`、`provider`、`source_id`、`market_type`、`provider_symbol`、`series_tag`、`series_hash`、`expected_count` 和创建时间。
-- [ ] 为 `(space_id, dataset_id, frequency, period_time, series_index)` 建唯一约束，并为同一 period 的 `series_key` 建唯一约束；确保 index 从 0 开始连续，hash 由规范排序后的完整 series key 集合计算。
-- [ ] 在仓储中实现 `GetPeriodSeries`、`CreatePeriodSeriesIfAbsent` 和有界过期清理。并发首建采用事务及唯一约束仲裁；已有周期只返回已保存 roster，不覆盖它。
-- [ ] 将新表加入 Collector Schema 加载、完整性校验和测试数据库列表。清理只删除已越过保留期的已终态周期，保留时间覆盖 SCF 回调、重试和 period 上报窗口。
+- [x] 新增 period series row，字段至少包括 `space_id`、`dataset_id`、`frequency`、`period_time`、`series_index`、`series_key`、`subject_id`、`provider`、`source_id`、`market_type`、`provider_symbol`、`series_tag`、`series_hash`、`expected_count` 和创建时间。
+- [x] 为 `(space_id, dataset_id, frequency, period_time, series_index)` 建唯一约束，并为同一 period 的 `series_key` 建唯一约束；确保 index 从 0 开始连续，hash 由规范排序后的完整 series key 集合计算。
+- [x] 在仓储中实现 `GetPeriodSeries`、`CreatePeriodSeriesIfAbsent` 和有界过期清理。并发首建采用事务及唯一约束仲裁；已有周期只返回已保存 roster，不覆盖它。
+- [x] 将新表加入 Collector Schema 加载、完整性校验和测试数据库列表。清理只删除已越过保留期的已终态周期，保留时间覆盖 SCF 回调、重试和 period 上报窗口。
 
 ### Task 3：调度只消费标签快照并复用周期 roster
 
@@ -71,11 +71,11 @@
 - Inspect: `modules/collector/internal/planner/storagesource/source.go`
 - Modify: `modules/collector/internal/marketfetch/scheduler_test.go`
 
-- [ ] 保留 `DatasetSource.ResolveSubjects` 对 Storage 的只读请求；确认 Scheduler 和 SCF worker 没有调用 `SubjectLister` / 外部行情源标的列表 API。
-- [ ] 在每个 Dataset/frequency/period 首次 planning 时，从 Storage 解析标签成员、展开 Provider symbol、规范化并创建 period roster，然后用该 roster 生成该周期的实例、write target、`series_index`、`series_hash` 和 `expected_count`。
-- [ ] 同周期后续 planning、retry 和重启恢复必须读取 period roster；不得再次用当前标签成员替换 roster，也不得因为 subject-sync 刷新造成同周期 expectation conflict。
-- [ ] 新周期重新读取 Storage 当前 active tag members，使成功的 subject snapshot 变更从下一周期生效。
-- [ ] 任务没有可采集成员或解析失败时，按现有任务错误路径记录原因，不创建伪造的空 roster；该错误不能中断同一调度轮次中的其它任务。
+- [x] 保留 `DatasetSource.ResolveSubjects` 对 Storage 的只读请求；确认 Scheduler 和 SCF worker 没有调用 `SubjectLister` / 外部行情源标的列表 API。
+- [x] 在每个 Dataset/frequency/period 首次 planning 时，从 Storage 解析标签成员、展开 Provider symbol、规范化并创建 period roster，然后用该 roster 生成该周期的实例、write target、`series_index`、`series_hash` 和 `expected_count`。
+- [x] 同周期后续 planning、retry 和重启恢复必须读取 period roster；不得再次用当前标签成员替换 roster，也不得因为 subject-sync 刷新造成同周期 expectation conflict。
+- [x] 新周期重新读取 Storage 当前 active tag members，使成功的 subject snapshot 变更从下一周期生效。
+- [x] 任务没有可采集成员或解析失败时，按现有任务错误路径记录原因，不创建伪造的空 roster；该错误不能中断同一调度轮次中的其它任务。
 
 ### Task 4：将重试耗尽记录为周期失败，不提前 finalize
 
@@ -85,10 +85,10 @@
 - Inspect: `modules/collector/internal/domain/fetch_batch.go`
 - Modify: `modules/collector/internal/marketfetch/scheduler_test.go`
 
-- [ ] 明确重试次数语义为初始请求后最多再重试 3 次；重试计数达到上限后，将 instance/retry 标记为 `permanent_failed`，保存最后错误类型和摘要，不再重新排队。
-- [ ] 将终态失败关联到其固定的 dataset/frequency/period 和 subject ID，并通过 Storage 适配器提交幂等失败标记；相同 subject 重复上报不重复计数。
-- [ ] 失败标记不得调用 Ensure 时改写 expected count，不得设置成功 bitmap，不得触发立即 finalize，也不得改动标签成员；其它待执行标的继续 dispatch。
-- [ ] 记录 late callback 的收敛规则：period 尚在 waiting 且写入成功时成功 bitmap 生效并撤销该 subject 的失败标记；period 已终结时遵循 Storage 既有终态规则，不重发或改写 marker。
+- [x] 明确重试次数语义为初始请求后最多再重试 3 次；重试计数达到上限后，将 instance/retry 标记为 `permanent_failed`，保存最后错误类型和摘要，不再重新排队。
+- [x] 将终态失败关联到其固定的 dataset/frequency/period 和 subject ID，并通过 Storage 适配器提交幂等失败标记；相同 subject 重复上报不重复计数。
+- [x] 失败标记不得调用 Ensure 时改写 expected count，不得设置成功 bitmap，不得触发立即 finalize，也不得改动标签成员；其它待执行标的继续 dispatch。
+- [x] 记录 late callback 的收敛规则：period 尚在 waiting 且写入成功时成功 bitmap 生效并撤销该 subject 的失败标记；period 已终结时遵循 Storage 既有终态规则，不重发或改写 marker。
 
 ### Task 5：Storage 保存 period universe / 失败标的并到期发布
 
@@ -101,11 +101,11 @@
 - Modify: `modules/storage/internal/service/datanode/pebble/period_progress.go`
 - Modify: `modules/storage/internal/service/datanode/pebble/period_progress_test.go`
 
-- [ ] `DatasetPeriodExpectation` 接收按 `series_index` 排序的 roster（每项包含 `series_index` 与 `subject_id`）；校验 roster 项数等于 `expected_count`、索引连续、subject ID 非空。marker 的 `universe_subject_ids` 按 Subject 去重，因为一个 Subject 可对应多个 Provider series。重复 Ensure 必须同时匹配已保存 roster，重试不得用不同 roster 覆盖已初始化周期；SCF commit 仍使用现有轻量 identity（不重复携带整份 roster）。
-- [ ] 新增 DataNode / Primary 的 `RecordDatasetPeriodFailures` 请求；请求携带同一 expectation identity 和失败 `series_index`。Storage 只接受 roster 中存在且仍处于 waiting 的 series，重复请求幂等，并将失败 index 持久化在 period state 中。
-- [ ] 成功 commit 对应的 `series_index` 时，清除该 index 的失败状态并推进既有 bitmap；marker 汇总 `failed_subjects` 时将未成功的失败 index 映射到 Subject ID 后去重；不得因失败记录让 period 提前终结。
-- [ ] deadline finalizer 继续以 bitmap 完整性决定 `complete` / `degraded`：未完成的 period 到 deadline 进入 `degraded`，marker 带完整 universe 和显式失败 subject IDs；只有所有 bit 成功时进入 `complete`。
-- [ ] 确保 marker/outbox 的 event ID 与 payload 幂等；同一 period 的重试不能发布冲突 payload 或重复事件。
+- [x] `DatasetPeriodExpectation` 接收按 `series_index` 排序的 roster（每项包含 `series_index` 与 `subject_id`）；校验 roster 项数等于 `expected_count`、索引连续、subject ID 非空。marker 的 `universe_subject_ids` 按 Subject 去重，因为一个 Subject 可对应多个 Provider series。重复 Ensure 必须同时匹配已保存 roster，重试不得用不同 roster 覆盖已初始化周期；SCF commit 仍使用现有轻量 identity（不重复携带整份 roster）。
+- [x] 新增 DataNode / Primary 的 `RecordDatasetPeriodFailures` 请求；请求携带同一 expectation identity 和失败 `series_index`。Storage 只接受 roster 中存在且仍处于 waiting 的 series，重复请求幂等，并将失败 index 持久化在 period state 中。
+- [x] 成功 commit 对应的 `series_index` 时，清除该 index 的失败状态并推进既有 bitmap；marker 汇总 `failed_subjects` 时将未成功的失败 index 映射到 Subject ID 后去重；不得因失败记录让 period 提前终结。
+- [x] deadline finalizer 继续以 bitmap 完整性决定 `complete` / `degraded`：未完成的 period 到 deadline 进入 `degraded`，marker 带完整 universe 和显式失败 subject IDs；只有所有 bit 成功时进入 `complete`。
+- [x] 确保 marker/outbox 的 event ID 与 payload 幂等；同一 period 的重试不能发布冲突 payload 或重复事件。
 
 ### Task 6：确认唯一标的列表刷新链路与验收
 
@@ -116,12 +116,12 @@
 - Inspect: `config/setup/metadata.yaml`
 - Modify only if a remaining legacy list refresh is found: related seed/config and its obsolete collector listing code
 
-- [ ] 用全仓搜索确认行情源 instrument listing fetch 只由 `moox-collector-subject` 调用；Collector Scheduler 对标签的读取只到 Storage Metadata 的 `ResolveSubjects`。
-- [ ] 若仍有旧 instrument 类型实时采集任务或另一处列表抓取入口，删除其默认任务/触发配置和无调用方代码；不得删除 K 线采集任务或 `ResolveSubjects` 只读接口。
-- [ ] 执行针对性 Go 测试：`go test ./modules/collector/internal/store ./modules/collector/internal/marketfetch ./modules/storage/internal/service/datanode/pebble ./modules/storage/internal/service/primarystore`。
-- [ ] 执行构建验证：`go build ./modules/collector/cmd/subject ./modules/collector/cmd/server ./modules/storage/cmd/server`。
-- [ ] 做本地端到端验证：先以 `{BTC, ETH}` 创建 1m 周期 roster；刷新 Storage 标签为 `{BTC}`；同一 1m 周期仍沿用 `{BTC, ETH}`；下一周期只含 `{BTC}`；让 ETH 的 SCF 请求耗尽 3 次重试，确认其它标的正常写入、周期在 deadline 前仍 waiting、deadline 后只有一条 `degraded` marker 且 `failed_subjects` 包含 ETH。
-- [ ] 执行 `git diff --check`，并检查 `rg -n "FetchSnapshot|NewSubjectListers|ResolveSubjects" modules/collector/internal` 的调用边界，确认源列表抓取未泄漏到 Scheduler。
+- [x] 用全仓搜索确认行情源 instrument listing fetch 只由 `moox-collector-subject` 调用；Collector Scheduler 对标签的读取只到 Storage Metadata 的 `ResolveSubjects`。
+- [x] 若仍有旧 instrument 类型实时采集任务或另一处列表抓取入口，删除其默认任务/触发配置和无调用方代码；不得删除 K 线采集任务或 `ResolveSubjects` 只读接口。
+- [x] 执行针对性 Go 测试：`go test ./modules/collector/internal/store ./modules/collector/internal/marketfetch ./modules/storage/internal/service/datanode/pebble ./modules/storage/internal/service/primarystore`。
+- [x] 执行构建验证：`go build ./modules/collector/cmd/subject ./modules/collector/cmd/server ./modules/storage/cmd/server`。
+- [x] 做本地端到端验证：先以 `{BTC, ETH}` 创建 1m 周期 roster；刷新 Storage 标签为 `{BTC}`；同一 1m 周期仍沿用 `{BTC, ETH}`；下一周期只含 `{BTC}`；让 ETH 的 SCF 请求耗尽 3 次重试，确认其它标的正常写入、周期在 deadline 前仍 waiting、deadline 后只有一条 `degraded` marker 且 `failed_subjects` 包含 ETH。
+- [x] 执行 `git diff --check`，并检查 `rg -n "FetchSnapshot|NewSubjectListers|ResolveSubjects" modules/collector/internal` 的调用边界，确认源列表抓取未泄漏到 Scheduler。
 
 ## 发布顺序
 

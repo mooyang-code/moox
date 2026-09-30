@@ -145,8 +145,10 @@ type RetryItem struct {
 	Frequency        string     `gorm:"column:c_frequency"`
 	TargetDataTime   time.Time  `gorm:"column:c_target_data_time"`
 	TaskJSON         string     `gorm:"column:c_task_json"`
+	FailureTargetsJSON string   `gorm:"column:c_failure_targets_json"`
 	Attempt          int        `gorm:"column:c_attempt"`
 	Status           string     `gorm:"column:c_status"`
+	PeriodFailureReported bool  `gorm:"column:c_period_failure_reported"`
 	NextRetryAt      *time.Time `gorm:"column:c_next_retry_at"`
 	LastErrorType    string     `gorm:"column:c_last_error_type"`
 	LastErrorSummary string     `gorm:"column:c_last_error_summary"`

@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestFetchBatchCompletionLateSuccessOnlyCancelsPendingRetry(t *testing.T) {
@@ -99,6 +100,42 @@ func TestFetchBatchCompletionMarksDispatchedRetryPermanent(t *testing.T) {
 	stored, err := s.FetchRetries().Get(ctx, "crypto", "delisted")
 	require.NoError(t, err)
 	assert.Equal(t, "permanent_failed", stored.Status)
+}
+
+func TestPermanentRetryFailurePersistsUntilReportedAndMarksRuntimeFailed(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task-a", TaskName: "Task A", DataType: "kline", Enabled: true}))
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "instance-a", SubjectID: "ETH-USDT", Frequency: "1m", TaskParams: `{}`}}))
+	require.NoError(t, s.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{ID: "target-a", SpaceID: "crypto", InstanceID: "instance-a", TaskID: "task-a", DatasetID: "bars", Status: "pending"}}))
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "retry-a", InstanceID: "instance-a", SubjectID: "ETH-USDT", Frequency: "1m",
+		TargetDataTime: now, FailureTargetsJSON: `[{"dataset_id":"bars"}]`, Status: "pending", Attempt: 3,
+	}))
+
+	require.NoError(t, s.FetchRetries().MarkPermanent(ctx, "crypto", "retry-a", "retry_budget_exhausted", "upstream timed out"))
+	retry, err := s.FetchRetries().Get(ctx, "crypto", "retry-a")
+	require.NoError(t, err)
+	require.Equal(t, "permanent_failed", retry.Status)
+	require.Equal(t, "retry_budget_exhausted", retry.LastErrorType)
+	require.Nil(t, retry.NextRetryAt)
+	instance, err := s.TaskInstances().Get(ctx, "crypto", "instance-a")
+	require.NoError(t, err)
+	require.Equal(t, domain.InstanceStatusFailed, instance.LastExecStatus)
+	target, err := s.TaskInstances().GetWriteTarget(ctx, "crypto", "target-a")
+	require.NoError(t, err)
+	require.Equal(t, "failed", target.Status)
+
+	// A stale cleanup pass must preserve the row until Storage acknowledges it.
+	require.NoError(t, s.db.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_retry_key = ?", "crypto", "retry-a").Update("c_mtime", now.Add(-8*24*time.Hour)).Error)
+	require.NoError(t, s.FetchRetries().Cleanup(ctx, now.Add(-7*24*time.Hour)))
+	_, err = s.FetchRetries().Get(ctx, "crypto", "retry-a")
+	require.NoError(t, err)
+	require.NoError(t, s.FetchRetries().MarkPeriodFailureReported(ctx, "crypto", "retry-a"))
+	require.NoError(t, s.FetchRetries().Cleanup(ctx, now.Add(time.Hour)))
+	_, err = s.FetchRetries().Get(ctx, "crypto", "retry-a")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
 func TestFetchBatchCompletionSupersedesOlderPendingRetry(t *testing.T) {

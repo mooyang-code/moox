@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -29,6 +30,11 @@ func TestProviderProbeMarksUnsupportedExchangeWithoutCallingFeed(t *testing.T) {
 	entry := unsupportedExchangeEntry("tencent", "920000.XBSE", "bj920000")
 	require.NoError(t, entry.Validate())
 	require.Equal(t, "unsupported_exchange", entry.ErrorKind)
+}
+
+func TestProviderProbeRejectsInstrumentFeed(t *testing.T) {
+	err := run(context.Background(), probeArgs{Feed: "instrument"})
+	require.ErrorContains(t, err, "--feed")
 }
 
 type testProbeProvider struct{}

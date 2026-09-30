@@ -50,6 +50,11 @@ type WriteTargetStatusEffect struct {
 	Attempt       int
 }
 
+type RetryTerminalError struct {
+	ErrorType    string
+	ErrorSummary string
+}
+
 type FetchCompletionEffects struct {
 	WriteTargetUpdates []WriteTargetStatusEffect
 	Retries            []*domain.RetryItem
@@ -59,6 +64,7 @@ type FetchCompletionEffects struct {
 	// dispatched so that its own completion can win the race.
 	CancelPendingRetryKeys []string
 	PermanentRetryKeys     []string
+	PermanentRetryErrors   map[string]RetryTerminalError
 	// SupersedePendingRetries retires older retry work after a newer realtime
 	// success. It also covers already-dispatched retries: their completion is
 	// still recorded, but must not regress the current task state.
@@ -273,9 +279,12 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 				Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_retry_key"}},
 				DoUpdates: clause.Assignments(map[string]any{
 					"c_source_batch_id": clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"}, "c_batch_kind": clause.Expr{SQL: "excluded.c_batch_kind"}, "c_attempt": clause.Expr{SQL: "excluded.c_attempt"},
+					"c_instance_id": clause.Expr{SQL: "excluded.c_instance_id"}, "c_write_target_id": clause.Expr{SQL: "excluded.c_write_target_id"}, "c_retry_scope": clause.Expr{SQL: "excluded.c_retry_scope"},
+					"c_subject_id": clause.Expr{SQL: "excluded.c_subject_id"}, "c_frequency": clause.Expr{SQL: "excluded.c_frequency"}, "c_target_data_time": clause.Expr{SQL: "excluded.c_target_data_time"}, "c_task_json": clause.Expr{SQL: "excluded.c_task_json"},
 					"c_status": clause.Expr{SQL: "CASE WHEN c_status IN ('succeeded', 'permanent_failed') THEN c_status ELSE excluded.c_status END"}, "c_next_retry_at": clause.Expr{SQL: "excluded.c_next_retry_at"},
 					"c_last_error_type": clause.Expr{SQL: "excluded.c_last_error_type"}, "c_last_error_summary": clause.Expr{SQL: "excluded.c_last_error_summary"},
-					"c_mtime": clause.Expr{SQL: "excluded.c_mtime"},
+					"c_failure_targets_json": clause.Expr{SQL: "CASE WHEN c_failure_targets_json <> '' AND c_failure_targets_json <> '[]' THEN c_failure_targets_json ELSE excluded.c_failure_targets_json END"},
+					"c_mtime":                clause.Expr{SQL: "excluded.c_mtime"},
 				}),
 			}).Create(item).Error; err != nil {
 				return err
@@ -294,7 +303,12 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			}
 		}
 		for _, key := range effects.PermanentRetryKeys {
-			if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_retry_key = ?", batch.SpaceID, key).Updates(map[string]any{"c_status": "permanent_failed", "c_mtime": time.Now().UTC()}).Error; err != nil {
+			updates := map[string]any{"c_status": "permanent_failed", "c_mtime": time.Now().UTC()}
+			if terminal, ok := effects.PermanentRetryErrors[key]; ok {
+				updates["c_last_error_type"] = terminal.ErrorType
+				updates["c_last_error_summary"] = terminal.ErrorSummary
+			}
+			if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_retry_key = ?", batch.SpaceID, key).Updates(updates).Error; err != nil {
 				return err
 			}
 		}

@@ -15,6 +15,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -69,6 +70,7 @@ type Scheduler struct {
 	Batches             *store.FetchBatchRepository
 	Runs                *store.RunRepository
 	Retries             *store.FetchRetryRepository
+	PeriodSeries        *store.TaskPeriodSeriesRepository
 	Invoker             MarketFetchInvoker
 	Storage             func(string, string, string) (Storage, error)
 	StorageTarget       string
@@ -88,17 +90,21 @@ type Scheduler struct {
 	DNSCache              interface {
 		Snapshot() map[string]sources.DNSResolution
 	}
-	Now         func() time.Time
-	mu          sync.Mutex
-	lastTaskID  string
-	lastCleanup time.Time
-	planStates  map[string]scheduleState
-	invokeSem   chan struct{}
+	Now                     func() time.Time
+	mu                      sync.Mutex
+	lastTaskID              string
+	lastCleanup             time.Time
+	lastPeriodSeriesCleanup time.Time
+	planStates              map[string]scheduleState
+	invokeSem               chan struct{}
 }
 
 const (
 	defaultBatchCompletionDeadline = 70 * time.Second
 	defaultSCFInvokeAttemptTimeout = 10 * time.Second
+	periodFailureReportingSlack    = 4 * time.Minute
+	periodSeriesRetention          = 30 * 24 * time.Hour
+	periodSeriesCleanupInterval    = time.Minute
 )
 
 // MarketFetchInvoker is the CloudNode list/invoke surface used by the scheduler.
@@ -111,6 +117,13 @@ type MarketFetchInvoker interface {
 func batchCompletionDeadline(kind domain.BatchKind) time.Duration {
 	_ = kind
 	return defaultBatchCompletionDeadline
+}
+
+func datasetPeriodCompletionWindow(kind domain.BatchKind) time.Duration {
+	// Leave room for the initial request, all three retries, each bounded SCF
+	// completion window, and the final failure report. Two minutes cover the
+	// scheduler tick delay between backoff expiry and retry dispatch.
+	return 5*batchCompletionDeadline(kind) + retryDelay(1) + retryDelay(2) + retryDelay(3) + periodFailureReportingSlack
 }
 
 func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
@@ -153,29 +166,21 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
+	s.cleanupExpiredPeriodSeries(ctx, now)
+	if reportErr := s.reportPendingPeriodFailures(ctx, spaceID); reportErr != nil {
+		log.WarnContextf(ctx, "report permanent market fetch period failures failed space=%s: %v", spaceID, reportErr)
+	}
 	dnsRoutes := s.dnsSnapshot(ctx)
 	allTasks, err := s.Tasks.ListEnabled(ctx, spaceID)
 	if err != nil {
 		return fmt.Errorf("list enabled collection tasks: %w", err)
 	}
-	// Refresh the single durable TaskSeries copy before establishing this
-	// scheduler round's cutoff. If another scheduler already created the Run,
-	// a changed series set receives c_mtime > run.CreateTime and is therefore
-	// deferred to the next Run instead of being appended to this one.
+	// Freeze each current Dataset period before establishing the Run cutoff.
+	// Existing periods are loaded without resolving Tags again, so membership
+	// changes can only affect a period that has not been created yet.
 	expansionCache := newTaskExpansionCache()
-	for _, task := range filterMarketFetchTasks(allTasks) {
-		if _, _, refreshErr := s.expandTaskWithCache(ctx, task, expansionCache); refreshErr != nil {
-			// Metadata failover may finish after the scheduler budget has expired.
-			// Invalidation must still fail closed, so give that small local write an
-			// independent bounded context instead of reusing an already-cancelled one.
-			invalidateCtx, invalidateCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-			invalidateErr := s.Tasks.InvalidateTaskSeries(invalidateCtx, task.SpaceID, task.TaskID)
-			invalidateCancel()
-			if invalidateErr != nil {
-				return fmt.Errorf("refresh task series task=%s: %v; invalidate after refresh failure: %w", task.TaskID, refreshErr, invalidateErr)
-			}
-			log.WarnContextf(ctx, "collection task series refresh failed task=%s; defer until a later run: %v", task.TaskID, refreshErr)
-		}
+	if err := s.prepareCurrentPeriodRosters(ctx, now, filterMarketFetchTasks(allTasks), expansionCache); err != nil {
+		return err
 	}
 	allTasks, err = s.Tasks.ListEnabled(ctx, spaceID)
 	if err != nil {
@@ -271,7 +276,8 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	// out to targets owned by tasks that appear later in the scheduler scan.
 	// Without this pre-pass the result depended on goroutine timing: task A
 	// could reach SCF before task B had attached its WriteTarget.
-	if err := s.primeSharedWriteTargets(ctx, spaceID, currentRunID, runCutoff, now, tasks); err != nil {
+	blockedPeriods, err := s.primeSharedWriteTargets(ctx, spaceID, currentRunID, runCutoff, now, tasks)
+	if err != nil {
 		return err
 	}
 	planned := 0
@@ -299,7 +305,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 		if !matches {
 			return fmt.Errorf("collector run %s became stale before dispatch planning for task %s", currentRunID, task.TaskID)
 		}
-		items, frequencies, err := s.expandTaskForPlanning(ctx, task)
+		frequencies, err := s.taskFrequencies(task)
 		if err != nil {
 			log.WarnContextf(ctx, "skip invalid collection task=%s: %v", task.TaskID, err)
 			continue
@@ -313,9 +319,17 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 			continue
 		}
 		for _, frequency := range frequencies {
+			if _, blocked := blockedPeriods[task.TaskID+"\x00"+frequency]; blocked {
+				continue
+			}
 			target, err := targetDataTime(now, frequency)
 			if err != nil {
 				log.WarnContextf(ctx, "skip task=%s frequency=%s: %v", task.TaskID, frequency, err)
+				continue
+			}
+			items, err := s.expandTaskForPeriod(ctx, task, frequency, target)
+			if err != nil {
+				log.WarnContextf(ctx, "skip task=%s frequency=%s period=%s: %v", task.TaskID, frequency, target.UTC().Format(time.RFC3339), err)
 				continue
 			}
 			frequencyRequestKeys := make([]string, 0, len(items))
@@ -429,22 +443,35 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 			log.WarnContextf(ctx, "market fetch retry cleanup failed: %v", err)
 		}
 	}
+	if len(blockedPeriods) > 0 {
+		keys := make([]string, 0, len(blockedPeriods))
+		for key := range blockedPeriods {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		conflicts := make([]error, 0, len(keys))
+		for _, key := range keys {
+			conflicts = append(conflicts, blockedPeriods[key])
+		}
+		return errors.Join(conflicts...)
+	}
 	return nil
 }
 
-func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID string, runCutoff, now time.Time, tasks []domain.CollectionTask) error {
+func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID string, runCutoff, now time.Time, tasks []domain.CollectionTask) (map[string]error, error) {
+	blockedPeriods := make(map[string]error)
 	if s == nil || s.Instances == nil {
-		return nil
+		return blockedPeriods, nil
 	}
 	for _, task := range tasks {
 		matches, err := s.taskIdentityMatchesRun(ctx, spaceID, task, runCutoff)
 		if err != nil {
-			return fmt.Errorf("check collection task before shared planning: %w", err)
+			return nil, fmt.Errorf("check collection task before shared planning: %w", err)
 		}
 		if !matches {
-			return fmt.Errorf("collector run %s became stale before planning task %s", runID, task.TaskID)
+			return nil, fmt.Errorf("collector run %s became stale before planning task %s", runID, task.TaskID)
 		}
-		items, frequencies, err := s.expandTaskForPlanning(ctx, task)
+		frequencies, err := s.taskFrequencies(task)
 		if err != nil {
 			// Keep the existing scheduler contract: one malformed task must not
 			// block unrelated tasks in the same run.
@@ -462,6 +489,11 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 				log.WarnContextf(ctx, "skip task=%s frequency=%s during shared planning: %v", task.TaskID, frequency, targetErr)
 				continue
 			}
+			items, periodErr := s.expandTaskForPeriod(ctx, task, frequency, target)
+			if periodErr != nil {
+				log.WarnContextf(ctx, "skip task=%s frequency=%s period=%s during shared planning: %v", task.TaskID, frequency, target.UTC().Format(time.RFC3339), periodErr)
+				continue
+			}
 			stateKey := task.TaskID + "\x00" + frequency
 			frequencyFingerprint := taskScheduleFingerprint(items, frequency, target, task.CollectParams)
 			state := s.planStates[stateKey]
@@ -470,13 +502,18 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 			}
 			matches, matchErr := s.taskIdentityMatchesRun(ctx, spaceID, task, runCutoff)
 			if matchErr != nil {
-				return matchErr
+				return nil, matchErr
 			}
 			if !matches {
-				return fmt.Errorf("collector run %s became stale before period initialization for task %s", runID, task.TaskID)
+				return nil, fmt.Errorf("collector run %s became stale before period initialization for task %s", runID, task.TaskID)
 			}
 			if err := s.ensureDatasetPeriod(ctx, task, items, frequency, target, now); err != nil {
-				return fmt.Errorf("ensure dataset period task=%s frequency=%s: %w", task.TaskID, frequency, err)
+				if errors.Is(err, marketstorage.ErrDatasetPeriodConflict) {
+					blockedPeriods[task.TaskID+"\x00"+frequency] = fmt.Errorf("skip collection task for conflicting dataset period task=%s frequency=%s target=%s: %w", task.TaskID, frequency, target.UTC().Format(time.RFC3339), err)
+					log.WarnContextf(ctx, "%v", blockedPeriods[task.TaskID+"\x00"+frequency])
+					continue
+				}
+				return nil, fmt.Errorf("ensure dataset period task=%s frequency=%s: %w", task.TaskID, frequency, err)
 			}
 			instances := make([]domain.TaskInstance, 0, len(items))
 			targets := make([]domain.WriteTarget, 0, len(items))
@@ -507,14 +544,14 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 				})
 			}
 			if err := s.Instances.UpsertMany(ctx, instances); err != nil {
-				return fmt.Errorf("persist shared collection instances task=%s frequency=%s: %w", task.TaskID, frequency, err)
+				return nil, fmt.Errorf("persist shared collection instances task=%s frequency=%s: %w", task.TaskID, frequency, err)
 			}
 			if err := s.Instances.UpsertWriteTargets(ctx, targets); err != nil {
-				return fmt.Errorf("persist shared write targets task=%s frequency=%s: %w", task.TaskID, frequency, err)
+				return nil, fmt.Errorf("persist shared write targets task=%s frequency=%s: %w", task.TaskID, frequency, err)
 			}
 		}
 	}
-	return nil
+	return blockedPeriods, nil
 }
 
 func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.CollectionTask, items []domain.CollectionItem, frequency string, period, now time.Time) error {
@@ -534,10 +571,17 @@ func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.Collect
 	if !ok {
 		return fmt.Errorf("storage client does not support dataset period commits")
 	}
-	deadline := now.UTC().Add(2 * batchCompletionDeadline(batchKindForTask(task)))
+	deadline := now.UTC().Add(datasetPeriodCompletionWindow(batchKindForTask(task)))
+	roster := make([]*storagepb.DatasetPeriodSeries, 0, len(items))
+	for index, item := range items {
+		if item.SeriesIndex != uint32(index) || item.SeriesHash != items[0].SeriesHash || item.ExpectedCount != items[0].ExpectedCount || strings.TrimSpace(item.SubjectID) == "" {
+			return fmt.Errorf("task %s has invalid immutable period roster at index %d", task.TaskID, index)
+		}
+		roster = append(roster, &storagepb.DatasetPeriodSeries{SeriesIndex: item.SeriesIndex, SubjectId: item.SubjectID})
+	}
 	return periodClient.EnsureDatasetPeriod(ctx, &storagepb.DatasetPeriodExpectation{
 		SpaceId: task.SpaceID, DatasetId: items[0].DatasetID, Frequency: strings.ToLower(strings.TrimSpace(frequency)),
-		PeriodTime: period.UTC().Unix(), SeriesHash: items[0].SeriesHash, ExpectedCount: items[0].ExpectedCount, DeadlineAt: deadline.Unix(),
+		PeriodTime: period.UTC().Unix(), SeriesHash: items[0].SeriesHash, ExpectedCount: items[0].ExpectedCount, DeadlineAt: deadline.Unix(), Roster: roster,
 	})
 }
 
@@ -548,9 +592,6 @@ func filterTasksForRunCutoff(tasks []domain.CollectionTask, cutoff time.Time) []
 	cutoff = cutoff.UTC()
 	filtered := make([]domain.CollectionTask, 0, len(tasks))
 	for _, task := range tasks {
-		if strings.TrimSpace(task.SeriesHash) == "" {
-			continue
-		}
 		if !task.CreateTime.IsZero() && task.CreateTime.UTC().After(cutoff) {
 			continue
 		}
@@ -573,7 +614,7 @@ func (s *Scheduler) taskIdentityMatchesRun(ctx context.Context, spaceID string, 
 		}
 		return false, err
 	}
-	if !current.Enabled || strings.TrimSpace(current.SeriesHash) == "" {
+	if !current.Enabled {
 		return false, nil
 	}
 	if !cutoff.IsZero() {
@@ -582,8 +623,7 @@ func (s *Scheduler) taskIdentityMatchesRun(ctx context.Context, spaceID string, 
 			return false, nil
 		}
 	}
-	return strings.TrimSpace(current.DefinitionHash) == strings.TrimSpace(snapshot.DefinitionHash) &&
-		strings.TrimSpace(current.SeriesHash) == strings.TrimSpace(snapshot.SeriesHash), nil
+	return strings.TrimSpace(current.DefinitionHash) == strings.TrimSpace(snapshot.DefinitionHash), nil
 }
 
 func filterMarketFetchTasks(tasks []domain.CollectionTask) []domain.CollectionTask {
@@ -1134,6 +1174,10 @@ func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfi
 			logicalSyncPointID = batch.BatchID
 		}
 		effects := store.FetchCompletionEffects{}
+		retryScope, writeTargetID := "fetch", ""
+		if batch.RetryScope == "write_target" {
+			retryScope, writeTargetID = batch.RetryScope, batch.WriteTargetID
+		}
 		for _, item := range request.Items {
 			raw, _ := json.Marshal(item)
 			target, _ := time.Parse(time.RFC3339Nano, item.TargetDataTime)
@@ -1145,7 +1189,7 @@ func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfi
 			if key == "" {
 				key = retryKey(batch.BatchID, item.SubjectID, item.TargetDataTime)
 			}
-			effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, InstanceID: item.InstanceID, RetryScope: "fetch", SubjectID: item.SubjectID, Frequency: item.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: batch.Attempt, Status: "pending", NextRetryAt: &next, LastErrorType: "scf_completion_timeout", LastErrorSummary: "SCF completion event deadline exceeded", CreateTime: now, ModifyTime: now})
+			effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, InstanceID: item.InstanceID, WriteTargetID: writeTargetID, RetryScope: retryScope, SubjectID: item.SubjectID, Frequency: item.Frequency, TargetDataTime: target, TaskJSON: string(raw), FailureTargetsJSON: retryFailureTargetsJSON(request, item.InstanceID, writeTargetID), Attempt: batch.Attempt, Status: "pending", NextRetryAt: &next, LastErrorType: "scf_completion_timeout", LastErrorSummary: "SCF completion event deadline exceeded", CreateTime: now, ModifyTime: now})
 		}
 		updated, err := s.Batches.CompleteWithEffects(ctx, &batch, effects)
 		if err != nil {
@@ -1170,8 +1214,200 @@ func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfi
 	return nil
 }
 
+type periodFailureReportGroup struct {
+	expectation *storagepb.DatasetPeriodExpectation
+	marketType  string
+	indexes     map[uint32]struct{}
+}
+
+func (s *Scheduler) reportPendingPeriodFailures(ctx context.Context, spaceID string) error {
+	if s == nil || s.Retries == nil || s.Storage == nil || strings.TrimSpace(s.StorageTarget) == "" {
+		return nil
+	}
+	const (
+		pageSize = 1000
+		maxRows  = 50000
+	)
+	retries := make([]domain.RetryItem, 0, pageSize)
+	afterRetryKey := ""
+	truncated := false
+	for len(retries) < maxRows {
+		limit := min(pageSize, maxRows-len(retries))
+		page, err := s.Retries.ListUnreportedPeriodFailuresAfter(ctx, spaceID, afterRetryKey, limit)
+		if err != nil {
+			return err
+		}
+		retries = append(retries, page...)
+		if len(page) < limit {
+			break
+		}
+		afterRetryKey = page[len(page)-1].RetryKey
+	}
+	if len(retries) == maxRows {
+		more, err := s.Retries.ListUnreportedPeriodFailuresAfter(ctx, spaceID, afterRetryKey, 1)
+		if err != nil {
+			return err
+		}
+		if len(more) > 0 {
+			truncated = true
+		}
+	}
+	var firstErr error
+	if truncated {
+		firstErr = fmt.Errorf("period failure report reached its %d-row work limit; remaining failures will be retried next tick", maxRows)
+	}
+	groups := make(map[string]*periodFailureReportGroup)
+	retryGroups := make(map[string]map[string]struct{}, len(retries))
+	retryCanReport := make(map[string]bool, len(retries))
+	for _, retry := range retries {
+		retryCanReport[retry.RetryKey] = true
+		var item domain.CollectionItem
+		if err := json.Unmarshal([]byte(retry.TaskJSON), &item); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("decode permanent retry item %s: %w", retry.RetryKey, err)
+			}
+			retryCanReport[retry.RetryKey] = false
+			continue
+		}
+		var targets []domain.WriteTarget
+		if err := json.Unmarshal([]byte(retry.FailureTargetsJSON), &targets); err != nil || len(targets) == 0 {
+			if firstErr == nil {
+				if err == nil {
+					err = errors.New("failure targets are empty")
+				}
+				firstErr = fmt.Errorf("decode permanent retry targets %s: %w", retry.RetryKey, err)
+			}
+			retryCanReport[retry.RetryKey] = false
+			continue
+		}
+		periodTime := retry.TargetDataTime.UTC()
+		if raw := strings.TrimSpace(item.TargetDataTime); raw != "" {
+			if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
+				periodTime = parsed.UTC()
+			}
+		}
+		if periodTime.IsZero() {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("permanent retry %s has no target period", retry.RetryKey)
+			}
+			retryCanReport[retry.RetryKey] = false
+			continue
+		}
+		frequency := strings.ToLower(strings.TrimSpace(firstNonEmpty(retry.Frequency, item.Frequency)))
+		if frequency == "" {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("permanent retry %s has no frequency", retry.RetryKey)
+			}
+			retryCanReport[retry.RetryKey] = false
+			continue
+		}
+		for _, target := range targets {
+			datasetID := strings.TrimSpace(target.DatasetID)
+			seriesHash := strings.TrimSpace(target.SeriesHash)
+			if datasetID == "" || seriesHash == "" || target.ExpectedCount == 0 || target.SeriesIndex >= target.ExpectedCount {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("permanent retry %s has invalid failure target %s", retry.RetryKey, target.ID)
+				}
+				retryCanReport[retry.RetryKey] = false
+				continue
+			}
+			marketType := strings.TrimSpace(item.MarketType)
+			key := strings.Join([]string{datasetID, frequency, periodTime.Format(time.RFC3339Nano), seriesHash, fmt.Sprintf("%d", target.ExpectedCount), marketType}, "\x00")
+			group := groups[key]
+			if group == nil {
+				group = &periodFailureReportGroup{expectation: &storagepb.DatasetPeriodExpectation{
+					SpaceId: spaceID, DatasetId: datasetID, Frequency: frequency, PeriodTime: periodTime.Unix(), SeriesHash: seriesHash, ExpectedCount: target.ExpectedCount,
+				}, marketType: marketType, indexes: make(map[uint32]struct{})}
+				groups[key] = group
+			}
+			group.indexes[target.SeriesIndex] = struct{}{}
+			if retryGroups[retry.RetryKey] == nil {
+				retryGroups[retry.RetryKey] = make(map[string]struct{})
+			}
+			retryGroups[retry.RetryKey][key] = struct{}{}
+		}
+		if len(retryGroups[retry.RetryKey]) == 0 {
+			retryCanReport[retry.RetryKey] = false
+		}
+	}
+
+	groupKeys := make([]string, 0, len(groups))
+	for key := range groups {
+		groupKeys = append(groupKeys, key)
+	}
+	sort.Strings(groupKeys)
+	succeededGroups := make(map[string]struct{}, len(groups))
+	for _, key := range groupKeys {
+		group := groups[key]
+		client, err := s.Storage(s.StorageTarget, group.marketType, "collector")
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("create Storage client for period failure group %s: %w", key, err)
+			}
+			continue
+		}
+		periodClient, ok := client.(periodStorage)
+		if !ok {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("Storage client for period failure group %s does not support period failures", key)
+			}
+			continue
+		}
+		indexes := make([]uint32, 0, len(group.indexes))
+		for index := range group.indexes {
+			indexes = append(indexes, index)
+		}
+		sort.Slice(indexes, func(i, j int) bool { return indexes[i] < indexes[j] })
+		if err := periodClient.RecordDatasetPeriodFailures(ctx, group.expectation, indexes); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("record permanent period failure group %s: %w", key, err)
+			}
+			continue
+		}
+		succeededGroups[key] = struct{}{}
+	}
+
+	for retryKey, keys := range retryGroups {
+		if !retryCanReport[retryKey] || len(keys) == 0 {
+			continue
+		}
+		reported := true
+		for key := range keys {
+			if _, ok := succeededGroups[key]; !ok {
+				reported = false
+				break
+			}
+		}
+		if !reported {
+			continue
+		}
+		if err := s.Retries.MarkPeriodFailureReported(ctx, spaceID, retryKey); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("mark permanent period failure %s reported: %w", retryKey, err)
+		}
+	}
+	return firstErr
+}
+
+func (s *Scheduler) cleanupExpiredPeriodSeries(ctx context.Context, now time.Time) {
+	if s == nil || s.PeriodSeries == nil || (!s.lastPeriodSeriesCleanup.IsZero() && now.Sub(s.lastPeriodSeriesCleanup) < periodSeriesCleanupInterval) {
+		return
+	}
+	deleted, err := s.PeriodSeries.CleanupReportedBefore(ctx, now.Add(-periodSeriesRetention), 1000)
+	if err != nil {
+		log.WarnContextf(ctx, "cleanup expired Collector period rosters failed space=%s: %v", s.SpaceID, err)
+		return
+	}
+	s.lastPeriodSeriesCleanup = now
+	if deleted > 0 {
+		log.InfoContextf(ctx, "cleaned expired Collector period roster rows space=%s count=%d", s.SpaceID, deleted)
+	}
+}
+
 func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, nodes []scfinvoker.Node, now time.Time) error {
-	if s.Retries == nil || len(nodes) == 0 {
+	if s.Retries == nil {
+		return nil
+	}
+	if len(nodes) == 0 {
 		return nil
 	}
 	items, err := s.Retries.ListDue(ctx, spaceID, now, 20)
@@ -1181,17 +1417,21 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 	for index, retry := range items {
 		maxAttempts := s.MaxRetryAttempts
 		if maxAttempts <= 0 {
-			maxAttempts = envInt("MOOX_FETCH_MAX_RETRY_ATTEMPTS", 3)
+			maxAttempts = maxRetryAttempts()
+		} else if maxAttempts > maxRetryAttempts() {
+			maxAttempts = maxRetryAttempts()
 		}
 		if retry.Attempt > maxAttempts {
-			if err := s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed"); err != nil {
+			if err := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "retry_budget_exhausted", retry.LastErrorSummary); err != nil {
 				return err
 			}
 			continue
 		}
 		var item domain.CollectionItem
 		if err := json.Unmarshal([]byte(retry.TaskJSON), &item); err != nil {
-			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
+			if markErr := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "invalid_retry_payload", err.Error()); markErr != nil {
+				return markErr
+			}
 			continue
 		}
 		item.SourceEventID = retry.RetryKey
@@ -1200,7 +1440,9 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			instanceID = strings.TrimSpace(item.InstanceID)
 		}
 		if instanceID == "" || s.Instances == nil {
-			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
+			if err := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "invalid_retry_identity", "retry instance is unavailable"); err != nil {
+				return err
+			}
 			continue
 		}
 		item.InstanceID = instanceID
@@ -1218,7 +1460,9 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			targets = filtered
 		}
 		if len(targets) == 0 {
-			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
+			if err := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "retry_target_unavailable", "no enabled write target remains"); err != nil {
+				return err
+			}
 			continue
 		}
 		node := nodes[index%len(nodes)]
@@ -1230,7 +1474,9 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: targets[0].DatasetID, Frequency: item.Frequency, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}, Targets: targets}
 		raw, _ := json.Marshal(req)
 		if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
-			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
+			if markErr := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "invalid_retry_request", err.Error()); markErr != nil {
+				return markErr
+			}
 			continue
 		}
 		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, InstanceID: instanceID, WriteTargetID: retry.WriteTargetID, RetryScope: retry.RetryScope, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
@@ -1555,6 +1801,152 @@ func (s *Scheduler) materializeTaskSeries(ctx context.Context, task domain.Colle
 		return items[i].SubjectID < items[j].SubjectID
 	})
 	return items, hash, nil
+}
+
+func (s *Scheduler) taskPeriodDefinition(task domain.CollectionTask) (*domain.CollectParams, string, []string, error) {
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	dataType := strings.ToLower(firstNonEmpty(params.Collector.DataType, task.DataType))
+	if dataType != "kline" {
+		return nil, "", nil, fmt.Errorf("unsupported data_type %q", dataType)
+	}
+	targetDataset := firstNonEmpty(params.Target.DatasetID, task.ResultDatasetID)
+	if strings.TrimSpace(targetDataset) == "" {
+		return nil, "", nil, fmt.Errorf("target dataset is required")
+	}
+	frequencies := append([]string(nil), params.Collector.Intervals...)
+	if len(frequencies) == 0 && params.Schedule.Interval != "" {
+		frequencies = []string{params.Schedule.Interval}
+	}
+	if len(frequencies) == 0 {
+		return nil, "", nil, fmt.Errorf("collection task %s has no frequency", task.TaskID)
+	}
+	return params, targetDataset, frequencies, nil
+}
+
+func (s *Scheduler) taskFrequencies(task domain.CollectionTask) ([]string, error) {
+	_, _, frequencies, err := s.taskPeriodDefinition(task)
+	return frequencies, err
+}
+
+func periodRosterFromItems(task domain.CollectionTask, datasetID, frequency string, period time.Time, items []domain.CollectionItem) ([]domain.TaskPeriodSeries, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("collection task %s expands to no series", task.TaskID)
+	}
+	rows := make([]domain.TaskPeriodSeries, 0, len(items))
+	for _, item := range items {
+		if item.SeriesHash == "" || item.ExpectedCount != uint32(len(items)) {
+			return nil, fmt.Errorf("collection task %s has invalid materialized series expectation", task.TaskID)
+		}
+		seriesTag := collectionItemSeriesTag(task.SpaceID, item)
+		rows = append(rows, domain.TaskPeriodSeries{
+			SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: strings.ToLower(strings.TrimSpace(frequency)), PeriodTime: period.UTC(),
+			SeriesIndex: item.SeriesIndex, SeriesKey: domain.CanonicalSeriesKey(item.Provider, item.SourceID, item.MarketType, item.SubjectID, seriesTag),
+			SubjectID: item.SubjectID, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType,
+			ProviderSymbol: item.Symbol, SeriesTag: seriesTag, SeriesHash: item.SeriesHash, ExpectedCount: int(item.ExpectedCount),
+		})
+	}
+	return rows, nil
+}
+
+func (s *Scheduler) prepareCurrentPeriodRosters(ctx context.Context, now time.Time, tasks []domain.CollectionTask, cache *taskExpansionCache) error {
+	// Unit tests that do not wire persistence retain the previous in-memory
+	// behavior. Production bootstrap always provides PeriodSeries.
+	if s.PeriodSeries == nil {
+		for _, task := range tasks {
+			if _, _, err := s.expandTaskWithCache(ctx, task, cache); err != nil {
+				log.WarnContextf(ctx, "collection task series refresh failed task=%s: %v", task.TaskID, err)
+			}
+		}
+		return nil
+	}
+	for _, task := range tasks {
+		_, datasetID, frequencies, err := s.taskPeriodDefinition(task)
+		if err != nil {
+			log.WarnContextf(ctx, "skip invalid collection task before period freeze task=%s: %v", task.TaskID, err)
+			continue
+		}
+		type missingPeriod struct {
+			frequency string
+			period    time.Time
+		}
+		missing := make([]missingPeriod, 0, len(frequencies))
+		for _, frequency := range frequencies {
+			period, periodErr := targetDataTime(now, frequency)
+			if periodErr != nil {
+				log.WarnContextf(ctx, "skip invalid collection period task=%s frequency=%s: %v", task.TaskID, frequency, periodErr)
+				continue
+			}
+			rows, readErr := s.PeriodSeries.GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: period})
+			if readErr != nil {
+				return fmt.Errorf("load period roster task=%s frequency=%s: %w", task.TaskID, frequency, readErr)
+			}
+			if len(rows) == 0 {
+				missing = append(missing, missingPeriod{frequency: frequency, period: period})
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		items, _, expandErr := s.expandTaskWithCache(ctx, task, cache)
+		if expandErr != nil {
+			// One malformed/empty task must not stop unrelated tasks. Existing
+			// periods remain usable because they never reach this branch.
+			log.WarnContextf(ctx, "collection task period roster creation deferred task=%s: %v", task.TaskID, expandErr)
+			continue
+		}
+		for _, entry := range missing {
+			roster, rosterErr := periodRosterFromItems(task, datasetID, entry.frequency, entry.period, items)
+			if rosterErr != nil {
+				log.WarnContextf(ctx, "skip invalid period roster task=%s frequency=%s: %v", task.TaskID, entry.frequency, rosterErr)
+				continue
+			}
+			if _, _, createErr := s.PeriodSeries.CreatePeriodSeriesIfAbsent(ctx, roster); createErr != nil {
+				if errors.Is(createErr, store.ErrPeriodSeriesConflict) {
+					log.WarnContextf(ctx, "period roster race kept existing immutable winner task=%s dataset=%s frequency=%s period=%s", task.TaskID, datasetID, entry.frequency, entry.period.UTC().Format(time.RFC3339))
+					continue
+				}
+				return fmt.Errorf("create period roster task=%s frequency=%s: %w", task.TaskID, entry.frequency, createErr)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Scheduler) expandTaskForPeriod(ctx context.Context, task domain.CollectionTask, frequency string, period time.Time) ([]domain.CollectionItem, error) {
+	if s.PeriodSeries == nil {
+		items, _, err := s.expandTaskForPlanning(ctx, task)
+		return items, err
+	}
+	params, datasetID, _, err := s.taskPeriodDefinition(task)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.PeriodSeries.GetPeriodSeries(ctx, domain.PeriodKey{SpaceID: task.SpaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: period})
+	if err != nil {
+		return nil, fmt.Errorf("load immutable period roster: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("immutable period roster is missing")
+	}
+	marketID := strings.ToLower(firstNonEmpty(params.MarketID, task.SpaceID, s.SpaceID))
+	dataType := strings.ToLower(firstNonEmpty(params.Collector.DataType, task.DataType))
+	items := make([]domain.CollectionItem, 0, len(rows))
+	for index, row := range rows {
+		if row.SeriesIndex != uint32(index) || row.ExpectedCount != len(rows) || row.SeriesHash != rows[0].SeriesHash {
+			return nil, fmt.Errorf("immutable period roster failed dense/hash/count validation")
+		}
+		instrumentType := strings.ToLower(firstNonEmpty(params.InstrumentType, defaultInstrumentTypeForMarket(marketID, row.MarketType)))
+		items = append(items, domain.CollectionItem{
+			SubjectID: row.SubjectID, Symbol: row.ProviderSymbol, Provider: row.Provider, SourceID: row.SourceID,
+			MarketID: marketID, InstrumentType: instrumentType, MarketType: row.MarketType, DataType: dataType,
+			DatasetID: row.DatasetID, Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
+			SeriesIndex: row.SeriesIndex, SeriesHash: row.SeriesHash, ExpectedCount: uint32(row.ExpectedCount),
+		})
+	}
+	return items, nil
 }
 
 func (s *Scheduler) expandTaskForPlanning(ctx context.Context, task domain.CollectionTask) ([]domain.CollectionItem, []string, error) {

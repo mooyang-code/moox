@@ -184,6 +184,7 @@ type sourceStorage interface {
 type periodStorage interface {
 	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) error
 	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
+	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) error
 }
 
 // ItemReporter receives final per-item outcomes from the common invocation

@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -68,6 +69,21 @@ func TestHandleCompletionMarksTaskInstanceFailedWhenRetriesAreExhausted(t *testi
 	ctx := context.Background()
 	completedAt := time.Date(2026, time.August, 2, 8, 5, 0, 0, time.UTC)
 	batch := completionTestBatch("retry-exhausted")
+	var request Request
+	require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
+	request.Items[0].TargetDataTime = "2026-08-02T07:59:00Z"
+	request.Items[0].SeriesIndex = 1
+	request.Items[0].SeriesHash = "bars-series-hash"
+	request.Items[0].ExpectedCount = 2
+	request.Items[0].MarketType = "spot"
+	request.Items[0].Provider = "binance"
+	request.Targets = []domain.WriteTarget{{
+		ID: "target-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule", DatasetID: "bars",
+		SeriesIndex: 1, SeriesHash: "bars-series-hash", ExpectedCount: 2,
+	}}
+	requestJSON, err := json.Marshal(request)
+	require.NoError(t, err)
+	batch.RequestJSON = string(requestJSON)
 	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 	require.NoError(t, err)
 	require.True(t, created)
@@ -88,6 +104,114 @@ func TestHandleCompletionMarksTaskInstanceFailedWhenRetriesAreExhausted(t *testi
 	retry, err := db.FetchRetries().Get(ctx, "crypto", "retry-key")
 	require.NoError(t, err)
 	assert.Equal(t, "permanent_failed", retry.Status)
+	assert.Equal(t, "rate_limit", retry.LastErrorType)
+	assert.Equal(t, "too many requests", retry.LastErrorSummary)
+	var failureTargets []domain.WriteTarget
+	require.NoError(t, json.Unmarshal([]byte(retry.FailureTargetsJSON), &failureTargets))
+	require.Len(t, failureTargets, 1)
+	assert.Equal(t, "bars", failureTargets[0].DatasetID)
+	assert.Equal(t, uint32(1), failureTargets[0].SeriesIndex)
+	assert.Equal(t, uint32(2), failureTargets[0].ExpectedCount)
+	assert.Equal(t, "bars-series-hash", failureTargets[0].SeriesHash)
+	assert.Equal(t, time.Date(2026, time.August, 2, 7, 59, 0, 0, time.UTC), retry.TargetDataTime.UTC())
+	target, err := db.TaskInstances().GetWriteTarget(ctx, "crypto", "target-btc")
+	require.NoError(t, err)
+	assert.Equal(t, "failed", target.Status)
+}
+
+func TestHandleCompletionExhaustsWriteTargetRetriesAfterThreeRetries(t *testing.T) {
+	db := newCompletionTestStore(t)
+	ctx := context.Background()
+	completedAt := time.Date(2026, time.August, 2, 8, 5, 0, 0, time.UTC)
+	const retryKey = "task-btc:target:target-btc"
+
+	batch := completionTestBatch("write-target-initial")
+	var request Request
+	require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
+	request.Items[0].TargetDataTime = "2026-08-02T07:59:00Z"
+	request.Targets = []domain.WriteTarget{{
+		ID: "target-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule", DatasetID: "bars",
+		SeriesIndex: 0, SeriesHash: "bars-hash", ExpectedCount: 1,
+	}}
+	requestJSON, err := json.Marshal(request)
+	require.NoError(t, err)
+	batch.RequestJSON = string(requestJSON)
+	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	persistCompletionTestInstance(t, db, ctx, batch.BatchID)
+
+	completeTargetWriteFailure := func(batch domain.BatchInvocation, completedAt time.Time) {
+		payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+			InstanceId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
+			SourceEventId: func() string {
+				if batch.RetryScope == "write_target" {
+					return retryKey
+				}
+				return ""
+			}(),
+			Outcome: string(domain.ItemOutcomeSuccess),
+			Targets: []*marketfetchpb.MarketFetchTargetResult{{
+				WriteTargetId: "target-btc", DatasetId: "bars", Status: "failed", ErrorSummary: "storage unavailable",
+			}},
+		}, completedAt)
+		payload.BatchId = batch.BatchID
+		payload.ScheduleId = batch.ScheduleID
+		require.NoError(t, handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload)))
+	}
+	completeTargetWriteFailure(batch, completedAt)
+
+	retry, err := db.FetchRetries().Get(ctx, "crypto", retryKey)
+	require.NoError(t, err)
+	require.Equal(t, 1, retry.Attempt, "the initial write failure schedules retry 1")
+	for retryNumber := 1; retryNumber <= 3; retryNumber++ {
+		require.NoError(t, db.FetchRetries().MarkStatus(ctx, "crypto", retryKey, "dispatched"))
+		batch = completionTestBatch(fmt.Sprintf("write-target-retry-%d", retryNumber))
+		batch.RetryScope = "write_target"
+		batch.WriteTargetID = "target-btc"
+		var retryRequest Request
+		require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &retryRequest))
+		retryRequest.Items[0].TargetDataTime = "2026-08-02T07:59:00Z"
+		retryRequest.Items[0].SourceEventID = retryKey
+		retryRequest.Targets = request.Targets
+		retryJSON, marshalErr := json.Marshal(retryRequest)
+		require.NoError(t, marshalErr)
+		batch.RequestJSON = string(retryJSON)
+		created, err = db.FetchBatches().CreatePlanned(ctx, &batch)
+		require.NoError(t, err)
+		require.True(t, created)
+		require.NoError(t, db.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{"task-btc"}))
+		completeTargetWriteFailure(batch, completedAt.Add(time.Duration(retryNumber)*time.Minute))
+		retry, err = db.FetchRetries().Get(ctx, "crypto", retryKey)
+		require.NoError(t, err)
+		if retryNumber < 3 {
+			assert.Equal(t, retryNumber+1, retry.Attempt)
+			assert.Equal(t, "pending", retry.Status)
+		} else {
+			assert.Equal(t, 3, retry.Attempt)
+			assert.Equal(t, "permanent_failed", retry.Status)
+			assert.Equal(t, "storage", retry.LastErrorType)
+			assert.Equal(t, "storage unavailable", retry.LastErrorSummary)
+		}
+	}
+	instance, err := db.TaskInstances().Get(ctx, "crypto", "task-btc")
+	require.NoError(t, err)
+	assert.Equal(t, domain.InstanceStatusSuccess, instance.LastExecStatus, "the provider fetch succeeded even though its destination exhausted retries")
+	target, err := db.TaskInstances().GetWriteTarget(ctx, "crypto", "target-btc")
+	require.NoError(t, err)
+	assert.Equal(t, "failed", target.Status)
+	assert.Equal(t, 3, target.Attempt)
+	var failureTargets []domain.WriteTarget
+	require.NoError(t, json.Unmarshal([]byte(retry.FailureTargetsJSON), &failureTargets))
+	require.Len(t, failureTargets, 1)
+	assert.Equal(t, "bars", failureTargets[0].DatasetID)
+}
+
+func TestConfiguredRetryBudgetCannotExceedThreeRetries(t *testing.T) {
+	t.Setenv("MOOX_FETCH_MAX_RETRY_ATTEMPTS", "9")
+	assert.Equal(t, 3, maxRetryAttempts())
+	t.Setenv("MOOX_FETCH_MAX_RETRY_ATTEMPTS", "2")
+	assert.Equal(t, 2, maxRetryAttempts())
 }
 
 func TestHandleCompletionPreservesLogicalSyncPointAcrossRetryGenerations(t *testing.T) {

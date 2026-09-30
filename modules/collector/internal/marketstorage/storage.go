@@ -2,6 +2,7 @@ package marketstorage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,11 +17,14 @@ import (
 
 const datasetSubjectPageSize = 1000
 
+var ErrDatasetPeriodConflict = errors.New("dataset period expectation conflict")
+
 type BatchStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
 	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) error
 	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
+	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) error
 }
 
 // ResampleStorage is the narrow exact-read/write surface used by the local
@@ -109,6 +113,9 @@ func (w *storageWriter) EnsureDatasetPeriod(ctx context.Context, expectation *st
 		if err != nil {
 			return fmt.Errorf("ensure dataset period: %w", err)
 		}
+		if ret := response.GetRetInfo(); ret != nil && ret.GetCode() == storagepb.ErrorCode_CONFLICT {
+			return fmt.Errorf("%w: %s", ErrDatasetPeriodConflict, ret.GetMsg())
+		}
 		return ensureStorageOK("ensure dataset period", response.GetRetInfo())
 	})
 }
@@ -123,6 +130,22 @@ func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *
 			return fmt.Errorf("commit time-series batch: %w", err)
 		}
 		return ensureStorageOK("commit time-series batch", response.GetRetInfo())
+	})
+}
+
+func (w *storageWriter) RecordDatasetPeriodFailures(ctx context.Context, expectation *storagepb.DatasetPeriodExpectation, seriesIndexes []uint32) error {
+	if expectation == nil || len(seriesIndexes) == 0 {
+		return fmt.Errorf("record dataset period failures: expectation and series_indexes are required")
+	}
+	return retryStorage(ctx, func() error {
+		response, err := w.access.RecordDatasetPeriodFailures(ctx, &storagepb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: w.authInfo, Expectation: expectation, SeriesIndexes: seriesIndexes})
+		if err != nil {
+			return fmt.Errorf("record dataset period failures: %w", err)
+		}
+		if ret := response.GetRetInfo(); ret != nil && ret.GetCode() == storagepb.ErrorCode_CONFLICT {
+			return fmt.Errorf("%w: %s", ErrDatasetPeriodConflict, ret.GetMsg())
+		}
+		return ensureStorageOK("record dataset period failures", response.GetRetInfo())
 	})
 }
 

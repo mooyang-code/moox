@@ -23,6 +23,7 @@ type Store struct {
 	runs         *RunRepository
 	fetchRetries *FetchRetryRepository
 	periods      *PeriodReadinessRepository
+	periodSeries *TaskPeriodSeriesRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -145,6 +146,7 @@ func Open(opts *Options) (*Store, error) {
 	s.runs = NewRunRepository(db)
 	s.fetchRetries = NewFetchRetryRepository(db)
 	s.periods = NewPeriodReadinessRepository(db)
+	s.periodSeries = NewTaskPeriodSeriesRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -188,6 +190,14 @@ func (s *Store) PeriodReadiness() *PeriodReadinessRepository {
 		return nil
 	}
 	return s.periods
+}
+
+// PeriodSeries returns the immutable Dataset period roster repository.
+func (s *Store) PeriodSeries() *TaskPeriodSeriesRepository {
+	if s == nil {
+		return nil
+	}
+	return s.periodSeries
 }
 
 // ApplySchema applies schema SQL during service startup.
@@ -235,6 +245,11 @@ func (s *Store) rejectLegacySchema() error {
 			"c_id", "c_space_id", "c_task_id", "c_series_index", "c_series_key", "c_subject_id",
 			"c_provider", "c_source_id", "c_market_type", "c_provider_symbol", "c_series_tag", "c_ctime", "c_mtime",
 		},
+		"t_collector_task_period_series": {
+			"c_id", "c_space_id", "c_dataset_id", "c_frequency", "c_period_time", "c_series_index", "c_series_key",
+			"c_subject_id", "c_provider", "c_source_id", "c_market_type", "c_provider_symbol", "c_series_tag",
+			"c_series_hash", "c_expected_count", "c_ctime",
+		},
 		"t_collector_runs": {
 			"c_id", "c_space_id", "c_run_id", "c_run_key", "c_run_type", "c_frequency",
 			"c_status", "c_target_time", "c_error_summary", "c_ctime", "c_mtime",
@@ -265,7 +280,7 @@ func (s *Store) rejectLegacySchema() error {
 		"t_collector_fetch_retry_items": {
 			"c_id", "c_space_id", "c_retry_key", "c_source_batch_id", "c_batch_kind",
 			"c_instance_id", "c_write_target_id", "c_retry_scope", "c_subject_id", "c_frequency",
-			"c_target_data_time", "c_task_json", "c_attempt", "c_status",
+			"c_target_data_time", "c_task_json", "c_failure_targets_json", "c_attempt", "c_status", "c_period_failure_reported",
 			"c_next_retry_at", "c_last_error_type", "c_last_error_summary",
 			"c_ctime", "c_mtime",
 		},

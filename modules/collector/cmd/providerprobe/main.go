@@ -38,12 +38,6 @@ type shadowKlineProvider interface {
 	FetchShadowKlines(context.Context, marketdata.KlineRequest) ([]commonsrc.ShadowPoint, error)
 }
 
-type instrumentProvider interface {
-	Descriptor() marketdata.ProviderDescriptor
-	InstrumentSpec() marketdata.InstrumentSpec
-	FetchInstrumentSnapshot(context.Context, marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error)
-}
-
 type probeArgs struct {
 	Market             string
 	Feed               string
@@ -67,7 +61,7 @@ func main() {
 func parseArgs() probeArgs {
 	var args probeArgs
 	flag.StringVar(&args.Market, "market", "stockcn", "market id")
-	flag.StringVar(&args.Feed, "feed", "all", "feed kind: all, kline, instrument")
+	flag.StringVar(&args.Feed, "feed", "all", "feed kind: all, kline")
 	flag.StringVar(&args.Frequency, "frequency", "1m", "kline frequency")
 	flag.StringVar(&args.Subjects, "subjects", "", "comma-separated subject ids")
 	flag.StringVar(&args.Output, "output", "", "optional output path")
@@ -80,7 +74,11 @@ func parseArgs() probeArgs {
 }
 
 func run(ctx context.Context, args probeArgs) error {
-	subjects, err := normalizeSubjects(args.Subjects, args.Feed)
+	feed := strings.TrimSpace(strings.ToLower(args.Feed))
+	if feed != "all" && feed != "kline" {
+		return fmt.Errorf("--feed 必须是 all 或 kline")
+	}
+	subjects, err := normalizeSubjects(args.Subjects)
 	if err != nil {
 		return err
 	}
@@ -89,10 +87,6 @@ func run(ctx context.Context, args probeArgs) error {
 	}
 	if strings.TrimSpace(args.Frequency) != "1m" {
 		return fmt.Errorf("--frequency 仅支持 1m")
-	}
-	feed := strings.TrimSpace(strings.ToLower(args.Feed))
-	if feed != "all" && feed != "kline" && feed != "instrument" {
-		return fmt.Errorf("--feed 必须是 all、kline 或 instrument")
 	}
 	if args.RequestTimout <= 0 {
 		return fmt.Errorf("--request-timeout 必须大于 0")
@@ -127,18 +121,6 @@ func run(ctx context.Context, args probeArgs) error {
 			return baidu.New(baidu.Config{HTTPClient: client, Now: clockNow})
 		})...)
 	}
-	if feed == "all" || feed == "instrument" {
-		report.Entries = append(report.Entries, probeInstrumentProvider(ctx, clockNow, args.RequestTimout, "sina", func(client *http.Client) instrumentProvider {
-			return sina.New(sina.Config{HTTPClient: client, Now: clockNow})
-		}))
-		report.Entries = append(report.Entries, probeInstrumentProvider(ctx, clockNow, args.RequestTimout, "eastmoney", func(client *http.Client) instrumentProvider {
-			return eastmoney.New(eastmoney.Config{HTTPClient: client, Now: clockNow})
-		}))
-		report.Entries = append(report.Entries, probeInstrumentProvider(ctx, clockNow, args.RequestTimout, "baidu", func(client *http.Client) instrumentProvider {
-			return baidu.New(baidu.Config{HTTPClient: client, Now: clockNow})
-		}))
-		report.Entries = append(report.Entries, commonsrc.NewInstrumentNotSupportedEntry("tencent"))
-	}
 	commonsrc.SortEntries(report.Entries)
 	if _, err := report.MarshalJSONStrict(); err != nil {
 		return err
@@ -157,49 +139,7 @@ func run(ctx context.Context, args probeArgs) error {
 	return writeAtomic(args.Output, content)
 }
 
-func probeInstrumentProvider(ctx context.Context, now func() time.Time, timeout time.Duration, providerID string, build func(*http.Client) instrumentProvider) commonsrc.ProbeEntry {
-	client, observation := newObservedClient(timeout)
-	provider := build(client)
-	started := time.Now()
-	snapshot, fetchErr := provider.FetchInstrumentSnapshot(ctx, marketdata.InstrumentRequest{
-		MarketID: "stockcn", SnapshotAt: now(), RequestID: fmt.Sprintf("providerprobe-instrument-%s-%d", providerID, started.UnixNano()),
-	})
-	entry := commonsrc.ProbeEntry{
-		ProviderID: providerID, FeedKind: commonsrc.ProbeFeedInstrument, Exchange: "ALL",
-		HTTPStatus: observation.StatusCode(), LatencyMS: time.Since(started).Milliseconds(),
-		Result: commonsrc.ProbeResultFail, ErrorKind: classifyError(fetchErr), Error: sanitizeError(fetchErr),
-		PageCount: snapshot.PageCount, InstrumentCount: len(snapshot.Instruments), Complete: snapshot.Complete,
-		ExchangeCoverage: make([]string, 0, len(snapshot.ExchangeCounts)),
-	}
-	for exchange, count := range snapshot.ExchangeCounts {
-		if count > 0 {
-			entry.ExchangeCoverage = append(entry.ExchangeCoverage, exchange)
-		}
-	}
-	sort.Strings(entry.ExchangeCoverage)
-	if fetchErr == nil && snapshot.Complete && len(snapshot.Instruments) > 0 {
-		missing := make([]string, 0)
-		for _, exchange := range provider.InstrumentSpec().Exchanges {
-			if snapshot.ExchangeCounts[exchange] == 0 {
-				missing = append(missing, exchange)
-			}
-		}
-		if len(missing) == 0 {
-			entry.Result = commonsrc.ProbeResultPass
-			entry.ErrorKind = "none"
-		} else {
-			entry.Complete = false
-			entry.ErrorKind = "protocol"
-			entry.Error = "snapshot missing exchanges: " + strings.Join(missing, ",")
-		}
-	}
-	return entry
-}
-
-func normalizeSubjects(raw, feed string) ([]string, error) {
-	if strings.EqualFold(strings.TrimSpace(feed), "instrument") {
-		return []string{"600000.XSHG", "000001.XSHE", "920000.XBSE"}, nil
-	}
+func normalizeSubjects(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, fmt.Errorf("--subjects is required for kline probes")
 	}

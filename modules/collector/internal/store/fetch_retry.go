@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -33,17 +34,18 @@ func (r *FetchRetryRepository) Upsert(ctx context.Context, item *domain.RetryIte
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_retry_key"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"c_source_batch_id":    clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"},
-			"c_batch_kind":         clause.Expr{SQL: "excluded.c_batch_kind"},
-			"c_instance_id":        clause.Expr{SQL: "excluded.c_instance_id"},
-			"c_write_target_id":    clause.Expr{SQL: "excluded.c_write_target_id"},
-			"c_retry_scope":        clause.Expr{SQL: "excluded.c_retry_scope"},
-			"c_attempt":            clause.Expr{SQL: "excluded.c_attempt"},
-			"c_status":             clause.Expr{SQL: "excluded.c_status"},
-			"c_next_retry_at":      clause.Expr{SQL: "excluded.c_next_retry_at"},
-			"c_last_error_type":    clause.Expr{SQL: "excluded.c_last_error_type"},
-			"c_last_error_summary": clause.Expr{SQL: "excluded.c_last_error_summary"},
-			"c_mtime":              clause.Expr{SQL: "excluded.c_mtime"},
+			"c_source_batch_id":      clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"},
+			"c_batch_kind":           clause.Expr{SQL: "excluded.c_batch_kind"},
+			"c_instance_id":          clause.Expr{SQL: "excluded.c_instance_id"},
+			"c_write_target_id":      clause.Expr{SQL: "excluded.c_write_target_id"},
+			"c_retry_scope":          clause.Expr{SQL: "excluded.c_retry_scope"},
+			"c_attempt":              clause.Expr{SQL: "excluded.c_attempt"},
+			"c_status":               clause.Expr{SQL: "excluded.c_status"},
+			"c_next_retry_at":        clause.Expr{SQL: "excluded.c_next_retry_at"},
+			"c_last_error_type":      clause.Expr{SQL: "excluded.c_last_error_type"},
+			"c_last_error_summary":   clause.Expr{SQL: "excluded.c_last_error_summary"},
+			"c_failure_targets_json": clause.Expr{SQL: "CASE WHEN c_failure_targets_json <> '' AND c_failure_targets_json <> '[]' THEN c_failure_targets_json ELSE excluded.c_failure_targets_json END"},
+			"c_mtime":                clause.Expr{SQL: "excluded.c_mtime"},
 		}),
 	}).Create(item).Error
 }
@@ -102,6 +104,80 @@ func (r *FetchRetryRepository) MarkStatus(ctx context.Context, spaceID, retryKey
 		Updates(map[string]any{"c_status": status, "c_mtime": time.Now().UTC()}).Error
 }
 
+func (r *FetchRetryRepository) MarkPermanent(ctx context.Context, spaceID, retryKey, errorType, errorSummary string) error {
+	spaceID, retryKey = strings.TrimSpace(spaceID), strings.TrimSpace(retryKey)
+	if spaceID == "" || retryKey == "" {
+		return gorm.ErrInvalidData
+	}
+	now := time.Now().UTC()
+	errorType, errorSummary = strings.TrimSpace(errorType), strings.TrimSpace(errorSummary)
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var item domain.RetryItem
+		if err := tx.Where("c_space_id = ? AND c_retry_key = ?", spaceID, retryKey).First(&item).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
+		if item.Status != "pending" && item.Status != "dispatched" {
+			return nil
+		}
+		result := tx.Model(&domain.RetryItem{}).
+			Where("c_space_id = ? AND c_retry_key = ? AND c_status IN ?", spaceID, retryKey, []string{"pending", "dispatched"}).
+			Updates(map[string]any{"c_status": "permanent_failed", "c_next_retry_at": nil, "c_last_error_type": errorType, "c_last_error_summary": errorSummary, "c_mtime": now})
+		if result.Error != nil || result.RowsAffected == 0 {
+			return result.Error
+		}
+		if item.InstanceID == "" {
+			return nil
+		}
+		payload, err := json.Marshal(map[string]string{"outcome": "failure", "error_type": errorType, "error_summary": errorSummary})
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&domain.TaskInstance{}).
+			Where("c_space_id = ? AND c_instance_id = ?", spaceID, item.InstanceID).
+			Updates(map[string]any{"c_last_exec_status": domain.InstanceStatusFailed, "c_last_exec_time": now, "c_result": string(payload), "c_mtime": now}).Error; err != nil {
+			return err
+		}
+		targetQuery := tx.Model(&domain.WriteTarget{}).Where("c_space_id = ? AND c_instance_id = ?", spaceID, item.InstanceID)
+		if item.WriteTargetID != "" {
+			targetQuery = targetQuery.Where("c_write_target_id = ?", item.WriteTargetID)
+		}
+		return targetQuery.Updates(map[string]any{"c_status": "failed", "c_last_error": errorSummary, "c_attempt": item.Attempt, "c_mtime": now}).Error
+	})
+}
+
+func (r *FetchRetryRepository) ListUnreportedPeriodFailures(ctx context.Context, spaceID string, limit int) ([]domain.RetryItem, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var items []domain.RetryItem
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_status = ? AND c_period_failure_reported = ? AND c_failure_targets_json <> '' AND c_failure_targets_json <> '[]'", strings.TrimSpace(spaceID), "permanent_failed", false).
+		Order("c_mtime ASC").Limit(limit).Find(&items).Error
+	return items, err
+}
+
+func (r *FetchRetryRepository) ListUnreportedPeriodFailuresAfter(ctx context.Context, spaceID, afterRetryKey string, limit int) ([]domain.RetryItem, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var items []domain.RetryItem
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_status = ? AND c_period_failure_reported = ? AND c_failure_targets_json <> '' AND c_failure_targets_json <> '[]' AND c_retry_key > ?", strings.TrimSpace(spaceID), "permanent_failed", false, strings.TrimSpace(afterRetryKey)).
+		Order("c_retry_key ASC").Limit(limit).Find(&items).Error
+	return items, err
+}
+
+func (r *FetchRetryRepository) MarkPeriodFailureReported(ctx context.Context, spaceID, retryKey string) error {
+	return r.db.WithContext(ctx).Model(&domain.RetryItem{}).
+		Where("c_space_id = ? AND c_retry_key = ? AND c_status = ?", strings.TrimSpace(spaceID), strings.TrimSpace(retryKey), "permanent_failed").
+		Updates(map[string]any{"c_period_failure_reported": true, "c_mtime": time.Now().UTC()}).Error
+}
+
 func (r *FetchRetryRepository) Cleanup(ctx context.Context, before time.Time) error {
-	return r.db.WithContext(ctx).Where("c_mtime < ?", before.UTC()).Delete(&domain.RetryItem{}).Error
+	return r.db.WithContext(ctx).
+		Where("c_mtime < ? AND (c_status IN ? OR (c_status = ? AND c_period_failure_reported = ?))", before.UTC(), []string{"succeeded", "superseded"}, "permanent_failed", true).
+		Delete(&domain.RetryItem{}).Error
 }

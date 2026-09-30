@@ -14,8 +14,12 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/report"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type recordingNode struct {
@@ -693,6 +697,98 @@ func TestPrimaryRejectsWritesFromSCFMarketCanaryCredential(t *testing.T) {
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
+}
+
+func TestPrimaryRecordDatasetPeriodFailuresRejectsReadOnlyCredentials(t *testing.T) {
+	svc, err := New(Options{Node: &recordingNode{
+		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return &pb.UpsertFieldsRsp{}, nil
+		},
+		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) { return &pb.ReadFieldsRsp{}, nil },
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, appID := range []string{"moox-skill", "scf-market-canary"} {
+		t.Run(appID, func(t *testing.T) {
+			rsp, err := svc.RecordDatasetPeriodFailures(context.Background(), &pb.PrimaryRecordDatasetPeriodFailuresReq{
+				AuthInfo:      &pb.AuthInfo{AppId: appID, AppKey: "valid"},
+				Expectation:   &pb.DatasetPeriodExpectation{SpaceId: "space", DatasetId: "dataset", Frequency: "1m", PeriodTime: time.Now().Unix(), SeriesHash: "hash", ExpectedCount: 1},
+				SeriesIndexes: []uint32{0},
+			})
+			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+				t.Fatalf("rsp=%v err=%v", rsp, err)
+			}
+		})
+	}
+}
+
+func TestPrimaryAndDataNodeRecordPeriodFailuresThroughDeadlineMarker(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node")
+	const secret = "period-rpc-secret"
+	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: secret, Pebble: pebble.Options{NodeID: "node-a", Path: root}})
+	require.NoError(t, err)
+	nodeClosed := false
+	t.Cleanup(func() {
+		if !nodeClosed {
+			_ = node.Close()
+		}
+	})
+	service, err := New(Options{Node: node, AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+		return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
+	}})
+	require.NoError(t, err)
+	deadline := time.Now().UTC().Add(time.Minute).Unix()
+	expectation := &pb.DatasetPeriodExpectation{
+		SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: time.Now().UTC().Truncate(time.Minute).Unix(),
+		SeriesHash: "period-rpc-hash", ExpectedCount: 1, DeadlineAt: deadline,
+		Roster: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "ETH-USDT"}},
+	}
+	auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
+	ensured, err := service.EnsureDatasetPeriod(context.Background(), &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: expectation})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, ensured.GetRetInfo().GetCode())
+	require.Equal(t, "waiting", ensured.GetStatus())
+	recorded, err := service.RecordDatasetPeriodFailures(context.Background(), &pb.PrimaryRecordDatasetPeriodFailuresReq{
+		AuthInfo: auth, Expectation: expectation, SeriesIndexes: []uint32{0},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, recorded.GetRetInfo().GetCode())
+	require.Equal(t, "waiting", recorded.GetPeriodStatus())
+
+	require.NoError(t, node.Close())
+	nodeClosed = true
+
+	periodStore, err := pebble.Open(pebble.Options{Path: root, NodeID: "node-a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = periodStore.Close() })
+	_, err = periodStore.FinalizeWaitingDatasetPeriods(context.Background(), time.Unix(deadline+1, 0).UTC(), 10)
+	require.NoError(t, err)
+	periodExpectation := pebble.DatasetPeriodExpectation{
+		SpaceID: expectation.GetSpaceId(), DatasetID: expectation.GetDatasetId(), Frequency: expectation.GetFrequency(),
+		PeriodTime: expectation.GetPeriodTime(), SeriesHash: expectation.GetSeriesHash(), ExpectedCount: expectation.GetExpectedCount(),
+		DeadlineAt: expectation.GetDeadlineAt(), Roster: []pebble.DatasetPeriodSeries{{SeriesIndex: 0, SubjectID: "ETH-USDT"}},
+	}
+	progress, err := periodStore.GetDatasetPeriodProgress(context.Background(), periodExpectation)
+	require.NoError(t, err)
+	require.Equal(t, "degraded", progress.Status)
+	require.Equal(t, []uint32{0}, progress.FailedSeriesIndexes)
+	entries, err := periodStore.ListOutbox(context.Background(), 0, 100)
+	require.NoError(t, err)
+	markers := 0
+	for _, entry := range entries {
+		message := &eventpb.EventMessage{}
+		if err := proto.Unmarshal(entry.Data, message); err != nil || message.GetEventName() != events.CollectorPeriodCompleted.Name() {
+			continue
+		}
+		marker := &storageeventpb.CollectorPeriodCompleted{}
+		require.NoError(t, proto.Unmarshal(message.GetPayload(), marker))
+		require.Equal(t, "degraded", marker.GetStatus())
+		require.Equal(t, []string{"ETH-USDT"}, marker.GetFailedSubjects())
+		require.Equal(t, []string{"ETH-USDT"}, marker.GetUniverseSubjectIds())
+		markers++
+	}
+	require.Equal(t, 1, markers)
 }
 
 func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
