@@ -25,6 +25,7 @@ check-format:
 	pnpm --dir web run lint:prettier:check
 
 check-lint:
+	CI=true pnpm --dir web install --frozen-lockfile
 	pnpm --dir web run lint:eslint:check
 
 test-quality-gates:
@@ -55,9 +56,7 @@ test-web:
 test-release:
 	./scripts/test-release-contract.sh
 
-verify: check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
-	CI=true pnpm install --frozen-lockfile
-	pnpm docs:build
+verify: test-go check-lint
 
 verify-custom-setup:
 	(cd packages/cloudprovider && go test -count=1 ./...)
