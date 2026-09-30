@@ -35,9 +35,13 @@ func TestPrimaryPeriodReceiptsDeadlineAndReadonlyStatus(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, node.Close()) })
-	service, err := New(Options{Node: node, AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
-		return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
-	}})
+	service, err := New(Options{
+		Node:     node,
+		Snapshot: func() metadata.RequestSnapshot { return collectorPeriodMetadataSnapshot("crypto", "bars", "1m") },
+		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
+		},
+	})
 	require.NoError(t, err)
 	auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
 	exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: deadline.Add(-time.Minute).Unix(), SeriesHash: "hash", ExpectedCount: 2, DeadlineAt: deadline.Unix(), SeriesSnapshot: []*pb.DatasetPeriodSeries{
@@ -129,9 +133,13 @@ func TestPrimaryPeriodRejectsNilSnapshotSlots(t *testing.T) {
 			node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: secret, Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node"), PeriodNow: func() time.Time { return period }}})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, node.Close()) })
-			service, err := New(Options{Node: node, AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
-				return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
-			}})
+			service, err := New(Options{
+				Node:     node,
+				Snapshot: func() metadata.RequestSnapshot { return collectorPeriodMetadataSnapshot("crypto", "bars", "1m") },
+				AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+					return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
+				},
+			})
 			require.NoError(t, err)
 			auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
 			exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), SeriesHash: "hash", ExpectedCount: count, DeadlineAt: period.Add(time.Hour).Unix(), SeriesSnapshot: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "okx"}, nil, {SeriesIndex: 1, SubjectId: "ETH-USDT", SeriesTag: "okx"}}}
@@ -184,7 +192,11 @@ func (n emptyPeriodNode) RecordDatasetPeriodFailures(context.Context, *pb.Record
 
 func TestPrimaryPeriodRejectsMissingRPCResponses(t *testing.T) {
 	for _, nilResponse := range []bool{false, true} {
-		service, err := New(Options{Node: emptyPeriodNode{nilResponse: nilResponse}, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) { return auth, nil }})
+		service, err := New(Options{
+			Node:       emptyPeriodNode{nilResponse: nilResponse},
+			Snapshot:   func() metadata.RequestSnapshot { return collectorPeriodMetadataSnapshot("crypto", "bars", "1m") },
+			AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) { return auth, nil },
+		})
 		require.NoError(t, err)
 		ctx := context.Background()
 		auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
@@ -905,6 +917,205 @@ func TestPrimaryRecordDatasetPeriodFailuresRejectsReadOnlyCredentials(t *testing
 	}
 }
 
+type periodAuthorizationNode struct {
+	ensure int
+	status int
+	commit int
+	record int
+}
+
+func (*periodAuthorizationNode) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+	return nil, errors.New("unexpected ordinary upsert")
+}
+
+func (*periodAuthorizationNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+	return nil, errors.New("unexpected ordinary read")
+}
+
+func (n *periodAuthorizationNode) EnsureDatasetPeriod(context.Context, *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
+	n.ensure++
+	return &pb.EnsureDatasetPeriodRsp{RetInfo: successRetInfo(), Status: "waiting"}, nil
+}
+
+func (n *periodAuthorizationNode) GetDatasetPeriodStatus(context.Context, *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error) {
+	n.status++
+	return &pb.GetDatasetPeriodStatusRsp{RetInfo: successRetInfo(), Status: "waiting"}, nil
+}
+
+func (n *periodAuthorizationNode) CommitTimeSeriesBatch(context.Context, *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
+	n.commit++
+	return &pb.CommitTimeSeriesBatchRsp{RetInfo: successRetInfo()}, nil
+}
+
+func (n *periodAuthorizationNode) RecordDatasetPeriodFailures(context.Context, *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error) {
+	n.record++
+	return &pb.RecordDatasetPeriodFailuresRsp{RetInfo: successRetInfo()}, nil
+}
+
+type periodAuthorizationSnapshot struct {
+	datasets map[routeKey]*pb.Dataset
+}
+
+func collectorPeriodMetadataSnapshot(spaceID, datasetID, frequency string) metadata.RequestSnapshot {
+	return periodAuthorizationSnapshot{datasets: map[routeKey]*pb.Dataset{
+		{spaceID: spaceID, datasetID: datasetID}: {
+			SpaceId: spaceID, DatasetId: datasetID, DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+			Freqs: []string{frequency}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
+		},
+	}}
+}
+
+func (s periodAuthorizationSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
+	dataset, ok := s.datasets[routeKey{spaceID: spaceID, datasetID: datasetID}]
+	return dataset, ok
+}
+
+func (periodAuthorizationSnapshot) GetDataNode(string) (*pb.DataNode, bool) { return nil, false }
+
+func (periodAuthorizationSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	return nil, &pb.PageResult{}, nil
+}
+
+func TestEnsureDatasetPeriodWriteAuthorization(t *testing.T) {
+	runPeriodAuthorizationCases(t, "ensure", func(svc *Service, auth *pb.AuthInfo, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
+		rsp, err := svc.EnsureDatasetPeriod(context.Background(), &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: exp})
+		if err != nil {
+			t.Fatalf("EnsureDatasetPeriod error: %v", err)
+		}
+		return rsp.GetRetInfo()
+	})
+}
+
+func TestCommitTimeSeriesBatchWriteAuthorization(t *testing.T) {
+	runPeriodAuthorizationCases(t, "commit", func(svc *Service, auth *pb.AuthInfo, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
+		row := &pb.RowFieldUpsert{Key: &pb.RowKey{
+			SpaceId: exp.GetSpaceId(), DatasetId: exp.GetDatasetId(),
+			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: exp.GetFrequency(), DataTime: "2026-09-30T00:00:00Z"}},
+		}}
+		rsp, err := svc.CommitTimeSeriesBatch(context.Background(), &pb.PrimaryCommitTimeSeriesBatchReq{
+			AuthInfo: auth, Expectation: exp, Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}}, WriteSource: "collector",
+		})
+		if err != nil {
+			t.Fatalf("CommitTimeSeriesBatch error: %v", err)
+		}
+		return rsp.GetRetInfo()
+	})
+}
+
+func TestRecordDatasetPeriodFailuresWriteAuthorization(t *testing.T) {
+	runPeriodAuthorizationCases(t, "record", func(svc *Service, auth *pb.AuthInfo, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
+		rsp, err := svc.RecordDatasetPeriodFailures(context.Background(), &pb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: auth, Expectation: exp, SeriesIndexes: []uint32{0}})
+		if err != nil {
+			t.Fatalf("RecordDatasetPeriodFailures error: %v", err)
+		}
+		return rsp.GetRetInfo()
+	})
+}
+
+func TestGetDatasetPeriodStatusAuthorization(t *testing.T) {
+	runPeriodAuthorizationCases(t, "status", func(svc *Service, auth *pb.AuthInfo, exp *pb.DatasetPeriodExpectation) *pb.RetInfo {
+		rsp, err := svc.GetDatasetPeriodStatus(context.Background(), &pb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: exp})
+		if err != nil {
+			t.Fatalf("GetDatasetPeriodStatus error: %v", err)
+		}
+		return rsp.GetRetInfo()
+	})
+}
+
+func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Service, *pb.AuthInfo, *pb.DatasetPeriodExpectation) *pb.RetInfo) {
+	t.Helper()
+	validDataset := func() *pb.Dataset {
+		return &pb.Dataset{
+			SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"},
+			Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
+		}
+	}
+	tests := []struct {
+		name            string
+		appID           string
+		dataset         *pb.Dataset
+		includeDataset  bool
+		includeSnapshot bool
+		frequency       string
+		authorizeErr    error
+		wantCode        pb.ErrorCode
+	}{
+		{name: "collector owner", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "moox skill read-only caller", appID: "moox-skill", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "SCF canary read-only caller", appID: "scf-market-canary", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "Factor caller", appID: "moox-factor", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "other module caller", appID: "admin", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "Factor-owned Dataset", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"}, Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "missing Dataset owner", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"}, Attributes: map[string]string{"dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "wrong Dataset role", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "snapshot Dataset identity mismatch", appID: "collector", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "record Dataset kind", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Freqs: []string{"1H"}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "invalid declared frequency", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"forever"}, Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "frequency spelling differs", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "unknown Dataset", appID: "collector", dataset: validDataset(), includeDataset: false, includeSnapshot: true, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "missing metadata snapshot", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: false, frequency: "1H", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "HMAC rejects before metadata", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1H", authorizeErr: errors.New("invalid HMAC"), wantCode: pb.ErrorCode_NO_PERMISSION},
+	}
+	for _, tc := range tests {
+		t.Run(method+"/"+tc.name, func(t *testing.T) {
+			node := &periodAuthorizationNode{}
+			var resolveCalls, signerCalls, authorizerCalls, snapshotCalls int
+			svc, err := New(Options{
+				Resolver: func(context.Context, string, string) (DataNodeClient, error) {
+					resolveCalls++
+					return node, nil
+				},
+				Snapshot: func() metadata.RequestSnapshot {
+					snapshotCalls++
+					if !tc.includeSnapshot {
+						return nil
+					}
+					datasets := map[routeKey]*pb.Dataset{}
+					if tc.includeDataset {
+						datasets[routeKey{spaceID: "space", datasetID: "dataset"}] = tc.dataset
+					}
+					return periodAuthorizationSnapshot{datasets: datasets}
+				},
+				AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+					signerCalls++
+					return &pb.AuthInfo{AppId: "storage-primary", AppKey: "node-key"}, nil
+				},
+				Authorizer: func(auth *pb.AuthInfo) error {
+					authorizerCalls++
+					if auth == nil || auth.GetAppId() == "" || auth.GetAppKey() == "" {
+						return errors.New("auth_info is invalid")
+					}
+					return tc.authorizeErr
+				},
+			})
+			require.NoError(t, err)
+			expectation := &pb.DatasetPeriodExpectation{SpaceId: "space", DatasetId: "dataset", Frequency: tc.frequency, PeriodTime: 123, SeriesHash: "hash", ExpectedCount: 1}
+			rsp := invoke(svc, &pb.AuthInfo{AppId: tc.appID, AppKey: "caller-key"}, expectation)
+			require.Equal(t, tc.wantCode, rsp.GetCode(), "ret_info=%v", rsp)
+			require.Equal(t, 1, authorizerCalls, "ordinary HMAC authorization must run first")
+			wantSnapshotCalls := 1
+			if tc.authorizeErr != nil {
+				wantSnapshotCalls = 0
+			} else if method != "status" && (tc.appID == "moox-skill" || tc.appID == "scf-market-canary") {
+				wantSnapshotCalls = 0
+			}
+			require.Equal(t, wantSnapshotCalls, snapshotCalls, "unexpected request metadata snapshot access")
+			if method == "status" && (tc.appID == "moox-skill" || tc.appID == "scf-market-canary") {
+				require.NotContains(t, rsp.GetMsg(), "read-only primary credential", "status reads must rely on Collector identity, not the write-only read-only credential block")
+			}
+			if tc.wantCode == pb.ErrorCode_SUCCESS {
+				require.Equal(t, 1, resolveCalls)
+				require.Equal(t, 1, signerCalls)
+				require.Equal(t, 1, node.ensure+node.status+node.commit+node.record)
+			} else {
+				require.Zero(t, resolveCalls, "unauthorized period RPC resolved a DataNode")
+				require.Zero(t, signerCalls, "unauthorized period RPC signed a DataNode request")
+				require.Zero(t, node.ensure+node.status+node.commit+node.record, "unauthorized period RPC reached the Store")
+			}
+		})
+	}
+}
+
 func TestPrimaryAndDataNodeRecordPeriodFailuresThroughDeadlineMarker(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "node")
 	const secret = "period-rpc-secret"
@@ -916,9 +1127,13 @@ func TestPrimaryAndDataNodeRecordPeriodFailuresThroughDeadlineMarker(t *testing.
 			_ = node.Close()
 		}
 	})
-	service, err := New(Options{Node: node, AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
-		return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
-	}})
+	service, err := New(Options{
+		Node:     node,
+		Snapshot: func() metadata.RequestSnapshot { return collectorPeriodMetadataSnapshot("crypto", "bars", "1m") },
+		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
+		},
+	})
 	require.NoError(t, err)
 	deadline := time.Now().UTC().Add(time.Minute).Unix()
 	expectation := &pb.DatasetPeriodExpectation{

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +15,9 @@ import (
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 type cleanupDatasetReader struct{}
@@ -379,6 +384,186 @@ func TestDataNodeProxyAdapterIncludesPeriodRuntime(t *testing.T) {
 	proxy := newDataNodeProxyAdapter()
 	if proxy.proxy == nil || proxy.adminProxy == nil || proxy.markerProxy == nil || proxy.periodProxy == nil || proxy.historyProxy == nil {
 		t.Fatalf("data node proxy adapter is missing a runtime proxy: %+v", proxy)
+	}
+}
+
+func TestDataNodeProxyAdapterPeriodMethodsAreNilSafe(t *testing.T) {
+	var nilAdapter *dataNodeProxyAdapter
+	if _, err := nilAdapter.GetDatasetPeriodStatus(context.Background(), nil); err == nil {
+		t.Fatal("nil adapter GetDatasetPeriodStatus returned no error")
+	}
+	if _, err := nilAdapter.RecordDatasetPeriodFailures(context.Background(), nil); err == nil {
+		t.Fatal("nil adapter RecordDatasetPeriodFailures returned no error")
+	}
+	if _, err := (&dataNodeProxyAdapter{}).GetDatasetPeriodStatus(context.Background(), nil); err == nil {
+		t.Fatal("missing period proxy GetDatasetPeriodStatus returned no error")
+	}
+	if _, err := (&dataNodeProxyAdapter{}).RecordDatasetPeriodFailures(context.Background(), nil); err == nil {
+		t.Fatal("missing period proxy RecordDatasetPeriodFailures returned no error")
+	}
+}
+
+type periodProxyForwardingStub struct {
+	ctx       context.Context
+	req       any
+	err       error
+	recordRsp *pb.RecordDatasetPeriodFailuresRsp
+	statusRsp *pb.GetDatasetPeriodStatusRsp
+}
+
+func (*periodProxyForwardingStub) EnsureDatasetPeriod(context.Context, *pb.EnsureDatasetPeriodReq, ...client.Option) (*pb.EnsureDatasetPeriodRsp, error) {
+	return nil, nil
+}
+
+func (*periodProxyForwardingStub) CommitTimeSeriesBatch(context.Context, *pb.CommitTimeSeriesBatchReq, ...client.Option) (*pb.CommitTimeSeriesBatchRsp, error) {
+	return nil, nil
+}
+
+func (p *periodProxyForwardingStub) RecordDatasetPeriodFailures(ctx context.Context, req *pb.RecordDatasetPeriodFailuresReq, _ ...client.Option) (*pb.RecordDatasetPeriodFailuresRsp, error) {
+	p.ctx, p.req = ctx, req
+	return p.recordRsp, p.err
+}
+
+func (p *periodProxyForwardingStub) GetDatasetPeriodStatus(ctx context.Context, req *pb.GetDatasetPeriodStatusReq, _ ...client.Option) (*pb.GetDatasetPeriodStatusRsp, error) {
+	p.ctx, p.req = ctx, req
+	return p.statusRsp, p.err
+}
+
+func TestDataNodeProxyAdapterForwardsPeriodStatusAndFailureCalls(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "trace-id")
+	wantErr := errors.New("period proxy failed")
+	statusReq := &pb.GetDatasetPeriodStatusReq{Expectation: &pb.DatasetPeriodExpectation{SpaceId: "space"}}
+	statusRsp := &pb.GetDatasetPeriodStatusRsp{Status: "waiting"}
+	statusProxy := &periodProxyForwardingStub{err: wantErr, statusRsp: statusRsp}
+	gotStatus, gotErr := (&dataNodeProxyAdapter{periodProxy: statusProxy}).GetDatasetPeriodStatus(ctx, statusReq)
+	if gotStatus != statusRsp || gotErr != wantErr || statusProxy.ctx != ctx || statusProxy.req != statusReq || statusProxy.ctx.Value(contextKey{}) != "trace-id" {
+		t.Fatalf("GetDatasetPeriodStatus forwarding: rsp=%p err=%v ctx=%v req=%p", gotStatus, gotErr, statusProxy.ctx, statusProxy.req)
+	}
+
+	recordReq := &pb.RecordDatasetPeriodFailuresReq{SeriesIndexes: []uint32{1, 3}}
+	recordRsp := &pb.RecordDatasetPeriodFailuresRsp{PeriodStatus: "degraded"}
+	recordProxy := &periodProxyForwardingStub{err: wantErr, recordRsp: recordRsp}
+	gotRecord, gotErr := (&dataNodeProxyAdapter{periodProxy: recordProxy}).RecordDatasetPeriodFailures(ctx, recordReq)
+	if gotRecord != recordRsp || gotErr != wantErr || recordProxy.ctx != ctx || recordProxy.req != recordReq || recordProxy.ctx.Value(contextKey{}) != "trace-id" {
+		t.Fatalf("RecordDatasetPeriodFailures forwarding: rsp=%p err=%v ctx=%v req=%p", gotRecord, gotErr, recordProxy.ctx, recordProxy.req)
+	}
+}
+
+type periodRPCContractService struct {
+	ensure *pb.EnsureDatasetPeriodReq
+	status *pb.GetDatasetPeriodStatusReq
+	commit *pb.CommitTimeSeriesBatchReq
+	record *pb.RecordDatasetPeriodFailuresReq
+}
+
+func (s *periodRPCContractService) EnsureDatasetPeriod(_ context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
+	s.ensure = req
+	return &pb.EnsureDatasetPeriodRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Status: "waiting", DeadlineAt: 400}, nil
+}
+
+func (s *periodRPCContractService) GetDatasetPeriodStatus(_ context.Context, req *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error) {
+	s.status = req
+	return &pb.GetDatasetPeriodStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Status: "complete", SeriesHash: "returned-hash", ExpectedCount: 2, DeadlineAt: 401}, nil
+}
+
+func (s *periodRPCContractService) CommitTimeSeriesBatch(_ context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
+	s.commit = req
+	return &pb.CommitTimeSeriesBatchRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Keys: []*pb.RowKey{req.GetItems()[0].GetRow().GetKey()}, PeriodStatus: "complete"}, nil
+}
+
+func (s *periodRPCContractService) RecordDatasetPeriodFailures(_ context.Context, req *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error) {
+	s.record = req
+	return &pb.RecordDatasetPeriodFailuresRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, PeriodStatus: "degraded"}, nil
+}
+
+func TestDataNodeResolverPeriodRPCContract(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+
+	dn := server.New(
+		server.WithServiceName("trpc.moox.storage.DataNodePeriodRuntime"),
+		server.WithProtocol("trpc"),
+		server.WithNetwork("tcp"),
+		server.WithListener(listener),
+		server.WithServerAsync(false),
+	)
+	backend := &periodRPCContractService{}
+	pb.RegisterDataNodePeriodRuntimeService(dn, backend)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- dn.Serve() }()
+	t.Cleanup(func() {
+		done := make(chan struct{}, 1)
+		if err := dn.Close(done); err != nil {
+			t.Errorf("close DataNode test service: %v", err)
+		}
+		<-done
+		if err := <-serveErr; err != nil {
+			t.Errorf("serve DataNode test service: %v", err)
+		}
+	})
+
+	snapshot := resolverSnapshot{
+		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "active"},
+		node:    &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://" + address},
+	}
+	resolver := newDataNodeResolver(func() metadata.RequestSnapshot { return snapshot }, nil)
+	runtime, err := resolver(context.Background(), "space", "dataset")
+	if err != nil {
+		t.Fatal(err)
+	}
+	periodRuntime, ok := runtime.(pb.DataNodePeriodRuntimeService)
+	if !ok {
+		t.Fatalf("resolved runtime %T does not implement DataNodePeriodRuntimeService", runtime)
+	}
+
+	auth := &pb.AuthInfo{AppId: "collector", AppKey: "signed-key"}
+	expectation := &pb.DatasetPeriodExpectation{
+		SpaceId: "space", DatasetId: "dataset", Frequency: "1H", PeriodTime: 123,
+		SeriesHash: "expected-hash", ExpectedCount: 1,
+		SeriesSnapshot: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "venue:binance"}},
+	}
+	row := &pb.RowFieldUpsert{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1H", DataTime: "2026-09-30T00:00:00Z", SeriesTag: "venue:binance"}}},
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 101.25}}}},
+	}
+	ensureReq := &pb.EnsureDatasetPeriodReq{AuthInfo: auth, NodeId: "node-a", Expectation: expectation}
+	statusReq := &pb.GetDatasetPeriodStatusReq{AuthInfo: auth, NodeId: "node-a", Expectation: expectation}
+	commitReq := &pb.CommitTimeSeriesBatchReq{
+		AuthInfo: auth, NodeId: "node-a", Expectation: expectation,
+		Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}}, SourceEventId: "event-1", WriteSource: "collector",
+	}
+	recordReq := &pb.RecordDatasetPeriodFailuresReq{AuthInfo: auth, NodeId: "node-a", Expectation: expectation, SeriesIndexes: []uint32{0, 2}}
+
+	ensured, err := periodRuntime.EnsureDatasetPeriod(context.Background(), ensureReq)
+	if err != nil || ensured.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || ensured.GetStatus() != "waiting" || ensured.GetDeadlineAt() != 400 {
+		t.Fatalf("EnsureDatasetPeriod response=%v err=%v", ensured, err)
+	}
+	status, err := periodRuntime.GetDatasetPeriodStatus(context.Background(), statusReq)
+	if err != nil || status.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || status.GetStatus() != "complete" || status.GetSeriesHash() != "returned-hash" || status.GetExpectedCount() != 2 || status.GetDeadlineAt() != 401 {
+		t.Fatalf("GetDatasetPeriodStatus response=%v err=%v", status, err)
+	}
+	committed, err := periodRuntime.CommitTimeSeriesBatch(context.Background(), commitReq)
+	if err != nil || committed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || committed.GetPeriodStatus() != "complete" || len(committed.GetKeys()) != 1 || !proto.Equal(committed.GetKeys()[0], row.GetKey()) {
+		t.Fatalf("CommitTimeSeriesBatch response=%v err=%v", committed, err)
+	}
+	recorded, err := periodRuntime.RecordDatasetPeriodFailures(context.Background(), recordReq)
+	if err != nil || recorded.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || recorded.GetPeriodStatus() != "degraded" {
+		t.Fatalf("RecordDatasetPeriodFailures response=%v err=%v", recorded, err)
+	}
+
+	for name, pair := range map[string][2]proto.Message{
+		"ensure": {ensureReq, backend.ensure},
+		"status": {statusReq, backend.status},
+		"commit": {commitReq, backend.commit},
+		"record": {recordReq, backend.record},
+	} {
+		if pair[1] == nil || !proto.Equal(pair[0], pair[1]) {
+			t.Errorf("%s request forwarded as %v, want %v", name, pair[1], pair[0])
+		}
 	}
 }
 

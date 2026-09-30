@@ -1016,6 +1016,8 @@ type dataNodeProxyAdapter struct {
 	historyProxy pb.DataNodeHistoryRuntimeClientProxy
 }
 
+var _ pb.DataNodePeriodRuntimeService = (*dataNodeProxyAdapter)(nil)
+
 func newDataNodeProxyAdapter(opts ...client.Option) *dataNodeProxyAdapter {
 	return &dataNodeProxyAdapter{
 		proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
@@ -1037,6 +1039,12 @@ func (a *dataNodeProxyAdapter) GetDatasetPeriodStatus(ctx context.Context, req *
 		return nil, errors.New("DataNode period runtime is unavailable")
 	}
 	return a.periodProxy.GetDatasetPeriodStatus(ctx, req)
+}
+func (a *dataNodeProxyAdapter) RecordDatasetPeriodFailures(ctx context.Context, req *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error) {
+	if a == nil || a.periodProxy == nil {
+		return nil, errors.New("DataNode period runtime is unavailable")
+	}
+	return a.periodProxy.RecordDatasetPeriodFailures(ctx, req)
 }
 func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
 	if a == nil || a.periodProxy == nil {
