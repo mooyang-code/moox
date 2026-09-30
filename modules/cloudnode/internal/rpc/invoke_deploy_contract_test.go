@@ -2,6 +2,8 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
@@ -98,5 +100,70 @@ func TestMarketFetcherInvokeDeployValidatesBasicEnvironmentWithoutTimerRules(t *
 				require.Equal(t, int64(90), fake.configured[0].Timeout)
 			}
 		})
+	}
+}
+
+func TestMarketFetcherInvokeTimeoutContractBeforeCloudMutation(t *testing.T) {
+	for _, test := range []struct {
+		name, outer, primary, alias string
+		wantError                   bool
+	}{
+		{"mismatch", "90", "60", "unset", true},
+		{"matching 90", "90", "90", "unset", false},
+		{"alias fallback", "90", "unset", "90", false},
+		{"default fallback", "60", "unset", "unset", false},
+		{"primary precedence", "90", "90", "60", false},
+		{"invalid primary", "90", "invalid", "90", true},
+		{"zero primary", "90", "0", "90", true},
+		{"empty primary", "90", "", "90", true},
+		{"invalid alias", "60", "unset", "invalid", true},
+		{"invalid ignored alias", "90", "90", "invalid", true},
+		{"negative primary", "90", "-1", "unset", true},
+		{"invalid outer", "invalid", "90", "unset", true},
+		{"zero outer", "0", "90", "unset", true},
+	} {
+		for _, operation := range []string{"create", "deploy"} {
+			t.Run(operation+"/"+test.name, func(t *testing.T) {
+				catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+				seedSCFAccountAndPackage(t, catalog)
+				env := completeInvokeEnvironment("90")
+				delete(env, "MOOX_FETCH_TIMEOUT_SECONDS")
+				if test.primary != "unset" {
+					env["MOOX_FETCH_TIMEOUT_SECONDS"] = test.primary
+				}
+				if test.alias != "unset" {
+					env["MOOX_MARKET_FETCH_TIMEOUT_SECONDS"] = test.alias
+				}
+				outer, _ := strconv.ParseInt(test.outer, 10, 64)
+				fake := &fakeSCFClient{currentEnvironment: env, currentTimeout: outer}
+				factoryCalls := 0
+				svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { factoryCalls++; return fake }}
+				var err error
+				if operation == "create" {
+					env["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+					fake.getResults = []fakeSCFGetResult{{err: errors.New("ResourceNotFound.FunctionName")}}
+					_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"memory_size": "64", "timeout": test.outer}, Environment: env}, 0)
+				} else {
+					require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "invoke", CloudAccountID: "account-a", TriggerType: "invoke", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
+					_, err = svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "invoke", PackageId: "moox-collector_dev", Config: map[string]string{"timeout": test.outer}})
+				}
+				if test.wantError {
+					require.ErrorContains(t, err, "Invoke runtime timeout")
+					require.Empty(t, fake.created)
+					require.Empty(t, fake.updated)
+					require.Empty(t, fake.configured)
+					if operation == "create" {
+						require.Zero(t, factoryCalls)
+					}
+				} else {
+					require.NoError(t, err)
+					if operation == "create" {
+						require.Len(t, fake.created, 1)
+					} else {
+						require.Len(t, fake.updated, 1)
+					}
+				}
+			})
+		}
 	}
 }

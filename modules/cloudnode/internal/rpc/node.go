@@ -319,6 +319,32 @@ func validateMarketFetchTimerTimeout(node *store.CloudNode, pkg store.FunctionPa
 	return nil
 }
 
+func validateMarketFetchInvokeTimeout(environment, config map[string]string, outerTimeout int64) error {
+	if value, ok := config["timeout"]; ok {
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || parsed <= 0 {
+			return fmt.Errorf("Invoke runtime timeout requires a positive config.timeout")
+		}
+		outerTimeout = parsed
+	}
+	// Match the handler's alias/default precedence, without silently accepting
+	// explicitly invalid values that would change the effective runtime budget.
+	runtimeTimeout := int64(tencent.CollectorTimerTimeoutSeconds)
+	for _, key := range []string{"MOOX_MARKET_FETCH_TIMEOUT_SECONDS", "MOOX_FETCH_TIMEOUT_SECONDS"} {
+		if value, ok := environment[key]; ok {
+			parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			if err != nil || parsed <= 0 {
+				return fmt.Errorf("Invoke runtime timeout requires a positive %s", key)
+			}
+			runtimeTimeout = parsed
+		}
+	}
+	if outerTimeout <= 0 || runtimeTimeout != outerTimeout {
+		return fmt.Errorf("Invoke runtime timeout must equal effective config.timeout")
+	}
+	return nil
+}
+
 func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.BatchDeleteNodesRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
@@ -457,6 +483,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 			return err
 		}
 	} else if modernMarketFetchNode(node, *pkg) {
+		if err := validateMarketFetchInvokeTimeout(item.GetEnvironment(), config, timeoutSeconds); err != nil {
+			return err
+		}
 		environment := copyStringMap(item.GetEnvironment())
 		if environment == nil {
 			environment = make(map[string]string)
@@ -747,6 +776,9 @@ func (s *Service) updateSCFFunctionCode(
 			return err
 		}
 	} else if modernMarketFetchNode(&node, pkg) {
+		if err := validateMarketFetchInvokeTimeout(environment, desiredConfig, info.Timeout); err != nil {
+			return err
+		}
 		if err := tencent.ValidateCollectorMarketFetchEnvironment(environment); err != nil {
 			return err
 		}
