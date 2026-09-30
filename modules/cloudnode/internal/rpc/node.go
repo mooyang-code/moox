@@ -327,15 +327,15 @@ func validateMarketFetchInvokeTimeout(environment, config map[string]string, out
 		}
 		outerTimeout = parsed
 	}
-	// Only the highest-precedence configured value controls the handler budget.
+	// Match executionContext's envInt(primary, envInt(alias, 60)) fallback.
 	runtimeTimeout := int64(tencent.CollectorTimerTimeoutSeconds)
 	for _, key := range []string{"MOOX_FETCH_TIMEOUT_SECONDS", "MOOX_MARKET_FETCH_TIMEOUT_SECONDS"} {
 		if value, ok := environment[key]; ok {
-			parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
 			if err != nil || parsed <= 0 {
-				return fmt.Errorf("Invoke runtime timeout requires a positive %s", key)
+				continue
 			}
-			runtimeTimeout = parsed
+			runtimeTimeout = int64(parsed)
 			break
 		}
 	}

@@ -114,13 +114,22 @@ func TestMarketFetcherInvokeTimeoutContractBeforeCloudMutation(t *testing.T) {
 		{"alias fallback", "90", "unset", "90", false},
 		{"default fallback", "60", "unset", "unset", false},
 		{"primary precedence", "90", "90", "60", false},
-		{"invalid primary", "90", "invalid", "90", true},
-		{"zero primary", "90", "0", "90", true},
-		{"empty primary", "90", "", "90", true},
-		{"invalid alias", "60", "unset", "invalid", true},
+		{"invalid primary falls back to alias", "90", "invalid", "90", false},
+		{"zero primary falls back to alias", "90", "0", "90", false},
+		{"empty primary falls back to alias", "90", "", "90", false},
+		{"negative primary falls back to alias", "90", "-1", "90", false},
+		{"invalid alias falls back to default", "60", "unset", "invalid", false},
+		{"empty alias falls back to default", "60", "unset", "", false},
+		{"zero alias falls back to default", "60", "unset", "0", false},
+		{"negative alias falls back to default", "60", "unset", "-1", false},
+		{"invalid primary falls back to default", "60", "invalid", "unset", false},
+		{"empty primary falls back to default", "60", "", "unset", false},
+		{"zero primary falls back to default", "60", "0", "unset", false},
+		{"negative primary falls back to default", "60", "-1", "unset", false},
+		{"both invalid fall back to default", "60", "invalid", "invalid", false},
 		{"invalid ignored alias", "90", "90", "invalid", false},
 		{"empty ignored alias", "90", "90", "", false},
-		{"negative primary", "90", "-1", "unset", true},
+		{"fallback budget mismatch", "90", "invalid", "invalid", true},
 		{"invalid outer", "invalid", "90", "unset", true},
 		{"zero outer", "0", "90", "unset", true},
 	} {
@@ -164,6 +173,63 @@ func TestMarketFetcherInvokeTimeoutContractBeforeCloudMutation(t *testing.T) {
 					} else {
 						require.Len(t, fake.updated, 1)
 					}
+				}
+			})
+		}
+	}
+}
+
+func TestMarketFetcherInvokeReadbackAcceptsHandlerFallback(t *testing.T) {
+	for _, test := range []struct {
+		name, primary, alias string
+		outer                int64
+	}{
+		{"invalid primary uses alias", "invalid", "90", 90},
+		{"empty primary uses alias", "", "90", 90},
+		{"zero primary uses alias", "0", "90", 90},
+		{"negative primary uses alias", "-1", "90", 90},
+		{"invalid alias uses default", "unset", "invalid", 60},
+		{"empty alias uses default", "unset", "", 60},
+		{"zero alias uses default", "unset", "0", 60},
+		{"negative alias uses default", "unset", "-1", 60},
+		{"both invalid use default", "invalid", "invalid", 60},
+	} {
+		for _, operation := range []string{"create", "deploy"} {
+			t.Run(operation+"/"+test.name, func(t *testing.T) {
+				catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+				seedSCFAccountAndPackage(t, catalog)
+				requestEnv := completeInvokeEnvironment("60")
+				requestEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+				delete(requestEnv, "MOOX_FETCH_TIMEOUT_SECONDS")
+				if test.outer == 90 {
+					requestEnv["MOOX_MARKET_FETCH_TIMEOUT_SECONDS"] = "90"
+				}
+				remoteEnv := copyStringMap(requestEnv)
+				if test.primary != "unset" {
+					remoteEnv["MOOX_FETCH_TIMEOUT_SECONDS"] = test.primary
+				}
+				remoteEnv["MOOX_MARKET_FETCH_TIMEOUT_SECONDS"] = test.alias
+				fake := &fakeSCFClient{currentEnvironment: remoteEnv, currentTimeout: test.outer}
+				svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
+				var err error
+				if operation == "create" {
+					item := &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": strconv.FormatInt(test.outer, 10)}, Environment: requestEnv}
+					_, err = svc.executeCreateNodeItem(context.Background(), "crypto", item, 0)
+					require.NoError(t, err)
+					node, err := catalog.GetNode(context.Background(), "crypto", cloudNodeFromCreateItem("crypto", item, 0).NodeID)
+					require.NoError(t, err)
+					require.True(t, parseJSONMap(node.Metadata)["deployment_ready"].(bool))
+				} else {
+					require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "invoke", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "invoke", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
+					initialEnv := copyStringMap(requestEnv)
+					initialEnv["MOOX_CODE_PACKAGE_ID"] = "old-package"
+					active := &tencentscf.FunctionInfo{Status: "Active", Environment: initialEnv, Timeout: test.outer}
+					fake.getResults = []fakeSCFGetResult{{info: active}, {info: active}, {info: active}, {info: &tencentscf.FunctionInfo{Status: "Active", Environment: remoteEnv, Timeout: test.outer}}}
+					_, err = svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "invoke", PackageId: "moox-collector_dev"})
+					require.NoError(t, err)
+					node, err := catalog.GetNode(context.Background(), "crypto", "invoke")
+					require.NoError(t, err)
+					require.Equal(t, "moox-collector_dev", node.PackageID)
 				}
 			})
 		}
