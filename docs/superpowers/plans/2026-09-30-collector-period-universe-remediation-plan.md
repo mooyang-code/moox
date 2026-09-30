@@ -299,9 +299,9 @@ Task 3 验证记录：四包单测、`make test-gateway-deploy`、Storage/Gatewa
 - Create: `modules/collector/internal/marketfetch/period_storage_reconciler.go`、`modules/collector/internal/marketfetch/period_storage_reconciler_test.go`
 - Modify: `modules/collector/internal/bootstrap/bootstrap.go`
 
-- [ ] **4.1 先补清理拒绝测试。** 覆盖“无 readiness”“30 天以上”“本地无活动批次”但 Storage waiting/unknown/NOT_FOUND/error 的情况，均不删除；只在 key/hash/count 匹配且 Storage complete/degraded 时允许删除。另测仍有 planned/dispatched batch、未结束 retry 或失败回执 pending 的周期保留。
-- [ ] **4.2 执行失败测试。** `go test -count=1 ./modules/collector/internal/store -run 'TestPeriodSeriesSnapshotCleanup'`。旧无 readiness 分支应违反保留断言；删除原来固化错误删除语义的断言，替换为上述明确场景。
-- [ ] **4.3 新建一张权威状态表，兼作首次 deadline 及终态确认。** 不同时新增另一张重复 terminal receipt 表。模型 `PeriodStorageState` 保留 key/hash/count、`DeadlineAt`、`Status`、`ConfirmedAt`，每行只由成功 Ensure/GetStatus 的匹配响应更新。
+- [x] **4.1 先补清理拒绝测试。** 覆盖“无 readiness”“30 天以上”“本地无活动批次”但 Storage waiting/unknown/NOT_FOUND/error 的情况，均不删除；只在 key/hash/count 匹配且 Storage complete/degraded 时允许删除。另测仍有 planned/dispatched batch、未结束 retry 或失败回执 pending 的周期保留。
+- [x] **4.2 执行失败测试。** `go test -count=1 ./modules/collector/internal/store -run 'TestPeriodSeriesSnapshotCleanup'`。旧无 readiness 分支应违反保留断言；删除原来固化错误删除语义的断言，替换为上述明确场景。
+- [x] **4.3 新建一张权威状态表，兼作首次 deadline 及终态确认。** 不同时新增另一张重复 terminal receipt 表。模型 `PeriodStorageState` 保留 key/hash/count、`DeadlineAt`、`Status`、`ConfirmedAt`，每行只由成功 Ensure/GetStatus 的匹配响应更新。
 
 ```sql
 CREATE TABLE IF NOT EXISTS t_collector_period_storage_states (
@@ -320,17 +320,19 @@ CREATE TABLE IF NOT EXISTS t_collector_period_storage_states (
 );
 ```
 
-- [ ] **4.4 更新 Collector Storage 接口。** Ensure 返回权威 `PeriodStorageState`，GetStatus 返回同类型；校验响应状态及 hash/count。首次 Ensure ACK 丢失时可以用只读 GetStatus 恢复，不用后续 tick 重算 deadline。仓储方法为 `ObservePeriodStorageState(ctx, state)` 和 `GetPeriodStorageState(ctx, key)`；不同 hash/count/deadline 拒绝，旧 waiting 响应不能覆盖已确认 complete/degraded。Commit 保持返回 error 的调用契约，但必须校验 `accepted_series_indexes` 恰好覆盖本次请求去重后的全部目标 index，缺项/额外项/重复项均报错；终态 nil-error 不再冒充实际写入成功。补截止后未接受失败、已成功重放通过的 adapter 测试。
-- [ ] **4.5 移除启动前置清理和错误推断。** 清理在 Storage client 可用后执行，按 Space 以 `(period_time,dataset_id,frequency)` 稳定 keyset 分页探测最多 1000 个过期周期，超时/error 留待下一轮。候选 API 显式接受/返回 cursor，reconciler 为每 Space 保留跨轮游标，到尾部回绕，不新增游标表；失败候选也推进游标。新增最老 1000 条持续 NOT_FOUND/error、第 1001 条合法终态仍能在下一轮清理的测试。把 `CleanupReportedBefore` 改为 `CleanupTerminalBefore(ctx, spaceID, before, limit)`，SQL 只 JOIN 匹配终态 state；删除 `OR NOT EXISTS readiness` 条件。保持 30 天保留期及活动工作保护，不把 local missed、年龄或 readiness 当 Storage 终态。
-- [ ] **4.6 保持探测与删除身份一致。** 探测用快照自身 key/hash/count；删除事务再次检查相同 hash/count、Storage state 终态及未决工作，再删除候选快照/state，不能跨 Space 扫全表。Timer manifest 尚未在本任务创建，其关联删除在 Task 6 加入同一清理事务。
-- [ ] **4.7 验证恢复与 schema。** 增加 Ensure 返回原始 deadline、重启读取 state、并发 waiting/terminal 响应不倒退测试；更新 fresh-schema 必需表/列校验。Task 5 变更回执字段后再次扩展 pending 保护，不能提前依赖尚不存在的列。
-- [ ] **4.8 验证并提交。** 预期全部 PASS；提交 `fix(collector): require storage terminal evidence for snapshot cleanup`。
+- [x] **4.4 更新 Collector Storage 接口。** Ensure 返回权威 `PeriodStorageState`，GetStatus 返回同类型；校验响应状态及 hash/count。首次 Ensure ACK 丢失时可以用只读 GetStatus 恢复，不用后续 tick 重算 deadline。仓储方法为 `ObservePeriodStorageState(ctx, state)` 和 `GetPeriodStorageState(ctx, key)`；不同 hash/count/deadline 拒绝，旧 waiting 响应不能覆盖已确认 complete/degraded。Commit 保持返回 error 的调用契约，但必须校验 `accepted_series_indexes` 恰好覆盖本次请求去重后的全部目标 index，缺项/额外项/重复项均报错；终态 nil-error 不再冒充实际写入成功。补截止后未接受失败、已成功重放通过的 adapter 测试。
+- [x] **4.5 移除启动前置清理和错误推断。** 清理在 Storage client 可用后执行，按 Space 以 `(period_time,dataset_id,frequency)` 稳定 keyset 分页探测最多 1000 个过期周期，超时/error 留待下一轮。候选 API 显式接受/返回 cursor，reconciler 为每 Space 保留跨轮游标，到尾部回绕，不新增游标表；失败候选也推进游标。新增最老 1000 条持续 NOT_FOUND/error、第 1001 条合法终态仍能在下一轮清理的测试。把 `CleanupReportedBefore` 改为 `CleanupTerminalBefore(ctx, spaceID, before, limit)`，SQL 只 JOIN 匹配终态 state；删除 `OR NOT EXISTS readiness` 条件。保持 30 天保留期及活动工作保护，不把 local missed、年龄或 readiness 当 Storage 终态。
+- [x] **4.6 保持探测与删除身份一致。** 探测用快照自身 key/hash/count；删除事务再次检查相同 hash/count、Storage state 终态及未决工作，再删除候选快照/state，不能跨 Space 扫全表。Timer manifest 尚未在本任务创建，其关联删除在 Task 6 加入同一清理事务。
+- [x] **4.7 验证恢复与 schema。** 增加 Ensure 返回原始 deadline、重启读取 state、并发 waiting/terminal 响应不倒退测试；更新 fresh-schema 必需表/列校验。Task 5 变更回执字段后再次扩展 pending 保护，不能提前依赖尚不存在的列。
+- [x] **4.8 验证并提交。** 实际提交：`cc9a1737`（Storage 终态清理、Collector 状态持久化与 reconciler）、`eed2a4ef`（处理 Primary `INNER_ERR` unknown outcome）。
 
 ```bash
 go test -count=1 ./modules/collector/internal/store ./modules/collector/internal/marketstorage ./modules/collector/internal/marketfetch ./modules/collector/internal/bootstrap
 sqlite3 :memory: '.read modules/collector/schema/collector.sql'
 git diff --check
 ```
+
+Task 4 验证记录：四包 fresh tests、四包 race、SQLite schema load、`gofmt` 和 `git diff --check` 均通过。首次清理拒绝测试在旧实现上按预期 RED；一次 Store 测试挂起定位为事务内从主 DB 二次取单连接，改为复用 transaction 后通过。规格审查 PASS；codeCR 发现 Primary 内部 DataNode 错误会以 nil-Go-error `INNER_ERR` 返回，导致 Ensure 未做状态恢复；新增回归先 RED 后以只读 GetStatus 恢复，`INNER_ERR+NOT_FOUND` 有界重试，参数/权限/冲突仍立即拒绝；修复复审 PASS。主 Agent 独立重跑四包 fresh/race 与 SQLite schema load。非阻断余项：未跑全 workspace gate；没有 bootstrap Storage-client-unavailable 级测试，也没有双 DB 连接并发插入 batch/retry 竞争测试。
 
 ### Task 5：逐目标持久失败回执与独立上报循环
 
