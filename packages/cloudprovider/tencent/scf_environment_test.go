@@ -51,6 +51,37 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 	if err := ValidateCollectorTimerEnvironment(invoke); err == nil {
 		t.Fatal("Timer must still require its Claim route")
 	}
+	for _, test := range []struct {
+		name, appKeys string
+		wantError     bool
+	}{
+		{"other binding only", `{"other":"` + strings.Repeat("b", 64) + `"}`, true},
+		{"Collector binding with extra key", `{"other":"` + strings.Repeat("b", 64) + `","moox-collector":"` + strings.Repeat("a", 64) + `"}`, false},
+	} {
+		for _, validator := range []struct {
+			name     string
+			validate func(map[string]string) error
+		}{
+			{"Invoke", ValidateCollectorMarketFetchEnvironment},
+			{"Timer", ValidateCollectorTimerEnvironment},
+		} {
+			t.Run("Storage binding/"+validator.name+"/"+test.name, func(t *testing.T) {
+				values := make(map[string]string)
+				for key, value := range valid {
+					values[key] = value
+				}
+				values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = test.appKeys
+				err := validator.validate(values)
+				if test.wantError {
+					if err == nil || !strings.Contains(err.Error(), "moox-collector") || strings.Contains(err.Error(), strings.Repeat("b", 64)) {
+						t.Fatalf("missing Collector binding must fail without exposing keys: %v", err)
+					}
+				} else if err != nil {
+					t.Fatalf("Collector binding plus extra keys is valid: %v", err)
+				}
+			})
+		}
+	}
 	for key := range valid {
 		t.Run("missing "+key, func(t *testing.T) {
 			copy := make(map[string]string)

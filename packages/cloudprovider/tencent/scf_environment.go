@@ -137,6 +137,9 @@ func validateStorageAppKeys(raw string) error {
 	if len(seen) == 0 {
 		return fmt.Errorf("app keys must not be empty")
 	}
+	if _, ok := seen["moox-collector"]; !ok {
+		return fmt.Errorf("app keys must include the moox-collector binding")
+	}
 	return nil
 }
 
