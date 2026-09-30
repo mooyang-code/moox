@@ -24,10 +24,13 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
-	mode := flag.String("mode", "monitor-http", "helper mode: monitor-http or kline-native")
+	mode := flag.String("mode", "monitor-http", "helper mode: monitor-http, kline-native or collector-period-native")
+	deploymentYAML := flag.String("deployment-yaml", "", "absolute production deployment YAML path")
+	routeScope := flag.String("route-scope", "", "collector-period-native scope: storage-period or collector-runtime")
 	nodeID := flag.String("node-id", "", "target Gateway node ID")
 	upstreamURL := flag.String("upstream-url", "", "loopback Monitor upstream URL")
 	upstreamAddress := flag.String("upstream-addr", "", "loopback native tRPC upstream address")
@@ -36,6 +39,14 @@ func main() {
 	nonceDirectory := flag.String("nonce-dir", "", "persistent nonce directory")
 	keyID := flag.String("key-id", "", "service HMAC key ID")
 	flag.Parse()
+	if *mode == "collector-period-native" {
+		err := runCollectorPeriodNative(*deploymentYAML, *routeScope, *nodeID, *upstreamAddress, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET"))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(*mode, *nodeID, *upstreamURL, *upstreamAddress, *listenAddress, *readyFile, *nonceDirectory, *keyID, os.Getenv("MOOX_GATEWAY_E2E_SERVICE_SECRET")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -113,10 +124,18 @@ func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDire
 	if err != nil || (host != "127.0.0.1" && host != "::1") {
 		return fmt.Errorf("upstream-addr must be a loopback host:port")
 	}
-	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, []gatewayproxy.Route{{
+	return runNativeRoutes(nodeID, []gatewayproxy.Route{{
 		ServiceID: "storage-primary", Address: upstreamAddress, ServicePath: "trpc.moox.storage.PrimaryStore",
 		AllowedMethods: []string{"ReadTimeSeriesRows", "UpsertFields"}, AllowedCallers: []string{"moox-skill"},
-	}})
+	}}, "moox-skill", listenAddress, readyFile, nonceDirectory, keyID, secret)
+}
+
+func runNativeRoutes(nodeID string, routes []gatewayproxy.Route, caller, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	credentials := gatewayauth.Credentials{KeyID: keyID, Caller: caller, Secret: secret}
+	if _, err := gatewayauth.Sign(credentials, gatewayauth.Request{Method: http.MethodPost, Path: "/", TargetNode: nodeID}, time.Now()); err != nil {
+		return fmt.Errorf("native gateway identity: %w", err)
+	}
+	snapshot, err := gatewayproxy.NormalizeAndHash(nodeID, routes)
 	if err != nil {
 		return err
 	}
@@ -130,11 +149,9 @@ func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDire
 	}
 	defer nonces.Close()
 	desc, implementation := router.NativeServiceDesc(router.NativeOptions{
-		NodeID: nodeID,
-		Credentials: gatewayauth.Credentials{
-			KeyID: keyID, Caller: "moox-skill", Secret: secret,
-		},
-		Table: &table, Nonces: nonces, Disabled: func() bool { return false },
+		NodeID:      nodeID,
+		Credentials: credentials,
+		Table:       &table, Nonces: nonces, Disabled: func() bool { return false },
 	})
 	listener, err := net.Listen("tcp", strings.TrimSpace(listenAddress))
 	if err != nil {
@@ -172,6 +189,128 @@ func runKlineNative(nodeID, upstreamAddress, listenAddress, readyFile, nonceDire
 	case err := <-done:
 		return err
 	}
+}
+
+type deploymentRoutePolicy struct {
+	TimeoutMS      int64    `yaml:"timeout_ms"`
+	MaxBodyBytes   int64    `yaml:"max_body_bytes"`
+	GatewayMethods []string `yaml:"gateway_methods"`
+	GatewayCallers []string `yaml:"gateway_callers"`
+}
+
+func runCollectorPeriodNative(path, scope, nodeID, upstreamAddress, listenAddress, readyFile, nonceDirectory, keyID, secret string) error {
+	routes, err := loadCollectorPeriodRoutes(path, scope, upstreamAddress)
+	if err != nil {
+		return err
+	}
+	return runNativeRoutes(nodeID, routes, "collector", listenAddress, readyFile, nonceDirectory, keyID, secret)
+}
+
+func loadCollectorPeriodRoutes(path, scope, upstreamAddress string) ([]gatewayproxy.Route, error) {
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("deployment-yaml must be an absolute path")
+	}
+	host, port, err := net.SplitHostPort(upstreamAddress)
+	if err != nil || (host != "127.0.0.1" && host != "::1") || port == "" {
+		return nil, fmt.Errorf("upstream-addr must be a loopback host:port")
+	}
+	serviceID, servicePath := "storage-primary", "trpc.moox.storage.PrimaryStore"
+	required := []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"}
+	switch scope {
+	case "storage-period":
+	case "collector-runtime":
+		serviceID, servicePath = "collector-market-runtime", "trpc.moox.collector.MarketFetchRuntime"
+		required = []string{"ClaimTimerBatch"}
+	default:
+		return nil, fmt.Errorf("unsupported route-scope %q", scope)
+	}
+	var seed struct {
+		Services []struct {
+			Name             string `yaml:"name"`
+			Status           string `yaml:"status"`
+			Host             string `yaml:"host"`
+			Port             int    `yaml:"port"`
+			GatewayPath      string `yaml:"gateway_path"`
+			GatewayServiceID string `yaml:"gateway_service_id"`
+			GatewayEnabled   bool   `yaml:"gateway_enabled"`
+			ExtraConfig      struct {
+				deploymentRoutePolicy `yaml:",inline"`
+				GatewayRoutes         []struct {
+					deploymentRoutePolicy `yaml:",inline"`
+					ServicePath           string `yaml:"service_path"`
+					Port                  int    `yaml:"port"`
+				} `yaml:"gateway_routes"`
+			} `yaml:"extra_config"`
+		} `yaml:"services"`
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(raw, &seed); err != nil {
+		return nil, fmt.Errorf("decode deployment-yaml: %w", err)
+	}
+	counts := make(map[string]int)
+	var selected []gatewayproxy.Route
+	for _, service := range seed.Services {
+		id := service.GatewayServiceID
+		if id == "" && service.Name == serviceID {
+			return nil, fmt.Errorf("required service %s needs explicit gateway_service_id", service.Name)
+		}
+		if id != serviceID {
+			continue
+		}
+		if !service.GatewayEnabled {
+			return nil, fmt.Errorf("required service %s is not gateway enabled", id)
+		}
+		if service.Status != "active" {
+			return nil, fmt.Errorf("required service %s must have active status", id)
+		}
+		appendRoute := func(path string, port int, policy deploymentRoutePolicy) error {
+			route := gatewayproxy.Route{ServiceID: id, Address: net.JoinHostPort(service.Host, fmt.Sprint(port)), ServicePath: path,
+				TimeoutMS: policy.TimeoutMS, MaxBodyBytes: policy.MaxBodyBytes,
+				AllowedMethods: policy.GatewayMethods, AllowedCallers: policy.GatewayCallers}
+			chosen := false
+			for _, method := range required {
+				if route.AllowsMethod(method) {
+					counts[method]++
+					chosen = true
+				}
+			}
+			if !chosen {
+				return nil
+			}
+			if path != servicePath || !route.AllowsCaller("collector") {
+				return fmt.Errorf("required route %s must use %s and allow collector", id, servicePath)
+			}
+			if _, err := gatewayproxy.NormalizeAndHash("validate-production-route", []gatewayproxy.Route{route}); err != nil {
+				return fmt.Errorf("invalid production route: %w", err)
+			}
+			route.Address = upstreamAddress
+			selected = append(selected, route)
+			return nil
+		}
+		if err := appendRoute(service.GatewayPath, service.Port, service.ExtraConfig.deploymentRoutePolicy); err != nil {
+			return nil, err
+		}
+		for _, route := range service.ExtraConfig.GatewayRoutes {
+			if route.ServicePath == "" || route.Port < 1 {
+				return nil, fmt.Errorf("gateway_routes entries require service_path and positive port")
+			}
+			if err := appendRoute(route.ServicePath, route.Port, route.deploymentRoutePolicy); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, method := range required {
+		if counts[method] != 1 {
+			return nil, fmt.Errorf("required method %s must have exactly one route (got %d)", method, counts[method])
+		}
+	}
+	if _, err := gatewayproxy.NormalizeAndHash("validate-selected-routes", selected); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 func writeReadyFile(path, value string) error {
