@@ -164,6 +164,15 @@ func TestGatewayServiceScopeClassificationProtectsInternalTradeOwnerAndStrategyB
 	assert.True(t, isSpaceScopedService("collector"))
 }
 
+func TestCollectorRuntimeIsNotExposedThroughAdminBFF(t *testing.T) {
+	for _, alias := range []string{"collector-market-runtime", "collector_market_runtime", "CollectorMarketRuntime"} {
+		assert.True(t, isInternalCollectorRuntimeService(alias), alias)
+	}
+	assert.False(t, isInternalCollectorRuntimeService("collector"))
+	assert.True(t, isInternalCollectorRuntimeServicePath("trpc.moox.collector.MarketFetchRuntime"))
+	assert.False(t, isInternalCollectorRuntimeServicePath("trpc.moox.collector.CollectMgr"))
+}
+
 func TestTradeConsoleDoesNotExposeStrategyOwnershipFencingToBrowser(t *testing.T) {
 	for _, method := range []string{"ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"} {
 		assert.True(t, isTradeOwnerOnlyMethod("trade_console", method), method)

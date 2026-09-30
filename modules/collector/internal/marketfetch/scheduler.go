@@ -30,8 +30,16 @@ import (
 )
 
 const (
-	DefaultBatchSize = MaxRealtimeItems
-	DefaultMaxPlan   = 1000
+	DefaultBatchSize         = MaxRealtimeItems
+	DefaultMaxPlan           = 1000
+	DefaultInvokeConcurrency = 20
+	// 96 slots drain StockCN's 170-batch wave in two worst-case 20-second waves.
+	StockCNTimerInvokeConcurrency = 96
+	maxSchedulerInvokeConcurrency = 96
+	maxDueRecoveryBatchesPerTick  = 256
+	maxRetryBatchesPerTick        = 256
+	maxRetryItemsPerTick          = maxRetryBatchesPerTick * MaxRealtimeItems
+	retryTargetLookupBatchSize    = 500
 )
 
 type scheduleState struct {
@@ -43,6 +51,24 @@ type plannedDispatch struct {
 	req   Request
 	node  scfinvoker.Node
 	nodes []scfinvoker.Node
+}
+
+type retryDispatchCandidate struct {
+	retry domain.RetryItem
+	item  domain.CollectionItem
+}
+
+type retryDispatchGroup struct {
+	key           string
+	batchKind     domain.BatchKind
+	attempt       int
+	retryScope    string
+	writeTargetID string
+	retries       []domain.RetryItem
+	items         []domain.CollectionItem
+	targets       []domain.WriteTarget
+	instanceIDs   []string
+	seenInstances map[string]struct{}
 }
 
 type taskExpansionCache struct {
@@ -63,19 +89,23 @@ func expansionCacheKey(spaceID string, tagIDs []string) string {
 // applies. It is intentionally a single process timer handler; SQLite unique
 // indexes provide the only idempotency needed by this single-user system.
 type Scheduler struct {
-	SCFRegionBlacklists  map[string][]string
-	ResolveSymbol        SymbolResolver
-	ResolveSourceID      func(string, string) string
-	Tasks                *store.TaskRepository
-	Instances            *store.TaskInstanceRepository
-	Batches              *store.FetchBatchRepository
-	Runs                 *store.RunRepository
-	Retries              *store.FetchRetryRepository
-	PeriodSeriesSnapshot *store.PeriodSeriesSnapshotRepository
-	PeriodStorageStates  *store.PeriodStorageStateRepository
-	Invoker              MarketFetchInvoker
-	Storage              func(string, string, string) (Storage, error)
-	StorageTarget        string
+	SCFRegionBlacklists        map[string][]string
+	ResolveSymbol              SymbolResolver
+	ResolveSourceID            func(string, string) string
+	Tasks                      *store.TaskRepository
+	Instances                  *store.TaskInstanceRepository
+	Batches                    *store.FetchBatchRepository
+	Runs                       *store.RunRepository
+	Retries                    *store.FetchRetryRepository
+	PeriodSeriesSnapshot       *store.PeriodSeriesSnapshotRepository
+	PeriodStorageStates        *store.PeriodStorageStateRepository
+	TimerPeriodBatches         *store.TimerPeriodBatchRepository
+	TimerPeriodPlanner         *TimerPeriodPlanner
+	TimerAssignments           func() []NodeAssignment
+	TimerMeasuredSafeGroupSize int
+	Invoker                    MarketFetchInvoker
+	Storage                    func(string, string, string) (Storage, error)
+	StorageTarget              string
 	// InvokeStorageTarget is sent in SCF invoke payloads. Leave empty to reuse
 	// StorageTarget. Collector on a mainland host may talk to Storage over a
 	// private IP while overseas functions still need the public native gateway.
@@ -92,17 +122,23 @@ type Scheduler struct {
 	DNSCache              interface {
 		Snapshot() map[string]sources.DNSResolution
 	}
-	Now         func() time.Time
-	mu          sync.Mutex
-	lastTaskID  string
-	lastCleanup time.Time
-	planStates  map[string]scheduleState
-	invokeSem   chan struct{}
+	Now                              func() time.Time
+	mu                               sync.Mutex
+	lastTaskID                       string
+	lastCleanup                      time.Time
+	planStates                       map[string]scheduleState
+	invokeSem                        chan struct{}
+	invokeAttemptTimeout             time.Duration
+	retryDispatchWaitTimeoutOverride time.Duration
+	retryDispatchMu                  sync.Mutex
+	retryDispatchInFlight            map[string]struct{}
 }
 
 const (
 	defaultBatchCompletionDeadline = 70 * time.Second
 	defaultSCFInvokeAttemptTimeout = 10 * time.Second
+	retryDispatchDatabaseSlack     = 30 * time.Second
+	retryDispatchScheduleSlack     = 5 * time.Second
 	periodFailureReportingSlack    = 4 * time.Minute
 )
 
@@ -125,6 +161,73 @@ func datasetPeriodCompletionWindow(kind domain.BatchKind) time.Duration {
 	return 5*batchCompletionDeadline(kind) + retryDelay(1) + retryDelay(2) + retryDelay(3) + periodFailureReportingSlack
 }
 
+func retryDispatchWaitTimeout(concurrency int) time.Duration {
+	if concurrency <= 0 {
+		concurrency = DefaultInvokeConcurrency
+	}
+	if concurrency > maxSchedulerInvokeConcurrency {
+		concurrency = maxSchedulerInvokeConcurrency
+	}
+	waves := (maxRetryBatchesPerTick + concurrency - 1) / concurrency
+	return time.Duration(waves)*2*defaultSCFInvokeAttemptTimeout + retryDispatchDatabaseSlack
+}
+
+func retryDispatchReservationKeys(spaceID, batchID string, retryKeys []string) []string {
+	spaceID, batchID = strings.TrimSpace(spaceID), strings.TrimSpace(batchID)
+	keys := []string{spaceID + "\x00batch\x00" + batchID}
+	for _, retryKey := range uniqueStrings(retryKeys) {
+		keys = append(keys, spaceID+"\x00retry\x00"+retryKey)
+	}
+	return keys
+}
+
+func (s *Scheduler) beginRetryDispatch(spaceID, batchID string, retryKeys []string) bool {
+	s.retryDispatchMu.Lock()
+	defer s.retryDispatchMu.Unlock()
+	if s.retryDispatchInFlight == nil {
+		s.retryDispatchInFlight = make(map[string]struct{})
+	}
+	keys := retryDispatchReservationKeys(spaceID, batchID, retryKeys)
+	for _, key := range keys {
+		if _, exists := s.retryDispatchInFlight[key]; exists {
+			return false
+		}
+	}
+	for _, key := range keys {
+		s.retryDispatchInFlight[key] = struct{}{}
+	}
+	return true
+}
+
+func (s *Scheduler) endRetryDispatch(spaceID, batchID string, retryKeys []string) {
+	s.retryDispatchMu.Lock()
+	for _, key := range retryDispatchReservationKeys(spaceID, batchID, retryKeys) {
+		delete(s.retryDispatchInFlight, key)
+	}
+	s.retryDispatchMu.Unlock()
+}
+
+func (s *Scheduler) retryDispatchWaitBudget() time.Duration {
+	if s.retryDispatchWaitTimeoutOverride > 0 {
+		return s.retryDispatchWaitTimeoutOverride
+	}
+	return retryDispatchWaitTimeout(cap(s.invokeSem))
+}
+
+func (s *Scheduler) ensureInvokeSemaphore() {
+	if s.invokeSem != nil {
+		return
+	}
+	limit := s.InvokeConcurrency
+	if limit <= 0 {
+		limit = DefaultInvokeConcurrency
+	}
+	if limit > maxSchedulerInvokeConcurrency {
+		limit = maxSchedulerInvokeConcurrency
+	}
+	s.invokeSem = make(chan struct{}, limit)
+}
+
 func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	if s == nil || s.Tasks == nil || s.Batches == nil || s.Invoker == nil {
 		return fmt.Errorf("market fetch scheduler is not initialized")
@@ -133,13 +236,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 		return nil
 	}
 	defer s.mu.Unlock()
-	if s.invokeSem == nil {
-		limit := s.InvokeConcurrency
-		if limit <= 0 || limit > 20 {
-			limit = 20
-		}
-		s.invokeSem = make(chan struct{}, limit)
-	}
+	s.ensureInvokeSemaphore()
 	if s.planStates == nil {
 		s.planStates = make(map[string]scheduleState)
 	}
@@ -148,6 +245,11 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	}
 	if spaceID == "" {
 		return fmt.Errorf("space_id is required")
+	}
+	if s.InvokeNonRealtimeOnly && s.TimerPeriodBatches != nil {
+		if _, cancelErr := s.TimerPeriodBatches.CancelStaleUnclaimed(ctx, spaceID); cancelErr != nil {
+			return fmt.Errorf("cancel stale unclaimed Timer batches: %w", cancelErr)
+		}
 	}
 	if s.Instances != nil {
 		if pruned, pruneErr := s.Instances.PruneDisabledWriteTargets(ctx, spaceID); pruneErr != nil {
@@ -257,14 +359,15 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 	})
 	invokeNodes = filterNodesByTrigger(nodes, "invoke")
 	timerNodes = filterNodesByTrigger(nodes, "timer")
-	if len(invokeNodes) == 0 && requiresInvoke {
-		return fmt.Errorf("no active Invoke market fetcher nodes")
-	}
-	if err := s.recoverDue(ctx, spaceID, invokeNodes, now); err != nil {
+	retryNodes := uniqueSCFNodes(append(append([]scfinvoker.Node(nil), invokeNodes...), timerNodes...))
+	if err := s.recoverDue(ctx, spaceID, retryNodes, now); err != nil {
 		log.WarnContextf(ctx, "recover market fetch batches failed: %v", err)
 	}
-	if err := s.dispatchDueRetries(ctx, spaceID, invokeNodes, now); err != nil {
+	if err := s.dispatchDueRetries(ctx, spaceID, retryNodes, now); err != nil {
 		log.WarnContextf(ctx, "dispatch market fetch retries failed: %v", err)
+	}
+	if len(invokeNodes) == 0 && requiresInvoke {
+		return fmt.Errorf("no active Invoke market fetcher nodes")
 	}
 	// Planning is intentionally two-phase. Persist every task's destination
 	// before the first batch is dispatched so a shared source request can fan
@@ -325,6 +428,17 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) (err error) {
 			items, err := s.expandTaskForPeriod(ctx, task, frequency, target)
 			if err != nil {
 				log.WarnContextf(ctx, "skip task=%s frequency=%s period=%s: %v", task.TaskID, frequency, target.UTC().Format(time.RFC3339), err)
+				continue
+			}
+			if s.ownsTimerTask(task) {
+				if s.TimerPeriodPlanner == nil || s.TimerAssignments == nil {
+					return fmt.Errorf("Timer period planning is not configured for task %s", task.TaskID)
+				}
+				created, planErr := s.planTimerPeriodForAssignments(ctx, spaceID, currentRunID, runCutoff, task, frequency, target, now, s.TimerAssignments(), timerNodes)
+				if planErr != nil {
+					return fmt.Errorf("plan Timer period task=%s frequency=%s: %w", task.TaskID, frequency, planErr)
+				}
+				planned += created
 				continue
 			}
 			frequencyRequestKeys := make([]string, 0, len(items))
@@ -459,6 +573,9 @@ func (s *Scheduler) primeSharedWriteTargets(ctx context.Context, spaceID, runID 
 		return blockedPeriods, nil
 	}
 	for _, task := range tasks {
+		if s.ownsTimerTask(task) {
+			continue
+		}
 		matches, err := s.taskIdentityMatchesRun(ctx, spaceID, task, runCutoff)
 		if err != nil {
 			return nil, fmt.Errorf("check collection task before shared planning: %w", err)
@@ -596,6 +713,219 @@ func (s *Scheduler) ensureDatasetPeriod(ctx context.Context, task domain.Collect
 		}
 	}
 	return nil
+}
+
+func (s *Scheduler) ownsTimerTask(task domain.CollectionTask) bool {
+	if s == nil {
+		return false
+	}
+	spaceID := firstNonEmpty(task.SpaceID, s.SpaceID)
+	return s.InvokeNonRealtimeOnly && strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) && isKlineTask(task)
+}
+
+func (s *Scheduler) planTimerPeriodForAssignments(ctx context.Context, spaceID, runID string, runCutoff time.Time, task domain.CollectionTask, frequency string, period, now time.Time, assignments []NodeAssignment, timerNodes []scfinvoker.Node) (int, error) {
+	planner := s.TimerPeriodPlanner
+	if planner == nil || planner.Snapshots == nil || planner.States == nil || planner.Batches == nil {
+		return 0, fmt.Errorf("Timer period planner repositories are not configured")
+	}
+	if _, err := marketdata.ParseFrequency(frequency); err != nil {
+		return 0, err
+	}
+	params, datasetID, _, err := s.taskPeriodDefinition(task)
+	if err != nil {
+		return 0, err
+	}
+	periodKey := domain.PeriodKey{SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: period.UTC()}
+	snapshot, found, err := planner.Snapshots.GetPeriodSeriesSnapshot(ctx, periodKey)
+	if err != nil {
+		return 0, fmt.Errorf("load Timer period series snapshot: %w", err)
+	}
+	if !found {
+		return 0, fmt.Errorf("Timer period series snapshot is missing")
+	}
+	if len(snapshot.Entries) != int(snapshot.ExpectedCount) {
+		return 0, fmt.Errorf("Timer period full membership differs from the frozen snapshot")
+	}
+	// An existing manifest set is the immutable period owner. Do not consult
+	// refreshed assignments or attempt to fill a missing group from new tags.
+	existing, err := planner.Batches.ListByPeriod(ctx, periodKey)
+	if err != nil {
+		return 0, fmt.Errorf("read existing Timer period manifests: %w", err)
+	}
+	if len(existing) != 0 {
+		return 0, nil
+	}
+	routeVersion, sources, err := stockCNAssignmentRoute()
+	if err != nil {
+		return 0, err
+	}
+	if s.TimerMeasuredSafeGroupSize <= 0 || s.TimerMeasuredSafeGroupSize > MaxRealtimeItems {
+		return 0, fmt.Errorf("Timer measured safe group size must be between 1 and %d", MaxRealtimeItems)
+	}
+	entries := append([]domain.PeriodSeriesSnapshotEntry(nil), snapshot.Entries...)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].SeriesIndex < entries[j].SeriesIndex })
+	subjects := make([]string, len(entries))
+	entryBySubject := make(map[string]domain.PeriodSeriesSnapshotEntry, len(entries))
+	for index, entry := range entries {
+		if entry.SeriesIndex != uint32(index) || entry.ExpectedCount != int(snapshot.ExpectedCount) || entry.SeriesHash != snapshot.SeriesHash ||
+			strings.TrimSpace(entry.SubjectID) == "" || strings.TrimSpace(entry.Provider) == "" || strings.TrimSpace(entry.SourceID) == "" ||
+			strings.TrimSpace(entry.MarketType) == "" || strings.TrimSpace(entry.ProviderSymbol) == "" || entry.SeriesTag == "" {
+			return 0, fmt.Errorf("Timer period snapshot has invalid entry at series index %d", index)
+		}
+		if entry.Provider != entries[0].Provider || entry.MarketType != entries[0].MarketType {
+			return 0, fmt.Errorf("Timer period snapshot crosses its static provider or market type")
+		}
+		subject := strings.ToUpper(strings.TrimSpace(entry.SubjectID))
+		if _, exists := entryBySubject[subject]; exists {
+			return 0, fmt.Errorf("Timer period snapshot repeats subject %s", subject)
+		}
+		subjects[index] = subject
+		entryBySubject[subject] = entry
+	}
+	catalog := make(map[int]NodeAssignment)
+	groupCount := 0
+	for _, assignment := range assignments {
+		if assignment.DatasetID != datasetID || assignment.Frequency != frequency {
+			continue
+		}
+		if assignment.GroupCount <= 0 || assignment.GroupID < 0 || assignment.GroupID >= assignment.GroupCount ||
+			assignment.RouteVersion != routeVersion || assignment.RouteProvider != entries[0].Provider ||
+			assignment.MarketType != entries[0].MarketType || assignment.Provider == "" || assignment.SourceID == "" ||
+			assignment.NodeID == "" || assignment.FunctionName == "" || assignment.Region == "" {
+			return 0, fmt.Errorf("Timer assignment catalog has an invalid static binding for group %d", assignment.GroupID)
+		}
+		if groupCount == 0 {
+			groupCount = assignment.GroupCount
+		}
+		if assignment.GroupCount != groupCount {
+			return 0, fmt.Errorf("Timer assignment catalog has inconsistent group_count")
+		}
+		if _, exists := catalog[assignment.GroupID]; exists {
+			return 0, fmt.Errorf("Timer assignment catalog repeats group %d", assignment.GroupID)
+		}
+		catalog[assignment.GroupID] = assignment
+	}
+	if groupCount == 0 || len(catalog) != groupCount {
+		return 0, fmt.Errorf("Timer assignment catalog does not cover all %d groups", groupCount)
+	}
+	sourceGroups, err := assignStockCNSourceGroups(subjects, sources, groupCount, s.TimerMeasuredSafeGroupSize, routeVersion)
+	if err != nil {
+		return 0, err
+	}
+	frozenItems := make([]domain.CollectionItem, 0, len(entries))
+	itemBySeriesIndex := make(map[uint32]domain.CollectionItem, len(entries))
+	for _, entry := range entries {
+		item := domain.CollectionItem{
+			SubjectID: entry.SubjectID, Symbol: entry.ProviderSymbol, Provider: entry.Provider, SourceID: entry.SourceID,
+			MarketID: StockCNSpaceID, InstrumentType: "equity", MarketType: entry.MarketType, DataType: task.DataType,
+			DatasetID: datasetID, Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
+			SeriesIndex: entry.SeriesIndex, SeriesHash: snapshot.SeriesHash, ExpectedCount: snapshot.ExpectedCount,
+		}
+		item = prepareCollectionItemRequest(item, frequency, period, MaxRealtimeRows)
+		frozenItems = append(frozenItems, item)
+		itemBySeriesIndex[item.SeriesIndex] = item
+	}
+	plans := make([]TimerPeriodPlan, 0, groupCount)
+	for groupID, sourceGroup := range sourceGroups {
+		if len(sourceGroup.Subjects) == 0 {
+			continue
+		}
+		assignment, ok := catalog[groupID]
+		if !ok {
+			return 0, fmt.Errorf("Timer assignment catalog is missing group %d", groupID)
+		}
+		if !timerAssignmentNodePresent(assignment, timerNodes) {
+			return 0, nil
+		}
+		if assignment.Provider != sourceGroup.Source.Provider || assignment.SourceID != sourceGroup.Source.SourceID {
+			return 0, fmt.Errorf("Timer assignment group %d differs from the frozen route provider binding", groupID)
+		}
+		groupSubjects := make(map[string]struct{}, len(sourceGroup.Subjects))
+		for _, subject := range sourceGroup.Subjects {
+			groupSubjects[strings.ToUpper(strings.TrimSpace(subject))] = struct{}{}
+		}
+		instances := make([]domain.TaskInstance, 0, len(groupSubjects))
+		targets := make([]domain.WriteTarget, 0, len(groupSubjects))
+		requestItems := make([]domain.CollectionItem, 0, len(groupSubjects))
+		for _, snapshotEntry := range entries {
+			subject := strings.ToUpper(strings.TrimSpace(snapshotEntry.SubjectID))
+			if _, selected := groupSubjects[subject]; !selected {
+				continue
+			}
+			item := itemBySeriesIndex[snapshotEntry.SeriesIndex]
+			item.InstanceID = collectionItemInstanceID(spaceID, runID, task.TaskID, item, frequency, period)
+			targetTime, parseErr := time.Parse(time.RFC3339Nano, item.TargetDataTime)
+			if parseErr != nil {
+				return 0, fmt.Errorf("parse Timer item target_data_time: %w", parseErr)
+			}
+			requestItem := item
+			requestItem.Provider = sourceGroup.Source.Provider
+			requestItem.SourceID = sourceGroup.Source.SourceID
+			instances = append(instances, domain.TaskInstance{
+				SpaceID: spaceID, InstanceID: item.InstanceID, RunID: runID, RequestKey: sharedCollectionItemKey(item, frequency, period),
+				Provider: item.Provider, ProviderSymbol: item.Symbol, SourceID: item.SourceID, MarketType: item.MarketType,
+				SeriesTag: snapshotEntry.SeriesTag, DataType: item.DataType, SubjectID: item.SubjectID, Frequency: frequency,
+				TargetDataTime: &targetTime, TaskParams: collectionItemRequestParams(item),
+			})
+			targets = append(targets, domain.WriteTarget{
+				ID: stableID(spaceID, item.InstanceID, task.TaskID, datasetID), SpaceID: spaceID, InstanceID: item.InstanceID,
+				TaskID: task.TaskID, DatasetID: datasetID, ViewID: task.ResultViewID,
+				OutputFields: stringSliceJSON(params.OutputFields), SeriesIndex: item.SeriesIndex,
+				SeriesHash: item.SeriesHash, ExpectedCount: item.ExpectedCount, Status: "pending",
+			})
+			requestItems = append(requestItems, requestItem)
+		}
+		if len(requestItems) == 0 || len(requestItems) > MaxRealtimeItems {
+			return 0, fmt.Errorf("Timer assignment group=%d has %d items, exceeds cap %d", assignment.GroupID, len(requestItems), MaxRealtimeItems)
+		}
+		request := Request{
+			BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, MarketID: assignment.MarketID,
+			InstrumentType: assignment.InstrumentType, DatasetID: datasetID, Frequency: frequency,
+			Provider: firstNonEmpty(assignment.Provider, assignment.RouteProvider), SourceID: assignment.SourceID,
+			MarketType: assignment.MarketType, Region: assignment.Region, NodeID: assignment.NodeID,
+			FunctionName: assignment.FunctionName, ShardIndex: assignment.GroupID, GroupID: assignment.GroupID,
+			GroupCount: assignment.GroupCount, RouteVersion: assignment.RouteVersion, RunID: runID,
+			DNSRoutes: s.dnsSnapshot(ctx), Items: requestItems, Targets: targets,
+		}
+		plans = append(plans, TimerPeriodPlan{Task: task, RunID: runID, RunCutoff: runCutoff, TaskModifyTime: task.ModifyTime, Snapshot: snapshot, Assignment: assignment,
+			Request: request, Instances: instances, Targets: targets})
+	}
+	if len(plans) == 0 {
+		return 0, nil
+	}
+	ensureStorage := planner.EnsureStorage
+	if s.Storage != nil && strings.TrimSpace(s.StorageTarget) != "" {
+		if s.PeriodStorageStates == nil {
+			return 0, fmt.Errorf("Timer period Storage state repository is not configured")
+		}
+		frozenStorageItems := append([]domain.CollectionItem(nil), frozenItems...)
+		ensureStorage = func(storageCtx context.Context, frozen domain.PeriodSeriesSnapshot) (domain.PeriodStorageState, error) {
+			if err := s.ensureDatasetPeriod(storageCtx, task, frozenStorageItems, frequency, period, now); err != nil {
+				return domain.PeriodStorageState{}, err
+			}
+			state, found, stateErr := s.PeriodStorageStates.GetPeriodStorageState(storageCtx, frozen.Key)
+			if stateErr != nil {
+				return domain.PeriodStorageState{}, stateErr
+			}
+			if !found {
+				return domain.PeriodStorageState{}, fmt.Errorf("Storage Ensure did not persist authoritative period state")
+			}
+			return state, nil
+		}
+	}
+	for index := range plans {
+		plans[index].EnsureStorage = ensureStorage
+	}
+	return planner.PlanMany(ctx, plans)
+}
+
+func timerAssignmentNodePresent(assignment NodeAssignment, nodes []scfinvoker.Node) bool {
+	for _, node := range nodes {
+		if node.NodeID == assignment.NodeID && node.FunctionName == assignment.FunctionName && node.Region == assignment.Region && strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") {
+			return true
+		}
+	}
+	return false
 }
 
 func filterTasksForRunCutoff(tasks []domain.CollectionTask, cutoff time.Time) []domain.CollectionTask {
@@ -1049,9 +1379,7 @@ func rotateTasksAfter(tasks []domain.CollectionTask, lastTaskID string) []domain
 }
 
 func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []scfinvoker.Node) {
-	if s.invokeSem == nil {
-		s.invokeSem = make(chan struct{}, 20)
-	}
+	s.ensureInvokeSemaphore()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	select {
@@ -1167,10 +1495,11 @@ func nodeMetadataInt(metadata map[string]any, key string) (int, bool) {
 }
 
 func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfinvoker.Node, now time.Time) error {
-	if s.Retries == nil || len(nodes) == 0 {
+	_ = nodes
+	if s.Retries == nil {
 		return nil
 	}
-	due, err := s.Batches.ListDue(ctx, spaceID, now, 100)
+	due, err := s.Batches.ListDue(ctx, spaceID, now, maxDueRecoveryBatchesPerTick)
 	if err != nil {
 		return err
 	}
@@ -1231,14 +1560,19 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 	if s.Retries == nil {
 		return nil
 	}
-	if len(nodes) == 0 {
-		return nil
-	}
-	items, err := s.Retries.ListDue(ctx, spaceID, now, 20)
+	due, err := s.Retries.ListDue(ctx, spaceID, now, maxRetryItemsPerTick)
 	if err != nil {
 		return err
 	}
-	for index, retry := range items {
+	if len(nodes) == 0 {
+		if len(due) > 0 {
+			log.WarnContextf(ctx, "market fetch retries remain queued because no Invoke or Timer capacity is available space=%s count=%d", spaceID, len(due))
+		}
+		return nil
+	}
+	candidates := make([]retryDispatchCandidate, 0, len(due))
+	instanceIDs := make([]string, 0, len(due))
+	for _, retry := range due {
 		maxAttempts := s.MaxRetryAttempts
 		if maxAttempts <= 0 {
 			maxAttempts = maxRetryAttempts()
@@ -1270,12 +1604,20 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			continue
 		}
 		item.InstanceID = instanceID
-		targets, targetErr := s.Instances.ListEnabledWriteTargetsForInstances(ctx, spaceID, []string{instanceID})
-		if targetErr != nil {
-			return targetErr
-		}
+		candidates = append(candidates, retryDispatchCandidate{retry: retry, item: item})
+		instanceIDs = append(instanceIDs, instanceID)
+	}
+	targetsByInstance, err := s.listEnabledRetryTargets(ctx, spaceID, instanceIDs)
+	if err != nil {
+		return err
+	}
+	groups := make([]retryDispatchGroup, 0, maxRetryBatchesPerTick)
+	lastGroupByKey := make(map[string]int)
+	for _, candidate := range candidates {
+		retry, item := candidate.retry, candidate.item
+		targets := targetsByInstance[item.InstanceID]
 		if retry.RetryScope == "write_target" {
-			filtered := targets[:0]
+			filtered := make([]domain.WriteTarget, 0, len(targets))
 			for _, target := range targets {
 				if target.ID == retry.WriteTargetID {
 					filtered = append(filtered, target)
@@ -1289,44 +1631,247 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 			}
 			continue
 		}
-		node := nodes[index%len(nodes)]
-		batchID := stableID(spaceID, "retry", retry.RetryKey, fmt.Sprintf("%d", retry.Attempt+1))
 		batchKind := retry.BatchKind
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: targets[0].DatasetID, Frequency: item.Frequency, Provider: item.Provider, SourceID: item.SourceID, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}, Targets: targets}
-		raw, _ := json.Marshal(req)
-		if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
-			if markErr := s.Retries.MarkPermanent(ctx, spaceID, retry.RetryKey, "invalid_retry_request", err.Error()); markErr != nil {
-				return markErr
+		scope := firstNonEmpty(retry.RetryScope, "fetch")
+		key := retryDispatchCompatibilityKey(retry, item, targets, scope, batchKind)
+		groupIndex, exists := lastGroupByKey[key]
+		maxItems := MaxRealtimeItems
+		if batchKind != domain.BatchKindRealtime {
+			maxItems = 1
+		}
+		if exists {
+			group := &groups[groupIndex]
+			_, duplicateInstance := group.seenInstances[item.InstanceID]
+			if len(group.items) >= maxItems || duplicateInstance {
+				exists = false
+			}
+		}
+		if !exists {
+			if len(groups) >= maxRetryBatchesPerTick {
+				continue
+			}
+			groupIndex = len(groups)
+			groups = append(groups, retryDispatchGroup{
+				key: key, batchKind: batchKind, attempt: retry.Attempt, retryScope: scope,
+				writeTargetID: retry.WriteTargetID, seenInstances: make(map[string]struct{}),
+			})
+			lastGroupByKey[key] = groupIndex
+		}
+		group := &groups[groupIndex]
+		group.retries = append(group.retries, retry)
+		group.items = append(group.items, item)
+		group.instanceIDs = append(group.instanceIDs, item.InstanceID)
+		group.seenInstances[item.InstanceID] = struct{}{}
+		group.targets = append(group.targets, targets...)
+	}
+	if len(groups) > 0 {
+		s.ensureInvokeSemaphore()
+	}
+	for index := range groups {
+		group := groups[index]
+		if len(group.items) == 0 {
+			continue
+		}
+		node := nodes[index%len(nodes)]
+		retryKeys := make([]string, len(group.retries))
+		parts := []string{spaceID, "retry"}
+		for retryIndex, retry := range group.retries {
+			retryKeys[retryIndex] = retry.RetryKey
+		}
+		sort.Strings(retryKeys)
+		if len(retryKeys) == 1 {
+			parts = append(parts, retryKeys[0], fmt.Sprintf("%d", group.attempt+1))
+		} else {
+			parts = append(parts, group.key, fmt.Sprintf("%d", group.attempt+1))
+			parts = append(parts, retryKeys...)
+		}
+		batchID := stableID(parts...)
+		req := Request{
+			BatchID: batchID, SyncPointID: group.retries[0].SourceBatchID, ScheduleID: "retry:" + batchID,
+			BatchKind: group.batchKind, SpaceID: spaceID, DatasetID: group.targets[0].DatasetID,
+			Frequency: group.items[0].Frequency, Provider: group.items[0].Provider, SourceID: group.items[0].SourceID,
+			MarketID: group.items[0].MarketID, InstrumentType: group.items[0].InstrumentType, MarketType: group.items[0].MarketType,
+			Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx),
+			ShardIndex: index, Items: group.items, Targets: group.targets,
+		}
+		if err := req.validate(); err != nil {
+			for _, retryKey := range retryKeys {
+				if markErr := s.Retries.MarkPermanent(ctx, spaceID, retryKey, "invalid_retry_request", err.Error()); markErr != nil {
+					return markErr
+				}
 			}
 			continue
 		}
-		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index, InstanceID: instanceID, WriteTargetID: retry.WriteTargetID, RetryScope: retry.RetryScope, Frequency: item.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, Status: domain.BatchStatusPlanned, Attempt: retry.Attempt + 1, RequestJSON: string(raw), PlannedCount: 1, PlannedAt: &now, DeadlineAt: timePtr(now.Add(batchCompletionDeadline(req.BatchKind)))}
-		created, err := s.Batches.CreatePlannedWithItemsForEnabledTargets(ctx, batch, []string{instanceID})
+		raw, err := json.Marshal(req)
 		if err != nil {
 			return err
 		}
-		if !created {
+		if _, err := marketFetchEvent(req, s.eventStorageTarget()); err != nil {
+			for _, retryKey := range retryKeys {
+				if markErr := s.Retries.MarkPermanent(ctx, spaceID, retryKey, "invalid_retry_request", err.Error()); markErr != nil {
+					return markErr
+				}
+			}
 			continue
 		}
-		go s.dispatchRetry(req, node, nodes, retry.RetryKey)
+		instanceID := ""
+		if len(group.instanceIDs) == 1 {
+			instanceID = group.instanceIDs[0]
+		}
+		queueDeadlineStart := time.Now().UTC()
+		batch := &domain.BatchInvocation{
+			SpaceID: spaceID, BatchID: batchID, ScheduleID: req.ScheduleID, BatchKind: req.BatchKind, ShardIndex: index,
+			InstanceID: instanceID, WriteTargetID: group.writeTargetID, RetryScope: group.retryScope,
+			Frequency: req.Frequency, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName,
+			Status: domain.BatchStatusPlanned, Attempt: group.attempt + 1, RequestJSON: string(raw), PlannedCount: len(group.items),
+			PlannedAt: &now, DeadlineAt: timePtr(queueDeadlineStart.Add(retryDispatchWaitTimeout(cap(s.invokeSem)) + retryDispatchScheduleSlack)),
+		}
+		if !s.beginRetryDispatch(spaceID, batchID, retryKeys) {
+			continue
+		}
+		created, err := s.Batches.CreatePlannedWithItemsForEnabledTargets(ctx, batch, group.instanceIDs)
+		if err != nil {
+			s.endRetryDispatch(spaceID, batchID, retryKeys)
+			return err
+		}
+		if !created {
+			persisted, getErr := s.Batches.Get(ctx, spaceID, batchID)
+			if errors.Is(getErr, gorm.ErrRecordNotFound) {
+				s.endRetryDispatch(spaceID, batchID, retryKeys)
+				continue
+			}
+			if getErr != nil {
+				s.endRetryDispatch(spaceID, batchID, retryKeys)
+				return getErr
+			}
+			if persisted.Status != domain.BatchStatusPlanned {
+				s.endRetryDispatch(spaceID, batchID, retryKeys)
+				continue
+			}
+			if decodeErr := json.Unmarshal([]byte(persisted.RequestJSON), &req); decodeErr != nil {
+				s.endRetryDispatch(spaceID, batchID, retryKeys)
+				return fmt.Errorf("decode persisted retry batch %s: %w", batchID, decodeErr)
+			}
+		}
+		if !created {
+			deadline := time.Now().UTC().Add(retryDispatchWaitTimeout(cap(s.invokeSem)) + retryDispatchScheduleSlack)
+			refreshed, refreshErr := s.Batches.RefreshPlannedRetryDeadline(ctx, spaceID, batchID, deadline)
+			if refreshErr != nil {
+				s.endRetryDispatch(spaceID, batchID, retryKeys)
+				return refreshErr
+			}
+			if !refreshed {
+				s.endRetryDispatch(spaceID, batchID, retryKeys)
+				continue
+			}
+		}
+		go func(req Request, node scfinvoker.Node, nodes []scfinvoker.Node, retryKeys []string, batchID, spaceID string) {
+			defer s.endRetryDispatch(spaceID, batchID, retryKeys)
+			s.dispatchRetry(req, node, nodes, retryKeys)
+		}(req, node, nodes, retryKeys, batchID, spaceID)
 	}
 	return nil
 }
 
-func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scfinvoker.Node, retryKey string) {
-	if s.invokeSem == nil {
-		s.invokeSem = make(chan struct{}, 20)
+func (s *Scheduler) listEnabledRetryTargets(ctx context.Context, spaceID string, instanceIDs []string) (map[string][]domain.WriteTarget, error) {
+	targetsByInstance := make(map[string][]domain.WriteTarget)
+	instanceIDs = uniqueStrings(instanceIDs)
+	for start := 0; start < len(instanceIDs); start += retryTargetLookupBatchSize {
+		end := min(start+retryTargetLookupBatchSize, len(instanceIDs))
+		targets, err := s.Instances.ListEnabledWriteTargetsForInstances(ctx, spaceID, instanceIDs[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for _, target := range targets {
+			targetsByInstance[target.InstanceID] = append(targetsByInstance[target.InstanceID], target)
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return targetsByInstance, nil
+}
+
+func retryDispatchCompatibilityKey(retry domain.RetryItem, item domain.CollectionItem, targets []domain.WriteTarget, scope string, kind domain.BatchKind) string {
+	datasets := make([]string, 0, len(targets))
+	for _, target := range targets {
+		datasets = append(datasets, target.DatasetID)
+	}
+	sort.Strings(datasets)
+	datasets = uniqueStrings(datasets)
+	sourceBatchID := strings.TrimSpace(retry.SourceBatchID)
+	if sourceBatchID == "" {
+		sourceBatchID = retry.RetryKey
+	}
+	return stableID(
+		sourceBatchID, string(kind), fmt.Sprintf("%d", retry.Attempt), scope, retry.WriteTargetID,
+		item.Provider, item.SourceID, item.MarketID, item.InstrumentType, item.MarketType, item.DataType,
+		item.DatasetID, item.Frequency, fmt.Sprintf("%d", item.CandidateIndex), strings.Join(datasets, "\x00"),
+	)
+}
+
+func uniqueSCFNodes(nodes []scfinvoker.Node) []scfinvoker.Node {
+	seen := make(map[string]struct{}, len(nodes))
+	result := make([]scfinvoker.Node, 0, len(nodes))
+	for _, node := range nodes {
+		nodeID := strings.TrimSpace(node.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		if _, exists := seen[nodeID]; exists {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		result = append(result, node)
+	}
+	return result
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scfinvoker.Node, retryKeys []string) {
+	s.ensureInvokeSemaphore()
+	ctx, cancel := context.WithTimeout(context.Background(), s.retryDispatchWaitBudget())
 	defer cancel()
 	select {
 	case s.invokeSem <- struct{}{}:
 		defer func() { <-s.invokeSem }()
 	case <-ctx.Done():
+		log.WarnContextf(ctx, "market fetch retry remains planned and queued because Invoke capacity wait timed out batch=%s", req.BatchID)
 		return
+	}
+	batch, err := s.Batches.Get(ctx, req.SpaceID, req.BatchID)
+	if err != nil || batch.Status != domain.BatchStatusPlanned {
+		return
+	}
+	if len(retryKeys) > 0 {
+		eligible, prepareErr := s.Batches.PrepareRetryBatchDispatch(ctx, req.SpaceID, req.BatchID, retryKeys)
+		if prepareErr != nil {
+			log.WarnContextf(ctx, "validate market fetch retry keys before invoke failed batch=%s err=%v", req.BatchID, prepareErr)
+			return
+		}
+		if !eligible {
+			return
+		}
+	}
+	attemptTimeout := s.invokeAttemptTimeout
+	if attemptTimeout <= 0 {
+		attemptTimeout = defaultSCFInvokeAttemptTimeout
 	}
 	for attempt, candidate := range invocationCandidates(node, nodes) {
 		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
@@ -1334,7 +1879,7 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 			log.WarnContextf(ctx, "build SCF market fetch retry failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
 		}
-		invokeCtx, invokeCancel := context.WithTimeout(ctx, defaultSCFInvokeAttemptTimeout)
+		invokeCtx, invokeCancel := context.WithTimeout(ctx, attemptTimeout)
 		result, invokeErr := s.Invoker.Invoke(invokeCtx, req.SpaceID, candidate.NodeID, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT)
 		invokeCancel()
 		if invokeErr != nil {
@@ -1345,7 +1890,12 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 			}
 			continue
 		}
-		updated, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(batchCompletionDeadline(req.BatchKind)), candidate.Region, candidate.NodeID, candidate.FunctionName)
+		var updated bool
+		if len(retryKeys) > 0 {
+			updated, err = s.Batches.MarkRetryBatchDispatched(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(batchCompletionDeadline(req.BatchKind)), candidate.Region, candidate.NodeID, candidate.FunctionName, retryKeys)
+		} else {
+			updated, err = s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(batchCompletionDeadline(req.BatchKind)), candidate.Region, candidate.NodeID, candidate.FunctionName)
+		}
 		if err != nil {
 			log.WarnContextf(ctx, "mark market fetch retry dispatched failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
 			return
@@ -1354,10 +1904,6 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 		// batch CAS is intentionally false; do not move an already completed retry
 		// item back to dispatched, or it can remain stuck forever.
 		if !updated {
-			return
-		}
-		if err := s.Retries.MarkStatus(ctx, req.SpaceID, retryKey, "dispatched"); err != nil {
-			log.WarnContextf(ctx, "mark market fetch retry status failed key=%s err=%v", retryKey, err)
 			return
 		}
 		if attempt > 0 {
@@ -1371,6 +1917,14 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scf
 		return
 	}
 	log.WarnContextf(ctx, "SCF market fetch retry invoke exhausted failover batch=%s original_node=%s", req.BatchID, node.NodeID)
+	forceCtx, forceCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer forceCancel()
+	forced, forceErr := s.Batches.MakePlannedRetryBatchDue(forceCtx, req.SpaceID, req.BatchID, time.Now().UTC())
+	if forceErr != nil {
+		log.WarnContextf(forceCtx, "mark failed Invoke retry batch due for recovery failed batch=%s err=%v", req.BatchID, forceErr)
+	} else if forced {
+		log.WarnContextf(forceCtx, "all Invoke candidates failed; retry batch queued for bounded recovery batch=%s", req.BatchID)
+	}
 }
 
 // invocationCandidates returns the original node followed by one deterministic

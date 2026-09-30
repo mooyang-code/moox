@@ -17,7 +17,8 @@ type FetchBatchRepository struct{ db *gorm.DB }
 // the short-lived collector. Keeping it here lets batch completion commit the
 // batch, retry state, and task freshness in one SQLite transaction.
 type MarketFetchInstanceUpdate struct {
-	SpaceID string
+	SpaceID        string
+	RetrySourceKey string
 	// InstanceID narrows the freshness update to one stable TaskInstance.
 	InstanceID     string
 	SubjectID      string
@@ -32,6 +33,7 @@ type MarketFetchInstanceUpdate struct {
 // newer realtime bar for the same governed route was stored successfully.
 type MarketFetchRetrySupersede struct {
 	SpaceID        string
+	RetrySourceKey string
 	SubjectID      string
 	Frequency      string
 	TargetDataTime time.Time
@@ -41,13 +43,14 @@ type MarketFetchRetrySupersede struct {
 }
 
 type WriteTargetStatusEffect struct {
-	SpaceID       string
-	InstanceID    string
-	WriteTargetID string
-	DatasetID     string
-	Status        string
-	LastError     string
-	Attempt       int
+	SpaceID        string
+	RetrySourceKey string
+	InstanceID     string
+	WriteTargetID  string
+	DatasetID      string
+	Status         string
+	LastError      string
+	Attempt        int
 }
 
 type RetryTerminalError struct {
@@ -56,6 +59,10 @@ type RetryTerminalError struct {
 }
 
 type FetchCompletionEffects struct {
+	// RetrySourceGuards maps each effect retry key to the retry key that
+	// produced it. Completion rechecks these source keys in the same transaction
+	// so late attempts cannot overwrite a newer terminal retry result.
+	RetrySourceGuards  map[string]string
 	WriteTargetUpdates []WriteTargetStatusEffect
 	Retries            []*domain.RetryItem
 	SucceededRetryKeys []string
@@ -177,6 +184,32 @@ func (r *FetchBatchRepository) Get(ctx context.Context, spaceID, batchID string)
 	return &batch, nil
 }
 
+func (r *FetchBatchRepository) GetTimerPeriodManifest(ctx context.Context, spaceID, batchID string) (*domain.TimerPeriodBatch, error) {
+	var manifest domain.TimerPeriodBatch
+	err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_batch_id = ?", spaceID, batchID).First(&manifest).Error
+	if err != nil {
+		return nil, err
+	}
+	return &manifest, nil
+}
+
+func (r *FetchBatchRepository) ListItems(ctx context.Context, spaceID, batchID string) ([]string, error) {
+	var items []struct {
+		InstanceID string `gorm:"column:c_instance_id"`
+	}
+	err := r.db.WithContext(ctx).Table("t_collector_fetch_batch_items").
+		Select("c_instance_id").Where("c_space_id = ? AND c_batch_id = ?", spaceID, batchID).
+		Order("c_instance_id ASC").Find(&items).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.InstanceID)
+	}
+	return result, nil
+}
+
 func (r *FetchBatchRepository) MarkDispatched(ctx context.Context, spaceID, batchID, requestID string, deadline time.Time) (bool, error) {
 	return r.MarkDispatchedToNode(ctx, spaceID, batchID, requestID, deadline, "", "", "")
 }
@@ -200,6 +233,170 @@ func (r *FetchBatchRepository) MarkDispatchedToNode(ctx context.Context, spaceID
 		Where("c_space_id = ? AND c_batch_id = ? AND c_status = ?", spaceID, batchID, domain.BatchStatusPlanned).
 		Updates(updates)
 	return result.RowsAffected == 1, result.Error
+}
+
+// MarkRetryBatchDispatched atomically records an accepted Invoke and marks the
+// retries that remain pending as dispatched. A retry may become terminal after
+// preflight while Invoke is in flight; that must not roll back the accepted batch.
+func (r *FetchBatchRepository) MarkRetryBatchDispatched(ctx context.Context, spaceID, batchID, requestID string, deadline time.Time, region, nodeID, functionName string, retryKeys []string) (bool, error) {
+	spaceID, batchID = strings.TrimSpace(spaceID), strings.TrimSpace(batchID)
+	if spaceID == "" || batchID == "" || len(retryKeys) == 0 {
+		return false, gorm.ErrInvalidData
+	}
+	keys := make([]string, 0, len(retryKeys))
+	seen := make(map[string]struct{}, len(retryKeys))
+	for _, retryKey := range retryKeys {
+		retryKey = strings.TrimSpace(retryKey)
+		if retryKey == "" {
+			return false, gorm.ErrInvalidData
+		}
+		if _, exists := seen[retryKey]; exists {
+			return false, gorm.ErrInvalidData
+		}
+		seen[retryKey] = struct{}{}
+		keys = append(keys, retryKey)
+	}
+
+	updated := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		updates := map[string]any{
+			"c_status": domain.BatchStatusDispatched, "c_request_id": requestID,
+			"c_dispatched_at": now, "c_deadline_at": deadline.UTC(), "c_mtime": now,
+		}
+		if strings.TrimSpace(region) != "" {
+			updates["c_region"] = region
+		}
+		if strings.TrimSpace(nodeID) != "" {
+			updates["c_node_id"] = nodeID
+		}
+		if strings.TrimSpace(functionName) != "" {
+			updates["c_function_name"] = functionName
+		}
+		result := tx.Model(&domain.BatchInvocation{}).
+			Where("c_space_id = ? AND c_batch_id = ? AND c_status = ?", spaceID, batchID, domain.BatchStatusPlanned).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return nil
+		}
+
+		result = tx.Model(&domain.RetryItem{}).
+			Where("c_space_id = ? AND c_retry_key IN ? AND c_status = ?", spaceID, keys, "pending").
+			Updates(map[string]any{"c_status": "dispatched", "c_mtime": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		updated = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return updated, nil
+}
+
+// RefreshPlannedRetryDeadline renews the bounded dispatch window when a
+// persisted planned retry batch is resumed after a process restart.
+func (r *FetchBatchRepository) RefreshPlannedRetryDeadline(ctx context.Context, spaceID, batchID string, deadline time.Time) (bool, error) {
+	spaceID, batchID = strings.TrimSpace(spaceID), strings.TrimSpace(batchID)
+	if spaceID == "" || batchID == "" || deadline.IsZero() {
+		return false, gorm.ErrInvalidData
+	}
+	now := time.Now().UTC()
+	result := r.db.WithContext(ctx).Model(&domain.BatchInvocation{}).
+		Where("c_space_id = ? AND c_batch_id = ? AND c_status = ?", spaceID, batchID, domain.BatchStatusPlanned).
+		Updates(map[string]any{"c_deadline_at": deadline.UTC(), "c_mtime": now})
+	return result.RowsAffected == 1, result.Error
+}
+
+// MakePlannedRetryBatchDue lets ordinary recovery own a batch after all Invoke
+// candidates have failed. It does not change retry keys or batch status.
+func (r *FetchBatchRepository) MakePlannedRetryBatchDue(ctx context.Context, spaceID, batchID string, dueAt time.Time) (bool, error) {
+	spaceID, batchID = strings.TrimSpace(spaceID), strings.TrimSpace(batchID)
+	if spaceID == "" || batchID == "" || dueAt.IsZero() {
+		return false, gorm.ErrInvalidData
+	}
+	now := time.Now().UTC()
+	result := r.db.WithContext(ctx).Model(&domain.BatchInvocation{}).
+		Where("c_space_id = ? AND c_batch_id = ? AND c_status = ?", spaceID, batchID, domain.BatchStatusPlanned).
+		Updates(map[string]any{"c_deadline_at": dueAt.UTC(), "c_mtime": now})
+	return result.RowsAffected == 1, result.Error
+}
+
+// PrepareRetryBatchDispatch rejects a persisted request if any of its retry
+// keys became terminal while it waited for Invoke capacity. The pending keys
+// remain queued so a later scheduler pass can build a fresh compatible batch.
+func (r *FetchBatchRepository) PrepareRetryBatchDispatch(ctx context.Context, spaceID, batchID string, retryKeys []string) (bool, error) {
+	spaceID, batchID = strings.TrimSpace(spaceID), strings.TrimSpace(batchID)
+	if spaceID == "" || batchID == "" || len(retryKeys) == 0 {
+		return false, gorm.ErrInvalidData
+	}
+	keys := make([]string, 0, len(retryKeys))
+	seen := make(map[string]struct{}, len(retryKeys))
+	for _, retryKey := range retryKeys {
+		retryKey = strings.TrimSpace(retryKey)
+		if retryKey == "" {
+			return false, gorm.ErrInvalidData
+		}
+		if _, exists := seen[retryKey]; exists {
+			return false, gorm.ErrInvalidData
+		}
+		seen[retryKey] = struct{}{}
+		keys = append(keys, retryKey)
+	}
+
+	eligible := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var batch domain.BatchInvocation
+		if err := tx.Select("c_status").Where("c_space_id = ? AND c_batch_id = ?", spaceID, batchID).First(&batch).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
+		if batch.Status != domain.BatchStatusPlanned {
+			return nil
+		}
+
+		var states []struct {
+			RetryKey string `gorm:"column:c_retry_key"`
+			Status   string `gorm:"column:c_status"`
+		}
+		if err := tx.Model(&domain.RetryItem{}).
+			Select("c_retry_key, c_status").
+			Where("c_space_id = ? AND c_retry_key IN ?", spaceID, keys).
+			Find(&states).Error; err != nil {
+			return err
+		}
+		allPending := len(states) == len(keys)
+		for _, state := range states {
+			if state.Status != "pending" {
+				allPending = false
+				break
+			}
+		}
+		if allPending {
+			eligible = true
+			return nil
+		}
+
+		now := time.Now().UTC()
+		result := tx.Model(&domain.BatchInvocation{}).
+			Where("c_space_id = ? AND c_batch_id = ? AND c_status = ?", spaceID, batchID, domain.BatchStatusPlanned).
+			Updates(map[string]any{
+				"c_status": domain.BatchStatusFailed, "c_completed_at": now,
+				"c_error_summary": "retry batch canceled because one or more retry keys are no longer pending",
+				"c_mtime":         now,
+			})
+		return result.Error
+	})
+	if err != nil {
+		return false, err
+	}
+	return eligible, nil
 }
 
 func (r *FetchBatchRepository) Complete(ctx context.Context, batch *domain.BatchInvocation) (bool, error) {
@@ -256,7 +453,52 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 		if err := validateCompletionScope(tx, batch, effects); err != nil {
 			return err
 		}
+		terminalRetrySources := make(map[string]struct{})
+		sourceKeys := make([]string, 0, len(effects.RetrySourceGuards)+len(effects.WriteTargetUpdates)+len(effects.InstanceUpdates))
+		for _, sourceKey := range effects.RetrySourceGuards {
+			sourceKeys = append(sourceKeys, sourceKey)
+		}
 		for _, item := range effects.WriteTargetUpdates {
+			sourceKeys = append(sourceKeys, item.RetrySourceKey)
+		}
+		for _, item := range effects.InstanceUpdates {
+			sourceKeys = append(sourceKeys, item.RetrySourceKey)
+		}
+		for _, item := range effects.SupersedePendingRetries {
+			sourceKeys = append(sourceKeys, item.RetrySourceKey)
+		}
+		sourceKeys = uniqueNonEmptyStrings(sourceKeys)
+		if len(sourceKeys) > 0 {
+			var retryStates []struct {
+				RetryKey string `gorm:"column:c_retry_key"`
+				Status   string `gorm:"column:c_status"`
+			}
+			if err := tx.Model(&domain.RetryItem{}).Select("c_retry_key, c_status").
+				Where("c_space_id = ? AND c_retry_key IN ?", batch.SpaceID, sourceKeys).Find(&retryStates).Error; err != nil {
+				return err
+			}
+			for _, retry := range retryStates {
+				switch retry.Status {
+				case "succeeded", "permanent_failed", "superseded":
+					terminalRetrySources[retry.RetryKey] = struct{}{}
+				}
+			}
+		}
+		sourceIsTerminal := func(sourceKey string) bool {
+			_, terminal := terminalRetrySources[strings.TrimSpace(sourceKey)]
+			return terminal
+		}
+		effectSourceKey := func(effectKey string) string {
+			effectKey = strings.TrimSpace(effectKey)
+			if sourceKey := strings.TrimSpace(effects.RetrySourceGuards[effectKey]); sourceKey != "" {
+				return sourceKey
+			}
+			return effectKey
+		}
+		for _, item := range effects.WriteTargetUpdates {
+			if sourceIsTerminal(item.RetrySourceKey) {
+				continue
+			}
 			result := tx.Model(&domain.WriteTarget{}).
 				Where("c_space_id = ? AND c_write_target_id = ? AND c_instance_id = ? AND c_dataset_id = ?", item.SpaceID, item.WriteTargetID, item.InstanceID, item.DatasetID).
 				Updates(map[string]any{"c_status": strings.TrimSpace(item.Status), "c_last_error": item.LastError, "c_attempt": item.Attempt, "c_mtime": time.Now().UTC()})
@@ -269,6 +511,9 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 		}
 		for _, item := range effects.Retries {
 			if item == nil {
+				continue
+			}
+			if sourceIsTerminal(effectSourceKey(item.RetryKey)) {
 				continue
 			}
 			if item.PeriodFailureReportState == "" {
@@ -287,7 +532,7 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 					"c_source_batch_id": clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"}, "c_batch_kind": clause.Expr{SQL: "excluded.c_batch_kind"}, "c_attempt": clause.Expr{SQL: "excluded.c_attempt"},
 					"c_instance_id": clause.Expr{SQL: "excluded.c_instance_id"}, "c_write_target_id": clause.Expr{SQL: "excluded.c_write_target_id"}, "c_retry_scope": clause.Expr{SQL: "excluded.c_retry_scope"},
 					"c_subject_id": clause.Expr{SQL: "excluded.c_subject_id"}, "c_frequency": clause.Expr{SQL: "excluded.c_frequency"}, "c_target_data_time": clause.Expr{SQL: "excluded.c_target_data_time"}, "c_task_json": clause.Expr{SQL: "excluded.c_task_json"},
-					"c_status": clause.Expr{SQL: "CASE WHEN c_status IN ('succeeded', 'permanent_failed') THEN c_status ELSE excluded.c_status END"}, "c_next_retry_at": clause.Expr{SQL: "excluded.c_next_retry_at"},
+					"c_status": clause.Expr{SQL: "CASE WHEN c_status IN ('succeeded', 'permanent_failed', 'superseded') THEN c_status ELSE excluded.c_status END"}, "c_next_retry_at": clause.Expr{SQL: "excluded.c_next_retry_at"},
 					"c_last_error_type": clause.Expr{SQL: "excluded.c_last_error_type"}, "c_last_error_summary": clause.Expr{SQL: "excluded.c_last_error_summary"},
 					"c_failure_targets_json": clause.Expr{SQL: "CASE WHEN c_failure_targets_json <> '' AND c_failure_targets_json <> '[]' THEN c_failure_targets_json ELSE excluded.c_failure_targets_json END"},
 					"c_mtime":                clause.Expr{SQL: "excluded.c_mtime"},
@@ -297,7 +542,10 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			}
 		}
 		for _, key := range effects.SucceededRetryKeys {
-			if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_retry_key = ?", batch.SpaceID, key).Updates(map[string]any{
+			if sourceIsTerminal(effectSourceKey(key)) {
+				continue
+			}
+			if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_retry_key = ? AND c_status NOT IN ?", batch.SpaceID, key, []string{"permanent_failed", "superseded"}).Updates(map[string]any{
 				"c_status": "succeeded", "c_period_failure_report_state": domain.PeriodFailureReportPending,
 				"c_period_failure_results_json": "[]", "c_period_failure_last_error": "",
 				"c_period_failure_deadline_exceeded_at": nil, "c_mtime": time.Now().UTC(),
@@ -306,6 +554,9 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			}
 		}
 		for _, key := range effects.CancelPendingRetryKeys {
+			if sourceIsTerminal(effectSourceKey(key)) {
+				continue
+			}
 			if err := tx.Model(&domain.RetryItem{}).
 				Where("c_space_id = ? AND c_retry_key = ? AND c_status = ?", batch.SpaceID, key, "pending").
 				Updates(map[string]any{
@@ -317,12 +568,16 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			}
 		}
 		for _, key := range effects.PermanentRetryKeys {
+			if sourceIsTerminal(effectSourceKey(key)) {
+				continue
+			}
 			updates := map[string]any{"c_status": "permanent_failed", "c_mtime": time.Now().UTC()}
 			if terminal, ok := effects.PermanentRetryErrors[key]; ok {
 				updates["c_last_error_type"] = terminal.ErrorType
 				updates["c_last_error_summary"] = terminal.ErrorSummary
 			}
-			if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_retry_key = ?", batch.SpaceID, key).Updates(updates).Error; err != nil {
+			if err := tx.Model(&domain.RetryItem{}).
+				Where("c_space_id = ? AND c_retry_key = ? AND c_status NOT IN ?", batch.SpaceID, key, []string{"succeeded", "permanent_failed", "superseded"}).Updates(updates).Error; err != nil {
 				return err
 			}
 		}
@@ -334,13 +589,18 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 		args := make([]any, 0, len(effects.SupersedePendingRetries)*5)
 		seen := make(map[string]struct{}, len(effects.SupersedePendingRetries))
 		for _, item := range effects.SupersedePendingRetries {
+			if sourceIsTerminal(item.RetrySourceKey) {
+				continue
+			}
 			if item.SpaceID == "" || item.SubjectID == "" || item.Frequency == "" || item.TargetDataTime.IsZero() {
 				continue
 			}
 			// Shared instances are retried per write target. Prefer the new
 			// identity when present; the legacy dataset key remains a fallback.
 			if item.WriteTargetID != "" {
-				if err := tx.Model(&domain.RetryItem{}).Where("c_space_id = ? AND c_write_target_id = ? AND c_status IN ?", item.SpaceID, item.WriteTargetID, []string{"pending", "dispatched"}).Updates(map[string]any{"c_status": "superseded", "c_mtime": time.Now().UTC()}).Error; err != nil {
+				if err := tx.Model(&domain.RetryItem{}).
+					Where("c_space_id = ? AND c_write_target_id = ? AND c_instance_id = ? AND c_target_data_time <= ? AND c_status IN ?", item.SpaceID, item.WriteTargetID, item.InstanceID, item.TargetDataTime.UTC(), []string{"pending", "dispatched"}).
+					Updates(map[string]any{"c_status": "superseded", "c_mtime": time.Now().UTC()}).Error; err != nil {
 					return err
 				}
 				continue
@@ -365,6 +625,9 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			}
 		}
 		for _, item := range effects.InstanceUpdates {
+			if sourceIsTerminal(item.RetrySourceKey) {
+				continue
+			}
 			query := tx.Model(&domain.TaskInstance{}).Where("t_collector_task_instances.c_space_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_is_deleted = ?", item.SpaceID, item.SubjectID, item.Frequency, false)
 			if item.InstanceID != "" {
 				query = query.Where("c_instance_id = ?", item.InstanceID)
@@ -461,7 +724,15 @@ func (r *FetchBatchRepository) ListDue(ctx context.Context, spaceID string, now 
 	}
 	var batches []domain.BatchInvocation
 	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_status IN ? AND c_deadline_at IS NOT NULL AND c_deadline_at <= ?", spaceID, []domain.BatchStatus{domain.BatchStatusPlanned, domain.BatchStatusDispatched}, now.UTC()).
+		Where(`c_space_id = ? AND c_status IN ? AND (
+			(c_deadline_at IS NOT NULL AND c_deadline_at <= ?) OR
+			(c_status = ? AND EXISTS (
+				SELECT 1 FROM t_collector_timer_period_batches AS manifests
+				WHERE manifests.c_space_id = t_collector_fetch_batches.c_space_id
+				  AND manifests.c_batch_id = t_collector_fetch_batches.c_batch_id
+				  AND manifests.c_claim_request_id = '' AND manifests.c_deadline_at <= ?
+			))
+		)`, spaceID, []domain.BatchStatus{domain.BatchStatusPlanned, domain.BatchStatusDispatched}, now.UTC(), domain.BatchStatusPlanned, now.UTC()).
 		Order("c_deadline_at ASC").Limit(limit).Find(&batches).Error
 	return batches, err
 }
@@ -490,8 +761,13 @@ func (r *FetchBatchRepository) HasActiveTask(ctx context.Context, spaceID, taskI
 }
 
 func (r *FetchBatchRepository) Cleanup(ctx context.Context, successBefore, failureBefore time.Time) error {
-	if err := r.db.WithContext(ctx).Where("c_status = ? AND c_completed_at IS NOT NULL AND c_completed_at < ?", domain.BatchStatusSucceeded, successBefore.UTC()).Delete(&domain.BatchInvocation{}).Error; err != nil {
+	retainedByManifest := `NOT EXISTS (
+        SELECT 1 FROM t_collector_timer_period_batches AS manifests
+        WHERE manifests.c_space_id = t_collector_fetch_batches.c_space_id
+          AND manifests.c_batch_id = t_collector_fetch_batches.c_batch_id
+    )`
+	if err := r.db.WithContext(ctx).Where("c_status = ? AND c_completed_at IS NOT NULL AND c_completed_at < ? AND "+retainedByManifest, domain.BatchStatusSucceeded, successBefore.UTC()).Delete(&domain.BatchInvocation{}).Error; err != nil {
 		return err
 	}
-	return r.db.WithContext(ctx).Where("c_status IN ? AND c_completed_at IS NOT NULL AND c_completed_at < ?", []domain.BatchStatus{domain.BatchStatusPartialFailed, domain.BatchStatusFailed, domain.BatchStatusTimedOut}, failureBefore.UTC()).Delete(&domain.BatchInvocation{}).Error
+	return r.db.WithContext(ctx).Where("c_status IN ? AND c_completed_at IS NOT NULL AND c_completed_at < ? AND "+retainedByManifest, []domain.BatchStatus{domain.BatchStatusPartialFailed, domain.BatchStatusFailed, domain.BatchStatusTimedOut}, failureBefore.UTC()).Delete(&domain.BatchInvocation{}).Error
 }

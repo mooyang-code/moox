@@ -39,6 +39,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		withExtra(deployment("eventbus", "eventbus", "http", "127.0.0.1", 11420, "trpc.moox.eventbus.EventBusMgr", "internal", "MooX 统一 NATS JetStream EventBus 服务"), `{"health_url":"http://127.0.0.1:11419/readyz","health_kind":"readiness","monitor_enabled":true,"nats_url":"tls://127.0.0.1:4222"}`),
 		withExtra(deployment("moox_gateway", "gateway", "http", "127.0.0.1", 11002, "", "internal", "节点服务网关，承载服务路由与路由表刷新"), `{"health_url":"http://127.0.0.1:11012/readyz","health_kind":"readiness","health_body_contains":"ready","monitor_enabled":true}`),
 		withExtra(deployment("moox_collector", "collector", "http", "127.0.0.1", 11402, "trpc.moox.collector.CollectMgr", "internal", "独立采集管理服务，承载采集任务、任务实例和 planner"), `{"health_url":"http://127.0.0.1:11412/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		withExtra(deployment("collector_market_runtime", "collector_runtime", "http", "127.0.0.1", 11418, "trpc.moox.collector.MarketFetchRuntime", "internal", "Collector in-process Timer period claim endpoint"), `{"gateway_methods":["ClaimTimerBatch"],"gateway_callers":["collector"]}`),
 		withExtra(deployment("moox_collector_subject", "collector_subject", "http", "127.0.0.1", 11413, "", "internal", "独立 Subject 标签和属性同步服务"), `{"health_url":"http://127.0.0.1:11413/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_cloudnode", "cloudnode", "http", "127.0.0.1", 11401, "trpc.moox.cloudnode.CloudNodeMgr", "internal", "独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用"), `{"health_url":"http://127.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true,"timeout_ms":960000,"max_body_bytes":33554432}`),
 		withExtra(deployment("moox_factor", "factor", "http", "127.0.0.1", 11404, "trpc.moox.factor.FactorMgr", "internal", "因子计算服务，承载因子定义、绑定、补算与结果写回"), `{"health_url":"http://127.0.0.1:11414/readyz","health_kind":"readiness","monitor_enabled":true,"timeout_ms":120000,"gateway_methods":["CreateFactor","UpdateFactor","SetFactorStatus","DeleteFactor","UpsertBinding","DeleteBinding","RecalcFactor","GetEngineStatus"],"gateway_callers":["admin-gateway","moox-cli"],"gateway_routes":[{"service_path":"trpc.moox.factor.FactorMgr","port":11403,"gateway_methods":["GetFactor","ListFactors","ListBindings"],"gateway_callers":["admin-gateway","moox-cli","strategy"]}]}`),
@@ -55,7 +56,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		withExtra(deployment("trade_dns_resolver", "trade", "http", "127.0.0.1", 11203, "trpc.moox.trade.TradeDNSResolverService", "internal", "交易节点 DNS 解析与连通性探测服务"), `{"gateway_methods":["ResolveDomains"],"gateway_callers":["collector"]}`),
 	}
 	canonical := map[string]string{
-		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret",
+		"moox_collector": "collectmgr", "collector_market_runtime": "collector-market-runtime", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret",
 	}
 	for i := range rows {
 		rows[i].NodeID = nodeID

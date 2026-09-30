@@ -17,17 +17,18 @@ import (
 
 // Config is the root collector control-plane configuration.
 type Config struct {
-	SCFRegionBlacklists map[string][]string   `yaml:"scf_region_blacklists"`
-	Database            DatabaseConfig        `yaml:"database"`
-	CloudNode           CloudNodeConfig       `yaml:"cloudnode"`
-	Storage             StorageConfig         `yaml:"storage"`
-	StockCN             StockCNConfig         `yaml:"stockcn"`
-	PeriodReadiness     PeriodReadinessConfig `yaml:"period_readiness"`
-	KlineResample       KlineResampleConfig   `yaml:"kline_resample"`
-	SysDeploy           SysDeployConfig       `yaml:"sysdeploy"`
-	Health              HealthConfig          `yaml:"health"`
-	DNS                 DNSConfig             `yaml:"dns"`
-	DNSResolver         DNSResolverConfig     `yaml:"dns_resolver"`
+	SCFRegionBlacklists map[string][]string    `yaml:"scf_region_blacklists"`
+	Database            DatabaseConfig         `yaml:"database"`
+	CloudNode           CloudNodeConfig        `yaml:"cloudnode"`
+	Storage             StorageConfig          `yaml:"storage"`
+	CollectorRuntime    CollectorRuntimeConfig `yaml:"collector_runtime"`
+	StockCN             StockCNConfig          `yaml:"stockcn"`
+	PeriodReadiness     PeriodReadinessConfig  `yaml:"period_readiness"`
+	KlineResample       KlineResampleConfig    `yaml:"kline_resample"`
+	SysDeploy           SysDeployConfig        `yaml:"sysdeploy"`
+	Health              HealthConfig           `yaml:"health"`
+	DNS                 DNSConfig              `yaml:"dns"`
+	DNSResolver         DNSResolverConfig      `yaml:"dns_resolver"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -64,6 +65,14 @@ type StorageConfig struct {
 	KeyID            string `yaml:"key_id"`
 	HMACKeyFile      string `yaml:"hmac_key_file"`
 	ResultDataNodeID string `yaml:"result_data_node_id"`
+}
+
+// CollectorRuntimeConfig overrides the native Gateway endpoint used to reach
+// the Collector host that owns MarketFetchRuntime. Both values are required
+// together; Storage routing is never a fallback for runtime claims.
+type CollectorRuntimeConfig struct {
+	GatewayTarget string `yaml:"gateway_target"`
+	NodeID        string `yaml:"node_id"`
 }
 
 // PeriodReadinessConfig controls the durable Collector period completion
@@ -154,6 +163,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateDNSResolver(); err != nil {
 		return nil, err
 	}
+	if err := cfg.validateCollectorRuntime(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validateKlineResample(); err != nil {
 		return nil, err
 	}
@@ -187,6 +199,12 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID"); v != "" {
 		c.Storage.GatewayNodeID = v
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET"); v != "" {
+		c.CollectorRuntime.GatewayTarget = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_RUNTIME_NODE_ID"); v != "" {
+		c.CollectorRuntime.NodeID = strings.TrimSpace(v)
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_KEY_ID"); v != "" {
 		c.Storage.KeyID = v
@@ -253,6 +271,21 @@ func (c *Config) validateStorageTargets() error {
 		if _, err := gatewayauth.CredentialsFromKeyFile(c.Storage.KeyID, c.Storage.HMACKeyFile); err != nil {
 			return fmt.Errorf("storage hmac credentials: %w", err)
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateCollectorRuntime() error {
+	target := strings.TrimSpace(c.CollectorRuntime.GatewayTarget)
+	nodeID := strings.TrimSpace(c.CollectorRuntime.NodeID)
+	if (target == "") != (nodeID == "") {
+		if target == "" {
+			return fmt.Errorf("collector_runtime.gateway_target and collector_runtime.node_id must be configured together")
+		}
+		return fmt.Errorf("collector_runtime.node_id is required when gateway_target is configured")
+	}
+	if target != "" && !isStorageTRPCTarget(target) {
+		return fmt.Errorf("collector_runtime.gateway_target must be a native tRPC target, got %q", target)
 	}
 	return nil
 }

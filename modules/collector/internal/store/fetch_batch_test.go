@@ -64,6 +64,33 @@ func TestDueMarketFetchRecordsAreIsolatedBySpace(t *testing.T) {
 	assert.Equal(t, "crypto", retries[0].SpaceID)
 }
 
+func TestListDueUsesCanonicalDeadlineForUnclaimedTimerManifest(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	batch := &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: "timer-period", BatchKind: domain.BatchKindRealtime,
+		Status: domain.BatchStatusPlanned, DeadlineAt: timePtr(now.Add(3 * time.Hour)), RequestJSON: `{"items":[]}`,
+	}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NoError(t, s.db.Create(&domain.TimerPeriodBatch{
+		Key: "timer-manifest", SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: now.Add(-time.Minute),
+		TaskID: "task", FirstRunID: "run", SeriesHash: "hash", ExpectedCount: 1, GroupCount: 1,
+		BindingHash: "binding", RouteVersion: "route-v1", BatchID: "timer-period", FunctionName: "timer-fn", NodeID: "node",
+		Region: "region", DeadlineAt: now.Add(2 * time.Hour),
+	}).Error)
+
+	due, err := s.FetchBatches().ListDue(ctx, "crypto", now, 10)
+	require.NoError(t, err)
+	require.Empty(t, due, "unclaimed planned manifests must use the canonical period deadline, not the batch completion deadline")
+
+	due, err = s.FetchBatches().ListDue(ctx, "crypto", now.Add(2*time.Hour), 10)
+	require.NoError(t, err)
+	require.Len(t, due, 1, "canonical deadline recovery must include an unclaimed manifest even when its batch deadline differs")
+}
+
 func TestMarkDispatchedToNodeUpdatesFailoverRouting(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
@@ -101,6 +128,111 @@ func TestFetchBatchCompletionMarksDispatchedRetryPermanent(t *testing.T) {
 	stored, err := s.FetchRetries().Get(ctx, "crypto", "delisted")
 	require.NoError(t, err)
 	assert.Equal(t, "permanent_failed", stored.Status)
+}
+
+func TestMarkRetryBatchDispatchedPreservesTerminalKeysChangedAfterPreflight(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "retry-atomic-mismatch", Status: domain.BatchStatusPlanned, PlannedAt: &now}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	for _, key := range []string{"retry-a", "retry-b"} {
+		require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: key, Status: "pending", Attempt: 1, CreateTime: now}))
+	}
+	eligible, err := s.FetchBatches().PrepareRetryBatchDispatch(ctx, "crypto", batch.BatchID, []string{"retry-a", "retry-b"})
+	require.NoError(t, err)
+	require.True(t, eligible)
+	require.NoError(t, s.FetchRetries().MarkStatus(ctx, "crypto", "retry-b", "superseded"))
+
+	updated, err := s.FetchBatches().MarkRetryBatchDispatched(ctx, "crypto", batch.BatchID, "invoke-request", now.Add(time.Minute), "region", "node", "function", []string{"retry-a", "retry-b"})
+	require.NoError(t, err)
+	require.True(t, updated, "the accepted remote invocation must be recorded even if a retry key terminalized after preflight")
+	storedBatch, err := s.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusDispatched, storedBatch.Status)
+	for key, want := range map[string]string{"retry-a": "dispatched", "retry-b": "superseded"} {
+		stored, getErr := s.FetchRetries().Get(ctx, "crypto", key)
+		require.NoError(t, getErr)
+		require.Equal(t, want, stored.Status, "only retries still pending after the Invoke response may transition to dispatched")
+	}
+}
+
+func TestMarkRetryBatchDispatchedCASFalseLeavesRetryKeysUnchanged(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "retry-atomic-terminal", Status: domain.BatchStatusPlanned, PlannedAt: &now}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	for _, key := range []string{"retry-a", "retry-b"} {
+		require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: key, Status: "pending", Attempt: 1, CreateTime: now}))
+	}
+	completed := *batch
+	completed.Status = domain.BatchStatusSucceeded
+	completed.CompletedAt = &now
+	updated, err := s.FetchBatches().CompleteWithEffects(ctx, &completed, FetchCompletionEffects{SucceededRetryKeys: []string{"retry-a", "retry-b"}})
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	updated, err = s.FetchBatches().MarkRetryBatchDispatched(ctx, "crypto", batch.BatchID, "late-invoke-request", now.Add(time.Minute), "region", "node", "function", []string{"retry-a", "retry-b"})
+	require.NoError(t, err)
+	require.False(t, updated, "terminal batch must lose planned->dispatched CAS")
+	for _, key := range []string{"retry-a", "retry-b"} {
+		stored, getErr := s.FetchRetries().Get(ctx, "crypto", key)
+		require.NoError(t, getErr)
+		require.Equal(t, "succeeded", stored.Status, "CAS miss must not regress completion state")
+	}
+}
+
+func TestMarkRetryBatchDispatchedRacingCompletionKeepsTerminalRetryState(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "retry-atomic-race", Status: domain.BatchStatusPlanned, PlannedAt: &now}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	keys := []string{"retry-a", "retry-b", "retry-c"}
+	for _, key := range keys {
+		require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: key, Status: "pending", Attempt: 1, CreateTime: now}))
+	}
+	start := make(chan struct{})
+	type result struct {
+		updated bool
+		err     error
+	}
+	dispatchResult := make(chan result, 1)
+	completionResult := make(chan result, 1)
+	go func() {
+		<-start
+		updated, err := s.FetchBatches().MarkRetryBatchDispatched(ctx, "crypto", batch.BatchID, "invoke-request", now.Add(time.Minute), "region", "node", "function", keys)
+		dispatchResult <- result{updated: updated, err: err}
+	}()
+	go func() {
+		<-start
+		completed := *batch
+		completed.Status = domain.BatchStatusSucceeded
+		completed.CompletedAt = &now
+		updated, err := s.FetchBatches().CompleteWithEffects(ctx, &completed, FetchCompletionEffects{SucceededRetryKeys: keys})
+		completionResult <- result{updated: updated, err: err}
+	}()
+	close(start)
+	dispatch := <-dispatchResult
+	completion := <-completionResult
+	require.NoError(t, dispatch.err)
+	require.NoError(t, completion.err)
+	require.True(t, completion.updated)
+	storedBatch, err := s.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusSucceeded, storedBatch.Status)
+	for _, key := range keys {
+		stored, getErr := s.FetchRetries().Get(ctx, "crypto", key)
+		require.NoError(t, getErr)
+		require.Equal(t, "succeeded", stored.Status, "completion must win without later dispatch status regression")
+	}
 }
 
 func TestPermanentRetryFailurePersistsUntilReportedAndMarksRuntimeFailed(t *testing.T) {
@@ -168,6 +300,40 @@ func TestFetchBatchCompletionSupersedesOlderPendingRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "superseded", older.Status)
 	assert.Equal(t, "pending", newer.Status)
+}
+
+func TestFetchBatchCompletionSupersedesOnlyOlderWriteTargetRetries(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.September, 28, 6, 0, 0, 0, time.UTC)
+	for _, item := range []*domain.RetryItem{
+		{SpaceID: "crypto", RetryKey: "target-older", InstanceID: "instance-a", WriteTargetID: "target-a", RetryScope: "write_target", TargetDataTime: now.Add(-time.Minute), Status: "pending"},
+		{SpaceID: "crypto", RetryKey: "target-same", InstanceID: "instance-a", WriteTargetID: "target-a", RetryScope: "write_target", TargetDataTime: now, Status: "dispatched"},
+		{SpaceID: "crypto", RetryKey: "target-newer", InstanceID: "instance-a", WriteTargetID: "target-a", RetryScope: "write_target", TargetDataTime: now.Add(time.Minute), Status: "pending"},
+		{SpaceID: "crypto", RetryKey: "other-instance", InstanceID: "instance-b", WriteTargetID: "target-a", RetryScope: "write_target", TargetDataTime: now.Add(-time.Minute), Status: "pending"},
+	} {
+		require.NoError(t, s.FetchRetries().Upsert(ctx, item))
+	}
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "write-target-realtime", Status: domain.BatchStatusPlanned, CompletedAt: &now}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	batch.Status = domain.BatchStatusSucceeded
+	updated, err := s.FetchBatches().CompleteWithEffects(ctx, batch, FetchCompletionEffects{SupersedePendingRetries: []MarketFetchRetrySupersede{{
+		SpaceID: "crypto", InstanceID: "instance-a", WriteTargetID: "target-a", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: now,
+	}}})
+	require.NoError(t, err)
+	require.True(t, updated)
+	for key, want := range map[string]string{
+		"target-older":   "superseded",
+		"target-same":    "superseded",
+		"target-newer":   "pending",
+		"other-instance": "pending",
+	} {
+		item, getErr := s.FetchRetries().Get(ctx, "crypto", key)
+		require.NoError(t, getErr)
+		assert.Equal(t, want, item.Status, key)
+	}
 }
 
 func seedCompletionAtomicityTest(t *testing.T, s *Store, secondInstance bool) (*domain.BatchInvocation, domain.TaskInstance, []domain.WriteTarget) {
@@ -327,4 +493,45 @@ func TestCompleteWithEffectsDuplicateTerminalCompletionDoesNotApplyEffects(t *te
 	target, err := s.TaskInstances().GetWriteTarget(context.Background(), "crypto", targets[0].ID)
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", target.Status)
+}
+
+func TestCompleteWithEffectsRechecksTerminalRetrySourceAtomically(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	batch, instance, targets := seedCompletionAtomicityTest(t, s, false)
+	now := time.Now().UTC()
+	const retryKey = "retry-a"
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: retryKey, InstanceID: instance.InstanceID, Status: "succeeded", Attempt: 2, CreateTime: now,
+	}))
+	require.NoError(t, s.TaskInstances().UpdateWriteTargetStatus(ctx, "crypto", targets[0].ID, "succeeded", "", 1))
+	require.NoError(t, s.db.WithContext(ctx).Model(&domain.TaskInstance{}).
+		Where("c_space_id = ? AND c_instance_id = ?", "crypto", instance.InstanceID).
+		Update("c_last_exec_status", domain.InstanceStatusSuccess).Error)
+
+	batch.Status = domain.BatchStatusFailed
+	batch.CompletedAt = &now
+	updated, err := s.FetchBatches().CompleteWithEffects(ctx, batch, FetchCompletionEffects{
+		RetrySourceGuards: map[string]string{retryKey: retryKey},
+		WriteTargetUpdates: []WriteTargetStatusEffect{{
+			SpaceID: "crypto", RetrySourceKey: retryKey, InstanceID: instance.InstanceID,
+			WriteTargetID: targets[0].ID, DatasetID: targets[0].DatasetID, Status: "failed", LastError: "stale failure",
+		}},
+		Retries:              []*domain.RetryItem{{SpaceID: "crypto", RetryKey: retryKey, InstanceID: instance.InstanceID, Status: "pending", Attempt: 3, CreateTime: now}},
+		PermanentRetryKeys:   []string{retryKey},
+		PermanentRetryErrors: map[string]RetryTerminalError{retryKey: {ErrorType: "invalid", ErrorSummary: "stale failure"}},
+		InstanceUpdates:      []MarketFetchInstanceUpdate{{SpaceID: "crypto", RetrySourceKey: retryKey, InstanceID: instance.InstanceID, SubjectID: instance.SubjectID, Frequency: instance.Frequency, At: now, Status: domain.InstanceStatusFailed, Result: `{"error_type":"invalid"}`}},
+	})
+	require.NoError(t, err)
+	require.True(t, updated, "the stale batch is terminalized even though its retry effects are suppressed")
+
+	storedRetry, err := s.FetchRetries().Get(ctx, "crypto", retryKey)
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", storedRetry.Status)
+	storedTarget, err := s.TaskInstances().GetWriteTarget(ctx, "crypto", targets[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", storedTarget.Status)
+	storedInstance, err := s.TaskInstances().Get(ctx, "crypto", instance.InstanceID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.InstanceStatusSuccess, storedInstance.LastExecStatus)
 }

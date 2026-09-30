@@ -128,6 +128,67 @@ func TestResolveSelectsStorageGatewayNode(t *testing.T) {
 	assert.Equal(t, "compute.example.com:11003", deps.StorageRPCGatewayTarget)
 }
 
+func TestResolveSelectsCollectorRuntimeGatewayOnCollectorNode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{
+				"collector-2/collector_market_runtime": map[string]any{
+					"service_name": "collector_market_runtime", "service_kind": "collector_runtime", "protocol": "http", "host": "127.0.0.1", "port": 11418,
+				},
+				"storage-1/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "storage-gw.example.com", "port": 11003,
+				},
+				"collector-2/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "collector-gw.example.com", "port": 11003,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "storage-1"
+
+	deps, err := Resolve(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "storage-gw.example.com:11003", deps.StorageRPCGatewayTarget)
+	assert.Equal(t, "collector-gw.example.com:11003", deps.CollectorRuntimeGatewayTarget)
+	assert.Equal(t, "collector-2", deps.CollectorRuntimeGatewayNodeID)
+}
+
+func TestResolveNeverFallsBackCollectorRuntimeToStorageGateway(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{
+				"collector-2/collector_market_runtime": map[string]any{
+					"service_name": "collector_market_runtime", "service_kind": "collector_runtime", "protocol": "http", "host": "127.0.0.1", "port": 11418,
+				},
+				"storage-1/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "storage-gw.example.com", "port": 11003,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "storage-1"
+
+	_, err := Resolve(context.Background(), cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collector runtime native Gateway")
+}
+
 func TestResolveFallsBackToExplicitStorageTargetWhenRouteIsIncomplete(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{

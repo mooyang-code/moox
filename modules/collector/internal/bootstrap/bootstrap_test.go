@@ -53,6 +53,17 @@ func TestCollectorHealthSnapshot(t *testing.T) {
 	}
 }
 
+func TestMarketFetchInvokeConcurrencyIsStockCNTimerSpecific(t *testing.T) {
+	if got := marketFetchInvokeConcurrency("stockcn"); got != 96 {
+		t.Fatalf("StockCN timer invoke concurrency = %d, want 96", got)
+	}
+	for _, spaceID := range []string{"crypto", "other"} {
+		if got := marketFetchInvokeConcurrency(spaceID); got != 20 {
+			t.Fatalf("%s invoke concurrency = %d, want existing default 20", spaceID, got)
+		}
+	}
+}
+
 type dnsStatusStub struct{ status collectordns.Status }
 
 func (s dnsStatusStub) Status() collectordns.Status { return s.status }

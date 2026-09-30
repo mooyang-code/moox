@@ -1,11 +1,16 @@
 package bootstrap
 
 import (
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadSCFRegionBlacklists(t *testing.T) {
@@ -45,6 +50,85 @@ storage:
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
 	assert.Equal(t, "ip://127.0.0.1:30100", cfg.Storage.GatewayTarget)
+}
+
+func TestCollectorRuntimeGatewayConfigIsExplicitPair(t *testing.T) {
+	t.Setenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET", "")
+	t.Setenv("MOOX_COLLECTOR_RUNTIME_NODE_ID", "")
+	cfg, err := Load(writeCollectorConfig(t, `collector_runtime:
+  gateway_target: ip://10.0.0.5:11003
+  node_id: collector-2
+`))
+	require.NoError(t, err)
+	assert.Equal(t, "ip://10.0.0.5:11003", cfg.CollectorRuntime.GatewayTarget)
+	assert.Equal(t, "collector-2", cfg.CollectorRuntime.NodeID)
+
+	t.Setenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET", "collector-gw.example.com:11003")
+	t.Setenv("MOOX_COLLECTOR_RUNTIME_NODE_ID", "collector-3")
+	cfg, err = Load(writeCollectorConfig(t, "database:\n  path: ./collector.db\n"))
+	require.NoError(t, err)
+	assert.Equal(t, "collector-gw.example.com:11003", cfg.CollectorRuntime.GatewayTarget)
+	assert.Equal(t, "collector-3", cfg.CollectorRuntime.NodeID)
+}
+
+func TestLoadRejectsPartialCollectorRuntimeGatewayConfig(t *testing.T) {
+	_, err := Load(writeCollectorConfig(t, `collector_runtime:
+  gateway_target: collector-gw.example.com:11003
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collector_runtime.node_id")
+}
+
+func TestMarketFetchRuntimeHasSeparateLoopbackHTTPAndNativeListeners(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
+	require.NoError(t, err)
+	var config struct {
+		Server struct {
+			Service []struct {
+				Name     string `yaml:"name"`
+				IP       string `yaml:"ip"`
+				Port     int    `yaml:"port"`
+				Protocol string `yaml:"protocol"`
+			} `yaml:"service"`
+		} `yaml:"server"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &config))
+	listeners := make(map[string]struct {
+		ip       string
+		port     int
+		protocol string
+	})
+	for _, service := range config.Server.Service {
+		if strings.Contains(service.Name, "MarketFetchRuntime") {
+			listeners[service.Protocol] = struct {
+				ip       string
+				port     int
+				protocol string
+			}{service.IP, service.Port, service.Protocol}
+		}
+	}
+	assert.Equal(t, struct {
+		ip       string
+		port     int
+		protocol string
+	}{"127.0.0.1", 11418, "http"}, listeners["http"])
+	assert.Equal(t, struct {
+		ip       string
+		port     int
+		protocol string
+	}{"127.0.0.1", 11422, "trpc"}, listeners["trpc"])
+}
+
+func TestStockCNTargetDataTimeValidatorUsesConfiguredCalendar(t *testing.T) {
+	calendar, err := stockmarket.LoadCalendar(filepath.Join("..", "..", "config", "markets", "stockcn", "calendar.yaml"))
+	require.NoError(t, err)
+	current := time.Date(2026, 9, 30, 2, 1, 10, 0, time.UTC)
+	valid := stockCNTargetDataTimeValidator(calendar, 10*time.Second, func() time.Time { return current })
+	assert.True(t, valid("1m", time.Date(2026, 9, 30, 2, 0, 0, 0, time.UTC)), "latest closed session minute")
+	assert.False(t, valid("1m", time.Date(2026, 9, 30, 4, 0, 0, 0, time.UTC)), "lunch period")
+	current = time.Date(2026, 10, 1, 2, 1, 10, 0, time.UTC)
+	assert.False(t, valid("1m", time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)), "configured holiday")
+	assert.False(t, valid("5m", time.Date(2026, 9, 30, 2, 0, 0, 0, time.UTC)), "non-1m frequency")
 }
 
 func TestMarketFetchSpaceIDUsesConfiguredMarketForScheduler(t *testing.T) {

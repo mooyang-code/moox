@@ -286,6 +286,26 @@ message GetKlineResampleBackfillRsp {
   uint64 canceled = 14;
 }
 
+// ClaimTimerBatchReq binds one Timer invocation to its durable period batch.
+// Work membership is derived from Collector's persisted manifest, never from
+// client-submitted items or tag names.
+message ClaimTimerBatchReq {
+  string space_id = 1;
+  string function_name = 2;
+  string request_id = 3;
+  uint32 group_id = 4;
+  uint32 group_count = 5;
+  string binding_hash = 6;
+  int64 tick_time = 7;
+}
+
+message ClaimTimerBatchRsp {
+  common.RetInfo ret_info = 1;
+  bool claimed = 2;
+  bytes request_json = 3;
+  int64 period_deadline_at = 4;
+}
+
 service CollectMgr {
   // ----- 采集任务 -----
   rpc GetTaskList(GetTaskListReq) returns (GetTaskListRsp);
@@ -304,4 +324,8 @@ service CollectMgr {
   rpc StartKlineResampleBackfill(StartKlineResampleBackfillReq) returns (StartKlineResampleBackfillRsp);
   rpc CancelKlineResampleBackfill(CancelKlineResampleBackfillReq) returns (CancelKlineResampleBackfillRsp);
   rpc GetKlineResampleBackfill(GetKlineResampleBackfillReq) returns (GetKlineResampleBackfillRsp);
+}
+
+service MarketFetchRuntime {
+  rpc ClaimTimerBatch(ClaimTimerBatchReq) returns (ClaimTimerBatchRsp);
 }

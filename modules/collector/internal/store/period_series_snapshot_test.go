@@ -314,6 +314,7 @@ func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork
 		"failed-unreported": base.Add(6 * time.Minute),
 		"planned-batch":     base.Add(7 * time.Minute),
 		"dispatched-batch":  base.Add(8 * time.Minute),
+		"planned-manifest":  base.Add(9 * time.Minute),
 		"other-space":       base.Add(9 * time.Minute),
 		"recent":            base.Add(48 * time.Hour),
 	}
@@ -330,7 +331,7 @@ func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork
 		require.NoError(t, err)
 		snapshots[name] = stored
 	}
-	for _, name := range []string{"complete", "degraded", "waiting", "hash-mismatch", "count-mismatch", "other-space", "recent", "pending-retry", "failed-unreported", "planned-batch", "dispatched-batch"} {
+	for _, name := range []string{"complete", "degraded", "waiting", "hash-mismatch", "count-mismatch", "other-space", "recent", "pending-retry", "failed-unreported", "planned-batch", "dispatched-batch", "planned-manifest"} {
 		status := domain.PeriodStatusComplete
 		if name == "degraded" {
 			status = domain.PeriodStatusDegraded
@@ -373,6 +374,26 @@ func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork
 			require.True(t, updated)
 		}
 	}
+	for _, manifest := range []struct {
+		name   string
+		status domain.BatchStatus
+	}{
+		{name: "complete", status: domain.BatchStatusSucceeded},
+		{name: "planned-manifest", status: domain.BatchStatusPlanned},
+	} {
+		period := periods[manifest.name]
+		batchID := "timer-manifest-" + manifest.name
+		require.NoError(t, s.db.Create(&domain.BatchInvocation{
+			SpaceID: "crypto", BatchID: batchID, ScheduleID: batchID, BatchKind: domain.BatchKindRealtime,
+			Frequency: "1m", Status: manifest.status,
+		}).Error)
+		require.NoError(t, s.db.Create(&domain.TimerPeriodBatch{
+			Key: "timer-key-" + manifest.name, SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period,
+			TaskID: "task-" + manifest.name, FirstRunID: "run-" + manifest.name, SeriesHash: snapshots[manifest.name].SeriesHash,
+			ExpectedCount: 1, GroupCount: 1, BindingHash: "binding", RouteVersion: "route-v1", BatchID: batchID,
+			FunctionName: "timer-function", NodeID: "timer-node", Region: "region", DeadlineAt: period.Add(time.Hour),
+		}).Error)
+	}
 
 	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", base.Add(24*time.Hour), 1)
 	require.NoError(t, err)
@@ -380,7 +401,7 @@ func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork
 	deleted, err = s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", base.Add(24*time.Hour), 1000)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted, "both complete and degraded Storage states permit cleanup")
-	for _, name := range []string{"waiting", "hash-mismatch", "count-mismatch", "pending-retry", "failed-unreported", "planned-batch", "dispatched-batch", "other-space", "recent"} {
+	for _, name := range []string{"waiting", "hash-mismatch", "count-mismatch", "pending-retry", "failed-unreported", "planned-batch", "dispatched-batch", "planned-manifest", "other-space", "recent"} {
 		_, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, snapshots[name].Key)
 		require.NoError(t, err)
 		require.True(t, found, "period %s must remain", name)
@@ -394,6 +415,48 @@ func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork
 	_, found, err = s.PeriodStorageStates().GetPeriodStorageState(ctx, snapshots["complete"].Key)
 	require.NoError(t, err)
 	require.False(t, found, "terminal state is removed atomically with its period snapshot")
+	var completedManifests, plannedManifests int64
+	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Where("c_key = ?", "timer-key-complete").Count(&completedManifests).Error)
+	require.Zero(t, completedManifests, "terminal manifest is removed with its confirmed period")
+	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Where("c_key = ?", "timer-key-planned-manifest").Count(&plannedManifests).Error)
+	require.EqualValues(t, 1, plannedManifests, "unclaimed planned manifest keeps its period active")
+}
+
+func TestTimerManifestSurvivesBatchRetentionUntilPeriodCleanup(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	snapshot, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(period, "BTC-USDT"))
+	require.NoError(t, err)
+	require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, storageStateForSnapshot(snapshot, domain.PeriodStatusComplete)))
+	completedAt := period.Add(time.Hour)
+	batchID := "batch-retained-by-manifest"
+	require.NoError(t, s.db.Create(&domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: batchID, ScheduleID: batchID, BatchKind: domain.BatchKindRealtime,
+		Frequency: "1m", Status: domain.BatchStatusSucceeded, CompletedAt: &completedAt,
+	}).Error)
+	require.NoError(t, s.db.Create(&domain.TimerPeriodBatch{
+		Key: "manifest-retained-by-batch", SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period,
+		TaskID: "task-retained", FirstRunID: "run-retained", SeriesHash: snapshot.SeriesHash, ExpectedCount: 1,
+		GroupCount: 1, BindingHash: "binding", RouteVersion: "route-v1", BatchID: batchID,
+		FunctionName: "timer-function", NodeID: "timer-node", Region: "region", DeadlineAt: period.Add(time.Hour),
+	}).Error)
+
+	retentionCutoff := period.Add(24 * time.Hour)
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, retentionCutoff, retentionCutoff))
+	_, err = s.FetchBatches().Get(ctx, "crypto", batchID)
+	require.NoError(t, err, "batch retention must not orphan a live period manifest")
+
+	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", period.Add(31*24*time.Hour), 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+	var manifestCount int64
+	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Where("c_key = ?", "manifest-retained-by-batch").Count(&manifestCount).Error)
+	require.Zero(t, manifestCount, "confirmed terminal period cleanup removes the manifest atomically")
+
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, retentionCutoff, retentionCutoff))
+	_, err = s.FetchBatches().Get(ctx, "crypto", batchID)
+	require.Error(t, err, "terminal batch becomes eligible after its period manifest is removed")
 }
 
 func storageStateForSnapshot(snapshot domain.PeriodSeriesSnapshot, status string) domain.PeriodStorageState {

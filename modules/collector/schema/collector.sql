@@ -117,6 +117,44 @@ CREATE TABLE IF NOT EXISTS t_collector_period_storage_states (
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_period_time)
 );
 
+-- A Timer period batch is the immutable claimable owner of one period shard.
+-- Claim columns are populated only by the planned-to-dispatched claim CAS.
+CREATE TABLE IF NOT EXISTS t_collector_timer_period_batches (
+    c_key TEXT NOT NULL PRIMARY KEY,
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_period_time DATETIME NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_first_run_id TEXT NOT NULL,
+    c_series_hash TEXT NOT NULL,
+    c_expected_count INTEGER NOT NULL,
+    c_group_id INTEGER NOT NULL,
+    c_group_count INTEGER NOT NULL,
+    c_shard_index INTEGER NOT NULL,
+    c_binding_hash TEXT NOT NULL,
+    c_route_version TEXT NOT NULL,
+    c_batch_id TEXT NOT NULL,
+    c_function_name TEXT NOT NULL,
+    c_node_id TEXT NOT NULL,
+    c_region TEXT NOT NULL,
+    c_claim_request_id TEXT NOT NULL DEFAULT '',
+    c_claimed_at DATETIME,
+    c_deadline_at DATETIME NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_expected_count > 0),
+    CHECK (c_group_count > 0),
+    CHECK (c_group_id < c_group_count),
+    UNIQUE (c_space_id, c_dataset_id, c_frequency, c_period_time, c_shard_index),
+    UNIQUE (c_space_id, c_batch_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_timer_period_batches_claim_request
+ON t_collector_timer_period_batches (c_space_id, c_function_name, c_claim_request_id)
+WHERE c_claim_request_id <> '';
+CREATE INDEX IF NOT EXISTS idx_collector_timer_period_batches_candidate
+ON t_collector_timer_period_batches (c_space_id, c_function_name, c_group_id, c_group_count, c_binding_hash, c_period_time, c_dataset_id, c_frequency, c_shard_index);
+
 CREATE TABLE IF NOT EXISTS t_collector_runs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,

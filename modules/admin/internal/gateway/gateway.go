@@ -138,7 +138,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		serviceID = mappedServiceID
-	} else if isInternalStorageService(serviceID) {
+	} else if isInternalStorageService(serviceID) || isInternalCollectorRuntimeService(serviceID) {
 		http.NotFound(w, r)
 		return
 	}
@@ -266,7 +266,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 		writeForwardError(ctx, w, err, headers)
 		return
 	}
-	if isMachineOnlyResolvedMethod(detail, method) || isInternalStorageServicePath(detail.Path) {
+	if isMachineOnlyResolvedMethod(detail, method) || isInternalStorageServicePath(detail.Path) || isInternalCollectorRuntimeServicePath(detail.Path) {
 		http.NotFound(w, r)
 		return
 	}
@@ -412,6 +412,19 @@ func isInternalStorageServicePath(servicePath string) bool {
 	default:
 		return false
 	}
+}
+
+func isInternalCollectorRuntimeService(serviceID string) bool {
+	switch canonicalAdminSegment(serviceID) {
+	case "collectormarketruntime", "collectormarketruntimeendpoint":
+		return true
+	default:
+		return false
+	}
+}
+
+func isInternalCollectorRuntimeServicePath(servicePath string) bool {
+	return canonicalAdminSegment(servicePath) == "trpcmooxcollectormarketfetchruntime"
 }
 
 func canonicalAdminSegment(value string) string {

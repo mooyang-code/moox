@@ -255,6 +255,17 @@ WHERE snapshots.c_space_id = ? AND snapshots.c_period_time < ?
         AND batch_snapshot.c_period_time = snapshots.c_period_time
         AND batches.c_status IN ('planned', 'dispatched')
   )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM t_collector_timer_period_batches AS manifests
+      LEFT JOIN t_collector_fetch_batches AS manifest_batches
+        ON manifest_batches.c_space_id = manifests.c_space_id AND manifest_batches.c_batch_id = manifests.c_batch_id
+      WHERE manifests.c_space_id = snapshots.c_space_id
+        AND manifests.c_dataset_id = snapshots.c_dataset_id
+        AND manifests.c_frequency = snapshots.c_frequency
+        AND manifests.c_period_time = snapshots.c_period_time
+        AND (manifest_batches.c_batch_id IS NULL OR manifest_batches.c_status IN ('planned', 'dispatched'))
+  )
 GROUP BY snapshots.c_space_id, snapshots.c_dataset_id, snapshots.c_frequency, snapshots.c_period_time,
          storage_state.c_series_hash, storage_state.c_expected_count
 HAVING COUNT(*) = storage_state.c_expected_count
@@ -314,9 +325,18 @@ WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time 
        AND batch_snapshot.c_subject_id = instances.c_subject_id
       WHERE batch_snapshot.c_space_id = ? AND batch_snapshot.c_dataset_id = ? AND batch_snapshot.c_frequency = ? AND batch_snapshot.c_period_time = ?
         AND batches.c_status IN ('planned', 'dispatched')
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM t_collector_timer_period_batches AS manifests
+      LEFT JOIN t_collector_fetch_batches AS manifest_batches
+        ON manifest_batches.c_space_id = manifests.c_space_id AND manifest_batches.c_batch_id = manifests.c_batch_id
+      WHERE manifests.c_space_id = ? AND manifests.c_dataset_id = ? AND manifests.c_frequency = ? AND manifests.c_period_time = ?
+        AND (manifest_batches.c_batch_id IS NULL OR manifest_batches.c_status IN ('planned', 'dispatched'))
   )`,
 				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime, snapshot.SeriesHash, snapshot.ExpectedCount,
 				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime, snapshot.SeriesHash, snapshot.ExpectedCount, domain.PeriodStatusComplete, domain.PeriodStatusDegraded,
+				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime,
 				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime,
 				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime,
 			)
@@ -328,6 +348,17 @@ WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time 
 			}
 			if result.RowsAffected != int64(len(snapshot.Entries)) {
 				return fmt.Errorf("period snapshot cleanup deleted %d rows, expected %d", result.RowsAffected, len(snapshot.Entries))
+			}
+			manifestDelete := tx.Exec(`
+DELETE FROM t_collector_timer_period_batches AS manifests
+WHERE manifests.c_space_id = ? AND manifests.c_dataset_id = ? AND manifests.c_frequency = ? AND manifests.c_period_time = ?
+  AND EXISTS (
+      SELECT 1 FROM t_collector_fetch_batches AS batches
+      WHERE batches.c_space_id = manifests.c_space_id AND batches.c_batch_id = manifests.c_batch_id
+        AND batches.c_status NOT IN ('planned', 'dispatched')
+  )`, key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime)
+			if manifestDelete.Error != nil {
+				return manifestDelete.Error
 			}
 			stateDelete := tx.Exec(`DELETE FROM t_collector_period_storage_states WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ? AND c_series_hash = ? AND c_expected_count = ? AND c_status IN (?, ?)`,
 				key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime, snapshot.SeriesHash, snapshot.ExpectedCount, domain.PeriodStatusComplete, domain.PeriodStatusDegraded)

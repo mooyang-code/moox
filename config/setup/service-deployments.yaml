@@ -211,6 +211,21 @@ services:
       monitor_enabled: true
       gateway_methods: ["*"]
       gateway_callers: ["*"]
+  - name: collector_market_runtime
+    kind: collector_runtime
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11418
+    gateway_path: trpc.moox.collector.MarketFetchRuntime
+    gateway_service_id: collector-market-runtime
+    gateway_enabled: true
+    scope: internal
+    status: active
+    description: Collector in-process Timer period claim endpoint
+    extra_config:
+      gateway_methods: [ClaimTimerBatch]
+      gateway_callers: [collector]
   - name: moox_collector_subject
     kind: collector_subject
     deployment_mode: process

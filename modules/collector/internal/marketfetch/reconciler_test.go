@@ -426,8 +426,8 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{
-		{NodeID: "timer-2", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
-		{NodeID: "timer-1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-2", FunctionName: "market-fetch-shanghai", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "timer-1", FunctionName: "market-fetch-guangzhou", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
 	}}
 	reconciler := &Reconciler{
 		Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
@@ -458,6 +458,28 @@ func TestReconcilerCopiesOneDNSSnapshotToPerNodeAssignmentsAndAvoidsNoop(t *test
 
 	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Equal(t, 1, nodes.submits, "unchanged assignment and DNS must not call CloudNode again")
+}
+
+func TestReconcilerExposesOnlyRuntimeObservedTimerAssignments(t *testing.T) {
+	task := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Enabled: true,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-1", FunctionName: "market-fetch", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"}}}
+	r := &Reconciler{
+		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:   nodes, MaxSubjects: 30,
+	}
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Empty(t, r.TimerAssignments(), "submitted but not observed assignments are not claimable")
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	assignments := r.TimerAssignments()
+	require.Len(t, assignments, 1)
+	require.True(t, assignments[0].Enabled)
+	require.Equal(t, "timer-1", assignments[0].NodeID)
+	assignments[0].Subjects[0] = "MUTATED"
+	require.Equal(t, []string{"BTC-USDT"}, r.TimerAssignments()[0].Subjects, "callers receive a defensive copy")
 }
 
 func TestReconcilerPublishesStockCNRouteIdentityToEveryTimer(t *testing.T) {

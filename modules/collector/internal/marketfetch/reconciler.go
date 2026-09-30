@@ -82,6 +82,7 @@ type Reconciler struct {
 	pendingSince                time.Time
 	pendingSubmissionIncomplete bool
 	lastGroups                  map[string][]TaskGroup
+	lastAssignments             []NodeAssignment
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
@@ -401,7 +402,7 @@ func (r *Reconciler) disableBlacklistedTimers(ctx context.Context, spaceID strin
 }
 
 func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nodes []scfinvoker.Node, assignments []NodeAssignment) error {
-	if r == nil || r.Instances == nil {
+	if r == nil {
 		return nil
 	}
 	functionNames := make([]string, 0, len(nodes))
@@ -428,10 +429,44 @@ func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nod
 		provider := firstNonEmpty(assignment.RouteProvider, assignment.Provider)
 		replacements = append(replacements, store.MarketFetchAssignment{Provider: provider, SourceID: assignment.SourceID, MarketType: assignment.MarketType, DatasetID: assignment.DatasetID, Frequency: assignment.Frequency, FunctionName: assignment.FunctionName, Subjects: assignment.Subjects})
 	}
-	if err := r.Instances.ReplaceMarketFetchAssignments(ctx, spaceID, functionNames, replacements); err != nil {
-		return fmt.Errorf("replace SCF task assignments: %w", err)
+	if r.Instances != nil {
+		if err := r.Instances.ReplaceMarketFetchAssignments(ctx, spaceID, functionNames, replacements); err != nil {
+			return fmt.Errorf("replace SCF task assignments: %w", err)
+		}
 	}
+	r.mu.Lock()
+	r.lastAssignments = cloneNodeAssignments(assignments)
+	r.mu.Unlock()
 	return nil
+}
+
+// TimerAssignments returns only assignments whose Timer runtime state was
+// observed and persisted by Reconcile. The returned nested slices and maps do
+// not alias reconciler state.
+func (r *Reconciler) TimerAssignments() []NodeAssignment {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return cloneNodeAssignments(r.lastAssignments)
+}
+
+func cloneNodeAssignments(input []NodeAssignment) []NodeAssignment {
+	result := make([]NodeAssignment, len(input))
+	for index, assignment := range input {
+		result[index] = assignment
+		result[index].OutputFields = append([]string(nil), assignment.OutputFields...)
+		result[index].Subjects = append([]string(nil), assignment.Subjects...)
+		result[index].ProviderChain = append([]string(nil), assignment.ProviderChain...)
+		if assignment.ExternalSymbols != nil {
+			result[index].ExternalSymbols = make(map[string]string, len(assignment.ExternalSymbols))
+			for subject, symbol := range assignment.ExternalSymbols {
+				result[index].ExternalSymbols[subject] = symbol
+			}
+		}
+	}
+	return result
 }
 
 func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.DNSResolution, maxSubjects int, resolver SymbolResolver, budgets ...int) ([]TaskGroup, error) {

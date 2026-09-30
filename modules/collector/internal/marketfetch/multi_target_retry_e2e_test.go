@@ -108,7 +108,7 @@ func TestSharedInstancePartialTargetFailureRetriesOnlyFailedDestinationE2E(t *te
 	require.NoError(t, err)
 	require.Equal(t, domain.InstanceStatusSuccess, storedInstance.LastExecStatus)
 
-	retryKey := instance.InstanceID + ":target:target-b"
+	retryKey := writeTargetRetryKey(instance.InstanceID, "target-b", barStart.Format(time.RFC3339Nano))
 	retry, err := db.FetchRetries().Get(ctx, "crypto", retryKey)
 	require.NoError(t, err)
 	require.Equal(t, "write_target", retry.RetryScope)
@@ -135,6 +135,12 @@ func TestSharedInstancePartialTargetFailureRetriesOnlyFailedDestinationE2E(t *te
 	require.NoError(t, json.Unmarshal([]byte(retryBatch.RequestJSON), &retryReq))
 	require.Len(t, retryReq.Targets, 1)
 	require.Equal(t, "bars-b", retryReq.Targets[0].DatasetID)
+	olderTargetARetryKey := "older-target-a-retry"
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: olderTargetARetryKey, InstanceID: instance.InstanceID,
+		WriteTargetID: "target-a", RetryScope: "write_target", SubjectID: "BTC-USDT", Frequency: "1m",
+		TargetDataTime: barStart.Add(-time.Minute), Status: "pending", Attempt: 1,
+	}))
 	retryCompletion, err := pipeline.Execute(ctx, retryReq)
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", retryCompletion.GetStatus())
@@ -149,6 +155,9 @@ func TestSharedInstancePartialTargetFailureRetriesOnlyFailedDestinationE2E(t *te
 	retry, err = db.FetchRetries().Get(ctx, "crypto", retryKey)
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", retry.Status)
+	olderTargetARetry, err := db.FetchRetries().Get(ctx, "crypto", olderTargetARetryKey)
+	require.NoError(t, err)
+	require.Equal(t, "pending", olderTargetARetry.Status, "success for target-b must not supersede another destination's retry")
 	require.Equal(t, 1, storage.count("bars-a"), "successful sibling target must not be rewritten")
 	require.Equal(t, 2, storage.count("bars-b"), "failed target gets exactly one retry write")
 }

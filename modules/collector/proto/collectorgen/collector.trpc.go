@@ -324,6 +324,48 @@ func RegisterCollectMgrService(s server.Service, svr CollectMgrService) {
 	}
 }
 
+// MarketFetchRuntimeService defines service.
+type MarketFetchRuntimeService interface {
+	ClaimTimerBatch(ctx context.Context, req *ClaimTimerBatchReq) (*ClaimTimerBatchRsp, error)
+}
+
+func MarketFetchRuntimeService_ClaimTimerBatch_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ClaimTimerBatchReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MarketFetchRuntimeService).ClaimTimerBatch(ctx, reqbody.(*ClaimTimerBatchReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// MarketFetchRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var MarketFetchRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.collector.MarketFetchRuntime",
+	HandlerType: ((*MarketFetchRuntimeService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.collector.MarketFetchRuntime/ClaimTimerBatch",
+			Func: MarketFetchRuntimeService_ClaimTimerBatch_Handler,
+		},
+	},
+}
+
+// RegisterMarketFetchRuntimeService registers service.
+func RegisterMarketFetchRuntimeService(s server.Service, svr MarketFetchRuntimeService) {
+	if err := s.Register(&MarketFetchRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("MarketFetchRuntime register error:%v", err))
+	}
+}
+
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedCollectMgr struct{}
@@ -368,6 +410,12 @@ func (s *UnimplementedCollectMgr) CancelKlineResampleBackfill(ctx context.Contex
 }
 func (s *UnimplementedCollectMgr) GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq) (*GetKlineResampleBackfillRsp, error) {
 	return nil, errors.New("rpc GetKlineResampleBackfill of service CollectMgr is not implemented")
+}
+
+type UnimplementedMarketFetchRuntime struct{}
+
+func (s *UnimplementedMarketFetchRuntime) ClaimTimerBatch(ctx context.Context, req *ClaimTimerBatchReq) (*ClaimTimerBatchRsp, error) {
+	return nil, errors.New("rpc ClaimTimerBatch of service MarketFetchRuntime is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -647,6 +695,40 @@ func (c *CollectMgrClientProxyImpl) GetKlineResampleBackfill(ctx context.Context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetKlineResampleBackfillRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// MarketFetchRuntimeClientProxy defines service client proxy
+type MarketFetchRuntimeClientProxy interface {
+	ClaimTimerBatch(ctx context.Context, req *ClaimTimerBatchReq, opts ...client.Option) (rsp *ClaimTimerBatchRsp, err error)
+}
+
+type MarketFetchRuntimeClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewMarketFetchRuntimeClientProxy = func(opts ...client.Option) MarketFetchRuntimeClientProxy {
+	return &MarketFetchRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *MarketFetchRuntimeClientProxyImpl) ClaimTimerBatch(ctx context.Context, req *ClaimTimerBatchReq, opts ...client.Option) (*ClaimTimerBatchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.MarketFetchRuntime/ClaimTimerBatch")
+	msg.WithCalleeServiceName(MarketFetchRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("MarketFetchRuntime")
+	msg.WithCalleeMethod("ClaimTimerBatch")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ClaimTimerBatchRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

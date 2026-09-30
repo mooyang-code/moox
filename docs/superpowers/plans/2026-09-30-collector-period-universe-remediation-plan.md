@@ -457,13 +457,13 @@ Task 5 完成记录：提交 `1894a96e`。首轮与二轮独立审查发现并�
 - Modify: `config/setup/service-deployments.yaml`、`modules/admin/internal/service/sysdeploy/defaults.go`、`modules/admin/internal/service/sysdeploy/defaults_test.go`、`modules/admin/internal/service/sysdeploy/routes.go`、`modules/admin/internal/service/sysdeploy/routes_test.go`
 - Modify: `modules/admin/internal/gateway/gateway.go`、`modules/admin/internal/gateway/gateway_test.go`
 
-- [ ] **6.1 先补计划与 CAS 测试。** 同周期两个 tick、Collector 重启、午休/节假日都只能保留一个 initial manifest、同一 owning Run/BatchItems；首次 Ensure 失败零 batch。单个候选时两个不同 requestID 并发 Claim 只有一个首次领取成功；相同 requestID 丢响应重放返回相同请求，terminal batch 重放 no_work。另建同 function/group/binding 的两个有效周期，断言先领旧周期、再领新周期；重启、持续新周期入队和并发 Claim 不能饿死旧周期。同 requestID 并发遇到两个候选仍只绑定同一个 batch，不因 CAS 失败领取下一批。
-- [ ] **6.2 执行失败测试。** `go test -count=1 ./modules/collector/internal/marketfetch ./modules/collector/internal/store -run 'TestTimer(Period|BatchClaim)'`。旧 Timer 分支缺批次/Claim，应编译或断言失败。
-- [ ] **6.3 定义持久 Timer manifest。** 表名 `t_collector_timer_period_batches`；模型 `TimerPeriodBatch` 字段为 key、TaskID、FirstRunID、SeriesHash、ExpectedCount、GroupID、GroupCount、ShardIndex、BindingHash、RouteVersion、BatchID、FunctionName、NodeID、Region、ClaimRequestID、ClaimedAt、CreateTime。唯一约束 `(space_id,dataset_id,frequency,period_time,shard_index)` 和 `(space_id,batch_id)`；另加 `(space_id,function_name,claim_request_id)` 的部分唯一索引，仅索引非空 claim request ID，防止同一次运行绑定两个 batch。ClaimRequestID/ClaimedAt 在 CAS 成功时写入，其余身份字段不可更新。
-- [ ] **6.4 冻结分组而非每轮重算。** 使用 snapshot 内的 series、现有 Provider/Source route 及 rendezvous/stagger 规则生成 shard，单 batch 不跨 Provider/Source、遵守请求 item 上限。GroupCount、route version 与静态 binding hash 首次固定；binding hash 不包含当前标签成员或当前 tick。进行中的 manifest 不因 Reconciler 当前标签或新 Run 追加 Instance。
-- [ ] **6.5 固定首次持久化顺序。** 先创建/读取 snapshot，再用完整 snapshot Ensure Storage，保存 canonical state，成功后一个 SQLite 事务创建 owning Instance/WriteTarget、manifest、batch、batch items、RequestJSON。首次 batch ID 为 `stableID(spaceID,datasetID,frequency,periodUTC,shardIndex,"timer-initial")`，不含 RunID/requestID/tick/动态 assignment hash；sync point ID 同样稳定。已有 manifest 只读复用，不能执行现有 duplicate insert 后仍追加 BatchItems 的分支。
-- [ ] **6.6 拒绝重复/过期首次计划。** 初次创建前按市场 Calendar 确认有效 TargetDataTime；终态或 canonical deadline 已过的周期不新建 initial batch。标签变化只影响下一周期。Task 修改/停用时，未领取批次按现有任务控制语义取消；已持久 owning 关系不静默替换为新 Run。
-- [ ] **6.7 定义独立运行协议。** 不接受客户端提交名单/Items/ExpectedSet；`request_json` 为有界持久 `Request` 的 JSON，worker 使用现有结构化 JSON decoder，而不是重新展开标签。所需字段为：
+- [x] **6.1 先补计划与 CAS 测试。** 同周期两个 tick、Collector 重启、午休/节假日都只能保留一个 initial manifest、同一 owning Run/BatchItems；首次 Ensure 失败零 batch。单个候选时两个不同 requestID 并发 Claim 只有一个首次领取成功；相同 requestID 丢响应重放返回相同请求，terminal batch 重放 no_work。另建同 function/group/binding 的两个有效周期，断言先领旧周期、再领新周期；重启、持续新周期入队和并发 Claim 不能饿死旧周期。同 requestID 并发遇到两个候选仍只绑定同一个 batch，不因 CAS 失败领取下一批。
+- [x] **6.2 执行失败测试。** `go test -count=1 ./modules/collector/internal/marketfetch ./modules/collector/internal/store -run 'TestTimer(Period|BatchClaim)'`。旧 Timer 分支缺批次/Claim，应编译或断言失败。
+- [x] **6.3 定义持久 Timer manifest。** 表名 `t_collector_timer_period_batches`；模型 `TimerPeriodBatch` 字段为 key、TaskID、FirstRunID、SeriesHash、ExpectedCount、GroupID、GroupCount、ShardIndex、BindingHash、RouteVersion、BatchID、FunctionName、NodeID、Region、ClaimRequestID、ClaimedAt、CreateTime。唯一约束 `(space_id,dataset_id,frequency,period_time,shard_index)` 和 `(space_id,batch_id)`；另加 `(space_id,function_name,claim_request_id)` 的部分唯一索引，仅索引非空 claim request ID，防止同一次运行绑定两个 batch。ClaimRequestID/ClaimedAt 在 CAS 成功时写入，其余身份字段不可更新。
+- [x] **6.4 冻结分组而非每轮重算。** 使用 snapshot 内的 series、现有 Provider/Source route 及 rendezvous/stagger 规则生成 shard，单 batch 不跨 Provider/Source、遵守请求 item 上限。GroupCount、route version 与静态 binding hash 首次固定；binding hash 不包含当前标签成员或当前 tick。进行中的 manifest 不因 Reconciler 当前标签或新 Run 追加 Instance。
+- [x] **6.5 固定首次持久化顺序。** 先创建/读取 snapshot，再用完整 snapshot Ensure Storage，保存 canonical state，成功后一个 SQLite 事务创建 owning Instance/WriteTarget、manifest、batch、batch items、RequestJSON。首次 batch ID 为 `stableID(spaceID,datasetID,frequency,periodUTC,shardIndex,"timer-initial")`，不含 RunID/requestID/tick/动态 assignment hash；sync point ID 同样稳定。已有 manifest 只读复用，不能执行现有 duplicate insert 后仍追加 BatchItems 的分支。
+- [x] **6.6 拒绝重复/过期首次计划。** 初次创建前按市场 Calendar 确认有效 TargetDataTime；终态或 canonical deadline 已过的周期不新建 initial batch。标签变化只影响下一周期。Task 修改/停用时，未领取批次按现有任务控制语义取消；已持久 owning 关系不静默替换为新 Run。
+- [x] **6.7 定义独立运行协议。** 不接受客户端提交名单/Items/ExpectedSet；`request_json` 为有界持久 `Request` 的 JSON，worker 使用现有结构化 JSON decoder，而不是重新展开标签。所需字段为：
 
 ```protobuf
 message ClaimTimerBatchReq {
@@ -488,10 +488,10 @@ service MarketFetchRuntime {
 }
 ```
 
-- [ ] **6.8 实现领取事务。** Gateway 负责验证既有 Collector credential 与 caller，runtime 在可信 loopback 边界内验证 Space、function/group/binding 与 manifest 一致、目标仍启用，然后 CAS `planned -> dispatched`，同事务保存 claim requestID/node/region 与完成超时。返回已冻结 RequestJSON，其中每项含 InstanceID、TargetDataTime、SeriesIndex/Hash/Count，每个 WriteTarget 携带自己的 period identity；request ID 从本次已持久 claim 填入，不重建 Items/Targets。无可领取批次返回 `claimed=false`、空 payload；超过请求体/响应 item 限制拒绝而非拆出未持久的新批次。已领取请求的同 requestID 重放是幂等交付，不承诺网络层 exactly-once 执行。
+- [x] **6.8 实现领取事务。** Gateway 负责验证既有 Collector credential 与 caller，runtime 在可信 loopback 边界内验证 Space、function/group/binding 与 manifest 一致、目标仍启用，然后 CAS `planned -> dispatched`，同事务保存 claim requestID/node/region 与完成超时。返回已冻结 RequestJSON，其中每项含 InstanceID、TargetDataTime、SeriesIndex/Hash/Count，每个 WriteTarget 携带自己的 period identity；request ID 从本次已持久 claim 填入，不重建 Items/Targets。无可领取批次返回 `claimed=false`、空 payload；超过请求体/响应 item 限制拒绝而非拆出未持久的新批次。已领取请求的同 requestID 重放是幂等交付，不承诺网络层 exactly-once 执行。
 
 领取顺序必须确定：先查 `(space_id,function_name,request_id)` 的已持久 claim，核验本次 group/count/binding 与原 claim 一致；非终态返回原 payload，终态返回 no_work，均不改领另一个周期。没有已持久 claim 时，只选择匹配静态身份、任务仍启用、尚未过 canonical deadline 的 planned manifest，按 `(period_time,dataset_id,frequency,shard_index)` 稳定 oldest-first；不把 tick_time 当成“只查最新周期”的过滤条件。CAS 竞争失败先重新查本 requestID，再有界重选下一候选，受本次 RPC context 约束，不无限自旋。唯一冲突回查原 claim，不静默覆盖。一次 Claim 最多返回一个已持久 batch；已过期 planned manifest 由 6.11 的超时恢复收尾，不能永远占据活动工作保护。
-- [ ] **6.9 接入 server 与 Gateway。** 增加独立 runtime listener，HTTP 为 loopback `127.0.0.1:11418`、native tRPC 为 loopback `127.0.0.1:11422`；实施时先确认配置和运行端口无占用，冲突时停止并调整配置与测试，不抢占已有服务。注册同一 runtime handler，Gateway 显式 alias/method/caller；`sysdeploy/routes.go` 的 native 端口映射为 `collector-market-runtime -> 11422`，不能把 tRPC 发往 deployment 的 HTTP 11418。BFF 同时拒绝 runtime alias 及解析后的 service path，避免通过别名绕过机器 ACL；保留旧 CollectMgr 管理接口，不扩大 wildcard。
+- [x] **6.9 接入 server 与 Gateway。** 增加独立 runtime listener，HTTP 为 loopback `127.0.0.1:11418`、native tRPC 为 loopback `127.0.0.1:11422`；实施时先确认配置和运行端口无占用，冲突时停止并调整配置与测试，不抢占已有服务。注册同一 runtime handler，Gateway 显式 alias/method/caller；`sysdeploy/routes.go` 的 native 端口映射为 `collector-market-runtime -> 11422`，不能把 tRPC 发往 deployment 的 HTTP 11418。BFF 同时拒绝 runtime alias 及解析后的 service path，避免通过别名绕过机器 ACL；保留旧 CollectMgr 管理接口，不扩大 wildcard。
 
 新增部署条目是 Collector 进程内 endpoint，不是第二个独立进程；YAML 与 DefaultDeployments 同步：
 
@@ -513,9 +513,9 @@ service MarketFetchRuntime {
 ```
 
 `Dependencies.CollectorRuntimeGatewayTarget` 与 `CollectorRuntimeGatewayNodeID` 从 Collector 所在节点的 native service gateway 解析，支持显式配置；缺值时 Claim 配置失败，不能回退 Storage 的节点。测试包含 Collector/Storage 不同节点的路由，避免仅单机通过。
-- [ ] **6.10 校验 Timer Completion 身份。** initial Timer batch 在既有 Completion 原子事务前验证持久 claim 的 Batch/Node/Function/RequestID/Region，错误事件零副作用。Invoke retry 仍沿用现有 failover identity 规则，不能把 Timer 的固定 node 校验套到合法重试。继续使用 Batch terminal CAS + 所有 ownership 校验 + effects 的事务，不新增 Complete RPC。
-- [ ] **6.11 拆开超时恢复与节点派发。** `recoverDue` 无 Invoke node 也要持久 timed_out 与 retry effects；同时扫描已到 canonical deadline 的未领取 planned manifest，使其按有界 timeout/retry 规则收尾，不能因 Claim 排除过期候选而永久保持 planned。`dispatchDueRetries` 无容量时保留队列并报警，不重新创建 Timer initial；失败报告的 pending/missed 仍由 Task 5 的权威回执决定，不由本地过期推断。StockCN 重试节点纳入可 Invoke 的 Timer fleet/实际可用 catalog，发布前验证该容量；不因为保留 Timer 初始触发就把重试也交给“下次 Timer”。同时扩展 Task 4 清理事务：仅已确认终态且无未决工作时删除同周期 manifest，再删除 snapshot/state；未领取 planned manifest 也属于活动工作保护。
-- [ ] **6.12 生成、验证、提交。** 预期全部 PASS；提交 `feat(collector): claim durable timer period batches`。
+- [x] **6.10 校验 Timer Completion 身份。** initial Timer batch 在既有 Completion 原子事务前验证持久 claim 的 Batch/Node/Function/RequestID/Region，错误事件零副作用。Invoke retry 仍沿用现有 failover identity 规则，不能把 Timer 的固定 node 校验套到合法重试。继续使用 Batch terminal CAS + 所有 ownership 校验 + effects 的事务，不新增 Complete RPC。
+- [x] **6.11 拆开超时恢复与节点派发。** `recoverDue` 无 Invoke node 也要持久 timed_out 与 retry effects；同时扫描已到 canonical deadline 的未领取 planned manifest，使其按有界 timeout/retry 规则收尾，不能因 Claim 排除过期候选而永久保持 planned。`dispatchDueRetries` 无容量时保留队列并报警，不重新创建 Timer initial；失败报告的 pending/missed 仍由 Task 5 的权威回执决定，不由本地过期推断。StockCN 重试节点纳入可 Invoke 的 Timer fleet/实际可用 catalog，发布前验证该容量；不因为保留 Timer 初始触发就把重试也交给“下次 Timer”。同时扩展 Task 4 清理事务：仅已确认终态且无未决工作时删除同周期 manifest，再删除 snapshot/state；未领取 planned manifest 也属于活动工作保护。
+- [x] **6.12 生成、验证、提交。** 预期全部 PASS；提交 `feat(collector): claim durable timer period batches`。
 
 ```bash
 make -C modules/collector/proto all

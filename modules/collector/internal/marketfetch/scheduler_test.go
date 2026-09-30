@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -272,7 +274,7 @@ func TestTickSharesOneFetchAcrossTaskWriteTargets(t *testing.T) {
 	for _, raw := range targetPayload {
 		target, ok := raw.(map[string]any)
 		require.True(t, ok)
-		gotDatasets = append(gotDatasets, strings.TrimSpace(fmt.Sprint(target["DatasetID"])))
+		gotDatasets = append(gotDatasets, strings.TrimSpace(fmt.Sprint(target["dataset_id"])))
 	}
 	require.ElementsMatch(t, []string{"bars_a", "bars_b"}, gotDatasets)
 
@@ -290,6 +292,208 @@ func TestTickSharesOneFetchAcrossTaskWriteTargets(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, targets, 2)
 	require.ElementsMatch(t, []string{"bars_a", "bars_b"}, []string{targets[0].DatasetID, targets[1].DatasetID})
+}
+
+func TestTimerTickPersistsOneFrozenManifestWithoutInvokingSCF(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	task := domain.CollectionTask{
+		SpaceID: StockCNSpaceID, TaskID: "stock-bars", TaskName: "Stock Bars", DataType: "kline", Enabled: true,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","instrument_type":"equity","subject_tags":["stockcn_equity"],"target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
+		ResultViewID:  "view-stock-bars",
+	}
+	require.NoError(t, db.Tasks().Create(ctx, task))
+	now := time.Now().UTC().Add(2 * time.Minute).Truncate(time.Minute).Add(8 * time.Second)
+	period := targetDataTimeForTest(now, "1m")
+	item := domain.CollectionItem{
+		SubjectID: "600000.SH", Symbol: "600000", Provider: "stockcn_multi", SourceID: "stockcn_multi", MarketID: StockCNSpaceID,
+		InstrumentType: "equity", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m",
+		TargetDataTime: period.Format(time.RFC3339Nano), SeriesIndex: 0, ExpectedCount: 1,
+	}
+	item.SeriesHash = domain.SeriesSetHash([]string{domain.CanonicalSeriesKey(item.Provider, item.SourceID, item.MarketType, item.SubjectID, collectionItemSeriesTag(StockCNSpaceID, item))})
+	snapshot, err := periodSeriesSnapshotFromItems(task, StockCNDatasetID, "1m", period, []domain.CollectionItem{item})
+	require.NoError(t, err)
+	_, _, err = db.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
+	require.NoError(t, err)
+	deadline := now.Add(5 * time.Minute)
+	routeVersion, sources, err := stockCNAssignmentRoute()
+	require.NoError(t, err)
+	sourceGroups, err := assignStockCNSourceGroups([]string{item.SubjectID}, sources, 1, MaxRealtimeItems, routeVersion)
+	require.NoError(t, err)
+	assignment := NodeAssignment{
+		NodeID: "timer-1", FunctionName: "market-fetch-1", Region: "ap-shanghai", Provider: sourceGroups[0].Source.Provider, RouteProvider: "stockcn_multi",
+		SourceID: sourceGroups[0].Source.SourceID, MarketType: "equity", MarketID: StockCNSpaceID, InstrumentType: "equity", DatasetID: StockCNDatasetID,
+		Frequency: "1m", RouteVersion: routeVersion, GroupID: 0, GroupCount: 1, Subjects: []string{item.SubjectID}, Enabled: true,
+	}
+	invoker := &recordingMarketFetchInvoker{
+		invokeNodes: []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "invoke-fetch", Region: "ap-hongkong", TriggerType: "invoke"}},
+		timerNodes:  []scfinvoker.Node{{NodeID: assignment.NodeID, FunctionName: assignment.FunctionName, Region: assignment.Region, TriggerType: "timer"}},
+	}
+	planner := &TimerPeriodPlanner{
+		Snapshots: db.PeriodSeriesSnapshot(), States: db.PeriodStorageStates(), Batches: db.TimerPeriodBatches(),
+		ValidTargetDataTime: func(string, time.Time) bool { return true },
+		Now:                 func() time.Time { return now },
+		EnsureStorage: func(_ context.Context, frozen domain.PeriodSeriesSnapshot) (domain.PeriodStorageState, error) {
+			return timerPlannerStorageState(frozen, deadline), nil
+		},
+	}
+	scheduler := &Scheduler{
+		Tasks: db.Tasks(), Instances: db.TaskInstances(), Batches: db.FetchBatches(), Runs: db.Runs(), Retries: db.FetchRetries(),
+		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(), TimerPeriodBatches: db.TimerPeriodBatches(),
+		TimerPeriodPlanner: planner, TimerAssignments: func() []NodeAssignment { return []NodeAssignment{assignment} },
+		Invoker: invoker, SpaceID: StockCNSpaceID, InvokeNonRealtimeOnly: true, Now: func() time.Time { return now },
+		ResolveSourceID: testSourceID, TimerMeasuredSafeGroupSize: MaxRealtimeItems,
+	}
+	require.NoError(t, scheduler.Tick(ctx, StockCNSpaceID))
+	first, err := db.TimerPeriodBatches().GetByPeriod(ctx, snapshot.Key, 0)
+	require.NoError(t, err)
+	require.NotEmpty(t, first.FirstRunID)
+	firstBatch, err := db.FetchBatches().Get(ctx, StockCNSpaceID, first.BatchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusPlanned, firstBatch.Status)
+	items, err := db.FetchBatches().ListItems(ctx, StockCNSpaceID, first.BatchID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Empty(t, invoker.snapshot(), "Timer initial manifests are claimed by the runtime, not directly invoked")
+
+	require.NoError(t, scheduler.Tick(ctx, StockCNSpaceID))
+	restarted := &Scheduler{
+		Tasks: db.Tasks(), Instances: db.TaskInstances(), Batches: db.FetchBatches(), Runs: db.Runs(), Retries: db.FetchRetries(),
+		PeriodSeriesSnapshot: db.PeriodSeriesSnapshot(), PeriodStorageStates: db.PeriodStorageStates(), TimerPeriodBatches: db.TimerPeriodBatches(),
+		TimerPeriodPlanner: planner, TimerAssignments: func() []NodeAssignment { return []NodeAssignment{assignment} },
+		Invoker: invoker, SpaceID: StockCNSpaceID, InvokeNonRealtimeOnly: true, Now: func() time.Time { return now },
+		ResolveSourceID: testSourceID, TimerMeasuredSafeGroupSize: MaxRealtimeItems,
+	}
+	require.NoError(t, restarted.Tick(ctx, StockCNSpaceID))
+	second, err := db.TimerPeriodBatches().GetByPeriod(ctx, snapshot.Key, 0)
+	require.NoError(t, err)
+	require.Equal(t, first.BatchID, second.BatchID, "restart and duplicate tick keep the original stable batch")
+	require.Equal(t, first.FirstRunID, second.FirstRunID, "restart cannot replace the period owner Run")
+	items, err = db.FetchBatches().ListItems(ctx, StockCNSpaceID, first.BatchID)
+	require.NoError(t, err)
+	require.Len(t, items, 1, "duplicate tick cannot append batch items")
+	require.Empty(t, invoker.snapshot())
+}
+
+func TestTimerPlanningFreezesAllGroupMembershipWhenAGroupIsUnavailable(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	task := domain.CollectionTask{
+		SpaceID: StockCNSpaceID, TaskID: "stock-bars", TaskName: "Stock Bars", DataType: "kline", Enabled: true,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","instrument_type":"equity","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
+		ResultViewID:  "view-stock-bars",
+	}
+	require.NoError(t, db.Tasks().Create(ctx, task))
+	period := time.Date(2026, 9, 30, 2, 14, 0, 0, time.UTC)
+	items := []domain.CollectionItem{
+		{SubjectID: "000001.SZ", Symbol: "000001", Provider: "stockcn_multi", SourceID: "stockcn_multi", MarketID: StockCNSpaceID, InstrumentType: "equity", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", TargetDataTime: period.Format(time.RFC3339Nano)},
+		{SubjectID: "600000.SH", Symbol: "600000", Provider: "stockcn_multi", SourceID: "stockcn_multi", MarketID: StockCNSpaceID, InstrumentType: "equity", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", TargetDataTime: period.Format(time.RFC3339Nano)},
+	}
+	keys := []string{
+		domain.CanonicalSeriesKey(items[0].Provider, items[0].SourceID, items[0].MarketType, items[0].SubjectID, "default"),
+		domain.CanonicalSeriesKey(items[1].Provider, items[1].SourceID, items[1].MarketType, items[1].SubjectID, "default"),
+	}
+	seriesHash := domain.SeriesSetHash(keys)
+	for index := range items {
+		items[index].SeriesIndex = uint32(index)
+		items[index].SeriesHash = seriesHash
+		items[index].ExpectedCount = uint32(len(items))
+	}
+	snapshot, err := periodSeriesSnapshotFromItems(task, StockCNDatasetID, "1m", period, items)
+	require.NoError(t, err)
+	_, _, err = db.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
+	require.NoError(t, err)
+	deadline := period.Add(5 * time.Minute)
+	planner := &TimerPeriodPlanner{
+		Snapshots: db.PeriodSeriesSnapshot(), States: db.PeriodStorageStates(), Batches: db.TimerPeriodBatches(),
+		Now: func() time.Time { return period.Add(time.Minute) },
+		EnsureStorage: func(_ context.Context, frozen domain.PeriodSeriesSnapshot) (domain.PeriodStorageState, error) {
+			return timerPlannerStorageState(frozen, deadline), nil
+		},
+	}
+	routeVersion, sources, err := stockCNAssignmentRoute()
+	require.NoError(t, err)
+	subjects := []string{items[0].SubjectID, items[1].SubjectID}
+	sourceGroups, err := assignStockCNSourceGroups(subjects, sources, 2, MaxRealtimeItems, routeVersion)
+	require.NoError(t, err)
+	assignments := make([]NodeAssignment, len(sourceGroups))
+	for groupID, sourceGroup := range sourceGroups {
+		nodeID := fmt.Sprintf("timer-%d", groupID+1)
+		assignments[groupID] = NodeAssignment{
+			NodeID: nodeID, FunctionName: fmt.Sprintf("market-fetch-%d", groupID), Region: "ap-shanghai",
+			Provider: sourceGroup.Source.Provider, RouteProvider: "stockcn_multi", SourceID: sourceGroup.Source.SourceID,
+			MarketType: "equity", MarketID: StockCNSpaceID, InstrumentType: "equity", DatasetID: StockCNDatasetID,
+			Frequency: "1m", RouteVersion: routeVersion, GroupID: groupID, GroupCount: len(sourceGroups),
+			Subjects: append([]string(nil), sourceGroup.Subjects...), Enabled: true,
+		}
+	}
+	scheduler := &Scheduler{
+		TimerPeriodPlanner: planner, PeriodStorageStates: db.PeriodStorageStates(), SpaceID: StockCNSpaceID,
+		TimerMeasuredSafeGroupSize: MaxRealtimeItems,
+	}
+	available := []scfinvoker.Node{{NodeID: "timer-1", FunctionName: "market-fetch-0", Region: "ap-shanghai", TriggerType: "timer"}}
+	created, err := scheduler.planTimerPeriodForAssignments(ctx, StockCNSpaceID, "run-first", time.Time{}, task, "1m", period, period.Add(time.Minute), assignments, available)
+	require.NoError(t, err)
+	require.Zero(t, created, "a missing group node must prevent partial period persistence")
+	manifests, err := db.TimerPeriodBatches().ListByPeriod(ctx, snapshot.Key)
+	require.NoError(t, err)
+	require.Empty(t, manifests, "a partially available node catalog must leave no manifests")
+	for groupID := range sourceGroups {
+		batchID := stableID(StockCNSpaceID, StockCNDatasetID, "1m", period.Format(time.RFC3339Nano), fmt.Sprint(groupID), "timer-initial")
+		_, batchErr := db.FetchBatches().Get(ctx, StockCNSpaceID, batchID)
+		require.Error(t, batchErr, "a missing group node must leave no batch rows")
+	}
+	instances, _, err := db.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: StockCNSpaceID, CollectionTaskID: task.TaskID, PageSize: 20})
+	require.NoError(t, err)
+	require.Empty(t, instances, "a missing group node must leave no instances or targets")
+
+	assignments[0].Subjects = []string{"600000.SH", "000001.SZ"}
+	assignments[1].Subjects = nil
+	available = []scfinvoker.Node{
+		{NodeID: "timer-1", FunctionName: "market-fetch-0", Region: "ap-shanghai", TriggerType: "timer"},
+		{NodeID: "timer-2", FunctionName: "market-fetch-1", Region: "ap-shanghai", TriggerType: "timer"},
+	}
+	created, err = scheduler.planTimerPeriodForAssignments(ctx, StockCNSpaceID, "run-after-label-change", time.Time{}, task, "1m", period, period.Add(time.Minute), assignments, available)
+	require.NoError(t, err)
+	require.Equal(t, 2, created, "the retry must atomically persist all nonempty groups from the snapshot")
+	manifests, err = db.TimerPeriodBatches().ListByPeriod(ctx, snapshot.Key)
+	require.NoError(t, err)
+	require.Len(t, manifests, 2)
+
+	before := make(map[uint32]string, len(manifests))
+	for shard := range sourceGroups {
+		manifest, err := db.TimerPeriodBatches().GetByPeriod(ctx, snapshot.Key, uint32(shard))
+		require.NoError(t, err)
+		batch, err := db.FetchBatches().Get(ctx, StockCNSpaceID, manifest.BatchID)
+		require.NoError(t, err)
+		var request Request
+		require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
+		want := append([]string(nil), sourceGroups[shard].Subjects...)
+		got := make([]string, len(request.Items))
+		for index, item := range request.Items {
+			got[index] = item.SubjectID
+		}
+		sort.Strings(want)
+		sort.Strings(got)
+		require.Equal(t, want, got, "group membership must come from the frozen snapshot, not refreshed assignment subjects")
+		before[uint32(shard)] = batch.RequestJSON
+	}
+
+	assignments[0].Subjects = []string{"000001.SZ"}
+	assignments[1].Subjects = []string{"600000.SH"}
+	created, err = scheduler.planTimerPeriodForAssignments(ctx, StockCNSpaceID, "run-after-second-label-change", time.Time{}, task, "1m", period, period.Add(time.Minute), assignments, available)
+	require.NoError(t, err)
+	require.Zero(t, created, "an existing manifest set is immutable across later assignment refreshes")
+	manifests, err = db.TimerPeriodBatches().ListByPeriod(ctx, snapshot.Key)
+	require.NoError(t, err)
+	require.Len(t, manifests, 2)
+	for shard, requestJSON := range before {
+		manifest, err := db.TimerPeriodBatches().GetByPeriod(ctx, snapshot.Key, shard)
+		require.NoError(t, err)
+		batch, err := db.FetchBatches().Get(ctx, StockCNSpaceID, manifest.BatchID)
+		require.NoError(t, err)
+		require.Equal(t, requestJSON, batch.RequestJSON)
+	}
 }
 
 func TestSchedulerExpansionCachesSharedTagAndSkipsDatasetLookup(t *testing.T) {
@@ -410,7 +614,7 @@ func TestDispatchDueRetriesRespectsRetryScopeTargets(t *testing.T) {
 			for _, rawTarget := range targetPayload {
 				target, ok := rawTarget.(map[string]any)
 				require.True(t, ok)
-				gotDatasets = append(gotDatasets, strings.TrimSpace(fmt.Sprint(target["DatasetID"])))
+				gotDatasets = append(gotDatasets, strings.TrimSpace(fmt.Sprint(target["dataset_id"])))
 			}
 			require.ElementsMatch(t, tc.wantDatasets, gotDatasets)
 		})
@@ -462,7 +666,7 @@ func TestRecoverDuePreservesWriteTargetRetryScopeAndAttempt(t *testing.T) {
 	require.NoError(t, err)
 
 	scheduler := &Scheduler{Batches: db.FetchBatches(), Retries: db.FetchRetries()}
-	require.NoError(t, scheduler.recoverDue(ctx, "crypto", []scfinvoker.Node{{NodeID: "node"}}, now))
+	require.NoError(t, scheduler.recoverDue(ctx, "crypto", nil, now))
 	recovered, err := db.FetchRetries().Get(ctx, "crypto", retryKey)
 	require.NoError(t, err)
 	require.Equal(t, "pending", recovered.Status)
@@ -472,6 +676,726 @@ func TestRecoverDuePreservesWriteTargetRetryScopeAndAttempt(t *testing.T) {
 	var failures []domain.WriteTarget
 	require.NoError(t, json.Unmarshal([]byte(recovered.FailureTargetsJSON), &failures))
 	require.Equal(t, []domain.WriteTarget{target}, failures)
+}
+
+func TestRecoverDueDoesNotResurrectSupersededRetry(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, instanceID, retryKey = "crypto", "superseded-instance", "superseded-retry"
+	now := time.Now().UTC()
+	period := now.Add(-time.Minute)
+	item := domain.CollectionItem{
+		InstanceID: instanceID, SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", Frequency: "1m",
+		Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline",
+		TargetDataTime: period.Format(time.RFC3339Nano), SourceEventID: retryKey,
+	}
+	itemRaw, err := json.Marshal(item)
+	require.NoError(t, err)
+	request := Request{
+		BatchID: "superseded-planned-timeout", SyncPointID: "sync-superseded", ScheduleID: "retry:superseded-planned-timeout",
+		BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: "bars", Frequency: "1m", Items: []domain.CollectionItem{item},
+	}
+	requestRaw, err := json.Marshal(request)
+	require.NoError(t, err)
+	deadline := now.Add(-time.Second)
+	batch := &domain.BatchInvocation{
+		SpaceID: spaceID, BatchID: request.BatchID, ScheduleID: request.ScheduleID, BatchKind: request.BatchKind,
+		Frequency: request.Frequency, Status: domain.BatchStatusPlanned, Attempt: 2, RequestJSON: string(requestRaw),
+		PlannedCount: 1, PlannedAt: &now, DeadlineAt: &deadline,
+	}
+	created, err := db.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NoError(t, db.FetchBatches().UpsertItems(ctx, spaceID, batch.BatchID, []string{instanceID}))
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: request.SyncPointID, BatchKind: request.BatchKind,
+		InstanceID: instanceID, SubjectID: item.SubjectID, Frequency: item.Frequency, TargetDataTime: period,
+		TaskJSON: string(itemRaw), Attempt: 1, Status: "superseded",
+	}))
+
+	scheduler := &Scheduler{Batches: db.FetchBatches(), Retries: db.FetchRetries()}
+	require.NoError(t, scheduler.recoverDue(ctx, spaceID, nil, now))
+	storedBatch, err := db.FetchBatches().Get(ctx, spaceID, batch.BatchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusTimedOut, storedBatch.Status)
+	storedRetry, err := db.FetchRetries().Get(ctx, spaceID, retryKey)
+	require.NoError(t, err)
+	require.Equal(t, "superseded", storedRetry.Status, "planned timeout recovery must not revive a retry retired by a newer period")
+}
+
+func TestSchedulerRecoversDueWorkWithoutInvokeNodesBeforeRefusingPlanning(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "http-task", TaskName: "HTTP task", DataType: "http", Enabled: true}
+	require.NoError(t, db.Tasks().Create(ctx, task))
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "timeout-instance", RunID: "timeout-run", DataType: "http", SubjectID: "BTC-USDT", Frequency: "1m"}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	target := domain.WriteTarget{ID: "timeout-target", SpaceID: "crypto", InstanceID: instance.InstanceID, TaskID: task.TaskID, DatasetID: "bars", Status: "pending"}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{target}))
+	item := domain.CollectionItem{
+		InstanceID: instance.InstanceID, SubjectID: instance.SubjectID, Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http",
+		MarketType: "spot", DataType: "kline", DatasetID: "bars", Frequency: "1m", TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano),
+	}
+	itemJSON, err := json.Marshal(item)
+	require.NoError(t, err)
+	request := Request{BatchID: "timeout-batch", ScheduleID: "timeout-batch", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", Items: []domain.CollectionItem{item}}
+	requestJSON, err := json.Marshal(request)
+	require.NoError(t, err)
+	plannedAt := now.Add(-2 * time.Minute)
+	deadline := now.Add(-time.Second)
+	batch := &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: request.BatchID, ScheduleID: request.ScheduleID, BatchKind: request.BatchKind,
+		Status: domain.BatchStatusPlanned, Attempt: 1, Frequency: "1m", RequestJSON: string(requestJSON), PlannedCount: 1,
+		PlannedAt: &plannedAt, DeadlineAt: &deadline,
+	}
+	created, err := db.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NoError(t, db.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{instance.InstanceID}))
+	_, err = db.FetchBatches().MarkDispatchedToNode(ctx, "crypto", batch.BatchID, "timeout-request", deadline, "region", "node", "fetch")
+	require.NoError(t, err)
+	dueRetryAt := now
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "already-due", Status: "pending", NextRetryAt: &dueRetryAt,
+		TaskJSON: string(itemJSON), CreateTime: now.Add(-time.Minute),
+	}))
+
+	invoker := &recordingMarketFetchInvoker{}
+	scheduler := &Scheduler{
+		Tasks: db.Tasks(), Instances: db.TaskInstances(), Batches: db.FetchBatches(), Retries: db.FetchRetries(),
+		Invoker: invoker, SpaceID: "crypto", Now: func() time.Time { return now },
+	}
+	err = scheduler.Tick(ctx, "crypto")
+	require.ErrorContains(t, err, "no active Invoke market fetcher nodes")
+	recovered, err := db.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusTimedOut, recovered.Status)
+	timeoutRetryKey := retryKey(batch.BatchID, item.SubjectID, item.TargetDataTime)
+	timeoutRetry, err := db.FetchRetries().Get(ctx, "crypto", timeoutRetryKey)
+	require.NoError(t, err)
+	require.Equal(t, "pending", timeoutRetry.Status)
+	queuedRetry, err := db.FetchRetries().Get(ctx, "crypto", "already-due")
+	require.NoError(t, err)
+	require.Equal(t, "pending", queuedRetry.Status, "due retries remain queued without dispatch capacity")
+	require.Empty(t, invoker.snapshot(), "no new Invoke-dependent plan is dispatched without Invoke nodes")
+}
+
+func TestDispatchDueRetriesKeepsQueueWhenNoCapacityExists(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	retry := &domain.RetryItem{SpaceID: "crypto", RetryKey: "queued", Status: "pending", NextRetryAt: &now, CreateTime: now}
+	require.NoError(t, db.FetchRetries().Upsert(ctx, retry))
+	scheduler := &Scheduler{Retries: db.FetchRetries(), Batches: db.FetchBatches()}
+
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, "crypto", nil, now))
+	stored, err := db.FetchRetries().Get(ctx, "crypto", retry.RetryKey)
+	require.NoError(t, err)
+	require.Equal(t, "pending", stored.Status, "lack of capacity must not consume or permanently fail retry work")
+	dueBatches, err := db.FetchBatches().ListDue(ctx, "crypto", now, 10)
+	require.NoError(t, err)
+	require.Empty(t, dueBatches)
+}
+
+func TestSchedulerRecoversAndDispatchesConfiguredTimerWavesWithinCapacity(t *testing.T) {
+	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stockcn", "route.yaml"))
+	require.NoError(t, err)
+	groups, itemsPerGroup := route.TimerFunctionCount, route.MeasuredSafeGroupSize
+	require.Equal(t, 170, groups)
+	require.Equal(t, MaxRealtimeItems, itemsPerGroup)
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: StockCNSpaceID, TaskID: "stock-wave-task", TaskName: "Stock Wave", DataType: "kline", Enabled: true}))
+
+	instances := make([]domain.TaskInstance, itemsPerGroup)
+	instanceIDs := make([]string, itemsPerGroup)
+	targets := make([]domain.WriteTarget, itemsPerGroup)
+	for index := 0; index < itemsPerGroup; index++ {
+		instanceID := fmt.Sprintf("stock-wave-instance-%02d", index)
+		instanceIDs[index] = instanceID
+		instances[index] = domain.TaskInstance{SpaceID: StockCNSpaceID, InstanceID: instanceID, Provider: "sina", ProviderSymbol: fmt.Sprintf("sh%06d", index), SourceID: "stockcn_minute_http", MarketType: "equity", DataType: "kline", SubjectID: fmt.Sprintf("%06d.XSHG", index), Frequency: "1m", TaskParams: `{}`}
+		targets[index] = domain.WriteTarget{ID: "stock-wave-target-" + instanceID, SpaceID: StockCNSpaceID, InstanceID: instanceID, TaskID: "stock-wave-task", DatasetID: StockCNDatasetID, Status: "pending"}
+	}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, instances))
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, targets))
+
+	nodes := make([]scfinvoker.Node, groups)
+	for index := range nodes {
+		nodes[index] = scfinvoker.Node{NodeID: fmt.Sprintf("invoke-%03d", index), FunctionName: fmt.Sprintf("fetch-%03d", index), Region: "ap-singapore", TriggerType: "invoke"}
+	}
+	invoker := &recordingMarketFetchInvoker{}
+	scheduler := &Scheduler{
+		Instances: db.TaskInstances(), Batches: db.FetchBatches(), Retries: db.FetchRetries(), Invoker: invoker,
+		InvokeConcurrency: 96,
+	}
+	firstTick := time.Now().UTC().Truncate(time.Minute).Add(10 * time.Second)
+	for wave := 0; wave < 2; wave++ {
+		tick := firstTick.Add(time.Duration(wave) * time.Minute)
+		for group := 0; group < groups; group++ {
+			batchID := fmt.Sprintf("stock-wave-%d-batch-%03d", wave, group)
+			items := make([]domain.CollectionItem, itemsPerGroup)
+			for index, instance := range instances {
+				items[index] = domain.CollectionItem{
+					InstanceID: instance.InstanceID, SubjectID: instance.SubjectID, Symbol: instance.ProviderSymbol,
+					TargetDataTime: tick.Add(-time.Minute).Format(time.RFC3339Nano), Provider: instance.Provider, SourceID: instance.SourceID,
+					MarketID: StockCNSpaceID, InstrumentType: "equity", MarketType: instance.MarketType, DataType: instance.DataType,
+					DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: MaxRealtimeRows,
+				}
+			}
+			request := Request{
+				BatchID: batchID, SyncPointID: fmt.Sprintf("stock-wave-%d-sync-%03d", wave, group), ScheduleID: batchID,
+				BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
+				Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", Items: items,
+			}
+			raw, marshalErr := json.Marshal(request)
+			require.NoError(t, marshalErr)
+			deadline := tick.Add(-time.Second)
+			batch := &domain.BatchInvocation{
+				SpaceID: StockCNSpaceID, BatchID: batchID, ScheduleID: batchID, BatchKind: domain.BatchKindRealtime,
+				Frequency: "1m", Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw), PlannedCount: itemsPerGroup,
+				PlannedAt: timePtr(tick.Add(-time.Minute)), DeadlineAt: &deadline,
+			}
+			created, createErr := db.FetchBatches().CreatePlanned(ctx, batch)
+			require.NoError(t, createErr)
+			require.True(t, created)
+			require.NoError(t, db.FetchBatches().UpsertItems(ctx, StockCNSpaceID, batchID, instanceIDs))
+			_, dispatchErr := db.FetchBatches().MarkDispatchedToNode(ctx, StockCNSpaceID, batchID, "timer-request", deadline, "ap-singapore", "timer-node", "timer-function")
+			require.NoError(t, dispatchErr)
+		}
+
+		before, err := db.FetchRetries().CountPending(ctx, StockCNSpaceID, StockCNDatasetID, "1m")
+		require.NoError(t, err)
+		require.Zero(t, before, "previous wave must be fully drained before new arrivals")
+		require.NoError(t, scheduler.recoverDue(ctx, StockCNSpaceID, nodes, tick))
+		afterRecovery, err := db.FetchRetries().CountPending(ctx, StockCNSpaceID, StockCNDatasetID, "1m")
+		require.NoError(t, err)
+		require.EqualValues(t, groups*itemsPerGroup, afterRecovery, "bounded recovery pass must recover every item from the configured wave")
+		require.NoError(t, scheduler.dispatchDueRetries(ctx, StockCNSpaceID, nodes, tick.Add(5*time.Second)))
+		wantInvocations := (wave + 1) * groups
+		require.Eventually(t, func() bool {
+			pending, countErr := db.FetchRetries().CountPending(ctx, StockCNSpaceID, StockCNDatasetID, "1m")
+			return countErr == nil && pending == 0 && len(invoker.snapshot()) == wantInvocations
+		}, 10*time.Second, 10*time.Millisecond, "all compatible fetch retries should dispatch in one bounded pass")
+		require.Equal(t, 96, cap(scheduler.invokeSem), "StockCN needs enough slots to drain 170 concurrent batches in two worst-case waves")
+		waveCount := (groups + cap(scheduler.invokeSem) - 1) / cap(scheduler.invokeSem)
+		require.Equal(t, 2, waveCount)
+		waveDuration := time.Duration(waveCount) * 2 * defaultSCFInvokeAttemptTimeout
+		require.Equal(t, 40*time.Second, waveDuration, "ceil(170/96) waves at two 10-second attempts each")
+		require.Less(t, waveDuration, time.Minute, "configured retry wave must leave scheduler-period headroom")
+		require.LessOrEqual(t, cap(scheduler.invokeSem), 96, "retry dispatch concurrency must remain bounded")
+		totalItems := 0
+		for _, invoke := range invoker.snapshot() {
+			data, ok := invoke.event["data"].(map[string]any)
+			require.True(t, ok)
+			requestItems, ok := data["items"].([]any)
+			require.True(t, ok)
+			require.Len(t, requestItems, itemsPerGroup, "one original source batch should remain one bounded retry request")
+			totalItems += len(requestItems)
+		}
+		require.Equal(t, wantInvocations*itemsPerGroup, totalItems)
+	}
+}
+
+func TestRetryDispatchWaitBudgetCoversBoundedQueueAtConfiguredConcurrency(t *testing.T) {
+	require.Equal(t, 90*time.Second, retryDispatchWaitTimeout(StockCNTimerInvokeConcurrency), "256 batches at 96 slots require three 20-second waves plus 30 seconds of dispatch/database slack")
+	require.Equal(t, 290*time.Second, retryDispatchWaitTimeout(DefaultInvokeConcurrency), "the default 20-slot scheduler also needs a finite budget covering all 256 batches")
+}
+
+type deadlineGatedMarketFetchInvoker struct {
+	deadlines   chan time.Time
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func (g *deadlineGatedMarketFetchInvoker) unblock() {
+	g.releaseOnce.Do(func() { close(g.release) })
+}
+
+func (g *deadlineGatedMarketFetchInvoker) ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
+	return nil, nil
+}
+
+func (g *deadlineGatedMarketFetchInvoker) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
+	return nil, nil
+}
+
+func (g *deadlineGatedMarketFetchInvoker) Invoke(ctx context.Context, _, _ string, _ map[string]any, _ cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+	deadline, _ := ctx.Deadline()
+	g.deadlines <- deadline
+	select {
+	case <-g.release:
+		return scfinvoker.InvocationResult{RequestID: "gated-request"}, nil
+	case <-ctx.Done():
+		return scfinvoker.InvocationResult{}, ctx.Err()
+	}
+}
+
+func TestDispatchRetrySemaphoreWaitDoesNotConsumeBoundedPassBudget(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	invoker := &deadlineGatedMarketFetchInvoker{deadlines: make(chan time.Time, 1), release: make(chan struct{})}
+	scheduler := &Scheduler{Batches: db.FetchBatches(), Invoker: invoker, InvokeConcurrency: StockCNTimerInvokeConcurrency, invokeAttemptTimeout: 2 * time.Minute}
+	scheduler.ensureInvokeSemaphore()
+	for index := 0; index < cap(scheduler.invokeSem); index++ {
+		scheduler.invokeSem <- struct{}{}
+	}
+
+	now := time.Now().UTC()
+	request := Request{
+		BatchID: "semaphore-wait-batch", SyncPointID: "sync-wait", ScheduleID: "retry:semaphore-wait-batch",
+		BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", DatasetID: "bars", Frequency: "1m",
+		Provider: "binance", SourceID: "spot_http", MarketType: "spot",
+		Items: []domain.CollectionItem{{InstanceID: "wait-instance", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars", Frequency: "1m", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano)}},
+	}
+	raw, err := json.Marshal(request)
+	require.NoError(t, err)
+	deadline := now.Add(time.Minute)
+	created, err := db.FetchBatches().CreatePlanned(ctx, &domain.BatchInvocation{
+		SpaceID: request.SpaceID, BatchID: request.BatchID, ScheduleID: request.ScheduleID, BatchKind: request.BatchKind,
+		Frequency: request.Frequency, Status: domain.BatchStatusPlanned, Attempt: 2, RequestJSON: string(raw),
+		PlannedCount: len(request.Items), PlannedAt: &now, DeadlineAt: &deadline,
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	node := scfinvoker.Node{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		invoker.unblock()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("retry dispatch goroutine did not stop during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		scheduler.dispatchRetry(request, node, []scfinvoker.Node{node}, nil)
+	}()
+	select {
+	case <-invoker.deadlines:
+		t.Fatal("Invoke acquired a slot while all semaphore tokens were held")
+	case <-time.After(2 * time.Second):
+	}
+	<-scheduler.invokeSem
+	var invokeDeadline time.Time
+	select {
+	case invokeDeadline = <-invoker.deadlines:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Invoke did not start after a semaphore slot became available")
+	}
+	require.Greater(t, time.Until(invokeDeadline), 80*time.Second, "queued work must retain the bounded-pass timeout rather than the old 30-second deadline")
+	invoker.unblock()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retry dispatch did not finish after releasing Invoke")
+	}
+}
+
+func TestDispatchDueRetriesDoesNotInvokeSamePlannedBatchTwiceAcrossTicks(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, instanceID, retryKey = "crypto", "retry-instance", "retry-once"
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: spaceID, TaskID: "retry-task", DataType: "kline", Enabled: true}))
+	instance := domain.TaskInstance{SpaceID: spaceID, InstanceID: instanceID, Provider: "binance", ProviderSymbol: "BTCUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	target := domain.WriteTarget{ID: "retry-target", SpaceID: spaceID, InstanceID: instanceID, TaskID: "retry-task", DatasetID: "bars", Status: "pending"}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{target}))
+	now := time.Now().UTC()
+	item := domain.CollectionItem{InstanceID: instanceID, SubjectID: instance.SubjectID, Symbol: instance.ProviderSymbol, Provider: instance.Provider, SourceID: instance.SourceID, MarketType: instance.MarketType, DataType: instance.DataType, DatasetID: target.DatasetID, Frequency: instance.Frequency, TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano)}
+	itemJSON, err := json.Marshal(item)
+	require.NoError(t, err)
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: "source-sync", BatchKind: domain.BatchKindRealtime,
+		InstanceID: instanceID, RetryScope: "fetch", SubjectID: instance.SubjectID, Frequency: instance.Frequency,
+		TargetDataTime: now.Add(-time.Minute), TaskJSON: string(itemJSON), Attempt: 1, Status: "pending", NextRetryAt: &now,
+	}))
+
+	invoker := &deadlineGatedMarketFetchInvoker{deadlines: make(chan time.Time, 2), release: make(chan struct{})}
+	t.Cleanup(invoker.unblock)
+	scheduler := &Scheduler{Instances: db.TaskInstances(), Batches: db.FetchBatches(), Retries: db.FetchRetries(), Invoker: invoker, InvokeConcurrency: 1}
+	nodes := []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}}
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
+	select {
+	case <-invoker.deadlines:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first retry did not enter Invoke")
+	}
+	// A later tick sees the same pending retry and deterministic planned batch
+	// while the first dispatch is still waiting for the Invoke response.
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now.Add(time.Minute)))
+	invoker.unblock()
+	require.Eventually(t, func() bool {
+		stored, getErr := db.FetchRetries().Get(ctx, spaceID, retryKey)
+		return getErr == nil && stored.Status == "dispatched"
+	}, 2*time.Second, 10*time.Millisecond)
+	select {
+	case <-invoker.deadlines:
+		t.Fatal("same deterministic retry batch was invoked twice across scheduler ticks")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestDispatchRetryRejectsSupersededKeysAfterWaitingForCapacity(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, taskID = "crypto", "retry-preflight-task"
+	const supersededKey, pendingKey = "retry-a-superseded", "retry-b-pending"
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: spaceID, TaskID: taskID, DataType: "kline", Enabled: true}))
+	instances := []domain.TaskInstance{
+		{SpaceID: spaceID, InstanceID: "instance-a", Provider: "binance", ProviderSymbol: "BTCUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: spaceID, InstanceID: "instance-b", Provider: "binance", ProviderSymbol: "ETHUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "ETH-USDT", Frequency: "1m", TaskParams: `{}`},
+	}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, instances))
+	targets := []domain.WriteTarget{
+		{ID: "target-a", SpaceID: spaceID, InstanceID: instances[0].InstanceID, TaskID: taskID, DatasetID: "bars", Status: "pending"},
+		{ID: "target-b", SpaceID: spaceID, InstanceID: instances[1].InstanceID, TaskID: taskID, DatasetID: "bars", Status: "pending"},
+	}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, targets))
+	now := time.Now().UTC()
+	items := []domain.CollectionItem{
+		{InstanceID: instances[0].InstanceID, SubjectID: instances[0].SubjectID, Symbol: instances[0].ProviderSymbol, Provider: instances[0].Provider, SourceID: instances[0].SourceID, MarketType: instances[0].MarketType, DataType: instances[0].DataType, DatasetID: "bars", Frequency: "1m", TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano), SourceEventID: supersededKey},
+		{InstanceID: instances[1].InstanceID, SubjectID: instances[1].SubjectID, Symbol: instances[1].ProviderSymbol, Provider: instances[1].Provider, SourceID: instances[1].SourceID, MarketType: instances[1].MarketType, DataType: instances[1].DataType, DatasetID: "bars", Frequency: "1m", TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano), SourceEventID: pendingKey},
+	}
+	for index, key := range []string{supersededKey, pendingKey} {
+		itemRaw, err := json.Marshal(items[index])
+		require.NoError(t, err)
+		require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+			SpaceID: spaceID, RetryKey: key, SourceBatchID: "retry-preflight-source", BatchKind: domain.BatchKindRealtime,
+			InstanceID: items[index].InstanceID, RetryScope: "fetch", SubjectID: items[index].SubjectID, Frequency: items[index].Frequency,
+			TargetDataTime: now.Add(-time.Minute), TaskJSON: string(itemRaw), Attempt: 1, Status: "pending", NextRetryAt: &now,
+		}))
+	}
+
+	invoker := &recordingMarketFetchInvoker{}
+	scheduler := &Scheduler{Instances: db.TaskInstances(), Batches: db.FetchBatches(), Retries: db.FetchRetries(), Invoker: invoker, InvokeConcurrency: 1}
+	scheduler.ensureInvokeSemaphore()
+	scheduler.invokeSem <- struct{}{}
+	nodes := []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}}
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
+
+	sourceItem := items[0]
+	compatibilityKey := retryDispatchCompatibilityKey(domain.RetryItem{
+		RetryKey: supersededKey, SourceBatchID: "retry-preflight-source", BatchKind: domain.BatchKindRealtime,
+		Attempt: 1, RetryScope: "fetch",
+	}, sourceItem, []domain.WriteTarget{targets[0]}, "fetch", domain.BatchKindRealtime)
+	batchID := stableID(spaceID, "retry", compatibilityKey, "2", supersededKey, pendingKey)
+	oldBatch, err := db.FetchBatches().Get(ctx, spaceID, batchID)
+	require.NoError(t, err)
+	var oldRequest Request
+	require.NoError(t, json.Unmarshal([]byte(oldBatch.RequestJSON), &oldRequest))
+	require.Len(t, oldRequest.Items, 2, "the queued first plan must contain both retry keys")
+	require.NoError(t, db.FetchRetries().MarkStatus(ctx, spaceID, supersededKey, "superseded"))
+	<-scheduler.invokeSem
+
+	require.Eventually(t, func() bool {
+		stored, getErr := db.FetchBatches().Get(ctx, spaceID, batchID)
+		return getErr == nil && stored.Status == domain.BatchStatusFailed
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Empty(t, invoker.snapshot(), "a stale planned payload must not be invoked after semaphore wait")
+	require.Eventually(t, func() bool {
+		scheduler.retryDispatchMu.Lock()
+		defer scheduler.retryDispatchMu.Unlock()
+		return len(scheduler.retryDispatchInFlight) == 0
+	}, 2*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
+	require.Eventually(t, func() bool { return len(invoker.snapshot()) == 1 }, 2*time.Second, 10*time.Millisecond)
+	assert.Equal(t, []string{items[1].SubjectID}, invokedSubjectIDs(invoker.snapshot()), "the next Tick must regroup only remaining pending work")
+	stale, err := db.FetchRetries().Get(ctx, spaceID, supersededKey)
+	require.NoError(t, err)
+	require.Equal(t, "superseded", stale.Status)
+	remaining, err := db.FetchRetries().Get(ctx, spaceID, pendingKey)
+	require.NoError(t, err)
+	require.Equal(t, "dispatched", remaining.Status)
+}
+
+func TestRetryDispatchInFlightKeysBlockOverlappingSubset(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, taskID = "crypto", "retry-overlap-task"
+	const supersededKey, pendingKey = "retry-overlap-a", "retry-overlap-b"
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: spaceID, TaskID: taskID, DataType: "kline", Enabled: true}))
+	instances := []domain.TaskInstance{
+		{SpaceID: spaceID, InstanceID: "overlap-instance-a", Provider: "binance", ProviderSymbol: "BTCUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: spaceID, InstanceID: "overlap-instance-b", Provider: "binance", ProviderSymbol: "ETHUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "ETH-USDT", Frequency: "1m", TaskParams: `{}`},
+	}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, instances))
+	targets := []domain.WriteTarget{
+		{ID: "overlap-target-a", SpaceID: spaceID, InstanceID: instances[0].InstanceID, TaskID: taskID, DatasetID: "bars", Status: "pending"},
+		{ID: "overlap-target-b", SpaceID: spaceID, InstanceID: instances[1].InstanceID, TaskID: taskID, DatasetID: "bars", Status: "pending"},
+	}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, targets))
+	now := time.Now().UTC()
+	items := []domain.CollectionItem{
+		{InstanceID: instances[0].InstanceID, SubjectID: instances[0].SubjectID, Symbol: instances[0].ProviderSymbol, Provider: instances[0].Provider, SourceID: instances[0].SourceID, MarketType: instances[0].MarketType, DataType: instances[0].DataType, DatasetID: "bars", Frequency: "1m", TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano), SourceEventID: supersededKey},
+		{InstanceID: instances[1].InstanceID, SubjectID: instances[1].SubjectID, Symbol: instances[1].ProviderSymbol, Provider: instances[1].Provider, SourceID: instances[1].SourceID, MarketType: instances[1].MarketType, DataType: instances[1].DataType, DatasetID: "bars", Frequency: "1m", TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano), SourceEventID: pendingKey},
+	}
+	for index, key := range []string{supersededKey, pendingKey} {
+		itemRaw, err := json.Marshal(items[index])
+		require.NoError(t, err)
+		require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+			SpaceID: spaceID, RetryKey: key, SourceBatchID: "retry-overlap-source", BatchKind: domain.BatchKindRealtime,
+			InstanceID: items[index].InstanceID, RetryScope: "fetch", SubjectID: items[index].SubjectID, Frequency: items[index].Frequency,
+			TargetDataTime: now.Add(-time.Minute), TaskJSON: string(itemRaw), Attempt: 1, Status: "pending", NextRetryAt: &now,
+		}))
+	}
+
+	invoker := &deadlineGatedMarketFetchInvoker{deadlines: make(chan time.Time, 3), release: make(chan struct{})}
+	scheduler := &Scheduler{Instances: db.TaskInstances(), Batches: db.FetchBatches(), Retries: db.FetchRetries(), Invoker: invoker, InvokeConcurrency: 2}
+	t.Cleanup(func() {
+		invoker.unblock()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			scheduler.retryDispatchMu.Lock()
+			inFlight := len(scheduler.retryDispatchInFlight)
+			scheduler.retryDispatchMu.Unlock()
+			if inFlight == 0 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Error("overlapping retry dispatch goroutines did not exit during cleanup")
+	})
+	nodes := []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}}
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
+	select {
+	case <-invoker.deadlines:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial two-key retry batch did not enter Invoke")
+	}
+	compatibilityKey := retryDispatchCompatibilityKey(domain.RetryItem{
+		RetryKey: supersededKey, SourceBatchID: "retry-overlap-source", BatchKind: domain.BatchKindRealtime, Attempt: 1, RetryScope: "fetch",
+	}, items[0], []domain.WriteTarget{targets[0]}, "fetch", domain.BatchKindRealtime)
+	firstBatchID := stableID(spaceID, "retry", compatibilityKey, "2", supersededKey, pendingKey)
+	subsetBatchID := stableID(spaceID, "retry", pendingKey, "2")
+	require.NoError(t, db.FetchRetries().MarkStatus(ctx, spaceID, supersededKey, "superseded"))
+
+	// The remaining pending key has a different deterministic BatchID, but it
+	// must remain blocked by the first batch's retry-key ownership.
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
+	select {
+	case <-invoker.deadlines:
+		t.Fatal("overlapping pending-key subset entered Invoke concurrently")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := db.FetchBatches().Get(ctx, spaceID, subsetBatchID); err == nil {
+		t.Fatal("subset batch must not be persisted while its retry key is owned by an in-flight batch")
+	}
+
+	invoker.unblock()
+	require.Eventually(t, func() bool {
+		stored, getErr := db.FetchBatches().Get(ctx, spaceID, firstBatchID)
+		return getErr == nil && stored.Status == domain.BatchStatusDispatched
+	}, 2*time.Second, 10*time.Millisecond)
+	for key, want := range map[string]string{supersededKey: "superseded", pendingKey: "dispatched"} {
+		stored, getErr := db.FetchRetries().Get(ctx, spaceID, key)
+		require.NoError(t, getErr)
+		require.Equal(t, want, stored.Status)
+	}
+	select {
+	case <-invoker.deadlines:
+		t.Fatal("first accepted batch was duplicated by the overlapping subset")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRetryInvokeCandidatesExhaustedForceRecoveryOnNextTick(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, taskID, instanceID, retryKey = "crypto", "retry-failure-task", "retry-failure-instance", "retry-failure-key"
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: spaceID, TaskID: taskID, DataType: "kline", Enabled: true}))
+	instance := domain.TaskInstance{SpaceID: spaceID, InstanceID: instanceID, Provider: "binance", ProviderSymbol: "BTCUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	target := domain.WriteTarget{ID: "retry-failure-target", SpaceID: spaceID, InstanceID: instanceID, TaskID: taskID, DatasetID: "bars", Status: "pending"}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{target}))
+	now := time.Now().UTC()
+	item := domain.CollectionItem{InstanceID: instanceID, SubjectID: instance.SubjectID, Symbol: instance.ProviderSymbol, Provider: instance.Provider, SourceID: instance.SourceID, MarketType: instance.MarketType, DataType: instance.DataType, DatasetID: target.DatasetID, Frequency: instance.Frequency, TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano)}
+	itemRaw, err := json.Marshal(item)
+	require.NoError(t, err)
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: "retry-failure-source", BatchKind: domain.BatchKindRealtime,
+		InstanceID: instanceID, RetryScope: "fetch", SubjectID: instance.SubjectID, Frequency: instance.Frequency,
+		TargetDataTime: now.Add(-time.Minute), TaskJSON: string(itemRaw), Attempt: 1, Status: "pending", NextRetryAt: &now,
+	}))
+
+	invoker := &alwaysFailMarketFetchInvoker{}
+	scheduler := &Scheduler{Instances: db.TaskInstances(), Batches: db.FetchBatches(), Retries: db.FetchRetries(), Invoker: invoker, InvokeConcurrency: 1}
+	nodes := []scfinvoker.Node{
+		{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"},
+		{NodeID: "invoke-2", FunctionName: "fetch-2", Region: "ap-shanghai", TriggerType: "invoke"},
+	}
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
+	require.Eventually(t, func() bool {
+		scheduler.retryDispatchMu.Lock()
+		defer scheduler.retryDispatchMu.Unlock()
+		return len(scheduler.retryDispatchInFlight) == 0
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, 2, invoker.count(), "both bounded invocation candidates should fail")
+
+	batchID := stableID(spaceID, "retry", retryKey, "2")
+	batch, err := db.FetchBatches().Get(ctx, spaceID, batchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusPlanned, batch.Status)
+	require.NotNil(t, batch.DeadlineAt)
+	require.True(t, !batch.DeadlineAt.After(time.Now().UTC()), "exhausted Invoke candidates must make the planned batch due for next-tick recovery")
+
+	recoveryAt := time.Now().UTC().Add(time.Second)
+	require.NoError(t, scheduler.recoverDue(ctx, spaceID, nodes, recoveryAt))
+	batch, err = db.FetchBatches().Get(ctx, spaceID, batchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusTimedOut, batch.Status)
+	recoveredRetry, err := db.FetchRetries().Get(ctx, spaceID, retryKey)
+	require.NoError(t, err)
+	require.Equal(t, 2, recoveredRetry.Attempt, "the failed planned attempt must advance through ordinary bounded recovery")
+	require.Equal(t, "pending", recoveredRetry.Status)
+}
+
+func TestPlannedRetryDeadlineCoversQueueBudgetUntilInvokeDispatch(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, taskID, instanceID, retryKey = "crypto", "deadline-task", "deadline-instance", "deadline-retry"
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: spaceID, TaskID: taskID, DataType: "kline", Enabled: true}))
+	instance := domain.TaskInstance{SpaceID: spaceID, InstanceID: instanceID, Provider: "binance", ProviderSymbol: "BTCUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	target := domain.WriteTarget{ID: "deadline-target", SpaceID: spaceID, InstanceID: instanceID, TaskID: taskID, DatasetID: "bars", Status: "pending"}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{target}))
+	dispatchStartedAt := time.Now().UTC()
+	now := dispatchStartedAt.Add(-5 * time.Minute).Truncate(time.Second)
+	item := domain.CollectionItem{InstanceID: instanceID, SubjectID: instance.SubjectID, Symbol: instance.ProviderSymbol, Provider: instance.Provider, SourceID: instance.SourceID, MarketType: instance.MarketType, DataType: instance.DataType, DatasetID: target.DatasetID, Frequency: instance.Frequency, TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano)}
+	itemJSON, err := json.Marshal(item)
+	require.NoError(t, err)
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: "deadline-sync", BatchKind: domain.BatchKindRealtime,
+		InstanceID: instanceID, RetryScope: "fetch", SubjectID: instance.SubjectID, Frequency: instance.Frequency,
+		TargetDataTime: now.Add(-time.Minute), TaskJSON: string(itemJSON), Attempt: 1, Status: "pending", NextRetryAt: &now,
+	}))
+	batchID := stableID(spaceID, "retry", retryKey, "2")
+	queuedRequest := Request{
+		BatchID: batchID, SyncPointID: "deadline-sync", ScheduleID: "retry:" + batchID, BatchKind: domain.BatchKindRealtime,
+		SpaceID: spaceID, DatasetID: target.DatasetID, Frequency: instance.Frequency, Provider: instance.Provider,
+		SourceID: instance.SourceID, MarketType: instance.MarketType, Region: "ap-hongkong", NodeID: "invoke-1", FunctionName: "fetch-1",
+		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
+	}
+	queuedRaw, err := json.Marshal(queuedRequest)
+	require.NoError(t, err)
+	oldQueueDeadline := dispatchStartedAt.Add(10 * time.Second)
+	created, err := db.FetchBatches().CreatePlanned(ctx, &domain.BatchInvocation{
+		SpaceID: spaceID, BatchID: batchID, ScheduleID: queuedRequest.ScheduleID, BatchKind: queuedRequest.BatchKind,
+		Frequency: instance.Frequency, Region: queuedRequest.Region, NodeID: queuedRequest.NodeID, FunctionName: queuedRequest.FunctionName,
+		Status: domain.BatchStatusPlanned, Attempt: 2, RequestJSON: string(queuedRaw), PlannedAt: &dispatchStartedAt, DeadlineAt: &oldQueueDeadline,
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	invoker := &recordingMarketFetchInvoker{}
+	scheduler := &Scheduler{Instances: db.TaskInstances(), Batches: db.FetchBatches(), Retries: db.FetchRetries(), Invoker: invoker}
+	scheduler.ensureInvokeSemaphore()
+	require.Equal(t, DefaultInvokeConcurrency, cap(scheduler.invokeSem), "this regression covers the default 20-slot queue")
+	for index := 0; index < cap(scheduler.invokeSem); index++ {
+		scheduler.invokeSem <- struct{}{}
+	}
+	var releaseSlot sync.Once
+	unblockRetry := func() { releaseSlot.Do(func() { <-scheduler.invokeSem }) }
+	t.Cleanup(func() {
+		unblockRetry()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			scheduler.retryDispatchMu.Lock()
+			inFlight := len(scheduler.retryDispatchInFlight)
+			scheduler.retryDispatchMu.Unlock()
+			if inFlight == 0 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Error("retry dispatch goroutine did not exit during cleanup")
+	})
+	nodes := []scfinvoker.Node{{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}}
+	require.NoError(t, scheduler.dispatchDueRetries(ctx, spaceID, nodes, now))
+	planned, err := db.FetchBatches().Get(ctx, spaceID, batchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusPlanned, planned.Status)
+	require.True(t, planned.DeadlineAt.After(oldQueueDeadline), "re-dispatch must extend an existing planned batch's nearly-expired queue deadline")
+	deadlineCoversQueueBudget := planned.DeadlineAt.After(dispatchStartedAt.Add(retryDispatchWaitTimeout(DefaultInvokeConcurrency)))
+
+	require.NoError(t, scheduler.recoverDue(ctx, spaceID, nodes, dispatchStartedAt.Add(defaultBatchCompletionDeadline)))
+	stillPlanned, err := db.FetchBatches().Get(ctx, spaceID, batchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusPlanned, stillPlanned.Status, "queue wait must not be mistaken for an SCF completion timeout")
+	storedRetry, err := db.FetchRetries().Get(ctx, spaceID, retryKey)
+	require.NoError(t, err)
+	require.Equal(t, "pending", storedRetry.Status)
+	require.Equal(t, 1, storedRetry.Attempt, "recoverDue must not consume an attempt before Invoke starts")
+	require.True(t, deadlineCoversQueueBudget, "planned retry deadline must be anchored to actual batch creation, not Tick's stale time")
+
+	unblockRetry()
+	require.Eventually(t, func() bool {
+		dispatched, getErr := db.FetchBatches().Get(ctx, spaceID, batchID)
+		return getErr == nil && dispatched.Status == domain.BatchStatusDispatched
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		scheduler.retryDispatchMu.Lock()
+		defer scheduler.retryDispatchMu.Unlock()
+		return len(scheduler.retryDispatchInFlight) == 0
+	}, 2*time.Second, 10*time.Millisecond)
+	dispatched, err := db.FetchBatches().Get(ctx, spaceID, batchID)
+	require.NoError(t, err)
+	require.Greater(t, dispatched.DeadlineAt.Sub(time.Now().UTC()), 60*time.Second, "successful Invoke must replace queue deadline with the 70-second completion deadline")
+}
+
+func TestDispatchRetrySemaphoreTimeoutLeavesRetryQueued(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, instanceID, retryKey = "crypto", "queue-timeout-instance", "queue-timeout-retry"
+	now := time.Now().UTC()
+	item := domain.CollectionItem{InstanceID: instanceID, SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars", Frequency: "1m", TargetDataTime: now.Add(-time.Minute).Format(time.RFC3339Nano)}
+	itemRaw, err := json.Marshal(item)
+	require.NoError(t, err)
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: "queue-timeout-source", BatchKind: domain.BatchKindRealtime,
+		InstanceID: instanceID, SubjectID: item.SubjectID, Frequency: item.Frequency, TargetDataTime: now.Add(-time.Minute),
+		TaskJSON: string(itemRaw), Attempt: 1, Status: "pending", NextRetryAt: &now,
+	}))
+	request := Request{BatchID: "queue-timeout-batch", ScheduleID: "retry:queue-timeout-batch", BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: "bars", Frequency: "1m", Provider: "binance", SourceID: "spot_http", MarketType: "spot", Region: "ap-hongkong", NodeID: "invoke-1", Items: []domain.CollectionItem{item}}
+	requestRaw, err := json.Marshal(request)
+	require.NoError(t, err)
+	deadline := now.Add(time.Hour)
+	created, err := db.FetchBatches().CreatePlanned(ctx, &domain.BatchInvocation{
+		SpaceID: spaceID, BatchID: request.BatchID, ScheduleID: request.ScheduleID, BatchKind: request.BatchKind,
+		Frequency: request.Frequency, Status: domain.BatchStatusPlanned, Attempt: 2, RequestJSON: string(requestRaw),
+		PlannedCount: 1, PlannedAt: &now, DeadlineAt: &deadline,
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	invoker := &recordingMarketFetchInvoker{}
+	scheduler := &Scheduler{
+		Batches: db.FetchBatches(), Retries: db.FetchRetries(), Invoker: invoker,
+		InvokeConcurrency: 1, retryDispatchWaitTimeoutOverride: 25 * time.Millisecond,
+	}
+	scheduler.ensureInvokeSemaphore()
+	scheduler.invokeSem <- struct{}{}
+	done := make(chan struct{})
+	node := scfinvoker.Node{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}
+	go func() {
+		defer close(done)
+		scheduler.dispatchRetry(request, node, []scfinvoker.Node{node}, []string{retryKey})
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("bounded semaphore wait did not time out")
+	}
+	require.Empty(t, invoker.snapshot(), "queue timeout must not invoke SCF")
+	storedBatch, err := db.FetchBatches().Get(ctx, spaceID, request.BatchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusPlanned, storedBatch.Status, "queue timeout must preserve the planned batch")
+	storedRetry, err := db.FetchRetries().Get(ctx, spaceID, retryKey)
+	require.NoError(t, err)
+	require.Equal(t, "pending", storedRetry.Status, "queue timeout must not consume or dispatch retry work")
 }
 
 func TestTickInvokesPriorityCryptoMinuteWhenTimersOwnRealtime(t *testing.T) {
@@ -1005,6 +1929,32 @@ type recordingMarketFetchInvoker struct {
 	timerNodes  []scfinvoker.Node
 	invokes     []recordedInvoke
 	err         error
+}
+
+type alwaysFailMarketFetchInvoker struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *alwaysFailMarketFetchInvoker) ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
+	return nil, nil
+}
+
+func (r *alwaysFailMarketFetchInvoker) ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {
+	return nil, nil
+}
+
+func (r *alwaysFailMarketFetchInvoker) Invoke(context.Context, string, string, map[string]any, cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return scfinvoker.InvocationResult{}, fmt.Errorf("SCF invoke unavailable")
+}
+
+func (r *alwaysFailMarketFetchInvoker) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
 }
 
 func (r *recordingMarketFetchInvoker) ListMarketFetchers(context.Context, string) ([]scfinvoker.Node, error) {

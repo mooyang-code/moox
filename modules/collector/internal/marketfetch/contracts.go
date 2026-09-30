@@ -50,6 +50,9 @@ type Request struct {
 	ShardIndex     int                              `json:"shard_index,omitempty"`
 	GroupID        int                              `json:"group_id,omitempty"`
 	GroupCount     int                              `json:"group_count,omitempty"`
+	BindingHash    string                           `json:"binding_hash,omitempty"`
+	RouteVersion   string                           `json:"route_version,omitempty"`
+	RunID          string                           `json:"-"`
 	Concurrency    int                              `json:"concurrency,omitempty"`
 	DNSRoutes      map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
 	Items          []domain.CollectionItem          `json:"items"`

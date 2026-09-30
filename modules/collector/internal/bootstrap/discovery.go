@@ -22,6 +22,10 @@ type Dependencies struct {
 	ServiceGatewayTarget    string
 	ServiceAuth             ServiceAuthConfig
 	StorageRPCGatewayTarget string
+	// CollectorRuntimeGatewayTarget is the native tRPC Gateway on the node
+	// hosting MarketFetchRuntime. It must not be inferred from Storage routing.
+	CollectorRuntimeGatewayTarget string
+	CollectorRuntimeGatewayNodeID string
 	// InvokeStorageRPCGatewayTarget is the address sent to SCF invoke
 	// payloads. Overseas functions cannot reach a mainland private IP, so this
 	// stays on the discovered public native gateway when an explicit private
@@ -43,6 +47,7 @@ type endpoint struct {
 	BaseURL     string `json:"base_url"`
 	RPCAddress  string `json:"rpc_address"`
 	GatewayPath string `json:"gateway_path"`
+	NodeID      string `json:"node_id"`
 	Scope       string `json:"scope"`
 	Status      string `json:"status"`
 }
@@ -67,6 +72,8 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 		ServiceAuth:                   cfg.SysDeploy.ServiceAuth,
 		StorageRPCGatewayTarget:       cfg.Storage.GatewayTarget,
 		InvokeStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
+		CollectorRuntimeGatewayTarget: cfg.CollectorRuntime.GatewayTarget,
+		CollectorRuntimeGatewayNodeID: cfg.CollectorRuntime.NodeID,
 	}
 	if strings.TrimSpace(cfg.SysDeploy.AdminGatewayURL) == "" {
 		return deps, nil
@@ -98,7 +105,67 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	}
 	deps.StorageRPCGatewayTarget = local
 	deps.InvokeStorageRPCGatewayTarget = invoke
+	runtimeTarget, runtimeNodeID, runtimeErr := resolveCollectorRuntimeGateway(active, cfg.CollectorRuntime)
+	if runtimeErr != nil {
+		return deps, runtimeErr
+	}
+	deps.CollectorRuntimeGatewayTarget = runtimeTarget
+	deps.CollectorRuntimeGatewayNodeID = runtimeNodeID
 	return deps, nil
+}
+
+func resolveCollectorRuntimeGateway(active map[string]endpoint, config CollectorRuntimeConfig) (string, string, error) {
+	nodeID := strings.TrimSpace(config.NodeID)
+	target := strings.TrimSpace(config.GatewayTarget)
+	if nodeID == "" {
+		var err error
+		nodeID, err = collectorRuntimeNodeID(active)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if nodeID == "" {
+		if target != "" {
+			return "", "", fmt.Errorf("collector runtime node_id is required for configured gateway target")
+		}
+		return "", "", nil
+	}
+	if target != "" {
+		return target, nodeID, nil
+	}
+	key := nodeID + "/service_gateway_native"
+	_, ok := active[key]
+	if !ok {
+		return "", "", fmt.Errorf("collector runtime native Gateway endpoint %q is missing", key)
+	}
+	target = strings.TrimSpace(endpointTRPCTarget(active, key))
+	if target == "" {
+		return "", "", fmt.Errorf("collector runtime native Gateway endpoint %q has no tRPC target", key)
+	}
+	return target, nodeID, nil
+}
+
+func collectorRuntimeNodeID(active map[string]endpoint) (string, error) {
+	nodes := make(map[string]struct{})
+	for key, item := range active {
+		if normalizeEndpointName(item.ServiceName) != "collector_market_runtime" || normalizeEndpointName(item.ServiceKind) != "collector_runtime" || (strings.TrimSpace(item.Status) != "" && !strings.EqualFold(strings.TrimSpace(item.Status), "active")) {
+			continue
+		}
+		nodeID := strings.TrimSpace(item.NodeID)
+		if nodeID == "" {
+			nodeID, _, _ = strings.Cut(key, "/")
+		}
+		if nodeID != "" {
+			nodes[nodeID] = struct{}{}
+		}
+	}
+	if len(nodes) > 1 {
+		return "", fmt.Errorf("collector runtime deployment is ambiguous across nodes")
+	}
+	for nodeID := range nodes {
+		return nodeID, nil
+	}
+	return "", nil
 }
 
 func selectStorageRPCTargets(configured, discovered string) (local, invoke string, err error) {

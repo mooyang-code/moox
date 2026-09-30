@@ -83,20 +83,22 @@ type TaskInstance struct {
 // WriteTarget is the task-specific destination of a shared TaskInstance.
 // Fetch status belongs to TaskInstance; write/retry status belongs here.
 type WriteTarget struct {
-	ID            string     `gorm:"column:c_write_target_id;primaryKey"`
-	SpaceID       string     `gorm:"column:c_space_id"`
-	InstanceID    string     `gorm:"column:c_instance_id"`
-	TaskID        string     `gorm:"column:c_task_id"`
-	DatasetID     string     `gorm:"column:c_dataset_id"`
-	ViewID        string     `gorm:"column:c_view_id"`
-	OutputFields  string     `gorm:"column:c_output_fields_json"`
-	SeriesIndex   uint32     `gorm:"column:c_series_index"`
-	SeriesHash    string     `gorm:"column:c_series_hash"`
-	ExpectedCount uint32     `gorm:"column:c_expected_count"`
-	Status        string     `gorm:"column:c_status"`
-	Attempt       int        `gorm:"column:c_attempt"`
-	LastError     string     `gorm:"column:c_last_error"`
-	NextRetryAt   *time.Time `gorm:"column:c_next_retry_at"`
+	ID             string     `gorm:"column:c_write_target_id;primaryKey" json:"write_target_id"`
+	SpaceID        string     `gorm:"column:c_space_id" json:"space_id"`
+	InstanceID     string     `gorm:"column:c_instance_id" json:"instance_id"`
+	TaskID         string     `gorm:"column:c_task_id" json:"task_id"`
+	DatasetID      string     `gorm:"column:c_dataset_id" json:"dataset_id"`
+	ViewID         string     `gorm:"column:c_view_id" json:"view_id,omitempty"`
+	OutputFields   string     `gorm:"column:c_output_fields_json" json:"output_fields_json,omitempty"`
+	SeriesIndex    uint32     `gorm:"column:c_series_index" json:"series_index"`
+	SeriesHash     string     `gorm:"column:c_series_hash" json:"series_hash"`
+	ExpectedCount  uint32     `gorm:"column:c_expected_count" json:"expected_count"`
+	Frequency      string     `gorm:"-" json:"frequency"`
+	TargetDataTime string     `gorm:"-" json:"target_data_time"`
+	Status         string     `gorm:"column:c_status" json:"status"`
+	Attempt        int        `gorm:"column:c_attempt" json:"attempt"`
+	LastError      string     `gorm:"column:c_last_error" json:"last_error,omitempty"`
+	NextRetryAt    *time.Time `gorm:"column:c_next_retry_at" json:"next_retry_at,omitempty"`
 }
 
 func (w *WriteTarget) TableName() string { return "t_collector_instance_write_targets" }

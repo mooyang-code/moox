@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
@@ -131,6 +132,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		ResultDataNodeID:               cfg.Storage.ResultDataNodeID,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
+	if err := registerMarketFetchRuntime(s, collectsvc.NewMarketFetchRuntime(&marketfetch.TimerBatchClaimer{Batches: dbm.TimerPeriodBatches()})); err != nil {
+		return nil, err
+	}
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
 	dnsDomains := append([]string(nil), cfg.DNS.Domains...)
@@ -189,6 +193,27 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return s, nil
+}
+
+const (
+	marketFetchRuntimeHTTPService   = "trpc.moox.collector.MarketFetchRuntime.http"
+	marketFetchRuntimeNativeService = "trpc.moox.collector.MarketFetchRuntime.native"
+)
+
+func registerMarketFetchRuntime(s *server.Server, implementation collectorpb.MarketFetchRuntimeService) error {
+	if s == nil || implementation == nil {
+		return fmt.Errorf("collector MarketFetchRuntime server is not initialized")
+	}
+	for _, name := range []string{marketFetchRuntimeHTTPService, marketFetchRuntimeNativeService} {
+		service := s.Service(name)
+		if service == nil {
+			return fmt.Errorf("collector MarketFetchRuntime listener %q is not configured", name)
+		}
+		if err := service.Register(&collectorpb.MarketFetchRuntimeServer_ServiceDesc, implementation); err != nil {
+			return fmt.Errorf("register MarketFetchRuntime on %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager, dataNodeID string) error {
@@ -555,6 +580,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	runtimes := make([]marketFetchRuntime, 0, len(spaceIDs))
 	for _, spaceID := range spaceIDs {
 		stockCNTimerOwned := strings.EqualFold(spaceID, marketfetch.StockCNSpaceID)
+		invokeConcurrency := marketFetchInvokeConcurrency(spaceID)
 		reconciler := &marketfetch.Reconciler{
 			SCFRegionBlacklists: cfg.SCFRegionBlacklists,
 			ResolveSourceID:     marketwiring.DefaultSourceID,
@@ -579,9 +605,23 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			// when runtime.env was rewritten). SCF invoke payloads keep the
 			// discovered public native gateway so overseas functions still work.
 			Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget, InvokeStorageTarget: deps.InvokeStorageRPCGatewayTarget,
-			InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
-			Symbols:               plannerSource,
-			InvokeNonRealtimeOnly: stockCNTimerOwned,
+			InvokeConcurrency: invokeConcurrency, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
+			Symbols:                    plannerSource,
+			InvokeNonRealtimeOnly:      stockCNTimerOwned,
+			TimerMeasuredSafeGroupSize: cfg.StockCN.MeasuredSafeGroupSize,
+		}
+		if stockCNTimerOwned {
+			calendar, calendarErr := stockmarket.LoadCalendar("./config/markets/stockcn/calendar.yaml")
+			if calendarErr != nil {
+				log.ErrorContextf(trpc.BackgroundContext(), "collector StockCN Timer planning is fail-closed because the market calendar could not be loaded: %v", calendarErr)
+			}
+			timerPlanner := &marketfetch.TimerPeriodPlanner{
+				Snapshots: dbm.PeriodSeriesSnapshot(), States: dbm.PeriodStorageStates(), Batches: dbm.TimerPeriodBatches(),
+				ValidTargetDataTime: stockCNTargetDataTimeValidator(calendar, cfg.KlineResample.DefaultSettleDelay, nil),
+			}
+			invokeScheduler.TimerPeriodBatches = dbm.TimerPeriodBatches()
+			invokeScheduler.TimerPeriodPlanner = timerPlanner
+			invokeScheduler.TimerAssignments = reconciler.TimerAssignments
 		}
 		failureReporter := marketfetch.NewPeriodFailureReporter(dbm.FetchRetries(), marketfetch.NewMarketStorageForMarket, deps.StorageRPCGatewayTarget, spaceID)
 		failureReporter.SetMetrics(metrics)
@@ -678,6 +718,17 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			go func(runtime *marketFetchRuntime) {
 				defer runtime.tickRunning.Store(false)
 				spaceID := runtime.spaceID
+				if runtime.timerOwned {
+					reconcileCtx, reconcileCancel := context.WithTimeout(trpc.BackgroundContext(), marketFetchReconcileTimeout)
+					if err := runtime.reconciler.Reconcile(reconcileCtx, spaceID); err != nil {
+						if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+							log.WarnContextf(reconcileCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
+						} else {
+							log.WarnContextf(reconcileCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
+						}
+					}
+					reconcileCancel()
+				}
 				scheduleCtx, scheduleCancel := context.WithTimeout(trpc.BackgroundContext(), marketFetchScheduleTimeout)
 				if err := runtime.scheduler.Tick(scheduleCtx, spaceID); err != nil {
 					log.WarnContextf(scheduleCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
@@ -693,26 +744,17 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 					}
 					storageCancel()
 				}
-				// Crypto is Scheduler/Invoke-owned. Its legacy Timer fleet is retired
-				// during SCF publication, so reconciling Timer assignments here would
-				// incorrectly require a second fleet and emit a false capacity error.
-				if !runtime.timerOwned {
-					return
-				}
-
-				tickCtx, tickCancel := context.WithTimeout(trpc.BackgroundContext(), marketFetchReconcileTimeout)
-				defer tickCancel()
-				if err := runtime.reconciler.Reconcile(tickCtx, spaceID); err != nil {
-					if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-						log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s expected_timer_function_count=%d measured_safe_group_size=%d: %v", spaceID, cfg.StockCN.ExpectedTimerFunctionCount, cfg.StockCN.MeasuredSafeGroupSize, err)
-					} else {
-						log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
-					}
-				}
 			}(runtime)
 		}
 		return nil
 	})
+}
+
+func marketFetchInvokeConcurrency(spaceID string) int {
+	if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+		return marketfetch.StockCNTimerInvokeConcurrency
+	}
+	return marketfetch.DefaultInvokeConcurrency
 }
 
 func marketFetchSpaceID() string {
@@ -751,4 +793,31 @@ func parseMarketFetchSpaceIDs(raw string) []string {
 
 func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {
 	return runtimeapp.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, TargetNode: cfg.TargetNode, CAFile: cfg.CAFile, CAPEMBase64: cfg.CAPEMBase64, ExpireSec: cfg.ExpireSeconds}
+}
+
+func stockCNTargetDataTimeValidator(calendar *stockmarket.Calendar, settleDelay time.Duration, now func() time.Time) func(string, time.Time) bool {
+	return func(frequency string, target time.Time) bool {
+		if calendar == nil || !strings.EqualFold(strings.TrimSpace(frequency), "1m") || calendar.Location() == nil {
+			return false
+		}
+		current := time.Now().UTC()
+		if now != nil {
+			current = now().UTC()
+		}
+		latest, _, err := calendar.LatestClosedMinute(current, settleDelay)
+		if err != nil || target.After(latest) {
+			return false
+		}
+		tradeDate := target.In(calendar.Location()).Format("2006-01-02")
+		bars, err := calendar.ExpectedMinuteBars(tradeDate)
+		if err != nil {
+			return false
+		}
+		for _, bar := range bars {
+			if bar.Equal(target.UTC()) {
+				return true
+			}
+		}
+		return false
+	}
 }
