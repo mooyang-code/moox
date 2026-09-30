@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
+	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/stretchr/testify/require"
@@ -117,7 +118,8 @@ func TestMarketFetcherInvokeTimeoutContractBeforeCloudMutation(t *testing.T) {
 		{"zero primary", "90", "0", "90", true},
 		{"empty primary", "90", "", "90", true},
 		{"invalid alias", "60", "unset", "invalid", true},
-		{"invalid ignored alias", "90", "90", "invalid", true},
+		{"invalid ignored alias", "90", "90", "invalid", false},
+		{"empty ignored alias", "90", "90", "", false},
 		{"negative primary", "90", "-1", "unset", true},
 		{"invalid outer", "invalid", "90", "unset", true},
 		{"zero outer", "0", "90", "unset", true},
@@ -165,5 +167,72 @@ func TestMarketFetcherInvokeTimeoutContractBeforeCloudMutation(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestMarketFetcherInvokeCreateValidatesReadbackTimeoutBeforeReady(t *testing.T) {
+	for _, path := range []string{"existing", "created", "ambiguous create"} {
+		t.Run(path, func(t *testing.T) {
+			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+			seedSCFAccountAndPackage(t, catalog)
+			requestEnv := completeInvokeEnvironment("60")
+			requestEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+			delete(requestEnv, "MOOX_FETCH_TIMEOUT_SECONDS")
+			remoteEnv := copyStringMap(requestEnv)
+			remoteEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+			remoteEnv["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
+			fake := &fakeSCFClient{currentEnvironment: remoteEnv, currentTimeout: 60}
+			if path != "existing" {
+				fake.getResults = []fakeSCFGetResult{{err: errors.New("ResourceNotFound.FunctionName")}}
+			}
+			if path == "ambiguous create" {
+				fake.createErr = context.DeadlineExceeded
+			}
+			svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
+			item := &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": "60"}, Environment: requestEnv}
+			_, err := svc.executeCreateNodeItem(context.Background(), "crypto", item, 0)
+			require.ErrorContains(t, err, "Invoke runtime timeout")
+			node, err := catalog.GetNode(context.Background(), "crypto", cloudNodeFromCreateItem("crypto", item, 0).NodeID)
+			require.NoError(t, err)
+			require.Nil(t, node, "mismatched readback cannot persist deployment_ready")
+			require.Empty(t, fake.configured)
+			if path == "existing" {
+				require.Empty(t, fake.created)
+			}
+		})
+	}
+}
+
+func TestMarketFetcherInvokeDeployValidatesVerifiedTimeoutWithoutDesiredTimeout(t *testing.T) {
+	for _, drift := range []string{"outer", "environment"} {
+		t.Run(drift, func(t *testing.T) {
+			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+			seedSCFAccountAndPackage(t, catalog)
+			require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "invoke", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "invoke", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
+			env := completeInvokeEnvironment("90")
+			verifiedEnv := copyStringMap(env)
+			verifiedEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+			verifiedTimeout := int64(90)
+			if drift == "outer" {
+				verifiedTimeout = 60
+			} else {
+				verifiedEnv["MOOX_FETCH_TIMEOUT_SECONDS"] = "60"
+			}
+			active := &tencentscf.FunctionInfo{Status: "Active", Environment: env, Timeout: 90}
+			fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
+				{info: active}, // initial read
+				{info: active}, // code update becomes active
+				{info: active}, // configuration update becomes active
+				{info: &tencentscf.FunctionInfo{Status: "Active", Environment: verifiedEnv, Timeout: verifiedTimeout}},
+			}}
+			svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
+			_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "invoke", PackageId: "moox-collector_dev"})
+			require.ErrorContains(t, err, "Invoke runtime timeout")
+			require.Len(t, fake.updated, 1)
+			require.Len(t, fake.configured, 1)
+			node, err := catalog.GetNode(context.Background(), "crypto", "invoke")
+			require.NoError(t, err)
+			require.Equal(t, "old-package", node.PackageID, "failed verification cannot persist the new package")
+		})
 	}
 }

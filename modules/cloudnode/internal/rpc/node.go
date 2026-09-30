@@ -327,22 +327,32 @@ func validateMarketFetchInvokeTimeout(environment, config map[string]string, out
 		}
 		outerTimeout = parsed
 	}
-	// Match the handler's alias/default precedence, without silently accepting
-	// explicitly invalid values that would change the effective runtime budget.
+	// Only the highest-precedence configured value controls the handler budget.
 	runtimeTimeout := int64(tencent.CollectorTimerTimeoutSeconds)
-	for _, key := range []string{"MOOX_MARKET_FETCH_TIMEOUT_SECONDS", "MOOX_FETCH_TIMEOUT_SECONDS"} {
+	for _, key := range []string{"MOOX_FETCH_TIMEOUT_SECONDS", "MOOX_MARKET_FETCH_TIMEOUT_SECONDS"} {
 		if value, ok := environment[key]; ok {
 			parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 			if err != nil || parsed <= 0 {
 				return fmt.Errorf("Invoke runtime timeout requires a positive %s", key)
 			}
 			runtimeTimeout = parsed
+			break
 		}
 	}
 	if outerTimeout <= 0 || runtimeTimeout != outerTimeout {
 		return fmt.Errorf("Invoke runtime timeout must equal effective config.timeout")
 	}
 	return nil
+}
+
+func validateMarketFetchInvokeReadback(node *store.CloudNode, pkg store.FunctionPackage, info *tencentscf.FunctionInfo) error {
+	if !modernMarketFetchNode(node, pkg) || node.TriggerType == "timer" {
+		return nil
+	}
+	if info == nil {
+		return fmt.Errorf("Invoke runtime timeout configuration readback is empty")
+	}
+	return validateMarketFetchInvokeTimeout(info.Environment, nil, info.Timeout)
 }
 
 func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.BatchDeleteNodesRsp, error) {
@@ -535,6 +545,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := reconcileSCFPublicNetwork(ctx, client, ref, info, effectiveConfig); err != nil {
 			return err
 		}
+		if err := validateMarketFetchInvokeReadback(node, *pkg, info); err != nil {
+			return err
+		}
 		if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
 			return err
 		}
@@ -614,6 +627,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := reconcileSCFPublicNetwork(reconcileCtx, client, ref, info, effectiveConfig); err != nil {
 			return err
 		}
+		if err := validateMarketFetchInvokeReadback(node, *pkg, info); err != nil {
+			return err
+		}
 		if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
 			return err
 		}
@@ -630,6 +646,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		return err
 	}
 	if err := reconcileSCFPublicNetwork(ctx, client, ref, info, effectiveConfig); err != nil {
+		return err
+	}
+	if err := validateMarketFetchInvokeReadback(node, *pkg, info); err != nil {
 		return err
 	}
 	if err := verifySCFFunctionConfiguration(info, effectiveConfig, item.GetEnvironment(), ref.FunctionName); err != nil {
@@ -820,6 +839,9 @@ func (s *Service) updateSCFFunctionCode(
 		return fmt.Errorf("verify scf function %s configuration: %w", ref.FunctionName, err)
 	}
 	if err := verifySCFFunctionConfiguration(verified, desiredConfig, desiredEnvironment, ref.FunctionName); err != nil {
+		return err
+	}
+	if err := validateMarketFetchInvokeReadback(&node, pkg, verified); err != nil {
 		return err
 	}
 	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(&node)); err != nil {
