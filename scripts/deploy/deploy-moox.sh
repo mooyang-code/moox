@@ -1286,7 +1286,8 @@ patch_configs() {
   # omitting dedicated Trade variables. Preserve the installed placement so a
   # Strategy-only upgrade cannot silently disconnect ownership calls.
   if [[ "${COMPONENT_OVERLAY:-0}" -eq 1 && -z "${trade_gateway_url}" && -z "${trade_gateway_node}" && -r "${DEPLOY_DIR}/config/trade-gateway.json" ]]; then
-    read -r trade_gateway_url trade_gateway_node < <(python3 - "${DEPLOY_DIR}/config/trade-gateway.json" <<'PY'
+    local persisted_trade_gateway
+    persisted_trade_gateway=$(python3 - "${DEPLOY_DIR}/config/trade-gateway.json" <<'PY'
 import ipaddress, json, re, sys
 from urllib.parse import urlsplit
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -1310,7 +1311,10 @@ if url.scheme != "https" and not (url.scheme == "http" and loopback):
     sys.exit("Trade Gateway placement requires HTTPS except loopback")
 print(raw + "\t" + node)
 PY
-    )
+    ) || fail "invalid persisted Trade Gateway placement"
+    if [[ -n "${persisted_trade_gateway}" ]]; then
+      IFS=$'\t' read -r trade_gateway_url trade_gateway_node <<<"${persisted_trade_gateway}"
+    fi
   fi
   if [[ -z "${trade_gateway_url}" && -z "${trade_gateway_node}" && "${WITH_TRADE}" -eq 1 ]]; then
     if [[ "${WITH_STORAGE}" -eq 0 && "${WITH_ADMIN}" -eq 0 && "${WITH_GATEWAY}" -eq 1 ]]; then
@@ -2484,17 +2488,35 @@ start_admin() {
     local resolver_enabled=0 resolver_node="" resolver_target=""
     local trade_gateway_url="${MOOX_TRADE_GATEWAY_URL:-}" trade_gateway_node="${MOOX_TRADE_GATEWAY_NODE_ID:-}"
     if [[ -z "${trade_gateway_url}" && -z "${trade_gateway_node}" && -r "${ROOT}/config/trade-gateway.json" ]]; then
-      IFS=$'\t' read -r trade_gateway_url trade_gateway_node < <(python3 - "${ROOT}/config/trade-gateway.json" <<'PY'
-import json, sys
+      local persisted_trade_gateway
+      persisted_trade_gateway=$(python3 - "${ROOT}/config/trade-gateway.json" <<'PY'
+import ipaddress, json, re, sys
 from urllib.parse import urlsplit
 with open(sys.argv[1], encoding="utf-8") as handle:
     value = json.load(handle)
 raw, node = str(value.get("gateway_url", "")), str(value.get("target_node", ""))
-if raw and node:
-    parsed = urlsplit(raw)
-    print(raw + "\t" + node)
+if not raw and not node:
+    sys.exit(0)
+url = urlsplit(raw)
+host = url.hostname
+loopback = False
+if host:
+    loopback = host.lower() == "localhost"
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            pass
+if not re.fullmatch(r"[a-z0-9_-]+", node) or not host or url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
+    sys.exit("invalid persisted Trade Gateway placement")
+if url.scheme != "https" and not (url.scheme == "http" and loopback):
+    sys.exit("Trade Gateway placement requires HTTPS except loopback")
+print(raw + "\t" + node)
 PY
-      )
+      ) || { echo "invalid persisted Trade Gateway placement" >&2; return 1; }
+      if [[ -n "${persisted_trade_gateway}" ]]; then
+        IFS=$'\t' read -r trade_gateway_url trade_gateway_node <<<"${persisted_trade_gateway}"
+      fi
     fi
     local resolver_json="${ROOT}/config/render-runtime-config.json"
     local trade_console_host="" trade_console_port=""

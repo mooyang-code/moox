@@ -174,6 +174,7 @@ git diff --check
 - Modify: `modules/storage/proto/data_node.proto`、`modules/storage/proto/primary_store.proto`、`modules/storage/proto/storagegen/`
 - Modify: `modules/storage/internal/service/datanode/period.go`、`modules/storage/internal/service/datanode/service.go`、`modules/storage/internal/service/datanode/service_test.go`
 - Modify: `modules/storage/internal/service/datanode/pebble/period_progress.go`、`modules/storage/internal/service/datanode/pebble/period_progress_test.go`
+- Modify: `modules/storage/internal/service/datanode/pebble/store.go`，用现有 Options 注入统一周期时钟，默认生产时间不变
 - Modify: `modules/storage/internal/service/primarystore/period.go`、`modules/storage/internal/service/primarystore/service_test.go`
 - Modify: `modules/collector/internal/marketfetch/scheduler.go`、`modules/collector/internal/marketfetch/scheduler_test.go`，在 Ensure 中携带最终 storage-series tag
 - Modify: `modules/storage/cmd/server/main.go` 中新增查询转发，使本任务协议可编译；完整代理契约在 Task 3 验证
@@ -654,6 +655,7 @@ git diff --check
 - Modify: `modules/collector/README.md`、`modules/storage/README.md`
 - Modify: `docs/架构总览.md`、`scripts/test/contract/test-docs-architecture.sh`，只修复已核验的 Workspace 模块清单及其数量断言漂移
 - Modify: `docs/策略模块架构设计.md`，仅补回当前发布事件 `LogicalAccountTargetWeightRequested` 的精确名称，不改 Strategy/Trade 行为
+- Modify: `scripts/deploy/deploy-moox.sh`、`scripts/test/contract/test-deploy-moox-gateway.sh`，修复已由真实契约定位的合法空可选 Trade placement 导致 overlay/Admin 启动 `read` EOF 退出；非法配置仍须拒绝
 - Create: `docs/ops/collector-period-universe-release.md`
 - Modify: 本计划，逐项附实际执行证据，不提前勾选
 
@@ -664,6 +666,8 @@ git diff --check
 本轮文档检查已发现既存前置失败：`make test-docs-architecture` 报 `docs/架构总览.md missing go.work module: tools/moox-mcp`；当前 `go.work` 实际含 55 个 module，脚本仍要求 54 个。实施时先同步真实模块清单和严格数量断言，保留逐模块覆盖检查；不得删除检查、跳过该门禁或把当前结果记为 PASS。
 
 同一门禁还要求 Strategy 文档出现 `LogicalAccountTargetWeightRequested`，当前文档仅写“完整目标权重事件”；该名称由 `packages/tradeeventpb/trade_events.proto`、`packages/events/registry.go` 和 `modules/strategy/internal/trigger/processor.go` 的实际发布路径共同确认。只补文档名称，不改交易协议。Gateway 部署门禁的固定健康地址断言与实际 `gateway_health_addr` 已漂移，gateway-only fixture 也必须显式关闭独立的 Storage Access、HostAgent；修复测试 fixture 后重新执行完整脚本。不得放宽部署脚本的凭据、组件依赖、健康检查或回滚保护。
+
+实施时进一步实跑定位到两处真实部署缺陷：`patch_configs` 和生成的 `start_admin` 在合法空可选 `trade-gateway.json` 时，Python 不输出、`read` EOF 返回 1，触发 `set -e`。按现有 `import_trade_owner_route` 的模式捕获 producer 结果与退出码，仅合法空配置跳过 `read`；半缺失字段、非法 JSON/URL/node 仍 fail closed。用生成 Admin placement block 与真实 overlay 的空/合法/非法 fixture 做红绿回归，不能填假 Trade node 掩盖缺陷；这是门禁前置修复，不改变 Strategy/Trade 业务规则。
 
 ```bash
 go -C modules/collector test -count=1 ./...
