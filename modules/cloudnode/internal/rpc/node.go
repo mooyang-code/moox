@@ -282,9 +282,6 @@ func (s *Service) executeCreateNodeItem(
 	if strings.TrimSpace(node.PackageID) == "" {
 		return "", fmt.Errorf("package_id is required")
 	}
-	if err := validateMarketFetchTimerTimeout(&node, item); err != nil {
-		return "", err
-	}
 	if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
 		return "", err
 	}
@@ -299,19 +296,21 @@ func (s *Service) executeCreateNodeItem(
 	return fmt.Sprintf("created function %s", node.FunctionName), nil
 }
 
-func validateMarketFetchTimerTimeout(node *store.CloudNode, item *pb.NodeCreateItem) error {
-	if !isMarketFetchNode(node) || node.TriggerType != "timer" {
+func durableMarketFetchTimer(node *store.CloudNode, pkg store.FunctionPackage) bool {
+	return pkg.WorkloadType == "market_fetcher" && node.TriggerType == "timer" && metadataString(parseJSONMap(node.Metadata), "function_mode") != "instrument_snapshot"
+}
+
+func validateMarketFetchTimerTimeout(node *store.CloudNode, pkg store.FunctionPackage, environment map[string]string, outerTimeout int64) error {
+	if !durableMarketFetchTimer(node, pkg) {
 		return nil
 	}
-	mode := metadataString(parseJSONMap(node.Metadata), "function_mode")
-	runtimeValue := strings.TrimSpace(item.GetEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"])
-	if mode == "instrument_snapshot" || (mode != "kline" && runtimeValue == "") {
-		return nil
+	runtimeValue := strings.TrimSpace(environment["MOOX_FETCH_TIMEOUT_SECONDS"])
+	if runtimeValue == "" {
+		runtimeValue = strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)
 	}
 	runtimeTimeout, err := strconv.ParseInt(runtimeValue, 10, 64)
-	outerTimeout := configInt64(item.GetConfig(), "timeout", defaultSCFTimeoutSeconds)
-	if err != nil || runtimeTimeout <= 0 || runtimeTimeout != outerTimeout {
-		return fmt.Errorf("Timer runtime timeout MOOX_FETCH_TIMEOUT_SECONDS must match config.timeout (%d)", outerTimeout)
+	if err != nil || runtimeTimeout != tencent.CollectorTimerTimeoutSeconds || outerTimeout != tencent.CollectorTimerTimeoutSeconds {
+		return fmt.Errorf("Timer runtime timeout MOOX_FETCH_TIMEOUT_SECONDS and config.timeout must both equal %d", tencent.CollectorTimerTimeoutSeconds)
 	}
 	return nil
 }
@@ -435,6 +434,25 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	memorySize := configInt64(config, "memory_size", 256)
 	timeoutSeconds := configInt64(config, "timeout", defaultSCFTimeoutSeconds)
 	effectiveConfig := config
+	if durableMarketFetchTimer(node, *pkg) {
+		timeoutSeconds = configInt64(config, "timeout", tencent.CollectorTimerTimeoutSeconds)
+		if err := validateMarketFetchTimerTimeout(node, *pkg, item.GetEnvironment(), timeoutSeconds); err != nil {
+			return err
+		}
+		effectiveConfig = copyStringMap(config)
+		if effectiveConfig == nil {
+			effectiveConfig = make(map[string]string)
+		}
+		effectiveConfig["timeout"] = strconv.FormatInt(timeoutSeconds, 10)
+		environment := copyStringMap(item.GetEnvironment())
+		if environment == nil {
+			environment = make(map[string]string)
+		}
+		environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
+		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
+			return err
+		}
+	}
 	// Keep the submitted Timer timeout authoritative from initial creation.
 	if isMarketFetchNode(node) && node.TriggerType == "timer" {
 		memorySize = 64
@@ -707,6 +725,14 @@ func (s *Service) updateSCFFunctionCode(
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
 		return fmt.Errorf("scf function %s %w", ref.FunctionName, err)
+	}
+	if durableMarketFetchTimer(&node, pkg) {
+		if err := validateMarketFetchTimerTimeout(&node, pkg, environment, configInt64(desiredConfig, "timeout", info.Timeout)); err != nil {
+			return err
+		}
+		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
+			return err
+		}
 	}
 	if !codeCurrent {
 		_, err = client.UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{

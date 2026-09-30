@@ -127,6 +127,8 @@ func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
 	return credentialFile
 }
 
+const collectorTestStorageAppKeysJSON = `{"moox-collector":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
+
 func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -854,6 +856,7 @@ func TestBuildCollectorFleetCreateItemsAreUniqueAndDeepCloned(t *testing.T) {
 		FunctionNamePrefix:     "e2e-collector",
 		NodeCount:              50,
 		EventBusCredentialFile: credentialFile,
+		StorageAppKeysJSON:     collectorTestStorageAppKeysJSON,
 	}, "pkg-new")
 	require.NoError(t, err)
 	require.Len(t, items, 50)
@@ -886,6 +889,7 @@ func TestBuildCollectorFleetCreateItemsContinuesOverflowIndexes(t *testing.T) {
 		NodeCount:              11,
 		IndexOffset:            49,
 		EventBusCredentialFile: credentialFile,
+		StorageAppKeysJSON:     collectorTestStorageAppKeysJSON,
 	}, "pkg-new")
 	require.NoError(t, err)
 	require.Len(t, items, 11)
@@ -936,7 +940,7 @@ func TestBuildCollectorFleetCreateItemsRequiresCompleteRuntimeEnvironment(t *tes
 
 func TestCollectorTimerRequiresUsableClaimRoute(t *testing.T) {
 	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
-	opts := collectorPublishOptions{SpaceID: "stockcn", NodeCount: 1, EventBusCredentialFile: credentialFile}
+	opts := collectorPublishOptions{SpaceID: "stockcn", NodeCount: 1, EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}
 	for _, tc := range []struct{ name, target, node string }{
 		{"missing target", "", "collector"},
 		{"missing node", "ip://collector.example:11003", ""},
@@ -957,6 +961,22 @@ func TestCollectorTimerRequiresUsableClaimRoute(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector")
 	_, err := buildCollectorFleetCreateItems(opts, "pkg")
 	require.NoError(t, err)
+}
+
+func TestCollectorTimerRequiresEventBusEnvironment(t *testing.T) {
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	environment, err := collectorFunctionEnvironment(collectorPublishOptions{SpaceID: "stockcn", TriggerType: "timer", EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}, "pkg")
+	require.NoError(t, err)
+	for _, key := range []string{"MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_NATS_TLS_CA_FILE"} {
+		t.Run(key, func(t *testing.T) {
+			partial := make(map[string]string, len(environment))
+			for name, value := range environment {
+				partial[name] = value
+			}
+			delete(partial, key)
+			require.ErrorContains(t, validateCollectorFleetRuntimeEnvironment(partial, true), key)
+		})
+	}
 }
 
 func TestSelectCollectorFleetNodesKeepsEmptySlotsForFleetExpansion(t *testing.T) {
@@ -1707,7 +1727,7 @@ func TestCollectorRegionalPreflightChecksInvokeAndOverflowShards(t *testing.T) {
 	fetcher := defaultCollectorSCFFetcherSpace()
 	fetcher.SpaceID = "stockcn"
 	fetcher.InvokeTimeoutSeconds = 900
-	opts := collectorPublishOptions{SpaceID: "stockcn", TriggerType: "timer", BizType: "market_fetcher", FetcherConfig: fetcher, EventBusCredentialFile: credentialFile}
+	opts := collectorPublishOptions{SpaceID: "stockcn", TriggerType: "timer", BizType: "market_fetcher", FetcherConfig: fetcher, EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON}
 	base, err := buildCollectorCreateNodeItem(opts, collectorPreflightPackageID(opts))
 	require.NoError(t, err)
 	opts.Env = []string{"PADDING=" + strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(base.Environment)-len("PADDING")-2)}

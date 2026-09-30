@@ -645,6 +645,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				return collectorPublishSummary{}, fmt.Errorf("Collector Timer manifest requires collector_rpc_gateway_target and collector_gateway_target_node before publication")
 			}
 		}
+		if err := preflightCollectorManifestEnvironmentLowerBound(opts, fetcherConfig, manifest); err != nil {
+			return collectorPublishSummary{}, err
+		}
 		// Cross-Space SCF quota is a publication-plan invariant. Keep ordinary
 		// read-only manifest consumers usable, but fail before any upload or
 		// CloudNode mutation when the complete plan exceeds Tencent's quota. A
@@ -3034,22 +3037,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if err := validateCollectorRuntimeConfig(config, &runtimeFetcher, strings.EqualFold(triggerType, "timer"), effectiveTimeoutSeconds); err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
-	for configKey, environmentKey := range map[string]string{
-		"max_inflight_requests": "MOOX_FETCH_MAX_INFLIGHT_REQUESTS",
-		"request_timeout_ms":    "MOOX_FETCH_REQUEST_TIMEOUT_MS",
-		"http_max_attempts":     "MOOX_FETCH_HTTP_MAX_ATTEMPTS",
-		"storage_max_attempts":  "MOOX_FETCH_STORAGE_MAX_ATTEMPTS",
-		"realtime_batch_size":   "MOOX_FETCH_REALTIME_BATCH_SIZE",
-		"realtime_bar_limit":    "MOOX_FETCH_REALTIME_BAR_LIMIT",
-		"catchup_batch_size":    "MOOX_FETCH_CATCHUP_BATCH_SIZE",
-		"catchup_bar_limit":     "MOOX_FETCH_CATCHUP_BAR_LIMIT",
-		"storage_timeout_ms":    "MOOX_FETCH_STORAGE_TIMEOUT_MS",
-		"max_retry_attempts":    "MOOX_FETCH_MAX_RETRY_ATTEMPTS",
-	} {
-		if value := strings.TrimSpace(config[configKey]); value != "" {
-			environment[environmentKey] = value
-		}
-	}
+	applyCollectorRuntimeEnvironmentOverrides(environment, config)
 	effectiveInt := func(key string, fallback int) int {
 		return collectorConfigInt(config, key, fallback)
 	}
@@ -3083,6 +3071,25 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 			"storage_timeout_ms":       effectiveInt("storage_timeout_ms", defaultInt(fetcher.StorageTimeoutMS, 5000)),
 		},
 	}, nil
+}
+
+func applyCollectorRuntimeEnvironmentOverrides(environment, config map[string]string) {
+	for configKey, environmentKey := range map[string]string{
+		"max_inflight_requests": "MOOX_FETCH_MAX_INFLIGHT_REQUESTS",
+		"request_timeout_ms":    "MOOX_FETCH_REQUEST_TIMEOUT_MS",
+		"http_max_attempts":     "MOOX_FETCH_HTTP_MAX_ATTEMPTS",
+		"storage_max_attempts":  "MOOX_FETCH_STORAGE_MAX_ATTEMPTS",
+		"realtime_batch_size":   "MOOX_FETCH_REALTIME_BATCH_SIZE",
+		"realtime_bar_limit":    "MOOX_FETCH_REALTIME_BAR_LIMIT",
+		"catchup_batch_size":    "MOOX_FETCH_CATCHUP_BATCH_SIZE",
+		"catchup_bar_limit":     "MOOX_FETCH_CATCHUP_BAR_LIMIT",
+		"storage_timeout_ms":    "MOOX_FETCH_STORAGE_TIMEOUT_MS",
+		"max_retry_attempts":    "MOOX_FETCH_MAX_RETRY_ATTEMPTS",
+	} {
+		if value := strings.TrimSpace(config[configKey]); value != "" {
+			environment[environmentKey] = value
+		}
+	}
 }
 
 type collectorShardIndexOffset struct {
@@ -3170,6 +3177,12 @@ func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID stri
 }
 
 func validateCollectorFleetRuntimeEnvironment(environment map[string]string, timer bool, marketFetcher ...bool) error {
+	if timer {
+		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
+			return fmt.Errorf("collector fleet runtime environment requires a valid Timer configuration: %w", err)
+		}
+		return nil
+	}
 	marketFetch := len(marketFetcher) > 0 && marketFetcher[0]
 	required := []string{
 		"MOOX_SPACE_ID",
@@ -3195,32 +3208,6 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string, tim
 		if strings.TrimSpace(environment[key]) == "" {
 			return fmt.Errorf("collector fleet runtime environment requires %s", key)
 		}
-	}
-	if timer {
-		if strings.TrimSpace(environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"]) == "" || strings.TrimSpace(environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"]) == "" {
-			return fmt.Errorf("collector timer runtime environment requires MOOX_COLLECTOR_RPC_GATEWAY_TARGET and MOOX_COLLECTOR_GATEWAY_TARGET_NODE")
-		}
-		if err := setupconfig.ValidateCollectorRuntimeRoute(environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"], environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"]); err != nil {
-			return fmt.Errorf("invalid MOOX_COLLECTOR_RPC_GATEWAY_TARGET or MOOX_COLLECTOR_GATEWAY_TARGET_NODE: %w", err)
-		}
-		if err := validateTimerStorageTarget(environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateTimerStorageTarget(raw string) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "ip" || parsed.Hostname() == "" || parsed.Port() == "" {
-		return fmt.Errorf("collector timer runtime environment requires MOOX_STORAGE_RPC_GATEWAY_TARGET as ip://host:port")
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if host == "localhost" || host == "ip6-localhost" {
-		return fmt.Errorf("MOOX_STORAGE_RPC_GATEWAY_TARGET must not point to loopback")
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return fmt.Errorf("MOOX_STORAGE_RPC_GATEWAY_TARGET must not point to loopback")
 	}
 	return nil
 }
@@ -3401,7 +3388,77 @@ func orderCollectorPublishRegions(regions []setupconfig.SCFFetcherRegion, storag
 	return out
 }
 
+// Check only guaranteed final values before reading remote trust, routes or CLS
+// resources. Remote-owned values are omitted, never guessed from stale local auth.
+func preflightCollectorManifestEnvironmentLowerBound(opts collectorPublishOptions, fetcher *setupconfig.SCFFetcherSpace, manifest *setupconfig.Snapshot) error {
+	opts.FetcherConfig = fetcher
+	opts.SpaceID = fetcher.SpaceID
+	if opts.PackageName == "moox-collector" {
+		opts.PackageName = fetcher.PackageName
+	}
+	opts.BizType = "market_fetcher"
+	opts.EventBusCredential = nil
+	opts.EventBusCredentialFile = ""
+	opts.RuntimeServiceKeyID = "collector"
+	opts.CLSHost = scfCLSIngestHost(firstNonEmpty(manifest.Manifest.TencentCloud.Region, clsprepare.Region) + ".cls.tencentyun.com")
+	clsID, clsKey := collectorCLSCredentials()
+	opts.CLSSecretID, opts.CLSSecretKey = clsID, clsKey
+	storageKnown := strings.TrimSpace(opts.StorageRPCGatewayTarget) != "" || !manifest.Manifest.HasStorageHost() || !strings.EqualFold(manifest.Manifest.StorageHost.Provider, "tencent")
+	if strings.TrimSpace(opts.StorageRPCGatewayTarget) == "" && storageKnown {
+		opts.StorageRPCGatewayTarget = fetcher.StorageRPCGatewayTarget
+	}
+	regions := append([]setupconfig.SCFFetcherRegion(nil), fetcher.Regions...)
+	if strings.TrimSpace(opts.Region) != "" {
+		regions = []setupconfig.SCFFetcherRegion{{Region: opts.Region, Enabled: true}}
+	}
+	triggers := []string{"timer", "invoke"}
+	if strings.EqualFold(fetcher.SpaceID, "crypto") {
+		triggers = []string{"invoke"}
+	}
+	for _, region := range regions {
+		if !region.Enabled || fetcher.IsRegionBlacklisted(region.Region) {
+			continue
+		}
+		for _, trigger := range triggers {
+			regional := opts
+			regional.Region, regional.TriggerType = region.Region, trigger
+			environment, err := collectorFunctionEnvironmentValues(regional, collectorPreflightPackageID(regional))
+			if err != nil {
+				return fmt.Errorf("validate collector manifest environment before remote access for region %s %s: %w", region.Region, trigger, err)
+			}
+			for _, key := range []string{"MOOX_GATEWAY_SERVICE_SECRET_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_LOGSET_ID", "MOOX_CLS_TOPIC_ID"} {
+				delete(environment, key)
+			}
+			if clsID == "" || clsKey == "" {
+				delete(environment, "MOOX_CLS_SECRET_ID")
+				delete(environment, "MOOX_CLS_SECRET_KEY")
+			}
+			if !storageKnown {
+				delete(environment, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+			}
+			environment["MOOX_EVENTBUS_NATS_URL"] = "tls://" + net.JoinHostPort(manifest.Manifest.EventBus.PublicAddress, strconv.Itoa(manifest.Manifest.EventBus.Port))
+			environment["MOOX_EVENTBUS_NATS_TLS_CA_FILE"] = "certs/eventbus-ca.pem"
+			applyCollectorRuntimeEnvironmentOverrides(environment, parseCollectorOverrides(opts.Config))
+			if err := tencent.ValidateSCFEnvironment(environment); err != nil {
+				return fmt.Errorf("validate collector manifest environment lower bound before remote access for region %s %s: %w", region.Region, trigger, err)
+			}
+		}
+	}
+	return nil
+}
+
 func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {
+	environment, err := collectorFunctionEnvironmentValues(opts, packageIDs...)
+	if err != nil {
+		return nil, err
+	}
+	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
+		return nil, err
+	}
+	return environment, nil
+}
+
+func collectorFunctionEnvironmentValues(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {
 	if len(opts.JobTypes) > 0 {
 		return nil, fmt.Errorf("market_fetcher does not consume CloudNode JobItem workloads")
 	}
@@ -3621,9 +3678,6 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	}
 	if len(env) == 0 {
 		return nil, nil
-	}
-	if err := tencent.ValidateSCFEnvironment(env); err != nil {
-		return nil, err
 	}
 	return env, nil
 }

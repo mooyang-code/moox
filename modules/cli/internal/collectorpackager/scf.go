@@ -270,7 +270,7 @@ func validatePublicCA(content []byte) error {
 		if err != nil || !cert.IsCA || !cert.BasicConstraintsValid {
 			return fmt.Errorf("certs/eventbus-ca.pem contains an invalid CA certificate")
 		}
-		if cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		if cert.KeyUsage != 0 && cert.KeyUsage&x509.KeyUsageCertSign == 0 {
 			return fmt.Errorf("certs/eventbus-ca.pem CA certificate must permit certificate signing")
 		}
 		now := time.Now()

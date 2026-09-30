@@ -38,7 +38,8 @@ func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
 	t.Setenv("GOCACHE", paths["GOCACHE"])
 	t.Setenv("HOME", t.TempDir())
 	ca := mustTestEventBusCAPEM(t)
-	host := startCollectorPublicationSSH(t, ca, "ap-nanjing")
+	var sshReads, cloudReads atomic.Int32
+	host := startCollectorPublicationSSH(t, ca, &sshReads, "ap-nanjing")
 	var uploads, creates, mutations, reads atomic.Int32
 	var accountMissing, legacyTimer atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +77,10 @@ func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
 	}))
 	defer server.Close()
 	previousCLS := newCollectorCLSAPI
-	newCollectorCLSAPI = func(string, string, string) (tencent.CLSAPI, error) { return collectorCLSAPI{}, nil }
+	newCollectorCLSAPI = func(string, string, string) (tencent.CLSAPI, error) {
+		cloudReads.Add(1)
+		return collectorCLSAPI{}, nil
+	}
 	t.Cleanup(func() { newCollectorCLSAPI = previousCLS })
 	collectorRoot, err := filepath.Abs(filepath.Join("..", "..", "..", "collector"))
 	require.NoError(t, err)
@@ -164,6 +168,15 @@ function_count = 1
 	item, err := buildCollectorCreateNodeItem(base, collectorPreflightPackageID(base))
 	require.NoError(t, err)
 	padding := strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(item.Environment)-len("PADDING")-2-64)
+	knownEnvironment := make(map[string]string, len(item.Environment))
+	for key, value := range item.Environment {
+		knownEnvironment[key] = value
+	}
+	for _, key := range []string{"MOOX_GATEWAY_SERVICE_SECRET_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_LOGSET_ID", "MOOX_CLS_TOPIC_ID", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD"} {
+		delete(knownEnvironment, key)
+	}
+	localPadding := strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(knownEnvironment)-len("PADDING")-2-64)
+	invokePadding := localPadding + strings.Repeat("x", 64)
 	for _, tc := range []struct {
 		name, packageName, padding, failingRegion, spaceID string
 		missingRoute, missingAccount, legacyTimer          bool
@@ -172,11 +185,17 @@ function_count = 1
 		{"second region overflow", "moox-collector", padding, "ap-singapore", "stockcn", false, false, true},
 		{"unregistered account overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "stockcn", false, true, false},
 		{"crypto legacy Timer overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "crypto", false, false, true},
+		{"local env overflow", "moox-collector", strings.Repeat("x", 4096), "ap-guangzhou", "stockcn", false, false, true},
+		{"second region local overflow", "moox-collector", localPadding, "ap-singapore", "stockcn", false, false, true},
+		{"local config overflow", "moox-collector", "", "ap-guangzhou", "stockcn", false, false, true},
+		{"local invoke overflow", "moox-collector", invokePadding, "ap-guangzhou", "stockcn", false, false, true},
 		{"missing claim route", "moox-collector", "", "", "stockcn", true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mutations.Store(0)
 			reads.Store(0)
+			sshReads.Store(0)
+			cloudReads.Store(0)
 			accountMissing.Store(tc.missingAccount)
 			legacyTimer.Store(tc.legacyTimer)
 			content := manifest
@@ -191,6 +210,9 @@ function_count = 1
 				content = strings.ReplaceAll(content, "collector_rpc_gateway_target = \"ip://203.0.113.10:11003\"\n", "")
 				content = strings.ReplaceAll(content, "collector_gateway_target_node = \"collector\"\n", "")
 			}
+			if tc.name == "local invoke overflow" {
+				content = strings.ReplaceAll(content, "timeout_seconds = 60\n", "timeout_seconds = 60\ninvoke_timeout_seconds = 900\n")
+			}
 			require.NoError(t, os.WriteFile(manifestPath, []byte(content), 0o600))
 			opts := collectorPublishOptions{
 				collectorPackageOptions: collectorPackageOptions{CollectorRoot: collectorRoot, Out: filepath.Join(t.TempDir(), "package.zip")},
@@ -198,6 +220,9 @@ function_count = 1
 			}
 			if tc.padding != "" {
 				opts.Env = []string{"PADDING=" + tc.padding}
+			}
+			if tc.name == "local config overflow" {
+				opts.Config = []string{"max_inflight_requests=" + strings.Repeat("9", 4096)}
 			}
 			_, err := publishCollectorFunction(context.Background(), opts)
 			require.Zero(t, mutations.Load(), "invalid publication must not change existing fleets or register accounts")
@@ -208,6 +233,14 @@ function_count = 1
 			}
 			require.ErrorContains(t, err, "4096")
 			require.ErrorContains(t, err, "region "+tc.failingRegion)
+			if tc.name == "local invoke overflow" {
+				require.ErrorContains(t, err, "invoke")
+			}
+			if tc.name != "second region overflow" {
+				require.Zero(t, reads.Load(), "known oversized environment must fail before Control reads")
+				require.Zero(t, sshReads.Load(), "known oversized environment must fail before SSH reads")
+				require.Zero(t, cloudReads.Load(), "known oversized environment must fail before cloud reads")
+			}
 			require.Zero(t, uploads.Load())
 			require.Zero(t, creates.Load())
 			require.NotContains(t, err.Error(), "publisher-secret")
@@ -215,7 +248,25 @@ function_count = 1
 	}
 }
 
-func startCollectorPublicationSSH(t *testing.T, ca []byte, blacklists ...string) setupconfig.Host {
+func TestCollectorManifestLowerBoundIgnoresRemoteOwnedValues(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", strings.Repeat("stale", 1000))
+	t.Setenv("MOOX_CLS_SECRET_ID", "")
+	t.Setenv("MOOX_CLS_SECRET_KEY", strings.Repeat("stale", 1000))
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", strings.Repeat("stale", 1000))
+	t.Setenv("MOOX_CLS_TOPIC_ID", strings.Repeat("stale", 1000))
+	fetcher := defaultCollectorSCFFetcherSpace()
+	fetcher.SpaceID = "stockcn"
+	fetcher.Regions = []setupconfig.SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1}}
+	manifest := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{EventBus: setupconfig.EventBus{PublicAddress: "203.0.113.10", Port: 4222}}}
+	opts := collectorPublishOptions{
+		RuntimeServiceSecretKey: strings.Repeat("stale", 1000), StorageAppKeysJSON: strings.Repeat("stale", 1000),
+		collectorPackageOptions: collectorPackageOptions{CLSLogsetID: strings.Repeat("stale", 1000), CLSTopicID: strings.Repeat("stale", 1000)},
+		EventBusCredentialFile:  filepath.Join(t.TempDir(), "must-not-read.yaml"),
+	}
+	require.NoError(t, preflightCollectorManifestEnvironmentLowerBound(opts, fetcher, manifest))
+}
+
+func startCollectorPublicationSSH(t *testing.T, ca []byte, reads *atomic.Int32, blacklists ...string) setupconfig.Host {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -266,6 +317,7 @@ func startCollectorPublicationSSH(t *testing.T, ca []byte, blacklists ...string)
 							}
 							var payload struct{ Command string }
 							_ = xssh.Unmarshal(request.Payload, &payload)
+							reads.Add(1)
 							_ = request.Reply(true, nil)
 							var stdout string
 							switch {

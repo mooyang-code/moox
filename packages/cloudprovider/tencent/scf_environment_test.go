@@ -24,3 +24,49 @@ func TestValidateSCFEnvironmentRejectsPrimaryMasterSecret(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *testing.T) {
+	valid := map[string]string{
+		"MOOX_GATEWAY_CALLER":                     "collector",
+		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
+		"MOOX_SPACE_ID":                           "stockcn", "MOOX_CODE_PACKAGE_ID": "collector_dev_00000000-0000-0000-0000-000000000000",
+		"MOOX_GATEWAY_NODE_ID": "storage", "MOOX_GATEWAY_TARGET_NODE": "storage", "MOOX_GATEWAY_SERVICE_KEY_ID": "collector", "MOOX_GATEWAY_SERVICE_SECRET_KEY": "private-test-secret",
+		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://storage.example:11003", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11004", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "collector",
+		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic", "MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
+		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret", "MOOX_EVENTBUS_NATS_TLS_CA_FILE": "certs/eventbus-ca.pem",
+	}
+	if err := ValidateCollectorTimerEnvironment(valid); err != nil {
+		t.Fatal(err)
+	}
+	for key := range valid {
+		t.Run("missing "+key, func(t *testing.T) {
+			copy := make(map[string]string)
+			for k, v := range valid {
+				copy[k] = v
+			}
+			delete(copy, key)
+			if err := ValidateCollectorTimerEnvironment(copy); err == nil {
+				t.Fatalf("missing %s must fail closed", key)
+			}
+		})
+	}
+	for _, test := range []struct{ key, value string }{
+		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{}`}, {"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"short"}`},
+		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("g", 64) + `"}`},
+		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`},
+		{"MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://localhost:11003"}, {"MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector.example:0"},
+		{"MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector.example:11004/path"}, {"MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "bad node"},
+		{"MOOX_EVENTBUS_NATS_URL", "nats://eventbus.example:4222"}, {"MOOX_CLS_ENABLED", "false"}, {"MOOX_CLS_TIMEOUT_MS", "invalid"}, {"MOOX_EVENTBUS_NATS_TLS_CA_FILE", "/tmp/ca.pem"},
+	} {
+		t.Run("invalid "+test.key+" "+test.value, func(t *testing.T) {
+			copy := make(map[string]string)
+			for k, v := range valid {
+				copy[k] = v
+			}
+			copy[test.key] = test.value
+			if err := ValidateCollectorTimerEnvironment(copy); err == nil {
+				t.Fatalf("invalid %s must fail closed", test.key)
+			}
+		})
+	}
+}
