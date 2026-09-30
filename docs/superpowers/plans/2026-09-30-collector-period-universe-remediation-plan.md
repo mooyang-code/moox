@@ -348,9 +348,9 @@ Task 4 验证记录：四包 fresh tests、四包 race、SQLite schema load、`g
 - Modify: `modules/collector/internal/store/period_series_snapshot.go`、`modules/collector/internal/store/period_series_snapshot_test.go`
 - Modify: `modules/collector/internal/bootstrap/bootstrap.go`
 
-- [ ] **5.1 先补错误 ACK 与恢复测试。** 覆盖终态未录入失败、截止前录入但 ACK 丢失、成功清除 failure、缺项/重复/额外 index/未知枚举响应、多 WriteTarget 一个 accepted 一个 missed、部分 RPC 错误、重启继续报告。任一未决目标时聚合状态必须仍为 pending。
-- [ ] **5.2 执行失败测试。** `go test -count=1 ./modules/collector/internal/marketfetch -run 'TestPeriodFailureReport'`；旧 boolean + nil-error 判成功的实现应失败。
-- [ ] **5.3 替换 boolean，不保留兼容分支。** `FetchRetryItem.PeriodFailureReported` 改成 `PeriodFailureReportState`，状态值 `pending / acknowledged / missed_deadline`；schema 替换 `c_period_failure_reported`，新增 `c_period_failure_results_json`、`c_period_failure_last_error`、`c_period_failure_deadline_exceeded_at`，更新 CHECK、pending 索引和启动校验。
+- [x] **5.1 先补错误 ACK 与恢复测试。** 覆盖终态未录入失败、截止前录入但 ACK 丢失、成功清除 failure、缺项/重复/额外 index/未知枚举响应、多 WriteTarget 一个 accepted 一个 missed、部分 RPC 错误、重启继续报告。任一未决目标时聚合状态必须仍为 pending。
+- [x] **5.2 执行失败测试。** `go test -count=1 ./modules/collector/internal/marketfetch -run 'TestPeriodFailureReport'`；旧 boolean + nil-error 判成功的实现应失败。
+- [x] **5.3 替换 boolean，不保留兼容分支。** `FetchRetryItem.PeriodFailureReported` 改成 `PeriodFailureReportState`，状态值 `pending / acknowledged / missed_deadline`；schema 替换 `c_period_failure_reported`，新增 `c_period_failure_results_json`、`c_period_failure_last_error`、`c_period_failure_deadline_exceeded_at`，更新 CHECK、pending 索引和启动校验。
 
 ```go
 type PeriodFailureReportState string
@@ -375,8 +375,8 @@ type PeriodFailureTargetResult struct {
 }
 ```
 
-- [ ] **5.4 适配器返回并验证逐 index 结果。** `RecordDatasetPeriodFailures` 返回 `[]*storagepb.DatasetPeriodFailureResult, error`；RetInfo 非成功、status 非法或结果集合不等于请求去重集合时返回错误，不能当作已上报。按 `(period identity, series_index)` 映射回原 WriteTarget，重复 index 的多个目标均保留各自结果，不用 `succeededGroups` 布尔值代替。
-- [ ] **5.5 原子合并目标结果并计算聚合状态。** 仓储方法 `ApplyPeriodFailureReportResults(ctx, spaceID, retryKey, results, lastError)` 在事务内读取已有结果、校验目标属于持久 FailureTargets、合并而非覆盖。规则：任何目标缺权威结果 => pending；全部 recorded/already_succeeded => acknowledged；无未决且至少一个 missed_deadline => missed_deadline。已接受结果不因后续网络错误倒退；missed 只有 Storage 明确返回才能写入。
+- [x] **5.4 适配器返回并验证逐 index 结果。** `RecordDatasetPeriodFailures` 返回 `[]*storagepb.DatasetPeriodFailureResult, error`；RetInfo 非成功、status 非法或结果集合不等于请求去重集合时返回错误，不能当作已上报。按 `(period identity, series_index)` 映射回原 WriteTarget，重复 index 的多个目标均保留各自结果，不用 `succeededGroups` 布尔值代替。
+- [x] **5.5 原子合并目标结果并计算聚合状态。** 仓储方法 `ApplyPeriodFailureReportResults(ctx, spaceID, retryKey, results, lastError)` 在事务内读取已有结果、校验目标属于持久 FailureTargets、合并而非覆盖。规则：任何目标缺权威结果 => pending；全部 recorded/already_succeeded => acknowledged；无未决且至少一个 missed_deadline => missed_deadline。已接受结果不因后续网络错误倒退；missed 只有 Storage 明确返回才能写入。
 
 聚合时按全部持久 FailureTargets 构造 dispositions，未确认目标填空值，不能只把本次成功 RPC 的目标传入。纯函数及最小表驱动测试为：
 
@@ -424,10 +424,10 @@ func TestAggregatePeriodFailureReportState(t *testing.T) {
     }
 }
 ```
-- [ ] **5.6 将报告从 Tick 拆到独立循环。** `PeriodFailureReporter.RunOnce(ctx, spaceID)` 复用永久失败 retry 行作为持久 outbox，按 retry key 分页、单轮最多 1000 条、整轮共用 5 秒 context 预算，单个 RPC 的现有超时不得越过该预算；bootstrap 启动每秒触发、无重叠、支持 cancel 的循环。每次已尝试的行推进分页游标，到尾部回绕；失败仍 pending，但不能让最前面的失败行永久饿死后面的报告。Completion 永久失败落库后唤醒循环；CloudNode 列表/规划失败不能阻断报告。没有另建 broker 或 in-memory-only 队列。新增超过一页、首行持续超时而后页可达，以及单轮预算到期退出的测试。
-- [ ] **5.7 逾期保持可恢复。** 对 canonical deadline 已到但传输未确认的目标记录一次 `deadline_exceeded_at` 与最后错误，仍 pending 并重放；不能按本地钟永久停止。恢复后 Storage 的 recorded/already_succeeded 可将其收敛为 acknowledged，未接受则收敛为 missed_deadline。清理保护 pending 行直到拿到权威结论。
-- [ ] **5.8 补可观测性。** 在现有 metrics 增加 pending、missed-deadline 与上报重试计数，新增指标的 label 仅使用已配置 Space、有效 frequency 和有限枚举 outcome；Dataset 是按 Task 生成的身份，不能把它误当作 bounded label。subject、dataset、taskID、retryKey 均只放结构化日志和持久 JSON，不进入新增指标标签。新增任务增删测试，断言不同 Dataset 不产生新的指标标签组合，并通过已有 metrics registry 验证各 outcome 计数；不借此重写无关监控。日志携带 period 和 outcome，不打印凭证，无需新前端页面。
-- [ ] **5.9 验证并提交。** 预期全部 PASS，包括报告无节点可用时仍运行、schema 空库及 race；提交 `fix(collector): persist authoritative period failure acknowledgements`。
+- [x] **5.6 将报告从 Tick 拆到独立循环。** `PeriodFailureReporter.RunOnce(ctx, spaceID)` 复用永久失败 retry 行作为持久 outbox，按 retry key 分页、单轮最多 1000 条、整轮共用 5 秒 context 预算，单个 RPC 的现有超时不得越过该预算；bootstrap 启动每秒触发、无重叠、支持 cancel 的循环。每次已尝试的行推进分页游标，到尾部回绕；失败仍 pending，但不能让最前面的失败行永久饿死后面的报告。Completion 永久失败落库后唤醒循环；CloudNode 列表/规划失败不能阻断报告。没有另建 broker 或 in-memory-only 队列。新增超过一页、首行持续超时而后页可达，以及单轮预算到期退出的测试。
+- [x] **5.7 逾期保持可恢复。** 对 canonical deadline 已到但传输未确认的目标记录一次 `deadline_exceeded_at` 与最后错误，仍 pending 并重放；不能按本地钟永久停止。恢复后 Storage 的 recorded/already_succeeded 可将其收敛为 acknowledged，未接受则收敛为 missed_deadline。清理保护 pending 行直到拿到权威结论。
+- [x] **5.8 补可观测性。** 在现有 metrics 增加 pending、missed-deadline 与上报重试计数，新增指标的 label 仅使用已配置 Space、有效 frequency 和有限枚举 outcome；Dataset 是按 Task 生成的身份，不能把它误当作 bounded label。subject、dataset、taskID、retryKey 均只放结构化日志和持久 JSON，不进入新增指标标签。新增任务增删测试，断言不同 Dataset 不产生新的指标标签组合，并通过已有 metrics registry 验证各 outcome 计数；不借此重写无关监控。日志携带 period 和 outcome，不打印凭证，无需新前端页面。
+- [x] **5.9 验证并提交。** 预期全部 PASS，包括报告无节点可用时仍运行、schema 空库及 race；提交 `fix(collector): persist authoritative period failure acknowledgements`。
 
 ```bash
 go test -count=1 ./modules/collector/internal/domain ./modules/collector/internal/store ./modules/collector/internal/marketstorage ./modules/collector/internal/marketfetch ./modules/collector/internal/bootstrap
@@ -435,6 +435,10 @@ go test -race -count=1 ./modules/collector/internal/marketfetch -run 'TestPeriod
 sqlite3 :memory: '.read modules/collector/schema/collector.sql'
 git diff --check
 ```
+
+Task 5 完成记录：提交 `1894a96e`。首轮与二轮独立审查发现并修正 pending outbox 被 Task 删除/disabled-target prune 丢弃、同目标权威结果覆盖、metrics 在预算耗尽后不刷新、日志缺 period/outcome、重复 index 多目标无回归测试等问题。第三轮复审另发现 round context 外增加 metrics 时间会突破 5 秒总预算，以及预算中断的短页误清游标导致前缀重试饥饿；实现已将 metrics 预留在同一 round deadline 内，并在中断时保留游标，测试先复现饥饿再通过。
+
+主 Agent 最终独立验证通过：五包 fresh tests、五包完整 race、五包 `go vet`、计划指定的 failure-report race、SQLite 空库 schema load、Collector scoped `git diff --check`。规格审查与最终 codeCR 复审均 PASS。Strategy/Trade/proto/ops 文档的既有未提交改动未纳入 Task 5 提交。
 
 ### Task 6：持久 Timer 周期批次与独立 Claim RPC
 
