@@ -230,7 +230,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("storage-primary gateway methods must not include %s: %v", method, storageExtra.GatewayMethods)
 		}
 	}
-	var metadataRoute, deleteSpaceRoute, primaryRoute, readTimeSeriesRoute *struct {
+	var metadataRoute, deleteSpaceRoute, primaryRoute, collectorPeriodRoute, readTimeSeriesRoute *struct {
 		ServicePath    string   `json:"service_path"`
 		Port           int32    `json:"port"`
 		GatewayMethods []string `json:"gateway_methods"`
@@ -253,6 +253,10 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			containsString(storageExtra.GatewayRoutes[i].GatewayMethods, "UpsertFields") {
 			primaryRoute = &storageExtra.GatewayRoutes[i]
 		}
+		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.PrimaryStore" &&
+			containsString(storageExtra.GatewayRoutes[i].GatewayMethods, "RecordDatasetPeriodFailures") {
+			collectorPeriodRoute = &storageExtra.GatewayRoutes[i]
+		}
 	}
 	if deleteSpaceRoute == nil || deleteSpaceRoute.Port != 20100 ||
 		!reflect.DeepEqual(deleteSpaceRoute.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
@@ -273,7 +277,18 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 		!reflect.DeepEqual(readTimeSeriesRoute.GatewayCallers, []string{"admin-gateway", "collector", "factor", "monitor", "archive", "storage-view", "strategy", "moox-skill"}) {
 		t.Fatalf("storage-primary ReadTimeSeriesRows route = %+v", readTimeSeriesRoute)
 	}
-	for _, method := range []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "ReportCollectorPeriodCompleted", "ReportMergePeriodCompleted", "CommitInput", "PatchFactor", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
+	periodMethods := []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"}
+	if collectorPeriodRoute == nil || collectorPeriodRoute.Port != 20102 ||
+		!reflect.DeepEqual(collectorPeriodRoute.GatewayMethods, periodMethods) ||
+		!reflect.DeepEqual(collectorPeriodRoute.GatewayCallers, []string{"collector"}) {
+		t.Fatalf("storage-primary collector period route = %+v", collectorPeriodRoute)
+	}
+	for _, method := range periodMethods {
+		if containsString(primaryRoute.GatewayMethods, method) {
+			t.Fatalf("storage-primary general route exposes collector period method %s", method)
+		}
+	}
+	for _, method := range []string{"ReportCollectorPeriodCompleted", "ReportMergePeriodCompleted", "CommitInput", "PatchFactor", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
 		if !containsString(primaryRoute.GatewayMethods, method) {
 			t.Fatalf("storage-primary gateway route missing %s: %v", method, primaryRoute.GatewayMethods)
 		}
