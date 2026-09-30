@@ -525,6 +525,8 @@ sqlite3 :memory: '.read modules/collector/schema/collector.sql'
 git diff --check
 ```
 
+Task 6 完成记录：提交 `82ef1df2`。最终 codeCR 与规格复审均 PASS。复审补正了按周期区分 write-target retry identity、按同一目标与周期边界 supersede 旧重试，并新增跨周期重试和 sibling target 保留的回归测试。主 Agent 最终验证通过：计划指定六包测试矩阵、Timer Completion race、retry/store race、proto 生成、SQLite schema load 与 `git diff --check`。
+
 ### Task 7：SCF Timer 消费 Claim、提交 period 并发布 Completion
 
 **Files：**
