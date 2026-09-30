@@ -38,6 +38,19 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 	if err := ValidateCollectorTimerEnvironment(valid); err != nil {
 		t.Fatal(err)
 	}
+	invoke := make(map[string]string)
+	for key, value := range valid {
+		invoke[key] = value
+	}
+	delete(invoke, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
+	delete(invoke, "MOOX_COLLECTOR_GATEWAY_TARGET_NODE")
+	invoke["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
+	if err := ValidateCollectorMarketFetchEnvironment(invoke); err != nil {
+		t.Fatalf("Invoke has its own timeout and no Claim route: %v", err)
+	}
+	if err := ValidateCollectorTimerEnvironment(invoke); err == nil {
+		t.Fatal("Timer must still require its Claim route")
+	}
 	for key := range valid {
 		t.Run("missing "+key, func(t *testing.T) {
 			copy := make(map[string]string)
@@ -51,6 +64,7 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 		})
 	}
 	for _, test := range []struct{ key, value string }{
+		{"MOOX_GATEWAY_CALLER", "strategy"},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{}`}, {"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"short"}`},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("g", 64) + `"}`},
 		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`},

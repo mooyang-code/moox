@@ -175,6 +175,14 @@ function_count = 1
 	for _, key := range []string{"MOOX_GATEWAY_SERVICE_SECRET_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_LOGSET_ID", "MOOX_CLS_TOPIC_ID", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD"} {
 		delete(knownEnvironment, key)
 	}
+	mandatoryPadding := strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(knownEnvironment)-len("PADDING")-2)
+	for key, minimum := range map[string]string{
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY": "0", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("0", 64) + `"}`,
+		"MOOX_CLS_LOGSET_ID": "x", "MOOX_CLS_TOPIC_ID": "x", "MOOX_EVENTBUS_NATS_USERNAME": "x", "MOOX_EVENTBUS_NATS_PASSWORD": "x",
+	} {
+		knownEnvironment[key] = minimum
+	}
+	require.NoError(t, tencent.ValidateCollectorTimerEnvironment(knownEnvironment), "the lower-bound placeholders must form a valid minimum runtime environment")
 	localPadding := strings.Repeat("x", 4096-tencent.SCFEnvironmentBytes(knownEnvironment)-len("PADDING")-2-64)
 	invokePadding := localPadding + strings.Repeat("x", 64)
 	for _, tc := range []struct {
@@ -186,6 +194,7 @@ function_count = 1
 		{"unregistered account overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "stockcn", false, true, false},
 		{"crypto legacy Timer overflow", strings.Repeat("n", 4096), "", "ap-guangzhou", "crypto", false, false, true},
 		{"local env overflow", "moox-collector", strings.Repeat("x", 4096), "ap-guangzhou", "stockcn", false, false, true},
+		{"mandatory dynamic fields overflow", "moox-collector", mandatoryPadding, "ap-guangzhou", "stockcn", false, false, true},
 		{"second region local overflow", "moox-collector", localPadding, "ap-singapore", "stockcn", false, false, true},
 		{"local config overflow", "moox-collector", "", "ap-guangzhou", "stockcn", false, false, true},
 		{"local invoke overflow", "moox-collector", invokePadding, "ap-guangzhou", "stockcn", false, false, true},
@@ -221,6 +230,9 @@ function_count = 1
 			if tc.padding != "" {
 				opts.Env = []string{"PADDING=" + tc.padding}
 			}
+			if tc.name == "mandatory dynamic fields overflow" {
+				opts.Region = "ap-guangzhou"
+			}
 			if tc.name == "local config overflow" {
 				opts.Config = []string{"max_inflight_requests=" + strings.Repeat("9", 4096)}
 			}
@@ -236,11 +248,9 @@ function_count = 1
 			if tc.name == "local invoke overflow" {
 				require.ErrorContains(t, err, "invoke")
 			}
-			if tc.name != "second region overflow" {
-				require.Zero(t, reads.Load(), "known oversized environment must fail before Control reads")
-				require.Zero(t, sshReads.Load(), "known oversized environment must fail before SSH reads")
-				require.Zero(t, cloudReads.Load(), "known oversized environment must fail before cloud reads")
-			}
+			require.Zero(t, reads.Load(), "known oversized environment must fail before Control reads")
+			require.Zero(t, sshReads.Load(), "known oversized environment must fail before SSH reads")
+			require.Zero(t, cloudReads.Load(), "known oversized environment must fail before cloud reads")
 			require.Zero(t, uploads.Load())
 			require.Zero(t, creates.Load())
 			require.NotContains(t, err.Error(), "publisher-secret")

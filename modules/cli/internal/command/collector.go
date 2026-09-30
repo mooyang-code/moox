@@ -3184,6 +3184,9 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string, tim
 		return nil
 	}
 	marketFetch := len(marketFetcher) > 0 && marketFetcher[0]
+	if marketFetch {
+		return tencent.ValidateCollectorMarketFetchEnvironment(environment)
+	}
 	required := []string{
 		"MOOX_SPACE_ID",
 		"MOOX_CODE_PACKAGE_ID",
@@ -3389,7 +3392,8 @@ func orderCollectorPublishRegions(regions []setupconfig.SCFFetcherRegion, storag
 }
 
 // Check only guaranteed final values before reading remote trust, routes or CLS
-// resources. Remote-owned values are omitted, never guessed from stale local auth.
+// resources. Mandatory remote-owned values use their smallest valid payloads,
+// never stale local auth; the complete values are checked again before mutation.
 func preflightCollectorManifestEnvironmentLowerBound(opts collectorPublishOptions, fetcher *setupconfig.SCFFetcherSpace, manifest *setupconfig.Snapshot) error {
 	opts.FetcherConfig = fetcher
 	opts.SpaceID = fetcher.SpaceID
@@ -3426,15 +3430,20 @@ func preflightCollectorManifestEnvironmentLowerBound(opts collectorPublishOption
 			if err != nil {
 				return fmt.Errorf("validate collector manifest environment before remote access for region %s %s: %w", region.Region, trigger, err)
 			}
-			for _, key := range []string{"MOOX_GATEWAY_SERVICE_SECRET_KEY", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_CLS_LOGSET_ID", "MOOX_CLS_TOPIC_ID"} {
-				delete(environment, key)
+			for key, minimum := range map[string]string{
+				"MOOX_GATEWAY_SERVICE_SECRET_KEY":         "0",
+				"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("0", 64) + `"}`,
+				"MOOX_CLS_LOGSET_ID":                      "x", "MOOX_CLS_TOPIC_ID": "x",
+				"MOOX_EVENTBUS_NATS_USERNAME": "x", "MOOX_EVENTBUS_NATS_PASSWORD": "x",
+			} {
+				environment[key] = minimum
 			}
 			if clsID == "" || clsKey == "" {
-				delete(environment, "MOOX_CLS_SECRET_ID")
-				delete(environment, "MOOX_CLS_SECRET_KEY")
+				environment["MOOX_CLS_SECRET_ID"] = "x"
+				environment["MOOX_CLS_SECRET_KEY"] = "x"
 			}
 			if !storageKnown {
-				delete(environment, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+				environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"] = "ip://a:1"
 			}
 			environment["MOOX_EVENTBUS_NATS_URL"] = "tls://" + net.JoinHostPort(manifest.Manifest.EventBus.PublicAddress, strconv.Itoa(manifest.Manifest.EventBus.Port))
 			environment["MOOX_EVENTBUS_NATS_TLS_CA_FILE"] = "certs/eventbus-ca.pem"

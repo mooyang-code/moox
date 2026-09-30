@@ -296,8 +296,12 @@ func (s *Service) executeCreateNodeItem(
 	return fmt.Sprintf("created function %s", node.FunctionName), nil
 }
 
+func modernMarketFetchNode(node *store.CloudNode, pkg store.FunctionPackage) bool {
+	return strings.EqualFold(strings.TrimSpace(pkg.WorkloadType), "market_fetcher") && metadataString(parseJSONMap(node.Metadata), "function_mode") != "instrument_snapshot"
+}
+
 func durableMarketFetchTimer(node *store.CloudNode, pkg store.FunctionPackage) bool {
-	return pkg.WorkloadType == "market_fetcher" && node.TriggerType == "timer" && metadataString(parseJSONMap(node.Metadata), "function_mode") != "instrument_snapshot"
+	return modernMarketFetchNode(node, pkg) && node.TriggerType == "timer"
 }
 
 func validateMarketFetchTimerTimeout(node *store.CloudNode, pkg store.FunctionPackage, environment map[string]string, outerTimeout int64) error {
@@ -450,6 +454,15 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		}
 		environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
+			return err
+		}
+	} else if modernMarketFetchNode(node, *pkg) {
+		environment := copyStringMap(item.GetEnvironment())
+		if environment == nil {
+			environment = make(map[string]string)
+		}
+		environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
+		if err := tencent.ValidateCollectorMarketFetchEnvironment(environment); err != nil {
 			return err
 		}
 	}
@@ -731,6 +744,10 @@ func (s *Service) updateSCFFunctionCode(
 			return err
 		}
 		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
+			return err
+		}
+	} else if modernMarketFetchNode(&node, pkg) {
+		if err := tencent.ValidateCollectorMarketFetchEnvironment(environment); err != nil {
 			return err
 		}
 	}

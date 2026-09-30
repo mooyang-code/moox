@@ -110,9 +110,11 @@ func TestGetNodeListSkipsTimerReadbackForCollectorSnapshot(t *testing.T) {
 func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
+	environment := completeInvokeEnvironment("15")
+	environment["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{err: errors.New("ResourceNotFound.FunctionName")},
-		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 15, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "crypto"}}},
+		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 15, Environment: environment}},
 	}}
 	svc := &Service{
 		catalog:            catalog,
@@ -124,7 +126,7 @@ func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
 	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
 		CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
 		Config:      map[string]string{"memory_size": "64", "timeout": "15"},
-		Environment: map[string]string{"MOOX_SPACE_ID": "crypto"}, Metadata: metadata,
+		Environment: environment, Metadata: metadata,
 	}, 0)
 	require.NoError(t, err)
 	require.Len(t, fake.created, 1)
@@ -136,9 +138,11 @@ func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
 func TestExecuteCreateInvokeMarketFetcherPreservesConfiguredTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
+	environment := completeInvokeEnvironment("60")
+	environment["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{err: errors.New("ResourceNotFound.FunctionName")},
-		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "crypto"}}},
+		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: environment}},
 	}}
 	svc := &Service{
 		catalog:            catalog,
@@ -150,7 +154,7 @@ func TestExecuteCreateInvokeMarketFetcherPreservesConfiguredTimeout(t *testing.T
 	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
 		CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
 		TriggerType: "invoke", Config: map[string]string{"memory_size": "64", "timeout": "60"},
-		Environment: map[string]string{"MOOX_SPACE_ID": "crypto"}, Metadata: metadata,
+		Environment: environment, Metadata: metadata,
 	}, 0)
 	require.NoError(t, err)
 	require.Len(t, fake.created, 1)
@@ -302,10 +306,11 @@ func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "account-a", PackageID: "old-package", NodeType: "scf-event", Provider: "tencent-scf",
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-0", Metadata: `{"biz_type":"market_fetcher","handler":"main"}`,
 	}))
-	remote := map[string]string{"MOOX_CODE_PACKAGE_ID": "old-package",
-		"MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11004", "MOOX_COLLECTOR_NODE_ID": "collector-node",
-		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://storage.example:11003", "MOOX_STORAGE_NODE_ID": "storage-node",
-		"MOOX_RPC_SERVICE_ID": "moox-collector", "MOOX_RPC_SERVICE_SECRET": "private-test-secret"}
+	remote := completeInvokeEnvironment("15")
+	remote["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = "ip://collector.example:11004"
+	remote["MOOX_COLLECTOR_NODE_ID"] = "collector-node"
+	remote["MOOX_RPC_SERVICE_ID"] = "moox-collector"
+	remote["MOOX_RPC_SERVICE_SECRET"] = "private-test-secret"
 	fake := &fakeSCFClient{currentEnvironment: remote}
 	svc := &Service{
 		catalog:            catalog,

@@ -15,9 +15,19 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+func seedGenericNodeItemPackage(t *testing.T, catalog *store.CatalogRepository) {
+	t.Helper()
+	seedSCFAccountAndPackage(t, catalog)
+	pkg, err := catalog.GetPackage(context.Background(), "crypto", "moox-collector_dev")
+	require.NoError(t, err)
+	// Provider lifecycle tests do not model the market-fetch runtime contract.
+	pkg.WorkloadType = "collect.kline"
+	require.NoError(t, catalog.UpsertPackage(context.Background(), *pkg))
+}
+
 func TestExecuteCreateNodeItemCreatesSCFAndCatalogNode(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{err: errors.New("ResourceNotFound.FunctionName")},
 		{info: &tencentscf.FunctionInfo{Status: "Active"}},
@@ -45,7 +55,7 @@ func TestExecuteCreateNodeItemCreatesSCFAndCatalogNode(t *testing.T) {
 
 func TestExecuteCreateNodeItemDoesNotPersistWhenPostCreateStatusFails(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{err: errors.New("ResourceNotFound.FunctionName")},
 		{err: errors.New("permission denied")},
@@ -69,7 +79,7 @@ func TestExecuteCreateNodeItemDoesNotPersistWhenPostCreateStatusFails(t *testing
 
 func TestExecuteCreateNodeItemReconcilesFunctionCreatedBeforeRestart(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{
 		info: &tencentscf.FunctionInfo{
 			Status:      "Active",
@@ -98,7 +108,7 @@ func TestExecuteCreateNodeItemReconcilesFunctionCreatedBeforeRestart(t *testing.
 
 func TestExecuteCreateNodeItemRejectsUnownedExistingFunction(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{
 		info: &tencentscf.FunctionInfo{
 			Status:      "Active",
@@ -125,7 +135,7 @@ func TestExecuteCreateNodeItemRejectsUnownedExistingFunction(t *testing.T) {
 
 func TestExecuteCreateNodeItemRejectsFailedExistingFunction(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{
 		info: &tencentscf.FunctionInfo{
 			Status:      "Failed",
@@ -148,7 +158,7 @@ func TestExecuteCreateNodeItemRejectsFailedExistingFunction(t *testing.T) {
 
 func TestExecuteCreateNodeItemReconcilesAcceptedCreateTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	fake := &fakeSCFClient{
 		createErr: context.DeadlineExceeded,
 		getResults: []fakeSCFGetResult{
@@ -182,7 +192,7 @@ func TestExecuteCreateNodeItemReconcilesAcceptedCreateTimeout(t *testing.T) {
 
 func TestExecuteCreateNodeItemReconcilesAfterItemDeadline(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	fake := &fakeSCFClient{
 		respectContext:       true,
 		createWaitForContext: true,
@@ -216,7 +226,7 @@ func TestExecuteCreateNodeItemReconcilesAfterItemDeadline(t *testing.T) {
 
 func TestExecuteDeployNodeItemUpdatesCodeAndCatalogPackage(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	seedNodeForDeploy(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{info: &tencentscf.FunctionInfo{Status: "Active", Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "old-package"}}},
@@ -238,7 +248,7 @@ func TestExecuteDeployNodeItemUpdatesCodeAndCatalogPackage(t *testing.T) {
 
 func TestExecuteDeployNodeItemRejectsFailedFunctionWithMatchingMarker(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	seedNodeForDeploy(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
 		Status:      "Failed",
@@ -255,7 +265,7 @@ func TestExecuteDeployNodeItemRejectsFailedFunctionWithMatchingMarker(t *testing
 
 func TestExecuteDeployNodeItemRejectsFailedStatusAfterConfigurationUpdate(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	seedNodeForDeploy(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{info: &tencentscf.FunctionInfo{
@@ -291,7 +301,7 @@ func TestExecuteDeployNodeItemRejectsMissingNode(t *testing.T) {
 
 func TestExecuteDeployNodeItemRejectsUnavailablePackage(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	seedNodeForDeploy(t, catalog)
 	pkg, err := catalog.GetPackage(context.Background(), "crypto", "moox-collector_dev")
 	require.NoError(t, err)
@@ -309,7 +319,7 @@ func TestExecuteDeployNodeItemRejectsUnavailablePackage(t *testing.T) {
 
 func TestExecuteDeployNodeItemReconcilesAcceptedTencentTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
+	seedGenericNodeItemPackage(t, catalog)
 	seedNodeForDeploy(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
 		Status:      "Updating",
