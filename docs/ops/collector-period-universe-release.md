@@ -10,6 +10,8 @@
 
 用户已授权编译、正式发布与线上端到端验证；公开 EventBus CA 按计划打包到 `certs/eventbus-ca.pem`。但 Collector 运行态 Schema 与 Pebble snapshot JSON 名称切换不兼容，period-only 清理/重建须先有真实只读 inventory、明确 Space/Dataset/period 时间范围、可验证备份及保留对象，再取得单独确认。当前仓库没有经验证的有界线上迁移/清理工具，因此在这项前置条件解决前不执行生产部署、不修改生产配置或数据。不能自动迁移、双读旧 Pebble snapshot JSON 或让旧 Collector 与新 Storage 混跑。
 
+**2026-10-01 SCF 本地预打包：** 以版本 `51209c7a` 生成 crypto 与 stockcn ZIP，均包含固定路径 `certs/eventbus-ca.pem`，包内 CA 与本机配置的公开 CA 字节一致；ZIP 仅含运行配置、市场源配置及 `main`，未包含凭据。`make test-collector-scf-package-contract` 通过。SHA-256：crypto `1f64028dfaf4232d005d17010488d0f07d0cfdd2bd1feb37b7246a5447ea112e`；stockcn `1cf6f1adca30e627113033bd0142639b6801a7cacf793a529ea367109410ad02`。产物位于 `/tmp/moox-collector-scf-crypto-51209c7a-public-ca.zip` 与 `/tmp/moox-collector-scf-stockcn-51209c7a-public-ca.zip`。这是本地准备，不是发布证明；尚未独立确认本机 CA 与 Control 主机信任 CA 相同，也未提交 SCF 发布。正式 submit 前必须由受管理发布流程校验信任 CA；若不匹配，按该流程重新打包。
+
 执行授权前的切换记录至少固定：目标 Space；受影响 Collector SQLite 文件与 schema/table；Storage node 与 Pebble period key 范围；`dataset_id/frequency/period_time` 上下界；任务定义、结果 Dataset/View 引用及已有行情行数/范围；备份对象和 SHA-256、恢复演练结果；获准重建/删除的精确对象；保留对象；操作者和确认记录。当前尚未取得生产 inventory，以上值不得臆造或以默认全量范围替代。
 
 命令中的 `$MANIFEST` 为受信发布配置的绝对路径，`$VERSION`、`$GIT_COMMIT` 为审查通过的唯一发布版本和完整提交，`$HOST`、`$SERVICE`、`$DEPLOY_DIR` 来自已确认的目标 deployment，`$PACKAGE` 为已校验的无凭据 ZIP。执行前在发布记录中固定这些非敏感值和 ZIP SHA-256，不在日志中输出配置内容、token、app key 或私钥。
