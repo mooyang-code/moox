@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func attachTestWriteTarget(t *testing.T, s *Store, ctx context.Context, spaceID, instanceID, taskID, datasetID string) {
@@ -40,6 +41,24 @@ func TestTaskInstanceRepositoryUpsertKeepsFreshnessForStableTask(t *testing.T) {
 	assert.Equal(t, first.LastExecTime, stored.LastExecTime)
 	assert.Equal(t, "1m", stored.Frequency)
 	assert.Equal(t, "binance", stored.Provider)
+}
+
+func TestTaskInstanceRepositoryRejectsWriteTargetWithoutSpace(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task", TaskName: "Task", DataType: "kline", Enabled: true,
+	}))
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", InstanceID: "instance", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m",
+	}}))
+	err := s.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{
+		ID: "target", InstanceID: "instance", TaskID: "task", DatasetID: "bars",
+	}})
+	require.ErrorIs(t, err, gorm.ErrInvalidData)
+	var count int64
+	require.NoError(t, s.db.Model(&domain.WriteTarget{}).Where("c_write_target_id = ?", "target").Count(&count).Error)
+	require.Zero(t, count, "a target without Space ownership must not be persisted")
 }
 
 func TestMarkStorageWritesSeparatesSameSubjectBySeriesTag(t *testing.T) {

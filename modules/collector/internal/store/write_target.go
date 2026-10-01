@@ -70,19 +70,23 @@ func (r *TaskInstanceRepository) UpsertWriteTargets(ctx context.Context, targets
 		return nil
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, target := range targets {
-			if strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.InstanceID) == "" || strings.TrimSpace(target.TaskID) == "" || strings.TrimSpace(target.DatasetID) == "" {
-				return gorm.ErrInvalidData
-			}
-			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "c_space_id"}, {Name: "c_instance_id"}, {Name: "c_task_id"}},
-				DoUpdates: clause.AssignmentColumns([]string{"c_dataset_id", "c_view_id", "c_output_fields_json", "c_series_index", "c_series_hash", "c_expected_count", "c_mtime"}),
-			}).Create(&target).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return upsertWriteTargetsTx(tx, targets)
 	})
+}
+
+func upsertWriteTargetsTx(tx *gorm.DB, targets []domain.WriteTarget) error {
+	for _, target := range targets {
+		if strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.SpaceID) == "" || strings.TrimSpace(target.InstanceID) == "" || strings.TrimSpace(target.TaskID) == "" || strings.TrimSpace(target.DatasetID) == "" {
+			return gorm.ErrInvalidData
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "c_space_id"}, {Name: "c_instance_id"}, {Name: "c_task_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"c_dataset_id", "c_view_id", "c_output_fields_json", "c_series_index", "c_series_hash", "c_expected_count", "c_mtime"}),
+		}).Create(&target).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteWriteTargetsByTask detaches one task without deleting shared instances.

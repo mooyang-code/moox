@@ -51,7 +51,7 @@ type TimerPeriodBatchClaimInput struct {
 	NodeID              string
 	Region              string
 	CompletionTimeout   time.Duration
-	ValidateRequestJSON func(batchID string, requestJSON []byte) error
+	ValidateRequestJSON func(manifest *domain.TimerPeriodBatch, batch *domain.BatchInvocation, batchInstanceIDs []string, instances []domain.TaskInstance, targets []domain.WriteTarget, snapshotEntries []domain.PeriodSeriesSnapshotEntry) error
 }
 
 type TimerPeriodBatchClaimResult struct {
@@ -226,13 +226,8 @@ func (r *TimerPeriodBatchRepository) CreateMany(ctx context.Context, plans []Tim
 			if err := NewTaskInstanceRepository(tx).upsertManyTx(ctx, tx, plan.Instances); err != nil {
 				return err
 			}
-			for _, target := range plan.Targets {
-				if err := tx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "c_space_id"}, {Name: "c_instance_id"}, {Name: "c_task_id"}},
-					DoUpdates: clause.AssignmentColumns([]string{"c_dataset_id", "c_view_id", "c_output_fields_json", "c_series_index", "c_series_hash", "c_expected_count", "c_mtime"}),
-				}).Create(&target).Error; err != nil {
-					return err
-				}
+			if err := upsertWriteTargetsTx(tx, plan.Targets); err != nil {
+				return err
 			}
 			if b.PlannedAt == nil {
 				b.PlannedAt = &now
@@ -362,13 +357,17 @@ func (r *TimerPeriodBatchRepository) claimOnce(ctx context.Context, input TimerP
 			if err := tx.Where("c_space_id = ? AND c_batch_id = ?", replay.SpaceID, replay.BatchID).First(&batch).Error; err != nil {
 				return err
 			}
-			if input.ValidateRequestJSON != nil {
-				if err := input.ValidateRequestJSON(batch.BatchID, []byte(batch.RequestJSON)); err != nil {
-					return fmt.Errorf("validate persisted timer request_json: %w", err)
-				}
-			}
 			if batch.Status.Terminal() {
 				return nil
+			}
+			if input.ValidateRequestJSON != nil {
+				batchInstanceIDs, instances, targets, snapshotEntries, err := loadTimerBatchClaimMembership(tx, replay.SpaceID, replay.BatchID, replay.TaskID, replay.DatasetID, replay.Frequency, replay.PeriodTime)
+				if err != nil {
+					return err
+				}
+				if err := input.ValidateRequestJSON(&replay, &batch, batchInstanceIDs, instances, targets, snapshotEntries); err != nil {
+					return fmt.Errorf("validate persisted timer request_json: %w", err)
+				}
 			}
 			output = TimerPeriodBatchClaimResult{Claimed: true, BatchID: replay.BatchID, RequestJSON: []byte(batch.RequestJSON), PeriodDeadlineAt: replay.DeadlineAt.UTC()}
 			return nil
@@ -398,7 +397,11 @@ func (r *TimerPeriodBatchRepository) claimOnce(ctx context.Context, input TimerP
 			return err
 		}
 		if input.ValidateRequestJSON != nil {
-			if err := input.ValidateRequestJSON(batch.BatchID, []byte(batch.RequestJSON)); err != nil {
+			batchInstanceIDs, instances, targets, snapshotEntries, err := loadTimerBatchClaimMembership(tx, candidate.SpaceID, candidate.BatchID, candidate.TaskID, candidate.DatasetID, candidate.Frequency, candidate.PeriodTime)
+			if err != nil {
+				return err
+			}
+			if err := input.ValidateRequestJSON(&candidate, &batch, batchInstanceIDs, instances, targets, snapshotEntries); err != nil {
 				return fmt.Errorf("validate persisted timer request_json: %w", err)
 			}
 		}
@@ -434,6 +437,40 @@ func (r *TimerPeriodBatchRepository) claimOnce(ctx context.Context, input TimerP
 		return nil
 	})
 	return output, err
+}
+
+func loadTimerBatchClaimMembership(tx *gorm.DB, spaceID, batchID, taskID, datasetID, frequency string, period time.Time) ([]string, []domain.TaskInstance, []domain.WriteTarget, []domain.PeriodSeriesSnapshotEntry, error) {
+	var items []struct {
+		InstanceID string `gorm:"column:c_instance_id"`
+	}
+	if err := tx.Table("t_collector_fetch_batch_items").Select("c_instance_id").
+		Where("c_space_id = ? AND c_batch_id = ?", spaceID, batchID).
+		Order("c_instance_id ASC").Find(&items).Error; err != nil {
+		return nil, nil, nil, nil, err
+	}
+	instanceIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		instanceIDs = append(instanceIDs, item.InstanceID)
+	}
+	var instances []domain.TaskInstance
+	if len(instanceIDs) > 0 {
+		if err := tx.Where("c_space_id = ? AND c_instance_id IN ?", spaceID, instanceIDs).
+			Order("c_instance_id ASC").Find(&instances).Error; err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	var targets []domain.WriteTarget
+	if len(instanceIDs) > 0 {
+		if err := tx.Where("c_space_id = ? AND c_task_id = ? AND c_dataset_id = ? AND c_instance_id IN ?", spaceID, taskID, datasetID, instanceIDs).
+			Order("c_write_target_id ASC").Find(&targets).Error; err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	snapshotEntries, err := loadPeriodSeriesSnapshotEntries(tx, spaceID, datasetID, frequency, period)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return instanceIDs, instances, targets, snapshotEntries, nil
 }
 
 func (r *TimerPeriodBatchRepository) currentTime() time.Time {

@@ -144,6 +144,7 @@ func buildTimerPeriodBatchPlan(plan TimerPeriodPlan, snapshot domain.PeriodSerie
 		request.Items[index].RequirePeriodCommit = true
 	}
 	request.Provider = firstNonEmpty(assignment.Provider, assignment.RouteProvider)
+	request.RouteProvider = firstNonEmpty(assignment.RouteProvider, assignment.Provider)
 	request.SourceID = assignment.SourceID
 	request.MarketID = assignment.MarketID
 	request.InstrumentType = assignment.InstrumentType
@@ -186,13 +187,34 @@ func buildTimerPeriodBatchPlan(plan TimerPeriodPlan, snapshot domain.PeriodSerie
 		PlannedCount: len(request.Items), PlannedAt: &now, DeadlineAt: timePtr(state.DeadlineAt.UTC()),
 	}
 	instances := append([]domain.TaskInstance(nil), plan.Instances...)
-	for i := range instances {
-		instances[i].RunID = plan.RunID
-		instances[i].FunctionName = assignment.FunctionName
-	}
 	taskModifyTime := plan.TaskModifyTime
 	if taskModifyTime.IsZero() {
 		taskModifyTime = plan.Task.ModifyTime
+	}
+	requestItemsByID := make(map[string]domain.CollectionItem, len(request.Items))
+	for _, item := range request.Items {
+		requestItemsByID[item.InstanceID] = item
+	}
+	snapshotEntriesByIndex := make(map[uint32]domain.PeriodSeriesSnapshotEntry, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		snapshotEntriesByIndex[entry.SeriesIndex] = entry
+	}
+	for index := range instances {
+		item, itemExists := requestItemsByID[instances[index].InstanceID]
+		entry, entryExists := snapshotEntriesByIndex[item.SeriesIndex]
+		if !itemExists || !entryExists {
+			return store.TimerPeriodBatchPlan{}, fmt.Errorf("timer task instance %s has no frozen request or snapshot entry", instances[index].InstanceID)
+		}
+		logicalItem := item
+		logicalItem.Provider = entry.Provider
+		logicalItem.SourceID = entry.SourceID
+		instances[index].RunID = plan.RunID
+		instances[index].FunctionName = assignment.FunctionName
+		instances[index].Provider = entry.Provider
+		instances[index].SourceID = entry.SourceID
+		instances[index].SeriesTag = entry.SeriesTag
+		instances[index].RequestKey = sharedCollectionItemKey(logicalItem, periodKey.Frequency, period)
+		instances[index].TaskParams = collectionItemRequestParams(item)
 	}
 	return store.TimerPeriodBatchPlan{Manifest: manifest, Batch: batch, Instances: instances, Targets: request.Targets,
 		OwnerRunCutoff: plan.RunCutoff, OwnerTaskModifyTime: taskModifyTime}, nil

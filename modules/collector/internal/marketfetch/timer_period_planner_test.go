@@ -139,6 +139,46 @@ func TestTimerPeriodPlannerRejectsInvalidCalendarPeriod(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTimerPeriodPlannerDerivesFrozenTaskInstanceIdentity(t *testing.T) {
+	ctx := context.Background()
+	s := newTimerPlannerStore(t)
+	task := timerPlannerTask()
+	require.NoError(t, s.Tasks().Create(ctx, task))
+	period := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	plan := timerPlannerPlan(task, "run-first", period)
+	plan.Request.Items[0].MarketID = "crypto"
+	plan.Request.Items[0].InstrumentType = "spot"
+	plan.Instances[0].RequestKey = ""
+	plan.Instances[0].Provider = "stale-provider"
+	plan.Instances[0].SourceID = "stale-source"
+	plan.Instances[0].SeriesTag = "stale-series-tag"
+	plan.Instances[0].FunctionName = "stale-function"
+	planner := TimerPeriodPlanner{
+		Snapshots: s.PeriodSeriesSnapshot(), States: s.PeriodStorageStates(), Batches: s.TimerPeriodBatches(),
+		Now: func() time.Time { return period.Add(10 * time.Second) },
+		EnsureStorage: func(_ context.Context, snapshot domain.PeriodSeriesSnapshot) (domain.PeriodStorageState, error) {
+			return timerPlannerStorageState(snapshot, period.Add(time.Hour)), nil
+		},
+	}
+	created, err := planner.Plan(ctx, plan)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	instance, err := s.TaskInstances().Get(ctx, "crypto", plan.Request.Items[0].InstanceID)
+	require.NoError(t, err)
+	entry := plan.Snapshot.Entries[0]
+	logicalItem := plan.Request.Items[0]
+	logicalItem.Provider = entry.Provider
+	logicalItem.SourceID = entry.SourceID
+	require.Equal(t, "run-first", instance.RunID)
+	require.Equal(t, plan.Assignment.FunctionName, instance.FunctionName)
+	require.Equal(t, entry.Provider, instance.Provider)
+	require.Equal(t, entry.SourceID, instance.SourceID)
+	require.Equal(t, entry.SeriesTag, instance.SeriesTag)
+	require.Equal(t, sharedCollectionItemKey(logicalItem, "1m", period), instance.RequestKey)
+	require.Equal(t, `{"instrument_type":"spot","market_id":"crypto"}`, instance.TaskParams)
+}
+
 func newTimerPlannerStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
@@ -160,6 +200,7 @@ func timerPlannerPlan(task domain.CollectionTask, runID string, period time.Time
 		Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline", DatasetID: "bars", Frequency: "1m",
 		SeriesIndex: 0, SeriesHash: seriesHash, ExpectedCount: 1,
 	}
+	requestKey := sharedCollectionItemKey(item, "1m", period)
 	targetTime := period.UTC()
 	request := Request{
 		SpaceID: "crypto", BatchKind: domain.BatchKindRealtime, DatasetID: "bars", Frequency: "1m", Provider: "binance",
@@ -179,7 +220,7 @@ func timerPlannerPlan(task domain.CollectionTask, runID string, period time.Time
 		},
 		Assignment: NodeAssignment{NodeID: "timer-node", FunctionName: "market-fetch", Region: "ap-singapore", Provider: "binance", RouteProvider: "binance", SourceID: "spot_http", MarketType: "spot", DatasetID: "bars", Frequency: "1m", GroupID: 0, GroupCount: 1, RouteVersion: "route-v1", Enabled: true, Subjects: []string{"BTC-USDT"}},
 		Request:    request,
-		Instances:  []domain.TaskInstance{{SpaceID: "crypto", InstanceID: item.InstanceID, RunID: runID, Provider: "binance", ProviderSymbol: "BTCUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: &targetTime, TaskParams: `{}`}},
+		Instances:  []domain.TaskInstance{{SpaceID: "crypto", InstanceID: item.InstanceID, RunID: runID, RequestKey: requestKey, Provider: "binance", ProviderSymbol: "BTCUSDT", SourceID: "spot_http", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TargetDataTime: &targetTime, TaskParams: `{}`}},
 		Targets:    []domain.WriteTarget{{ID: "target-old", SpaceID: "crypto", InstanceID: item.InstanceID, TaskID: task.TaskID, DatasetID: "bars", SeriesIndex: 0, SeriesHash: seriesHash, ExpectedCount: 1, Status: "pending"}},
 	}
 }

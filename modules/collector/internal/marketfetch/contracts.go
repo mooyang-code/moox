@@ -42,6 +42,7 @@ type Request struct {
 	DatasetID           string                           `json:"dataset_id,omitempty"`
 	Frequency           string                           `json:"frequency,omitempty"`
 	Provider            string                           `json:"provider"`
+	RouteProvider       string                           `json:"route_provider,omitempty"`
 	SourceID            string                           `json:"source_id,omitempty"`
 	MarketType          string                           `json:"market_type"`
 	Region              string                           `json:"region"`

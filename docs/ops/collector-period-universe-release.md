@@ -28,7 +28,7 @@ crypto 和 stockcn 包均由 `scripts/build/build-collector-scf-package.sh` 以 
 
 `./bin/moox-cli setup e2e-eventbus --file ./moox.toml` 返回 `public_tls=true`、`worker_bind_fetch_ack=true`、`worker_create_denied=true`、`worker_publish_denied=true`。该验证从本机连接正式 EventBus，创建并清理隔离的系统测试 consumer、发布/确认测试事件并验证 worker ACL；它确认 Control 提供的 CA 可用于该连接，但**不证明**本地 SCF 包内 CA 与 Control CA 字节/信任链一致，也不替代真实 1m/1h Collector 验收。
 
-执行授权前的切换记录至少固定：目标 Space；受影响 Collector SQLite 文件与 schema/table；Storage node 与 Pebble period key 范围；`dataset_id/frequency/period_time` 上下界；任务定义、结果 Dataset/View 引用及已有行情行数/范围；备份对象和 SHA-256、恢复演练结果；获准重建/删除的精确对象；保留对象；操作者和确认记录。当前尚未取得生产 inventory，以上值不得臆造或以默认全量范围替代。
+**2026-10-01 后续用户授权（取代上面的数据保留门禁）：** 用户明确说明这是新项目，目标物理主机上的全部数据可以删除，程序可以重新部署。由此不再要求保留旧 Collector 任务、Dataset/View 引用、行情行或 Pebble period ledger，也不需要为这些业务数据制作恢复备份。当前本机 manifest 映射的候选范围为 Control/Compile/Strategy 共用 `106.53.107.122`、Storage/View 共用 `146.56.196.204`；这是候选目标，不是新鲜线上 inventory，其他未映射的 host entry 不纳入范围。该授权只覆盖最终 dry-run 中逐项列明并再次确认的物理主机及数据卷；不覆盖 SCF namespace、EventBus、COS 或腾讯云账户级资源。开始任何远端读取或变更前须确认相关凭证已轮换，且不再使用可能暴露的旧凭证。执行前仍须用新鲜清单验证主机/IP、服务/挂载卷、拟删除路径和可重部署依赖，展示 dry-run 并获得对该精确清单的确认；旧主机摘要和本机 manifest 都不能替代这一步。另固定 SCF account/region/namespace/node、Timer 实际状态及是否保持或重建，明确 EventBus/COS 是否排除、重部署版本/制品摘要、操作者和确认记录。不得据此推导云侧资源或账户级清理授权。
 
 命令中的 `$MANIFEST` 为受信发布配置的绝对路径，`$VERSION`、`$GIT_COMMIT` 为审查通过的唯一发布版本和完整提交，`$HOST`、`$SERVICE`、`$DEPLOY_DIR` 来自已确认的目标 deployment，`$PACKAGE` 为已校验的无凭据 ZIP。执行前在发布记录中固定这些非敏感值和 ZIP SHA-256，不在日志中输出配置内容、token、app key 或私钥。
 
