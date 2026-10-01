@@ -4,7 +4,7 @@
 
 本手册是执行计划 Task 9 的发布准备文件，不是已发布证明。Task 1 至 Task 8 的实现、编码后独立审查和本地真实进程 E2E 已完成；2026-10-01 本轮新增 Storage cgo E2E，使用真实 Pebble finalizer、生产 `outbox.Relay`/`JetStreamPublisher` 与 durable pull subscriber，核验 degraded `CollectorPeriodCompleted` payload、同步 ACK、AckFloor，并证明 marker 只在 publisher 返回成功后从 outbox 清除。`make test-collector-period-universe-e2e` 已通过原 30 个进程场景及 marker ACK 场景；新测试的 focused race `-count=5` 通过。新起 `codeCR` 及其独立复核均未发现 P1/P2/P3。提交 `ff01e53f` 后 `env GOARCH=arm64 CGO_ENABLED=1 make verify-pr` 通过，Proto 生成无漂移、工作树干净。此前版本 `51209c7a` 的 compile host Storage Linux build 通过。正式环境尚未发布，真实 1m/1h 线上周期也尚未验收。不得把本地 build/E2E 记为生产证据。
 
-**2026-10-01 只读运行态检查：** 用户要求按全新项目处理，不实现旧版本数据结构或协议兼容；这不代表正式环境为空，也不自动授权删除现存业务数据。`setup host-diagnostics` 确认 Control 上 `moox-collector` 与 `moox-collector-subject` 正在运行，`/data/moox/prod/data/collector` 约 8.1 GiB；Storage 主机上的 DataNode、Primary、View 正在运行，`/data/moox/storage/data/storage-node/pebble` 约 450 MiB，View indexes 约 367 MiB。Storage 近期日志已有 crypto 与多个 stockcn K 线 Dataset 的历史索引 backfill 记录。因此正式切换必须先确认当前任务、批次、失败回执与 waiting 周期的运行态，并将任何 ledger 重建和保留对象明确分开；不能把“无需兼容历史”推导成全量清库。该检查未修改生产状态。
+**2026-10-01 只读运行态检查：** 用户要求按全新项目处理，不实现旧版本数据结构或协议兼容；这不代表正式环境为空，也不自动授权删除现存业务数据。最新 `setup host-diagnostics` 再次确认 Control 的 `moox-collector` 与 `moox-collector-subject` 正在运行，`/data/moox/prod/data/collector` 约 8.5 GiB，EventBus JetStream 约 6.1 GiB；Storage 的 DataNode、Primary、View、Access 与 Gateway 正在运行，`/data/moox/storage/data/storage-node/pebble` 约 476 MiB，View indexes 约 399 MiB。Storage 近期日志仍有 crypto 与多个 stockcn/stockus K 线 Dataset 的历史索引 backfill 记录。该只读检查没有取得 SQLite 运行态或 period-key inventory，也未停止任何进程或修改生产状态。因此正式切换必须先确认当前任务、批次、失败回执与 waiting 周期的运行态，并将任何 ledger 重建和保留对象明确分开；不能把“无需兼容历史”推导成全量清库。
 
 同日尝试现有 opt-in SQLite 诊断测试：`TestLiveCollectorE2EDiagnostic` 在 30 秒预算内超时，`TestLiveSchedulerDBDiagnostic` 在 90 秒预算内超时，未获得可用的周期级盘点结果。运行态 inventory 仍未完成；不要把目录容量、进程存活或本地状态当作排空证明。
 
@@ -123,6 +123,10 @@ VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" \
   --file "$MANIFEST" --host "$HOST" --service "$SERVICE" \
   --package "$PACKAGE" --deploy-dir "$DEPLOY_DIR"
 ```
+
+正式部署也有受控原位路径，但它们不是离线角色 ZIP：Control 上 Collector/Gateway 可在维护门禁完成后使用 `scripts/deploy/deploy-moox.sh --component-overlay --skip-build`，从仓库 `bin/` 读取已校验二进制。Overlay 要求目标已有受支持的 `start.sh` 与 `config/components.env`，强制排除 Admin/Storage，并会停止所选服务、替换所选组件文件及配置；执行前必须显式排除所有不属于本次发布的 profile 组件，并检查待覆盖配置差异。它不能与 `--package-only` 一起使用。
+
+Storage 使用 `moox-cli setup deploy-storage --host "$STORAGE_HOST"` 的受管理部署路径；当已准备好 Storage Linux 二进制时，可在受控发布环境设 `MOOX_SKIP_STORAGE_BUILD=1` 复用 `./bin/moox-storage-*`。该命令会部署并更新相关 Control placement/routes/firewall/client 状态，不是离线打包或只读操作；两个 reset flag 必须保持关闭，除非另有精确范围和单独授权。`setup deploy-service` 仍只适合经过专门 staging 契约验证的独立服务目录，不能把共享 monolith 的根目录生命周期脚本当普通单服务包覆盖。
 
 `deploy-service` 执行 ZIP/摘要校验、激活、健康检查和 Admin registry 同步；中途失败自动恢复旧文件。成功后的旧快照会 finalize，仓库没有公开 `rollback-service`：事后回滚须保留并重新发布上一完整 ZIP，不能假设旧目录仍可恢复。
 
