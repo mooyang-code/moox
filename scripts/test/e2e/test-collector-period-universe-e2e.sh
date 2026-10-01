@@ -56,4 +56,6 @@ for scenario in \
   fi
   printf 'Collector period E2E scenario passed: %s\n' "${scenario}"
 done
+CGO_ENABLED=1 go -C modules/storage test -count=1 -timeout=1m -v ./internal/service/e2e -run '^TestCollectorPeriodMarkerJetStreamAckE2E$' | tee "${TMP_DIR}/period-marker-jetstream-e2e.log"
+grep -Fq -- 'SCENARIO PASS collector-period-marker-jetstream-ack' "${TMP_DIR}/period-marker-jetstream-e2e.log"
 printf 'Collector period native RPC E2E passed.\n'
