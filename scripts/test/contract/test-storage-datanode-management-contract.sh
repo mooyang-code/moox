@@ -71,7 +71,7 @@ require_text modules/storage/proto/metadata.proto 'rpc RegisterDataNode' 'deploy
 require_text modules/storage/proto/metadata.proto 'rpc CheckDatasetActivation' 'read-only activation check RPC'
 require_text modules/storage/proto/metadata.proto 'rpc ActivateDataset' 'explicit activation RPC'
 require_text modules/storage/proto/data_node.proto 'service DataNodeRuntime {' 'DataNode runtime service'
-require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '10')" 'Schema v10'
+require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '12')" 'Schema v12'
 require_text config/setup/metadata.yaml 'data_source_id: crypto' 'shared crypto logical DataSource binding'
 require_text config/setup/metadata.yaml 'dataset_id: dataset_spot_kline_1h' 'shared crypto spot Dataset'
 require_text config/setup/metadata.yaml 'dataset_id: dataset_perpetual_kline_1h' 'shared crypto perpetual Dataset'
@@ -116,7 +116,8 @@ require_regex modules/cli/internal/doctor/storage_activation.go 'CheckDatasetAct
 require_regex web/src/views/ops/storage/nodes.vue 'DataNode|data_node' 'DataNode management UI'
 require_regex web/src/views/data/datasets/index.vue 'activateDataset|rebindDatasetDataNode|data_node_id' 'Dataset activation and binding UI'
 require_regex modules/cli/internal/command/setup_storage.go 'createStorageBrowserFixture|MOOX_REMOTE_STORAGE_FIXTURE|browser_e2e_cleanup_failed' 'isolated remote browser fixture lifecycle'
-require_regex web/tests/storage-datanode-management.remote.e2e.spec.ts 'MOOX_REMOTE_STORAGE_FIXTURE|ActivateDataset|remote fixture Dataset must be listed' 'remote browser lifecycle assertions'
+require_regex web/tests/storage-datanode-management.remote.e2e.spec.ts 'remote desktop covers DataNode details' 'remote DataNode details browser assertion'
+require_regex web/tests/storage-datanode-management.remote.e2e.spec.ts 'remote default setup exposes each business Space.s Fields' 'remote business Space Fields browser assertions'
 
 forbidden_matches="$(rg -n -i --no-heading "${scan_globs[@]}" \
   -e 'primarystorenode' \
