@@ -70,7 +70,18 @@ X-Space-Id: 已确认Space
 {"node_id":"已导出NodeID","cloud_account_id":"已确认AccountID","namespace":"已确认Namespace","region":"已确认Region","node_type":"scf-event","trigger_type":"timer","page":{"page":1,"size":1}}
 ```
 
-保存每个节点云侧实际的 `timer_actual_enabled`、`timer_actual_cron` 和 `timer_last_readback_at`；要求实际字段存在、`timer_status_error` 为空、`timer_available_status` 不是 `Unknown`/`Missing`，并有本次盘点开始后的新鲜 readback 证据。若 Admin 转发预算不足、缓存未刷新或字段不完整，则用既有受信云 API/控制台逐节点取得等价证据，不编造强制刷新参数。目录期望与云侧实际不一致时先停止并核对漂移，不能直接按目录状态关闭或恢复。
+保存每个节点云侧实际的 enabled、cron、type、qualifier、message 和 `timer_last_readback_at`；要求字段存在、`timer_status_error` 为空、`timer_available_status=Available`，实际 type=`timer`、qualifier=`$LATEST`、message=`market_fetch_timer_v1`，且 readback 不早于盘点开始、距观察时间不超过 5 分钟。服务端对 5 分钟内的 readback 会命中缓存，不保证每次列表调用都会生成新的时间戳；缓存旧值不能当作本次云侧读回，等待其超过缓存窗口后重试，或用既有受信云 API/控制台逐节点取得等价证据。不可伪造强制刷新参数。目录期望与云侧实际不一致时先停止并核对漂移，不能直接按目录状态关闭或恢复。
+
+仓库 CLI 提供只读的有界 fleet 盘点，可替代逐页手工读回；先按 `biz_type=market_fetcher` 取得目录，再逐个指定 NodeID、在 provider readback 查询中省略 `biz_type`。每个 provider 请求每页最多 1 项，查询预算超过一分钟；同范围下相似 NodeID 按服务端 LIKE 返回时，报告只接受精确 ID。命令最多运行 15 分钟，报告原始节点字段但不回显 provider 错误详情。`complete=true` 且退出码为 0 才能作为完整读回证据；其语义是范围内至少有一个非删除 Timer、所有节点都有完整目录/实际配置、启用状态和 cron 一致、trigger type/qualifier/message 分别匹配 `timer`、`$LATEST`、`market_fetch_timer_v1`、状态严格为 `Available`，且 readback 在命令开始后生成并且观察时不超过 5 分钟。若服务端对尚未过期的缓存跳过 provider 查询，命令会 fail closed；应等待缓存窗口过期后重试或用受信云 API 取得等价证据。它不会改动 Timer。
+
+```bash
+"$CANDIDATE_MOOX_CLI" collector function timer-inventory \
+  --control-url "$CONTROL_URL" --file "$MANIFEST" --space-id "$SPACE_ID" \
+  --cloud-account-id "$ACCOUNT_ID" --namespace "$NAMESPACE" --region "$REGION" \
+  > "$TIMER_INVENTORY_JSON"
+```
+
+没有节点、scope mismatch、重复 NodeID、缺字段、旧 readback 或非 `Available` 状态都会非零退出；零节点不表示 Timer 已停。若命令未完整通过，应停止，不把部分 JSON 当作可恢复/可关闭的 fleet 清单。
 
 仅针对该 inventory，以每批最多 100 个节点关闭 Timer，cron 使用已核对的实际值，并保存返回 job ID。提交与查询仍携带同一受认证 Space 上下文：
 

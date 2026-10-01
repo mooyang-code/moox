@@ -13,7 +13,7 @@ moox-cli storage repair-view ...    # 清理 View durable consumer 积压并触�
 moox-cli storage reset-view-consumers ... # 删除全部 View durable/消息/索引并从 Primary 回溯重建
 moox-cli factor clear-queue ...     # 清空 Factor durable consumer 历史积压并重启 Factor
 moox-cli data rows export ...       # 导出行数据
-moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
+moox-cli collector function ...     # 采集 SCF 代码包、发布/部署及 Timer 只读盘点
 moox-cli collector period-inventory ... # 一致只读盘点 Collector SQLite 周期与运行态
 moox-cli collector task purge ...   # 预览或重置 Collector 任务运行数据（默认只读）
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
@@ -21,6 +21,18 @@ moox-cli setup ...                  # 初始化控制面、发布服务包、部
 ```
 
 `collector period-inventory` 仅用于受信 Control 主机上的单 Space 只读盘点。它识别 `pre_remediation` 与 `current` 完整 Schema profile，不做迁移；目标 Space 无数据时 fail closed；`--max-items` 对周期键、active batch、pending retry 三类数组分别限额。发布门禁还须独立核对 DB 路径、Space 身份和已知任务数。`work_type=resample` 使用 Storage canonical 固定周期且不要求 Collector period snapshot；Storage deadline/confirmed 状态及 Timer 请求、Claim、Completion、batch item、WriteTarget 与 snapshot 的绑定按运行契约校验。报告不能单独证明生产者已停止或 drain 完成。
+
+`collector function timer-inventory` 是只读的 SCF Timer fleet 盘点。必须指定 Control URL、Space、云账号、namespace 和 region；命令先按 `biz_type=market_fetcher` 列出目标目录，再逐个省略 `biz_type` 并精确核对 NodeID 以触发 provider readback，每个服务端请求最多刷新一个 Timer。只有每个 Timer 都有本次命令开始后的 readback（且观察时不超过 5 分钟）、desired/actual enabled 与 cron 一致、实际 trigger type/qualifier/message 分别匹配 `timer`、`$LATEST`、`market_fetch_timer_v1`，provider 状态为 `Available` 时才报告 `complete=true`。服务端缓存中的旧 readback 会令命令 fail closed；输出不包含原始 provider 错误详情。
+
+```bash
+moox-cli collector function timer-inventory \
+  --control-url http://127.0.0.1:11002 \
+  --file ./moox.toml \
+  --space-id crypto \
+  --cloud-account-id <account-id> \
+  --namespace <namespace> \
+  --region <region>
+```
 
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
 

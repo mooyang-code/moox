@@ -123,9 +123,13 @@ type CloudNode struct {
 
 type CloudNodeListFilter struct {
 	CloudAccountID string
+	Namespace      string
 	Region         string
+	NodeID         string
 	NodeType       string
 	BizType        string
+	TriggerType    string
+	PageSize       int
 }
 
 type CollectionTaskSummary struct {
@@ -463,14 +467,23 @@ func normalizeProtoEnum(value any, names map[int]string) (string, error) {
 
 // ListCloudNodes returns every catalog node matching the server-side fleet filters.
 func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter) ([]CloudNode, error) {
-	const pageSize = 500
+	pageSize := filter.PageSize
+	if pageSize == 0 {
+		pageSize = 500
+	}
+	if pageSize < 1 || pageSize > 1000 {
+		return nil, fmt.Errorf("cloud node page size must be between 1 and 1000")
+	}
 	var nodes []CloudNode
 	for page := 1; ; page++ {
 		raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", map[string]any{
 			"cloud_account_id": filter.CloudAccountID,
+			"namespace":        filter.Namespace,
 			"region":           filter.Region,
+			"node_id":          filter.NodeID,
 			"node_type":        filter.NodeType,
 			"biz_type":         filter.BizType,
+			"trigger_type":     filter.TriggerType,
 			"page":             map[string]int{"page": page, "size": pageSize},
 		})
 		if err != nil {

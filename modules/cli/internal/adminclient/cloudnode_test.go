@@ -61,6 +61,34 @@ func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
 	assert.Equal(t, float64(1), nodes[1].Metadata["index"])
 }
 
+func TestListCloudNodesPassesScopedTimerReadbackFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "account-a", body["cloud_account_id"])
+		assert.Equal(t, "ap-singapore", body["region"])
+		assert.Equal(t, "default", body["namespace"])
+		assert.Equal(t, "timer-1", body["node_id"])
+		assert.Equal(t, "scf-event", body["node_type"])
+		assert.Equal(t, "timer", body["trigger_type"])
+		assert.Empty(t, body["biz_type"])
+		assert.Equal(t, float64(4), body["page"].(map[string]any)["size"])
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL).ListCloudNodes(context.Background(), CloudNodeListFilter{
+		CloudAccountID: "account-a",
+		Namespace:      "default",
+		Region:         "ap-singapore",
+		NodeID:         "timer-1",
+		NodeType:       "scf-event",
+		TriggerType:    "timer",
+		PageSize:       4,
+	})
+	require.NoError(t, err)
+}
+
 func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/admin/cloudnode/ListCloudAccounts", r.URL.Path)
