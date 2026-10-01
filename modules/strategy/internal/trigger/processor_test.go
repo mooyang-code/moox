@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type fakeInputLoader struct {
@@ -122,8 +123,16 @@ func TestMarshalTargetEventUsesSessionFenceWithoutOwnerGeneration(t *testing.T) 
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.GetOwnerGeneration() != 0 {
-		t.Fatalf("modern target unexpectedly carries owner generation: %d", payload.GetOwnerGeneration())
+	if payload.GetTargetId() != "result-1" || payload.GetInstanceId() != "instance-1" || payload.GetSessionId() != "session-1" || payload.GetStrategyId() != "strategy-1" || payload.GetLogicalAccountId() != account {
+		t.Fatalf("modern target identity = %+v", payload)
+	}
+	if !payload.GetBarEndTime().AsTime().Equal(now) || !payload.GetEffectiveAt().AsTime().Equal(now) || !payload.GetValidUntil().AsTime().Equal(now.Add(time.Hour)) {
+		t.Fatalf("modern target times = %+v", payload)
+	}
+	for _, name := range []protoreflect.Name{"command_sequence", "signal_time", "owner_generation", "runner_id"} {
+		if payload.ProtoReflect().Descriptor().Fields().ByName(name) != nil {
+			t.Errorf("modern target descriptor still exposes %s", name)
+		}
 	}
 }
 

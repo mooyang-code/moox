@@ -1391,22 +1391,17 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []s
 	case <-ctx.Done():
 		return
 	}
-	if batch, err := s.Batches.Get(ctx, req.SpaceID, req.BatchID); err != nil || batch.Status != domain.BatchStatusPlanned {
+	batch, err := s.Batches.Get(ctx, req.SpaceID, req.BatchID)
+	if err != nil || batch.Status != domain.BatchStatusPlanned {
 		return
 	}
+	var persistedRequest Request
+	if err := json.Unmarshal([]byte(batch.RequestJSON), &persistedRequest); err != nil || persistedRequest.BatchID != batch.BatchID || persistedRequest.SpaceID != batch.SpaceID {
+		log.WarnContextf(ctx, "decode persisted market fetch request before dispatch failed batch=%s err=%v", req.BatchID, err)
+		return
+	}
+	req = persistedRequest
 	for attempt, candidate := range invocationCandidates(node, nodes) {
-		if s.Instances != nil {
-			instanceIDs := make([]string, 0, len(req.Items))
-			for _, item := range req.Items {
-				instanceIDs = append(instanceIDs, item.InstanceID)
-			}
-			targets, err := s.Instances.ListEnabledWriteTargetsForInstances(ctx, req.SpaceID, instanceIDs)
-			if err != nil || len(targets) == 0 {
-				return
-			}
-			req.Targets = targets
-			bindRequestTargetPeriodIdentity(&req)
-		}
 		event, err := marketFetchEvent(requestForNode(req, candidate), s.eventStorageTarget())
 		if err != nil {
 			log.WarnContextf(ctx, "build SCF market fetch failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)

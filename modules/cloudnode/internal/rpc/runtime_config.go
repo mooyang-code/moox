@@ -116,6 +116,9 @@ func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, it
 	if value, ok := item.GetManagedEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"]; ok && value != strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
 		return retErr(pb.ErrorCode_INVALID_PARAM, "Timer runtime timeout must be 60 seconds")
 	}
+	if item.GetTimerEnabled() && item.GetManagedEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"] != strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
+		return retErr(pb.ErrorCode_INVALID_PARAM, "enabled Timer runtime config requires MOOX_FETCH_TIMEOUT_SECONDS=60")
+	}
 	return nil
 }
 
@@ -186,6 +189,20 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		needsEnvironmentUpdate = needsEnvironmentUpdate || oldSubjects || oldSymbols
 		delete(environment, "MOOX_MARKET_FETCH_SUBJECTS")
 		delete(environment, "MOOX_MARKET_FETCH_SYMBOLS_JSON")
+	}
+	if strings.TrimSpace(environment["MOOX_EVENTBUS_NATS_TLS_CA_FILE"]) != "" {
+		if _, hasLegacyPEM := environment["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"]; hasLegacyPEM {
+			delete(environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+			needsEnvironmentUpdate = true
+		}
+	}
+	if item.GetTimerEnabled() {
+		if environment["MOOX_FETCH_TIMEOUT_SECONDS"] != strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
+			return "", fmt.Errorf("scf function %s Timer runtime environment requires MOOX_FETCH_TIMEOUT_SECONDS=60", ref.FunctionName)
+		}
+		if err := tencent.ValidateCollectorTimerEnvironment(environment); err != nil {
+			return "", fmt.Errorf("scf function %s Timer runtime environment: %w", ref.FunctionName, err)
+		}
 	}
 	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
 		return "", fmt.Errorf("scf function %s %w", ref.FunctionName, err)

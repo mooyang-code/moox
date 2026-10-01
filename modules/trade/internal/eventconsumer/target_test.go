@@ -28,7 +28,7 @@ func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-2", "runner-1", "logical-1", 2,
+		t, now, "target-2", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT-SPOT", TargetWeight: "2.5",
 		}},
@@ -69,18 +69,18 @@ func TestHandleTargetDirectedWakeOnlyAfterNewAcceptance(t *testing.T) {
 		require.NoError(t, err, "receipt must be committed before wake")
 		wakes = append(wakes, space+"/"+logical)
 	}
-	delivery := logicalTargetDelivery(t, now, "target-directed", "runner-1", "logical-1", 2, nil)
+	delivery := logicalTargetDelivery(t, now, "target-directed", "runner-1", "logical-1", nil)
 	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
 	require.Equal(t, []string{"space-1/logical-1"}, wakes)
 	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
-	rejected := logicalTargetDelivery(t, now, "target-rejected", "runner-other", "logical-1", 3, nil)
+	rejected := logicalTargetDelivery(t, now, "target-rejected", "runner-other", "logical-1", nil)
 	require.Equal(t, jetstream.TERM, HandleTarget(context.Background(), rejected, opts).Decision)
 	opts.WeightResolver = targetResolverFunc(func(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
 		return targetapp.WeightConversion{}, errors.New("resolver unavailable")
 	})
 	next := now.Add(time.Minute)
 	opts.Now = func() time.Time { return next }
-	failed := logicalTargetDelivery(t, next, "target-failed", "runner-1", "logical-1", 3, nil)
+	failed := logicalTargetDelivery(t, next, "target-failed", "runner-1", "logical-1", nil)
 	require.Equal(t, jetstream.RETRY, HandleTarget(context.Background(), failed, opts).Decision)
 	require.Equal(t, []string{"space-1/logical-1"}, wakes)
 }
@@ -89,7 +89,7 @@ func TestManualTargetReplayRejectedBeforeResolverAndWake(t *testing.T) {
 	db := openTargetStore(t)
 	seedLogicalTargetAccount(t, db, true, true)
 	now := time.Now().UTC()
-	delivery := logicalTargetDelivery(t, now, "target-manual", "runner-1", "logical-1", 2, nil)
+	delivery := logicalTargetDelivery(t, now, "target-manual", "runner-1", "logical-1", nil)
 	opts := targetOptions(db, now)
 	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
 	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
@@ -107,7 +107,7 @@ func TestHandleLogicalAccountTargetAcceptsEmptyFullWhilePaused(t *testing.T) {
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-empty", "runner-1", "logical-1", 1, nil,
+		t, now, "target-empty", "runner-1", "logical-1", nil,
 	), targetOptions(tradeStore, now))
 
 	require.Equal(t, jetstream.ACK, result.Decision)
@@ -124,7 +124,7 @@ func TestHandleLogicalAccountTargetAcceptsBeforeEffectiveAt(t *testing.T) {
 	seedLogicalTargetAccount(t, db, true, true)
 	now := time.Now().UTC()
 	effective := now.Add(500 * time.Millisecond)
-	delivery := logicalTargetDeliveryWithTimes(t, effective, effective, effective.Add(time.Hour), "future-target", "runner-1", "logical-1", 1, nil)
+	delivery := logicalTargetDeliveryWithTimes(t, effective, effective, effective.Add(time.Hour), "future-target", "runner-1", "logical-1", nil)
 	result := HandleTarget(context.Background(), delivery, targetOptions(db, now))
 	require.Equal(t, jetstream.ACK, result.Decision)
 	require.NoError(t, result.Err)
@@ -140,7 +140,7 @@ func TestHandleLogicalAccountTargetTermsAfterValidityWindow(t *testing.T) {
 	db := openTargetStore(t)
 	seedLogicalTargetAccount(t, db, true, true)
 	now := time.Now().UTC()
-	delivery := logicalTargetDeliveryWithTimes(t, now.Add(-2*time.Hour), now.Add(-2*time.Hour), now.Add(-time.Hour), "expired-target", "runner-1", "logical-1", 1, nil)
+	delivery := logicalTargetDeliveryWithTimes(t, now.Add(-2*time.Hour), now.Add(-2*time.Hour), now.Add(-time.Hour), "expired-target", "runner-1", "logical-1", nil)
 	result := HandleTarget(context.Background(), delivery, targetOptions(db, now))
 	require.Equal(t, jetstream.TERM, result.Decision)
 	require.ErrorIs(t, result.Err, store.ErrTargetExpired)
@@ -152,7 +152,7 @@ func TestHandleLogicalAccountTargetRejectsWrongRunner(t *testing.T) {
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-1", "runner-other", "logical-1", 1, nil,
+		t, now, "target-1", "runner-other", "logical-1", nil,
 	), targetOptions(tradeStore, now))
 
 	require.Equal(t, jetstream.TERM, result.Decision)
@@ -168,7 +168,7 @@ func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle
 	}))
 	oldEventAt := claimAt.Add(-time.Second)
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, oldEventAt, "delayed-old-target", "runner-1", "logical-1", 1,
+		t, oldEventAt, "delayed-old-target", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1"}},
 	), targetOptions(tradeStore, oldEventAt))
 	require.Equal(t, jetstream.TERM, result.Decision)
@@ -226,14 +226,15 @@ func TestHandleModernTargetUsesSessionFenceWithoutLegacyGeneration(t *testing.T)
 	require.Equal(t, jetstream.ACK, HandleTarget(ctx, delivery, targetOptions(db, now)).Decision)
 }
 
-func TestHandleLogicalAccountTargetIgnoresLegacyGenerationField(t *testing.T) {
+func TestHandleLogicalAccountTargetHasNoOwnerGenerationField(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	now := time.Now().UTC()
+	require.Nil(t, (&tradeeventpb.LogicalAccountTargetWeightRequested{}).ProtoReflect().Descriptor().Fields().ByName("owner_generation"))
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-generation-match", "runner-1", "logical-1", 1,
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1"}}, 999,
+		t, now, "target-generation-match", "runner-1", "logical-1",
+		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1"}},
 	), targetOptions(tradeStore, now))
 
 	require.Equal(t, jetstream.ACK, result.Decision)
@@ -267,7 +268,7 @@ func TestHandleLogicalAccountTargetAcceptsSessionFenceWithoutOwnerGeneration(t *
 	require.Greater(t, claimed.OwnerGeneration, int64(0))
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-session-fence", "runner-1", "logical-1", 1,
+		t, now, "target-session-fence", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1"}},
 	), targetOptions(tradeStore, now))
 
@@ -283,7 +284,7 @@ func TestHandleLogicalAccountTargetRejectsUnsupportedInstrument(t *testing.T) {
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-1", "runner-1", "logical-1", 1,
+		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "ETH-USDT-SPOT", TargetWeight: "1",
 		}},
@@ -308,7 +309,7 @@ func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-usdc", "runner-1", "logical-1", 1,
+		t, now, "target-usdc", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDC-SPOT", TargetWeight: "1",
 		}},
@@ -333,7 +334,7 @@ func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testin
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-lowercase-status", "runner-1", "logical-1", 1,
+		t, now, "target-lowercase-status", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1",
 		}},
@@ -359,7 +360,7 @@ func TestHandleLogicalAccountTargetRetriesMissingMetadataUntilMembersReady(t *te
 			now := time.Now().UTC()
 
 			result := HandleTarget(context.Background(), logicalTargetDelivery(
-				t, now, "target-1", "runner-1", "logical-1", 1,
+				t, now, "target-1", "runner-1", "logical-1",
 				[]*tradeeventpb.InstrumentWeightTarget{{
 					InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1",
 				}},
@@ -380,7 +381,7 @@ func TestHandleLogicalAccountTargetRetriesWhenAllMembersDisabled(t *testing.T) {
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-disabled", "runner-1", "logical-1", 1,
+		t, now, "target-disabled", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1"}},
 	), targetOptions(tradeStore, now))
 
@@ -401,7 +402,7 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-1", "runner-1", "logical-1", 1,
+		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1",
 		}},
@@ -447,7 +448,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 	now := time.Now().UTC()
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
-		t, now, "target-1", "runner-1", "logical-1", 1,
+		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT-SWAP", TargetWeight: "1",
 		}},
@@ -463,7 +464,7 @@ func TestHandleLogicalAccountTargetDoesNotWakeForExactRetry(t *testing.T) {
 	var wakes atomic.Int32
 	now := time.Now().UTC()
 	delivery := logicalTargetDelivery(
-		t, now, "target-1", "runner-1", "logical-1", 1, nil,
+		t, now, "target-1", "runner-1", "logical-1", nil,
 	)
 	opts := targetOptions(tradeStore, now)
 	opts.Wake = func() { wakes.Add(1) }
@@ -494,13 +495,6 @@ func TestHandleTargetTermsMalformedEnvelope(t *testing.T) {
 
 func TestHandleTargetRejectsLegacyQuantityEvent(t *testing.T) {
 	tradeStore := openTargetStore(t)
-	legacyPayload, err := proto.Marshal(&tradeeventpb.LogicalAccountTargetRequested{
-		TargetId:         "legacy-target",
-		RunnerId:         "runner-1",
-		LogicalAccountId: "logical-1",
-		CommandSequence:  1,
-	})
-	require.NoError(t, err)
 	raw, err := proto.Marshal(&eventpb.EventMessage{
 		EventId:      "legacy-target",
 		EventName:    "event.trade.target.requested",
@@ -508,7 +502,7 @@ func TestHandleTargetRejectsLegacyQuantityEvent(t *testing.T) {
 		SpaceId:      "space-1",
 		SubjectId:    "logical-1",
 		OccurredAt:   timestamppb.New(time.Now().UTC()),
-		Payload:      legacyPayload,
+		Payload:      []byte("unregistered target payload"),
 	})
 	require.NoError(t, err)
 
@@ -521,11 +515,9 @@ func TestHandleTargetRejectsLegacyQuantityEvent(t *testing.T) {
 
 func TestHandleTargetRejectsIncompleteModernEventBeforeAccountLookup(t *testing.T) {
 	tradeStore := openTargetStore(t)
-	legacyPayload, err := proto.Marshal(&tradeeventpb.LogicalAccountTargetWeightRequested{
+	incompletePayload, err := proto.Marshal(&tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId:         "incomplete-target",
-		RunnerId:         "runner-1",
 		LogicalAccountId: "logical-1",
-		CommandSequence:  1,
 	})
 	require.NoError(t, err)
 	now := time.Now().UTC()
@@ -540,7 +532,7 @@ func TestHandleTargetRejectsIncompleteModernEventBeforeAccountLookup(t *testing.
 		SpaceId:      "space-1",
 		SubjectId:    "logical-1",
 		OccurredAt:   timestamppb.New(now),
-		Payload:      legacyPayload,
+		Payload:      incompletePayload,
 	})
 	require.NoError(t, err)
 
@@ -629,13 +621,11 @@ func logicalTargetDelivery(
 	t *testing.T,
 	now time.Time,
 	targetID string,
-	runnerID string,
+	instanceID string,
 	logicalAccountID string,
-	sequence int64,
 	targets []*tradeeventpb.InstrumentWeightTarget,
-	ownerGeneration ...int64,
 ) *jetstream.Delivery {
-	return logicalTargetDeliveryWithTimes(t, now, now, now.Add(time.Hour), targetID, runnerID, logicalAccountID, sequence, targets, ownerGeneration...)
+	return logicalTargetDeliveryWithTimes(t, now, now, now.Add(time.Hour), targetID, instanceID, logicalAccountID, targets)
 }
 
 func logicalTargetDeliveryWithTimes(
@@ -644,24 +634,18 @@ func logicalTargetDeliveryWithTimes(
 	effective time.Time,
 	validUntil time.Time,
 	targetID string,
-	runnerID string,
+	instanceID string,
 	logicalAccountID string,
-	sequence int64,
 	targets []*tradeeventpb.InstrumentWeightTarget,
-	ownerGeneration ...int64,
 ) *jetstream.Delivery {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	var generation int64
-	if len(ownerGeneration) > 0 {
-		generation = ownerGeneration[0]
-	}
 	encoded, err := registry.Encode(
 		events.LogicalAccountTargetWeightRequested,
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
-			TargetId: targetID, InstanceId: runnerID, SessionId: "session-1", StrategyId: "strategy-1",
-			LogicalAccountId: logicalAccountID, CommandSequence: sequence, OwnerGeneration: generation, Targets: targets,
+			TargetId: targetID, InstanceId: instanceID, SessionId: "session-1", StrategyId: "strategy-1",
+			LogicalAccountId: logicalAccountID, Targets: targets,
 			BarEndTime: timestamppb.New(barEnd), EffectiveAt: timestamppb.New(effective), ValidUntil: timestamppb.New(validUntil),
 		},
 		events.PublishOptions{

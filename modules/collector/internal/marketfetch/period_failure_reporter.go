@@ -214,6 +214,10 @@ func (r *PeriodFailureReporter) reportRetry(ctx context.Context, spaceID string,
 		return r.persistReportError(ctx, spaceID, retry, nil, fmt.Errorf("invalid permanent retry period identity: %w", err))
 	}
 	r.seenFrequencies[string(frequency)] = struct{}{}
+	storageFrequency, err := normalizeStorageFrequency(string(frequency))
+	if err != nil {
+		return r.persistReportError(ctx, spaceID, retry, nil, fmt.Errorf("invalid Storage period frequency: %w", err))
+	}
 	previousResults := make(map[string]string)
 	var persisted []domain.PeriodFailureTargetResult
 	if json.Unmarshal([]byte(retry.PeriodFailureResultsJSON), &persisted) == nil {
@@ -234,11 +238,11 @@ func (r *PeriodFailureReporter) reportRetry(ctx context.Context, spaceID string,
 		if target.ID == "" || target.DatasetID == "" || target.SeriesHash == "" || target.ExpectedCount == 0 || target.SeriesIndex >= target.ExpectedCount || (target.SpaceID != "" && target.SpaceID != spaceID) {
 			return r.persistReportError(ctx, spaceID, retry, nil, fmt.Errorf("invalid durable failure target %q", target.ID))
 		}
-		key := strings.Join([]string{target.DatasetID, string(frequency), periodTime.Format(time.RFC3339Nano), target.SeriesHash, fmt.Sprint(target.ExpectedCount), item.MarketType}, "\x00")
+		key := strings.Join([]string{target.DatasetID, storageFrequency, periodTime.Format(time.RFC3339Nano), target.SeriesHash, fmt.Sprint(target.ExpectedCount), item.MarketType}, "\x00")
 		group := groups[key]
 		if group == nil {
 			group = &reportGroup{
-				expectation: &storagepb.DatasetPeriodExpectation{SpaceId: spaceID, DatasetId: target.DatasetID, Frequency: string(frequency), PeriodTime: periodTime.Unix(), SeriesHash: target.SeriesHash, ExpectedCount: target.ExpectedCount},
+				expectation: &storagepb.DatasetPeriodExpectation{SpaceId: spaceID, DatasetId: target.DatasetID, Frequency: storageFrequency, PeriodTime: periodTime.Unix(), SeriesHash: target.SeriesHash, ExpectedCount: target.ExpectedCount},
 				marketType:  item.MarketType, targets: make(map[uint32][]targetEntry),
 			}
 			groups[key] = group

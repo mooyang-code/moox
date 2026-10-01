@@ -38,8 +38,12 @@ reject 'NewPullConsumer|EnsurePullConsumer|BindPullConsumer|BindManagedPullConsu
   "legacy Consumer lifecycle API remains" --glob '*.go' modules packages
 reject '^consumers:|^consumer_templates:|ConsumerTemplates' \
   "EventBus still owns Consumer declarations" --glob '*.go' --glob '*.yaml' modules/eventbus
+# Storage owns these static consumer partitions, whose durable identities are
+# part of the Storage runtime topology rather than business YAML contracts.
 reject '(^|[[:space:]])([A-Za-z0-9_]*_durable|durable):' \
-  "business YAML still uses durable as a configuration name" --glob '*.yaml' modules
+  "business YAML still uses durable as a configuration name" \
+  --glob '*.yaml' --glob '!modules/storage/config/storage.yaml' \
+  --glob '!modules/storage/config/storage_view/trpc_go.yaml' modules
 reject 'PublishRaw\(|Client\.Publish\(' \
   "business modules bypass the typed Event API" --glob '*.go' --glob '!**/*_test.go' modules
 reject '\.NewConsumer\(' \
@@ -55,7 +59,6 @@ reject 'strategy_run_id|strategy_result_id|execution_id|execution_binding_id|exc
   "Strategy target publisher or public event still uses the obsolete target contract" \
   "${production[@]}" \
   modules/strategy/internal/store/results.go \
-  modules/strategy/internal/action \
   modules/strategy/internal/outbox \
   modules/strategy/internal/rpc/service.go \
   packages/events/registry.go \
@@ -86,7 +89,9 @@ reject 'NATS\.Stream|NATS\.Consumer|NATS\.URL\b|yaml:"stream"|yaml:"consumer"|ya
 reject '^[[:space:]]+(stream|consumer|url):' \
   "Factor YAML still exposes duplicate or fixed live EventBus settings" \
   --glob '*.yaml' modules/factor/config
-reject 'NewDurableEventBatcher|PendingEventStore|t_factor_event_inbox|cross_section|arrow_mmap|GetRecalcProgress|ListFactorRuns' \
+# FactorTypeCrossSection remains a supported calculation type; only its retired
+# persistence and recalculation APIs belong in this removal guard.
+reject 'NewDurableEventBatcher|PendingEventStore|t_factor_event_inbox|arrow_mmap|GetRecalcProgress|ListFactorRuns' \
   "removed Factor capability remains" \
   --glob '*.go' --glob '*.proto' --glob '*.py' --glob '!**/*_test.go' \
   modules/factor/internal modules/factor/proto modules/factor/cmd modules/factor/pyworker
@@ -100,7 +105,10 @@ reject 'NATSURL|EmbeddedJetStreamConfig|yaml:"nats_url"|yaml:"embedded"' \
   --glob '*.go' modules/cloudnode/internal
 reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_wait_ms):' \
   "code-owned Consumer identity or ack settings remain in business YAML" \
-  --glob '*.yaml' modules/archive/config modules/monitor/config modules/trade/config modules/storage/config
+  --glob '*.yaml' \
+  --glob '!modules/storage/config/storage.yaml' \
+  --glob '!modules/storage/config/storage_view/trpc_go.yaml' \
+  modules/archive/config modules/monitor/config modules/trade/config modules/storage/config
 
 for permission in \
   '$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>' \
@@ -129,7 +137,9 @@ else
   echo "factor real Storage E2E not run (set MOOX_RUN_REAL_FACTOR_E2E=1 with a running deployment)"
 fi
 (cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/jobqueue ./internal/jobstate ./internal/rpc)
-(cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox ./test)
+# Strategy E2E tests are build-tagged e2e_external and require deployed services;
+# this local contract gate covers the package-level storage and outbox tests.
+(cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox)
 (cd modules/trade && CGO_ENABLED=1 go test ./internal/bootstrap ./internal/eventconsumer ./internal/application/target)
 (cd modules/hostagent && go test ./internal/eventpublisher ./internal/app)
 

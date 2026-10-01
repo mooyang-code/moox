@@ -495,6 +495,18 @@ func TestCompleteWithEffectsDuplicateTerminalCompletionDoesNotApplyEffects(t *te
 	require.Equal(t, "succeeded", target.Status)
 }
 
+func TestCompleteWithEffectsRejectsNonterminalStatus(t *testing.T) {
+	s := newCollectorStore(t)
+	batch, _, targets := seedCompletionAtomicityTest(t, s, false)
+	batch.Status = domain.BatchStatusDispatched
+	updated, err := s.FetchBatches().CompleteWithEffects(context.Background(), batch, FetchCompletionEffects{
+		WriteTargetUpdates: []WriteTargetStatusEffect{{SpaceID: "crypto", InstanceID: "instance-a", WriteTargetID: targets[0].ID, DatasetID: targets[0].DatasetID, Status: "succeeded"}},
+	})
+	require.ErrorContains(t, err, "not terminal")
+	require.False(t, updated)
+	assertCompletionRolledBack(t, s, batch.BatchID, targets[0].ID)
+}
+
 func TestCompleteWithEffectsRechecksTerminalRetrySourceAtomically(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()

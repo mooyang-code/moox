@@ -56,15 +56,16 @@
 
 ### 1.2 实施状态与接续入口
 
-以下状态仅用于避免重复劳动，不替代任务清单和验收。主工作区尚未合入任何本计划的业务变更；独立工作区为 `.worktrees/collector-period-universe-remediation`，实施分支为 `codex/collector-period-universe-remediation`。
+以下状态仅用于避免重复劳动，不替代任务清单和验收。表格首列记录计划建立时主工作区的状态；本次实施及最终门禁进度以右侧记录为准。独立工作区为 `.worktrees/collector-period-universe-remediation`，实施分支为 `codex/collector-period-universe-remediation`。
 
 | 范围 | 主工作区状态 | 独立工作区已有内容 | 下一步 |
 | --- | --- | --- | --- |
 | Task 1 命名与完整快照对象 | 待合入 | 已完成并提交 `34da1414`，规格/质量审查及主 Agent 七包复跑、三个入口 build 通过 | 本实施分支 Task 1 已勾选；最终合入前随完整链路再验证 |
-| Task 3 Gateway 默认路由 | 待实施/合入 | 四方法 Collector-only 路由与真实 seed 派生测试提交 `396683ae`，分项审查及主 Agent Admin/Gateway 复跑通过 | 完成生产 adapter、服务鉴权和真实 resolver 测试，不能仅凭路由测试勾选 Task 3 |
-| Task 9 门禁前置项 | 待完成 | 架构模块清单、事件名和空可选 placement 修复提交 `391e4b2a`，分项审查与两项完整门禁复跑通过 | 所有最终门禁重新执行，不以局部修复推断整体验收 PASS |
-| Task 2 | 完成并提交 `caea6e1c` | 规格/质量审查均 PASS；主 Agent Storage/Collector 全模块测试、Pebble focused race、Proto 生成、Storage build 通过 | Task 3 仍需补生产 Record adapter 和四 RPC 鉴权；Task 2 单项不证明完整生产链路 |
-| Task 4、5、6、7、8 | 待实施 | 无可验收的完整实现 | 严格按第 3 节依赖顺序实施 |
+| Task 3 Gateway 默认路由 | 计划建立时待实施/合入 | 四方法 Collector-only 路由、生产 adapter、服务鉴权和 resolver/Gateway 集成测试均已实现；独立审查及主 Agent 复跑通过 | 已完成；最终门禁仍按 Task 9 执行 |
+| Task 9 门禁前置项 | 计划建立时待完成 | 文档模块清单、事件名、部署契约和部署脚本缺陷已修复；部分门禁已复跑通过 | 完成剩余 `make verify-pr` 和最终复核 |
+| Task 2 | 完成并提交 `caea6e1c` | 后续增加了 deadline finalizer 公平轮转和失败游标重启恢复；Storage codeCR 复审及 race 测试通过 | 已完成；最终 proto-check 纳入 Task 9 |
+| Task 4、5、6 | 计划建立时待实施 | 持久 Storage 状态、逐目标失败回执、Timer manifest/Claim 与 Completion 生命周期均已实现并有回归测试 | 已完成；以 Task 8 真实进程验收和最终门禁为准 |
+| Task 7、8 | 计划建立时待实施 | SCF Timer Claim/period Commit/Completion、凭据与公开 CA 契约已实现；真实 Collector SQLite、Gateway、Storage 和 EventBus E2E 已运行通过 | 已完成本地实现及 E2E；不等于正式环境发布或验收 |
 
 若独立工作区已被修改，先重新读取本表涉及文件并按实际 diff 更新执行记录；不撤销已有工作，也不把未完成改动直接发布。每项任务完成必须同时具备实现、针对性测试、审查闭环和提交记录。
 
@@ -236,6 +237,7 @@ status == waiting && now < deadline  => 持久化 failure[index] 后 recorded
 - [x] **2.7 新增只读查询 RPC。** DataNode request 字段为 `auth_info=1, node_id=2, expectation=3`，Primary request 为 `auth_info=1, expectation=2`；两层 response 为 `ret_info=1, status=2, series_hash=3, expected_count=4, deadline_at=5`。在 `DataNodePeriodRuntime` 与 `PrimaryStore` 增加 `GetDatasetPeriodStatus`。查询 expectation 只携带 key/hash/count，不要求整份 snapshot；锁内一致读取并校验 hash/count，不创建 period、不改 deadline、不调用 Ensure。不存在返回 `NOT_FOUND`，不冒充 waiting 或终态。
 - [x] **2.8 补全服务映射测试。** DataNode/Primary 均验证逐 index 回执和 deadline 未丢失；查询合法等待/完整/降级、hash/count 冲突、NOT_FOUND。截止后两种锁顺序的 status、event ID、payload 必须相同；marker/outbox 数量保持 1。
 - [x] **2.9 生成、验证、提交。** 预期以下全部 PASS；提交 `fix(storage): acknowledge period failures with deadline fencing`。
+- [x] **2.10 补齐 finalizer 重试公平性。** deadline 批次因 marker 大小失败后降低限制并重启，仍能重试唯一 cursor 项；持久游标回绕不饿死该项或后续周期。`TestDatasetPeriodFinalizerRetriesOnlyFailedCursorAfterRestart`、轮转测试及 Pebble race focused 测试通过。
 
 ```bash
 make -C modules/storage/proto all
@@ -463,7 +465,7 @@ Task 5 完成记录：提交 `1894a96e`。首轮与二轮独立审查发现并�
 - [x] **6.4 冻结分组而非每轮重算。** 使用 snapshot 内的 series、现有 Provider/Source route 及 rendezvous/stagger 规则生成 shard，单 batch 不跨 Provider/Source、遵守请求 item 上限。GroupCount、route version 与静态 binding hash 首次固定；binding hash 不包含当前标签成员或当前 tick。进行中的 manifest 不因 Reconciler 当前标签或新 Run 追加 Instance。
 - [x] **6.5 固定首次持久化顺序。** 先创建/读取 snapshot，再用完整 snapshot Ensure Storage，保存 canonical state，成功后一个 SQLite 事务创建 owning Instance/WriteTarget、manifest、batch、batch items、RequestJSON。首次 batch ID 为 `stableID(spaceID,datasetID,frequency,periodUTC,shardIndex,"timer-initial")`，不含 RunID/requestID/tick/动态 assignment hash；sync point ID 同样稳定。已有 manifest 只读复用，不能执行现有 duplicate insert 后仍追加 BatchItems 的分支。
 - [x] **6.6 拒绝重复/过期首次计划。** 初次创建前按市场 Calendar 确认有效 TargetDataTime；终态或 canonical deadline 已过的周期不新建 initial batch。标签变化只影响下一周期。Task 修改/停用时，未领取批次按现有任务控制语义取消；已持久 owning 关系不静默替换为新 Run。
-- [x] **6.7 定义独立运行协议。** 不接受客户端提交名单/Items/ExpectedSet；`request_json` 为有界持久 `Request` 的 JSON，worker 使用现有结构化 JSON decoder，而不是重新展开标签。所需字段为：
+- [x] **6.7 定义独立运行协议。** 不接受客户端提交标的列表、Items 或周期快照；`request_json` 为有界持久 `Request` 的 JSON，worker 使用现有结构化 JSON decoder，而不是重新展开标签。所需字段为：
 
 ```protobuf
 message ClaimTimerBatchReq {
@@ -546,16 +548,7 @@ Task 6 完成记录：提交 `82ef1df2`。最终 codeCR 与规格复审均 PASS�
 - Modify: `modules/collector/configs/scf/market_data/sources/market/binance.yaml`、`modules/collector/configs/scf/stockcn/sources/market/binance.yaml`，SCF binding 只保留 app ID，app key 为空
 - Modify: `modules/collector/internal/subjectsync/storage_client_test.go` 及现有 marketwiring Storage 测试，验证 host 凭据路径及错误传播不被 SCF 契约破坏
 
-- [ ] **7.1 先补 fail-closed 测试。** Claim no_work、超时、鉴权失败、身份不完整均不得创建 Storage writer、调用 provider 或 Upsert；合法 Claim 使用原 batch/targets/index/hash/count；Timer publish 一次 Completion。新增 `TestTimerClaimRequired`、`TestTimerPublishesDurableCompletion`、`TestReservedDeadlineStoragePeriodContract`。
-- [ ] **7.2 执行失败测试。** `go test -count=1 ./modules/collector/internal/marketfetch -run 'Test(TimerClaim|TimerPublishes|ReservedDeadlineStorage)'`；当前环境自造请求、publish=false 和包装器接口缺失应失败。
-- [ ] **7.3 替换环境自造名单。** `TimerRequestFromEnv` 改为只解析静态 function/group/binding/endpoint 配置，再由 runtime client 发起 Claim。移除 Timer 的 `MOOX_MARKET_FETCH_SUBJECTS` / symbols JSON 作为采集真相的路径。新增受管理环境 `MOOX_COLLECTOR_RPC_GATEWAY_TARGET`、`MOOX_COLLECTOR_GATEWAY_TARGET_NODE`；显式独立于 `MOOX_STORAGE_RPC_GATEWAY_TARGET` 与 Storage node，复用 `gatewayauth.NewTRPCClientOptions` 及既有 Collector credential。
-- [ ] **7.4 让 durable 请求强制 period mode。** `Request` 新增 `RequirePeriodCommit bool`，Collector direct period 初始/重试请求均设为 true，Claim worker 验证为 true。缺 TargetDataTime/index/hash/count/WriteTarget 绑定时失败，不走普通 Upsert；诊断/非周期写入保留明确非 period 路径，不靠“字段缺失”隐式选择。
-- [ ] **7.5 补齐 Storage 包装器。** `reservedDeadlineStorage` 转发更新后的 Ensure、Commit、Record、GetStatus，并为每次调用使用 storageContext。增加编译期接口断言和 wrapped writer 的真实 period commit 测试；若底层不具备周期接口，返回明确错误，不回退 Upsert。
-- [ ] **7.6 修正交易时段与写入证据。** durable 请求按 Collector 冻结的有效目标 bar 执行，不按 worker 当前时间把午休/收盘/周末的历史重试跳过成 success。Provider 结果必须覆盖 TargetDataTime，且 Task 4 适配器确认目标 index 被接受后才给该 item success；空 bars/不含目标 bar 返回可重试失败。Storage 已成功 index 的幂等重放允许 success，但截止后未接受的首次写入必须失败，不能仅按 RPC nil-error 标记成功。no valid target 的情况在 planning/Claim 返回 no_work，不生成零写入 Completion success。
-- [ ] **7.7 发布 Completion 并保留重试次数语义。** Timer 改用 `handleRequest(..., true)`；初始 Timer + 最多 3 次 Invoke retry，达到上限转 permanent_failed 并唤醒 Task 5 reporter。EventBus publish 失败不声称批次完成，由持久超时恢复继续；即使 Storage 已成功而 Completion 丢失，重试 Commit 必须幂等，不重复 marker。按 SCF timeout 预留 Storage、EventBus、CLS 时间，验证完整执行预算，不能沿用“不发布事件”的旧预算注释。
-- [ ] **7.8 更新发布环境与安全预算。** Timer 注入受管理的 EventBus publisher credential，不能继续 `useEventBus := !isTimer`。CLI 创建环境和 CloudNode runtime patch 的 managed key 白名单同步接入新 Collector endpoint/target-node/binding 键，保留已有对凭证覆盖的拒绝规则。环境合并 provider、CLS、Gateway、Collector endpoint、EventBus、Storage 凭据后复用 CloudNode 最终环境校验，真实总字节必须 <=4096；超限 fail-before-cloud-call，错误只显示键名/长度。必要的公开 CA 放入 SCF 包并由现有 TLS 配置引用，私钥、HMAC/NATS 密码绝不写包。移除不再需要的全量 subjects/symbol env，保持 group/stagger/fleet 行为，不能只验证 managed 2200-byte 部分。
-- [ ] **7.8a 同步消除两个打包入口的凭据渲染。** shell 删除 `render_storage_auth`，Go packager 删除 `addRenderedStorageAuthConfig` 及仅服务于打包的 `StoragePrimaryAuthSecret` 选项；配置包只保留非敏感 app ID 和空 app key。`ValidateSCFPackageZip` 改为拒绝非空 app key、密钥和密码载荷，不再要求 ZIP 携带 64 位 HMAC。运行时从受管理环境解析调用凭据，缺值/缺 app ID 映射在创建 writer 前报错；发布环境的派生与校验独立于无凭据打包，不能退回使用配置里的占位 key。新增 shell/Go 两路无密钥可打包测试、注入测试凭据后 ZIP 内容仍无该凭据测试、外部 ZIP 含凭据拒绝测试，以及 runtime 凭据缺失零 RPC 和合法凭据完成 period RPC 的测试。
-- [ ] **7.8b 固定派生、注入和消费契约。** `collectorSCFTrustMaterial.StoragePrimaryAuthSecret` 只供受信发布端派生，不交给 packager、不注入 SCF；从 `collectorPackageOptions` 移到发布专用选项。发布端按配置中受允许的 binding app ID 去重，使用现有 HMAC 算法生成受管理的 `MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON`，当前 `moox-collector` 只占一项。`collectorFunctionEnvironment` 将它放入基础环境，拒绝 `--env` 覆盖并参与最终 4096 字节校验，不由 Timer assignment patch 重写。非 manifest 的 publish/deploy 在上传前必须从现有受信本地配置取得主密钥并完成派生，缺值提前失败；无凭据的单独 package 命令不要求主密钥。SCF 环境不得出现 `MOOX_STORAGE_PRIMARY_AUTH_SECRET`。
+- [x] **7.1-7.8b Timer、period 写入、Completion 与凭据链路。** Claim fail-closed、period-only Commit、Storage wrapper、历史目标 bar、最多三次 Invoke retry、持久 Completion、环境预算和运行时受管凭据解析均已实现；Collector/CLI/CloudNode 测试、SCF package contract 与本地 E2E 已覆盖。针对性 race 测试及全 Workspace 测试通过。
 
 运行时 `storageAuthInfo(binding)` 改为 `(*storagepb.AuthInfo, error)`：通过 `os.LookupEnv` 判断 JSON 是否存在，存在但为空也必须报错，不能回退。JSON 一旦存在就是权威来源，使用 `json.Decoder.Token` 先检查顶层对象及重复 app ID，再构造 `map[string]string`；禁止直接 `json.Unmarshal` 到 map 后声称已检测重复键。按 `binding.AuthInfo.AppID` 精确取值；非法 JSON、重复 app ID、缺项、非字符串/非 64 位 hex、顶层 null/数组或尾随第二段 JSON 均报错且不回退，错误不携带凭据值。JSON 不存在时保留 host 的现有主密钥派生路径；SCF binding 的 key 为空，因此 SCF 缺受管 JSON 时 fail closed。错误从 `NewBatchStorageWithWriteSource`、`NewResampleMetadataClient`、`NewResampleStorage`、`ResolveStorageAuthInfo` 传播，验证 subject-sync 的 host 用法仍正常。所有 ZIP 上传入口，包括 `publish --zip` 和 `function deploy --zip`，均先执行相同的无凭据校验，再执行现有 CLS 校验；不能因外部 ZIP 跳过门禁。
 
@@ -626,8 +619,8 @@ func TestStoragePrimaryAppKeysRejectDuplicateAppID(t *testing.T) {
 ```
 
 在 writer 构造测试中设置上述重复对象、一个看似合法的 host 主密钥以及计数型 fake client，断言构造失败、没有回退且 RPC 次数为 0；对空值、null、数组、尾随 JSON、非字符串值和缺少 binding app ID 执行相同零 RPC 断言。这里只使用测试凭据，不把真实主密钥写入 fixture。
-- [ ] **7.8c 固定公开 CA 的打包数据路径。** 两套 packager 仅接受公开证书材料，将 EventBus CA 写入 `certs/eventbus-ca.pem`；Go options 新增公开 `EventBusCAPEM`，发布端从已核验的 trust material 显式传入。shell 使用公开 CA 文件参数，不读取私钥或 credential 文件并直接整包复制。环境使用受管 `MOOX_EVENTBUS_NATS_TLS_CA_FILE=certs/eventbus-ca.pem`，不再同时塞同份 Base64 CA；复用 JetStream 已有 file 支持。CLI 删除对这个受管固定路径的无条件拒绝，但继续拒绝 `--env` 指定任意 CA 路径。外部 ZIP 必须包含该路径及合法公开 CA，缺失/私钥 PEM/密码载荷上传前失败。新增两种打包方式的 CA 内容与路径测试、外部 ZIP 缺 CA 拒绝测试，以及最终环境含全部非敏感路径和派生凭据后的预算测试。
-- [ ] **7.9 验证并提交。** 同步修订原“不发布 Completion”及“无 EventBus”断言。预期全部 PASS；提交 `fix(collector): route stockcn timer through period completion lifecycle`。
+- [x] **7.8c 固定公开 CA 的打包数据路径。** 用户选择按计划将公开 CA 打包。Go/shell packager 只接收并校验公开证书，固定写入 `certs/eventbus-ca.pem`；运行时使用该路径，私钥及凭据不会入包。外部 ZIP 和 CA/凭据负例已覆盖。
+- [x] **7.9 验证实现。** SCF package contract、CLI 全量测试、Collector/Storage/CloudNode 相关测试、完整 Workspace 门禁和 build 通过；`make proto` 已执行且无额外生成漂移。Task 9 的 `make verify-pr` 最终门禁待提交后执行。
 
 ```bash
 go test -count=1 ./modules/collector/internal/marketfetch ./modules/collector/internal/marketstorage ./modules/collector/internal/marketwiring ./modules/collector/internal/subjectsync ./modules/collector/internal/serverless/market_data ./modules/cli/internal/collectorpackager ./modules/cli/internal/command ./modules/cli/internal/setup/config ./modules/cloudnode/internal/rpc
@@ -645,14 +638,10 @@ git diff --check
 - Create: `scripts/test/e2e/test-collector-period-universe-e2e.sh`
 - Modify: `Makefile`，新增本地 `test-collector-period-universe-e2e` 验收入口
 
-- [ ] **8.1 先建立不会绕过生产 adapter 的测试进程。** Storage helper 通过 `go test -c` 编译，`TestPeriodNativeProcessHelper` 仅在 `MOOX_PERIOD_E2E_HELPER=1` 时启动，普通测试显式 Skip；启动真实 Pebble DataNode native listener、Primary、Metadata，并复用实际 resolver/adapter。不跨模块 import Storage internal，不直接 `Options.Node = datanode.Service`。readiness、端口、临时目录、退出信号及日志均由 test harness 控制。
-- [ ] **8.2 接入真实 Gateway 路由。** 既有 e2e-helper 新增 `collector-period-native` 模式，读取部署 YAML 派生路由，保留方法/caller 白名单，只替换临时 listener 地址。Collector 使用真实 marketstorage/gatewayauth client；缺 route、上游错误或 helper 启动失败必须 FAIL，不能降级为直接 RPC 或测试 Skip。
-- [ ] **8.3 启动真实 Collector SQLite、Runtime 与嵌入式 JetStream。** 测试放在 marketfetch 包内，调用私有 reporter/reconciler 而不新增测试专用生产导出 API。只 fake 外部行情 provider 与 CloudNode Invoke transport；Tag Metadata、Storage、Gateway、period state、Claim 和 Completion consumer 使用真实实现。动态 loopback 端口、全新 DB、不加载生产凭证、不访问云网络，退出等待所有子进程和 goroutine。
-- [ ] **8.4 覆盖成员冻结场景。** 初始 Universe `{BTC, ETH}`，周期中通过真实 Metadata 标签快照改为 `{BTC}`；当前周期 series snapshot/hash/index/count 不变，下个周期只有 BTC。增加一个 Subject 的双 Provider/Source fixture，验证 series count 与 Universe 去重不同，Marker payload 按 Subject 去重。通过真实 Gateway 发出错绑 series_tag/index 的 Commit，必须拒绝且 bitmap 不推进、不能提前 complete。
-- [ ] **8.5 覆盖失败与 ACK 场景。** ETH 初始 + 3 次失败、BTC 成功，截止前 waiting、截止后仅一个 degraded；ETH failure 必须通过 Gateway/adapter recorded。另测 lost ACK 后跨截止重放 recorded、首次报告超过截止 missed、一个目标 accepted 一个目标 missed、断网 pending 恢复，不允许把 nil error 当整组 ACK。
-- [ ] **8.6 覆盖 Timer 场景。** StockCN 两次 tick 和重启只一个 initial batch；同 function 多个有效周期积压时 oldest-first，两个相同 requestID 的并发 Claim 只返回同一 batch，过期未领取批次可收尾。真实 Claim -> wrapped Storage Commit -> EventBus Completion -> 持久 effects。错误 runtime 身份 Completion 零副作用；Collector Claim 不可达零普通 Upsert；publish 失败后超时恢复并最多 3 次 Invoke retry；非交易当前时刻的有效历史目标照常 Commit，空 bars 不算成功。截止后首次 Commit 未接受不能产生 worker success，已成功 bit 的 replay 可以幂等成功。
-- [ ] **8.7 覆盖终态清理与 marker 不变。** 查询 waiting/NOT_FOUND/网络错误保留 snapshot，真实 complete/degraded 且过期无未决工作才删除。deadline 后重复 Record/Commit/finalizer 不改变 event ID、marker payload、outbox 条数；查询不会创建缺失 period。
-- [ ] **8.8 用脚本强制执行，不接受跳过。** 新脚本用 `mktemp`、trap、启动超时和最终 Wait 管理 helpers；编译二进制到临时目录，设置本地 E2E 开关后运行 `TestPeriodStorageRPCE2E`，检查实际执行并记录每个子场景。测试时使用可控时钟推进截止，不等待真实小时。预期以下 PASS；提交 `test(collector): verify period universe over production rpc boundaries`。
+- [x] **8.1 先建立不会绕过生产 adapter 的测试进程。** Storage helper 通过 `go test -c` 编译，`TestPeriodNativeProcessHelper` 仅在 `MOOX_PERIOD_E2E_HELPER=1` 时启动，普通测试显式 Skip；启动真实 Pebble DataNode native listener、Primary、Metadata，并复用实际 resolver/adapter。不跨模块 import Storage internal，不直接 `Options.Node = datanode.Service`。readiness、端口、临时目录、退出信号及日志均由 test harness 控制。实现提交 `b4a65388`；主 Agent Storage server 测试与 race 生命周期测试通过；codeCR 未发现阻断项。受控时钟已验证 deadline 后状态降级，SIGINT/SIGTERM 与缺失时钟 fail-closed 已验证。
+- [x] **8.2 接入真实 Gateway 路由。** 既有 e2e-helper 新增 `collector-period-native` 模式，读取部署 YAML 派生路由，保留方法/caller 白名单，只替换临时 listener 地址。Collector 使用真实 marketstorage/gatewayauth client；缺 route、上游错误或 helper 启动失败必须 FAIL，不能降级为直接 RPC 或测试 Skip。实现提交 `e4f6c5d3`；独立 codeCR 复审及主 Agent focused/race 测试通过。真实 Collector client 跨 Gateway RPC 将由 8.3/8.8 端到端测试完成。
+- [x] **8.3-8.7 真实进程端到端场景。** `period_storage_rpc_e2e_test.go` 使用真实 Collector SQLite/Runtime、嵌入式 EventBus、Gateway 路由和 Storage Pebble helper；覆盖快照冻结/下周期更新、Subject 去重、错误绑定、failure ACK 与 deadline、Timer Claim/CAS/retry/Completion、清理与 marker 不变。
+- [x] **8.8 本地 E2E 门禁。** `bash scripts/test/e2e/test-collector-period-universe-e2e.sh` 成功，实际执行并报告全部场景；Collector Timer/reporter focused race 测试 `-count=5` 通过。此证据仅为本地真实进程 E2E，不替代正式环境 1m/1h 验收。
 
 ```bash
 bash scripts/test/e2e/test-collector-period-universe-e2e.sh
@@ -677,8 +666,8 @@ git diff --check
 - Create: `docs/ops/collector-period-universe-release.md`
 - Modify: 本计划，逐项附实际执行证据，不提前勾选
 
-- [ ] **9.1 更新活跃文档。** 使用周期标的池快照 / PeriodSeriesSnapshot，说明 Timer Claim、EventBus Completion、Invoke retry、权威回执和 deadline 语义。写清首次失败截止前未送达不保证进入 marker，但不能假 ACK；旧计划不批量替换，另在本计划保留 superseding 说明。
-- [ ] **9.2 复核唯一列表刷新入口。** 执行 `rg -n 'FetchSnapshot|NewSubjectListers|ResolveSubjects' modules/collector/internal`，逐调用点确认外部列表只由 subject-sync 拉取，Scheduler 仅 Metadata ResolveSubjects；仅发现真实残留时删除相关旧调用，不能删除只读接口或 K 线采集任务。
+- [x] **9.1 更新活跃文档。** Collector/Storage README、采集架构、任务管理和 task result 架构文档现已描述周期标的池快照、Timer Claim、Completion、Invoke retry、权威回执与 deadline；明确首次失败可能 missed 且不假 ACK。
+- [x] **9.2 复核唯一列表刷新入口。** 搜索调用点确认外部列表刷新只在 subject-sync runners；Scheduler/reconciler 使用 Metadata `ResolveSubjects`，没有残留刷新调用。
 - [ ] **9.3 执行模块级和跨模块门禁。** 当前 review baseline 的局部测试/build 成功不替代新增验收。以下命令必须全部成功并保留日志：
 
 本轮文档检查已发现既存前置失败：`make test-docs-architecture` 报 `docs/架构总览.md missing go.work module: tools/moox-mcp`；当前 `go.work` 实际含 55 个 module，脚本仍要求 54 个。实施时先同步真实模块清单和严格数量断言，保留逐模块覆盖检查；不得删除检查、跳过该门禁或把当前结果记为 PASS。
@@ -703,14 +692,14 @@ go build ./modules/collector/cmd/subject ./modules/collector/cmd/server ./module
 git diff --check
 ```
 
-- [ ] **9.4 验证所有 Schema 可载入空库。** 执行下列循环，预期每个文件 exit 0；另执行实际 Collector 初始化/Schema 列表校验测试。不为本次字段更名加入启动时自动 ALTER/migrate；已有 DB 不匹配应明确阻止启动。
+- [x] **9.4 验证所有 Schema 可载入空库。** 全部 `modules/**/schema/*.sql` 经 sqlite3 空库加载成功；Collector 初始化/必需 schema 校验测试通过。没有增加启动时自动迁移。
 
 ```bash
 while IFS= read -r schema; do
     sqlite3 :memory: ".read $schema" || exit 1
 done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 ```
-- [ ] **9.5 执行独立代码审查。** 使用两个 `codeCR` subAgent 分别审查 Storage 协议/截止/鉴权/代理，与 Collector Timer/持久化/Completion/回执/清理；两者完成后主 Agent 独立验证文件/符号/行号及新增测试。修复全部阻断发现，重跑受影响门禁，再记录结果。Proto 生成结果提交后运行 `make proto-check`，要求无生成漂移。
+- [ ] **9.5 执行独立代码审查及 proto-check。** 两个独立 `codeCR` Agent 分别复审 Storage finalizer 和 Collector/SCF 最近修改；主 Agent 已核对证据并处理所有阻断发现，复审无 P1/P2。`make proto` 已成功且无额外生成文件变化；待提交后运行 `make proto-check`，确认 clean-tree 且无生成漂移后勾选。
 - [ ] **9.6 编写协调发布运行手册，并在全部前置门禁通过后执行正式发布。** 明确采用无兼容协议的维护窗口，不做滚动混跑。先暂停新周期规划和 Timer 触发，同时让旧 in-flight/重试/报告及 Storage finalizer 收尾；未决数量和真实 Storage 状态是门禁，不仅是“等了几分钟”。旧状态无法收尾时停止发布，由用户另行决定有明确 Space/Dataset/时间范围的备份与重置，不在脚本中自动 reset。
 - [ ] **9.7 明确 Schema/Pebble 切换前置条件。** 即使没有活跃周期，旧 Collector 表结构和 Pebble snapshot JSON 名称仍不能自动兼容。运行手册列出受影响 Collector DB 与 Storage period key 的范围、备份、受影响运行态表按新 Schema 重建及有界旧 period state 清理方案；保存并核对任务定义、结果 Dataset/View 引用与已有行情行数据。任何清理/重建必须另行授权，不清空整个 Storage 行数据，也不把运行手册中的一次性受授权重建变成产品兼容迁移。当前 `collector task purge` 会调用 DeleteView/DeleteDatasetRows/DeleteDataset，不可作为本次“保留行情与任务”的切换工具；`reset-view-consumers` 也不能证明 period ledger 已处理。若没有可审计、受授权的切换方案就停止，不能以“已 drain”替代 schema 处理。
 - [ ] **9.8 固定实际发布顺序及停止条件。** 停止旧生产者后，以同一构建版本准备 Storage/Collector/SCF/Gateway route 与受管理环境；验证新的四个 Storage RPC 和 Claim、caller ACL、Timer EventBus、总环境 <=4096、Invoke retry 容量后才恢复 Timer/规划。禁止“先升级 Storage、旧 Collector 继续运行”。所有节点/proto/SCF package 不一致、pending 漏报不可解释或新 Schema 初始化失败立即停止恢复采集。

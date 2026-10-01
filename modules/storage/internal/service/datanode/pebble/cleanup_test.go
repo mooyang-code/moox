@@ -2,11 +2,14 @@ package pebble
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -119,5 +122,107 @@ func TestDeleteDatasetRowsRemovesReceiptsMarkersAndOutbox(t *testing.T) {
 	}
 	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 0 {
 		t.Fatalf("outbox after cleanup entries=%d err=%v", len(entries), err)
+	}
+}
+
+func TestDeleteDatasetRowsClearsPeriodProgressAndIndexes(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	deadline := time.Now().UTC().Add(time.Minute).Unix()
+	exp := periodExpectationForTest(time.Now().UTC().Truncate(time.Minute), 1, "BTC-USDT")
+	exp.SpaceID = "s"
+	exp.DatasetID = "delete-me"
+	exp.DeadlineAt = deadline
+	keep := exp
+	keep.DatasetID = "keep-me"
+	if _, err := store.EnsureDatasetPeriod(ctx, exp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnsureDatasetPeriod(ctx, keep); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.DeleteDatasetRows(ctx, exp.SpaceID, exp.DatasetID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RestoreDatasetRows(ctx, exp.SpaceID, exp.DatasetID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetDatasetPeriodProgress(ctx, exp); !errors.Is(err, cpebble.ErrNotFound) {
+		t.Fatalf("deleted period progress err=%v, want not found", err)
+	}
+
+	finalized, err := store.FinalizeWaitingDatasetPeriods(ctx, time.Unix(deadline+1, 0).UTC(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalized != 1 {
+		t.Fatalf("finalized periods=%d, want only unrelated dataset", finalized)
+	}
+	if got := countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()); got != 1 {
+		t.Fatalf("collector period markers=%d, want only unrelated dataset marker", got)
+	}
+
+	result, err := store.EnsureDatasetPeriod(ctx, exp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "waiting" {
+		t.Fatalf("recreated period status=%q, want waiting", result.Status)
+	}
+}
+
+func TestRestoreDatasetRowsWithoutTombstonePreservesPeriodProgress(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	period := time.Now().UTC().Truncate(time.Minute)
+	exp := periodExpectationForTest(period, 2, "BTC-USDT", "ETH-USDT")
+	exp.SpaceID = "s"
+	exp.DatasetID = "active"
+	deadline := time.Now().UTC().Add(time.Minute).Unix()
+	exp.DeadlineAt = deadline
+	if _, err := store.EnsureDatasetPeriod(ctx, exp); err != nil {
+		t.Fatal(err)
+	}
+	row := periodRowForTest(period, "BTC-USDT")
+	row.GetKey().SpaceId = exp.SpaceID
+	row.GetKey().DatasetId = exp.DatasetID
+	if _, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}}, "source-btc", "collector"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordDatasetPeriodFailures(ctx, exp, []uint32{1}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RestoreDatasetRows(ctx, exp.SpaceID, exp.DatasetID); err != nil {
+		t.Fatal(err)
+	}
+	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
+	if err != nil {
+		t.Fatalf("period progress after no-op restore: %v", err)
+	}
+	if progress.Status != "waiting" || bitmapCount(progress.Bitmap) != 1 || len(progress.FailedSeriesIndexes) != 1 || progress.FailedSeriesIndexes[0] != 1 {
+		t.Fatalf("period progress after no-op restore=%+v, want bitmap and failure progress preserved", progress)
+	}
+
+	finalized, err := store.FinalizeWaitingDatasetPeriods(ctx, time.Unix(deadline+1, 0).UTC(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalized != 1 {
+		t.Fatalf("finalized periods=%d after no-op restore, want 1", finalized)
+	}
+	if got := countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()); got != 1 {
+		t.Fatalf("collector period markers=%d after no-op restore, want 1", got)
 	}
 }

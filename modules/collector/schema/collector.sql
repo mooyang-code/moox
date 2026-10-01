@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS t_collector_task_series (
 
 CREATE INDEX IF NOT EXISTS idx_collector_task_series_subject ON t_collector_task_series (c_space_id, c_subject_id);
 
--- Period series freezes one Dataset/frequency roster for its market period.
+-- Period series freezes the Dataset/frequency snapshot for its market period.
 CREATE TABLE IF NOT EXISTS t_collector_task_period_series (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,

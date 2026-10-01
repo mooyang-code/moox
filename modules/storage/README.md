@@ -182,6 +182,18 @@ MOOX_STORAGE_ROLE=view
 或环境变量兜底。Dataset 创建后默认为 disabled/unlocked；Doctor 只读检查就绪，
 部署或管理员随后显式激活，激活成功后绑定永久锁定。
 
+### Collector 周期状态
+
+DataNode 是行情周期进度的唯一权威。`EnsureDatasetPeriod` 首次收到请求时持久化完整的
+`series_snapshot`、hash/count 与 canonical deadline；后续 Commit、失败上报和状态查询都必须绑定同一快照。
+Commit 只有收到完整的 `accepted_series_indexes` 回执才算成功，截止后未接受的首次写入不能由 nil error
+推断为成功。失败上报返回逐 index 的 `recorded`、`already_succeeded` 或 `missed_deadline`；Collector
+在网络错误或 ACK 丢失时保留 pending 并重放，不把传输成功当作业务 ACK。
+
+到期后 Storage 原子固化 `complete`/`degraded` 状态和 `CollectorPeriodCompleted` marker；marker 只包含截止前
+被 Storage 接受且最终仍未成功的失败 Subject。超过事件大小上限的 marker 不会进入 ordered outbox。删除或恢复 Dataset
+时，其周期状态、deadline 与 waiting/complete 索引一并清理，避免已删除的 Dataset 被再次终结。
+
 ```text
 service_target: ip://127.0.0.1:20107
 ```

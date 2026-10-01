@@ -83,7 +83,7 @@ SCF 包通过腾讯云 API 查询 `moox/moox-application` 资源并写入真实 
 - 管理台 Collection Task API：`/api/admin/collectmgr/{Method}`。
 - Collector 调 CloudNode：`GetNodeList(trigger_type=timer)`、受管 Runtime Config Batch；
   `InvokeFunction` 只供缺口补采、探针和人工 E2E；stockcn 全市场标的快照由独立的每日 Instrument Timer SCF 执行。
-- EventBus：`moox.event.market.fetch.batch.completed.v1.*` 仅供有界 Invoke Completion，实时 Timer 不依赖它。
+- EventBus：`moox.event.market.fetch.batch.completed.v1.*` 用于有界 Invoke 与实时 Timer 的 Completion；Timer 首先经 Collector Runtime `ClaimTimerBatch` 领取持久批次，再按其周期快照采集和写入。
 - Collector 数据库默认：`./data/moox_collector.db`。
 
 关键环境变量：
@@ -110,3 +110,9 @@ go test -race -count=1 ./internal/marketfetch ./internal/store ./internal/bootst
 event 时间、Assignment/DNS hash、CLS 逐标的结果和 Storage watermark；有界补采另行保留
 `batch_id`、CloudNode `request_id`、Completion 和 RetryItem。旧 `cloud_job_item_id`、JobItem
 终态和常驻 SCF runner 不是实时 Timer 路径的验收条件。
+
+实时 Timer 通过 `ClaimTimerBatch` 使用 Collector 持久批次；Storage 首次 Ensure 固定该
+`space + dataset + frequency + target_data_time` 的 `PeriodSeriesSnapshot`。Timer 写入、Completion、
+最多三次 write-target retry 与失败上报都关联同一快照。Storage 在 canonical deadline 原子提交
+`complete`/`degraded` marker；失败回执必须由 Storage 确认，未确认请求保持 pending，首次迟到失败不会被误记为 marker 内容。
+SCF 发布包显式携带公开 EventBus CA (`certs/eventbus-ca.pem`)，不携带私钥或 Storage HMAC 凭据。

@@ -208,7 +208,38 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 func TestMonitorAppConfigLoadsKlineFreshnessRules(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
 	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
-	cfg, err := Load(filepath.Join("..", "..", "config", "app.yaml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "app.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var app map[string]any
+	if err := yaml.Unmarshal(raw, &app); err != nil {
+		t.Fatal(err)
+	}
+	metrics, ok := app["metrics"].(map[string]any)
+	if !ok {
+		t.Fatal("metrics config is missing")
+	}
+	keyPath := filepath.Join(t.TempDir(), "gateway-monitor.key")
+	if err := os.WriteFile(keyPath, []byte("test-gateway-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"storage", "host_storage"} {
+		storage, ok := metrics[name].(map[string]any)
+		if !ok {
+			t.Fatalf("metrics.%s config is missing", name)
+		}
+		storage["hmac_key_file"] = keyPath
+	}
+	fixture, err := yaml.Marshal(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "app.yaml")
+	if err := os.WriteFile(configPath, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
 	if err != nil {
 		t.Fatalf("Load(app.yaml) error = %v", err)
 	}

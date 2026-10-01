@@ -32,7 +32,7 @@ func TestTargetResolutionHasDeadlineAndTimeoutDoesNotAccept(t *testing.T) {
 		<-ctx.Done()
 		return targetapp.WeightConversion{}, ctx.Err()
 	})
-	result := HandleTarget(context.Background(), logicalTargetDelivery(t, now, "target-timeout", "runner-1", "logical-1", 1, nil), opts)
+	result := HandleTarget(context.Background(), logicalTargetDelivery(t, now, "target-timeout", "runner-1", "logical-1", nil), opts)
 	require.Equal(t, jetstream.RETRY, result.Decision)
 	require.ErrorIs(t, result.Err, context.DeadlineExceeded)
 	_, err := tradeStore.GetTargetReceipt(context.Background(), "space-1", "target-timeout")
@@ -41,6 +41,6 @@ func TestTargetResolutionHasDeadlineAndTimeoutDoesNotAccept(t *testing.T) {
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
 	opts.WeightResolver = testWeightResolver{}
-	result = HandleTarget(context.Background(), logicalTargetDelivery(t, now, "target-timeout", "runner-1", "logical-1", 1, nil), opts)
+	result = HandleTarget(context.Background(), logicalTargetDelivery(t, now, "target-timeout", "runner-1", "logical-1", nil), opts)
 	require.Equal(t, jetstream.ACK, result.Decision, result.Err)
 }

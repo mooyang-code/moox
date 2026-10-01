@@ -60,8 +60,9 @@ func TestWeightResolverPersistsRepeatingQuantityAtLogicalPrecision(t *testing.T)
 }
 
 func TestRequestHashCanonicalizesTargetOrderAndDecimal(t *testing.T) {
-	left := &tradeeventpb.LogicalAccountTargetWeightRequested{RunnerId: "r", LogicalAccountId: "l", CommandSequence: 1, Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "B", TargetWeight: "0.50"}, {InstrumentId: "A", TargetWeight: "-0"}}}
-	right := &tradeeventpb.LogicalAccountTargetWeightRequested{RunnerId: "r", LogicalAccountId: "l", CommandSequence: 1, Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "A", TargetWeight: "0"}, {InstrumentId: "B", TargetWeight: "0.5"}}}
+	bar := timestamppb.New(time.UnixMilli(1000))
+	left := &tradeeventpb.LogicalAccountTargetWeightRequested{InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1", LogicalAccountId: "l", BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(time.UnixMilli(3000)), Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "B", TargetWeight: "0.50"}, {InstrumentId: "A", TargetWeight: "-0"}}}
+	right := &tradeeventpb.LogicalAccountTargetWeightRequested{InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1", LogicalAccountId: "l", BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(time.UnixMilli(3000)), Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "A", TargetWeight: "0"}, {InstrumentId: "B", TargetWeight: "0.5"}}}
 	h1, err := RequestHash(left)
 	if err != nil {
 		t.Fatal(err)

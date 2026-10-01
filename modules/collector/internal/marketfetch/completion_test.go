@@ -21,6 +21,19 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestStartCompletionConsumerWithDoneWaitsForCancellation(t *testing.T) {
+	db := newCompletionTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done, err := StartCompletionConsumerWithDone(ctx, "crypto", db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil)
+	require.NoError(t, err)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("completion consumer did not stop after cancellation")
+	}
+}
+
 func TestRetryCollectionItemUsesExactInstanceIDBeforeSubjectFallback(t *testing.T) {
 	request := Request{DatasetID: "dataset_stockcn_equity_kline", Items: []domain.CollectionItem{
 		{InstanceID: "snapshot-shard-0", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
@@ -42,6 +55,12 @@ func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	ctx := context.Background()
 	completedAt := time.Date(2026, time.August, 2, 8, 0, 0, 0, time.UTC)
 	batch := completionTestBatch("invalid")
+	var request Request
+	require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
+	request.Items[0].TargetDataTime = "2026-08-02T07:59:00Z"
+	requestJSON, err := json.Marshal(request)
+	require.NoError(t, err)
+	batch.RequestJSON = string(requestJSON)
 	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 	require.NoError(t, err)
 	require.True(t, created)
@@ -114,6 +133,7 @@ func TestHandleCompletionMarksTaskInstanceFailedWhenRetriesAreExhausted(t *testi
 	var request Request
 	require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
 	request.Items[0].TargetDataTime = "2026-08-02T07:59:00Z"
+	request.Items[0].SourceEventID = "retry-key"
 	request.Items[0].SeriesIndex = 1
 	request.Items[0].SeriesHash = "bars-series-hash"
 	request.Items[0].ExpectedCount = 2
@@ -334,6 +354,15 @@ func TestHandleCompletionPreservesLogicalSyncPointAcrossRetryGenerations(t *test
 	for _, batchID := range []string{"b0", "b1"} {
 		batch := completionTestBatch(batchID)
 		batch.BatchKind = domain.BatchKindCatchup
+		var request Request
+		require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
+		request.Items[0].TargetDataTime = "2026-08-02T07:59:00Z"
+		if batchID == "b1" {
+			request.Items[0].SourceEventID = retryID
+		}
+		requestJSON, marshalErr := json.Marshal(request)
+		require.NoError(t, marshalErr)
+		batch.RequestJSON = string(requestJSON)
 		created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
 		require.NoError(t, err)
 		require.True(t, created)
@@ -393,6 +422,12 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithSupersededRetryFailure(t *t
 	for _, batch := range []*domain.BatchInvocation{&olderBatch, &newerBatch} {
 		var request Request
 		require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
+		if batch == &olderBatch {
+			request.Items[0].TargetDataTime = olderTarget.Format(time.RFC3339Nano)
+			request.Items[0].SourceEventID = "old-retry"
+		} else {
+			request.Items[0].TargetDataTime = newerTarget.Format(time.RFC3339Nano)
+		}
 		request.Targets = []domain.WriteTarget{{
 			ID: "target-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule", DatasetID: "bars",
 		}}
@@ -523,6 +558,17 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithOlderRealtimeFailure(t *tes
 	newerTarget := olderTarget.Add(time.Minute)
 	olderBatch := completionTestBatch("old-realtime")
 	newerBatch := completionTestBatch("new-realtime")
+	for _, item := range []struct {
+		batch *domain.BatchInvocation
+		at    time.Time
+	}{{&olderBatch, olderTarget}, {&newerBatch, newerTarget}} {
+		var request Request
+		require.NoError(t, json.Unmarshal([]byte(item.batch.RequestJSON), &request))
+		request.Items[0].TargetDataTime = item.at.Format(time.RFC3339Nano)
+		requestJSON, marshalErr := json.Marshal(request)
+		require.NoError(t, marshalErr)
+		item.batch.RequestJSON = string(requestJSON)
+	}
 	created, err := db.FetchBatches().CreatePlanned(ctx, &olderBatch)
 	require.NoError(t, err)
 	require.True(t, created)
@@ -656,7 +702,8 @@ func completionTestBatch(suffix string) domain.BatchInvocation {
 	request, _ := json.Marshal(Request{
 		BatchID: "batch-" + suffix, ScheduleID: "schedule-" + suffix, BatchKind: domain.BatchKindRealtime,
 		SpaceID: "crypto", DatasetID: "bars", Frequency: "1m",
-		Items: []domain.CollectionItem{{InstanceID: "task-btc", SubjectID: "BTC-USDT", DatasetID: "bars", Frequency: "1m"}},
+		Items:   []domain.CollectionItem{{InstanceID: "task-btc", SubjectID: "BTC-USDT", DatasetID: "bars", Frequency: "1m"}},
+		Targets: []domain.WriteTarget{{ID: "target-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule", DatasetID: "bars"}},
 	})
 	return domain.BatchInvocation{SpaceID: "crypto", BatchID: "batch-" + suffix, ScheduleID: "schedule-" + suffix, BatchKind: domain.BatchKindRealtime, DatasetID: "bars", Frequency: "1m", NodeID: "node-1", Status: domain.BatchStatusPlanned, PlannedCount: 1, RequestJSON: string(request)}
 }
@@ -679,7 +726,22 @@ func persistCompletionTestInstance(t *testing.T, db *store.Store, ctx context.Co
 }
 
 func completionTestPayload(item *marketfetchpb.MarketFetchItemResult, completedAt time.Time) *marketfetchpb.MarketFetchBatchCompleted {
-	return &marketfetchpb.MarketFetchBatchCompleted{ScheduleId: "schedule", BatchKind: string(domain.BatchKindRealtime), DatasetId: "bars", Frequency: "1m", NodeId: "node-1", PlannedCount: 1, Status: string(domain.BatchStatusFailed), PermanentFailedCount: 1, CompletedAt: timestamppb.New(completedAt), Items: []*marketfetchpb.MarketFetchItemResult{item}}
+	payload := &marketfetchpb.MarketFetchBatchCompleted{ScheduleId: "schedule", BatchKind: string(domain.BatchKindRealtime), DatasetId: "bars", Frequency: "1m", NodeId: "node-1", PlannedCount: 1, CompletedAt: timestamppb.New(completedAt), Items: []*marketfetchpb.MarketFetchItemResult{item}}
+	switch domain.ItemOutcome(item.GetOutcome()) {
+	case domain.ItemOutcomeSuccess:
+		payload.Status = string(domain.BatchStatusSucceeded)
+		payload.SuccessCount = 1
+		if len(item.GetTargets()) == 0 {
+			item.Targets = []*marketfetchpb.MarketFetchTargetResult{{WriteTargetId: "target-btc", DatasetId: "bars", Status: "succeeded"}}
+		}
+	case domain.ItemOutcomeHTTP429, domain.ItemOutcomeHTTP5xx, domain.ItemOutcomeNetworkError, domain.ItemOutcomeStorageError, domain.ItemOutcomeProviderError:
+		payload.Status = string(domain.BatchStatusFailed)
+		payload.RetryCount = 1
+	default:
+		payload.Status = string(domain.BatchStatusFailed)
+		payload.PermanentFailedCount = 1
+	}
+	return payload
 }
 
 func completionTestDelivery(payload *marketfetchpb.MarketFetchBatchCompleted) *events.EventDelivery {
@@ -720,6 +782,109 @@ func TestHandleCompletionRejectsEnvelopeIdentityMismatchWithoutSideEffects(t *te
 	stored, getErr := db.FetchBatches().Get(ctx, "crypto", batch.BatchID)
 	require.NoError(t, getErr)
 	require.Equal(t, domain.BatchStatusPlanned, stored.Status)
+}
+
+func TestHandleCompletionRejectsFieldsOutsideFrozenRequest(t *testing.T) {
+	db := newCompletionTestStore(t)
+	ctx := context.Background()
+	batch := completionTestBatch("frozen-item-mismatch")
+	var request Request
+	require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
+	request.Items[0].TargetDataTime = "2026-08-02T07:59:00Z"
+	request.Items[0].SourceEventID = "frozen-source-event"
+	request.Targets = []domain.WriteTarget{{ID: "target-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule", DatasetID: "bars"}}
+	encoded, err := json.Marshal(request)
+	require.NoError(t, err)
+	batch.RequestJSON = string(encoded)
+	created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	persistCompletionTestInstance(t, db, ctx, batch.BatchID)
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-other", TaskName: "Other rule", DataType: "kline", Enabled: true}))
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{
+		ID: "target-other", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule-other", DatasetID: "other-bars", Status: "pending",
+	}}))
+
+	for _, mutate := range []func(*marketfetchpb.MarketFetchItemResult){
+		func(item *marketfetchpb.MarketFetchItemResult) { item.TargetDataTime = "2026-08-02T08:00:00Z" },
+		func(item *marketfetchpb.MarketFetchItemResult) { item.SourceEventId = "forged-source-event" },
+		func(item *marketfetchpb.MarketFetchItemResult) {
+			item.Targets = []*marketfetchpb.MarketFetchTargetResult{{WriteTargetId: "target-other", DatasetId: "other-bars", Status: "failed", ErrorSummary: "forged"}}
+		},
+	} {
+		payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+			InstanceId: "task-btc", SubjectId: "BTC-USDT", TargetDataTime: request.Items[0].TargetDataTime,
+			SourceEventId: request.Items[0].SourceEventID, Outcome: string(domain.ItemOutcomeSuccess),
+			Targets: []*marketfetchpb.MarketFetchTargetResult{{WriteTargetId: "target-btc", DatasetId: "bars", Status: "succeeded"}},
+		}, time.Now().UTC())
+		payload.BatchId = batch.BatchID
+		payload.ScheduleId = batch.ScheduleID
+		mutate(payload.Items[0])
+		require.ErrorIs(t, handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload)), errCompletionIdentityMismatch)
+	}
+
+	storedBatch, err := db.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+	require.NoError(t, err)
+	require.Equal(t, domain.BatchStatusPlanned, storedBatch.Status)
+	for _, targetID := range []string{"target-btc", "target-other"} {
+		target, targetErr := db.TaskInstances().GetWriteTarget(ctx, "crypto", targetID)
+		require.NoError(t, targetErr)
+		require.Equal(t, "pending", target.Status)
+	}
+	_, err = db.FetchRetries().Get(ctx, "crypto", "forged-source-event")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestHandleCompletionRejectsInvalidStatusCountsAndMissingTargetReceipt(t *testing.T) {
+	mutations := map[string]func(*marketfetchpb.MarketFetchBatchCompleted){
+		"nonterminal status": func(payload *marketfetchpb.MarketFetchBatchCompleted) {
+			payload.Status = string(domain.BatchStatusDispatched)
+		},
+		"inconsistent counts": func(payload *marketfetchpb.MarketFetchBatchCompleted) {
+			payload.SuccessCount = 0
+		},
+		"missing frozen target receipt": func(payload *marketfetchpb.MarketFetchBatchCompleted) {
+			payload.Items[0].Targets = nil
+		},
+		"unknown target status": func(payload *marketfetchpb.MarketFetchBatchCompleted) {
+			payload.Items[0].Targets[0].Status = "unknown"
+		},
+		"unknown item outcome": func(payload *marketfetchpb.MarketFetchBatchCompleted) {
+			payload.Items[0].Outcome = "unknown"
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			db := newCompletionTestStore(t)
+			ctx := context.Background()
+			batch := completionTestBatch("invalid-contract-" + stableID(name))
+			created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
+			require.NoError(t, err)
+			require.True(t, created)
+			persistCompletionTestInstance(t, db, ctx, batch.BatchID)
+
+			payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+				InstanceId: "task-btc", SubjectId: "BTC-USDT", Outcome: string(domain.ItemOutcomeSuccess),
+				Targets: []*marketfetchpb.MarketFetchTargetResult{{WriteTargetId: "target-btc", DatasetId: "bars", Status: "succeeded"}},
+			}, time.Now().UTC())
+			payload.BatchId = batch.BatchID
+			payload.ScheduleId = batch.ScheduleID
+			payload.Status = string(domain.BatchStatusSucceeded)
+			payload.SuccessCount = 1
+			payload.RetryCount = 0
+			payload.PermanentFailedCount = 0
+			mutate(payload)
+
+			err = handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload))
+			require.ErrorIs(t, err, errCompletionIdentityMismatch)
+			stored, err := db.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+			require.NoError(t, err)
+			require.Equal(t, domain.BatchStatusPlanned, stored.Status)
+			target, err := db.TaskInstances().GetWriteTarget(ctx, "crypto", "target-btc")
+			require.NoError(t, err)
+			require.Equal(t, "pending", target.Status)
+		})
+	}
 }
 
 func TestHandleCompletionRejectsItemNotInOriginalRequestWithoutSideEffects(t *testing.T) {

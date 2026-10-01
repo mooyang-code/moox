@@ -39,7 +39,12 @@ grep -q 'SKIP_WEB_ASSETS' "${ROOT}/scripts/release/release.sh"
 grep -q 'binary_name' "${ROOT}/scripts/build/build.sh"
 grep -q 'collector-scf)' "${ROOT}/scripts/build/build.sh"
 ! grep -q 'collector-market-data-scf' "${ROOT}/scripts/build/build.sh"
-grep -q 'MOOX_STORAGE_PRIMARY_AUTH_SECRET' "${ROOT}/scripts/build/build-collector-scf-package.sh"
+if grep -q 'MOOX_STORAGE_PRIMARY_AUTH_SECRET' "${ROOT}/scripts/build/build-collector-scf-package.sh"; then
+  echo "SCF packager must not read or embed Storage credentials" >&2
+  exit 1
+fi
+grep -q 'eventbus-ca.pem' "${ROOT}/scripts/build/build-collector-scf-package.sh"
+grep -q 'credential assignment is not permitted' "${ROOT}/scripts/build/build-collector-scf-package.sh"
 grep -q 'moox-collector-scf' "${ROOT}/scripts/build/build-release-binaries.sh"
 grep -q 'release/moox-binaries-' "${ROOT}/scripts/build/build-release-binaries.sh"
 grep -q 'publish-release-binaries.sh' "${ROOT}/scripts/build/build-release-binaries.sh"

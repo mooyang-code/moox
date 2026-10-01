@@ -783,6 +783,9 @@ func (s *Service) updateSCFFunctionCode(
 	for key, value := range desiredEnvironment {
 		environment[key] = value
 	}
+	if strings.TrimSpace(environment["MOOX_EVENTBUS_NATS_TLS_CA_FILE"]) != "" {
+		delete(environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
 		return fmt.Errorf("scf function %s %w", ref.FunctionName, err)

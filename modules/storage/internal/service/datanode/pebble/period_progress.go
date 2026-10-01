@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/bits"
 	"sort"
 	"strconv"
@@ -28,6 +29,8 @@ const (
 	periodWaitingPrefix  = "__dataset_period_waiting/"
 	periodDeadlinePrefix = "__dataset_period_deadline/"
 	periodCompletePrefix = "__dataset_period_complete/"
+	periodFinalizeCursor = "__dataset_period_finalize_cursor/"
+	periodFinalizeOrder  = "__dataset_period_finalize_order"
 	periodFinalizeBatch  = 256
 )
 
@@ -135,6 +138,11 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 		}
 		return DatasetPeriodResult{Status: status, DeadlineAt: current.DeadlineAt}, nil
 	}
+	// Marker size is a creation constraint. Existing periods retain their
+	// original contract even if deployment limits are lowered later.
+	if err := s.validatePeriodUniverseSize(exp); err != nil {
+		return DatasetPeriodResult{}, err
+	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
 	if err := batch.Set(periodFieldKey(base, "series_hash"), []byte(exp.SeriesHash), s.writeOptions); err != nil {
@@ -174,6 +182,32 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 		return DatasetPeriodResult{}, err
 	}
 	return DatasetPeriodResult{Status: "waiting", DeadlineAt: exp.DeadlineAt}, nil
+}
+
+func (s *Store) validatePeriodUniverseSize(exp DatasetPeriodExpectation) error {
+	if s.maxEventBytes <= 0 {
+		return nil
+	}
+	universe, _ := periodMarkerSubjects(exp, nil, nil)
+	marker := &pb.CollectorPeriodCompletedMarker{
+		DatasetId: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
+		Status: "degraded", BatchId: periodCompletionID(periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)),
+		ConfigSnapshotId: exp.SeriesHash, ExpectedScopeRef: exp.SeriesHash,
+		UniverseSubjectIds: universe, FailedSubjects: append([]string(nil), universe...),
+		CollectedAt: timestamppb.New(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)),
+	}
+	raw, _, err := BuildCollectorPeriodCompletedMessage(exp.SpaceID, marker)
+	if err != nil {
+		return err
+	}
+	return s.validatePeriodMarkerPayloadSize(raw)
+}
+
+func (s *Store) validatePeriodMarkerPayloadSize(raw []byte) error {
+	if s.maxEventBytes > 0 && len(raw) > s.maxEventBytes {
+		return invalidf("event payload size %d exceeds limit %d", len(raw), s.maxEventBytes)
+	}
+	return nil
 }
 
 func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpectation, items []TimeSeriesBatchItem, sourceEventID, writeSource string) (DatasetPeriodResult, error) {
@@ -466,6 +500,9 @@ func (s *Store) finalizePeriodBaseLocked(ctx context.Context, base string, now t
 	if err != nil {
 		return "", err
 	}
+	if err := s.validatePeriodMarkerPayloadSize(raw); err != nil {
+		return "", err
+	}
 	message := &eventpb.EventMessage{}
 	if err := proto.Unmarshal(raw, message); err != nil {
 		return "", err
@@ -530,10 +567,34 @@ func (s *Store) startPeriodFinalizer() {
 			case <-s.historyCtx.Done():
 				return
 			case <-ticker.C:
-				_, _ = s.FinalizeWaitingDatasetPeriods(s.historyCtx, s.periodNow().UTC(), periodFinalizeBatch)
+				if _, err := s.FinalizeWaitingDatasetPeriods(s.historyCtx, s.periodNow().UTC(), periodFinalizeBatch); err != nil {
+					s.logPeriodFinalizeError(err)
+				} else {
+					s.clearPeriodFinalizeError()
+				}
 			}
 		}
 	}()
+}
+
+func (s *Store) logPeriodFinalizeError(err error) {
+	if err == nil {
+		return
+	}
+	message := err.Error()
+	s.periodFinalizeErrorMu.Lock()
+	defer s.periodFinalizeErrorMu.Unlock()
+	if message == s.periodFinalizeLastError {
+		return
+	}
+	s.periodFinalizeLastError = message
+	log.Printf("DataNode period finalizer failed: %v", err)
+}
+
+func (s *Store) clearPeriodFinalizeError() {
+	s.periodFinalizeErrorMu.Lock()
+	s.periodFinalizeLastError = ""
+	s.periodFinalizeErrorMu.Unlock()
 }
 
 func (s *Store) FinalizeWaitingDatasetPeriods(ctx context.Context, now time.Time, limit int) (int, error) {
@@ -543,68 +604,167 @@ func (s *Store) FinalizeWaitingDatasetPeriods(ctx context.Context, now time.Time
 	if now.IsZero() {
 		now = s.periodNow().UTC()
 	}
+	s.periodFinalizeMu.Lock()
+	defer s.periodFinalizeMu.Unlock()
+
+	indexes := []struct {
+		prefix  string
+		dueOnly bool
+	}{
+		{prefix: periodCompletePrefix},
+		{prefix: periodDeadlinePrefix, dueOnly: true},
+		{prefix: periodWaitingPrefix},
+	}
+	start, err := s.readPeriodFinalizeOrder()
+	if err != nil {
+		return 0, err
+	}
 	bases := make([]string, 0, limit)
 	seen := make(map[string]struct{}, limit)
-	appendFromIndex := func(prefix string, dueDeadline bool) error {
+	cursors := make(map[string][]byte, len(indexes))
+	appendFromIndex := func(prefix string, dueDeadline bool, candidateLimit int) error {
+		cursor, err := s.readPeriodFinalizeCursor(prefix)
+		if err != nil {
+			return err
+		}
 		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(prefix), UpperBound: nextPrefix([]byte(prefix))})
 		if err != nil {
 			return err
 		}
 		defer iter.Close()
-		for valid := iter.First(); valid && len(bases) < limit; valid = iter.Next() {
+		valid := false
+		wrapped := len(cursor) == 0
+		if wrapped {
+			valid = iter.First()
+		} else {
+			valid = iter.SeekGE(cursor)
+			if valid && string(iter.Key()) == string(cursor) {
+				valid = iter.Next()
+			}
+			if !valid {
+				wrapped = true
+				valid = iter.First()
+			}
+		}
+		added := 0
+		var lastKey []byte
+		for valid {
+			key := append([]byte(nil), iter.Key()...)
+			if wrapped && len(cursor) > 0 && string(key) > string(cursor) {
+				break
+			}
 			if dueDeadline {
-				key := string(iter.Key())
-				suffix := strings.TrimPrefix(key, periodDeadlinePrefix)
+				suffix := strings.TrimPrefix(string(key), periodDeadlinePrefix)
 				deadlinePart, _, ok := strings.Cut(suffix, "/")
 				deadline, parseErr := strconv.ParseInt(deadlinePart, 10, 64)
 				if !ok || parseErr != nil {
 					return errors.New("dataset period deadline index is corrupted")
 				}
 				if deadline > now.UTC().Unix() {
+					if !wrapped && len(cursor) > 0 {
+						wrapped = true
+						valid = iter.First()
+						continue
+					}
 					break
 				}
 			}
-			base := string(append([]byte(nil), iter.Value()...))
-			if _, exists := seen[base]; exists {
-				continue
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-			seen[base] = struct{}{}
-			bases = append(bases, base)
+			lastKey = key
+			base := string(append([]byte(nil), iter.Value()...))
+			if _, exists := seen[base]; !exists {
+				seen[base] = struct{}{}
+				bases = append(bases, base)
+				added++
+			}
+			if added >= candidateLimit {
+				break
+			}
+			valid = iter.Next()
+			if !valid && iter.Error() == nil && !wrapped && len(cursor) > 0 {
+				wrapped = true
+				valid = iter.First()
+			}
 		}
-		return iter.Error()
+		if err := iter.Error(); err != nil {
+			return err
+		}
+		if lastKey != nil {
+			cursors[prefix] = lastKey
+		}
+		return nil
 	}
-	// Complete periods are normally finalized by CommitTimeSeriesBatch. This
-	// durable index also recovers a process crash between the atomic row/bitmap
-	// commit and the follow-up finalizer call.
-	if err := appendFromIndex(periodCompletePrefix, false); err != nil {
+	// Rotate the starting index and split each bounded scan's budget between
+	// completion recovery, due deadlines, and the waiting recovery index. A
+	// permanent error in one class must not starve another class or later keys.
+	remaining := limit
+	for offset := 0; offset < len(indexes) && remaining > 0; offset++ {
+		index := indexes[(start+offset)%len(indexes)]
+		classesLeft := len(indexes) - offset
+		quota := remaining / classesLeft
+		if remaining%classesLeft != 0 {
+			quota++
+		}
+		if err := appendFromIndex(index.prefix, index.dueOnly, quota); err != nil {
+			return 0, err
+		}
+		remaining -= quota
+	}
+	cursorBatch := s.db.NewBatch()
+	defer cursorBatch.Close()
+	for prefix, cursor := range cursors {
+		if err := cursorBatch.Set([]byte(periodFinalizeCursor+prefix), cursor, s.writeOptions); err != nil {
+			return 0, err
+		}
+	}
+	if err := cursorBatch.Set([]byte(periodFinalizeOrder), []byte{byte((start + 1) % len(indexes))}, s.writeOptions); err != nil {
 		return 0, err
 	}
-	// Deadline keys are ordered by deadline, so even a large queue of future
-	// periods cannot starve an expired one.
-	if len(bases) < limit {
-		if err := appendFromIndex(periodDeadlinePrefix, true); err != nil {
-			return 0, err
-		}
-	}
-	// The waiting index is the recovery source of truth. Scan it after ready
-	// and due entries so a prior build's full bitmap (or a process crash before
-	// writing the ready hint) can still converge without starving deadlines.
-	if len(bases) < limit {
-		if err := appendFromIndex(periodWaitingPrefix, false); err != nil {
-			return 0, err
-		}
+	if err := cursorBatch.Commit(s.writeOptions); err != nil {
+		return 0, err
 	}
 	finalized := 0
+	var finalizeErrors []error
 	for _, base := range bases {
 		status, err := s.finalizePeriodBase(ctx, base, now)
 		if err != nil {
-			return finalized, err
+			finalizeErrors = append(finalizeErrors, fmt.Errorf("finalize dataset period %q: %w", base, err))
+			continue
 		}
 		if status == "complete" || status == "degraded" {
 			finalized++
 		}
 	}
-	return finalized, nil
+	return finalized, errors.Join(finalizeErrors...)
+}
+
+func (s *Store) readPeriodFinalizeCursor(prefix string) ([]byte, error) {
+	value, closer, err := s.db.Get([]byte(periodFinalizeCursor + prefix))
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer closer.Close()
+	return append([]byte(nil), value...), nil
+}
+
+func (s *Store) readPeriodFinalizeOrder() (int, error) {
+	value, closer, err := s.db.Get([]byte(periodFinalizeOrder))
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer closer.Close()
+	if len(value) != 1 || value[0] > 2 {
+		return 0, errors.New("dataset period finalizer order is corrupted")
+	}
+	return int(value[0]), nil
 }
 
 func (s *Store) GetDatasetPeriodProgress(ctx context.Context, exp DatasetPeriodExpectation) (*DatasetPeriodProgress, error) {

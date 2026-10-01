@@ -17,6 +17,7 @@ import (
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestDatasetPeriodCommitBitmapIsIdempotentAndCompletesOnce(t *testing.T) {
@@ -68,6 +69,225 @@ func TestDatasetPeriodExpectationConflictIsRejected(t *testing.T) {
 	_, err = store.EnsureDatasetPeriod(ctx, changed)
 	var conflict PeriodConflictError
 	require.ErrorAs(t, err, &conflict)
+}
+
+func TestDatasetPeriodEnsureRejectsMarkerOverEventLimit(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "node"), NodeID: "node-a", MaxEventBytes: 1})
+	require.NoError(t, err)
+	defer store.Close()
+
+	exp := periodExpectationForTest(time.Now().UTC().Truncate(time.Minute), 1, "BTC-USDT")
+	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
+	require.ErrorContains(t, err, "exceeds limit")
+	_, err = store.GetDatasetPeriodStatus(context.Background(), exp)
+	require.ErrorIs(t, err, cpebble.ErrNotFound, "an unpublishable period must not be persisted")
+	require.Zero(t, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+}
+
+func TestDatasetPeriodEnsurePreflightIncludesMaximumTimestampNanos(t *testing.T) {
+	exp := periodExpectationForTest(time.Date(2026, 9, 28, 4, 1, 0, 0, time.UTC), 1, "BTC-USDT")
+	maxTimestamp := time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)
+	raw := periodMarkerPayloadForTest(t, exp, maxTimestamp)
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "node"), NodeID: "node-a", MaxEventBytes: len(raw) - 1})
+	require.NoError(t, err)
+	defer store.Close()
+
+	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
+	require.ErrorContains(t, err, "exceeds limit", "Ensure must reserve enough space for non-zero protobuf Timestamp nanos")
+}
+
+func TestDatasetPeriodEnsureExistingStateIgnoresCurrentMarkerLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node")
+	period := time.Now().UTC().Truncate(time.Minute)
+	subject := fmt.Sprintf("%0400d", 0)
+	exp := periodExpectationForTest(period, 1, subject)
+	exp.DeadlineAt = period.Add(time.Hour).Unix()
+	store, err := Open(Options{Path: path, NodeID: "node-a"})
+	require.NoError(t, err)
+	defer func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	}()
+	created, err := store.EnsureDatasetPeriod(context.Background(), exp)
+	require.NoError(t, err)
+	completed, err := store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, subject)}}, "source-large", "collector")
+	require.NoError(t, err)
+	require.Equal(t, "complete", completed.Status)
+	require.NoError(t, store.Close())
+	store = nil
+
+	store, err = Open(Options{Path: path, NodeID: "node-a", MaxEventBytes: 1})
+	require.NoError(t, err)
+
+	replayed, err := store.EnsureDatasetPeriod(context.Background(), exp)
+	require.NoError(t, err, "existing period state must be checked before applying a creation-only marker limit")
+	require.Equal(t, completed.Status, replayed.Status)
+	require.Equal(t, created.DeadlineAt, replayed.DeadlineAt)
+}
+
+func TestDatasetPeriodFinalizerContinuesAfterOversizedPeriod(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node")
+	store, err := Open(Options{Path: path, NodeID: "node-a"})
+	require.NoError(t, err)
+
+	largeSubjects := make([]string, 30)
+	for index := range largeSubjects {
+		largeSubjects[index] = fmt.Sprintf("LONG-ASSET-SYMBOL-%02d-ABCDEFGHIJKLMNOPQRSTUVWXYZ", index)
+	}
+	large := periodExpectationForTest(time.Unix(1, 0).UTC(), uint32(len(largeSubjects)), largeSubjects...)
+	large.SpaceID, large.DatasetID, large.DeadlineAt = "crypto", "large", 10
+	small := periodExpectationForTest(time.Unix(2, 0).UTC(), 1, "BTC-USDT")
+	small.SpaceID, small.DatasetID, small.DeadlineAt = "crypto", "small", 10
+	_, err = store.EnsureDatasetPeriod(context.Background(), large)
+	require.NoError(t, err)
+	_, err = store.EnsureDatasetPeriod(context.Background(), small)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	store = nil
+
+	now := time.Unix(100, 123456789).UTC()
+	smallRaw := periodMarkerPayloadForTest(t, small, now)
+	largeRaw := periodMarkerPayloadForTest(t, large, now)
+	require.Greater(t, len(largeRaw), len(smallRaw))
+	store, err = Open(Options{Path: path, NodeID: "node-a", MaxEventBytes: len(smallRaw)})
+	require.NoError(t, err)
+	defer store.Close()
+
+	finalized, err := store.FinalizeWaitingDatasetPeriods(context.Background(), now, 10)
+	require.ErrorContains(t, err, "exceeds limit", "the unpublishable legacy period must remain observable")
+	require.Equal(t, 1, finalized, "one oversized period must not block a later publishable period")
+
+	largeStatus, err := store.GetDatasetPeriodProgress(context.Background(), large)
+	require.NoError(t, err)
+	require.Equal(t, "waiting", largeStatus.Status)
+	smallStatus, err := store.GetDatasetPeriodProgress(context.Background(), small)
+	require.NoError(t, err)
+	require.Equal(t, "degraded", smallStatus.Status)
+	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+}
+
+func TestDatasetPeriodFinalizerRotatesPastOversizedDeadlineBatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node")
+	store, err := Open(Options{Path: path, NodeID: "node-a"})
+	require.NoError(t, err)
+	defer func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	}()
+
+	largeSubject := fmt.Sprintf("%0400d", 0)
+	deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Second).Unix()
+	largePeriods := []DatasetPeriodExpectation{
+		periodExpectationForTest(time.Unix(1, 0).UTC(), 1, largeSubject),
+		periodExpectationForTest(time.Unix(2, 0).UTC(), 1, largeSubject),
+	}
+	for index := range largePeriods {
+		largePeriods[index].SpaceID = "crypto"
+		largePeriods[index].DatasetID = fmt.Sprintf("%d-large", index)
+		largePeriods[index].DeadlineAt = deadline
+		_, err = store.EnsureDatasetPeriod(context.Background(), largePeriods[index])
+		require.NoError(t, err)
+	}
+	small := periodExpectationForTest(time.Unix(3, 0).UTC(), 1, "BTC-USDT")
+	small.SpaceID, small.DatasetID, small.DeadlineAt = "crypto", "z-small", deadline
+	_, err = store.EnsureDatasetPeriod(context.Background(), small)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	now := time.Unix(deadline+90, 123456789).UTC()
+	smallRaw := periodMarkerPayloadForTest(t, small, now)
+	for _, exp := range largePeriods {
+		largeRaw := periodMarkerPayloadForTest(t, exp, now)
+		require.Greater(t, len(largeRaw), len(smallRaw))
+	}
+	store, err = Open(Options{Path: path, NodeID: "node-a", MaxEventBytes: len(smallRaw)})
+	require.NoError(t, err)
+
+	finalized, err := store.FinalizeWaitingDatasetPeriods(context.Background(), now, 2)
+	require.ErrorContains(t, err, "exceeds limit")
+	require.Zero(t, finalized)
+	require.NoError(t, store.Close())
+	store = nil
+
+	var smallStatus string
+	for attempt := 0; attempt < 10; attempt++ {
+		store, err = Open(Options{Path: path, NodeID: "node-a", MaxEventBytes: len(smallRaw)})
+		require.NoError(t, err)
+		finalized, finalErr := store.FinalizeWaitingDatasetPeriods(context.Background(), now, 2)
+		if finalized > 0 {
+			require.Equal(t, 1, finalized)
+		}
+		if finalErr != nil {
+			require.ErrorContains(t, finalErr, "exceeds limit")
+		}
+		progress, progressErr := store.GetDatasetPeriodProgress(context.Background(), small)
+		require.NoError(t, progressErr)
+		smallStatus = progress.Status
+		require.NoError(t, store.Close())
+		store = nil
+		if smallStatus == "degraded" {
+			break
+		}
+	}
+	require.Equal(t, "degraded", smallStatus, "a persisted scan cursor must let a later publishable deadline period make progress after restart")
+	store, err = Open(Options{Path: path, NodeID: "node-a", MaxEventBytes: len(smallRaw)})
+	require.NoError(t, err)
+	progress, err := store.GetDatasetPeriodProgress(context.Background(), small)
+	require.NoError(t, err)
+	require.Equal(t, "degraded", progress.Status)
+}
+
+func TestDatasetPeriodFinalizerDoesNotAppendOversizedOutboxEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node")
+	store, err := Open(Options{Path: path, NodeID: "node-a"})
+	require.NoError(t, err)
+	exp := periodExpectationForTest(time.Now().UTC().Truncate(time.Minute), 1, "BTC-USDT")
+	exp.DeadlineAt = time.Now().UTC().Add(-time.Minute).Unix()
+	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	store, err = Open(Options{Path: path, NodeID: "node-a", MaxEventBytes: 1})
+	require.NoError(t, err)
+	defer store.Close()
+	_, err = store.FinalizeWaitingDatasetPeriods(context.Background(), time.Now().UTC(), 10)
+	require.ErrorContains(t, err, "exceeds limit")
+	status, err := store.GetDatasetPeriodStatus(context.Background(), exp)
+	require.NoError(t, err)
+	require.Equal(t, "waiting", status.Status)
+	require.Zero(t, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+}
+
+func TestDatasetPeriodFinalizerRetriesOnlyFailedCursorAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node")
+	exp := periodExpectationForTest(time.Unix(1, 0).UTC(), 1, "BTC-USDT")
+	exp.SpaceID, exp.DatasetID = "crypto", "only-period"
+	exp.DeadlineAt = time.Unix(2, 0).Unix()
+	store, err := Open(Options{Path: path, NodeID: "node-a"})
+	require.NoError(t, err)
+	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	now := time.Unix(3, 0).UTC()
+	markerSize := len(periodMarkerPayloadForTest(t, exp, now))
+	store, err = Open(Options{Path: path, NodeID: "node-a", MaxEventBytes: 1})
+	require.NoError(t, err)
+	_, err = store.FinalizeWaitingDatasetPeriods(context.Background(), now, 10)
+	require.ErrorContains(t, err, "exceeds limit")
+	require.NoError(t, store.Close())
+
+	store, err = Open(Options{Path: path, NodeID: "node-a", MaxEventBytes: markerSize})
+	require.NoError(t, err)
+	defer store.Close()
+	finalized, err := store.FinalizeWaitingDatasetPeriods(context.Background(), now, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, finalized, "the only failed cursor entry must be retried after restart")
+	status, err := store.GetDatasetPeriodStatus(context.Background(), exp)
+	require.NoError(t, err)
+	require.Equal(t, "degraded", status.Status)
 }
 
 func TestDatasetPeriodExpectationSeriesSnapshotIsValidatedAndImmutable(t *testing.T) {
@@ -423,6 +643,19 @@ func collectorPeriodMarkerFromOutbox(t *testing.T, store *Store) *storageeventpb
 	}
 	t.Fatal("collector period marker not found in outbox")
 	return nil
+}
+
+func periodMarkerPayloadForTest(t *testing.T, exp DatasetPeriodExpectation, collectedAt time.Time) []byte {
+	t.Helper()
+	universe, failed := periodMarkerSubjects(exp, nil, nil)
+	raw, _, err := BuildCollectorPeriodCompletedMessage(exp.SpaceID, &pb.CollectorPeriodCompletedMarker{
+		DatasetId: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime, Status: "degraded",
+		BatchId:          periodCompletionID(periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)),
+		ConfigSnapshotId: exp.SeriesHash, ExpectedScopeRef: exp.SeriesHash,
+		UniverseSubjectIds: universe, FailedSubjects: failed, CollectedAt: timestamppb.New(collectedAt),
+	})
+	require.NoError(t, err)
+	return raw
 }
 
 func periodRowForTest(period time.Time, subject string) *pb.RowFieldUpsert {

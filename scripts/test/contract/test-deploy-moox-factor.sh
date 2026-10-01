@@ -46,7 +46,7 @@ deploy_args=(
   --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
   --goos linux --goarch amd64 --skip-build --node-id factor-contract \
   --gateway-control-url http://127.0.0.1:11000 \
-  --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode \
+  --no-admin --no-storage --no-storage-access --no-archive --no-eventbus --no-cloudnode \
   --no-collector --no-strategy --no-trade --no-monitor --no-hostagent
 )
 if PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" "${deploy_args[@]}" \

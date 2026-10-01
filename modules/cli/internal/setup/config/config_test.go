@@ -505,9 +505,11 @@ func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
 	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
 
 	base.MeasuredSafeGroupSize = 0
-	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be a positive value")
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be between 1 and 40")
 	base.MeasuredSafeGroupSize = -1
-	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be a positive value")
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be between 1 and 40")
+	base.MeasuredSafeGroupSize = StockCNMaxRealtimeItems + 1
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be between 1 and 40")
 }
 
 func TestValidateSCFFetcherRejectsUnsafeStockStaggerRate(t *testing.T) {

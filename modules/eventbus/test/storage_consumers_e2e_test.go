@@ -15,7 +15,23 @@ import (
 )
 
 func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testing.T) {
-	server, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()})
+	cfg, err := config.Load("../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxStore := int64(0)
+	for i := range cfg.Streams {
+		stream := &cfg.Streams[i]
+		if stream.MaxBytes > 0 {
+			// The test exercises topology and delivery, not production retention quotas.
+			stream.MaxBytes = 1 << 20
+			maxStore += stream.MaxBytes
+		}
+	}
+	server, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, JetStreamStrict: true,
+		JetStreamMaxStore: maxStore, StoreDir: t.TempDir(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,10 +47,6 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	}
 	defer nc.Close()
 	js, err := nc.JetStream()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := config.Load("../config/app.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +87,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	}
 
 	occurredAt := time.Now().UTC()
-	payload := &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}
+	payload := &storagepb.DatasetRowsUpserted{SourceNodeId: "node-e2e", SourceStoreId: "store-e2e", SourceSequence: 1, SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}
 	first, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "dataset_binance_spot_kline_1m"})
 	if err != nil || first == nil || first.Duplicate {
 		t.Fatalf("first publish ack=%+v err=%v", first, err)

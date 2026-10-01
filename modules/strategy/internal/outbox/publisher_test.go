@@ -47,7 +47,6 @@ func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 	bar := timestamppb.New(time.Now().UTC())
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, EffectiveAt: bar, ValidUntil: validUntil,
-		CommandSequence: 1,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1",
 		}},
@@ -71,7 +70,7 @@ func TestJetStreamPublisherAcceptsEmptyFullTargetWithoutExpiry(t *testing.T) {
 	validUntil := timestamppb.New(now.Add(time.Hour))
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-empty", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", LogicalAccountId: "logical-1", BarEndTime: bar, EffectiveAt: bar, ValidUntil: validUntil,
-		CommandSequence: 1, Targets: []*tradeeventpb.InstrumentWeightTarget{},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{},
 	}, events.PublishOptions{
 		EventID: "target-empty", OccurredAt: now, SpaceID: "crypto", SubjectID: "logical-1",
 	})

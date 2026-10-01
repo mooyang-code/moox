@@ -64,8 +64,7 @@ func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing
 	)
 	require.NoError(t, err)
 	require.Equal(t, "target-3", current.TargetID)
-	// Modern target events derive the historical ordering value from bar_end_time;
-	// command_sequence is deprecated and no longer authorizes execution.
+	// Target ordering is derived from bar_end_time.
 	require.Equal(t, uint64(now.UnixMilli()), current.CommandSequence)
 	require.Equal(t, "0.03", current.Targets[0].Quantity)
 	require.Equal(t, int32(2), wakes.Load(), "stale command must not wake convergence")
@@ -291,11 +290,11 @@ func targetDeliveryWithTargets(
 	encoded, err := registry.Encode(
 		events.LogicalAccountTargetWeightRequested,
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
-			TargetId: targetID, RunnerId: testRunner, InstanceId: testRunner,
+			TargetId: targetID, InstanceId: testRunner,
 			SessionId: "session-e2e", StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,
-			CommandSequence:  sequence, Targets: targets,
-			BarEndTime: timestamppb.New(bar), EffectiveAt: timestamppb.New(bar),
+			Targets:          targets,
+			BarEndTime:       timestamppb.New(bar), EffectiveAt: timestamppb.New(bar),
 			ValidUntil: timestamppb.New(bar.Add(time.Hour)),
 		},
 		events.PublishOptions{

@@ -78,9 +78,7 @@ func HandleTarget(
 	if opts.WeightResolver == nil {
 		return targetRejection("resolver_missing", errors.New("trade target weight resolver is required"))
 	}
-	// DecodeRaw has already enforced the complete session-scoped contract. Do
-	// not infer ownership or ordering from the deprecated runner/sequence
-	// fields: they are retained in the protobuf only for wire compatibility.
+	// DecodeRaw has already enforced the complete session-scoped contract.
 	account, accountErr := opts.Store.GetLogicalAccount(ctx, message.GetSpaceId(), request.GetLogicalAccountId())
 	if accountErr != nil {
 		if errors.Is(accountErr, gorm.ErrRecordNotFound) {

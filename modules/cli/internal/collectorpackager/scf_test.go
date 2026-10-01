@@ -185,6 +185,9 @@ func TestValidateSCFPackageZipRejectsSecretsAndInvalidCA(t *testing.T) {
 	for _, tc := range []struct{ name, path, payload string }{
 		{"secret", "config.yaml", "secret: test-secret\n"},
 		{"password", "sources/market/extra.yaml", "password: test-password\n"},
+		{"nats jwt block scalar", "sources/market/extra.yaml", "credentials: |\n  -----BEGIN NATS USER JWT-----\n  test-user-jwt\n  ------END NATS USER JWT------\n"},
+		{"nkey seed", "config.yaml", "nats:\n  user_nkey_seed: SUABCDEF1234567890\n"},
+		{"nats jwt scalar", "sources/market/extra.yaml", "nats_user_jwt: eyJ0eXAiOiJKV1Qi.signature.payload\n"},
 		{"hmac", "sources/market/binance.yaml", "app_key: " + strings.Repeat("a", 64) + "\n"},
 		{"private", "certs/eventbus-ca.pem", "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n"},
 		{"malformed", "certs/eventbus-ca.pem", "not a certificate"},
@@ -197,6 +200,99 @@ func TestValidateSCFPackageZipRejectsSecretsAndInvalidCA(t *testing.T) {
 			assert.NotContains(t, err.Error(), "test-password")
 		})
 	}
+}
+
+func TestValidateSCFPackageZipRejectsCredentialAssignmentsInScalarsAndLists(t *testing.T) {
+	for _, payload := range []string{
+		"note: MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret\n",
+		"notes:\n  - MOOX_EVENTBUS_NATS_PASSWORD=secret\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret:\n",
+		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET=topsecret\n",
+		"# \"MOOX_STORAGE_PRIMARY_AUTH_SECRET\": \"topsecret\"\n",
+		"# \"MOOX_STORAGE_PRIMARY_AUTH_SECRET\": \",topsecret\"\n",
+		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: \"\"topsecret\n",
+		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: null topsecret\n",
+		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: ~ topsecret\n",
+		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: null # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n",
+		"# MOOX_STORAGE_PRIMARY_AUTH_SECRET: \"\" # MOOX_EVENTBUS_NATS_PASSWORD=topsecret\n",
+		"env:\n  - name: MOOX_STORAGE_PRIMARY_AUTH_SECRET\n    value: topsecret\n",
+		"env:\n  - Name: MOOX_EVENTBUS_NATS_PASSWORD\n    Value: topsecret\n",
+	} {
+		path := writeTestPackage(t, map[string][]byte{
+			"certs/eventbus-ca.pem": testCAPEM(t),
+			"main":                  testfixture.LinuxExecutable(elf.EM_X86_64),
+			"config.yaml":           []byte(payload),
+		})
+		require.ErrorContains(t, ValidateSCFPackageZip(path), "credential")
+	}
+}
+
+func TestValidateSCFPackageZipAllowsEmptyCredentialPlaceholders(t *testing.T) {
+	for _, payload := range []string{
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET: null\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET: ~\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET: \"\"\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET: '  '\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET:",
+	} {
+		path := writeTestPackage(t, map[string][]byte{
+			"certs/eventbus-ca.pem": testCAPEM(t),
+			"main":                  testfixture.LinuxExecutable(elf.EM_X86_64),
+			"config.yaml":           []byte(payload),
+		})
+		require.NoError(t, ValidateSCFPackageZip(path), "placeholder %q should remain non-sensitive", payload)
+	}
+}
+
+func TestBuildSCFPackageRejectsSymlinkedConfigDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	config := filepath.Join(tmp, "config")
+	linkedConfig := filepath.Join(tmp, "linked-config")
+	binary := filepath.Join(tmp, "main")
+	out := filepath.Join(tmp, "package.zip")
+	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("runtime: test\n"), 0o644))
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
+	require.NoError(t, os.Symlink(config, linkedConfig))
+
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: linkedConfig + string(filepath.Separator), OutPath: out, EventBusCAPEM: testCAPEM(t)})
+	require.ErrorContains(t, err, "config dir")
+	_, statErr := os.Stat(out)
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestBuildSCFPackageRejectsSymlinkedSourceFiles(t *testing.T) {
+	tmp := t.TempDir()
+	config := filepath.Join(tmp, "config")
+	secret := filepath.Join(tmp, "outside.yaml")
+	binary := filepath.Join(tmp, "main")
+	out := filepath.Join(tmp, "package.zip")
+	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources", "market"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("runtime: test\n"), 0o644))
+	require.NoError(t, os.WriteFile(secret, []byte("note: external-private-data\n"), 0o600))
+	require.NoError(t, os.Symlink(secret, filepath.Join(config, "sources", "market", "leak.yaml")))
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
+
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out, EventBusCAPEM: testCAPEM(t)})
+	require.ErrorContains(t, err, "symlink")
+	_, statErr := os.Stat(out)
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestBuildSCFPackageDoesNotLeaveInvalidOutput(t *testing.T) {
+	tmp := t.TempDir()
+	config := filepath.Join(tmp, "config")
+	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(config, "config.yaml"), []byte("runtime: test\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(config, "sources", "credentials.yaml"), []byte("credentials: |\n  -----BEGIN NATS USER JWT-----\n  test-user-jwt\n  ------END NATS USER JWT------\n"), 0o644))
+	binary := filepath.Join(tmp, "main")
+	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
+	out := filepath.Join(tmp, "invalid.zip")
+
+	_, err := BuildSCFPackage(BuildSCFPackageOptions{BinaryPath: binary, ConfigDir: config, OutPath: out, EventBusCAPEM: testCAPEM(t)})
+	require.ErrorContains(t, err, "credential")
+	_, statErr := os.Stat(out)
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "failed validation must not leave a publishable ZIP")
 }
 
 func TestValidateSCFPackageZipRequiresCA(t *testing.T) {

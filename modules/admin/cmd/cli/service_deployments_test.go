@@ -20,7 +20,7 @@ func TestLoadServiceDeploymentSeed_Example(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, seed.Version)
 	require.Equal(t, "control", seed.Node.ID)
-	require.Len(t, seed.Services, 26)
+	require.Len(t, seed.Services, 27)
 	processes := 0
 	for _, service := range seed.Services {
 		if service.DeploymentMode == "process" {
@@ -74,13 +74,13 @@ func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(second.Bytes(), &result))
 	require.Equal(t, 0, result.Created)
-	require.Equal(t, 26, result.Updated)
+	require.Equal(t, 27, result.Updated)
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_service_deployments").Count(&count).Error)
-	require.Equal(t, int64(26), count)
+	require.Equal(t, int64(27), count)
 }
 
 func TestScopedTradeOwnerImportCompilesOnlyReceivingNodeRoute(t *testing.T) {
@@ -341,7 +341,7 @@ func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, enableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 27)
+	require.Len(t, seed.Services, 28)
 
 	var primary, shard serviceDeploymentEntry
 	for _, item := range seed.Services {
@@ -452,7 +452,7 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, disableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 27)
+	require.Len(t, seed.Services, 28)
 	shard := seed.Services[len(seed.Services)-1]
 	require.Equal(t, "storage-shard", shard.Name)
 	require.False(t, shard.GatewayEnabled)

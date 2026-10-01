@@ -403,6 +403,9 @@ func (r *FetchBatchRepository) Complete(ctx context.Context, batch *domain.Batch
 	if batch == nil {
 		return false, gorm.ErrInvalidData
 	}
+	if !batch.Status.Terminal() {
+		return false, fmt.Errorf("market fetch batch completion status %q is not terminal", batch.Status)
+	}
 	updates := map[string]any{
 		"c_status": batch.Status, "c_success_count": batch.SuccessCount, "c_retry_count": batch.RetryCount,
 		"c_permanent_failed_count": batch.PermanentFailedCount, "c_error_summary": batch.ErrorSummary,
@@ -428,6 +431,9 @@ func (r *FetchBatchRepository) Complete(ctx context.Context, batch *domain.Batch
 func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *domain.BatchInvocation, effects FetchCompletionEffects) (bool, error) {
 	if batch == nil {
 		return false, gorm.ErrInvalidData
+	}
+	if !batch.Status.Terminal() {
+		return false, fmt.Errorf("market fetch batch completion status %q is not terminal", batch.Status)
 	}
 	updated := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

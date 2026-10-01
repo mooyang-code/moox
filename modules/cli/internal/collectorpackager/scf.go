@@ -46,23 +46,32 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	if opts.OutPath == "" {
 		return nil, fmt.Errorf("output path is required")
 	}
+	configDir := filepath.Clean(opts.ConfigDir)
+	configInfo, err := os.Lstat(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("config dir: %w", err)
+	}
+	if configInfo.Mode()&os.ModeSymlink != 0 || !configInfo.IsDir() {
+		return nil, fmt.Errorf("config dir must be a directory and not a symlink")
+	}
 	if err := validatePublicCA(opts.EventBusCAPEM); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(opts.OutPath), 0o755); err != nil {
 		return nil, err
 	}
-	out, err := os.OpenFile(opts.OutPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	out, err := os.CreateTemp(filepath.Dir(opts.OutPath), ".scf-package-*.zip")
 	if err != nil {
 		return nil, err
 	}
+	tempPath := out.Name()
+	defer os.Remove(tempPath)
 	defer out.Close()
 	if err := out.Chmod(0o600); err != nil {
 		return nil, err
 	}
 
 	zw := zip.NewWriter(out)
-	defer zw.Close()
 
 	var entries []string
 	if err := addZipBytes(zw, opts.EventBusCAPEM, "certs/eventbus-ca.pem", 0o644); err != nil {
@@ -81,12 +90,12 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 		return nil, err
 	}
 
-	configPath := filepath.Join(opts.ConfigDir, "config.yaml")
+	configPath := filepath.Join(configDir, "config.yaml")
 	if err := addFile(configPath, "config.yaml"); err != nil {
 		return nil, err
 	}
 
-	sourcesDir := filepath.Join(opts.ConfigDir, "sources")
+	sourcesDir := filepath.Join(configDir, "sources")
 	if _, err := os.Stat(sourcesDir); err == nil {
 		err = filepath.WalkDir(sourcesDir, func(path string, d os.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -95,7 +104,7 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 			if d.IsDir() {
 				return nil
 			}
-			rel, err := filepath.Rel(opts.ConfigDir, path)
+			rel, err := filepath.Rel(configDir, path)
 			if err != nil {
 				return err
 			}
@@ -108,7 +117,7 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 		return nil, err
 	}
 
-	calendarPath, err := stockCNCalendarPath(opts.ConfigDir)
+	calendarPath, err := stockCNCalendarPath(configDir)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +127,7 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 		}
 	}
 
-	routePath, err := stockCNRoutePath(opts.ConfigDir)
+	routePath, err := stockCNRoutePath(configDir)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +140,13 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	if err := zw.Close(); err != nil {
 		return nil, err
 	}
-	if err := ValidateSCFPackageZip(opts.OutPath); err != nil {
+	if err := out.Close(); err != nil {
+		return nil, err
+	}
+	if err := ValidateSCFPackageZip(tempPath); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tempPath, opts.OutPath); err != nil {
 		return nil, err
 	}
 	sort.Strings(entries)
@@ -204,6 +219,9 @@ func ValidateSCFPackageZip(zipPath string) error {
 
 var scfBinaryPrivateMaterial = regexp.MustCompile(`-----BEGIN (?:(?:[A-Z0-9]+ )?PRIVATE KEY|NATS USER JWT|USER NKEY SEED)-----[\r\n]`)
 var scfBinaryCredentialAssignment = regexp.MustCompile(`(?mi)(?:^|[\x00\r\n])[ \t]*(?:MOOX_STORAGE_PRIMARY_AUTH_SECRET|MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON|MOOX_EVENTBUS_NATS_PASSWORD|MOOX_GATEWAY_SERVICE_SECRET_KEY|MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY|TENCENTCLOUD_SECRET_KEY|TENCENT_SECRET_KEY)[ \t]*[:=][ \t]*[^\x00\r\n \t]`)
+var scfYAMLNATSPrivateMaterial = regexp.MustCompile(`(?i)-----BEGIN (?:NATS USER JWT|USER NKEY SEED)-----`)
+var scfYAMLCredentialAssignment = regexp.MustCompile(`(?im)(^|[^A-Za-z0-9_])["']?(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))["']?[ \t]*[:=][ \t]*`)
+var scfYAMLCredentialEnvironmentName = regexp.MustCompile(`(?i)^(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))$`)
 
 func validateSCFMain(file *zip.File) error {
 	if !file.Mode().IsRegular() || file.Mode().Perm()&0o111 == 0 {
@@ -287,6 +305,15 @@ func validatePublicCA(content []byte) error {
 }
 
 func validateCredentialFreeYAML(content []byte) error {
+	if strings.Contains(strings.ToUpper(string(content)), "PRIVATE KEY") {
+		return fmt.Errorf("private key payload is not permitted")
+	}
+	if scfYAMLNATSPrivateMaterial.Match(content) {
+		return fmt.Errorf("NATS credential material is not permitted")
+	}
+	if hasNonemptySCFCredentialAssignment(content) {
+		return fmt.Errorf("credential assignment is not permitted")
+	}
 	decoder := yaml.NewDecoder(bytes.NewReader(content))
 	for {
 		var document yaml.Node
@@ -301,21 +328,40 @@ func validateCredentialFreeYAML(content []byte) error {
 			if node.Kind == yaml.AliasNode {
 				return fmt.Errorf("configuration YAML aliases are not permitted")
 			}
-			if node.Kind == yaml.ScalarNode && strings.Contains(strings.ToUpper(node.Value), "PRIVATE KEY") {
-				return fmt.Errorf("private key payload is not permitted")
+			if node.Kind == yaml.ScalarNode {
+				if strings.Contains(strings.ToUpper(node.Value), "PRIVATE KEY") {
+					return fmt.Errorf("private key payload is not permitted")
+				}
+				if scfYAMLNATSPrivateMaterial.MatchString(node.Value) {
+					return fmt.Errorf("NATS credential material is not permitted")
+				}
 			}
 			if node.Kind == yaml.MappingNode {
 				keys := make(map[string]bool)
+				var environmentName, environmentValue *yaml.Node
 				for i := 0; i+1 < len(node.Content); i += 2 {
 					key, value := node.Content[i], node.Content[i+1]
 					if keys[key.Value] {
 						return fmt.Errorf("duplicate configuration key")
 					}
 					keys[key.Value] = true
+					if strings.EqualFold(key.Value, "name") {
+						if environmentName != nil {
+							return fmt.Errorf("duplicate credential environment name field")
+						}
+						environmentName = value
+					}
+					if strings.EqualFold(key.Value, "value") {
+						if environmentValue != nil {
+							return fmt.Errorf("duplicate credential environment value field")
+						}
+						environmentValue = value
+					}
 					name := strings.ToLower(strings.ReplaceAll(key.Value, "-", "_"))
 					fieldPath := path + "." + key.Value
 					sensitive := name == "app_key" || name == "key" || name == "token" ||
 						strings.Contains(name, "secret") || strings.Contains(name, "password") ||
+						strings.Contains(name, "jwt") || strings.Contains(name, "nkey") || strings.Contains(name, "credential") || name == "seed" || strings.HasSuffix(name, "_seed") ||
 						strings.Contains(name, "private_key") || strings.HasSuffix(name, "api_key") ||
 						strings.HasSuffix(name, "hmac_key_file") || strings.HasSuffix(name, "app_keys_json") ||
 						strings.HasSuffix(name, "_token") || (strings.HasSuffix(name, "access_key") && fieldPath != ".system.service_auth.access_key")
@@ -325,6 +371,11 @@ func validateCredentialFreeYAML(content []byte) error {
 					if err := visit(value, fieldPath); err != nil {
 						return err
 					}
+				}
+				if environmentName != nil && environmentName.Kind == yaml.ScalarNode &&
+					scfYAMLCredentialEnvironmentName.MatchString(strings.TrimSpace(environmentName.Value)) &&
+					environmentValue != nil && (environmentValue.Kind != yaml.ScalarNode || (strings.TrimSpace(environmentValue.Value) != "" && environmentValue.Tag != "!!null")) {
+					return fmt.Errorf("credential environment variable value is not permitted")
 				}
 				return nil
 			}
@@ -339,6 +390,46 @@ func validateCredentialFreeYAML(content []byte) error {
 			return err
 		}
 	}
+}
+
+func hasNonemptySCFCredentialAssignment(content []byte) bool {
+	for _, match := range scfYAMLCredentialAssignment.FindAllIndex(content, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		valueBytes := content[match[1]:]
+		if lineEnd := bytes.IndexByte(valueBytes, '\n'); lineEnd >= 0 {
+			valueBytes = valueBytes[:lineEnd]
+		}
+		value := strings.TrimSpace(strings.TrimSuffix(string(valueBytes), "\r"))
+		if value == "" || strings.HasPrefix(value, "#") {
+			continue
+		}
+		if value[0] == '"' || value[0] == '\'' {
+			closing := strings.IndexByte(value[1:], value[0])
+			if closing < 0 {
+				return true
+			}
+			remainder := strings.TrimSpace(value[closing+2:])
+			if strings.TrimSpace(value[1:1+closing]) != "" || remainder != "" && !strings.HasPrefix(remainder, "#") {
+				return true
+			}
+			continue
+		}
+		fields := strings.Fields(value)
+		if len(fields) == 0 {
+			continue
+		}
+		if fields[0] == "~" || strings.EqualFold(fields[0], "null") {
+			remainder := strings.TrimSpace(strings.TrimPrefix(value, fields[0]))
+			if remainder != "" && !strings.HasPrefix(remainder, "#") {
+				return true
+			}
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func stockCNCalendarPath(configDir string) (string, error) {
@@ -372,9 +463,15 @@ func stockCNRoutePath(configDir string) (string, error) {
 }
 
 func addZipFile(zw *zip.Writer, src, dst string) error {
-	info, err := os.Stat(src)
+	info, err := os.Lstat(src)
 	if err != nil {
 		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("scf package source symlinks are not permitted: %s", src)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("scf package source must be a regular file: %s", src)
 	}
 	header, err := zip.FileInfoHeader(info)
 	if err != nil {

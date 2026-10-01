@@ -243,8 +243,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if r.ExpectedStockCNTimerFunctions <= 0 {
 			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn timer function count must be an explicit positive value"))
 		}
-		if r.MeasuredSafeGroupSize <= 0 {
-			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn measured_safe_group_size must be a positive value"))
+		if r.MeasuredSafeGroupSize < 1 || r.MeasuredSafeGroupSize > MaxRealtimeItems {
+			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn measured_safe_group_size must be between 1 and %d", MaxRealtimeItems))
 		}
 		requiredGroupSize, sizeErr := requiredStockCNGroupSize(len(groups[0].Subjects), r.ExpectedStockCNTimerFunctions)
 		if sizeErr != nil {

@@ -61,7 +61,7 @@ func TestTargetActionReportSeparatesBusinessAndTransportOutcomes(t *testing.T) {
 func TestTargetActionReportUsesOnlyValidatedBoundedIdentity(t *testing.T) {
 	ctx, msg := codec.WithNewMessage(context.Background())
 	msg.WithServerMetaData(codec.MetaData{"trace_id": []byte("trace-1")})
-	delivery := logicalTargetDelivery(t, time.Now().UTC(), "target-report", "instance-report", "logical-report", 1, nil)
+	delivery := logicalTargetDelivery(t, time.Now().UTC(), "target-report", "instance-report", "logical-report", nil)
 	delivery.Stream = strings.Repeat("x", 300)
 	delivery.Consumer = "consumer\n\"unsafe"
 	delivery.StreamSeq, delivery.DeliveryCount = 32, 2
@@ -91,7 +91,7 @@ func TestTargetActionReportUsesOnlyValidatedBoundedIdentity(t *testing.T) {
 }
 
 func TestTargetReportEventLocalTraceAndUnicodeIdentity(t *testing.T) {
-	delivery := logicalTargetDelivery(t, time.Now().UTC(), "target-trace", "instance-trace", "logical-trace", 1, nil)
+	delivery := logicalTargetDelivery(t, time.Now().UTC(), "target-trace", "instance-trace", "logical-trace", nil)
 	report := makeTargetActionReport(context.Background(), delivery, jetstream.HandlerResult{Decision: jetstream.ACK}, nil)
 	require.Len(t, report.TraceID, 32)
 	require.Equal(t, "event_id", report.TraceSource)
@@ -107,7 +107,7 @@ func TestTargetReportEventLocalTraceAndUnicodeIdentity(t *testing.T) {
 
 func TestHandleTargetClassifiesInvalidBusinessContract(t *testing.T) {
 	now := time.Now().UTC()
-	delivery := logicalTargetDelivery(t, now, "target-contract", "instance-contract", "logical-1", 1, nil)
+	delivery := logicalTargetDelivery(t, now, "target-contract", "instance-contract", "logical-1", nil)
 	message := new(eventpb.EventMessage)
 	require.NoError(t, proto.Unmarshal(delivery.RawData, message))
 	request := new(tradeeventpb.LogicalAccountTargetWeightRequested)
@@ -173,7 +173,7 @@ func TestRunTargetReportsBusinessDecisionAfterTransportAction(t *testing.T) {
 	})
 	// A valid envelope with a different owner is a permanent business rejection,
 	// not a transport failure. It must be visible even though TERM succeeds.
-	delivery := logicalTargetDelivery(t, now, "report-rejected-target", "other-owner", "logical-1", 1, nil)
+	delivery := logicalTargetDelivery(t, now, "report-rejected-target", "other-owner", "logical-1", nil)
 	before := targetReportMetric(t, "TERM", "authorization_conflict", "success")
 	_, err = client.PublishRaw(ctx, delivery.Subject, delivery.RawMessageID, delivery.RawData, delivery.ContentType)
 	require.NoError(t, err)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -217,6 +218,10 @@ func (r *FetchRetryRepository) ApplyPeriodFailureReportResults(ctx context.Conte
 		if err != nil {
 			return fmt.Errorf("retry item has invalid failure frequency %q: %w", item.Frequency, err)
 		}
+		storageFrequency, err := report.NormalizeDatasetFrequency(item.Frequency)
+		if err != nil {
+			return fmt.Errorf("retry item has invalid Storage failure frequency %q: %w", item.Frequency, err)
+		}
 		targetByID := make(map[string]domain.WriteTarget, len(targets))
 		for _, target := range targets {
 			id := strings.TrimSpace(target.ID)
@@ -293,7 +298,7 @@ func (r *FetchRetryRepository) ApplyPeriodFailureReportResults(ctx context.Conte
 				}
 				result := tx.Table("t_collector_period_storage_states").
 					Select("c_deadline_at").
-					Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", spaceID, target.DatasetID, string(normalizedFrequency), item.TargetDataTime.UTC()).
+					Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", spaceID, target.DatasetID, storageFrequency, item.TargetDataTime.UTC()).
 					Limit(1).Find(&periodState)
 				if result.Error == nil && result.RowsAffected > 0 && !periodState.DeadlineAt.IsZero() && !time.Now().UTC().Before(periodState.DeadlineAt.UTC()) {
 					updates["c_period_failure_deadline_exceeded_at"] = time.Now().UTC()

@@ -6,24 +6,6 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeventpb";
 
-message InstrumentTarget {
-  string instrument_id = 1;
-  string quantity = 2;
-}
-
-message LogicalAccountTargetRequested {
-  option deprecated = true;
-
-  // Retained for decoding historical facts only. It is not registered as an
-  // executable Event and must not be published for automatic execution.
-  string target_id = 1;
-  string runner_id = 2;
-  string logical_account_id = 3;
-  int64 command_sequence = 4;
-  repeated InstrumentTarget targets = 5;
-  string signal_time = 6;
-}
-
 message InstrumentWeightTarget {
   string instrument_id = 1;
   string target_weight = 2;
@@ -33,16 +15,10 @@ message LogicalAccountTargetWeightRequested {
   string target_id = 1;
   string instance_id = 2;
   string logical_account_id = 3;
-  // Deprecated fields remain only so older in-tree fixtures and persisted
-  // envelopes can be decoded. They never authorize or order execution.
-  int64 command_sequence = 4 [deprecated = true];
   repeated InstrumentWeightTarget targets = 5;
-  string signal_time = 6 [deprecated = true];
-  int64 owner_generation = 7 [deprecated = true];
   string session_id = 8;
   string strategy_id = 9;
   google.protobuf.Timestamp bar_end_time = 10;
   google.protobuf.Timestamp effective_at = 11;
   google.protobuf.Timestamp valid_until = 12;
-  string runner_id = 13 [deprecated = true];
 }

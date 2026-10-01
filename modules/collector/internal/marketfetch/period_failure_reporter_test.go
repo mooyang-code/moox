@@ -20,6 +20,27 @@ type periodFailureStorageStub struct {
 	call  func(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error)
 }
 
+func TestPeriodFailureReportUsesStorageCanonicalFrequency(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	period := time.Now().UTC().Truncate(time.Hour)
+	retry := permanentFailureRetry(t, "retry-hour-frequency", period, []domain.WriteTarget{failureTarget("target-hour", "bars-1h", 0, 1)})
+	retry.Frequency = "1h"
+	var receivedFrequency string
+	storage := &periodFailureStorageStub{call: func(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, indexes []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
+		receivedFrequency = expectation.GetFrequency()
+		if receivedFrequency != "1H" {
+			return nil, fmt.Errorf("period frequency %q does not match Dataset declaration %q", receivedFrequency, "1H")
+		}
+		return recordedFailureResults(indexes, storagepb.PeriodFailureDisposition_PERIOD_FAILURE_DISPOSITION_RECORDED), nil
+	}}
+	require.NoError(t, db.FetchRetries().Upsert(ctx, &retry))
+	reporter := newFailureReporter(db, storage)
+	reporter.budget = time.Second
+	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
+	require.Equal(t, "1H", receivedFrequency)
+}
+
 func (*periodFailureStorageStub) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
 	return nil
 }

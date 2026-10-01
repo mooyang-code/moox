@@ -706,6 +706,23 @@ func TestReconcilerAllowsStockGroupAboveThirtyWhenMeasuredSafeSizeAllowsIt(t *te
 	require.Equal(t, 40, seenSubjects)
 }
 
+func TestReconcilerRejectsStockGroupSizeAboveRealtimeLimit(t *testing.T) {
+	task := domain.CollectionTask{
+		SpaceID: StockCNSpaceID, TaskID: "stock-bars", DataType: "kline", Enabled: true,
+		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","subject_tags":["binance_spot"],"target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
+	}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-stockcn-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
+	reconciler := &Reconciler{
+		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
+		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{task}},
+		Symbols: reconcilerSymbolsStub{dataset: storagesource.DatasetInfo{DataSourceID: "symbol-source"}, subjects: []domain.DatasetSubject{{SubjectID: "600000.XSHG", Status: "active"}}},
+		Nodes:   nodes, ExpectedStockCNTimerFunctions: 1, MeasuredSafeGroupSize: MaxRealtimeItems + 1,
+	}
+
+	require.ErrorContains(t, reconciler.Reconcile(context.Background(), StockCNSpaceID), "measured_safe_group_size must be between 1 and 40")
+	require.Zero(t, nodes.submits)
+}
+
 func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "bars", DataType: "kline", Enabled: true,

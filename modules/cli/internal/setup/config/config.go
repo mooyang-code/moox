@@ -1859,8 +1859,8 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 		if cfg.TimerFunctionCount <= 0 {
 			return fmt.Errorf("config_invalid: %s.timer_function_count must be an explicit positive value for stockcn", path)
 		}
-		if cfg.MeasuredSafeGroupSize <= 0 {
-			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be a positive value for stockcn", path)
+		if cfg.MeasuredSafeGroupSize < 1 || cfg.MeasuredSafeGroupSize > StockCNMaxRealtimeItems {
+			return fmt.Errorf("config_invalid: %s.measured_safe_group_size must be between 1 and %d for stockcn", path, StockCNMaxRealtimeItems)
 		}
 		if cfg.StaggerStartSecond == 0 && cfg.StaggerWindowSeconds == 0 && cfg.StaggerMaxStartsPerSecond == 0 {
 			cfg.StaggerStartSecond = DefaultStockCNStaggerStartSecond

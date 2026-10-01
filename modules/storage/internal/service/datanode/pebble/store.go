@@ -66,7 +66,10 @@ type Store struct {
 	datasetWriteMu          sync.RWMutex
 	outboxMu                sync.Mutex
 	periodMu                sync.Mutex
+	periodFinalizeMu        sync.Mutex
 	periodNow               func() time.Time
+	periodFinalizeErrorMu   sync.Mutex
+	periodFinalizeLastError string
 	outboxPending           atomic.Int64
 	outboxRevision          atomic.Uint64
 	outboxHintKnown         atomic.Bool

@@ -333,7 +333,7 @@ func TestHandleAcknowledgesExpiredPeriodWithoutRetry(t *testing.T) {
 	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 9, 15, 3, 25, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Minute)
 	dsl := `name: factor-result-e2e
 triggers:
   event: {name: ViewDataReady}
@@ -356,7 +356,7 @@ rules:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	period := time.Date(2026, 9, 15, 3, 8, 0, 0, time.UTC)
+	period := now.Add(-17 * time.Minute)
 	loader := &recordingIndexedLoader{err: input.ErrNotReady}
 	compiled := compiler.CompiledStrategy{
 		Data:         config.Data{Bar: "1m", Calendar: "crypto_24x7"},

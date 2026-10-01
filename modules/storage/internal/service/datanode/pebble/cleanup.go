@@ -3,6 +3,7 @@ package pebble
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -175,6 +176,8 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	defer s.historyBackfillMu.Unlock()
 	s.datasetWriteMu.Lock()
 	defer s.datasetWriteMu.Unlock()
+	s.periodMu.Lock()
+	defer s.periodMu.Unlock()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 
@@ -250,6 +253,11 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	if err := batch.Delete(historyMaterializedMarker(spaceID, datasetID), s.writeOptions); err != nil {
 		return 0, err
 	}
+	periodRanges, err := s.stageDatasetPeriodCleanup(batch, spaceID, datasetID)
+	if err != nil {
+		return 0, err
+	}
+	ranges = append(ranges, periodRanges...)
 	deletedOutbox, err := s.stageDatasetAuxiliaryCleanup(batch, spaceID, datasetID)
 	if err != nil {
 		return 0, err
@@ -270,6 +278,46 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		s.noteOutboxDeleted(deletedOutbox)
 	}
 	return uint64(len(ranges) + 1), nil
+}
+
+func (s *Store) stageDatasetPeriodCleanup(batch *cpebble.Batch, spaceID, datasetID string) ([][2][]byte, error) {
+	progressPrefix := []byte(periodProgressPrefix + hex.EncodeToString([]byte(spaceID)) + "/" + hex.EncodeToString([]byte(datasetID)) + "/")
+	progressUpper := nextPrefix(progressPrefix)
+	ranges := [][2][]byte{{progressPrefix, progressUpper}}
+	if err := batch.DeleteRange(progressPrefix, progressUpper, s.writeOptions); err != nil {
+		return nil, err
+	}
+	baseIndexPrefix := hex.EncodeToString(progressPrefix)
+	for _, indexPrefix := range []string{periodWaitingPrefix, periodCompletePrefix} {
+		prefix := []byte(indexPrefix + baseIndexPrefix)
+		upper := nextPrefix(prefix)
+		if err := batch.DeleteRange(prefix, upper, s.writeOptions); err != nil {
+			return nil, err
+		}
+		ranges = append(ranges, [2][]byte{prefix, upper})
+	}
+
+	deadlineIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(periodDeadlinePrefix), UpperBound: nextPrefix([]byte(periodDeadlinePrefix))})
+	if err != nil {
+		return nil, err
+	}
+	for valid := deadlineIter.First(); valid; valid = deadlineIter.Next() {
+		if !bytes.HasPrefix(deadlineIter.Value(), progressPrefix) {
+			continue
+		}
+		if err := batch.Delete(append([]byte(nil), deadlineIter.Key()...), s.writeOptions); err != nil {
+			_ = deadlineIter.Close()
+			return nil, err
+		}
+	}
+	if err := deadlineIter.Error(); err != nil {
+		_ = deadlineIter.Close()
+		return nil, err
+	}
+	if err := deadlineIter.Close(); err != nil {
+		return nil, err
+	}
+	return ranges, nil
 }
 
 // stageDatasetAuxiliaryCleanup removes state that is not part of the normal
@@ -450,10 +498,22 @@ func (s *Store) RestoreDatasetRows(ctx context.Context, spaceID, datasetID strin
 	defer s.historyBackfillMu.Unlock()
 	s.datasetWriteMu.Lock()
 	defer s.datasetWriteMu.Unlock()
+	s.periodMu.Lock()
+	defer s.periodMu.Unlock()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
+	deleted, err := s.isDatasetDeleted(spaceID, datasetID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return nil
+	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
+	if _, err := s.stageDatasetPeriodCleanup(batch, spaceID, datasetID); err != nil {
+		return err
+	}
 	if err := batch.Delete(datasetDeletedKey(spaceID, datasetID), s.writeOptions); err != nil {
 		return err
 	}

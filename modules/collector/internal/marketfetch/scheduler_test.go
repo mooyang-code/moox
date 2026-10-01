@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -149,6 +150,76 @@ func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
 		assert.Equal(t, []string{"node-b", "node-c"}, []string{got[0].NodeID, got[1].NodeID})
 	}
 	assert.Equal(t, []string{"node-a"}, []string{invocationCandidates(nodes[0], nodes[:1])[0].NodeID})
+}
+
+func TestDispatchPlannedKeepsPersistedTargetSnapshotAcrossDisableAndCompletes(t *testing.T) {
+	db := newTestMarketFetchStore(t)
+	ctx := context.Background()
+	const spaceID, instanceID = "crypto", "shared-instance"
+	for _, taskID := range []string{"task-a", "task-b"} {
+		require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: spaceID, TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true}))
+	}
+	item := domain.CollectionItem{
+		InstanceID: instanceID, SubjectID: "BTC-USDT", Symbol: "BTCUSDT", DatasetID: "bars-a", Frequency: "1m",
+		TargetDataTime: "2026-09-30T11:59:00Z", Provider: "binance", SourceID: "spot_http", MarketType: "spot", DataType: "kline",
+	}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: spaceID, InstanceID: instanceID, SubjectID: item.SubjectID, Frequency: item.Frequency, TaskParams: `{}`,
+	}}))
+	targets := []domain.WriteTarget{
+		{ID: "target-a", SpaceID: spaceID, InstanceID: instanceID, TaskID: "task-a", DatasetID: "bars-a", Status: "pending"},
+		{ID: "target-b", SpaceID: spaceID, InstanceID: instanceID, TaskID: "task-b", DatasetID: "bars-b", Status: "pending"},
+	}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, targets))
+	req := Request{
+		BatchID: "batch-target-snapshot", SyncPointID: "sync-target-snapshot", ScheduleID: "schedule-target-snapshot",
+		BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency,
+		Provider: "binance", MarketType: "spot", Items: []domain.CollectionItem{item},
+	}
+	node := scfinvoker.Node{NodeID: "invoke-1", FunctionName: "fetch-1", Region: "ap-hongkong", TriggerType: "invoke"}
+	invoker := &recordingMarketFetchInvoker{}
+	scheduler := &Scheduler{Instances: db.TaskInstances(), Batches: db.FetchBatches(), Invoker: invoker}
+	created, err := scheduler.planOneDeferred(ctx, domain.CollectionTask{SpaceID: spaceID, TaskID: "task-a"}, &req, node)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Len(t, req.Targets, 2)
+
+	// The planned batch owns the target snapshot; disabling a sibling affects
+	// later plans but must not silently mutate this batch's Completion contract.
+	taskB, err := db.Tasks().GetByTaskID(ctx, spaceID, "task-b")
+	require.NoError(t, err)
+	taskB.Enabled = false
+	_, err = db.Tasks().UpdateByTaskID(ctx, spaceID, taskB.TaskID, *taskB)
+	require.NoError(t, err)
+	scheduler.dispatchPlanned(req, node, []scfinvoker.Node{node})
+
+	recorded := invoker.snapshot()
+	require.Len(t, recorded, 1)
+	data, ok := recorded[0].event["data"].(map[string]any)
+	require.True(t, ok)
+	targetPayload, ok := data["targets"].([]any)
+	require.True(t, ok)
+	require.Len(t, targetPayload, 2, "dispatch must use exactly the targets persisted with the planned batch")
+
+	resultTargets := make([]*marketfetchpb.MarketFetchTargetResult, 0, len(targetPayload))
+	for _, rawTarget := range targetPayload {
+		target, ok := rawTarget.(map[string]any)
+		require.True(t, ok)
+		resultTargets = append(resultTargets, &marketfetchpb.MarketFetchTargetResult{
+			WriteTargetId: fmt.Sprint(target["write_target_id"]), DatasetId: fmt.Sprint(target["dataset_id"]), Status: "succeeded",
+		})
+	}
+	payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+		InstanceId: item.InstanceID, SubjectId: item.SubjectID, Symbol: item.Symbol,
+		TargetDataTime: item.TargetDataTime, Outcome: string(domain.ItemOutcomeSuccess), Targets: resultTargets,
+	}, time.Now().UTC())
+	payload.BatchId = req.BatchID
+	payload.ScheduleId = req.ScheduleID
+	payload.BatchKind = string(req.BatchKind)
+	payload.Frequency = req.Frequency
+	payload.Status = string(domain.BatchStatusSucceeded)
+	payload.SuccessCount, payload.RetryCount, payload.PermanentFailedCount = 1, 0, 0
+	require.NoError(t, handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload)))
 }
 
 func TestBatchKindForTaskUsesRealtimeForKline(t *testing.T) {
@@ -2261,9 +2332,5 @@ func assertSchedulerRetryFailureKeepsFrequencyIdentity(t *testing.T, frequency s
 	reporter := NewPeriodFailureReporter(db.FetchRetries(), func(string, string, string) (Storage, error) { return storage, nil }, "storage.local:11003", "crypto")
 	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
 	require.Len(t, storage.expectations, 1)
-	wantFrequency := frequency
-	if frequency == "1H" {
-		wantFrequency = "1h"
-	}
-	require.Equal(t, wantFrequency, storage.expectations[0].GetFrequency())
+	require.Equal(t, frequency, storage.expectations[0].GetFrequency(), "failure RPC identity must use the Dataset's canonical Storage frequency")
 }

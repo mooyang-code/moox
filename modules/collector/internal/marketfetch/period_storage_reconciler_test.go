@@ -28,7 +28,7 @@ func TestPeriodStorageReconcilerProbesSnapshotIdentityAndDeletesOnlyConfirmedTer
 		require.Equal(t, stored.SeriesHash, expectation.GetSeriesHash())
 		require.Equal(t, stored.ExpectedCount, expectation.GetExpectedCount())
 		require.Zero(t, expectation.GetDeadlineAt(), "status probes do not invent a deadline")
-		require.Empty(t, expectation.GetSeriesSnapshot(), "status probes use the snapshot envelope, not a rebuilt roster")
+		require.Empty(t, expectation.GetSeriesSnapshot(), "status probes use the persisted snapshot identity, not a reconstructed series list")
 		return reconcilerStateForSnapshot(stored, domain.PeriodStatusComplete), nil
 	}}
 	reconciler := NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), client, "crypto")

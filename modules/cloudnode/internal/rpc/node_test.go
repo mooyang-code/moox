@@ -367,20 +367,19 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 		SpaceID: "crypto", NodeID: "timer-node", CloudAccountID: "account-a", PackageID: "pkg", NodeType: "scf-event", TriggerType: "timer", Provider: "tencent-scf",
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher"}`,
 	}))
-	environment := map[string]string{
-		"MOOX_CODE_PACKAGE_ID":              "pkg",
-		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment",
-		"MOOX_MARKET_FETCH_DNS_HASH":        "dns",
-		"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  "2026-08-04T01:00:00Z",
-		"MOOX_MARKET_FETCH_SUBJECTS":        "BTC-USDT",
-		"MOOX_MARKET_FETCH_SYMBOLS_JSON":    `{"BTC-USDT":"BTCUSDT"}`,
-		"MOOX_MARKET_FETCH_PROVIDER":        "binance",
-		"MOOX_MARKET_FETCH_MARKET_TYPE":     "spot",
-		"MOOX_MARKET_FETCH_DATASET_ID":      "bars",
-		"MOOX_MARKET_FETCH_FREQUENCY":       "1m",
-		"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": `{"api.binance.com":["203.0.113.1"]}`,
-	}
-	fake := &fakeSCFClient{currentEnvironment: environment}
+	environment := completeTimerEnvironment()
+	environment["MOOX_CODE_PACKAGE_ID"] = "pkg"
+	environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
+	environment["MOOX_MARKET_FETCH_DNS_HASH"] = "dns"
+	environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"] = "2026-08-04T01:00:00Z"
+	environment["MOOX_MARKET_FETCH_SUBJECTS"] = "BTC-USDT"
+	environment["MOOX_MARKET_FETCH_SYMBOLS_JSON"] = `{"BTC-USDT":"BTCUSDT"}`
+	environment["MOOX_MARKET_FETCH_PROVIDER"] = "binance"
+	environment["MOOX_MARKET_FETCH_MARKET_TYPE"] = "spot"
+	environment["MOOX_MARKET_FETCH_DATASET_ID"] = "bars"
+	environment["MOOX_MARKET_FETCH_FREQUENCY"] = "1m"
+	environment["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"] = `{"api.binance.com":["203.0.113.1"]}`
+	fake := &fakeSCFClient{currentEnvironment: environment, currentTimeout: 60}
 	svc := &Service{
 		catalog:            catalog,
 		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
@@ -393,6 +392,30 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 	require.Empty(t, fake.configured, "unchanged managed environment must not call UpdateFunctionConfiguration")
 }
 
+func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto", NodeID: "timer-node", CloudAccountID: "account-a", PackageID: "pkg", NodeType: "scf-event", TriggerType: "timer", Provider: "tencent-scf",
+		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher"}`,
+	}))
+	environment := completeTimerEnvironment()
+	delete(environment, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	fake := &fakeSCFClient{currentEnvironment: environment}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	_, err := svc.executeRuntimeConfigItem(context.Background(), "crypto", &pb.NodeRuntimeConfigPatch{
+		NodeId: "timer-node", ManagedEnvironment: map[string]string{"MOOX_MARKET_FETCH_BINDING_HASH": "binding"},
+		TimerCron: "0 * * * * * *", TimerEnabled: true,
+	})
+	require.ErrorContains(t, err, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	require.Empty(t, fake.configured, "invalid runtime dependencies must be rejected before updating configuration")
+	require.Zero(t, fake.timerEnsures, "invalid runtime dependencies must not enable the Timer trigger")
+}
+
 func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
@@ -400,7 +423,13 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 		SpaceID: "stockcn", NodeID: "timer-node", CloudAccountID: "account-a", NodeType: "scf-event", TriggerType: "timer",
 		Region: "ap-guangzhou", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher"}`,
 	}))
-	fake := &fakeSCFClient{currentEnvironment: map[string]string{"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECTS": strings.Repeat("old-subject|", 80), "MOOX_EVENTBUS_NATS_PASSWORD": "keep-password"}}
+	environment := completeTimerEnvironment()
+	environment["MOOX_SPACE_ID"] = "stockcn"
+	environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
+	environment["MOOX_MARKET_FETCH_SUBJECTS"] = strings.Repeat("old-subject|", 80)
+	environment["MOOX_EVENTBUS_NATS_PASSWORD"] = "keep-password"
+	environment["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
+	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 	patch := &pb.NodeRuntimeConfigPatch{NodeId: "timer-node", TimerCron: "5 * * * * * *", TimerEnabled: true, ManagedEnvironment: map[string]string{
 		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11002", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "control-a", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
@@ -411,6 +440,8 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	require.Len(t, fake.configured, 1)
 	require.EqualValues(t, 60, fake.configured[0].Timeout)
 	require.Equal(t, "keep-password", fake.currentEnvironment["MOOX_EVENTBUS_NATS_PASSWORD"])
+	require.NotContains(t, fake.currentEnvironment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
 	require.NotContains(t, fake.currentEnvironment, "MOOX_MARKET_FETCH_SUBJECTS")
 	node, err := catalog.GetNode(context.Background(), "stockcn", "timer-node")
 	require.NoError(t, err)

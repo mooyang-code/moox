@@ -38,6 +38,14 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 	if err := ValidateCollectorTimerEnvironment(valid); err != nil {
 		t.Fatal(err)
 	}
+	withLegacyCA := make(map[string]string)
+	for key, value := range valid {
+		withLegacyCA[key] = value
+	}
+	withLegacyCA["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
+	if err := ValidateCollectorTimerEnvironment(withLegacyCA); err == nil || !strings.Contains(err.Error(), "CA") {
+		t.Fatalf("Timer must reject simultaneous CA file and embedded PEM, got %v", err)
+	}
 	invoke := make(map[string]string)
 	for key, value := range valid {
 		invoke[key] = value

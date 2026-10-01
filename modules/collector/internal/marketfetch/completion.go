@@ -26,14 +26,23 @@ var errCompletionIdentityMismatch = errors.New("market fetch completion identity
 // returns immediately. The loop is best effort: if EventBus is unavailable,
 // the timer's deadline recovery remains the source of truth.
 func StartCompletionConsumer(ctx context.Context, spaceID string, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, wake ...func()) error {
+	_, err := StartCompletionConsumerWithDone(ctx, spaceID, batches, retries, instances, metrics, wake...)
+	return err
+}
+
+// StartCompletionConsumerWithDone starts the best-effort completion loop and
+// returns a channel that closes after the loop and its resources have stopped.
+func StartCompletionConsumerWithDone(ctx context.Context, spaceID string, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, wake ...func()) (<-chan struct{}, error) {
 	if batches == nil || retries == nil || instances == nil {
-		return fmt.Errorf("completion repositories are required")
+		return nil, fmt.Errorf("completion repositories are required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
 	if spaceID == "" {
-		return fmt.Errorf("completion consumer space_id is required")
+		return nil, fmt.Errorf("completion consumer space_id is required")
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		backoff := time.Second
 		for ctx.Err() == nil {
 			client, err := completionEventBusClient(ctx)
@@ -74,7 +83,7 @@ func StartCompletionConsumer(ctx context.Context, spaceID string, batches *store
 			}
 		}
 	}()
-	return nil
+	return done, nil
 }
 
 func completionConsumerName(spaceID string) string {
@@ -163,6 +172,16 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 	} else if mismatch != "" {
 		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
 	}
+	var original Request
+	if err := json.Unmarshal([]byte(batch.RequestJSON), &original); err != nil {
+		return fmt.Errorf("%w: stored request is invalid: %v", errCompletionIdentityMismatch, err)
+	}
+	if mismatch := completionItemIdentityMismatch(original, payload); mismatch != "" {
+		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
+	}
+	if mismatch := completionPayloadContractMismatch(original, payload); mismatch != "" {
+		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
+	}
 	completedAt := time.Now().UTC()
 	if payload.GetCompletedAt() != nil && payload.GetCompletedAt().CheckValid() == nil {
 		completedAt = payload.GetCompletedAt().AsTime().UTC()
@@ -187,11 +206,6 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		batch.LateCompletion = true
 	}
 	effects := store.FetchCompletionEffects{}
-	var original Request
-	_ = json.Unmarshal([]byte(batch.RequestJSON), &original)
-	if mismatch := completionItemIdentityMismatch(original, payload); mismatch != "" {
-		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
-	}
 	logicalSyncPointID := strings.TrimSpace(original.SyncPointID)
 	if logicalSyncPointID == "" {
 		logicalSyncPointID = payload.GetBatchId()
@@ -219,9 +233,6 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 				continue
 			}
 			status := strings.TrimSpace(target.GetStatus())
-			if status == "" {
-				status = "succeeded"
-			}
 			effects.WriteTargetUpdates = append(effects.WriteTargetUpdates, store.WriteTargetStatusEffect{
 				SpaceID: spaceID, RetrySourceKey: sourceRetryKey, InstanceID: item.GetInstanceId(), WriteTargetID: target.GetWriteTargetId(), DatasetID: target.GetDatasetId(),
 				Status: status, LastError: target.GetErrorSummary(),
@@ -673,6 +684,7 @@ func completionItemIdentityMismatch(original Request, payload *marketfetchpb.Mar
 		return fmt.Sprintf("completion item count expected=%d actual=%d", len(original.Items), len(payload.GetItems()))
 	}
 	allowed := make(map[string]domain.CollectionItem, len(original.Items))
+	allowedTargets := make(map[string]map[string]string)
 	for _, item := range original.Items {
 		if strings.TrimSpace(item.InstanceID) == "" {
 			return "request item instance_id is empty"
@@ -681,6 +693,23 @@ func completionItemIdentityMismatch(original Request, payload *marketfetchpb.Mar
 			return fmt.Sprintf("request item instance_id %q is duplicated", item.InstanceID)
 		}
 		allowed[item.InstanceID] = item
+	}
+	for _, target := range original.Targets {
+		if strings.TrimSpace(target.InstanceID) == "" || strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.DatasetID) == "" {
+			return "request target identity is incomplete"
+		}
+		if _, exists := allowed[target.InstanceID]; !exists {
+			return fmt.Sprintf("request target %q is not attached to an original request item", target.ID)
+		}
+		byID := allowedTargets[target.InstanceID]
+		if byID == nil {
+			byID = make(map[string]string)
+			allowedTargets[target.InstanceID] = byID
+		}
+		if _, exists := byID[target.ID]; exists {
+			return fmt.Sprintf("request target %q is duplicated for instance %q", target.ID, target.InstanceID)
+		}
+		byID[target.ID] = target.DatasetID
 	}
 	seen := make(map[string]struct{}, len(payload.GetItems()))
 	for index, item := range payload.GetItems() {
@@ -699,6 +728,100 @@ func completionItemIdentityMismatch(original Request, payload *marketfetchpb.Mar
 		if item.GetSubjectId() != expected.SubjectID {
 			return fmt.Sprintf("completion item %d subject_id does not match instance %q", index, instanceID)
 		}
+		if item.GetTargetDataTime() != expected.TargetDataTime {
+			return fmt.Sprintf("completion item %d target_data_time does not match instance %q", index, instanceID)
+		}
+		if item.GetSourceEventId() != expected.SourceEventID {
+			return fmt.Sprintf("completion item %d source_event_id does not match instance %q", index, instanceID)
+		}
+		seenTargets := make(map[string]struct{}, len(item.GetTargets()))
+		for targetIndex, target := range item.GetTargets() {
+			if target == nil || strings.TrimSpace(target.GetWriteTargetId()) == "" {
+				return fmt.Sprintf("completion item %d target %d has no write_target_id", index, targetIndex)
+			}
+			targetID := target.GetWriteTargetId()
+			datasetID, exists := allowedTargets[instanceID][targetID]
+			if !exists || target.GetDatasetId() != datasetID {
+				return fmt.Sprintf("completion item %d target %q is not in the original request", index, targetID)
+			}
+			if _, exists := seenTargets[targetID]; exists {
+				return fmt.Sprintf("completion item %d target %q is duplicated", index, targetID)
+			}
+			seenTargets[targetID] = struct{}{}
+		}
+	}
+	return ""
+}
+
+func completionPayloadContractMismatch(original Request, payload *marketfetchpb.MarketFetchBatchCompleted) string {
+	if payload == nil {
+		return "payload is nil"
+	}
+	planned := int(payload.GetPlannedCount())
+	successCount, retryCount, permanentFailedCount := 0, 0, 0
+	targetsByInstance := make(map[string]map[string]struct{}, len(original.Items))
+	for _, target := range original.Targets {
+		if targetsByInstance[target.InstanceID] == nil {
+			targetsByInstance[target.InstanceID] = make(map[string]struct{})
+		}
+		targetsByInstance[target.InstanceID][target.ID] = struct{}{}
+	}
+	for index, item := range payload.GetItems() {
+		if item == nil {
+			return fmt.Sprintf("completion item %d is nil", index)
+		}
+		switch domain.ItemOutcome(item.GetOutcome()) {
+		case domain.ItemOutcomeSuccess:
+			successCount++
+			expectedTargets := targetsByInstance[item.GetInstanceId()]
+			seenTargets := make(map[string]struct{}, len(item.GetTargets()))
+			for targetIndex, target := range item.GetTargets() {
+				if target == nil {
+					return fmt.Sprintf("completion item %d target %d is nil", index, targetIndex)
+				}
+				switch strings.TrimSpace(target.GetStatus()) {
+				case "succeeded", "failed":
+				default:
+					return fmt.Sprintf("completion item %d target %q has invalid status %q", index, target.GetWriteTargetId(), target.GetStatus())
+				}
+				seenTargets[target.GetWriteTargetId()] = struct{}{}
+			}
+			if len(seenTargets) != len(expectedTargets) {
+				return fmt.Sprintf("completion item %d target receipt count expected=%d actual=%d", index, len(expectedTargets), len(seenTargets))
+			}
+		case domain.ItemOutcomeHTTP429, domain.ItemOutcomeHTTP5xx, domain.ItemOutcomeNetworkError,
+			domain.ItemOutcomeStorageError, domain.ItemOutcomeProviderError:
+			retryCount++
+		case domain.ItemOutcomeInvalid:
+			permanentFailedCount++
+		default:
+			return fmt.Sprintf("completion item %d has invalid outcome %q", index, item.GetOutcome())
+		}
+		for targetIndex, target := range item.GetTargets() {
+			if target == nil {
+				continue
+			}
+			switch strings.TrimSpace(target.GetStatus()) {
+			case "succeeded", "failed":
+			default:
+				return fmt.Sprintf("completion item %d target %d has invalid status %q", index, targetIndex, target.GetStatus())
+			}
+		}
+	}
+	if payload.GetSuccessCount() < 0 || payload.GetRetryCount() < 0 || payload.GetPermanentFailedCount() < 0 {
+		return "completion counts cannot be negative"
+	}
+	if int(payload.GetSuccessCount()) != successCount || int(payload.GetRetryCount()) != retryCount || int(payload.GetPermanentFailedCount()) != permanentFailedCount || successCount+retryCount+permanentFailedCount != planned {
+		return fmt.Sprintf("completion counts do not match item outcomes planned=%d success=%d retry=%d permanent_failed=%d", planned, payload.GetSuccessCount(), payload.GetRetryCount(), payload.GetPermanentFailedCount())
+	}
+	expectedStatus := domain.BatchStatusFailed
+	if successCount == planned {
+		expectedStatus = domain.BatchStatusSucceeded
+	} else if successCount > 0 {
+		expectedStatus = domain.BatchStatusPartialFailed
+	}
+	if domain.BatchStatus(payload.GetStatus()) != expectedStatus || !expectedStatus.Terminal() {
+		return fmt.Sprintf("completion status expected=%q actual=%q", expectedStatus, payload.GetStatus())
 	}
 	return ""
 }

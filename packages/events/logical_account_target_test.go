@@ -44,14 +44,10 @@ func TestLogicalAccountTargetWeightRequiresModernIdentity(t *testing.T) {
 func TestLogicalAccountTargetWeightRejectsLegacyRunnerAndSequenceFallback(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	// This was accepted by the previous validator and then authorized by the
-	// Trade consumer through runner_id/command_sequence. It must no longer be
-	// a publishable automatic-execution event.
+	// Target and account identity alone cannot authorize automatic execution.
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId:         "target-1",
-		RunnerId:         "runner-1",
 		LogicalAccountId: "logical-1",
-		CommandSequence:  1,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT-SPOT",
 			TargetWeight: "1",
@@ -69,13 +65,6 @@ func TestLegacyQuantityTargetIsNotRegistered(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 
-	payload, err := proto.Marshal(&tradeeventpb.LogicalAccountTargetRequested{
-		TargetId:         "target-1",
-		RunnerId:         "runner-1",
-		LogicalAccountId: "logical-1",
-		CommandSequence:  1,
-	})
-	require.NoError(t, err)
 	message, err := proto.Marshal(&eventpb.EventMessage{
 		EventId:      "target-1",
 		EventName:    "event.trade.target.requested",
@@ -83,7 +72,7 @@ func TestLegacyQuantityTargetIsNotRegistered(t *testing.T) {
 		SpaceId:      "space",
 		SubjectId:    "logical-1",
 		OccurredAt:   timestamppb.New(time.Unix(1_700_000_000, 0).UTC()),
-		Payload:      payload,
+		Payload:      []byte("unregistered target payload"),
 	})
 	require.NoError(t, err)
 

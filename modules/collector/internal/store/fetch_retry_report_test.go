@@ -76,6 +76,34 @@ func TestApplyPeriodFailureReportResultsRejectsUnknownTarget(t *testing.T) {
 	require.Equal(t, "[]", stored.PeriodFailureResultsJSON)
 }
 
+func TestApplyPeriodFailureReportResultsFindsCanonicalHourlyDeadline(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	period := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Hour)
+	target := domain.WriteTarget{ID: "hourly-target", SpaceID: "crypto", DatasetID: "bars", SeriesIndex: 0, SeriesHash: "hourly-hash", ExpectedCount: 1}
+	targetsJSON, err := json.Marshal([]domain.WriteTarget{target})
+	require.NoError(t, err)
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "hourly-retry", SubjectID: "BTC-USDT", Frequency: "1H", TargetDataTime: period,
+		FailureTargetsJSON: string(targetsJSON), Status: "permanent_failed",
+	}))
+	deadline := period.Add(time.Minute)
+	require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
+		Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1H", PeriodTime: period},
+		SeriesHash: "hourly-hash", ExpectedCount: 1, DeadlineAt: deadline, Status: domain.PeriodStatusWaiting, ConfirmedAt: period.Add(time.Second),
+	}))
+
+	result := domain.PeriodFailureTargetResult{
+		WriteTargetID: target.ID, SpaceID: "crypto", DatasetID: "bars", Frequency: "1H", PeriodTime: period,
+		SeriesHash: target.SeriesHash, ExpectedCount: target.ExpectedCount, SeriesIndex: target.SeriesIndex,
+		Disposition: "missed_deadline", ObservedAt: time.Now().UTC(),
+	}
+	require.NoError(t, s.FetchRetries().ApplyPeriodFailureReportResults(ctx, "crypto", "hourly-retry", []domain.PeriodFailureTargetResult{result}, ""))
+	stored, err := s.FetchRetries().Get(ctx, "crypto", "hourly-retry")
+	require.NoError(t, err)
+	require.NotNil(t, stored.PeriodFailureDeadlineExceededAt, "canonical 1H state must be found when recording a missed deadline")
+}
+
 func TestApplyPeriodFailureReportResultsKeepsFirstAuthoritativeTargetDisposition(t *testing.T) {
 	for _, test := range []struct {
 		name      string

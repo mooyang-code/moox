@@ -128,3 +128,18 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 		})
 	}
 }
+
+func TestMarketFetcherTimerDeployRemovesLegacyEmbeddedCA(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "timer", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "timer", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "timer", CreateTime: time.Now(), Metadata: `{}`}))
+	env := completeTimerEnvironment()
+	env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
+	fake := &fakeSCFClient{currentEnvironment: env, currentTimeout: 60}
+	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
+
+	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "timer", PackageId: "moox-collector_dev", Environment: map[string]string{"MOOX_SPACE_ID": "crypto"}})
+	require.NoError(t, err)
+	require.Len(t, fake.configured, 1)
+	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+}

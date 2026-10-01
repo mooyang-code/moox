@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,6 +27,10 @@ import (
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -39,6 +44,9 @@ type periodProcessReady struct {
 	SpaceID        string `json:"space_id"`
 	DatasetID      string `json:"dataset_id"`
 	Frequency      string `json:"frequency"`
+	StockSpaceID   string `json:"stock_space_id"`
+	StockDatasetID string `json:"stock_dataset_id"`
+	OutboxTarget   string `json:"outbox_target"`
 	ClockFile      string `json:"clock_file"`
 	DataDir        string `json:"data_dir"`
 	AppID          string `json:"app_id"`
@@ -47,6 +55,21 @@ type periodProcessReady struct {
 	NodeAppKey     string `json:"node_app_key"`
 	PrimarySecret  string `json:"primary_secret"`
 	NodeSecret     string `json:"node_secret"`
+}
+
+type periodHelperOutboxSnapshot struct {
+	OutboxCount            int                             `json:"outbox_count"`
+	CollectorPeriodMarkers []periodHelperOutboxMarkerEntry `json:"collector_period_markers"`
+}
+
+type periodHelperOutboxMarkerEntry struct {
+	OutboxID   uint64          `json:"outbox_id"`
+	EventID    string          `json:"event_id"`
+	SpaceID    string          `json:"space_id"`
+	DatasetID  string          `json:"dataset_id"`
+	Frequency  string          `json:"frequency"`
+	PeriodTime int64           `json:"period_time"`
+	Payload    json.RawMessage `json:"payload"`
 }
 
 // Compile with go test -c; the harness atomically replaces clock_file with a
@@ -78,7 +101,8 @@ func TestPeriodNativeProcessHelper(t *testing.T) {
 	})
 	ready := periodProcessReady{
 		NodeID: "period-e2e-node", SpaceID: "period-e2e-space", DatasetID: "period-e2e-dataset",
-		Frequency: "1H", AppID: "moox-collector", DataDir: root,
+		Frequency: "1H", StockSpaceID: "stockcn", StockDatasetID: "dataset_stockcn_equity_kline",
+		AppID: "moox-collector", DataDir: root,
 		ClockFile: filepath.Join(root, "clock"), PrimarySecret: periodHelperSecret(t), NodeSecret: periodHelperSecret(t),
 	}
 	ready.PrimaryAppKey = datanode.ServiceAuthKey(ready.PrimarySecret, ready.AppID)
@@ -115,7 +139,7 @@ func TestPeriodNativeProcessHelper(t *testing.T) {
 			t.Errorf("close helper Pebble: %v", err)
 		}
 	})
-	listeners := make(chan error, 3)
+	listeners := make(chan error, 4)
 	dn, target := periodHelperListener(t, "trpc.moox.storage.DataNodeRuntime")
 	ready.DataNodeTarget = target
 	pb.RegisterDataNodeRuntimeService(dn, node)
@@ -189,6 +213,12 @@ func TestPeriodNativeProcessHelper(t *testing.T) {
 	ready.MetadataTarget = target
 	pb.RegisterMetadataService(ms, metadataRPC)
 	periodHelperServe(t, ms, listeners)
+	outboxListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready.OutboxTarget = outboxListener.Addr().String()
+	periodHelperServeOutbox(t, outboxListener, node, listeners)
 	if err := periodHelperProbe(startup, ready); err != nil {
 		t.Fatalf("helper RPC readiness: %v", err)
 	}
@@ -279,9 +309,95 @@ func periodHelperServe(t *testing.T, service server.Service, failures chan<- err
 	})
 }
 
+func periodHelperServeOutbox(t *testing.T, listener net.Listener, node *datanode.Service, failures chan<- error) {
+	t.Helper()
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/__test/outbox" {
+			http.NotFound(w, r)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		entries, err := node.Store().ListOutbox(ctx, 0, 10000)
+		if err != nil {
+			http.Error(w, "read outbox failed", http.StatusInternalServerError)
+			return
+		}
+		if len(entries) == 10000 {
+			http.Error(w, "outbox exceeds test inspection limit", http.StatusInsufficientStorage)
+			return
+		}
+		snapshot := periodHelperOutboxSnapshot{OutboxCount: len(entries)}
+		for _, entry := range entries {
+			message := &eventpb.EventMessage{}
+			if err := proto.Unmarshal(entry.Data, message); err != nil {
+				http.Error(w, "decode outbox event failed", http.StatusInternalServerError)
+				return
+			}
+			if message.GetEventName() != events.CollectorPeriodCompleted.Name() {
+				continue
+			}
+			payload := &storageeventpb.CollectorPeriodCompleted{}
+			if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
+				http.Error(w, "decode collector period marker failed", http.StatusInternalServerError)
+				return
+			}
+			encodedPayload, err := protojson.Marshal(payload)
+			if err != nil {
+				http.Error(w, "encode collector period marker failed", http.StatusInternalServerError)
+				return
+			}
+			snapshot.CollectorPeriodMarkers = append(snapshot.CollectorPeriodMarkers, periodHelperOutboxMarkerEntry{
+				OutboxID: entry.ID, EventID: message.GetEventId(), SpaceID: message.GetSpaceId(),
+				DatasetID: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), Payload: encodedPayload,
+			})
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snapshot)
+	})}
+	done := make(chan error, 1)
+	go func() {
+		err := server.Serve(listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		done <- err
+		failures <- err
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown helper outbox endpoint: %v", err)
+			_ = server.Close()
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("helper outbox endpoint: %v", err)
+			}
+		case <-ctx.Done():
+			t.Error("helper outbox endpoint did not stop")
+		}
+	})
+}
+
 func periodHelperSeed(t *testing.T, ctx context.Context, meta *metasqlite.Store, ready periodProcessReady) {
 	t.Helper()
 	if _, err := meta.CreateSpace(ctx, &pb.Space{SpaceId: ready.SpaceID, Name: "Period E2E"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := meta.UpsertDataSource(ctx, &pb.DataSource{
+		SpaceId: ready.SpaceID, DataSourceId: "binance", Name: "Period E2E source", Kind: "exchange",
+		Market: "crypto", Timezone: "UTC", Status: "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := meta.CreateTag(ctx, &pb.Tag{
+		SpaceId: ready.SpaceID, TagId: "period_e2e", TagName: "Period E2E", Mode: "auto",
+		Source: "binance", MarketType: "spot",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := meta.RegisterDataNode(ctx, ready.NodeID, ready.DataNodeTarget, "Period E2E node"); err != nil {
@@ -305,6 +421,54 @@ func periodHelperSeed(t *testing.T, ctx context.Context, meta *metasqlite.Store,
 		}
 	}
 	if _, err := meta.CommitDatasetActivation(ctx, ready.SpaceID, ready.DatasetID, dataset.GetRevision()); err != nil {
+		t.Fatal(err)
+	}
+	periodHelperSeedStockCN(t, ctx, meta, ready)
+}
+
+func periodHelperSeedStockCN(t *testing.T, ctx context.Context, meta *metasqlite.Store, ready periodProcessReady) {
+	t.Helper()
+	if _, err := meta.CreateSpace(ctx, &pb.Space{SpaceId: ready.StockSpaceID, Name: "StockCN Period E2E"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := meta.UpsertDataSource(ctx, &pb.DataSource{
+		SpaceId: ready.StockSpaceID, DataSourceId: "sina", Name: "StockCN Period E2E source", Kind: "exchange",
+		Market: "stockcn", Timezone: "Asia/Shanghai", Status: "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := meta.CreateTag(ctx, &pb.Tag{
+		SpaceId: ready.StockSpaceID, TagId: "stockcn_period_e2e", TagName: "StockCN Period E2E", Mode: "auto",
+		Source: "sina", MarketType: "equity",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dataset, err := meta.CreateDataset(ctx, &pb.Dataset{
+		SpaceId: ready.StockSpaceID, DatasetId: ready.StockDatasetID, DataNodeId: ready.NodeID,
+		Name: "StockCN Period E2E Kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"},
+		Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": "stockcn-period-e2e-task"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	columns := map[pb.FieldValueType][]string{
+		pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE: {"open", "high", "low", "close", "volume", "amount"},
+		pb.FieldValueType_FIELD_VALUE_TYPE_STRING: {"instrument_name", "volume_unit", "amount_unit", "provider_symbol", "request_id", "route_id", "source_provider", "quality_status", "amount_quality", "provider_id", "source_id"},
+		pb.FieldValueType_FIELD_VALUE_TYPE_TIME:   {"trade_date", "close_time", "provider_timestamp", "fetched_at"},
+		pb.FieldValueType_FIELD_VALUE_TYPE_INT:    {"route_rank"},
+	}
+	for valueType, names := range columns {
+		for _, name := range names {
+			if _, err := meta.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
+				SpaceId: ready.StockSpaceID, DatasetId: ready.StockDatasetID, ColumnName: name,
+				OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM, OriginId: name,
+				ValueType: valueType, Status: "active",
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := meta.CommitDatasetActivation(ctx, ready.StockSpaceID, ready.StockDatasetID, dataset.GetRevision()); err != nil {
 		t.Fatal(err)
 	}
 }
