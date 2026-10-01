@@ -670,7 +670,7 @@ git diff --check
 
 - [x] **9.1 更新活跃文档。** Collector/Storage README、采集架构、任务管理和 task result 架构文档现已描述周期标的池快照、Timer Claim、Completion、Invoke retry、权威回执与 deadline；明确首次失败可能 missed 且不假 ACK。
 - [x] **9.2 复核唯一列表刷新入口。** 搜索调用点确认外部列表刷新只在 subject-sync runners；Scheduler/reconciler 使用 Metadata `ResolveSubjects`，没有残留刷新调用。
-- [x] **9.3 执行模块级和跨模块门禁。** 原生 macOS arm64 + CGO 环境下全量 `make verify-pr` 成功，包含 proto clean-tree 检查、event/greenfield 合同、EventBus、Storage view capacity、Factor View-ready、DataNode management 和 SCF package gates。`CGO_ENABLED=1 bash scripts/test/contract/test-go-workspace.sh` 全 Workspace 测试与 vet、module boundaries、architecture/Gateway/SCF 文档与包门禁、空库 Schema 加载、Collector period process E2E、五个入口 build、focused race 测试及 `git diff --check` 均通过；过程中的三处旧合同/本机架构假失败已按当前实现修正后复跑。结果仅证明本地门禁，不代表正式发布。
+- [x] **9.3 执行模块级和跨模块门禁。** 原生 macOS arm64 + CGO 环境下全量 `make verify-pr` 成功，包含 proto clean-tree 检查、event/greenfield 合同、EventBus、Storage view capacity、Factor View-ready、DataNode management 和 SCF package gates。`CGO_ENABLED=1 bash scripts/test/contract/test-go-workspace.sh` 全 Workspace 测试与 vet、module boundaries、architecture/Gateway/SCF 文档与包门禁、空库 Schema 加载、Collector period process E2E、五个入口 build、focused race 测试及 `git diff --check` 均通过；过程中的三处旧合同/本机架构假失败已按当前实现修正后复跑。最终 Storage 浏览器 fixture/默认 Space opt-in 补强提交 `22ba03cd` 后，再次运行 `env GOARCH=arm64 CGO_ENABLED=1 make verify-pr` 成功；其 CLI 命令单测、Storage contract 和 Playwright `--list`（3 项）亦通过。结果仅证明本地门禁，不代表正式发布。
 
 本轮文档检查已发现既存前置失败：`make test-docs-architecture` 报 `docs/架构总览.md missing go.work module: tools/moox-mcp`；当前 `go.work` 实际含 55 个 module，脚本仍要求 54 个。实施时先同步真实模块清单和严格数量断言，保留逐模块覆盖检查；不得删除检查、跳过该门禁或把当前结果记为 PASS。
 
@@ -703,7 +703,7 @@ while IFS= read -r schema; do
     sqlite3 :memory: ".read $schema" || exit 1
 done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 ```
-- [x] **9.5 执行独立代码审查及 proto-check。** 两个独立 `codeCR` Agent 分别复审 Storage finalizer 和 Collector/SCF 最近修改；主 Agent 核对文件/符号/测试证据并修复所有阻断发现，最终复审无 P1/P2。已在提交后执行 `make proto-check`，生成无漂移且工作树干净。
+- [x] **9.5 执行独立代码审查及 proto-check。** 两个独立 `codeCR` Agent 分别复审 Storage finalizer 和 Collector/SCF 最近修改；另有 `codeCR` 独立复审 Storage browser fixture/env contract follow-up。主 Agent 核对文件/符号/测试证据，修复 Storage contract 覆盖断言与继承环境变量两项 P2，最终复审无 P1/P2。已在提交后执行 `make proto-check`，生成无漂移且工作树干净。
 - [x] **9.6a 编写协调发布运行手册。** `docs/ops/collector-period-universe-release.md` 已列明无兼容协议的维护窗口、暂停/排空门禁、构建与服务包、Gateway/operator-owned route 有界更新、SCF CA/凭据预算、停止条件、回滚与分层线上证据。需要由获准生产 inventory 填写的值保持空白，不伪造目标范围。
 - [ ] **9.6b 在全部前置条件获批后执行正式发布。** 本地代码、审查及门禁已通过；生产尚未发布。先取得受影响运行态表与 Pebble period key 的只读 inventory，并单独确认明确 Space/Dataset/时间边界、可验证备份与保留行情/任务对象的有界 schema 切换方案；未获该项确认前不暂停生产者、不修改生产配置或数据、不上线。
 - [ ] **9.7 明确 Schema/Pebble 切换前置条件。** 即使没有活跃周期，旧 Collector 表结构和 Pebble snapshot JSON 名称仍不能自动兼容。运行手册列出受影响 Collector DB 与 Storage period key 的范围、备份、受影响运行态表按新 Schema 重建及有界旧 period state 清理方案；保存并核对任务定义、结果 Dataset/View 引用与已有行情行数据。任何清理/重建必须另行授权，不清空整个 Storage 行数据，也不把运行手册中的一次性受授权重建变成产品兼容迁移。当前 `collector task purge` 会调用 DeleteView/DeleteDatasetRows/DeleteDataset，不可作为本次“保留行情与任务”的切换工具；`reset-view-consumers` 也不能证明 period ledger 已处理。若没有可审计、受授权的切换方案就停止，不能以“已 drain”替代 schema 处理。
