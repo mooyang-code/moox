@@ -4,6 +4,10 @@
 
 本手册是执行计划 Task 9 的发布准备文件，不是已发布证明。Task 1 至 Task 8 的实现、编码后独立审查和本地真实进程 E2E 已完成；2026-10-01 的 `make verify-pr`（macOS arm64、CGO enabled）、`proto-check`、Workspace tests/vet、architecture/Gateway/SCF 门禁、Schema 空库加载与目标 build 均通过。正式环境尚未发布，真实 1m/1h 线上周期也尚未验收。不得把本地 build/E2E 记为生产证据。
 
+**2026-10-01 只读运行态检查：** 用户要求按全新项目处理，不实现旧版本数据结构或协议兼容；这不代表正式环境为空，也不自动授权删除现存业务数据。`setup host-diagnostics` 确认 Control 上 `moox-collector` 与 `moox-collector-subject` 正在运行，`/data/moox/prod/data/collector` 约 8.1 GiB；Storage 主机上的 DataNode、Primary、View 正在运行，`/data/moox/storage/data/storage-node/pebble` 约 450 MiB，View indexes 约 367 MiB。Storage 近期日志已有 crypto 与多个 stockcn K 线 Dataset 的历史索引 backfill 记录。因此正式切换必须先确认当前任务、批次、失败回执与 waiting 周期的运行态，并将任何 ledger 重建和保留对象明确分开；不能把“无需兼容历史”推导成全量清库。该检查未修改生产状态。
+
+同日尝试现有 opt-in SQLite 诊断测试：`TestLiveCollectorE2EDiagnostic` 在 30 秒预算内超时，`TestLiveSchedulerDBDiagnostic` 在 90 秒预算内超时，未获得可用的周期级盘点结果。运行态 inventory 仍未完成；不要把目录容量、进程存活或本地状态当作排空证明。
+
 用户已授权编译、正式发布与线上端到端验证；公开 EventBus CA 按计划打包到 `certs/eventbus-ca.pem`。但 Collector 运行态 Schema 与 Pebble snapshot JSON 名称切换不兼容，period-only 清理/重建须先有真实只读 inventory、明确 Space/Dataset/period 时间范围、可验证备份及保留对象，再取得单独确认。当前仓库没有经验证的有界线上迁移/清理工具，因此在这项前置条件解决前不执行生产部署、不修改生产配置或数据。不能自动迁移、双读旧 Pebble snapshot JSON 或让旧 Collector 与新 Storage 混跑。
 
 执行授权前的切换记录至少固定：目标 Space；受影响 Collector SQLite 文件与 schema/table；Storage node 与 Pebble period key 范围；`dataset_id/frequency/period_time` 上下界；任务定义、结果 Dataset/View 引用及已有行情行数/范围；备份对象和 SHA-256、恢复演练结果；获准重建/删除的精确对象；保留对象；操作者和确认记录。当前尚未取得生产 inventory，以上值不得臆造或以默认全量范围替代。
