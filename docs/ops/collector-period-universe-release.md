@@ -10,6 +10,8 @@
 
 本轮只读检查还确认 Collector SQLite 文件约 9.2 GB，Control 根分区约剩 10 GB；Collector 日志有最长约 62 秒的慢 SQL/`context deadline exceeded`。因此不在同一分区创建近等大的备份，也不对在线库启动可能全表扫描的候选 inventory。生产 Collector Schema 是 inventory CLI 不支持的混合旧结构：缺少 `t_collector_period_storage_states`、`t_collector_timer_period_batches`、`t_collector_task_period_series`，retry 表既无旧 `c_period_failure_reported`，也无当前失败回执字段；旧 `t_collector_task_series` 与 readiness 表仍存在。候选工具应对此 fail closed，不得据此自动迁移或将缺表解释为无周期数据。Storage DataNode 仍在运行，尚未取得可离线验证的 Pebble period-key inventory。
 
+**2026-10-01 20:57 CST 最新主机只读复核：** 通过 `setup host-diagnostics` 的安全摘要再次核对 Control 与 Storage。Control 根分区 39 GB、可用约 10 GB，Collector data 目录约 8.6 GB；`moox-collector` 与 `moox-collector-subject` 进程仍运行。Storage 根分区 98 GB、可用约 86 GB，Pebble 目录约 490 MB；DataNode、Primary、View、Access 与 Gateway 进程仍运行。此命令仅读取磁盘/进程摘要；未打印日志正文、未停止进程、未复制数据库、未修改服务配置。该结果再次证明 Pebble inventory 需在获准维护窗口停止 DataNode 后进行，Control 本地空间仍不适合放置近等大小的 SQLite 备份。
+
 只读 CloudNode catalog 检查列出 80 个 `crypto` invoke 节点，未发现 `stockcn` 或 Timer 节点；这不是按 Timer trigger 做的新鲜云侧 readback，不能据此认定没有已启用 Timer。全程未禁用任务、停进程、上传/提交 SCF、改配置或数据。生产 inventory 与一致备份仍未完成，且已有 retry 和 batch 未收尾，故本轮不执行部署或切换。
 
 用户已授权编译、正式发布与线上端到端验证，并明确选择按计划将公开 EventBus CA 打包到 `certs/eventbus-ca.pem`；当前两个本地 SCF 候选均按该选择构建。正式切换仍被上述生产状态阻断：Collector 运行态 Schema 与 Pebble snapshot JSON 名称切换不兼容，period-only 清理/重建须先有可完成的只读 inventory、明确 Space/Dataset/period 时间范围、异机可验证备份及保留对象，再取得针对精确数据范围的单独确认。Control 磁盘余量不足以安全地原地复制 Collector DB，且当前没有经验证的有界线上迁移/清理工具。在这些前置条件解决前不执行生产部署、不修改生产配置或数据。不能自动迁移、双读旧 Pebble snapshot JSON 或让旧 Collector 与新 Storage 混跑。
