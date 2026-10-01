@@ -659,6 +659,7 @@ git diff --check
 - Modify: `docs/策略模块架构设计.md`，仅补回当前发布事件 `LogicalAccountTargetWeightRequested` 的精确名称，不改 Strategy/Trade 行为
 - Modify: `scripts/deploy/deploy-moox.sh`、`scripts/test/contract/test-deploy-moox-gateway.sh`，修复合法空可选 Trade placement 导致 overlay/Admin 启动 `read` EOF 退出；非法配置仍须拒绝
 - Modify: `scripts/test/contract/test-storage-datanode-management-contract.sh`，将过期的 Storage Schema v10 和旧 Dataset 浏览器断言同步到当前 v12 与远端 DataNode/Fields 页面测试
+- Modify: `scripts/test/contract/test-build-storage-linux-contract.sh`，将 GOTMPDIR 远端命令断言同步到当前实际生成的 assignment 语法
 - Modify: `modules/cli/internal/command/collector_task_purge.go`；Create: `collector_task_purge_proxy_test.go`，修复 Workspace vet 暴露的 protobuf 锁浅拷贝及嵌套 Page 共享，不执行 purge
 - Modify: `packages/tradeeventpb/trade_events.proto` 及生成文件、直接依赖的测试 fixture（包含 `reporter_test.go`、`target_timeout_test.go` 的 helper 调用），移除无生产调用的历史兼容消息/字段，不改 Trade store 业务字段；新增 descriptor 回归，不放宽 greenfield 门禁
 - Modify: `modules/strategy/internal/trigger/modern_test.go`，仅将已过 7 天去重 TTL 的固定旧日期 fixture 改为当前时钟的相同 17 分钟过期距离，不改生产 TTL 或拒绝/确认断言
@@ -677,7 +678,7 @@ git diff --check
 
 独立工作区的实跑还定位到两处真实部署缺陷：`patch_configs` 和生成的 `start_admin` 在合法空可选 `trade-gateway.json` 时，Python 不输出、`read` EOF 返回 1，触发 `set -e`。按现有 `import_trade_owner_route` 的模式捕获 producer 结果与退出码，仅合法空配置跳过 `read`；半缺失字段、非法 JSON/URL/node 仍 fail closed。用生成 Admin placement block 与真实 overlay 的空/合法/非法 fixture 做红绿回归，不能填假 Trade node 掩盖缺陷；这是门禁前置修复，不改变 Strategy/Trade 业务规则。
 
-2026-10-01 最终 `make verify-pr` 首次尝试遇到两项环境/契约漂移：Factor E2E 继承登录 Shell 的 `GOARCH=amd64, CGO_ENABLED=0`，使 macOS arm64 的 DuckDB bindings 选错构建目标；以 `GOARCH=arm64 CGO_ENABLED=1` 单独重跑该脚本通过。随后 DataNode management contract 仍要求旧 Schema v10 和已从 remote UI 场景删除的 Dataset 页面断言；已按当前 Schema v12 与实际 DataNode/Fields 测试更新断言。全量 `make verify-pr` 正在用原生架构、启用 CGO 的环境重新执行，尚未记为 PASS。
+2026-10-01 最终 `make verify-pr` 执行中发现本机登录 Shell 默认 `GOARCH=amd64, CGO_ENABLED=0`，Factor E2E 的 macOS arm64 DuckDB bindings 因交叉目标选择失败；以 `GOARCH=arm64 CGO_ENABLED=1` 单独重跑该脚本通过。DataNode management contract 仍要求旧 Schema v10 和已从 remote UI 场景删除的 Dataset 页面断言，且 Storage Linux build contract 将无语义差异的 GOTMPDIR 赋值要求成带引号文本；三项断言已按当前 schema、UI 场景及 shell 实际参数更新，各自目标通过。完整 `make verify-pr` 将在提交后用原生架构、启用 CGO 的环境重跑，尚未记为 PASS。
 
 ```bash
 go -C modules/collector test -count=1 ./...
