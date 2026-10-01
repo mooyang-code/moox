@@ -774,3 +774,5 @@ done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 本轮最终计划复核还指出 Timer 积压领取顺序、普通 JSON map 无法查重、Dataset 标签无界三项；主 Agent 已核验 assignment、Storage 凭据入口、任务结果身份和标准 JSON decoder 的实际行为，分别补入 Task 6、7、5 及验收矩阵。没有增加另一个运行协议、迁移体系或监控子系统。
 
 本次接续更新在主工作区 `06972d14` 上再次由 Storage、Collector 两路 `codeCR` 分别只读复核，均为 PASS、无新增阻断项；主 Agent 独立核验了生产 adapter、Ensure 授权、终态 Record 分支、Timer 请求与 Completion、Storage 包装器、失败适配器、清理 SQL 和任务结果身份约束。仅更新文档基线、分项实施状态与门禁前置文件清单，未继续业务编码；全部实施复选框仍未勾选。上述计划复核不替代编码完成后的独立审查或端到端验收。
+
+2026-10-01 Timer Claim follow-up：修复冻结 request/manifest/batch/TaskInstance/WriteTarget 的 claim 前一致性校验，并使周期终态后的 replay 在清理依赖的 membership 前返回 no-work；规划阶段派生 canonical 逻辑 TaskInstance 身份。新起 `codeCR` 与独立嵌套复核未发现剩余问题。最新 `go test ./... -count=1`（Collector module）、Timer focused race、`make test-collector-period-universe-e2e` 和 `env GOARCH=arm64 CGO_ENABLED=1 make verify-pr` 均通过。此处仅记录本地测试、真实本地进程 E2E 与构建/合同门禁；未部署生产，真实 1m/1h 周期验收仍待完成，Task 9.7-9.9 不勾选。
