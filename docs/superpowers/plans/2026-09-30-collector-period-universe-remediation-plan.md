@@ -716,6 +716,8 @@ done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 
 2026-10-01 当前提交复验：`env GOARCH=arm64 CGO_ENABLED=1 make verify-pr` 在 `2eef8b23` 全量通过，包含 Proto 生成/clean 检查、greenfield/event contracts、Workspace 测试、Storage E2E、Linux build contract 与 SCF package contract；Proto 无漂移，复验后工作树干净。该门禁是本地仓库证据，不代表正式部署或线上采集验收。
 
+2026-10-01 21:19 CST 当前代码树复验：`make test-collector-period-universe-e2e` 退出码 0；脚本逐项确认 30 个 Collector 真实 RPC 进程场景全部 `SCENARIO PASS`，并确认真实 Pebble finalizer -> JetStream publisher/relay -> durable pull consumer ACK 场景通过。此为本地进程级 E2E，不替代正式环境 1m/1h 数据验收。
+
 2026-10-01 接续复验：最新文档提交 `84a188f4` 下重新运行 `env GOARCH=arm64 CGO_ENABLED=1 make verify-pr`，Proto 无漂移，greenfield/event contracts、Storage E2E、Storage Linux build contract 与 SCF package contract 全部通过。未设置架构的 `make verify-pr` 在本机 Go 默认 `GOARCH=amd64, CGO_ENABLED=0` 下于 DuckDB Darwin/amd64 binding 编译失败；这不是业务测试失败，使用本机原生 arm64/cgo 环境后完整门禁通过。现有候选包摘要与 ZIP 完整性再次核对一致。该复验不改变正式发布和线上验收未完成的状态。
 
 - [ ] **9.7 明确 Schema/Pebble 切换前置条件。** 即使没有活跃周期，旧 Collector 表结构和 Pebble snapshot JSON 名称仍不能自动兼容。运行手册列出受影响 Collector DB 与 Storage period key 的范围、备份、受影响运行态表按新 Schema 重建及有界旧 period state 清理方案；保存并核对任务定义、结果 Dataset/View 引用与已有行情行数据。任何清理/重建必须另行授权，不清空整个 Storage 行数据，也不把运行手册中的一次性受授权重建变成产品兼容迁移。当前 `collector task purge` 会调用 DeleteView/DeleteDatasetRows/DeleteDataset，不可作为本次“保留行情与任务”的切换工具；`reset-view-consumers` 也不能证明 period ledger 已处理。若没有可审计、受授权的切换方案就停止，不能以“已 drain”替代 schema 处理。
