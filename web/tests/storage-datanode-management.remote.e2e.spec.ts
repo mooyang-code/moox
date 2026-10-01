@@ -6,9 +6,19 @@ test.describe.configure({ mode: "serial" });
 
 type RpcBody = {
   ret_info?: { code?: number | string; msg?: string };
-  items?: Array<{ node?: { node_id?: string }; datasets?: Array<{ dataset_id?: string; name?: string }> }>;
+  items?: Array<{
+    node?: { node_id?: string };
+    datasets?: Array<{ space_id?: string; dataset_id?: string; name?: string }>;
+  }>;
   spaces?: Array<{ space_id?: string; name?: string }>;
   fields?: Array<{ field_id?: string; name?: string }>;
+};
+
+type BrowserFixture = {
+  space_id: string;
+  dataset_id: string;
+  dataset_name: string;
+  data_node_id: string;
 };
 
 type RpcExchange = {
@@ -44,6 +54,21 @@ function waitForMethodExchange(page: Page, method: string, service = "storage", 
 
 function waitForMethod(page: Page, method: string, service = "storage") {
   return waitForMethodExchange(page, method, service).then(exchange => exchange.body);
+}
+
+function browserFixture(): BrowserFixture {
+  const raw = process.env.MOOX_REMOTE_STORAGE_FIXTURE;
+  if (!raw) throw new Error("remote_storage_fixture_missing");
+  let fixture: BrowserFixture;
+  try {
+    fixture = JSON.parse(raw) as BrowserFixture;
+  } catch {
+    throw new Error("remote_storage_fixture_invalid");
+  }
+  for (const key of ["space_id", "dataset_id", "dataset_name", "data_node_id"] as const) {
+    if (!fixture[key]) throw new Error(`remote_storage_fixture_${key}_missing`);
+  }
+  return fixture;
 }
 
 async function login(page: Page) {
@@ -129,11 +154,32 @@ async function openFieldPage(page: Page, expected: { spaceID: string; spaceName:
   return fieldsExchange.body;
 }
 
-test("remote desktop covers DataNode details", async ({ page }) => {
-  test.skip(process.env.MOOX_REMOTE_DEFAULT_SETUP === "1", "covered by the standard remote acceptance run");
+test("remote desktop verifies DataNode details and fixture binding", async ({ page }) => {
   await login(page);
+  const fixture = browserFixture();
   const nodeBody = await openDataNodePage(page, "unknown");
   await expectInfoTooltip(page, "数据节点说明", "Dataset 直接绑定 DataNode");
+
+  const fixtureNode = nodeBody.items?.find(item => item.node?.node_id === fixture.data_node_id);
+  expect(fixtureNode, `browser fixture DataNode ${fixture.data_node_id} must be listed`).toBeTruthy();
+  expect(
+    fixtureNode?.datasets?.some(
+      summary =>
+        summary.space_id === fixture.space_id &&
+        summary.dataset_id === fixture.dataset_id &&
+        summary.name === fixture.dataset_name
+    ),
+    `browser fixture Dataset ${fixture.space_id}/${fixture.dataset_id} must be bound to its DataNode`
+  ).toBeTruthy();
+
+  const fixtureRow = page.getByRole("row").filter({ hasText: fixture.data_node_id }).first();
+  await expect(fixtureRow).toBeVisible();
+  await expect(fixtureRow).toContainText(fixture.dataset_name);
+  await fixtureRow.getByRole("button", { name: "查看" }).click();
+  const detailModal = page.getByTestId("data-node-detail-modal");
+  await expect(detailModal).toBeVisible();
+  await expect(detailModal.getByRole("row").filter({ hasText: fixture.dataset_id })).toBeVisible();
+  await page.keyboard.press("Escape");
 
   const firstNode = page.getByRole("row").nth(1);
   await expect(firstNode).toBeVisible();
@@ -143,15 +189,9 @@ test("remote desktop covers DataNode details", async ({ page }) => {
     const label = summary.name || summary.dataset_id;
     if (label) await expect(firstNode).toContainText(label);
   }
-  await firstNode.getByRole("button", { name: "查看" }).click();
-  const detailModal = page.getByTestId("data-node-detail-modal");
-  await expect(detailModal).toBeVisible();
-  await expect(detailModal.getByRole("heading", { name: "Dataset" })).toBeVisible();
-  await page.keyboard.press("Escape");
 });
 
 test("remote mobile keeps the DataNode workflow inside the viewport", async ({ page }) => {
-  test.skip(process.env.MOOX_REMOTE_DEFAULT_SETUP === "1", "covered by the standard remote acceptance run");
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page);
 
@@ -171,7 +211,7 @@ test("remote mobile keeps the DataNode workflow inside the viewport", async ({ p
 });
 
 test("remote default setup exposes each business Space's Fields", async ({ page }) => {
-  test.skip(process.env.MOOX_REMOTE_DEFAULT_SETUP !== "1", "default-setup acceptance is opt-in");
+  test.skip(process.env.MOOX_REMOTE_DEFAULT_SETUP !== "1", "default-space checks require --default-spaces");
   await login(page);
 
   for (const expected of [

@@ -357,19 +357,23 @@ moox-cli setup deploy-storage \
 moox-cli setup verify-storage --file ./moox.toml --host compute
 moox-cli setup e2e-storage --file ./moox.toml --host compute --namespace codex-storage
 moox-cli setup browser-e2e-storage --file ./moox.toml --host compute --repo-root .
+# 可选：额外核对默认 stockcn/crypto 业务 Space
+moox-cli setup browser-e2e-storage --file ./moox.toml --host compute --repo-root . --default-spaces
 ```
 
-`verify-storage` 通过 CLI 管理的 SSH 隧道检查组件就绪、Schema v6、二进制哈希、
+`verify-storage` 通过 CLI 管理的 SSH 隧道检查组件就绪、Schema v12、二进制哈希、
 签名 DataNode 身份以及 Dataset 汇总，并只输出脱敏的状态、ID、数量和版本信息。
 `e2e-storage` 使用调用方提供的短命名空间创建禁用 Dataset，执行激活自检和 revision
 激活，再通过支持的接口清理临时 Space、DataSource 和 Dataset；即使断言失败也会报告
 清理结果。命名空间必须是安全的短标识符。
 
 `browser-e2e-storage` 只启动远端 Storage 管理台 Playwright 用例，覆盖桌面和 390px
-移动视口的 DataNode/Dataset 页面、详情、Info 提示和激活自检。登录材料由 setup CLI
-通过子进程 stdin 传给 global setup，只在验证进程内存中使用；不会出现在 argv、日志、
-临时文件、截图、trace、video 或 Playwright `storageState` 中。三个命令都要求显式
-指定 Storage 主机，`moox.toml` 只能由 setup CLI 读取且始终保持不变。
+移动视口的 DataNode 列表、详情、Info 提示，以及隔离 Dataset 在 DataNode 上的绑定摘要。
+传入 `--default-spaces` 时额外核对 `stockcn`、`crypto` 两个业务 Space 的 Fields；该浏览器流程只读远端
+业务元数据，Dataset 激活/锁定和 rebind 生命周期由 `e2e-storage` 的服务 E2E 覆盖。
+登录材料由 setup CLI 通过子进程 stdin 传给 global setup，只在验证进程内存中使用；不会
+出现在 argv、日志、临时文件、截图、trace、video 或 Playwright `storageState` 中。
+三个命令都要求显式指定 Storage 主机，`moox.toml` 只能由 setup CLI 读取且始终保持不变。
 
 ## 构建
 

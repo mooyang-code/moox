@@ -2,7 +2,7 @@
 
 ## 状态与边界
 
-本手册是执行计划 Task 9 的发布准备文件，不是已发布证明。Task 1 至 Task 8 的实现、编码后独立审查和本地真实进程 E2E 已完成；最终 `make verify-pr` 与提交后的 `proto-check` 仍待执行。正式环境尚未发布，真实 1m/1h 线上周期也尚未验收。不得把本地 build/E2E 记为生产证据。
+本手册是执行计划 Task 9 的发布准备文件，不是已发布证明。Task 1 至 Task 8 的实现、编码后独立审查和本地真实进程 E2E 已完成；2026-10-01 的 `make verify-pr`（macOS arm64、CGO enabled）、`proto-check`、Workspace tests/vet、architecture/Gateway/SCF 门禁、Schema 空库加载与目标 build 均通过。正式环境尚未发布，真实 1m/1h 线上周期也尚未验收。不得把本地 build/E2E 记为生产证据。
 
 用户已授权编译、正式发布与线上端到端验证；公开 EventBus CA 按计划打包到 `certs/eventbus-ca.pem`。但 Collector 运行态 Schema 与 Pebble snapshot JSON 名称切换不兼容，period-only 清理/重建须先有真实只读 inventory、明确 Space/Dataset/period 时间范围、可验证备份及保留对象，再取得单独确认。当前仓库没有经验证的有界线上迁移/清理工具，因此在这项前置条件解决前不执行生产部署、不修改生产配置或数据。不能自动迁移、双读旧 Pebble snapshot JSON 或让旧 Collector 与新 Storage 混跑。
 

@@ -53,7 +53,7 @@ type setupDeps struct {
 	importMetadata         func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
 	verifyStorage          func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
 	e2eStorage             func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
-	browserE2EStorage      func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
+	browserE2EStorage      func(context.Context, *setupconfig.Snapshot, string, string, bool) (storageBrowserResult, error)
 	e2eEventBus            func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error)
 	exportSkillConfig      func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
 	ensureFirewall         func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)

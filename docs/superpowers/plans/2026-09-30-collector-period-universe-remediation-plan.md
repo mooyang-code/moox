@@ -658,7 +658,7 @@ git diff --check
 - Modify: `docs/架构总览.md`、`scripts/test/contract/test-docs-architecture.sh`，只修复已核验的 Workspace 模块清单及其数量断言漂移
 - Modify: `docs/策略模块架构设计.md`，仅补回当前发布事件 `LogicalAccountTargetWeightRequested` 的精确名称，不改 Strategy/Trade 行为
 - Modify: `scripts/deploy/deploy-moox.sh`、`scripts/test/contract/test-deploy-moox-gateway.sh`，修复合法空可选 Trade placement 导致 overlay/Admin 启动 `read` EOF 退出；非法配置仍须拒绝
-- Modify: `scripts/test/contract/test-storage-datanode-management-contract.sh`，将过期的 Storage Schema v10 和旧 Dataset 浏览器断言同步到当前 v12 与远端 DataNode/Fields 页面测试
+- Modify: `scripts/test/contract/test-storage-datanode-management-contract.sh`，将过期的 Storage Schema v10 断言同步到当前 v12，并校验远端 DataNode fixture binding、默认业务 Fields 以及 Storage lifecycle E2E 覆盖
 - Modify: `scripts/test/contract/test-build-storage-linux-contract.sh`，将 GOTMPDIR 远端命令断言同步到当前实际生成的 assignment 语法
 - Modify: `modules/cli/internal/command/collector_task_purge.go`；Create: `collector_task_purge_proxy_test.go`，修复 Workspace vet 暴露的 protobuf 锁浅拷贝及嵌套 Page 共享，不执行 purge
 - Modify: `packages/tradeeventpb/trade_events.proto` 及生成文件、直接依赖的测试 fixture（包含 `reporter_test.go`、`target_timeout_test.go` 的 helper 调用），移除无生产调用的历史兼容消息/字段，不改 Trade store 业务字段；新增 descriptor 回归，不放宽 greenfield 门禁
@@ -670,7 +670,7 @@ git diff --check
 
 - [x] **9.1 更新活跃文档。** Collector/Storage README、采集架构、任务管理和 task result 架构文档现已描述周期标的池快照、Timer Claim、Completion、Invoke retry、权威回执与 deadline；明确首次失败可能 missed 且不假 ACK。
 - [x] **9.2 复核唯一列表刷新入口。** 搜索调用点确认外部列表刷新只在 subject-sync runners；Scheduler/reconciler 使用 Metadata `ResolveSubjects`，没有残留刷新调用。
-- [ ] **9.3 执行模块级和跨模块门禁。** 当前 review baseline 的局部测试/build 成功不替代新增验收。以下命令必须全部成功并保留日志：
+- [x] **9.3 执行模块级和跨模块门禁。** 原生 macOS arm64 + CGO 环境下全量 `make verify-pr` 成功，包含 proto clean-tree 检查、event/greenfield 合同、EventBus、Storage view capacity、Factor View-ready、DataNode management 和 SCF package gates。`CGO_ENABLED=1 bash scripts/test/contract/test-go-workspace.sh` 全 Workspace 测试与 vet、module boundaries、architecture/Gateway/SCF 文档与包门禁、空库 Schema 加载、Collector period process E2E、五个入口 build、focused race 测试及 `git diff --check` 均通过；过程中的三处旧合同/本机架构假失败已按当前实现修正后复跑。结果仅证明本地门禁，不代表正式发布。
 
 本轮文档检查已发现既存前置失败：`make test-docs-architecture` 报 `docs/架构总览.md missing go.work module: tools/moox-mcp`；当前 `go.work` 实际含 55 个 module，脚本仍要求 54 个。实施时先同步真实模块清单和严格数量断言，保留逐模块覆盖检查；不得删除检查、跳过该门禁或把当前结果记为 PASS。
 
@@ -678,7 +678,7 @@ git diff --check
 
 独立工作区的实跑还定位到两处真实部署缺陷：`patch_configs` 和生成的 `start_admin` 在合法空可选 `trade-gateway.json` 时，Python 不输出、`read` EOF 返回 1，触发 `set -e`。按现有 `import_trade_owner_route` 的模式捕获 producer 结果与退出码，仅合法空配置跳过 `read`；半缺失字段、非法 JSON/URL/node 仍 fail closed。用生成 Admin placement block 与真实 overlay 的空/合法/非法 fixture 做红绿回归，不能填假 Trade node 掩盖缺陷；这是门禁前置修复，不改变 Strategy/Trade 业务规则。
 
-2026-10-01 最终 `make verify-pr` 执行中发现本机登录 Shell 默认 `GOARCH=amd64, CGO_ENABLED=0`，Factor E2E 的 macOS arm64 DuckDB bindings 因交叉目标选择失败；以 `GOARCH=arm64 CGO_ENABLED=1` 单独重跑该脚本通过。DataNode management contract 仍要求旧 Schema v10 和已从 remote UI 场景删除的 Dataset 页面断言，且 Storage Linux build contract 将无语义差异的 GOTMPDIR 赋值要求成带引号文本；三项断言已按当前 schema、UI 场景及 shell 实际参数更新，各自目标通过。完整 `make verify-pr` 将在提交后用原生架构、启用 CGO 的环境重跑，尚未记为 PASS。
+2026-10-01 最终 `make verify-pr` 执行中发现本机登录 Shell 默认 `GOARCH=amd64, CGO_ENABLED=0`，Factor E2E 的 macOS arm64 DuckDB bindings 因交叉目标选择失败；以 `GOARCH=arm64 CGO_ENABLED=1` 单独重跑该脚本通过。DataNode management contract 仍要求旧 Schema v10 和已从 remote UI 场景删除的 Dataset 页面断言，且 Storage Linux build contract 将无语义差异的 GOTMPDIR 赋值要求成带引号文本；三项断言已按当前 schema、UI 场景及 shell 实际参数更新，各自目标通过。随后 `env GOARCH=arm64 CGO_ENABLED=1 make verify-pr` 完整成功，`proto-check` 确认生成无漂移且工作树干净。
 
 ```bash
 go -C modules/collector test -count=1 ./...
@@ -703,8 +703,9 @@ while IFS= read -r schema; do
     sqlite3 :memory: ".read $schema" || exit 1
 done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 ```
-- [ ] **9.5 执行独立代码审查及 proto-check。** 两个独立 `codeCR` Agent 分别复审 Storage finalizer 和 Collector/SCF 最近修改；主 Agent 已核对证据并处理所有阻断发现，复审无 P1/P2。`make proto` 已成功且无额外生成文件变化；待提交后运行 `make proto-check`，确认 clean-tree 且无生成漂移后勾选。
-- [ ] **9.6 编写协调发布运行手册，并在全部前置门禁通过后执行正式发布。** 明确采用无兼容协议的维护窗口，不做滚动混跑。先暂停新周期规划和 Timer 触发，同时让旧 in-flight/重试/报告及 Storage finalizer 收尾；未决数量和真实 Storage 状态是门禁，不仅是“等了几分钟”。旧状态无法收尾时停止发布，由用户另行决定有明确 Space/Dataset/时间范围的备份与重置，不在脚本中自动 reset。
+- [x] **9.5 执行独立代码审查及 proto-check。** 两个独立 `codeCR` Agent 分别复审 Storage finalizer 和 Collector/SCF 最近修改；主 Agent 核对文件/符号/测试证据并修复所有阻断发现，最终复审无 P1/P2。已在提交后执行 `make proto-check`，生成无漂移且工作树干净。
+- [x] **9.6a 编写协调发布运行手册。** `docs/ops/collector-period-universe-release.md` 已列明无兼容协议的维护窗口、暂停/排空门禁、构建与服务包、Gateway/operator-owned route 有界更新、SCF CA/凭据预算、停止条件、回滚与分层线上证据。需要由获准生产 inventory 填写的值保持空白，不伪造目标范围。
+- [ ] **9.6b 在全部前置条件获批后执行正式发布。** 本地代码、审查及门禁已通过；生产尚未发布。先取得受影响运行态表与 Pebble period key 的只读 inventory，并单独确认明确 Space/Dataset/时间边界、可验证备份与保留行情/任务对象的有界 schema 切换方案；未获该项确认前不暂停生产者、不修改生产配置或数据、不上线。
 - [ ] **9.7 明确 Schema/Pebble 切换前置条件。** 即使没有活跃周期，旧 Collector 表结构和 Pebble snapshot JSON 名称仍不能自动兼容。运行手册列出受影响 Collector DB 与 Storage period key 的范围、备份、受影响运行态表按新 Schema 重建及有界旧 period state 清理方案；保存并核对任务定义、结果 Dataset/View 引用与已有行情行数据。任何清理/重建必须另行授权，不清空整个 Storage 行数据，也不把运行手册中的一次性受授权重建变成产品兼容迁移。当前 `collector task purge` 会调用 DeleteView/DeleteDatasetRows/DeleteDataset，不可作为本次“保留行情与任务”的切换工具；`reset-view-consumers` 也不能证明 period ledger 已处理。若没有可审计、受授权的切换方案就停止，不能以“已 drain”替代 schema 处理。
 - [ ] **9.8 固定实际发布顺序及停止条件。** 停止旧生产者后，以同一构建版本准备 Storage/Collector/SCF/Gateway route 与受管理环境；验证新的四个 Storage RPC 和 Claim、caller ACL、Timer EventBus、总环境 <=4096、Invoke retry 容量后才恢复 Timer/规划。禁止“先升级 Storage、旧 Collector 继续运行”。所有节点/proto/SCF package 不一致、pending 漏报不可解释或新 Schema 初始化失败立即停止恢复采集。
 - [ ] **9.8a 明确存量部署配置的受控应用与回滚。** Gateway 的真实来源是 Admin 中 active deployment，不是工作区 YAML；非空 `gateway_routes` 为 operator-owned，不会自动合并新默认值。运行手册要求先导出并备份各目标 node 的 `storage-primary`、Collector runtime deployment 及受影响市场 Dataset metadata，生成逐行差异，只修改本次 period/Claim route 和 owner 属性，保留其余 operator 配置。使用现有 service-deployment scoped import/update 应用，注意 import 会覆盖整份 `extra_config`，不得直接拿全量默认 seed 覆盖所有生产行。明确失败时恢复原行的命令及停采条件；等待 Gateway 实际 applied route hash 与 Admin snapshot 一致，正向验证四个 RPC + Claim、反向验证非 Collector 零上游调用，再恢复生产者。上线授权前仅准备命令和脱敏差异，不执行更新。

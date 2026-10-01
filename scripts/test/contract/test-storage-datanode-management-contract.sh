@@ -115,9 +115,17 @@ require_regex modules/storage/cmd/cli/main.go 'RegisterDataNode' 'deployment reg
 require_regex modules/cli/internal/doctor/storage_activation.go 'CheckDatasetActivation' 'read-only Doctor activation check'
 require_regex web/src/views/ops/storage/nodes.vue 'DataNode|data_node' 'DataNode management UI'
 require_regex web/src/views/data/datasets/index.vue 'activateDataset|rebindDatasetDataNode|data_node_id' 'Dataset activation and binding UI'
-require_regex modules/cli/internal/command/setup_storage.go 'createStorageBrowserFixture|MOOX_REMOTE_STORAGE_FIXTURE|browser_e2e_cleanup_failed' 'isolated remote browser fixture lifecycle'
-require_regex web/tests/storage-datanode-management.remote.e2e.spec.ts 'remote desktop covers DataNode details' 'remote DataNode details browser assertion'
-require_regex web/tests/storage-datanode-management.remote.e2e.spec.ts 'remote default setup exposes each business Space.s Fields' 'remote business Space Fields browser assertions'
+require_text modules/cli/internal/command/setup_storage.go 'func createStorageBrowserFixture(' 'isolated remote browser fixture lifecycle'
+require_text modules/cli/internal/command/setup_storage.go '"MOOX_REMOTE_STORAGE_FIXTURE="+mustMarshalStorageBrowserFixture(fixture)' 'fixture is passed to the remote browser'
+require_text modules/cli/internal/command/setup_storage.go '"default-spaces", false, "额外验证 stockcn 和 crypto 业务 Space"' 'default-space acceptance CLI option'
+require_text modules/cli/internal/command/setup_storage.go 'func storageBrowserEnvironment(' 'explicit browser default-space environment builder'
+require_text modules/cli/internal/command/setup_storage.go 'name == "MOOX_REMOTE_DEFAULT_SETUP"' 'inherited default-space mode is removed'
+require_text modules/cli/internal/command/setup_storage_test.go 'TestStorageBrowserEnvironmentOwnsDefaultSpaceMode' 'default-space environment override regression test'
+require_text modules/cli/internal/command/setup_storage.go 'browser_e2e_cleanup_failed' 'remote browser fixture cleanup guard'
+require_text web/tests/storage-datanode-management.remote.e2e.spec.ts 'function browserFixture()' 'remote browser consumes its isolated fixture'
+require_text web/tests/storage-datanode-management.remote.e2e.spec.ts 'browser fixture Dataset ${fixture.space_id}/${fixture.dataset_id} must be bound to its DataNode' 'remote browser verifies fixture binding'
+require_text web/tests/storage-datanode-management.remote.e2e.spec.ts "remote default setup exposes each business Space's Fields" 'remote business Space Fields browser assertion'
+require_regex modules/storage/internal/service/e2e/datanode_management_test.go 'TestDataNodeManagementLifecycle|lockedRebind|CheckDatasetActivation|ActivateDataset' 'Storage lifecycle E2E coverage'
 
 forbidden_matches="$(rg -n -i --no-heading "${scan_globs[@]}" \
   -e 'primarystorenode' \

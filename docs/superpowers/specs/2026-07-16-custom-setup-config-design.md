@@ -261,14 +261,16 @@ resources even after an assertion failure. Its JSON contains only sanitized
 IDs, check IDs, revisions, statuses, and cleanup state.
 
 `browser-e2e-storage` runs the remote Playwright spec against the named Admin
-UI and covers DataNode and Dataset workflows at desktop and 390px mobile
-viewports. The setup process sends `base_url`, username, and password through
-the child process stdin to `remote-auth-global-setup.ts`; credentials remain
-in memory for the run and are never placed in argv, logs, artifacts, or
-browser storage. Remote mode registers only the remote project, disables
-trace/video, leaves `storageState` unset, and does not start a local web server.
-The browser spec uses the deployed API rather than synthetic fixtures and does
-not perform destructive Dataset or DataNode mutations.
+UI and covers DataNode details plus the CLI-created isolated Dataset binding at
+desktop and 390px mobile viewports. Passing `--default-spaces` additionally checks
+Fields in the `stockcn` and `crypto` business Spaces. Dataset activation/locking and
+rebind lifecycle remain in `e2e-storage` and Storage service E2E tests; the
+browser run only reads existing business metadata and cleans up its own fixture.
+The setup process sends `base_url`, username, and password through the child
+process stdin to `remote-auth-global-setup.ts`; credentials remain in memory
+for the run and are never placed in argv, logs, artifacts, or browser storage.
+Remote mode registers only the remote project, disables trace/video, leaves
+`storageState` unset, and does not start a local web server.
 
 ## Admin Setup Service
 

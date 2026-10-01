@@ -82,6 +82,7 @@ type storageBrowserFixture struct {
 	SourceID    string `json:"data_source_id"`
 	DatasetID   string `json:"dataset_id"`
 	DatasetName string `json:"dataset_name"`
+	DataNodeID  string `json:"data_node_id"`
 }
 
 type storageBuildProvenance struct {
@@ -400,13 +401,14 @@ func newSetupE2EStorageCommand(deps setupDeps) *cobra.Command {
 
 func newSetupBrowserE2EStorageCommand(deps setupDeps) *cobra.Command {
 	var file, host, repoRoot string
+	var defaultSpaces bool
 	cmd := &cobra.Command{Use: "browser-e2e-storage", Short: "运行远端 Storage 管理台浏览器验证", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		result, err := deps.browserE2EStorage(cmd.Context(), snapshot, host, repoRoot)
+		result, err := deps.browserE2EStorage(cmd.Context(), snapshot, host, repoRoot, defaultSpaces)
 		if err != nil {
 			return err
 		}
@@ -418,6 +420,7 @@ func newSetupBrowserE2EStorageCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&host, "host", "", "Storage/Admin 目标主机名称")
 	cmd.Flags().StringVar(&repoRoot, "repo-root", "", "仓库根目录")
+	cmd.Flags().BoolVar(&defaultSpaces, "default-spaces", false, "额外验证 stockcn 和 crypto 业务 Space")
 	_ = cmd.MarkFlagRequired("host")
 	_ = cmd.MarkFlagRequired("repo-root")
 	return cmd
@@ -1150,6 +1153,22 @@ func mustMarshalStorageBrowserFixture(fixture storageBrowserFixture) string {
 	return string(raw)
 }
 
+func storageBrowserEnvironment(environ []string, defaultSpaces bool) []string {
+	filtered := make([]string, 0, len(environ)+1)
+	for _, entry := range environ {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && name == "MOOX_REMOTE_DEFAULT_SETUP" {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	defaultSpacesValue := "0"
+	if defaultSpaces {
+		defaultSpacesValue = "1"
+	}
+	return append(filtered, "MOOX_REMOTE_DEFAULT_SETUP="+defaultSpacesValue)
+}
+
 func storageBrowserBaseURL(publicHost, localAddress string) (string, error) {
 	publicHost = strings.TrimSpace(publicHost)
 	if publicHost == "" {
@@ -1244,6 +1263,7 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 	if err != nil {
 		return fixture, cleanup, err
 	}
+	fixture.DataNodeID = node.GetNodeId()
 	dataset.DataNodeId = node.GetNodeId()
 	datasetResponse, err := session.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: session.auth, Dataset: dataset})
 	if err != nil || datasetResponse == nil || datasetResponse.GetRetInfo() == nil || datasetResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || datasetResponse.GetDataset() == nil {
@@ -1393,7 +1413,7 @@ func parseStorageBrowserTime(value string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name, repoRoot string) (storageBrowserResult, error) {
+func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name, repoRoot string, defaultSpaces bool) (storageBrowserResult, error) {
 	if snapshot == nil || strings.TrimSpace(repoRoot) == "" {
 		return storageBrowserResult{}, errors.New("browser_e2e_invalid")
 	}
@@ -1459,7 +1479,7 @@ curl -kfsS https://127.0.0.1:9527/ >/dev/null`, "moox-browser-e2e", controlRoot}
 	if err != nil {
 		return storageBrowserResult{}, err
 	}
-	command.Env = append(os.Environ(),
+	command.Env = append(storageBrowserEnvironment(os.Environ(), defaultSpaces),
 		"MOOX_REMOTE_PLAYWRIGHT=1",
 		"MOOX_REMOTE_BASE_URL="+baseURL,
 		"MOOX_REMOTE_FORWARD_HOST="+strings.TrimSpace(host.Address),

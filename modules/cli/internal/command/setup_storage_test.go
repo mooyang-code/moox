@@ -20,6 +20,7 @@ func TestSetupStorageCommandsRequireExplicitHostAndSanitizeResults(t *testing.T)
 	snapshot := setupSnapshot(t)
 	const secret = "admin-test-password"
 	verifyCalls, e2eCalls, browserCalls := 0, 0, 0
+	var browserDefaultSpaces []bool
 	deps := setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
 		verifyStorage: func(_ context.Context, _ *setupconfig.Snapshot, host string) (storageVerifyResult, error) {
@@ -38,8 +39,9 @@ func TestSetupStorageCommandsRequireExplicitHostAndSanitizeResults(t *testing.T)
 			require.Equal(t, "task16", namespace)
 			return storageE2EResult{Status: "passed", Namespace: namespace, Assertions: []string{"space_created", "dataset_activated_locked"}, Cleanup: "completed"}, nil
 		},
-		browserE2EStorage: func(_ context.Context, _ *setupconfig.Snapshot, host, root string) (storageBrowserResult, error) {
+		browserE2EStorage: func(_ context.Context, _ *setupconfig.Snapshot, host, root string, defaultSpaces bool) (storageBrowserResult, error) {
 			browserCalls++
+			browserDefaultSpaces = append(browserDefaultSpaces, defaultSpaces)
 			require.Equal(t, "compute", host)
 			require.Equal(t, "/repo", root)
 			return storageBrowserResult{Status: "passed", Desktop: "passed", Mobile: "passed"}, nil
@@ -54,6 +56,7 @@ func TestSetupStorageCommandsRequireExplicitHostAndSanitizeResults(t *testing.T)
 		{name: "verify", args: []string{"verify-storage", "--file", "moox.toml", "--host", "compute"}, want: "schema_version"},
 		{name: "e2e", args: []string{"e2e-storage", "--file", "moox.toml", "--host", "compute", "--namespace", "task16"}, want: "cleanup"},
 		{name: "browser", args: []string{"browser-e2e-storage", "--file", "moox.toml", "--host", "compute", "--repo-root", "/repo"}, want: "desktop"},
+		{name: "browser default spaces", args: []string{"browser-e2e-storage", "--file", "moox.toml", "--host", "compute", "--repo-root", "/repo", "--default-spaces"}, want: "desktop"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -71,7 +74,8 @@ func TestSetupStorageCommandsRequireExplicitHostAndSanitizeResults(t *testing.T)
 	}
 	require.Equal(t, 1, verifyCalls)
 	require.Equal(t, 1, e2eCalls)
-	require.Equal(t, 1, browserCalls)
+	require.Equal(t, 2, browserCalls)
+	require.Equal(t, []bool{false, true}, browserDefaultSpaces)
 }
 
 func TestStorageVerificationUsesConfiguredRootAndCurrentSchema(t *testing.T) {
@@ -83,6 +87,21 @@ func TestStorageVerificationUsesConfiguredRootAndCurrentSchema(t *testing.T) {
 	schemaCommand := storageSchemaVersionCommand()
 	require.Contains(t, schemaCommand, `"$storage_root/data/storage/metadata/storage_metadata.db"`)
 	require.Equal(t, 12, currentStorageMetadataSchemaVersion)
+}
+
+func TestStorageBrowserEnvironmentOwnsDefaultSpaceMode(t *testing.T) {
+	inherited := []string{
+		"PATH=/bin",
+		"MOOX_REMOTE_DEFAULT_SETUP=1",
+		"OTHER=value",
+		"MOOX_REMOTE_DEFAULT_SETUP=0",
+	}
+	require.Equal(t, []string{
+		"PATH=/bin", "OTHER=value", "MOOX_REMOTE_DEFAULT_SETUP=0",
+	}, storageBrowserEnvironment(inherited, false))
+	require.Equal(t, []string{
+		"PATH=/bin", "OTHER=value", "MOOX_REMOTE_DEFAULT_SETUP=1",
+	}, storageBrowserEnvironment(inherited, true))
 }
 
 func TestSetupStorageCommandsRejectMissingRequiredFlags(t *testing.T) {
@@ -190,6 +209,8 @@ func TestStorageBrowserFixtureCreatesAndCleansIsolatedAdminAndMetadataRows(t *te
 	require.Equal(t, fixture.SpaceName, "浏览器隔离空间 "+fixture.Namespace)
 	require.Equal(t, fixture.DatasetID, "dataset_"+fixture.Namespace)
 	require.Equal(t, fixture.DatasetName, "浏览器验证集")
+	require.Equal(t, storageDeploymentNodeID, fixture.DataNodeID)
+	require.Equal(t, []string{fixture.DataNodeID}, metadata.datasetDataNodeIDs)
 	require.NoError(t, cleanup())
 	require.Equal(t, []string{fixture.DatasetID}, metadata.deletedDatasets)
 	require.Equal(t, []string{fixture.SourceID}, metadata.deletedSources)
@@ -397,6 +418,7 @@ type fakeStorageMetadataAPI struct {
 	deletedNodes              []string
 	dataSourceKinds           []string
 	datasetColumnDisplayNames []string
+	datasetDataNodeIDs        []string
 	temporaryNode             *storagepb.DataNode
 	temporaryReferenced       bool
 	failCreateSpace           bool
@@ -521,6 +543,7 @@ func (f *fakeStorageMetadataAPI) DeleteDataSource(_ context.Context, req *storag
 func (f *fakeStorageMetadataAPI) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	f.remember(req.GetAuthInfo())
 	dataset := *req.GetDataset()
+	f.datasetDataNodeIDs = append(f.datasetDataNodeIDs, dataset.GetDataNodeId())
 	dataset.Revision = 7
 	if f.temporaryNode != nil && dataset.GetDataNodeId() == f.temporaryNode.GetNodeId() {
 		f.temporaryReferenced = true
