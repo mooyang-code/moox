@@ -78,7 +78,18 @@ POST /api/admin/cloudnode/GetNodeBatchChange
 
 旧 Collector Schema 和 Pebble snapshot JSON 名称不能自动兼容。即使已排空，也须在发布记录中明确受影响运行态表与 period key 范围、备份校验结果、保留的任务定义和结果引用，以及保留全部已有物理行情数据的处理步骤。该范围只能根据经批准的生产只读 inventory 填入，至少限定 Space、Dataset 和 `period_time` 边界；执行前核对备份可恢复，并证明不会删除任务、结果 Dataset/View 引用或行情行。
 
-现有仓库没有经本计划验收的 period-only 线上重建工具。不得拿全量 reset 冒充有界处理；有界清理/重建方案未获用户确认时维持停采，不激活新生产者。备份需要有可验证恢复步骤，而不只是文件存在。若尚无可审计的有界工具，先实现并 code review 只处理获批 period ledger 与 Collector 运行态表的工具，提供 dry-run inventory、范围断言、备份校验和保留行情数据测试，再另行审批其精确影响范围；不得用 `collector task purge` 或 Storage 全量 reset 替代。
+Storage 已新增只读 `moox-storage-cli period-inventory`，只在 DataNode 已停止或一致离线副本上运行；Pebble 数据库锁会使它在 DataNode 正运行时 fail closed。每次必须指定预期 DataNode ID、Pebble path、一个 Space、Dataset、frequency 和闭区间 `period_time`；命令校验 DataNode layout 与 Pebble 中持久化的 node/store identity，并在 JSON 中报告绝对 path、layout 版本、node/store ID 和扫描计数。它输出该范围的周期身份、状态、deadline、成功/失败位图计数、快照格式/规模及 secondary index、marker record、outbox 关联证据；不导出行情行或 Subject 明细、不改写数据库。为了核验没有遗漏的 orphan/duplicate links，命令会流式扫描全库 period indexes、marker records 与 outbox，范围只限制结果集而不限制这部分 I/O；因此只允许离线执行。周期报告最多 100,000 条，超过输出上限、状态损坏、索引孤儿、旧 roster 格式或 marker 关系不一致都会使命令以非零退出；事件校验错误只显示脱敏摘要，不回显 Subject 值。报告只用于定位和审批，不是清理许可。
+
+```bash
+./bin/moox-storage-cli period-inventory \
+  --path "$PEBBLE_DB" \
+  --node-id "$DATA_NODE_ID" \
+  --space "$SPACE_ID" --dataset "$DATASET_ID" --frequency "$FREQUENCY" \
+  --period-time-min "$PERIOD_TIME_MIN" --period-time-max "$PERIOD_TIME_MAX" \
+  > "$INVENTORY_JSON"
+```
+
+在完整收集 Collector SQLite 的运行态并确认 producer 已停止后，若确需检查 Pebble，先保存并校验可恢复备份，再停止对应 DataNode；不要在在线 Pebble 目录上复制文件以冒充一致快照。用该只读命令盘点审批候选范围，保存 stdout 和退出码；非零报告必须先逐项解释，不能作为零风险证据。完成盘点后，若尚未获得确切 period ledger 重建授权，原样重启原 Storage 版本并恢复服务，不执行清理。任何有界重建工具仍须提供范围断言、备份校验、dry-run 差异和任务/结果引用/物理行情行保留测试；不得用 `collector task purge` 或 Storage 全量 reset 替代。
 
 ## 构建与服务包
 

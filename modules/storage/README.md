@@ -194,6 +194,21 @@ Commit 只有收到完整的 `accepted_series_indexes` 回执才算成功，截�
 被 Storage 接受且最终仍未成功的失败 Subject。超过事件大小上限的 marker 不会进入 ordered outbox。删除或恢复 Dataset
 时，其周期状态、deadline 与 waiting/complete 索引一并清理，避免已删除的 Dataset 被再次终结。
 
+运行态盘点使用 `moox-storage-cli period-inventory`。它要求明确的 DataNode ID、Space、Dataset、frequency 与闭区间
+`period_time`，校验 Pebble layout 和持久化 node/store identity，并以 read-only 模式列出周期状态、快照格式/规模及
+deadline、marker、outbox 索引证据；不导出 Subject 明细，不修改行情行或周期数据。报告包含源绝对路径、layout 版本、
+node/store ID 与全局索引/marker/outbox 扫描计数，便于审批人核对目标。扫描会遍历这些全局命名空间，故必须在 DataNode
+停止后或一致离线副本上执行；Pebble 目录锁会拒绝仍由 DataNode 打开的数据库。周期输出最多 100,000 条，超过上限、
+存在完整性错误或旧 `roster` 状态时命令返回非零；marker 校验错误只输出脱敏摘要，不回显 Subject 值。报告不能授权删除。
+
+```bash
+moox-storage-cli period-inventory \
+  --path /path/to/stopped-or-consistent-pebble \
+  --node-id storage-node-a \
+  --space crypto --dataset bars --frequency 1m \
+  --period-time-min 1790798400 --period-time-max 1790884800
+```
+
 ```text
 service_target: ip://127.0.0.1:20107
 ```
