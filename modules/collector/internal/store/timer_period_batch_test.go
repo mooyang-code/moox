@@ -44,6 +44,18 @@ func TestTimerPeriodBatchClaimReplayAndTerminalNoWork(t *testing.T) {
 	require.Empty(t, terminalReplay.RequestJSON)
 }
 
+func TestTimerPeriodBatchRejectsNegativeGroupAndShardIndexes(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	period := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	seedTimerPeriodBatch(t, s, "nonnegative", "run-nonnegative", period)
+	manifest, err := s.TimerPeriodBatches().GetByPeriod(ctx, domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}, 0)
+	require.NoError(t, err)
+
+	require.Error(t, s.db.Exec(`UPDATE t_collector_timer_period_batches SET c_group_id = -1 WHERE c_key = ?`, manifest.Key).Error)
+	require.Error(t, s.db.Exec(`UPDATE t_collector_timer_period_batches SET c_shard_index = -1 WHERE c_key = ?`, manifest.Key).Error)
+}
+
 func TestTimerPeriodBatchClaimRejectsBackdatedTickAfterCanonicalDeadline(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()

@@ -144,7 +144,9 @@ CREATE TABLE IF NOT EXISTS t_collector_timer_period_batches (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_expected_count > 0),
     CHECK (c_group_count > 0),
+    CHECK (c_group_id >= 0),
     CHECK (c_group_id < c_group_count),
+    CHECK (c_shard_index >= 0),
     UNIQUE (c_space_id, c_dataset_id, c_frequency, c_period_time, c_shard_index),
     UNIQUE (c_space_id, c_batch_id)
 );

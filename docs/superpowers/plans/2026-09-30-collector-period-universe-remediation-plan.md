@@ -776,3 +776,5 @@ done < <(rg --files modules | rg '/schema/[^/]+\.sql$')
 本次接续更新在主工作区 `06972d14` 上再次由 Storage、Collector 两路 `codeCR` 分别只读复核，均为 PASS、无新增阻断项；主 Agent 独立核验了生产 adapter、Ensure 授权、终态 Record 分支、Timer 请求与 Completion、Storage 包装器、失败适配器、清理 SQL 和任务结果身份约束。仅更新文档基线、分项实施状态与门禁前置文件清单，未继续业务编码；全部实施复选框仍未勾选。上述计划复核不替代编码完成后的独立审查或端到端验收。
 
 2026-10-01 Timer Claim follow-up：修复冻结 request/manifest/batch/TaskInstance/WriteTarget 的 claim 前一致性校验，并使周期终态后的 replay 在清理依赖的 membership 前返回 no-work；规划阶段派生 canonical 逻辑 TaskInstance 身份。新起 `codeCR` 与独立嵌套复核未发现剩余问题。最新 `go test ./... -count=1`（Collector module）、Timer focused race、`make test-collector-period-universe-e2e` 和 `env GOARCH=arm64 CGO_ENABLED=1 make verify-pr` 均通过。此处仅记录本地测试、真实本地进程 E2E 与构建/合同门禁；未部署生产，真实 1m/1h 周期验收仍待完成，Task 9.7-9.9 不勾选。
+
+2026-10-01 合并 `feature/mooyang` 前审阅其原有 Timer 草稿：主体实现已被当前更严格的 claim/manifest/Storage 状态机及测试覆盖；仅保留 SQL 层 `group_id`、`shard_index` 非负检查并补回归测试。旧 schema 下测试按预期失败，添加约束后通过；合并后 `go test ./... -count=1`（Collector module）通过。草稿其余 12 个路径保存在有描述的 Git stash 中，未直接覆盖到新实现；`WriteTarget` 内部 JSON tag 变化不纳入，因其会改动 Timer Request 的现有 `output_fields_json` 字符串字段契约。生产发布和真实周期验收仍未完成。
