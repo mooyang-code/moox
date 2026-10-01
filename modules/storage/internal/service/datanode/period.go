@@ -3,6 +3,7 @@ package datanode
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
@@ -13,11 +14,14 @@ func (s *Service) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDataset
 	if req == nil || req.GetExpectation() == nil {
 		return &pb.EnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("expectation is required"))}, nil
 	}
-	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.EnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	if err := validatePeriodNodeID(req.GetNodeId(), s.nodeID); err != nil {
+		return &pb.EnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
 		return &pb.EnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if req.GetExpectation().GetDeadlineAt() <= 0 {
+		return &pb.EnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("deadline_at must be positive"))}, nil
 	}
 	result, err := s.store.EnsureDatasetPeriod(ctx, periodExpectation(req.GetExpectation()))
 	if err != nil {
@@ -30,8 +34,8 @@ func (s *Service) GetDatasetPeriodStatus(ctx context.Context, req *pb.GetDataset
 	if req == nil || req.GetExpectation() == nil {
 		return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("expectation is required"))}, nil
 	}
-	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	if err := validatePeriodNodeID(req.GetNodeId(), s.nodeID); err != nil {
+		return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
 		return &pb.GetDatasetPeriodStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
@@ -47,8 +51,8 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeS
 	if req == nil || req.GetExpectation() == nil || len(req.GetItems()) == 0 {
 		return &pb.CommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("expectation and items are required"))}, nil
 	}
-	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.CommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	if err := validatePeriodNodeID(req.GetNodeId(), s.nodeID); err != nil {
+		return &pb.CommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
 		return &pb.CommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
@@ -73,8 +77,8 @@ func (s *Service) RecordDatasetPeriodFailures(ctx context.Context, req *pb.Recor
 	if req == nil || req.GetExpectation() == nil || len(req.GetSeriesIndexes()) == 0 {
 		return &pb.RecordDatasetPeriodFailuresRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("expectation and series_indexes are required"))}, nil
 	}
-	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.RecordDatasetPeriodFailuresRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	if err := validatePeriodNodeID(req.GetNodeId(), s.nodeID); err != nil {
+		return &pb.RecordDatasetPeriodFailuresRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
 		return &pb.RecordDatasetPeriodFailuresRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
@@ -84,6 +88,16 @@ func (s *Service) RecordDatasetPeriodFailures(ctx context.Context, req *pb.Recor
 		return &pb.RecordDatasetPeriodFailuresRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	return &pb.RecordDatasetPeriodFailuresRsp{RetInfo: retinfo.Success("success"), PeriodStatus: result.Status, Results: result.FailureResults}, nil
+}
+
+func validatePeriodNodeID(nodeID, expectedNodeID string) error {
+	if strings.TrimSpace(nodeID) == "" {
+		return errors.New("node_id is required")
+	}
+	if nodeID != expectedNodeID {
+		return errors.New("node_id does not match DataNode")
+	}
+	return nil
 }
 
 func periodExpectation(in *pb.DatasetPeriodExpectation) pebble.DatasetPeriodExpectation {

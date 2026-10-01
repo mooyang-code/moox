@@ -8,9 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
+	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
@@ -436,16 +440,20 @@ func TestDataNodeProxyAdapterForwardsPeriodStatusAndFailureCalls(t *testing.T) {
 	statusReq := &pb.GetDatasetPeriodStatusReq{Expectation: &pb.DatasetPeriodExpectation{SpaceId: "space"}}
 	statusRsp := &pb.GetDatasetPeriodStatusRsp{Status: "waiting"}
 	statusProxy := &periodProxyForwardingStub{err: wantErr, statusRsp: statusRsp}
-	gotStatus, gotErr := (&dataNodeProxyAdapter{periodProxy: statusProxy}).GetDatasetPeriodStatus(ctx, statusReq)
-	if gotStatus != statusRsp || gotErr != wantErr || statusProxy.ctx != ctx || statusProxy.req != statusReq || statusProxy.ctx.Value(contextKey{}) != "trace-id" {
+	gotStatus, gotErr := (&dataNodeProxyAdapter{periodProxy: statusProxy, nodeID: "node-a"}).GetDatasetPeriodStatus(ctx, statusReq)
+	statusExpected := proto.Clone(statusReq).(*pb.GetDatasetPeriodStatusReq)
+	statusExpected.NodeId = "node-a"
+	if gotStatus != statusRsp || gotErr != wantErr || statusProxy.ctx != ctx || !proto.Equal(statusExpected, statusProxy.req.(proto.Message)) || statusReq.GetNodeId() != "" || statusProxy.ctx.Value(contextKey{}) != "trace-id" {
 		t.Fatalf("GetDatasetPeriodStatus forwarding: rsp=%p err=%v ctx=%v req=%p", gotStatus, gotErr, statusProxy.ctx, statusProxy.req)
 	}
 
 	recordReq := &pb.RecordDatasetPeriodFailuresReq{SeriesIndexes: []uint32{1, 3}}
 	recordRsp := &pb.RecordDatasetPeriodFailuresRsp{PeriodStatus: "degraded"}
 	recordProxy := &periodProxyForwardingStub{err: wantErr, recordRsp: recordRsp}
-	gotRecord, gotErr := (&dataNodeProxyAdapter{periodProxy: recordProxy}).RecordDatasetPeriodFailures(ctx, recordReq)
-	if gotRecord != recordRsp || gotErr != wantErr || recordProxy.ctx != ctx || recordProxy.req != recordReq || recordProxy.ctx.Value(contextKey{}) != "trace-id" {
+	gotRecord, gotErr := (&dataNodeProxyAdapter{periodProxy: recordProxy, nodeID: "node-a"}).RecordDatasetPeriodFailures(ctx, recordReq)
+	recordExpected := proto.Clone(recordReq).(*pb.RecordDatasetPeriodFailuresReq)
+	recordExpected.NodeId = "node-a"
+	if gotRecord != recordRsp || gotErr != wantErr || recordProxy.ctx != ctx || !proto.Equal(recordExpected, recordProxy.req.(proto.Message)) || recordReq.GetNodeId() != "" || recordProxy.ctx.Value(contextKey{}) != "trace-id" {
 		t.Fatalf("RecordDatasetPeriodFailures forwarding: rsp=%p err=%v ctx=%v req=%p", gotRecord, gotErr, recordProxy.ctx, recordProxy.req)
 	}
 }
@@ -530,13 +538,13 @@ func TestDataNodeResolverPeriodRPCContract(t *testing.T) {
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1H", DataTime: "2026-09-30T00:00:00Z", SeriesTag: "venue:binance"}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 101.25}}}},
 	}
-	ensureReq := &pb.EnsureDatasetPeriodReq{AuthInfo: auth, NodeId: "node-a", Expectation: expectation}
-	statusReq := &pb.GetDatasetPeriodStatusReq{AuthInfo: auth, NodeId: "node-a", Expectation: expectation}
+	ensureReq := &pb.EnsureDatasetPeriodReq{AuthInfo: auth, Expectation: expectation}
+	statusReq := &pb.GetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: expectation}
 	commitReq := &pb.CommitTimeSeriesBatchReq{
-		AuthInfo: auth, NodeId: "node-a", Expectation: expectation,
+		AuthInfo: auth, Expectation: expectation,
 		Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}}, SourceEventId: "event-1", WriteSource: "collector",
 	}
-	recordReq := &pb.RecordDatasetPeriodFailuresReq{AuthInfo: auth, NodeId: "node-a", Expectation: expectation, SeriesIndexes: []uint32{0, 2}}
+	recordReq := &pb.RecordDatasetPeriodFailuresReq{AuthInfo: auth, Expectation: expectation, SeriesIndexes: []uint32{0, 2}}
 
 	ensured, err := periodRuntime.EnsureDatasetPeriod(context.Background(), ensureReq)
 	if err != nil || ensured.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || ensured.GetStatus() != "waiting" || ensured.GetDeadlineAt() != 400 {
@@ -555,16 +563,143 @@ func TestDataNodeResolverPeriodRPCContract(t *testing.T) {
 		t.Fatalf("RecordDatasetPeriodFailures response=%v err=%v", recorded, err)
 	}
 
+	boundEnsure := proto.Clone(ensureReq).(*pb.EnsureDatasetPeriodReq)
+	boundEnsure.NodeId = "node-a"
+	boundStatus := proto.Clone(statusReq).(*pb.GetDatasetPeriodStatusReq)
+	boundStatus.NodeId = "node-a"
+	boundCommit := proto.Clone(commitReq).(*pb.CommitTimeSeriesBatchReq)
+	boundCommit.NodeId = "node-a"
+	boundRecord := proto.Clone(recordReq).(*pb.RecordDatasetPeriodFailuresReq)
+	boundRecord.NodeId = "node-a"
 	for name, pair := range map[string][2]proto.Message{
-		"ensure": {ensureReq, backend.ensure},
-		"status": {statusReq, backend.status},
-		"commit": {commitReq, backend.commit},
-		"record": {recordReq, backend.record},
+		"ensure": {boundEnsure, backend.ensure},
+		"status": {boundStatus, backend.status},
+		"commit": {boundCommit, backend.commit},
+		"record": {boundRecord, backend.record},
 	} {
 		if pair[1] == nil || !proto.Equal(pair[0], pair[1]) {
 			t.Errorf("%s request forwarded as %v, want %v", name, pair[1], pair[0])
 		}
 	}
+}
+
+func TestPrimaryPeriodWrongDataNodeTargetFailsClosed(t *testing.T) {
+	const secret = "period-routing-secret"
+	nodeA, addressA := startPeriodRuntimeNode(t, "node-a", secret)
+	nodeB, addressB := startPeriodRuntimeNode(t, "node-b", secret)
+	if addressA == addressB {
+		t.Fatal("test DataNodes must have distinct targets")
+	}
+	period := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	expectation := &pb.DatasetPeriodExpectation{
+		SpaceId: "space", DatasetId: "dataset", Frequency: "1m", PeriodTime: period.Unix(),
+		SeriesHash: "hash", ExpectedCount: 1, DeadlineAt: period.Add(time.Hour).Unix(),
+		SeriesSnapshot: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "venue:binance"}},
+	}
+	row := &pb.RowFieldUpsert{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: period.Format(time.RFC3339Nano), SeriesTag: "venue:binance"}}},
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
+	}
+	// Metadata says node-a, while the registered target is actually node-b.
+	snapshot := resolverSnapshot{
+		dataset: &pb.Dataset{
+			SpaceId: "space", DatasetId: "dataset", DataNodeId: "node-a", Status: "active",
+			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"},
+			Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"},
+		},
+		node: &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://" + addressB},
+	}
+	resolver := newDataNodeResolver(func() metadata.RequestSnapshot { return snapshot }, nil)
+	primary, err := primarystore.New(primarystore.Options{
+		Resolver: resolver,
+		Snapshot: func() metadata.RequestSnapshot { return snapshot },
+		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
+	ensure, err := primary.EnsureDatasetPeriod(context.Background(), &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: expectation})
+	if err != nil || ensure.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM || !strings.Contains(ensure.GetRetInfo().GetMsg(), "node_id does not match") {
+		t.Fatalf("wrong-target Ensure response=%v err=%v", ensure, err)
+	}
+	commit, err := primary.CommitTimeSeriesBatch(context.Background(), &pb.PrimaryCommitTimeSeriesBatchReq{
+		AuthInfo: auth, Expectation: expectation, Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}}, WriteSource: "collector",
+	})
+	if err != nil || commit.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM || !strings.Contains(commit.GetRetInfo().GetMsg(), "node_id does not match") {
+		t.Fatalf("wrong-target Commit response=%v err=%v", commit, err)
+	}
+	status, err := primary.GetDatasetPeriodStatus(context.Background(), &pb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: expectation})
+	if err != nil || status.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM || !strings.Contains(status.GetRetInfo().GetMsg(), "node_id does not match") {
+		t.Fatalf("wrong-target GetStatus response=%v err=%v", status, err)
+	}
+	failure, err := primary.RecordDatasetPeriodFailures(context.Background(), &pb.PrimaryRecordDatasetPeriodFailuresReq{AuthInfo: auth, Expectation: expectation, SeriesIndexes: []uint32{0}})
+	if err != nil || failure.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM || !strings.Contains(failure.GetRetInfo().GetMsg(), "node_id does not match") {
+		t.Fatalf("wrong-target RecordFailures response=%v err=%v", failure, err)
+	}
+
+	storageExpectation := storagepebble.DatasetPeriodExpectation{
+		SpaceID: "space", DatasetID: "dataset", Frequency: "1m", PeriodTime: expectation.GetPeriodTime(),
+		SeriesHash: "hash", ExpectedCount: 1, DeadlineAt: expectation.GetDeadlineAt(),
+		SeriesSnapshot: []storagepebble.DatasetPeriodSeries{{SeriesIndex: 0, SubjectID: "BTC-USDT", SeriesTag: "venue:binance"}},
+	}
+	for nodeID, node := range map[string]*datanode.Service{"node-a": nodeA, "node-b": nodeB} {
+		_, err := node.Store().GetDatasetPeriodStatus(context.Background(), storageExpectation)
+		if !errors.Is(err, cpebble.ErrNotFound) {
+			t.Errorf("node %s period state error=%v, want not found", nodeID, err)
+		}
+		rows, err := node.Store().ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+			SpaceId: "space", DatasetId: "dataset", Page: &pb.Page{Page: 1, Size: 10},
+		})
+		if err != nil || len(rows.GetRows()) != 0 {
+			t.Errorf("node %s rows=%v err=%v, want no writes", nodeID, rows.GetRows(), err)
+		}
+		outbox, err := node.Store().ListOutbox(context.Background(), 0, 100)
+		if err != nil || len(outbox) != 0 {
+			t.Errorf("node %s outbox=%d err=%v, want no writes", nodeID, len(outbox), err)
+		}
+	}
+}
+
+func startPeriodRuntimeNode(t *testing.T, nodeID, secret string) (*datanode.Service, string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := datanode.NewService(datanode.Options{NodeID: nodeID, AuthSecret: secret, Pebble: storagepebble.Options{
+		NodeID: nodeID, Path: filepath.Join(t.TempDir(), nodeID),
+	}})
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	dn := server.New(
+		server.WithServiceName("trpc.moox.storage.DataNodePeriodRuntime"),
+		server.WithProtocol("trpc"),
+		server.WithNetwork("tcp"),
+		server.WithListener(listener),
+		server.WithServerAsync(false),
+	)
+	pb.RegisterDataNodePeriodRuntimeService(dn, node)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- dn.Serve() }()
+	t.Cleanup(func() {
+		done := make(chan struct{}, 1)
+		if err := dn.Close(done); err != nil {
+			t.Errorf("close DataNode %s test service: %v", nodeID, err)
+		}
+		<-done
+		if err := <-serveErr; err != nil {
+			t.Errorf("serve DataNode %s test service: %v", nodeID, err)
+		}
+		if err := node.Close(); err != nil {
+			t.Errorf("close DataNode %s store: %v", nodeID, err)
+		}
+	})
+	return node, listener.Addr().String()
 }
 
 func TestResolveDataNodeUsesActiveDatasetNodeAndTargetOnly(t *testing.T) {

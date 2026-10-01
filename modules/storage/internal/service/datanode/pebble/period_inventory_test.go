@@ -522,6 +522,28 @@ func TestInspectPeriodLedgerRejectsDegradedPeriodWithoutPositiveDeadline(t *test
 	require.Contains(t, got.Periods[0].IntegrityErrors, "degraded period has no positive deadline")
 }
 
+func TestInspectPeriodLedgerRejectsWaitingPeriodWithoutPositiveDeadline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node")
+	store, err := Open(Options{Path: path, NodeID: "node-a"})
+	require.NoError(t, err)
+	period := time.Date(2026, 9, 30, 23, 30, 0, 0, time.UTC)
+	exp := periodExpectationForTest(period, 1, "BTC-USDT")
+	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	base := periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)
+	db, err := cpebble.Open(path, &cpebble.Options{Merger: BitmapORMerger})
+	require.NoError(t, err)
+	require.NoError(t, db.Set(periodFieldKey(base, "deadline"), int64Bytes(0), cpebble.Sync))
+	require.NoError(t, db.Delete(periodDeadlineKey(exp.DeadlineAt, base), cpebble.Sync))
+	require.NoError(t, db.Close())
+
+	got, err := InspectPeriodLedger(path, "node-a", PeriodLedgerScope{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTimeMin: exp.PeriodTime, PeriodTimeMax: exp.PeriodTime})
+	require.NoError(t, err)
+	require.Contains(t, got.Periods[0].IntegrityErrors, "period has no positive deadline")
+}
+
 func TestInspectPeriodLedgerRejectsEventIDNotBoundToMarkerPayload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "node")
 	store, err := Open(Options{Path: path, NodeID: "node-a"})

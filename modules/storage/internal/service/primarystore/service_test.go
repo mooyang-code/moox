@@ -24,6 +24,34 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type primaryPeriodNodeIDAdapter struct {
+	*datanode.Service
+}
+
+func (n primaryPeriodNodeIDAdapter) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
+	bound := proto.Clone(req).(*pb.EnsureDatasetPeriodReq)
+	bound.NodeId = "node-a"
+	return n.Service.EnsureDatasetPeriod(ctx, bound)
+}
+
+func (n primaryPeriodNodeIDAdapter) GetDatasetPeriodStatus(ctx context.Context, req *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error) {
+	bound := proto.Clone(req).(*pb.GetDatasetPeriodStatusReq)
+	bound.NodeId = "node-a"
+	return n.Service.GetDatasetPeriodStatus(ctx, bound)
+}
+
+func (n primaryPeriodNodeIDAdapter) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
+	bound := proto.Clone(req).(*pb.CommitTimeSeriesBatchReq)
+	bound.NodeId = "node-a"
+	return n.Service.CommitTimeSeriesBatch(ctx, bound)
+}
+
+func (n primaryPeriodNodeIDAdapter) RecordDatasetPeriodFailures(ctx context.Context, req *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error) {
+	bound := proto.Clone(req).(*pb.RecordDatasetPeriodFailuresReq)
+	bound.NodeId = "node-a"
+	return n.Service.RecordDatasetPeriodFailures(ctx, bound)
+}
+
 func TestPrimaryPeriodReceiptsDeadlineAndReadonlyStatus(t *testing.T) {
 	ctx := context.Background()
 	deadline := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
@@ -36,7 +64,7 @@ func TestPrimaryPeriodReceiptsDeadlineAndReadonlyStatus(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, node.Close()) })
 	service, err := New(Options{
-		Node:     node,
+		Node:     primaryPeriodNodeIDAdapter{Service: node},
 		Snapshot: func() metadata.RequestSnapshot { return collectorPeriodMetadataSnapshot("crypto", "bars", "1m") },
 		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
 			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
@@ -134,7 +162,7 @@ func TestPrimaryPeriodRejectsNilSnapshotSlots(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, node.Close()) })
 			service, err := New(Options{
-				Node:     node,
+				Node:     primaryPeriodNodeIDAdapter{Service: node},
 				Snapshot: func() metadata.RequestSnapshot { return collectorPeriodMetadataSnapshot("crypto", "bars", "1m") },
 				AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
 					return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil
@@ -153,6 +181,34 @@ func TestPrimaryPeriodRejectsNilSnapshotSlots(t *testing.T) {
 			entries, err := node.Store().ListOutbox(ctx, 0, 100)
 			require.NoError(t, err)
 			require.Empty(t, entries)
+		})
+	}
+}
+
+func TestPrimaryEnsureRejectsNonPositiveDeadlineBeforeDataNodeCall(t *testing.T) {
+	for _, deadlineAt := range []int64{0, -1} {
+		t.Run(fmt.Sprint(deadlineAt), func(t *testing.T) {
+			node := &periodAuthorizationNode{}
+			service, err := New(Options{
+				Node:     node,
+				Snapshot: func() metadata.RequestSnapshot { return collectorPeriodMetadataSnapshot("crypto", "bars", "1m") },
+				AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+					return &pb.AuthInfo{AppId: "primary", AppKey: "node-key"}, nil
+				},
+			})
+			require.NoError(t, err)
+
+			expectation := &pb.DatasetPeriodExpectation{
+				SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: 123,
+				SeriesHash: "hash", ExpectedCount: 1, DeadlineAt: deadlineAt,
+				SeriesSnapshot: []*pb.DatasetPeriodSeries{{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "okx"}},
+			}
+			rsp, err := service.EnsureDatasetPeriod(context.Background(), &pb.PrimaryEnsureDatasetPeriodReq{
+				AuthInfo: &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}, Expectation: expectation,
+			})
+			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+			require.Zero(t, node.ensure)
 		})
 	}
 }
@@ -200,7 +256,7 @@ func TestPrimaryPeriodRejectsMissingRPCResponses(t *testing.T) {
 		require.NoError(t, err)
 		ctx := context.Background()
 		auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
-		exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: 1, SeriesHash: "hash", ExpectedCount: 1}
+		exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: 1, SeriesHash: "hash", ExpectedCount: 1, DeadlineAt: time.Now().Add(time.Hour).Unix()}
 		ensured, err := service.EnsureDatasetPeriod(ctx, &pb.PrimaryEnsureDatasetPeriodReq{AuthInfo: auth, Expectation: exp})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_INNER_ERR, ensured.GetRetInfo().GetCode())
@@ -1089,7 +1145,7 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 				},
 			})
 			require.NoError(t, err)
-			expectation := &pb.DatasetPeriodExpectation{SpaceId: "space", DatasetId: "dataset", Frequency: tc.frequency, PeriodTime: 123, SeriesHash: "hash", ExpectedCount: 1}
+			expectation := &pb.DatasetPeriodExpectation{SpaceId: "space", DatasetId: "dataset", Frequency: tc.frequency, PeriodTime: 123, SeriesHash: "hash", ExpectedCount: 1, DeadlineAt: time.Now().Add(time.Hour).Unix()}
 			rsp := invoke(svc, &pb.AuthInfo{AppId: tc.appID, AppKey: "caller-key"}, expectation)
 			require.Equal(t, tc.wantCode, rsp.GetCode(), "ret_info=%v", rsp)
 			require.Equal(t, 1, authorizerCalls, "ordinary HMAC authorization must run first")
@@ -1128,7 +1184,7 @@ func TestPrimaryAndDataNodeRecordPeriodFailuresThroughDeadlineMarker(t *testing.
 		}
 	})
 	service, err := New(Options{
-		Node:     node,
+		Node:     primaryPeriodNodeIDAdapter{Service: node},
 		Snapshot: func() metadata.RequestSnapshot { return collectorPeriodMetadataSnapshot("crypto", "bars", "1m") },
 		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
 			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey(secret, "primary")}, nil

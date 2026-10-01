@@ -477,7 +477,7 @@ func periodHelperProbe(ctx context.Context, ready periodProcessReady) error {
 	opts := func(target string) []client.Option {
 		return []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(time.Second)}
 	}
-	expectation := &pb.DatasetPeriodExpectation{SpaceId: ready.SpaceID, DatasetId: ready.DatasetID, Frequency: ready.Frequency, PeriodTime: 1, SeriesHash: "readiness", ExpectedCount: 1}
+	expectation := &pb.DatasetPeriodExpectation{SpaceId: ready.SpaceID, DatasetId: ready.DatasetID, Frequency: ready.Frequency, PeriodTime: 1, SeriesHash: "readiness", ExpectedCount: 1, DeadlineAt: time.Now().Add(time.Hour).Unix()}
 	node := pb.NewDataNodePeriodRuntimeClientProxy(opts(ready.DataNodeTarget)...)
 	primary := pb.NewPrimaryStoreClientProxy(opts(ready.PrimaryTarget)...)
 	meta := pb.NewMetadataClientProxy(opts(ready.MetadataTarget)...)

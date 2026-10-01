@@ -619,14 +619,19 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 	if entry.SnapshotFormat == "legacy_roster" {
 		entry.IntegrityErrors = append(entry.IntegrityErrors, "legacy roster state requires an explicitly approved rebuild")
 	}
+	if entry.DeadlineAt <= 0 {
+		if entry.Status == "degraded" {
+			entry.IntegrityErrors = append(entry.IntegrityErrors, "degraded period has no positive deadline")
+		} else {
+			entry.IntegrityErrors = append(entry.IntegrityErrors, "period has no positive deadline")
+		}
+	}
 	if entry.Status == "waiting" {
 		if entry.WaitingIndexCount != 1 {
 			entry.IntegrityErrors = append(entry.IntegrityErrors, "waiting period does not have exactly one waiting index")
 		}
-		if entry.DeadlineAt > 0 && entry.DeadlineIndexCount != 1 {
+		if entry.DeadlineIndexCount != 1 {
 			entry.IntegrityErrors = append(entry.IntegrityErrors, "waiting period does not have exactly one deadline index")
-		} else if entry.DeadlineAt == 0 && entry.DeadlineIndexCount != 0 {
-			entry.IntegrityErrors = append(entry.IntegrityErrors, "period without deadline has a deadline index")
 		}
 		for _, indexDeadline := range record.deadlineIndexTimes {
 			entry.DeadlineIndexAt = indexDeadline
@@ -645,9 +650,6 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 	}
 	if entry.Status == "degraded" && bitmapAllSet(fields["bitmap"], entry.ExpectedCount) {
 		entry.IntegrityErrors = append(entry.IntegrityErrors, "degraded period has all success bits")
-	}
-	if entry.Status == "degraded" && entry.DeadlineAt <= 0 {
-		entry.IntegrityErrors = append(entry.IntegrityErrors, "degraded period has no positive deadline")
 	}
 	if (entry.Status == "complete" || entry.Status == "degraded") && entry.MarkerRecordCount != 1 {
 		entry.IntegrityErrors = append(entry.IntegrityErrors, "terminal period marker record count is not 1")

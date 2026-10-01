@@ -2,7 +2,7 @@
 
 ## 状态与边界
 
-本手册是执行计划 Task 9 的发布准备文件，不是已发布证明。Task 1 至 Task 8 的实现、编码后独立审查和本地真实进程 E2E 已完成；2026-10-01 的 `make verify-pr`（macOS arm64、CGO enabled）、`proto-check`、Workspace tests/vet、architecture/Gateway/SCF 门禁、Schema 空库加载与目标 build 均通过。正式环境尚未发布，真实 1m/1h 线上周期也尚未验收。不得把本地 build/E2E 记为生产证据。
+本手册是执行计划 Task 9 的发布准备文件，不是已发布证明。Task 1 至 Task 8 的实现、编码后独立审查和本地真实进程 E2E 已完成；2026-10-01 增量 Storage 改动的四包 fresh/race 与 period E2E 复跑通过。周期 E2E 检查真实 Pebble marker/outbox 入队和 payload，但不启动生产 Storage Relay 并等待该 marker 的 JetStream subscriber ACK；独立审查将这项列为非阻断 P3 证据缺口。正式环境尚未发布，真实 1m/1h 线上周期也尚未验收。不得把本地 build/E2E 记为生产证据。最终代码变更后的 `make verify-pr` 与 Linux Storage 构建仍待提交后重跑。
 
 **2026-10-01 只读运行态检查：** 用户要求按全新项目处理，不实现旧版本数据结构或协议兼容；这不代表正式环境为空，也不自动授权删除现存业务数据。`setup host-diagnostics` 确认 Control 上 `moox-collector` 与 `moox-collector-subject` 正在运行，`/data/moox/prod/data/collector` 约 8.1 GiB；Storage 主机上的 DataNode、Primary、View 正在运行，`/data/moox/storage/data/storage-node/pebble` 约 450 MiB，View indexes 约 367 MiB。Storage 近期日志已有 crypto 与多个 stockcn K 线 Dataset 的历史索引 backfill 记录。因此正式切换必须先确认当前任务、批次、失败回执与 waiting 周期的运行态，并将任何 ledger 重建和保留对象明确分开；不能把“无需兼容历史”推导成全量清库。该检查未修改生产状态。
 

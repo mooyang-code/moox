@@ -71,6 +71,24 @@ func TestDatasetPeriodExpectationConflictIsRejected(t *testing.T) {
 	require.ErrorAs(t, err, &conflict)
 }
 
+func TestDatasetPeriodEnsureRejectsNonPositiveDeadlineWithoutSideEffects(t *testing.T) {
+	for _, deadlineAt := range []int64{0, -1} {
+		t.Run(fmt.Sprint(deadlineAt), func(t *testing.T) {
+			store := newPeriodTestStore(t)
+			exp := periodExpectationForTest(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), 1, "BTC-USDT")
+			exp.DeadlineAt = deadlineAt
+
+			_, err := store.EnsureDatasetPeriod(context.Background(), exp)
+			require.ErrorContains(t, err, "deadline_at must be positive")
+			query := exp
+			query.DeadlineAt = 0
+			_, err = store.GetDatasetPeriodStatus(context.Background(), query)
+			require.ErrorIs(t, err, cpebble.ErrNotFound)
+			require.Zero(t, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+		})
+	}
+}
+
 func TestDatasetPeriodEnsureRejectsMarkerOverEventLimit(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "node"), NodeID: "node-a", MaxEventBytes: 1})
 	require.NoError(t, err)

@@ -36,6 +36,9 @@ func (s *Service) EnsureDatasetPeriod(ctx context.Context, req *pb.PrimaryEnsure
 	if err := validateCollectorPeriodDataset(ctx, req.GetAuthInfo(), exp); err != nil {
 		return &pb.PrimaryEnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
+	if exp.GetDeadlineAt() <= 0 {
+		return &pb.PrimaryEnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("deadline_at must be positive"))}, nil
+	}
 	node, err := s.resolve(ctx, exp.GetSpaceId(), exp.GetDatasetId())
 	if err != nil {
 		return &pb.PrimaryEnsureDatasetPeriodRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil

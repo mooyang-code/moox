@@ -105,6 +105,9 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 	if err != nil {
 		return DatasetPeriodResult{}, err
 	}
+	if exp.DeadlineAt <= 0 {
+		return DatasetPeriodResult{}, invalid("deadline_at must be positive")
+	}
 	if err := ctx.Err(); err != nil {
 		return DatasetPeriodResult{}, err
 	}
