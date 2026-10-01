@@ -13,6 +13,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTimerPeriodBindingHashIncludesActualProvider(t *testing.T) {
+	assignment := NodeAssignment{
+		RouteProvider: "stockcn_multi", Provider: "sina", SourceID: "stockcn_minute_http", RouteVersion: "route-v1",
+		GroupID: 0, GroupCount: 1, MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity",
+		DatasetID: "bars", Frequency: "1m", OutputFields: []string{"close"}, NodeID: "timer-node",
+		FunctionName: "market-fetch", Region: "ap-singapore",
+	}
+	baseline := timerPeriodBindingHash(assignment)
+	require.NotEmpty(t, baseline)
+
+	assignment.Provider = "eastmoney"
+	require.NotEqual(t, baseline, timerPeriodBindingHash(assignment))
+}
+
 func TestTimerPeriodPlannerReusesFrozenOwnerAcrossRuns(t *testing.T) {
 	ctx := context.Background()
 	s := newTimerPlannerStore(t)

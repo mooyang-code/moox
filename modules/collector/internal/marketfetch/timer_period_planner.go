@@ -378,8 +378,10 @@ func timerPeriodTargets(input []domain.WriteTarget, items []domain.CollectionIte
 }
 
 func timerPeriodBindingHash(assignment NodeAssignment) string {
+	routeProvider := strings.ToLower(strings.TrimSpace(firstNonEmpty(assignment.RouteProvider, assignment.Provider)))
+	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(assignment.Provider, routeProvider)))
 	return AssignmentHash(
-		strings.ToLower(strings.TrimSpace(firstNonEmpty(assignment.RouteProvider, assignment.Provider))),
+		routeProvider, provider,
 		strings.ToLower(strings.TrimSpace(assignment.SourceID)), strings.TrimSpace(assignment.RouteVersion),
 		strconv.Itoa(assignment.GroupID), strconv.Itoa(assignment.GroupCount), strings.ToLower(strings.TrimSpace(assignment.MarketType)),
 		strings.ToLower(strings.TrimSpace(assignment.MarketID)), strings.ToLower(strings.TrimSpace(assignment.InstrumentType)),

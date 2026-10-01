@@ -76,7 +76,17 @@ POST /api/admin/cloudnode/GetNodeBatchChange
 
 必须轮询同一 job 至终态并核验云侧触发器确已禁用。观察超时不代表任务停止，不能因此重新提交或恢复 Timer。关闭新 planning 后仍保留旧进程的 in-flight、retry、failure reporter 和 Storage finalizer，使其收尾。
 
-仓库没有公开的非破坏性批量 drain API。发布者须通过受信、只读的运行态检查列出实际批次、重试、pending failure 回执和 Storage waiting 周期数量及身份；查询方式、DB 路径与范围要先核验。没有这些证据则停止切换。`DisableTask` 不会取消已经 Invoke 的 SCF，`/readyz` 和服务包 healthcheck 也不证明 drain。
+仓库没有公开的非破坏性批量 drain API。由确认过的受信控制面/云 API 停止新 planning 和 Timer 触发后，使用发布前独立复审通过、且与唯一发布提交一致的 `moox-cli` 候选版在 Control 主机执行 Collector SQLite 一致只读盘点；固定绝对 DB 路径和单个 Space，保存 JSON 与退出码：
+
+```bash
+"$CANDIDATE_MOOX_CLI" collector period-inventory \
+  --db-path "$COLLECTOR_DB" --space-id "$SPACE_ID" --max-items 100000 \
+  > "$COLLECTOR_INVENTORY_JSON"
+```
+
+报告只包含按 Space 统计的表/状态计数、匿名化的 active fetch batch/retry 引用，以及不含 Subject 明细的周期键汇总；失败回执只投影安全的 Dataset ID，不输出原始 JSON。当前回执检查按 reporter 实际输入验证 `TaskJSON.market_type`、有效频率/非零周期、非空且无重复 ID 的同 Space WriteTarget；新 Schema 还校验已持久化结果 JSON 中每个目标的 Space/Dataset/frequency/period/hash/count/index/disposition 身份及重复项。工具严格识别 `pre_remediation`（旧 boolean 回执）和 `current` 两种完整 Schema profile，不迁移数据库；预部署的旧正式库应报告 `schema.profile=pre_remediation`，新 period 表会列在 `schema.unavailable_tables`，不能把它们误当成数据缺失。混合/部分 Schema、缺表列、未知状态、无效快照或 Timer runtime request、损坏回执、全库无法归属 Space 的 readiness orphan、输出截断都会非零退出。工具使用 SQLite `mode=ro`、`query_only` 和单连接一致读事务；测试比较数据库与 WAL 的内容哈希，SQLite reader 仍可能更新 `-shm` 的内部读标记。`--max-items` 分别限制周期键、active batch、pending retry 三类数组，每类最多 100000 条。`fetch_batch_items.status` 只作历史关系计数：生产只插入 `pending`，不随父 batch 完成更新；排空判断看父 batch 的 planned/dispatched 状态，不要求 item 状态归零。`complete` 必须为 true、退出码必须为 0、`period_keys_truncated`/`activity_truncated` 必须为 false；否则停止切换。重复采集报告直到 planned/dispatched batch、未结 retry/failure receipt 与 waiting/pending readiness 均可解释并完成收尾。该报告不证明外部 Timer 已停、SCF invocation 已结束或 DataNode 已停止；云侧 readback、进程状态和 Storage 离线盘点仍须各自留证。`DisableTask` 不会取消已经 Invoke 的 SCF，`/readyz` 和服务包 healthcheck 也不证明 drain。
+
+**Inventory 前置核对：** 在运行命令前，以受信部署配置/控制面核实目标 Control 主机、Collector DB 绝对路径和 `SpaceID`；将报告中的 `space_id` 与控制面确认值逐字比对，并将 `table_counts.t_collector_tasks` 与该 Space 的已知任务数交叉核对。报告要求 `scope_present=true`；空库或拼错 Space 会 fail closed，不能作为“已排空”。该工具无法独立证明一个非空但错误的 Space 身份正确，任何一项不符都停止发布。`work_type=resample` readiness 接受 Storage 保存的 canonical 固定周期（例如 `4H`、`7m`），没有 `PeriodSeriesSnapshot` 时报告 `snapshot_required=false`。Storage period state 必须有有效 deadline 和 confirmed 时间。Timer manifest 检查同周期 Task/FirstRun/route version 一致、非空 deadline 与初始 attempt、严格拒绝 runtime 不接受的未知或超限 RequestJSON，并核对 manifest/batch/request 的 schedule/batch kind/frequency/shard/planned-count/Function/RequestID/NodeID/Region/route-version、真实 Claim 限制的 item 数及持久 batch item/write target 关系；item Provider/Source 与请求级实际路由绑定、item Subject/Symbol/Market 与快照 index 身份、WriteTarget ID/Task/Space/周期/series identity 以及全周期 index 完整覆盖也必须成立。StockCN 的快照 Provider/Source 是逻辑路由身份，而请求 Provider/Source 是被选中的实际数据源，两者不要求相等。无 Timer manifest 的快照不建立全量 Subject map。
 
 禁止使用 `collector task purge`、删除 Task、删除 Dataset/行情行或 `reset-view-consumers` 代替排空。
 

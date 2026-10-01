@@ -14,10 +14,13 @@ moox-cli storage reset-view-consumers ... # 删除全部 View durable/消息/索
 moox-cli factor clear-queue ...     # 清空 Factor durable consumer 历史积压并重启 Factor
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
+moox-cli collector period-inventory ... # 一致只读盘点 Collector SQLite 周期与运行态
 moox-cli collector task purge ...   # 预览或重置 Collector 任务运行数据（默认只读）
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
 moox-cli setup ...                  # 初始化控制面、发布服务包、部署 Storage、导入元数据
 ```
+
+`collector period-inventory` 仅用于受信 Control 主机上的单 Space 只读盘点。它识别 `pre_remediation` 与 `current` 完整 Schema profile，不做迁移；目标 Space 无数据时 fail closed；`--max-items` 对周期键、active batch、pending retry 三类数组分别限额。发布门禁还须独立核对 DB 路径、Space 身份和已知任务数。`work_type=resample` 使用 Storage canonical 固定周期且不要求 Collector period snapshot；Storage deadline/confirmed 状态及 Timer 请求、Claim、Completion、batch item、WriteTarget 与 snapshot 的绑定按运行契约校验。报告不能单独证明生产者已停止或 drain 完成。
 
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
 
