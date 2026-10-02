@@ -246,7 +246,7 @@ func TestPermanentRetryFailurePersistsUntilReportedAndMarksRuntimeFailed(t *test
 	require.NoError(t, err)
 	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
 		SpaceID: "crypto", RetryKey: "retry-a", InstanceID: "instance-a", SubjectID: "ETH-USDT", Frequency: "1m",
-		TargetDataTime: now, FailureTargetsJSON: string(failureTargetsJSON), Status: "pending", Attempt: 3,
+		TargetDataTime: now, TaskJSON: `{"market_type":"spot"}`, FailureTargetsJSON: string(failureTargetsJSON), Status: "pending", Attempt: 3,
 	}))
 
 	require.NoError(t, s.FetchRetries().MarkPermanent(ctx, "crypto", "retry-a", "retry_budget_exhausted", "upstream timed out"))
@@ -255,6 +255,7 @@ func TestPermanentRetryFailurePersistsUntilReportedAndMarksRuntimeFailed(t *test
 	require.Equal(t, "permanent_failed", retry.Status)
 	require.Equal(t, "retry_budget_exhausted", retry.LastErrorType)
 	require.Nil(t, retry.NextRetryAt)
+	require.Equal(t, domain.PeriodFailureReportPending, retry.PeriodFailureReportState)
 	instance, err := s.TaskInstances().Get(ctx, "crypto", "instance-a")
 	require.NoError(t, err)
 	require.Equal(t, domain.InstanceStatusFailed, instance.LastExecStatus)
@@ -274,6 +275,67 @@ func TestPermanentRetryFailurePersistsUntilReportedAndMarksRuntimeFailed(t *test
 	require.NoError(t, s.FetchRetries().Cleanup(ctx, now.Add(time.Hour)))
 	_, err = s.FetchRetries().Get(ctx, "crypto", "retry-a")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestPermanentRetryWithoutReportPayloadIsTerminalAndCleaned(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	targetsJSON, err := json.Marshal([]domain.WriteTarget{{
+		ID: "target-a", SpaceID: "crypto", InstanceID: "instance-a", DatasetID: "bars",
+		SeriesIndex: 0, SeriesHash: "hash", ExpectedCount: 1,
+	}})
+	require.NoError(t, err)
+
+	duplicateTargetsJSON, err := json.Marshal([]domain.WriteTarget{
+		{ID: "target-a", SpaceID: "crypto", InstanceID: "instance-a", DatasetID: "bars", SeriesIndex: 0, SeriesHash: "hash", ExpectedCount: 1},
+		{ID: " target-a ", SpaceID: "crypto", InstanceID: "instance-a", DatasetID: "bars", SeriesIndex: 0, SeriesHash: "hash", ExpectedCount: 1},
+	})
+	require.NoError(t, err)
+	noncanonicalTargetJSON, err := json.Marshal([]domain.WriteTarget{{
+		ID: " target-a ", SpaceID: "crypto", InstanceID: "instance-a", DatasetID: "bars",
+		SeriesIndex: 0, SeriesHash: "hash", ExpectedCount: 1,
+	}})
+	require.NoError(t, err)
+	inconsistentRosterJSON, err := json.Marshal([]domain.WriteTarget{
+		{ID: "target-a", SpaceID: "crypto", InstanceID: "instance-a", DatasetID: "bars", SeriesIndex: 0, SeriesHash: "hash-a", ExpectedCount: 1},
+		{ID: "target-b", SpaceID: "crypto", InstanceID: "instance-b", DatasetID: "bars", SeriesIndex: 0, SeriesHash: "hash-b", ExpectedCount: 1},
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name        string
+		taskJSON    string
+		targetsJSON string
+		frequency   string
+		periodTime  time.Time
+	}{
+		{name: "malformed task JSON", taskJSON: "not-json", targetsJSON: string(targetsJSON), frequency: "1m", periodTime: now},
+		{name: "missing market type", taskJSON: `{"frequency":"1m","target_data_time":"2026-10-02T12:00:00Z"}`, targetsJSON: string(targetsJSON), frequency: "1m", periodTime: now},
+		{name: "unsupported market type", taskJSON: `{"market_type":"bogus"}`, targetsJSON: string(targetsJSON), frequency: "1m", periodTime: now},
+		{name: "duplicate target IDs", taskJSON: `{"market_type":"spot"}`, targetsJSON: string(duplicateTargetsJSON), frequency: "1m", periodTime: now},
+		{name: "noncanonical target ID", taskJSON: `{"market_type":"spot"}`, targetsJSON: string(noncanonicalTargetJSON), frequency: "1m", periodTime: now},
+		{name: "inconsistent dataset roster", taskJSON: `{"market_type":"spot"}`, targetsJSON: string(inconsistentRosterJSON), frequency: "1m", periodTime: now},
+		{name: "task frequency fallback", taskJSON: `{"market_type":"spot","frequency":"1m"}`, targetsJSON: string(targetsJSON), periodTime: now},
+		{name: "task period fallback", taskJSON: `{"market_type":"spot","target_data_time":"2026-10-02T12:00:00Z"}`, targetsJSON: string(targetsJSON), frequency: "1m"},
+		{name: "noncanonical retry frequency", taskJSON: `{"market_type":"spot"}`, targetsJSON: string(targetsJSON), frequency: " 1m ", periodTime: now},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newCollectorStore(t)
+			require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
+				SpaceID: "crypto", RetryKey: "retry-a", InstanceID: "instance-a", SubjectID: "ETH-USDT", Frequency: tc.frequency,
+				TargetDataTime: tc.periodTime, TaskJSON: tc.taskJSON, FailureTargetsJSON: tc.targetsJSON, Status: "pending", Attempt: 3,
+			}))
+
+			require.NoError(t, s.FetchRetries().MarkPermanent(ctx, "crypto", "retry-a", "invalid_retry_payload", "invalid retry task"))
+			retry, err := s.FetchRetries().Get(ctx, "crypto", "retry-a")
+			require.NoError(t, err)
+			require.Equal(t, domain.PeriodFailureReportMissedDeadline, retry.PeriodFailureReportState)
+			require.Equal(t, "durable period failure snapshot unavailable", retry.PeriodFailureLastError)
+
+			require.NoError(t, s.FetchRetries().Cleanup(ctx, now.Add(time.Hour)))
+			_, err = s.FetchRetries().Get(ctx, "crypto", "retry-a")
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestFetchBatchCompletionSupersedesOlderPendingRetry(t *testing.T) {

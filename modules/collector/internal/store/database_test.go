@@ -13,6 +13,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const legacyFetchRetryItemsDDL = `CREATE TABLE t_collector_fetch_retry_items (
+	c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	c_space_id TEXT NOT NULL,
+	c_retry_key TEXT NOT NULL,
+	c_source_batch_id TEXT NOT NULL,
+	c_batch_kind TEXT NOT NULL DEFAULT 'realtime',
+	c_instance_id TEXT NOT NULL DEFAULT '',
+	c_write_target_id TEXT NOT NULL DEFAULT '',
+	c_retry_scope TEXT NOT NULL DEFAULT '',
+	c_subject_id TEXT NOT NULL,
+	c_frequency TEXT NOT NULL,
+	c_target_data_time DATETIME NOT NULL,
+	c_task_json TEXT NOT NULL DEFAULT '{}',
+	c_attempt INTEGER NOT NULL DEFAULT 1,
+	c_status TEXT NOT NULL,
+	c_next_retry_at DATETIME,
+	c_last_error_type TEXT NOT NULL DEFAULT '',
+	c_last_error_summary TEXT NOT NULL DEFAULT '',
+	c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+	c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+)`
+
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	mgr, err := Open(&Options{Path: dbPath})
@@ -147,6 +169,141 @@ func TestApplySchemaRejectsIncompleteCurrentTaskSchema(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "collector schema reset required")
 	require.ErrorContains(t, err, "current task schema is incomplete")
+}
+
+func TestApplySchemaMigratesLegacyFetchRetryItemsAndPreservesRows(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_tasks (c_space_id, c_task_id, c_task_name, c_definition_hash, c_series_hash)
+		VALUES ('crypto', 'task-17', 'task-17', 'definition-17', 'series-set-17')`).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_task_instances (c_space_id, c_instance_id, c_subject_id, c_frequency)
+		VALUES ('crypto', 'instance-17', 'BTC-USDT', '1m')`).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_instance_write_targets (
+		c_space_id, c_write_target_id, c_instance_id, c_task_id, c_dataset_id, c_series_index, c_series_hash, c_expected_count
+	) VALUES ('crypto', 'target-17', 'instance-17', 'task-17', 'bars', 0, 'current-hash-after-roster-change', 1)`).Error)
+	require.NoError(t, mgr.db.Exec(`DROP TABLE t_collector_fetch_retry_items`).Error)
+	require.NoError(t, mgr.db.Exec(legacyFetchRetryItemsDDL).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_fetch_retry_items (
+		c_id, c_space_id, c_retry_key, c_source_batch_id, c_batch_kind, c_instance_id,
+		c_write_target_id, c_retry_scope, c_subject_id, c_frequency, c_target_data_time,
+		c_task_json, c_attempt, c_status, c_last_error_type, c_last_error_summary
+	) VALUES (17, 'crypto', 'retry-17', 'batch-17', 'scheduled', 'instance-17',
+		'target-17', 'period', 'BTC-USDT', '1m', '2026-10-02T12:00:00Z',
+		'{"task":"kept"}', 3, 'permanent_failed', 'network', 'still visible')`).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_fetch_retry_items (
+		c_id, c_space_id, c_retry_key, c_source_batch_id, c_batch_kind, c_instance_id,
+		c_write_target_id, c_retry_scope, c_subject_id, c_frequency, c_target_data_time,
+		c_task_json, c_attempt, c_status, c_last_error_type, c_last_error_summary
+	) VALUES (18, 'crypto', 'retry-18', 'batch-18', 'scheduled', 'deleted-instance',
+		'', 'period', 'ETH-USDT', '1m', '2026-10-02T12:00:00Z',
+		'{"task":"kept"}', 2, 'permanent_failed', 'network', 'target no longer exists')`).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_fetch_retry_items (
+		c_id, c_space_id, c_retry_key, c_source_batch_id, c_batch_kind, c_instance_id,
+		c_write_target_id, c_retry_scope, c_subject_id, c_frequency, c_target_data_time,
+		c_task_json, c_attempt, c_status, c_last_error_type, c_last_error_summary
+	) VALUES (19, 'crypto', 'retry-19', 'batch-19', 'scheduled', 'instance-17',
+		'', 'period', 'BTC-USDT', '1m', '2026-10-02T12:00:00Z',
+		'{"task":"kept"}', 2, 'pending', 'network', 'pending before upgrade')`).Error)
+
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	var item domain.RetryItem
+	require.NoError(t, mgr.db.Where("c_retry_key = ?", "retry-17").Take(&item).Error)
+	require.Equal(t, 17, item.ID)
+	require.Equal(t, "instance-17", item.InstanceID)
+	require.Equal(t, "target-17", item.WriteTargetID)
+	require.Equal(t, "period", item.RetryScope)
+	require.Equal(t, 3, item.Attempt)
+	require.Equal(t, "permanent_failed", item.Status)
+	require.Equal(t, "still visible", item.LastErrorSummary)
+	require.Equal(t, "[]", item.FailureTargetsJSON, "mutable current WriteTargets must not be treated as a historical period snapshot")
+	require.Equal(t, domain.PeriodFailureReportMissedDeadline, item.PeriodFailureReportState)
+	var noTarget domain.RetryItem
+	require.NoError(t, mgr.db.Where("c_retry_key = ?", "retry-18").Take(&noTarget).Error)
+	require.Equal(t, "[]", noTarget.FailureTargetsJSON)
+	require.Equal(t, domain.PeriodFailureReportMissedDeadline, noTarget.PeriodFailureReportState)
+	pending, err := mgr.FetchRetries().ListPendingPeriodFailuresAfter(context.Background(), "crypto", "", 10)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+	require.NoError(t, mgr.FetchRetries().MarkPermanent(context.Background(), "crypto", "retry-19", "retry_budget_exhausted", "upstream timed out"))
+	var newlyPermanent domain.RetryItem
+	require.NoError(t, mgr.db.Where("c_retry_key = ?", "retry-19").Take(&newlyPermanent).Error)
+	require.Equal(t, domain.PeriodFailureReportMissedDeadline, newlyPermanent.PeriodFailureReportState)
+	require.NoError(t, mgr.FetchRetries().Cleanup(context.Background(), time.Now().Add(time.Hour)))
+	require.Error(t, mgr.db.Where("c_retry_key = ?", "retry-18").Take(&noTarget).Error)
+	require.Error(t, mgr.db.Where("c_retry_key = ?", "retry-19").Take(&newlyPermanent).Error)
+	require.Error(t, mgr.db.Exec(`INSERT INTO t_collector_fetch_retry_items (
+		c_space_id, c_retry_key, c_source_batch_id, c_subject_id, c_frequency,
+		c_target_data_time, c_status, c_period_failure_report_state
+	) VALUES ('crypto', 'invalid-state', '', 'BTC-USDT', '1m', '2026-10-02T12:00:00Z',
+		'permanent_failed', 'unknown')`).Error)
+}
+
+func TestApplySchemaRejectsBeforeMigratingLegacyFetchRetryItems(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.db.Exec(legacyFetchRetryItemsDDL).Error)
+	require.NoError(t, mgr.db.Exec(`CREATE UNIQUE INDEX idx_collector_fetch_retry ON t_collector_fetch_retry_items (c_space_id, c_retry_key)`).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_fetch_retry_items (c_space_id, c_retry_key, c_source_batch_id, c_subject_id, c_frequency, c_target_data_time, c_status)
+		VALUES ('crypto', 'preserved', 'batch', 'BTC-USDT', '1m', '2026-10-02T12:00:00Z', 'pending')`).Error)
+	require.NoError(t, mgr.db.Exec(`CREATE TABLE t_collector_task_rules (c_id INTEGER PRIMARY KEY)`).Error)
+
+	err = mgr.ApplySchema(schema.AllSQL())
+	require.ErrorContains(t, err, "t_collector_task_rules")
+	var columnCount int64
+	require.NoError(t, mgr.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_fetch_retry_items')`).Scan(&columnCount).Error)
+	require.EqualValues(t, 19, columnCount)
+	var indexCount int64
+	require.NoError(t, mgr.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_collector_fetch_retry'`).Scan(&indexCount).Error)
+	require.EqualValues(t, 1, indexCount)
+	var retryKey string
+	require.NoError(t, mgr.db.Raw(`SELECT c_retry_key FROM t_collector_fetch_retry_items WHERE c_id = 1`).Scan(&retryKey).Error)
+	require.Equal(t, "preserved", retryKey)
+}
+
+func TestApplySchemaRollsBackLegacyFetchRetryMigrationOnSchemaError(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.db.Exec(legacyFetchRetryItemsDDL).Error)
+	require.NoError(t, mgr.db.Exec(`CREATE UNIQUE INDEX idx_collector_fetch_retry ON t_collector_fetch_retry_items (c_space_id, c_retry_key)`).Error)
+	require.NoError(t, mgr.db.Exec(`INSERT INTO t_collector_fetch_retry_items (c_space_id, c_retry_key, c_source_batch_id, c_subject_id, c_frequency, c_target_data_time, c_status)
+		VALUES ('crypto', 'preserved', 'batch', 'BTC-USDT', '1m', '2026-10-02T12:00:00Z', 'pending')`).Error)
+
+	err = mgr.ApplySchema(`CREATE TABLE t_apply_schema_partial (c_id INTEGER); THIS IS NOT SQL;`)
+	require.Error(t, err)
+	var columnCount int64
+	require.NoError(t, mgr.db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_fetch_retry_items')`).Scan(&columnCount).Error)
+	require.EqualValues(t, 19, columnCount)
+	var indexCount int64
+	require.NoError(t, mgr.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_collector_fetch_retry'`).Scan(&indexCount).Error)
+	require.EqualValues(t, 1, indexCount)
+	var retryKey string
+	require.NoError(t, mgr.db.Raw(`SELECT c_retry_key FROM t_collector_fetch_retry_items WHERE c_id = 1`).Scan(&retryKey).Error)
+	require.Equal(t, "preserved", retryKey)
+	var partialTableCount int64
+	require.NoError(t, mgr.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 't_apply_schema_partial'`).Scan(&partialTableCount).Error)
+	require.Zero(t, partialTableCount)
+}
+
+func TestApplySchemaRejectsUnknownLegacyFetchRetryColumn(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.db.Exec(`CREATE TABLE t_collector_fetch_retry_items (
+		c_id INTEGER PRIMARY KEY, c_space_id TEXT NOT NULL, c_retry_key TEXT NOT NULL,
+		c_source_batch_id TEXT NOT NULL, c_batch_kind TEXT NOT NULL, c_instance_id TEXT NOT NULL,
+		c_write_target_id TEXT NOT NULL, c_retry_scope TEXT NOT NULL, c_subject_id TEXT NOT NULL,
+		c_frequency TEXT NOT NULL, c_target_data_time DATETIME NOT NULL, c_task_json TEXT NOT NULL,
+		c_attempt INTEGER NOT NULL, c_status TEXT NOT NULL, c_next_retry_at DATETIME,
+		c_last_error_type TEXT NOT NULL, c_last_error_summary TEXT NOT NULL,
+		c_ctime DATETIME, c_mtime DATETIME, c_unrecognized TEXT
+	)`).Error)
+	err = mgr.ApplySchema(schema.AllSQL())
+	require.Error(t, err)
+	require.ErrorContains(t, err, "unsupported legacy Collector fetch retry schema")
 }
 
 func TestApplySchemaRejectsIncompletePeriodSeriesSchema(t *testing.T) {

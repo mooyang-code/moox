@@ -141,9 +141,20 @@ func (r *FetchRetryRepository) MarkPermanent(ctx context.Context, spaceID, retry
 		if item.Status != "pending" && item.Status != "dispatched" {
 			return nil
 		}
+		reportState := domain.PeriodFailureReportPending
+		reportError := ""
+		if !retryHasReportableFailureSnapshot(&item) {
+			reportState = domain.PeriodFailureReportMissedDeadline
+			reportError = "durable period failure snapshot unavailable"
+		}
 		result := tx.Model(&domain.RetryItem{}).
 			Where("c_space_id = ? AND c_retry_key = ? AND c_status IN ?", spaceID, retryKey, []string{"pending", "dispatched"}).
-			Updates(map[string]any{"c_status": "permanent_failed", "c_next_retry_at": nil, "c_last_error_type": errorType, "c_last_error_summary": errorSummary, "c_mtime": now})
+			Updates(map[string]any{
+				"c_status": "permanent_failed", "c_next_retry_at": nil,
+				"c_last_error_type": errorType, "c_last_error_summary": errorSummary,
+				"c_period_failure_report_state": reportState, "c_period_failure_last_error": reportError,
+				"c_mtime": now,
+			})
 		if result.Error != nil || result.RowsAffected == 0 {
 			return result.Error
 		}
@@ -165,6 +176,59 @@ func (r *FetchRetryRepository) MarkPermanent(ctx context.Context, spaceID, retry
 		}
 		return targetQuery.Updates(map[string]any{"c_status": "failed", "c_last_error": errorSummary, "c_attempt": item.Attempt, "c_mtime": now}).Error
 	})
+}
+
+func retryHasReportableFailureSnapshot(item *domain.RetryItem) bool {
+	if item == nil {
+		return false
+	}
+	var targets []domain.WriteTarget
+	if err := json.Unmarshal([]byte(item.FailureTargetsJSON), &targets); err != nil || len(targets) == 0 {
+		return false
+	}
+	targetIDs := make(map[string]struct{}, len(targets))
+	type datasetSeriesIdentity struct {
+		seriesHash    string
+		expectedCount uint32
+	}
+	datasetSeries := make(map[string]datasetSeriesIdentity, len(targets))
+	for _, target := range targets {
+		targetID := strings.TrimSpace(target.ID)
+		datasetID := strings.TrimSpace(target.DatasetID)
+		seriesHash := strings.TrimSpace(target.SeriesHash)
+		if targetID == "" || targetID != target.ID || datasetID == "" || datasetID != target.DatasetID || seriesHash == "" || seriesHash != target.SeriesHash || target.ExpectedCount == 0 || target.SeriesIndex >= target.ExpectedCount || (target.SpaceID != "" && target.SpaceID != item.SpaceID) {
+			return false
+		}
+		if _, exists := targetIDs[targetID]; exists {
+			return false
+		}
+		targetIDs[targetID] = struct{}{}
+		identity := datasetSeriesIdentity{seriesHash: seriesHash, expectedCount: target.ExpectedCount}
+		if previous, exists := datasetSeries[datasetID]; exists && previous != identity {
+			return false
+		}
+		datasetSeries[datasetID] = identity
+	}
+	var collectionItem domain.CollectionItem
+	if err := json.Unmarshal([]byte(item.TaskJSON), &collectionItem); err != nil || strings.TrimSpace(collectionItem.MarketType) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(collectionItem.MarketType)) {
+	case "spot", "swap", "equity", "stockcn":
+	default:
+		return false
+	}
+	frequency := strings.TrimSpace(item.Frequency)
+	if frequency == "" || frequency != item.Frequency || item.TargetDataTime.IsZero() {
+		return false
+	}
+	if _, err := marketdata.ParseFrequency(frequency); err != nil {
+		return false
+	}
+	if _, err := report.NormalizeDatasetFrequency(frequency); err != nil {
+		return false
+	}
+	return true
 }
 
 func (r *FetchRetryRepository) ListPendingPeriodFailuresAfter(ctx context.Context, spaceID, afterRetryKey string, limit int) ([]domain.RetryItem, error) {

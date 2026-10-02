@@ -17,6 +17,7 @@ WITH_STORAGE_ACCESS=1
 WITH_ARCHIVE=1
 WITH_EVENTBUS=1
 WITH_WEB_HOST=1
+WITH_WEB_HOST_EXPLICIT=0
 STORAGE_EXTERNAL_LISTEN=0
 WITH_CLOUDNODE=1
 WITH_COLLECTOR=1
@@ -140,6 +141,7 @@ Options:
   --with-archive                  Package/start moox-archive (overrides profile default).
   --no-eventbus                   Do not package/stop/start moox-eventbus; preserve existing remote EventBus files.
   --no-web-host                   Do not package/start moox-web-host.
+  --with-web-host                 Package/start the browser application without Admin.
   --no-cloudnode                  Do not package/start moox-cloudnode.
   --no-collector                  Do not package/start moox-collector.
   --no-factor                     Do not package/start moox-factor.
@@ -542,6 +544,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-web-host)
       WITH_WEB_HOST=0
+      WITH_WEB_HOST_EXPLICIT=1
+      shift
+      ;;
+    --with-web-host)
+      WITH_WEB_HOST=1
+      WITH_WEB_HOST_EXPLICIT=1
       shift
       ;;
     --no-cloudnode)
@@ -582,7 +590,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-admin)
       WITH_ADMIN=0
-      WITH_WEB_HOST=0
+      if [[ "${WITH_WEB_HOST_EXPLICIT}" -eq 0 ]]; then
+        WITH_WEB_HOST=0
+      fi
       shift
       ;;
     --build-web-assets)

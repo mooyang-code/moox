@@ -231,11 +231,132 @@ func (s *Store) ApplySchema(sql string) error {
 	if err := s.rejectLegacySchema(); err != nil {
 		return err
 	}
-	if err := s.db.Exec(sql).Error; err != nil {
-		return err
-	}
-	return s.validatePeriodFailureSchema()
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := migrateLegacyFetchRetryItems(tx); err != nil {
+			return err
+		}
+		if err := tx.Exec(sql).Error; err != nil {
+			return err
+		}
+		return validatePeriodFailureSchema(tx)
+	})
 }
+
+func migrateLegacyFetchRetryItems(db *gorm.DB) error {
+	var tableCount int64
+	if err := db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 't_collector_fetch_retry_items'`).Scan(&tableCount).Error; err != nil {
+		return fmt.Errorf("inspect legacy Collector fetch retry table: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	var columns []struct {
+		Name string `gorm:"column:name"`
+	}
+	if err := db.Raw(`SELECT name FROM pragma_table_info('t_collector_fetch_retry_items') ORDER BY cid`).Scan(&columns).Error; err != nil {
+		return fmt.Errorf("inspect legacy Collector fetch retry columns: %w", err)
+	}
+	columnSet := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		columnSet[column.Name] = struct{}{}
+	}
+	if len(columnSet) == 0 {
+		return fmt.Errorf("unsupported legacy Collector fetch retry schema: table has no columns")
+	}
+	if !isLegacyFetchRetryItemsSchema(columnSet) {
+		if hasCurrentFetchRetrySchema(columnSet) {
+			return nil
+		}
+		return fmt.Errorf("unsupported legacy Collector fetch retry schema: unexpected column set")
+	}
+	var existingMigrationTable int64
+	if err := db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 't_collector_fetch_retry_items_migration_v1'`).Scan(&existingMigrationTable).Error; err != nil {
+		return fmt.Errorf("inspect legacy Collector fetch retry migration table: %w", err)
+	}
+	if existingMigrationTable != 0 {
+		return fmt.Errorf("unsupported legacy Collector fetch retry schema: migration table already exists")
+	}
+
+	if err := db.Exec(`ALTER TABLE t_collector_fetch_retry_items RENAME TO t_collector_fetch_retry_items_migration_v1`).Error; err != nil {
+		return fmt.Errorf("rename legacy Collector fetch retry table: %w", err)
+	}
+	if err := db.Exec(createFetchRetryItemsTableSQL).Error; err != nil {
+		return fmt.Errorf("create current Collector fetch retry table: %w", err)
+	}
+	const legacyColumnList = `c_id, c_space_id, c_retry_key, c_source_batch_id, c_batch_kind, c_instance_id,
+		c_write_target_id, c_retry_scope, c_subject_id, c_frequency, c_target_data_time, c_task_json,
+		c_attempt, c_status, c_next_retry_at, c_last_error_type, c_last_error_summary, c_ctime, c_mtime`
+	if err := db.Exec(`INSERT INTO t_collector_fetch_retry_items (` + legacyColumnList + `,
+		c_failure_targets_json, c_period_failure_report_state)
+		SELECT ` + legacyColumnList + `,
+			'[]',
+			CASE WHEN legacy.c_status = 'permanent_failed' THEN 'missed_deadline' ELSE 'pending' END
+		FROM t_collector_fetch_retry_items_migration_v1 AS legacy`).Error; err != nil {
+		return fmt.Errorf("copy legacy Collector fetch retry rows: %w", err)
+	}
+	if err := db.Exec(`DROP TABLE t_collector_fetch_retry_items_migration_v1`).Error; err != nil {
+		return fmt.Errorf("drop migrated Collector fetch retry table: %w", err)
+	}
+	return nil
+}
+
+func isLegacyFetchRetryItemsSchema(columns map[string]struct{}) bool {
+	legacyColumns := []string{
+		"c_id", "c_space_id", "c_retry_key", "c_source_batch_id", "c_batch_kind", "c_instance_id",
+		"c_write_target_id", "c_retry_scope", "c_subject_id", "c_frequency", "c_target_data_time",
+		"c_task_json", "c_attempt", "c_status", "c_next_retry_at", "c_last_error_type",
+		"c_last_error_summary", "c_ctime", "c_mtime",
+	}
+	if len(columns) != len(legacyColumns) {
+		return false
+	}
+	for _, column := range legacyColumns {
+		if _, exists := columns[column]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func hasCurrentFetchRetrySchema(columns map[string]struct{}) bool {
+	for _, column := range []string{
+		"c_failure_targets_json", "c_period_failure_report_state", "c_period_failure_results_json",
+		"c_period_failure_last_error", "c_period_failure_deadline_exceeded_at",
+	} {
+		if _, exists := columns[column]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+const createFetchRetryItemsTableSQL = `CREATE TABLE t_collector_fetch_retry_items (
+	c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	c_space_id TEXT NOT NULL,
+	c_retry_key TEXT NOT NULL,
+	c_source_batch_id TEXT NOT NULL,
+	c_batch_kind TEXT NOT NULL DEFAULT 'realtime',
+	c_instance_id TEXT NOT NULL DEFAULT '',
+	c_write_target_id TEXT NOT NULL DEFAULT '',
+	c_retry_scope TEXT NOT NULL DEFAULT '',
+	c_subject_id TEXT NOT NULL,
+	c_frequency TEXT NOT NULL,
+	c_target_data_time DATETIME NOT NULL,
+	c_task_json TEXT NOT NULL DEFAULT '{}',
+	c_failure_targets_json TEXT NOT NULL DEFAULT '[]',
+	c_attempt INTEGER NOT NULL DEFAULT 1,
+	c_status TEXT NOT NULL,
+	c_period_failure_report_state TEXT NOT NULL DEFAULT 'pending'
+		CHECK (c_period_failure_report_state IN ('pending', 'acknowledged', 'missed_deadline')),
+	c_period_failure_results_json TEXT NOT NULL DEFAULT '[]',
+	c_period_failure_last_error TEXT NOT NULL DEFAULT '',
+	c_period_failure_deadline_exceeded_at DATETIME,
+	c_next_retry_at DATETIME,
+	c_last_error_type TEXT NOT NULL DEFAULT '',
+	c_last_error_summary TEXT NOT NULL DEFAULT '',
+	c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+	c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+)`
 
 // rejectLegacySchema deliberately fails closed for the pre-task model. There
 // is no safe in-place migration for a running Collector because the old rule
@@ -336,6 +457,24 @@ func (s *Store) rejectLegacySchema() error {
 		if tableCount == 0 {
 			continue
 		}
+		if table == "t_collector_fetch_retry_items" {
+			var retryColumns []struct {
+				Name string `gorm:"column:name"`
+			}
+			if err := s.db.Raw(`SELECT name FROM pragma_table_info('t_collector_fetch_retry_items')`).Scan(&retryColumns).Error; err != nil {
+				return fmt.Errorf("inspect collector fetch retry compatibility: %w", err)
+			}
+			retryColumnSet := make(map[string]struct{}, len(retryColumns))
+			for _, column := range retryColumns {
+				retryColumnSet[column.Name] = struct{}{}
+			}
+			if isLegacyFetchRetryItemsSchema(retryColumnSet) {
+				continue
+			}
+			if !hasCurrentFetchRetrySchema(retryColumnSet) {
+				return fmt.Errorf("unsupported legacy Collector fetch retry schema: unexpected column set")
+			}
+		}
 		for _, column := range columns {
 			var columnCount int64
 			if err := s.db.Raw(`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&columnCount).Error; err != nil {
@@ -401,23 +540,23 @@ func (s *Store) rejectLegacySchema() error {
 	return nil
 }
 
-func (s *Store) validatePeriodFailureSchema() error {
+func validatePeriodFailureSchema(db *gorm.DB) error {
 	var tableSQL string
-	if err := s.db.Raw(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 't_collector_fetch_retry_items'`).Scan(&tableSQL).Error; err != nil {
+	if err := db.Raw(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 't_collector_fetch_retry_items'`).Scan(&tableSQL).Error; err != nil {
 		return fmt.Errorf("inspect period failure schema constraint: %w", err)
 	}
 	if !strings.Contains(strings.ToLower(tableSQL), "check (c_period_failure_report_state in ('pending', 'acknowledged', 'missed_deadline'))") {
 		return fmt.Errorf("collector schema reset required: period failure report state CHECK constraint is missing")
 	}
 	var invalidStates int64
-	if err := s.db.Raw(`SELECT count(*) FROM t_collector_fetch_retry_items WHERE c_period_failure_report_state NOT IN ('pending', 'acknowledged', 'missed_deadline')`).Scan(&invalidStates).Error; err != nil {
+	if err := db.Raw(`SELECT count(*) FROM t_collector_fetch_retry_items WHERE c_period_failure_report_state NOT IN ('pending', 'acknowledged', 'missed_deadline')`).Scan(&invalidStates).Error; err != nil {
 		return fmt.Errorf("validate period failure report states: %w", err)
 	}
 	if invalidStates > 0 {
 		return fmt.Errorf("collector schema contains %d invalid period failure report states", invalidStates)
 	}
 	var indexCount int64
-	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_collector_fetch_retry_period_failure'`).Scan(&indexCount).Error; err != nil {
+	if err := db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_collector_fetch_retry_period_failure'`).Scan(&indexCount).Error; err != nil {
 		return fmt.Errorf("inspect period failure report index: %w", err)
 	}
 	if indexCount != 1 {

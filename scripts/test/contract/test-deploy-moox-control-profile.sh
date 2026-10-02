@@ -6,6 +6,8 @@ TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-control-profile.XXXXXX")"
 FIXTURE_ROOT="${TMP_ROOT}/repo"
 ARCHIVE="${TMP_ROOT}/control.tar.gz"
 DEFAULT_ARCHIVE="${TMP_ROOT}/default-control.tar.gz"
+WEB_HOST_OVERLAY_ARCHIVE="${TMP_ROOT}/web-host-overlay.tar.gz"
+WEB_HOST_OVERLAY_REVERSED_ARCHIVE="${TMP_ROOT}/web-host-overlay-reversed.tar.gz"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 file_mode() {
@@ -47,7 +49,7 @@ ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 for binary in \
   moox-admin moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli \
+  moox-collector moox-collector-cli moox-collector-subject \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli moox-host-agent; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
@@ -86,7 +88,7 @@ tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in \
   moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli \
+  moox-collector moox-collector-cli moox-collector-subject \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli moox-host-agent; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }
@@ -221,10 +223,78 @@ grep -Fq 'MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS' "${TMP_ROOT}/unpacked/sta
 ! grep -Fq 'Reuse Collector' "${TMP_ROOT}/unpacked/start.sh"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
+  --profile control --package-only --archive "${WEB_HOST_OVERLAY_ARCHIVE}" \
+  --target localhost --dir "${TMP_ROOT}/deploy-web-host" --stage "${TMP_ROOT}/stage-web-host" \
+  --goos linux --goarch amd64 --skip-build --reuse-web-assets \
+  --no-admin --with-web-host --no-storage --no-storage-access --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor \
+  --no-hostagent --no-gateway --node-id control --gateway-control-url http://127.0.0.1:11000 \
+  --monitor-instance-id monitor-control --public-host 106.53.107.122 --service-https-port 11001 >/dev/null
+
+mkdir "${TMP_ROOT}/unpacked-web-host"
+tar -C "${TMP_ROOT}/unpacked-web-host" -xzf "${WEB_HOST_OVERLAY_ARCHIVE}"
+[[ -x "${TMP_ROOT}/unpacked-web-host/bin/moox-web-host" ]]
+[[ ! -e "${TMP_ROOT}/unpacked-web-host/bin/moox-admin" ]]
+
+PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
+  --profile control --package-only --archive "${WEB_HOST_OVERLAY_REVERSED_ARCHIVE}" \
+  --target localhost --dir "${TMP_ROOT}/deploy-web-host-reversed" --stage "${TMP_ROOT}/stage-web-host-reversed" \
+  --goos linux --goarch amd64 --skip-build --reuse-web-assets \
+  --with-web-host --no-admin --no-storage --no-storage-access --no-archive --no-eventbus \
+  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor \
+  --no-hostagent --no-gateway --node-id control --gateway-control-url http://127.0.0.1:11000 \
+  --monitor-instance-id monitor-control --public-host 106.53.107.122 --service-https-port 11001 >/dev/null
+
+mkdir "${TMP_ROOT}/unpacked-web-host-reversed"
+tar -C "${TMP_ROOT}/unpacked-web-host-reversed" -xzf "${WEB_HOST_OVERLAY_REVERSED_ARCHIVE}"
+[[ -x "${TMP_ROOT}/unpacked-web-host-reversed/bin/moox-web-host" ]]
+[[ ! -e "${TMP_ROOT}/unpacked-web-host-reversed/bin/moox-admin" ]]
+
+WEB_HOST_OVERLAY_DEPLOY="${TMP_ROOT}/installed-control"
+mkdir -p "${WEB_HOST_OVERLAY_DEPLOY}"
+cp -R "${TMP_ROOT}/unpacked/." "${WEB_HOST_OVERLAY_DEPLOY}/"
+mkdir -p "${WEB_HOST_OVERLAY_DEPLOY}/config/caddy" "${WEB_HOST_OVERLAY_DEPLOY}/secrets" \
+  "${WEB_HOST_OVERLAY_DEPLOY}/admin"
+printf 'keep-edge-config\n' >"${WEB_HOST_OVERLAY_DEPLOY}/config/caddy/edge.env"
+printf 'keep-admin-state\n' >"${WEB_HOST_OVERLAY_DEPLOY}/admin/keep.txt"
+printf 'keep-admin-auth\n' >"${WEB_HOST_OVERLAY_DEPLOY}/secrets/admin-jwt.env"
+for gateway_env in gateway-control.env gateway-service.env gateway-moox-cli.env; do
+  printf 'preserve-%s\n' "${gateway_env}" >"${WEB_HOST_OVERLAY_DEPLOY}/secrets/${gateway_env}"
+done
+cp "${WEB_HOST_OVERLAY_DEPLOY}/start.sh" "${TMP_ROOT}/start-before-web-host-overlay.sh"
+cp "${WEB_HOST_OVERLAY_DEPLOY}/stop.sh" "${TMP_ROOT}/stop-before-web-host-overlay.sh"
+cp "${WEB_HOST_OVERLAY_DEPLOY}/bin/moox-admin" "${TMP_ROOT}/admin-before-web-host-overlay"
+
+"${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
+  --profile control --target localhost --dir "${WEB_HOST_OVERLAY_DEPLOY}" \
+  --stage "${TMP_ROOT}/stage-installed-web-host" --goos linux --goarch amd64 \
+  --skip-build --reuse-web-assets --no-start --component-overlay \
+  --no-admin --with-web-host --no-gateway --no-storage --no-storage-access \
+  --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor \
+  --no-strategy --no-trade --no-monitor --no-hostagent --local-ca skip --target-ca skip \
+  --node-id control --gateway-control-url http://127.0.0.1:11000 \
+  --gateway-ca-bundle "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" \
+  --gateway-control-key-file "${TMP_ROOT}/unpacked/secrets/gateway-control.key" \
+  --gateway-service-key-file "${TMP_ROOT}/unpacked/secrets/gateway-service.key" >/dev/null
+
+cmp "${TMP_ROOT}/start-before-web-host-overlay.sh" "${WEB_HOST_OVERLAY_DEPLOY}/start.sh"
+cmp "${TMP_ROOT}/stop-before-web-host-overlay.sh" "${WEB_HOST_OVERLAY_DEPLOY}/stop.sh"
+cmp "${TMP_ROOT}/admin-before-web-host-overlay" "${WEB_HOST_OVERLAY_DEPLOY}/bin/moox-admin"
+[[ -x "${WEB_HOST_OVERLAY_DEPLOY}/bin/moox-web-host" ]]
+[[ -f "${WEB_HOST_OVERLAY_DEPLOY}/admin/keep.txt" ]]
+grep -Fxq 'keep-edge-config' "${WEB_HOST_OVERLAY_DEPLOY}/config/caddy/edge.env"
+grep -Fxq 'keep-admin-auth' "${WEB_HOST_OVERLAY_DEPLOY}/secrets/admin-jwt.env"
+grep -Fxq 'MOOX_INSTALLED_WITH_ADMIN=1' "${WEB_HOST_OVERLAY_DEPLOY}/config/components.env"
+grep -Fxq 'MOOX_INSTALLED_WITH_WEB_HOST=1' "${WEB_HOST_OVERLAY_DEPLOY}/config/components.env"
+for gateway_env in gateway-control.env gateway-service.env gateway-moox-cli.env; do
+  grep -Fxq "preserve-${gateway_env}" "${WEB_HOST_OVERLAY_DEPLOY}/secrets/${gateway_env}"
+done
+
+PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh" \
   --package-only --archive "${DEFAULT_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-default" --stage "${TMP_ROOT}/stage-default" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
-  --no-storage --no-archive --no-factor --no-strategy --no-trade --no-monitor \
+  --no-storage --no-storage-access --no-archive --no-factor --no-strategy --no-trade --no-monitor \
   --node-id control --gateway-control-url http://127.0.0.1:11000 >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked-default"
