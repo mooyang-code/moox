@@ -64,6 +64,36 @@ func (r *TaskInstanceRepository) ListWriteTargets(ctx context.Context, spaceID, 
 	return targets, err
 }
 
+// ListWriteTargetsForInstances returns all destinations for a page of shared
+// instances in bounded queries instead of one query per instance.
+func (r *TaskInstanceRepository) ListWriteTargetsForInstances(ctx context.Context, spaceID string, instanceIDs []string) (map[string][]domain.WriteTarget, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	instanceIDs = uniqueNonEmptyStrings(instanceIDs)
+	byInstance := make(map[string][]domain.WriteTarget, len(instanceIDs))
+	if spaceID == "" || len(instanceIDs) == 0 {
+		return byInstance, nil
+	}
+	for _, instanceID := range instanceIDs {
+		byInstance[instanceID] = nil
+	}
+	for start := 0; start < len(instanceIDs); start += taskInstanceLookupBatchSize {
+		end := start + taskInstanceLookupBatchSize
+		if end > len(instanceIDs) {
+			end = len(instanceIDs)
+		}
+		var targets []domain.WriteTarget
+		if err := r.db.WithContext(ctx).
+			Where("c_space_id = ? AND c_instance_id IN ?", spaceID, instanceIDs[start:end]).
+			Order("c_instance_id ASC, c_id ASC").Find(&targets).Error; err != nil {
+			return nil, err
+		}
+		for _, target := range targets {
+			byInstance[target.InstanceID] = append(byInstance[target.InstanceID], target)
+		}
+	}
+	return byInstance, nil
+}
+
 // UpsertWriteTargets atomically attaches task destinations to a shared instance.
 func (r *TaskInstanceRepository) UpsertWriteTargets(ctx context.Context, targets []domain.WriteTarget) error {
 	if len(targets) == 0 {

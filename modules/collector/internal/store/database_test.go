@@ -77,7 +77,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 			}
 		}
 	}
-	for _, index := range []string{"idx_collector_instances_run", "idx_collector_batch_items_instance_batch", "idx_collector_task_period_series_lookup", "idx_collector_task_period_series_key", "idx_collector_task_period_series_retention", "idx_collector_task_period_series_space_retention", "idx_collector_fetch_retry_period_failure", "idx_collector_timer_period_batches_claim_request", "idx_collector_timer_period_batches_candidate"} {
+	for _, index := range []string{"idx_collector_instances_run", "idx_collector_instances_space_page", "idx_collector_instances_list_page", "idx_collector_instances_space_status_page", "idx_collector_batch_items_instance_batch", "idx_collector_task_period_series_lookup", "idx_collector_task_period_series_key", "idx_collector_task_period_series_retention", "idx_collector_task_period_series_space_retention", "idx_collector_fetch_retry_period_failure", "idx_collector_timer_period_batches_claim_request", "idx_collector_timer_period_batches_candidate"} {
 		var count int64
 		if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?", index).Scan(&count).Error; err != nil {
 			t.Fatalf("query index %s: %v", index, err)

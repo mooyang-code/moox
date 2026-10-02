@@ -219,6 +219,12 @@ CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_inst
 CREATE INDEX IF NOT EXISTS idx_collector_instances_deleted ON t_collector_task_instances (c_is_deleted);
 
 CREATE INDEX IF NOT EXISTS idx_collector_instances_ctime ON t_collector_task_instances (c_ctime DESC);
+CREATE INDEX IF NOT EXISTS idx_collector_instances_space_page
+ON t_collector_task_instances (c_space_id, c_id DESC);
+CREATE INDEX IF NOT EXISTS idx_collector_instances_list_page
+ON t_collector_task_instances (c_space_id, c_is_deleted, c_id DESC);
+CREATE INDEX IF NOT EXISTS idx_collector_instances_space_status_page
+ON t_collector_task_instances (c_space_id, c_last_exec_status, c_id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_run_request
 ON t_collector_task_instances (c_space_id, c_run_id, c_request_key)
 WHERE c_run_id <> '' AND c_request_key <> '';

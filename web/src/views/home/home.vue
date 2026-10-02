@@ -338,6 +338,7 @@ const counts = reactive<Record<string, number | null>>({
   subjects: null,
   tasks: null
 });
+const taskCountLabel = ref<string | null>(null);
 const spaceLoadGate = new RequestGate();
 
 const pipeline = [
@@ -445,7 +446,7 @@ const dashboardKpis = computed(() => [
   {
     key: "tasks",
     label: "今日采集任务",
-    value: fmt(counts.tasks ?? 443),
+    value: fmt(taskCountLabel.value ?? counts.tasks ?? 443),
     unit: "",
     note: "任务展开实例",
     delta: "运行中 18",
@@ -587,7 +588,7 @@ const visibleHosts = computed(() => {
   }));
 });
 
-function fmt(v: number | null | undefined): string {
+function fmt(v: number | string | null | undefined): string {
   return v === null || v === undefined ? "—" : String(v);
 }
 
@@ -634,9 +635,15 @@ async function loadSpaceScoped() {
     }),
     callControl<
       { filter: { space_id: string; page: { page: number; size: number } } },
-      { instances?: unknown[]; page?: { total?: number } }
+      { instances?: unknown[]; page?: { total?: number; total_state?: number | string; has_more?: boolean } }
     >("collectmgr", "GetTaskInstanceList", { filter: { space_id: spaceId, page: { page: 1, size: 1 } } }).then(rsp => {
-      if (isCurrent()) counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
+      if (!isCurrent()) return;
+      const totalState = rsp.page?.total_state;
+      const skipped = totalState === 2 || totalState === "SKIPPED" || totalState === "TOTAL_STATE_SKIPPED";
+      counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
+      taskCountLabel.value = skipped
+        ? (rsp.page?.has_more ? "2+" : String(rsp.instances?.length ?? 0))
+        : null;
     }),
     listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       if (isCurrent()) counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
@@ -733,6 +740,7 @@ function resetCounts() {
   Object.keys(counts).forEach(k => {
     counts[k] = null;
   });
+  taskCountLabel.value = null;
   nodesTotal.value = null;
 }
 

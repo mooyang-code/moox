@@ -21,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -764,22 +765,31 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 			repoFilter.LastExecStatus = &status
 		}
 	}
-	instances, total, err := s.instanceRepo.List(ctx, repoFilter)
+	instances, hasMore, err := s.instanceRepo.ListPage(ctx, repoFilter)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] list task instances failed: %v", err)
 		return &pb.GetTaskInstanceListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	instanceIDs := make([]string, 0, len(instances))
+	for _, instance := range instances {
+		instanceIDs = append(instanceIDs, instance.InstanceID)
+	}
+	targetsByInstance, targetsErr := s.instanceRepo.ListWriteTargetsForInstances(ctx, spaceID, instanceIDs)
+	if targetsErr != nil {
+		log.ErrorContextf(ctx, "[Collector] list task instance write targets failed: %v", targetsErr)
+		return &pb.GetTaskInstanceListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, targetsErr.Error())}, nil
+	}
 	out := make([]*pb.TaskInstance, 0, len(instances))
 	for _, instance := range instances {
 		item := toPBInstance(instance)
-		if targets, targetErr := s.instanceRepo.ListWriteTargets(ctx, instance.SpaceID, instance.InstanceID); targetErr == nil {
-			for _, target := range targets {
-				item.Targets = append(item.Targets, toPBWriteTarget(target))
-			}
+		for _, target := range targetsByInstance[instance.InstanceID] {
+			item.Targets = append(item.Targets, toPBWriteTarget(target))
 		}
 		out = append(out, item)
 	}
-	return &pb.GetTaskInstanceListRsp{RetInfo: retOK(), Instances: out, Page: pageResult(page, size, total)}, nil
+	return &pb.GetTaskInstanceListRsp{RetInfo: retOK(), Instances: out, Page: &pb.PageResult{
+		Page: uint32(page), Size: uint32(size), HasMore: hasMore, TotalState: commonpb.TotalState_SKIPPED,
+	}}, nil
 }
 
 // GetDataTypeConfigs returns the currently supported collection task data types.

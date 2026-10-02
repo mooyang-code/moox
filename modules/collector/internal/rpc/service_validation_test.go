@@ -15,6 +15,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
@@ -908,6 +909,38 @@ func TestStripCollectionTaskRoutingRemovesAllKlineRouteOverrides(t *testing.T) {
 	}
 	require.Contains(t, clean, `"frequency":"1m"`)
 	require.Contains(t, clean, `"output_fields":["close"]`)
+}
+
+func TestGetTaskInstanceListSkipsExactTotalAndReturnsWriteTargets(t *testing.T) {
+	db := openCollectorTestStore(t)
+	ctx := context.Background()
+	instances := []domain.TaskInstance{
+		{SpaceID: "crypto", InstanceID: "instance-1", DataType: "kline"},
+		{SpaceID: "crypto", InstanceID: "instance-2", DataType: "kline"},
+	}
+	require.NoError(t, db.TaskInstances().UpsertMany(ctx, instances))
+	for _, taskID := range []string{"task-1", "task-2"} {
+		require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
+			SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true,
+		}))
+	}
+	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{
+		{ID: "target-1", SpaceID: "crypto", InstanceID: "instance-1", TaskID: "task-1", DatasetID: "dataset-1"},
+		{ID: "target-2", SpaceID: "crypto", InstanceID: "instance-2", TaskID: "task-2", DatasetID: "dataset-2"},
+	}))
+	service := &Service{instanceRepo: db.TaskInstances()}
+
+	rsp, err := service.GetTaskInstanceList(ctx, &pb.GetTaskInstanceListReq{Filter: &pb.TaskInstanceFilter{
+		SpaceId: "crypto", Page: &pb.Page{Page: 1, Size: 1},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, commonpb.TotalState_SKIPPED, rsp.GetPage().GetTotalState())
+	require.Zero(t, rsp.GetPage().GetTotal())
+	require.True(t, rsp.GetPage().GetHasMore())
+	require.Len(t, rsp.GetInstances(), 1)
+	require.Equal(t, "instance-2", rsp.GetInstances()[0].GetInstanceId())
+	require.Equal(t, "task-2", rsp.GetInstances()[0].GetTargets()[0].GetTaskId())
 }
 
 func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T) {

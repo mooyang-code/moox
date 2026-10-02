@@ -188,6 +188,7 @@ import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { callControl } from "@/api/admin/http";
 import { useSpaceStore } from "@/store/modules/space";
+import { taskInstancePaginationTotal, type TaskInstancePageResult } from "./task-instances-pagination";
 
 interface TaskWriteTarget {
   WriteTargetID: string;
@@ -239,14 +240,12 @@ const form = ref({
   lastExecStatus: null as number | null,
   includeDeleted: false
 });
-const pagination = ref({ current: 1, pageSize: 20, total: 0, showTotal: true, showPageSize: true });
+const pagination = ref({ current: 1, pageSize: 20, total: 0, showTotal: false, showPageSize: true });
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
 
 const paginationConfig = computed(() => ({
-  ...pagination.value,
-  onChange: (current: number) => onPageChange(current),
-  onPageSizeChange: (pageSize: number) => onPageSizeChange(pageSize)
+  ...pagination.value
 }));
 
 function normalizeObject(value: any): Record<string, any> {
@@ -386,13 +385,18 @@ async function getInstanceList() {
     if (form.value.lastExecStatus !== null) filter.last_exec_status = form.value.lastExecStatus;
     if (form.value.includeDeleted) filter.include_deleted = true;
 
-    const data = await callControl<{ filter: typeof filter }, { instances?: RawTaskInstance[]; page?: { total?: number } }>(
+    const data = await callControl<{ filter: typeof filter }, { instances?: RawTaskInstance[]; page?: TaskInstancePageResult }>(
       "collectmgr",
       "GetTaskInstanceList",
       { filter }
     );
     instanceList.value = (data.instances || []).map(normalizeTaskInstance);
-    pagination.value.total = Number(data.page?.total) || (data.instances ? data.instances.length : 0);
+    pagination.value.total = taskInstancePaginationTotal(
+      pagination.value.current,
+      pagination.value.pageSize,
+      instanceList.value.length,
+      data.page,
+    );
   } catch (error) {
     console.error("获取任务实例列表失败:", error);
     Message.error("获取任务实例列表失败");

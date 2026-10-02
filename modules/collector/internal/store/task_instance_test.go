@@ -43,6 +43,62 @@ func TestTaskInstanceRepositoryUpsertKeepsFreshnessForStableTask(t *testing.T) {
 	assert.Equal(t, "binance", stored.Provider)
 }
 
+func TestTaskInstanceListPageUsesLookaheadWithoutExactCount(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instances := []domain.TaskInstance{
+		{SpaceID: "crypto", InstanceID: "instance-1", DataType: "kline"},
+		{SpaceID: "crypto", InstanceID: "instance-2", DataType: "kline"},
+		{SpaceID: "crypto", InstanceID: "instance-3", DataType: "kline"},
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+
+	page, hasMore, err := s.TaskInstances().ListPage(ctx, TaskInstanceFilter{
+		SpaceID: "crypto", Page: 1, PageSize: 2,
+	})
+	require.NoError(t, err)
+	require.True(t, hasMore)
+	require.Len(t, page, 2)
+	require.Equal(t, "instance-3", page[0].InstanceID)
+	require.Equal(t, "instance-2", page[1].InstanceID)
+
+	page, hasMore, err = s.TaskInstances().ListPage(ctx, TaskInstanceFilter{
+		SpaceID: "crypto", Page: 2, PageSize: 2,
+	})
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.Len(t, page, 1)
+	require.Equal(t, "instance-1", page[0].InstanceID)
+}
+
+func TestListWriteTargetsForInstancesBatchesAndGroupsTargets(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instances := []domain.TaskInstance{
+		{SpaceID: "crypto", InstanceID: "instance-a"},
+		{SpaceID: "crypto", InstanceID: "instance-b"},
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+	attachTestWriteTarget(t, s, ctx, "crypto", "instance-a", "task-a1", "dataset-a1")
+	attachTestWriteTarget(t, s, ctx, "crypto", "instance-a", "task-a2", "dataset-a2")
+	attachTestWriteTarget(t, s, ctx, "crypto", "instance-b", "task-b1", "dataset-b1")
+
+	queries := 0
+	require.NoError(t, s.db.Callback().Query().After("gorm:query").Register("test:count_target_list_queries", func(tx *gorm.DB) {
+		if tx.Statement.Table == "t_collector_instance_write_targets" {
+			queries++
+		}
+	}))
+
+	targets, err := s.TaskInstances().ListWriteTargetsForInstances(ctx, "crypto", []string{"instance-b", "instance-a", "instance-a", ""})
+	require.NoError(t, err)
+	require.Equal(t, 1, queries)
+	require.Len(t, targets["instance-a"], 2)
+	require.Equal(t, []string{"task-a1", "task-a2"}, []string{targets["instance-a"][0].TaskID, targets["instance-a"][1].TaskID})
+	require.Len(t, targets["instance-b"], 1)
+	require.Equal(t, "task-b1", targets["instance-b"][0].TaskID)
+}
+
 func TestTaskInstanceRepositoryRejectsWriteTargetWithoutSpace(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()

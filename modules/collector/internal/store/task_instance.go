@@ -98,6 +98,23 @@ func (r *TaskInstanceRepository) List(ctx context.Context, filter TaskInstanceFi
 	return instances, total, err
 }
 
+// ListPage returns one newest-first page and probes one extra row to determine
+// whether another page exists, avoiding a full-table COUNT on execution history.
+func (r *TaskInstanceRepository) ListPage(ctx context.Context, filter TaskInstanceFilter) ([]domain.TaskInstance, bool, error) {
+	page, size := normalizePage(filter.Page, filter.PageSize)
+	var instances []domain.TaskInstance
+	err := r.applyFilter(r.db.WithContext(ctx).Model(&domain.TaskInstance{}), filter).
+		Order("c_id DESC").Limit(size + 1).Offset((page - 1) * size).Find(&instances).Error
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(instances) > size
+	if hasMore {
+		instances = instances[:size]
+	}
+	return instances, hasMore, nil
+}
+
 // UpsertMany creates or updates stable business instances. A periodic batch
 // never changes the instance identity or resets its freshness state.
 func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []domain.TaskInstance) error {
