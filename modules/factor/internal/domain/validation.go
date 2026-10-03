@@ -37,7 +37,6 @@ func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
 	factor.Name = strings.TrimSpace(factor.Name)
 	factor.SourceCode = strings.TrimSpace(factor.SourceCode)
 	factor.SourceHash = strings.TrimSpace(factor.SourceHash)
-	factor.SourcePath = strings.TrimSpace(factor.SourcePath)
 	factor.Status = strings.TrimSpace(factor.Status)
 	if factor.FactorID == "" || factor.Name == "" || factor.SourceCode == "" {
 		return FactorDef{}, fmt.Errorf("factor_id, name and source_code are required")

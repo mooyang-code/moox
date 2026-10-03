@@ -1,8 +1,11 @@
 package domain
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +47,27 @@ func TestSourceHash(t *testing.T) {
 	require.True(t, strings.HasPrefix(got, "sha256:"))
 	require.Equal(t, got, SourceHash("def compute(df, params):\n    return df"))
 	require.NotEqual(t, got, SourceHash("different source"))
+}
+
+func TestFactorDefUsesDatasetPipelineFields(t *testing.T) {
+	typeOf := reflect.TypeOf(FactorDef{})
+	createdAt, ok := typeOf.FieldByName("CreatedAt")
+	require.True(t, ok)
+	require.Equal(t, "column:c_ctime", createdAt.Tag.Get("gorm"))
+	updatedAt, ok := typeOf.FieldByName("UpdatedAt")
+	require.True(t, ok)
+	require.Equal(t, "column:c_mtime", updatedAt.Tag.Get("gorm"))
+	_, hasSourcePath := typeOf.FieldByName("SourcePath")
+	require.False(t, hasSourcePath)
+
+	encoded, err := json.Marshal(FactorDef{FactorID: "f", SetID: "s", CreatedAt: time.Unix(1, 0).UTC()})
+	require.NoError(t, err)
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &fields))
+	require.Contains(t, fields, "factor_id")
+	require.Contains(t, fields, "set_id")
+	require.Contains(t, fields, "created_at")
+	require.NotContains(t, fields, "source_path")
 }
 
 func TestValidateSetRequiresCanonicalIdentityAndScope(t *testing.T) {

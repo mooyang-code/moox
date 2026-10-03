@@ -17,23 +17,20 @@ const (
 
 // FactorDef is a locally managed factor definition.
 type FactorDef struct {
-	SetID                string    `gorm:"column:c_set_id"`
-	FactorType           string    `gorm:"column:c_factor_type"`
-	FactorID             string    `gorm:"column:c_factor_id;primaryKey"`
-	Name                 string    `gorm:"column:c_name"`
-	SourceCode           string    `gorm:"column:c_source_code"`
-	SourceHash           string    `gorm:"column:c_source_hash"`
-	SourcePath           string    `gorm:"column:c_source_path"`
-	InputColumns         []string  `gorm:"column:c_input_columns_json;serializer:json"`
-	Outputs              []string  `gorm:"column:c_outputs_json;serializer:json"`
-	ParamsJSON           string    `gorm:"column:c_params_json"`
-	LookbackPeriods      int       `gorm:"column:c_lookback_periods"`
-	AllowPartialUniverse bool      `gorm:"column:c_allow_partial_universe"`
-	Status               string    `gorm:"column:c_status"`
-	CreatedAt            time.Time `gorm:"-" json:"created_at"`
-	UpdatedAt            time.Time `gorm:"-" json:"updated_at"`
-	CreateTime           time.Time `gorm:"column:c_ctime"`
-	ModifyTime           time.Time `gorm:"column:c_mtime"`
+	FactorID             string    `json:"factor_id" gorm:"column:c_factor_id;primaryKey"`
+	SetID                string    `json:"set_id" gorm:"column:c_set_id"`
+	Name                 string    `json:"name" gorm:"column:c_name"`
+	FactorType           string    `json:"factor_type" gorm:"column:c_factor_type"`
+	SourceCode           string    `json:"source_code" gorm:"column:c_source_code"`
+	SourceHash           string    `json:"source_hash" gorm:"column:c_source_hash"`
+	InputColumns         []string  `json:"input_columns" gorm:"column:c_input_columns_json;serializer:json"`
+	Outputs              []string  `json:"outputs" gorm:"column:c_outputs_json;serializer:json"`
+	ParamsJSON           string    `json:"params_json" gorm:"column:c_params_json"`
+	LookbackPeriods      int       `json:"lookback_periods" gorm:"column:c_lookback_periods"`
+	AllowPartialUniverse bool      `json:"allow_partial_universe" gorm:"column:c_allow_partial_universe"`
+	Status               string    `json:"status" gorm:"column:c_status"`
+	CreatedAt            time.Time `json:"created_at" gorm:"column:c_ctime"`
+	UpdatedAt            time.Time `json:"updated_at" gorm:"column:c_mtime"`
 }
 
 // TableName returns the factor definition table.
