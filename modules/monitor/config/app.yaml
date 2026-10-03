@@ -57,7 +57,7 @@ market_canary:
       # store the unsuffixed identity; the canary resolver maps either form.
       symbol: BTC-USDT
       frequency: 1m
-      series_tag: venue:binance
+      series_tag: venue:binance|market:spot|source:spot_http
 
 market_health:
   timer_coordination_stale_after: 15m

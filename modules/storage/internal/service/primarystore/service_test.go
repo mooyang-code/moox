@@ -656,7 +656,7 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 	}
 	validSelector := &pb.TimeSeriesSelector{
 		SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", SubjectId: "BTC-USDT",
-		Freq: "1m", SeriesTag: stringPtr("venue:binance"),
+		Freq: "1m", SeriesTag: stringPtr("venue:binance|market:spot|source:spot_http"),
 	}
 	tests := []struct {
 		name string
@@ -689,8 +689,12 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 }
 
 func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing.T) {
-	cryptoTag := "venue:binance"
-	cryptoSwapTag := "venue:binance|market:swap"
+	cryptoSpotTag := "venue:binance|market:spot|source:spot_http"
+	cryptoSwapTag := "venue:binance|market:swap|source:swap_http"
+	legacyCryptoTag := "venue:binance"
+	missingSpotSourceTag := "venue:binance|market:spot"
+	missingSwapSourceTag := "venue:binance|market:swap"
+	wrongSourceTag := "venue:binance|market:spot|source:other"
 	emptyTag := ""
 	defaultTag := "default"
 	otherTag := "venue:okx"
@@ -708,15 +712,19 @@ func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing
 		req     *pb.ReadTimeSeriesRowsReq
 		wantErr bool
 	}{
-		{name: "crypto binance spot 1m", req: request("crypto", "dataset_binance_kline_1m", "1m", &cryptoTag)},
+		{name: "crypto binance spot http 1m", req: request("crypto", "dataset_binance_kline_1m", "1m", &cryptoSpotTag)},
 		{name: "crypto binance swap 1m", req: request("crypto", "dataset_binance_kline_1m", "1m", &cryptoSwapTag)},
+		{name: "crypto legacy tag rejected", req: request("crypto", "dataset_binance_kline_1m", "1m", &legacyCryptoTag), wantErr: true},
+		{name: "crypto spot missing source rejected", req: request("crypto", "dataset_binance_kline_1m", "1m", &missingSpotSourceTag), wantErr: true},
+		{name: "crypto swap missing source rejected", req: request("crypto", "dataset_binance_kline_1m", "1m", &missingSwapSourceTag), wantErr: true},
+		{name: "crypto wrong source rejected", req: request("crypto", "dataset_binance_kline_1m", "1m", &wrongSourceTag), wantErr: true},
 		{name: "crypto wildcard series", req: request("crypto", "dataset_binance_kline_1m", "1m", nil), wantErr: true},
 		{name: "crypto empty series", req: request("crypto", "dataset_binance_kline_1m", "1m", &emptyTag), wantErr: true},
 		{name: "crypto other series", req: request("crypto", "dataset_binance_kline_1m", "1m", &otherTag), wantErr: true},
-		{name: "crypto old dataset", req: request("crypto", "dataset_binance_spot_kline_1m", "1m", &cryptoTag), wantErr: true},
+		{name: "crypto old dataset", req: request("crypto", "dataset_binance_spot_kline_1m", "1m", &cryptoSpotTag), wantErr: true},
 		{name: "stock cn default series 1m", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", &defaultTag)},
 		{name: "stock cn wildcard series", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", nil), wantErr: true},
-		{name: "stock cn provider series", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", &cryptoTag), wantErr: true},
+		{name: "stock cn provider series", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", &cryptoSpotTag), wantErr: true},
 		{name: "stock cn other frequency", req: request("stockcn", "dataset_stockcn_equity_kline", "1d", &defaultTag), wantErr: true},
 		{name: "stock cn other dataset", req: request("stockcn", "stock_kline", "1m", &defaultTag), wantErr: true},
 		{name: "other space", req: request("stockus", "dataset_stockcn_equity_kline", "1m", &defaultTag), wantErr: true},
@@ -724,7 +732,7 @@ func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing
 			req := request("stockcn", "dataset_stockcn_equity_kline", "1m", &defaultTag)
 			req.Selectors[0].SpaceId = "crypto"
 			req.Selectors[0].DatasetId = "dataset_binance_kline_1m"
-			req.Selectors[0].SeriesTag = &cryptoTag
+			req.Selectors[0].SeriesTag = &cryptoSpotTag
 			return req
 		}(), wantErr: true},
 	} {

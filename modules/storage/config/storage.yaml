@@ -76,7 +76,7 @@ storage:
         durable: storage_view_factor
         routes:
           - space_id: crypto
-            dataset_ids: [dataset_factor_binance_spot_kline_1m]
+            dataset_ids: [dataset_factor_binance_kline_1m]
         # Keep JetStream delivery serialized across process restarts: while a
         # result-row event is unacked, the following FactorPeriodComputed
         # marker must not be delivered to the View consumer.

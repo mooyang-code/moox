@@ -553,6 +553,8 @@ func (s *pipelineStorageWithInstrumentNames) ListInstrumentNames(_ context.Conte
 
 func TestDefaultMarketSeriesTagDistinguishesMarketAndSource(t *testing.T) {
 	require.Equal(t, "venue:binance", defaultMarketSeriesTag("binance", "binance", "spot"))
+	require.Equal(t, "venue:binance|market:spot|source:spot_http", defaultMarketSeriesTag("binance", "spot_http", "spot"))
+	require.Equal(t, "venue:binance|market:swap|source:swap_http", defaultMarketSeriesTag("binance", "swap_http", "swap"))
 	require.Equal(t, "venue:okx", defaultMarketSeriesTag("OKX", "okx", "spot"))
 	require.Equal(t, "venue:binance|market:swap", defaultMarketSeriesTag("binance", "binance", "swap"))
 	require.Equal(t, "venue:binance|market:spot|source:binance-proxy", defaultMarketSeriesTag("binance", "binance-proxy", "spot"))

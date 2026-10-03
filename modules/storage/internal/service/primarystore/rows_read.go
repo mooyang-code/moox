@@ -125,7 +125,7 @@ func isMooxSkillKlineSelector(selector *pb.TimeSeriesSelector) bool {
 		return false
 	}
 	return selector.GetSpaceId() == "crypto" && selector.GetDatasetId() == "dataset_binance_kline_1m" &&
-		(selector.GetSeriesTag() == "venue:binance" || selector.GetSeriesTag() == "venue:binance|market:swap") ||
+		(selector.GetSeriesTag() == "venue:binance|market:spot|source:spot_http" || selector.GetSeriesTag() == "venue:binance|market:swap|source:swap_http") ||
 		selector.GetSpaceId() == "stockcn" && selector.GetDatasetId() == "dataset_stockcn_equity_kline" && selector.GetSeriesTag() == stockCNDefaultSeriesTag
 }
 

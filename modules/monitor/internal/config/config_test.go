@@ -50,6 +50,9 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.MarketCanary.ClosedBarMinCoverage != 0.99 {
 		t.Fatalf("closed bar minimum coverage = %v", cfg.MarketCanary.ClosedBarMinCoverage)
 	}
+	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].SeriesTag == nil || *cfg.MarketCanary.Subjects[0].SeriesTag != "venue:binance|market:spot|source:spot_http" {
+		t.Fatalf("market canary default series tag = %+v", cfg.MarketCanary.Subjects)
+	}
 	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
 		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute ||
 		cfg.MarketHealth.LowCapacityHeadroom != 2 {
@@ -286,6 +289,9 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	}
 	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].Symbol != "BTC-USDT" {
 		t.Fatalf("market canary subjects = %+v", cfg.MarketCanary.Subjects)
+	}
+	if cfg.MarketCanary.Subjects[0].SeriesTag == nil || *cfg.MarketCanary.Subjects[0].SeriesTag != "venue:binance|market:spot|source:spot_http" {
+		t.Fatalf("loaded market canary series tag = %+v", cfg.MarketCanary.Subjects[0].SeriesTag)
 	}
 }
 

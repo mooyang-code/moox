@@ -65,7 +65,7 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	assert.Equal(t, "dataset_binance_kline_1m", selector.GetDatasetId())
 	assert.Equal(t, "BTC-USDT", selector.GetSubjectId())
 	assert.Equal(t, "1m", selector.GetFreq())
-	assert.Equal(t, "venue:binance", selector.GetSeriesTag())
+	assert.Equal(t, "venue:binance|market:spot|source:spot_http", selector.GetSeriesTag())
 	assert.Contains(t, stdout.String(), "ret_info")
 	deadline, ok := reader.ctx.Deadline()
 	require.True(t, ok)

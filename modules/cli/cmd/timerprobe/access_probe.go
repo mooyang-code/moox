@@ -46,7 +46,10 @@ func accessRead() error {
 			readAppID = strings.TrimSpace(os.Getenv("MOOX_SPOT_APP_ID"))
 			readAppKey = strings.TrimSpace(os.Getenv("MOOX_SPOT_APP_KEY"))
 		}
-		series := binanceSeriesTag(dataset.marketType)
+		series, err := binanceSeriesTag(dataset.marketType, dataset.freq)
+		if err != nil {
+			return err
+		}
 		rsp, err := reader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
 			AuthInfo: &pb.AuthInfo{AppId: readAppID, AppKey: readAppKey},
 			Selectors: []*pb.TimeSeriesSelector{{
@@ -90,7 +93,10 @@ func viewRead() error {
 		{"view_crypto_swap_kline_1h", "dataset_perpetual_kline_1h", "1H", "LTC-USDT", "swap"},
 	}
 	for _, view := range views {
-		series := binanceSeriesTag(view.marketType)
+		series, err := binanceSeriesTag(view.marketType, view.freq)
+		if err != nil {
+			return err
+		}
 		rsp, err := reader.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 			AuthInfo: &pb.AuthInfo{AppId: appID, AppKey: appKey}, SpaceId: "crypto", ViewId: view.view,
 			Selectors: []*pb.TimeSeriesSelector{{SpaceId: "crypto", DatasetId: view.dataset, SubjectId: view.subject, Freq: view.freq, SeriesTag: &series}},
@@ -111,9 +117,16 @@ func viewRead() error {
 	return nil
 }
 
-func binanceSeriesTag(marketType string) string {
-	if marketType == "swap" {
-		return "venue:binance|market:swap"
+func binanceSeriesTag(marketType, frequency string) (string, error) {
+	if frequency == "1H" && (marketType == "spot" || marketType == "swap") {
+		return "venue:binance", nil
 	}
-	return "venue:binance"
+	switch {
+	case frequency == "1m" && marketType == "spot":
+		return "venue:binance|market:spot|source:spot_http", nil
+	case frequency == "1m" && marketType == "swap":
+		return "venue:binance|market:swap|source:swap_http", nil
+	default:
+		return "", fmt.Errorf("unsupported Binance probe market/frequency %q/%q", marketType, frequency)
+	}
 }

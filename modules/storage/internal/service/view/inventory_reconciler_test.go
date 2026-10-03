@@ -62,7 +62,7 @@ func TestInventoryReconcilerUsesFactorTemplateForDynamicFactorDatasets(t *testin
 		Consumer: EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{
 			{
 				PartitionID: "factor", Consumer: "storage_view_factor", FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
-				DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_spot_kline_1m"}},
+				DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}},
 			},
 			{
 				PartitionID: "misc", Consumer: "storage_view_misc", FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16,
@@ -285,7 +285,7 @@ func TestInventoryReconcilerKeepsExactRouteOutsideWildcardSpace(t *testing.T) {
 func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 	opts := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{
 		{PartitionID: "kline", Consumer: "storage_view_kline", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m"}}},
-		{PartitionID: "factor", Consumer: "storage_view_factor", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_spot_kline_1m"}}},
+		{PartitionID: "factor", Consumer: "storage_view_factor", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}}},
 		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}, {SpaceID: "crypto", DatasetID: "*"}}},
 	}}
 	_, _, exact, dynamicExact, allowed, err := dynamicConsumerTemplate(opts)
