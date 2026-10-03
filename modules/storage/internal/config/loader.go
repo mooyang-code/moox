@@ -357,6 +357,9 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		if partition.FetchBatch < 1 || partition.MaxWorkers < 1 || partition.MaxAckPending < 1 || partition.AckWaitMS < 1 {
 			return fmt.Errorf("storage view consumer partition %q has non-positive delivery settings", id)
 		}
+		if durable == events.StorageViewFactorConsumer && (partition.FetchBatch != 1 || partition.MaxWorkers != 1 || partition.MaxAckPending != 1) {
+			return fmt.Errorf("storage view factor durable %q must keep fetch_batch/max_workers/max_ack_pending at 1/1/1", durable)
+		}
 		if partition.FetchBatch > partition.MaxAckPending {
 			return fmt.Errorf("storage view consumer partition %q fetch_batch %d exceeds max_ack_pending %d", id, partition.FetchBatch, partition.MaxAckPending)
 		}

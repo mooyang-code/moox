@@ -303,6 +303,28 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	}
 }
 
+func TestStorageViewConsumerPartitionsRequireSerialFactorDelivery(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*StorageViewConsumerPartition)
+	}{
+		{name: "fetch_batch", mutate: func(partition *StorageViewConsumerPartition) { partition.FetchBatch = 2 }},
+		{name: "max_workers", mutate: func(partition *StorageViewConsumerPartition) { partition.MaxWorkers = 2 }},
+		{name: "max_ack_pending", mutate: func(partition *StorageViewConsumerPartition) { partition.MaxAckPending = 2 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg RuntimeConfig
+			cfg.ApplyDefaults()
+			factor := &cfg.Storage.View.ConsumerPartitions[1]
+			tt.mutate(factor)
+			if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err == nil || !strings.Contains(err.Error(), "1/1/1") || !strings.Contains(err.Error(), factor.Durable) {
+				t.Fatalf("ValidateConsumerPartitions() error = %v, want factor durable 1/1/1 constraint", err)
+			}
+		})
+	}
+}
+
 func TestCheckedInFactorViewConsumerProfilesSerializeCanonicalRoute(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join("..", "..", "config", "storage.yaml"),
