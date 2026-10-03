@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -37,6 +38,12 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if req.GetAuthInfo().GetAppId() == "storage-view" && len(req.GetKeys()) == 0 {
 		return s.readHistoricalTimeSeriesRows(ctx, req)
 	}
+	if isFactorHistoryRead(req) {
+		if err := validateFactorHistoryRead(req); err != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		return s.readHistoricalTimeSeriesRows(ctx, req)
+	}
 	if len(req.GetKeys()) == 0 {
 		return s.readTimeSeriesView(ctx, req)
 	}
@@ -60,6 +67,31 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		rows = append(rows, &pb.TimeSeriesRow{Key: timeSeriesKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
+}
+
+func isFactorHistoryRead(req *pb.ReadTimeSeriesRowsReq) bool {
+	return req != nil && len(req.GetKeys()) == 0 && strings.EqualFold(strings.TrimSpace(req.GetAuthInfo().GetAppId()), "factor")
+}
+
+func validateFactorHistoryRead(req *pb.ReadTimeSeriesRowsReq) error {
+	if len(req.GetSelectors()) == 0 || len(req.GetColumnNames()) == 0 {
+		return errors.New("factor history reads require selectors and columns")
+	}
+	if req.GetTimeRange() == nil || req.GetPage() == nil || req.GetPage().GetSize() == 0 || req.GetPage().GetSize() > 2000 {
+		return errors.New("factor history reads require a bounded time range and page size from 1 to 2000")
+	}
+	if req.GetOrder() != pb.SortOrder_SORT_ORDER_ASC {
+		return errors.New("factor history reads require ascending order")
+	}
+	start, err := time.Parse(time.RFC3339Nano, req.GetTimeRange().GetStartTime())
+	if err != nil {
+		return errors.New("factor history read start_time must be RFC3339")
+	}
+	end, err := time.Parse(time.RFC3339Nano, req.GetTimeRange().GetEndTime())
+	if err != nil || !start.Before(end) {
+		return errors.New("factor history read end_time must be RFC3339 and after start_time")
+	}
+	return nil
 }
 
 func validateMooxSkillReadRequest(req *pb.ReadTimeSeriesRowsReq) error {
