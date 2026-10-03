@@ -3,6 +3,7 @@ import hashlib
 import math
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pandas as pd
@@ -77,7 +78,7 @@ def test_worker_load_error_is_structured_and_stdout_safe(tmp_path: Path):
             "id": "load-1",
             "logical_id": "Noisy",
             "path": str(noisy),
-            "source_hash": hashlib.sha256(noisy.read_bytes()).hexdigest(),
+            "source_hash": source_hash(noisy),
         })
         frame_type, meta, payload = read_frame(proc.stdout)
         assert frame_type == TYPE_ERROR
@@ -139,226 +140,175 @@ def test_decode_json_df_rejects_invalid_identity(rows, message):
         })
 
 
-def test_execute_preserves_tags_and_filters_half_open_target_range(tmp_path: Path):
-    worker = loaded_worker(tmp_path)
-    response = worker.execute_request(request_meta())
-    assert response["results"] == [
-        {
-            "data_time": "2026-07-28T00:00:00.000000001Z",
-            "series_tag": "venue:binance",
-            "values": {"double": 6.0, "triple": 9.0},
-        },
-        {
-            "data_time": "2026-07-28T00:00:00.000000001Z",
-            "series_tag": "venue:okx",
-            "values": {"double": 10.0, "triple": 15.0},
-        },
-    ]
-
-
-def test_execute_can_return_cross_tag_spread(tmp_path: Path):
-    source = """
-left = df[df["series_tag"] == params["left"]].set_index("data_time")
-right = df[df["series_tag"] == params["right"]].set_index("data_time")
-joined = left[["value"]].join(right[["value"]], lsuffix="_left", rsuffix="_right")
-return pd.DataFrame({
-    "data_time": joined.index,
-    "series_tag": params["output"],
-    "double": joined["value_left"] - joined["value_right"],
-    "triple": joined["value_right"] - joined["value_left"],
-})
-""".strip()
-    worker = loaded_worker(tmp_path, body=source)
-    meta = request_meta()
-    meta["factor"]["params"] = {
-        "left": "venue:binance",
-        "right": "venue:okx",
-        "output": "venue_pair:binance-okx",
-    }
-    result = worker.execute_request(meta)["results"]
-    assert result == [{
-        "data_time": "2026-07-28T00:00:00.000000001Z",
-        "series_tag": "venue_pair:binance-okx",
-        "values": {"double": -2.0, "triple": 2.0},
-    }]
-
-
-def test_execute_accepts_empty_dataframe(tmp_path: Path):
-    worker = loaded_worker(
-        tmp_path,
-        body='return pd.DataFrame(columns=["data_time", "series_tag", "double", "triple"])',
-    )
-    assert worker.execute_request(request_meta())["results"] == []
-
-
-def test_execute_batch_shares_frame_and_isolates_factor_errors(tmp_path: Path):
+def test_batch_runs_multiple_factors_on_shared_frame(tmp_path: Path):
     factors_dir = make_factor_dir(tmp_path)
-    other = factors_dir / "Other.py"
-    other.write_text(
-        "import pandas as pd\n\n"
-        "def compute(df, params, context):\n"
-        "    result = df[[\"data_time\", \"series_tag\"]].copy()\n"
-        "    result[\"double\"] = df[\"value\"] + 10\n"
-        "    result[\"triple\"] = df[\"value\"] + 20\n"
-        "    return result\n",
-        encoding="utf-8",
+    other = write_factor(
+        factors_dir,
+        "Other",
+        'result = df[["data_time", "series_tag"]].copy(); result["other"] = df["value"] + 10; return result',
     )
-    broken = factors_dir / "Broken.py"
-    broken.write_text("def compute(:\n", encoding="utf-8")
     worker = FactorWorker(factors_dir)
-    load_factor(worker, factors_dir / "Generic.py", "Generic")
-    load_factor(worker, other, "Other")
-    meta = request_meta()
-    meta["id"] = "batch-1"
-    base = meta.pop("factor")
-    meta["mode"] = "batch"
-    generic_hash = hashlib.sha256((factors_dir / "Generic.py").read_bytes()).hexdigest()
-    other_hash = hashlib.sha256(other.read_bytes()).hexdigest()
-    broken_hash = hashlib.sha256(broken.read_bytes()).hexdigest()
-    meta["factors"] = [
-        {"task_id": "task-good", "binding_id": "binding-good", "factor": {**base, "name": "Generic", "source_path": str(factors_dir / "Generic.py"), "source_hash": generic_hash}},
-        {"task_id": "task-other", "binding_id": "binding-other", "factor": {**base, "name": "Other", "source_path": str(other), "source_hash": other_hash}},
-        {"task_id": "task-bad", "binding_id": "binding-bad", "factor": {**base, "name": "Broken", "source_path": str(broken), "source_hash": broken_hash}},
-    ]
-
+    meta = batch_request([
+        factor_call(factors_dir / "Generic.py", "factor_one", "Generic", ["value"], ["double", "triple"]),
+        factor_call(other, "factor_two", "Other", ["value"], ["other"]),
+    ])
     response = worker.execute_request(meta)
-    assert response["id"] == "batch-1"
-    assert len(response["items"]) == 3
-    assert response["items"][0]["ok"] is True
-    assert response["items"][1]["ok"] is True
-    assert response["items"][2]["ok"] is False
-    assert "broken" in response["items"][2]["message"].lower()
+    assert [item["factor_id"] for item in response["items"]] == ["factor_one", "factor_two"]
+    assert all(item["ok"] for item in response["items"])
+    assert response["items"][0]["results"]["columns"] == ["data_time", "series_tag", "double", "triple"]
+    assert response["items"][0]["results"]["rows"] == [[
+        "2026-07-28T00:00:00Z", "venue:binance", 6.0, 9.0
+    ], ["2026-07-28T00:00:00Z", "venue:okx", 10.0, 15.0]]
+    assert response["items"][1]["results"]["columns"] == ["data_time", "series_tag", "other"]
 
 
-def test_execute_batch_applies_each_members_lookback_window(tmp_path: Path):
+def test_slices_frame_per_factor_lookback(tmp_path: Path):
     factors_dir = make_factor_dir(tmp_path)
-    count = factors_dir / "Count.py"
-    count.write_text(
-        "import pandas as pd\n\n"
-        "def compute(df, params, context):\n"
-        "    result = df[[\"data_time\", \"series_tag\"]].copy()\n"
-        "    result[\"double\"] = len(df)\n"
-        "    result[\"triple\"] = len(df)\n"
-        "    return result\n",
-        encoding="utf-8",
+    count = write_factor(
+        factors_dir,
+        "Count",
+        'result = df[["data_time", "series_tag"]].copy(); result["count"] = len(df); return result',
     )
     worker = FactorWorker(factors_dir)
-    load_factor(worker, count, "Count")
     rows = [
-        [f"2026-07-28T00:00:00.00000000{i}Z", "venue:binance", float(i)]
-        for i in range(4)
-    ]
-    meta = {
-        "id": "batch-lookback", "mode": "batch",
-        "context": request_meta()["context"],
-        "target_start_time": "2026-07-28T00:00:00.000000003Z",
-        "target_end_time": "2026-07-28T00:00:00.000000004Z",
-        "df": {"columns": ["data_time", "series_tag", "value"], "rows": rows},
-        "factors": [],
-    }
-    raw = count.read_bytes()
-    factor = {
-        "name": "Count", "input_columns": ["value"],
-        "factor_type": "timeseries",
-        "outputs": ["double", "triple"], "params": {},
-        "source_path": str(count), "source_hash": hashlib.sha256(raw).hexdigest(),
-    }
-    for task_id, lookback in (("short", 2), ("long", 4)):
-        meta["factors"].append({
-            "task_id": task_id, "binding_id": task_id,
-            "lookback_periods": lookback,
-            "target_start_time": meta["target_start_time"],
-            "target_end_time": meta["target_end_time"],
-            "factor": factor,
-        })
-    response = worker.execute_request(meta)
-    values = {
-        item["task_id"]: item["results"][0]["values"]["double"]
-        for item in response["items"]
-    }
-    assert values == {"short": 2, "long": 4}
+        [f"2026-07-27T23:{i}:00Z", "venue:binance", float(i)] for i in range(58, 60)
+    ] + [["2026-07-28T00:00:00Z", "venue:binance", 60.0]]
+    short, long = factor_call(count, "short", "Count", ["value"], ["count"], 2), factor_call(
+        count, "long", "CountAlias", ["value"], ["count"], 3
+    )
+    meta = batch_request([short, long], rows=rows)
+    results = {item["factor_id"]: item["results"]["rows"][0][2] for item in worker.execute_request(meta)["items"]}
+    assert results == {"short": 2, "long": 3}
+    assert len(worker.modules) == 1
+
+
+def test_projects_only_input_columns(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    project = write_factor(
+        factors_dir,
+        "Project",
+        'result = df[["data_time", "series_tag"]].copy(); result["seen"] = ",".join(df.columns); return result',
+    )
+    response = FactorWorker(factors_dir).execute_request(batch_request([
+        factor_call(project, "project", "Project", ["value"], ["seen"])
+    ]))
+    assert response["items"][0]["results"]["rows"][0][2] == "data_time,series_tag,value"
+
+
+def test_factor_error_isolated(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    broken = write_factor(factors_dir, "Broken", 'raise RuntimeError("isolated failure")')
+    good = write_factor(
+        factors_dir, "Good",
+        'result = df[["data_time", "series_tag"]].copy(); result["ok"] = 1; return result',
+    )
+    response = FactorWorker(factors_dir).execute_request(batch_request([
+        factor_call(broken, "bad", "Broken", ["value"], ["ok"]),
+        factor_call(good, "good", "Good", ["value"], ["ok"]),
+    ]))
+    assert response["items"][0]["ok"] is False
+    assert "isolated failure" in response["items"][0]["error"]["message"]
+    assert response["items"][1]["ok"] is True
+
+
+def test_timeseries_context_has_subject_and_period_times(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    capture = write_factor(
+        factors_dir, "Capture",
+        'result = df[["data_time", "series_tag"]].copy(); result["seen"] = str(context); return result',
+    )
+    response = FactorWorker(factors_dir).execute_request(batch_request([
+        factor_call(capture, "capture", "Capture", ["value"], ["seen"])
+    ]))
+    seen = response["items"][0]["results"]["rows"][0][2]
+    assert "'subject_id': 'BTC'" in seen
+    assert "'period_times': ['2026-07-27T23:59:00Z', '2026-07-28T00:00:00Z']" in seen
+
+
+def test_cross_section_rejects_unknown_subject_output(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    cross = write_factor(
+        factors_dir, "Cross",
+        'result = df[["data_time", "series_tag", "subject_id"]].copy(); result["score"] = 1; result.loc[0, "subject_id"] = "ETH"; return result',
+    )
+    meta = batch_request([
+        factor_call(cross, "cross", "Cross", ["value"], ["score"], factor_type="cross_section")
+    ], columns=["data_time", "series_tag", "subject_id", "value"], rows=[
+        ["2026-07-28T00:00:00Z", "venue:binance", "BTC", 60.0]
+    ])
+    meta["context"].pop("subject_id")
+    meta["context"].update(expected_subjects=["BTC"], available_subjects=["BTC"])
+    response = FactorWorker(factors_dir).execute_request(meta)
+    assert response["items"][0]["ok"] is False
+    assert "outside the available universe" in response["items"][0]["error"]["message"]
 
 
 @pytest.mark.parametrize(
-    ("source", "outputs", "message"),
-    [
-        (
-            'return pd.DataFrame({"data_time": df["data_time"], "series_tag": df["series_tag"], "double": df["value"]})',
-            ["double", "extra"],
-            "outputs mismatch",
-        ),
-        (
-            'return pd.DataFrame({"data_time": df["data_time"], "series_tag": df["series_tag"], "double": df["value"], "triple": df["value"], "extra": df["value"]})',
-            ["double", "triple"],
-            "outputs mismatch",
-        ),
-        ('return {"double": df["value"]}', ["double", "triple"], "pandas DataFrame"),
-    ],
+    ("location", "field"),
+    [("request", "task_id"), ("context", "binding_id"), ("factor", "config_snapshot_id"),
+     ("request", "missing_subjects")],
 )
-def test_execute_rejects_invalid_output_shape(tmp_path, source, outputs, message):
-    worker = loaded_worker(tmp_path, body=source)
-    meta = request_meta()
-    meta["factor"]["outputs"] = outputs
-    with pytest.raises((TypeError, ValueError), match=message):
-        worker.execute_request(meta)
-
-
-@pytest.mark.parametrize(
-    ("body", "message"),
-    [
-        (
-            'result = df[["data_time", "series_tag"]].copy(); result["double"] = 1; result["triple"] = 2; return pd.concat([result, result.iloc[[0]]], ignore_index=True)',
-            "duplicate",
-        ),
-        (
-            'result = df[["data_time", "series_tag"]].copy(); result.loc[:, "data_time"] = "bad"; result["double"] = 1; result["triple"] = 2; return result',
-            "(?i)time",
-        ),
-        (
-            'result = df[["data_time", "series_tag"]].copy(); result.loc[0, "data_time"] = pd.NaT; result["double"] = 1; result["triple"] = 2; return result',
-            "(?i)time",
-        ),
-        (
-            'result = df[["data_time", "series_tag"]].copy(); result.loc[:, "series_tag"] = " bad"; result["double"] = 1; result["triple"] = 2; return result',
-            "whitespace",
-        ),
-    ],
-)
-def test_execute_rejects_invalid_result_identity(tmp_path, body, message):
-    worker = loaded_worker(tmp_path, body=body)
-    with pytest.raises((TypeError, ValueError), match=message):
-        worker.execute_request(request_meta())
-
-
-def test_execute_normalizes_nan_and_infinity(tmp_path: Path):
-    worker = loaded_worker(
-        tmp_path,
-        body='result = df[["data_time", "series_tag"]].copy(); result["double"] = float("nan"); result["triple"] = float("inf"); return result',
-    )
-    result = worker.execute_request(request_meta())["results"]
-    assert all(row["values"] == {"double": None, "triple": None} for row in result)
-
-
-def test_execute_rejects_non_object_params(tmp_path: Path):
-    worker = loaded_worker(tmp_path)
-    meta = request_meta()
-    meta["factor"]["params"] = []
-    with pytest.raises(TypeError, match="params must be an object"):
-        worker.execute_request(meta)
-
-
-def test_execute_rejects_legacy_signal_only_module(tmp_path: Path):
-    factors_dir = tmp_path / "factors"
-    factors_dir.mkdir()
-    (factors_dir / "Legacy.py").write_text(
-        "def signal(df, n, factor_name):\n    return df\n", encoding="utf-8"
-    )
+def test_rejects_legacy_fields(tmp_path: Path, location: str, field: str):
+    factors_dir = make_factor_dir(tmp_path)
     worker = FactorWorker(factors_dir)
-    load_factor(worker, factors_dir / "Legacy.py", "Legacy")
-    meta = request_meta()
-    meta["factor"]["name"] = "Legacy"
-    with pytest.raises(AttributeError, match=r"must define compute\(df, params, context\)"):
+    meta = batch_request([factor_call(factors_dir / "Generic.py", "generic", "Generic", ["value"], ["double", "triple"])])
+    if location == "request":
+        meta[field] = "legacy"
+    elif location == "context":
+        meta["context"][field] = "legacy"
+    else:
+        meta["factors"][0][field] = "legacy"
+    with pytest.raises(ValueError, match="legacy field"):
         worker.execute_request(meta)
+
+
+@pytest.mark.parametrize(
+    ("body", "outputs", "message"),
+    [
+        ('return pd.DataFrame({"data_time": df["data_time"], "series_tag": df["series_tag"], "one": 1})', ["two"], "outputs mismatch"),
+        ('return {"one": 1}', ["one"], "pandas DataFrame"),
+    ],
+)
+def test_batch_rejects_invalid_output_shape(tmp_path, body, outputs, message):
+    factors_dir = make_factor_dir(tmp_path)
+    path = write_factor(factors_dir, "Invalid", body)
+    response = FactorWorker(factors_dir).execute_request(batch_request([
+        factor_call(path, "invalid", "Invalid", ["value"], outputs)
+    ]))
+    assert response["items"][0]["ok"] is False
+    assert message in response["items"][0]["error"]["message"]
+
+
+def test_batch_normalizes_nan_and_infinity(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    path = write_factor(
+        factors_dir, "NonFinite",
+        'result = df[["data_time", "series_tag"]].copy(); result["nan"] = float("nan"); result["inf"] = float("inf"); return result',
+    )
+    response = FactorWorker(factors_dir).execute_request(batch_request([
+        factor_call(path, "nonfinite", "NonFinite", ["value"], ["nan", "inf"])
+    ]))
+    assert response["items"][0]["results"]["rows"][0][2:] == [None, None]
+
+
+def test_batch_rejects_non_object_params(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    meta = batch_request([factor_call(factors_dir / "Generic.py", "generic", "Generic", ["value"], ["double", "triple"])])
+    meta["factors"][0]["params"] = []
+    response = FactorWorker(factors_dir).execute_request(meta)
+    assert response["items"][0]["ok"] is False
+    assert "params must be an object" in response["items"][0]["error"]["message"]
+
+
+def test_batch_rejects_legacy_signal_only_module(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    path = factors_dir / "Legacy.py"
+    path.write_text("def signal(df, n, factor_name):\n    return df\n", encoding="utf-8")
+    response = FactorWorker(factors_dir).execute_request(batch_request([
+        factor_call(path, "legacy", "Legacy", ["value"], ["signal"])
+    ]))
+    assert response["items"][0]["ok"] is False
+    assert "must define compute(df, params, context)" in response["items"][0]["error"]["message"]
 
 
 def test_explicit_load_reports_captured_import_diagnostics(tmp_path: Path):
@@ -376,7 +326,7 @@ def test_explicit_load_reports_captured_import_diagnostics(tmp_path: Path):
         load_factor(worker, noisy, "Noisy")
     assert exc_info.value.stdout == "draft stdout\n"
     assert exc_info.value.stderr == "draft stderr\n"
-    assert worker.factors == {}
+    assert worker.modules == {}
 
 
 def test_load_rejects_missing_source_hash_without_importing(tmp_path: Path):
@@ -387,7 +337,7 @@ def test_load_rejects_missing_source_hash_without_importing(tmp_path: Path):
             "logical_id": "Generic",
             "path": str(factors_dir / "Generic.py"),
         })
-    assert worker.factors == {}
+    assert worker.modules == {}
 
 
 def test_json_value_normalizes_nan_and_infinity():
@@ -400,60 +350,65 @@ def make_factor_dir(tmp_path: Path, body=None) -> Path:
     factors_dir = tmp_path / "factors"
     factors_dir.mkdir(exist_ok=True)
     if body is None:
-        body = """
-result = df[["data_time", "series_tag"]].copy()
-result["double"] = df["value"] * 2
-result["triple"] = df["value"] * 3
-return result
-""".strip()
-    (factors_dir / "Generic.py").write_text(
-        f"import pandas as pd\n\ndef compute(df, params, context):\n"
-        + "\n".join(f"    {line}" for line in body.splitlines())
-        + "\n",
-        encoding="utf-8",
-    )
+        body = 'result = df[["data_time", "series_tag"]].copy(); result["double"] = df["value"] * 2; result["triple"] = df["value"] * 3; return result'
+    write_factor(factors_dir, "Generic", body)
     return factors_dir
 
 
-def loaded_worker(tmp_path: Path, body=None) -> FactorWorker:
-    factors_dir = make_factor_dir(tmp_path, body)
-    worker = FactorWorker(factors_dir)
-    load_factor(worker, factors_dir / "Generic.py", "Generic")
-    return worker
+def write_factor(factors_dir: Path, name: str, body: str) -> Path:
+    path = factors_dir / f"{name}.py"
+    body = textwrap.dedent(body).strip()
+    path.write_text(
+        "import pandas as pd\n\ndef compute(df, params, context):\n"
+        + "\n".join(f"    {line}" for line in body.splitlines()) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def source_hash(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def load_factor(worker: FactorWorker, path: Path, logical_id: str):
-    raw = path.read_bytes()
     return worker.load_one({
         "logical_id": logical_id,
         "path": str(path),
-        "source_hash": hashlib.sha256(raw).hexdigest(),
+        "source_hash": source_hash(path),
     })
 
 
-def request_meta():
+def factor_call(path, factor_id, name, inputs, outputs, lookback=2, factor_type="timeseries"):
     return {
-        "id": "task-1",
-        "encoding": "json",
-        "context": {"period_time": 1785196800, "frequency": "1m", "subject_id": "BTC",
-                    "config_snapshot_id": "contract-1"},
-        "target_start_time": "2026-07-28T00:00:00.000000001Z",
-        "target_end_time": "2026-07-28T00:00:00.000000002Z",
-        "factor": {
-            "factor_type": "timeseries",
-            "name": "Generic",
-            "input_columns": ["value"],
-            "outputs": ["double", "triple"],
-            "params": {"window": 2},
+        "factor_id": factor_id, "name": name, "source_hash": source_hash(path),
+        "source_path": str(path), "factor_type": factor_type,
+        "input_columns": inputs, "outputs": outputs, "params": {},
+        "lookback_periods": lookback,
+    }
+
+
+def batch_request(factors, rows=None, columns=None):
+    target = "2026-07-28T00:00:00Z"
+    if rows is None:
+        rows = [
+            ["2026-07-27T23:59:00Z", "venue:binance", 3.0],
+            ["2026-07-27T23:59:00Z", "venue:okx", 5.0],
+            [target, "venue:binance", 3.0],
+            [target, "venue:okx", 5.0],
+        ]
+    if columns is None:
+        columns = ["data_time", "series_tag", "value"]
+    return {
+        "id": "period-1", "encoding": "json",
+        "context": {
+            "period_time": 1785196800, "frequency": "1m", "subject_id": "BTC",
+            "period_times_by_factor": {
+                factor["factor_id"]: [
+                    (pd.Timestamp(target) - pd.Timedelta(minutes=offset)).isoformat().replace("+00:00", "Z")
+                    for offset in reversed(range(factor["lookback_periods"]))
+                ]
+                for factor in factors
+            },
         },
-        "df": {
-            "columns": ["data_time", "series_tag", "value"],
-            "rows": [
-                ["2026-07-28T00:00:00Z", "venue:binance", 1.0],
-                ["2026-07-28T00:00:00Z", "venue:okx", 2.0],
-                ["2026-07-28T00:00:00.000000001Z", "venue:binance", 3.0],
-                ["2026-07-28T00:00:00.000000001Z", "venue:okx", 5.0],
-                ["2026-07-28T00:00:00.000000002Z", "", 7.0],
-            ],
-        },
+        "df": {"columns": columns, "rows": rows}, "factors": factors,
     }
