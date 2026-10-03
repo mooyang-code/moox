@@ -128,6 +128,10 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if strings.TrimSpace(item.GetDataSourceId()) == "" && !collectorOwnedDataset(item) {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("data_source_id is required unless owner_module is collector"))}, nil
 	}
+	if err := validateDatasetDataNodeID(item.GetDataNodeId()); err != nil {
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
 	if item.DatasetId == "" {
 		item.DatasetId = defaultID(item.GetName(), "dataset")
 		if !strings.HasPrefix(item.DatasetId, "dataset_") {
@@ -161,6 +165,14 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
+	current, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
+	if err != nil {
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := validateDatasetDataNodeUpdate(current, item.GetDataNodeId()); err != nil {
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
 	updated, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -237,7 +249,14 @@ func (s *Service) RebindDatasetDataNode(ctx context.Context, req *pb.RebindDatas
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || strings.TrimSpace(req.GetDataNodeId()) == "" || req.GetExpectedRevision() == 0 {
 		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, data_node_id and expected_revision are required"))}, nil
 	}
-	dataset, err := s.metadata.RebindDatasetDataNode(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetDataNodeId(), req.GetExpectedRevision())
+	current, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if current.GetStatus() != "disabled" {
+		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset must be disabled before offline data node rebind"))}, nil
+	}
+	dataset, err := s.metadata.RebindDatasetDataNode(ctx, req.GetSpaceId(), req.GetDatasetId(), strings.TrimSpace(req.GetDataNodeId()), req.GetExpectedRevision())
 	if err != nil {
 		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}

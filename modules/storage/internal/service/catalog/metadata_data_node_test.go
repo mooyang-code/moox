@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 
@@ -18,6 +19,29 @@ type dataNodeMetadataStore struct {
 	registerCalls  int
 	datasetQueries []metadata.DatasetQuery
 	dataNodePages  []*pb.Page
+}
+
+type datasetOwnershipMetadataStore struct {
+	metadata.Store
+	dataset           *pb.Dataset
+	upsertDatasetCall int
+	rebindCall        int
+}
+
+func (s *datasetOwnershipMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
+	return s.dataset, nil
+}
+
+func (s *datasetOwnershipMetadataStore) UpsertDataset(_ context.Context, item *pb.Dataset) (*pb.Dataset, error) {
+	s.upsertDatasetCall++
+	return item, nil
+}
+
+func (s *datasetOwnershipMetadataStore) RebindDatasetDataNode(_ context.Context, _, _ string, nodeID string, _ uint64) (*pb.Dataset, error) {
+	s.rebindCall++
+	updated := *s.dataset
+	updated.DataNodeId = nodeID
+	return &updated, nil
 }
 
 func (s *dataNodeMetadataStore) RegisterDataNode(context.Context, string, string, string) (*pb.DataNode, error) {
@@ -38,6 +62,15 @@ func (s *dataNodeMetadataStore) GetDataNode(_ context.Context, nodeID string) (*
 		}
 	}
 	return nil, nil
+}
+
+func (s *dataNodeMetadataStore) GetDataset(_ context.Context, spaceID, datasetID string) (*pb.Dataset, error) {
+	for _, dataset := range s.datasets {
+		if dataset.GetSpaceId() == spaceID && dataset.GetDatasetId() == datasetID {
+			return dataset, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (s *dataNodeMetadataStore) UpdateDataNode(_ context.Context, nodeID, name, status string) (*pb.DataNode, error) {
@@ -182,7 +215,12 @@ func TestDataNodeMutationSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) 
 }
 
 func TestRebindDatasetSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
-	store := &dataNodeMetadataStore{nodes: []*pb.DataNode{{NodeId: "node-a", Status: "active"}}}
+	store := &dataNodeMetadataStore{
+		nodes: []*pb.DataNode{{NodeId: "node-a", Status: "active"}},
+		datasets: []*pb.Dataset{{
+			SpaceId: "space-a", DatasetId: "dataset-a", DataNodeId: "node-b", Status: "disabled",
+		}},
+	}
 	svc, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
@@ -192,6 +230,53 @@ func TestRebindDatasetSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, "node-a", rsp.GetDataset().GetDataNodeId())
+}
+
+func TestCreateDatasetRequiresDataNodeID(t *testing.T) {
+	store := &datasetOwnershipMetadataStore{}
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+
+	rsp, err := svc.CreateDataset(context.Background(), &pb.CreateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId: "space-a", DatasetId: "dataset_a", DataSourceId: "source-a", Name: "测试集",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, KeepDuration: "24h",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Zero(t, store.upsertDatasetCall)
+}
+
+func TestUpdateActiveDatasetCannotChangeDataNode(t *testing.T) {
+	store := &datasetOwnershipMetadataStore{dataset: &pb.Dataset{
+		SpaceId: "space-a", DatasetId: "dataset_a", DataNodeId: "node-a", Name: "测试集",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Revision: 2,
+	}}
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+
+	rsp, err := svc.UpdateDataset(context.Background(), &pb.UpdateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId: "space-a", DatasetId: "dataset_a", DataNodeId: "node-b", Name: "测试集",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Revision: 2,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Zero(t, store.upsertDatasetCall)
+}
+
+func TestRebindDatasetRequiresDisabledState(t *testing.T) {
+	store := &datasetOwnershipMetadataStore{dataset: &pb.Dataset{
+		SpaceId: "space-a", DatasetId: "dataset_a", DataNodeId: "node-a", Name: "测试集",
+		DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Revision: 2,
+	}}
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+
+	rsp, err := svc.RebindDatasetDataNode(context.Background(), &pb.RebindDatasetDataNodeReq{
+		SpaceId: "space-a", DatasetId: "dataset_a", DataNodeId: "node-b", ExpectedRevision: 2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Zero(t, store.rebindCall)
 }
 
 func TestRegisterDataNodeRequiresDeploymentHMAC(t *testing.T) {

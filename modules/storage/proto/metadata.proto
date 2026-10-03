@@ -1804,7 +1804,7 @@ service Metadata {
   rpc GetDataset(GetDatasetReq) returns (GetDatasetRsp);
   // 列出数据集。
   rpc ListDatasets(ListDatasetsReq) returns (ListDatasetsRsp);
-  // 更换尚未激活 Dataset 的 DataNode 绑定。
+  // 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
   rpc RebindDatasetDataNode(RebindDatasetDataNodeReq) returns (RebindDatasetDataNodeRsp);
   // 只读检查 Dataset 是否满足激活条件。
   rpc CheckDatasetActivation(CheckDatasetActivationReq) returns (CheckDatasetActivationRsp);

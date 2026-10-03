@@ -55,6 +55,24 @@ func validateDatasetID(datasetID string) error {
 	return validateLowerSnakeID("dataset_id", datasetID, 50)
 }
 
+func validateDatasetDataNodeID(dataNodeID string) error {
+	if strings.TrimSpace(dataNodeID) == "" {
+		return errors.New("data_node_id is required")
+	}
+	return nil
+}
+
+func validateDatasetDataNodeUpdate(existing *pb.Dataset, dataNodeID string) error {
+	dataNodeID = strings.TrimSpace(dataNodeID)
+	if dataNodeID == "" || existing.GetDataNodeId() == dataNodeID {
+		return nil
+	}
+	if existing.GetStatus() == "active" {
+		return errors.New("active dataset data_node_id is immutable")
+	}
+	return errors.New("dataset data_node_id is immutable; use RebindDatasetDataNode while disabled")
+}
+
 func validateViewID(viewID string) error {
 	if !strings.HasPrefix(viewID, "view_") {
 		return errors.New("view_id must start with view_")
