@@ -117,6 +117,35 @@ func (s *Store) UpdateSet(ctx context.Context, set domain.FactorSet) error {
 	return nil
 }
 
+// SetSetStatus changes a set's lifecycle status only if it still matches
+// expectedStatus. The single conditional update makes competing lifecycle
+// transitions explicit instead of silently overwriting one another.
+func (s *Store) SetSetStatus(ctx context.Context, setID, expectedStatus, status string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	setID = strings.TrimSpace(setID)
+	if setID == "" {
+		return fmt.Errorf("set id is required")
+	}
+	if !validSetStatus(expectedStatus) || !validSetStatus(status) {
+		return fmt.Errorf("invalid factor set status transition %q to %q", expectedStatus, status)
+	}
+	result := s.db.WithContext(ctx).Exec(`
+		UPDATE t_factor_sets SET c_status = ?, c_mtime = ? WHERE c_set_id = ? AND c_status = ?
+	`, status, time.Now().UTC(), setID, expectedStatus)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	if _, err := s.GetSet(ctx, setID); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: factor set %q status changed", ErrConflict, setID)
+}
+
 // GetSet returns a factor set by id.
 func (s *Store) GetSet(ctx context.Context, setID string) (domain.FactorSet, error) {
 	if s == nil || s.db == nil {
@@ -228,4 +257,13 @@ func unmarshalStringSlice(raw string) ([]string, error) {
 
 func isUniqueConstraint(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique constraint failed")
+}
+
+func validSetStatus(status string) bool {
+	switch status {
+	case domain.SetStatusPending, domain.SetStatusEnabled, domain.SetStatusDisabled:
+		return true
+	default:
+		return false
+	}
 }

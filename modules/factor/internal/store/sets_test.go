@@ -124,3 +124,38 @@ func TestSetCRUDAndFactorCRUD(t *testing.T) {
 	require.NoError(t, s.DeleteFactor(ctx, def.FactorID))
 	require.NoError(t, s.DeleteSet(ctx, set.SetID))
 }
+
+func TestLifecycleStatusWritesUseExpectedStatus(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	set := testSet("set_prices", domain.SetStatusPending)
+	require.NoError(t, s.CreateSet(ctx, set))
+	require.NoError(t, s.SetSetStatus(ctx, set.SetID, domain.SetStatusPending, domain.SetStatusEnabled))
+	require.ErrorIs(t, s.SetSetStatus(ctx, set.SetID, domain.SetStatusPending, domain.SetStatusDisabled), ErrConflict)
+	storedSet, err := s.GetSet(ctx, set.SetID)
+	require.NoError(t, err)
+	require.Equal(t, domain.SetStatusEnabled, storedSet.Status)
+
+	factor := testFactorDef("factor_close", domain.FactorStatusDisabled)
+	require.NoError(t, s.CreateFactor(ctx, factor))
+	require.NoError(t, s.SetFactorStatus(ctx, factor.FactorID, domain.FactorStatusDisabled, domain.FactorStatusEnabled))
+	require.ErrorIs(t, s.SetFactorStatus(ctx, factor.FactorID, domain.FactorStatusDisabled, domain.FactorStatusDisabled), ErrConflict)
+	storedFactor, err := s.GetFactor(ctx, factor.FactorID)
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusEnabled, storedFactor.Status)
+}
+
+func TestUpdateAndDeleteFactorRequireDisabled(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
+	factor := testFactorDef("factor_close", domain.FactorStatusEnabled)
+	require.NoError(t, s.CreateFactor(ctx, factor))
+
+	factor.SourceCode = "changed"
+	require.ErrorContains(t, s.UpdateFactor(ctx, factor), "disabled")
+	require.ErrorContains(t, s.DeleteFactor(ctx, factor.FactorID), "disabled")
+	stored, err := s.GetFactor(ctx, factor.FactorID)
+	require.NoError(t, err)
+	require.NotEqual(t, "changed", stored.SourceCode)
+}

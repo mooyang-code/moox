@@ -108,6 +108,9 @@ func (s *Store) UpdateFactor(ctx context.Context, def domain.FactorDef) error {
 	if def.FactorID == "" {
 		return fmt.Errorf("factor id is required")
 	}
+	if def.Status != domain.FactorStatusDisabled {
+		return fmt.Errorf("factor must be disabled before updating its definition")
+	}
 	if def.ParamsJSON == "" {
 		def.ParamsJSON = "{}"
 	}
@@ -126,16 +129,54 @@ func (s *Store) UpdateFactor(ctx context.Context, def domain.FactorDef) error {
 	result := s.db.WithContext(ctx).Exec(`
 		UPDATE t_factor_defs SET c_name = ?, c_factor_type = ?, c_source_code = ?, c_source_hash = ?,
 		 c_input_columns_json = ?, c_outputs_json = ?, c_params_json = ?, c_lookback_periods = ?,
-		 c_allow_partial_universe = ?, c_status = ?, c_mtime = ? WHERE c_factor_id = ?
+		 c_allow_partial_universe = ?, c_status = ?, c_mtime = ? WHERE c_factor_id = ? AND c_status = ?
 	`, def.Name, def.FactorType, def.SourceCode, def.SourceHash, inputsJSON, outputsJSON,
-		def.ParamsJSON, def.LookbackPeriods, partial, def.Status, time.Now().UTC(), def.FactorID)
+		def.ParamsJSON, def.LookbackPeriods, partial, def.Status, time.Now().UTC(), def.FactorID, domain.FactorStatusDisabled)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
+		stored, err := s.GetFactor(ctx, def.FactorID)
+		if err != nil {
+			return err
+		}
+		if stored.Status != domain.FactorStatusDisabled {
+			return fmt.Errorf("factor must be disabled before updating its definition")
+		}
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+// SetFactorStatus changes a factor's lifecycle status only if it still matches
+// expectedStatus. Catalog serializes the surrounding metadata work with the
+// factor-set lock; this compare-and-set guards the local transition itself.
+func (s *Store) SetFactorStatus(ctx context.Context, factorID, expectedStatus, status string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	factorID = strings.TrimSpace(factorID)
+	if factorID == "" {
+		return fmt.Errorf("factor id is required")
+	}
+	if (expectedStatus != domain.FactorStatusEnabled && expectedStatus != domain.FactorStatusDisabled) ||
+		(status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled) {
+		return fmt.Errorf("invalid factor status transition %q to %q", expectedStatus, status)
+	}
+	result := s.db.WithContext(ctx).Exec(`
+		UPDATE t_factor_defs SET c_status = ?, c_mtime = ? WHERE c_factor_id = ? AND c_status = ?
+	`, status, time.Now().UTC(), factorID, expectedStatus)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	stored, err := s.GetFactor(ctx, factorID)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: factor %q status is %q, expected %q", ErrConflict, factorID, stored.Status, expectedStatus)
 }
 
 // GetFactor returns one definition by id.
@@ -184,11 +225,19 @@ func (s *Store) DeleteFactor(ctx context.Context, factorID string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
 	}
-	result := s.db.WithContext(ctx).Exec("DELETE FROM t_factor_defs WHERE c_factor_id = ?", strings.TrimSpace(factorID))
+	factorID = strings.TrimSpace(factorID)
+	result := s.db.WithContext(ctx).Exec("DELETE FROM t_factor_defs WHERE c_factor_id = ? AND c_status = ?", factorID, domain.FactorStatusDisabled)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
+		stored, err := s.GetFactor(ctx, factorID)
+		if err != nil {
+			return err
+		}
+		if stored.Status != domain.FactorStatusDisabled {
+			return fmt.Errorf("factor must be disabled before deletion")
+		}
 		return gorm.ErrRecordNotFound
 	}
 	return nil
