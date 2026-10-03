@@ -6,9 +6,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/nats-io/nats.go"
 )
+
+func TestProcessRowsBatchAckFailureSettlesOnlyAppliedDelivery(t *testing.T) {
+	var applies int
+	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
+		applies++
+		return nil
+	}))
+	encoded, raw := validDatasetDelivery(t)
+	first := &jetstream.Delivery{Subject: encoded.Subject, RawData: raw, RawMessageID: encoded.Message.GetEventId(), ContentType: events.ContentType, StreamSeq: 40}
+	second := *first
+	second.StreamSeq = 41
+	err := consumer.processRowsBatchWithPolicy(context.Background(), []*jetstream.Delivery{first, &second}, []*deliveryHeartbeat{nil, nil}, -1)
+	if !errors.Is(err, jetstream.ErrInvalidDelivery) {
+		t.Fatalf("missing stale ACK error: %v", err)
+	}
+	if applies != 1 || !deliverySettled(err, first) || deliverySettled(err, &second) {
+		t.Fatalf("partial batch settlement: applies=%d first=%v second=%v", applies, deliverySettled(err, first), deliverySettled(err, &second))
+	}
+}
+
+func TestProcessRowsBatchSuccessfulApplySettlesAllDespiteAckFailure(t *testing.T) {
+	consumer := &Consumer{}
+	deliveries := []*jetstream.Delivery{{StreamSeq: 50}, {StreamSeq: 51}}
+	err := consumer.processDeliveryBatchWithPolicy(context.Background(), deliveries, []*deliveryHeartbeat{nil, nil}, -1, func(context.Context) error { return nil })
+	if !errors.Is(err, jetstream.ErrInvalidDelivery) {
+		t.Fatalf("missing stale ACK error: %v", err)
+	}
+	for _, delivery := range deliveries {
+		if !deliverySettled(err, delivery) {
+			t.Fatalf("applied batch delivery %d incorrectly fenced on uncertain ACK", delivery.StreamSeq)
+		}
+	}
+}
 
 func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *testing.T) {
 	consumer := &Consumer{config: Config{}}

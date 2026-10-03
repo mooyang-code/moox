@@ -28,6 +28,8 @@ type subjectQueue struct {
 	subject    string
 	deliveries []*queuedDelivery
 	running    bool
+	// Failed applies keep the Dataset lane fenced until broker redelivery.
+	blocked map[uint64]struct{}
 }
 
 type queuedDelivery struct {
@@ -133,7 +135,7 @@ func (d *subjectDispatcher) Dispatch(delivery *jetstream.Delivery) error {
 		heartbeat = d.hooks.newHeartbeat(d.ctx, delivery)
 	}
 	queue.deliveries = append(queue.deliveries, &queuedDelivery{delivery: delivery, heartbeat: heartbeat})
-	start := !queue.running
+	start := !queue.running && queueReady(queue)
 	if start {
 		queue.running = true
 	}
@@ -252,7 +254,7 @@ func (d *subjectDispatcher) worker() {
 				}
 				<-d.pending
 			}
-			d.finish(queue)
+			d.finish(queue, items, err)
 		case <-d.ctx.Done():
 			return
 		}
@@ -264,7 +266,20 @@ func (d *subjectDispatcher) nextBatch(queue *subjectQueue) ([]*queuedDelivery, b
 	defer d.mu.Unlock()
 	if len(queue.deliveries) == 0 {
 		queue.running = false
-		delete(d.queues, queue.subject)
+		if len(queue.blocked) == 0 {
+			delete(d.queues, queue.subject)
+		}
+		return nil, false
+	}
+	if len(queue.blocked) != 0 {
+		sequence := firstBlockedSequence(queue)
+		for i, item := range queue.deliveries {
+			if sequence != 0 && item.delivery.StreamSeq == sequence {
+				queue.deliveries = append(queue.deliveries[:i], queue.deliveries[i+1:]...)
+				return []*queuedDelivery{item}, true
+			}
+		}
+		queue.running = false
 		return nil, false
 	}
 	size := 1
@@ -278,11 +293,23 @@ func (d *subjectDispatcher) nextBatch(queue *subjectQueue) ([]*queuedDelivery, b
 	return items, true
 }
 
-func (d *subjectDispatcher) finish(queue *subjectQueue) {
+func (d *subjectDispatcher) finish(queue *subjectQueue, items []*queuedDelivery, err error) {
 	d.mu.Lock()
-	if len(queue.deliveries) == 0 {
+	for _, item := range items {
+		if err == nil || deliverySettled(err, item.delivery) {
+			delete(queue.blocked, item.delivery.StreamSeq)
+		} else {
+			if queue.blocked == nil {
+				queue.blocked = make(map[uint64]struct{})
+			}
+			queue.blocked[item.delivery.StreamSeq] = struct{}{}
+		}
+	}
+	if !queueReady(queue) {
 		queue.running = false
-		delete(d.queues, queue.subject)
+		if len(queue.deliveries) == 0 && len(queue.blocked) == 0 {
+			delete(d.queues, queue.subject)
+		}
 		d.mu.Unlock()
 		return
 	}
@@ -294,6 +321,32 @@ func (d *subjectDispatcher) finish(queue *subjectQueue) {
 		// contains other queues. The helper exits with the dispatcher.
 		go d.enqueue(queue)
 	}
+}
+
+func firstBlockedSequence(queue *subjectQueue) uint64 {
+	var first uint64
+	for sequence := range queue.blocked {
+		if sequence == 0 {
+			return 0
+		}
+		if first == 0 || sequence < first {
+			first = sequence
+		}
+	}
+	return first
+}
+
+func queueReady(queue *subjectQueue) bool {
+	if len(queue.blocked) == 0 {
+		return len(queue.deliveries) != 0
+	}
+	sequence := firstBlockedSequence(queue)
+	for _, item := range queue.deliveries {
+		if sequence != 0 && item.delivery.StreamSeq == sequence {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *subjectDispatcher) enqueue(queue *subjectQueue) {

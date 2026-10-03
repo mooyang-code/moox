@@ -33,14 +33,16 @@ func (c *Consumer) processRowsBatchWithPolicy(ctx context.Context, deliveries []
 	}
 	batchHandler, ok := c.handler.(DatasetRowsBatchHandler)
 	if !ok {
+		var settled []*jetstream.Delivery
 		for index, delivery := range deliveries {
 			var heartbeat *deliveryHeartbeat
 			if index < len(heartbeats) {
 				heartbeat = heartbeats[index]
 			}
 			if err := c.processDeliveryWithPolicy(ctx, delivery, heartbeat, maxRetryAttempts); err != nil {
-				return err
+				return withSettledDeliveries(err, settled...)
 			}
+			settled = append(settled, delivery)
 		}
 		return nil
 	}
@@ -48,14 +50,16 @@ func (c *Consumer) processRowsBatchWithPolicy(ctx context.Context, deliveries []
 	if err != nil {
 		// Fall back to the single-delivery policy so a malformed event cannot
 		// make otherwise valid rows share its permanent-error decision.
+		var settled []*jetstream.Delivery
 		for index, delivery := range deliveries {
 			var heartbeat *deliveryHeartbeat
 			if index < len(heartbeats) {
 				heartbeat = heartbeats[index]
 			}
 			if singleErr := c.processDeliveryWithPolicy(ctx, delivery, heartbeat, maxRetryAttempts); singleErr != nil {
-				return singleErr
+				return withSettledDeliveries(singleErr, settled...)
 			}
+			settled = append(settled, delivery)
 		}
 		return nil
 	}
@@ -86,13 +90,19 @@ func (c *Consumer) decodeRowsBatch(deliveries []*jetstream.Delivery) ([]DatasetR
 	return items, nil
 }
 
-func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliveries []*jetstream.Delivery, heartbeats []*deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context) error) error {
+func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliveries []*jetstream.Delivery, heartbeats []*deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context) error) (result error) {
 	if c == nil || len(deliveries) == 0 || len(deliveries) != len(heartbeats) || apply == nil {
 		return errors.New("storage view delivery batch policy is incomplete")
 	}
 	if ctx == nil {
 		return errors.New("storage view delivery batch context is required")
 	}
+	settled := false
+	defer func() {
+		if settled {
+			result = withSettledDeliveries(result, deliveries...)
+		}
+	}()
 	started := time.Now()
 	metrics := c.config.Metrics
 	if metrics == nil {
@@ -119,6 +129,7 @@ func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliverie
 			c.config.Lease.Release()
 		}
 		if err == nil {
+			settled = true
 			acked := make([]bool, len(deliveries))
 			for ctx.Err() == nil {
 				allAcked := true
@@ -182,15 +193,17 @@ func progressDeliveryBatch(ctx context.Context, deliveries []*jetstream.Delivery
 }
 
 func termDeliveryBatch(ctx context.Context, deliveries []*jetstream.Delivery, metrics *observability.ViewMetrics, applyErr error, heartbeats []*deliveryHeartbeat) error {
+	var settled []*jetstream.Delivery
 	for _, delivery := range deliveries {
 		if err := delivery.Term(ctx); err != nil {
 			metrics.IncAckError()
 			metrics.ObserveDelivery("term", "error")
-			return errors.Join(applyErr, err, batchHeartbeatError(heartbeats))
+			return withSettledDeliveries(errors.Join(applyErr, err, batchHeartbeatError(heartbeats)), settled...)
 		}
 		metrics.ObserveDelivery("term", "success")
+		settled = append(settled, delivery)
 	}
-	return errors.Join(applyErr, batchHeartbeatError(heartbeats))
+	return withSettledDeliveries(errors.Join(applyErr, batchHeartbeatError(heartbeats)), settled...)
 }
 
 func batchHeartbeatError(heartbeats []*deliveryHeartbeat) error {
@@ -217,7 +230,7 @@ type deliveryActions struct {
 	term     func(context.Context) error
 }
 
-func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error, actions deliveryActions) error {
+func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error, actions deliveryActions) (result error) {
 	if c == nil {
 		return errors.New("storage view event consumer is nil")
 	}
@@ -230,6 +243,12 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 	if ctx == nil {
 		return errors.New("storage view delivery context is required")
 	}
+	settled := false
+	defer func() {
+		if settled {
+			result = withSettledDeliveries(result, delivery)
+		}
+	}()
 	started := time.Now()
 	metrics := c.config.Metrics
 	if metrics == nil {
@@ -258,6 +277,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 			c.config.Lease.Release()
 		}
 		if err == nil || IsDeferred(err) {
+			settled = true
 			// Applying an event is deliberately separate from ACK retry:
 			// an ACK transport failure must never repeat an already successful
 			// index write. Deferred apply is already persisted (ViewDataReady
@@ -291,8 +311,8 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 			return ctx.Err()
 		}
 		if IsPermanent(err) {
-			// A malformed row/marker cannot be skipped: MaxAckPending=1 is the
-			// rows-before-marker ordering fence.  The default unlimited policy
+			// A malformed row/marker cannot be skipped: the Dataset lane is the
+			// rows-before-marker ordering fence. The default unlimited policy
 			// therefore keeps the poison delivery pending for operator repair;
 			// only an explicit positive emergency limit permits TERM.
 			if maxRetryAttempts <= 0 {
@@ -310,6 +330,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 			}
 			for ctx.Err() == nil {
 				if termErr := actions.term(ctx); termErr == nil {
+					settled = true
 					metrics.ObserveDelivery("term", "success")
 					return heartbeat.err()
 				} else {
@@ -338,6 +359,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 				return errors.Join(err, termErr, heartbeat.err())
 			}
 			metrics.ObserveDelivery("term", "success")
+			settled = true
 			return errors.Join(err, heartbeat.err())
 		}
 		// Keep the delivery pending while retrying. NAK would release
@@ -358,6 +380,40 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 		}
 	}
 	return ctx.Err()
+}
+
+// A successful apply (or explicit TERM) settles ordering even if its ACK or
+// heartbeat transport fails. Preserve this per delivery for partial batches.
+type settledDeliveryError struct {
+	error
+	deliveries map[*jetstream.Delivery]struct{}
+}
+
+func (e *settledDeliveryError) Unwrap() error { return e.error }
+
+func withSettledDeliveries(err error, deliveries ...*jetstream.Delivery) error {
+	if err == nil || len(deliveries) == 0 {
+		return err
+	}
+	settled := make(map[*jetstream.Delivery]struct{}, len(deliveries))
+	for _, delivery := range deliveries {
+		settled[delivery] = struct{}{}
+	}
+	return &settledDeliveryError{error: err, deliveries: settled}
+}
+
+func deliverySettled(err error, delivery *jetstream.Delivery) bool {
+	for err != nil {
+		var settled *settledDeliveryError
+		if !errors.As(err, &settled) {
+			return false
+		}
+		if _, ok := settled.deliveries[delivery]; ok {
+			return true
+		}
+		err = settled.Unwrap()
+	}
+	return false
 }
 
 func isStaleDeliveryTransport(err error) bool {

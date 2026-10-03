@@ -4,10 +4,17 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestDatasetQueueKeyUsesGovernedSubjectForMalformedPayload(t *testing.T) {
@@ -31,6 +38,222 @@ func TestDatasetQueueKeyUsesGovernedSubjectForMalformedPayload(t *testing.T) {
 	}
 	if row != "space\x00bars" || marker != row {
 		t.Fatalf("queue keys row=%q marker=%q", row, marker)
+	}
+}
+
+type dispatcherFactorHandler struct {
+	datasetRowsHandlerFunc
+	factor func()
+}
+
+func (h dispatcherFactorHandler) HandleFactorPeriodComputed(context.Context, *eventpb.EventMessage, *storagepb.FactorPeriodComputed) error {
+	h.factor()
+	return nil
+}
+
+func TestDatasetDispatcherFailedRowBlocksFactorUntilRedelivery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rowStarted, releaseRow := make(chan struct{}), make(chan struct{})
+	markerDone, otherDone := make(chan struct{}), make(chan struct{})
+	failed := make(chan error, 1)
+	var attempts atomic.Int32
+	var applied atomic.Bool
+	consumer := testConsumer(t, dispatcherFactorHandler{
+		datasetRowsHandlerFunc: func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
+			if attempts.Add(1) == 1 {
+				close(rowStarted)
+				select {
+				case <-releaseRow:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				return errors.New("row apply failed")
+			}
+			applied.Store(true)
+			return nil
+		},
+		factor: func() { close(markerDone) },
+	})
+	rowEncoded, rowRaw := validDatasetDelivery(t)
+	row := &jetstream.Delivery{Subject: rowEncoded.Subject, RawData: rowRaw, RawMessageID: rowEncoded.Message.GetEventId(), ContentType: events.ContentType, StreamSeq: 10, DeliveryCount: 1}
+	at := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	markerEncoded, err := consumer.registry.Encode(events.FactorPeriodComputed, &storagepb.FactorPeriodComputed{
+		DatasetId: "bar", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: at.Unix(), Status: "complete",
+		UniverseSubjectIds: []string{"ETH"}, Factors: []*storagepb.FactorPeriodState{{FactorId: "factor", Status: "complete", SourceHash: "hash"}},
+		TriggerEventId: "source-ready", ComputedAt: timestamppb.New(at),
+	}, events.PublishOptions{EventID: "factor-marker", OccurredAt: at, SpaceID: "foo", SubjectID: "bar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerRaw, err := proto.Marshal(markerEncoded.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := &jetstream.Delivery{Subject: markerEncoded.Subject, RawData: markerRaw, RawMessageID: "factor-marker", ContentType: events.ContentType, StreamSeq: 11}
+	d := newSubjectDispatcherWithKey(ctx, 2, 128, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+		if delivery.Subject == "other-dataset" {
+			close(otherDone)
+			return nil
+		}
+		return consumer.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, -1, consumer.applyDelivery, deliveryActions{
+			ack:      func(context.Context) error { return nil },
+			progress: func(context.Context) error { return nats.ErrConnectionClosed },
+			term:     func(context.Context) error { t.Error("unexpected TERM"); return nil },
+		})
+	}, jetstream.ErrorReporterFunc(func(err error) { failed <- err }), func(delivery *jetstream.Delivery) (string, error) {
+		if delivery.Subject == "other-dataset" {
+			return delivery.Subject, nil
+		}
+		return datasetQueueKey(consumer.registry, delivery)
+	})
+	defer d.Close()
+	if err := d.Dispatch(row); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-rowStarted:
+	case <-time.After(time.Second):
+		t.Fatal("row did not start")
+	}
+	if err := d.Dispatch(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "other-dataset", StreamSeq: 12}); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseRow)
+	select {
+	case err := <-failed:
+		if !errors.Is(err, nats.ErrConnectionClosed) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale row did not return")
+	}
+	select {
+	case <-otherDone:
+	case <-time.After(time.Second):
+		t.Fatal("other Dataset lane is blocked")
+	}
+	select {
+	case <-markerDone:
+		t.Fatal("factor marker overtook unapplied row after stale transport")
+	case <-time.After(50 * time.Millisecond):
+	}
+	retry := *row
+	retry.DeliveryCount = 2
+	if err := d.Dispatch(&retry); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-markerDone:
+	case <-time.After(time.Second):
+		t.Fatal("factor marker did not resume after row redelivery")
+	}
+	if !applied.Load() || attempts.Load() != 2 {
+		t.Fatalf("row applied=%v attempts=%d", applied.Load(), attempts.Load())
+	}
+}
+
+func TestDatasetDispatcherSuccessfulApplyWithStaleAckDoesNotBlockMarker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	consumer := &Consumer{}
+	markerDone := make(chan struct{})
+	var applies atomic.Int32
+	d := newSubjectDispatcher(ctx, 1, 8, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+		if delivery.RawMessageID == "marker" {
+			close(markerDone)
+			return nil
+		}
+		return consumer.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, -1,
+			func(context.Context, *jetstream.Delivery) error { applies.Add(1); return nil },
+			deliveryActions{
+				ack:      func(context.Context) error { return nats.ErrConnectionClosed },
+				progress: func(context.Context) error { return nil },
+				term:     func(context.Context) error { t.Error("unexpected TERM"); return nil },
+			})
+	}, nil)
+	defer d.Close()
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "dataset", RawMessageID: "row", StreamSeq: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "dataset", RawMessageID: "marker", StreamSeq: 21}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-markerDone:
+	case <-time.After(time.Second):
+		t.Fatal("successful row apply was blocked on uncertain ACK")
+	}
+	if applies.Load() != 1 {
+		t.Fatalf("successful apply repeated %d times", applies.Load())
+	}
+}
+
+func TestDatasetDispatcherFailedBatchWaitsForEveryUnsettledSequence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	batchFailed := make(chan error, 1)
+	markerDone := make(chan struct{})
+	rowApplied := make(chan uint64, 2)
+	var mu sync.Mutex
+	var order []uint64
+	d := newSubjectDispatcherWithKeyAndBatch(ctx, 1, 8, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
+		if delivery.RawMessageID == "marker" {
+			close(markerDone)
+			return nil
+		}
+		mu.Lock()
+		order = append(order, delivery.StreamSeq)
+		mu.Unlock()
+		rowApplied <- delivery.StreamSeq
+		return nil
+	}, func(context.Context, []*jetstream.Delivery, []*deliveryHeartbeat) error {
+		return nats.ErrConnectionClosed
+	}, 8, func(delivery *jetstream.Delivery) bool { return delivery.RawMessageID != "marker" }, jetstream.ErrorReporterFunc(func(err error) { batchFailed <- err }), nil)
+	defer d.Close()
+	// Hold the scheduler while placing both rows in the same batch.
+	d.mu.Lock()
+	queue := &subjectQueue{subject: "dataset", running: true, deliveries: []*queuedDelivery{
+		{delivery: &jetstream.Delivery{Subject: "dataset", StreamSeq: 30}},
+		{delivery: &jetstream.Delivery{Subject: "dataset", StreamSeq: 31}},
+		{delivery: &jetstream.Delivery{Subject: "dataset", RawMessageID: "marker", StreamSeq: 32}},
+	}}
+	d.queues[queue.subject] = queue
+	for range queue.deliveries {
+		d.pending <- struct{}{}
+	}
+	d.mu.Unlock()
+	d.ready <- queue
+	select {
+	case <-batchFailed:
+	case <-time.After(time.Second):
+		t.Fatal("batch did not fail")
+	}
+	// JetStream can redeliver a later failed sequence first; it must not
+	// bypass the earliest unresolved row or the following marker.
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "dataset", StreamSeq: 31, DeliveryCount: 2}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-rowApplied:
+		t.Fatal("later redelivery overtook earliest failed row")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "dataset", StreamSeq: 30, DeliveryCount: 2}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-markerDone:
+	case <-time.After(time.Second):
+		t.Fatal("marker did not resume after every batch row applied")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 || order[0] != 30 || order[1] != 31 {
+		t.Fatalf("redelivery order=%v", order)
 	}
 }
 
