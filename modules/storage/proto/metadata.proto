@@ -134,7 +134,7 @@ message ViewColumn {
   string created_at = 9;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 10;
-  // attributes 是扩展属性；Factor 结果列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
+  // attributes 是扩展属性；factor_result 输出列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 11;
 }
 
@@ -347,32 +347,6 @@ message Field {
   uint32 sort_order = 14;
 }
 
-// Factor 是可跨 Space 复用的已参数化因子定义。
-message Factor {
-	// space_id 是创建或管理该 Factor 的 Space 上下文，不参与 Factor ID 命名。
-	string space_id = 1;
-	// factor_id 是与 Python 因子文件名主体一致的大小写组合，例如 Bias 或 QuoteVolumeMean。
-	string factor_id = 2;
-  // name 是因子中文名或展示名。
-  string name = 3;
-  // description 是说明文本。
-  string description = 4;
-  // algorithm 是因子算法或计算族标识，例如 MA 或 RSI。
-  string algorithm = 5;
-  // params_json 是已参数化后的因子参数，例如 {"window":20,"price":"close"}。
-  string params_json = 6;
-  // value_type 是因子值的逻辑类型。
-  FieldValueType value_type = 7;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 8;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 9;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 10;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 11;
-}
-
 // DatasetColumn 表示 Dataset 下允许写入和读取的一列。
 message DatasetColumn {
   // space_id 是 DatasetColumn 所属 Space。
@@ -397,7 +371,7 @@ message DatasetColumn {
   string created_at = 10;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 11;
-  // attributes 是扩展属性；Factor 结果列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
+  // attributes 是扩展属性；factor_result 输出列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 12;
 }
 
@@ -1173,78 +1147,6 @@ message DeleteFieldGroupRsp {
   common.RetInfo ret_info = 1;
 }
 
-// CreateFactorReq 表示创建因子的请求。
-message CreateFactorReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // factor 是待创建的因子元数据。
-  Factor factor = 2;
-}
-
-// CreateFactorRsp 表示创建因子的响应。
-message CreateFactorRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // factor 是创建后的因子元数据。
-  Factor factor = 2;
-}
-
-// UpdateFactorReq 表示更新因子的请求。
-message UpdateFactorReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // factor 是更新后的因子元数据。
-  Factor factor = 2;
-}
-
-// UpdateFactorRsp 表示更新因子的响应。
-message UpdateFactorRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // factor 是更新后的因子元数据。
-  Factor factor = 2;
-}
-
-// GetFactorReq 表示获取因子的请求。
-message GetFactorReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是使用空间 ID。
-  string space_id = 2;
-  // factor_id 是因子 ID。
-  string factor_id = 3;
-}
-
-// GetFactorRsp 表示获取因子的响应。
-message GetFactorRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // factor 是因子元数据。
-  Factor factor = 2;
-}
-
-// ListFactorsReq 表示列出因子的请求。
-message ListFactorsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是可选使用空间 ID 过滤条件。
-  string space_id = 2;
-  // algorithm 是可选算法过滤条件。
-  string algorithm = 3;
-  // page 是分页参数。
-  common.Page page = 4;
-}
-
-// ListFactorsRsp 表示列出因子的响应。
-message ListFactorsRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // factors 是因子列表。
-  repeated Factor factors = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
 // UpsertDatasetColumnReq 表示创建或更新数据集列的请求。
 message UpsertDatasetColumnReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -1834,15 +1736,6 @@ service Metadata {
   rpc BatchUpdateFields(BatchUpdateFieldsReq) returns (BatchUpdateFieldsRsp);
   // 删除没有子组和字段引用的空字段组。
   rpc DeleteFieldGroup(DeleteFieldGroupReq) returns (DeleteFieldGroupRsp);
-
-  // 创建因子。
-  rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);
-  // 更新因子。
-  rpc UpdateFactor(UpdateFactorReq) returns (UpdateFactorRsp);
-  // 按 ID 获取因子。
-  rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
-  // 列出因子。
-  rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
 
   // 创建或更新数据集列。
   rpc UpsertDatasetColumn(UpsertDatasetColumnReq) returns (UpsertDatasetColumnRsp);

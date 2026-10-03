@@ -32,7 +32,6 @@ type ImportResult struct {
 	Datasets       int
 	FieldGroups    int
 	Fields         int
-	Factors        int
 	DatasetColumns int
 	Views          int
 	ViewColumns    int
@@ -181,17 +180,6 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 			return result, seedErr("field", item.FieldID, err)
 		}
 		result.Fields++
-	}
-
-	for _, item := range seed.Factors {
-		if _, err := store.UpsertFactor(ctx, &pb.Factor{
-			SpaceId: item.SpaceID, FactorId: item.FactorID, Name: item.Name, Description: item.Description,
-			Algorithm: item.Algorithm, ParamsJson: item.ParamsJSON,
-			ValueType: parseValueType(item.ValueType), Status: item.Status,
-		}); err != nil {
-			return result, seedErr("factor", item.FactorID, err)
-		}
-		result.Factors++
 	}
 
 	for _, item := range seed.DatasetColumns {
@@ -392,7 +380,6 @@ type seedFile struct {
 	Datasets       []seedDataset       `yaml:"datasets"`
 	FieldGroups    []seedFieldGroup    `yaml:"field_groups"`
 	Fields         []seedField         `yaml:"fields"`
-	Factors        []seedFactor        `yaml:"factors"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
 	Views          []seedView          `yaml:"views"`
 	ViewColumns    []seedViewColumn    `yaml:"view_columns"`
@@ -488,18 +475,6 @@ type seedFieldGroup struct {
 	ParentGroupID string `yaml:"parent_group_id"`
 	SortOrder     uint32 `yaml:"sort_order"`
 	Status        string `yaml:"status"`
-}
-
-// seedFactor 描述待初始化的因子定义。
-type seedFactor struct {
-	SpaceID     string `yaml:"space_id"`
-	FactorID    string `yaml:"factor_id"`
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Algorithm   string `yaml:"algorithm"`
-	ParamsJSON  string `yaml:"params_json"`
-	ValueType   string `yaml:"value_type"`
-	Status      string `yaml:"status"`
 }
 
 // seedDatasetColumn 描述 Dataset 中可写入的列定义。

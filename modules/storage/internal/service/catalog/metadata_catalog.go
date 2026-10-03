@@ -131,6 +131,9 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if err := validateDatasetDataNodeID(item.GetDataNodeId()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
+	if err := validateDatasetRole(item.GetAttributes()["dataset_role"]); err != nil {
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
 	if item.DatasetId == "" {
 		item.DatasetId = defaultID(item.GetName(), "dataset")
@@ -158,6 +161,9 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	item := req.GetDataset()
 	if item == nil || item.GetDatasetId() == "" {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
+	}
+	if err := validateDatasetRole(item.GetAttributes()["dataset_role"]); err != nil {
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	if err := validateChineseDisplayName("dataset name", item.GetName()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -294,7 +300,7 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	}
 	// An active, locked Dataset is the successful terminal state. Return it
 	// before readiness checks so retries remain idempotent even when the node
-	// is temporarily disabled or unreachable. Factor result View creation is
+	// is temporarily disabled or unreachable. factor_result View creation is
 	// retried here too because it follows the Dataset activation transaction.
 	if dataset.GetStatus() == "active" && dataset.GetBindingLocked() {
 		if err := s.ensureFactorResultDefaultView(ctx, dataset); err != nil {
@@ -542,50 +548,16 @@ func validateFieldSpaceContext(ctx context.Context, requestSpaceID string) error
 	return nil
 }
 
-func (s *Service) CreateFactor(ctx context.Context, req *pb.CreateFactorReq) (*pb.CreateFactorRsp, error) {
-	created, err := s.metadata.UpsertFactor(ctx, req.GetFactor())
-	if err != nil {
-		return &pb.CreateFactorRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateFactorRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.CreateFactorRsp{RetInfo: retinfo.Success("success"), Factor: created}, nil
-}
-
-func (s *Service) UpdateFactor(ctx context.Context, req *pb.UpdateFactorReq) (*pb.UpdateFactorRsp, error) {
-	updated, err := s.metadata.UpsertFactor(ctx, req.GetFactor())
-	if err != nil {
-		return &pb.UpdateFactorRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdateFactorRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.UpdateFactorRsp{RetInfo: retinfo.Success("success"), Factor: updated}, nil
-}
-
-func (s *Service) GetFactor(ctx context.Context, req *pb.GetFactorReq) (*pb.GetFactorRsp, error) {
-	item, err := s.metadata.GetFactor(ctx, req.GetSpaceId(), req.GetFactorId())
-	if err != nil {
-		return &pb.GetFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_FACTOR_NOT_FOUND, err)}, nil
-	}
-	return &pb.GetFactorRsp{RetInfo: retinfo.Success("success"), Factor: item}, nil
-}
-
-func (s *Service) ListFactors(ctx context.Context, req *pb.ListFactorsReq) (*pb.ListFactorsRsp, error) {
-	items, page, err := s.metadata.ListFactors(ctx, req.GetSpaceId(), req.GetAlgorithm(), req.GetPage())
-	if err != nil {
-		return &pb.ListFactorsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.ListFactorsRsp{RetInfo: retinfo.Success("success"), Factors: items, PageResult: page}, nil
-}
-
 func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDatasetColumnReq) (*pb.UpsertDatasetColumnRsp, error) {
 	item := req.GetColumn()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
 	}
-	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetAttributes(), isFactorDatasetColumn(item)); err != nil {
+	dataset, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
+	if err != nil {
+		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetAttributes(), isFactorResultDataset(dataset)); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)

@@ -607,50 +607,6 @@ func escapeLikePattern(value string) string {
 	return strings.ReplaceAll(value, `_`, `\_`)
 }
 
-func (s *Store) UpsertFactor(ctx context.Context, item *pb.Factor) (*pb.Factor, error) {
-	if item == nil || item.GetSpaceId() == "" || item.GetFactorId() == "" || item.GetName() == "" {
-		return nil, errors.New("space_id, factor_id and name are required")
-	}
-	item.Status = defaultStatus(item.GetStatus())
-	raw, err := marshal(item)
-	if err != nil {
-		return nil, err
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_factors (c_space_id, c_factor_id, c_name, c_description, c_algorithm, c_params_json, c_value_type, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_factor_id) DO UPDATE SET
-			c_name = excluded.c_name,
-			c_description = excluded.c_description,
-			c_algorithm = excluded.c_algorithm,
-			c_params_json = excluded.c_params_json,
-			c_value_type = excluded.c_value_type,
-			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetFactorId(), item.GetName(), item.GetDescription(), item.GetAlgorithm(), defaultJSON(item.GetParamsJson()), valueTypeSQL(item.GetValueType()), item.GetStatus(), raw)
-	if err != nil {
-		return nil, err
-	}
-	return s.GetFactor(ctx, item.GetSpaceId(), item.GetFactorId())
-}
-
-func (s *Store) GetFactor(ctx context.Context, spaceID string, factorID string) (*pb.Factor, error) {
-	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_factors WHERE c_space_id = ? AND c_factor_id = ?`, []any{spaceID, factorID}, func() *pb.Factor { return &pb.Factor{} })
-}
-
-func (s *Store) ListFactors(ctx context.Context, spaceID string, algorithm string, page *pb.Page) ([]*pb.Factor, *pb.PageResult, error) {
-	const where = `
-		FROM t_factors
-		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_algorithm = ?)`
-	args := []any{spaceID, spaceID, algorithm, algorithm}
-	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_factor_id`,
-		`SELECT COUNT(1) `+where,
-		args, page, func() *pb.Factor { return &pb.Factor{} },
-	)
-}
-
 func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return nil, errors.New("space_id, dataset_id and column_name are required")

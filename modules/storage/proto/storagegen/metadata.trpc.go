@@ -119,7 +119,7 @@ type MetadataService interface {
 	GetDataset(ctx context.Context, req *GetDatasetReq) (*GetDatasetRsp, error)
 	// ListDatasets 列出数据集。
 	ListDatasets(ctx context.Context, req *ListDatasetsReq) (*ListDatasetsRsp, error)
-	// RebindDatasetDataNode 更换尚未激活 Dataset 的 DataNode 绑定。
+	// RebindDatasetDataNode 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
 	RebindDatasetDataNode(ctx context.Context, req *RebindDatasetDataNodeReq) (*RebindDatasetDataNodeRsp, error)
 	// CheckDatasetActivation 只读检查 Dataset 是否满足激活条件。
 	CheckDatasetActivation(ctx context.Context, req *CheckDatasetActivationReq) (*CheckDatasetActivationRsp, error)
@@ -147,14 +147,6 @@ type MetadataService interface {
 	BatchUpdateFields(ctx context.Context, req *BatchUpdateFieldsReq) (*BatchUpdateFieldsRsp, error)
 	// DeleteFieldGroup 删除没有子组和字段引用的空字段组。
 	DeleteFieldGroup(ctx context.Context, req *DeleteFieldGroupReq) (*DeleteFieldGroupRsp, error)
-	// CreateFactor 创建因子。
-	CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error)
-	// UpdateFactor 更新因子。
-	UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error)
-	// GetFactor 按 ID 获取因子。
-	GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error)
-	// ListFactors 列出因子。
-	ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error)
 	// UpsertDatasetColumn 创建或更新数据集列。
 	UpsertDatasetColumn(ctx context.Context, req *UpsertDatasetColumnReq) (*UpsertDatasetColumnRsp, error)
 	// ListDatasetColumns 列出数据集列。
@@ -1335,78 +1327,6 @@ func MetadataService_DeleteFieldGroup_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func MetadataService_CreateFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateFactorReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).CreateFactor(ctx, reqbody.(*CreateFactorReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_UpdateFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateFactorReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).UpdateFactor(ctx, reqbody.(*UpdateFactorReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_GetFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetFactorReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).GetFactor(ctx, reqbody.(*GetFactorReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_ListFactors_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListFactorsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).ListFactors(ctx, reqbody.(*ListFactorsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func MetadataService_UpsertDatasetColumn_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &UpsertDatasetColumnReq{}
 	filters, err := f(req)
@@ -1903,22 +1823,6 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_DeleteFieldGroup_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Metadata/CreateFactor",
-			Func: MetadataService_CreateFactor_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/UpdateFactor",
-			Func: MetadataService_UpdateFactor_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/GetFactor",
-			Func: MetadataService_GetFactor_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/ListFactors",
-			Func: MetadataService_ListFactors_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.Metadata/UpsertDatasetColumn",
 			Func: MetadataService_UpsertDatasetColumn_Handler,
 		},
@@ -2200,7 +2104,7 @@ func (s *UnimplementedMetadata) ListDatasets(ctx context.Context, req *ListDatas
 	return nil, errors.New("rpc ListDatasets of service Metadata is not implemented")
 }
 
-// RebindDatasetDataNode 更换尚未激活 Dataset 的 DataNode 绑定。
+// RebindDatasetDataNode 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
 func (s *UnimplementedMetadata) RebindDatasetDataNode(ctx context.Context, req *RebindDatasetDataNodeReq) (*RebindDatasetDataNodeRsp, error) {
 	return nil, errors.New("rpc RebindDatasetDataNode of service Metadata is not implemented")
 }
@@ -2268,26 +2172,6 @@ func (s *UnimplementedMetadata) BatchUpdateFields(ctx context.Context, req *Batc
 // DeleteFieldGroup 删除没有子组和字段引用的空字段组。
 func (s *UnimplementedMetadata) DeleteFieldGroup(ctx context.Context, req *DeleteFieldGroupReq) (*DeleteFieldGroupRsp, error) {
 	return nil, errors.New("rpc DeleteFieldGroup of service Metadata is not implemented")
-}
-
-// CreateFactor 创建因子。
-func (s *UnimplementedMetadata) CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error) {
-	return nil, errors.New("rpc CreateFactor of service Metadata is not implemented")
-}
-
-// UpdateFactor 更新因子。
-func (s *UnimplementedMetadata) UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error) {
-	return nil, errors.New("rpc UpdateFactor of service Metadata is not implemented")
-}
-
-// GetFactor 按 ID 获取因子。
-func (s *UnimplementedMetadata) GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error) {
-	return nil, errors.New("rpc GetFactor of service Metadata is not implemented")
-}
-
-// ListFactors 列出因子。
-func (s *UnimplementedMetadata) ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error) {
-	return nil, errors.New("rpc ListFactors of service Metadata is not implemented")
 }
 
 // UpsertDatasetColumn 创建或更新数据集列。
@@ -2463,7 +2347,7 @@ type MetadataClientProxy interface {
 	GetDataset(ctx context.Context, req *GetDatasetReq, opts ...client.Option) (rsp *GetDatasetRsp, err error)
 	// ListDatasets 列出数据集。
 	ListDatasets(ctx context.Context, req *ListDatasetsReq, opts ...client.Option) (rsp *ListDatasetsRsp, err error)
-	// RebindDatasetDataNode 更换尚未激活 Dataset 的 DataNode 绑定。
+	// RebindDatasetDataNode 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
 	RebindDatasetDataNode(ctx context.Context, req *RebindDatasetDataNodeReq, opts ...client.Option) (rsp *RebindDatasetDataNodeRsp, err error)
 	// CheckDatasetActivation 只读检查 Dataset 是否满足激活条件。
 	CheckDatasetActivation(ctx context.Context, req *CheckDatasetActivationReq, opts ...client.Option) (rsp *CheckDatasetActivationRsp, err error)
@@ -2491,14 +2375,6 @@ type MetadataClientProxy interface {
 	BatchUpdateFields(ctx context.Context, req *BatchUpdateFieldsReq, opts ...client.Option) (rsp *BatchUpdateFieldsRsp, err error)
 	// DeleteFieldGroup 删除没有子组和字段引用的空字段组。
 	DeleteFieldGroup(ctx context.Context, req *DeleteFieldGroupReq, opts ...client.Option) (rsp *DeleteFieldGroupRsp, err error)
-	// CreateFactor 创建因子。
-	CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (rsp *CreateFactorRsp, err error)
-	// UpdateFactor 更新因子。
-	UpdateFactor(ctx context.Context, req *UpdateFactorReq, opts ...client.Option) (rsp *UpdateFactorRsp, err error)
-	// GetFactor 按 ID 获取因子。
-	GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (rsp *GetFactorRsp, err error)
-	// ListFactors 列出因子。
-	ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (rsp *ListFactorsRsp, err error)
 	// UpsertDatasetColumn 创建或更新数据集列。
 	UpsertDatasetColumn(ctx context.Context, req *UpsertDatasetColumnReq, opts ...client.Option) (rsp *UpsertDatasetColumnRsp, err error)
 	// ListDatasetColumns 列出数据集列。
@@ -3810,86 +3686,6 @@ func (c *MetadataClientProxyImpl) DeleteFieldGroup(ctx context.Context, req *Del
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &DeleteFieldGroupRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (*CreateFactorRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateFactor")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("CreateFactor")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CreateFactorRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) UpdateFactor(ctx context.Context, req *UpdateFactorReq, opts ...client.Option) (*UpdateFactorRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateFactor")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("UpdateFactor")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpdateFactorRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (*GetFactorRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/GetFactor")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("GetFactor")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetFactorRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (*ListFactorsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListFactors")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("ListFactors")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListFactorsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

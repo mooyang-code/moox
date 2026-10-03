@@ -46,13 +46,17 @@ func defaultViewEngine(kind pb.DataKind) string {
 }
 
 func validateDatasetID(datasetID string) error {
-	if strings.HasPrefix(datasetID, "mdataset_") {
-		return validateLowerSnakeID("dataset_id", datasetID, 50)
-	}
 	if !strings.HasPrefix(datasetID, "dataset_") {
-		return errors.New("dataset_id must start with dataset_ or mdataset_")
+		return errors.New("dataset_id must start with dataset_")
 	}
 	return validateLowerSnakeID("dataset_id", datasetID, 50)
+}
+
+func validateDatasetRole(role string) error {
+	if strings.EqualFold(strings.TrimSpace(role), "merged_factor") {
+		return errors.New("dataset_role merged_factor is not supported")
+	}
+	return nil
 }
 
 func validateDatasetDataNodeID(dataNodeID string) error {
@@ -120,14 +124,8 @@ func validateColumnDisplayName(field string, spaceID string, attrs map[string]st
 	return validateChineseDisplayName(field, displayName)
 }
 
-func isFactorDatasetColumn(column *pb.DatasetColumn) bool {
-	if column == nil || column.GetOriginType() != pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR {
-		return false
-	}
-	attrs := column.GetAttributes()
-	factorID := strings.TrimSpace(attrs["origin_factor_id"])
-	output := strings.TrimSpace(attrs["factor_output"])
-	return factorID != "" && output != "" && strings.TrimSpace(column.GetOriginId()) == factorID+"."+output
+func isFactorResultDataset(dataset *pb.Dataset) bool {
+	return dataset != nil && strings.EqualFold(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]), "factor_result")
 }
 
 func isFactorViewColumn(column *pb.ViewColumn) bool {

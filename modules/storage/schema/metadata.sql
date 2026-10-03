@@ -1,7 +1,7 @@
 -- moox storage metadata schema
 --
 -- 设计目标：
--- 1. Space 是业务命名空间；DataSource、Subject、Dataset、Field、Factor 和 View 都归属 Space。
+-- 1. Space 是业务命名空间；DataSource、Subject、Dataset、Field 和 View 都归属 Space。
 -- 2. Dataset 描述可写事实数据集，并且只绑定一个 DataSource。
 -- 3. Subject 是 Space 内业务对象，不归属 DataSource；来源侧代码由抓取适配器换算。
 -- 4. View 是查询入口，使用 keep_duration 控制 TimeSeries 行保留。
@@ -359,7 +359,7 @@ BEGIN
     UPDATE t_data_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- ************ Dataset、Field 与 Factor ************
+-- ************ Dataset、Field 与 DatasetColumn ************
 CREATE TABLE IF NOT EXISTS t_datasets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -502,36 +502,6 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_fields SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TABLE IF NOT EXISTS t_factors (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_factor_id TEXT NOT NULL,
-    c_name TEXT NOT NULL,
-    c_description TEXT NOT NULL DEFAULT '',
-    c_algorithm TEXT NOT NULL DEFAULT '',
-    c_params_json TEXT NOT NULL DEFAULT '{}',
-    c_value_type TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_attrs_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_value_type IN ('string', 'int', 'double', 'bool', 'time', 'json', 'bytes')),
-    CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
-    FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_factor_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_factors_algorithm ON t_factors (c_space_id, c_algorithm, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_factors_status ON t_factors (c_space_id, c_status);
-
-CREATE TRIGGER IF NOT EXISTS trg_t_factors_mtime
-AFTER UPDATE ON t_factors
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_factors SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 CREATE TABLE IF NOT EXISTS t_dataset_columns (

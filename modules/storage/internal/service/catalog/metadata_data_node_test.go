@@ -246,6 +246,29 @@ func TestCreateDatasetRequiresDataNodeID(t *testing.T) {
 	require.Zero(t, store.upsertDatasetCall)
 }
 
+func TestDatasetRoleRejectsMergedFactor(t *testing.T) {
+	store := &datasetOwnershipMetadataStore{}
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+
+	rsp, err := svc.CreateDataset(context.Background(), &pb.CreateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId: "space-a", DatasetId: "dataset_merged", DataSourceId: "source-a", DataNodeId: "node-a",
+		Name: "合并因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"},
+		Attributes: map[string]string{"dataset_role": "merged_factor"},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Zero(t, store.upsertDatasetCall)
+
+	updateRsp, err := svc.UpdateDataset(context.Background(), &pb.UpdateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId: "space-a", DatasetId: "dataset_merged", DataNodeId: "node-a", Name: "合并因子",
+		Attributes: map[string]string{"dataset_role": "merged_factor"},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
+	require.Zero(t, store.upsertDatasetCall)
+}
+
 func TestUpdateActiveDatasetCannotChangeDataNode(t *testing.T) {
 	store := &datasetOwnershipMetadataStore{dataset: &pb.Dataset{
 		SpaceId: "space-a", DatasetId: "dataset_a", DataNodeId: "node-a", Name: "测试集",

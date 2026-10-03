@@ -57,7 +57,7 @@ func TestViewConsumerFilterDriftIgnoresSubjectOrder(t *testing.T) {
 func TestDesiredStaticViewConsumerFiltersMatchServerContract(t *testing.T) {
 	storage := storageconfig.StorageConfig{
 		View: storageconfig.StorageView{ConsumerPartitions: []storageconfig.StorageViewConsumerPartition{
-			{Durable: events.StorageViewKlineConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m"}}}},
+			{Durable: events.StorageViewKlineConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}}}},
 			{Durable: events.StorageViewFactorConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_factor_binance_spot_kline_1m"}}}},
 			{Durable: events.StorageViewMetricsConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}},
 			{Durable: events.StorageViewMiscConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "stockcn", DatasetIDs: []string{"*"}}}},
@@ -76,7 +76,7 @@ func TestDesiredStaticViewConsumerFiltersMatchServerContract(t *testing.T) {
 		space    string
 		dataset  string
 	}{
-		{events.StorageViewKlineConsumer, "crypto", "dataset_binance_spot_kline_1m"},
+		{events.StorageViewKlineConsumer, "crypto", "dataset_binance_kline_1m"},
 		{events.StorageViewFactorConsumer, "crypto", "dataset_factor_binance_spot_kline_1m"},
 		{events.StorageViewMetricsConsumer, "mooxsys", "dataset_mooxsys_service_metrics"},
 	} {

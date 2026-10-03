@@ -135,6 +135,23 @@ func TestNewFactorResultColumnExtendsDefaultViewDesiredSchema(t *testing.T) {
 	require.Equal(t, beforeRevision+1, view.GetDesiredViewRevision(), "idempotent metadata upsert must not advance View revision")
 }
 
+func TestFactorResultColumnUsesOriginFactorIDWithoutFactorEntity(t *testing.T) {
+	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	column := &pb.DatasetColumn{
+		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "bias_10",
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
+		OriginId:   "bias",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Attributes: map[string]string{
+			"display_name": "bias_10", "origin_factor_id": "bias", "factor_output": "bias_10",
+		},
+	}
+	rsp, err := service.UpsertDatasetColumn(context.Background(), &pb.UpsertDatasetColumnReq{Column: column})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.Equal(t, "bias", rsp.GetColumn().GetOriginId())
+}
+
 func TestActivateFactorResultDatasetRejectsInvalidSchemaBeforeCommit(t *testing.T) {
 	cases := []struct {
 		name  string

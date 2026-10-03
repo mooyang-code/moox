@@ -99,8 +99,6 @@ type Reader interface {
 	GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error)
 	ListFields(ctx context.Context, query FieldQuery) ([]*pb.Field, *pb.PageResult, error)
 	CountFieldsByGroup(ctx context.Context, spaceID string) (FieldGroupCounts, error)
-	GetFactor(ctx context.Context, spaceID string, factorID string) (*pb.Factor, error)
-	ListFactors(ctx context.Context, spaceID string, algorithm string, page *pb.Page) ([]*pb.Factor, *pb.PageResult, error)
 	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 
 	GetDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error)
@@ -153,7 +151,6 @@ type Writer interface {
 	UpdateField(ctx context.Context, item *pb.Field) (*pb.Field, error)
 	BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs []string, targetGroupID string, targetStatus string) (uint32, error)
 	DeleteFieldGroup(ctx context.Context, spaceID string, groupID string) error
-	UpsertFactor(ctx context.Context, item *pb.Factor) (*pb.Factor, error)
 	UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error)
 	RegisterDataNode(ctx context.Context, nodeID string, serviceTarget string, initialName string) (*pb.DataNode, error)
 	UpdateDataNode(ctx context.Context, nodeID string, name string, status string) (*pb.DataNode, error)

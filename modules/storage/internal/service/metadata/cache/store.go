@@ -33,7 +33,6 @@ const (
 	kindDataset       = "dataset"
 	kindFieldGroup    = "field_group"
 	kindField         = "field"
-	kindFactor        = "factor"
 	kindDatasetColumn = "dataset_column"
 	kindDataNode      = "data_node"
 	kindDevice        = "device"
@@ -80,7 +79,6 @@ type entry struct {
 	Revision       uint64   `json:"revision,omitempty"`
 	ViewID         string   `json:"view_id,omitempty"`
 	ValueType      int32    `json:"value_type,omitempty"`
-	Algorithm      string   `json:"algorithm,omitempty"`
 	Engine         string   `json:"engine,omitempty"`
 	Payload        []byte   `json:"payload"`
 }
@@ -480,20 +478,6 @@ func (s *Store) CountFieldsByGroup(ctx context.Context, spaceID string) (metadat
 	return result, nil
 }
 
-func (s *Store) GetFactor(ctx context.Context, spaceID string, factorID string) (*pb.Factor, error) {
-	return getProto(s, ctx, kindFactor, spaceID, factorID, func() *pb.Factor { return &pb.Factor{} })
-}
-
-func (s *Store) ListFactors(ctx context.Context, spaceID string, algorithm string, page *pb.Page) ([]*pb.Factor, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindFactor, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) && (algorithm == "" || item.Algorithm == algorithm)
-	}), func() *pb.Factor { return &pb.Factor{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	var raw []entry
 	if spaceID != "" && datasetID != "" {
@@ -659,9 +643,6 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchFields(ctx, out); err != nil {
 		return nil, err
 	}
-	if out, err = s.fetchFactors(ctx, out); err != nil {
-		return nil, err
-	}
 	if out, err = s.fetchDatasetColumns(ctx, out); err != nil {
 		return nil, err
 	}
@@ -769,22 +750,6 @@ func (s *Store) fetchFieldGroups(ctx context.Context, out []entry) ([]entry, err
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindFieldGroup, SpaceID: item.GetSpaceId(), ID: item.GetGroupId(), ParentGroupID: item.GetParentGroupId(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchFactors(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Factor, *pb.PageResult, error) {
-		return s.base.ListFactors(ctx, "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindFactor, SpaceID: item.GetSpaceId(), ID: item.GetFactorId(), Algorithm: item.GetAlgorithm(), ValueType: int32(item.GetValueType()), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

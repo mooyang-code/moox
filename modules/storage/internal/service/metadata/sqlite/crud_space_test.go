@@ -61,7 +61,6 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 			c_space_id,c_view_id,c_build_id,c_index_id,c_engine,c_target_view_version,c_state,
 			c_owner_id,c_new_slot,c_status,c_started_at,c_updated_at
 		) VALUES ('target','view','build','index','duckdb',1,1,'owner','slot-b','building','now','now');
-		INSERT INTO t_factors(c_space_id,c_factor_id,c_name,c_value_type) VALUES ('target','factor','Factor','double');
 		INSERT INTO t_archive_files(c_space_id,c_archive_file_id,c_dataset_id,c_device_id,c_partition_key,c_file_uri)
 			VALUES ('target','archive','dataset','device','2026-07-28','file:///archive.parquet');
 	`)
@@ -75,7 +74,7 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		"t_spaces", "t_data_sources", "t_subjects", "t_tags", "t_subject_tags",
 		"t_field_groups", "t_fields", "t_datasets",
 		"t_dataset_columns", "t_views", "t_view_columns", "t_view_index_builds",
-		"t_factors", "t_archive_files",
+		"t_archive_files",
 	} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE c_space_id = 'target'").Scan(&count); err != nil {

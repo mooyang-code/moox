@@ -480,14 +480,6 @@ func (s *countingPanicStore) CountFieldsByGroup(ctx context.Context, space strin
 	s.guard("CountFieldsByGroup")
 	return s.Store.CountFieldsByGroup(ctx, space)
 }
-func (s *countingPanicStore) GetFactor(ctx context.Context, space, factor string) (*pb.Factor, error) {
-	s.guard("GetFactor")
-	return s.Store.GetFactor(ctx, space, factor)
-}
-func (s *countingPanicStore) ListFactors(ctx context.Context, space, algorithm string, page *pb.Page) ([]*pb.Factor, *pb.PageResult, error) {
-	s.guard("ListFactors")
-	return s.Store.ListFactors(ctx, space, algorithm, page)
-}
 func (s *countingPanicStore) ListDatasetColumns(ctx context.Context, space, dataset string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	s.guard("ListDatasetColumns")
 	return s.Store.ListDatasetColumns(ctx, space, dataset, page)

@@ -78,12 +78,6 @@ func (stubMetadataReader) ListFields(context.Context, metadata.FieldQuery) ([]*p
 func (stubMetadataReader) CountFieldsByGroup(context.Context, string) (metadata.FieldGroupCounts, error) {
 	return metadata.FieldGroupCounts{ByGroup: map[string]uint64{}}, nil
 }
-func (stubMetadataReader) GetFactor(context.Context, string, string) (*pb.Factor, error) {
-	return nil, nil
-}
-func (stubMetadataReader) ListFactors(context.Context, string, string, *pb.Page) ([]*pb.Factor, *pb.PageResult, error) {
-	return nil, nil, nil
-}
 func (stubMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, nil, nil
 }

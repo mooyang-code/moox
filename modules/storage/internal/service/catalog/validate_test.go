@@ -11,20 +11,19 @@ import (
 func TestValidateDatasetIDAllowsFiftyCharacters(t *testing.T) {
 	require.NoError(t, validateDatasetID("dataset_a"+strings.Repeat("b", 41)))
 	require.Error(t, validateDatasetID("dataset_a"+strings.Repeat("b", 42)))
-	require.ErrorContains(t, validateDatasetID("a"+strings.Repeat("b", 49)), "must start with dataset_ or mdataset_")
+	require.ErrorContains(t, validateDatasetID("a"+strings.Repeat("b", 49)), "must start with dataset_")
 }
 
-func TestValidateDatasetIDAllowsMergedPrefix(t *testing.T) {
-	require.NoError(t, validateDatasetID("mdataset_binance_kline_1m"))
-	require.ErrorContains(t, validateDatasetID("xdataset_binance_kline_1m"), "must start with dataset_ or mdataset_")
+func TestDatasetIDRejectsMdatasetPrefix(t *testing.T) {
+	require.ErrorContains(t, validateDatasetID("mdataset_binance_kline_1m"), "must start with dataset_")
 }
 
-func TestValidateViewColumnNameAllowsMergedDataset(t *testing.T) {
-	require.NoError(t, validateViewColumnName(&pb.ViewColumn{
+func TestValidateViewColumnNameRejectsMdataset(t *testing.T) {
+	require.ErrorContains(t, validateViewColumnName(&pb.ViewColumn{
 		ColumnName: "mdataset_binance_kline_1m.dataset_binance_spot_kline_1m__open",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		OriginId:   "mdataset_binance_kline_1m.dataset_binance_spot_kline_1m__open",
-	}))
+	}), "must start with dataset_")
 }
 
 func TestValidateViewIDAllowsFiftyCharacters(t *testing.T) {
@@ -50,21 +49,15 @@ func TestValidateColumnDisplayNameAllowsMatchingFactorOutput(t *testing.T) {
 	}, true))
 }
 
-func TestFactorColumnIdentity(t *testing.T) {
-	attrs := map[string]string{
-		"display_name":     "bias_20",
-		"factor_output":    "bias_20",
-		"origin_factor_id": "bias",
-	}
-	datasetColumn := &pb.DatasetColumn{
-		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
-		OriginId:   "bias.bias_20",
-		Attributes: attrs,
-	}
-	require.True(t, isFactorDatasetColumn(datasetColumn))
-	datasetColumn.OriginId = "other.bias_20"
-	require.False(t, isFactorDatasetColumn(datasetColumn))
+func TestFactorResultDatasetRecognitionUsesRole(t *testing.T) {
+	require.True(t, isFactorResultDataset(&pb.Dataset{Attributes: map[string]string{"dataset_role": "factor_result"}}))
+	require.True(t, isFactorResultDataset(&pb.Dataset{Attributes: map[string]string{"dataset_role": " Factor_Result "}}))
+	require.False(t, isFactorResultDataset(&pb.Dataset{Attributes: map[string]string{"dataset_role": "raw_collection"}}))
+	require.False(t, isFactorResultDataset(nil))
+}
 
+func TestFactorViewColumnIdentity(t *testing.T) {
+	attrs := map[string]string{"display_name": "bias_20", "factor_output": "bias_20", "origin_factor_id": "bias"}
 	viewColumn := &pb.ViewColumn{
 		ColumnName: "result.bias__bias_20",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
