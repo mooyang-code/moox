@@ -2,22 +2,86 @@ package rpc
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/stretchr/testify/require"
 )
 
-func TestFactorConvertRoundTrip(t *testing.T) {
-	def := domain.FactorDef{FactorType: "timeseries",
-		FactorID: "f1", Name: "Bias", SourceCode: "x=1", SourceHash: "h",
-		InputColumns: []string{"close", "funding_rate"}, Outputs: []string{"bias_20", "bias_96"},
-		ParamsJSON: `{"windows":[20,96]}`, LookbackPeriods: 200, Status: domain.FactorStatusEnabled,
+func TestConvertFactorDefRoundTrip(t *testing.T) {
+	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
+	updatedAt := createdAt.Add(time.Minute)
+	want := domain.FactorDef{
+		FactorID:             "rolling_mean",
+		SetID:                "fset_binance_kline_1m",
+		Name:                 "Rolling mean",
+		FactorType:           domain.FactorTypeTimeSeries,
+		SourceCode:           "def calculate(frame, context): return frame",
+		SourceHash:           domain.SourceHash("def calculate(frame, context): return frame"),
+		InputColumns:         []string{"close", "open"},
+		Outputs:              []string{"mean_close"},
+		ParamsJSON:           `{"window":3}`,
+		LookbackPeriods:      3,
+		AllowPartialUniverse: true,
+		Status:               domain.FactorStatusDisabled,
+		CreatedAt:            createdAt,
+		UpdatedAt:            updatedAt,
 	}
-	got := factorFromPB(factorToPB(def))
-	require.Equal(t, def.FactorID, got.FactorID)
-	require.Equal(t, def.FactorType, got.FactorType)
-	require.Equal(t, def.InputColumns, got.InputColumns)
-	require.Equal(t, def.Outputs, got.Outputs)
-	require.Equal(t, def.ParamsJSON, got.ParamsJSON)
-	require.Equal(t, def.LookbackPeriods, got.LookbackPeriods)
+
+	got, err := factorDefFromPB(factorDefToPB(want))
+
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+func TestConvertFactorSetRoundTrip(t *testing.T) {
+	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
+	want := domain.FactorSet{
+		SetID:           "fset_binance_kline_1m",
+		SpaceID:         "crypto",
+		SourceDatasetID: "dataset_binance_kline_1m",
+		Freq:            "1m",
+		SubjectMode:     domain.SubjectModeInclude,
+		Subjects:        []string{"BTCUSDT", "ETHUSDT"},
+		ResultDatasetID: "dataset_factor_binance_kline_1m",
+		Status:          domain.SetStatusEnabled,
+		CreatedAt:       createdAt,
+		UpdatedAt:       createdAt.Add(time.Minute),
+	}
+
+	got, err := factorSetFromPB(factorSetToPB(want))
+
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+func TestConvertRecalcJobRoundTrip(t *testing.T) {
+	start := time.Date(2026, time.October, 4, 10, 0, 0, 0, time.UTC)
+	want := RecalcJob{
+		JobID:        "request-1",
+		RequestID:    "request-1",
+		SetID:        "fset_binance_kline_1m",
+		FactorIDs:    []string{"rolling_mean"},
+		Subjects:     []string{"BTCUSDT"},
+		StartTime:    start,
+		EndTime:      start.Add(time.Hour),
+		Status:       "accepted",
+		ProgressTime: start.Add(time.Minute),
+		CreatedAt:    start,
+		UpdatedAt:    start.Add(time.Minute),
+	}
+
+	got, err := recalcJobFromPB(recalcJobToPB(want))
+
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+func TestFactorDefPBDoesNotExposeSourcePath(t *testing.T) {
+	got := factorDefToPB(domain.FactorDef{
+		FactorID: "rolling_mean",
+	})
+
+	require.Nil(t, got.ProtoReflect().Descriptor().Fields().ByName("source_path"))
+	require.Equal(t, "rolling_mean", got.GetFactorId())
 }
