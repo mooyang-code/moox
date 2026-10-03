@@ -271,7 +271,7 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 			t.Fatalf("kline dataset[%d] = %+v, want crypto/%s", i, klineDatasets[i], datasetID)
 		}
 	}
-	if partitions[1].ID != "factor" || partitions[1].Durable != "storage_view_factor" || partitions[1].FetchBatch != 16 || partitions[1].MaxWorkers != 8 || partitions[1].MaxAckPending != 128 {
+	if partitions[1].ID != "factor" || partitions[1].Durable != "storage_view_factor" || partitions[1].FetchBatch != 1 || partitions[1].MaxWorkers != 1 || partitions[1].MaxAckPending != 1 {
 		t.Fatalf("factor partition = %+v", partitions[1])
 	}
 	if partitions[2].ID != "system_metrics" || partitions[2].Durable != "storage_view_metrics" || partitions[2].FetchBatch != 16 || partitions[2].MaxWorkers != 4 || partitions[2].MaxAckPending != 64 {
@@ -298,6 +298,30 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 			t.Fatalf("stockcn default route %q is missing: %+v", datasetID, miscDatasets)
 		}
 	}
+}
+
+func TestCheckedInFactorViewConsumerSerializesOrderedDeliveryBudget(t *testing.T) {
+	path := filepath.Join("..", "..", "config", "storage.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg RuntimeConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyDefaults()
+
+	for _, partition := range cfg.Storage.View.ConsumerPartitions {
+		if partition.ID != "factor" {
+			continue
+		}
+		if partition.FetchBatch != 1 || partition.MaxAckPending != 1 || partition.MaxWorkers != 1 {
+			t.Fatalf("factor broker delivery budget = fetch_batch:%d max_ack_pending:%d max_workers:%d, want all 1", partition.FetchBatch, partition.MaxAckPending, partition.MaxWorkers)
+		}
+		return
+	}
+	t.Fatal("factor consumer partition is missing")
 }
 
 func TestStorageViewConsumerPartitionsRequireAllCryptoKlineRoutes(t *testing.T) {
