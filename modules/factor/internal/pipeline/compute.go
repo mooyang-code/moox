@@ -20,6 +20,7 @@ type computeTask struct {
 	subject string
 	cross   bool
 	factors []domain.FactorDef
+	target  time.Time
 }
 
 func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Computation, error) {
@@ -35,6 +36,17 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	target, err := planTarget(r.clock, plan)
 	if err != nil {
 		return Computation{}, err
+	}
+	freqDuration, err := r.clock.Duration(plan.Set.Freq)
+	if err != nil {
+		return Computation{}, err
+	}
+	targets := []time.Time{target}
+	if plan.Mode == ModeRecalc {
+		targets, err = periodRange(r.clock, plan.TargetStart, plan.TargetEnd, plan.Set.Freq)
+		if err != nil {
+			return Computation{}, err
+		}
 	}
 	available := intersectLists(plan.Expected, loaded.Available)
 	missing := subjectDifference(plan.Expected, available)
@@ -67,6 +79,16 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		if _, ok := computation.Results[factorID]; !ok {
 			computation.Results[factorID] = make(map[string]pyexec.ItemResult)
 		}
+		if previous, exists := computation.Results[factorID][key]; exists && previous.Err == nil && item.Err == nil {
+			if len(previous.Columns) > 0 && len(item.Columns) > 0 && !equalStrings(previous.Columns, item.Columns) {
+				item = pyexec.ItemResult{FactorID: factorID, Err: fmt.Errorf("executor changed result columns between recalc periods")}
+			} else {
+				if len(item.Columns) == 0 {
+					item.Columns = previous.Columns
+				}
+				item.Rows = append(append([][]any(nil), previous.Rows...), item.Rows...)
+			}
+		}
 		computation.Results[factorID][key] = item
 		if item.Err != nil {
 			state := computation.FactorStates[factorID]
@@ -94,11 +116,17 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	tasks := make([]computeTask, 0, len(available)+len(crossFactors))
 	for _, subject := range available {
 		if len(timeFactors) > 0 {
-			tasks = append(tasks, computeTask{subject: subject, factors: timeFactors})
+			tasks = append(tasks, computeTask{subject: subject, factors: timeFactors, target: target})
 		}
 	}
 	for _, factor := range crossFactors {
-		tasks = append(tasks, computeTask{cross: true, factors: []domain.FactorDef{factor}})
+		factorTargets := []time.Time{target}
+		if plan.Mode == ModeRecalc {
+			factorTargets = targets
+		}
+		for _, factorTarget := range factorTargets {
+			tasks = append(tasks, computeTask{cross: true, factors: []domain.FactorDef{factor}, target: factorTarget})
+		}
 	}
 	if len(tasks) == 0 {
 		return computation, nil
@@ -136,11 +164,22 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 			defer workersDone.Done()
 			for task := range jobs {
 				frame := any(panel)
-				contextValues, contextErr := crossSectionContext(r.clock, plan, target, task.factors, available)
+				contextValues, contextErr := crossSectionContext(r.clock, plan, task.target, task.factors, available)
+				if task.cross && plan.Mode == ModeRecalc && contextErr == nil {
+					factorStart, windowErr := r.clock.Window(task.target, plan.Set.Freq, task.factors[0].LookbackPeriods)
+					if windowErr != nil {
+						contextErr = windowErr
+					} else {
+						var periodPanel storageio.Frame
+						periodPanel, contextErr = buildPanelFrameRange(available, loaded.Frames, factorStart[0], task.target.Add(freqDuration))
+						frame = periodPanel
+						contextValues["target_period_times"] = []string{task.target.UTC().Format(time.RFC3339Nano)}
+					}
+				}
 				resultKey := ""
 				if !task.cross {
 					frame = frameFor(loaded.Frames[task.subject], task.subject, plan.CarryColumns)
-					contextValues, contextErr = timeseriesContext(r.clock, plan, target, task.factors, task.subject)
+					contextValues, contextErr = timeseriesContext(r.clock, plan, task.target, task.factors, task.subject)
 					resultKey = task.subject
 				}
 				if contextErr != nil {
@@ -179,6 +218,9 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 						state.Status = "degraded"
 						computation.FactorStates[factor.FactorID] = state
 						statesMu.Unlock()
+						if plan.Mode == ModeRecalc {
+							item.Err = nil
+						}
 					}
 					addResult(factor.FactorID, resultKey, item)
 				}
@@ -211,12 +253,43 @@ func planTarget(clock periodclock.Clock, plan Plan) (time.Time, error) {
 }
 
 func timeseriesContext(clock periodclock.Clock, plan Plan, target time.Time, factors []domain.FactorDef, subject string) (map[string]any, error) {
+	if plan.Mode == ModeRecalc {
+		return recalcTimeseriesContext(clock, plan, factors, subject)
+	}
 	return baseComputeContext(clock, plan, target, factors, map[string]any{"subject_id": subject})
 }
 
 func crossSectionContext(clock periodclock.Clock, plan Plan, target time.Time, factors []domain.FactorDef, available []string) (map[string]any, error) {
 	extra := map[string]any{"expected_subjects": append([]string(nil), plan.Expected...), "available_subjects": append([]string(nil), available...)}
+	if plan.Mode == ModeRecalc {
+		extra["target_period_times"] = []string{target.UTC().Format(time.RFC3339Nano)}
+	}
 	return baseComputeContext(clock, plan, target, factors, extra)
+}
+
+func recalcTimeseriesContext(clock periodclock.Clock, plan Plan, factors []domain.FactorDef, subject string) (map[string]any, error) {
+	targets, err := periodRange(clock, plan.TargetStart, plan.TargetEnd, plan.Set.Freq)
+	if err != nil {
+		return nil, err
+	}
+	periodsByFactor := make(map[string][]string, len(factors))
+	for _, factor := range factors {
+		window, err := clock.Window(plan.TargetStart, plan.Set.Freq, factor.LookbackPeriods)
+		if err != nil {
+			return nil, fmt.Errorf("factor %q lookback window: %w", factor.FactorID, err)
+		}
+		periods, err := periodRange(clock, window[0], plan.TargetEnd, plan.Set.Freq)
+		if err != nil {
+			return nil, err
+		}
+		periodsByFactor[factor.FactorID] = formatPeriods(periods)
+	}
+	last := targets[len(targets)-1]
+	return map[string]any{
+		"period_time": last.Unix(), "frequency": plan.Set.Freq,
+		"period_times_by_factor": periodsByFactor, "target_period_times": formatPeriods(targets),
+		"subject_id": subject,
+	}, nil
 }
 
 func baseComputeContext(clock periodclock.Clock, plan Plan, target time.Time, factors []domain.FactorDef, extra map[string]any) (map[string]any, error) {
@@ -237,6 +310,39 @@ func baseComputeContext(clock periodclock.Clock, plan Plan, target time.Time, fa
 		contextValues[key] = value
 	}
 	return contextValues, nil
+}
+
+func periodRange(clock periodclock.Clock, start, end time.Time, freq string) ([]time.Time, error) {
+	if !start.Before(end) {
+		return nil, fmt.Errorf("factor period range must have start before end")
+	}
+	aligned, err := clock.Align(start, freq)
+	if err != nil {
+		return nil, err
+	}
+	if !aligned.Equal(start) {
+		return nil, fmt.Errorf("factor period range start is not aligned")
+	}
+	duration, err := clock.Duration(freq)
+	if err != nil {
+		return nil, err
+	}
+	periods := make([]time.Time, 0)
+	for at := start.UTC(); at.Before(end); at = at.Add(duration) {
+		periods = append(periods, at)
+	}
+	if len(periods) == 0 {
+		return nil, fmt.Errorf("factor period range contains no periods")
+	}
+	return periods, nil
+}
+
+func formatPeriods(periods []time.Time) []string {
+	values := make([]string, len(periods))
+	for i, period := range periods {
+		values[i] = period.UTC().Format(time.RFC3339Nano)
+	}
+	return values
 }
 
 func factorCall(factorsDir string, factor domain.FactorDef) pyexec.FactorCall {
@@ -286,6 +392,25 @@ func buildPanelFrame(subjects []string, frames map[string]*storageio.Frame) (sto
 			panel.Rows = append(panel.Rows, values)
 		}
 	}
+	return panel, nil
+}
+
+func buildPanelFrameRange(subjects []string, frames map[string]*storageio.Frame, start, end time.Time) (storageio.Frame, error) {
+	panel, err := buildPanelFrame(subjects, frames)
+	if err != nil {
+		return storageio.Frame{}, err
+	}
+	filtered := panel.Rows[:0]
+	for rowNo, row := range panel.Rows {
+		at, timeErr := parseDataTime(row[0])
+		if timeErr != nil {
+			return storageio.Frame{}, fmt.Errorf("panel row %d data_time: %w", rowNo, timeErr)
+		}
+		if !at.Before(start) && at.Before(end) {
+			filtered = append(filtered, row)
+		}
+	}
+	panel.Rows = filtered
 	return panel, nil
 }
 

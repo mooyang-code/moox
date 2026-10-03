@@ -225,6 +225,34 @@ def test_timeseries_context_has_subject_and_period_times(tmp_path: Path):
     assert "'period_times': ['2026-07-27T23:59:00Z', '2026-07-28T00:00:00Z']" in seen
 
 
+def test_recalc_returns_every_target_period_in_one_factor_call(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    factor_path = write_factor(
+        factors_dir, "Recalc",
+        'result = df[["data_time", "series_tag"]].copy(); result["value"] = df["value"] * 2; return result',
+    )
+    factor = factor_call(factor_path, "recalc", "Recalc", ["value"], ["value"])
+    meta = batch_request([factor], rows=[
+        ["2026-07-27T23:59:00Z", "venue:binance", 1.0],
+        ["2026-07-28T00:00:00Z", "venue:binance", 2.0],
+        ["2026-07-28T00:01:00Z", "venue:binance", 3.0],
+        ["2026-07-28T00:02:00Z", "venue:binance", 4.0],
+    ])
+    meta["context"]["period_time"] = 1785196920
+    meta["context"]["period_times_by_factor"]["recalc"] = [
+        "2026-07-27T23:59:00Z", "2026-07-28T00:00:00Z",
+        "2026-07-28T00:01:00Z", "2026-07-28T00:02:00Z",
+    ]
+    meta["context"]["target_period_times"] = ["2026-07-28T00:01:00Z", "2026-07-28T00:02:00Z"]
+    response = FactorWorker(factors_dir).execute_request(meta)
+    item = response["items"][0]
+    assert item["ok"] is True
+    assert item["results"]["rows"] == [
+        ["2026-07-28T00:01:00Z", "venue:binance", 6.0],
+        ["2026-07-28T00:02:00Z", "venue:binance", 8.0],
+    ]
+
+
 def test_cross_section_rejects_unknown_subject_output(tmp_path: Path):
     factors_dir = make_factor_dir(tmp_path)
     cross = write_factor(

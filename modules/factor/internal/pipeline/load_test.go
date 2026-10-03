@@ -37,6 +37,23 @@ func TestLoadUsesMaxLookbackRange(t *testing.T) {
 	require.Equal(t, []string{"BTC"}, loaded.Available)
 }
 
+func TestLoadRecalcExtendsReadRangeByLookback(t *testing.T) {
+	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	factors := []domain.FactorDef{
+		{FactorID: "short", LookbackPeriods: 5, Status: domain.FactorStatusEnabled},
+		{FactorID: "long", LookbackPeriods: 20, Status: domain.FactorStatusEnabled},
+	}
+	plan := Plan{Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"}, Factors: factors,
+		TargetStart: start, TargetEnd: start.Add(3 * time.Minute), Expected: []string{"BTC"}, Available: []string{"BTC"}, CarryColumns: []string{"close"}}
+	store := &fakeStore{read: func(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+		require.Equal(t, start.Add(-19*time.Minute), req.Start)
+		require.Equal(t, start.Add(3*time.Minute), req.End)
+		return emptyFrames(req), nil
+	}}
+	_, err := NewRunner(store, nil, periodclock.Continuous{}, Config{}).Load(context.Background(), plan)
+	require.NoError(t, err)
+}
+
 func TestLoadBatchesSubjectsAndLimitsConcurrency(t *testing.T) {
 	subjects := make([]string, 250)
 	for i := range subjects {

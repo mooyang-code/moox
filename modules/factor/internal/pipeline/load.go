@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
@@ -29,6 +30,10 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	}
 	if !plan.TargetStart.Before(plan.TargetEnd) {
 		return LoadResult{}, errors.New("factor read window must have start before end")
+	}
+	readStart, err := readWindowStart(r.clock, plan)
+	if err != nil {
+		return LoadResult{}, err
 	}
 	batchSize := r.cfg.ReadBatchSubjects
 	if batchSize < 1 {
@@ -62,7 +67,7 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 		go func() {
 			defer workersDone.Done()
 			for batch := range jobs {
-				frames, err := r.readBatch(ctx, plan, batch)
+				frames, err := r.readBatch(ctx, plan, readStart, batch)
 				results <- batchResult{subjects: batch, frames: frames, err: err}
 			}
 		}()
@@ -122,7 +127,7 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	return result, nil
 }
 
-func (r *Runner) readBatch(ctx context.Context, plan Plan, subjects []string) (map[string]*storageio.Frame, error) {
+func (r *Runner) readBatch(ctx context.Context, plan Plan, start time.Time, subjects []string) (map[string]*storageio.Frame, error) {
 	retries := r.cfg.ReadRetries
 	if retries < 0 {
 		retries = 0
@@ -139,7 +144,7 @@ func (r *Runner) readBatch(ctx context.Context, plan Plan, subjects []string) (m
 		readCtx, cancel := context.WithTimeout(ctx, timeout)
 		frames, err := r.store.ReadWindow(readCtx, storageio.ReadRequest{
 			SpaceID: plan.Set.SpaceID, DatasetID: plan.Set.SourceDatasetID, Freq: plan.Set.Freq,
-			Subjects: append([]string(nil), subjects...), Start: plan.TargetStart, End: plan.TargetEnd,
+			Subjects: append([]string(nil), subjects...), Start: start, End: plan.TargetEnd,
 			Columns: append([]string(nil), plan.CarryColumns...),
 		})
 		cancel()
@@ -152,4 +157,21 @@ func (r *Runner) readBatch(ctx context.Context, plan Plan, subjects []string) (m
 		}
 	}
 	return nil, lastErr
+}
+
+func readWindowStart(clock periodclock.Clock, plan Plan) (time.Time, error) {
+	if plan.Mode != ModeRecalc || len(plan.Factors) == 0 {
+		return plan.TargetStart, nil
+	}
+	maxLookback := 1
+	for _, factor := range plan.Factors {
+		if factor.LookbackPeriods > maxLookback {
+			maxLookback = factor.LookbackPeriods
+		}
+	}
+	window, err := clock.Window(plan.TargetStart, plan.Set.Freq, maxLookback)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("compute recalc read lookback: %w", err)
+	}
+	return window[0], nil
 }

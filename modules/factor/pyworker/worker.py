@@ -104,7 +104,8 @@ class FactorWorker:
         lookback = factor.get("lookback_periods")
         if not isinstance(lookback, int) or isinstance(lookback, bool) or lookback < 1:
             raise ValueError(f"{name} lookback_periods must be a positive integer")
-        periods = validate_period_times(period_times, lookback, base_context["period_time"], name)
+        recalc_targets = "target_period_times" in base_context
+        periods = validate_period_times(period_times, lookback, base_context["period_time"], name, recalc_targets)
         context = {key: deepcopy(value) for key, value in base_context.items() if key != "period_times_by_factor"}
         context["period_times"] = [time.isoformat().replace("+00:00", "Z") for time in periods]
         validate_factor_context(context, factor_type, frame, name)
@@ -146,8 +147,14 @@ class FactorWorker:
                 stdout.write(load_diagnostics["stdout"])
                 stderr.write(load_diagnostics["stderr"])
             produced = self.validate_output(produced, identity, outputs, context, factor_type, name)
-            target_time = pd.Timestamp(base_context["period_time"], unit="s", tz="UTC")
-            produced = produced[produced["data_time"] == target_time]
+            target_periods = parse_target_period_times(base_context, name)
+            if target_periods is None:
+                target_time = pd.Timestamp(base_context["period_time"], unit="s", tz="UTC")
+                produced = produced[produced["data_time"] == target_time]
+            else:
+                if not target_periods.isin(periods).all():
+                    raise ValueError(f"{name} target periods are outside context period_times")
+                produced = produced[produced["data_time"].isin(target_periods)]
             produced = produced.sort_values(identity, kind="stable").reset_index(drop=True)
             return produced, {"stdout": stdout.getvalue(), "stderr": stderr.getvalue()}
         except Exception as exc:
@@ -257,9 +264,10 @@ def validate_base_context(context):
         raise ValueError("context frequency is required")
 
 
-def validate_period_times(raw, lookback, period_time, name):
-    if not isinstance(raw, list) or len(raw) != lookback:
-        raise ValueError(f"{name} context period_times must contain lookback_periods timestamps")
+def validate_period_times(raw, lookback, period_time, name, allow_range=False):
+    if not isinstance(raw, list) or len(raw) < lookback or (not allow_range and len(raw) != lookback):
+        size = "at least" if allow_range else "exactly"
+        raise ValueError(f"{name} context period_times must contain {size} lookback_periods timestamps")
     try:
         periods = pd.to_datetime(raw, format="ISO8601", utc=True, errors="raise")
     except Exception as exc:
@@ -269,6 +277,24 @@ def validate_period_times(raw, lookback, period_time, name):
     target = pd.Timestamp(period_time, unit="s", tz="UTC")
     if periods[-1] != target:
         raise ValueError(f"{name} context period_times must end at period_time")
+    return periods
+
+
+def parse_target_period_times(context, name):
+    if "target_period_times" not in context:
+        return None
+    raw = context["target_period_times"]
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"{name} target_period_times must be a non-empty array")
+    try:
+        periods = pd.to_datetime(raw, format="ISO8601", utc=True, errors="raise")
+    except Exception as exc:
+        raise ValueError(f"{name} target_period_times must be RFC3339 timestamps") from exc
+    if periods.isna().any() or periods.has_duplicates or not periods.is_monotonic_increasing:
+        raise ValueError(f"{name} target_period_times must be unique and ascending")
+    target = pd.Timestamp(context["period_time"], unit="s", tz="UTC")
+    if periods[-1] != target:
+        raise ValueError(f"{name} target_period_times must end at period_time")
     return periods
 
 
