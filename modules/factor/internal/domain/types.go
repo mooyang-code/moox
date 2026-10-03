@@ -3,6 +3,11 @@ package domain
 import "time"
 
 const (
+	FactorTypeTimeSeries   = "timeseries"
+	FactorTypeCrossSection = "cross_section"
+	FactorStatusEnabled    = "enabled"
+	FactorStatusDisabled   = "disabled"
+
 	SubjectModeAll     = "all"
 	SubjectModeInclude = "include"
 
@@ -26,3 +31,22 @@ type FactorSet struct {
 }
 
 func (FactorSet) TableName() string { return "t_factor_sets" }
+
+type FactorDef struct {
+	FactorID             string    `json:"factor_id" gorm:"column:c_factor_id;primaryKey"`
+	SetID                string    `json:"set_id" gorm:"column:c_set_id"`
+	Name                 string    `json:"name" gorm:"column:c_name"`
+	FactorType           string    `json:"factor_type" gorm:"column:c_factor_type"`
+	SourceCode           string    `json:"source_code" gorm:"column:c_source_code"`
+	SourceHash           string    `json:"source_hash" gorm:"column:c_source_hash"`
+	InputColumns         []string  `json:"input_columns" gorm:"column:c_input_columns_json;serializer:json"`
+	Outputs              []string  `json:"outputs" gorm:"column:c_outputs_json;serializer:json"`
+	ParamsJSON           string    `json:"params_json" gorm:"column:c_params_json"`
+	LookbackPeriods      int       `json:"lookback_periods" gorm:"column:c_lookback_periods"`
+	AllowPartialUniverse bool      `json:"allow_partial_universe" gorm:"column:c_allow_partial_universe"`
+	Status               string    `json:"status" gorm:"column:c_status"`
+	CreatedAt            time.Time `json:"created_at" gorm:"column:c_ctime"`
+	UpdatedAt            time.Time `json:"updated_at" gorm:"column:c_mtime"`
+}
+
+func (FactorDef) TableName() string { return "t_factor_defs" }

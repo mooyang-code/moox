@@ -139,8 +139,6 @@ case "${TARGET_MODULE}" in
     build_go modules/collector ./cmd/subject moox-collector-subject 0
     build_go modules/factor ./cmd/server moox-factor 1
     build_go modules/factor ./cmd/cli moox-factor-cli 1
-    build_go modules/factor ./cmd/engine moox-factor-engine 1
-    build_go modules/merge ./cmd/server moox-merge 1
     build_go modules/strategy ./cmd/server moox-strategy 0
     build_go modules/strategy ./cmd/cli moox-strategy-cli 0
     build_go modules/trade ./cmd/server moox-trade 0
@@ -193,13 +191,6 @@ case "${TARGET_MODULE}" in
   factor)
     build_go modules/factor ./cmd/server moox-factor 1
     build_go modules/factor ./cmd/cli moox-factor-cli 1
-    build_go modules/factor ./cmd/engine moox-factor-engine 1
-    ;;
-  factor-engine)
-    build_go modules/factor ./cmd/engine moox-factor-engine 1
-    ;;
-  merge)
-    build_go modules/merge ./cmd/server moox-merge 1
     ;;
   strategy)
     build_go modules/strategy ./cmd/server moox-strategy 0

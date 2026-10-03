@@ -128,14 +128,7 @@ done
 (cd modules/monitor && go test ./internal/config ./internal/metrics/... ./internal/hostmetrics/... ./test)
 (cd modules/archive && go test ./internal/config ./internal/eventconsumer)
 (cd modules/archive && go test ./internal/bootstrap -run '^TestAppRunConsumesStorageEventAndBecomesReadyE2E$' -count=1)
-(cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap)
-(cd modules/merge && CGO_ENABLED=1 go test ./internal/merge ./internal/domain)
-(cd modules/factor && CGO_ENABLED=1 go test ./internal/trigger ./internal/trigger/eventconsumer -run '^(TestConsumerReopensFailedSessionAndRestoresReadiness|TestConsumerReceivesRealEventBusDeliveryE2E)$' -count=1)
-if [[ "${MOOX_RUN_REAL_FACTOR_E2E:-0}" == "1" ]]; then
-  (cd modules/factor && CGO_ENABLED=1 go test -tags=integration ./test -run '^TestFactorRealStorageE2E$' -count=1)
-else
-  echo "factor real Storage E2E not run (set MOOX_RUN_REAL_FACTOR_E2E=1 with a running deployment)"
-fi
+(cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap ./internal/catalog ./internal/periodclock ./internal/trigger ./internal/pipeline ./internal/recalc ./internal/storageio)
 (cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/jobqueue ./internal/jobstate ./internal/rpc)
 # Strategy E2E tests are build-tagged e2e_external and require deployed services;
 # this local contract gate covers the package-level storage and outbox tests.

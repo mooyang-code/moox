@@ -16,7 +16,6 @@ use (
 	./modules/gateway
 	./modules/hostagent
 	./modules/hostagent/proto/hostagentgen
-	./modules/merge
 	./modules/monitor
 	./modules/monitor/proto/monitorgen
 	./modules/storage
@@ -38,19 +37,19 @@ use (
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream
-	./packages/marketfetchpb
 	./packages/marketcalendar
+	./packages/marketfetchpb
 	./packages/marketmanifest
-	./packages/routeprobe
-	./packages/tdx
 	./packages/metricspb
 	./packages/notification
 	./packages/observabilitypb
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
+	./packages/routeprobe
 	./packages/security
 	./packages/storagepb
+	./packages/tdx
 	./packages/timerjob
 	./packages/tradeeventpb
 	./packages/trpcretry

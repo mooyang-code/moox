@@ -7,25 +7,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseFrequencyAcceptsPositiveStorageFrequencies(t *testing.T) {
-	for raw, want := range map[string]time.Duration{
-		"1m": time.Minute,
-		"5m": 5 * time.Minute,
-		"1h": time.Hour,
-		"1D": 24 * time.Hour,
-		"2w": 14 * 24 * time.Hour,
-		"1M": 30 * 24 * time.Hour,
-		"1Y": 365 * 24 * time.Hour,
+func TestParseFrequencySupportsCryptoPeriods(t *testing.T) {
+	for value, want := range map[string]time.Duration{
+		"1m": time.Minute, "5m": 5 * time.Minute, "15m": 15 * time.Minute,
+		"30m": 30 * time.Minute, "1h": time.Hour, "4h": 4 * time.Hour, "1d": 24 * time.Hour,
 	} {
-		got, err := ParseFrequency(raw)
-		require.NoError(t, err, raw)
-		require.Equal(t, want, got, raw)
+		got, err := ParseFrequency(value)
+		require.NoError(t, err, value)
+		require.Equal(t, want, got, value)
 	}
 }
 
-func TestParseFrequencyRejectsNonPositiveOrMalformedValues(t *testing.T) {
-	for _, raw := range []string{"", "0s", "0m", "-1m", "1s", "m", "1", " 1m "} {
-		_, err := ParseFrequency(raw)
-		require.Error(t, err, raw)
+func TestParseFrequencyRejectsUnsupportedPeriods(t *testing.T) {
+	for _, value := range []string{"", "0m", "2h", "1M", "1w", "1s", " 1m "} {
+		_, err := ParseFrequency(value)
+		require.Error(t, err, value)
 	}
 }

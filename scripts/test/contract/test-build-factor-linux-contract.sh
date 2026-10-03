@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 SCRIPT="${ROOT}/scripts/build/build-storage-linux.sh"
 WRAPPER="${ROOT}/scripts/build/build-factor-linux.sh"
-PACKAGER="${ROOT}/scripts/build/package-factor-engine.sh"
 DEPLOY_SCRIPT="${ROOT}/scripts/deploy/deploy-moox.sh"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-build-factor-linux.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
@@ -13,7 +12,6 @@ command -v jq >/dev/null 2>&1 || { echo 'jq is required' >&2; exit 1; }
 bash -n "${WRAPPER}"
 grep -Fq 'MOOX_LINUX_CGO_TARGET="${MOOX_LINUX_CGO_TARGET:-factor}"' "${WRAPPER}"
 grep -Fq 'build-storage-linux.sh' "${WRAPPER}"
-grep -Fq 'MOOX_LINUX_CGO_TARGET=factor-engine' "${PACKAGER}"
 grep -Fq 'MOOX_LINUX_CGO_TARGET=factor' "${DEPLOY_SCRIPT}"
 grep -Fq 'moox-cli.host' "${DEPLOY_SCRIPT}"
 grep -Fq 'MOOX_CLI="${host_cli}" MOOX_LINUX_CGO_TARGET=factor' "${DEPLOY_SCRIPT}"
@@ -69,7 +67,7 @@ SSH_LOG="${TMP_ROOT}/ssh.log" \
 PATH="${FAKE_BIN}:${PATH}" \
 MOOX_CLI="${FAKE_BIN}/moox-cli" \
 MOOX_SSH_PASSWORD=fixture-password \
-MOOX_LINUX_CGO_TARGET=factor-engine \
+MOOX_LINUX_CGO_TARGET=factor \
 CONFIG="${ROOT}/moox.toml.contract-test" \
 KNOWN_HOSTS_PATH="${TMP_ROOT}/known_hosts" \
 BIN_DIR="${TMP_ROOT}/output" \
@@ -79,9 +77,10 @@ VERSION=test-version \
 bash "${SCRIPT}"
 
 grep -Fq -- 'bash ./scripts/build/build.sh' "${TMP_ROOT}/ssh.log"
-grep -Fq -- 'factor-engine' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'factor' "${TMP_ROOT}/ssh.log"
 ! grep -Fq -- 'build.sh storage' "${TMP_ROOT}/ssh.log"
-test -s "${TMP_ROOT}/output/moox-factor-engine"
+test -s "${TMP_ROOT}/output/moox-factor"
+test -s "${TMP_ROOT}/output/moox-factor-cli"
 ! test -e "${TMP_ROOT}/output/moox-storage-primary"
 ! grep -Fq -- 'fixture-password' "${TMP_ROOT}/rsync.log" "${TMP_ROOT}/scp.log" "${TMP_ROOT}/ssh.log"
 
