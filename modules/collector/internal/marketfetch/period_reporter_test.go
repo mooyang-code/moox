@@ -46,6 +46,34 @@ func TestPeriodReporterPersistsPayloadBeforeRetry(t *testing.T) {
 	require.Equal(t, first, fake.payloads[0].GetCollectedAt().AsTime())
 }
 
+func TestPeriodReportedUniverseIsDistinctSubjects(t *testing.T) {
+	s, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	require.NoError(t, s.ApplySchema(schema.AllSQL()))
+	period := time.Date(2026, 10, 4, 12, 2, 0, 0, time.UTC)
+	key := domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}
+	_, err = s.PeriodReadiness().EnsurePeriod(context.Background(), domain.PeriodSeed{
+		PeriodKey:  key,
+		DeadlineAt: period.Add(time.Minute),
+		Tasks: []domain.PeriodTaskSeed{
+			{InstanceID: "spot", WriteTargetID: "spot", SubjectID: "BTCUSDT", SeriesTag: "venue:binance"},
+			{InstanceID: "perpetual", WriteTargetID: "perpetual", SubjectID: "BTCUSDT", SeriesTag: "venue:binance|market:perpetual"},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{
+		SpaceID: key.SpaceID, DatasetID: key.DatasetID, Frequency: key.Frequency, PeriodTime: key.PeriodTime, SeriesTag: "venue:binance",
+	}, "BTCUSDT", "", "", period.Add(10*time.Second)))
+	fake := &periodReporterFake{}
+	reporter := NewPeriodReporter(s.PeriodReadiness(), fake, "crypto")
+	reporter.now = func() time.Time { return period.Add(time.Minute) }
+	require.NoError(t, reporter.Flush(context.Background()))
+	require.Len(t, fake.payloads, 1)
+	require.Equal(t, []string{"BTCUSDT"}, fake.payloads[0].GetUniverseSubjectIds())
+	require.Equal(t, []string{"BTCUSDT"}, fake.payloads[0].GetFailedSubjects())
+}
+
 func TestPeriodReporterRebuildsPayloadWhenSubjectIdsMissing(t *testing.T) {
 	s, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)

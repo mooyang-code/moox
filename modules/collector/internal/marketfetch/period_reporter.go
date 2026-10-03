@@ -144,13 +144,21 @@ func (r *PeriodReporter) payload(ctx context.Context, report domain.PeriodReport
 			return r.completeCollectorPayload(payload, report), nil
 		}
 	}
-	subjects := make([]string, 0, len(report.Items))
-	failed := make([]string, 0)
+	subjectsByID := make(map[string]struct{}, len(report.Items))
+	failedByID := make(map[string]struct{})
 	for _, item := range report.Items {
-		subjects = append(subjects, item.SubjectID)
+		subjectsByID[item.SubjectID] = struct{}{}
 		if item.State != domain.PeriodItemSuccess {
-			failed = append(failed, item.SubjectID)
+			failedByID[item.SubjectID] = struct{}{}
 		}
+	}
+	subjects := make([]string, 0, len(subjectsByID))
+	for subjectID := range subjectsByID {
+		subjects = append(subjects, subjectID)
+	}
+	failed := make([]string, 0, len(failedByID))
+	for subjectID := range failedByID {
+		failed = append(failed, subjectID)
 	}
 	sort.Strings(subjects)
 	sort.Strings(failed)

@@ -167,6 +167,38 @@ func TestPeriodReadinessAllowsSameSubjectAcrossSeries(t *testing.T) {
 	require.EqualValues(t, 2, count)
 }
 
+func TestPeriodReadinessWaitsForAllSeriesTags(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.PeriodReadiness()
+	ctx := context.Background()
+	period := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	key := domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}
+	_, err := repo.EnsurePeriod(ctx, domain.PeriodSeed{
+		PeriodKey:  key,
+		DeadlineAt: period.Add(time.Minute),
+		Tasks: []domain.PeriodTaskSeed{
+			{InstanceID: "spot", WriteTargetID: "spot", SubjectID: "BTCUSDT", SeriesTag: "venue:binance"},
+			{InstanceID: "perpetual", WriteTargetID: "perpetual", SubjectID: "BTCUSDT", SeriesTag: "venue:binance|market:perpetual"},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.MarkSubjectSuccess(ctx, domain.PeriodKey{SpaceID: key.SpaceID, DatasetID: key.DatasetID, Frequency: key.Frequency, PeriodTime: key.PeriodTime, SeriesTag: "venue:binance"}, "BTCUSDT", "", "", period.Add(10*time.Second)))
+
+	reports, err := repo.FinalizeDue(ctx, period.Add(20*time.Second), 10)
+	require.NoError(t, err)
+	require.Empty(t, reports)
+	var readiness domain.PeriodReadiness
+	require.NoError(t, s.db.Where("c_dataset_id = ? AND c_period_time = ?", key.DatasetID, key.PeriodTime).First(&readiness).Error)
+	require.Equal(t, domain.PeriodStatusWaiting, readiness.Status)
+
+	require.NoError(t, repo.MarkSubjectSuccess(ctx, domain.PeriodKey{SpaceID: key.SpaceID, DatasetID: key.DatasetID, Frequency: key.Frequency, PeriodTime: key.PeriodTime, SeriesTag: "venue:binance|market:perpetual"}, "BTCUSDT", "", "", period.Add(30*time.Second)))
+	reports, err = repo.FinalizeDue(ctx, period.Add(40*time.Second), 10)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, domain.PeriodStatusComplete, reports[0].Readiness.Status)
+	require.Len(t, reports[0].Items, 2)
+}
+
 func TestEnsurePeriodDoesNotExpandExistingSnapshot(t *testing.T) {
 	s := newCollectorStore(t)
 	repo := s.PeriodReadiness()
