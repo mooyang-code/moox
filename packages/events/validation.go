@@ -205,7 +205,7 @@ func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Mes
 	if payload.GetStatus() == "complete" && len(failed) != 0 {
 		return fmt.Errorf("factor period computed complete status has failed_subjects")
 	}
-	if err := validateFactorStates(payload.GetFactors(), payload.GetStatus(), "factor period computed"); err != nil {
+	if err := validateFactorStates(payload.GetFactors(), subjects, payload.GetStatus(), "factor period computed"); err != nil {
 		return err
 	}
 	hasDegraded := len(failed) != 0
@@ -251,7 +251,11 @@ func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) e
 		return fmt.Errorf("view data ready degraded status requires failed_scope_ref")
 	}
 	if payload.GetCompletionKind() == FactorPeriodComputed.Name() {
-		return validateFactorStates(payload.GetFactors(), payload.GetStatus(), "view data ready")
+		subjects, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "view data ready universe_subject_ids")
+		if err != nil {
+			return err
+		}
+		return validateFactorStates(payload.GetFactors(), subjects, payload.GetStatus(), "view data ready")
 	}
 	return nil
 }
@@ -356,10 +360,7 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 	return nil
 }
 
-func validateFactorStates(states []*storagepb.FactorPeriodState, status, label string) error {
-	if len(states) == 0 {
-		return fmt.Errorf("%s factors are required", label)
-	}
+func validateFactorStates(states []*storagepb.FactorPeriodState, subjects map[string]struct{}, status, label string) error {
 	seen := make(map[string]struct{}, len(states))
 	for i, state := range states {
 		if state == nil || !validRequiredToken(state.GetFactorId()) {
@@ -378,6 +379,11 @@ func validateFactorStates(states []*storagepb.FactorPeriodState, status, label s
 		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("%s factor %q failed_subjects", label, state.GetFactorId()))
 		if err != nil {
 			return err
+		}
+		for subject := range failed {
+			if _, ok := subjects[subject]; !ok {
+				return fmt.Errorf("%s factor %q failed_subject %q is not in universe_subject_ids", label, state.GetFactorId(), subject)
+			}
 		}
 		if state.GetStatus() == "complete" && len(failed) != 0 {
 			return fmt.Errorf("%s complete factor %q has failed subjects", label, state.GetFactorId())

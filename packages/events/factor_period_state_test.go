@@ -27,7 +27,21 @@ func TestValidateFactorPeriodComputedRequiresFactorStates(t *testing.T) {
 		wantError bool
 	}{
 		{name: "complete"},
-		{name: "missing factors", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors = nil }, wantError: true},
+		{name: "complete without enabled factors", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors = nil }},
+		{name: "complete with empty factors", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors = []*storagepb.FactorPeriodState{} }},
+		{name: "empty factors degraded without failures", mutate: func(v *storagepb.FactorPeriodComputed) {
+			v.Factors = nil
+			v.Status = "degraded"
+		}, wantError: true},
+		{name: "empty factors complete with failures", mutate: func(v *storagepb.FactorPeriodComputed) {
+			v.Factors = nil
+			v.FailedSubjects = []string{"ETH"}
+		}, wantError: true},
+		{name: "empty factors degraded with failures", mutate: func(v *storagepb.FactorPeriodComputed) {
+			v.Factors = nil
+			v.Status = "degraded"
+			v.FailedSubjects = []string{"ETH"}
+		}},
 		{name: "nil factor", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0] = nil }, wantError: true},
 		{name: "missing factor id", mutate: func(v *storagepb.FactorPeriodComputed) { v.Factors[0].FactorId = "" }, wantError: true},
 		{name: "missing source dataset", mutate: func(v *storagepb.FactorPeriodComputed) { v.SourceDatasetId = "" }, wantError: true},
@@ -60,6 +74,11 @@ func TestValidateFactorPeriodComputedRequiresFactorStates(t *testing.T) {
 		{name: "unknown failed subject", mutate: func(v *storagepb.FactorPeriodComputed) {
 			v.Status = "degraded"
 			v.FailedSubjects = []string{"unknown"}
+		}, wantError: true},
+		{name: "unknown factor failed subject", mutate: func(v *storagepb.FactorPeriodComputed) {
+			v.Status = "degraded"
+			v.Factors[0].Status = "degraded"
+			v.Factors[0].FailedSubjects = []string{"unknown"}
 		}, wantError: true},
 	}
 	for _, tt := range tests {
@@ -112,4 +131,43 @@ func TestRegistryHasNoMergePeriodCompleted(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := registry.Lookup("event.storage.merge.period.completed", 1)
 	require.False(t, ok)
+}
+
+func TestDecodeViewDataReadyEmptyFactors(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	payload := validViewDataReady(timestamppb.Now())
+	payload.CompletionKind = FactorPeriodComputed.Name()
+	payload.Factors = nil
+	encoded, err := registry.Encode(ViewDataReady, payload, validationOptions("ready-event", "space", "view-1"))
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
+	require.NoError(t, err)
+	_, decoded, err := DecodeViewDataReady(registry, raw, encoded.Subject, "ready-event")
+	require.NoError(t, err)
+	require.Empty(t, decoded.Factors)
+	require.Equal(t, "complete", decoded.Status)
+}
+
+func TestValidateViewDataReadyFactorFailureUniverse(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	for _, subject := range []string{"ETH", "unknown"} {
+		t.Run(subject, func(t *testing.T) {
+			payload := validViewDataReady(timestamppb.Now())
+			payload.CompletionKind = FactorPeriodComputed.Name()
+			payload.Status = "degraded"
+			payload.FailedScopeRef = "failed:momentum"
+			payload.UniverseSubjectIds = []string{"BTC", "ETH"}
+			payload.Factors = []*storagepb.FactorPeriodState{{
+				FactorId: "momentum", Status: "degraded", SourceHash: "hash-1", FailedSubjects: []string{subject},
+			}}
+			_, err := registry.Encode(ViewDataReady, payload, validationOptions("ready-event", "space", "view-1"))
+			if subject == "unknown" {
+				require.ErrorContains(t, err, "not in universe_subject_ids")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
