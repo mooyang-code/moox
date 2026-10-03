@@ -3,8 +3,6 @@ package domain
 import "time"
 
 const (
-	SubjectModeAll              = "all"
-	SubjectModeInclude          = "include"
 	BindingStatusPendingView    = "pending_view"
 	BindingStatusEnabled        = "enabled"
 	BindingStatusDisabled       = "disabled"
