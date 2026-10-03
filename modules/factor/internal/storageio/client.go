@@ -2,699 +2,138 @@ package storageio
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net/url"
-	"sort"
-	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/errs"
 )
 
-// AccessClient is the Storage Access RPC subset used by factor writes.
-type AccessClient interface {
-	PatchFactor(ctx context.Context, req *storagepb.PrimaryPatchFactorReq, opts ...client.Option) (*storagepb.PrimaryPatchFactorRsp, error)
+var ErrInfra = errors.New("storage infrastructure failure")
+
+type PrimaryStoreClient interface {
+	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
+	WriteFactorRows(context.Context, *storagepb.PrimaryWriteFactorRowsReq, ...client.Option) (*storagepb.PrimaryWriteFactorRowsRsp, error)
+	ReportFactorPeriodComputed(context.Context, *storagepb.ReportFactorPeriodComputedReq, ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error)
+	GetFactorPeriodComputed(context.Context, *storagepb.GetFactorPeriodComputedReq, ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error)
 }
 
-type ViewClient interface {
-	QueryTimeSeriesRows(ctx context.Context, req *storagepb.QueryTimeSeriesRowsReq, opts ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error)
+type MetadataClient interface {
+	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
+	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
+	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
+	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
+	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
+	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 }
 
-// ViewRevisionReader exposes the persisted write revision used to fence a
-// manual/recalc source snapshot before factor tasks are started.
-type ViewRevisionReader interface {
-	ActiveViewRevision(context.Context, string, string, string, string) (uint64, error)
-}
-
-// ViewRevisionAtReader is the fenced form used by recalc. The expected index
-// ID is checked by the same DataView request that returns the revision, so an
-// A/B cutover cannot be silently split across two probes.
-type ViewRevisionAtReader interface {
-	ActiveViewRevisionAt(context.Context, string, string, string, string, string) (uint64, error)
-}
-
-// WindowKey identifies one source time-series scope.
-type WindowKey struct {
-	InputContractVersion        string
-	SourceSeriesTag             string
-	FilterSourceSeriesTag       bool
-	SpaceID                     string
-	SourceViewID                string
-	SourceDataset               string
-	SubjectID                   string
-	SubjectIDs                  []string
-	Freq                        string
-	ExpectedActiveIndexID       string
-	ExpectedActiveIndexRevision uint64
-	StorageSchemaID             string
-}
-
-// ActiveViewRevision probes DataView once and returns the revision token of
-// the currently active physical index. It is intentionally a read-only
-// capability used by recalc, whose synthetic source-ready event has no
-// upstream revision field to carry.
-func (c *Client) ActiveViewRevision(ctx context.Context, spaceID, viewID, subjectID, frequency string) (uint64, error) {
-	return c.activeViewRevision(ctx, spaceID, viewID, subjectID, frequency, "")
-}
-
-func (c *Client) ActiveViewRevisionAt(ctx context.Context, spaceID, viewID, subjectID, frequency, expectedIndexID string) (uint64, error) {
-	return c.activeViewRevision(ctx, spaceID, viewID, subjectID, frequency, expectedIndexID)
-}
-
-func (c *Client) activeViewRevision(ctx context.Context, spaceID, viewID, subjectID, frequency, expectedIndexID string) (uint64, error) {
-	if c == nil || c.view == nil {
-		return 0, fmt.Errorf("storage View client is unavailable")
-	}
-	filter := &storagepb.FilterSpec{Groups: []*storagepb.FilterGroup{{Conds: []*storagepb.FilterCond{
-		{Column: "subject_id", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(subjectID)}},
-		{Column: "freq", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(frequency)}},
-	}}}}
-	rsp, err := c.view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
-		AuthInfo: c.viewRequestAuth(), SpaceId: spaceID, ViewId: viewID, Filter: filter, Limit: 1, ExpectedActiveIndexId: expectedIndexID,
-		TotalMode: storagepb.TotalMode_NONE,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("read active View revision: %w", err)
-	}
-	if err := classifyViewReadRet("read active View revision", rsp.GetRetInfo()); err != nil {
-		return 0, err
-	}
-	if rsp.GetServedActiveIndexRevision() == 0 {
-		return 0, fmt.Errorf("active View %s has no revision", viewID)
-	}
-	return rsp.GetServedActiveIndexRevision(), nil
-}
-
-// Client wraps Storage Access RPCs.
 type Client struct {
-	access       AccessClient
-	primary      datasetPrimaryReader
-	view         ViewClient
-	manifests    OutputManifestStore
-	auth         *commonpb.AuthInfo
-	viewAuth     *commonpb.AuthInfo
-	datasetCache *DatasetCache
+	primary  PrimaryStoreClient
+	metadata MetadataClient
+	auth     *commonpb.AuthInfo
 }
 
-func NewClientWithCredentials(accessTarget, targetNode string, credentials gatewayauth.Credentials, auth *commonpb.AuthInfo) *Client {
-	// Storage is an explicit dependency. Do not replace its target with the
-	// process-local service gateway: a control-plane Factor may use a remote
-	// Storage node and the target-node signature must match that endpoint.
-	target := NormalizeStorageTarget(accessTarget, "11003")
-	options := gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)
-	proxy := storagepb.NewPrimaryStoreClientProxy(options...)
-	return &Client{
-		access:   proxy,
-		primary:  proxy,
-		view:     storagepb.NewDataViewClientProxy(options...),
-		auth:     auth,
-		viewAuth: auth,
-	}
+func NewClient(primary PrimaryStoreClient, metadata MetadataClient, auth *commonpb.AuthInfo) *Client {
+	return &Client{primary: primary, metadata: metadata, auth: auth}
 }
 
-// WithViewAuth sets the credentials used for DataView reads. PrimaryStore
-// writes and legacy reads continue to use the primary credentials in auth.
-// Storage exposes these services with separate secrets in a deployed profile.
-func (c *Client) WithViewAuth(auth *commonpb.AuthInfo) *Client {
-	if c == nil {
-		return c
-	}
-	c.viewAuth = auth
-	return c
+func NewClientWithCredentials(storageTarget, targetNode string, credentials gatewayauth.Credentials, auth *commonpb.AuthInfo) *Client {
+	options := gatewayauth.NewTRPCClientOptions(storageTarget, targetNode, credentials)
+	return NewClient(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), auth)
 }
 
-// WithDatasetCache attaches the disposable Dataset+schema cache used by Primary window reads.
-func (c *Client) WithDatasetCache(cache *DatasetCache) *Client {
-	if c == nil {
-		return c
-	}
-	c.datasetCache = cache
-	return c
+type Frame struct {
+	SubjectID string
+	Columns   []string
+	Rows      [][]any
 }
 
-const rangeReadPageSize = 2000
-
-// RangeChunk contains history plus target rows and the distinct target periods.
-type RangeChunk struct {
-	Frame         *engine.DataFrame
-	TargetPeriods []time.Time
-	Complete      bool
-	IndexedTo     time.Time
+type ResultRow struct {
+	SubjectID string
+	DataTime  time.Time
+	SeriesTag string
+	Fields    map[string]any
 }
 
-type EndExpansion struct {
-	EndTime   time.Time
-	Complete  bool
-	IndexedTo time.Time
+type PeriodMarker struct {
+	SpaceID          string
+	ResultDatasetID  string
+	SourceDatasetID  string
+	Frequency        string
+	PeriodTime       int64
+	Status           string
+	UniverseSubjects []string
+	FailedSubjects   []string
+	Factors          []FactorState
+	TriggerEventID   string
+	ComputedAt       time.Time
 }
 
-// ReadPeriodChunk reads one acknowledged target period together with its
-// lookback in a single descending View query. View-ready execution calls this
-// path once per subject; generic multi-period/manual ranges keep using
-// ReadRangeChunk below.
-func (c *Client) ReadPeriodChunk(
-	ctx context.Context,
-	key WindowKey,
-	startTime, endTime time.Time,
-	lookbackPeriods int,
-	columns []string,
-) (*RangeChunk, error) {
-	if lookbackPeriods < 1 {
-		lookbackPeriods = 1
-	}
-	if usesPrimaryDatasetWindow(key) {
-		if c.datasetCache != nil {
-			chunk, handled, err := c.datasetCache.ReadPeriodChunk(ctx, c, key, startTime, endTime, lookbackPeriods, columns)
-			if err != nil {
-				return nil, err
-			}
-			if handled {
-				return chunk, nil
-			}
-		}
-		chunk, err := c.ReadDatasetWindow(ctx, key, startTime, endTime, lookbackPeriods, columns)
-		if err != nil {
-			return nil, err
-		}
-		if err := RequireDatasetLookback(chunk, lookbackPeriods); err != nil {
-			return nil, nonRetryableRead(err)
-		}
-		return chunk, nil
-	}
-	if key.SourceViewID == "" {
-		key.SourceViewID = key.SourceDataset
-	}
-	rows, periods, complete, indexedTo, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
-		EndTime: endTime.UTC().Format(time.RFC3339Nano),
-	}, storagepb.SortOrder_SORT_ORDER_DESC, lookbackPeriods, columns)
-	if err != nil {
-		return nil, err
-	}
-	frame, err := RowsToDataFrame(rows, columns)
-	if err != nil {
-		return nil, nonRetryableRead(err)
-	}
-	targetPeriods := make([]time.Time, 0, 1)
-	for _, period := range periods {
-		if !period.Before(startTime) && period.Before(endTime) {
-			targetPeriods = append(targetPeriods, period.UTC())
-		}
-	}
-	sort.Slice(targetPeriods, func(i, j int) bool { return targetPeriods[i].Before(targetPeriods[j]) })
-	return &RangeChunk{
-		Frame: frame, TargetPeriods: targetPeriods, Complete: complete, IndexedTo: indexedTo,
-	}, nil
+type FactorState struct {
+	FactorID       string
+	Status         string
+	FailedSubjects []string
+	SourceHash     string
 }
 
-// ReadPeriodChunks reads one lookback window for many subjects in a single
-// descending View query (subject_id IN ...). Distinct data_time values are
-// still capped at lookbackPeriods, so a 1m grid of N subjects costs one scan
-// instead of N per-subject RPCs.
-func (c *Client) ReadPeriodChunks(
-	ctx context.Context,
-	key WindowKey,
-	subjectIDs []string,
-	startTime, endTime time.Time,
-	lookbackPeriods int,
-	columns []string,
-) (map[string]*RangeChunk, error) {
-	ids := uniqueSortedStrings(subjectIDs)
-	if len(ids) == 0 {
-		return map[string]*RangeChunk{}, nil
-	}
-	if usesPrimaryDatasetWindow(key) {
-		if c.datasetCache != nil {
-			out := make(map[string]*RangeChunk, len(ids))
-			handledAll := true
-			for _, subjectID := range ids {
-				part := key
-				part.SubjectID = subjectID
-				chunk, handled, err := c.datasetCache.ReadPeriodChunk(ctx, c, part, startTime, endTime, lookbackPeriods, columns)
-				if err != nil {
-					return nil, err
-				}
-				if !handled {
-					handledAll = false
-					break
-				}
-				out[subjectID] = chunk
-			}
-			if handledAll {
-				return out, nil
-			}
-		}
-		return c.readPrimaryPeriodChunks(ctx, key, ids, startTime, endTime, lookbackPeriods, columns)
-	}
-	if key.InputContractVersion != "" {
-		if lookbackPeriods < 1 {
-			lookbackPeriods = 1
-		}
-		if lookbackPeriods > 10000 {
-			return nil, nonRetryableRead(fmt.Errorf("series window lookback exceeds 10000 rows"))
-		}
-		maxSubjects := storagepb.SeriesWindowSubjectLimit(lookbackPeriods, len(uniqueSortedStrings(columns)))
-		if maxSubjects == 0 {
-			return nil, nonRetryableRead(fmt.Errorf("series window exceeds single-subject cell budget"))
-		}
-		if len(ids) > maxSubjects {
-			out := make(map[string]*RangeChunk, len(ids))
-			// Subjects are independent; split oversized requests without paging
-			// any subject's history or weakening its single-statement snapshot.
-			for start := 0; start < len(ids); start += maxSubjects {
-				partKey := key
-				partKey.SubjectID, partKey.SubjectIDs = "", nil
-				part, err := c.ReadPeriodChunks(ctx, partKey, ids[start:min(start+maxSubjects, len(ids))], startTime, endTime, lookbackPeriods, columns)
-				if err != nil {
-					return nil, err
-				}
-				for subject, chunk := range part {
-					out[subject] = chunk
-				}
-			}
-			return out, nil
-		}
-	}
-	if len(ids) == 1 {
-		key.SubjectID = ids[0]
-		key.SubjectIDs = nil
-		chunk, err := c.ReadPeriodChunk(ctx, key, startTime, endTime, lookbackPeriods, columns)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]*RangeChunk{ids[0]: chunk}, nil
-	}
-	if key.SourceViewID == "" {
-		key.SourceViewID = key.SourceDataset
-	}
-	if lookbackPeriods < 1 {
-		lookbackPeriods = 1
-	}
-	key.SubjectID = ""
-	key.SubjectIDs = ids
-	rows, _, complete, indexedTo, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
-		EndTime: endTime.UTC().Format(time.RFC3339Nano),
-	}, storagepb.SortOrder_SORT_ORDER_DESC, lookbackPeriods, columns)
-	if err != nil {
-		return nil, err
-	}
-	bySubject := make(map[string][]*storagepb.TimeSeriesRow, len(ids))
-	for _, row := range rows {
-		subjectID := strings.TrimSpace(row.GetKey().GetSubjectId())
-		if subjectID == "" {
-			continue
-		}
-		bySubject[subjectID] = append(bySubject[subjectID], row)
-	}
-	out := make(map[string]*RangeChunk, len(ids))
-	for _, subjectID := range ids {
-		chunk, chunkErr := rangeChunkFromRows(bySubject[subjectID], columns, startTime, endTime, complete, indexedTo)
-		if chunkErr != nil {
-			return nil, chunkErr
-		}
-		out[subjectID] = chunk
-	}
-	return out, nil
+type Store interface {
+	DatasetColumns(ctx context.Context, spaceID, datasetID string) ([]string, error)
+	ReadWindow(ctx context.Context, req ReadRequest) (map[string]*Frame, error)
+	WriteRows(ctx context.Context, spaceID, datasetID, commitID string, rows []ResultRow) error
+	ReportComputed(ctx context.Context, marker PeriodMarker) error
+	ComputedExists(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (bool, error)
 }
 
-func rangeChunkFromRows(
-	rows []*storagepb.TimeSeriesRow,
-	columns []string,
-	startTime, endTime time.Time,
-	complete bool,
-	indexedTo time.Time,
-) (*RangeChunk, error) {
-	frame, err := RowsToDataFrame(rows, columns)
-	if err != nil {
-		return nil, nonRetryableRead(err)
-	}
-	targetPeriods := make([]time.Time, 0, 1)
-	if frame != nil && len(frame.DataTimes) > 0 {
-		targetPeriods = targetPeriods[:0]
-		seen := make(map[int64]struct{})
-		for _, at := range frame.DataTimes {
-			if at.Before(startTime) || !at.Before(endTime) {
-				continue
-			}
-			nanos := at.UTC().UnixNano()
-			if _, ok := seen[nanos]; ok {
-				continue
-			}
-			seen[nanos] = struct{}{}
-			targetPeriods = append(targetPeriods, at.UTC())
-		}
-	}
-	sort.Slice(targetPeriods, func(i, j int) bool { return targetPeriods[i].Before(targetPeriods[j]) })
-	return &RangeChunk{
-		Frame: frame, TargetPeriods: targetPeriods, Complete: complete, IndexedTo: indexedTo,
-	}, nil
+type ReadRequest struct {
+	SpaceID   string
+	DatasetID string
+	Freq      string
+	Subjects  []string
+	Start     time.Time
+	End       time.Time
+	Columns   []string
 }
 
-func uniqueSortedStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// ExpandEndByPeriods is retained for manual callers; View-ready execution no longer polls it.
-func (c *Client) ExpandEndByPeriods(ctx context.Context, key WindowKey, endTime time.Time, periods int) (*EndExpansion, error) {
-	if key.SourceViewID == "" {
-		key.SourceViewID = key.SourceDataset
-	}
-	if periods <= 0 {
-		return &EndExpansion{EndTime: endTime, Complete: true}, nil
-	}
-	_, next, complete, indexedTo, err := c.readPeriods(ctx, key, &storagepb.TimeRange{StartTime: endTime.UTC().Format(time.RFC3339Nano)}, storagepb.SortOrder_SORT_ORDER_ASC, periods, nil)
-	if err != nil {
-		return nil, err
-	}
-	result := &EndExpansion{EndTime: endTime, Complete: complete || len(next) >= periods, IndexedTo: indexedTo}
-	if len(next) > 0 {
-		result.EndTime = next[len(next)-1].Add(time.Nanosecond)
-	}
-	return result, nil
-}
-
-// ReadRangeChunk reads a bounded target range and prepends the required history.
-func (c *Client) ReadRangeChunk(
-	ctx context.Context,
-	key WindowKey,
-	startTime, endTime time.Time,
-	lookbackPeriods, targetLimit int,
-	columns []string,
-) (*RangeChunk, error) {
-	if key.SourceViewID == "" {
-		key.SourceViewID = key.SourceDataset
-	}
-	if targetLimit <= 0 {
-		targetLimit = 2000
-	}
-	targetRows, targetPeriods, complete, indexedTo, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
-		StartTime: startTime.UTC().Format(time.RFC3339Nano),
-		EndTime:   endTime.UTC().Format(time.RFC3339Nano),
-	}, storagepb.SortOrder_SORT_ORDER_ASC, targetLimit, columns)
-	if err != nil {
-		return nil, err
-	}
-	targetFrame, err := RowsToDataFrame(targetRows, columns)
-	if err != nil {
-		return nil, nonRetryableRead(err)
-	}
-	if len(targetFrame.DataTimes) == 0 {
-		return &RangeChunk{Frame: targetFrame, Complete: complete, IndexedTo: indexedTo}, nil
-	}
-	historyLimit := lookbackPeriods - 1
-	var historyFrame *engine.DataFrame
-	if historyLimit > 0 {
-		historyRows, _, _, _, readErr := c.readPeriods(ctx, key, &storagepb.TimeRange{
-			EndTime: targetFrame.DataTimes[0].UTC().Format(time.RFC3339Nano),
-		}, storagepb.SortOrder_SORT_ORDER_DESC, historyLimit, columns)
-		if readErr != nil {
-			return nil, readErr
-		}
-		historyFrame, err = RowsToDataFrame(historyRows, columns)
-		if err != nil {
-			return nil, nonRetryableRead(err)
-		}
-	} else {
-		historyFrame = &engine.DataFrame{Columns: append([]string(nil), columns...)}
-	}
-	frame := &engine.DataFrame{
-		Columns:    append([]string(nil), columns...),
-		Rows:       append(append([][]any(nil), historyFrame.Rows...), targetFrame.Rows...),
-		DataTimes:  append(append([]time.Time(nil), historyFrame.DataTimes...), targetFrame.DataTimes...),
-		SeriesTags: append(append([]string(nil), historyFrame.SeriesTags...), targetFrame.SeriesTags...),
-	}
-	return &RangeChunk{
-		Frame: frame, TargetPeriods: append([]time.Time(nil), targetPeriods...),
-		Complete: complete, IndexedTo: indexedTo,
-	}, nil
-}
-
-func (c *Client) readPeriods(
-	ctx context.Context,
-	key WindowKey,
-	timeRange *storagepb.TimeRange,
-	order storagepb.SortOrder,
-	periodLimit int,
-	columns []string,
-) ([]*storagepb.TimeSeriesRow, []time.Time, bool, time.Time, error) {
-	if key.InputContractVersion != "" {
-		return c.readSeriesWindow(ctx, key, timeRange, periodLimit, columns)
-	}
-	if periodLimit <= 0 {
-		return nil, nil, true, time.Time{}, nil
-	}
-	var rows []*storagepb.TimeSeriesRow
-	periods := make([]time.Time, 0, periodLimit)
-	seen := make(map[int64]struct{}, periodLimit+1)
-	bySubject := make(map[string]map[int64]struct{}, len(key.SubjectIDs))
-	exhausted := make(map[string]bool, len(key.SubjectIDs))
-	for _, subject := range key.SubjectIDs {
-		bySubject[subject] = make(map[int64]struct{}, periodLimit)
-	}
-	complete := true
-	var indexedTo time.Time
-	pageKey := key
-	for page := uint32(1); ; page++ {
-		rsp, err := c.readRowsPage(ctx, pageKey, timeRange, order, page, rangeReadPageSize, columns)
-		if err != nil {
-			return nil, nil, false, time.Time{}, err
-		}
-		complete = complete && rsp.GetComplete()
-		if servedRevision := rsp.GetServedActiveIndexRevision(); servedRevision != 0 {
-			if pageKey.ExpectedActiveIndexRevision != 0 && pageKey.ExpectedActiveIndexRevision != servedRevision {
-				return nil, nil, false, time.Time{}, fmt.Errorf("active View revision changed: expected=%d actual=%d", pageKey.ExpectedActiveIndexRevision, servedRevision)
-			}
-			pageKey.ExpectedActiveIndexRevision = servedRevision
-		}
-		if raw := rsp.GetServedIndexedTo(); raw != "" {
-			parsed, parseErr := time.Parse(time.RFC3339Nano, raw)
-			if parseErr != nil {
-				return nil, nil, false, time.Time{}, nonRetryableRead(fmt.Errorf("parse served_indexed_to %q: %w", raw, parseErr))
-			}
-			if parsed.After(indexedTo) {
-				indexedTo = parsed.UTC()
-			}
-		}
-		pageRows := rsp.GetRows()
-		reachedNextPeriod := false
-		for _, row := range pageRows {
-			dataTime, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
-			if parseErr != nil {
-				return nil, nil, false, time.Time{}, nonRetryableRead(fmt.Errorf("parse data_time %q: %w", row.GetKey().GetDataTime(), parseErr))
-			}
-			nanos := dataTime.UTC().UnixNano()
-			if len(bySubject) > 0 {
-				subject := row.GetKey().GetSubjectId()
-				seenForSubject, requested := bySubject[subject]
-				if !requested {
-					return nil, nil, false, time.Time{}, nonRetryableRead(fmt.Errorf("unexpected subject %q in bulk View response", subject))
-				}
-				if _, exists := seenForSubject[nanos]; !exists {
-					if len(seenForSubject) == periodLimit {
-						exhausted[subject] = true
-						if len(exhausted) == len(bySubject) {
-							reachedNextPeriod = true
-							break
-						}
-						continue
-					}
-					seenForSubject[nanos] = struct{}{}
-				}
-				rows = append(rows, row)
-				continue
-			}
-			if _, exists := seen[nanos]; !exists {
-				if len(periods) == periodLimit {
-					reachedNextPeriod = true
-					break
-				}
-				seen[nanos] = struct{}{}
-				periods = append(periods, dataTime.UTC())
-			}
-			rows = append(rows, row)
-		}
-		if reachedNextPeriod || len(pageRows) == 0 || !responseHasMore(rsp, len(pageRows)) {
-			break
-		}
-	}
-	return rows, periods, complete, indexedTo, nil
-}
-
-func responseHasMore(rsp *storagepb.QueryTimeSeriesRowsRsp, rowCount int) bool {
-	if rsp.GetPageResult() != nil {
-		return rsp.GetPageResult().GetHasMore()
-	}
-	return rowCount == rangeReadPageSize
-}
-
-func subjectIDFilterCond(key WindowKey) *storagepb.FilterCond {
-	ids := uniqueSortedStrings(append(append([]string{}, key.SubjectIDs...), key.SubjectID))
-	values := make([]*storagepb.TypedValue, len(ids))
-	for i, id := range ids {
-		values[i] = stringValue(id)
-	}
-	op := storagepb.FilterOp_FILTER_OP_EQ
-	if len(values) != 1 {
-		op = storagepb.FilterOp_FILTER_OP_IN
-	}
-	return &storagepb.FilterCond{Column: "subject_id", Op: op, Values: values}
-}
-
-func (c *Client) readRowsPage(
-	ctx context.Context,
-	key WindowKey,
-	timeRange *storagepb.TimeRange,
-	order storagepb.SortOrder,
-	page uint32,
-	size uint32,
-	columns []string,
-) (*storagepb.QueryTimeSeriesRowsRsp, error) {
-	req := &storagepb.QueryTimeSeriesRowsReq{
-		AuthInfo:  c.viewRequestAuth(),
-		SpaceId:   key.SpaceID,
-		ViewId:    key.SourceViewID,
-		TimeRange: timeRange,
-		Filter: &storagepb.FilterSpec{Groups: []*storagepb.FilterGroup{{Conds: []*storagepb.FilterCond{
-			subjectIDFilterCond(key),
-			{Column: "freq", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(key.Freq)}},
-		}}}},
-		Sorts: []*storagepb.SortSpec{{FieldName: "data_time", Desc: order == storagepb.SortOrder_SORT_ORDER_DESC}},
-		// DataView resolves an unqualified logical input to its unique projected
-		// column suffix and rejects ambiguity. This pushes the group's column
-		// union into DuckDB instead of fetching every View field.
-		ColumnNames:                 append([]string(nil), columns...),
-		Page:                        &commonpb.Page{Page: page, Size: size},
-		TotalMode:                   storagepb.TotalMode_NONE,
-		ExpectedActiveIndexId:       key.ExpectedActiveIndexID,
-		ExpectedActiveIndexRevision: key.ExpectedActiveIndexRevision,
-	}
-	if key.FilterSourceSeriesTag {
-		req.Filter.Groups[0].Conds = append(req.Filter.Groups[0].Conds, &storagepb.FilterCond{
-			Column: "series_tag", Op: storagepb.FilterOp_FILTER_OP_EQ, Values: []*storagepb.TypedValue{stringValue(key.SourceSeriesTag)},
-		})
-	}
-	// TaskRunner owns the two-attempt tail retry policy. Do not add an RPC-level
-	// retry here or one slow subject will retain its read-worker slot.
-	if c.view == nil {
-		ids := uniqueSortedStrings(append(append([]string{}, key.SubjectIDs...), key.SubjectID))
-		if len(ids) != 1 {
-			return nil, nonRetryableRead(fmt.Errorf("batch view read requires DataView"))
-		}
-		legacy, ok := c.access.(interface {
-			ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
-		})
-		if !ok {
-			return nil, nonRetryableRead(fmt.Errorf("storage View client is unavailable"))
-		}
-		legacyRsp, legacyErr := legacy.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: c.auth, SpaceId: key.SpaceID, DatasetId: key.SourceViewID, Selectors: []*storagepb.TimeSeriesSelector{{SpaceId: key.SpaceID, DatasetId: key.SourceViewID, SubjectId: ids[0], Freq: key.Freq}}, TimeRange: timeRange, Order: order, ColumnNames: qualifyDatasetColumns(key.SourceViewID, columns), Page: req.Page})
-		if legacyErr != nil {
-			return nil, fmt.Errorf("read time-series rows: %w", legacyErr)
-		}
-		if retErr := classifyViewReadRet("read time-series rows", legacyRsp.GetRetInfo()); retErr != nil {
-			return nil, retErr
-		}
-		return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: legacyRsp.GetRetInfo(), Rows: legacyRsp.GetRows(), PageResult: legacyRsp.GetPageResult(), ServedIndexedFrom: legacyRsp.GetServedIndexedFrom(), ServedIndexedTo: legacyRsp.GetServedIndexedTo(), Complete: legacyRsp.GetComplete()}, nil
-	}
-	rsp, err := c.view.QueryTimeSeriesRows(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("read time-series rows: %w", err)
-	}
-	if err := classifyViewReadRet("read time-series rows", rsp.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func nonRetryableRead(err error) error {
-	if err == nil {
-		return nil
-	}
-	return engine.NonRetryableError{Err: err}
-}
-
-func classifyViewReadRet(action string, ret *commonpb.RetInfo) error {
-	err := ensureStorageOK(action, ret)
-	if err == nil {
-		return nil
-	}
-	if ret != nil {
-		switch ret.GetCode() {
-		case commonpb.ErrorCode_INNER_ERR, commonpb.ErrorCode_VIEW_NOT_READY, commonpb.ErrorCode_CONFLICT:
-			return err
-		}
-	}
-	return nonRetryableRead(err)
-}
-
-func (c *Client) viewRequestAuth() *commonpb.AuthInfo {
-	if c != nil && c.viewAuth != nil {
-		return c.viewAuth
-	}
-	if c == nil {
-		return nil
-	}
-	return c.auth
-}
-
-func qualifyDatasetColumns(datasetID string, columns []string) []string {
-	if columns == nil {
-		return nil
-	}
-	qualified := make([]string, len(columns))
-	for index, column := range columns {
-		qualified[index] = datasetID + "." + column
-	}
-	return qualified
-}
-
-// NormalizeStorageTarget normalizes bare host:port targets to tRPC ip:// targets.
-func NormalizeStorageTarget(raw string, defaultPort string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:" + defaultPort
-	}
-	if strings.HasPrefix(raw, "ip://") {
-		return raw
-	}
-	parsed, err := url.Parse(raw)
-	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
-		return raw
-	}
-	if err == nil && parsed.Scheme != "" && parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return raw
-	}
-	if err == nil && parsed.Host != "" {
-		return "ip://" + parsed.Host
-	}
-	if strings.Contains(raw, "://") || !strings.Contains(raw, ":") {
-		return raw
-	}
-	return "ip://" + raw
-}
-
-func ensureStorageOK(action string, ret *commonpb.RetInfo) error {
-	if ret == nil {
-		return fmt.Errorf("%s: empty ret_info", action)
-	}
-	if ret.GetCode() != commonpb.ErrorCode_SUCCESS {
-		return fmt.Errorf("%s: %s", action, ret.GetMsg())
+func (c *Client) primaryReady(action string) error {
+	if c == nil || c.primary == nil {
+		return fmt.Errorf("%s: primary storage client is unavailable", action)
 	}
 	return nil
+}
+
+func (c *Client) metadataReady(action string) error {
+	if c == nil || c.metadata == nil {
+		return fmt.Errorf("%s: metadata storage client is unavailable", action)
+	}
+	return nil
+}
+
+func rpcError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	wrapped := fmt.Errorf("%s: %w", action, err)
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errs.Code(err) == errs.RetClientTimeout || errs.Code(err) == errs.RetClientNetErr {
+		return fmt.Errorf("%w: %w", ErrInfra, wrapped)
+	}
+	return wrapped
+}
+
+func responseError(action string, ret *commonpb.RetInfo) error {
+	if ret == nil {
+		return fmt.Errorf("%w: %s returned empty ret_info", ErrInfra, action)
+	}
+	if ret.GetCode() == commonpb.ErrorCode_SUCCESS {
+		return nil
+	}
+	err := fmt.Errorf("%s: %s", action, ret.GetMsg())
+	if ret.GetCode() == commonpb.ErrorCode_INNER_ERR {
+		return fmt.Errorf("%w: %w", ErrInfra, err)
+	}
+	return err
 }
