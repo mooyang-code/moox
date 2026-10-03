@@ -573,7 +573,7 @@ func processClaim(parent context.Context, claim store.ResampleTaskClaim, instanc
 	// crashes between these operations, lease recovery retries the same bucket;
 	// the readiness write is idempotent and no success marker is lost.
 	if readiness != nil && claim.Result.ActiveOrigin == domain.ResampleOriginRealtime {
-		if markErr := readiness.MarkSubjectSuccess(parent, domain.PeriodKey{SpaceID: result.SpaceID, DatasetID: result.DatasetID, Frequency: result.Frequency, PeriodTime: result.DataTime, WriteTargetID: writeTarget.ID}, claim.Instance.SubjectID, localResampleFunction, writeSource, time.Now().UTC()); markErr != nil {
+		if markErr := readiness.MarkSubjectSuccess(parent, domain.PeriodKey{SpaceID: result.SpaceID, DatasetID: result.DatasetID, Frequency: result.Frequency, PeriodTime: result.DataTime, SeriesTag: result.SeriesTag, WriteTargetID: writeTarget.ID}, claim.Instance.SubjectID, localResampleFunction, writeSource, time.Now().UTC()); markErr != nil {
 			markError()
 			log.Printf("resample readiness state update failed instance=%s: %v", claim.Instance.InstanceID, markErr)
 			attempt := claim.Result.Attempt + 1

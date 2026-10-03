@@ -55,9 +55,19 @@ func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
 		fields = append(fields, &storagepb.FieldValue{FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 1}}})
 		fake.rows = append(fake.rows, &storagepb.RowFieldValues{Key: rowKey("crypto", "source_bars", "BTC", "1m", at, "venue:binance"), Fields: fields})
 	}
-	runner := &Runner{Tasks: db.Tasks(), Instances: db.TaskInstances(), Source: runnerSource{subjects: []domain.Subject{{SubjectID: "BTC", Status: "active"}}}, Primary: fake, Config: RunnerConfig{SpaceID: "crypto", WorkerConcurrency: 1, WorkerJobTimeout: time.Second, RepairLookbackBuckets: 0}}
+	runner := &Runner{Tasks: db.Tasks(), Instances: db.TaskInstances(), Source: runnerSource{subjects: []domain.Subject{{SubjectID: "BTC", Status: "active"}}}, Primary: fake, Readiness: db.PeriodReadiness(), Config: RunnerConfig{SpaceID: "crypto", WorkerConcurrency: 1, WorkerJobTimeout: time.Second, RepairLookbackBuckets: 0}}
 	require.NoError(t, runner.Tick(context.Background(), now))
 	require.Len(t, fake.writes, 1)
+	reports, err := db.PeriodReadiness().FinalizeDue(context.Background(), now.Add(time.Hour), 10)
+	require.NoError(t, err)
+	var completedTargetPeriod bool
+	for _, report := range reports {
+		if report.Readiness.DatasetID == resultIDs.DatasetID && report.Readiness.PeriodTime.Equal(start) {
+			completedTargetPeriod = true
+			require.Equal(t, domain.PeriodStatusComplete, report.Readiness.Status)
+		}
+	}
+	require.True(t, completedTargetPeriod, "resample success must complete its tagged readiness item")
 	instances, _, err := db.TaskInstances().List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto", CollectionTaskID: "rule-5m", Page: 1, PageSize: 10})
 	require.NoError(t, err)
 	require.Len(t, instances, 1)
