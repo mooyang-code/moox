@@ -26,15 +26,17 @@ func DependencyMismatchError(err error) error {
 	return fmt.Errorf("%w: %w", ErrDependencyMismatch, err)
 }
 
-// VerifyDependencies rechecks bindings frozen by the instance.  A strategy
-// DSL itself contains logical field names, so the concrete Factor/View
-// binding is supplied by the instance and represented in CompiledStrategy.Factors.
+// VerifyDependencies confirms each strategy factor is enabled in the FactorSet
+// that owns the result View's dataset.
 func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrategy) error {
 	if len(compiled.Factors) == 0 && strings.TrimSpace(compiled.SourceView.ID) == "" {
 		return nil
 	}
-	if c.Factors == nil || c.Storage == nil {
-		return dependencyMismatch("strategy compiler dependencies are required")
+	if len(compiled.Factors) > 0 && c.Factors == nil {
+		return dependencyMismatch("factor catalog is required")
+	}
+	if (len(compiled.Factors) > 0 || strings.TrimSpace(compiled.SourceView.ID) != "") && c.Storage == nil {
+		return dependencyMismatch("storage catalog is required")
 	}
 	if sourceID := strings.TrimSpace(compiled.SourceView.ID); sourceID != "" {
 		source, err := c.Storage.GetView(ctx, sourceID)
@@ -47,52 +49,56 @@ func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrat
 			return dependencyMismatch("source view %q changed", sourceID)
 		}
 	}
+	var sets []FactorSetDescriptor
+	if len(compiled.Factors) > 0 {
+		var err error
+		sets, err = c.Factors.ListFactorSets(ctx)
+		if err != nil {
+			return fmt.Errorf("list factor sets: %w", err)
+		}
+	}
+	views := make(map[string]ViewDescriptor)
+	columnsByView := make(map[string][]ViewColumn)
 	for _, factor := range compiled.Factors {
-		descriptor, err := c.Factors.GetFactor(ctx, factor.FactorID)
-		if err != nil {
-			return fmt.Errorf("verify factor %q: %w", factor.FactorID, err)
-		}
-		if !isActive(descriptor.Status) || !containsOutput(descriptor.Outputs, factor.Output) ||
-			descriptor.SourceHash != factor.SourceHash ||
-			!sameStringSet(descriptor.InputColumns, factor.InputColumns) ||
-			strings.TrimSpace(descriptor.ParamsJSON) != strings.TrimSpace(factor.ParamsJSON) ||
-			descriptor.LookbackPeriods != factor.LookbackPeriods {
-			return dependencyMismatch("factor %q status or output changed", factor.FactorID)
-		}
-		bindings, err := c.Factors.ListBindings(ctx, factor.FactorID)
-		if err != nil {
-			return fmt.Errorf("verify factor %q bindings: %w", factor.FactorID, err)
-		}
-		found := false
-		for _, binding := range bindings {
-			if binding.ID != factor.BindingID {
-				continue
+		view, ok := views[factor.ResultViewID]
+		if !ok {
+			var err error
+			view, err = c.Storage.GetView(ctx, factor.ResultViewID)
+			if err != nil {
+				return fmt.Errorf("verify result view %q: %w", factor.ResultViewID, err)
 			}
-			bindingFrequency, bindingFrequencyErr := normalizeOptionalFrequency(binding.Frequency)
-			factorFrequency, factorFrequencyErr := normalizeOptionalFrequency(factor.Frequency)
-			if !isActive(binding.Status) || binding.FactorID != factor.FactorID || binding.SpaceID != compiled.SpaceID || binding.SourceViewID != compiled.SourceView.ID || bindingFrequencyErr != nil || factorFrequencyErr != nil || bindingFrequency != factorFrequency ||
-				binding.ResultDatasetID != factor.ResultDatasetID || binding.ResultViewID != factor.ResultViewID ||
-				binding.SubjectMode != factor.SubjectMode || binding.SubjectsJSON != factor.SubjectsJSON {
-				return dependencyMismatch("binding %q changed", factor.BindingID)
-			}
-			found = true
-			break
-		}
-		if !found {
-			return dependencyMismatch("binding %q no longer exists", factor.BindingID)
-		}
-		view, err := c.Storage.GetView(ctx, factor.ResultViewID)
-		if err != nil {
-			return fmt.Errorf("verify result view %q: %w", factor.ResultViewID, err)
+			views[factor.ResultViewID] = view
 		}
 		factorFrequency, factorFrequencyErr := normalizeOptionalFrequency(factor.Frequency)
 		viewFrequency, viewFrequencyErr := normalizeOptionalFrequency(view.Frequency)
-		if !isActive(view.Status) || factorFrequencyErr != nil || viewFrequencyErr != nil || (factorFrequency != "" && viewFrequency != "" && viewFrequency != factorFrequency) {
+		if !isActive(view.Status) || strings.TrimSpace(view.DatasetID) == "" || factorFrequencyErr != nil || viewFrequencyErr != nil || (factorFrequency != "" && viewFrequency != "" && viewFrequency != factorFrequency) {
 			return dependencyMismatch("result view %q changed", factor.ResultViewID)
 		}
-		columns, err := c.Storage.ListViewColumns(ctx, factor.ResultViewID)
+		set, found := findFactorSet(sets, factor.SetID, view.DatasetID)
+		if !found || !isActive(set.Status) || set.ResultDatasetID != view.DatasetID ||
+			(strings.TrimSpace(factor.ResultDatasetID) != "" && factor.ResultDatasetID != view.DatasetID) {
+			return dependencyMismatch("factor set for result view %q changed", factor.ResultViewID)
+		}
+		factorDescriptors, err := c.Factors.ListFactors(ctx, set)
 		if err != nil {
-			return fmt.Errorf("verify result view %q columns: %w", factor.ResultViewID, err)
+			return fmt.Errorf("list factors in set %q: %w", set.SetID, err)
+		}
+		descriptor, found := findFactor(factorDescriptors, factor.FactorID)
+		if !found || !isActive(descriptor.Status) || descriptor.SetID != set.SetID || descriptor.ResultDatasetID != view.DatasetID || !containsOutput(descriptor.Outputs, factor.Output) ||
+			(factor.SourceHash != "" && descriptor.SourceHash != factor.SourceHash) ||
+			(len(factor.InputColumns) > 0 && !sameStringSet(descriptor.InputColumns, factor.InputColumns)) ||
+			(strings.TrimSpace(factor.ParamsJSON) != "" && strings.TrimSpace(descriptor.ParamsJSON) != strings.TrimSpace(factor.ParamsJSON)) ||
+			(factor.LookbackPeriods != 0 && descriptor.LookbackPeriods != factor.LookbackPeriods) {
+			return dependencyMismatch("factor %q is not enabled in result View factor set %q", factor.FactorID, set.SetID)
+		}
+		columns, ok := columnsByView[factor.ResultViewID]
+		if !ok {
+			var err error
+			columns, err = c.Storage.ListViewColumns(ctx, factor.ResultViewID)
+			if err != nil {
+				return fmt.Errorf("verify result view %q columns: %w", factor.ResultViewID, err)
+			}
+			columnsByView[factor.ResultViewID] = columns
 		}
 		column, ok := findFactorColumn(columns, factor.FactorID, factor.Output)
 		if !ok || column.Name != factor.ColumnName {
@@ -100,6 +106,28 @@ func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrat
 		}
 	}
 	return nil
+}
+
+func findFactorSet(sets []FactorSetDescriptor, wantedSetID, resultDatasetID string) (FactorSetDescriptor, bool) {
+	wantedSetID = strings.TrimSpace(wantedSetID)
+	for _, set := range sets {
+		if wantedSetID != "" && set.SetID != wantedSetID {
+			continue
+		}
+		if set.ResultDatasetID == resultDatasetID {
+			return set, true
+		}
+	}
+	return FactorSetDescriptor{}, false
+}
+
+func findFactor(factors []FactorDescriptor, wantedID string) (FactorDescriptor, bool) {
+	for _, factor := range factors {
+		if factor.FactorID == wantedID {
+			return factor, true
+		}
+	}
+	return FactorDescriptor{}, false
 }
 
 func normalizeOptionalFrequency(value string) (string, error) {

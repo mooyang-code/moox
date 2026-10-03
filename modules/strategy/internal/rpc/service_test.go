@@ -127,10 +127,10 @@ func TestStrategyInstanceRPCRequiresMatchingSpaceMetadata(t *testing.T) {
 
 type runnerVerifyCatalog struct{}
 
-func (runnerVerifyCatalog) GetFactor(context.Context, string) (compiler.FactorDescriptor, error) {
-	return compiler.FactorDescriptor{}, nil
+func (runnerVerifyCatalog) ListFactorSets(context.Context) ([]compiler.FactorSetDescriptor, error) {
+	return nil, nil
 }
-func (runnerVerifyCatalog) ListBindings(context.Context, string) ([]compiler.BindingDescriptor, error) {
+func (runnerVerifyCatalog) ListFactors(context.Context, compiler.FactorSetDescriptor) ([]compiler.FactorDescriptor, error) {
 	return nil, nil
 }
 func (runnerVerifyCatalog) GetView(_ context.Context, id string) (compiler.ViewDescriptor, error) {

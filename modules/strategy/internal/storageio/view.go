@@ -388,7 +388,7 @@ func validateUniqueSeriesRows(rows []ViewRow, viewID string, compiled compiler.C
 			if _, exists := row.Values[factor.ColumnName]; !exists {
 				continue
 			}
-			identity := strings.TrimSpace(factor.BindingID)
+			identity := strings.TrimSpace(factor.FactorID)
 			if identity == "" {
 				identity = strings.TrimSpace(factor.FactorID)
 			}
@@ -605,7 +605,7 @@ func factorAppliesToItem(factor compiler.CompiledFactor, item input.PoolItem) bo
 }
 
 // fieldRequiresScopedFactor reports whether a field belongs exclusively to a
-// factor binding that does not cover this instrument. Such a field is not a
+// factor selection that does not cover this instrument. Such a field is not a
 // missing value for this row; the corresponding rule cannot use it here.
 func fieldRequiresScopedFactor(compiled compiler.CompiledStrategy, field string, item input.PoolItem) bool {
 	name := strings.ToLower(strings.TrimSpace(field))

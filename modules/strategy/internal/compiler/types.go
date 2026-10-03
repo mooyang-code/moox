@@ -9,30 +9,30 @@ import (
 )
 
 type FactorDescriptor struct {
-	ID              string
+	FactorID        string
+	SetID           string
+	Outputs         []string
 	Status          string
+	ResultDatasetID string
 	SourceHash      string
 	InputColumns    []string
 	ParamsJSON      string
 	LookbackPeriods int
-	Outputs         []string
 }
 
-type BindingDescriptor struct {
-	ID              string
-	FactorID        string
-	SpaceID         string
-	SourceViewID    string
-	Frequency       string
+type FactorSetDescriptor struct {
+	SetID           string
 	Status          string
 	ResultDatasetID string
-	ResultViewID    string
+	SourceDatasetID string
+	Frequency       string
 	SubjectMode     string
-	SubjectsJSON    string
+	Subjects        []string
 }
 
 type ViewDescriptor struct {
 	ID           string
+	DatasetID    string
 	Status       string
 	SourceViewID string
 	Frequency    string
@@ -44,8 +44,8 @@ type ViewColumn struct {
 }
 
 type FactorCatalog interface {
-	GetFactor(context.Context, string) (FactorDescriptor, error)
-	ListBindings(context.Context, string) ([]BindingDescriptor, error)
+	ListFactorSets(context.Context) ([]FactorSetDescriptor, error)
+	ListFactors(context.Context, FactorSetDescriptor) ([]FactorDescriptor, error)
 }
 
 type StorageCatalog interface {
@@ -131,11 +131,11 @@ type CompiledSchedule struct {
 
 type CompiledFactor struct {
 	FactorID        string
+	SetID           string
 	SourceHash      string
 	InputColumns    []string
 	ParamsJSON      string
 	LookbackPeriods int
-	BindingID       string
 	Frequency       string
 	ResultDatasetID string
 	ResultViewID    string

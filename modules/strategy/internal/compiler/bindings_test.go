@@ -23,7 +23,7 @@ rules:
 	require.NoError(t, err)
 	compiled, err := (Compiler{}).CompileWithBindings(context.Background(), dsl, "space-1", []byte(`{
   "source_view_id":"source",
-  "factors":[{"factor_id":"ma20_factor","binding_id":"binding","frequency":"1d","result_dataset_id":"result","result_view_id":"result-view","output":"value","column_name":"ma20"}]
+  "factors":[{"factor_id":"ma20_factor","set_id":"factor-set","frequency":"1d","result_dataset_id":"result","result_view_id":"result-view","output":"value","column_name":"ma20"}]
 }`))
 	require.NoError(t, err)
 	require.Len(t, compiled.Factors, 1)
@@ -41,7 +41,7 @@ rules: {r: {pool: [BTC], score: value, weight: 1}}
 	require.NoError(t, err)
 	compiled, err := (Compiler{}).CompileWithBindings(context.Background(), dsl, "space-1", []byte(`{
   "source_view_id":"view_prices",
-  "factors":[{"factor_id":"momentum","binding_id":"binding","frequency":"1m","result_dataset_id":"prices","result_view_id":"view_prices","output":"value","column_name":"prices.momentum__value"}]
+  "factors":[{"factor_id":"momentum","set_id":"factor-set","frequency":"1m","result_dataset_id":"prices","result_view_id":"view_prices","output":"value","column_name":"prices.momentum__value"}]
 }`))
 	require.NoError(t, err)
 	require.Equal(t, "view_prices", compiled.SourceView.ID)

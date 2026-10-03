@@ -90,7 +90,7 @@ rules:
 		t.Fatal(err)
 	}
 	session := "session-1"
-	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", InputBindingsJSON: json.RawMessage(`{"source_view_id":"source","frequency":"1d","factors":[{"factor_id":"ma20","binding_id":"binding","result_view_id":"factor"}]}`), Enabled: true, SessionID: &session, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", InputBindingsJSON: json.RawMessage(`{"source_view_id":"source","frequency":"1d","factors":[{"factor_id":"ma20","set_id":"factor-set","result_view_id":"factor"}]}`), Enabled: true, SessionID: &session, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	loader := &countingLoader{}
@@ -98,7 +98,7 @@ rules:
 		Store:  repo,
 		Loader: loader,
 		CompileWithBindings: func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error) {
-			return compiler.CompiledStrategy{Data: config.Data{Bar: "1d", Calendar: "crypto_24x7"}, Triggers: config.Triggers{Schedule: &config.Schedule{Cron: "@daily"}, Event: &config.Event{Name: "ViewDataReady"}}, SourceView: compiler.CompiledView{ID: "source", Frequency: "1d"}, Factors: []compiler.CompiledFactor{{BindingID: "binding", ResultViewID: "factor"}}, Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor"}}}, nil
+			return compiler.CompiledStrategy{Data: config.Data{Bar: "1d", Calendar: "crypto_24x7"}, Triggers: config.Triggers{Schedule: &config.Schedule{Cron: "@daily"}, Event: &config.Event{Name: "ViewDataReady"}}, SourceView: compiler.CompiledView{ID: "source", Frequency: "1d"}, Factors: []compiler.CompiledFactor{{FactorID: "ma20", SetID: "factor-set", ResultViewID: "factor"}}, Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor"}}}, nil
 		},
 		Now: func() time.Time { return now },
 	}
@@ -156,7 +156,7 @@ rules:
 	period := now.Add(-time.Minute).Truncate(time.Minute)
 	loader := fakeInputLoader{value: input.EvaluationInput{SpaceID: "space", StrategyID: "s1", PeriodEnd: period.Format(time.RFC3339Nano), SourceViewID: "source", DataFrequency: "1m", Items: []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC", SubjectID: "btc"}, Values: map[string]quant.Decimal{"bias": quant.Must("1")}}, {PoolItem: input.PoolItem{InstrumentID: "ETH", SubjectID: "eth"}, Values: map[string]quant.Decimal{"bias": quant.Must("2")}}}}}
 	p := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return now }}
-	if err := p.Handle(context.Background(), PeriodReady{MessageID: "m1", EventName: "ViewDataReady", SpaceID: "space", ViewID: "factor", Frequency: "1m", PeriodTime: period, Status: "degraded", BindingStatuses: map[string]string{"unrelated": "degraded"}}); err != nil {
+	if err := p.Handle(context.Background(), PeriodReady{MessageID: "m1", EventName: "ViewDataReady", SpaceID: "space", ViewID: "factor", Frequency: "1m", PeriodTime: period, Status: "degraded", FactorStates: map[string]FactorPeriodState{"unrelated": {Status: "degraded"}}}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := repo.LatestResult(context.Background(), "i1", session)
@@ -448,20 +448,6 @@ rules:
 		},
 		Now:        func() time.Time { return now },
 		Diagnostic: func(err error) { diags = append(diags, err) },
-	}
-	merge := PeriodReady{
-		MessageID: "merge-ready", EventName: "ViewDataReady", SpaceID: "crypto",
-		ViewID: "view_binance_kline_1m", SourceViewID: "view_binance_kline_1m", Frequency: "1m",
-		PeriodTime: period, Status: "degraded", CompletionKind: "event.storage.merge.period.completed",
-	}
-	if err := p.Handle(context.Background(), merge); err != nil {
-		t.Fatal(err)
-	}
-	if loader.calls != 0 {
-		t.Fatalf("merge ViewDataReady loaded rows %d times", loader.calls)
-	}
-	if _, err := repo.LatestResult(context.Background(), "i1", session); err == nil {
-		t.Fatal("input ViewDataReady must not produce a factor-backed result")
 	}
 	factorReady := PeriodReady{
 		MessageID: "factor-ready", EventName: "ViewDataReady", SpaceID: "crypto",

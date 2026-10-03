@@ -151,12 +151,12 @@ func TestAugmentCompiledBindingsPreservesCompiledProgramAndAddsFactorViews(t *te
 		Rules:       []compiler.CompiledRule{{Name: "rank"}},
 		InputFields: map[string]reflect.Type{"bias": reflect.TypeOf(float64(0))},
 	}
-	augmentCompiledBindings(&compiled, json.RawMessage(`{"source_view_id":"bound-source","factors":[{"factor_id":"bias","binding_id":"b1","result_view_id":"factor-view","column_name":"bias"}]}`))
+	augmentCompiledBindings(&compiled, json.RawMessage(`{"source_view_id":"bound-source","factors":[{"factor_id":"bias","set_id":"set-1","result_view_id":"factor-view","column_name":"bias"}]}`))
 	if compiled.SourceView.ID != "bound-source" || compiled.SourceView.Frequency != "1m" || len(compiled.Rules) != 1 || len(compiled.InputFields) != 1 {
 		t.Fatalf("compiled binding augmentation lost catalog program: %+v", compiled)
 	}
 	if len(compiled.Factors) != 1 || compiled.Dependencies.FactorResultViewIDs[0] != "factor-view" {
-		t.Fatalf("factor binding not added: %+v", compiled)
+		t.Fatalf("factor selection not added: %+v", compiled)
 	}
 }
 
@@ -170,195 +170,39 @@ func TestDependsOnEventOnlyMatchesDeclaredViews(t *testing.T) {
 	}
 }
 
-func TestAcceptsFactorResultReadyIgnoresInputViewReady(t *testing.T) {
-	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "b", ResultViewID: "factor"}}, Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor"}}}
-	if acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor", CompletionKind: events.MergePeriodCompleted.Name()}) {
-		t.Fatal("input ViewDataReady must not run factor-backed strategies")
-	}
-	if acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor"}) {
-		t.Fatal("factor ViewDataReady without completion_kind must not run factor-backed strategies")
-	}
-	if !acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor", CompletionKind: events.FactorPeriodComputed.Name()}) {
-		t.Fatal("result ViewDataReady must run factor-backed strategies")
-	}
-	bare := compiler.CompiledStrategy{SourceView: compiler.CompiledView{ID: "source"}}
-	if !acceptsFactorResultReady(bare, PeriodReady{ViewID: "source", CompletionKind: events.MergePeriodCompleted.Name()}) {
-		t.Fatal("strategies without factor Views may consume input readiness")
-	}
-}
-
-func TestBindingEventSourceMismatchRejectsStaleReadyEvent(t *testing.T) {
-	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "binding", ResultViewID: "factor-view", SourceHash: "hash-a"}}}
-	event := PeriodReady{ViewID: "factor-view", BindingStates: map[string]BindingPeriodState{
-		"binding": {Status: "complete", SourceHash: "hash-b"},
-	}}
-	if err := bindingEventSourceMismatch(compiled, event); err == nil {
-		t.Fatal("expected stale factor-ready event to be rejected")
-	}
-	event.BindingStates["binding"] = BindingPeriodState{Status: "complete", SourceHash: "hash-a"}
-	if err := bindingEventSourceMismatch(compiled, event); err != nil {
-		t.Fatalf("matching factor source hash rejected: %v", err)
-	}
-}
-
-func TestRequiredBindingsReadyUsesOnlyCompiledBindings(t *testing.T) {
-	compiled := compiler.CompiledStrategy{InstrumentPool: config.InstrumentPoolRule{Include: []string{"BTC"}}, Factors: []compiler.CompiledFactor{{BindingID: "binding-required"}}}
-	if !requiredBindingsReady(compiled, PeriodReady{Status: "degraded", BindingStatuses: map[string]string{
-		"binding-required": "complete", "binding-unrelated": "degraded",
-	}}) {
-		t.Fatal("unrelated degraded binding should not block this strategy")
-	}
-	if requiredBindingsReady(compiled, PeriodReady{Status: "complete", BindingStatuses: map[string]string{
-		"binding-required": "degraded",
-	}}) {
-		t.Fatal("required degraded binding should block evaluation")
-	}
-}
-
-func TestRequiredBindingsReadyRejectsFactorComputedDegradedWithoutStatuses(t *testing.T) {
-	compiled := compiler.CompiledStrategy{Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"view_binance_kline_1m"}}}
-	if requiredBindingsReady(compiled, PeriodReady{Status: "degraded", CompletionKind: events.MergePeriodCompleted.Name()}) {
-		t.Fatal("merge degraded ViewDataReady must not run factor-backed strategies via binding readiness")
-	}
-	if requiredBindingsReady(compiled, PeriodReady{Status: "degraded", CompletionKind: events.FactorPeriodComputed.Name()}) {
-		t.Fatal("factor computed ViewDataReady must not evaluate degraded results without binding statuses")
-	}
-}
-
-func TestRequiredBindingsReadyFactorComputedUsesBindingStatesWhenFactorsTrimmed(t *testing.T) {
+func TestProcessorIgnoresNonFactorCompletionKinds(t *testing.T) {
 	compiled := compiler.CompiledStrategy{
-		SourceView:   compiler.CompiledView{ID: "view_binance_kline_1m"},
-		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"view_binance_kline_1m"}},
+		Factors:      []compiler.CompiledFactor{{FactorID: "momentum", ResultViewID: "factor-view"}},
+		Dependencies: compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"factor-view"}},
+	}
+	if acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor-view", CompletionKind: "event.storage.collector.period.completed"}) {
+		t.Fatal("a non-factor completion kind must not run a factor-backed strategy")
+	}
+	if !acceptsFactorResultReady(compiled, PeriodReady{ViewID: "factor-view", CompletionKind: events.FactorPeriodComputed.Name()}) {
+		t.Fatal("factor-period completion must run the strategy")
+	}
+}
+
+func TestProcessorReadsFactorStatesFromViewDataReady(t *testing.T) {
+	compiled := compiler.CompiledStrategy{
+		SourceView:     compiler.CompiledView{ID: "source"},
+		InstrumentPool: config.InstrumentPoolRule{Include: []string{"BTC"}},
+		Factors:        []compiler.CompiledFactor{{FactorID: "momentum", ResultViewID: "factor-view"}},
 	}
 	event := PeriodReady{
-		ViewID: "view_binance_kline_1m", Status: "degraded", CompletionKind: events.FactorPeriodComputed.Name(),
-		BindingStatuses: map[string]string{"binding-1": "degraded"},
-		BindingStates: map[string]BindingPeriodState{
-			"binding-1": {Status: "degraded", SkippedSubjects: []string{"ETH-USDT"}},
+		ViewID: "factor-view", Status: "degraded",
+		FactorStates: map[string]FactorPeriodState{
+			"momentum": {Status: "degraded", FailedSubjects: []string{"ETH"}},
+			"other":    {Status: "degraded", FailedSubjects: []string{"BTC"}},
 		},
 	}
-	pool := []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC-USDT", SubjectID: "BTC-USDT"}}}
-	if !requiredBindingsReady(compiled, event, pool) {
-		t.Fatal("trimmed factor plan must still accept skipped subjects outside the evaluated pool")
+	pool := []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC", SubjectID: "BTC"}}}
+	if !requiredFactorsReady(compiled, event, pool) {
+		t.Fatal("a target factor failure outside the selected pool should follow the existing degradation policy")
 	}
-	event.BindingStates["binding-1"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"BTC-USDT"}}
-	if requiredBindingsReady(compiled, event, pool) {
-		t.Fatal("trimmed factor plan must reject a failed subject in the evaluated pool")
-	}
-}
-
-func TestRequiredBindingsReadyAllowsSkippedOnlyBindingState(t *testing.T) {
-	compiled := compiler.CompiledStrategy{InstrumentPool: config.InstrumentPoolRule{Include: []string{"BTC"}}, Factors: []compiler.CompiledFactor{{BindingID: "binding-required"}}}
-	event := PeriodReady{Status: "degraded", BindingStatuses: map[string]string{"binding-required": "degraded"}, BindingStates: map[string]BindingPeriodState{
-		"binding-required": {Status: "degraded", SkippedSubjects: []string{"OTHER"}},
-	}}
-	if !requiredBindingsReady(compiled, event) {
-		t.Fatal("skipped-only binding should remain eligible for pool-level readiness")
-	}
-	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"BTC"}}
-	if requiredBindingsReady(compiled, event) {
-		t.Fatal("failed subject in selected pool must block evaluation")
-	}
-	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"OTHER"}}
-	if !requiredBindingsReady(compiled, event) {
-		t.Fatal("failed subject outside selected pool should not block evaluation")
-	}
-}
-
-func TestRequiredBindingsReadyMatchesLoadedPoolBySubjectOrInstrument(t *testing.T) {
-	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "binding-required", SubjectMode: "include", SubjectsJSON: `["btc-binance"]`}}}
-	event := PeriodReady{Status: "degraded", BindingStatuses: map[string]string{"binding-required": "degraded"}, BindingStates: map[string]BindingPeriodState{
-		"binding-required": {Status: "degraded", FailedSubjects: []string{"BUSD-USDT"}},
-	}}
-	pool := []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC-USDT", SubjectID: "btc-binance"}}}
-	if !requiredBindingsReady(compiled, event, pool) {
-		t.Fatal("failure for a subject outside the loaded pool should not block evaluation")
-	}
-	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"btc-binance"}}
-	if requiredBindingsReady(compiled, event, pool) {
-		t.Fatal("failure for a selected subject should block evaluation")
-	}
-	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", SkippedSubjects: []string{"BTC-USDT"}}
-	if requiredBindingsReady(compiled, event, pool) {
-		t.Fatal("instrument ID reported by a factor must also match the selected pool")
-	}
-}
-
-func TestRequiredBindingsReadyIgnoresScopedSkippedSubjectsOutsidePool(t *testing.T) {
-	compiled := compiler.CompiledStrategy{Factors: []compiler.CompiledFactor{{BindingID: "binding-required", SubjectMode: "include", SubjectsJSON: `["BTC"]`}}}
-	event := PeriodReady{Status: "degraded", BindingStatuses: map[string]string{"binding-required": "degraded"}, BindingStates: map[string]BindingPeriodState{
-		"binding-required": {Status: "degraded", SkippedSubjects: []string{"ETH"}},
-	}}
-	pool := []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "ETH", SubjectID: "eth-binance"}}}
-	if !requiredBindingsReady(compiled, event, pool) {
-		t.Fatal("a subject-scoped binding skipped outside its scope should not block the pool")
-	}
-}
-
-func TestRequiredBindingsReadyScopesStatusesToEventView(t *testing.T) {
-	compiled := compiler.CompiledStrategy{
-		SourceView: compiler.CompiledView{ID: "source", Frequency: "1m"},
-		Factors: []compiler.CompiledFactor{
-			{BindingID: "binding-one", ResultViewID: "view-one", Frequency: "1m"},
-			{BindingID: "binding-two", ResultViewID: "view-two", Frequency: "1m"},
-		},
-	}
-	event := PeriodReady{ViewID: "view-one", Status: "degraded", BindingStatuses: map[string]string{
-		"binding-one": "complete", "binding-two": "degraded",
-	}}
-	if !requiredBindingsReady(compiled, event) {
-		t.Fatal("degraded binding on another result View should not block this event")
-	}
-	if dependsOnEvent(compiled, PeriodReady{ViewID: "view-one", Frequency: "5m"}) {
-		t.Fatal("ready event with mismatched frequency should not trigger strategy")
-	}
-	if !dependsOnEvent(compiled, PeriodReady{ViewID: "view-one", Frequency: "1m"}) {
-		t.Fatal("matching result View/frequency should trigger strategy")
-	}
-}
-
-func TestTerminalReadyForInstanceIgnoresUnrelatedDegradedBinding(t *testing.T) {
-	compiled := compiler.CompiledStrategy{
-		SourceView: compiler.CompiledView{ID: "source", Frequency: "1m"},
-		Factors: []compiler.CompiledFactor{
-			{BindingID: "binding-required", ResultViewID: "factor-view", Frequency: "1m"},
-		},
-	}
-	event := PeriodReady{ViewID: "factor-view", Status: "degraded", BindingStatuses: map[string]string{
-		"binding-required": "complete", "binding-unrelated": "degraded",
-	}}
-	if terminalReadyForInstance(compiled, event) {
-		t.Fatal("unrelated degraded binding must not terminally ACK a strict-incomplete read")
-	}
-	event.BindingStatuses["binding-required"] = "degraded"
-	if !terminalReadyForInstance(compiled, event) {
-		t.Fatal("required degraded binding should be terminal")
-	}
-}
-
-func TestTerminalReadyForInstanceIsConservativeForDynamicPool(t *testing.T) {
-	compiled := compiler.CompiledStrategy{
-		SourceView: compiler.CompiledView{ID: "source", Frequency: "1m"},
-		Factors: []compiler.CompiledFactor{
-			{BindingID: "binding-required", ResultViewID: "factor-view", Frequency: "1m"},
-		},
-	}
-	event := PeriodReady{ViewID: "factor-view", Status: "degraded", BindingStatuses: map[string]string{
-		"binding-required": "degraded",
-	}, BindingStates: map[string]BindingPeriodState{
-		"binding-required": {Status: "degraded", FailedSubjects: []string{"UNKNOWN"}},
-	}}
-	if terminalReadyForInstance(compiled, event) {
-		t.Fatal("dynamic pool with explicit subject failure must remain retryable")
-	}
-	pool := []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC", SubjectID: "btc"}}}
-	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"other"}}
-	if terminalReadyForInstance(compiled, event, pool) {
-		t.Fatal("dynamic pool failure outside resolved pool must remain retryable")
-	}
-	event.BindingStates["binding-required"] = BindingPeriodState{Status: "degraded", FailedSubjects: []string{"btc"}}
-	if !terminalReadyForInstance(compiled, event, pool) {
-		t.Fatal("resolved pool failure must be terminal")
+	event.FactorStates["momentum"] = FactorPeriodState{Status: "degraded", FailedSubjects: []string{"BTC"}}
+	if requiredFactorsReady(compiled, event, pool) {
+		t.Fatal("a target factor failure in the selected pool must block evaluation")
 	}
 }
 

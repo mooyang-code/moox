@@ -291,7 +291,7 @@ func (c *RPCClient) GetView(ctx context.Context, id string) (compiler.ViewDescri
 	if view == nil {
 		return compiler.ViewDescriptor{}, fmt.Errorf("storage view %s is empty", id)
 	}
-	return compiler.ViewDescriptor{ID: view.GetViewId(), Status: view.GetStatus(), Frequency: viewFrequency(view)}, nil
+	return compiler.ViewDescriptor{ID: view.GetViewId(), DatasetID: view.GetDatasetId(), Status: view.GetStatus(), Frequency: viewFrequency(view)}, nil
 }
 
 func (c *RPCClient) ListViewColumns(ctx context.Context, id string) ([]compiler.ViewColumn, error) {

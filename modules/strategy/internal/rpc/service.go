@@ -957,7 +957,7 @@ func validateEnabledBindings(raw json.RawMessage) error {
 		ViewID       string `json:"view_id"`
 		Factors      []struct {
 			FactorID     string `json:"factor_id"`
-			BindingID    string `json:"binding_id"`
+			SetID        string `json:"set_id"`
 			ResultViewID string `json:"result_view_id"`
 			Output       string `json:"output"`
 			ColumnName   string `json:"column_name"`
@@ -970,8 +970,8 @@ func validateEnabledBindings(raw json.RawMessage) error {
 		return errors.New("strategy instance input_bindings_json must set source_view_id")
 	}
 	for index, factor := range binding.Factors {
-		if strings.TrimSpace(factor.FactorID) == "" || strings.TrimSpace(factor.BindingID) == "" || strings.TrimSpace(factor.ResultViewID) == "" || strings.TrimSpace(factor.Output) == "" || strings.TrimSpace(factor.ColumnName) == "" {
-			return fmt.Errorf("strategy instance input_bindings_json factors[%d] requires factor_id, binding_id, result_view_id, output and column_name", index)
+		if strings.TrimSpace(factor.FactorID) == "" || strings.TrimSpace(factor.SetID) == "" || strings.TrimSpace(factor.ResultViewID) == "" || strings.TrimSpace(factor.Output) == "" || strings.TrimSpace(factor.ColumnName) == "" {
+			return fmt.Errorf("strategy instance input_bindings_json factors[%d] requires factor_id, set_id, result_view_id, output and column_name", index)
 		}
 	}
 	return nil

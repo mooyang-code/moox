@@ -46,15 +46,10 @@ type PeriodReady struct {
 	ResultIndexID       string
 	SourceIndexRevision uint64
 	ResultIndexRevision uint64
-	// BindingStatuses preserves the per-binding terminal state emitted by
-	// Factor. A degraded aggregate may still be usable when every binding this
-	// strategy actually references completed successfully.
-	BindingStatuses map[string]string
-	// BindingStates keeps the subject-level terminal details needed to
-	// distinguish an include-scope skip from an actual computation failure.
-	// A strategy may safely evaluate a pool that does not intersect skipped
-	// subjects, while failed subjects must never be treated as ready.
-	BindingStates map[string]BindingPeriodState
+	// FactorStates carries the per-factor terminal states emitted with a result
+	// View notification. Degraded factors are evaluated against this strategy's
+	// selected pool rather than the aggregate period status.
+	FactorStates map[string]FactorPeriodState
 	// CompletionKind is the registered completion event associated with a
 	// ViewDataReady. Factor-backed strategies wait for FactorPeriodComputed.
 	CompletionKind string
@@ -64,14 +59,10 @@ type PeriodReady struct {
 	TargetInstanceID string
 }
 
-type BindingPeriodState struct {
-	Status          string
-	SkippedSubjects []string
-	FailedSubjects  []string
-	// SourceHash identifies the immutable Factor source used for this period.
-	// It prevents a delayed readiness event from being evaluated with a newer
-	// or rolled-back Factor version.
-	SourceHash string
+type FactorPeriodState struct {
+	Status         string
+	FailedSubjects []string
+	SourceHash     string
 }
 
 type InputLoader interface {
@@ -132,7 +123,7 @@ type Processor struct {
 	// lightweight DSL fallback below.
 	Compile func(context.Context, config.DSL, string) (compiler.CompiledStrategy, error)
 	// CompileWithBindings is the production path for instance-specific fields;
-	// it prevents bars[0].factor from being rejected before the binding is
+	// it prevents bars[0].factor from being rejected before the factor selection is
 	// attached to the shared DSL artifact.
 	CompileWithBindings func(context.Context, config.DSL, string, json.RawMessage) (compiler.CompiledStrategy, error)
 	// VerifyDependencies is optional for embedded/test processors. Production
@@ -151,9 +142,8 @@ type Processor struct {
 }
 
 const (
-	// MergePeriodCompleted is published at NextPeriod+2m, which equals two
-	// bars after bar end. Keep results writable for four bars so View indexing
-	// and FactorPeriodComputed can still commit.
+	// Keep results writable long enough for View indexing and factor completion
+	// publication after the source period closes.
 	strategyResultValidityBars = 4
 )
 
@@ -275,7 +265,7 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 		if event.EventName != "strategy.schedule" && !acceptsFactorResultReady(compiled, event) {
 			continue
 		}
-		if hasCompiledFactorBindings(compiled) && indexProvenanceIsPartial(event) {
+		if hasFactorDependencies(compiled) && indexProvenanceIsPartial(event) {
 			// A malformed in-process event must not allow Storage to pin one
 			// View generation while silently using the other View's current
 			// generation. Public event validation rejects this shape as well.
@@ -291,7 +281,7 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 		}
 		// Only claim the delivery once this instance is routed to the same
 		// source/factor View. An unrelated instance must not affect this delivery.
-		if event.TargetInstanceID != "" && hasCompiledFactorBindings(compiled) {
+		if event.TargetInstanceID != "" && hasFactorDependencies(compiled) {
 			// A timer wake-up has no Factor source/result index provenance. Do not
 			// combine a newly revised source row with an older factor row; the
 			// ViewDataReady event will evaluate this instance once its generation is
@@ -341,8 +331,8 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 		loadCompiled.InstrumentPool.IncludeSet = false
 		loadCompiled.InstrumentPool.HistoricalInclude = nil
 		trimCompiledInput(&loadCompiled, inputDSL)
-		if mismatchErr := bindingEventSourceMismatch(loadCompiled, event); mismatchErr != nil {
-			p.reportDiagnostic(fmt.Errorf("instance %s binding source: %w", instance.InstanceID, mismatchErr))
+		if mismatchErr := factorEventSourceMismatch(loadCompiled, event); mismatchErr != nil {
+			p.reportDiagnostic(fmt.Errorf("instance %s factor source: %w", instance.InstanceID, mismatchErr))
 			continue
 		}
 		configureFixedPool(&loadCompiled, inputDSL)
@@ -420,7 +410,7 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 				// Scheduled jobs pin the Storage-active snapshot and keep the
 				// source-coverage gate. ViewDataReady without index IDs still
 				// uses an empty (non-nil) map so the current bar is not dropped
-				// just because Merge left the universe incomplete.
+				// when historical source coverage is incomplete.
 				expectedIndexesMap = nil
 			} else if len(expectedIndexesMap) == 0 {
 				expectedIndexesMap = map[string]string{}
@@ -438,7 +428,7 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 			if errors.Is(err, input.ErrStrictIncomplete) {
 				// A scheduled wake-up owns this bar and must keep retrying while
 				// Storage/Factor finishes publishing it. Ready events carrying a
-				// terminal degraded binding are acknowledged instead.
+				// terminal degraded factor state are acknowledged instead.
 				if event.TargetInstanceID != "" || !terminalReadyForInstance(compiled, event) {
 					if retryErr == nil {
 						retryErr = err
@@ -485,8 +475,8 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 		if poolResolutionFailed {
 			continue
 		}
-		if !requiredBindingsReady(loadCompiled, event, evaluated.Items) {
-			// A required binding that is degraded for this period must not be
+		if !requiredFactorsReady(loadCompiled, event, evaluated.Items) {
+			// A required factor that is degraded for this period must not be
 			// replaced by a stale/partial row that happens to remain readable.
 			// The check is against the trimmed plan so a carried holding rule does
 			// not make an unrelated Factor a prerequisite for this bar.
@@ -730,7 +720,7 @@ func hasPoolUDF(dsl config.DSL) bool {
 	return false
 }
 
-func hasCompiledFactorBindings(compiled compiler.CompiledStrategy) bool {
+func hasFactorDependencies(compiled compiler.CompiledStrategy) bool {
 	return len(compiled.Factors) > 0 || len(compiled.Dependencies.FactorResultViewIDs) > 0
 }
 
@@ -818,7 +808,7 @@ func augmentCompiledBindings(compiled *compiler.CompiledStrategy, raw json.RawMe
 		ViewID       string `json:"view_id"`
 		Factors      []struct {
 			FactorID        string   `json:"factor_id"`
-			BindingID       string   `json:"binding_id"`
+			SetID           string   `json:"set_id"`
 			SourceHash      string   `json:"source_hash"`
 			InputColumns    []string `json:"input_columns"`
 			ParamsJSON      string   `json:"params_json"`
@@ -871,7 +861,7 @@ func augmentCompiledBindings(compiled *compiler.CompiledStrategy, raw json.RawMe
 		}
 		if !found {
 			compiled.Factors = append(compiled.Factors, compiler.CompiledFactor{
-				FactorID: factor.FactorID, BindingID: factor.BindingID, SourceHash: factor.SourceHash,
+				FactorID: factor.FactorID, SetID: factor.SetID, SourceHash: factor.SourceHash,
 				InputColumns: append([]string(nil), factor.InputColumns...), ParamsJSON: factor.ParamsJSON,
 				LookbackPeriods: factor.LookbackPeriods, Frequency: factor.Frequency,
 				ResultDatasetID: factor.ResultDatasetID, ResultViewID: factor.ResultViewID,
@@ -1054,47 +1044,44 @@ func marshalTargetEvent(instance store.StrategyInstance, result store.StrategyRe
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: valueOrEmpty(instance.LogicalAccountID)})
 }
 
-func bindingEventSourceMismatch(compiled compiler.CompiledStrategy, event PeriodReady) error {
+func factorEventSourceMismatch(compiled compiler.CompiledStrategy, event PeriodReady) error {
 	for _, factor := range compiled.Factors {
-		if factor.BindingID == "" || (event.ViewID != "" && factor.ResultViewID != event.ViewID) {
+		if factor.FactorID == "" || (event.ViewID != "" && factor.ResultViewID != event.ViewID) {
 			continue
 		}
-		state, ok := event.BindingStates[factor.BindingID]
+		state, ok := event.FactorStates[factor.FactorID]
 		if strings.TrimSpace(factor.SourceHash) == "" {
 			continue
 		}
 		if !ok || strings.TrimSpace(state.SourceHash) == "" {
-			return fmt.Errorf("factor binding %s ready event has no source hash", factor.BindingID)
+			return fmt.Errorf("factor %s ready event has no source hash", factor.FactorID)
 		}
 		if state.SourceHash != factor.SourceHash {
-			return fmt.Errorf("factor binding %s source hash changed: compiled=%s event=%s", factor.BindingID, factor.SourceHash, state.SourceHash)
+			return fmt.Errorf("factor %s source hash changed: compiled=%s event=%s", factor.FactorID, factor.SourceHash, state.SourceHash)
 		}
 	}
 	return nil
 }
 
 func terminalReadyForInstance(compiled compiler.CompiledStrategy, event PeriodReady, pools ...[]input.InstrumentInput) bool {
-	if status := strings.TrimSpace(strings.ToLower(event.Status)); status != "" && status != "complete" && len(event.BindingStatuses) == 0 {
+	if status := strings.TrimSpace(strings.ToLower(event.Status)); status != "" && status != "complete" && len(event.FactorStates) == 0 {
 		return true
 	}
 	for _, factor := range compiled.Factors {
-		if factor.BindingID == "" || (event.ViewID != "" && factor.ResultViewID != event.ViewID) {
+		if factor.FactorID == "" || (event.ViewID != "" && factor.ResultViewID != event.ViewID) {
 			continue
 		}
-		status, ok := event.BindingStatuses[factor.BindingID]
-		if !ok || strings.EqualFold(strings.TrimSpace(status), "complete") {
+		state, ok := event.FactorStates[factor.FactorID]
+		if !ok || strings.EqualFold(strings.TrimSpace(state.Status), "complete") {
 			continue
 		}
-		state, hasState := event.BindingStates[factor.BindingID]
-		if !hasState || (len(state.FailedSubjects) == 0 && len(state.SkippedSubjects) == 0) {
+		if strings.EqualFold(strings.TrimSpace(state.Status), "skipped") || len(state.FailedSubjects) == 0 {
 			return true
 		}
-		// With a dynamic pool there is no authoritative membership information
-		// until the loader has resolved it. Do not treat an explicit failed/skipped
-		// subject as terminally irrelevant; the caller will retry with the loaded
-		// pool instead. An explicit include list can safely scope the event here.
+		// A dynamic pool is not known until loading succeeds; keep the event
+		// retryable unless a concrete selected-pool failure is already known.
 		if len(pools) > 0 {
-			if bindingStateAffectsPool(factor, state, pools...) {
+			if factorStateAffectsPool(factor, state, pools...) {
 				return true
 			}
 		} else if len(compiled.InstrumentPool.Include) > 0 {
@@ -1102,7 +1089,7 @@ func terminalReadyForInstance(compiled compiler.CompiledStrategy, event PeriodRe
 			for _, id := range compiled.InstrumentPool.Include {
 				items = append(items, input.InstrumentInput{PoolItem: input.PoolItem{InstrumentID: id}})
 			}
-			if bindingStateAffectsPool(factor, state, items) {
+			if factorStateAffectsPool(factor, state, items) {
 				return true
 			}
 		}
@@ -1110,8 +1097,8 @@ func terminalReadyForInstance(compiled compiler.CompiledStrategy, event PeriodRe
 	return false
 }
 
-func requiredBindingsReady(compiled compiler.CompiledStrategy, event PeriodReady, pools ...[]input.InstrumentInput) bool {
-	if len(event.BindingStatuses) == 0 {
+func requiredFactorsReady(compiled compiler.CompiledStrategy, event PeriodReady, pools ...[]input.InstrumentInput) bool {
+	if len(event.FactorStates) == 0 {
 		return event.Status == "" || event.Status == "complete"
 	}
 	scopedPools := pools
@@ -1124,40 +1111,30 @@ func requiredBindingsReady(compiled compiler.CompiledStrategy, event PeriodReady
 	}
 	required := 0
 	for _, factor := range compiled.Factors {
-		if factor.BindingID == "" {
+		if factor.FactorID == "" {
 			continue
 		}
 		if event.ViewID != "" && factor.ResultViewID != event.ViewID {
 			continue
 		}
 		required++
-		status, ok := event.BindingStatuses[factor.BindingID]
+		state, ok := event.FactorStates[factor.FactorID]
 		if !ok {
 			return false
 		}
-		if status == "complete" {
+		if strings.EqualFold(strings.TrimSpace(state.Status), "complete") {
 			continue
 		}
-		state, hasState := event.BindingStates[factor.BindingID]
-		// Subject-level terminal details are scoped against an explicit
-		// instrument include list when one exists. A failed/skipped subject
-		// outside that list cannot affect this run; without an include list we
-		// retain the conservative aggregate gate because the loader may otherwise
-		// see a stale row for the failed subject.
-		if !hasState || (len(state.FailedSubjects) == 0 && len(state.SkippedSubjects) == 0) {
+		if len(state.FailedSubjects) == 0 {
 			return false
 		}
-		if bindingStateAffectsPool(factor, state, scopedPools...) {
+		if factorStateAffectsPool(factor, state, scopedPools...) {
 			return false
 		}
 	}
 	if required == 0 {
-		// A degraded result View that this strategy does not reference must not
-		// veto evaluation. Source View events are different: they carry the
-		// actual market-row readiness for the whole input and remain strict.
-		if event.CompletionKind == events.FactorPeriodComputed.Name() {
-			return factorComputedBindingsReady(event, scopedPools...)
-		}
+		// Per-factor completion state is relevant only for factors declared by
+		// this strategy. Source View readiness remains governed by its aggregate.
 		if event.ViewID != "" && event.ViewID != compiled.SourceView.ID {
 			return true
 		}
@@ -1166,26 +1143,7 @@ func requiredBindingsReady(compiled compiler.CompiledStrategy, event PeriodReady
 	return true
 }
 
-func factorComputedBindingsReady(event PeriodReady, pools ...[]input.InstrumentInput) bool {
-	if len(event.BindingStatuses) == 0 {
-		return event.Status == "" || event.Status == "complete"
-	}
-	for id, status := range event.BindingStatuses {
-		if status == "complete" {
-			continue
-		}
-		state, ok := event.BindingStates[id]
-		if !ok || (len(state.FailedSubjects) == 0 && len(state.SkippedSubjects) == 0) {
-			return false
-		}
-		if bindingStateAffectsPool(compiler.CompiledFactor{BindingID: id}, state, pools...) {
-			return false
-		}
-	}
-	return true
-}
-
-func bindingStateAffectsPool(factor compiler.CompiledFactor, state BindingPeriodState, pools ...[]input.InstrumentInput) bool {
+func factorStateAffectsPool(factor compiler.CompiledFactor, state FactorPeriodState, pools ...[]input.InstrumentInput) bool {
 	if len(pools) == 0 {
 		return true
 	}
@@ -1200,7 +1158,7 @@ func bindingStateAffectsPool(factor compiler.CompiledFactor, state BindingPeriod
 			scoped[strings.ToUpper(strings.TrimSpace(value))] = struct{}{}
 		}
 	}
-	for _, value := range append(append([]string(nil), state.FailedSubjects...), state.SkippedSubjects...) {
+	for _, value := range state.FailedSubjects {
 		key := strings.ToUpper(strings.TrimSpace(value))
 		for _, item := range pools[0] {
 			subject := strings.ToUpper(strings.TrimSpace(item.SubjectID))
@@ -1226,7 +1184,7 @@ func bindingStateAffectsPool(factor compiler.CompiledFactor, state BindingPeriod
 }
 
 func acceptsFactorResultReady(compiled compiler.CompiledStrategy, event PeriodReady) bool {
-	factorBacked := hasCompiledFactorBindings(compiled) || len(compiled.Dependencies.FactorResultViewIDs) > 0
+	factorBacked := hasFactorDependencies(compiled) || len(compiled.Dependencies.FactorResultViewIDs) > 0
 	if !factorBacked {
 		return true
 	}

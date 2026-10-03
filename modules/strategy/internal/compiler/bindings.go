@@ -39,7 +39,7 @@ func ParseInstanceBindings(raw []byte) (InstanceBindings, error) {
 			InputColumns    []string `json:"input_columns"`
 			ParamsJSON      string   `json:"params_json"`
 			LookbackPeriods int      `json:"lookback_periods"`
-			BindingID       string   `json:"binding_id"`
+			SetID           string   `json:"set_id"`
 			Frequency       string   `json:"frequency"`
 			ResultDatasetID string   `json:"result_dataset_id"`
 			ResultViewID    string   `json:"result_view_id"`
@@ -64,7 +64,7 @@ func ParseInstanceBindings(raw []byte) (InstanceBindings, error) {
 	for _, factor := range value.Factors {
 		result.Factors = append(result.Factors, CompiledFactor{
 			FactorID: factor.FactorID, SourceHash: factor.SourceHash, InputColumns: append([]string(nil), factor.InputColumns...), ParamsJSON: factor.ParamsJSON,
-			LookbackPeriods: factor.LookbackPeriods, BindingID: factor.BindingID, Frequency: factor.Frequency,
+			LookbackPeriods: factor.LookbackPeriods, SetID: factor.SetID, Frequency: factor.Frequency,
 			ResultDatasetID: factor.ResultDatasetID, ResultViewID: factor.ResultViewID, Output: factor.Output,
 			ColumnName: factor.ColumnName, SubjectMode: factor.SubjectMode, SubjectsJSON: factor.SubjectsJSON,
 		})
@@ -73,7 +73,7 @@ func ParseInstanceBindings(raw []byte) (InstanceBindings, error) {
 }
 
 // CompileWithBindings compiles expressions with the fields exposed by the
-// instance's concrete factor bindings and attaches those bindings to the
+// instance's concrete factor selections and attaches those selections to the
 // artifact so VerifyDependencies can be run before enabling the instance.
 func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, spaceID string, raw []byte) (CompiledStrategy, error) {
 	binding, err := ParseInstanceBindings(raw)
@@ -81,7 +81,7 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 		return CompiledStrategy{}, err
 	}
 	if dsl.Triggers.Schedule != nil && dsl.Triggers.Event == nil && (len(binding.Factors) > 0 || len(binding.FactorViewIDs) > 0) {
-		return CompiledStrategy{}, fmt.Errorf("scheduled strategies with factor bindings require a ViewDataReady event trigger")
+		return CompiledStrategy{}, fmt.Errorf("scheduled strategies with factors require a ViewDataReady event trigger")
 	}
 	if err := validateFactorAliases(binding.Factors); err != nil {
 		return CompiledStrategy{}, err
@@ -89,7 +89,7 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 	// Factor outputs may be materialized into the same View as their source;
 	// the loader deduplicates that View while reading source and factor values.
 	if resultViews := uniqueResultViews(binding.Factors); len(resultViews) > 1 {
-		return CompiledStrategy{}, fmt.Errorf("strategy factor bindings must share one result_view_id, got %s", strings.Join(resultViews, ", "))
+		return CompiledStrategy{}, fmt.Errorf("strategy factor selections must share one result_view_id, got %s", strings.Join(resultViews, ", "))
 	}
 	fields := cloneTypes(c.InputFields)
 	if fields == nil {
@@ -138,7 +138,7 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 		if strings.TrimSpace(compiled.Factors[i].Frequency) != "" {
 			normalized, frequencyErr := report.NormalizeDatasetFrequency(compiled.Factors[i].Frequency)
 			if frequencyErr != nil {
-				return CompiledStrategy{}, fmt.Errorf("strategy factor %s binding frequency: %w", compiled.Factors[i].FactorID, frequencyErr)
+				return CompiledStrategy{}, fmt.Errorf("strategy factor %s frequency: %w", compiled.Factors[i].FactorID, frequencyErr)
 			}
 			frequency = normalized
 		}

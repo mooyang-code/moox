@@ -8,18 +8,19 @@
 
 The Strategy service is a declarative, Go-only runtime. A `moox.strategy/v2`
 Manifest is validated and compiled into an immutable dependency record before
-it is persisted. The record freezes the source View, Factor Binding, result
-View, and concrete factor output columns; enabling a Runner re-verifies those
-identifiers without selecting replacements. It is not a persisted period-input
-snapshot and does not make the mutable Storage index replayable.
+it is persisted. The record freezes the source View, FactorSet, result View,
+and concrete factor output columns; enabling a Runner re-verifies that each
+declared factor remains enabled in the FactorSet that owns the result View's
+dataset. It is not a persisted period-input snapshot and does not make the
+mutable Storage index replayable.
 
 `ViewDataReady` associated with `FactorPeriodComputed` is the runtime trigger.
-The event identifies a completed Factor result View period, carries per-binding
-terminal states, and includes the dataset / visible scope used for that computation.
-Input `ViewDataReady` associated with `MergePeriodCompleted` must not run
-factor-backed strategies.
-Strategy evaluates a Runner only when every binding referenced by that Runner
-is complete; an unrelated degraded binding in the same View does not block it.
+The event identifies a completed Factor result View period, carries per-factor
+terminal states in `factors[]`, and includes the dataset / visible scope used
+for that computation. Factor-backed strategies accept only the
+`factor_period.computed` completion kind. Strategy evaluates a Runner only
+when each factor it references is usable for the selected pool; a degraded
+factor with failures confined to subjects outside that pool does not block it.
 The compiler requires all factor outputs to share one Result View. The Storage
 RPC reader first pins the active index and subject selectors for the source and
 Result Views. Every history/current query then
@@ -30,7 +31,7 @@ View generations. Storage also returns an
 `active_index_revision` and rejects a page when the same physical index was
 updated in place during the read; subsequent pages carry
 `expected_active_index_revision`. The Runner loads the complete configured
-instrument pool and all frozen factor columns for that period. Binding-level
+instrument pool and all frozen factor columns for that period. Per-factor
 degraded states are scoped against the loaded pool using both `subject_id` and
 `instrument_id`; a failed subject that is outside the configured pool does not
 veto this Runner, while a selected subject always does. Without a loaded pool
@@ -38,8 +39,8 @@ the check remains conservative.
 `strict` readiness distinguishes two outcomes: an unfinished View or temporary
 Storage failure returns RETRY; a stale View provenance generation is terminally
 superseded and ACKed; a readable View with a missing pool
-row or required column records `last_error`. If the Factor-ready event is
-already terminally degraded, the inbox is ACKed after recording the failure so
+row or required column records `last_error`. If a declared factor's ready state
+is already terminally degraded for the selected pool, the inbox is ACKed after recording the failure so
 an unrecoverable period cannot poison the unlimited-delivery consumer; a
 complete marker remains retryable until a matching ready marker is reissued.
 Permanent dependency responses such as a deleted Factor or View are classified

@@ -14,19 +14,19 @@ func TestPeriodTimeUsesUnixSecondsContract(t *testing.T) {
 	}
 }
 
-func TestViewDataReadyBindingsCopyIntoPeriodReady(t *testing.T) {
+func TestViewDataReadyFactorsCopyIntoPeriodReady(t *testing.T) {
 	payload := &storagepb.ViewDataReady{
-		Bindings: []*storagepb.FactorBindingPeriodState{{
-			BindingId: "binding-1", Status: "degraded", SourceHash: "hash-1",
-			SkippedSubjects: []string{"ETH-USDT"}, FailedSubjects: []string{"SOL-USDT"},
+		Factors: []*storagepb.FactorPeriodState{{
+			FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
+			FailedSubjects: []string{"SOL-USDT"},
 		}},
 	}
-	statuses, states := periodReadyBindings(payload)
-	if statuses["binding-1"] != "degraded" {
-		t.Fatalf("binding statuses=%v", statuses)
+	states := periodReadyFactors(payload)
+	if states["factor-1"].Status != "degraded" {
+		t.Fatalf("factor states=%v", states)
 	}
-	state := states["binding-1"]
-	if state.SourceHash != "hash-1" || len(state.SkippedSubjects) != 1 || state.SkippedSubjects[0] != "ETH-USDT" || len(state.FailedSubjects) != 1 || state.FailedSubjects[0] != "SOL-USDT" {
-		t.Fatalf("binding state=%v", state)
+	state := states["factor-1"]
+	if state.SourceHash != "hash-1" || len(state.FailedSubjects) != 1 || state.FailedSubjects[0] != "SOL-USDT" {
+		t.Fatalf("factor state=%v", state)
 	}
 }
