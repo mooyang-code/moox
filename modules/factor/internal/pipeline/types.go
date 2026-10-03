@@ -44,6 +44,8 @@ type Config struct {
 	ReadWorkers       int
 	ReadRetries       int
 	ReadTimeout       time.Duration
+	WriteBatchRows    int
+	WriteRetries      int
 	PythonWorkers     int
 	FactorsDir        string
 }
@@ -67,6 +69,12 @@ func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Cl
 	}
 	if cfg.ReadTimeout <= 0 {
 		cfg.ReadTimeout = 20 * time.Second
+	}
+	if cfg.WriteBatchRows <= 0 {
+		cfg.WriteBatchRows = 1000
+	}
+	if cfg.WriteRetries <= 0 {
+		cfg.WriteRetries = 3
 	}
 	if cfg.PythonWorkers <= 0 {
 		cfg.PythonWorkers = 1

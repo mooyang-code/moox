@@ -111,7 +111,7 @@ func computePlan(target time.Time, factors []domain.FactorDef, subjects []string
 	return Plan{
 		Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
 		Factors: factors, TargetStart: target.Add(-time.Minute), TargetEnd: target.Add(time.Minute),
-		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"},
+		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
 	}
 }
 
