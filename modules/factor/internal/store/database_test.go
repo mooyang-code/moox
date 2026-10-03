@@ -2,203 +2,65 @@ package store
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/stretchr/testify/require"
 )
 
-func TestIsDatabaseCorruption(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "wrapped malformed image", err: errors.New("persist factor output: database disk image is malformed (11)"), want: true},
-		{name: "malformed schema", err: errors.New("malformed database schema"), want: true},
-		{name: "other sqlite error", err: errors.New("database is locked"), want: false},
-		{name: "nil", want: false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := IsDatabaseCorruption(test.err); got != test.want {
-				t.Fatalf("IsDatabaseCorruption(%v) = %v, want %v", test.err, got, test.want)
-			}
-		})
-	}
+func TestOpenCreatesFactorSchema(t *testing.T) {
+	s := openTestStore(t)
+	var tables []string
+	require.NoError(t, s.db.Raw(`
+		SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't_factor_%' ORDER BY name
+	`).Scan(&tables).Error)
+	require.Equal(t, []string{"t_factor_defs", "t_factor_recalc_jobs", "t_factor_sets"}, tables)
 }
 
-func TestOpenAndClose(t *testing.T) {
-	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	if mgr.db == nil {
-		t.Fatal("database returned nil")
-	}
-	if err := mgr.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-}
-
-func TestForeignKeysAreEnabledOnEveryPooledConnection(t *testing.T) {
-	db, err := Open(&Options{
-		Path: filepath.Join(t.TempDir(), "factor.db"), MaxOpenConns: 4, MaxIdleConns: 4,
-	})
+func TestApplySchemaRejectsNonCurrentTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "factor.db")
+	s, err := Open(&Options{Path: path})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-
-	sqlDB, err := db.db.DB()
-	require.NoError(t, err)
-	conns := make([]interface{ Close() error }, 0, 4)
-	for index := range 4 {
-		conn, connErr := sqlDB.Conn(context.Background())
-		require.NoError(t, connErr)
-		conns = append(conns, conn)
-		var enabled int
-		require.NoError(t, conn.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&enabled))
-		require.Equal(t, 1, enabled)
-		_, insertErr := conn.ExecContext(context.Background(), `
-			INSERT INTO t_factor_bindings (
-				c_binding_id, c_factor_id, c_space_id, c_source_view_id, c_freq,
-				c_subject_mode, c_subjects_json, c_result_dataset_id, c_result_view_id, c_status
-			) VALUES (?, 'missing', 'space', 'source', '1m', 'all', '[]', 'target', 'target_view', 'disabled')
-		`, "orphan-"+string(rune('a'+index)))
-		require.ErrorContains(t, insertErr, "FOREIGN KEY constraint failed")
-	}
-	for _, conn := range conns {
-		require.NoError(t, conn.Close())
-	}
+	require.NoError(t, s.db.Exec("CREATE TABLE t_factor_old_ledger (c_id TEXT)").Error)
+	require.ErrorContains(t, s.ApplySchema("CREATE TABLE IF NOT EXISTS t_factor_sets(c_id TEXT)"), "only factor sets")
+	require.NoError(t, s.Close())
 }
 
-func TestBuildSQLiteDSNUsesDurablePragmas(t *testing.T) {
+func TestBuildSQLiteDSNUsesForeignKeysAndDurablePragmas(t *testing.T) {
 	dsn := buildSQLiteDSN("./data/factor/factor.db")
-
 	for _, want := range []string{
-		"_pragma=journal_mode(WAL)",
-		"_pragma=foreign_keys(ON)",
-		"_pragma=synchronous(NORMAL)",
-		"_pragma=busy_timeout(5000)",
-		"_pragma=temp_store(MEMORY)",
-		"_pragma=cache_size(-64000)",
+		"_pragma=journal_mode(WAL)", "_pragma=foreign_keys(ON)",
+		"_pragma=synchronous(NORMAL)", "_pragma=busy_timeout(5000)",
 		"_pragma=wal_autocheckpoint(1000)",
 	} {
-		if !strings.Contains(dsn, want) {
-			t.Fatalf("dsn %q does not contain %q", dsn, want)
-		}
+		require.True(t, strings.Contains(dsn, want), "dsn %q missing %q", dsn, want)
 	}
-	if strings.Contains(dsn, "synchronous(OFF)") {
-		t.Fatalf("dsn %q must not disable SQLite synchronization", dsn)
+	require.NotContains(t, dsn, "synchronous(OFF)")
+}
+
+func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", "disabled")))
+	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close", "disabled")))
+	_, err := s.CreateRecalcJob(ctx, RecalcJob{
+		JobID: "job-1", RequestID: "req-1", SetID: "set_prices", StartTime: 100, EndTime: 200,
+	})
+	require.NoError(t, err)
+
+	for _, tableAndKey := range []struct{ table, key string }{
+		{"t_factor_sets", "set_prices"},
+		{"t_factor_defs", "factor_close"},
+		{"t_factor_recalc_jobs", "job-1"},
+	} {
+		keyColumn := map[string]string{
+			"t_factor_sets": "c_set_id", "t_factor_defs": "c_factor_id", "t_factor_recalc_jobs": "c_job_id",
+		}[tableAndKey.table]
+		require.NoError(t, s.db.Exec("UPDATE "+tableAndKey.table+" SET c_mtime = '2000-01-01 00:00:00' WHERE "+keyColumn+" = ?", tableAndKey.key).Error)
+		require.NoError(t, s.db.Exec("UPDATE "+tableAndKey.table+" SET c_status = c_status WHERE "+keyColumn+" = ?", tableAndKey.key).Error)
+		var updated string
+		require.NoError(t, s.db.Raw("SELECT c_mtime FROM "+tableAndKey.table+" WHERE "+keyColumn+" = ?", tableAndKey.key).Scan(&updated).Error)
+		require.NotEqual(t, "2000-01-01 00:00:00", updated)
 	}
-}
-
-func TestApplySchemaRejectsObsoleteDatabase(t *testing.T) {
-	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.db.Exec(`
-		CREATE TABLE t_factor_defs (
-			c_factor_id TEXT PRIMARY KEY,
-			c_name TEXT,
-			c_params_json TEXT
-		);
-		CREATE TABLE t_factor_event_inbox (c_event_id TEXT PRIMARY KEY);
-	`).Error)
-
-	err = db.ApplySchema(factorschema.AllSQL())
-	require.ErrorContains(t, err, "fresh database")
-}
-
-func TestApplySchemaRejectsLookbackRowsDatabase(t *testing.T) {
-	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.db.Exec(`
-		CREATE TABLE t_factor_defs (
-			c_factor_id TEXT NOT NULL PRIMARY KEY,
-			c_name TEXT NOT NULL,
-			c_source_code TEXT NOT NULL,
-			c_source_hash TEXT NOT NULL,
-			c_source_path TEXT NOT NULL DEFAULT '',
-			c_input_columns_json TEXT NOT NULL,
-			c_outputs_json TEXT NOT NULL,
-			c_params_json TEXT NOT NULL DEFAULT '{}',
-			c_lookback_rows INTEGER NOT NULL,
-			c_status TEXT NOT NULL,
-			c_ctime DATETIME NOT NULL,
-			c_mtime DATETIME NOT NULL
-		);
-		CREATE TABLE t_factor_bindings (
-			c_binding_id TEXT NOT NULL PRIMARY KEY,
-			c_factor_id TEXT NOT NULL,
-			c_space_id TEXT NOT NULL,
-			c_source_dataset TEXT NOT NULL,
-			c_freq TEXT NOT NULL,
-			c_subject_mode TEXT NOT NULL,
-			c_subjects_json TEXT NOT NULL,
-			c_target_dataset TEXT NOT NULL,
-			c_status TEXT NOT NULL,
-			c_ctime DATETIME NOT NULL,
-			c_mtime DATETIME NOT NULL
-		);
-	`).Error)
-
-	err = db.ApplySchema(factorschema.AllSQL())
-	require.ErrorContains(t, err, "fresh database")
-}
-
-func TestApplySchemaRejectsPreviousDatasetBindingShape(t *testing.T) {
-	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.db.Exec(`
-		CREATE TABLE t_factor_defs (
-			c_factor_id TEXT NOT NULL PRIMARY KEY, c_name TEXT NOT NULL, c_factor_type TEXT NOT NULL DEFAULT 'timeseries', c_source_code TEXT NOT NULL,
-			c_source_hash TEXT NOT NULL, c_source_path TEXT NOT NULL DEFAULT '', c_input_columns_json TEXT NOT NULL,
-			c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL DEFAULT '{}', c_lookback_periods INTEGER NOT NULL,
-			c_status TEXT NOT NULL DEFAULT 'disabled', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);
-		CREATE TABLE t_factor_bindings (
-			c_binding_id TEXT NOT NULL PRIMARY KEY, c_factor_id TEXT NOT NULL, c_space_id TEXT NOT NULL,
-			c_source_dataset TEXT NOT NULL, c_freq TEXT NOT NULL, c_subject_mode TEXT NOT NULL DEFAULT 'all',
-			c_subjects_json TEXT NOT NULL DEFAULT '[]', c_target_dataset TEXT NOT NULL,
-			c_status TEXT NOT NULL DEFAULT 'enabled', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);
-		INSERT INTO t_factor_defs(c_factor_id,c_name,c_source_code,c_source_hash,c_input_columns_json,c_outputs_json,c_lookback_periods)
-		VALUES ('factor','Factor','x','hash','["close"]','["value"]',1);
-		INSERT INTO t_factor_bindings(c_binding_id,c_factor_id,c_space_id,c_source_dataset,c_freq,c_subjects_json,c_target_dataset)
-		VALUES ('binding','factor','space','prices','1m','[]','factor-results');
-	`).Error)
-	require.ErrorContains(t, db.ApplySchema(factorschema.AllSQL()), "fresh database")
-}
-
-func TestApplySchemaAllowsUnusedLegacyTablesAndCreatesMissingOnes(t *testing.T) {
-	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.db.Exec(`
-		CREATE TABLE t_factor_defs (
-			c_factor_id TEXT NOT NULL PRIMARY KEY, c_name TEXT NOT NULL, c_factor_type TEXT NOT NULL DEFAULT 'timeseries', c_source_code TEXT NOT NULL,
-			c_source_hash TEXT NOT NULL, c_source_path TEXT NOT NULL DEFAULT '', c_input_columns_json TEXT NOT NULL,
-			c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL DEFAULT '{}', c_lookback_periods INTEGER NOT NULL,
-			c_status TEXT NOT NULL DEFAULT 'disabled', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);
-		CREATE TABLE t_factor_subject_receipts (
-			c_space_id TEXT NOT NULL,
-			c_event_id TEXT NOT NULL
-		);
-	`).Error)
-	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-	var receipts int
-	require.NoError(t, db.db.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 't_factor_subject_receipts'`).Scan(&receipts).Error)
-	require.Equal(t, 1, receipts)
-	var barriers int
-	require.NoError(t, db.db.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 't_factor_period_barriers'`).Scan(&barriers).Error)
-	require.Equal(t, 1, barriers)
 }

@@ -1,8 +1,9 @@
-// Package store owns Factor's SQLite connection and persistence repositories.
+// Package store persists Factor configuration and asynchronous recalc jobs.
 package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,38 +11,15 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// IsDatabaseCorruption reports SQLite errors that indicate the local factor
-// database can no longer be trusted for writes. The pure-Go SQLite driver wraps
-// these errors, so matching the stable SQLite message is more reliable than
-// depending on a driver-specific error type.
-func IsDatabaseCorruption(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{
-		"database disk image is malformed",
-		"malformed database schema",
-		"database corruption",
-	} {
-		if strings.Contains(message, marker) {
-			return true
-		}
-	}
-	return false
-}
+var ErrConflict = errors.New("factor store conflict")
 
-// Store owns the Factor SQLite connection and repositories.
+// Store owns the Factor SQLite connection.
 type Store struct {
-	db        *gorm.DB
-	factors   *FactorRepository
-	bindings  *BindingRepository
-	manifests *OutputManifestRepository
-	merged    *MergedDatasetRepository
+	db *gorm.DB
 }
 
 // Options configures the Factor SQLite store.
@@ -53,7 +31,7 @@ type Options struct {
 	ConnMaxIdleTime time.Duration
 }
 
-// Open opens the Factor SQLite store. Schema creation is handled by bootstrap.
+// Open opens the SQLite store and creates its schema on a fresh database.
 func Open(opts *Options) (*Store, error) {
 	dbPath := "./data/factor/factor.db"
 	if opts != nil && opts.Path != "" {
@@ -66,49 +44,17 @@ func Open(opts *Options) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	s := &Store{db: db}
-	s.factors = NewFactorRepository(db)
-	s.bindings = NewBindingRepository(db)
-	s.manifests = NewOutputManifestRepository(db)
-	s.merged = NewMergedDatasetRepository(db)
 	applySQLitePoolConfig(db, opts)
-	log.Infof("初始化 Factor SQLite 数据库: %s", dbPath)
+	s := &Store{db: db}
+	if err := s.ApplySchema(factorschema.AllSQL()); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("initialize factor schema: %w", err)
+	}
 	return s, nil
 }
 
-// Factors returns the factor repository.
-func (s *Store) Factors() *FactorRepository {
-	if s == nil {
-		return nil
-	}
-	return s.factors
-}
-
-// Bindings returns the factor binding repository.
-func (s *Store) Bindings() *BindingRepository {
-	if s == nil {
-		return nil
-	}
-	return s.bindings
-}
-
-// OutputManifests returns the dynamic output manifest repository.
-func (s *Store) OutputManifests() *OutputManifestRepository {
-	if s == nil {
-		return nil
-	}
-	return s.manifests
-}
-
-// MergedDatasets returns the composite Dataset definition repository.
-func (s *Store) MergedDatasets() *MergedDatasetRepository {
-	if s == nil {
-		return nil
-	}
-	return s.merged
-}
-
-// ApplySchema applies schema SQL during service startup.
+// ApplySchema executes the embedded schema on a new database and rejects a
+// database whose Factor tables do not match the current schema.
 func (s *Store) ApplySchema(sql string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
@@ -116,44 +62,23 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("factor schema sql is empty")
 	}
-	tables, err := s.factorSchemaTables()
+	existing, err := s.factorSchemaTables()
 	if err != nil {
 		return err
 	}
-	if len(tables) > 0 {
-		if err := s.validateSchemaTables(tables, false); err != nil {
+	if len(existing) > 0 {
+		if err := s.validateSchemaTables(existing); err != nil {
 			return err
 		}
 	}
 	if err := s.db.Exec(sql).Error; err != nil {
 		return err
 	}
-	return s.validateSchema()
-}
-
-func (s *Store) tableColumns(table string) ([]string, error) {
-	var columns []string
-	if err := s.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", table).Scan(&columns).Error; err != nil {
-		return nil, fmt.Errorf("inspect factor schema table %s: %w", table, err)
-	}
-	return columns, nil
-}
-
-func containsColumn(columns []string, expected string) bool {
-	for _, column := range columns {
-		if column == expected {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Store) validateSchema() error {
 	tables, err := s.factorSchemaTables()
 	if err != nil {
 		return err
 	}
-	return s.validateSchemaTables(tables, true)
+	return s.validateSchemaTables(tables)
 }
 
 func (s *Store) factorSchemaTables() ([]string, error) {
@@ -166,72 +91,53 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 	return tables, nil
 }
 
-func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
+func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
-		"t_factor_subject_runs":  {"c_task_id", "c_scope_key", "c_period_time", "c_task_json", "c_status", "c_error", "c_updated_at"},
-		"t_factor_subject_heads": {"c_scope_key", "c_task_id", "c_period_time", "c_source_node", "c_source_store", "c_source_sequence", "c_source_event", "c_catalog_revision"},
-		"t_factor_subject_gc":    {"c_id", "c_completed_before"},
-		"t_factor_catalog":       {"c_id", "c_revision", "c_snapshot_hash"},
 		"t_factor_defs": {
-			"c_factor_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash", "c_source_path",
+			"c_factor_id", "c_set_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash",
 			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
-			"c_status", "c_ctime", "c_mtime",
+			"c_allow_partial_universe", "c_status", "c_ctime", "c_mtime",
 		},
-		"t_factor_bindings": {
-			"c_binding_id", "c_binding_generation", "c_factor_id", "c_space_id", "c_source_view_id", "c_freq",
-			"c_subject_mode", "c_subjects_json", "c_result_dataset_id", "c_result_view_id", "c_status", "c_ctime", "c_mtime",
-		},
-		"t_factor_output_manifests": {
-			"c_source_series_tag", "c_filter_source_series_tag", "c_binding_id", "c_binding_generation", "c_cleanup_task_json", "c_subject_id", "c_frequency", "c_period_time", "c_row_keys_json", "c_updated_at",
-		},
-		"t_factor_merged_datasets": {
-			"c_dataset_id", "c_space_id", "c_frequency", "c_key_contract_json", "c_object_set_json", "c_sources_json",
-			"c_merge_mode", "c_field_mappings_json", "c_enabled", "c_config_snapshot_id", "c_input_semantics_hash",
-			"c_storage_resource_state", "c_storage_schema_id", "c_ctime", "c_mtime",
-		},
-		"t_factor_merged_dataset_snapshots": {
-			"c_snapshot_id", "c_dataset_id", "c_config_json", "c_input_semantics_hash", "c_ctime",
-		},
-		"t_factor_period_barriers": {
-			"c_space_id", "c_dataset_id", "c_snapshot_id", "c_frequency", "c_period_time",
-			"c_batch_id", "c_scope_ref", "c_frozen", "c_status", "c_report_state",
-			"c_bindings_json", "c_expected_json", "c_failed_json", "c_mtime",
-		},
-		"t_factor_period_pairs": {
-			"c_space_id", "c_dataset_id", "c_snapshot_id", "c_frequency", "c_period_time",
-			"c_binding_id", "c_subject_id", "c_state", "c_receipt_confirmed",
-			"c_commit_id", "c_node_id", "c_store_id", "c_sequence", "c_mtime",
-		},
-		"t_factor_period_gc": {"c_id", "c_completed_before"},
 		"t_factor_recalc_jobs": {
-			"c_job_id", "c_request_id", "c_space_id", "c_dataset_id", "c_source_view_id",
-			"c_subject_id", "c_freq", "c_factor_id", "c_binding_id", "c_binding_generation",
-			"c_start_time", "c_end_time", "c_status", "c_failure_class", "c_error", "c_ctime", "c_mtime",
+			"c_job_id", "c_request_id", "c_set_id", "c_factor_ids_json", "c_subjects_json",
+			"c_start_time", "c_end_time", "c_status", "c_progress_time", "c_error", "c_ctime", "c_mtime",
 		},
-		"t_factor_engine_status": {
-			"c_engine_id", "c_desired_revision", "c_applied_revision", "c_last_seen", "c_mtime",
+		"t_factor_sets": {
+			"c_set_id", "c_space_id", "c_source_dataset_id", "c_freq", "c_subject_mode",
+			"c_subjects_json", "c_result_dataset_id", "c_status", "c_ctime", "c_mtime",
 		},
 	}
-	present := make(map[string]struct{}, len(tables))
+	if len(tables) != len(expected) {
+		return fmt.Errorf("factor database must contain only factor sets, definitions, and recalc jobs; create a fresh database")
+	}
 	for _, table := range tables {
-		present[table] = struct{}{}
-	}
-	for name, want := range expected {
-		if _, ok := present[name]; !ok {
-			if requireAll {
-				return fmt.Errorf("factor database missing table %s; create a fresh database", name)
-			}
-			continue
+		want, ok := expected[table]
+		if !ok {
+			return fmt.Errorf("factor database contains unexpected table %s; create a fresh database", table)
 		}
 		var columns []string
-		if err := s.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", name).Scan(&columns).Error; err != nil {
-			return fmt.Errorf("inspect factor schema table %s: %w", name, err)
+		if err := s.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", table).Scan(&columns).Error; err != nil {
+			return fmt.Errorf("inspect factor schema table %s: %w", table, err)
 		}
 		if strings.Join(columns, "\x00") != strings.Join(want, "\x00") {
-			return fmt.Errorf("factor database table %s uses an obsolete schema; create a fresh database", name)
+			return fmt.Errorf("factor database table %s uses an obsolete schema; create a fresh database", table)
+		}
+	}
+	for name := range expected {
+		if !contains(tables, name) {
+			return fmt.Errorf("factor database missing table %s; create a fresh database", name)
 		}
 	}
 	return nil
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // WithTx runs fn inside a Factor SQLite transaction.
@@ -240,7 +146,7 @@ func (s *Store) WithTx(ctx context.Context, fn func(*gorm.DB) error) error {
 		return fmt.Errorf("factor database is not open")
 	}
 	if fn == nil {
-		return fmt.Errorf("factor transaction is required")
+		return fmt.Errorf("factor transaction callback is required")
 	}
 	return s.db.WithContext(ctx).Transaction(fn)
 }
@@ -287,8 +193,6 @@ func applySQLitePoolConfig(db *gorm.DB, cfg *Options) {
 	if err != nil {
 		return
 	}
-	// Factor writes output manifests from many task workers. Keep a single
-	// SQLite connection so concurrent WAL writes cannot corrupt the catalog.
 	maxOpen := 1
 	maxIdle := 1
 	if cfg != nil {
