@@ -194,17 +194,17 @@ func (m *IndexManager) ExtendColumns(ctx context.Context, id string, current, ne
 		current.Engine != "duckdb" || next.Engine != current.Engine || next.SpaceID != current.SpaceID ||
 		next.ViewID != current.ViewID || next.PrimaryDatasetID != current.PrimaryDatasetID ||
 		current.ViewVersion == 0 || next.ViewVersion <= current.ViewVersion || current.SchemaHash == "" || next.SchemaHash == "" {
-		return errors.New("DuckDB schema extension requires matching index identity and increasing revisions")
+		return fmt.Errorf("%w: DuckDB requires matching index identity and increasing revisions", viewindex.ErrSchemaExtensionConflict)
 	}
 	if viewindex.HashViewIndexSchema(current) != current.SchemaHash || viewindex.HashViewIndexSchema(next) != next.SchemaHash {
-		return errors.New("DuckDB schema extension hash does not match its columns")
+		return fmt.Errorf("%w: DuckDB schema hash does not match its columns", viewindex.ErrSchemaExtensionConflict)
 	}
 	if !viewindex.IsAppendOnlyViewColumns(current.Columns, next.Columns) {
-		return errors.New("DuckDB schema extension must append columns without changing existing columns")
+		return fmt.Errorf("%w: DuckDB columns are not append-only", viewindex.ErrSchemaExtensionConflict)
 	}
 	oldColumns, targetColumns := schemaColumns(current.Columns), schemaColumns(next.Columns)
 	if len(oldColumns) != len(current.Columns) || len(targetColumns) != len(next.Columns) {
-		return errors.New("DuckDB schema extension contains an invalid or system column")
+		return fmt.Errorf("%w: DuckDB schema contains an invalid or system column", viewindex.ErrSchemaExtensionConflict)
 	}
 	db, _, _, _, err := m.getIndex(ctx, id)
 	if err != nil {
@@ -225,21 +225,23 @@ func (m *IndexManager) ExtendColumns(ctx context.Context, id string, current, ne
 		return err
 	}
 	if datasetID != current.PrimaryDatasetID || spaceID != current.SpaceID {
-		return errors.New("DuckDB schema extension index identity conflicts with physical metadata")
+		return fmt.Errorf("%w: DuckDB index identity differs from physical metadata", viewindex.ErrSchemaExtensionConflict)
 	}
 	if version == next.ViewVersion && schemaHash == next.SchemaHash && samePhysicalColumns(physicalColumns, targetColumns) {
 		return nil
 	}
 	if version < current.ViewVersion || version > next.ViewVersion ||
 		!isPhysicalAppendOnlyState(physicalColumns, oldColumns, targetColumns) {
-		return fmt.Errorf("DuckDB schema extension physical state conflicts: revision=%d", version)
+		return fmt.Errorf("%w: DuckDB physical state is not an append-only prefix at revision %d", viewindex.ErrSchemaExtensionConflict, version)
 	}
 	if version == current.ViewVersion {
 		if schemaHash != current.SchemaHash || !samePhysicalColumns(physicalColumns, oldColumns) {
-			return errors.New("DuckDB active schema does not match the expected current contract")
+			return fmt.Errorf("%w: DuckDB active schema differs from the expected current contract", viewindex.ErrSchemaExtensionConflict)
 		}
 	} else if version == next.ViewVersion {
-		return errors.New("DuckDB target revision has a conflicting physical schema")
+		return fmt.Errorf("%w: DuckDB target revision has a conflicting physical schema", viewindex.ErrSchemaExtensionConflict)
+	} else if !matchesAppendOnlyPhysicalPrefix(physicalColumns, next, version, schemaHash) {
+		return fmt.Errorf("%w: DuckDB intermediate schema is not an append-only target prefix", viewindex.ErrSchemaExtensionConflict)
 	}
 	for _, column := range next.Columns {
 		name := column.GetColumnName()
@@ -321,6 +323,21 @@ func isPhysicalAppendOnlyState(physical, current, target map[string]pb.FieldValu
 		}
 	}
 	return true
+}
+
+func matchesAppendOnlyPhysicalPrefix(physical map[string]pb.FieldValueType, target viewindex.ViewIndexSchema, version uint64, schemaHash string) bool {
+	if len(physical) == 0 || len(physical) > len(target.Columns) {
+		return false
+	}
+	columns := target.Columns[:len(physical)]
+	if !samePhysicalColumns(physical, schemaColumns(columns)) {
+		return false
+	}
+	prefix := viewindex.ViewIndexSchema{
+		SpaceID: target.SpaceID, ViewID: target.ViewID, PrimaryDatasetID: target.PrimaryDatasetID,
+		ViewVersion: version, Engine: target.Engine, Columns: columns,
+	}
+	return viewindex.HashViewIndexSchema(prefix) == schemaHash
 }
 
 func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {

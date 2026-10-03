@@ -519,6 +519,12 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 					return err
 				}
 				if err := validatePhysicalViewContract(view, stats); err != nil {
+					if recovered, recoverErr := s.recoverFactorResultSchemaExtension(ctx, opts, auth, view, engine, stats); recoverErr != nil {
+						log.Printf("storage view factor-result schema recovery deferred on restore space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), recoverErr)
+						continue
+					} else if recovered {
+						continue
+					}
 					// One stale/corrupt active index must not take down the
 					// whole View process. Leave this View unattached so
 					// maintenance can rebuild it, and keep restoring others.
@@ -835,7 +841,13 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 				// live runtime we can build a replacement from the still-readable
 				// index; on startup RestoreActiveViews will fail closed and leave
 				// the actionable failed history row below.
-				activeInvalidErr = err
+				if extended, recoveryErr := s.recoverFactorResultSchemaExtension(ctx, opts, auth, view, engine, stats); recoveryErr != nil {
+					return fmt.Errorf("retry factor-result active schema recovery: %w", recoveryErr)
+				} else if extended {
+					return nil
+				} else {
+					activeInvalidErr = err
+				}
 			} else {
 				if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
 					return err

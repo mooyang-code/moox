@@ -181,6 +181,9 @@ type SchemaExtender interface {
 	ExtendColumns(context.Context, string, ViewIndexSchema, ViewIndexSchema) error
 }
 
+// ErrSchemaExtensionConflict means the physical index cannot satisfy the requested append-only contract.
+var ErrSchemaExtensionConflict = errors.New("view schema extension conflicts with physical index")
+
 // IsAppendOnlyViewColumns reports whether desired preserves every physical
 // column in active and appends at least one new column after its sort order.
 func IsAppendOnlyViewColumns(active, desired []*pb.ViewColumn) bool {

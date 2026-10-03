@@ -5,6 +5,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -118,6 +119,60 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		if field.GetValue().GetNullValue() != pb.NullValue_NULL_VALUE_NULL {
 			t.Errorf("new field %q = %v, want NULL", field.GetFieldId(), field.GetValue())
 		}
+	}
+}
+
+func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
+	ctx := context.Background()
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	current := viewindex.ViewIndexSchema{
+		SpaceID: "space", ViewID: "factor-view", PrimaryDatasetID: "dataset_factor_btc_1m",
+		ViewVersion: 1, Engine: "duckdb", Columns: []*pb.ViewColumn{{
+			ColumnName: "dataset_factor_btc_1m.close", OriginId: "dataset_factor_btc_1m.close",
+			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		}},
+	}
+	current.SchemaHash = viewindex.HashViewIndexSchema(current)
+	if err := manager.Prepare(ctx, "factor-view-a", current); err != nil {
+		t.Fatal(err)
+	}
+	bias := &pb.ViewColumn{
+		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "dataset_factor_btc_1m.bias_20",
+		OriginId: "dataset_factor_btc_1m.bias_20", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1,
+	}
+	intermediate := viewindex.ViewIndexSchema{
+		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
+		ViewVersion: 2, Engine: current.Engine, Columns: append(append([]*pb.ViewColumn(nil), current.Columns...), bias),
+	}
+	intermediate.SchemaHash = viewindex.HashViewIndexSchema(intermediate)
+	if err := manager.ExtendColumns(ctx, "factor-view-a", current, intermediate); err != nil {
+		t.Fatalf("create intermediate revision: %v", err)
+	}
+	db, _, _, _, err := manager.getIndex(ctx, "factor-view-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE view_meta SET schema_hash = 'corrupt' WHERE singleton = 1`); err != nil {
+		t.Fatal(err)
+	}
+	volume := &pb.ViewColumn{
+		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "dataset_factor_btc_1m.volume",
+		OriginId: "dataset_factor_btc_1m.volume", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2,
+	}
+	target := viewindex.ViewIndexSchema{
+		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
+		ViewVersion: 3, Engine: current.Engine, Columns: append(append(append([]*pb.ViewColumn(nil), current.Columns...), bias), volume),
+	}
+	target.SchemaHash = viewindex.HashViewIndexSchema(target)
+	if err := manager.ExtendColumns(ctx, "factor-view-a", current, target); !errors.Is(err, viewindex.ErrSchemaExtensionConflict) {
+		t.Fatalf("corrupt intermediate schema error = %v, want schema extension conflict", err)
 	}
 }
 

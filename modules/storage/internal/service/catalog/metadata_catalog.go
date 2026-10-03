@@ -270,6 +270,9 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	if err != nil {
 		return &pb.ActivateDatasetRsp{RetInfo: datasetReadRetInfo(err)}, nil
 	}
+	if err := validateFactorResultDatasetContract(dataset); err != nil {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	// An active, locked Dataset is the successful terminal state. Return it
 	// before readiness checks so retries remain idempotent even when the node
 	// is temporarily disabled or unreachable. Factor result View creation is

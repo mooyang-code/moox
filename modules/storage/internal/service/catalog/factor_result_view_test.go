@@ -6,12 +6,18 @@ import (
 	"path/filepath"
 	"testing"
 
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func newFactorResultActivationFixture(t *testing.T, role string) (*sqlite.Store, *Service, *pb.Dataset) {
+	return newFactorResultActivationFixtureWithSchema(t, role, pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m"})
+}
+
+func newFactorResultActivationFixtureWithSchema(t *testing.T, role string, kind pb.DataKind, freqs []string) (*sqlite.Store, *Service, *pb.Dataset) {
 	t.Helper()
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, sqlite.Options{
@@ -27,9 +33,13 @@ func newFactorResultActivationFixture(t *testing.T, role string) (*sqlite.Store,
 	require.NoError(t, err)
 	_, err = store.RegisterDataNode(ctx, "factor-node", "ip://127.0.0.1:19090", "因子节点")
 	require.NoError(t, err)
+	keepDuration := "720h"
+	if kind == pb.DataKind_DATA_KIND_RECORD {
+		keepDuration = "0"
+	}
 	dataset, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "factor-space", DatasetId: "dataset_factor_btc_1m", DataSourceId: "factor", DataNodeId: "factor-node",
-		Name: "BTC 因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1m"}, KeepDuration: "720h",
+		Name: "BTC 因子", DataKind: kind, Freqs: freqs, KeepDuration: keepDuration,
 		Attributes: map[string]string{"dataset_role": role, "owner_module": "factor"},
 	})
 	require.NoError(t, err)
@@ -123,6 +133,99 @@ func TestNewFactorResultColumnExtendsDefaultViewDesiredSchema(t *testing.T) {
 	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
 	require.NoError(t, err)
 	require.Equal(t, beforeRevision+1, view.GetDesiredViewRevision(), "idempotent metadata upsert must not advance View revision")
+}
+
+func TestActivateFactorResultDatasetRejectsInvalidSchemaBeforeCommit(t *testing.T) {
+	cases := []struct {
+		name  string
+		kind  pb.DataKind
+		freqs []string
+	}{
+		{name: "record dataset", kind: pb.DataKind_DATA_KIND_RECORD, freqs: []string{"1m"}},
+		{name: "no frequency", kind: pb.DataKind_DATA_KIND_TIME_SERIES},
+		{name: "multiple frequencies", kind: pb.DataKind_DATA_KIND_TIME_SERIES, freqs: []string{"1m", "5m"}},
+		{name: "blank frequency", kind: pb.DataKind_DATA_KIND_TIME_SERIES, freqs: []string{" "}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, service, dataset := newFactorResultActivationFixtureWithSchema(t, "factor_result", tc.kind, tc.freqs)
+			rsp, err := service.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{
+				SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ExpectedRevision: dataset.GetRevision(),
+			})
+			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+			persisted, err := store.GetDataset(context.Background(), dataset.GetSpaceId(), dataset.GetDatasetId())
+			require.NoError(t, err)
+			require.Equal(t, "disabled", persisted.GetStatus())
+			require.False(t, persisted.GetBindingLocked())
+		})
+	}
+}
+
+func TestEnsureFactorResultDefaultViewRejectsManagedContractConflicts(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*pb.View)
+	}{
+		{name: "owner", mutate: func(view *pb.View) { view.Attributes["owner_module"] = "collector" }},
+		{name: "view role", mutate: func(view *pb.View) { view.Attributes["view_role"] = "raw_collection" }},
+		{name: "managed by", mutate: func(view *pb.View) { delete(view.Attributes, "managed_by") }},
+		{name: "primary role", mutate: func(view *pb.View) { view.Attributes["primary_dataset_role"] = "raw_collection" }},
+		{name: "engine", mutate: func(view *pb.View) { view.Engine = "bleve" }},
+		{name: "status", mutate: func(view *pb.View) { view.Status = "disabled" }},
+		{name: "grain", mutate: func(view *pb.View) { view.GrainKeys = []string{"subject_id"} }},
+		{name: "frequency", mutate: func(view *pb.View) { view.FilterJson = `{"freq":"5m"}` }},
+		{name: "retention", mutate: func(view *pb.View) { view.KeepDuration = "24h" }},
+		{name: "columns", mutate: func(view *pb.View) { view.Columns[0].ValueType = pb.FieldValueType_FIELD_VALUE_TYPE_STRING }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+			activateFactorResultFixture(t, service, dataset)
+			view, err := store.GetView(context.Background(), dataset.GetSpaceId(), "view_factor_btc_1m")
+			require.NoError(t, err)
+			view = proto.Clone(view).(*pb.View)
+			tc.mutate(view)
+			_, err = store.UpsertView(context.Background(), view)
+			require.NoError(t, err)
+
+			err = service.ensureFactorResultDefaultView(context.Background(), dataset)
+			require.Error(t, err, "an existing same-ID View must match the managed factor-result contract")
+		})
+	}
+}
+
+type factorResultViewCreateRaceStore struct {
+	metadatastore.Store
+	existing  *pb.View
+	getCalls  int
+	createErr error
+}
+
+func (s *factorResultViewCreateRaceStore) GetView(context.Context, string, string) (*pb.View, error) {
+	s.getCalls++
+	if s.getCalls == 1 {
+		return nil, sql.ErrNoRows
+	}
+	return proto.Clone(s.existing).(*pb.View), nil
+}
+
+func (s *factorResultViewCreateRaceStore) CreateView(context.Context, *pb.View) (*pb.View, error) {
+	return nil, s.createErr
+}
+
+func TestEnsureFactorResultDefaultViewRejectsErrViewExistsRaceConflict(t *testing.T) {
+	store, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	activateFactorResultFixture(t, service, dataset)
+	existing, err := store.GetView(context.Background(), dataset.GetSpaceId(), "view_factor_btc_1m")
+	require.NoError(t, err)
+	existing.Attributes["owner_module"] = "collector"
+	raceStore := &factorResultViewCreateRaceStore{Store: store, existing: existing, createErr: metadatastore.ErrViewExists}
+	service.metadata = raceStore
+
+	err = service.ensureFactorResultDefaultView(context.Background(), dataset)
+	require.Error(t, err, "the ErrViewExists re-read must validate the same managed contract")
+	require.Equal(t, 2, raceStore.getCalls)
 }
 
 func viewColumnNames(columns []*pb.ViewColumn) []string {
