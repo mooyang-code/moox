@@ -415,8 +415,8 @@ func TestMooxSkillWriteMethodsAreDeniedBeforeDataNodeResolution(t *testing.T) {
 			rsp, callErr := svc.CommitInput(context.Background(), &pb.PrimaryCommitInputReq{AuthInfo: auth, CommitId: "commit-1", RequiredFields: []string{"value"}, Row: row})
 			return rsp.GetRetInfo(), callErr
 		},
-		"PatchFactor": func() (*pb.RetInfo, error) {
-			rsp, callErr := svc.PatchFactor(context.Background(), &pb.PrimaryPatchFactorReq{AuthInfo: auth, CommitId: "patch-1", BindingVersion: "bind-1", OwnedFields: []string{"value"}, Row: row})
+		"WriteFactorRows": func() (*pb.RetInfo, error) {
+			rsp, callErr := svc.WriteFactorRows(context.Background(), &pb.PrimaryWriteFactorRowsReq{AuthInfo: auth, SpaceId: "space", DatasetId: "dataset", CommitId: "commit-1", Rows: []*pb.RowFieldUpsert{row}})
 			return rsp.GetRetInfo(), callErr
 		},
 	}

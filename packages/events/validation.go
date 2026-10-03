@@ -421,7 +421,7 @@ func validateStorageWriteKind(kind string) error {
 		return fmt.Errorf("storage event write_kind is invalid")
 	}
 	switch kind {
-	case "", "input_commit", "factor_patch":
+	case "", "input_commit", "factor_result":
 		return nil
 	default:
 		return fmt.Errorf("storage event write_kind is invalid")

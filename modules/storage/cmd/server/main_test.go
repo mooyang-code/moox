@@ -47,7 +47,7 @@ func (*cleanupNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetN
 func (*cleanupNode) CommitInput(context.Context, *pb.CommitInputReq) (*pb.CommitInputRsp, error) {
 	return nil, nil
 }
-func (*cleanupNode) PatchFactor(context.Context, *pb.PatchFactorReq) (*pb.PatchFactorRsp, error) {
+func (*cleanupNode) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
 	return nil, nil
 }
 func (*cleanupNode) LookupWriteReceipt(context.Context, *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error) {
@@ -398,8 +398,8 @@ func (*resolverRuntime) CleanupExpiredBuckets(context.Context, *pb.CleanupExpire
 func (*resolverRuntime) CommitInput(context.Context, *pb.CommitInputReq) (*pb.CommitInputRsp, error) {
 	return &pb.CommitInputRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
-func (*resolverRuntime) PatchFactor(context.Context, *pb.PatchFactorReq) (*pb.PatchFactorRsp, error) {
-	return &pb.PatchFactorRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+func (*resolverRuntime) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
+	return &pb.WriteFactorRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 func (*resolverRuntime) LookupWriteReceipt(context.Context, *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error) {
 	return &pb.LookupWriteReceiptRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil

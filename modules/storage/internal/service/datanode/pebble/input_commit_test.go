@@ -3,7 +3,6 @@ package pebble
 import (
 	"context"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -16,10 +15,10 @@ func TestInputCommitIncompleteBaseFieldsDoNotBecomeReady(t *testing.T) {
 	store := openInputCommitStore(t)
 	key := inputCommitKey("BTC-USDT")
 	_, err := store.CommitInput(context.Background(), InputCommit{
-		CommitID:        "commit-incomplete",
-		RequiredFields:  []string{"open", "close"},
-		Row:             &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("open", 1)}},
-		WriteKind:       WriteKindInputCommit,
+		CommitID:       "commit-incomplete",
+		RequiredFields: []string{"open", "close"},
+		Row:            &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("open", 1)}},
+		WriteKind:      WriteKindInputCommit,
 	})
 	if err == nil {
 		t.Fatal("incomplete base fields must be rejected")
@@ -72,7 +71,7 @@ func TestInputCommitRetryDoesNotChangeCommittedBase(t *testing.T) {
 	key := inputCommitKey("SOL-USDT")
 	_, err := store.CommitInput(context.Background(), InputCommit{
 		CommitID: "commit-stable", RequiredFields: []string{"close"},
-		Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 10)}},
+		Row:       &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 10)}},
 		WriteKind: WriteKindInputCommit,
 	})
 	if err != nil {
@@ -80,7 +79,7 @@ func TestInputCommitRetryDoesNotChangeCommittedBase(t *testing.T) {
 	}
 	_, err = store.CommitInput(context.Background(), InputCommit{
 		CommitID: "commit-stable", RequiredFields: []string{"close"},
-		Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 99)}},
+		Row:       &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 99)}},
 		WriteKind: WriteKindInputCommit,
 	})
 	if err == nil {
@@ -89,87 +88,6 @@ func TestInputCommitRetryDoesNotChangeCommittedBase(t *testing.T) {
 	got, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
 	if err != nil || len(got) != 1 || got[0].GetFields()[0].GetValue().GetDoubleValue() != 10 {
 		t.Fatalf("base fields changed: %v err=%v", got, err)
-	}
-}
-
-func TestInputCommitConcurrentFactorPatchesDoNotClobber(t *testing.T) {
-	store := openInputCommitStore(t)
-	key := inputCommitKey("BNB-USDT")
-	_, err := store.CommitInput(context.Background(), InputCommit{
-		CommitID: "commit-base", RequiredFields: []string{"close"},
-		Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 4)}},
-		WriteKind: WriteKindInputCommit,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, err := store.PatchFactor(context.Background(), FactorPatch{
-			CommitID: "patch-ma", BindingVersion: "bind-ma-1", OwnedFields: []string{"ma"},
-			Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("ma", 4.1)}},
-		})
-		errs <- err
-	}()
-	go func() {
-		defer wg.Done()
-		_, err := store.PatchFactor(context.Background(), FactorPatch{
-			CommitID: "patch-vol", BindingVersion: "bind-vol-1", OwnedFields: []string{"vol"},
-			Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("vol", 100)}},
-		})
-		errs <- err
-	}()
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close", "ma", "vol"}, []string{attrInputReady})
-	if err != nil || len(got) != 1 {
-		t.Fatalf("rows=%v err=%v", got, err)
-	}
-	values := fieldMap(got[0])
-	if values["close"] != 4 || values["ma"] != 4.1 || values["vol"] != 100 {
-		t.Fatalf("patched fields=%v", values)
-	}
-	if !inputReady(got[0]) {
-		t.Fatal("factor patch must not clear input_ready")
-	}
-}
-
-func TestInputCommitFactorPatchCannotWriteBaseFields(t *testing.T) {
-	store := openInputCommitStore(t)
-	key := inputCommitKey("XRP-USDT")
-	_, err := store.CommitInput(context.Background(), InputCommit{
-		CommitID: "commit-xrp", RequiredFields: []string{"close"},
-		Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 1)}},
-		WriteKind: WriteKindInputCommit,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.PatchFactor(context.Background(), FactorPatch{
-		CommitID: "patch-evil", BindingVersion: "bind-ma-1", OwnedFields: []string{"ma"},
-		Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 0), doubleField("ma", 1.1)}},
-	})
-	if err == nil {
-		t.Fatal("factor patch must not write unowned base fields")
-	}
-	got, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close", "ma"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	values := fieldMap(got[0])
-	if values["close"] != 1 {
-		t.Fatalf("base field overwritten: %v", values)
-	}
-	if _, ok := values["ma"]; ok {
-		t.Fatalf("rejected patch still wrote owned field: %v", values)
 	}
 }
 
@@ -193,17 +111,6 @@ func doubleField(id string, value float64) *pb.FieldValue {
 	return &pb.FieldValue{FieldId: id, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}
 }
 
-func fieldMap(row *pb.RowFieldValues) map[string]float64 {
-	out := map[string]float64{}
-	if row == nil {
-		return out
-	}
-	for _, field := range row.GetFields() {
-		out[field.GetFieldId()] = field.GetValue().GetDoubleValue()
-	}
-	return out
-}
-
 func inputReady(row *pb.RowFieldValues) bool {
 	if row == nil {
 		return false
@@ -217,28 +124,18 @@ func TestInputCommitEventWriteKindIsDerivedFromOperation(t *testing.T) {
 	key := inputCommitKey("ADA-USDT")
 	_, err := store.CommitInput(context.Background(), InputCommit{
 		CommitID: "commit-kind", RequiredFields: []string{"close"},
-		Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 1)}},
+		Row:       &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("close", 1)}},
 		WriteKind: WriteKindInputCommit,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.PatchFactor(context.Background(), FactorPatch{
-		CommitID: "patch-kind", BindingVersion: "bind-1", OwnedFields: []string{"ma"},
-		Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{doubleField("ma", 1.2)}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
-	if err != nil || len(entries) != 2 {
+	if err != nil || len(entries) != 1 {
 		t.Fatalf("outbox=%v err=%v", entries, err)
 	}
 	if got := outboxWriteKind(t, entries[0].Data); got != WriteKindInputCommit {
 		t.Fatalf("commit write_kind=%q", got)
-	}
-	if got := outboxWriteKind(t, entries[1].Data); got != WriteKindFactorPatch {
-		t.Fatalf("patch write_kind=%q", got)
 	}
 }
 

@@ -74,17 +74,17 @@ message PrimaryCommitInputRsp {
   WriteReceipt receipt = 2;
 }
 
-message PrimaryPatchFactorReq {
+message PrimaryWriteFactorRowsReq {
   common.AuthInfo auth_info = 1;
-  string commit_id = 2;
-  string binding_version = 3;
-  repeated string owned_fields = 4;
-  RowFieldUpsert row = 5;
+  string space_id = 2;
+  string dataset_id = 3;
+  string commit_id = 4;
+  repeated RowFieldUpsert rows = 5;
 }
 
-message PrimaryPatchFactorRsp {
+message PrimaryWriteFactorRowsRsp {
   common.RetInfo ret_info = 1;
-  WriteReceipt receipt = 2;
+  uint64 rows_written = 2;
 }
 
 message PrimaryLookupWriteReceiptReq {
@@ -218,7 +218,7 @@ service PrimaryStore {
   rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
   rpc RecordDatasetPeriodFailures(PrimaryRecordDatasetPeriodFailuresReq) returns (PrimaryRecordDatasetPeriodFailuresRsp);
   rpc CommitInput(PrimaryCommitInputReq) returns (PrimaryCommitInputRsp);
-  rpc PatchFactor(PrimaryPatchFactorReq) returns (PrimaryPatchFactorRsp);
+  rpc WriteFactorRows(PrimaryWriteFactorRowsReq) returns (PrimaryWriteFactorRowsRsp);
   rpc LookupWriteReceipt(PrimaryLookupWriteReceiptReq) returns (PrimaryLookupWriteReceiptRsp);
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
   rpc DeleteDatasetRows(PrimaryDeleteDatasetRowsReq) returns (PrimaryDeleteDatasetRowsRsp);

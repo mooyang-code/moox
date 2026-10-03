@@ -24,7 +24,7 @@ type DataNodeRuntimeService interface {
 
 	CommitInput(ctx context.Context, req *CommitInputReq) (*CommitInputRsp, error)
 
-	PatchFactor(ctx context.Context, req *PatchFactorReq) (*PatchFactorRsp, error)
+	WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq) (*WriteFactorRowsRsp, error)
 
 	LookupWriteReceipt(ctx context.Context, req *LookupWriteReceiptReq) (*LookupWriteReceiptRsp, error)
 
@@ -71,14 +71,14 @@ func DataNodeRuntimeService_CommitInput_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func DataNodeRuntimeService_PatchFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PatchFactorReq{}
+func DataNodeRuntimeService_WriteFactorRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &WriteFactorRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeRuntimeService).PatchFactor(ctx, reqbody.(*PatchFactorReq))
+		return svr.(DataNodeRuntimeService).WriteFactorRows(ctx, reqbody.(*WriteFactorRowsReq))
 	}
 
 	var rsp interface{}
@@ -175,8 +175,8 @@ var DataNodeRuntimeServer_ServiceDesc = server.ServiceDesc{
 			Func: DataNodeRuntimeService_CommitInput_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNodeRuntime/PatchFactor",
-			Func: DataNodeRuntimeService_PatchFactor_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/WriteFactorRows",
+			Func: DataNodeRuntimeService_WriteFactorRows_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.DataNodeRuntime/LookupWriteReceipt",
@@ -551,8 +551,8 @@ func (s *UnimplementedDataNodeRuntime) UpsertFields(ctx context.Context, req *Up
 func (s *UnimplementedDataNodeRuntime) CommitInput(ctx context.Context, req *CommitInputReq) (*CommitInputRsp, error) {
 	return nil, errors.New("rpc CommitInput of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNodeRuntime) PatchFactor(ctx context.Context, req *PatchFactorReq) (*PatchFactorRsp, error) {
-	return nil, errors.New("rpc PatchFactor of service DataNodeRuntime is not implemented")
+func (s *UnimplementedDataNodeRuntime) WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq) (*WriteFactorRowsRsp, error) {
+	return nil, errors.New("rpc WriteFactorRows of service DataNodeRuntime is not implemented")
 }
 func (s *UnimplementedDataNodeRuntime) LookupWriteReceipt(ctx context.Context, req *LookupWriteReceiptReq) (*LookupWriteReceiptRsp, error) {
 	return nil, errors.New("rpc LookupWriteReceipt of service DataNodeRuntime is not implemented")
@@ -625,7 +625,7 @@ type DataNodeRuntimeClientProxy interface {
 
 	CommitInput(ctx context.Context, req *CommitInputReq, opts ...client.Option) (rsp *CommitInputRsp, err error)
 
-	PatchFactor(ctx context.Context, req *PatchFactorReq, opts ...client.Option) (rsp *PatchFactorRsp, err error)
+	WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq, opts ...client.Option) (rsp *WriteFactorRowsRsp, err error)
 
 	LookupWriteReceipt(ctx context.Context, req *LookupWriteReceiptReq, opts ...client.Option) (rsp *LookupWriteReceiptRsp, err error)
 
@@ -685,20 +685,20 @@ func (c *DataNodeRuntimeClientProxyImpl) CommitInput(ctx context.Context, req *C
 	return rsp, nil
 }
 
-func (c *DataNodeRuntimeClientProxyImpl) PatchFactor(ctx context.Context, req *PatchFactorReq, opts ...client.Option) (*PatchFactorRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq, opts ...client.Option) (*WriteFactorRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/PatchFactor")
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/WriteFactorRows")
 	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("DataNodeRuntime")
-	msg.WithCalleeMethod("PatchFactor")
+	msg.WithCalleeMethod("WriteFactorRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &PatchFactorRsp{}
+	rsp := &WriteFactorRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

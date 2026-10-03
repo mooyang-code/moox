@@ -36,7 +36,7 @@ func TestInputCommitSpoofedMergeSourceCannotSetReady(t *testing.T) {
 	}
 }
 
-func TestInputCommitSpoofedFactorSourceCannotPatch(t *testing.T) {
+func TestGenericUpsertRejectsFactorWriteSource(t *testing.T) {
 	writes := 0
 	svc, err := New(Options{Resolver: func(context.Context, string, string) (DataNodeClient, error) {
 		writes++
@@ -60,7 +60,7 @@ func TestInputCommitSpoofedFactorSourceCannotPatch(t *testing.T) {
 	}
 }
 
-func TestInputCommitUnauthorizedClientCannotCallCommitOrPatch(t *testing.T) {
+func TestInputCommitUnauthorizedClientCannotCallCommit(t *testing.T) {
 	svc, err := New(Options{Resolver: func(context.Context, string, string) (DataNodeClient, error) {
 		t.Fatal("unauthorized commit resolved DataNode")
 		return nil, nil
@@ -76,16 +76,9 @@ func TestInputCommitUnauthorizedClientCannotCallCommitOrPatch(t *testing.T) {
 	if err != nil || commit.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("unauthorized commit rsp=%v err=%v", commit, err)
 	}
-	patch, err := svc.PatchFactor(context.Background(), &pb.PrimaryPatchFactorReq{
-		AuthInfo: auth, CommitId: "patch-web", BindingVersion: "bind-1", OwnedFields: []string{"ma"},
-		Row: inputCommitRow("SOL-USDT", map[string]float64{"ma": 1}),
-	})
-	if err != nil || patch.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("unauthorized patch rsp=%v err=%v", patch, err)
-	}
 }
 
-func TestInputCommitAuthorizedMergeAndFactorDoNotClobber(t *testing.T) {
+func TestInputCommitAuthorizedCallerStoresBaseFields(t *testing.T) {
 	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: "node-secret", Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")}})
 	if err != nil {
 		t.Fatal(err)
@@ -110,15 +103,8 @@ func TestInputCommitAuthorizedMergeAndFactorDoNotClobber(t *testing.T) {
 	if err != nil || lookup.GetReceipt().GetPosition().GetSequence() != commit.GetReceipt().GetPosition().GetSequence() {
 		t.Fatalf("lookup rsp=%v err=%v", lookup, err)
 	}
-	patch, err := svc.PatchFactor(context.Background(), &pb.PrimaryPatchFactorReq{
-		AuthInfo: &pb.AuthInfo{AppId: "factor"}, CommitId: "patch-ma", BindingVersion: "bind-ma-1", OwnedFields: []string{"ma"},
-		Row: inputCommitRow("BNB-USDT", map[string]float64{"ma": 4.1}),
-	})
-	if err != nil || patch.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("factor patch rsp=%v err=%v", patch, err)
-	}
 	got, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "merge"}, Keys: []*pb.RowKey{row.GetKey()}, FieldIds: []string{"close", "ma"}, AttributeKeys: []string{"moox.input_ready"},
+		AuthInfo: &pb.AuthInfo{AppId: "merge"}, Keys: []*pb.RowKey{row.GetKey()}, FieldIds: []string{"close"}, AttributeKeys: []string{"moox.input_ready"},
 	})
 	if err != nil || got.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(got.GetRows()) != 1 {
 		t.Fatalf("read rsp=%v err=%v", got, err)
@@ -127,11 +113,11 @@ func TestInputCommitAuthorizedMergeAndFactorDoNotClobber(t *testing.T) {
 	for _, field := range got.GetRows()[0].GetFields() {
 		values[field.GetFieldId()] = field.GetValue().GetDoubleValue()
 	}
-	if values["close"] != 4 || values["ma"] != 4.1 {
+	if values["close"] != 4 {
 		t.Fatalf("fields=%v", values)
 	}
 	if !got.GetRows()[0].GetAttributes()["moox.input_ready"].GetBoolValue() {
-		t.Fatal("factor patch cleared input_ready")
+		t.Fatal("input commit did not set input_ready")
 	}
 }
 
@@ -165,35 +151,6 @@ func TestCommitInputAllowsMergeOnFactorResultDataset(t *testing.T) {
 	})
 	if err != nil || denied.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("merge generic upsert must stay denied rsp=%v err=%v", denied, err)
-	}
-}
-
-func TestPatchFactorAcceptsEngineAppID(t *testing.T) {
-	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: "node-secret", Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = node.Close() })
-	svc, err := New(Options{Node: node, AuthSigner: func(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
-		return &pb.AuthInfo{AppId: auth.GetAppId(), AppKey: datanode.ServiceAuthKey("node-secret", auth.GetAppId())}, nil
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	row := inputCommitRow("BNB-USDT", map[string]float64{"ma": 4.1})
-	upsert, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "moox-factor-engine"}, WriteSource: "factor",
-		Rows: []*pb.RowFieldUpsert{row},
-	})
-	if err != nil || upsert.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("engine upsert rsp=%v err=%v", upsert, err)
-	}
-	patch, err := svc.PatchFactor(context.Background(), &pb.PrimaryPatchFactorReq{
-		AuthInfo: &pb.AuthInfo{AppId: "moox-factor-engine"}, CommitId: "patch-engine", BindingVersion: "bind-ma-1",
-		OwnedFields: []string{"ma"}, Row: row,
-	})
-	if err != nil || patch.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || patch.GetReceipt().GetPosition().GetSequence() == 0 {
-		t.Fatalf("engine patch rsp=%v err=%v", patch, err)
 	}
 }
 

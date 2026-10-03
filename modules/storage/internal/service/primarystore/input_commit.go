@@ -13,7 +13,6 @@ import (
 
 type inputCommitDataNodeClient interface {
 	CommitInput(context.Context, *pb.CommitInputReq) (*pb.CommitInputRsp, error)
-	PatchFactor(context.Context, *pb.PatchFactorReq) (*pb.PatchFactorRsp, error)
 	LookupWriteReceipt(context.Context, *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error)
 }
 
@@ -53,47 +52,6 @@ func (s *Service) CommitInput(ctx context.Context, req *pb.PrimaryCommitInputReq
 		return &pb.PrimaryCommitInputRsp{RetInfo: rsp.GetRetInfo()}, nil
 	}
 	return &pb.PrimaryCommitInputRsp{RetInfo: retinfo.Success("success"), Receipt: rsp.GetReceipt()}, nil
-}
-
-func (s *Service) PatchFactor(ctx context.Context, req *pb.PrimaryPatchFactorReq) (*pb.PrimaryPatchFactorRsp, error) {
-	if req == nil || req.GetRow() == nil {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row is required"))}, nil
-	}
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if !isFactorAppID(req.GetAuthInfo().GetAppId()) {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("factor patch requires factor caller"))}, nil
-	}
-	rows := normalizeStockCNSeriesTags([]*pb.RowFieldUpsert{req.GetRow()})
-	ctx = s.requestContext(ctx)
-	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), rows); err != nil {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if err := validateRow(ctx, rows[0], s.validate); err != nil {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	node, err := s.resolveInputCommitNode(ctx, rows[0].GetKey())
-	if err != nil {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
-	auth, err := s.signAuth(req.GetAuthInfo())
-	if err != nil {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	rsp, err := node.PatchFactor(ctx, &pb.PatchFactorReq{
-		AuthInfo: auth, CommitId: req.GetCommitId(), BindingVersion: req.GetBindingVersion(), OwnedFields: req.GetOwnedFields(), Row: rows[0],
-	})
-	if err != nil {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return &pb.PrimaryPatchFactorRsp{RetInfo: rsp.GetRetInfo()}, nil
-	}
-	return &pb.PrimaryPatchFactorRsp{RetInfo: retinfo.Success("success"), Receipt: rsp.GetReceipt()}, nil
 }
 
 func (s *Service) LookupWriteReceipt(ctx context.Context, req *pb.PrimaryLookupWriteReceiptReq) (*pb.PrimaryLookupWriteReceiptRsp, error) {
@@ -169,7 +127,7 @@ func rejectUnauthorizedUpsertSemantics(rows []*pb.RowFieldUpsert, writeSource st
 
 func privilegedWriteSource(source string) bool {
 	switch strings.ToLower(strings.TrimSpace(source)) {
-	case "merge", "moox-merge", "factor", "moox-factor", "moox-factor-engine", pebble.WriteKindInputCommit, pebble.WriteKindFactorPatch:
+	case "merge", "moox-merge", "factor", "moox-factor", "moox-factor-engine", pebble.WriteKindInputCommit:
 		return true
 	default:
 		return false
@@ -178,7 +136,7 @@ func privilegedWriteSource(source string) bool {
 
 func reservedWriteAttribute(name string) bool {
 	switch name {
-	case "moox.input_ready", "moox.commit_id", "moox.binding_version":
+	case "moox.input_ready", "moox.commit_id":
 		return true
 	default:
 		return false

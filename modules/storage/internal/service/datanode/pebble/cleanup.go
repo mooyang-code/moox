@@ -372,7 +372,7 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 		if stored.SpaceID == "" && stored.DatasetID == "" {
 			belongs = sequenceDataset[stored.Sequence]
 			if !belongs {
-				inferredSpace, inferredDataset, inferErr := s.receiptDataset(strings.TrimPrefix(string(receiptIter.Key()), writeReceiptPrefix), stored.WriteKind)
+				inferredSpace, inferredDataset, inferErr := s.receiptDataset(strings.TrimPrefix(string(receiptIter.Key()), writeReceiptPrefix))
 				if inferErr != nil {
 					_ = receiptIter.Close()
 					return 0, inferErr
@@ -454,7 +454,7 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 // DatasetID were added to the persisted receipt. The fingerprint retains the
 // original RowFieldUpsert, so this also works after the relay has removed the
 // corresponding outbox entry.
-func (s *Store) receiptDataset(commitID, writeKind string) (string, string, error) {
+func (s *Store) receiptDataset(commitID string) (string, string, error) {
 	data, closer, err := s.db.Get([]byte(writeReceiptBodyPref + commitID))
 	if errors.Is(err, cpebble.ErrNotFound) {
 		return "", "", nil
@@ -467,13 +467,6 @@ func (s *Store) receiptDataset(commitID, writeKind string) (string, string, erro
 		return "", "", err
 	}
 	row := &pb.RowFieldUpsert{}
-	if writeKind == WriteKindFactorPatch {
-		wrapper := &pb.RowFieldUpsert{}
-		if err := proto.Unmarshal(body, wrapper); err != nil || len(wrapper.GetFields()) != 1 || wrapper.GetFields()[0].GetValue() == nil {
-			return "", "", nil
-		}
-		body = wrapper.GetFields()[0].GetValue().GetBytesValue()
-	}
 	if err := proto.Unmarshal(body, row); err != nil || row.GetKey() == nil {
 		return "", "", nil
 	}

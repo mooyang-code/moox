@@ -138,23 +138,21 @@ func (s *Service) CommitInput(ctx context.Context, req *pb.CommitInputReq) (*pb.
 	return &pb.CommitInputRsp{RetInfo: retinfo.Success("success"), Receipt: protoWriteReceipt(receipt)}, nil
 }
 
-func (s *Service) PatchFactor(ctx context.Context, req *pb.PatchFactorReq) (*pb.PatchFactorRsp, error) {
+func (s *Service) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
 	if req == nil {
-		return &pb.PatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.PatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.PatchFactorRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	receipt, err := s.store.PatchFactor(ctx, pebble.FactorPatch{
-		CommitID: req.GetCommitId(), BindingVersion: req.GetBindingVersion(), OwnedFields: req.GetOwnedFields(), Row: req.GetRow(),
-	})
+	rowsWritten, err := s.store.WriteFactorRows(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetCommitId(), req.GetRows())
 	if err != nil {
-		return &pb.PatchFactorRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
-	return &pb.PatchFactorRsp{RetInfo: retinfo.Success("success"), Receipt: protoWriteReceipt(receipt)}, nil
+	return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Success("success"), RowsWritten: rowsWritten}, nil
 }
 
 func (s *Service) LookupWriteReceipt(ctx context.Context, req *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error) {

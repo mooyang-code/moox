@@ -32,7 +32,7 @@ type PrimaryStoreService interface {
 
 	CommitInput(ctx context.Context, req *PrimaryCommitInputReq) (*PrimaryCommitInputRsp, error)
 
-	PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq) (*PrimaryPatchFactorRsp, error)
+	WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq) (*PrimaryWriteFactorRowsRsp, error)
 
 	LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq) (*PrimaryLookupWriteReceiptRsp, error)
 
@@ -165,14 +165,14 @@ func PrimaryStoreService_CommitInput_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
-func PrimaryStoreService_PatchFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrimaryPatchFactorReq{}
+func PrimaryStoreService_WriteFactorRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryWriteFactorRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).PatchFactor(ctx, reqbody.(*PrimaryPatchFactorReq))
+		return svr.(PrimaryStoreService).WriteFactorRows(ctx, reqbody.(*PrimaryWriteFactorRowsReq))
 	}
 
 	var rsp interface{}
@@ -411,8 +411,8 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_CommitInput_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/PatchFactor",
-			Func: PrimaryStoreService_PatchFactor_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/WriteFactorRows",
+			Func: PrimaryStoreService_WriteFactorRows_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/LookupWriteReceipt",
@@ -491,8 +491,8 @@ func (s *UnimplementedPrimaryStore) RecordDatasetPeriodFailures(ctx context.Cont
 func (s *UnimplementedPrimaryStore) CommitInput(ctx context.Context, req *PrimaryCommitInputReq) (*PrimaryCommitInputRsp, error) {
 	return nil, errors.New("rpc CommitInput of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq) (*PrimaryPatchFactorRsp, error) {
-	return nil, errors.New("rpc PatchFactor of service PrimaryStore is not implemented")
+func (s *UnimplementedPrimaryStore) WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq) (*PrimaryWriteFactorRowsRsp, error) {
+	return nil, errors.New("rpc WriteFactorRows of service PrimaryStore is not implemented")
 }
 func (s *UnimplementedPrimaryStore) LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq) (*PrimaryLookupWriteReceiptRsp, error) {
 	return nil, errors.New("rpc LookupWriteReceipt of service PrimaryStore is not implemented")
@@ -549,7 +549,7 @@ type PrimaryStoreClientProxy interface {
 
 	CommitInput(ctx context.Context, req *PrimaryCommitInputReq, opts ...client.Option) (rsp *PrimaryCommitInputRsp, err error)
 
-	PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq, opts ...client.Option) (rsp *PrimaryPatchFactorRsp, err error)
+	WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq, opts ...client.Option) (rsp *PrimaryWriteFactorRowsRsp, err error)
 
 	LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq, opts ...client.Option) (rsp *PrimaryLookupWriteReceiptRsp, err error)
 
@@ -703,20 +703,20 @@ func (c *PrimaryStoreClientProxyImpl) CommitInput(ctx context.Context, req *Prim
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) PatchFactor(ctx context.Context, req *PrimaryPatchFactorReq, opts ...client.Option) (*PrimaryPatchFactorRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq, opts ...client.Option) (*PrimaryWriteFactorRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/PatchFactor")
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/WriteFactorRows")
 	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("PatchFactor")
+	msg.WithCalleeMethod("WriteFactorRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &PrimaryPatchFactorRsp{}
+	rsp := &PrimaryWriteFactorRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
