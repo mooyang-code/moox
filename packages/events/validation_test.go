@@ -124,11 +124,6 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			},
 		},
 		{
-			name: "merge incomplete position", event: MergePeriodCompleted, subjectID: "mdataset",
-			payload: validMergePeriodCompleted(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.MergePeriodCompleted).CommittedPositions[0].Sequence = 0 },
-		},
-		{
 			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "mdataset",
 			payload: validFactorPeriodComputed(now),
 			mutate:  func(value proto.Message) { value.(*storagepb.FactorPeriodComputed).TriggerEventId = "" },
@@ -162,7 +157,7 @@ func TestFactorCompletionRequiresSourceHash(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 	payload := validFactorPeriodComputed(timestamppb.Now())
-	payload.Bindings[0].SourceHash = ""
+	payload.Factors[0].SourceHash = ""
 	_, err = registry.Encode(FactorPeriodComputed, payload, validationOptions("factor-event-1", "space", "mdataset"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "source_hash is required")

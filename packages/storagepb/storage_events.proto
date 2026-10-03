@@ -49,46 +49,26 @@ message CollectorPeriodCompleted {
   google.protobuf.Timestamp collected_at = 11;
 }
 
-// MergePeriodCompleted marks that every universe mdataset object reached a
-// construction terminal state. Successful input commits precede this event.
-message MergePeriodCompleted {
-  string dataset_id = 1;
-  string frequency = 2;
-  int64 period_time = 3;
-  string status = 4;
-  string batch_id = 5;
-  string config_snapshot_id = 6;
-  string expected_scope_ref = 7;
-  repeated string universe_subject_ids = 8;
-  repeated string failed_subjects = 9;
-  repeated CommittedPosition committed_positions = 10;
-  google.protobuf.Timestamp completed_at = 11;
+message FactorPeriodState {
+  string factor_id = 1;
+  string status = 2; // complete | degraded | skipped
+  repeated string failed_subjects = 3;
+  string source_hash = 4;
 }
 
-message FactorBindingPeriodState {
-  string binding_id = 1;
-  string factor_id = 2;
-  string status = 3;
-  repeated string skipped_subjects = 4;
-  repeated string failed_subjects = 5;
-  string source_hash = 6;
-}
-
-// FactorPeriodComputed marks all frozen bindings for one Dataset period as
-// terminal. Successful result patches precede this event in the same outbox.
+// FactorPeriodComputed marks all frozen factors for one result Dataset period
+// as terminal. Successful result row writes precede it in the same outbox.
 message FactorPeriodComputed {
   string dataset_id = 1;
-  string frequency = 2;
-  int64 period_time = 3;
-  string status = 4;
-  string batch_id = 5;
-  string config_snapshot_id = 6;
-  string expected_scope_ref = 7;
-  repeated string universe_subject_ids = 8;
-  repeated FactorBindingPeriodState bindings = 9;
-  repeated CommittedPosition committed_positions = 10;
-  google.protobuf.Timestamp computed_at = 11;
-  string trigger_event_id = 12;
+  string source_dataset_id = 2;
+  string frequency = 3;
+  int64 period_time = 4;
+  string status = 5; // complete | degraded
+  repeated string universe_subject_ids = 6;
+  repeated string failed_subjects = 7;
+  repeated FactorPeriodState factors = 8;
+  string trigger_event_id = 9;
+  google.protobuf.Timestamp computed_at = 10;
 }
 
 // ViewDataReady is published by View after a completion marker's required
@@ -106,14 +86,14 @@ message ViewDataReady {
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp ready_at = 11;
   // Registered completion event name this readiness is associated with, such as
-  // event.storage.merge.period.completed or event.storage.dataset.factor_period.computed.
+  // event.storage.collector.period.completed or event.storage.dataset.factor_period.computed.
   string completion_kind = 12;
   // Period completions copy the frozen object universe so consumers can lock
-  // the same membership without a second MergePeriodCompleted subscription.
+  // the same membership without a second completion event subscription.
   repeated string universe_subject_ids = 13;
-  // FactorPeriodComputed copies per-binding terminal states so strategies can
+  // FactorPeriodComputed copies per-factor terminal states so strategies can
   // decide whether a degraded aggregate is still usable for their pool.
-  repeated FactorBindingPeriodState bindings = 14;
+  repeated FactorPeriodState factors = 14;
 }
 
 // DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.

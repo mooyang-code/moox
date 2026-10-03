@@ -28,7 +28,7 @@ func TestViewDataReadyContract(t *testing.T) {
 	t.Run("required replacement events are registered", func(t *testing.T) {
 		for _, name := range []string{
 			"event.storage.collector.period.completed",
-			"event.storage.merge.period.completed",
+			"event.storage.dataset.factor_period.computed",
 			"event.storage.view.data.ready",
 		} {
 			_, ok := registry.Lookup(name, 1)
@@ -40,9 +40,9 @@ func TestViewDataReadyContract(t *testing.T) {
 	validReady := &storagepb.ViewDataReady{
 		ViewId:             "view-1",
 		ViewConfigId:       "view-config-1",
-		CompletionEventId:  "merge-completed-1",
-		CompletionKind:     MergePeriodCompleted.Name(),
-		DatasetId:          "mdataset_kline_1m",
+		CompletionEventId:  "collector-completed-1",
+		CompletionKind:     CollectorPeriodCompleted.Name(),
+		DatasetId:          "dataset_kline_1m",
 		Status:             "complete",
 		VisibleScope:       "universe:crypto:usdt",
 		Frequency:          "1m",

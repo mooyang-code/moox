@@ -111,24 +111,6 @@ func DecodeCollectorPeriodCompletedWithContentType(registry *Registry, raw []byt
 	return message, storagePayload, nil
 }
 
-// DecodeMergePeriodCompleted validates and decodes a merge completion marker.
-func DecodeMergePeriodCompleted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.MergePeriodCompleted, error) {
-	return DecodeMergePeriodCompletedWithContentType(registry, raw, subject, messageID, ContentType)
-}
-
-// DecodeMergePeriodCompletedWithContentType also validates broker content type.
-func DecodeMergePeriodCompletedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.MergePeriodCompleted, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, MergePeriodCompleted)
-	if err != nil {
-		return message, nil, err
-	}
-	storagePayload, ok := payload.(*storagepb.MergePeriodCompleted)
-	if !ok {
-		return message, nil, fmt.Errorf("merge period completed payload has type %T", payload)
-	}
-	return message, storagePayload, nil
-}
-
 // DecodeViewDataReady validates and decodes a View readiness event.
 func DecodeViewDataReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.ViewDataReady, error) {
 	return DecodeViewDataReadyWithContentType(registry, raw, subject, messageID, ContentType)

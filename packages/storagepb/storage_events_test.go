@@ -42,35 +42,24 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 				DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1786032000,
 				Status: "degraded", BatchId: "batch-1", ConfigSnapshotId: "config-1",
 				ExpectedScopeRef: "universe:spot_kline:1m", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
-				FailedSubjects: []string{"ETH-USDT"},
+				FailedSubjects:     []string{"ETH-USDT"},
 				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 9}},
 				CollectedAt:        now,
 			},
 			new: func() proto.Message { return new(CollectorPeriodCompleted) },
 		},
 		{
-			name: "merge period completed",
-			payload: &MergePeriodCompleted{
-				DatasetId: "mdataset_kline", Frequency: "1m", PeriodTime: 1786032000,
-				Status: "complete", BatchId: "merge-1", ConfigSnapshotId: "merge-config",
-				ExpectedScopeRef: "universe:mdataset:1m", UniverseSubjectIds: []string{"BTC-USDT"},
-				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 10}},
-				CompletedAt:        now,
-			},
-			new: func() proto.Message { return new(MergePeriodCompleted) },
-		},
-		{
 			name: "view data ready",
 			payload: &ViewDataReady{
-				ViewId: "view_kline", ViewConfigId: "view-config", CompletionEventId: "merge-1",
+				ViewId: "view_kline", ViewConfigId: "view-config", CompletionEventId: "factor-event-1",
 				CompletionKind: "event.storage.dataset.factor_period.computed",
-				DatasetId:      "mdataset_kline", Status: "degraded", VisibleScope: "universe:mdataset:1m",
+				DatasetId:      "result_kline", Status: "degraded", VisibleScope: "universe:result:1m",
 				Frequency: "1m", PeriodTime: 1786032000,
 				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 10}},
 				ReadyAt:            now,
-				Bindings: []*FactorBindingPeriodState{{
-					BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
-					SkippedSubjects: []string{"ETH-USDT"},
+				Factors: []*FactorPeriodState{{
+					FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
+					FailedSubjects: []string{"ETH-USDT"},
 				}},
 			},
 			new: func() proto.Message { return new(ViewDataReady) },
@@ -78,15 +67,14 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		{
 			name: "factor period computed",
 			payload: &FactorPeriodComputed{
-				DatasetId: "mdataset_kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-				BatchId: "factor-1", ConfigSnapshotId: "factor-config", ExpectedScopeRef: "universe:mdataset:1m",
+				DatasetId: "result_kline", SourceDatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
 				UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
-				Bindings: []*FactorBindingPeriodState{{
-					BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
-					SkippedSubjects: []string{"ETH-USDT"}, FailedSubjects: []string{"BTC-USDT"},
+				FailedSubjects:     []string{"ETH-USDT"},
+				Factors: []*FactorPeriodState{{
+					FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
+					FailedSubjects: []string{"BTC-USDT"},
 				}},
-				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 11}},
-				ComputedAt:         now, TriggerEventId: "merge-1",
+				ComputedAt: now, TriggerEventId: "collector-event-1",
 			},
 			new: func() proto.Message { return new(FactorPeriodComputed) },
 		},

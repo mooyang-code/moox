@@ -27,7 +27,6 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.storage.dataset.factor_period.computed@1",
 		"event.storage.dataset.rows.upserted@2",
 		"event.storage.dataset.sync_point@1",
-		"event.storage.merge.period.completed@1",
 		"event.storage.view.data.ready@1",
 		"event.trade.target.weight_requested@1",
 	}
@@ -41,7 +40,6 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.storage.dataset.factor_period.computed@1":  "storage",
 		"event.storage.dataset.rows.upserted@2":           "storage",
 		"event.storage.dataset.sync_point@1":              "storage",
-		"event.storage.merge.period.completed@1":          "storage",
 		"event.storage.view.data.ready@1":                 "storage",
 		"event.trade.target.weight_requested@1":           "strategy",
 	}
@@ -94,15 +92,6 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 			subjectID: "dataset",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeCollectorPeriodCompleted(registry, raw, subject, id)
-				return payload, err
-			},
-		},
-		{
-			name: "merge period completed", event: MergePeriodCompleted,
-			payload:   validMergePeriodCompleted(now),
-			subjectID: "mdataset",
-			decode: func(raw []byte, subject, id string) (proto.Message, error) {
-				_, payload, err := DecodeMergePeriodCompleted(registry, raw, subject, id)
 				return payload, err
 			},
 		},
@@ -259,21 +248,11 @@ func validCollectorPeriodCompleted(now *timestamppb.Timestamp) *storagepb.Collec
 	}
 }
 
-func validMergePeriodCompleted(now *timestamppb.Timestamp) *storagepb.MergePeriodCompleted {
-	return &storagepb.MergePeriodCompleted{
-		DatasetId: "mdataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
-		BatchId: "merge-batch-1", ConfigSnapshotId: "merge-config-1", ExpectedScopeRef: "universe:mdataset:1m",
-		UniverseSubjectIds: []string{"BTC-USDT"},
-		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 2}},
-		CompletedAt:        now,
-	}
-}
-
 func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
 	return &storagepb.ViewDataReady{
-		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "merge-completed-1",
-		CompletionKind: MergePeriodCompleted.Name(),
-		DatasetId:      "mdataset", Status: "complete", VisibleScope: "universe:mdataset:1m",
+		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "collector-completed-1",
+		CompletionKind: CollectorPeriodCompleted.Name(),
+		DatasetId:      "dataset", Status: "complete", VisibleScope: "universe:dataset:1m",
 		Frequency: "1m", PeriodTime: 1786032000,
 		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 2}},
 		ReadyAt:            now,
@@ -282,11 +261,9 @@ func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
 
 func validFactorPeriodComputed(now *timestamppb.Timestamp) *storagepb.FactorPeriodComputed {
 	return &storagepb.FactorPeriodComputed{
-		DatasetId: "mdataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
-		BatchId: "factor-batch-1", ConfigSnapshotId: "factor-config-1", ExpectedScopeRef: "universe:mdataset:1m",
+		DatasetId: "mdataset", SourceDatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
 		UniverseSubjectIds: []string{"BTC-USDT"},
-		Bindings:           []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
-		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 3}},
-		ComputedAt:         now, TriggerEventId: "merge-completed-1",
+		Factors:            []*storagepb.FactorPeriodState{{FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
+		ComputedAt:         now, TriggerEventId: "collector-completed-1",
 	}
 }

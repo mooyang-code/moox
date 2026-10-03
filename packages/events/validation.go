@@ -175,27 +175,6 @@ func validateCollectorPeriodCompleted(message *eventpb.EventMessage, value proto
 	})
 }
 
-func validateMergePeriodCompleted(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.MergePeriodCompleted)
-	if !ok {
-		return fmt.Errorf("merge period completed payload has type %T", value)
-	}
-	return validatePeriodCompletion(message, periodCompletion{
-		label:              "merge period completed",
-		datasetID:          payload.GetDatasetId(),
-		frequency:          payload.GetFrequency(),
-		periodTime:         payload.GetPeriodTime(),
-		status:             payload.GetStatus(),
-		batchID:            payload.GetBatchId(),
-		configSnapshotID:   payload.GetConfigSnapshotId(),
-		expectedScopeRef:   payload.GetExpectedScopeRef(),
-		universeSubjectIDs: payload.GetUniverseSubjectIds(),
-		failedSubjects:     payload.GetFailedSubjects(),
-		committedPositions: payload.GetCommittedPositions(),
-		timestamp:          payload.GetCompletedAt(),
-	})
-}
-
 func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*storagepb.FactorPeriodComputed)
 	if !ok {
@@ -204,22 +183,39 @@ func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Mes
 	if !validRequiredToken(payload.GetTriggerEventId()) {
 		return fmt.Errorf("factor period computed trigger_event_id is required")
 	}
-	if err := validatePeriodCompletion(message, periodCompletion{
-		label:              "factor period computed",
-		datasetID:          payload.GetDatasetId(),
-		frequency:          payload.GetFrequency(),
-		periodTime:         payload.GetPeriodTime(),
-		status:             payload.GetStatus(),
-		batchID:            payload.GetBatchId(),
-		configSnapshotID:   payload.GetConfigSnapshotId(),
-		expectedScopeRef:   payload.GetExpectedScopeRef(),
-		universeSubjectIDs: payload.GetUniverseSubjectIds(),
-		committedPositions: payload.GetCommittedPositions(),
-		timestamp:          payload.GetComputedAt(),
-	}); err != nil {
+	if !validRequiredToken(payload.GetSourceDatasetId()) {
+		return fmt.Errorf("factor period computed source_dataset_id is required")
+	}
+	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetComputedAt(), "factor period computed"); err != nil {
 		return err
 	}
-	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "factor period computed", true)
+	subjects, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "factor period computed universe_subject_ids")
+	if err != nil {
+		return err
+	}
+	failed, err := validateUniqueTokens(payload.GetFailedSubjects(), false, "factor period computed failed_subjects")
+	if err != nil {
+		return err
+	}
+	for subject := range failed {
+		if _, ok := subjects[subject]; !ok {
+			return fmt.Errorf("factor period computed failed_subject %q is not in universe_subject_ids", subject)
+		}
+	}
+	if payload.GetStatus() == "complete" && len(failed) != 0 {
+		return fmt.Errorf("factor period computed complete status has failed_subjects")
+	}
+	if err := validateFactorStates(payload.GetFactors(), payload.GetStatus(), "factor period computed"); err != nil {
+		return err
+	}
+	hasDegraded := len(failed) != 0
+	for _, factor := range payload.GetFactors() {
+		hasDegraded = hasDegraded || factor.GetStatus() != "complete"
+	}
+	if (payload.GetStatus() == "degraded") != hasDegraded {
+		return fmt.Errorf("factor period computed status does not match factors and failed_subjects")
+	}
+	return nil
 }
 
 func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {
@@ -253,6 +249,9 @@ func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) e
 	}
 	if payload.GetStatus() == "degraded" && !validRequiredToken(payload.GetFailedScopeRef()) {
 		return fmt.Errorf("view data ready degraded status requires failed_scope_ref")
+	}
+	if payload.GetCompletionKind() == FactorPeriodComputed.Name() {
+		return validateFactorStates(payload.GetFactors(), payload.GetStatus(), "view data ready")
 	}
 	return nil
 }
@@ -357,46 +356,35 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 	return nil
 }
 
-func validateFactorBindingStates(states []*storagepb.FactorBindingPeriodState, status, label string, requireSourceHash bool) error {
+func validateFactorStates(states []*storagepb.FactorPeriodState, status, label string) error {
 	if len(states) == 0 {
-		return fmt.Errorf("%s bindings are required", label)
+		return fmt.Errorf("%s factors are required", label)
 	}
 	seen := make(map[string]struct{}, len(states))
-	hasDegraded := false
 	for i, state := range states {
-		if state == nil || !validRequiredToken(state.GetBindingId()) || !validRequiredToken(state.GetFactorId()) {
-			return fmt.Errorf("%s binding %d identity is invalid", label, i)
+		if state == nil || !validRequiredToken(state.GetFactorId()) {
+			return fmt.Errorf("%s factor %d identity is invalid", label, i)
 		}
-		if _, ok := seen[state.GetBindingId()]; ok {
-			return fmt.Errorf("%s binding_id %q is duplicated", label, state.GetBindingId())
+		if _, ok := seen[state.GetFactorId()]; ok {
+			return fmt.Errorf("%s factor_id %q is duplicated", label, state.GetFactorId())
 		}
-		seen[state.GetBindingId()] = struct{}{}
-		if !validCompletionStatus(state.GetStatus()) {
-			return fmt.Errorf("%s binding %q status %q is invalid", label, state.GetBindingId(), state.GetStatus())
+		seen[state.GetFactorId()] = struct{}{}
+		if !validCompletionStatus(state.GetStatus()) && state.GetStatus() != "skipped" {
+			return fmt.Errorf("%s factor %q status %q is invalid", label, state.GetFactorId(), state.GetStatus())
 		}
-		if requireSourceHash && !validRequiredToken(state.GetSourceHash()) {
-			return fmt.Errorf("%s binding %q source_hash is required", label, state.GetBindingId())
+		if !validRequiredToken(state.GetSourceHash()) {
+			return fmt.Errorf("%s factor %q source_hash is required", label, state.GetFactorId())
 		}
-		skipped, err := validateUniqueTokens(state.GetSkippedSubjects(), false, fmt.Sprintf("%s binding %q skipped_subjects", label, state.GetBindingId()))
+		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("%s factor %q failed_subjects", label, state.GetFactorId()))
 		if err != nil {
 			return err
 		}
-		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("%s binding %q failed_subjects", label, state.GetBindingId()))
-		if err != nil {
-			return err
+		if state.GetStatus() == "complete" && len(failed) != 0 {
+			return fmt.Errorf("%s complete factor %q has failed subjects", label, state.GetFactorId())
 		}
-		for subject := range skipped {
-			if _, ok := failed[subject]; ok {
-				return fmt.Errorf("%s binding %q subject %q is both skipped and failed", label, state.GetBindingId(), subject)
-			}
+		if status == "complete" && state.GetStatus() != "complete" {
+			return fmt.Errorf("%s complete status has non-complete factor %q", label, state.GetFactorId())
 		}
-		if state.GetStatus() == "complete" && (len(skipped) != 0 || len(failed) != 0) {
-			return fmt.Errorf("%s complete binding %q has skipped or failed subjects", label, state.GetBindingId())
-		}
-		hasDegraded = hasDegraded || state.GetStatus() == "degraded"
-	}
-	if (status == "degraded") != hasDegraded {
-		return fmt.Errorf("%s status does not match bindings", label)
 	}
 	return nil
 }
@@ -440,7 +428,7 @@ func validCompletionStatus(status string) bool {
 
 func validateViewCompletionKind(kind string) error {
 	switch kind {
-	case CollectorPeriodCompleted.Name(), MergePeriodCompleted.Name(), FactorPeriodComputed.Name():
+	case CollectorPeriodCompleted.Name(), FactorPeriodComputed.Name():
 		return nil
 	default:
 		return fmt.Errorf("view data ready completion_kind is invalid")

@@ -85,9 +85,6 @@ var (
 	CollectorPeriodCompleted = declareEvent("event.storage.collector.period.completed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.CollectorPeriodCompleted{}
 	}, validateCollectorPeriodCompleted)
-	MergePeriodCompleted = declareEvent("event.storage.merge.period.completed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
-		return &storagepb.MergePeriodCompleted{}
-	}, validateMergePeriodCompleted)
 	FactorPeriodComputed = declareEvent("event.storage.dataset.factor_period.computed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.FactorPeriodComputed{}
 	}, validateFactorPeriodComputed)
