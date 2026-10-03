@@ -85,6 +85,19 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 	if err != nil {
 		return nil, err
 	}
+	retention := snapshot.Manifest.CollectorRetention
+	rendered, err = replaceYAMLMapping(rendered, "collector_retention", orderedMapping(
+		mappingField{"maintenance_interval", retention.MaintenanceInterval},
+		mappingField{"maintenance_timeout", retention.MaintenanceTimeout},
+		mappingField{"max_rows_per_pass", retention.MaxRowsPerPass},
+		mappingField{"execution_detail_retention", retention.ExecutionDetailRetention},
+		mappingField{"scheduled_run_summary_retention", retention.ScheduledRunSummaryRetention},
+		mappingField{"terminal_retry_retention", retention.TerminalRetryRetention},
+		mappingField{"period_snapshot_retention", retention.PeriodSnapshotRetention},
+	))
+	if err != nil {
+		return nil, err
+	}
 	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
 		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") {
 			continue

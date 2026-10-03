@@ -80,6 +80,7 @@ func (c *Config) ApplyCredentialFile(path string) error {
 	// explicit CA remains authoritative and is resolved relative to itself.
 	if caFile != "" {
 		c.TLSCAFile = caFile
+		c.TLSCAPEMBase64 = ""
 	}
 	// The deployment endpoint is supplied by the module config or the
 	// deployment-wide environment. Credential exports on the control host may

@@ -16,7 +16,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-var ErrUnsupportedOutputFields = errors.New("unsupported output fields")
+var (
+	ErrUnsupportedOutputFields = errors.New("unsupported output fields")
+	ErrResultContract          = errors.New("task result ownership or metadata contract violation")
+)
 
 // IDs are the stable metadata identities for one task result. Datasets and
 // views are task scoped; the view name is derived from taskID, type and
@@ -281,6 +284,7 @@ const (
 	ResultStatusPending = "pending"
 	ResultStatusReady   = "ready"
 	ResultStatusError   = "error"
+	ResultStatusUnknown = "unknown"
 )
 
 // Inspection is the read-only result metadata snapshot for one task.
@@ -311,10 +315,10 @@ func (m *Manager) InspectIDs(ctx context.Context, spaceID, taskID string, ids ID
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	inspection := Inspection{IDs: ids, Status: ResultStatusPending}
 	if m == nil || m.metadata == nil || m.auth == nil {
-		return inspectionWithError(inspection, fmt.Errorf("task result metadata manager is not configured"))
+		return inspectionWithError(inspection, fmt.Errorf("%w: task result metadata manager is not configured", ErrResultContract))
 	}
 	if spaceID == "" || taskID == "" {
-		return inspectionWithError(inspection, fmt.Errorf("space_id and task_id are required"))
+		return inspectionWithError(inspection, fmt.Errorf("%w: space_id and task_id are required", ErrResultContract))
 	}
 
 	datasetRsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: inspection.IDs.DatasetID})
@@ -322,26 +326,29 @@ func (m *Manager) InspectIDs(ctx context.Context, spaceID, taskID string, ids ID
 		return inspectionWithError(inspection, fmt.Errorf("inspect result dataset: %w", err))
 	}
 	if datasetRsp == nil {
-		return inspectionWithError(inspection, fmt.Errorf("inspect result dataset: empty response"))
+		return inspectionWithError(inspection, fmt.Errorf("%w: inspect result dataset: empty response", ErrResultContract))
 	}
 	if datasetRsp.GetRetInfo() == nil {
-		return inspectionWithError(inspection, metadataError("inspect result dataset", nil, nil))
+		return inspectionWithError(inspection, fmt.Errorf("%w: %v", ErrResultContract, metadataError("inspect result dataset", nil, nil)))
 	}
 	datasetExists := false
 	switch datasetRsp.GetRetInfo().GetCode() {
 	case storagepb.ErrorCode_SUCCESS:
 		dataset := datasetRsp.GetDataset()
 		if dataset == nil {
-			return inspectionWithError(inspection, fmt.Errorf("inspect result dataset: empty dataset"))
+			return inspectionWithError(inspection, fmt.Errorf("%w: inspect result dataset: empty dataset", ErrResultContract))
+		}
+		if dataset.GetSpaceId() != spaceID || dataset.GetDatasetId() != inspection.IDs.DatasetID {
+			return inspectionWithError(inspection, fmt.Errorf("%w: result dataset identity does not match requested space/dataset", ErrResultContract))
 		}
 		if !ownedByTask(dataset.GetAttributes(), taskID) {
-			return inspectionWithError(inspection, fmt.Errorf("result dataset %s is owned by another task", inspection.IDs.DatasetID))
+			return inspectionWithError(inspection, fmt.Errorf("%w: result dataset %s is owned by another task", ErrResultContract, inspection.IDs.DatasetID))
 		}
 		inspection.Dataset = dataset
 		datasetExists = true
 	case storagepb.ErrorCode_DATASET_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
 	default:
-		return inspectionWithError(inspection, metadataError("inspect result dataset", nil, datasetRsp.GetRetInfo()))
+		return inspectionWithError(inspection, classifyInspectionMetadataError("inspect result dataset", datasetRsp.GetRetInfo()))
 	}
 
 	viewRsp, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: inspection.IDs.ViewID})
@@ -349,33 +356,36 @@ func (m *Manager) InspectIDs(ctx context.Context, spaceID, taskID string, ids ID
 		return inspectionWithError(inspection, fmt.Errorf("inspect result view: %w", err))
 	}
 	if viewRsp == nil {
-		return inspectionWithError(inspection, fmt.Errorf("inspect result view: empty response"))
+		return inspectionWithError(inspection, fmt.Errorf("%w: inspect result view: empty response", ErrResultContract))
 	}
 	if viewRsp.GetRetInfo() == nil {
-		return inspectionWithError(inspection, metadataError("inspect result view", nil, nil))
+		return inspectionWithError(inspection, fmt.Errorf("%w: %v", ErrResultContract, metadataError("inspect result view", nil, nil)))
 	}
 	viewExists := false
 	switch viewRsp.GetRetInfo().GetCode() {
 	case storagepb.ErrorCode_SUCCESS:
 		view := viewRsp.GetView()
 		if view == nil {
-			return inspectionWithError(inspection, fmt.Errorf("inspect result view: empty view"))
+			return inspectionWithError(inspection, fmt.Errorf("%w: inspect result view: empty view", ErrResultContract))
+		}
+		if view.GetSpaceId() != spaceID || view.GetViewId() != inspection.IDs.ViewID {
+			return inspectionWithError(inspection, fmt.Errorf("%w: result view identity does not match requested space/view", ErrResultContract))
 		}
 		if !ownedByTask(view.GetAttributes(), taskID) {
-			return inspectionWithError(inspection, fmt.Errorf("result view %s is owned by another task", inspection.IDs.ViewID))
+			return inspectionWithError(inspection, fmt.Errorf("%w: result view %s is owned by another task", ErrResultContract, inspection.IDs.ViewID))
 		}
 		if view.GetDatasetId() != inspection.IDs.DatasetID {
-			return inspectionWithError(inspection, fmt.Errorf("result view %s does not reference task dataset %s", inspection.IDs.ViewID, inspection.IDs.DatasetID))
+			return inspectionWithError(inspection, fmt.Errorf("%w: result view %s does not reference task dataset %s", ErrResultContract, inspection.IDs.ViewID, inspection.IDs.DatasetID))
 		}
 		inspection.View = view
 		viewExists = true
 	case storagepb.ErrorCode_VIEW_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
 	default:
-		return inspectionWithError(inspection, metadataError("inspect result view", nil, viewRsp.GetRetInfo()))
+		return inspectionWithError(inspection, classifyInspectionMetadataError("inspect result view", viewRsp.GetRetInfo()))
 	}
 
 	if !datasetExists && viewExists {
-		return inspectionWithError(inspection, fmt.Errorf("result view %s exists without task dataset %s", inspection.IDs.ViewID, inspection.IDs.DatasetID))
+		return inspectionWithError(inspection, fmt.Errorf("%w: result view %s exists without task dataset %s", ErrResultContract, inspection.IDs.ViewID, inspection.IDs.DatasetID))
 	}
 	if !datasetExists || !viewExists {
 		return inspection, nil
@@ -403,6 +413,19 @@ func inspectionWithError(inspection Inspection, err error) (Inspection, error) {
 		inspection.Error = err.Error()
 	}
 	return inspection, err
+}
+
+func classifyInspectionMetadataError(action string, ret *storagepb.RetInfo) error {
+	err := metadataError(action, nil, ret)
+	if ret == nil {
+		return fmt.Errorf("%w: %v", ErrResultContract, err)
+	}
+	switch ret.GetCode() {
+	case storagepb.ErrorCode_INVALID_PARAM, storagepb.ErrorCode_NO_AUTH, storagepb.ErrorCode_NO_PERMISSION, storagepb.ErrorCode_CONFLICT:
+		return fmt.Errorf("%w: %v", ErrResultContract, err)
+	default:
+		return err
+	}
 }
 
 func resultLastDataTime(dataset *storagepb.Dataset, view *storagepb.View) string {

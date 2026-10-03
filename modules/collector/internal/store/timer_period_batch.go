@@ -17,6 +17,20 @@ const (
 	maxTimerBatchItems       = 40
 	maxTimerBatchRequestSize = 256 * 1024
 	maxTimerClaimAttempts    = 8
+	maxTimerManifestCleanup  = 10000
+	timerManifestCleanupSQL  = `SELECT manifests.c_key
+		FROM t_collector_period_storage_states AS states INDEXED BY idx_collector_period_storage_terminal_cleanup
+		CROSS JOIN t_collector_timer_period_batches AS manifests
+		CROSS JOIN t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch
+		WHERE states.c_space_id = ? AND states.c_status = ?
+		  AND manifests.c_space_id = states.c_space_id
+		  AND manifests.c_dataset_id = states.c_dataset_id
+		  AND manifests.c_frequency = states.c_frequency
+		  AND manifests.c_period_time = states.c_period_time
+		  AND batches.c_space_id = manifests.c_space_id AND batches.c_batch_id = manifests.c_batch_id
+		  AND batches.c_status IN ('succeeded', 'partial_failed', 'failed', 'timed_out')
+		ORDER BY states.c_confirmed_at, states.c_dataset_id, states.c_frequency, states.c_period_time
+		LIMIT ?`
 )
 
 var errTimerBatchClaimCAS = errors.New("timer period batch claim compare-and-swap lost")
@@ -29,6 +43,48 @@ type TimerPeriodBatchRepository struct {
 
 func NewTimerPeriodBatchRepository(db *gorm.DB) *TimerPeriodBatchRepository {
 	return &TimerPeriodBatchRepository{db: db, now: time.Now}
+}
+
+// CleanupStorageTerminal removes claim manifests once Storage has finalized
+// their period and every associated batch is terminal. Waiting periods retain
+// their manifests so late Timer claims and failure recovery remain possible.
+func (r *TimerPeriodBatchRepository) CleanupStorageTerminal(ctx context.Context, spaceID string, limit int) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("timer period batch repository is not initialized")
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return 0, fmt.Errorf("space_id is required")
+	}
+	if limit <= 0 {
+		limit = maxTimerManifestCleanup
+	}
+	limit = min(limit, maxTimerManifestCleanup)
+	var deleted int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		remaining := limit
+		statuses := []string{domain.PeriodStatusComplete, domain.PeriodStatusDegraded}
+		for pass := 0; pass < 2 && remaining > 0; pass++ {
+			for index, status := range statuses {
+				statusLimit := remaining
+				if pass == 0 {
+					remainingStatuses := len(statuses) - index
+					statusLimit = (remaining + remainingStatuses - 1) / remainingStatuses
+				}
+				result := tx.Exec(`DELETE FROM t_collector_timer_period_batches WHERE c_key IN (`+timerManifestCleanupSQL+`)`, spaceID, status, statusLimit)
+				if result.Error != nil {
+					return result.Error
+				}
+				deleted += result.RowsAffected
+				remaining -= int(result.RowsAffected)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, err
 }
 
 type TimerPeriodBatchPlan struct {

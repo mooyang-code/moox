@@ -86,10 +86,10 @@ func (c Compiler) CompileWithBindings(ctx context.Context, dsl config.DSL, space
 	if err := validateFactorAliases(binding.Factors); err != nil {
 		return CompiledStrategy{}, err
 	}
+	// Factor outputs may be materialized into the same View as their source;
+	// the loader deduplicates that View while reading source and factor values.
 	if resultViews := uniqueResultViews(binding.Factors); len(resultViews) > 1 {
 		return CompiledStrategy{}, fmt.Errorf("strategy factor bindings must share one result_view_id, got %s", strings.Join(resultViews, ", "))
-	} else if len(resultViews) == 1 && strings.TrimSpace(binding.SourceViewID) != "" && resultViews[0] == strings.TrimSpace(binding.SourceViewID) {
-		return CompiledStrategy{}, fmt.Errorf("strategy source_view_id must differ from factor result_view_id %q", resultViews[0])
 	}
 	fields := cloneTypes(c.InputFields)
 	if fields == nil {

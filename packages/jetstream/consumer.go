@@ -41,6 +41,8 @@ type ConsumerInfo struct {
 	MaxDeliver int
 }
 
+const consumerOwnershipInspectionTimeout = 250 * time.Millisecond
+
 // ConsumerState is a point-in-time server view of one durable's backlog.
 type ConsumerState struct {
 	NumPending    uint64
@@ -195,27 +197,35 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 
 func (c *Client) rejectConsumerOwnedByAnotherStream(ctx context.Context, requestedStream, durable string) error {
 	// JetStream only requires durable names to be unique inside one stream. Keep
-	// the cross-stream guard for local/test streams, but do not probe production
-	// streams owned by another role: scoped credentials are deliberately denied
-	// ConsumerInfo there (and on KV streams), so such probes only turn a valid
-	// requested-stream check into a timeout.
+	// this cross-stream guard as a bounded best-effort check: scoped credentials
+	// commonly cannot list streams, and nats.go's StreamNames channel hides the
+	// permission error until its context expires. Requested-stream validation
+	// below remains authoritative.
 	js, err := c.jetStream()
 	if err != nil {
 		return err
 	}
-	names := js.StreamNames(nats.Context(ctx))
+	inspectionCtx, cancel := context.WithTimeout(ctx, consumerOwnershipInspectionTimeout)
+	defer cancel()
+	names := js.StreamNames(nats.Context(inspectionCtx))
 	for stream := range names {
+		if inspectionCtx.Err() != nil {
+			break
+		}
 		if stream == requestedStream || strings.HasPrefix(stream, "KV_") ||
 			(requestedStream == "MOOX_STORAGE" && strings.HasPrefix(stream, "MOOX_")) {
 			continue
 		}
-		_, err := js.ConsumerInfo(stream, durable, nats.Context(ctx))
+		_, err := js.ConsumerInfo(stream, durable, nats.Context(inspectionCtx))
 		switch {
 		case err == nil:
 			return fmt.Errorf("%w: consumer %s already belongs to stream %s", ErrConsumerConfigConflict, durable, stream)
 		case errors.Is(err, nats.ErrConsumerNotFound):
 			continue
 		default:
+			if inspectionCtx.Err() != nil {
+				break
+			}
 			if strings.Contains(strings.ToLower(err.Error()), "permissions violation") {
 				continue
 			}

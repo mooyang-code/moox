@@ -35,6 +35,7 @@ type StorageRPCConfig struct {
 type ServiceAuthConfig struct {
 	AccessKey   string `json:"access_key" yaml:"access_key"`
 	SecretKey   string `json:"secret_key" yaml:"secret_key"`
+	Caller      string `json:"caller" yaml:"caller"`
 	TargetNode  string `json:"target_node" yaml:"target_node"`
 	CAFile      string `json:"ca_file" yaml:"ca_file"`
 	CAPEMBase64 string `json:"ca_pem_base64" yaml:"ca_pem_base64"`
@@ -112,6 +113,9 @@ func GetServiceAuthConfig() ServiceAuthConfig {
 	}
 	if value := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); value != "" {
 		cfg.SecretKey = value
+	}
+	if value := os.Getenv("MOOX_GATEWAY_CALLER"); value != "" {
+		cfg.Caller = value
 	}
 	if value := os.Getenv("MOOX_GATEWAY_CA_FILE"); value != "" {
 		cfg.CAFile = value

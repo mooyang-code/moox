@@ -1,6 +1,6 @@
 import type { CollectorTask } from "@/api/collector";
 
-export type TaskResultState = "ready" | "preparing" | "error";
+export type TaskResultState = "ready" | "preparing" | "stale" | "error";
 
 export interface TaskResultTab {
   task: CollectorTask;
@@ -39,6 +39,7 @@ export function getTaskResultState(task: CollectorTask): TaskResultState {
   if (["error", "failed", "invalid"].includes(resultStatus) || prepareState === "error" || Boolean(task.last_error)) {
     return "error";
   }
+  if (["stale", "unknown"].includes(resultStatus)) return "stale";
   if (getTaskResultViewIds(task).length > 0 && !["pending", "preparing", "waiting_view"].includes(resultStatus)) {
     return "ready";
   }
@@ -48,6 +49,7 @@ export function getTaskResultState(task: CollectorTask): TaskResultState {
 export function resultStateLabel(state: TaskResultState): string {
   if (state === "ready") return "结果可用";
   if (state === "error") return "结果异常";
+  if (state === "stale") return "结果状态待刷新";
   return "结果准备中";
 }
 
@@ -70,6 +72,17 @@ export function selectTaskIdFromQuery(tasks: CollectorTask[], requestedTaskId: u
   const requested = queryString(requestedTaskId);
   const sortedTasks = sortTasksByCreatedAt(tasks);
   return sortedTasks.some(task => task.task_id === requested) ? requested : sortedTasks[0]?.task_id || "";
+}
+
+export function resolveActiveTask(
+  tasks: CollectorTask[],
+  details: Record<string, CollectorTask>,
+  selectedTaskId: string
+): CollectorTask | undefined {
+  if (selectedTaskId) {
+    return details[selectedTaskId] || tasks.find(task => task.task_id === selectedTaskId);
+  }
+  return sortTasksByCreatedAt(tasks)[0];
 }
 
 export function buildResultsQuery(taskId: string): { tab: "results"; resultTask?: string } {

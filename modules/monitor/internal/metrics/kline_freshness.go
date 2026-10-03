@@ -16,20 +16,26 @@ import (
 const (
 	ViewDatasetOutputLastDataTimeMetric = "moox_storage_view_dataset_output_last_data_time_seconds"
 	KlineDefaultSeriesTag               = "default"
+	TaskResultInventoryCheckID          = "kline_freshness:task_result_inventory"
 	klineFutureTolerance                = 10 * time.Minute
 )
 
 type KlineFreshnessRule struct {
-	Enabled    bool
-	SpaceID    string
-	DatasetID  string
-	ViewID     string
-	Frequency  string
-	MarketID   string
-	CalendarID string
-	Timezone   string
-	Sessions   []string
-	StaleAfter time.Duration
+	Enabled               bool
+	SpaceID               string
+	DatasetID             string
+	ViewID                string
+	Frequency             string
+	MarketID              string
+	CalendarID            string
+	Timezone              string
+	Sessions              []string
+	StaleAfter            time.Duration
+	ResultStatus          string
+	LatestCompletedPeriod time.Time
+	LatestCompletedStatus string
+	ViewLastDataTime      time.Time
+	InventoryObservedAt   time.Time
 }
 
 type KlineFreshnessReport struct {
@@ -42,6 +48,7 @@ type KlineFreshnessReport struct {
 	StaleCount       int
 	ObservedCount    int
 	OldestDataTime   time.Time
+	StaleAge         time.Duration
 	StaleSubjects    []string
 	ObservedSubjects []string
 }
@@ -50,6 +57,8 @@ type KlineFreshnessEvaluator struct {
 	query       *QueryService
 	rules       []KlineFreshnessRule
 	maxSubjects int
+	inventory   *TaskResultInventoryCache
+	staleAfter  time.Duration
 }
 
 func NewKlineFreshnessEvaluator(query *QueryService, rules []KlineFreshnessRule, maxSubjects int) *KlineFreshnessEvaluator {
@@ -60,6 +69,13 @@ func NewKlineFreshnessEvaluator(query *QueryService, rules []KlineFreshnessRule,
 		maxSubjects = 100
 	}
 	return &KlineFreshnessEvaluator{query: query, rules: append([]KlineFreshnessRule(nil), rules...), maxSubjects: maxSubjects}
+}
+
+func NewKlineFreshnessEvaluatorWithInventory(query *QueryService, inventory *TaskResultInventoryCache, staleAfter time.Duration, maxSubjects int) *KlineFreshnessEvaluator {
+	evaluator := NewKlineFreshnessEvaluator(query, nil, maxSubjects)
+	evaluator.inventory = inventory
+	evaluator.staleAfter = staleAfter
+	return evaluator
 }
 
 func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...time.Time) ([]KlineFreshnessReport, error) {
@@ -74,9 +90,19 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	filters := make([]ViewMetricScope, 0, len(e.rules))
-	for _, rule := range e.rules {
-		if !rule.Enabled {
+	rules := e.rules
+	inventoryEvaluated := false
+	if e.inventory != nil {
+		inventory, err := e.inventory.Get(ctx, now)
+		if err != nil {
+			return nil, &TaskResultInventoryRefreshError{Cause: fmt.Errorf("load task-result inventory: %w", err), State: e.inventory.State(now)}
+		}
+		rules = klineFreshnessRulesFromInventory(inventory, e.staleAfter)
+		inventoryEvaluated = true
+	}
+	filters := make([]ViewMetricScope, 0, len(rules))
+	for _, rule := range rules {
+		if !rule.Enabled || rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
 			continue
 		}
 		filters = append(filters, ViewMetricScope{SpaceID: rule.SpaceID, ViewID: rule.ViewID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
@@ -106,8 +132,16 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		}
 	}
 
-	reports := make([]KlineFreshnessReport, 0, len(e.rules))
-	for _, rule := range e.rules {
+	reports := make([]KlineFreshnessReport, 0, len(rules)+1)
+	if inventoryEvaluated {
+		state := e.inventory.State(now)
+		reports = append(reports, KlineFreshnessReport{
+			Rule:    KlineFreshnessRule{SpaceID: InternalMetricSpaceID, ViewID: "task-result-inventory"},
+			CheckID: TaskResultInventoryCheckID, Success: true, Reason: "inventory_fresh",
+			Diagnostic: fmt.Sprintf("cache_age_seconds=%.0f", state.Age.Seconds()),
+		})
+	}
+	for _, rule := range rules {
 		if !rule.Enabled {
 			reports = append(reports, KlineFreshnessReport{
 				Rule: rule, CheckID: KlineFreshnessCheckID(rule), Skipped: true, Reason: "disabled",
@@ -115,6 +149,19 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			continue
 		}
 		report := KlineFreshnessReport{Rule: rule, CheckID: KlineFreshnessCheckID(rule)}
+		if rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
+			report.Skipped = true
+			report.Reason = "task_result_not_ready"
+			reports = append(reports, report)
+			continue
+		}
+		if rule.ResultStatus == "error" {
+			report.Reason = "task_result_error"
+			report.StaleAge = inventoryDataAge(now, rule.ViewLastDataTime)
+			report.Diagnostic = formatKlineDiagnostic(report)
+			reports = append(reports, report)
+			continue
+		}
 		if reason := klineMarketSkipReason(rule, now); reason != "" {
 			report.Skipped, report.Reason = true, reason
 			reports = append(reports, report)
@@ -142,10 +189,20 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 				observed, activeObservedSubjects = filterObservedByActiveSubjects(observed, activeSubjects, expectedKlineSubjectSuffix(rule.DatasetID))
 			}
 		}
+		if lag, behind := completedPeriodViewLag(rule, observed, now); behind {
+			report.Success = false
+			report.Reason = "view_behind_latest_completed_period"
+			report.StaleAge = lag
+			report.ObservedCount = len(observed)
+			report.Diagnostic = formatKlineDiagnostic(report)
+			reports = append(reports, report)
+			continue
+		}
 		if len(observed) == 0 {
 			// An enabled rule with no output watermark is a real failure: a
 			// misrouted View or an unbound consumer must not remain silent.
 			report.Success, report.Reason = false, "no_observation"
+			report.StaleAge = inventoryDataAge(now, rule.ViewLastDataTime)
 			report.Diagnostic = formatKlineDiagnostic(report)
 			reports = append(reports, report)
 			continue
@@ -158,6 +215,9 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			observedSubjects[item.identity.SubjectID] = struct{}{}
 			if report.OldestDataTime.IsZero() || item.outputTime.Before(report.OldestDataTime) {
 				report.OldestDataTime = item.outputTime
+			}
+			if age := inventoryDataAge(now, item.outputTime); age > report.StaleAge {
+				report.StaleAge = age
 			}
 			if now.Sub(item.outputTime) > rule.StaleAfter {
 				report.StaleCount++
@@ -189,6 +249,26 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].CheckID < reports[j].CheckID })
 	return reports, nil
+}
+
+func completedPeriodViewLag(rule KlineFreshnessRule, observed []viewObservation, now time.Time) (time.Duration, bool) {
+	status := strings.ToLower(strings.TrimSpace(rule.LatestCompletedStatus))
+	if rule.LatestCompletedPeriod.IsZero() || (status != "complete" && status != "degraded") {
+		return 0, false
+	}
+	latestViewTime := rule.ViewLastDataTime
+	for _, item := range observed {
+		if item.outputTime.After(latestViewTime) {
+			latestViewTime = item.outputTime
+		}
+	}
+	if !latestViewTime.IsZero() && !latestViewTime.Before(rule.LatestCompletedPeriod) {
+		return 0, false
+	}
+	if latestViewTime.IsZero() {
+		return inventoryDataAge(now, rule.LatestCompletedPeriod), true
+	}
+	return rule.LatestCompletedPeriod.Sub(latestViewTime), true
 }
 
 // filterObservedByActiveSubjects keeps the metadata catalog authoritative while
@@ -279,6 +359,50 @@ func subjectProductSuffix(subjectID string) string {
 
 func KlineFreshnessCheckID(rule KlineFreshnessRule) string {
 	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.ViewID), strings.TrimSpace(rule.Frequency))
+}
+
+func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, staleAfter time.Duration) []KlineFreshnessRule {
+	rules := make([]KlineFreshnessRule, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		if !entry.Enabled {
+			rules = append(rules, inventoryRule(entry, false, staleAfter))
+			continue
+		}
+		if entry.ResultStatus == "error" {
+			rules = append(rules, inventoryRule(entry, true, staleAfter))
+			continue
+		}
+		if entry.ResultStatus == "pending" {
+			rules = append(rules, inventoryRule(entry, true, staleAfter))
+			continue
+		}
+		if !entry.OwnershipVerified || entry.ResultStatus != "ready" {
+			unverified := inventoryRule(entry, true, staleAfter)
+			unverified.ResultStatus = "unverified"
+			rules = append(rules, unverified)
+			continue
+		}
+		rules = append(rules, inventoryRule(entry, true, staleAfter))
+	}
+	return rules
+}
+
+func inventoryRule(entry TaskResultInventoryEntry, enabled bool, staleAfter time.Duration) KlineFreshnessRule {
+	return KlineFreshnessRule{
+		Enabled: enabled, SpaceID: entry.SpaceID, DatasetID: entry.DatasetID, ViewID: entry.ViewID,
+		Frequency: entry.Frequency, MarketID: entry.MarketID, CalendarID: entry.CalendarID,
+		Timezone: entry.Timezone, Sessions: append([]string(nil), entry.Sessions...), StaleAfter: staleAfter,
+		ResultStatus: entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
+		LatestCompletedStatus: entry.LatestCompletedStatus, ViewLastDataTime: entry.ViewLastDataTime,
+		InventoryObservedAt: entry.ObservedAt,
+	}
+}
+
+func inventoryDataAge(now, dataTime time.Time) time.Duration {
+	if dataTime.IsZero() || dataTime.After(now) {
+		return 0
+	}
+	return now.Sub(dataTime)
 }
 
 type viewObservationIdentity struct {
@@ -395,7 +519,10 @@ func formatKlineDiagnostic(report KlineFreshnessReport) string {
 		}
 		return value.UTC().Format(time.RFC3339)
 	}
-	return fmt.Sprintf("stale_count=%d observed_count=%d oldest_output_data_time=%s stale_subjects=%s", report.StaleCount, report.ObservedCount, format(report.OldestDataTime), strings.Join(report.StaleSubjects, ","))
+	return fmt.Sprintf("stale_count=%d observed_count=%d oldest_output_data_time=%s stale_age=%s latest_completed_period=%s latest_completed_status=%s view_last_data_time=%s inventory_observed_at=%s stale_subjects=%s",
+		report.StaleCount, report.ObservedCount, format(report.OldestDataTime), report.StaleAge,
+		format(report.Rule.LatestCompletedPeriod), report.Rule.LatestCompletedStatus,
+		format(report.Rule.ViewLastDataTime), format(report.Rule.InventoryObservedAt), strings.Join(report.StaleSubjects, ","))
 }
 
 func klineMarketSkipReason(rule KlineFreshnessRule, now time.Time) string {

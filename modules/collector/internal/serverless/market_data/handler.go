@@ -79,8 +79,11 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 			functionName = function.FunctionName
 		}
 	}
-	if event.StorageRPCGatewayTarget == "" {
-		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	// The SCF deployment owns the reachable Storage route for this function.
+	// Scheduler payloads may be delayed or retried after Storage endpoints move,
+	// so prefer the current function environment over a stale serialized target.
+	if storageTarget := strings.TrimSpace(os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")); storageTarget != "" {
+		event.StorageRPCGatewayTarget = storageTarget
 	}
 	fetch := h.NewMarketFetch
 	if fetch == nil {

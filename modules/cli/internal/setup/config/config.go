@@ -29,7 +29,7 @@ const (
 	DefaultStorageRoot = "/data/moox/storage"
 	// DefaultStorageViewRebuildLookbackPeriods is the number of completed bars
 	// every View rebuild replays when no explicit manifest value is supplied.
-	DefaultStorageViewRebuildLookbackPeriods uint64 = 1000
+	DefaultStorageViewRebuildLookbackPeriods uint64 = 5000
 	// SCFCLSReserveMilliseconds is injected into every short-lived market SCF.
 	// Keep setup validation aligned with the runtime's CLS flush reservation.
 	SCFCLSReserveMilliseconds = 3000
@@ -157,6 +157,8 @@ type DNSResolver struct {
 // in nested overrides inherit the global value.
 type StorageView struct {
 	MaintenanceCheckInterval string                      `toml:"maintenance_check_interval" json:"maintenance_check_interval"`
+	CapacityCheckInterval    string                      `toml:"capacity_check_interval" json:"capacity_check_interval"`
+	CapacityCheckJitter      string                      `toml:"capacity_check_jitter" json:"capacity_check_jitter"`
 	RebuildLookbackPeriods   uint64                      `toml:"rebuild_lookback_periods" json:"rebuild_lookback_periods"`
 	MaxPeriodsPerSeries      uint64                      `toml:"max_periods_per_series" json:"max_periods_per_series"`
 	MaxViewFileBytes         int64                       `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
@@ -172,8 +174,22 @@ type StorageViewPolicyOverride struct {
 	MaxViewFileBytes       int64  `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
 }
 
+// CollectorRetention describes the Collector maintenance worker and terminal
+// execution-history retention windows rendered into the Collector config.
+type CollectorRetention struct {
+	MaintenanceInterval          string `toml:"maintenance_interval" json:"maintenance_interval"`
+	MaintenanceTimeout           string `toml:"maintenance_timeout" json:"maintenance_timeout"`
+	MaxRowsPerPass               int    `toml:"max_rows_per_pass" json:"max_rows_per_pass"`
+	ExecutionDetailRetention     string `toml:"execution_detail_retention" json:"execution_detail_retention"`
+	ScheduledRunSummaryRetention string `toml:"scheduled_run_summary_retention" json:"scheduled_run_summary_retention"`
+	TerminalRetryRetention       string `toml:"terminal_retry_retention" json:"terminal_retry_retention"`
+	PeriodSnapshotRetention      string `toml:"period_snapshot_retention" json:"period_snapshot_retention"`
+}
+
 type ResolvedStorageViewPolicy struct {
 	MaintenanceCheckInterval string `json:"maintenance_check_interval"`
+	CapacityCheckInterval    string `json:"capacity_check_interval"`
+	CapacityCheckJitter      string `json:"capacity_check_jitter"`
 	RebuildLookbackPeriods   uint64 `json:"rebuild_lookback_periods"`
 	MaxPeriodsPerSeries      uint64 `json:"max_periods_per_series"`
 	MaxViewFileBytes         int64  `json:"max_view_file_bytes"`
@@ -182,6 +198,8 @@ type ResolvedStorageViewPolicy struct {
 func (s StorageView) ResolvePolicy(spaceID, viewID string) ResolvedStorageViewPolicy {
 	policy := ResolvedStorageViewPolicy{
 		MaintenanceCheckInterval: s.MaintenanceCheckInterval,
+		CapacityCheckInterval:    s.CapacityCheckInterval,
+		CapacityCheckJitter:      s.CapacityCheckJitter,
 		RebuildLookbackPeriods:   s.RebuildLookbackPeriods,
 		MaxPeriodsPerSeries:      s.MaxPeriodsPerSeries,
 		MaxViewFileBytes:         s.MaxViewFileBytes,
@@ -544,12 +562,44 @@ func spaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, 
 
 // SpaceRegionNamespaceShards returns the namespace slices the publisher will
 // create for one enabled regional fleet. Crypto is Invoke-only; stockcn keeps
-// Timer functions plus one Invoke canary.
+// Timer functions plus one production Invoke slot.
 func SpaceRegionNamespaceShards(space SCFFetcherSpace, region SCFFetcherRegion, limits TencentSCFLimits) []SCFNamespaceShard {
 	if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
 		return nil
 	}
 	return spaceRegionNamespaceShards(space, region, limits)
+}
+
+// SpaceRegionReleaseCanaryNamespace returns the namespace reserved for the
+// candidate-package release canary. It reuses spare per-namespace quota
+// before allocating the next overflow namespace.
+func SpaceRegionReleaseCanaryNamespace(space SCFFetcherSpace, region SCFFetcherRegion, limits TencentSCFLimits) (string, error) {
+	spaceID := strings.ToLower(strings.TrimSpace(space.SpaceID))
+	if spaceID != "crypto" && spaceID != "stockcn" {
+		return "", fmt.Errorf("release canary namespace allocation is only defined for crypto and stockcn Invoke pools")
+	}
+	if !region.Enabled || region.FunctionCount <= 0 || space.IsRegionBlacklisted(region.Region) {
+		return "", fmt.Errorf("release canary region must be enabled with a positive function_count")
+	}
+	limits.normalize()
+	regionLimit := limits.ForRegion(region.Region)
+	shards := spaceRegionNamespaceShards(space, region, limits)
+	if len(shards) == 0 || regionLimit.MaxFunctionsPerNamespace < 1 || regionLimit.MaxNamespacesPerRegion < 1 {
+		return "", fmt.Errorf("release canary region %s has no namespace capacity", region.Region)
+	}
+	for _, shard := range shards {
+		if shard.Functions() < regionLimit.MaxFunctionsPerNamespace {
+			return shard.Namespace, nil
+		}
+	}
+	if len(shards) >= regionLimit.MaxNamespacesPerRegion {
+		return "", fmt.Errorf("release canary region %s has no namespace capacity", region.Region)
+	}
+	base := strings.ToLower(strings.TrimSpace(space.Namespace))
+	if base == "" {
+		base = ExpectedSCFNamespace(space.SpaceID)
+	}
+	return OverflowSCFNamespace(base, len(shards)), nil
 }
 
 func (l TencentSCFLimits) validate(path string) error {
@@ -623,7 +673,10 @@ type FactorSetupItem struct {
 type SCFFetcherSpace struct {
 	RegionBlacklist []string `toml:"region_blacklist"`
 	SpaceID         string   `toml:"space_id"`
-	Entrypoint      string   `toml:"entrypoint"`
+	// CanaryTaskID selects a dedicated, disabled, single-series task whose
+	// task-owned Dataset and View are used by publication business proofs.
+	CanaryTaskID string `toml:"canary_task_id"`
+	Entrypoint   string `toml:"entrypoint"`
 	// Market-data functions carry this canonical identity in their static
 	// environment. It is intentionally separate from the legacy crypto
 	// market_type label so a function cannot infer an asset class from a
@@ -741,24 +794,25 @@ func DefaultTimerFunctionCount(spaceID string) int {
 }
 
 type Manifest struct {
-	Admin         Admin                     `toml:"admin"`
-	TencentCloud  TencentCloud              `toml:"tencent_cloud"`
-	EventBus      EventBus                  `toml:"eventbus"`
-	Paths         Paths                     `toml:"paths"`
-	DNSResolver   DNSResolver               `toml:"dns_resolver"`
-	StorageView   StorageView               `toml:"storage_view"`
-	LocalLogs     LocalLogs                 `toml:"local_logs"`
-	Observability Observability             `toml:"observability"`
-	Notification  Notification              `toml:"notification"`
-	Factors       FactorSetup               `toml:"factors"`
-	SCFFetcher    SCFFetcher                `toml:"scf_fetcher"`
-	HostCatalog   map[string]HostDefinition `toml:"hosts"`
-	ControlHost   Host                      `toml:"control_host"`
-	CompileHost   Host                      `toml:"compile_host"`
-	StrategyHost  Host                      `toml:"strategy_host"`
-	StorageHost   Host                      `toml:"storage_host"`
-	ViewHost      Host                      `toml:"view_host"`
-	OtherHosts    []Host                    `toml:"other_hosts"`
+	Admin              Admin                     `toml:"admin"`
+	TencentCloud       TencentCloud              `toml:"tencent_cloud"`
+	EventBus           EventBus                  `toml:"eventbus"`
+	Paths              Paths                     `toml:"paths"`
+	DNSResolver        DNSResolver               `toml:"dns_resolver"`
+	StorageView        StorageView               `toml:"storage_view"`
+	CollectorRetention CollectorRetention        `toml:"collector_retention"`
+	LocalLogs          LocalLogs                 `toml:"local_logs"`
+	Observability      Observability             `toml:"observability"`
+	Notification       Notification              `toml:"notification"`
+	Factors            FactorSetup               `toml:"factors"`
+	SCFFetcher         SCFFetcher                `toml:"scf_fetcher"`
+	HostCatalog        map[string]HostDefinition `toml:"hosts"`
+	ControlHost        Host                      `toml:"control_host"`
+	CompileHost        Host                      `toml:"compile_host"`
+	StrategyHost       Host                      `toml:"strategy_host"`
+	StorageHost        Host                      `toml:"storage_host"`
+	ViewHost           Host                      `toml:"view_host"`
+	OtherHosts         []Host                    `toml:"other_hosts"`
 }
 
 func (m Manifest) Hosts() []Host {
@@ -910,11 +964,42 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("storage_view", "maintenance_check_interval") {
 		out.StorageView.MaintenanceCheckInterval = "1m"
 	}
+	if !md.IsDefined("storage_view", "capacity_check_interval") {
+		out.StorageView.CapacityCheckInterval = "1h"
+	}
+	if !md.IsDefined("storage_view", "capacity_check_jitter") {
+		jitter := time.Hour
+		if interval, err := time.ParseDuration(strings.TrimSpace(out.StorageView.CapacityCheckInterval)); err == nil && interval > 0 && interval < jitter {
+			jitter = interval
+		}
+		out.StorageView.CapacityCheckJitter = jitter.String()
+	}
 	if !md.IsDefined("storage_view", "max_periods_per_series") {
-		out.StorageView.MaxPeriodsPerSeries = 2000
+		out.StorageView.MaxPeriodsPerSeries = 6000
 	}
 	if !md.IsDefined("storage_view", "max_view_file_bytes") {
 		out.StorageView.MaxViewFileBytes = 1 << 30
+	}
+	if !md.IsDefined("collector_retention", "maintenance_interval") {
+		out.CollectorRetention.MaintenanceInterval = "1m"
+	}
+	if !md.IsDefined("collector_retention", "maintenance_timeout") {
+		out.CollectorRetention.MaintenanceTimeout = "45s"
+	}
+	if !md.IsDefined("collector_retention", "max_rows_per_pass") {
+		out.CollectorRetention.MaxRowsPerPass = 50000
+	}
+	if !md.IsDefined("collector_retention", "execution_detail_retention") {
+		out.CollectorRetention.ExecutionDetailRetention = "24h"
+	}
+	if !md.IsDefined("collector_retention", "scheduled_run_summary_retention") {
+		out.CollectorRetention.ScheduledRunSummaryRetention = "720h"
+	}
+	if !md.IsDefined("collector_retention", "terminal_retry_retention") {
+		out.CollectorRetention.TerminalRetryRetention = "168h"
+	}
+	if !md.IsDefined("collector_retention", "period_snapshot_retention") {
+		out.CollectorRetention.PeriodSnapshotRetention = "720h"
 	}
 	if !md.IsDefined("local_logs", "max_size_mb") {
 		out.LocalLogs.MaxSizeMB = 50
@@ -1144,6 +1229,9 @@ func validate(manifest *Manifest) error {
 	if err := validateStorageView(&manifest.StorageView); err != nil {
 		return err
 	}
+	if err := validateCollectorRetention(&manifest.CollectorRetention); err != nil {
+		return err
+	}
 	if manifest.LocalLogs.MaxSizeMB < 1 || manifest.LocalLogs.MaxSizeMB > 10240 {
 		return fmt.Errorf("config_invalid: local_logs.max_size_mb must be between 1 and 10240")
 	}
@@ -1250,6 +1338,14 @@ func validateStorageView(cfg *StorageView) error {
 	if err != nil || interval < 30*time.Second {
 		return fmt.Errorf("config_invalid: storage_view.maintenance_check_interval must be at least 30s")
 	}
+	capacityInterval, err := time.ParseDuration(strings.TrimSpace(cfg.CapacityCheckInterval))
+	if err != nil || capacityInterval <= 0 || capacityInterval > 24*time.Hour {
+		return fmt.Errorf("config_invalid: storage_view.capacity_check_interval must be greater than 0 and at most 24h")
+	}
+	capacityJitter, err := time.ParseDuration(strings.TrimSpace(cfg.CapacityCheckJitter))
+	if err != nil || capacityJitter <= 0 || capacityJitter > capacityInterval {
+		return fmt.Errorf("config_invalid: storage_view.capacity_check_jitter must be greater than 0 and at most capacity_check_interval")
+	}
 	if cfg.MaxPeriodsPerSeries == 0 || cfg.MaxPeriodsPerSeries > 1_000_000 {
 		return fmt.Errorf("config_invalid: storage_view.max_periods_per_series must be between 1 and 1000000")
 	}
@@ -1289,6 +1385,32 @@ func validateStorageView(cfg *StorageView) error {
 		resolved = cfg.ResolvePolicy(override.SpaceID, override.ViewID)
 		if resolved.MaxPeriodsPerSeries <= resolved.RebuildLookbackPeriods {
 			return fmt.Errorf("config_invalid: resolved policy for %s/%s has max_periods_per_series not greater than rebuild_lookback_periods", override.SpaceID, override.ViewID)
+		}
+	}
+	return nil
+}
+
+func validateCollectorRetention(cfg *CollectorRetention) error {
+	interval, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceInterval))
+	if err != nil || interval <= 0 || interval > 24*time.Hour {
+		return fmt.Errorf("config_invalid: collector_retention.maintenance_interval must be greater than 0 and at most 24h")
+	}
+	timeout, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceTimeout))
+	if err != nil || timeout <= 0 || timeout > interval {
+		return fmt.Errorf("config_invalid: collector_retention.maintenance_timeout must be positive and not exceed maintenance_interval")
+	}
+	if cfg.MaxRowsPerPass < 9 || cfg.MaxRowsPerPass > 50000 {
+		return fmt.Errorf("config_invalid: collector_retention.max_rows_per_pass must be between 9 and 50000")
+	}
+	for field, raw := range map[string]string{
+		"execution_detail_retention":      cfg.ExecutionDetailRetention,
+		"scheduled_run_summary_retention": cfg.ScheduledRunSummaryRetention,
+		"terminal_retry_retention":        cfg.TerminalRetryRetention,
+		"period_snapshot_retention":       cfg.PeriodSnapshotRetention,
+	} {
+		duration, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil || duration <= 0 || duration > 365*24*time.Hour {
+			return fmt.Errorf("config_invalid: collector_retention.%s must be greater than 0 and at most 365 days", field)
 		}
 	}
 	return nil
@@ -1621,11 +1743,9 @@ func validateSCFSharedNamespaceAutoAllocation(cfg *SCFFetcher) error {
 	return nil
 }
 
-// ValidateSCFCapacities accounts for every function the manifest publisher
-// creates for each Space/region/namespace: Timer functions and one Invoke
-// canary per active region. A Space may occupy multiple namespaces in the same
-// region when one namespace's function quota is full. Tencent's function quota
-// applies to that aggregate, not only to timer_function_count.
+// ValidateSCFCapacities accounts for production Timer/Invoke functions and
+// one isolated release-canary function per active Crypto/StockCN region. A
+// Space may occupy multiple namespaces when one namespace's quota is full.
 func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
 	if cfg == nil {
 		return nil
@@ -1656,6 +1776,13 @@ func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
 			}
 			for _, shard := range spaceRegionNamespaceShards(space, region, limits) {
 				add(region.Region, shard.Namespace, shard.Functions())
+			}
+			if strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") || strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") {
+				namespace, err := SpaceRegionReleaseCanaryNamespace(space, region, limits)
+				if err != nil {
+					return fmt.Errorf("config_invalid: Space %s region %s release canary: %w", space.SpaceID, region.Region, err)
+				}
+				add(region.Region, namespace, 1)
 			}
 		}
 	}
@@ -2038,9 +2165,6 @@ func resolveSCFTimerFunctionCountsWithLimit(cfg *SCFFetcherSpace, path string, m
 // reserving the publisher-created Invoke canary for each region.
 func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path string, maxFunctionsPerNamespace int, reservedByRegion map[string]int) error {
 	auxiliary := 1
-	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
-		auxiliary = 0
-	}
 	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
 		return maxFunctionsPerNamespace - auxiliary - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
 	})
@@ -2052,7 +2176,7 @@ func resolveSCFTimerFunctionCountsWithRegionalCapacities(cfg *SCFFetcherSpace, p
 		reserved := reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
 		limit := limits.ForRegion(region)
 		if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
-			capacity := limit.MaxFunctionsPerRegion() - reserved
+			capacity := limit.MaxFunctionsPerRegion() - 1 - reserved
 			if capacity < 0 {
 				return 0
 			}
@@ -2173,7 +2297,7 @@ func RebalanceSCFTimerFunctionCounts(cfg *SCFFetcherSpace, storageRegion string,
 	capacity := func(region string) int {
 		limit := limits.ForRegion(region)
 		if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {
-			return limit.MaxFunctionsPerRegion()
+			return max(0, limit.MaxFunctionsPerRegion()-1)
 		}
 		return limit.TimerCapacity(0)
 	}

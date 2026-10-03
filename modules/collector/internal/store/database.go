@@ -17,6 +17,7 @@ import (
 // Store owns the Collector SQLite connection and repositories.
 type Store struct {
 	db                   *gorm.DB
+	path                 string
 	taskRepo             *TaskRepository
 	taskItems            *TaskInstanceRepository
 	fetchBatches         *FetchBatchRepository
@@ -141,7 +142,7 @@ func Open(opts *Options) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, path: dbPath}
 	s.taskRepo = NewTaskRepository(db)
 	s.taskItems = NewTaskInstanceRepository(db)
 	s.fetchBatches = NewFetchBatchRepository(db)
@@ -235,11 +236,83 @@ func (s *Store) ApplySchema(sql string) error {
 		if err := migrateLegacyFetchRetryItems(tx); err != nil {
 			return err
 		}
+		if err := ensurePeriodPriorityColumns(tx); err != nil {
+			return err
+		}
+		if err := ensureBatchCleanupColumns(tx); err != nil {
+			return err
+		}
 		if err := tx.Exec(sql).Error; err != nil {
 			return err
 		}
-		return validatePeriodFailureSchema(tx)
+		if err := validatePeriodFailureSchema(tx); err != nil {
+			return err
+		}
+		for _, index := range []string{
+			`CREATE INDEX IF NOT EXISTS idx_collector_retry_operational_oldest ON t_collector_fetch_retry_items (c_space_id, c_status, c_ctime)`,
+			`CREATE INDEX IF NOT EXISTS idx_collector_period_operational_oldest ON t_collector_period_storage_states (c_space_id, c_status, c_period_time)`,
+		} {
+			if err := tx.Exec(index).Error; err != nil {
+				return fmt.Errorf("create Collector operational statistics index: %w", err)
+			}
+		}
+		return nil
 	})
+}
+
+func ensureBatchCleanupColumns(db *gorm.DB) error {
+	var tableCount int64
+	if err := db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 't_collector_fetch_batches'`).Scan(&tableCount).Error; err != nil {
+		return fmt.Errorf("inspect Collector batch cleanup table: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	var columnCount int64
+	if err := db.Raw(`SELECT count(*) FROM pragma_table_info('t_collector_fetch_batches') WHERE name = 'c_items_cleaned'`).Scan(&columnCount).Error; err != nil {
+		return fmt.Errorf("inspect Collector batch cleanup column: %w", err)
+	}
+	if columnCount != 0 {
+		return nil
+	}
+	if err := db.Exec(`ALTER TABLE t_collector_fetch_batches ADD COLUMN c_items_cleaned INTEGER NOT NULL DEFAULT 0`).Error; err != nil {
+		return fmt.Errorf("add Collector batch cleanup column: %w", err)
+	}
+	return nil
+}
+
+func ensurePeriodPriorityColumns(db *gorm.DB) error {
+	for table, columns := range map[string][]string{
+		"t_collector_fetch_batches":     {"c_period_time", "c_period_deadline_at"},
+		"t_collector_fetch_retry_items": {"c_period_time", "c_period_deadline_at"},
+	} {
+		var tableCount int64
+		if err := db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&tableCount).Error; err != nil {
+			return fmt.Errorf("inspect Collector period priority table %s: %w", table, err)
+		}
+		if tableCount == 0 {
+			continue
+		}
+		var existing []struct {
+			Name string `gorm:"column:name"`
+		}
+		if err := db.Raw("SELECT name FROM pragma_table_info(?)", table).Scan(&existing).Error; err != nil {
+			return fmt.Errorf("inspect Collector period priority columns for %s: %w", table, err)
+		}
+		columnSet := make(map[string]struct{}, len(existing))
+		for _, column := range existing {
+			columnSet[column.Name] = struct{}{}
+		}
+		for _, column := range columns {
+			if _, found := columnSet[column]; found {
+				continue
+			}
+			if err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " DATETIME").Error; err != nil {
+				return fmt.Errorf("add Collector period priority column %s.%s: %w", table, column, err)
+			}
+		}
+	}
+	return nil
 }
 
 func migrateLegacyFetchRetryItems(db *gorm.DB) error {
@@ -342,6 +415,8 @@ const createFetchRetryItemsTableSQL = `CREATE TABLE t_collector_fetch_retry_item
 	c_subject_id TEXT NOT NULL,
 	c_frequency TEXT NOT NULL,
 	c_target_data_time DATETIME NOT NULL,
+	c_period_time DATETIME,
+	c_period_deadline_at DATETIME,
 	c_task_json TEXT NOT NULL DEFAULT '{}',
 	c_failure_targets_json TEXT NOT NULL DEFAULT '[]',
 	c_attempt INTEGER NOT NULL DEFAULT 1,

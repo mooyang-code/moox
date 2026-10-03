@@ -10,6 +10,7 @@ export interface CloudNode {
   tag: string;
   ip_address: string;
   package_id?: string;
+  deployment_id?: string;
   package_version?: string;
   metadata: string | Record<string, unknown>;
   create_time?: string;
@@ -44,6 +45,7 @@ export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode
     tag: String(item.tag || ""),
     ip_address: String(item.ip_address || ""),
     package_id: String(item.package_id || ""),
+    deployment_id: String(item.deployment_id || ""),
     package_version: String(item.package_version || ""),
     metadata: (item.metadata as string | Record<string, unknown>) || "",
     create_time: String(item.create_time || ""),

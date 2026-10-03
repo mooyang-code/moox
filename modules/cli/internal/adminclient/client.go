@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -20,8 +21,10 @@ type Client struct {
 	SpaceID     string
 	// ServiceAuth 后台服务签名鉴权配置。设置后请求走 /api/service/{service}/{method}
 	// 路由并使用 HMAC Auth 头，不再依赖用户登录态 X-Access-Token。
-	ServiceAuth *ServiceAuthConfig
-	HTTPClient  *http.Client
+	ServiceAuth    *ServiceAuthConfig
+	HTTPClient     *http.Client
+	publishLeaseMu sync.RWMutex
+	publishLease   *CollectorPublishLease
 }
 
 // New creates a Control API client. baseURL should point at the Control service root.

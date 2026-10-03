@@ -1,4 +1,4 @@
-.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-factor-view-ready-batch-e2e test-collector-period-universe-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-binaries release-matrix deploy publish-release-binaries test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract test-series-tag-e2e-space-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-factor-view-ready-batch-e2e test-collector-period-universe-e2e test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-binaries release-matrix deploy publish-release-binaries test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -103,7 +103,7 @@ proto-check:
 	$(MAKE) proto
 	@test -z "$$(git status --porcelain)"
 
-verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-factor-view-ready-batch-e2e test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
+verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-factor-view-ready-batch-e2e test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract test-series-tag-e2e-space-contract
 
 verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
@@ -129,6 +129,9 @@ test-caddy:
 
 test-collector-scf-package-contract:
 	bash scripts/build/build-collector-scf-package_test.sh
+
+test-series-tag-e2e-space-contract:
+	bash scripts/test/contract/test-series-tag-e2e-space.sh
 
 test-script-contracts:
 	@set -e; for script in scripts/test/contract/*.sh; do bash "$$script"; done

@@ -2,13 +2,69 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+)
+
+var ErrInvalidCompletionScope = errors.New("completion effects violate batch scope")
+
+const (
+	maxFetchBatchCleanupItemRows = 12000
+	maxFetchBatchCleanupBatches  = 500
+
+	fetchBatchCleanupItemsPageSQL = `SELECT items.rowid
+		FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_items_cleanup
+		CROSS JOIN t_collector_fetch_batch_items AS items
+		WHERE batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ? AND batches.c_items_cleaned = 0
+		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+		  AND items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
+		ORDER BY batches.c_completed_at, batches.c_id
+		LIMIT ?`
+	fetchBatchCleanupItemsPageSpaceSQL = `SELECT items.rowid
+		FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_items_cleanup_space
+		CROSS JOIN t_collector_fetch_batch_items AS items
+		WHERE batches.c_space_id = ? AND batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ? AND batches.c_items_cleaned = 0
+		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+		  AND items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
+		ORDER BY batches.c_completed_at, batches.c_id
+		LIMIT ?`
+	fetchBatchCleanupBatchesPageSQL = `SELECT batches.c_id
+		FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_parent_cleanup
+		WHERE batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ?
+		  AND batches.c_items_cleaned = 1
+		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+		  AND NOT EXISTS (
+			SELECT 1 FROM t_collector_fetch_batch_items AS items
+			WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM t_collector_timer_period_batches AS manifests
+			WHERE manifests.c_space_id = batches.c_space_id AND manifests.c_batch_id = batches.c_batch_id
+		  )
+		ORDER BY batches.c_completed_at, batches.c_id
+		LIMIT ?`
+	fetchBatchCleanupBatchesPageSpaceSQL = `SELECT batches.c_id
+		FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_parent_cleanup_space
+		WHERE batches.c_space_id = ? AND batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ?
+		  AND batches.c_items_cleaned = 1
+		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+		  AND NOT EXISTS (
+			SELECT 1 FROM t_collector_fetch_batch_items AS items
+			WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM t_collector_timer_period_batches AS manifests
+			WHERE manifests.c_space_id = batches.c_space_id AND manifests.c_batch_id = batches.c_batch_id
+		  )
+		ORDER BY batches.c_completed_at, batches.c_id
+		LIMIT ?`
 )
 
 type FetchBatchRepository struct{ db *gorm.DB }
@@ -457,7 +513,7 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 		}
 		updated = true
 		if err := validateCompletionScope(tx, batch, effects); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrInvalidCompletionScope, err)
 		}
 		terminalRetrySources := make(map[string]struct{})
 		sourceKeys := make([]string, 0, len(effects.RetrySourceGuards)+len(effects.WriteTargetUpdates)+len(effects.InstanceUpdates))
@@ -537,8 +593,11 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 				DoUpdates: clause.Assignments(map[string]any{
 					"c_source_batch_id": clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"}, "c_batch_kind": clause.Expr{SQL: "excluded.c_batch_kind"}, "c_attempt": clause.Expr{SQL: "excluded.c_attempt"},
 					"c_instance_id": clause.Expr{SQL: "excluded.c_instance_id"}, "c_write_target_id": clause.Expr{SQL: "excluded.c_write_target_id"}, "c_retry_scope": clause.Expr{SQL: "excluded.c_retry_scope"},
-					"c_subject_id": clause.Expr{SQL: "excluded.c_subject_id"}, "c_frequency": clause.Expr{SQL: "excluded.c_frequency"}, "c_target_data_time": clause.Expr{SQL: "excluded.c_target_data_time"}, "c_task_json": clause.Expr{SQL: "excluded.c_task_json"},
-					"c_status": clause.Expr{SQL: "CASE WHEN c_status IN ('succeeded', 'permanent_failed', 'superseded') THEN c_status ELSE excluded.c_status END"}, "c_next_retry_at": clause.Expr{SQL: "excluded.c_next_retry_at"},
+					"c_subject_id": clause.Expr{SQL: "excluded.c_subject_id"}, "c_frequency": clause.Expr{SQL: "excluded.c_frequency"}, "c_target_data_time": clause.Expr{SQL: "excluded.c_target_data_time"},
+					"c_period_time":        clause.Expr{SQL: "CASE WHEN c_period_time IS NOT NULL THEN c_period_time ELSE excluded.c_period_time END"},
+					"c_period_deadline_at": clause.Expr{SQL: "CASE WHEN c_period_deadline_at IS NOT NULL THEN c_period_deadline_at ELSE excluded.c_period_deadline_at END"},
+					"c_task_json":          clause.Expr{SQL: "excluded.c_task_json"},
+					"c_status":             clause.Expr{SQL: "CASE WHEN c_status IN ('succeeded', 'permanent_failed', 'superseded') THEN c_status ELSE excluded.c_status END"}, "c_next_retry_at": clause.Expr{SQL: "excluded.c_next_retry_at"},
 					"c_last_error_type": clause.Expr{SQL: "excluded.c_last_error_type"}, "c_last_error_summary": clause.Expr{SQL: "excluded.c_last_error_summary"},
 					"c_failure_targets_json": clause.Expr{SQL: "CASE WHEN c_failure_targets_json <> '' AND c_failure_targets_json <> '[]' THEN c_failure_targets_json ELSE excluded.c_failure_targets_json END"},
 					"c_mtime":                clause.Expr{SQL: "excluded.c_mtime"},
@@ -743,6 +802,89 @@ func (r *FetchBatchRepository) ListDue(ctx context.Context, spaceID string, now 
 	return batches, err
 }
 
+func (r *FetchBatchRepository) ListDuePrioritized(ctx context.Context, spaceID string, now time.Time, recentLimit, historicalLimit int) (recent, historical []domain.BatchInvocation, err error) {
+	if recentLimit < 0 || historicalLimit < 0 {
+		return nil, nil, gorm.ErrInvalidData
+	}
+	now = now.UTC()
+	recentPredicate := "c_period_deadline_at IS NOT NULL AND c_period_deadline_at > ?"
+	statuses := []domain.BatchStatus{domain.BatchStatusPlanned, domain.BatchStatusDispatched}
+	recentGroups := make([][]domain.BatchInvocation, 0, len(statuses))
+	historicalGroups := make([][]domain.BatchInvocation, 0, len(statuses))
+	for _, status := range statuses {
+		base := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status = ?", spaceID, status)
+		if status == domain.BatchStatusPlanned {
+			base = base.Where(`(
+				(c_deadline_at IS NOT NULL AND c_deadline_at <= ?) OR
+				EXISTS (
+					SELECT 1 FROM t_collector_timer_period_batches AS manifests
+					WHERE manifests.c_space_id = t_collector_fetch_batches.c_space_id
+					  AND manifests.c_batch_id = t_collector_fetch_batches.c_batch_id
+					  AND manifests.c_claim_request_id = '' AND manifests.c_deadline_at <= ?
+				)
+			)`, now, now)
+		} else {
+			base = base.Where("c_deadline_at IS NOT NULL AND c_deadline_at <= ?", now)
+		}
+		if recentLimit > 0 {
+			var group []domain.BatchInvocation
+			err = base.Session(&gorm.Session{}).Where(recentPredicate, now).
+				Order("c_period_deadline_at ASC, c_deadline_at ASC, c_id ASC").Limit(recentLimit).Find(&group).Error
+			if err != nil {
+				return nil, nil, err
+			}
+			recentGroups = append(recentGroups, group)
+		}
+		if historicalLimit > 0 {
+			var group []domain.BatchInvocation
+			err = base.Session(&gorm.Session{}).Where("c_period_deadline_at IS NULL OR c_period_deadline_at <= ?", now).
+				Order("c_deadline_at ASC, c_id ASC").Limit(historicalLimit).Find(&group).Error
+			if err != nil {
+				return nil, nil, err
+			}
+			historicalGroups = append(historicalGroups, group)
+		}
+	}
+	recent = mergePrioritizedBatches(recentGroups, recentLimit, func(left, right domain.BatchInvocation) bool {
+		if left.PeriodDeadlineAt != nil && right.PeriodDeadlineAt != nil && !left.PeriodDeadlineAt.Equal(*right.PeriodDeadlineAt) {
+			return left.PeriodDeadlineAt.Before(*right.PeriodDeadlineAt)
+		}
+		if left.DeadlineAt != nil && right.DeadlineAt != nil && !left.DeadlineAt.Equal(*right.DeadlineAt) {
+			return left.DeadlineAt.Before(*right.DeadlineAt)
+		}
+		return left.ID < right.ID
+	})
+	historical = mergePrioritizedBatches(historicalGroups, historicalLimit, func(left, right domain.BatchInvocation) bool {
+		if left.DeadlineAt == nil || right.DeadlineAt == nil {
+			if left.DeadlineAt != nil {
+				return true
+			}
+			if right.DeadlineAt != nil {
+				return false
+			}
+		} else if !left.DeadlineAt.Equal(*right.DeadlineAt) {
+			return left.DeadlineAt.Before(*right.DeadlineAt)
+		}
+		return left.ID < right.ID
+	})
+	return recent, historical, nil
+}
+
+func mergePrioritizedBatches(groups [][]domain.BatchInvocation, limit int, less func(domain.BatchInvocation, domain.BatchInvocation) bool) []domain.BatchInvocation {
+	if limit <= 0 {
+		return nil
+	}
+	merged := make([]domain.BatchInvocation, 0, limit*len(groups))
+	for _, group := range groups {
+		merged = append(merged, group...)
+	}
+	sort.Slice(merged, func(left, right int) bool { return less(merged[left], merged[right]) })
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged
+}
+
 // HasActiveTask reports planned/dispatched batches that can still write for
 // one CollectionTask. Shared batches are discovered through
 // batch_items -> write_targets rather than only BatchInvocation.TaskID.
@@ -766,14 +908,135 @@ func (r *FetchBatchRepository) HasActiveTask(ctx context.Context, spaceID, taskI
 	return count > 0, nil
 }
 
-func (r *FetchBatchRepository) Cleanup(ctx context.Context, successBefore, failureBefore time.Time) error {
-	retainedByManifest := `NOT EXISTS (
-        SELECT 1 FROM t_collector_timer_period_batches AS manifests
-        WHERE manifests.c_space_id = t_collector_fetch_batches.c_space_id
-          AND manifests.c_batch_id = t_collector_fetch_batches.c_batch_id
-    )`
-	if err := r.db.WithContext(ctx).Where("c_status = ? AND c_completed_at IS NOT NULL AND c_completed_at < ? AND "+retainedByManifest, domain.BatchStatusSucceeded, successBefore.UTC()).Delete(&domain.BatchInvocation{}).Error; err != nil {
-		return err
+func (r *FetchBatchRepository) Cleanup(ctx context.Context, terminalBefore time.Time) error {
+	return r.cleanup(ctx, "", terminalBefore, maxFetchBatchCleanupItemRows, maxFetchBatchCleanupBatches)
+}
+
+// CleanupSpace gives each configured Space an independent bounded cleanup
+// page so a high-volume Space cannot consume another Space's maintenance turn.
+func (r *FetchBatchRepository) CleanupSpace(ctx context.Context, spaceID string, terminalBefore time.Time, itemBudget, batchBudget int) error {
+	_, _, err := r.CleanupSpaceWithCounts(ctx, spaceID, terminalBefore, itemBudget, batchBudget)
+	return err
+}
+
+// CleanupSpaceWithCounts returns only committed item and batch deletes.
+func (r *FetchBatchRepository) CleanupSpaceWithCounts(ctx context.Context, spaceID string, terminalBefore time.Time, itemBudget, batchBudget int) (int64, int64, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return 0, 0, fmt.Errorf("space_id is required for scoped batch cleanup")
 	}
-	return r.db.WithContext(ctx).Where("c_status IN ? AND c_completed_at IS NOT NULL AND c_completed_at < ? AND "+retainedByManifest, []domain.BatchStatus{domain.BatchStatusPartialFailed, domain.BatchStatusFailed, domain.BatchStatusTimedOut}, failureBefore.UTC()).Delete(&domain.BatchInvocation{}).Error
+	return r.cleanupWithCounts(ctx, spaceID, terminalBefore, itemBudget, batchBudget)
+}
+
+func (r *FetchBatchRepository) cleanup(ctx context.Context, spaceID string, terminalBefore time.Time, itemBudget, batchBudget int) error {
+	_, _, err := r.cleanupWithCounts(ctx, spaceID, terminalBefore, itemBudget, batchBudget)
+	return err
+}
+
+func (r *FetchBatchRepository) cleanupWithCounts(ctx context.Context, spaceID string, terminalBefore time.Time, itemBudget, batchBudget int) (int64, int64, error) {
+	itemBudget = min(max(0, itemBudget), maxFetchBatchCleanupItemRows)
+	batchBudget = min(max(0, batchBudget), maxFetchBatchCleanupBatches)
+	var itemsDeleted, batchesDeleted int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		before := terminalBefore.UTC()
+		statuses := []struct {
+			status domain.BatchStatus
+			before time.Time
+		}{
+			{status: domain.BatchStatusSucceeded, before: before},
+			{status: domain.BatchStatusPartialFailed, before: before},
+			{status: domain.BatchStatusFailed, before: before},
+			{status: domain.BatchStatusTimedOut, before: before},
+		}
+		remainingItems := itemBudget
+		remainingBatches := batchBudget
+		for _, pass := range []int{0, 1} {
+			for index, candidate := range statuses {
+				remainingStatuses := len(statuses) - index
+				itemLimit := remainingItems
+				if pass == 0 {
+					itemLimit = (remainingItems + remainingStatuses - 1) / remainingStatuses
+				}
+				itemQuery := fetchBatchCleanupItemsPageSQL
+				itemArgs := []any{candidate.status, candidate.before, itemLimit}
+				if spaceID != "" {
+					itemQuery = fetchBatchCleanupItemsPageSpaceSQL
+					itemArgs = []any{spaceID, candidate.status, candidate.before, itemLimit}
+				}
+				itemResult := tx.Exec(`DELETE FROM t_collector_fetch_batch_items WHERE rowid IN (`+itemQuery+`)`, itemArgs...)
+				if itemResult.Error != nil {
+					return itemResult.Error
+				}
+				remainingItems -= int(itemResult.RowsAffected)
+				itemsDeleted += itemResult.RowsAffected
+
+				batchLimit := remainingBatches
+				if pass == 0 {
+					batchLimit = (remainingBatches + remainingStatuses - 1) / remainingStatuses
+				}
+				batchQuery := fetchBatchCleanupBatchesPageSQL
+				batchArgs := []any{candidate.status, candidate.before, batchLimit}
+				if spaceID != "" {
+					batchQuery = fetchBatchCleanupBatchesPageSpaceSQL
+					batchArgs = []any{spaceID, candidate.status, candidate.before, batchLimit}
+				}
+				batchResult := tx.Exec(`DELETE FROM t_collector_fetch_batches WHERE c_id IN (`+batchQuery+`)`, batchArgs...)
+				if batchResult.Error != nil {
+					return batchResult.Error
+				}
+				remainingBatches -= int(batchResult.RowsAffected)
+				batchesDeleted += batchResult.RowsAffected
+			}
+			if err := markItemlessTerminalBatchesCleaned(tx, statuses, batchBudget, spaceID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return itemsDeleted, batchesDeleted, nil
+}
+
+func markItemlessTerminalBatchesCleaned(tx *gorm.DB, statuses []struct {
+	status domain.BatchStatus
+	before time.Time
+}, limit int, spaceID string) error {
+	for _, candidate := range statuses {
+		query := `UPDATE t_collector_fetch_batches SET c_items_cleaned = 1 WHERE c_id IN (
+			SELECT batches.c_id
+			FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_items_cleanup
+			WHERE batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ?
+			  AND batches.c_items_cleaned = 0
+			  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+			  AND NOT EXISTS (
+				SELECT 1 FROM t_collector_fetch_batch_items AS items
+				WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
+			  )
+			ORDER BY batches.c_completed_at, batches.c_id
+			LIMIT ?
+		)`
+		args := []any{candidate.status, candidate.before, limit}
+		if spaceID != "" {
+			query = `UPDATE t_collector_fetch_batches SET c_items_cleaned = 1 WHERE c_id IN (
+			SELECT batches.c_id
+			FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_items_cleanup_space
+			WHERE batches.c_space_id = ? AND batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ?
+			  AND batches.c_items_cleaned = 0
+			  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+			  AND NOT EXISTS (
+				SELECT 1 FROM t_collector_fetch_batch_items AS items
+				WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
+			  )
+			ORDER BY batches.c_completed_at, batches.c_id
+			LIMIT ?
+		)`
+			args = []any{spaceID, candidate.status, candidate.before, limit}
+		}
+		if err := tx.Exec(query, args...).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }

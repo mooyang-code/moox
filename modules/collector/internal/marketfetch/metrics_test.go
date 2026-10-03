@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -14,17 +15,65 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type operationalStatsFake struct {
+	stats store.OperationalStats
+	err   error
+}
+
+func (f *operationalStatsFake) OperationalStats(context.Context, string, time.Time, int) (store.OperationalStats, error) {
+	return f.stats, f.err
+}
+
+func TestOperationalMetricsZeroResetBoundedLabelsAndFailedRefresh(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+	now := time.Now().UTC().Truncate(time.Second)
+	f := &operationalStatsFake{stats: store.OperationalStats{DBBytes: 100, WALBytes: 20, Rows: map[string]store.OperationalRowCount{"retry": {Count: 9, Capped: true}, "task-secret": {Count: 1}}, OldestPendingRetry: now.Add(-time.Hour)}}
+	require.NoError(t, m.RefreshOperationalStats(context.Background(), f, "crypto", now.Add(-24*time.Hour), now))
+	require.Equal(t, 9.0, testutil.ToFloat64(m.storeRows.WithLabelValues("crypto", "retry")))
+	require.Equal(t, 1.0, testutil.ToFloat64(m.storeRowsCapped.WithLabelValues("crypto", "retry")))
+	f.err = errors.New("task-secret query failure")
+	require.Error(t, m.RefreshOperationalStats(context.Background(), f, "crypto", now, now.Add(time.Hour)))
+	require.Equal(t, 9.0, testutil.ToFloat64(m.storeRows.WithLabelValues("crypto", "retry")))
+	require.Equal(t, 0.0, testutil.ToFloat64(m.storeStatsHealthy.WithLabelValues("crypto")))
+	require.Equal(t, float64(now.Unix()), testutil.ToFloat64(m.storeStatsLastSuccess.WithLabelValues("crypto")))
+	f.err, f.stats = nil, store.OperationalStats{}
+	require.NoError(t, m.RefreshOperationalStats(context.Background(), f, "crypto", now, now.Add(time.Hour)))
+	require.Zero(t, testutil.ToFloat64(m.storeRows.WithLabelValues("crypto", "retry")))
+	require.Zero(t, testutil.ToFloat64(m.storeOldest.WithLabelValues("crypto", "retry_pending")))
+	m.ObserveMaintenanceDeletes("crypto", map[string]int64{"runs": 2, "period_readiness": 4, "task-secret": 3})
+	require.Equal(t, 4.0, testutil.ToFloat64(m.maintenanceDeleted.WithLabelValues("crypto", "period_readiness")))
+	m.ObserveMaintenanceDeletes("crypto", nil)
+	require.Zero(t, testutil.ToFloat64(m.maintenanceDeleted.WithLabelValues("crypto", "runs")))
+	require.Zero(t, testutil.ToFloat64(m.maintenanceDeleted.WithLabelValues("crypto", "period_readiness")))
+	m.ObserveSchedulerSuccess("crypto", "task-secret", now)
+	m.ObserveSchedulerSuccess("crypto", "planning", now)
+	m.ObserveSchedulerSuccess("crypto", "dispatch", now)
+	m.ObserveMaintenancePass(time.Second, errors.New("task-secret"))
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			for name, value := range metricLabels(metric) {
+				require.NotContains(t, name, "subject")
+				require.NotContains(t, name, "task")
+				require.NotEqual(t, "task-secret", value)
+			}
+		}
+	}
+}
+
 func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
-	metrics.ObserveAssignment("crypto", "bars", "1m", 16, 16, 1722652200)
+	metrics.ObserveAssignment("crypto", "1m", 16, 16, 1722652200)
 	metrics.ObserveAssignmentPending("crypto", true, time.Unix(1722652200, 0))
 	metrics.ObserveTimerState("crypto", "timer-1", "true", 1)
 	metrics.ObserveTimerCapacity("crypto", 45, 52, 0)
 	metrics.ObserveAssignmentError("crypto", "capacity")
 	metrics.ObserveAssignmentFailure("crypto", "submit_timeout")
-	metrics.ObservePeriodPending("bars", "1m", 2)
-	metrics.ObservePeriodReportRetry("bars", "1m")
+	metrics.ObservePeriodPendingSnapshot("crypto", map[string]int{"1m": 2})
+	metrics.ObservePeriodReportRetry("crypto", "1m")
 	metrics.ObservePeriodFailurePending("crypto", "1m", 2)
 	metrics.ObservePeriodFailureMissedDeadline("crypto", "1m")
 	metrics.ObservePeriodFailureReportRetry("crypto", "1m", "timeout")
@@ -63,6 +112,32 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 	for name := range got {
 		if name == "moox_collector_market_fetch_batches_total" || name == "moox_collector_market_fetch_retry_pending" {
 			t.Fatalf("legacy completion metric %q should not be registered", name)
+		}
+	}
+}
+
+func TestPeriodPendingMetricsUseBoundedSpaceAndFrequencyLabels(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := NewMetrics(registry)
+	metrics.ObservePeriodPendingSnapshot("crypto", map[string]int{"1m": 2, "5m": 1})
+	require.Equal(t, 2.0, testutil.ToFloat64(metrics.periodPending.WithLabelValues("crypto", "1m")))
+	require.Equal(t, 1.0, testutil.ToFloat64(metrics.periodPending.WithLabelValues("crypto", "5m")))
+
+	metrics.ObservePeriodPendingSnapshot("crypto", map[string]int{"1m": 1})
+	require.Equal(t, 1.0, testutil.ToFloat64(metrics.periodPending.WithLabelValues("crypto", "1m")))
+	require.Zero(t, testutil.ToFloat64(metrics.periodPending.WithLabelValues("crypto", "5m")), "disappeared frequencies must reset instead of remaining stale")
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != "moox_collector_period_pending_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			labels := metricLabels(metric)
+			require.Len(t, labels, 2)
+			require.Contains(t, labels, "space_id")
+			require.Contains(t, labels, "frequency")
 		}
 	}
 }
@@ -223,7 +298,7 @@ func TestMetricsUseFixedErrorReasons(t *testing.T) {
 func TestMetricsRemoveDeletedAssignmentAndTimerLabels(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
-	metrics.ObserveAssignmentDesired("crypto", "old-bars", "1m", 1, 1)
+	metrics.ObserveAssignmentDesired("crypto", "1m", 1, 1)
 	metrics.ObserveTimerState("crypto", "old-timer", "true", 1)
 	metrics.ResetAssignmentScope("crypto")
 	metrics.ResetTimerScope("crypto")
@@ -275,12 +350,60 @@ func TestMetricsKeepOnlyCurrentCoordinationFailureReason(t *testing.T) {
 
 func TestMetricsResetRequirementsPreservesLastActiveAssignment(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
-	metrics.ObserveAssignmentDesired("crypto", "bars", "1m", 34, 34)
+	metrics.ObserveAssignmentDesired("crypto", "1m", 34, 34)
 	metrics.ResetAssignmentRequirements("crypto")
-	metrics.ObserveAssignmentRequired("crypto", "bars", "1m", 34)
+	metrics.ObserveAssignmentRequired("crypto", "1m", 34)
 
-	require.Equal(t, float64(34), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "bars", "1m")))
-	require.Equal(t, float64(34), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "bars", "1m")))
+	require.Equal(t, float64(34), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "1m")))
+	require.Equal(t, float64(34), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "1m")))
+}
+
+func TestAssignmentMetricsAggregateAcrossDatasetsWithoutDatasetLabels(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := NewMetrics(registry)
+	reconciler := &Reconciler{Metrics: metrics}
+	groups := []TaskGroup{
+		{Provider: "binance", MarketType: "spot", DatasetID: "bars-a", Frequency: "1m", Subjects: []string{"BTC-USDT"}},
+		{Provider: "binance", MarketType: "spot", DatasetID: "bars-a", Frequency: "1m", Subjects: []string{"ETH-USDT"}},
+		{Provider: "binance", MarketType: "spot", DatasetID: "bars-b", Frequency: "1m", Subjects: []string{"SOL-USDT"}},
+	}
+	assignments := []NodeAssignment{
+		{Provider: "binance", MarketType: "spot", DatasetID: "bars-a", Frequency: "1m", Subjects: []string{"BTC-USDT"}},
+		{Provider: "binance", MarketType: "spot", DatasetID: "bars-b", Frequency: "1m", Subjects: []string{"SOL-USDT"}},
+	}
+
+	reconciler.observeAssignmentRequirements("crypto", groups)
+	reconciler.observeAssignmentDesiredMetrics("crypto", groups, assignments)
+	reconciler.observeAssignmentMetrics("crypto", groups, assignments, 1722772800)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, name := range []string{
+		"moox_collector_market_fetch_assignment_required",
+		"moox_collector_market_fetch_assignment_active",
+	} {
+		family := metricFamily(t, families, name)
+		require.Len(t, family.GetMetric(), 1)
+		metric := family.GetMetric()[0]
+		require.Equal(t, map[string]string{"space_id": "crypto", "frequency": "1m"}, metricLabels(metric))
+		if name == "moox_collector_market_fetch_assignment_required" {
+			require.Equal(t, float64(3), metric.GetGauge().GetValue())
+		} else {
+			require.Equal(t, float64(2), metric.GetGauge().GetValue())
+		}
+	}
+}
+
+func TestAssignmentMetricsBoundUnsupportedFrequencyLabels(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := NewMetrics(registry)
+	metrics.ObserveAssignmentDesired("crypto", "task-specific-frequency", 2, 1)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	family := metricFamily(t, families, "moox_collector_market_fetch_assignment_required")
+	require.Len(t, family.GetMetric(), 1)
+	require.Equal(t, map[string]string{"space_id": "crypto", "frequency": "unknown"}, metricLabels(family.GetMetric()[0]))
 }
 
 func TestMetricsExposeLowCardinalityFeedDimensions(t *testing.T) {

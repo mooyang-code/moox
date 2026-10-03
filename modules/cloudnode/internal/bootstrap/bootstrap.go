@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/publishlease"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -115,7 +116,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
-	opts := []cloudnoderpc.Option{cloudnoderpc.WithModuleMetrics(moduleMetrics)}
+	opts := []cloudnoderpc.Option{
+		cloudnoderpc.WithModuleMetrics(moduleMetrics),
+		cloudnoderpc.WithCollectorPublishLeaseValidator(publishlease.NewFromEnv()),
+	}
 	if cfg.Queue.Backend == "jetstream" && cfg.JetStream.Enabled {
 		rt, err := jobqueue.Connect(ctx, cfg.JetStream)
 		if err != nil {

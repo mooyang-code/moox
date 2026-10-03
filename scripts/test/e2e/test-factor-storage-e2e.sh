@@ -32,25 +32,25 @@ require_running_service() {
   kill -0 "${pid}" 2>/dev/null || fail "${name} is not running (pid ${pid})"
 }
 
-# The integration test subscribes to the final ViewDataReady event.
-# Reuse the running Factor process' EventBus URL and the deployment-generated
-# Factor credentials instead of relying on the checked-in local defaults.
+# The integration test subscribes to the final ViewDataReady event using its
+# own durable consumer. Use the scoped Storage EventBus role, not the Factor
+# production credential which is restricted to Factor's named durables.
 factor_pid_file="${DEPLOY_ROOT}/run/factor.pid"
 factor_eventbus_url=""
 if [[ -r "/proc/$(tr -d '[:space:]' <"${factor_pid_file}")/environ" ]]; then
   factor_eventbus_url="$(tr '\0' '\n' <"/proc/$(tr -d '[:space:]' <"${factor_pid_file}")/environ" | sed -n 's/^MOOX_EVENTBUS_NATS_URL=//p' | head -1)"
 fi
-factor_eventbus_credentials="${HOME}/.config/moox/eventbus/factor-eventbus.yaml"
-if [[ -r "${factor_eventbus_credentials}" ]]; then
+storage_eventbus_credentials="${HOME}/.config/moox/eventbus/storage-eventbus.yaml"
+if [[ -r "${storage_eventbus_credentials}" ]]; then
   # macOS does not expose /proc, so fall back to the role credential file's
   # endpoint instead of silently attempting an unauthenticated nats:// URL.
   if [[ -z "${factor_eventbus_url}" ]]; then
-    factor_eventbus_url="$(sed -n 's/^  -[[:space:]]*//p' "${factor_eventbus_credentials}" | head -1)"
+    factor_eventbus_url="$(sed -n 's/^  -[[:space:]]*//p' "${storage_eventbus_credentials}" | head -1)"
   fi
-  export MOOX_EVENTBUS_NATS_CREDENTIALS="${factor_eventbus_credentials}"
-  factor_eventbus_ca="$(sed -n 's/^ca_file:[[:space:]]*//p' "${factor_eventbus_credentials}" | head -1 | sed 's/[[:space:]]*$//')"
-  [[ "${factor_eventbus_ca}" = /* ]] || factor_eventbus_ca="$(cd "$(dirname "${factor_eventbus_credentials}")" && pwd -P)/${factor_eventbus_ca}"
-  [[ -n "${factor_eventbus_ca}" && -r "${factor_eventbus_ca}" ]] && export MOOX_EVENTBUS_NATS_TLS_CA_FILE="${factor_eventbus_ca}"
+  export MOOX_EVENTBUS_NATS_CREDENTIALS="${storage_eventbus_credentials}"
+  storage_eventbus_ca="$(sed -n 's/^ca_file:[[:space:]]*//p' "${storage_eventbus_credentials}" | head -1 | sed 's/[[:space:]]*$//')"
+  [[ "${storage_eventbus_ca}" = /* ]] || storage_eventbus_ca="$(cd "$(dirname "${storage_eventbus_credentials}")" && pwd -P)/${storage_eventbus_ca}"
+  [[ -n "${storage_eventbus_ca}" && -r "${storage_eventbus_ca}" ]] && export MOOX_EVENTBUS_NATS_TLS_CA_FILE="${storage_eventbus_ca}"
 fi
 # Preserve a custom EventBus endpoint even for deployments that authenticate
 # with no role credential file (for example a local non-TLS broker).
@@ -59,6 +59,27 @@ fi
 for service in gateway storage-primary storage-node storage-view factor strategy; do
   require_running_service "${service}"
 done
+
+# Factor control and computation are separate deployment roles. This real
+# Storage E2E requires the durable ViewDataReady consumer, not only FactorMgr.
+factor_engine_root="${MOOX_FACTOR_ENGINE_DEPLOY_ROOT:-${DEPLOY_ROOT}/factor-engine}"
+[[ -x "${factor_engine_root}/healthcheck.sh" ]] ||
+  fail "Factor Engine healthcheck is missing at ${factor_engine_root}/healthcheck.sh; set MOOX_FACTOR_ENGINE_DEPLOY_ROOT for a separate Engine deployment"
+factor_engine_pid_file="${factor_engine_root}/run/factor-engine.pid"
+require_file "${factor_engine_pid_file}"
+factor_engine_pid="$(tr -d '[:space:]' <"${factor_engine_pid_file}")"
+[[ "${factor_engine_pid}" =~ ^[0-9]+$ ]] && kill -0 "${factor_engine_pid}" 2>/dev/null ||
+  fail "Factor Engine is not running"
+factor_engine_secrets_dir="${MOOX_FACTOR_ENGINE_SECRETS_DIR:-}"
+if [[ -z "${factor_engine_secrets_dir}" && -r "${factor_engine_root}/secrets/health-auth.env" ]]; then
+  factor_engine_secrets_dir="${factor_engine_root}/secrets"
+fi
+if [[ -n "${factor_engine_secrets_dir}" ]]; then
+  MOOX_FACTOR_ENGINE_SECRETS_DIR="${factor_engine_secrets_dir}" "${factor_engine_root}/healthcheck.sh" ||
+    fail "Factor Engine healthcheck failed"
+else
+  "${factor_engine_root}/healthcheck.sh" || fail "Factor Engine healthcheck failed"
+fi
 
 require_executable "${DEPLOY_ROOT}/bin/moox-factor-run-once"
 require_executable "${DEPLOY_ROOT}/bin/moox-factor-cli"

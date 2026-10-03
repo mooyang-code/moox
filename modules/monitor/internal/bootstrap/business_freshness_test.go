@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,18 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
+
+type businessFreshnessInventoryProvider struct {
+	snapshot monmetrics.TaskResultInventorySnapshot
+	err      error
+}
+
+func (p *businessFreshnessInventoryProvider) FetchTaskResultInventory(context.Context) (monmetrics.TaskResultInventorySnapshot, error) {
+	if p.err != nil {
+		return monmetrics.TaskResultInventorySnapshot{}, p.err
+	}
+	return p.snapshot, nil
+}
 
 func TestBusinessFreshnessReporterResolvesDatasetNoLongerExpected(t *testing.T) {
 	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
@@ -169,6 +183,156 @@ func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testi
 	}
 	if len(results) != 1 || results[0].Success || !strings.HasPrefix(results[0].ErrorMessage, "no_observation") {
 		t.Fatalf("no-observation kline check result = %+v", results)
+	}
+}
+
+func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineCheck(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	provider := &businessFreshnessInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
+		ID: "inventory-1", ObservedAt: now,
+		Entries: []monmetrics.TaskResultInventoryEntry{{
+			SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", ViewID: "view-a", Frequency: "1m",
+			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now,
+		}},
+	}}
+	cache, err := monmetrics.NewTaskResultInventoryCache(provider, time.Minute, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
+	builder := &monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}
+	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, nil, time.Second, evaluator)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	klineID := "kline_freshness:crypto:view-a:1m"
+	klineResults, err := repositories.Results.Recent(t.Context(), "crypto", klineID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(klineResults) != 1 || klineResults[0].Success || !strings.HasPrefix(klineResults[0].ErrorMessage, "no_observation") {
+		t.Fatalf("initial Kline result = %+v", klineResults)
+	}
+
+	now = now.Add(2 * time.Minute)
+	provider.err = errors.New("collector inventory endpoint unavailable")
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	inventoryResults, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, monmetrics.TaskResultInventoryCheckID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventoryResults) != 2 || inventoryResults[0].Success || inventoryResults[0].ErrorMessage != "inventory_refresh_failed" ||
+		!strings.Contains(inventoryResults[0].BodyExcerpt, "collector inventory endpoint unavailable") {
+		t.Fatalf("inventory refresh result = %+v", inventoryResults)
+	}
+	klineResults, err = repositories.Results.Recent(t.Context(), "crypto", klineID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(klineResults) != 1 || klineResults[0].Success {
+		t.Fatalf("inventory failure must preserve the previous Kline failure without synthesizing a resolution: %+v", klineResults)
+	}
+}
+
+func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	entry := monmetrics.TaskResultInventoryEntry{
+		SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", ViewID: "view-a", Frequency: "1m",
+		MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now,
+	}
+	provider := &businessFreshnessInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
+		ID: "inventory-ready", ObservedAt: now, Entries: []monmetrics.TaskResultInventoryEntry{entry},
+	}}
+	cache, err := monmetrics.NewTaskResultInventoryCache(provider, time.Minute, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
+	builder := &monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}
+	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, nil, time.Second, evaluator)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	klineID := "kline_freshness:crypto:view-a:1m"
+	klineResults, err := repositories.Results.Recent(t.Context(), "crypto", klineID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(klineResults) != 1 || klineResults[0].Success {
+		t.Fatalf("initial Kline failure = %+v", klineResults)
+	}
+
+	entry.OwnershipVerified = false
+	entry.ResultStatus = "error"
+	entry.ObservedAt = now.Add(2 * time.Minute)
+	provider.snapshot = monmetrics.TaskResultInventorySnapshot{
+		ID: "inventory-error", ObservedAt: entry.ObservedAt, Entries: []monmetrics.TaskResultInventoryEntry{entry},
+	}
+	now = entry.ObservedAt
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	klineResults, err = repositories.Results.Recent(t.Context(), "crypto", klineID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(klineResults) != 2 || klineResults[0].Success || !strings.HasPrefix(klineResults[0].ErrorMessage, "task_result_error") {
+		t.Fatalf("unowned task prepare error must remain a Kline failure: %+v", klineResults)
+	}
+
+	entry.ResultStatus = "pending"
+	entry.ObservedAt = now.Add(2 * time.Minute)
+	provider.snapshot = monmetrics.TaskResultInventorySnapshot{
+		ID: "inventory-pending", ObservedAt: entry.ObservedAt, Entries: []monmetrics.TaskResultInventoryEntry{entry},
+	}
+	now = entry.ObservedAt
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	klineResults, err = repositories.Results.Recent(t.Context(), "crypto", klineID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(klineResults) != 2 || klineResults[0].Success {
+		t.Fatalf("pending preparation must not synthesize a Kline resolution: %+v", klineResults)
 	}
 }
 
@@ -393,7 +557,7 @@ func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "pipeline:storage_outbox", 1)
+	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "data_delivery:storage_outbox", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

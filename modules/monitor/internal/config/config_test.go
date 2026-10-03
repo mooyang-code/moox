@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,9 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	}
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
+	}
+	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://127.0.0.1:11003" {
+		t.Fatalf("collector gateway target default = %q", cfg.KlineFreshness.CollectorGatewayTarget)
 	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
@@ -148,6 +152,23 @@ func TestMonitorStorageGatewayEnvironmentOverridesMetricsOnly(t *testing.T) {
 	}
 }
 
+func TestMonitorCollectorGatewayEnvironmentIsIndependentFromStorageRoute(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
+	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector-gateway:11003")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://storage-gateway:11003")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "storage-node")
+	cfg := Default()
+	cfg.applyEnv()
+
+	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://collector-gateway:11003" || cfg.KlineFreshness.CollectorGatewayNodeID != "collector-node" {
+		t.Fatalf("collector route = %q/%q", cfg.KlineFreshness.CollectorGatewayTarget, cfg.KlineFreshness.CollectorGatewayNodeID)
+	}
+	if cfg.Metrics.Storage.GatewayTarget != "ip://storage-gateway:11003" || cfg.Metrics.Storage.GatewayNodeID != "storage-node" {
+		t.Fatalf("storage route = %q/%q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.Storage.GatewayNodeID)
+	}
+}
+
 func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
@@ -205,7 +226,7 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 	}
 }
 
-func TestMonitorAppConfigLoadsKlineFreshnessRules(t *testing.T) {
+func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
 	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "app.yaml"))
@@ -243,11 +264,25 @@ func TestMonitorAppConfigLoadsKlineFreshnessRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(app.yaml) error = %v", err)
 	}
-	if !cfg.KlineFreshness.Enabled || len(cfg.KlineFreshness.Rules) != 1 {
+	if !cfg.KlineFreshness.Enabled {
 		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
 	}
-	if cfg.KlineFreshness.Rules[0].ViewID != "view_binance_spot_kline_1m" {
-		t.Fatalf("kline freshness view = %s", cfg.KlineFreshness.Rules[0].ViewID)
+	freshness, ok := app["kline_freshness"].(map[string]any)
+	if !ok || freshness["collector_gateway_target"] != "ip://127.0.0.1:11003" {
+		t.Fatalf("kline freshness Collector gateway target = %v", freshness["collector_gateway_target"])
+	}
+	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://127.0.0.1:11003" {
+		t.Fatalf("loaded collector gateway target = %q", cfg.KlineFreshness.CollectorGatewayTarget)
+	}
+	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
+		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute {
+		t.Fatalf("dynamic kline freshness inventory = %+v", cfg.KlineFreshness)
+	}
+	if !reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
+		t.Fatalf("loaded kline freshness Space IDs = %v", cfg.KlineFreshness.SpaceIDs)
+	}
+	if strings.Contains(string(raw), "view_binance_spot_kline_1m") || strings.Contains(string(raw), "  rules:") {
+		t.Fatal("Monitor app config still pins a static K-line View")
 	}
 	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].Symbol != "BTC-USDT" {
 		t.Fatalf("market canary subjects = %+v", cfg.MarketCanary.Subjects)
@@ -304,15 +339,14 @@ func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 
 func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
-	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 {
+	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 ||
+		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
+		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute ||
+		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
 	cfg.SysDeploy.Enabled = false
 	cfg.KlineFreshness.Enabled = true
-	cfg.KlineFreshness.Rules = []KlineFreshnessRule{
-		{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
-		{Enabled: true, SpaceID: "crypto", DatasetID: "dataset-factor", ViewID: "view-factor", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute},
-	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
 	}
@@ -321,42 +355,23 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		name string
 		edit func(*Config)
 	}{
-		{"missing view", func(c *Config) { c.KlineFreshness.Rules[0].ViewID = "" }},
-		{"missing dataset", func(c *Config) { c.KlineFreshness.Rules[0].DatasetID = "" }},
-		{"duplicate rule", func(c *Config) { c.KlineFreshness.Rules = append(c.KlineFreshness.Rules, c.KlineFreshness.Rules[0]) }},
-		{"stale after too short", func(c *Config) { c.KlineFreshness.Rules[0].StaleAfter = 30 * time.Second }},
+		{"refresh interval too short", func(c *Config) { c.KlineFreshness.InventoryRefreshInterval = 0 }},
+		{"empty Space ID", func(c *Config) { c.KlineFreshness.SpaceIDs = []string{""} }},
+		{"duplicate Space ID", func(c *Config) { c.KlineFreshness.SpaceIDs = []string{"crypto", " crypto "} }},
+		{"refresh interval unbounded", func(c *Config) { c.KlineFreshness.InventoryRefreshInterval = 11 * time.Minute }},
+		{"page size out of range", func(c *Config) { c.KlineFreshness.InventoryPageSize = 101 }},
+		{"inventory cap out of range", func(c *Config) { c.KlineFreshness.InventoryMaxEntries = 1001 }},
+		{"stale after too short", func(c *Config) { c.KlineFreshness.StaleAfter = 30 * time.Second }},
 		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			copy := *cfg
-			copy.KlineFreshness.Rules = append([]KlineFreshnessRule(nil), cfg.KlineFreshness.Rules...)
 			test.edit(&copy)
 			if err := copy.Validate(); err == nil {
 				t.Fatal("Validate() error = nil")
 			}
 		})
-	}
-}
-
-func TestMonitorConfigKlineFreshnessStockRuleRequiresTradingSession(t *testing.T) {
-	cfg := Default()
-	cfg.SysDeploy.Enabled = false
-	cfg.KlineFreshness.Enabled = true
-	cfg.KlineFreshness.Rules = []KlineFreshnessRule{{
-		Enabled: true, SpaceID: "stockcn", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute,
-	}}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("valid stock rule rejected: %v", err)
-	}
-	cfg.KlineFreshness.Rules[0].Sessions = []string{"bad"}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("invalid stock session accepted")
-	}
-	cfg.KlineFreshness.Rules[0].Sessions = []string{"09:30-11:30", "13:00-15:00"}
-	cfg.KlineFreshness.Rules[0].CalendarID = "missing_calendar"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("unknown stock calendar accepted")
 	}
 }
 

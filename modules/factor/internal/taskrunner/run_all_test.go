@@ -205,6 +205,33 @@ func TestRunAllBatchesFactorsBySubject(t *testing.T) {
 	require.Equal(t, 1, storage.periodReadCount())
 }
 
+func TestRunAllBatchProjectsMergedPhysicalColumnsToPythonInputs(t *testing.T) {
+	storage := &recordingReadStorage{}
+	exec := &recordingBatchExecutor{}
+	runner := NewService(2, storage, exec)
+	base := time.Date(2026, 8, 10, 6, 10, 0, 0, time.UTC)
+	first := oneBarTask("BTC-USDT", base)
+	first.PeriodTime = base.Unix()
+	first.TaskID = "task-close"
+	first.SourceDataset = "mdataset_binance_kline_1m"
+	first.PreferredSourceDataset = "dataset_binance_spot_kline_1m"
+	first.Factor.InputColumns = []string{"close"}
+	second := first
+	second.TaskID = "task-volume"
+	second.Factor.FactorID = "volume-factor"
+	second.Factor.InputColumns = []string{"volume"}
+
+	results := runner.RunAll(context.Background(), []Task{first, second})
+
+	for _, result := range results {
+		require.NoError(t, result.Err)
+	}
+	require.Equal(t, []string{
+		"dataset_binance_spot_kline_1m__close", "dataset_binance_spot_kline_1m__volume",
+	}, storage.readColumns())
+	require.Equal(t, []string{"close", "volume"}, exec.frameColumns)
+}
+
 func TestRunAllIndividualFallbackPreservesMemberLookback(t *testing.T) {
 	base := time.Date(2026, 8, 10, 6, 10, 0, 0, time.UTC)
 	for _, batchEnabled := range []bool{false, true} {
@@ -446,6 +473,7 @@ type recordingExecutor struct {
 type recordingBatchExecutor struct {
 	batchCalls   int
 	batchFactors int
+	frameColumns []string
 }
 
 func (e *recordingBatchExecutor) Execute(context.Context, *engine.FactorTask, *engine.DataFrame) (*engine.FactorResult, error) {
@@ -455,6 +483,7 @@ func (e *recordingBatchExecutor) Execute(context.Context, *engine.FactorTask, *e
 func (e *recordingBatchExecutor) ExecuteBatch(_ context.Context, batch *engine.BatchTask, frame *engine.DataFrame) (*engine.BatchResult, error) {
 	e.batchCalls++
 	e.batchFactors += len(batch.Tasks)
+	e.frameColumns = append([]string(nil), frame.Columns...)
 	items := make([]engine.BatchItemResult, 0, len(batch.Tasks))
 	for _, task := range batch.Tasks {
 		items = append(items, engine.BatchItemResult{TaskID: task.TaskID, BindingID: task.BindingID, Result: resultForFrame(frame)})

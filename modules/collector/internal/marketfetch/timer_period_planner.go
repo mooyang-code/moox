@@ -182,7 +182,7 @@ func buildTimerPeriodBatchPlan(plan TimerPeriodPlan, snapshot domain.PeriodSerie
 	}
 	batch := &domain.BatchInvocation{
 		SpaceID: periodKey.SpaceID, BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindRealtime,
-		ShardIndex: shard, Frequency: periodKey.Frequency, Region: assignment.Region, NodeID: assignment.NodeID,
+		ShardIndex: shard, Frequency: periodKey.Frequency, PeriodTime: timePtr(period), PeriodDeadlineAt: timePtr(state.DeadlineAt.UTC()), Region: assignment.Region, NodeID: assignment.NodeID,
 		FunctionName: assignment.FunctionName, Status: domain.BatchStatusPlanned, Attempt: 1, RequestJSON: string(raw),
 		PlannedCount: len(request.Items), PlannedAt: &now, DeadlineAt: timePtr(state.DeadlineAt.UTC()),
 	}

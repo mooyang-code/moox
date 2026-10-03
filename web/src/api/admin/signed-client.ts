@@ -1,6 +1,7 @@
 import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import { clearSigningSessions, createNonce, loadSigningSession, signRequest } from "@/utils/request-signing";
 import { readSelectedSpaceId } from "./space-header";
+import { AuthSessionExpiredError } from "./auth-errors";
 
 interface PersistedAuth {
   token?: string;
@@ -21,13 +22,18 @@ export async function clearBrowserSession(): Promise<void> {
   await clearSigningSessions();
 }
 
+export async function expireBrowserSession(message?: string): Promise<AuthSessionExpiredError> {
+  await clearBrowserSession();
+  if (window.location.hash !== "#/login") window.location.hash = "#/login";
+  return new AuthSessionExpiredError(message);
+}
+
 async function signConfig(config: InternalAxiosRequestConfig): Promise<InternalAxiosRequestConfig> {
   const auth = readPersistedAuth();
   const now = Math.floor(Date.now() / 1000);
   const session = auth.sessionId ? await loadSigningSession(auth.sessionId) : null;
   if (!auth.token || !auth.sessionId || !auth.expiresAt || auth.expiresAt <= now || !session) {
-    await clearBrowserSession();
-    throw new Error("登录态已失效，请重新登录");
+    throw await expireBrowserSession();
   }
 
   const body = config.data == null ? "" : typeof config.data === "string" ? config.data : JSON.stringify(config.data);
@@ -59,8 +65,7 @@ export function installSignedClient(client: AxiosInstance): void {
   client.interceptors.request.use(signConfig);
   client.interceptors.response.use(undefined, async error => {
     if (error?.response?.status === 401) {
-      await clearBrowserSession();
-      if (window.location.hash !== "#/login") window.location.hash = "#/login";
+      await expireBrowserSession();
     }
     return Promise.reject(error);
   });

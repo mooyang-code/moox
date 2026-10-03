@@ -72,7 +72,7 @@ func TestPrimaryPeriodReceiptsDeadlineAndReadonlyStatus(t *testing.T) {
 	})
 	require.NoError(t, err)
 	auth := &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"}
-	exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: deadline.Add(-time.Minute).Unix(), SeriesHash: "hash", ExpectedCount: 2, DeadlineAt: deadline.Unix(), SeriesSnapshot: []*pb.DatasetPeriodSeries{
+	exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: deadline.Add(-time.Minute).Unix(), SeriesHash: "hash", ExpectedCount: 2, DeadlineAt: deadline.Unix(), ReservationId: "release-a", SeriesSnapshot: []*pb.DatasetPeriodSeries{
 		{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "okx"}, {SeriesIndex: 1, SubjectId: "BTC-USDT", SeriesTag: "binance"},
 	}}
 	query := proto.Clone(exp).(*pb.DatasetPeriodExpectation)
@@ -101,7 +101,7 @@ func TestPrimaryPeriodReceiptsDeadlineAndReadonlyStatus(t *testing.T) {
 		require.Equal(t, deadline.Unix(), response.GetDeadlineAt())
 	}
 	assertStatus(query, "waiting")
-	for _, change := range []func(*pb.DatasetPeriodExpectation){func(x *pb.DatasetPeriodExpectation) { x.SeriesHash = "wrong" }, func(x *pb.DatasetPeriodExpectation) { x.ExpectedCount++ }} {
+	for _, change := range []func(*pb.DatasetPeriodExpectation){func(x *pb.DatasetPeriodExpectation) { x.SeriesHash = "wrong" }, func(x *pb.DatasetPeriodExpectation) { x.ExpectedCount++ }, func(x *pb.DatasetPeriodExpectation) { x.ReservationId = "release-b" }} {
 		bad := proto.Clone(query).(*pb.DatasetPeriodExpectation)
 		change(bad)
 		status, err = service.GetDatasetPeriodStatus(ctx, &pb.PrimaryGetDatasetPeriodStatusReq{AuthInfo: auth, Expectation: bad})

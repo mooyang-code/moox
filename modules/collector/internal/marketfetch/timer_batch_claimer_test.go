@@ -106,7 +106,11 @@ func TestTimerBatchClaimerTerminalReplaySurvivesPrunedWriteTarget(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NoError(t, db.Tasks().SetEnabled(ctx, plan.Task.SpaceID, plan.Task.TaskID, false))
-	pruned, err := db.TaskInstances().PruneDisabledWriteTargets(ctx, plan.Task.SpaceID)
+	terminalState := timerPlannerStorageState(plan.Snapshot, now.Add(time.Hour))
+	terminalState.Status = domain.PeriodStatusComplete
+	terminalState.ConfirmedAt = now.Add(time.Hour + time.Second)
+	require.NoError(t, db.PeriodStorageStates().ObservePeriodStorageState(ctx, terminalState))
+	pruned, err := db.TaskInstances().PruneDisabledWriteTargets(ctx, plan.Task.SpaceID, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, pruned)
 

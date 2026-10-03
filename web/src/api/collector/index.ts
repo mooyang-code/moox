@@ -70,6 +70,15 @@ export interface GetTaskListResponse {
   page?: CollectorPage;
 }
 
+export interface GetTaskDetailRequest {
+  space_id: string;
+  task_id: string;
+}
+
+export interface GetTaskDetailResponse {
+  task?: CollectorTask;
+}
+
 export interface CreateTaskRequest {
   task: CollectionTaskPayload;
   result_config: CollectionTaskResultConfig;
@@ -140,6 +149,10 @@ export interface DataTypeConfigDetail {
 
 export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {
   return callControl<GetTaskListRequest, GetTaskListResponse>("collectmgr", "GetTaskList", params);
+}
+
+export async function GetTaskDetail(params: GetTaskDetailRequest): Promise<GetTaskDetailResponse> {
+  return callControl<GetTaskDetailRequest, GetTaskDetailResponse>("collectmgr", "GetTaskDetail", params);
 }
 
 export async function CreateTask(params: CreateTaskRequest): Promise<CreateTaskResponse> {

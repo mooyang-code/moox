@@ -29,6 +29,12 @@ crypto 行情 View 至少有：`view_crypto_spot_kline_1m`、`view_crypto_swap_k
 
 控制面：`/data/moox/prod`。Trade 可能在 `/home/ubuntu/moox/trade-move`，不要往香港机发 Storage。
 
+## Storage View 容量检查
+
+有界保留的时序 View 重建后，每个 `(subject_id, frequency, series_tag)` 默认只保留最近 **5,000 根**完整 K 线；任一序列达到 **6,001 根**（严格超过 6,000）触发 A/B 安全重建。新索引完成回溯并追平后才切换，旧索引继续服务到无引用清理；此操作不删除 Primary 历史。1 GiB 文件阈值可独立触发有界保留 View 的重建；永久 View 超限时只产生 `moox_storage_view_permanent_view_capacity_over_limit` 告警，不自动截断历史。
+
+容量统计由 Storage View Maintainer 执行。轻量维护仍每分钟检查，但对每个 View 的 active index，昂贵的逐序列容量扫描最多每小时一次。进程首次看到该 View/index 时先独立随机等待 `[0, 1h)`；进程重启或 active index 切换后重新抽取首次偏移。扫描之后按扫描开始时间加一小时调度，不按整点对齐。失败或超时也占用本次周期，不会被每分钟维护循环热重试。
+
 ## 禁止
 
 - 对行情 / 交易 / 因子 Dataset 执行 `purge-dataset-events`
@@ -65,7 +71,7 @@ moox-cli storage repair-view \
   --dry-run
 ```
 
-执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`rebuild_lookback_periods`，默认 1000 根），不要为了追平改成 `--reset-view-indexes`。
+执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`rebuild_lookback_periods`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
 
 ### EventBus admin 地址
 

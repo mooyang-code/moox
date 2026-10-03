@@ -238,11 +238,11 @@ func (r *PeriodFailureReporter) reportRetry(ctx context.Context, spaceID string,
 		if target.ID == "" || target.DatasetID == "" || target.SeriesHash == "" || target.ExpectedCount == 0 || target.SeriesIndex >= target.ExpectedCount || (target.SpaceID != "" && target.SpaceID != spaceID) {
 			return r.persistReportError(ctx, spaceID, retry, nil, fmt.Errorf("invalid durable failure target %q", target.ID))
 		}
-		key := strings.Join([]string{target.DatasetID, storageFrequency, periodTime.Format(time.RFC3339Nano), target.SeriesHash, fmt.Sprint(target.ExpectedCount), item.MarketType}, "\x00")
+		key := strings.Join([]string{target.DatasetID, storageFrequency, periodTime.Format(time.RFC3339Nano), target.SeriesHash, fmt.Sprint(target.ExpectedCount), item.MarketType, item.PeriodReservationID}, "\x00")
 		group := groups[key]
 		if group == nil {
 			group = &reportGroup{
-				expectation: &storagepb.DatasetPeriodExpectation{SpaceId: spaceID, DatasetId: target.DatasetID, Frequency: storageFrequency, PeriodTime: periodTime.Unix(), SeriesHash: target.SeriesHash, ExpectedCount: target.ExpectedCount},
+				expectation: &storagepb.DatasetPeriodExpectation{SpaceId: spaceID, DatasetId: target.DatasetID, Frequency: storageFrequency, PeriodTime: periodTime.Unix(), SeriesHash: target.SeriesHash, ExpectedCount: target.ExpectedCount, ReservationId: item.PeriodReservationID},
 				marketType:  item.MarketType, targets: make(map[uint32][]targetEntry),
 			}
 			groups[key] = group

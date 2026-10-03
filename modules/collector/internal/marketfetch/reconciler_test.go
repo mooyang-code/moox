@@ -22,10 +22,15 @@ import (
 type reconcilerTasksStub struct{ tasks []domain.CollectionTask }
 
 func TestReconcilerMissingClaimRouteCannotEnableTimer(t *testing.T) {
-	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}}}
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer", FunctionName: "market-fetcher-timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}}}
 	r := &Reconciler{Tasks: reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}}, Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}}, Nodes: nodes}
 	require.ErrorContains(t, r.Reconcile(context.Background(), "crypto"), "collector runtime")
 	require.Zero(t, nodes.submits)
+}
+
+func TestMarketRouteIDBoundsFrequencyLabels(t *testing.T) {
+	require.Equal(t, "binance_spot_kline_1h", marketRouteID("crypto", "binance", "spot", "60m"))
+	require.Equal(t, "unknown", marketRouteID("crypto", "binance", "spot", "task-specific-frequency"))
 }
 
 func TestDefaultMaxSubjectsUsesSmallerCryptoShards(t *testing.T) {
@@ -245,15 +250,25 @@ func TestReconcilerUsesTaskTagsAsAuthoritativeCrossProviderRoutes(t *testing.T) 
 }
 
 type reconcilerNodesStub struct {
-	nodes         []scfinvoker.Node
-	patches       []*cloudnodepb.NodeRuntimeConfigPatch
-	submits       int
-	listStarted   chan struct{}
-	listRelease   chan struct{}
-	listOnce      sync.Once
-	submitErr     error
-	batchStatuses map[string]cloudnodepb.NodeBatchStatus
-	batchErr      error
+	nodes          []scfinvoker.Node
+	patches        []*cloudnodepb.NodeRuntimeConfigPatch
+	submits        int
+	submitJobID    string
+	submitJobIDSet bool
+	listStarted    chan struct{}
+	listRelease    chan struct{}
+	listOnce       sync.Once
+	submitErr      error
+	batchStatuses  map[string]cloudnodepb.NodeBatchStatus
+	batchErr       error
+	batchErrors    map[string]error
+	batchQueries   []string
+	lease          *scfinvoker.CollectorPublishLease
+	leaseError     error
+	renewError     error
+	leaseAcquires  int
+	leaseRenews    int
+	leaseReleases  int
 }
 
 func TestRuntimeConfigPatchBatchesRespectCloudNodeLimit(t *testing.T) {
@@ -295,6 +310,7 @@ func (s *reconcilerNodesStub) SubmitRuntimeConfigs(_ context.Context, _ string, 
 				s.nodes[index].Metadata = map[string]any{}
 			}
 			s.nodes[index].Metadata["assignment_hash"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
+			s.nodes[index].Metadata["assignment_count"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
 			s.nodes[index].Metadata["binding_hash"] = patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_BINDING_HASH"]
 			s.nodes[index].Metadata["collector_rpc_gateway_target"] = patch.GetManagedEnvironment()["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"]
 			s.nodes[index].Metadata["collector_gateway_target_node"] = patch.GetManagedEnvironment()["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"]
@@ -310,7 +326,185 @@ func (s *reconcilerNodesStub) SubmitRuntimeConfigs(_ context.Context, _ string, 
 			s.nodes[index].Metadata["timer_actual_message"] = "market_fetch_timer_v1"
 		}
 	}
+	if s.submitJobIDSet {
+		return s.submitJobID, nil
+	}
 	return "job-1", nil
+}
+
+func (s *reconcilerNodesStub) AcquireCollectorPublishLease(_ context.Context, spaceID, holderID string) (*scfinvoker.CollectorPublishLease, error) {
+	s.leaseAcquires++
+	if s.leaseError != nil {
+		return nil, s.leaseError
+	}
+	s.lease = &scfinvoker.CollectorPublishLease{SpaceID: spaceID, LeaseID: "lease-" + holderID, HolderID: holderID, FencingToken: int64(s.leaseAcquires), ExpiresAt: time.Now().Add(time.Minute)}
+	return s.lease, nil
+}
+
+func (s *reconcilerNodesStub) RenewCollectorPublishLease(_ context.Context, lease *scfinvoker.CollectorPublishLease) (*scfinvoker.CollectorPublishLease, error) {
+	s.leaseRenews++
+	if s.renewError != nil {
+		return nil, s.renewError
+	}
+	if s.leaseError != nil {
+		return nil, s.leaseError
+	}
+	if s.lease == nil || s.lease.LeaseID != lease.LeaseID {
+		return nil, fmt.Errorf("lease is stale")
+	}
+	updated := *lease
+	updated.ExpiresAt = time.Now().Add(time.Minute)
+	s.lease = &updated
+	return &updated, nil
+}
+
+func TestReconcilerRepairsLegacyAssignmentWithoutSubjectCount(t *testing.T) {
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer", FunctionName: "timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}}}
+	r := &Reconciler{
+		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
+		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:   nodes,
+	}
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, 1, nodes.submits)
+	require.Equal(t, "1", fmt.Sprint(nodes.nodes[0].Metadata["assignment_count"]))
+
+	delete(nodes.nodes[0].Metadata, "assignment_count")
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, 2, nodes.submits, "a legacy node with matching assignment hash but no count must be upgraded")
+	require.Equal(t, "1", fmt.Sprint(nodes.nodes[0].Metadata["assignment_count"]))
+}
+
+func TestReconcilerEmptySubmitJobIDWaitsForExpiryThenFencesUnknownJob(t *testing.T) {
+	nodes := &reconcilerNodesStub{
+		nodes:          []scfinvoker.Node{{NodeID: "timer", FunctionName: "timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}},
+		submitJobIDSet: true,
+		submitJobID:    "",
+	}
+	r := &Reconciler{
+		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
+		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:   nodes,
+	}
+	require.ErrorIs(t, r.Reconcile(context.Background(), "crypto"), scfinvoker.ErrRuntimeConfigSubmissionUnknown)
+	jobs, _ := r.pendingRuntimeJobsState()
+	require.Empty(t, jobs, "an absent job ID must not become an unqueryable pending job")
+	require.True(t, r.pendingRuntimeSubmitUnknown())
+	require.NotNil(t, r.publishLease, "retain the current fence while the response remains ambiguous")
+	require.EqualValues(t, 1, r.publishLease.FencingToken)
+	require.Zero(t, nodes.leaseReleases, "an unknown response must not release the lease")
+
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"), "the unresolved submission remains fenced until its lease expires")
+	require.Equal(t, 1, nodes.leaseAcquires)
+	require.Zero(t, nodes.leaseReleases)
+
+	delete(nodes.nodes[0].Metadata, "assignment_count")
+	r.publishLease.ExpiresAt = time.Now().Add(-time.Second)
+	nodes.submitJobIDSet = false
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.False(t, r.pendingRuntimeSubmitUnknown())
+	require.Equal(t, 2, nodes.leaseAcquires, "after expiry a new fencing token must be acquired before retrying")
+	require.NotEmpty(t, nodes.patches[0].GetCollectorPublishLeaseId())
+	require.EqualValues(t, 2, nodes.patches[0].GetCollectorPublishFencingToken())
+	jobs, _ = r.pendingRuntimeJobsState()
+	require.Equal(t, []string{"job-1"}, jobs)
+}
+
+func TestReconcilerStaleLeaseRenewalPollsTerminalJobThenAcquiresHigherFence(t *testing.T) {
+	nodes := &reconcilerNodesStub{
+		nodes:         []scfinvoker.Node{{NodeID: "timer", FunctionName: "timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}},
+		batchStatuses: map[string]cloudnodepb.NodeBatchStatus{"job-old": cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS},
+		renewError:    scfinvoker.ErrCollectorPublishLeaseStale,
+	}
+	r := &Reconciler{
+		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
+		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:   nodes,
+	}
+	oldLease, err := r.ensurePublishLease(context.Background(), "crypto")
+	require.NoError(t, err)
+	r.setPendingRuntimeJobs([]string{"job-old"}, nil, true)
+
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, []string{"job-old"}, nodes.batchQueries, "known work must be confirmed terminal before reacquiring")
+	require.EqualValues(t, 2, nodes.leaseAcquires)
+	require.Len(t, nodes.patches, 1)
+	require.NotEqual(t, oldLease.LeaseID, nodes.patches[0].GetCollectorPublishLeaseId())
+	require.Greater(t, nodes.patches[0].GetCollectorPublishFencingToken(), oldLease.FencingToken)
+	require.NotNil(t, r.publishLease)
+	require.Greater(t, r.publishLease.FencingToken, oldLease.FencingToken)
+}
+
+func TestReconcilerKeepsLeaseAndPendingJobsOnAmbiguousRenewFailure(t *testing.T) {
+	nodes := &reconcilerNodesStub{
+		batchStatuses: map[string]cloudnodepb.NodeBatchStatus{"job-1": cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING},
+		renewError:    context.DeadlineExceeded,
+	}
+	r := &Reconciler{Tasks: reconcilerTasksStub{}, Symbols: reconcilerSymbolsStub{}, Nodes: nodes}
+	lease, err := r.ensurePublishLease(context.Background(), "crypto")
+	require.NoError(t, err)
+	r.setPendingRuntimeJobs([]string{"job-1"}, nil, true)
+
+	require.ErrorIs(t, r.Reconcile(context.Background(), "crypto"), context.DeadlineExceeded)
+	require.Same(t, lease, r.publishLease, "transport errors do not establish that the current fence is stale")
+	jobs, _ := r.pendingRuntimeJobsState()
+	require.Equal(t, []string{"job-1"}, jobs)
+	require.Empty(t, nodes.batchQueries, "do not poll after an ambiguous failed renewal")
+}
+
+func (s *reconcilerNodesStub) ReleaseCollectorPublishLease(_ context.Context, lease *scfinvoker.CollectorPublishLease) error {
+	s.leaseReleases++
+	if s.leaseError != nil {
+		return s.leaseError
+	}
+	if s.lease == nil || s.lease.LeaseID != lease.LeaseID {
+		return fmt.Errorf("lease is stale")
+	}
+	s.lease = nil
+	return nil
+}
+
+func TestTimerRuntimeConfigFencingLeaseCoversAsyncBatchLifetime(t *testing.T) {
+	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer", FunctionName: "market-fetcher-timer", Region: "ap-singapore", NodeType: "scf-event", TriggerType: "timer"}}}
+	r := &Reconciler{
+		CollectorRuntimeGatewayTarget: "ip://collector.local:11002", CollectorRuntimeGatewayNodeID: "collector-node",
+		Tasks:   reconcilerTasksStub{tasks: []domain.CollectionTask{{SpaceID: "crypto", TaskID: "bars", Enabled: true, DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars","frequency":"1h"}`}}},
+		Symbols: reconcilerSymbolsStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", Status: "active"}}},
+		Nodes:   nodes,
+	}
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.EqualValues(t, 1, nodes.leaseAcquires)
+	require.Len(t, nodes.patches, 1)
+	require.True(t, strings.HasPrefix(nodes.patches[0].GetCollectorPublishLeaseId(), "lease-timer-reconciler-"))
+	require.EqualValues(t, 1, nodes.patches[0].GetCollectorPublishFencingToken())
+	require.Zero(t, nodes.leaseReleases)
+
+	nodes.batchStatuses = map[string]cloudnodepb.NodeBatchStatus{"job-1": cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING}
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.EqualValues(t, 1, nodes.leaseRenews)
+	require.Zero(t, nodes.leaseReleases, "a higher fencing token must not be issued while CloudNode is applying this batch")
+
+	nodes.batchStatuses["job-1"] = cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.EqualValues(t, 1, nodes.leaseReleases)
+	require.Nil(t, r.publishLease)
+}
+
+func TestDisableBlacklistedTimersUsesPublishFence(t *testing.T) {
+	nodes := &reconcilerNodesStub{}
+	r := &Reconciler{Nodes: nodes}
+	submitted, err := r.disableBlacklistedTimers(context.Background(), "crypto", []scfinvoker.Node{{
+		NodeID: "blocked", Metadata: map[string]any{"timer_enabled": true},
+	}})
+	require.NoError(t, err)
+	require.True(t, submitted)
+	require.Len(t, nodes.patches, 1)
+	require.NotEmpty(t, nodes.patches[0].GetCollectorPublishLeaseId())
+	require.Positive(t, nodes.patches[0].GetCollectorPublishFencingToken())
+	require.Zero(t, nodes.leaseReleases)
 }
 
 func TestReconcilerResolvesMissingInstrumentIdentity(t *testing.T) {
@@ -356,17 +550,22 @@ func TestReconcilerTreatsRuntimeSubmitTimeoutAsRetryPending(t *testing.T) {
 	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto"), context.DeadlineExceeded)
 	_, firstPendingSince := reconciler.pendingRuntimeJobState()
 	require.False(t, firstPendingSince.IsZero())
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "bars", "1m")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "1m")))
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "submit_timeout")))
 
 	time.Sleep(time.Millisecond)
-	require.ErrorIs(t, reconciler.Reconcile(context.Background(), "crypto"), context.DeadlineExceeded)
+	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"), "do not resubmit an outcome-unknown request under the same fence")
 	_, secondPendingSince := reconciler.pendingRuntimeJobState()
 	require.Equal(t, firstPendingSince, secondPendingSince, "retries must preserve the original pending time")
+	require.Equal(t, 1, nodes.submits, "an unknown submission cannot be retried until a higher fencing token is acquired")
 }
 
 func (s *reconcilerNodesStub) GetRuntimeConfigBatchStatus(_ context.Context, _ string, jobID string) (*cloudnodepb.NodeBatchSummary, error) {
+	s.batchQueries = append(s.batchQueries, jobID)
+	if err := s.batchErrors[jobID]; err != nil {
+		return nil, err
+	}
 	if s.batchErr != nil {
 		return nil, s.batchErr
 	}
@@ -374,6 +573,77 @@ func (s *reconcilerNodesStub) GetRuntimeConfigBatchStatus(_ context.Context, _ s
 		return &cloudnodepb.NodeBatchSummary{Status: status}, nil
 	}
 	return &cloudnodepb.NodeBatchSummary{Status: cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS}, nil
+}
+
+func TestReconcilerRetainsFailedBatchUntilOtherJobsAreTerminal(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.ObserveAssignmentSuccess("crypto", 123)
+	nodes := &reconcilerNodesStub{batchStatuses: map[string]cloudnodepb.NodeBatchStatus{
+		"job-1": cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED,
+		"job-2": cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING,
+	}}
+	r := &Reconciler{Tasks: reconcilerTasksStub{}, Symbols: reconcilerSymbolsStub{}, Nodes: nodes, Metrics: metrics}
+	_, leaseErr := r.ensurePublishLease(context.Background(), "crypto")
+	require.NoError(t, leaseErr)
+	r.setPendingRuntimeJobs([]string{"job-1", "job-2"}, nil, true)
+	_, since := r.pendingRuntimeJobsState()
+
+	require.NoError(t, r.Reconcile(context.Background(), "crypto"))
+	require.Equal(t, []string{"job-1", "job-2"}, nodes.batchQueries)
+	jobs, after := r.pendingRuntimeJobsState()
+	require.Equal(t, []string{"job-1", "job-2"}, jobs)
+	require.Equal(t, since, after)
+	require.Zero(t, nodes.leaseReleases)
+	require.NotNil(t, r.publishLease)
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
+
+	nodes.batchStatuses["job-2"] = cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL
+	err := r.Reconcile(context.Background(), "crypto")
+	require.ErrorContains(t, err, "job-1 failed")
+	require.ErrorContains(t, err, "job-2 partially failed")
+	jobs, _ = r.pendingRuntimeJobsState()
+	require.Empty(t, jobs)
+	require.Equal(t, 1, nodes.leaseReleases)
+	require.Nil(t, r.publishLease)
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
+	require.Equal(t, float64(123), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")))
+}
+
+func TestReconcilerChecksAllPendingJobsBeforeReturning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status cloudnodepb.NodeBatchStatus
+		err    error
+	}{
+		{name: "pending", status: cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING},
+		{name: "running", status: cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING},
+		{name: "unknown", status: cloudnodepb.NodeBatchStatus(99)},
+		{name: "unreadable", err: context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := &reconcilerNodesStub{
+				batchStatuses: map[string]cloudnodepb.NodeBatchStatus{"job-1": tc.status, "job-2": cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED},
+				batchErrors:   map[string]error{"job-1": tc.err},
+			}
+			r := &Reconciler{Tasks: reconcilerTasksStub{}, Symbols: reconcilerSymbolsStub{}, Nodes: nodes}
+			_, leaseErr := r.ensurePublishLease(context.Background(), "crypto")
+			require.NoError(t, leaseErr)
+			r.setPendingRuntimeJobs([]string{"job-1", "job-2"}, nil, true)
+			err := r.Reconcile(context.Background(), "crypto")
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+			} else if tc.name == "unknown" {
+				require.ErrorContains(t, err, "unknown status")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, []string{"job-1", "job-2"}, nodes.batchQueries)
+			jobs, _ := r.pendingRuntimeJobsState()
+			require.Equal(t, []string{"job-1", "job-2"}, jobs)
+			require.Zero(t, nodes.leaseReleases)
+			require.NotNil(t, r.publishLease)
+		})
+	}
 }
 
 func TestReconcilerRecordsCompletedBatchBeforeNextDNSChange(t *testing.T) {
@@ -740,8 +1010,8 @@ func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
 	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto"), "capacity")
 	require.Zero(t, nodes.submits)
 	// Capacity failure must publish required work before returning.
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "bars", "1m")))
-	require.Equal(t, float64(0), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "bars", "1m")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "1m")))
+	require.Equal(t, float64(0), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto", "1m")))
 	require.Equal(t, float64(0), testutil.ToFloat64(metrics.timerCapacityTotal.WithLabelValues("crypto")))
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.timerCapacityRequired.WithLabelValues("crypto")))
 	require.Equal(t, float64(-1), testutil.ToFloat64(metrics.timerCapacityHeadroom.WithLabelValues("crypto")))
@@ -819,7 +1089,7 @@ func TestReconcilerRejectsExhaustedRemoteEnvironmentBudget(t *testing.T) {
 		Metrics: metrics,
 	}
 	require.ErrorContains(t, reconciler.Reconcile(context.Background(), "crypto"), "no available timer environment budget")
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "bars", "1m")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto", "1m")))
 }
 
 func TestTimerTriggerNeedsRepairWhenSchedulerOwnsAcquisition(t *testing.T) {

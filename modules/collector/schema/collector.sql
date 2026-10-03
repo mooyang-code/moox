@@ -102,6 +102,9 @@ ON t_collector_task_period_series (c_period_time, c_space_id, c_dataset_id, c_fr
 CREATE INDEX IF NOT EXISTS idx_collector_task_period_series_space_retention
 ON t_collector_task_period_series (c_space_id, c_period_time, c_dataset_id, c_frequency);
 
+CREATE INDEX IF NOT EXISTS idx_collector_task_period_series_created
+ON t_collector_task_period_series (c_space_id, c_ctime, c_dataset_id, c_frequency, c_period_time);
+
 CREATE TABLE IF NOT EXISTS t_collector_period_storage_states (
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
@@ -116,6 +119,13 @@ CREATE TABLE IF NOT EXISTS t_collector_period_storage_states (
     CHECK (c_status IN ('waiting', 'complete', 'degraded')),
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_period_time)
 );
+
+CREATE INDEX IF NOT EXISTS idx_collector_period_storage_terminal_cleanup
+ON t_collector_period_storage_states (c_space_id, c_status, c_confirmed_at, c_dataset_id, c_frequency, c_period_time);
+
+CREATE INDEX IF NOT EXISTS idx_collector_period_storage_waiting_cursor
+ON t_collector_period_storage_states (c_space_id, c_dataset_id, c_frequency, c_period_time)
+WHERE c_status = 'waiting';
 
 -- A Timer period batch is the immutable claimable owner of one period shard.
 -- Claim columns are populated only by the planned-to-dispatched claim CAS.
@@ -174,6 +184,12 @@ CREATE TABLE IF NOT EXISTS t_collector_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_collector_runs_status ON t_collector_runs (c_space_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_collector_runs_terminal_cleanup
+ON t_collector_runs (c_mtime, c_id)
+WHERE c_run_type = 'scheduled' AND c_status IN ('succeeded','partial_failed','failed');
+CREATE INDEX IF NOT EXISTS idx_collector_runs_terminal_cleanup_space
+ON t_collector_runs (c_space_id, c_mtime, c_id)
+WHERE c_run_type = 'scheduled' AND c_status IN ('succeeded','partial_failed','failed');
 
 CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -206,6 +222,9 @@ ON t_collector_task_instances (c_space_id, c_instance_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_subject
 ON t_collector_task_instances (c_space_id, c_subject_id, c_frequency);
 
+CREATE INDEX IF NOT EXISTS idx_collector_instances_storage_write
+ON t_collector_task_instances (c_space_id, c_subject_id, c_frequency, c_series_tag, c_function_name, c_is_deleted);
+
 CREATE INDEX IF NOT EXISTS idx_collector_instances_provider_status
 ON t_collector_task_instances (c_space_id, c_provider, c_last_exec_status);
 
@@ -230,6 +249,10 @@ ON t_collector_task_instances (c_space_id, c_run_id, c_request_key)
 WHERE c_run_id <> '' AND c_request_key <> '';
 CREATE INDEX IF NOT EXISTS idx_collector_instances_run
 ON t_collector_task_instances (c_space_id, c_run_id, c_instance_id, c_last_exec_status);
+
+CREATE INDEX IF NOT EXISTS idx_collector_instances_terminal_cleanup_space
+ON t_collector_task_instances (c_space_id, c_mtime, c_id)
+WHERE c_run_id <> '' AND c_last_exec_status IN (2, 3);
 
 CREATE TABLE IF NOT EXISTS t_collector_instance_write_targets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -267,6 +290,9 @@ ON t_collector_instance_write_targets (c_space_id, c_dataset_id, c_write_target_
 CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset_instance
 ON t_collector_instance_write_targets (c_space_id, c_dataset_id, c_instance_id);
 
+CREATE INDEX IF NOT EXISTS idx_collector_write_targets_retention_space
+ON t_collector_instance_write_targets (c_space_id, c_mtime, c_id);
+
 CREATE TRIGGER IF NOT EXISTS update_collector_tasks_mtime
 AFTER UPDATE ON t_collector_tasks
 WHEN NEW.c_mtime = OLD.c_mtime
@@ -293,6 +319,8 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_batches (
     c_write_target_id TEXT NOT NULL DEFAULT '',
     c_retry_scope TEXT NOT NULL DEFAULT '',
     c_frequency TEXT NOT NULL,
+    c_period_time DATETIME,
+    c_period_deadline_at DATETIME,
     c_region TEXT NOT NULL,
     c_node_id TEXT NOT NULL,
     c_function_name TEXT NOT NULL,
@@ -310,6 +338,7 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_batches (
     c_dispatched_at DATETIME,
     c_deadline_at DATETIME,
     c_completed_at DATETIME,
+    c_items_cleaned INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -337,10 +366,38 @@ ON t_collector_fetch_batches (c_space_id, c_schedule_id, c_batch_kind, c_shard_i
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_deadline ON t_collector_fetch_batches (c_status, c_deadline_at);
 
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_cleanup
+ON t_collector_fetch_batches (c_status, c_completed_at, c_id);
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_items_cleanup
+ON t_collector_fetch_batches (c_status, c_completed_at, c_id)
+WHERE c_items_cleaned = 0;
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_items_cleanup_space
+ON t_collector_fetch_batches (c_space_id, c_status, c_completed_at, c_id)
+WHERE c_items_cleaned = 0;
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_parent_cleanup
+ON t_collector_fetch_batches (c_status, c_completed_at, c_id)
+WHERE c_items_cleaned = 1;
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_parent_cleanup_space
+ON t_collector_fetch_batches (c_space_id, c_status, c_completed_at, c_id)
+WHERE c_items_cleaned = 1;
+
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_due_scope
 ON t_collector_fetch_batches (c_space_id, c_status, c_deadline_at);
 
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_period_due
+ON t_collector_fetch_batches (c_space_id, c_status, c_period_deadline_at, c_deadline_at);
+
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_schedule ON t_collector_fetch_batches (c_space_id, c_schedule_id);
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_instance_ref
+ON t_collector_fetch_batches (c_space_id, c_instance_id);
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_target_ref
+ON t_collector_fetch_batches (c_space_id, c_write_target_id);
 
 CREATE TABLE IF NOT EXISTS t_collector_fetch_retry_items (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -354,6 +411,8 @@ CREATE TABLE IF NOT EXISTS t_collector_fetch_retry_items (
     c_subject_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_target_data_time DATETIME NOT NULL,
+    c_period_time DATETIME,
+    c_period_deadline_at DATETIME,
     c_task_json TEXT NOT NULL DEFAULT '{}',
     c_failure_targets_json TEXT NOT NULL DEFAULT '[]',
     c_attempt INTEGER NOT NULL DEFAULT 1,
@@ -377,14 +436,39 @@ CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due ON t_collector_fetch_re
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_target
 ON t_collector_fetch_retry_items (c_space_id, c_write_target_id, c_status);
 
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_instance_active
+ON t_collector_fetch_retry_items (c_space_id, c_instance_id, c_status, c_period_failure_report_state);
+
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_pending_scope
 ON t_collector_fetch_retry_items (c_space_id, c_status, c_frequency, c_write_target_id, c_instance_id);
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due_scope
 ON t_collector_fetch_retry_items (c_space_id, c_status, c_next_retry_at);
 
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_period_due
+ON t_collector_fetch_retry_items (c_space_id, c_status, c_period_deadline_at, c_next_retry_at);
+
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_period_failure
 ON t_collector_fetch_retry_items (c_space_id, c_status, c_period_failure_report_state, c_retry_key);
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_terminal_cleanup
+ON t_collector_fetch_retry_items (c_mtime, c_status, c_period_failure_report_state, c_id);
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_cleanup_succeeded
+ON t_collector_fetch_retry_items (c_mtime, c_id)
+WHERE c_status IN ('succeeded', 'superseded');
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_cleanup_succeeded_space
+ON t_collector_fetch_retry_items (c_space_id, c_mtime, c_id)
+WHERE c_status IN ('succeeded', 'superseded');
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_cleanup_permanent
+ON t_collector_fetch_retry_items (c_mtime, c_id)
+WHERE c_status = 'permanent_failed' AND c_period_failure_report_state <> 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_cleanup_permanent_space
+ON t_collector_fetch_retry_items (c_space_id, c_mtime, c_id)
+WHERE c_status = 'permanent_failed' AND c_period_failure_report_state <> 'pending';
 
 -- Period readiness is the Collector's durable answer to whether all
 -- expected Storage writes for one market period have reached a terminal
@@ -419,6 +503,15 @@ ON t_period_readiness (c_space_id, c_report_state, c_dataset_id, c_frequency);
 CREATE INDEX IF NOT EXISTS idx_period_readiness_waiting_scope
 ON t_period_readiness (c_space_id, c_report_state, c_deadline_at, c_id);
 
+CREATE INDEX IF NOT EXISTS idx_period_readiness_completed_scope
+ON t_period_readiness (c_space_id, c_dataset_id, c_frequency, c_status, c_period_time DESC, c_id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_period_readiness_retention
+ON t_period_readiness (c_space_id, c_report_state, c_collected_at, c_id);
+
+CREATE INDEX IF NOT EXISTS idx_period_readiness_item_retention
+ON t_period_readiness (c_space_id, c_report_state, c_dataset_id, c_frequency, c_period_time DESC, c_id DESC);
+
 CREATE TABLE IF NOT EXISTS t_period_readiness_items (
     c_readiness_id INTEGER NOT NULL,
     c_instance_id TEXT NOT NULL,
@@ -439,3 +532,6 @@ CREATE INDEX IF NOT EXISTS idx_period_readiness_items_state ON t_period_readines
 
 CREATE INDEX IF NOT EXISTS idx_period_readiness_items_target
 ON t_period_readiness_items (c_readiness_id, c_write_target_id, c_state);
+
+CREATE INDEX IF NOT EXISTS idx_period_readiness_items_write_target
+ON t_period_readiness_items (c_write_target_id, c_readiness_id);

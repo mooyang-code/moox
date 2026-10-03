@@ -145,6 +145,11 @@ func collectSCFTargets(manifest setupconfig.Manifest, includeIdle bool) []SCFTar
 				}
 				add(region.Region, shard.Namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), poolCount)
 			}
+			if region.Enabled && region.FunctionCount > 0 && strings.EqualFold(strings.TrimSpace(space.SpaceID), "crypto") && !space.IsRegionBlacklisted(region.Region) {
+				if namespace, err := setupconfig.SpaceRegionReleaseCanaryNamespace(space, region, manifest.SCFFetcher.TencentLimits); err == nil {
+					add(region.Region, namespace, space.FunctionPrefix, publicNet, space.StorageAccessTarget(region.Region), 1)
+				}
+			}
 		}
 	}
 	out := make([]SCFTarget, 0, len(byKey))

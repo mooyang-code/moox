@@ -48,23 +48,28 @@ const (
 	// per-region platform limit remains enforced by setup validation.
 	maxCollectorPublishNodeCount    = 1000
 	collectorRuntimeConfigBatchSize = 100
+	collectorMaxNodeBatchItems      = 100
 )
 
 type collectorRuntimeConfigPatch struct {
-	NodeID             string            `json:"node_id"`
-	ManagedEnvironment map[string]string `json:"managed_environment,omitempty"`
-	TimerEnabled       bool              `json:"timer_enabled"`
-	TimerCron          string            `json:"timer_cron"`
+	NodeID                       string            `json:"node_id"`
+	ManagedEnvironment           map[string]string `json:"managed_environment,omitempty"`
+	TimerEnabled                 bool              `json:"timer_enabled"`
+	TimerCron                    string            `json:"timer_cron"`
+	CollectorPublishLeaseID      string            `json:"collector_publish_lease_id,omitempty"`
+	CollectorPublishFencingToken int64             `json:"collector_publish_fencing_token,omitempty"`
 }
 
 type collectorPublishedTimerFleet struct {
-	opts  collectorPublishOptions
-	nodes []adminclient.CloudNode
+	opts      collectorPublishOptions
+	packageID string
+	nodes     []adminclient.CloudNode
 }
 
 type collectorRegionalPublishPlan struct {
 	opts   collectorPublishOptions
 	shards []setupconfig.SCFNamespaceShard
+	region setupconfig.SCFFetcherRegion
 }
 
 type collectorPackageOptions struct {
@@ -130,11 +135,14 @@ type collectorPublishOptions struct {
 	// certificate rotation.
 	EventBusCredential       *jetstream.CredentialFile
 	StoragePrimaryAuthSecret string
+	StorageViewAuthSecret    string
 	StorageAppKeysJSON       string
 	GatewayCAPEM             []byte
 	ServiceGatewayCAPEM      []byte
 	RuntimeServiceKeyID      string
 	RuntimeServiceSecretKey  string
+	canaryProof              *collectorSCFCanaryProof
+	canaryRegion             string
 }
 
 type collectorSCFTrustMaterial struct {
@@ -143,6 +151,7 @@ type collectorSCFTrustMaterial struct {
 	GatewayCAPEM             []byte
 	ServiceGatewayCAPEM      []byte
 	StoragePrimaryAuthSecret string
+	StorageViewAuthSecret    string
 	CLIServiceKey            string
 	CollectorServiceKey      string
 }
@@ -165,6 +174,7 @@ type collectorStockCNActivateOptions struct {
 	SpaceID          string
 	File             string
 	Version          string
+	RegionPackageIDs []string
 }
 
 type collectorDeployOptions struct {
@@ -458,6 +468,7 @@ func init() {
 	activateFlags.StringVar(&collectorStockCNActivateFlags.SpaceID, "space-id", "stockcn", "space id")
 	activateFlags.StringVar(&collectorStockCNActivateFlags.File, "file", "", "moox.toml manifest")
 	activateFlags.StringVar(&collectorStockCNActivateFlags.Version, "version", "", "expected deployed package version")
+	activateFlags.StringArrayVar(&collectorStockCNActivateFlags.RegionPackageIDs, "region-package-id", nil, "exact package identity as REGION=PACKAGE_ID; repeat for every enabled stockcn region")
 
 	submitFlags := collectorFunctionPublishSubmitCmd.Flags()
 	submitFlags.StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
@@ -610,7 +621,7 @@ func resolveCollectorCLSSink(ctx context.Context, control *adminclient.Client, a
 	return collectorCLSSink{Resources: resources, SecretID: secret.KeyID, SecretKey: secret.SecretValue}, nil
 }
 
-func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions) (collectorPublishSummary, error) {
+func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions) (summary collectorPublishSummary, resultErr error) {
 	if opts.ZipPath != "" {
 		if err := collectorpackager.ValidateSCFPackageZip(opts.ZipPath); err != nil {
 			return collectorPublishSummary{}, err
@@ -685,6 +696,25 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			maxCollectorPublishNodeCount,
 		)
 	}
+	// The business target must be owned and reserved before any publication
+	// side effects. Ad-hoc ZIP deployments cannot prove task ownership and remain
+	// unsupported.
+	if fetcherConfig != nil && strings.TrimSpace(opts.ZipPath) != "" {
+		return collectorPublishSummary{}, fmt.Errorf("--zip is not allowed with --file manifest deployments; rebuild the package from control-plane trust material")
+	}
+	if fetcherConfig == nil {
+		if err := validateCollectorPublishAuth(opts); err != nil {
+			return collectorPublishSummary{}, err
+		}
+	} else {
+		limits := setupconfig.TencentSCFLimits{}
+		if manifest != nil {
+			limits = manifest.Manifest.SCFFetcher.TencentLimits
+		}
+		if err := validateCollectorSCFCanaryInvokePlan(fetcherConfig, limits, opts.Region); err != nil {
+			return collectorPublishSummary{}, err
+		}
+	}
 	storageTargetExplicit := strings.TrimSpace(opts.StorageRPCGatewayTarget) != ""
 	var storageRoutePlan privatenet.SCFRoutePlan
 	var storageRoutes map[string]privatenet.SCFStorageRoute
@@ -704,27 +734,18 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			}
 		}
 	}
-	// A manifest deployment must build the package from the authoritative
-	// control-plane trust material below. Accepting an operator-supplied zip
-	// here would bypass the Primary auth, EventBus endpoint and CA preflight.
-	if fetcherConfig != nil && strings.TrimSpace(opts.ZipPath) != "" {
-		return collectorPublishSummary{}, fmt.Errorf("--zip is not allowed with --file manifest deployments; rebuild the package from control-plane trust material")
-	}
-	if fetcherConfig == nil {
-		if err := validateCollectorPublishAuth(opts); err != nil {
-			return collectorPublishSummary{}, err
-		}
-	}
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return collectorPublishSummary{}, err
 	}
 	serviceGatewayCAFile := ""
 	manifestServiceAuth := false
+	var collectorCanaryTrust collectorSCFTrustMaterial
 	if fetcherConfig != nil {
 		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
 		if trustErr != nil {
 			return collectorPublishSummary{}, trustErr
 		}
+		collectorCanaryTrust = trustMaterial
 		if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
 			opts.ServiceAccessKey = "moox-cli"
 			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
@@ -768,6 +789,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		// Derive per-app runtime credentials at publication, never in the package.
 		// The control host's auth file overrides a stale operator environment.
 		opts.StoragePrimaryAuthSecret = trustMaterial.StoragePrimaryAuthSecret
+		opts.StorageViewAuthSecret = trustMaterial.StorageViewAuthSecret
 		opts.EventBusCredential = &trustMaterial.EventBusCredential
 		opts.EventBusCAPEM = trustMaterial.EventBusCAPEM
 		opts.GatewayCAPEM = trustMaterial.GatewayCAPEM
@@ -808,13 +830,93 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before control-plane access: %w", err)
 		}
 	}
-	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
+	leaseSpaceID := strings.TrimSpace(opts.SpaceID)
+	if fetcherConfig != nil {
+		leaseSpaceID = strings.TrimSpace(fetcherConfig.SpaceID)
+	}
+	if leaseSpaceID == "" {
+		return collectorPublishSummary{}, fmt.Errorf("collector publish requires a target space for the control-plane lease")
+	}
+	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, leaseSpaceID)
 	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
 		client.ServiceAuth.CAFile = serviceGatewayCAFile
 	}
 	if manifestServiceAuth && client.ServiceAuth != nil {
 		client.ServiceAuth.Caller = "moox-cli"
 		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
+	}
+	publishBaseCtx := ctx
+	var leaseGuard *collectorPublishLeaseGuard
+	defer func() {
+		if leaseGuard != nil {
+			if errors.Is(resultErr, errCollectorBatchOutcomeUnknown) {
+				leaseGuard.Abandon()
+				fmt.Fprintln(os.Stderr, "warning: Collector publish batch outcome is unknown; leaving the control-plane lease to expire")
+				return
+			}
+			if releaseErr := leaseGuard.Close(); releaseErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: release Collector publish lease: %v\n", releaseErr)
+			}
+		}
+	}()
+	acquirePublishLease := func() error {
+		if leaseGuard != nil {
+			return nil
+		}
+		leaseCtx, guard, acquireErr := acquireCollectorPublishLease(publishBaseCtx, client, leaseSpaceID)
+		if acquireErr != nil {
+			return fmt.Errorf("acquire Collector publish lease: %w", acquireErr)
+		}
+		ctx, leaseGuard = leaseCtx, guard
+		return nil
+	}
+	var preflightFleetNodes []adminclient.CloudNode
+	if fetcherConfig == nil {
+		preflightFleetNodes, err = inspectCollectorFleet(ctx, client, opts)
+		if err != nil {
+			return collectorPublishSummary{}, err
+		}
+		if err := validateCollectorSCFCanaryProofPreflight(); err != nil {
+			return collectorPublishSummary{}, err
+		}
+	}
+	if fetcherConfig != nil {
+		if err := validateCollectorSCFCanaryTaskBinding(fetcherConfig); err != nil {
+			return collectorPublishSummary{}, err
+		}
+		limits := setupconfig.TencentSCFLimits{}
+		if manifest != nil {
+			limits = manifest.Manifest.SCFFetcher.TencentLimits
+		}
+		preferredRegion := ""
+		if opts.SameRegionFirst && len(storageRoutePlan.Routes) > 0 {
+			preferredRegion = storageRoutePlan.Storage.Instance.Region
+		}
+		canaryRegion, selectErr := selectCollectorSCFCanaryRegion(fetcherConfig, limits, opts.Region, preferredRegion)
+		if selectErr != nil {
+			return collectorPublishSummary{}, selectErr
+		}
+		canaryOpts := opts
+		canaryOpts.Region = canaryRegion.Region
+		canaryOpts = applyCollectorStorageRoute(canaryOpts, storageRoutes, fetcherConfig, storageTargetExplicit)
+		storageTarget := collectorStorageRPCGatewayTarget(canaryOpts)
+		storageNode := firstNonEmpty(fetcherConfig.StorageAccessTargetNode(canaryRegion.Region), os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
+		canaryFetcher := *fetcherConfig
+		canaryFetcher.CollectorRPCGatewayTarget = firstNonEmpty(opts.CollectorRPCGatewayTarget, fetcherConfig.CollectorRPCGatewayTarget, os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET"))
+		canaryFetcher.CollectorGatewayTargetNode = firstNonEmpty(opts.CollectorGatewayTargetNode, fetcherConfig.CollectorGatewayTargetNode, os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE"))
+		canaryAccess, accessErr := newCollectorCanaryAccess(&canaryFetcher, storageTarget, storageNode, collectorCanaryTrust)
+		if accessErr != nil {
+			return collectorPublishSummary{}, accessErr
+		}
+		if err := acquirePublishLease(); err != nil {
+			return collectorPublishSummary{}, err
+		}
+		canaryProof, proofErr := prepareCollectorSCFCanaryProof(ctx, fetcherConfig, canaryAccess, time.Now().UTC())
+		if proofErr != nil {
+			return collectorPublishSummary{}, proofErr
+		}
+		opts.canaryProof = canaryProof
+		opts.canaryRegion = canaryRegion.Region
 	}
 	if fetcherConfig != nil && strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
 		enabledTasks, taskErr := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID)
@@ -857,13 +959,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	}
 	if fetcherConfig == nil && accountsByID[opts.CloudAccountID].AccountID == "" {
 		return collectorPublishSummary{}, fmt.Errorf("Tencent cloud account %q not found", opts.CloudAccountID)
-	}
-	var preflightFleetNodes []adminclient.CloudNode
-	if fetcherConfig == nil {
-		preflightFleetNodes, err = inspectCollectorFleet(ctx, client, opts)
-		if err != nil {
-			return collectorPublishSummary{}, err
-		}
 	}
 	clsAccountID := opts.CloudAccountID
 	if fetcherConfig != nil {
@@ -922,7 +1017,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 
-	summary := collectorPublishSummary{ZipPath: zipPath}
+	summary = collectorPublishSummary{ZipPath: zipPath}
 	if len(storageRoutePlan.Routes) > 0 {
 		summary.StorageRoutes = append([]privatenet.SCFStorageRoute(nil), storageRoutePlan.Routes...)
 	}
@@ -943,6 +1038,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		var jobs []string
 		var publishedTimerFleets []collectorPublishedTimerFleet
 		var publishedInvokeNodes []adminclient.CloudNode
+		canaryVerified := false
 		regions := append([]setupconfig.SCFFetcherRegion(nil), fetcherConfig.Regions...)
 		if strings.TrimSpace(opts.Region) != "" {
 			// A manifest publish with --region is a deliberate single-region
@@ -978,6 +1074,10 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		}
 		// Validate every regional Timer/Invoke shard with the complete merged
 		// environment before any region uploads a package.
+		publishLimits := setupconfig.TencentSCFLimits{}
+		if manifest != nil {
+			publishLimits = manifest.Manifest.SCFFetcher.TencentLimits
+		}
 		plans := make([]collectorRegionalPublishPlan, 0, len(regions))
 		for _, region := range regions {
 			if !region.Enabled || fetcherConfig.IsRegionBlacklisted(region.Region) {
@@ -1003,11 +1103,10 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					regionNodeLimit = regionalLimit.MaxFunctionsPerNamespace
 				}
 			}
-			if fetcherConfig != nil && !strings.EqualFold(fetcherConfig.SpaceID, "crypto") {
-				// Timer-owned spaces create one auxiliary Invoke canary per region.
-				// Crypto's configured function_count is already the Invoke pool.
-				regionNodeLimit--
-			}
+			// Timer-owned spaces place the canary in their reserved Invoke slot;
+			// Crypto keeps its configured Invoke pool intact and needs one extra,
+			// isolated candidate slot before any production Invoke is updated.
+			regionNodeLimit--
 			if regionNodeLimit < 1 || regionOpts.NodeCount <= 0 || regionOpts.NodeCount > regionNodeLimit {
 				return summary, fmt.Errorf("--node-count for region %s must be between 1 and %d after publisher auxiliary functions", regionOpts.Region, regionNodeLimit)
 			}
@@ -1016,10 +1115,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			account, ok := accountsByID[regionOpts.CloudAccountID]
 			if !ok || account.IsDeleted {
 				return summary, fmt.Errorf("Tencent cloud account %q for region %s not found", regionOpts.CloudAccountID, regionOpts.Region)
-			}
-			publishLimits := setupconfig.TencentSCFLimits{}
-			if manifest != nil {
-				publishLimits = manifest.Manifest.SCFFetcher.TencentLimits
 			}
 			shards := setupconfig.SpaceRegionNamespaceShards(*fetcherConfig, region, publishLimits)
 			if len(shards) == 0 {
@@ -1032,8 +1127,20 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if err := preflightCollectorRegionalEnvironment(regionOpts, shards); err != nil {
 				return summary, fmt.Errorf("validate collector fleet before package upload for region %s: %w", regionOpts.Region, err)
 			}
-			plans = append(plans, collectorRegionalPublishPlan{opts: regionOpts, shards: shards})
+			if requiresIsolatedCollectorReleaseCanary(fetcherConfig.SpaceID) {
+				canaryOpts, canaryErr := collectorSCFReleaseCanaryOptions(regionOpts, fetcherConfig, region, publishLimits)
+				if canaryErr != nil {
+					return summary, fmt.Errorf("reserve isolated release canary slot in region %s: %w", regionOpts.Region, canaryErr)
+				}
+				if _, canaryErr = buildCollectorFleetCreateItems(canaryOpts, collectorPreflightPackageID(canaryOpts)); canaryErr != nil {
+					return summary, fmt.Errorf("validate isolated release canary environment for region %s: %w", regionOpts.Region, canaryErr)
+				}
+			}
+			plans = append(plans, collectorRegionalPublishPlan{opts: regionOpts, shards: shards, region: region})
 		}
+		sort.SliceStable(plans, func(i, j int) bool {
+			return strings.EqualFold(plans[i].opts.Region, opts.canaryRegion) && !strings.EqualFold(plans[j].opts.Region, opts.canaryRegion)
+		})
 		if err := ensureCollectorSpaceCloudAccounts(ctx, client, fetcherConfig, registeredAccountsByID); err != nil {
 			return summary, err
 		}
@@ -1045,13 +1152,52 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				return summary, err
 			}
 		}
+		packageIDs := make(map[string]string, len(plans))
+		if requiresIsolatedCollectorReleaseCanary(fetcherConfig.SpaceID) {
+			var canaryPlan *collectorRegionalPublishPlan
+			for index := range plans {
+				if strings.EqualFold(plans[index].opts.Region, opts.canaryRegion) {
+					canaryPlan = &plans[index]
+					break
+				}
+			}
+			if canaryPlan == nil {
+				return summary, fmt.Errorf("SCF release canary region %q is absent from the production plan", opts.canaryRegion)
+			}
+			if !canaryPlan.region.Enabled {
+				return summary, fmt.Errorf("SCF release canary region %q is not enabled in the manifest", canaryPlan.opts.Region)
+			}
+			packageID, uploadErr := upload(canaryPlan.opts)
+			if uploadErr != nil {
+				return summary, uploadErr
+			}
+			packageIDs[canaryPlan.opts.Region] = packageID
+			canaryOpts, canaryErr := collectorSCFReleaseCanaryOptions(canaryPlan.opts, fetcherConfig, canaryPlan.region, publishLimits)
+			if canaryErr != nil {
+				return summary, fmt.Errorf("prepare isolated release canary in region %s: %w", canaryPlan.opts.Region, canaryErr)
+			}
+			canarySummary, _, canaryErr := publishCollectorSCFReleaseCanaryFleet(ctx, client, canaryOpts, packageID)
+			if canaryErr != nil {
+				return summary, fmt.Errorf("candidate package rejected before production Invoke rollout: %w", canaryErr)
+			}
+			canaryVerified = true
+			summary.TotalCount += canarySummary.TotalCount
+			if canarySummary.JobID != "" {
+				jobs = append(jobs, canarySummary.JobID)
+			}
+		}
 		// Regional publication is deliberately synchronous. The Storage region
 		// finishes its canary and complete fleet before any other region deploys.
 		for _, plan := range plans {
 			regionOpts, shards := plan.opts, plan.shards
-			packageID, uploadErr := upload(regionOpts)
-			if uploadErr != nil {
-				return summary, uploadErr
+			packageID := packageIDs[regionOpts.Region]
+			if packageID == "" {
+				var uploadErr error
+				packageID, uploadErr = upload(regionOpts)
+				if uploadErr != nil {
+					return summary, uploadErr
+				}
+				packageIDs[regionOpts.Region] = packageID
 			}
 			shardOffsets := collectorShardIndexOffsets(shards)
 			for shardIndex, shard := range shards {
@@ -1060,9 +1206,8 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				shardOpts.NodeCount = shard.Timers
 				shardOpts.IndexOffset = shardOffsets[shardIndex].Timer
 				if shard.Invokes > 0 {
-					// The auxiliary Invoke node is deployed and exercised first. A
-					// successful market_fetch canary proves the Kline SCF -> Storage path
-					// before any regional Timer fleet is changed.
+					// The canary proof preflight above must be implemented before this
+					// Invoke fleet can be published; a bare SCF success is not a release gate.
 					invokeOpts := shardOpts
 					invokeOpts.TriggerType = "invoke"
 					invokeOpts.NodeCount = shard.Invokes
@@ -1078,8 +1223,14 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 					}
 					invokeSummary, submitInvokeErr := submitCollectorFleet(ctx, client, invokeOpts, packageID, invokeItems, invokeNodes)
 					if submitInvokeErr != nil {
-						return summary, submitInvokeErr
+						jobs = appendCollectorBatchIDs(jobs, invokeSummary.JobID)
+						summary.JobIDs = append([]string(nil), jobs...)
+						summary.JobID = strings.Join(summary.JobIDs, ",")
+						return summary, settleCollectorSubmittedJobs(ctx, client, invokeSummary.JobID, submitInvokeErr)
 					}
+					jobs = appendCollectorBatchIDs(jobs, invokeSummary.JobID)
+					summary.JobIDs = append([]string(nil), jobs...)
+					summary.JobID = strings.Join(summary.JobIDs, ",")
 					if err := waitCollectorBatch(ctx, client, invokeSummary.JobID); err != nil {
 						return summary, fmt.Errorf("SCF invoke canary fleet for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
 					}
@@ -1090,14 +1241,17 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 						}
 						return summary, fmt.Errorf("SCF invoke fleet for region %s namespace %s has %d ready nodes; expected %d", regionOpts.Region, shard.Namespace, len(invokeNodes), invokeOpts.NodeCount)
 					}
-					if err := runCollectorSCFCanary(ctx, client, invokeOpts, invokeNodes[0].NodeID); err != nil {
-						return summary, fmt.Errorf("SCF canary for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
+					if err := requireCollectorFleetPackageID(invokeNodes, packageID); err != nil {
+						return summary, fmt.Errorf("SCF invoke fleet for region %s namespace %s does not match the published candidate: %w", regionOpts.Region, shard.Namespace, err)
+					}
+					if !canaryVerified && strings.EqualFold(regionOpts.Region, opts.canaryRegion) {
+						if err := runCollectorSCFCanary(ctx, client, invokeOpts, invokeNodes[0].NodeID); err != nil {
+							return summary, fmt.Errorf("SCF canary for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
+						}
+						canaryVerified = true
 					}
 					publishedInvokeNodes = append(publishedInvokeNodes, invokeNodes...)
 					summary.TotalCount += invokeSummary.TotalCount
-					if invokeSummary.JobID != "" {
-						jobs = append(jobs, invokeSummary.JobID)
-					}
 				}
 				if shard.Timers <= 0 {
 					continue
@@ -1108,13 +1262,15 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				}
 				if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
 					disableJobs, disableErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerDisablePatches(fleetNodes))
+					jobs = append(jobs, disableJobs...)
+					summary.JobIDs = append([]string(nil), jobs...)
+					summary.JobID = strings.Join(summary.JobIDs, ",")
 					if disableErr != nil {
 						return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", disableErr)
 					}
 					if err := waitCollectorBatches(ctx, client, disableJobs); err != nil {
 						return summary, fmt.Errorf("disable existing Timer fleet before deploy: %w", err)
 					}
-					jobs = append(jobs, disableJobs...)
 				}
 				createItems, buildErr := buildCollectorFleetCreateItems(shardOpts, packageID)
 				if buildErr != nil {
@@ -1122,10 +1278,14 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				}
 				fleetSummary, submitErr := submitCollectorFleet(ctx, client, shardOpts, packageID, createItems, fleetNodes)
 				if submitErr != nil {
+					jobs = appendCollectorBatchIDs(jobs, fleetSummary.JobID)
 					summary.JobIDs = append([]string(nil), jobs...)
 					summary.JobID = strings.Join(summary.JobIDs, ",")
-					return summary, submitErr
+					return summary, settleCollectorSubmittedJobs(ctx, client, fleetSummary.JobID, submitErr)
 				}
+				jobs = appendCollectorBatchIDs(jobs, fleetSummary.JobID)
+				summary.JobIDs = append([]string(nil), jobs...)
+				summary.JobID = strings.Join(summary.JobIDs, ",")
 				if err := waitCollectorBatch(ctx, client, fleetSummary.JobID); err != nil {
 					return summary, fmt.Errorf("SCF Timer fleet for region %s namespace %s: %w", regionOpts.Region, shard.Namespace, err)
 				}
@@ -1133,19 +1293,20 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				if inspectDeployedErr != nil {
 					return summary, inspectDeployedErr
 				}
-				publishedTimerFleets = append(publishedTimerFleets, collectorPublishedTimerFleet{opts: shardOpts, nodes: deployedNodes})
+				if err := requireCollectorFleetPackageID(deployedNodes, packageID); err != nil {
+					return summary, fmt.Errorf("SCF Timer fleet for region %s namespace %s does not match the published candidate: %w", regionOpts.Region, shard.Namespace, err)
+				}
+				publishedTimerFleets = append(publishedTimerFleets, collectorPublishedTimerFleet{opts: shardOpts, packageID: packageID, nodes: deployedNodes})
 				summary.FleetMode = fleetSummary.FleetMode
 				summary.Operation = fleetSummary.Operation
 				summary.TotalCount += fleetSummary.TotalCount
 				summary.PackageID = packageID
 				summary.CLSTopicID = regionOpts.CLSTopicID
 				summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Region: regionOpts.Region, CloudAccountID: regionOpts.CloudAccountID, PackageID: packageID, CLSLogsetID: regionOpts.CLSLogsetID, CLSTopicID: regionOpts.CLSTopicID, JobID: fleetSummary.JobID, TotalCount: fleetSummary.TotalCount})
-				if fleetSummary.JobID != "" {
-					jobs = append(jobs, fleetSummary.JobID)
-				}
-				summary.JobIDs = append([]string(nil), jobs...)
-				summary.JobID = strings.Join(summary.JobIDs, ",")
 			}
+		}
+		if !canaryVerified {
+			return summary, fmt.Errorf("SCF canary verification contract is unavailable: published Invoke fleets did not include the preflight target region %q", opts.canaryRegion)
 		}
 		// Keep the deployed Timer nodes available to every manifest space. Stock
 		// activation has extra canary gates; crypto activation only needs the
@@ -1157,6 +1318,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		if strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
 			rollbackTaskID := ""
 			rollbackActivation := func(cause error) error {
+				if errors.Is(cause, errCollectorPublishFenceChanged) {
+					return cause
+				}
 				rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, rollbackTaskID, allTimerNodes)
 				if rollbackErr != nil {
 					return fmt.Errorf("%w; rollback stockcn activation failed: %v", cause, rollbackErr)
@@ -1186,11 +1350,23 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				if !found {
 					return summary, rollbackActivation(fmt.Errorf("stock Kline task enable was not confirmed by control-plane readback"))
 				}
-				if err := waitCollectorTimerFleetsAssigned(ctx, client, publishedTimerFleets); err != nil {
-					return summary, rollbackActivation(fmt.Errorf("verify stock Kline assignments after task enable: %w", err))
+				handoffCtx, _, handoffErr := handoffCollectorPublishLeaseForTimerAssignment(publishBaseCtx, client, fetcherConfig.SpaceID, &leaseGuard, publishedTimerFleets)
+				if handoffErr != nil {
+					if handoffCtx != nil {
+						ctx = handoffCtx
+					}
+					return summary, rollbackActivation(fmt.Errorf("verify stock Kline assignments after task enable: %w", handoffErr))
+				}
+				ctx = handoffCtx
+				allTimerNodes = allTimerNodes[:0]
+				for _, fleet := range publishedTimerFleets {
+					allTimerNodes = append(allTimerNodes, fleet.nodes...)
 				}
 				enablePatches := collectorTimerEnablePatches(allTimerNodes, *fetcherConfig)
 				enableJobs, enableErr := submitCollectorTimerRuntimeConfigs(ctx, client, enablePatches)
+				jobs = append(jobs, enableJobs...)
+				summary.JobIDs = append([]string(nil), jobs...)
+				summary.JobID = strings.Join(summary.JobIDs, ",")
 				if enableErr != nil {
 					return summary, rollbackActivation(fmt.Errorf("enable stock Kline Timer fleet: %w", enableErr))
 				}
@@ -1200,7 +1376,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				if err := waitCollectorTimerFleetsEnabled(ctx, client, publishedTimerFleets); err != nil {
 					return summary, rollbackActivation(fmt.Errorf("verify stock Kline Timer fleet enabled: %w", err))
 				}
-				jobs = append(jobs, enableJobs...)
 			}
 			if opts.EnableStockCN {
 				summary.StockCNEnabled = true
@@ -1245,21 +1420,22 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 }
 
 type collectorStockCNActivationSummary struct {
-	SpaceID            string   `json:"space_id"`
-	PackageVersion     string   `json:"package_version"`
-	ExpectedTimerCount int      `json:"expected_timer_count"`
-	TimerCount         int      `json:"timer_count"`
-	TimerJobIDs        []string `json:"timer_job_ids,omitempty"`
-	TaskID             string   `json:"task_id"`
-	Enabled            bool     `json:"enabled"`
+	SpaceID            string            `json:"space_id"`
+	PackageVersion     string            `json:"package_version"`
+	RegionPackageIDs   map[string]string `json:"region_package_ids"`
+	ExpectedTimerCount int               `json:"expected_timer_count"`
+	TimerCount         int               `json:"timer_count"`
+	TimerJobIDs        []string          `json:"timer_job_ids,omitempty"`
+	TaskID             string            `json:"task_id"`
+	Enabled            bool              `json:"enabled"`
 }
 
 // activateStockCNCollection resumes a fleet that was published but left
 // disabled by a failed or interrupted final canary. It rechecks package
 // identity before enabling the Kline Timers and Kline task. Egress probing is
 // diagnostic only.
-func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivateOptions) (collectorStockCNActivationSummary, error) {
-	summary := collectorStockCNActivationSummary{SpaceID: opts.SpaceID, PackageVersion: opts.Version}
+func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivateOptions) (summary collectorStockCNActivationSummary, resultErr error) {
+	summary = collectorStockCNActivationSummary{SpaceID: opts.SpaceID, PackageVersion: opts.Version}
 	if strings.TrimSpace(opts.ControlURL) == "" {
 		return summary, fmt.Errorf("--control-url is required")
 	}
@@ -1269,12 +1445,27 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if strings.TrimSpace(opts.Version) == "" {
 		return summary, fmt.Errorf("--version is required to prevent activating an older package")
 	}
+	if len(opts.RegionPackageIDs) == 0 {
+		return summary, fmt.Errorf("--region-package-id is required for every enabled stockcn region to bind activation to exact immutable package identities")
+	}
 	fetcherConfig, manifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, opts.SpaceID)
 	if err != nil {
 		return summary, err
 	}
 	if fetcherConfig == nil || !strings.EqualFold(fetcherConfig.SpaceID, "stockcn") {
 		return summary, fmt.Errorf("activation requires an enabled stockcn manifest")
+	}
+	regionPackageIDs, err := parseCollectorRegionPackageIDs(opts.RegionPackageIDs, fetcherConfig)
+	if err != nil {
+		return summary, err
+	}
+	summary.RegionPackageIDs = regionPackageIDs
+	activateLimits := setupconfig.TencentSCFLimits{}
+	if manifest != nil {
+		activateLimits = manifest.Manifest.SCFFetcher.TencentLimits
+	}
+	if err := validateCollectorSCFCanaryInvokePlan(fetcherConfig, activateLimits, ""); err != nil {
+		return summary, err
 	}
 	var storageRoutes map[string]privatenet.SCFStorageRoute
 	if manifest != nil && manifest.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(manifest.Manifest.StorageHost.Provider), "tencent") {
@@ -1289,11 +1480,11 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	}
 	serviceGatewayCAFile := ""
 	manifestServiceAuth := false
+	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
+	if trustErr != nil {
+		return summary, trustErr
+	}
 	if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
-		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
-		if trustErr != nil {
-			return summary, trustErr
-		}
 		opts.ServiceAccessKey = "moox-cli"
 		opts.ServiceSecretKey = trustMaterial.CLIServiceKey
 		manifestServiceAuth = true
@@ -1325,9 +1516,48 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 		client.ServiceAuth.Caller = "moox-cli"
 		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
 	}
-	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
-		return summary, err
+	canaryRegion, selectErr := selectCollectorSCFCanaryRegion(fetcherConfig, activateLimits, "", "")
+	if selectErr != nil {
+		return summary, selectErr
 	}
+	canaryOpts := collectorPublishOptions{
+		SpaceID: fetcherConfig.SpaceID, Region: canaryRegion.Region,
+		StorageRPCGatewayTarget: fetcherConfig.StorageRPCGatewayTarget, FetcherConfig: fetcherConfig,
+	}
+	canaryOpts = applyCollectorStorageRoute(canaryOpts, storageRoutes, fetcherConfig, false)
+	canaryFetcher := *fetcherConfig
+	canaryFetcher.CollectorRPCGatewayTarget = firstNonEmpty(fetcherConfig.CollectorRPCGatewayTarget, os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET"))
+	canaryFetcher.CollectorGatewayTargetNode = firstNonEmpty(fetcherConfig.CollectorGatewayTargetNode, os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE"))
+	canaryAccess, accessErr := newCollectorCanaryAccess(
+		&canaryFetcher, collectorStorageRPCGatewayTarget(canaryOpts),
+		firstNonEmpty(fetcherConfig.StorageAccessTargetNode(canaryRegion.Region), os.Getenv("MOOX_SCF_STORAGE_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE")),
+		trustMaterial,
+	)
+	if accessErr != nil {
+		return summary, accessErr
+	}
+	publishBaseCtx := ctx
+	leaseCtx, leaseGuard, err := acquireCollectorPublishLease(publishBaseCtx, client, fetcherConfig.SpaceID)
+	if err != nil {
+		return summary, fmt.Errorf("acquire Collector activation lease: %w", err)
+	}
+	ctx = leaseCtx
+	defer func() {
+		if errors.Is(resultErr, errCollectorBatchOutcomeUnknown) {
+			leaseGuard.Abandon()
+			fmt.Fprintln(os.Stderr, "warning: Collector activation batch outcome is unknown; leaving the control-plane lease to expire")
+			return
+		}
+		if releaseErr := leaseGuard.Close(); releaseErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: release Collector activation lease: %v\n", releaseErr)
+		}
+	}()
+	canaryProof, proofErr := prepareCollectorSCFCanaryProof(ctx, fetcherConfig, canaryAccess, time.Now().UTC())
+	if proofErr != nil {
+		return summary, proofErr
+	}
+	canaryOpts.canaryProof = canaryProof
+	canaryOpts.canaryRegion = canaryRegion.Region
 	enabledTasks, err := client.ListEnabledTasks(ctx, fetcherConfig.SpaceID)
 	if err != nil {
 		return summary, fmt.Errorf("stockcn activation requires a collection task readback: %w", err)
@@ -1344,10 +1574,8 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 
 	var fleets []collectorPublishedTimerFleet
 	var allTimerNodes []adminclient.CloudNode
-	activateLimits := setupconfig.TencentSCFLimits{}
-	if manifest != nil {
-		activateLimits = manifest.Manifest.SCFFetcher.TencentLimits
-	}
+	var canaryNode string
+	var canaryInvokeOpts collectorPublishOptions
 	for _, region := range fetcherConfig.Regions {
 		if !region.Enabled || region.FunctionCount <= 0 || fetcherConfig.IsRegionBlacklisted(region.Region) {
 			continue
@@ -1359,8 +1587,8 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 				Timers:    region.FunctionCount,
 			}}
 		}
-		timerIndexOffset := 0
-		for _, shard := range shards {
+		shardOffsets := collectorShardIndexOffsets(shards)
+		for shardIndex, shard := range shards {
 			regionOpts := collectorPublishOptions{
 				SpaceID:                        fetcherConfig.SpaceID,
 				CloudAccountID:                 region.CloudAccountID,
@@ -1370,13 +1598,35 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 				BizType:                        "market_fetcher",
 				TriggerType:                    "timer",
 				NodeCount:                      shard.Timers,
-				IndexOffset:                    timerIndexOffset,
+				IndexOffset:                    shardOffsets[shardIndex].Timer,
 				FunctionNamePrefix:             fetcherConfig.FunctionPrefix,
 				StorageRPCGatewayTarget:        fetcherConfig.StorageRPCGatewayTarget,
 				StoragePrivateRPCGatewayTarget: fetcherConfig.StoragePrivateRPCGatewayTarget,
 				FetcherConfig:                  fetcherConfig,
 			}
 			regionOpts = applyCollectorStorageRoute(regionOpts, storageRoutes, fetcherConfig, false)
+			if shard.Invokes > 0 {
+				invokeOpts := regionOpts
+				invokeOpts.TriggerType = "invoke"
+				invokeOpts.NodeCount = shard.Invokes
+				invokeOpts.IndexOffset = shardOffsets[shardIndex].Invoke
+				invokeOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-invoke"
+				invokeNodes, invokeErr := inspectCollectorFleet(ctx, client, invokeOpts)
+				if invokeErr != nil {
+					return summary, fmt.Errorf("inspect stock canary Invoke fleet in %s namespace %s: %w", region.Region, shard.Namespace, invokeErr)
+				}
+				if len(invokeNodes) != shard.Invokes {
+					return summary, fmt.Errorf("stock canary Invoke fleet in %s namespace %s has %d nodes; expected %d", region.Region, shard.Namespace, len(invokeNodes), shard.Invokes)
+				}
+				for _, node := range invokeNodes {
+					if err := validateStockCNPackageIdentity(node, region.Region, opts.Version, regionPackageIDs); err != nil {
+						return summary, err
+					}
+				}
+				if strings.EqualFold(region.Region, canaryRegion.Region) && canaryNode == "" {
+					canaryNode, canaryInvokeOpts = invokeNodes[0].NodeID, invokeOpts
+				}
+			}
 			nodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
 			if inspectErr != nil {
 				return summary, fmt.Errorf("inspect stock Kline fleet in %s namespace %s: %w", region.Region, shard.Namespace, inspectErr)
@@ -1385,13 +1635,12 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 				return summary, fmt.Errorf("stock Kline fleet in %s namespace %s has %d nodes; expected %d", region.Region, shard.Namespace, len(nodes), shard.Timers)
 			}
 			for _, node := range nodes {
-				if !strings.Contains(node.PackageID, opts.Version) {
-					return summary, fmt.Errorf("stock Kline node %s is on package %q, expected version %q", node.NodeID, node.PackageID, opts.Version)
+				if err := validateStockCNPackageIdentity(node, region.Region, opts.Version, regionPackageIDs); err != nil {
+					return summary, err
 				}
 			}
-			fleets = append(fleets, collectorPublishedTimerFleet{opts: regionOpts, nodes: nodes})
+			fleets = append(fleets, collectorPublishedTimerFleet{opts: regionOpts, packageID: regionPackageIDs[region.Region], nodes: nodes})
 			allTimerNodes = append(allTimerNodes, nodes...)
-			timerIndexOffset += shard.Timers
 		}
 	}
 	summary.ExpectedTimerCount = fetcherConfig.TimerFunctionCount
@@ -1399,7 +1648,30 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if len(allTimerNodes) != fetcherConfig.TimerFunctionCount {
 		return summary, fmt.Errorf("stock Kline fleet has %d nodes; expected %d", len(allTimerNodes), fetcherConfig.TimerFunctionCount)
 	}
+	if canaryNode == "" {
+		return summary, fmt.Errorf("stock canary Invoke fleet in target region %s is unavailable", canaryRegion.Region)
+	}
+	canaryInvokeOpts.canaryProof = canaryProof
+	canaryInvokeOpts.canaryRegion = canaryRegion.Region
+	if err := runCollectorSCFCanary(ctx, client, canaryInvokeOpts, canaryNode); err != nil {
+		return summary, fmt.Errorf("stock canary in region %s: %w", canaryRegion.Region, err)
+	}
+	canaryInvokeNodes, inspectErr := inspectCollectorFleet(ctx, client, canaryInvokeOpts)
+	if inspectErr != nil {
+		return summary, fmt.Errorf("recheck stock canary artifact identity after invocation: %w", inspectErr)
+	}
+	for _, node := range canaryInvokeNodes {
+		if err := validateStockCNPackageIdentity(node, canaryRegion.Region, opts.Version, regionPackageIDs); err != nil {
+			return summary, fmt.Errorf("stock canary artifact changed during invocation: %w", err)
+		}
+	}
+	if err := disableCollectorBlacklistedTimers(ctx, client, fetcherConfig); err != nil {
+		return summary, err
+	}
 	rollbackActivation := func(cause error) error {
+		if errors.Is(cause, errCollectorPublishFenceChanged) {
+			return cause
+		}
 		rollbackErr := rollbackStockCNActivation(ctx, client, fetcherConfig.SpaceID, summary.TaskID, allTimerNodes)
 		if rollbackErr != nil {
 			return fmt.Errorf("%w; rollback stockcn activation failed: %v", cause, rollbackErr)
@@ -1417,10 +1689,20 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	}
 	for _, task := range enabledTasks {
 		if task.TaskID == summary.TaskID && task.Enabled {
-			if err := waitCollectorTimerFleetsAssigned(ctx, client, fleets); err != nil {
-				return summary, rollbackActivation(fmt.Errorf("verify stock Kline assignments after task enable: %w", err))
+			handoffCtx, _, handoffErr := handoffCollectorPublishLeaseForTimerAssignment(publishBaseCtx, client, fetcherConfig.SpaceID, &leaseGuard, fleets)
+			if handoffErr != nil {
+				if handoffCtx != nil {
+					ctx = handoffCtx
+				}
+				return summary, rollbackActivation(fmt.Errorf("verify stock Kline assignments after task enable: %w", handoffErr))
+			}
+			ctx = handoffCtx
+			allTimerNodes = allTimerNodes[:0]
+			for _, fleet := range fleets {
+				allTimerNodes = append(allTimerNodes, fleet.nodes...)
 			}
 			timerJobs, timerErr := submitCollectorTimerRuntimeConfigs(ctx, client, collectorTimerEnablePatches(allTimerNodes, *fetcherConfig))
+			summary.TimerJobIDs = append(summary.TimerJobIDs, timerJobs...)
 			if timerErr != nil {
 				return summary, rollbackActivation(fmt.Errorf("enable stock Kline Timer fleet: %w", timerErr))
 			}
@@ -1430,7 +1712,6 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 			if timerErr = waitCollectorTimerFleetsEnabled(ctx, client, fleets); timerErr != nil {
 				return summary, rollbackActivation(fmt.Errorf("verify stock Kline Timer fleet: %w", timerErr))
 			}
-			summary.TimerJobIDs = append(summary.TimerJobIDs, timerJobs...)
 			summary.Enabled = true
 			return summary, nil
 		}
@@ -1635,6 +1916,10 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 	if err != nil {
 		return collectorSCFTrustMaterial{}, fmt.Errorf("validate control Storage auth: %w", err)
 	}
+	storageViewAuthSecret, err := collectorStorageViewAuthSecret(storageAuthRaw)
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("validate control Storage View auth: %w", err)
+	}
 	gatewayCA, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "certs/gateway/peers.pem"))
 	if err != nil {
 		return collectorSCFTrustMaterial{}, fmt.Errorf("read control Gateway peer CA: %w", err)
@@ -1668,6 +1953,7 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 		GatewayCAPEM:             gatewayCA,
 		ServiceGatewayCAPEM:      serviceGatewayCA,
 		StoragePrimaryAuthSecret: storagePrimaryAuthSecret,
+		StorageViewAuthSecret:    storageViewAuthSecret,
 		CLIServiceKey:            collectorServiceKey,
 		CollectorServiceKey:      runtimeServiceKey,
 	}, nil
@@ -1710,6 +1996,19 @@ func collectorStoragePrimaryAuthSecret(raw []byte) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("primary auth secret is missing")
+}
+
+func collectorStorageViewAuthSecret(raw []byte) (string, error) {
+	normalized, err := normalizeStorageInternalAuth(string(raw))
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(normalized, "\n") {
+		if value, ok := strings.CutPrefix(line, "MOOX_STORAGE_VIEW_AUTH_SECRET="); ok {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("Storage View auth secret is missing")
 }
 
 func collectorStorageBindingAppKeys(raw []byte, secret string) (string, error) {
@@ -1905,12 +2204,16 @@ func submitCollectorFleet(
 	}
 	if len(fleetNodes) == 0 {
 		summary.FleetMode = "created"
+		summary.Operation = "create_nodes"
+		summary.TotalCount = len(createItems)
 		resp, err := api.SubmitCreateNodes(ctx, createItems)
 		if err != nil {
-			return summary, err
+			return summary, classifyCollectorSubmitError("submit collector create batch", err)
+		}
+		if resp == nil || strings.TrimSpace(resp.JobID) == "" {
+			return summary, collectorUnknownBatchOutcome("collector create submission returned no job id", nil)
 		}
 		summary.JobID = resp.JobID
-		summary.Operation = "create_nodes"
 		summary.TotalCount = resp.TotalCount
 		return summary, nil
 	}
@@ -1932,6 +2235,12 @@ func submitCollectorFleet(
 	}
 
 	summary.FleetMode = "updated"
+	if len(missing) == 0 {
+		summary.Operation = "deploy_nodes"
+	} else {
+		summary.Operation = "deploy_nodes,create_nodes"
+	}
+	summary.TotalCount = opts.NodeCount
 	deployments := make([]adminclient.NodeDeployItem, 0, len(fleetNodes))
 	for index, node := range fleetNodes {
 		if strings.TrimSpace(node.NodeID) == "" {
@@ -1948,29 +2257,49 @@ func submitCollectorFleet(
 	if len(deployments) > 0 {
 		resp, err := api.SubmitDeployNodes(ctx, deployments)
 		if err != nil {
-			return summary, err
+			return summary, classifyCollectorSubmitError("submit collector deploy batch", err)
 		}
-		if resp != nil && strings.TrimSpace(resp.JobID) != "" {
-			jobIDs = append(jobIDs, resp.JobID)
+		if resp == nil || strings.TrimSpace(resp.JobID) == "" {
+			return summary, collectorUnknownBatchOutcome("collector deploy submission returned no job id", nil)
 		}
+		jobIDs = append(jobIDs, resp.JobID)
 	}
 	if len(missing) > 0 {
 		resp, err := api.SubmitCreateNodes(ctx, missing)
 		if err != nil {
-			return summary, fmt.Errorf("create %d missing collector fleet slots after updating %d existing nodes: %w", len(missing), existing, err)
+			summary.JobID = strings.Join(jobIDs, ",")
+			return summary, classifyCollectorSubmitError(fmt.Sprintf("create %d missing collector fleet slots after updating %d existing nodes", len(missing), existing), err)
 		}
-		if resp != nil && strings.TrimSpace(resp.JobID) != "" {
-			jobIDs = append(jobIDs, resp.JobID)
+		if resp == nil || strings.TrimSpace(resp.JobID) == "" {
+			summary.JobID = strings.Join(jobIDs, ",")
+			return summary, collectorUnknownBatchOutcome("collector create submission returned no job id after deploy batch", nil)
 		}
+		jobIDs = append(jobIDs, resp.JobID)
 	}
 	summary.JobID = strings.Join(jobIDs, ",")
-	if len(missing) == 0 {
-		summary.Operation = "deploy_nodes"
-	} else {
-		summary.Operation = "deploy_nodes,create_nodes"
-	}
-	summary.TotalCount = len(deployments) + len(missing)
 	return summary, nil
+}
+
+func classifyCollectorSubmitError(operation string, err error) error {
+	wrapped := fmt.Errorf("%s: %w", operation, err)
+	if isAmbiguousCollectorPublishOutcome(err) {
+		return errors.Join(errCollectorBatchOutcomeUnknown, wrapped)
+	}
+	return wrapped
+}
+
+func collectorUnknownBatchOutcome(message string, cause error) error {
+	if cause == nil {
+		return fmt.Errorf("%w: %s", errCollectorBatchOutcomeUnknown, message)
+	}
+	return errors.Join(errCollectorBatchOutcomeUnknown, fmt.Errorf("%s: %w", message, cause))
+}
+
+func settleCollectorSubmittedJobs(ctx context.Context, client *adminclient.Client, jobIDs string, submitErr error) error {
+	if strings.TrimSpace(jobIDs) == "" {
+		return submitErr
+	}
+	return errors.Join(submitErr, waitCollectorBatch(ctx, client, jobIDs))
 }
 
 // waitCollectorBatch makes publishing fail closed. CloudNode submissions are
@@ -1978,24 +2307,41 @@ func submitCollectorFleet(
 // success used to hide failed SCF deployments until the first production
 // timer fired.
 func waitCollectorBatch(ctx context.Context, client *adminclient.Client, jobID string) error {
+	var errs []error
 	for _, one := range strings.Split(jobID, ",") {
 		one = strings.TrimSpace(one)
 		if one == "" {
 			continue
 		}
 		if err := waitCollectorBatchOne(ctx, client, one); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func waitCollectorBatchOne(ctx context.Context, client *adminclient.Client, jobID string) error {
 	if strings.TrimSpace(jobID) == "" {
 		return nil
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
-	defer cancel()
+	change, err := waitCollectorBatchTerminalChange(ctx, client, jobID)
+	if err != nil {
+		return err
+	}
+	switch strings.ToUpper(strings.TrimSpace(change.Job.Status)) {
+	case "NODE_BATCH_STATUS_SUCCESS", "SUCCESS", "SUCCEEDED":
+		return nil
+	case "NODE_BATCH_STATUS_FAILED", "FAILED", "NODE_BATCH_STATUS_PARTIAL", "PARTIAL":
+		return fmt.Errorf("batch %s ended with status %s failed=%d", jobID, change.Job.Status, change.Job.FailedCount)
+	default:
+		return collectorUnknownBatchOutcome(fmt.Sprintf("batch %s returned unknown status %s", jobID, change.Job.Status), nil)
+	}
+}
+
+func waitCollectorBatchTerminalChange(ctx context.Context, client *adminclient.Client, jobID string) (*adminclient.NodeBatchChangeResponse, error) {
+	if strings.TrimSpace(jobID) == "" {
+		return nil, nil
+	}
 	const statusRequestTimeout = 30 * time.Second
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -2003,7 +2349,7 @@ func waitCollectorBatchOne(ctx context.Context, client *adminclient.Client, jobI
 		var change *adminclient.NodeBatchChangeResponse
 		var lastErr error
 		for attempt := 0; attempt < 3; attempt++ {
-			statusCtx, statusCancel := context.WithTimeout(waitCtx, statusRequestTimeout)
+			statusCtx, statusCancel := context.WithTimeout(ctx, statusRequestTimeout)
 			candidate, err := client.GetNodeBatchChange(statusCtx, jobID)
 			statusCancel()
 			if err == nil {
@@ -2013,39 +2359,45 @@ func waitCollectorBatchOne(ctx context.Context, client *adminclient.Client, jobI
 			}
 			lastErr = err
 			select {
-			case <-waitCtx.Done():
-				return fmt.Errorf("wait batch %s: %w", jobID, waitCtx.Err())
+			case <-ctx.Done():
+				return nil, collectorUnknownBatchOutcome(fmt.Sprintf("wait batch %s", jobID), ctx.Err())
 			case <-time.After(time.Second):
 			}
 		}
 		if lastErr != nil {
-			return fmt.Errorf("GetNodeBatchChange for batch %s: %w", jobID, lastErr)
+			return nil, collectorUnknownBatchOutcome(fmt.Sprintf("GetNodeBatchChange for batch %s", jobID), lastErr)
 		}
 		if change == nil || change.Job == nil {
-			return fmt.Errorf("empty batch status")
+			return nil, collectorUnknownBatchOutcome(fmt.Sprintf("batch %s returned empty status", jobID), nil)
 		}
 		switch strings.ToUpper(strings.TrimSpace(change.Job.Status)) {
 		case "NODE_BATCH_STATUS_SUCCESS", "SUCCESS", "SUCCEEDED":
-			return nil
+			return change, nil
 		case "NODE_BATCH_STATUS_FAILED", "FAILED", "NODE_BATCH_STATUS_PARTIAL", "PARTIAL":
-			return fmt.Errorf("batch %s ended with status %s failed=%d", jobID, change.Job.Status, change.Job.FailedCount)
+			return change, nil
 		}
 		select {
-		case <-waitCtx.Done():
-			return fmt.Errorf("wait batch %s: %w", jobID, waitCtx.Err())
+		case <-ctx.Done():
+			return nil, collectorUnknownBatchOutcome(fmt.Sprintf("wait batch %s", jobID), ctx.Err())
 		case <-ticker.C:
 		}
 	}
 }
 
-// runCollectorSCFCanary exercises the same bounded market_fetch path used by
-// the scheduler. Crypto uses a realtime request; stockcn uses a bounded
-// historical request that stays inside the active providers' verified page
-// capability. A successful response proves credentials, CA, EventBus ACL/ACK
-// and Storage auth together.
+// runCollectorSCFCanary exercises the bounded market_fetch path and then
+// requires independent Storage evidence for the exact task-owned target.
 func runCollectorSCFCanary(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string) error {
+	if opts.canaryProof == nil || opts.canaryProof.entry == nil || opts.canaryProof.period.IsZero() {
+		return fmt.Errorf("market_fetch canary verification incomplete: no ownership-validated task, period, Dataset and View proof was prepared before publication")
+	}
+	if err := opts.canaryProof.revalidateTaskBinding(ctx); err != nil {
+		return fmt.Errorf("market_fetch canary task binding changed after preflight: %w", err)
+	}
+	if err := opts.canaryProof.ensurePeriod(ctx); err != nil {
+		return fmt.Errorf("market_fetch canary could not ensure Storage period: %w", err)
+	}
 	batchID := fmt.Sprintf("deploy-canary-%d", time.Now().UnixNano())
-	response, err := client.InvokeFunction(ctx, nodeID, collectorSCFCanaryEvent(opts, nodeID, batchID))
+	response, err := client.InvokeFunction(ctx, nodeID, collectorSCFCanaryEventForProof(opts, nodeID, batchID, opts.canaryProof))
 	if err != nil {
 		return err
 	}
@@ -2053,7 +2405,185 @@ func runCollectorSCFCanary(ctx context.Context, client *adminclient.Client, opts
 		raw, _ := json.Marshal(response)
 		return fmt.Errorf("market_fetch canary returned unsuccessful response: %s", raw)
 	}
+	if err := opts.canaryProof.verify(ctx); err != nil {
+		return fmt.Errorf("market_fetch canary Storage proof failed (node_id=%s batch_id=%s): %w", nodeID, batchID, err)
+	}
 	return nil
+}
+
+func publishCollectorSCFReleaseCanaryFleet(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, packageID string) (summary collectorPublishSummary, canaryNode adminclient.CloudNode, resultErr error) {
+	var deploymentJobID string
+	deploymentComplete := false
+	deploymentOutcomeUnknown := false
+	defer func() {
+		cleanupErr := cleanupCollectorSCFReleaseCanaryFleet(ctx, client, opts, deploymentJobID, deploymentComplete, deploymentOutcomeUnknown)
+		if cleanupErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("clean up isolated release canary fleet: %w", cleanupErr))
+		}
+		canaryNode = adminclient.CloudNode{}
+	}()
+
+	nodes, err := inspectCollectorFleet(ctx, client, opts)
+	if err != nil {
+		return summary, adminclient.CloudNode{}, fmt.Errorf("inspect isolated release canary fleet: %w", err)
+	}
+	items, err := buildCollectorFleetCreateItems(opts, packageID)
+	if err != nil {
+		return summary, adminclient.CloudNode{}, fmt.Errorf("build isolated release canary fleet: %w", err)
+	}
+	summary, err = submitCollectorFleet(ctx, client, opts, packageID, items, nodes)
+	deploymentJobID = summary.JobID
+	if err != nil {
+		deploymentOutcomeUnknown = errors.Is(err, errCollectorBatchOutcomeUnknown) && strings.TrimSpace(deploymentJobID) == ""
+		return summary, adminclient.CloudNode{}, fmt.Errorf("deploy isolated release canary candidate: %w", err)
+	}
+	if err := waitCollectorBatch(ctx, client, summary.JobID); err != nil {
+		return summary, adminclient.CloudNode{}, fmt.Errorf("wait isolated release canary deployment: %w", err)
+	}
+	deploymentComplete = true
+	nodes, err = inspectCollectorFleet(ctx, client, opts)
+	if err != nil {
+		return summary, adminclient.CloudNode{}, fmt.Errorf("read back isolated release canary fleet: %w", err)
+	}
+	if len(nodes) != 1 || strings.TrimSpace(nodes[0].NodeID) == "" || nodes[0].PackageID != packageID {
+		return summary, adminclient.CloudNode{}, fmt.Errorf("isolated release canary fleet is not ready with candidate package %q", packageID)
+	}
+	if err := runCollectorSCFCanary(ctx, client, opts, nodes[0].NodeID); err != nil {
+		return summary, adminclient.CloudNode{}, fmt.Errorf("isolated release canary business proof failed: %w", err)
+	}
+	return summary, nodes[0], nil
+}
+
+// cleanupCollectorSCFReleaseCanaryFleet removes only functions created for
+// this reservation. Known asynchronous jobs must reach terminal status before
+// cleanup starts; their provider operation may legitimately take 16 minutes.
+func cleanupCollectorSCFReleaseCanaryFleet(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, deploymentJobID string, deploymentComplete, deploymentOutcomeUnknown bool) error {
+	if client == nil {
+		return errors.New("control client is required")
+	}
+	if strings.TrimSpace(opts.CloudAccountID) == "" || strings.TrimSpace(opts.Region) == "" || strings.TrimSpace(opts.Namespace) == "" || strings.TrimSpace(opts.FunctionNamePrefix) == "" {
+		return errors.New("canary cleanup requires exact cloud account, region, namespace, and function prefix")
+	}
+	if !strings.EqualFold(strings.TrimSpace(defaultFlag(opts.NodeType, "scf-event")), "scf-event") ||
+		!strings.EqualFold(strings.TrimSpace(defaultFlag(opts.BizType, "market_fetcher")), "market_fetcher") ||
+		!strings.EqualFold(strings.TrimSpace(opts.TriggerType), "invoke") {
+		return errors.New("canary cleanup requires the isolated market_fetcher Invoke fleet identity")
+	}
+
+	cleanupCtx := context.WithoutCancel(ctx)
+	var cleanupErr error
+	if strings.TrimSpace(deploymentJobID) != "" && !deploymentComplete {
+		if _, err := waitCollectorBatchTerminalChange(ctx, client, deploymentJobID); err != nil {
+			// Without a terminal readback, deleting would race the still-running
+			// create/deploy worker. Keep the outer publish lease fail-closed.
+			return collectorUnknownBatchOutcome(fmt.Sprintf("settle canary deployment batch %s before cleanup", deploymentJobID), err)
+		}
+	}
+
+	var nodes []adminclient.CloudNode
+	var err error
+	if deploymentOutcomeUnknown {
+		nodes, err = waitForCollectorSCFReleaseCanaryNodes(ctx, client, opts, 2*time.Second)
+	} else {
+		nodes, err = listCollectorSCFReleaseCanaryNodes(cleanupCtx, client, opts)
+	}
+	if err != nil {
+		return errors.Join(cleanupErr, fmt.Errorf("list isolated canary functions: %w", err))
+	}
+	if len(nodes) == 0 {
+		if deploymentOutcomeUnknown {
+			return errors.Join(cleanupErr, collectorUnknownBatchOutcome("ambiguous canary create has no job identity and its reserved prefix is not visible yet", nil))
+		}
+		return cleanupErr
+	}
+	if deploymentOutcomeUnknown && opts.NodeCount != 1 {
+		return errors.Join(cleanupErr, collectorUnknownBatchOutcome("ambiguous canary create cannot be settled because its reservation is not a single isolated function", nil))
+	}
+	nodeIDs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		nodeIDs = append(nodeIDs, node.NodeID)
+	}
+	deleted, err := client.SubmitDeleteNodes(cleanupCtx, nodeIDs)
+	if err != nil {
+		return errors.Join(cleanupErr, classifyCollectorSubmitError("submit isolated canary deletion", err))
+	}
+	if deleted == nil || strings.TrimSpace(deleted.JobID) == "" {
+		return errors.Join(cleanupErr, collectorUnknownBatchOutcome("submit isolated canary deletion returned no batch identity", nil))
+	}
+	if err := waitCollectorBatch(ctx, client, deleted.JobID); err != nil {
+		return errors.Join(cleanupErr, fmt.Errorf("wait isolated canary deletion batch %s: %w", deleted.JobID, err))
+	}
+	remaining, err := listCollectorSCFReleaseCanaryNodes(cleanupCtx, client, opts)
+	if err != nil {
+		return errors.Join(cleanupErr, fmt.Errorf("verify isolated canary deletion: %w", err))
+	}
+	if len(remaining) > 0 {
+		return errors.Join(cleanupErr, fmt.Errorf("isolated canary cleanup left %d active function(s)", len(remaining)))
+	}
+	if deploymentOutcomeUnknown {
+		return errors.Join(cleanupErr, collectorUnknownBatchOutcome("isolated canary prefix was cleaned best-effort, but the create job has no terminal identity and could still create a late function", nil))
+	}
+	return cleanupErr
+}
+
+func waitForCollectorSCFReleaseCanaryNodes(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, pollInterval time.Duration) ([]adminclient.CloudNode, error) {
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		nodes, err := listCollectorSCFReleaseCanaryNodes(ctx, client, opts)
+		if err != nil {
+			return nil, collectorUnknownBatchOutcome("inventory ambiguous canary create prefix", err)
+		}
+		if len(nodes) > 0 {
+			return nodes, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, collectorUnknownBatchOutcome("wait for ambiguous canary create to appear in prefix inventory", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func listCollectorSCFReleaseCanaryNodes(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions) ([]adminclient.CloudNode, error) {
+	region := strings.TrimSpace(opts.Region)
+	namespace := defaultFlag(opts.Namespace, "default")
+	accountID := strings.TrimSpace(opts.CloudAccountID)
+	prefix := strings.TrimSpace(opts.FunctionNamePrefix)
+	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
+		CloudAccountID: accountID,
+		Namespace:      namespace,
+		Region:         region,
+		NodeType:       "scf-event",
+		BizType:        "market_fetcher",
+		TriggerType:    "invoke",
+	})
+	if err != nil {
+		return nil, err
+	}
+	owned := make([]adminclient.CloudNode, 0, len(nodes))
+	for _, node := range nodes {
+		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" ||
+			!strings.EqualFold(strings.TrimSpace(node.CloudAccountID), accountID) ||
+			!strings.EqualFold(strings.TrimSpace(node.Region), region) ||
+			!strings.EqualFold(defaultFlag(node.Namespace, "default"), namespace) ||
+			!strings.EqualFold(strings.TrimSpace(node.NodeType), "scf-event") ||
+			!strings.EqualFold(strings.TrimSpace(node.BizType), "market_fetcher") ||
+			!strings.EqualFold(strings.TrimSpace(node.TriggerType), "invoke") {
+			continue
+		}
+		if _, belongs, _ := collectorFleetIndex(node, prefix); belongs {
+			owned = append(owned, node)
+		}
+	}
+	return owned, nil
+}
+
+func validateCollectorSCFCanaryProofPreflight() error {
+	return errors.New("SCF canary verification contract is unavailable: ad-hoc publication has no ownership-validated disabled task, exact period, Dataset and View binding; use a manifest canary_task_id")
 }
 
 const (
@@ -2210,7 +2740,7 @@ func waitCollectorTimerFleetsEnabled(ctx context.Context, client *adminclient.Cl
 	}
 }
 
-func waitCollectorTimerFleetsAssigned(ctx context.Context, client *adminclient.Client, fleets []collectorPublishedTimerFleet) error {
+func waitCollectorTimerFleetsAssigned(ctx context.Context, client *adminclient.Client, fleets []collectorPublishedTimerFleet) (map[string]collectorTimerAssignment, error) {
 	waitDuration := 10 * time.Minute
 	if collectorTimerFleetsAreStockCN(fleets) {
 		waitDuration = collectorStockCNFleetWaitTimeout
@@ -2221,32 +2751,39 @@ func waitCollectorTimerFleetsAssigned(ctx context.Context, client *adminclient.C
 	defer ticker.Stop()
 	for {
 		ready := true
-		for _, fleet := range fleets {
+		assignments := make(map[string]collectorTimerAssignment)
+		for fleetIndex := range fleets {
+			fleet := &fleets[fleetIndex]
 			nodes, err := inspectCollectorFleet(waitCtx, client, fleet.opts)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if len(nodes) != fleet.opts.NodeCount {
 				ready = false
 				break
 			}
+			fleet.nodes = nodes
 			for _, node := range nodes {
-				assignmentCount, hasAssignment := metadataIntValue(node.Metadata, "assignment_count")
-				if !hasAssignment || assignmentCount <= 0 {
+				assignment, assigned := collectorTimerAssignmentFromNode(node, fleet.packageID)
+				if !assigned {
 					ready = false
 					break
 				}
+				if _, duplicate := assignments[assignment.NodeID]; duplicate {
+					return nil, fmt.Errorf("timer node %s appears in multiple published fleets", assignment.NodeID)
+				}
+				assignments[assignment.NodeID] = assignment
 			}
 			if !ready {
 				break
 			}
 		}
 		if ready {
-			return nil
+			return assignments, nil
 		}
 		select {
 		case <-waitCtx.Done():
-			return waitCtx.Err()
+			return nil, waitCtx.Err()
 		case <-ticker.C:
 		}
 	}
@@ -2276,7 +2813,17 @@ func submitCollectorTimerRuntimeConfigs(ctx context.Context, client *adminclient
 	if len(patches) == 0 {
 		return nil, nil
 	}
+	if fence := client.CollectorPublishFence(); fence != nil {
+		patches = append([]collectorRuntimeConfigPatch(nil), patches...)
+		for index := range patches {
+			patches[index].CollectorPublishLeaseID = fence.LeaseID
+			patches[index].CollectorPublishFencingToken = fence.FencingToken
+		}
+	}
 	jobs := make([]string, 0, (len(patches)+collectorRuntimeConfigBatchSize-1)/collectorRuntimeConfigBatchSize)
+	settleOnError := func(submitErr error) ([]string, error) {
+		return jobs, errors.Join(submitErr, waitCollectorBatches(ctx, client, jobs))
+	}
 	for start := 0; start < len(patches); start += collectorRuntimeConfigBatchSize {
 		end := min(start+collectorRuntimeConfigBatchSize, len(patches))
 		var response struct {
@@ -2287,16 +2834,16 @@ func submitCollectorTimerRuntimeConfigs(ctx context.Context, client *adminclient
 			JobID string `json:"job_id"`
 		}
 		if err := client.CallJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs", map[string]any{"nodes": patches[start:end]}, &response); err != nil {
-			return nil, err
+			return settleOnError(classifyCollectorSubmitError("submit Timer runtime-config batch", err))
 		}
 		if response.RetInfo == nil || response.RetInfo.Code != 0 && response.RetInfo.Code != 200 {
 			if response.RetInfo == nil {
-				return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs returned no ret_info")
+				return settleOnError(collectorUnknownBatchOutcome("SubmitUpdateNodeRuntimeConfigs returned no ret_info", nil))
 			}
-			return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs: code %d: %s", response.RetInfo.Code, response.RetInfo.Msg)
+			return settleOnError(fmt.Errorf("SubmitUpdateNodeRuntimeConfigs: code %d: %s", response.RetInfo.Code, response.RetInfo.Msg))
 		}
 		if strings.TrimSpace(response.JobID) == "" {
-			return nil, fmt.Errorf("SubmitUpdateNodeRuntimeConfigs returned no job_id")
+			return settleOnError(collectorUnknownBatchOutcome("SubmitUpdateNodeRuntimeConfigs returned no job_id", nil))
 		}
 		jobs = append(jobs, response.JobID)
 	}
@@ -2304,12 +2851,22 @@ func submitCollectorTimerRuntimeConfigs(ctx context.Context, client *adminclient
 }
 
 func waitCollectorBatches(ctx context.Context, client *adminclient.Client, jobIDs []string) error {
+	var errs []error
 	for _, jobID := range jobIDs {
 		if err := waitCollectorBatch(ctx, client, jobID); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+func appendCollectorBatchIDs(jobIDs []string, value string) []string {
+	for _, jobID := range strings.Split(value, ",") {
+		if jobID = strings.TrimSpace(jobID); jobID != "" {
+			jobIDs = append(jobIDs, jobID)
+		}
+	}
+	return jobIDs
 }
 
 func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID string) map[string]any {
@@ -2365,6 +2922,58 @@ func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID strin
 	// environment. When the operator has a current control-plane DNS snapshot,
 	// carry it in the canary payload so the release gate exercises the same
 	// resolved-IP path as production Timer requests.
+	if rawRoutes := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON")); rawRoutes != "" {
+		var routes map[string]any
+		if err := json.Unmarshal([]byte(rawRoutes), &routes); err == nil && len(routes) > 0 {
+			data["data"].(map[string]any)["dns_routes"] = routes
+		}
+	}
+	return data
+}
+
+func collectorSCFCanaryEventForProof(opts collectorPublishOptions, nodeID, batchID string, proof *collectorSCFCanaryProof) map[string]any {
+	if proof == nil || proof.entry == nil {
+		return nil
+	}
+	entry := proof.entry
+	spaceID := entry.GetSpaceId()
+	instanceID := "scf-canary-instance:" + entry.GetTaskId() + ":" + batchID
+	targetID := "scf-canary-target:" + entry.GetTaskId() + ":" + batchID
+	period := proof.period.UTC().Format(time.RFC3339Nano)
+	outputFields := append([]string(nil), entry.GetOutputFields()...)
+	outputFieldsJSON, _ := json.Marshal(outputFields)
+	marketID := firstNonEmpty(entry.GetMarketId(), spaceID)
+	marketType := entry.GetMarketType()
+	item := map[string]any{
+		"instance_id": instanceID, "subject_id": entry.GetSubjectId(), "symbol": entry.GetProviderSymbol(),
+		"provider": entry.GetProvider(), "source_id": entry.GetSourceId(), "market_id": marketID,
+		"instrument_type": marketType, "market_type": marketType, "data_type": "kline",
+		"dataset_id": entry.GetDatasetId(), "frequency": entry.GetFrequency(), "bar_limit": 1,
+		"target_data_time": period, "source_event_id": batchID, "output_fields": outputFields,
+		"series_index": entry.GetSeriesIndex(), "series_hash": entry.GetSeriesHash(), "expected_count": entry.GetExpectedCount(),
+		"require_period_commit": true, "period_reservation_id": proof.reservationID,
+	}
+	if strings.EqualFold(marketID, "stockcn") {
+		item["canary"] = true
+	}
+	target := map[string]any{
+		"write_target_id": targetID, "space_id": spaceID, "instance_id": instanceID,
+		"task_id": entry.GetTaskId(), "dataset_id": entry.GetDatasetId(), "view_id": entry.GetViewId(),
+		"output_fields_json": string(outputFieldsJSON), "series_index": entry.GetSeriesIndex(),
+		"series_hash": entry.GetSeriesHash(), "expected_count": entry.GetExpectedCount(),
+		"frequency": entry.GetFrequency(), "target_data_time": period,
+	}
+	data := map[string]any{
+		"action": "market_fetch", "storage_rpc_gateway_target": collectorStorageRPCGatewayTarget(opts),
+		"data": map[string]any{
+			"batch_id": batchID, "schedule_id": "scf-canary:" + entry.GetTaskId() + ":" + batchID,
+			"batch_kind": "backfill", "space_id": spaceID, "market_id": marketID,
+			"instrument_type": marketType, "dataset_id": entry.GetDatasetId(), "frequency": entry.GetFrequency(),
+			"provider": entry.GetProvider(), "source_id": entry.GetSourceId(), "market_type": marketType,
+			"region": opts.Region, "node_id": nodeID, "task_id": entry.GetTaskId(), "require_period_commit": true,
+			"items": []map[string]any{item}, "targets": []map[string]any{target},
+		},
+	}
 	if rawRoutes := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON")); rawRoutes != "" {
 		var routes map[string]any
 		if err := json.Unmarshal([]byte(rawRoutes), &routes); err == nil && len(routes) > 0 {
@@ -2491,7 +3100,7 @@ func mergeBatchStatus(current, next string) string {
 	return "NODE_BATCH_STATUS_PARTIAL"
 }
 
-func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) (*collectorDeleteSummary, error) {
+func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) (summaryResult *collectorDeleteSummary, retErr error) {
 	controlURL := strings.TrimSpace(opts.ControlURL)
 	if controlURL == "" {
 		return nil, fmt.Errorf("--control-url is required")
@@ -2502,6 +3111,9 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	}
 	if !opts.DryRun && !opts.Confirm {
 		return nil, fmt.Errorf("refusing to delete SCF nodes without --confirm (use --dry-run to inspect targets)")
+	}
+	if !opts.DryRun && !opts.Wait {
+		return nil, fmt.Errorf("market_fetcher deletion requires --wait so the publish lease covers the asynchronous CloudNode batch")
 	}
 
 	serviceGatewayCAFile := ""
@@ -2552,31 +3164,17 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	}
 	namespace := strings.TrimSpace(opts.Namespace)
 	region := strings.TrimSpace(opts.Region)
-	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
-		NodeType: "scf-event",
-		BizType:  "market_fetcher",
-		Region:   region,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list active SCF nodes: %w", err)
-	}
-	nodeIDs := make([]string, 0, len(nodes))
-	for _, node := range nodes {
-		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || (namespace != "" && strings.TrimSpace(node.Namespace) != namespace) {
-			continue
+	if opts.DryRun {
+		nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
+			NodeType: "scf-event",
+			BizType:  "market_fetcher",
+			Region:   region,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list active SCF nodes: %w", err)
 		}
-		nodeIDs = append(nodeIDs, node.NodeID)
-	}
-	summary := &collectorDeleteSummary{
-		SpaceID:    spaceID,
-		Namespace:  namespace,
-		Region:     region,
-		NodeType:   "scf-event",
-		DryRun:     opts.DryRun,
-		TotalCount: len(nodeIDs),
-		NodeIDs:    nodeIDs,
-	}
-	if opts.DryRun || len(nodeIDs) == 0 {
+		nodeIDs := collectorDeleteTargetNodeIDs(nodes, namespace)
+		summary := collectorDeleteResult(spaceID, namespace, region, true, nodeIDs)
 		if len(nodeIDs) == 0 {
 			summary.Status = "nothing_to_delete"
 		} else {
@@ -2584,46 +3182,126 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		}
 		return summary, nil
 	}
-
-	resp, err := client.SubmitDeleteNodes(ctx, nodeIDs)
+	leaseCtx, leaseGuard, err := acquireCollectorPublishLease(ctx, client, spaceID)
 	if err != nil {
-		return summary, fmt.Errorf("submit SCF deletion batch: %w", err)
+		return nil, fmt.Errorf("acquire collector publish lease before deletion: %w", err)
 	}
-	summary.JobID = resp.JobID
-	summary.Operation = resp.Operation
-	summary.TotalCount = resp.TotalCount
-	summary.Status = "submitted"
-	if !opts.Wait {
+	accepted, terminal := false, false
+	defer func() {
+		if accepted && !terminal {
+			leaseGuard.Abandon()
+			return
+		}
+		retErr = errors.Join(retErr, leaseGuard.Close())
+	}()
+	ctx = leaseCtx
+	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
+		NodeType: "scf-event",
+		BizType:  "market_fetcher",
+		Region:   region,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list active SCF nodes under publish lease: %w", err)
+	}
+	nodeIDs := collectorDeleteTargetNodeIDs(nodes, namespace)
+	summary := collectorDeleteResult(spaceID, namespace, region, false, nodeIDs)
+	if len(nodeIDs) == 0 {
+		summary.Status = "nothing_to_delete"
 		return summary, nil
 	}
 
-	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	defer cancel()
-	for {
-		change, err := client.GetNodeBatchChange(waitCtx, resp.JobID)
-		if err != nil {
-			return summary, fmt.Errorf("poll SCF deletion batch %s: %w", resp.JobID, err)
+	jobIDs := make([]string, 0, (len(nodeIDs)+collectorMaxNodeBatchItems-1)/collectorMaxNodeBatchItems)
+	var submitErr error
+	unknownSubmission := false
+	for offset := 0; offset < len(nodeIDs); offset += collectorMaxNodeBatchItems {
+		end := min(offset+collectorMaxNodeBatchItems, len(nodeIDs))
+		resp, submitErrForBatch := client.SubmitDeleteNodes(ctx, nodeIDs[offset:end])
+		if submitErrForBatch != nil {
+			submitErr = fmt.Errorf("submit SCF deletion batch for nodes %d-%d: %w", offset+1, end, submitErrForBatch)
+			unknownSubmission = isAmbiguousCollectorPublishOutcome(submitErrForBatch)
+			if unknownSubmission {
+				accepted = true
+			}
+			break
 		}
-		summary.Status = change.Job.Status
-		summary.SuccessCount = change.Job.SuccessCount
-		summary.FailedCount = change.Job.FailedCount
-		summary.FailedResults = nil
+		if resp == nil || strings.TrimSpace(resp.JobID) == "" {
+			submitErr = collectorUnknownBatchOutcome("SCF deletion batch returned no job id", nil)
+			unknownSubmission = true
+			accepted = true
+			break
+		}
+		accepted = true
+		jobIDs = append(jobIDs, resp.JobID)
+	}
+	summary.JobID = strings.Join(jobIDs, ",")
+	summary.Operation = "delete_nodes"
+	summary.Status = ""
+	allTerminal := !unknownSubmission
+	var waitErrs []error
+	for _, jobID := range jobIDs {
+		change, pollErr := waitCollectorBatchTerminalChange(ctx, client, jobID)
+		if pollErr != nil {
+			allTerminal = false
+			waitErrs = append(waitErrs, fmt.Errorf("poll SCF deletion batch %s: %w", jobID, pollErr))
+			continue
+		}
+		if change == nil || change.Job == nil {
+			allTerminal = false
+			waitErrs = append(waitErrs, collectorUnknownBatchOutcome(fmt.Sprintf("SCF deletion batch %s returned empty terminal status", jobID), nil))
+			continue
+		}
+		summary.Status = mergeBatchStatus(summary.Status, change.Job.Status)
+		summary.SuccessCount += change.Job.SuccessCount
+		summary.FailedCount += change.Job.FailedCount
 		for _, item := range change.Items {
 			if item.Status != "NODE_BATCH_ITEM_STATUS_SUCCESS" {
 				summary.FailedResults = append(summary.FailedResults, item)
 			}
 		}
-		switch change.Job.Status {
-		case "NODE_BATCH_STATUS_SUCCESS":
-			return summary, nil
-		case "NODE_BATCH_STATUS_FAILED", "NODE_BATCH_STATUS_PARTIAL":
-			return summary, fmt.Errorf("SCF deletion batch %s finished with status %s", resp.JobID, change.Job.Status)
+		if strings.Contains(change.Job.Status, "FAILED") || strings.Contains(change.Job.Status, "PARTIAL") {
+			waitErrs = append(waitErrs, fmt.Errorf("SCF deletion batch %s finished with status %s", jobID, change.Job.Status))
 		}
-		select {
-		case <-waitCtx.Done():
-			return summary, fmt.Errorf("wait SCF deletion batch %s: %w", resp.JobID, waitCtx.Err())
-		case <-time.After(2 * time.Second):
+	}
+	terminal = allTerminal
+	if unknownSubmission {
+		waitErrs = append(waitErrs, collectorUnknownBatchOutcome("SCF deletion submission outcome is unknown", submitErr))
+	} else if submitErr != nil {
+		waitErrs = append(waitErrs, submitErr)
+	}
+	if summary.Status == "" {
+		switch {
+		case unknownSubmission:
+			summary.Status = "unknown"
+		case submitErr != nil:
+			summary.Status = "rejected"
+		default:
+			summary.Status = "nothing_to_delete"
 		}
+	}
+	retErr = errors.Join(waitErrs...)
+	return summary, retErr
+}
+
+func collectorDeleteTargetNodeIDs(nodes []adminclient.CloudNode, namespace string) []string {
+	nodeIDs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || (namespace != "" && strings.TrimSpace(node.Namespace) != namespace) {
+			continue
+		}
+		nodeIDs = append(nodeIDs, node.NodeID)
+	}
+	return nodeIDs
+}
+
+func collectorDeleteResult(spaceID, namespace, region string, dryRun bool, nodeIDs []string) *collectorDeleteSummary {
+	return &collectorDeleteSummary{
+		SpaceID:    spaceID,
+		Namespace:  namespace,
+		Region:     region,
+		NodeType:   "scf-event",
+		DryRun:     dryRun,
+		TotalCount: len(nodeIDs),
+		NodeIDs:    nodeIDs,
 	}
 }
 
@@ -3976,6 +4654,9 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 	// its remote configuration and validates the complete map before code upload.
 	_, err := collectorFunctionEnvironment(publication, collectorPreflightPackageID(publication))
 	if err != nil {
+		return collectorDeploySummary{}, err
+	}
+	if err := validateCollectorSCFCanaryProofPreflight(); err != nil {
 		return collectorDeploySummary{}, err
 	}
 	data, err := os.ReadFile(zipPath)

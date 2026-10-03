@@ -71,6 +71,60 @@ func TestDatasetPeriodExpectationConflictIsRejected(t *testing.T) {
 	require.ErrorAs(t, err, &conflict)
 }
 
+func TestDatasetPeriodWaitingReservationIsExclusiveAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node")
+	store, err := Open(Options{Path: path, NodeID: "node-a"})
+	require.NoError(t, err)
+	period := time.Now().UTC().Truncate(time.Second)
+	exp := periodExpectationForTest(period, 1, "BTC-USDT")
+	exp.ReservationID = "release-a"
+	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	store, err = Open(Options{Path: path, NodeID: "node-a"})
+	require.NoError(t, err)
+	defer store.Close()
+
+	competing := exp
+	competing.ReservationID = "release-b"
+	_, err = store.EnsureDatasetPeriod(context.Background(), competing)
+	var conflict PeriodConflictError
+	require.ErrorAs(t, err, &conflict, "a second publisher must not join the waiting canary period")
+
+	_, err = store.CommitTimeSeriesBatch(context.Background(), competing, []TimeSeriesBatchItem{{
+		SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT"),
+	}}, "release-b", "collector")
+	require.ErrorAs(t, err, &conflict, "a different reservation must not commit data into the canary period")
+	_, err = store.GetDatasetPeriodStatus(context.Background(), competing)
+	require.ErrorAs(t, err, &conflict, "a different reservation must not inspect a waiting canary period")
+	_, err = store.RecordDatasetPeriodFailures(context.Background(), competing, []uint32{0})
+	require.ErrorAs(t, err, &conflict, "a different reservation must not report failures into the canary period")
+
+	status, err := store.GetDatasetPeriodStatus(context.Background(), exp)
+	require.NoError(t, err)
+	require.Equal(t, "waiting", status.Status)
+
+	statusResult, err := store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{
+		SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT"),
+	}}, "release-a", "collector")
+	require.NoError(t, err)
+	require.Equal(t, "complete", statusResult.Status)
+
+	// Reservation ownership only fences a waiting period. Once terminal, normal
+	// tokenless status reads and retry receipts remain compatible with the data identity.
+	ordinary := exp
+	ordinary.ReservationID = ""
+	terminal, err := store.GetDatasetPeriodStatus(context.Background(), ordinary)
+	require.NoError(t, err)
+	require.Equal(t, "complete", terminal.Status)
+	terminalResult, err := store.CommitTimeSeriesBatch(context.Background(), ordinary, []TimeSeriesBatchItem{{
+		SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT"),
+	}}, "normal-retry", "collector")
+	require.NoError(t, err)
+	require.Equal(t, "complete", terminalResult.Status)
+}
+
 func TestDatasetPeriodEnsureRejectsNonPositiveDeadlineWithoutSideEffects(t *testing.T) {
 	for _, deadlineAt := range []int64{0, -1} {
 		t.Run(fmt.Sprint(deadlineAt), func(t *testing.T) {

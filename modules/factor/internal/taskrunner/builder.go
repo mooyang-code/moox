@@ -64,9 +64,6 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 	if scope.ResultDatasetID == "" {
 		scope.ResultDatasetID = scope.TargetDataset
 	}
-	if scope.SourceDataset == "" {
-		scope.SourceDataset = scope.SourceViewID
-	}
 	if scope.TargetDataset == "" {
 		scope.TargetDataset = scope.ResultDatasetID
 	}

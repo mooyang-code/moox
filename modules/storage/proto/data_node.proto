@@ -25,6 +25,7 @@ message DatasetPeriodExpectation {
   uint32 expected_count = 6;
   int64 deadline_at = 7;
   repeated DatasetPeriodSeries series_snapshot = 8;
+  string reservation_id = 9;
 }
 
 message EnsureDatasetPeriodReq {

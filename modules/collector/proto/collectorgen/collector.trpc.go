@@ -24,6 +24,8 @@ type CollectMgrService interface {
 
 	GetTaskDetail(ctx context.Context, req *GetTaskDetailReq) (*GetTaskDetailRsp, error)
 
+	GetTaskResultInventory(ctx context.Context, req *GetTaskResultInventoryReq) (*GetTaskResultInventoryRsp, error)
+
 	CreateTask(ctx context.Context, req *CreateTaskReq) (*CreateTaskRsp, error)
 
 	UpdateTask(ctx context.Context, req *UpdateTaskReq) (*UpdateTaskRsp, error)
@@ -71,6 +73,24 @@ func CollectMgrService_GetTaskDetail_Handler(svr interface{}, ctx context.Contex
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CollectMgrService).GetTaskDetail(ctx, reqbody.(*GetTaskDetailReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_GetTaskResultInventory_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetTaskResultInventoryReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetTaskResultInventory(ctx, reqbody.(*GetTaskResultInventoryReq))
 	}
 
 	var rsp interface{}
@@ -275,6 +295,10 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_GetTaskDetail_Handler,
 		},
 		{
+			Name: "/trpc.moox.collector.CollectMgr/GetTaskResultInventory",
+			Func: CollectMgrService_GetTaskResultInventory_Handler,
+		},
+		{
 			Name: "/trpc.moox.collector.CollectMgr/CreateTask",
 			Func: CollectMgrService_CreateTask_Handler,
 		},
@@ -377,6 +401,9 @@ func (s *UnimplementedCollectMgr) GetTaskList(ctx context.Context, req *GetTaskL
 func (s *UnimplementedCollectMgr) GetTaskDetail(ctx context.Context, req *GetTaskDetailReq) (*GetTaskDetailRsp, error) {
 	return nil, errors.New("rpc GetTaskDetail of service CollectMgr is not implemented")
 }
+func (s *UnimplementedCollectMgr) GetTaskResultInventory(ctx context.Context, req *GetTaskResultInventoryReq) (*GetTaskResultInventoryRsp, error) {
+	return nil, errors.New("rpc GetTaskResultInventory of service CollectMgr is not implemented")
+}
 func (s *UnimplementedCollectMgr) CreateTask(ctx context.Context, req *CreateTaskReq) (*CreateTaskRsp, error) {
 	return nil, errors.New("rpc CreateTask of service CollectMgr is not implemented")
 }
@@ -430,6 +457,8 @@ type CollectMgrClientProxy interface {
 	GetTaskList(ctx context.Context, req *GetTaskListReq, opts ...client.Option) (rsp *GetTaskListRsp, err error)
 
 	GetTaskDetail(ctx context.Context, req *GetTaskDetailReq, opts ...client.Option) (rsp *GetTaskDetailRsp, err error)
+
+	GetTaskResultInventory(ctx context.Context, req *GetTaskResultInventoryReq, opts ...client.Option) (rsp *GetTaskResultInventoryRsp, err error)
 
 	CreateTask(ctx context.Context, req *CreateTaskReq, opts ...client.Option) (rsp *CreateTaskRsp, err error)
 
@@ -495,6 +524,26 @@ func (c *CollectMgrClientProxyImpl) GetTaskDetail(ctx context.Context, req *GetT
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetTaskDetailRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetTaskResultInventory(ctx context.Context, req *GetTaskResultInventoryReq, opts ...client.Option) (*GetTaskResultInventoryRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetTaskResultInventory")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetTaskResultInventory")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetTaskResultInventoryRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

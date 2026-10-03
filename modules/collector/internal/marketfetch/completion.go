@@ -320,7 +320,8 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 				if parsed, parseErr := time.Parse(time.RFC3339Nano, item.GetTargetDataTime()); parseErr == nil {
 					targetDataTime = parsed.UTC()
 				}
-				effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: sourceBatchID, BatchKind: batch.BatchKind, InstanceID: item.GetInstanceId(), WriteTargetID: targetResult.GetWriteTargetId(), RetryScope: "write_target", SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime, TaskJSON: marshalRetryCollectionItem(collectionItem), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), targetResult.GetWriteTargetId()), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: "storage", LastErrorSummary: targetResult.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
+				periodTime, periodDeadlineAt := retryPeriodMetadata(batch, targetDataTime)
+				effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: sourceBatchID, BatchKind: batch.BatchKind, InstanceID: item.GetInstanceId(), WriteTargetID: targetResult.GetWriteTargetId(), RetryScope: "write_target", SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime, PeriodTime: periodTime, PeriodDeadlineAt: periodDeadlineAt, TaskJSON: marshalRetryCollectionItem(collectionItem), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), targetResult.GetWriteTargetId()), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: "storage", LastErrorSummary: targetResult.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
 				guardRetryEffect(&effects, retryKey, sourceRetryKey)
 			}
 			appendCompletionInstanceUpdate(&effects, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusSuccess), sourceRetryKey)
@@ -386,7 +387,8 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		if batch.RetryScope == "write_target" {
 			retryScope, writeTargetID = batch.RetryScope, batch.WriteTargetID
 		}
-		effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, InstanceID: collectionItem.InstanceID, WriteTargetID: writeTargetID, RetryScope: retryScope, SubjectID: collectionItem.SubjectID, Frequency: collectionItem.Frequency, TargetDataTime: target, TaskJSON: string(raw), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), writeTargetID), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: item.GetErrorType(), LastErrorSummary: item.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
+		periodTime, periodDeadlineAt := retryPeriodMetadata(batch, target)
+		effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, InstanceID: collectionItem.InstanceID, WriteTargetID: writeTargetID, RetryScope: retryScope, SubjectID: collectionItem.SubjectID, Frequency: collectionItem.Frequency, TargetDataTime: target, PeriodTime: periodTime, PeriodDeadlineAt: periodDeadlineAt, TaskJSON: string(raw), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), writeTargetID), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: item.GetErrorType(), LastErrorSummary: item.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
 		guardRetryEffect(&effects, key, sourceRetryKey)
 	}
 	updated, err := batches.CompleteWithEffects(ctx, batch, effects)
@@ -428,9 +430,6 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 	}
 	if metrics != nil {
 		metrics.Observe(spaceID, payload)
-		if count, countErr := retries.CountPending(ctx, spaceID, payload.GetDatasetId(), payload.GetFrequency()); countErr == nil {
-			metrics.SetRetryPending(spaceID, payload.GetDatasetId(), payload.GetFrequency(), int(count))
-		}
 	}
 	return nil
 }
@@ -557,14 +556,31 @@ func permanentRetryItem(original Request, batch *domain.BatchInvocation, payload
 	if batch != nil && batch.RetryScope == "write_target" {
 		retryScope, writeTargetID = batch.RetryScope, batch.WriteTargetID
 	}
+	periodTime, periodDeadlineAt := retryPeriodMetadata(batch, targetTime)
 	return &domain.RetryItem{
 		SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batchKind,
 		InstanceID: collectionItem.InstanceID, WriteTargetID: writeTargetID, RetryScope: retryScope,
 		SubjectID: collectionItem.SubjectID, Frequency: firstNonEmpty(collectionItem.Frequency, payload.GetFrequency()),
-		TargetDataTime: targetTime.UTC(), TaskJSON: string(raw), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), writeTargetID),
+		TargetDataTime: targetTime.UTC(), PeriodTime: periodTime, PeriodDeadlineAt: periodDeadlineAt, TaskJSON: string(raw), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), writeTargetID),
 		Attempt: attempt, Status: "permanent_failed", LastErrorType: strings.TrimSpace(errorType), LastErrorSummary: strings.TrimSpace(errorSummary),
 		CreateTime: at.UTC(), ModifyTime: at.UTC(),
 	}
+}
+
+func retryPeriodMetadata(batch *domain.BatchInvocation, target time.Time) (*time.Time, *time.Time) {
+	var periodTime, periodDeadlineAt *time.Time
+	if batch != nil && batch.PeriodTime != nil && !batch.PeriodTime.IsZero() {
+		value := batch.PeriodTime.UTC()
+		periodTime = &value
+	} else if !target.IsZero() {
+		value := target.UTC()
+		periodTime = &value
+	}
+	if batch != nil && batch.PeriodDeadlineAt != nil && !batch.PeriodDeadlineAt.IsZero() {
+		value := batch.PeriodDeadlineAt.UTC()
+		periodDeadlineAt = &value
+	}
+	return periodTime, periodDeadlineAt
 }
 
 func appendPermanentTargetUpdates(effects *store.FetchCompletionEffects, original Request, item *marketfetchpb.MarketFetchItemResult, batch *domain.BatchInvocation, attempt int, summary, sourceRetryKey string) {
@@ -835,13 +851,34 @@ func maxRetryAttempts() int {
 }
 
 func completionEventBusClient(ctx context.Context) (*jetstream.Client, error) {
-	cfg := jetstream.ConfigFromEnv(nil, "moox-collector-market-fetch-completion")
-	if credentialFile := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CREDENTIAL_FILE")); credentialFile != "" {
-		if err := cfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(credentialFile)); err != nil {
-			return nil, err
-		}
+	cfg, err := completionEventBusConfig()
+	if err != nil {
+		return nil, err
 	}
 	return jetstream.Connect(ctx, cfg)
+}
+
+func completionEventBusConfig() (jetstream.Config, error) {
+	cfg := marketFetchEventBusConfig("moox-collector-market-fetch-completion")
+	if credentialFile := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CREDENTIAL_FILE")); credentialFile != "" {
+		if err := cfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(credentialFile)); err != nil {
+			return jetstream.Config{}, err
+		}
+	}
+	if cfg.TLSCAFile != "" {
+		cfg.TLSCAPEMBase64 = ""
+	}
+	return cfg, nil
+}
+
+func marketFetchEventBusConfig(name string) jetstream.Config {
+	cfg := jetstream.ConfigFromEnv(nil, name)
+	// The SCF package carries the validated EventBus CA as a file. Prefer it
+	// over an inline CA left in a function environment by an older deployment.
+	if cfg.TLSCAFile != "" {
+		cfg.TLSCAPEMBase64 = ""
+	}
+	return cfg
 }
 
 func isRetryOutcome(outcome string) bool {

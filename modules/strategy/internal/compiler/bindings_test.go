@@ -32,6 +32,22 @@ rules:
 	require.Equal(t, "source", compiled.SourceView.ID)
 }
 
+func TestCompileWithBindingsAllowsFactorResultsOnSourceView(t *testing.T) {
+	dsl, err := config.Parse([]byte(`name: same-view-factor
+triggers: {event: {name: ViewDataReady}}
+data: {bar: 1m, calendar: crypto_24x7}
+rules: {r: {pool: [BTC], score: value, weight: 1}}
+`))
+	require.NoError(t, err)
+	compiled, err := (Compiler{}).CompileWithBindings(context.Background(), dsl, "space-1", []byte(`{
+  "source_view_id":"view_prices",
+  "factors":[{"factor_id":"momentum","binding_id":"binding","frequency":"1m","result_dataset_id":"prices","result_view_id":"view_prices","output":"value","column_name":"prices.momentum__value"}]
+}`))
+	require.NoError(t, err)
+	require.Equal(t, "view_prices", compiled.SourceView.ID)
+	require.Equal(t, []string{"view_prices"}, compiled.Dependencies.FactorResultViewIDs)
+}
+
 func TestCompileWithBindingsRejectsScheduleOnlyFactorStrategy(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: schedule-factor
 triggers: {schedule: {cron: "@daily"}}

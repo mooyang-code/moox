@@ -248,6 +248,8 @@ func methodAllowed(servicePath, method string) bool {
 		PrimaryStoreName: {
 			"UpsertFields": {}, "ReadFields": {}, "ReadTimeSeriesRows": {}, "ReadRecordRows": {},
 			"ReportCollectorPeriodCompleted": {}, "WaitViewSyncPoint": {},
+			"EnsureDatasetPeriod": {}, "CommitTimeSeriesBatch": {},
+			"RecordDatasetPeriodFailures": {}, "GetDatasetPeriodStatus": {},
 		},
 		MetadataName: {
 			"GetSubject": {}, "ListSubjects": {},

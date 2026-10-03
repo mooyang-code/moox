@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -16,9 +17,11 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
@@ -75,6 +78,97 @@ func TestNormalizeHostStorageTarget(t *testing.T) {
 	}
 }
 
+func TestBuildKlineFreshnessInventoryUsesTypedCollectorClientConfig(t *testing.T) {
+	oldFactory := collectorpb.NewCollectMgrClientProxy
+	var capturedTarget string
+	collectorpb.NewCollectMgrClientProxy = func(opts ...client.Option) collectorpb.CollectMgrClientProxy {
+		clientOptions := &client.Options{}
+		for _, option := range opts {
+			option(clientOptions)
+		}
+		capturedTarget = clientOptions.Target
+		return collectorInventoryClientStub{}
+	}
+	t.Cleanup(func() { collectorpb.NewCollectMgrClientProxy = oldFactory })
+
+	cfg := config.Default()
+	cfg.KlineFreshness.Enabled = true
+	cfg.KlineFreshness.CollectorGatewayTarget = "ip://collector-gateway:19091"
+	cfg.Metrics.Storage.GatewayTarget = "ip://storage-gateway:19091"
+	cfg.Metrics.Storage.GatewayNodeID = "gateway-test-node"
+	cfg.Metrics.Storage.KeyID = "monitor"
+	cfg.Metrics.Storage.HMACKeyFile = filepath.Join(t.TempDir(), "gateway.key")
+	require.NoError(t, os.WriteFile(cfg.Metrics.Storage.HMACKeyFile, []byte("test-gateway-secret\n"), 0o600))
+	if _, err := gatewayauth.ResolveCredentials(cfg.Metrics.Storage.KeyID, cfg.Metrics.Storage.HMACKeyFile); err != nil {
+		t.Fatalf("test credentials invalid: %v", err)
+	}
+
+	cache, err := buildKlineFreshnessInventory(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, cache)
+	require.Equal(t, "ip://collector-gateway:19091", capturedTarget)
+
+	disabled := *cfg
+	disabled.KlineFreshness.Enabled = false
+	cache, err = buildKlineFreshnessInventory(&disabled)
+	require.NoError(t, err)
+	require.Nil(t, cache)
+
+	invalid := *cfg
+	invalid.KlineFreshness.InventoryPageSize = 101
+	_, err = buildKlineFreshnessInventory(&invalid)
+	require.ErrorContains(t, err, "page size")
+}
+
+type collectorInventoryClientStub struct {
+	collectorpb.CollectMgrClientProxy
+}
+
+func TestKlineFreshnessCollectorRouteDoesNotReuseMetricsStorageRoute(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "gateway-default")
+	cfg := config.Default()
+	cfg.KlineFreshness.CollectorGatewayTarget = "ip://collector-gateway:11003"
+	cfg.KlineFreshness.CollectorGatewayNodeID = "collector-node"
+	cfg.Metrics.Storage.GatewayTarget = "ip://storage-gateway:11003"
+	cfg.Metrics.Storage.GatewayNodeID = "storage-node"
+
+	target, nodeID := klineFreshnessCollectorRoute(cfg)
+	require.Equal(t, "ip://collector-gateway:11003", target)
+	require.Equal(t, "collector-node", nodeID)
+
+	cfg.KlineFreshness.CollectorGatewayNodeID = ""
+	_, nodeID = klineFreshnessCollectorRoute(cfg)
+	require.Equal(t, "gateway-default", nodeID)
+}
+
+type bootstrapInventoryProvider struct {
+	snapshot monmetrics.TaskResultInventorySnapshot
+}
+
+func (p bootstrapInventoryProvider) FetchTaskResultInventory(context.Context) (monmetrics.TaskResultInventorySnapshot, error) {
+	return p.snapshot, nil
+}
+
+func TestKlineViewMetricScopesFollowFreshOwnedInventoryOnly(t *testing.T) {
+	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	cache, err := monmetrics.NewTaskResultInventoryCache(bootstrapInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
+		ID: "snapshot-1", ObservedAt: now,
+		Entries: []monmetrics.TaskResultInventoryEntry{
+			{SpaceID: "crypto", TaskID: "active", DatasetID: "dataset-a", ViewID: "view-a", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "disabled", DatasetID: "dataset-b", ViewID: "view-b", Frequency: "1m", Enabled: false, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "unowned", DatasetID: "dataset-c", ViewID: "view-c", Frequency: "1m", Enabled: true, OwnershipVerified: false, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "pending", DatasetID: "dataset-d", ViewID: "view-d", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "pending", ObservedAt: now},
+		},
+	}}, time.Minute, 10)
+	require.NoError(t, err)
+	_, err = cache.Get(t.Context(), now)
+	require.NoError(t, err)
+
+	scopes := klineViewMetricScopes(cache, now)
+	require.Equal(t, []monmetrics.ViewMetricScope{{SpaceID: "crypto", ViewID: "view-a", DatasetID: "dataset-a", Frequency: "1m"}}, scopes)
+	require.Nil(t, klineViewMetricScopes(cache, now.Add(time.Minute)))
+}
+
 func TestMaxInt(t *testing.T) {
 	if maxInt(3, 7) != 7 || maxInt(9, 2) != 9 {
 		t.Fatal("maxInt returned wrong value")
@@ -112,13 +206,13 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	disabled.Metrics.HostStorage.Enabled = false
 	startHostStorageGate(ctx, &disabled, rt, &hostmetrics.StorageGate{})
 
-	startObservabilityConsumer(ctx, nil, rt, nil, nil)
-	startObservabilityConsumer(ctx, &disabled, rt, nil, hostmetrics.NewStore(nil, nil))
+	startObservabilityConsumer(ctx, nil, rt, nil, nil, nil)
+	startObservabilityConsumer(ctx, &disabled, rt, nil, hostmetrics.NewStore(nil, nil), nil)
 	cfg.Observability.Enabled = false
-	startObservabilityConsumer(ctx, cfg, rt, nil, hostmetrics.NewStore(nil, nil))
+	startObservabilityConsumer(ctx, cfg, rt, nil, hostmetrics.NewStore(nil, nil), nil)
 	cfg.Observability.Enabled = true
-	startObservabilityConsumer(ctx, cfg, nil, nil, nil)
-	startObservabilityConsumer(ctx, cfg, &Runtime{}, nil, hostmetrics.NewStore(nil, nil))
+	startObservabilityConsumer(ctx, cfg, nil, nil, nil, nil)
+	startObservabilityConsumer(ctx, cfg, &Runtime{}, nil, hostmetrics.NewStore(nil, nil), nil)
 
 	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
@@ -256,8 +350,8 @@ func TestObservabilityWriteFailureRequiresSubsequentSuccess(t *testing.T) {
 
 	rt.recordObservabilityWriteSuccess()
 	ready, reason := rt.observabilityWriteReady(time.Now())
-	assert.True(t, ready)
-	assert.Empty(t, reason)
+	assert.True(t, ready, "failure=%d success=%d", rt.observabilityWriteFailed.Load(), rt.observabilityWriteOK.Load())
+	assert.Empty(t, reason, "failure=%d success=%d", rt.observabilityWriteFailed.Load(), rt.observabilityWriteOK.Load())
 }
 
 func TestHostWriteFailureIsNotClearedByMetricsSuccess(t *testing.T) {
@@ -270,8 +364,15 @@ func TestHostWriteFailureIsNotClearedByMetricsSuccess(t *testing.T) {
 
 	rt.recordHostWriteSuccess()
 	ready, reason := rt.observabilityWriteReady(time.Now())
-	assert.True(t, ready)
-	assert.Empty(t, reason)
+	assert.True(t, ready, "failure=%d success=%d", rt.hostWriteFailed.Load(), rt.hostWriteOK.Load())
+	assert.Empty(t, reason, "failure=%d success=%d", rt.hostWriteFailed.Load(), rt.hostWriteOK.Load())
+}
+
+func TestStoreWriteStateSequenceDoesNotRegress(t *testing.T) {
+	var sequence atomic.Int64
+	storeWriteStateSequence(&sequence, 2)
+	storeWriteStateSequence(&sequence, 1)
+	assert.EqualValues(t, 2, sequence.Load())
 }
 
 func TestMonitorHealthSnapshotRequiresHostStorageSchema(t *testing.T) {

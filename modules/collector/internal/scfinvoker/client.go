@@ -3,9 +3,12 @@ package scfinvoker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +28,11 @@ type Config struct {
 }
 
 const listMarketFetchersPageSize = 500
+
+var (
+	ErrRuntimeConfigSubmissionUnknown = errors.New("runtime config submission outcome is unknown")
+	ErrCollectorPublishLeaseStale     = errors.New("collector publish lease is expired or fenced")
+)
 
 type Client struct {
 	target    string
@@ -54,6 +62,14 @@ type InvocationResult struct {
 	Result       map[string]any
 	DurationMS   int64
 	BillDuration int64
+}
+
+type CollectorPublishLease struct {
+	SpaceID      string
+	LeaseID      string
+	HolderID     string
+	FencingToken int64
+	ExpiresAt    time.Time
 }
 
 func New(cfg Config) *Client {
@@ -139,13 +155,17 @@ func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patch
 		return "", err
 	}
 	var rsp cloudnodepb.SubmitNodeBatchRsp
-	if err := c.post(ctx, spaceID, "SubmitUpdateNodeRuntimeConfigs", raw, &rsp); err != nil {
+	if err := c.postRuntimeConfigSubmission(ctx, spaceID, raw, &rsp); err != nil {
 		return "", err
 	}
 	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
 		return "", fmt.Errorf("submit runtime configs: %s", rsp.GetRetInfo().GetMsg())
 	}
-	return rsp.GetJobId(), nil
+	jobID := strings.TrimSpace(rsp.GetJobId())
+	if jobID == "" {
+		return "", fmt.Errorf("%w: SubmitUpdateNodeRuntimeConfigs returned no job_id", ErrRuntimeConfigSubmissionUnknown)
+	}
+	return jobID, nil
 }
 
 // GetRuntimeConfigBatchStatus is used by Collector to distinguish an
@@ -171,6 +191,130 @@ func (c *Client) GetRuntimeConfigBatchStatus(ctx context.Context, spaceID, jobID
 		return nil, fmt.Errorf("get runtime config batch: empty job")
 	}
 	return rsp.GetJob(), nil
+}
+
+func (c *Client) AcquireCollectorPublishLease(ctx context.Context, spaceID, holderID string) (*CollectorPublishLease, error) {
+	spaceID, holderID = strings.TrimSpace(spaceID), strings.TrimSpace(holderID)
+	if spaceID == "" || holderID == "" {
+		return nil, fmt.Errorf("space_id and holder_id are required")
+	}
+	var response struct {
+		RetInfo struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		} `json:"ret_info"`
+		SpaceID      string          `json:"space_id"`
+		LeaseID      string          `json:"lease_id"`
+		FencingToken json.RawMessage `json:"fencing_token"`
+		ExpiresAt    string          `json:"expires_at"`
+	}
+	body, err := json.Marshal(map[string]string{"space_id": spaceID, "holder_id": holderID})
+	if err != nil {
+		return nil, err
+	}
+	if err := c.postService(ctx, spaceID, "AcquireCollectorPublishLease", body, &response); err != nil {
+		return nil, err
+	}
+	if response.RetInfo.Code != 0 {
+		return nil, fmt.Errorf("acquire collector publish lease: %s", response.RetInfo.Msg)
+	}
+	token, err := parsePublishFencingToken(response.FencingToken)
+	if err != nil {
+		return nil, err
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, response.ExpiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("decode collector publish lease expiry: %w", err)
+	}
+	if response.LeaseID == "" || token < 1 {
+		return nil, fmt.Errorf("collector publish lease response is incomplete")
+	}
+	return &CollectorPublishLease{SpaceID: response.SpaceID, LeaseID: response.LeaseID, HolderID: holderID, FencingToken: token, ExpiresAt: expiresAt}, nil
+}
+
+func (c *Client) RenewCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease) (*CollectorPublishLease, error) {
+	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
+		return nil, fmt.Errorf("collector publish lease identity is incomplete")
+	}
+	return c.updateCollectorPublishLease(ctx, lease, "RenewCollectorPublishLease")
+}
+
+func (c *Client) ReleaseCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease) error {
+	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
+		return fmt.Errorf("collector publish lease identity is incomplete")
+	}
+	var response struct {
+		RetInfo struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		} `json:"ret_info"`
+		Released bool `json:"released"`
+	}
+	body, err := json.Marshal(map[string]string{"space_id": lease.SpaceID, "lease_id": lease.LeaseID, "fencing_token": strconv.FormatInt(lease.FencingToken, 10)})
+	if err != nil {
+		return err
+	}
+	if err := c.postService(ctx, lease.SpaceID, "ReleaseCollectorPublishLease", body, &response); err != nil {
+		return err
+	}
+	if response.RetInfo.Code != 0 || !response.Released {
+		return fmt.Errorf("release collector publish lease rejected: %s", response.RetInfo.Msg)
+	}
+	return nil
+}
+
+func (c *Client) updateCollectorPublishLease(ctx context.Context, lease *CollectorPublishLease, method string) (*CollectorPublishLease, error) {
+	var response struct {
+		RetInfo struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		} `json:"ret_info"`
+		SpaceID      string          `json:"space_id"`
+		LeaseID      string          `json:"lease_id"`
+		FencingToken json.RawMessage `json:"fencing_token"`
+		ExpiresAt    string          `json:"expires_at"`
+	}
+	body, err := json.Marshal(map[string]string{"space_id": lease.SpaceID, "lease_id": lease.LeaseID, "fencing_token": strconv.FormatInt(lease.FencingToken, 10)})
+	if err != nil {
+		return nil, err
+	}
+	if err := c.postService(ctx, lease.SpaceID, method, body, &response); err != nil {
+		return nil, err
+	}
+	if response.RetInfo.Code != 0 {
+		if method == "RenewCollectorPublishLease" && response.RetInfo.Code == int(commonpb.ErrorCode_CONFLICT) {
+			return nil, fmt.Errorf("%w: %s", ErrCollectorPublishLeaseStale, response.RetInfo.Msg)
+		}
+		return nil, fmt.Errorf("%s: %s", method, response.RetInfo.Msg)
+	}
+	token, err := parsePublishFencingToken(response.FencingToken)
+	if err != nil {
+		return nil, err
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, response.ExpiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("decode collector publish lease expiry: %w", err)
+	}
+	if response.LeaseID != lease.LeaseID || token != lease.FencingToken {
+		return nil, fmt.Errorf("%s returned a different lease identity", method)
+	}
+	return &CollectorPublishLease{SpaceID: lease.SpaceID, LeaseID: lease.LeaseID, HolderID: lease.HolderID, FencingToken: token, ExpiresAt: expiresAt}, nil
+}
+
+func parsePublishFencingToken(raw json.RawMessage) (int64, error) {
+	value := strings.TrimSpace(string(raw))
+	if len(value) > 1 && value[0] == '"' {
+		var decoded string
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return 0, err
+		}
+		value = decoded
+	}
+	token, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || token < 1 {
+		return 0, fmt.Errorf("collector publish lease fencing_token is invalid")
+	}
+	return token, nil
 }
 
 func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (InvocationResult, error) {
@@ -207,6 +351,18 @@ func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[s
 }
 
 func (c *Client) post(ctx context.Context, spaceID, method string, body []byte, out proto.Message) error {
+	return c.postPath(ctx, spaceID, "/api/service/cloudnode/"+method, "cloudnode "+method, body, out, false)
+}
+
+func (c *Client) postService(ctx context.Context, spaceID, method string, body []byte, out any) error {
+	return c.postPath(ctx, spaceID, "/api/service/publishlease/"+method, "publishlease "+method, body, out, false)
+}
+
+func (c *Client) postRuntimeConfigSubmission(ctx context.Context, spaceID string, body []byte, out proto.Message) error {
+	return c.postPath(ctx, spaceID, "/api/service/cloudnode/SubmitUpdateNodeRuntimeConfigs", "cloudnode SubmitUpdateNodeRuntimeConfigs", body, out, true)
+}
+
+func (c *Client) postPath(ctx context.Context, spaceID, path, label string, body []byte, out any, unknownAfterSend bool) error {
 	if c == nil || c.httpError != nil {
 		if c == nil {
 			return fmt.Errorf("SCF invoker is nil")
@@ -216,28 +372,52 @@ func (c *Client) post(ctx context.Context, spaceID, method string, body []byte, 
 	if c.target == "" {
 		return fmt.Errorf("service gateway target is required")
 	}
-	path := "/api/service/cloudnode/" + method
 	req, err := runtimeapp.NewSignedRequestWithContextAndHeaders(ctx, http.MethodPost, c.target+path, body, map[string]string{"X-Space-Id": spaceID}, c.auth)
 	if err != nil {
 		return err
 	}
 	response, err := c.http.Do(req)
 	if err != nil {
+		if unknownAfterSend {
+			return fmt.Errorf("%w: %s request transport failed: %v", ErrRuntimeConfigSubmissionUnknown, label, err)
+		}
 		return err
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
+		if unknownAfterSend {
+			return fmt.Errorf("%w: read %s response: %v", ErrRuntimeConfigSubmissionUnknown, label, err)
+		}
 		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("cloudnode %s status=%d body=%s", method, response.StatusCode, string(responseBody))
+		if unknownAfterSend && response.StatusCode >= http.StatusInternalServerError {
+			return fmt.Errorf("%w: %s status=%d body=%s", ErrRuntimeConfigSubmissionUnknown, label, response.StatusCode, string(responseBody))
+		}
+		return fmt.Errorf("%s status=%d body=%s", label, response.StatusCode, string(responseBody))
 	}
 	if len(bytes.TrimSpace(responseBody)) == 0 || out == nil {
+		if unknownAfterSend && out != nil {
+			return fmt.Errorf("%w: %s returned an empty response", ErrRuntimeConfigSubmissionUnknown, label)
+		}
 		return nil
 	}
-	if err := protojson.Unmarshal(responseBody, out); err != nil {
-		return fmt.Errorf("decode cloudnode %s response: %w", method, err)
+	switch value := out.(type) {
+	case proto.Message:
+		if err := protojson.Unmarshal(responseBody, value); err != nil {
+			if unknownAfterSend {
+				return fmt.Errorf("%w: decode %s response: %v", ErrRuntimeConfigSubmissionUnknown, label, err)
+			}
+			return fmt.Errorf("decode %s response: %w", label, err)
+		}
+	default:
+		if err := json.Unmarshal(responseBody, value); err != nil {
+			if unknownAfterSend {
+				return fmt.Errorf("%w: decode %s response: %v", ErrRuntimeConfigSubmissionUnknown, label, err)
+			}
+			return fmt.Errorf("decode %s response: %w", label, err)
+		}
 	}
 	return nil
 }

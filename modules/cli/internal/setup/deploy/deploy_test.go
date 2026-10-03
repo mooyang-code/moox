@@ -363,7 +363,7 @@ func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 		UseControlGateway: true, EventBusPublicAddress: "eventbus.example.test",
 		EventBusPort: 4222, EventBusTLSEnabled: true,
 		StoragePrimarySecret: "primary-secret", StorageViewSecret: "view-secret",
-		StorageViewPolicy: setupconfig.StorageView{MaintenanceCheckInterval: "1m", RebuildLookbackPeriods: 777, MaxPeriodsPerSeries: 1600, MaxViewFileBytes: 805306368},
+		StorageViewPolicy: setupconfig.StorageView{MaintenanceCheckInterval: "1m", CapacityCheckInterval: "1h", CapacityCheckJitter: "1h", RebuildLookbackPeriods: 5000, MaxPeriodsPerSeries: 6000, MaxViewFileBytes: 805306368},
 		LocalLogs:         setupconfig.LocalLogs{MaxSizeMB: 88, BackupCount: 9},
 		HealthAuthVersion: "moox-health-v1", HealthAuthAccessKey: "monitor", HealthAuthSecretKey: "health-secret",
 	})

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 防止 Collector 运行记录持续增长拖慢任务页面，消除任务结果列表对 Storage 的同步扇出，并让动态 K 线结果在采集、Primary、View、API 和监控中保持可验证的新鲜度；时序 View 默认保留最近 5,000 根 K 线，任一序列超过 6,000 根时触发安全重建，容量扫描改为每小时一次并随机错峰。
+**Goal:** 防止 Collector 运行记录持续增长拖慢任务页面，消除任务结果列表对 Storage 的同步扇出，并让动态 K 线结果在采集、Primary、View、API 和监控中保持可验证的新鲜度；时序 View 默认保留最近 5,000 根 K 线，任一序列超过 6,000 根时触发安全重建。容量扫描由 Storage View Maintainer 调度：轻量维护仍每分钟运行，昂贵的容量统计按每个 View/active index 最多每小时一次，首次扫描使用 0–1 小时随机偏移以错峰。
 
 **Architecture:** Pebble Primary 继续作为在线事实数据权威，DuckDB View 作为可重建的查询投影。Collector 对终态运行明细实行有界保留，清理移出 Scheduler 前台路径并集中限速；任务列表直接返回本地轻量状态，只有用户查看的任务才刷新 Storage 结果元数据。View 沿用已有 A/B 构建与索引退役清理机制，只调整容量策略并补足端到端验收、动态结果新鲜度监控和发布门禁。
 
@@ -15,24 +15,24 @@
 - 计划基于 `feature/mooyang` 的 `39cb7d3b` 编写；更新本计划时该分支工作区仍有大量未提交变更，其中 View 容量调度、Collector 维护 runner、period 清理、执行明细回收等已有部分实现。执行前必须逐文件审阅 `git status` 与 `git diff`，把已有修改视为用户工作；不得覆盖、回滚或假设它们已经提交。以下任务描述的是目标合同，现有未提交代码只有经过测试和独立审查后才能勾选完成。
 - 按用户确认的新项目策略，不承担旧版数据兼容；可重新部署，但本计划执行时仍须保护正在执行、待重试或尚未获 Storage 明确终态确认的数据。计划编写阶段没有清空远端数据或部署服务；实现与发布必须分别记录代码验证和真实链路证据，任何手工数据清理仍要限定目标并先做 inventory/dry-run。
 - View 的 A/B 重建、容量触发、索引退役清理以及 Collector period bitmap/Storage 状态链路已经有实现；本计划不是重写这些机制，而是调整默认容量并补足有证据的生命周期、性能和发布门禁。
-- 当前 `maintenance_check_interval=1m` 驱动整个 View Maintainer，不只是容量查询。计划保留每分钟的轻量维护/修复循环，不把它整体放慢到 1 小时；每分钟循环只判断容量扫描是否到期，真正昂贵的序列行数统计按每个 Storage View 进程中的 `(View, active index)` 独立限频为每小时一次。随机偏移只用于容量扫描，不改变其它维护任务的频率。
+- 容量检查由 Storage 服务内现有的 View Maintainer 执行（`modules/storage/internal/service/view/maintenance.go`），不由 Collector 或 Monitor 发起，也不新增独立的 hourly cron、goroutine 或服务。`maintenance_check_interval=1m` 驱动整个 View Maintainer，不是容量扫描周期。保留每分钟的轻量维护/修复循环；每轮仅比较容量扫描是否到期，未到期时不得调用 `SeriesCapacity` 或其它逐序列容量统计 RPC/查询。昂贵的序列行数统计通过 `capacity_check_interval=1h` 按每个 Storage View 进程中的 `(View, active index)` 独立限频；首次扫描再以 `[0, 1h)` 随机偏移错开。这样不会把整个 Maintainer 降为每小时运行，也不会每分钟请求容量统计；错峰不改变其它维护任务频率。
 - 本计划不把 Collector/Storage SQLite 或 Pebble 全库定期重建作为容量方案。删除 Collector 执行历史不删除 Primary K 线事实；View 重建也不删除 Primary 历史。
 
 ## 已确认决策与保留建议
 
 1. 时序 View 每个 `(subject_id, frequency, series_tag)` 重建后保留最近 **5,000 根完整 K 线**。
-2. 任一序列物理行数 **超过 6,000 根**（即至少 6,001 根）即可触发容量重建；1 GiB View 文件硬上限仍独立生效。
+2. 任一采用有界保留的时序 View 序列物理行数 **超过 6,000 根**（即至少 6,001 根）即可触发容量重建；1 GiB 文件阈值对有界保留 View 也可独立触发安全重建。永久 View 超过 1 GiB 时只发出容量告警，不执行会截断历史的自动重建。
 3. 用户查询的逻辑 View ID 不变。新索引先在 inactive slot 构建并追平，CAS 激活后旧索引按现有无引用清理机制删除；不允许先删旧 View 再建新 View。
 4. 5,000/6,000 是全局时序 View 默认。`mooxsys` 和单 View override 必须解析为 `max_periods_per_series > rebuild_lookback_periods`；若不再需要旧的 1,000/2,000 显式覆盖，应更新或移除，避免遮蔽新默认。
-5. **（2026-10-03 已确认）** 容量行数检查独立设置为每个 `(Storage View 进程, View, active index)` 每 **1 小时**至多一次；这里的“每小时”指昂贵的容量统计，不是把整个 View Maintainer 改为每小时运行。首次容量扫描不立即执行，而是在进程启动/active index 首次可见后均匀随机延迟 `[0, 1h)`；之后固定按最近一次扫描**开始**时间加 1 小时调度，不按整点对齐，也不在每次扫描后再额外叠加 jitter。重启或 active index 切换后重新抽取首次偏移。保持 `capacity_check_jitter="1h"`。同一维护 loop 内的 View 扫描串行，同一个 active index 不得并发扫描。失败/超时也占用本次扫描周期，只能在下一次到期扫描重试，不能被每分钟的通用维护循环立即重试。容量扫描的实际启动时刻可能比计划到期时刻晚最多一个 `maintenance_check_interval`（默认 1 分钟）；独立随机初始相位用于降低多个 View/Storage 进程同时扫描的概率，不承诺跨 Storage 副本全局去重。
+5. **（2026-10-03 已确认）** 容量行数检查独立设置为每个 `(Storage View 进程, View, active index)` 每 **1 小时**至多一次；这里的“每小时”指昂贵的容量统计，不是把整个 View Maintainer 改为每小时运行。首次容量扫描在进程启动/active index 首次可见后均匀随机延迟 `[0, 1h)`，以分散多个 View 的首次扫描；之后按最近一次扫描**开始**时间加 1 小时调度，不按整点对齐，也不在每次扫描后额外叠加 jitter。重启或 active index 切换后重新抽取首次偏移。保持 `capacity_check_jitter="1h"`。同一维护 loop 内的 View 扫描串行，同一个 active index 不得并发扫描；多个到期 View 排队时按稳定、公平的顺序处理，不允许某个 View 长期饿死。失败/超时也占用本次扫描周期，只能在下一次到期扫描重试，不能被每分钟的通用维护循环立即重试。由于多个 View 串行扫描，实际启动时刻可能晚于计划到期时刻超过一个 `maintenance_check_interval`；不承诺到期后 1 分钟内必定启动，也不承诺跨 Storage 副本全局去重。必须记录容量扫描排队延迟/最老到期未扫描年龄，且不能通过追赶式并发扫描制造新的请求尖峰。
 
    | 调度项 | 配置 | 作用 |
    |---|---|---|
-   | 通用 View Maintainer | `maintenance_check_interval="1m"` | 继续每分钟处理轻量维护；未到容量扫描期限时只检查到期条件，不调用序列容量统计 RPC。 |
-   | 容量统计 | `capacity_check_interval="1h"` | 对每个 active index 至多每小时执行一次昂贵的逐序列行数检查。 |
+   | 通用 View Maintainer | `maintenance_check_interval="1m"` | 继续每分钟处理轻量维护；容量调度只做到期状态比较，未到期不调用 `SeriesCapacity` 或其它逐序列容量统计 RPC/查询。 |
+   | 容量统计 | `capacity_check_interval="1h"` | 对每个 active index 至多每小时执行一次昂贵的逐序列行数检查；由现有 1 分钟 Maintainer 检查是否到期，不额外启动独立定时任务。 |
    | 首次错峰 | `capacity_check_jitter="1h"` | 每个进程/View/index 在首次可见时独立抽取 `[0, 1h)` 初始延迟；后续按固定一小时周期，不逐轮重新随机。 |
 
-Collector 数据保留默认值定为：已被更新结果替代的终态 scheduled 执行明细保留 24 小时、scheduled Run 汇总保留 30 天、terminal retry 保留 7 天、period snapshot 保留 30 天；维护 worker 默认每分钟运行一次，timeout 45 秒，单轮总删除预算默认 50,000 行。预算包含 BatchItem 12,000、terminal Batch 500、terminal Retry 10,000、已替代 WriteTarget 12,000、per-Run TaskInstance 10,000、scheduled Run 汇总 4,000、terminal period snapshot 500、Timer manifest 1,000；按 Space 轮转公平分配，不能把每个 Space 都当成完整全局预算。期限、worker interval/timeout 和总预算都要进入 `[collector_retention]` 配置并有上下界校验；总预算最小 8 行（覆盖八类清理），最大 50,000 行。任何仍被活动 Batch、pending/dispatched Retry、未终态 Timer manifest 或 Storage waiting period 使用的记录不得因年龄到期而清除；对 K 线 WriteTarget，只有找到 Storage 明确的同 Dataset/frequency/period `complete` 或 `degraded` 状态才允许删除，缺少状态行和 `waiting` 均必须保留。若未来需要超过现有分项上限，必须同步提高对应 Repository 的硬上限和配置上限，不能只提高 `max_rows_per_pass`。
+Collector 数据保留默认值定为：已被更新结果替代的终态 scheduled 执行明细保留 24 小时、scheduled Run 汇总保留 30 天、terminal retry 保留 7 天、period snapshot 保留 30 天；维护 worker 默认每分钟运行一次，timeout 45 秒，单轮总删除预算默认 50,000 行，所有分项均按实际提交删除的物理数据库行计数。预算包含 BatchItem 11,500、terminal Batch 500、terminal Retry 10,000、已替代 WriteTarget 12,000、per-Run TaskInstance 10,000、scheduled Run 汇总 3,000、已上报且过期的 PeriodReadiness 1,000、terminal period snapshot/state 合计 1,000（最多 500 个 period）、Timer manifest 1,000；分项上限总和仍为 50,000。PeriodReadiness 预算只清理已成功上报的旧 readiness 父子行，并与 Storage period snapshot/state 预算分开计数；snapshot 与对应 state 每个 period 各计一条物理行，共享 1,000 行预算。按 Space 轮转公平分配，不能把每个 Space 都当成完整全局预算。期限、worker interval/timeout 和总预算都要进入 `[collector_retention]` 配置并有上下界校验；总预算最小 9 行（覆盖九类清理），最大 50,000 行。任何仍被活动 Batch、pending/dispatched Retry、未终态 Timer manifest、未上报 PeriodReadiness 或 Storage waiting period 使用的记录不得因年龄到期而清除；对 K 线 WriteTarget，只有找到 Storage 明确的同 Dataset/frequency/period `complete` 或 `degraded` 状态才允许删除，缺少状态行和 `waiting` 均必须保留。若未来需要超过现有分项上限，必须同步提高对应 Repository 的硬上限和配置上限，不能只提高 `max_rows_per_pass`。
 
 **重要数据模型约束：** market-fetch 的 `TaskInstance` 是一个 Collector Run 内的一次 Provider 请求执行，生产调度的 identity 包含 `run_id`；一个 instance 可由多个 CollectionTask 共享，具体任务/Dataset 输出关系由 `WriteTarget` 表示。因此它们不是稳定的任务定义或跨 Run 身份。24 小时回收只针对终态 scheduled Run 中已被同一启用任务、Dataset、subject、frequency 的更新 WriteTarget 替代的旧执行明细；保留每个启用目标的最新结果，保留活动 Run/Batch、Retry、Timer manifest 及所有 period 未获 Storage 明确终态确认的数据。`kline_resample`、manual/backfill 和无 Run 的维护身份不纳入这条回收规则。scheduled Run 汇总按独立的 30 天策略清理；任务定义与 Series/Dataset 配置不属于执行明细。禁止把“本地无 readiness/Storage 状态行”推断为 Storage 已终态，也禁止利用级联删除绕过上述保护。
 
@@ -44,7 +44,8 @@ Collector 数据保留默认值定为：已被更新结果替代的终态 schedu
 - 修改 `modules/cli/internal/setup/config/config.go`、`config_test.go`、`modules/cli/README.md`：CLI 配置默认、优先级解析、范围校验与用户说明。
 - 修改 `modules/storage/internal/config/loader.go` 及对应测试、`modules/storage/cmd/server/main.go`：Storage 直接启动的默认值与解析行为。
 - 修改 `modules/storage/config/storage_view/maintenance.json`、`trpc_go.yaml`、`storage.yaml` 中的对应默认项：各启动 profile 保持一致。
-- 修改 `modules/storage/internal/service/view/maintenance.go`、`maintenance_test.go`、`maintenance_capacity_cgo_test.go`：独立容量扫描周期、随机偏移、阈值、保留根数和 A/B 激活语义。
+- 修改 `modules/storage/internal/service/view/maintenance.go`、`maintenance_test.go`、`maintenance_capacity_cgo_test.go`、`modules/storage/internal/observability/view_metrics.go` 及测试：独立容量扫描周期、随机偏移、到期队列公平性与延迟观测、阈值、保留根数、容量调度状态生命周期和 A/B 激活语义。
+- 修改 `modules/storage/README.md`、`skills/moox/references/view-catchup.md`、`skills/moox/references/cli-operations.md` 和 `scripts/test/e2e/test-series-tag-e2e.sh`：同步运行说明、运维说明和 E2E policy fixture，移除会覆盖新默认的旧 1,000/2,000 值。
 
 ### Collector 生命周期与请求延迟
 
@@ -59,15 +60,15 @@ Collector 数据保留默认值定为：已被更新结果替代的终态 schedu
 
 ### Period 清理、可观测性与发布验证
 
-- 修改 `modules/collector/internal/marketfetch/period_storage_reconciler.go` 及其测试：增加有界分页和受限并发的 Storage 状态探测，确认清理吞吐长期大于过期 period 产生速率，并且仅凭 Storage 明确的 complete/degraded 状态清理快照。
+- 修改 `modules/collector/internal/marketfetch/period_storage_reconciler.go`、`modules/collector/internal/store/period_readiness.go` 及其测试：Storage 状态探测增加有界分页和受限并发；PeriodReadiness 已上报旧记录进入同一个 maintenance worker 的 1,000 行独立预算；仅凭 Storage 明确的 complete/degraded 状态清理 period snapshot/state。
 - 修改 `modules/collector/internal/marketfetch/metrics.go`、`metrics_runtime.go` 及 bootstrap wiring，覆盖数据库增长、清理积压、最老活动队列和最近成功时间；短时积压不得令 readiness 抖动。
-- 修改 `modules/cli/internal/command/collector.go` 与对应测试、`scripts/test/contract/` 中 Storage Gateway/AccessProxy 合同脚本：发布 canary 必须检查 SCF 业务结果并验证目标 View 数据，不以进程存活或 HTTP 200 代替。
-- 扩展 `modules/collector/internal/marketfetch/period_storage_rpc_e2e_test.go`、Storage Primary/DataNode/AccessProxy 测试与发布验收脚本：覆盖实际生产代理路径、Timer 和 Invoke period binding、Primary 写入及 View 可读结果。
+- 修改 `modules/cli/internal/command/collector.go` 与对应测试、`scripts/test/contract/` 中 Storage Gateway/AccessProxy 合同脚本：发布 canary 必须在副作用前独占预留目标 period，并检查本次 SCF 业务结果和目标 View 数据，不以进程存活或 HTTP 200 代替。
+- 扩展 `modules/storage/proto/data_node.proto`、Storage Primary/DataNode/Pebble/AccessProxy 测试及 `modules/collector/internal/marketfetch/period_storage_rpc_e2e_test.go`：覆盖 canary period reservation owner 在 Storage 持久化、生产代理路径、Timer 和 Invoke period binding、Primary 写入及 View 可读结果。
 - 修改 `modules/monitor/internal/metrics/kline_freshness.go`、`kline_freshness_test.go`、`modules/monitor/internal/config/config.go`、配置测试及 `modules/monitor/config/app.yaml`：动态 task-owned View 纳入新鲜度告警，不再只盯固定的 `view_binance_spot_kline_1m`。
 
 ## Task 1：统一 View 默认容量为 5,000/6,000
 
-**Files:** `modules/storage/internal/service/view/{maintenance.go,maintenance_test.go,maintenance_capacity_cgo_test.go}`、`modules/storage/internal/config/loader.go` 及测试、`modules/storage/cmd/server/main.go`、`modules/storage/config/storage_view/{maintenance.json,trpc_go.yaml,storage.yaml}`、`modules/cli/internal/setup/config/{config.go,config_test.go}`、`moox.toml`、`moox.toml.example`。
+**Files:** `modules/storage/internal/service/view/{maintenance.go,maintenance_test.go,maintenance_capacity_cgo_test.go}`、`modules/storage/internal/config/loader.go` 及测试、`modules/storage/cmd/server/main.go`、`modules/storage/config/storage_view/{maintenance.json,trpc_go.yaml,storage.yaml}`、`modules/cli/internal/setup/config/{config.go,config_test.go}`、`modules/storage/README.md`、`skills/moox/references/{view-catchup.md,cli-operations.md}`、`scripts/test/e2e/test-series-tag-e2e.sh`、`moox.toml`、`moox.toml.example`。
 
 - [ ] **Step 1：先增加配置合同测试。** 覆盖全局默认 `rebuild_lookback_periods=5000`、`max_periods_per_series=6000`、`max_view_file_bytes=1073741824`、`capacity_check_interval="1h"`、`capacity_check_jitter="1h"`；覆盖 `mooxsys` 与 `view_binance_spot_kline_1m` 的解析后值；覆盖非法的 `max <= lookback`、jitter 大于 interval、非正值和超过 24 小时的间隔仍被拒绝。
 - [ ] **Step 2：运行配置测试确认失败。**
@@ -79,8 +80,8 @@ cd ../storage
 go test ./internal/config ./internal/service/view -run 'Test.*View.*(Policy|Capacity|Rebuild)' -count=1
 ```
 
-- [ ] **Step 3：同步所有运行默认与 override。** 更新 CLI 默认、Storage loader/server 默认、`moox.toml`、示例和 Storage profile。所有生效配置保持 lookback 5,000、单序列阈值 6,000、容量扫描周期 1 小时、jitter 上限 1 小时；通用 `maintenance_check_interval` 仍为 1 分钟，不改 1 GiB 文件硬上限；删除或同步旧 1,000/2,000 覆盖，禁止只改示例而遗漏运行配置。
-- [ ] **Step 4：锁定容量扫描和重建行为。** 注入时钟与 jitter source，验证启动时通用 View Maintainer 仍立即完成首轮维护、容量扫描按 `(进程, View, active index)` 的随机相位错开、每个 active index 每个 1 小时窗口最多执行一次 `SeriesCapacity`，失败/超时不会被每分钟的通用循环热重试而会在下一次到期扫描重试；同一 active index 的扫描不得并发，单个 maintainer loop 内的 View 扫描保持串行。用固定 jitter source 模拟多个 View 和多个 Storage View 实例，验证首轮扫描按各自相位落在 `[0, 1h)`，而非启动即同时扫描或统一对齐整点；这是降低集中请求概率的错峰，不承诺跨进程绝无时间碰撞。维护循环仍可每分钟执行其它必要检查，扫描启动比到期时刻晚最多 1 分钟。测试 6,000 根不因序列行数触发，6,001 根触发；重建后每个序列最多保留最新 5,000 根；文件大小超过 1 GiB 仍可独立触发；inactive 构建失败时 active slot 不变；激活后旧物理索引只有在无引用后才被现有 Cleanup Timer 回收。
+- [ ] **Step 3：同步所有运行默认与说明。** 更新 CLI 默认、Storage loader/server 默认、`moox.toml`、示例、Storage profile、series-tag E2E policy fixture 和运维文档。所有生效配置保持 lookback 5,000、单序列阈值 6,000、容量扫描周期 1 小时、jitter 上限 1 小时；通用 `maintenance_check_interval` 仍为 1 分钟；1 GiB 文件阈值只自动重建有效保留策略有界的 View，永久 View 超限时导出告警且不得因该阈值反复重建。删除或同步旧 1,000/2,000 覆盖，禁止只改示例而遗漏运行配置或文档。
+- [ ] **Step 4：锁定容量扫描和重建行为。** 注入时钟与 jitter source，验证启动时通用 View Maintainer 仍立即完成首轮轻量维护、昂贵容量扫描按 `(进程, View, active index)` 的随机初始相位错开、每个 active index 任意 1 小时窗口最多执行一次 `SeriesCapacity`，失败/超时不会被每分钟的通用循环热重试而会在下一次到期扫描重试；同一 active index 的扫描不得并发，单个 maintainer loop 内的 View 扫描保持串行。用固定 jitter source 模拟多个 View 和多个 Storage View 实例，验证首次扫描按各自偏移分布在 `[0, 1h)`，后续按各自最近一次扫描开始时间加 1 小时执行，而非统一对齐整点；这是降低集中请求概率的错峰，不承诺跨进程绝无时间碰撞。加入多个 View 同时到期的测试，验证确定性排队顺序、不会追赶式并发补扫；记录 `moox_storage_view_capacity_scan_queue_delay_seconds` 和 `moox_storage_view_capacity_scan_oldest_overdue_seconds`，确认维护循环串行排队时延可观测且没有“最多晚 1 分钟”的硬保证。每轮以完整 active View/index inventory 清除已删除/停用 View 和已切换 active index 的调度状态，并验证反复创建/删除 View 不会令容量调度 map 无界增长。测试 6,000 根不因序列行数触发，6,001 根对采用逐序列有界保留的时序 View 触发；重建后每个序列最多保留最新 5,000 根；有界保留 View 超过 1 GiB 时也可独立触发，永久 View 超限应使 `moox_storage_view_permanent_view_capacity_over_limit` 大于零、记录一次告警且不重复启动文件容量重建；inactive 构建失败时 active slot 不变；激活后旧物理索引只有在无引用后才被现有 Cleanup Timer 回收。
 - [ ] **Step 5：运行配置、Storage View 和 CLI 定向测试。**
 
 ```bash
@@ -98,7 +99,7 @@ go test ./internal/config ./internal/service/view ./internal/service/catalog ./c
 
 **Files:** `moox.toml`、`moox.toml.example`、`modules/cli/internal/setup/config/{config.go,runtime_config.go}` 及测试、`modules/collector/internal/bootstrap/{config.go,bootstrap.go}` 及测试、`modules/collector/internal/store/{run.go,run_retention.go,fetch_batch.go,fetch_retry.go,task_instance.go,write_target.go}` 及相邻测试、`modules/collector/schema/collector.sql`、`modules/collector/internal/store/database.go`。
 
-- [ ] **Step 1：定义 retention 配置和保护规则测试。** 在 `[collector_retention]` 中设置 `maintenance_interval="1m"`、`maintenance_timeout="45s"`、`max_rows_per_pass=50000`、`execution_detail_retention="24h"`、`scheduled_run_summary_retention="720h"`、`terminal_retry_retention="168h"`、`period_snapshot_retention="720h"`。拒绝非正值、timeout 大于 interval、超过 365 天的期限和每轮删除上限小于 8 行或超过 50,000 行。fixture 覆盖 planned/active Run、活动 Batch、pending/dispatched Retry、未终态 Timer manifest、Storage waiting/状态缺失、已 complete/degraded period、被新结果替代的旧执行记录、每个启用目标的最新结果、disabled task、manual/backfill 与 `kline_resample`；确认活动工作和未获 Storage 明确终态确认的数据不被误删。
+- [ ] **Step 1：定义 retention 配置和保护规则测试。** 在 `[collector_retention]` 中设置 `maintenance_interval="1m"`、`maintenance_timeout="45s"`、`max_rows_per_pass=50000`、`execution_detail_retention="24h"`、`scheduled_run_summary_retention="720h"`、`terminal_retry_retention="168h"`、`period_snapshot_retention="720h"`。拒绝非正值、timeout 大于 interval、超过 365 天的期限和每轮删除上限小于 9 行或超过 50,000 行；拒绝 `period_readiness.parent_retention` 非正或超过 365 天以及非正 `item_retention`。fixture 覆盖 planned/active Run、活动 Batch、pending/dispatched Retry、未终态 Timer manifest、未上报/已上报 PeriodReadiness、Storage waiting/状态缺失、已 complete/degraded period、被新结果替代的旧执行记录、每个启用目标的最新结果、disabled task、manual/backfill 与 `kline_resample`；确认活动工作和未获 Storage 明确终态确认的数据不被误删。
 - [ ] **Step 2：先运行新测试确认清理 API 不存在或行为不符。**
 
 ```bash
@@ -106,21 +107,21 @@ cd modules/collector
 go test ./internal/store -run 'Test.*(Retention|Cleanup|PreserveActive)' -count=1
 ```
 
-- [ ] **Step 3：实现限量分批、space-scoped 清理。** 每轮全局总删除预算最多 50,000 行，短事务并按老记录优先分配：BatchItem 12,000、terminal Batch 500、terminal Retry 10,000、已替代的 WriteTarget 12,000、对应 per-Run TaskInstance 10,000、scheduled Run 汇总 4,000、terminal period snapshot 500、terminal Timer manifest 1,000；分项总和不得超过全局预算。清理超过 24 小时且已被更新结果替代的终态 scheduled 执行明细、30 天前的 terminal scheduled Run 汇总、7 天前且不再被活动工作引用的 terminal Retry、30 天前且 Storage 已确认终态的 period snapshot。仅当 K 线 period 有 Storage 明确的同键 `complete`/`degraded` 状态时，才能删除其 WriteTarget；状态缺失或 `waiting` 必须保留。最新目标结果、活动 Run/Batch、pending/dispatched Retry、未终态 Timer manifest、manual/backfill 与 `kline_resample` 不受此回收规则影响。WriteTarget 删除后，只能删除已无目标和其它活动引用的对应 per-Run TaskInstance；任务定义不属于这条 TTL。
+- [ ] **Step 3：实现限量分批、space-scoped 清理。** 每轮全局总删除预算最多 50,000 个实际提交删除的物理数据库行，短事务并按老记录优先分配：BatchItem 11,500、terminal Batch 500、terminal Retry 10,000、已替代的 WriteTarget 12,000、对应 per-Run TaskInstance 10,000、scheduled Run 汇总 3,000、已上报且超过 `period_readiness.parent_retention` 的 PeriodReadiness 父子行 1,000、terminal period snapshot/state 合计 1,000（最多 500 个 period）、terminal Timer manifest 1,000；分项上限总和不得超过全局预算。PeriodReadiness 清理仅涉及已上报记录，按 `item_retention` 保留每个 Dataset/frequency 最新 readiness，并按实际删除的父/子物理行计入 1,000 行预算；Period snapshot 和对应 state 各计一条物理行，仍共享独立的 1,000 行预算。清理超过 24 小时且已被更新结果替代的终态 scheduled 执行明细、30 天前的 terminal scheduled Run 汇总、7 天前且不再被活动工作引用的 terminal Retry、30 天前且 Storage 已确认终态的 period snapshot/state。仅当 K 线 period 有 Storage 明确的同键 `complete`/`degraded` 状态时，才能删除其 WriteTarget；状态缺失或 `waiting` 必须保留。最新目标结果、活动 Run/Batch、pending/dispatched Retry、未上报 PeriodReadiness、未终态 Timer manifest、manual/backfill 与 `kline_resample` 不受此回收规则影响。WriteTarget 删除后，只能删除已无目标和其它活动引用的对应 per-Run TaskInstance；任务定义不属于这条 TTL。
 - [ ] **Step 4：增加查询索引并验证初始化。** 对 space/status/terminal timestamp/primary key 清理条件新增可复用索引；新项目只要求当前 schema 可从空库正确初始化并可重复启动，不要求兼容历史 schema 或旧版 Collector 运行记录。测试 `EXPLAIN QUERY PLAN` 命中清理索引，避免全表排序或扫描。
-- [ ] **Step 5：复用并协调现有 Batch/Retry 清理。** 将终态 Batch/BatchItem TTL 固定为 24 小时、terminal Retry TTL 固定为 7 天；测试证明清理不会删除每个启用目标的最新结果、Storage 状态缺失/等待的 K 线 WriteTarget 或 pending/dispatched Retry 依赖的目标。terminal retry 的 7 天诊断记录独立保留；只有符合 per-Run 明细回收条件且引用关系安全时，才回收对应实例/目标。
+- [ ] **Step 5：复用并协调现有 Batch/Retry 清理。** 将终态 Batch/BatchItem 的基础 TTL 定为 24 小时、terminal Retry 的基础 TTL 定为 7 天；活动引用可延长实际保留期。测试证明清理不会删除每个启用目标的最新结果、Storage 状态缺失/等待的 K 线 WriteTarget 或 pending/dispatched Retry 依赖的目标。任何仍允许 late completion 执行 effects 的 Batch 都必须继续保护其 terminal Retry fence 和 `batch_items` scope membership，包括 `timed_out && !late_completion`；两者至少保留到首个 late completion 原子地将 `c_late_completion` 置为 true。关联须按精确 retry key/source event 或 sync point 识别，不能只依赖可为空的 instance/WriteTarget 投影。timer manifest 保留的 Batch 及其仍需 late completion 的关联也必须保留。terminal retry 的 7 天诊断记录独立保留；只有符合 per-Run 明细回收条件且引用关系安全时，才回收对应实例/目标。增加清理后 late completion 与 malformed `RequestJSON.items` 元素的回归测试，证明旧 completion 不会重新创建 retry/重复应用 effects，异常 JSON 不会卡住整页清理。
 - [ ] **Step 6：测试幂等、故障恢复和并发。** 对清理前后重跑、删除中断、并发 completion、Batch 晚到回调、Retry 重新 dispatch 进行测试；清理失败不得推进水位或误删下一页数据。
 
-**验收：** 数据量持续增长时可清理的终态 Run、Batch/BatchItem、Retry 与已被替代的 per-Run 执行明细保持在配置保留窗内；最新目标结果、活动/可恢复工作及 Storage 未明确终态确认的 K 线数据不被清理；每轮全局清理不超过 50,000 行且按 Space 公平分配，重复执行安全；scheduled Run 汇总与执行明细的保留策略彼此独立。
+**验收：** 数据量持续增长时可清理的终态 Run、Batch/BatchItem、Retry、已上报旧 PeriodReadiness 与已被替代的 per-Run 执行明细保持在配置保留窗内；最新目标结果、活动/可恢复工作、未上报 PeriodReadiness 及 Storage 未明确终态确认的 K 线数据不被清理；每轮全局清理不超过 50,000 行且按 Space 公平分配，重复执行安全；scheduled Run 汇总与执行明细的保留策略彼此独立。
 
 ## Task 3：将维护清理移出 Scheduler 前台并确保 period backlog 可收敛
 
 **Files:** `modules/collector/internal/marketfetch/scheduler.go` 及测试、process-level maintenance runner、`modules/collector/internal/bootstrap/bootstrap.go`、`modules/collector/internal/marketfetch/period_storage_reconciler.go` 及测试、相关配置。
 
 - [ ] **Step 1：增加 Scheduler 不等待清理的回归测试。** 用阻塞 cleanup fake 证明 Tick 在其自身计划和 SCF dispatch 预算内返回；多个 Space 共用一个进程级维护队列，不能每个 Scheduler 独立启动相同的全库清理。
-- [ ] **Step 2：把 Batch、Retry、Run 和执行明细维护接入唯一 worker。** worker 使用一个串行/coalescing 队列、45 秒超时和每轮 50,000 行全局预算；Scheduler Tick 只发起非阻塞唤醒，不在 `return` 前做清理；按 Space 轮转并分摊各类额度；SQLite 连接数不因并发 worker 增加。scheduled Run 仅清理 30 天前、终态且不再被最新目标执行或 Timer manifest 引用的汇总。所有 Storage status client/reconciler 必须在 `MaintenanceRunner.Start` 前构造完毕，启动后 runtime 字段只读。
-- [ ] **Step 3：为 period snapshot 设置可证明的清理吞吐。** 保持先分页探测 Storage 状态、仅确认 complete/degraded 后回收的规则；按最老候选 cursor 轮转多个 Dataset/frequency，每 Space 每轮最多读取 500 个 snapshot 候选、探测 500 个 waiting state、删除 500 个已确认终态 snapshot；Storage RPC 全进程并发最多 10，单轮仍受 45 秒全局 timeout 限制。一个失败 probe 不得卡住整页或永久钉住 cursor。以每分钟新增 300 个过期候选的持续模拟验证 backlog 收敛，并记录 RPC 数、清理耗时和最老过期 snapshot 年龄；若实测生产新增速率超过该验收负载，必须提高受配置约束的预算后再发布。
-- [ ] **Step 4：复核 Timer 与 Invoke 两条周期链。** 测试 Timer 请求带正确 period、series index/hash/count，Timer manifest 绑定并终态清理；Invoke 重试耗尽会经生产代理上报失败；Primary/DataNode 拒绝错误凭据或不匹配身份；late report 的终态响应不能被 Collector 当成成功确认。
+- [ ] **Step 2：把 Batch、Retry、Run、PeriodReadiness 和执行明细维护接入唯一 worker。** worker 使用一个串行/coalescing 队列、45 秒超时和每轮 50,000 行全局预算；Scheduler Tick 只发起非阻塞唤醒，不在 `return` 前做清理；按 Space 轮转并分摊九类额度；SQLite 连接数不因并发 worker 增加。scheduled Run 只清理 30 天前、终态且不再被最新目标执行或 Timer manifest 引用的汇总；PeriodReadiness 只清理已上报且满足父记录/最新 item 保留策略的数据。所有 Storage status client/reconciler 必须在 `MaintenanceRunner.Start` 前构造完毕，启动后 runtime 字段只读。
+- [ ] **Step 3：为 period snapshot 设置可证明的清理吞吐。** 保持先分页探测 Storage 状态、仅确认 complete/degraded 后回收的规则；按最老候选 cursor 轮转多个 Dataset/frequency，每 Space 每轮最多读取 500 个 snapshot 候选、探测 500 个 waiting state、最多删除 500 个已确认终态 period（即 snapshot 与 state 最多各 500 行）；这些物理删除统一计入全进程 period snapshot/state 1,000 行分项预算以及 50,000 行总预算。Storage RPC 全进程并发最多 10，单轮仍受 45 秒全局 timeout 限制。一个失败 probe 不得卡住整页或永久钉住 cursor。以每分钟新增 300 个过期候选的持续模拟验证 backlog 收敛（最多 600 条物理行/min，周期预算留有余量），并记录 RPC 数、清理耗时和最老过期 snapshot 年龄；若实测生产新增速率超过该验收负载，必须提高受配置约束的预算后再发布。
+- [ ] **Step 4：复核 Timer 与 Invoke 两条周期链和 timeout recovery。** 测试 Timer 请求带正确 period、series index/hash/count，Timer manifest 绑定并终态清理；Invoke 重试耗尽会经生产代理上报失败；Primary/DataNode 拒绝错误凭据或不匹配身份；late report 的终态响应不能被 Collector 当成成功确认。timeout recovery 遇到无法解析的 batch `RequestJSON` 或确定性 contract poison 时，必须持久记录隔离/终态并继续处理同一有界页中的后续批次；瞬时持久化错误可重试，但不能让最老坏记录永久占满 recent/historical recovery quota。测试同一页后续批次及下一轮仍能恢复，并验证 poison 不会被悄悄当作成功。
 - [ ] **Step 5：运行 Collector/Storage 定向集成测试。**
 
 ```bash
@@ -162,13 +163,15 @@ pnpm exec vue-tsc --noEmit
 
 ## Task 5：让动态 K 线新鲜度、数据库压力和发布结果可见
 
-**Files:** Collector/Storage 当前 metrics 实现、`modules/monitor/config/app.yaml` 和对应测试、`modules/cli/internal/command/collector.go` 及测试、`scripts/test/contract/`、period RPC E2E 测试。
+**Files:** Collector/Storage 当前 metrics 实现、`modules/monitor/config/app.yaml` 和对应测试、`modules/cli/internal/command/collector.go` 及测试、`modules/cli/internal/command/collector_publish_lease.go`、`modules/admin/proto/collector_publish_lease_service.proto`、`modules/admin/internal/service/publishlease/`、`modules/admin/internal/bootstrap/`、`modules/admin/internal/service/sysdeploy/defaults.go`、`modules/admin/schema/admin.sql`、`modules/cloudnode/internal/publishlease/`、`modules/cloudnode/internal/rpc/publish_fence.go`、`config/setup/service-deployments.yaml`、`scripts/test/contract/`、period RPC E2E 测试。
 
-> **当前安全状态（2026-10-03）：** 独立 period/Primary/View 正向证明合同尚未实现；CLI 当前必须对 manifest 与 ad-hoc 发布、Timer 与 Invoke 发布、空区域计划一律 fail closed，并在账号注册、上传包和节点/Timer 变更前退出。这只是防止无证明发布的临时安全门，不代表 canary 或 Task 5 已完成；Step 3 必须保持未勾选，直到可绑定同一目标 period/序列/View 并通过发布级验证。
+> **当前实施状态（2026-10-03）：** 本工作区已实现 canary period 的 Storage 独占 reservation ID、SCF 请求/Primary commit/失败上报的 token 透传、唯一 canary 函数名前缀，以及 Admin 持久化发布租约和单调 fencing token。CloudNode 对每个相关 Provider attempt 原子申请有期 operation claim 并在执行期间续租；Admin 在 claim 释放或到期前拒绝签发下一代 token。Create、deploy、Timer runtime-config、delete 和发布失败清理均传递并校验 fence，市场采集节点会持久记录 fenced 身份。StockCN 周末/节假日候选选择已按 Provider 历史窗口处理并有测试，生产 `dataNodeProxyAdapter` 已转发 period RPC，Primary Ensure 已要求写权限，late failure disposition 已校验。Admin、CLI、CloudNode 的全模块测试和构建已通过；本轮独立 code review 正在复核 operation claim、异步批次和所有生产入口的 fencing 完整性，因此在审查完成并补齐发现的问题前不勾选 Step 3。当前 `moox.toml` 的 crypto/StockCN 生效项仍缺必需的 `canary_task_id`；部署前必须创建并配置各 Space 专用、禁用、单序列的 canary task，并用真实 manifest 做预检。真实部署、生产 SCF/Primary/View 三路 E2E、结果页及长时间保留验收仍未完成，不能宣称发布 canary 或 Task 5 达标。若任一生产入口未执行预检，或不能证明数据属于本次不可变产物和 reservation，仍必须 fail closed。
+
+> **（2026-10-03 已确认）并发发布与激活 fencing。** Admin 按 Space 持久化单调递增的发布 fencing token 和有期限租约。CLI 必须在首次 canary period reservation、包上传或节点变更前取得租约，整个发布/激活过程中续租，并在 CloudNode 所有相关异步批次终态后释放；独立激活入口使用相同协议。CloudNode 仅对 `collector/market_fetcher` 函数的创建、部署、Timer 运行时配置变更接受发布 token，并在每次 Provider 执行尝试前通过受 HMAC Gateway ACL 保护的 Admin 校验接口确认 token 仍是该 Space 当前有效代次。缺少 token、租约过期/被更高代次取代、Admin 校验不可用时均 fail closed；失败回滚必须继续携带原 token，过期后不得影响后续发布。控制面不能验证时不得退化为“仅 CLI 单进程锁”或缓存节点快照。
 
 - [ ] **Step 1：确定并测试关键运行指标。** 暴露 Collector DB/WAL bytes、Runs/Instances/WriteTargets/Batches/Retry/period snapshot 行数、每轮删除行数和耗时、最老 pending/dispatched Retry、最老 period waiting/snapshot 清理候选、Scheduler planning/dispatch 最近成功时间。标签只使用有限基数维度（Space、状态、频率），不把 subject/task ID 写成 Prometheus label。
-- [ ] **Step 2：增加动态 task-owned View freshness 信号。** 先补齐并测试一个 authoritative、分页且有总量上限的 active task-result inventory 合同，至少返回经过 ownership 校验的 `space/task/dataset/view/frequency/market-calendar`、最近完成 period、View 最近数据时间及观测时间，并能表达 task 禁用/删除和结果身份变更；Monitor 当前静态配置和 Storage metrics 不足以推断这些身份，不得反向扫描无界 metrics 或把 task/subject ID 加为 Prometheus label。再复用 `moox_storage_view_dataset_output_last_data_time_seconds`，按该 inventory 汇总最近完成周期与最近 View 数据时间，提供 stale age，并在有界刷新 TTL 内处理禁用、删除和 View 变更。监控配置不再只绑定静态 Binance View 名称。短暂任务 backlog 不直接令服务 readiness 失败。
-- [ ] **Step 3：加强发布 canary。** SCF canary 同时要求函数返回 `success=true`、目标 period 状态为 `complete`、Primary 存在目标 K 线行、View 对同一 subject/frequency 查询到新 period；`success=false` 即使 RPC transport 无 error 也算失败。必须在任何账号注册、SCF 包上传或节点/Timer 变更前确认目标周期/序列/View 身份已绑定且三路独立读校验可用；校验合同未实现时，所有公开发布入口（manifest/ad-hoc、Timer/Invoke、空区域计划）都必须在预检阶段拒绝，Timer-only 不得绕过验证要求；不能在部署 Invoke 节点后才报 canary 失败。`degraded` 只由独立故障场景测试验证，不作为正常发布 canary 通过条件。
+- [ ] **Step 2：增加动态 task-owned View freshness 信号。** 先补齐并测试一个 authoritative、分页且有总量上限的 active task-result inventory 合同，至少返回经过 ownership 校验的 `space/task/dataset/view/frequency/market-calendar`、最近完成 period、View 最近数据时间及观测时间，并能表达 task 禁用/删除和结果身份变更；Monitor 当前静态配置和 Storage metrics 不足以推断这些身份，不得反向扫描无界 metrics 或把 task/subject ID 加为 Prometheus label。再复用 `moox_storage_view_dataset_output_last_data_time_seconds`，按该 inventory 汇总最近完成周期与最近 View 数据时间，提供 stale age，并在有界刷新 TTL 内处理禁用、删除和 View 变更。Inventory 刷新成功、失败和缓存 stale age 必须有独立的低基数指标；刷新失败时不得静默跳过整轮 K 线结果上报，运维应能区分结果 API/inventory 故障与数据本身过期。监控配置不再只绑定静态 Binance View 名称。短暂任务 backlog 不直接令服务 readiness 失败。
+- [ ] **Step 3：加强发布 canary。** 每个启用的 SCF Space 必须配置一个真实、专用、禁用、单序列 `canary_task_id`，并在 manifest 合同测试中验证 active `moox.toml` 和 `moox.toml.example` 的解析行为；缺少、禁用状态不符、非单序列或 Dataset/View ownership 不匹配必须在注册账号、上传包或改节点前拒绝。SCF canary 同时要求函数返回 `success=true`、目标 period 状态为 `complete`、Primary 存在目标 K 线行、View 对同一 subject/frequency 查询到新 period；`success=false` 即使 RPC transport 无 error 也算失败。发布必须在任何账号注册、SCF 包上传或节点/Timer 变更前，通过 Storage `EnsureDatasetPeriod` 原子预留一个未使用的目标 period，并携带本次发布唯一 reservation ID；Storage 对 reservation ID 持久化，在 period `waiting` 时拒绝其它 reservation/无 token 写入，SCF 请求和 Primary commit/failure report 必须保留相同 token。并发发布碰到已预留 period 时只能另选候选 period，不能共用同一 canary proof。Crypto 和 StockCN 的候选 canary 均部署到以 reservation ID 隔离的临时 Invoke 函数，必须验证读回函数的 `package_id` 与本次上传的精确 ID 一致，不能借用可被并发发布覆盖的生产 Invoke 节点。StockCN 激活还必须按发布结果为每个启用地域提供精确 package ID，逐节点校验 Timer/Invoke 的包身份；只匹配版本字符串不够。StockCN 闭市时段必须沿交易日历选择可验证的最近目标 period，同时遵守被选 Provider 的历史窗口；不得仅移除 23 小时门限或通过改写 HistoryAsOf 绕过 Provider 能力。需覆盖周末、节假日、周一开盘前和 Provider 历史窗口边界；若当时没有可验证的数据源，则在任何发布副作用前拒绝/延后 canary。预留、产物绑定或三路独立读校验合同不可用时，所有公开发布入口（manifest/ad-hoc、Timer/Invoke、空区域计划）都必须在预检阶段拒绝，Timer-only 不得绕过验证要求；不能在部署 Invoke 节点后才报 canary 失败。`degraded` 只由独立故障场景测试验证，不作为正常发布 canary 通过条件。
 - [ ] **Step 4：增加网关合同回归。** 从同一测试合同验证 AccessProxy、Admin Gateway 默认白名单包含 period Ensure/Commit/Failure/Status RPC；通过生产 `dataNodeProxyAdapter` 测试请求 node_id 被正确绑定和调用被转发，覆盖 read-only/invalid auth 拒绝写操作。
 - [ ] **Step 5：运行 CLI 和合同脚本测试。**
 
@@ -179,7 +182,7 @@ cd ../..
 scripts/test/contract/test-deploy-moox-control-profile.sh
 ```
 
-**验收：** 运维能从指标区分“没有执行”“SCF 成功但没写 Primary”“Primary 有数据但 View 未追平”“结果 API 过期”；发布 canary 会因业务返回失败或目标 View 缺新 K 线而失败。
+**验收：** 运维能从指标区分“没有执行”“SCF 成功但没写 Primary”“Primary 有数据但 View 未追平”“结果 API/inventory 刷新失败或过期”；发布 canary 会因业务返回失败、产物/reservation 绑定不符或目标 View 缺新 K 线而失败，并发发布不能借用彼此的 period 或数据作为证明。
 
 ## Task 6：构建、独立审查与真实链路发布验收
 

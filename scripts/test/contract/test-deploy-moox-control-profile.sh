@@ -24,6 +24,33 @@ mkdir -p "${FIXTURE_ROOT}/scripts/deploy" "${FIXTURE_ROOT}/scripts/runtime" \
   "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" \
   "${FIXTURE_ROOT}/config/setup" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
+selected_workload="$(sed -n '/^HAS_SELECTED_WORKLOAD=0$/,/^fi$/p' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh")"
+if ! grep -Fq '"${WITH_STORAGE_ACCESS}" == "1"' <<<"${selected_workload}"; then
+  echo "storage-access-only component overlays must be accepted as selected workloads" >&2
+  exit 1
+fi
+verify_shell="$(sed -n "/local verify_script=/,/^fi'$/p" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh")"
+if grep -Fq 'awk "{print \\$NF}"' <<<"${verify_shell}"; then
+  echo "remote HTTPS acceptance script expands awk's NF in the caller shell" >&2
+  exit 1
+fi
+escaped_nf_count="$(grep -Fc 'awk "{print \$NF}"' <<<"${verify_shell}" || true)"
+if [[ "${escaped_nf_count}" -ne 6 ]]; then
+  echo "expected six escaped awk NF references in remote HTTPS acceptance script, got ${escaped_nf_count}" >&2
+  exit 1
+fi
+rollback_helper="$(sed -n '/^rollback_caddy_activation_if_attempted() {$/,/^}$/p' "${ROOT}/scripts/deploy/deploy-moox.sh")"
+if ! grep -Fq '"${COMPONENT_OVERLAY}" == "1"' <<<"${rollback_helper}" ||
+  ! grep -Fq 'rollback --deploy-dir' <<<"${rollback_helper}"; then
+  echo "Caddy rollback must be guarded and remain available to deployments that activated Caddy" >&2
+  exit 1
+fi
+https_helper="$(sed -n '/^verify_public_https() {$/,/^rollback_caddy_activation_if_attempted() {$/p' "${ROOT}/scripts/deploy/deploy-moox.sh")"
+if ! grep -Fq 'skip HTTPS acceptance because this deployment did not activate Caddy' <<<"${https_helper}" ||
+  ! grep -Fq '"${COMPONENT_OVERLAY}" == "1"' <<<"${https_helper}"; then
+  echo "component overlays must skip public HTTPS acceptance when they do not activate Caddy" >&2
+  exit 1
+fi
 cp "${ROOT}/scripts/runtime/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-storage-auth-check.sh"
 cp "${ROOT}/scripts/runtime/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-storage-auth-rotate.sh"
 cp "${ROOT}/scripts/runtime/moox-log-rotate.sh" "${FIXTURE_ROOT}/scripts/runtime/moox-log-rotate.sh"
@@ -152,6 +179,10 @@ grep -Fq 'SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-https:/
 grep -Fq 'SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-ip://106.53.107.122:11003}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq "gateway: reconciled native listener to %s for SCF target %s" "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'gateway native listener ${current_native:-<missing>} does not match expected ${expected_native}' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"${trade_gateway_ca_env[@]+"${trade_gateway_ca_env[@]}"}"' "${TMP_ROOT}/unpacked/start.sh" ||
+  { echo 'control profile contract failed: optional trade Gateway CA environment must be safe with an empty array under bash nounset' >&2; exit 1; }
+grep -Fq '"${trade_gateway_env[@]+"${trade_gateway_env[@]}"}"' "${TMP_ROOT}/unpacked/start.sh" ||
+  { echo 'control profile contract failed: optional trade Gateway environment must be safe with an empty array under bash nounset' >&2; exit 1; }
 grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'gateway_health_addr() {' "${TMP_ROOT}/unpacked/healthcheck.sh"
 grep -Fq 'gateway) health_addr="$(gateway_health_addr)"; port="${health_addr##*:}"' "${TMP_ROOT}/unpacked/healthcheck.sh"

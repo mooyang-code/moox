@@ -71,16 +71,17 @@ market_health:
 
 kline_freshness:
   enabled: true
+  space_ids:
+    - crypto
+    - stockcn
+  collector_gateway_target: ip://127.0.0.1:11003
+  collector_gateway_node_id: ""
   evaluation_interval: 30s
+  inventory_refresh_interval: 1m
+  inventory_page_size: 100
+  inventory_max_entries: 1000
+  stale_after: 5m
   max_subjects_per_alert: 20
-  rules:
-    - enabled: true
-      space_id: crypto
-      dataset_id: dataset_binance_spot_kline_1m
-      view_id: view_binance_spot_kline_1m
-      frequency: 1m
-      market_id: crypto
-      stale_after: 5m
 
 metrics:
   enabled: true

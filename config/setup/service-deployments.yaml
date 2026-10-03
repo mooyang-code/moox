@@ -415,6 +415,26 @@ services:
         - ListSecrets
         - GetSecretValue
       gateway_callers: [admin-gateway, cloudnode, moox-cli, trade]
+  - name: publishlease
+    kind: admin_rpc
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11111
+    gateway_path: trpc.moox.admin.CollectorPublishLease
+    gateway_service_id: publishlease
+    gateway_enabled: true
+    scope: internal
+    status: active
+    description: Collector SCF 发布租约与 fencing 校验
+    extra_config:
+      gateway_methods: [AcquireCollectorPublishLease, RenewCollectorPublishLease, ReleaseCollectorPublishLease]
+      gateway_callers: [moox-cli, collector, cloudnode]
+      gateway_routes:
+        - service_path: trpc.moox.admin.CollectorPublishLease
+          port: 11111
+          gateway_methods: [ValidateCollectorPublishLease, BeginCollectorPublishOperation, RenewCollectorPublishOperation, EndCollectorPublishOperation]
+          gateway_callers: [cloudnode]
   - name: sysdeploy
     kind: admin_rpc
     deployment_mode: endpoint

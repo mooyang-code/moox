@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -286,6 +287,9 @@ func TestPeriodSeriesSnapshotCleanupRequiresStorageTerminalState(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(oldWithReadiness, "ETH-USDT"))
 	require.NoError(t, err)
+	require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).
+		Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", "crypto", "bars", "1m").
+		Update("c_ctime", oldWithoutReadiness).Error)
 	// Readiness and age are local signals, not evidence that Storage finalized the period.
 	require.NoError(t, s.db.Exec(`INSERT INTO t_period_readiness (c_space_id, c_dataset_id, c_frequency, c_work_type, c_period_time, c_deadline_at, c_status, c_report_state, c_collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "crypto", "bars", "1m", "collection", oldWithReadiness, oldWithReadiness.Add(time.Minute), domain.PeriodStatusComplete, domain.PeriodReportReported, oldWithReadiness.Add(time.Hour)).Error)
 
@@ -298,6 +302,112 @@ func TestPeriodSeriesSnapshotCleanupRequiresStorageTerminalState(t *testing.T) {
 		require.True(t, found, "period %s must survive without matching terminal Storage state", period)
 		require.Len(t, snapshot.Entries, 1)
 	}
+}
+
+func TestPeriodSeriesSnapshotCleanupRetentionUsesSnapshotAndConfirmationAge(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-30 * 24 * time.Hour)
+	fixtures := []struct {
+		frequency string
+		period    time.Time
+	}{
+		{frequency: "1D", period: now.Add(-2 * 24 * time.Hour)},
+		{frequency: "1W", period: now.Add(-8 * 24 * time.Hour)},
+		{frequency: "1M", period: now.Add(-32 * 24 * time.Hour)},
+	}
+	for _, fixture := range fixtures {
+		snapshot := testPeriodSnapshot(fixture.period, "BTC-USDT")
+		snapshot.Key.Frequency = fixture.frequency
+		snapshot.Entries[0].Frequency = fixture.frequency
+		stored, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
+		require.NoError(t, err)
+		require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
+			Key: stored.Key, SeriesHash: stored.SeriesHash, ExpectedCount: stored.ExpectedCount,
+			DeadlineAt: fixture.period.Add(time.Minute), Status: domain.PeriodStatusComplete, ConfirmedAt: now,
+		}))
+	}
+	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", cutoff, 10)
+	require.NoError(t, err)
+	require.Zero(t, deleted, "old 1D/1W/1M period timestamps do not make fresh snapshots immediately collectible")
+
+	retainedAt := cutoff.Add(-time.Second)
+	for _, fixture := range fixtures {
+		require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).
+			Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", "crypto", "bars", fixture.frequency, fixture.period).
+			Update("c_ctime", retainedAt).Error)
+		require.NoError(t, s.db.Table("t_collector_period_storage_states").
+			Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", "crypto", "bars", fixture.frequency, fixture.period).
+			Update("c_confirmed_at", retainedAt).Error)
+	}
+	deleted, err = s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", cutoff, 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 6, deleted, "cleanup reports the three snapshot rows and their three Storage-state rows")
+	var snapshotRows, stateRows int64
+	require.NoError(t, s.db.Table("t_collector_task_period_series").Count(&snapshotRows).Error)
+	require.NoError(t, s.db.Table("t_collector_period_storage_states").Count(&stateRows).Error)
+	require.Zero(t, snapshotRows)
+	require.Zero(t, stateRows)
+}
+
+func TestPeriodCleanupRetainsTerminalEvidenceWhileKlineWriteTargetExists(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	period := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	snapshot, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(period, "BTC-USDT"))
+	require.NoError(t, err)
+	require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).
+		Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", "crypto", "bars", "1m", period).
+		Update("c_ctime", period).Error)
+	require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
+		Key: snapshot.Key, SeriesHash: snapshot.SeriesHash, ExpectedCount: snapshot.ExpectedCount,
+		DeadlineAt: period.Add(time.Minute), Status: domain.PeriodStatusComplete, ConfirmedAt: period,
+	}))
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-retained", TaskName: "Retained", DataType: "kline", CollectParams: `{}`, Enabled: true,
+	}))
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
+		SpaceID: "crypto", InstanceID: "instance-retained", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m",
+		TargetDataTime: &period, TaskParams: `{}`,
+	}}))
+	require.NoError(t, s.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{
+		ID: "target-retained", SpaceID: "crypto", InstanceID: "instance-retained", TaskID: "task-retained", DatasetID: "bars", Status: "succeeded",
+	}}))
+
+	cutoff := period.Add(31 * 24 * time.Hour)
+	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", cutoff, 100)
+	require.NoError(t, err)
+	require.Zero(t, deleted, "terminal period proof is still needed by the surviving Kline WriteTarget")
+	_, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, snapshot.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	_, found, err = s.PeriodStorageStates().GetPeriodStorageState(ctx, snapshot.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	require.NoError(t, s.db.Exec(`DELETE FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_write_target_id = ?`, "crypto", "target-retained").Error)
+	deleted, err = s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", cutoff, 100)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, deleted, "period evidence becomes collectible after its WriteTarget is gone")
+}
+
+func TestListCleanupCandidatesSkipsRecentlyConfirmedTerminalStoragePeriods(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	period := now.Add(-32 * 24 * time.Hour)
+	snapshot := testPeriodSnapshot(period, "BTC-USDT")
+	stored, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
+	require.NoError(t, err)
+	require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
+		Key: stored.Key, SeriesHash: stored.SeriesHash, ExpectedCount: stored.ExpectedCount,
+		DeadlineAt: period.Add(time.Hour), Status: domain.PeriodStatusComplete, ConfirmedAt: now,
+	}))
+
+	page, err := s.PeriodSeriesSnapshot().ListCleanupCandidates(ctx, "crypto", now.Add(-30*24*time.Hour), nil, 10)
+	require.NoError(t, err)
+	require.Empty(t, page.Snapshots, "a recently confirmed monthly period should not be probed again before retention expires")
 }
 
 func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork(t *testing.T) {
@@ -329,6 +439,9 @@ func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork
 		snapshot.Entries[0].SpaceID = spaceID
 		stored, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, snapshot)
 		require.NoError(t, err)
+		require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).
+			Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", spaceID, "bars", "1m", period).
+			Update("c_ctime", period).Error)
 		snapshots[name] = stored
 	}
 	for _, name := range []string{"complete", "degraded", "waiting", "hash-mismatch", "count-mismatch", "other-space", "recent", "pending-retry", "failed-unreported", "planned-batch", "dispatched-batch", "planned-manifest"} {
@@ -394,13 +507,19 @@ func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork
 			FunctionName: "timer-function", NodeID: "timer-node", Region: "region", DeadlineAt: period.Add(time.Hour),
 		}).Error)
 	}
+	manifestsDeleted, err := s.TimerPeriodBatches().CleanupStorageTerminal(ctx, "crypto", 1)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, manifestsDeleted, "terminal manifests use their own bounded cleanup budget")
 
 	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", base.Add(24*time.Hour), 1)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted, "limit and return value are measured in whole periods, not snapshot rows")
+	require.EqualValues(t, 1, deleted, "the physical row budget can remove a series entry while retaining state as progress")
 	deleted, err = s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", base.Add(24*time.Hour), 1000)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted, "both complete and degraded Storage states permit cleanup")
+	require.EqualValues(t, 2, deleted, "the next keyset page removes the remaining degraded period rows")
+	deleted, err = s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", base.Add(24*time.Hour), 1000)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted, "the cursor wraps to remove the prior period's retained Storage state")
 	for _, name := range []string{"waiting", "hash-mismatch", "count-mismatch", "pending-retry", "failed-unreported", "planned-batch", "dispatched-batch", "planned-manifest", "other-space", "recent"} {
 		_, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, snapshots[name].Key)
 		require.NoError(t, err)
@@ -420,6 +539,112 @@ func TestCleanupTerminalBeforeRequiresMatchingStorageStateAndProtectsPendingWork
 	require.Zero(t, completedManifests, "terminal manifest is removed with its confirmed period")
 	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Where("c_key = ?", "timer-key-planned-manifest").Count(&plannedManifests).Error)
 	require.EqualValues(t, 1, plannedManifests, "unclaimed planned manifest keeps its period active")
+}
+
+func TestPeriodCleanupCountsBoundLargePeriodAndAdvanceFairly(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	period := cutoff.Add(-24 * time.Hour)
+	subjects := make([]string, 1201)
+	for i := range subjects {
+		subjects[i] = fmt.Sprintf("S%04d-USDT", i)
+	}
+	large, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(period, subjects...))
+	require.NoError(t, err)
+	small, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(period.Add(time.Minute), "OTHER-USDT"))
+	require.NoError(t, err)
+	require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).Where("c_space_id = ?", "crypto").Update("c_ctime", period).Error)
+	for _, snapshot := range []domain.PeriodSeriesSnapshot{large, small} {
+		state := storageStateForSnapshot(snapshot, domain.PeriodStatusComplete)
+		state.ConfirmedAt = period
+		require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, state))
+	}
+	counts, err := s.PeriodSeriesSnapshot().CleanupTerminalBeforeWithCounts(ctx, "crypto", cutoff, 500)
+	require.NoError(t, err)
+	require.Equal(t, PeriodCleanupCounts{SnapshotRows: 500}, counts)
+	counts, err = s.PeriodSeriesSnapshot().CleanupTerminalBeforeWithCounts(ctx, "crypto", cutoff, 500)
+	require.NoError(t, err)
+	require.Equal(t, PeriodCleanupCounts{SnapshotRows: 1, StateRows: 1}, counts)
+	_, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, small.Key)
+	require.NoError(t, err)
+	require.False(t, found, "next pass advances beyond the oversized period before wrapping")
+	counts, err = s.PeriodSeriesSnapshot().CleanupTerminalBeforeWithCounts(ctx, "crypto", cutoff, 500)
+	require.NoError(t, err)
+	require.Equal(t, PeriodCleanupCounts{SnapshotRows: 500}, counts)
+	counts, err = s.PeriodSeriesSnapshot().CleanupTerminalBeforeWithCounts(ctx, "crypto", cutoff, 500)
+	require.NoError(t, err)
+	require.Equal(t, PeriodCleanupCounts{SnapshotRows: 201, StateRows: 1}, counts)
+}
+
+func TestCleanupTerminalBeforeHonorsPhysicalRowBudgetAcrossMultiSeriesPeriods(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-30 * 24 * time.Hour)
+	periods := []struct {
+		period   time.Time
+		subjects []string
+		status   string
+	}{
+		{period: now.Add(-40 * 24 * time.Hour), subjects: []string{"BTC-USDT", "ETH-USDT", "SOL-USDT"}, status: domain.PeriodStatusComplete},
+		{period: now.Add(-39 * 24 * time.Hour), subjects: []string{"ADA-USDT", "XRP-USDT"}, status: domain.PeriodStatusDegraded},
+	}
+	stored := make([]domain.PeriodSeriesSnapshot, 0, len(periods))
+	for _, fixture := range periods {
+		snapshot, _, err := s.PeriodSeriesSnapshot().CreatePeriodSeriesSnapshotIfAbsent(ctx, testPeriodSnapshot(fixture.period, fixture.subjects...))
+		require.NoError(t, err)
+		stored = append(stored, snapshot)
+		require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).
+			Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", "crypto", "bars", "1m", fixture.period).
+			Update("c_ctime", cutoff.Add(-time.Hour)).Error)
+		require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
+			Key: snapshot.Key, SeriesHash: snapshot.SeriesHash, ExpectedCount: snapshot.ExpectedCount,
+			DeadlineAt: fixture.period.Add(time.Minute), Status: fixture.status, ConfirmedAt: cutoff.Add(-time.Hour),
+		}))
+	}
+
+	require.NoError(t, s.db.Exec(`CREATE TRIGGER fail_state_delete BEFORE DELETE ON t_collector_period_storage_states BEGIN SELECT RAISE(ABORT, 'test rollback'); END`).Error)
+	counts, err := s.PeriodSeriesSnapshot().CleanupTerminalBeforeWithCounts(ctx, "crypto", cutoff, 5)
+	require.Error(t, err)
+	require.Equal(t, PeriodCleanupCounts{}, counts, "failed state deletion rolls back earlier snapshot-entry deletes")
+	var unchanged int64
+	require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).Count(&unchanged).Error)
+	require.EqualValues(t, 5, unchanged)
+	require.NoError(t, s.db.Exec(`DROP TRIGGER fail_state_delete`).Error)
+	counts, err = s.PeriodSeriesSnapshot().CleanupTerminalBeforeWithCounts(ctx, "crypto", cutoff, 5)
+	deleted := counts.Total()
+	require.NoError(t, err)
+	require.Equal(t, PeriodCleanupCounts{SnapshotRows: 4, StateRows: 1}, counts)
+	require.EqualValues(t, 5, deleted, "the next candidate can use only the remaining physical-row budget")
+	_, found, err := s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, stored[0].Key)
+	require.NoError(t, err)
+	require.False(t, found)
+	state, found, err := s.PeriodStorageStates().GetPeriodStorageState(ctx, stored[0].Key)
+	require.NoError(t, err)
+	require.False(t, found, "Storage state is removed only after all snapshot entries fit in budget")
+	var remainingSeriesRows int64
+	require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).
+		Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", stored[1].Key.SpaceID, stored[1].Key.DatasetID, stored[1].Key.Frequency, stored[1].Key.PeriodTime).
+		Count(&remainingSeriesRows).Error)
+	require.EqualValues(t, 1, remainingSeriesRows, "oversized progress leaves a prefix and terminal state for the next pass")
+	state, found, err = s.PeriodStorageStates().GetPeriodStorageState(ctx, stored[1].Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, domain.PeriodStatusDegraded, state.Status)
+	page, err := s.PeriodSeriesSnapshot().ListCleanupCandidates(ctx, "crypto", cutoff, nil, 10)
+	require.NoError(t, err)
+	require.Len(t, page.Snapshots, 1)
+	require.Equal(t, stored[1].SeriesHash, page.Snapshots[0].SeriesHash, "the old terminal Storage state supplies identity while rows are partial")
+	require.Equal(t, stored[1].ExpectedCount, page.Snapshots[0].ExpectedCount)
+	require.Len(t, page.Snapshots[0].Entries, 1)
+
+	deleted, err = s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", cutoff, 3)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, deleted, "the final series row and state fit in the next physical budget")
+	_, found, err = s.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, stored[1].Key)
+	require.NoError(t, err)
+	require.False(t, found)
 }
 
 func TestTimerManifestSurvivesBatchRetentionUntilPeriodCleanup(t *testing.T) {
@@ -443,18 +668,28 @@ func TestTimerManifestSurvivesBatchRetentionUntilPeriodCleanup(t *testing.T) {
 	}).Error)
 
 	retentionCutoff := period.Add(24 * time.Hour)
-	require.NoError(t, s.FetchBatches().Cleanup(ctx, retentionCutoff, retentionCutoff))
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, retentionCutoff))
 	_, err = s.FetchBatches().Get(ctx, "crypto", batchID)
 	require.NoError(t, err, "batch retention must not orphan a live period manifest")
+	require.NoError(t, s.db.Model(&domain.PeriodSeriesSnapshotEntry{}).
+		Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", "crypto", "bars", "1m", period).
+		Update("c_ctime", period).Error)
 
-	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", period.Add(31*24*time.Hour), 10)
+	cutoff := period.Add(31 * 24 * time.Hour)
+	deleted, err := s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", cutoff, 10)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted)
+	require.Zero(t, deleted, "snapshot cleanup must not delete Timer manifests outside their separate budget")
 	var manifestCount int64
 	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Where("c_key = ?", "manifest-retained-by-batch").Count(&manifestCount).Error)
-	require.Zero(t, manifestCount, "confirmed terminal period cleanup removes the manifest atomically")
+	require.EqualValues(t, 1, manifestCount, "the terminal manifest remains until bounded manifest cleanup handles it")
+	manifestsDeleted, err := s.TimerPeriodBatches().CleanupStorageTerminal(ctx, "crypto", 1)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, manifestsDeleted)
+	deleted, err = s.PeriodSeriesSnapshot().CleanupTerminalBefore(ctx, "crypto", cutoff, 2)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, deleted, "the snapshot and Storage state are charged to the physical row budget")
 
-	require.NoError(t, s.FetchBatches().Cleanup(ctx, retentionCutoff, retentionCutoff))
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, retentionCutoff))
 	_, err = s.FetchBatches().Get(ctx, "crypto", batchID)
 	require.Error(t, err, "terminal batch becomes eligible after its period manifest is removed")
 }

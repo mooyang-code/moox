@@ -74,13 +74,18 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	// never the source of execution membership.
 	t.Setenv("MOOX_MARKET_FETCH_BINDING_HASH", "binding-hash")
 	t.Setenv("MOOX_MARKET_FETCH_MODE", "kline")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://storage-runtime:12004")
 
 	published := 0
 	var observed marketfetch.Request
+	var observedStorageTarget string
 	handler := &Handler{
 		NewMarketFetch: func() *marketfetch.Handler {
 			return &marketfetch.Handler{
-				NewStorage: func(string, string, string) (marketfetch.Storage, error) { return timerStorage{}, nil },
+				NewStorage: func(target, _, _ string) (marketfetch.Storage, error) {
+					observedStorageTarget = target
+					return timerStorage{}, nil
+				},
 				Publish: func(_ context.Context, request marketfetch.Request, _ proto.Message) error {
 					published++
 					observed = request
@@ -113,6 +118,7 @@ func TestHandlerSchedulerInvokePublishesCompletionOnTimerConfiguredNode(t *testi
 	require.True(t, response.(*model.Response).Success)
 	require.Equal(t, 1, published, "durable scheduler invokes must publish BatchCompleted")
 	require.Equal(t, "batch-shared", observed.BatchID)
+	require.Equal(t, "ip://storage-runtime:12004", observedStorageTarget, "SCF runtime routing must override stale scheduler payloads")
 }
 
 func TestHandlerRejectsRemovedInstrumentSnapshotAction(t *testing.T) {

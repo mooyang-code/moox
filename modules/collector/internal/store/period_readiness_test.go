@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -205,7 +206,7 @@ func TestDeleteReportedItemsOutsideWindowKeepsNewestPeriods(t *testing.T) {
 		require.NoError(t, repo.PersistPayload(ctx, report.ID, `{"status":"complete"}`))
 		require.NoError(t, repo.MarkReported(ctx, report.ID))
 	}
-	_, err := repo.DeleteReportedItemsOutsideWindow(ctx, 1)
+	_, err := repo.CleanupReportedRetentionInSpace(ctx, "crypto", base.Add(-time.Hour), 1, 100)
 	require.NoError(t, err)
 	var items []domain.PeriodReadinessItem
 	require.NoError(t, s.db.Find(&items).Error)
@@ -213,4 +214,101 @@ func TestDeleteReportedItemsOutsideWindowKeepsNewestPeriods(t *testing.T) {
 	var kept domain.PeriodReadiness
 	require.NoError(t, s.db.First(&kept, "c_id = ?", items[0].ReadinessID).Error)
 	require.Equal(t, base.Add(2*time.Minute), kept.PeriodTime)
+}
+
+func TestCleanupReportedRetentionInSpaceBoundsPhysicalRows(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.PeriodReadiness()
+	ctx := context.Background()
+	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-24 * time.Hour)
+
+	createPeriod := func(space, dataset string, period, collected time.Time, reportState string, itemCount int) int64 {
+		t.Helper()
+		row := domain.PeriodReadiness{
+			SpaceID: space, DatasetID: dataset, Frequency: "1m", PeriodTime: period,
+			DeadlineAt: period.Add(time.Minute), CollectedAt: collected,
+			Status: domain.PeriodStatusComplete, ReportState: reportState, PayloadJSON: `{"status":"complete"}`,
+		}
+		require.NoError(t, s.db.Create(&row).Error)
+		items := make([]domain.PeriodReadinessItem, 0, itemCount)
+		for index := 0; index < itemCount; index++ {
+			items = append(items, domain.PeriodReadinessItem{
+				ReadinessID: row.ID, InstanceID: "instance", WriteTargetID: fmt.Sprintf("target-%d", index),
+				SubjectID: fmt.Sprintf("SUBJECT-%d", index), State: domain.PeriodItemSuccess, UpdatedAt: period,
+			})
+		}
+		if len(items) > 0 {
+			require.NoError(t, s.db.Create(&items).Error)
+		}
+		return row.ID
+	}
+
+	expiredID := createPeriod("crypto", "bars", cutoff.Add(-time.Minute), cutoff.Add(-time.Minute), domain.PeriodReportReported, 3)
+	currentID := createPeriod("crypto", "bars", now.Add(-time.Minute), now, domain.PeriodReportReported, 2)
+	pendingID := createPeriod("crypto", "bars", now.Add(-2*time.Minute), cutoff.Add(-time.Minute), domain.PeriodReportPending, 2)
+	otherSpaceID := createPeriod("stockcn", "bars", cutoff.Add(-time.Minute), cutoff.Add(-time.Minute), domain.PeriodReportReported, 2)
+
+	deleted, err := repo.CleanupReportedRetentionInSpace(ctx, "crypto", cutoff, 1, 2)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, deleted)
+	var expiredItems int64
+	require.NoError(t, s.db.Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ?", expiredID).Count(&expiredItems).Error)
+	require.EqualValues(t, 1, expiredItems)
+	require.NoError(t, s.db.First(&domain.PeriodReadiness{}, expiredID).Error)
+
+	deleted, err = repo.CleanupReportedRetentionInSpace(ctx, "crypto", cutoff, 1, 2)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, deleted)
+	require.Error(t, s.db.First(&domain.PeriodReadiness{}, expiredID).Error)
+	require.NoError(t, s.db.First(&domain.PeriodReadiness{}, currentID).Error)
+	require.NoError(t, s.db.First(&domain.PeriodReadiness{}, pendingID).Error)
+	require.NoError(t, s.db.First(&domain.PeriodReadiness{}, otherSpaceID).Error)
+	var currentItems int64
+	require.NoError(t, s.db.Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ?", currentID).Count(&currentItems).Error)
+	require.EqualValues(t, 2, currentItems)
+
+	var plan []struct{ Detail string }
+	require.NoError(t, s.db.Raw(`EXPLAIN QUERY PLAN
+SELECT c_id FROM t_period_readiness
+ WHERE c_space_id = ? AND c_report_state = ? AND c_collected_at < ?
+ ORDER BY c_collected_at ASC, c_id ASC LIMIT 1`, "crypto", domain.PeriodReportReported, cutoff).Scan(&plan).Error)
+	require.NotEmpty(t, plan)
+	require.Contains(t, plan[0].Detail, "idx_period_readiness_retention")
+}
+
+func TestLatestCompletedPeriodUsesExactScopeAndCompletionOrder(t *testing.T) {
+	s := newCollectorStore(t)
+	base := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	rows := []domain.PeriodReadiness{
+		{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: base, DeadlineAt: base.Add(time.Minute), Status: domain.PeriodStatusComplete, ReportState: domain.PeriodReportReported, WorkType: "collection"},
+		{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: base.Add(time.Minute), DeadlineAt: base.Add(2 * time.Minute), Status: domain.PeriodStatusDegraded, ReportState: domain.PeriodReportReported, WorkType: "collection"},
+		{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: base.Add(2 * time.Minute), DeadlineAt: base.Add(3 * time.Minute), Status: domain.PeriodStatusWaiting, ReportState: domain.PeriodReportWaiting, WorkType: "collection"},
+		{SpaceID: "crypto", DatasetID: "other-bars", Frequency: "1m", PeriodTime: base.Add(3 * time.Minute), DeadlineAt: base.Add(4 * time.Minute), Status: domain.PeriodStatusComplete, ReportState: domain.PeriodReportReported, WorkType: "collection"},
+		{SpaceID: "stockcn", DatasetID: "bars", Frequency: "1m", PeriodTime: base.Add(4 * time.Minute), DeadlineAt: base.Add(5 * time.Minute), Status: domain.PeriodStatusComplete, ReportState: domain.PeriodReportReported, WorkType: "collection"},
+		{SpaceID: "crypto", DatasetID: "bars", Frequency: "5m", PeriodTime: base.Add(5 * time.Minute), DeadlineAt: base.Add(6 * time.Minute), Status: domain.PeriodStatusComplete, ReportState: domain.PeriodReportReported, WorkType: "collection"},
+	}
+	require.NoError(t, s.db.Create(&rows).Error)
+
+	got, err := s.PeriodReadiness().LatestCompletedPeriod(context.Background(), "crypto", "bars", "1m")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, domain.PeriodStatusDegraded, got.Status)
+	require.Equal(t, base.Add(time.Minute), got.PeriodTime)
+
+	var plan []struct{ Detail string }
+	require.NoError(t, s.db.Raw(`EXPLAIN QUERY PLAN SELECT c_id FROM t_period_readiness WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_status = ? ORDER BY c_period_time DESC, c_id DESC LIMIT 1`, "crypto", "bars", "1m", domain.PeriodStatusComplete).Scan(&plan).Error)
+	require.NotEmpty(t, plan)
+	require.Contains(t, plan[0].Detail, "idx_period_readiness_completed_scope")
+}
+
+func TestLatestCompletedPeriodReturnsEmptyWhenNoTerminalPeriod(t *testing.T) {
+	s := newCollectorStore(t)
+	period := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	row := domain.PeriodReadiness{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period, DeadlineAt: period.Add(time.Minute), Status: domain.PeriodStatusWaiting, ReportState: domain.PeriodReportWaiting, WorkType: "collection"}
+	require.NoError(t, s.db.Create(&row).Error)
+
+	got, err := s.PeriodReadiness().LatestCompletedPeriod(context.Background(), "crypto", "bars", "1m")
+	require.NoError(t, err)
+	require.Nil(t, got)
 }

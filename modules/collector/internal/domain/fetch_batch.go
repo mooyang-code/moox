@@ -86,6 +86,9 @@ type CollectionItem struct {
 	SeriesIndex   uint32 `json:"series_index,omitempty"`
 	SeriesHash    string `json:"series_hash,omitempty"`
 	ExpectedCount uint32 `json:"expected_count,omitempty"`
+	// PeriodReservationID fences deployment canary writes from other publishers
+	// while the target Storage period is waiting.
+	PeriodReservationID string `json:"period_reservation_id,omitempty"`
 }
 
 type ItemResult struct {
@@ -115,6 +118,8 @@ type BatchInvocation struct {
 	WriteTargetID        string      `gorm:"column:c_write_target_id"`
 	RetryScope           string      `gorm:"column:c_retry_scope"`
 	Frequency            string      `gorm:"column:c_frequency"`
+	PeriodTime           *time.Time  `gorm:"column:c_period_time"`
+	PeriodDeadlineAt     *time.Time  `gorm:"column:c_period_deadline_at"`
 	Region               string      `gorm:"column:c_region"`
 	NodeID               string      `gorm:"column:c_node_id"`
 	FunctionName         string      `gorm:"column:c_function_name"`
@@ -150,6 +155,8 @@ type RetryItem struct {
 	SubjectID                       string                   `gorm:"column:c_subject_id"`
 	Frequency                       string                   `gorm:"column:c_frequency"`
 	TargetDataTime                  time.Time                `gorm:"column:c_target_data_time"`
+	PeriodTime                      *time.Time               `gorm:"column:c_period_time"`
+	PeriodDeadlineAt                *time.Time               `gorm:"column:c_period_deadline_at"`
 	TaskJSON                        string                   `gorm:"column:c_task_json"`
 	FailureTargetsJSON              string                   `gorm:"column:c_failure_targets_json"`
 	Attempt                         int                      `gorm:"column:c_attempt"`

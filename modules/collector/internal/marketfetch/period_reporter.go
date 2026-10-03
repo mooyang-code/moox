@@ -24,25 +24,14 @@ type DatasetPeriodReporter interface {
 }
 
 type PeriodReporter struct {
-	periods         *store.PeriodReadinessRepository
-	storage         DatasetPeriodReporter
-	spaceID         string
-	batchSize       int
-	parentRetention time.Duration
-	itemRetention   int
-	nodeID          string
-	storeID         string
-	now             func() time.Time
-	metrics         *Metrics
-}
-
-// SetItemRetention trims the per-period subject snapshot after a report has
-// been durably published. Parent rows remain available for the longer
-// reporting retention window; only their detailed task rows are pruned.
-func (r *PeriodReporter) SetItemRetention(periods int) {
-	if r != nil {
-		r.itemRetention = periods
-	}
+	periods   *store.PeriodReadinessRepository
+	storage   DatasetPeriodReporter
+	spaceID   string
+	batchSize int
+	nodeID    string
+	storeID   string
+	now       func() time.Time
+	metrics   *Metrics
 }
 
 // SetMetrics attaches the process-wide low-cardinality period metrics sink.
@@ -53,11 +42,8 @@ func (r *PeriodReporter) SetMetrics(metrics *Metrics) {
 	}
 }
 
-func NewPeriodReporter(periods *store.PeriodReadinessRepository, storage DatasetPeriodReporter, spaceID string, parentRetention time.Duration) *PeriodReporter {
-	if parentRetention <= 0 {
-		parentRetention = 7 * 24 * time.Hour
-	}
-	return &PeriodReporter{periods: periods, storage: storage, spaceID: spaceID, batchSize: 100, parentRetention: parentRetention, now: time.Now}
+func NewPeriodReporter(periods *store.PeriodReadinessRepository, storage DatasetPeriodReporter, spaceID string) *PeriodReporter {
+	return &PeriodReporter{periods: periods, storage: storage, spaceID: spaceID, batchSize: 100, now: time.Now}
 }
 
 func StartPeriodReporter(ctx context.Context, reporter *PeriodReporter, interval time.Duration) error {
@@ -99,48 +85,29 @@ func (r *PeriodReporter) Flush(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list pending period reports: %w", err)
 	}
-	pending := make(map[string]int)
-	for _, report := range reports {
-		key := report.Readiness.DatasetID + "\x00" + report.Readiness.Frequency
-		pending[key]++
-	}
 	var firstReportErr error
 	for _, report := range reports {
 		payload, err := r.payload(ctx, report)
 		if err != nil {
-			r.metrics.ObservePeriodReportRetry(report.Readiness.DatasetID, report.Readiness.Frequency)
+			r.metrics.ObservePeriodReportRetry(r.spaceID, report.Readiness.Frequency)
 			if firstReportErr == nil {
 				firstReportErr = err
 			}
 			continue
 		}
 		if err := r.storage.ReportCollectorPeriodCompleted(ctx, r.spaceID, payload); err != nil {
-			r.metrics.ObservePeriodReportRetry(report.Readiness.DatasetID, report.Readiness.Frequency)
+			r.metrics.ObservePeriodReportRetry(r.spaceID, report.Readiness.Frequency)
 			if firstReportErr == nil {
 				firstReportErr = fmt.Errorf("report collector period completed dataset=%s period=%s: %w", report.Readiness.DatasetID, report.Readiness.PeriodTime.Format(time.RFC3339), err)
 			}
 			continue
 		}
 		if err := r.periods.MarkReported(ctx, report.Readiness.ID); err != nil {
-			r.metrics.ObservePeriodReportRetry(report.Readiness.DatasetID, report.Readiness.Frequency)
+			r.metrics.ObservePeriodReportRetry(r.spaceID, report.Readiness.Frequency)
 			if firstReportErr == nil {
 				firstReportErr = fmt.Errorf("mark period report reported id=%d: %w", report.Readiness.ID, err)
 			}
 			continue
-		}
-	}
-	if r.parentRetention > 0 {
-		if _, err := r.periods.DeleteBeforeInSpace(ctx, r.spaceID, now().UTC().Add(-r.parentRetention)); err != nil {
-			if firstReportErr == nil {
-				firstReportErr = fmt.Errorf("cleanup period readiness: %w", err)
-			}
-		}
-	}
-	if r.itemRetention > 0 {
-		if _, err := r.periods.DeleteReportedItemsOutsideWindowInSpace(ctx, r.spaceID, r.itemRetention); err != nil {
-			if firstReportErr == nil {
-				firstReportErr = fmt.Errorf("cleanup period readiness items: %w", err)
-			}
 		}
 	}
 	counts, err := r.periods.CountPendingReportsInSpace(ctx, r.spaceID)
@@ -149,18 +116,14 @@ func (r *PeriodReporter) Flush(ctx context.Context) error {
 			firstReportErr = fmt.Errorf("count pending period reports: %w", err)
 		}
 	} else {
-		for key := range pending {
-			parts := strings.SplitN(key, "\x00", 2)
-			count := counts[key]
-			r.metrics.ObservePeriodPending(parts[0], parts[1], count)
-		}
+		pendingByFrequency := make(map[string]int)
 		for key, count := range counts {
-			if _, seen := pending[key]; seen {
-				continue
-			}
 			parts := strings.SplitN(key, "\x00", 2)
-			r.metrics.ObservePeriodPending(parts[0], parts[1], count)
+			if len(parts) == 2 {
+				pendingByFrequency[parts[1]] += count
+			}
 		}
+		r.metrics.ObservePeriodPendingSnapshot(r.spaceID, pendingByFrequency)
 	}
 	if firstReportErr != nil {
 		// Continue attempting the remaining datasets in this flush, but keep

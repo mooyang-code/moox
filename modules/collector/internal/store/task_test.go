@@ -248,3 +248,35 @@ func TestCollectionTaskRepository_ListEnabledAllRejectsPartialSnapshot(t *testin
 	_, err = repo.ListEnabledAll(ctx, MaxEnabledTasks+1)
 	require.Error(t, err)
 }
+
+func TestCollectionTaskRepository_ListKlineResultTasksIsBoundedAndIncludesDisabled(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.Tasks()
+	ctx := context.Background()
+	for _, task := range []domain.CollectionTask{
+		{SpaceID: "crypto", TaskID: "kline-a", DataType: "kline", Enabled: true},
+		{SpaceID: "stockcn", TaskID: "resample-a", DataType: "kline_resample", Enabled: true},
+		{SpaceID: "crypto", TaskID: "kline-disabled", DataType: "kline", Enabled: false},
+		{SpaceID: "crypto", TaskID: "resample-b", DataType: "kline_resample", Enabled: true},
+		{SpaceID: "crypto", TaskID: "factor", DataType: "factor", Enabled: true},
+	} {
+		require.NoError(t, repo.Create(ctx, task))
+	}
+
+	rows, err := repo.ListKlineResultTasks(ctx, "crypto", 3)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	require.Equal(t, []string{"kline-a", "kline-disabled", "resample-b"}, []string{rows[0].TaskID, rows[1].TaskID, rows[2].TaskID})
+	require.False(t, rows[1].Enabled)
+
+	rows, err = repo.ListKlineResultTasks(ctx, "crypto", 2)
+	require.ErrorContains(t, err, "exceeds limit")
+	require.Nil(t, rows)
+
+	rows, err = repo.ListKlineResultTasks(ctx, "stockcn", 3)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "resample-a", rows[0].TaskID)
+	_, err = repo.ListKlineResultTasks(ctx, "", 3)
+	require.ErrorContains(t, err, "space_id is required")
+}

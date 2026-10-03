@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -54,9 +55,12 @@ func (s validationDatasetSource) ResolveSubjects(context.Context, string, []stri
 type taskResultMetadataFake struct {
 	datasets          map[string]*storagepb.Dataset
 	views             map[string]*storagepb.View
+	getDatasets       int
+	getViews          int
 	deleteDatasets    int
 	deleteViews       int
 	failDeleteDataset bool
+	failGetDataset    error
 }
 
 func newTaskResultMetadataFake(ids taskresult.IDs, taskID string) *taskResultMetadataFake {
@@ -77,6 +81,10 @@ func newTaskResultMetadataFake(ids taskresult.IDs, taskID string) *taskResultMet
 }
 
 func (f *taskResultMetadataFake) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
+	f.getDatasets++
+	if f.failGetDataset != nil {
+		return nil, f.failGetDataset
+	}
 	dataset := f.datasets[req.GetDatasetId()]
 	if dataset == nil {
 		return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_DATASET_NOT_FOUND}}, nil
@@ -108,6 +116,7 @@ func (f *taskResultMetadataFake) DeleteDataset(_ context.Context, req *storagepb
 }
 
 func (f *taskResultMetadataFake) GetView(_ context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
+	f.getViews++
 	view := f.views[req.GetViewId()]
 	if view == nil {
 		return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
@@ -366,6 +375,112 @@ func openCollectorTestStore(t *testing.T) *store.Store {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	return db
+}
+
+func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T) {
+	db := openCollectorTestStore(t)
+	ctx := context.Background()
+	metadata := &taskResultMetadataFake{
+		datasets: make(map[string]*storagepb.Dataset),
+		views:    make(map[string]*storagepb.View),
+	}
+	const taskCount = 1000
+	for index := 0; index < taskCount; index++ {
+		taskID := fmt.Sprintf("task-%04d", index)
+		ids := taskresult.ResultIDs("crypto", taskID)
+		task := domain.CollectionTask{
+			SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true,
+			PrepareState: domain.PrepareStateReady, ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+		}
+		require.NoError(t, db.Tasks().Create(ctx, task))
+		taskMetadata := newTaskResultMetadataFake(ids, taskID)
+		metadata.datasets[ids.DatasetID] = taskMetadata.datasets[ids.DatasetID]
+		metadata.views[ids.ViewID] = taskMetadata.views[ids.ViewID]
+	}
+	service := &Service{
+		taskRepo:      db.Tasks(),
+		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+	}
+
+	list, err := service.GetTaskList(ctx, &pb.GetTaskListReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: taskCount}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, list.GetRetInfo().GetCode())
+	require.Len(t, list.GetTasks(), taskCount)
+	require.Equal(t, 0, metadata.getDatasets)
+	require.Equal(t, 0, metadata.getViews)
+	require.Equal(t, taskresult.ResultStatusUnknown, list.GetTasks()[0].GetResult().GetStatus())
+
+	detail, err := service.GetTaskDetail(ctx, &pb.GetTaskDetailReq{SpaceId: "crypto", TaskId: "task-0000"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, detail.GetRetInfo().GetCode())
+	require.Equal(t, taskresult.ResultStatusReady, detail.GetTask().GetResult().GetStatus())
+	require.Equal(t, 1, metadata.getDatasets)
+	require.Equal(t, 1, metadata.getViews)
+}
+
+func TestGetTaskDetailDistinguishesResultContractFailureFromStorageFailure(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		prepare    func(*taskResultMetadataFake, taskresult.IDs)
+		wantStatus string
+		wantError  string
+	}{
+		{
+			name: "ownership mismatch is permanent error",
+			prepare: func(metadata *taskResultMetadataFake, ids taskresult.IDs) {
+				metadata.datasets[ids.DatasetID].Attributes["collector_task_id"] = "another-task"
+			},
+			wantStatus: taskresult.ResultStatusError,
+			wantError:  "owned by another task",
+		},
+		{
+			name: "Storage outage remains unknown",
+			prepare: func(metadata *taskResultMetadataFake, _ taskresult.IDs) {
+				metadata.failGetDataset = errors.New("Storage unavailable")
+			},
+			wantStatus: taskresult.ResultStatusUnknown,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := openCollectorTestStore(t)
+			task := domain.CollectionTask{
+				SpaceID: "crypto", TaskID: "task-contract", TaskName: "contract", DataType: "kline",
+				PrepareState: domain.PrepareStateReady,
+			}
+			ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+			task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+			require.NoError(t, db.Tasks().Create(context.Background(), task))
+			metadata := newTaskResultMetadataFake(ids, task.TaskID)
+			test.prepare(metadata, ids)
+			service := &Service{
+				taskRepo:      db.Tasks(),
+				resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+			}
+			response, err := service.GetTaskDetail(context.Background(), &pb.GetTaskDetailReq{SpaceId: task.SpaceID, TaskId: task.TaskID})
+			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
+			require.Equal(t, test.wantStatus, response.GetTask().GetResult().GetStatus())
+			require.Contains(t, response.GetTask().GetLastError(), test.wantError)
+		})
+	}
+}
+
+func TestGetTaskDetailMapsOnlyMissingTasksToNotFound(t *testing.T) {
+	db := openCollectorTestStore(t)
+	service := &Service{taskRepo: db.Tasks()}
+	ctx := context.Background()
+
+	missing, err := service.GetTaskDetail(ctx, &pb.GetTaskDetailReq{SpaceId: "crypto", TaskId: "missing"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, missing.GetRetInfo().GetCode())
+
+	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "present", TaskName: "Present", DataType: "kline"}
+	require.NoError(t, db.Tasks().Create(ctx, task))
+	require.NoError(t, db.Close())
+
+	unavailable, err := service.GetTaskDetail(ctx, &pb.GetTaskDetailReq{SpaceId: task.SpaceID, TaskId: task.TaskID})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, unavailable.GetRetInfo().GetCode())
 }
 
 func TestCreateTaskRejectsInvalidNamesBeforeStorage(t *testing.T) {

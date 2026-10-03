@@ -200,6 +200,8 @@ func TestMarketFetcherInvokeReadbackAcceptsHandlerFallback(t *testing.T) {
 				seedSCFAccountAndPackage(t, catalog)
 				requestEnv := completeInvokeEnvironment("60")
 				requestEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+				reservationID := "invoke-create-reservation"
+				requestEnv["MOOX_CREATE_RESERVATION_ID"] = reservationID
 				delete(requestEnv, "MOOX_FETCH_TIMEOUT_SECONDS")
 				if test.outer == 90 {
 					requestEnv["MOOX_MARKET_FETCH_TIMEOUT_SECONDS"] = "90"
@@ -213,7 +215,7 @@ func TestMarketFetcherInvokeReadbackAcceptsHandlerFallback(t *testing.T) {
 				svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 				var err error
 				if operation == "create" {
-					item := &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": strconv.FormatInt(test.outer, 10)}, Environment: requestEnv}
+					item := &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": strconv.FormatInt(test.outer, 10)}, Environment: requestEnv, CreateReservationId: reservationID}
 					_, err = svc.executeCreateNodeItem(context.Background(), "crypto", item, 0)
 					require.NoError(t, err)
 					node, err := catalog.GetNode(context.Background(), "crypto", cloudNodeFromCreateItem("crypto", item, 0).NodeID)
@@ -246,6 +248,10 @@ func TestMarketFetcherInvokeCreateValidatesReadbackTimeoutBeforeReady(t *testing
 			delete(requestEnv, "MOOX_FETCH_TIMEOUT_SECONDS")
 			remoteEnv := copyStringMap(requestEnv)
 			remoteEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+			reservationID := "ambiguous-create-reservation"
+			if path == "existing" || path == "ambiguous create" {
+				remoteEnv["MOOX_CREATE_RESERVATION_ID"] = reservationID
+			}
 			remoteEnv["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
 			fake := &fakeSCFClient{currentEnvironment: remoteEnv, currentTimeout: 60}
 			if path != "existing" {
@@ -256,11 +262,15 @@ func TestMarketFetcherInvokeCreateValidatesReadbackTimeoutBeforeReady(t *testing
 			}
 			svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 			item := &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": "60"}, Environment: requestEnv}
+			if path == "existing" || path == "ambiguous create" {
+				item.CreateReservationId = reservationID
+			}
 			_, err := svc.executeCreateNodeItem(context.Background(), "crypto", item, 0)
 			require.ErrorContains(t, err, "Invoke runtime timeout")
 			node, err := catalog.GetNode(context.Background(), "crypto", cloudNodeFromCreateItem("crypto", item, 0).NodeID)
 			require.NoError(t, err)
-			require.Nil(t, node, "mismatched readback cannot persist deployment_ready")
+			require.NotNil(t, node, "mismatched readback must leave a discoverable cleanup reservation")
+			require.False(t, metadataBool(parseJSONMap(node.Metadata), "deployment_ready"), "mismatched readback cannot persist deployment_ready")
 			require.Empty(t, fake.configured)
 			if path == "existing" {
 				require.Empty(t, fake.created)

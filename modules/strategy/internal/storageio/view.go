@@ -349,15 +349,16 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 }
 
 // validateUniqueSeriesRows prevents a wildcard selector from silently
-// overwriting values when a subject has multiple physical series.  Multiple
-// source rows are valid when the strategy only consumes a factor result and
-// needs the source View merely as a readiness/presence signal; they become an
-// error as soon as this View contributes an expression or factor value.
+// overwriting a consumed source field or Factor output. Rows that do not
+// provide a value used by the strategy do not make a merged View ambiguous.
 func validateUniqueSeriesRows(rows []ViewRow, viewID string, compiled compiler.CompiledStrategy, items map[string]input.InstrumentInput, subjectToInstrument map[string]string) error {
-	if !viewContributesStrategyValues(viewID, compiled, items) {
-		return nil
+	sourceFields := make(map[string]map[string]struct{})
+	if viewID == compiled.SourceView.ID {
+		for instrumentID, item := range items {
+			sourceFields[instrumentID] = consumedSourceFields(compiled, item.PoolItem)
+		}
 	}
-	counts := make(map[string]int)
+	counts := make(map[string]map[string]int)
 	for _, row := range rows {
 		instrumentID := row.InstrumentID
 		if row.SubjectID != "" {
@@ -372,32 +373,43 @@ func validateUniqueSeriesRows(rows []ViewRow, viewID string, compiled compiler.C
 		if item.SeriesTag != "" && row.SeriesTag != "" && item.SeriesTag != row.SeriesTag {
 			continue
 		}
-		counts[instrumentID]++
-		if counts[instrumentID] > 1 {
-			return fmt.Errorf("%w: view %s instrument %s has multiple series rows; bind an explicit series_tag", input.ErrStrictIncomplete, viewID, instrumentID)
+		if counts[instrumentID] == nil {
+			counts[instrumentID] = make(map[string]int)
+		}
+		for field := range sourceFields[instrumentID] {
+			if rowHasField(row.Values, field) && countSeriesContribution(counts, instrumentID, "source:"+field) > 1 {
+				return multipleSeriesContributionError(viewID, instrumentID, field)
+			}
+		}
+		for _, factor := range compiled.Factors {
+			if factor.ResultViewID != viewID || !factorAppliesToItem(factor, item.PoolItem) || strings.TrimSpace(factor.ColumnName) == "" {
+				continue
+			}
+			if _, exists := row.Values[factor.ColumnName]; !exists {
+				continue
+			}
+			identity := strings.TrimSpace(factor.BindingID)
+			if identity == "" {
+				identity = strings.TrimSpace(factor.FactorID)
+			}
+			if identity == "" {
+				identity = strings.TrimSpace(factor.ColumnName)
+			}
+			if countSeriesContribution(counts, instrumentID, "factor:"+identity) > 1 {
+				return multipleSeriesContributionError(viewID, instrumentID, factor.ColumnName)
+			}
 		}
 	}
 	return nil
 }
 
-func viewContributesStrategyValues(viewID string, compiled compiler.CompiledStrategy, items map[string]input.InstrumentInput) bool {
-	if viewID == compiled.SourceView.ID {
-		return compiledUsesSourceFields(compiled)
-	}
-	for _, factor := range compiled.Factors {
-		if factor.ResultViewID != viewID {
-			continue
-		}
-		for _, item := range items {
-			if factorAppliesToItem(factor, item.PoolItem) {
-				return true
-			}
-		}
-	}
-	return false
+func countSeriesContribution(counts map[string]map[string]int, instrumentID, contribution string) int {
+	counts[instrumentID][contribution]++
+	return counts[instrumentID][contribution]
 }
 
-func compiledUsesSourceFields(compiled compiler.CompiledStrategy) bool {
+func consumedSourceFields(compiled compiler.CompiledStrategy, item input.PoolItem) map[string]struct{} {
+	fields := make(map[string]struct{})
 	factorFields := make(map[string]struct{}, len(compiled.Factors)*3)
 	for _, factor := range compiled.Factors {
 		for _, alias := range []string{factor.FactorID, factor.Output, factor.ColumnName} {
@@ -407,31 +419,42 @@ func compiledUsesSourceFields(compiled compiler.CompiledStrategy) bool {
 		}
 	}
 	for _, rule := range compiled.Rules {
-		for _, expression := range []*compiler.CompiledExpression{rule.FilterBefore, rule.Score, rule.SelectWhere, rule.SignalEntry, rule.SignalExit, rule.FilterAfter} {
-			if expression == nil {
-				continue
-			}
-			for _, field := range expression.Dependencies.Fields {
-				name := strings.ToLower(strings.TrimSpace(field))
-				if name != "" && name != "instrument_id" {
-					if _, factorField := factorFields[name]; !factorField {
-						return true
-					}
-				}
-			}
-			for _, fields := range expression.Dependencies.Bars {
-				for _, field := range fields {
-					name := strings.ToLower(strings.TrimSpace(field))
-					if name != "" {
-						if _, factorField := factorFields[name]; !factorField {
-							return true
-						}
-					}
-				}
-			}
+		if !ruleAppliesToInstrument(compiled, rule.Definition.Pool, item.InstrumentID) {
+			continue
+		}
+		current, previous := ruleFields(rule)
+		for field := range current {
+			addConsumedSourceField(fields, factorFields, field)
+		}
+		for field := range previous {
+			addConsumedSourceField(fields, factorFields, field)
+		}
+	}
+	return fields
+}
+
+func addConsumedSourceField(fields, factorFields map[string]struct{}, field string) {
+	name := strings.ToLower(strings.TrimSpace(field))
+	if name == "" || name == "instrument_id" {
+		return
+	}
+	if _, factorField := factorFields[name]; factorField {
+		return
+	}
+	fields[name] = struct{}{}
+}
+
+func rowHasField(values map[string]string, field string) bool {
+	for name := range values {
+		if strings.EqualFold(strings.TrimSpace(name), field) || strings.EqualFold(mergedSourceShortName(name), field) {
+			return true
 		}
 	}
 	return false
+}
+
+func multipleSeriesContributionError(viewID, instrumentID, field string) error {
+	return fmt.Errorf("%w: view %s instrument %s has multiple series rows contributing %s; bind an explicit series_tag", input.ErrStrictIncomplete, viewID, instrumentID, field)
 }
 
 func scopedFieldsForItem(compiled compiler.CompiledStrategy, item input.PoolItem) map[string]bool {

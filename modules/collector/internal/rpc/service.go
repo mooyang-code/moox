@@ -58,6 +58,9 @@ type Service struct {
 	defaultResampleSettleDelay time.Duration
 	resultManager              *taskresult.Manager
 	resultDataNodeID           string
+	inventorySnapshotMu        sync.Mutex
+	inventorySnapshots         map[string]*taskResultInventorySnapshot
+	inventorySnapshotBuilds    map[string]int
 	createTaskMu               sync.Mutex
 	taskMutationLocks          keyedTaskLocker
 }
@@ -217,7 +220,11 @@ func (s *Service) GetTaskDetail(ctx context.Context, req *pb.GetTaskDetailReq) (
 	}
 	task, err := s.taskRepo.GetByTaskID(ctx, req.GetSpaceId(), req.GetTaskId())
 	if err != nil {
-		return &pb.GetTaskDetailRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &pb.GetTaskDetailRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "collection task not found")}, nil
+		}
+		log.ErrorContextf(ctx, "[Collector] get collection task failed: %v", err)
+		return &pb.GetTaskDetailRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "failed to load collection task")}, nil
 	}
 	return &pb.GetTaskDetailRsp{RetInfo: retOK(), Task: s.toPBTask(ctx, *task)}, nil
 }
@@ -231,34 +238,14 @@ func (s *Service) toPBTask(ctx context.Context, task domain.CollectionTask) *pb.
 	return result
 }
 
-func (s *Service) toPBTaskList(ctx context.Context, tasks []domain.CollectionTask) []*pb.CollectionTask {
+func (s *Service) toPBTaskList(_ context.Context, tasks []domain.CollectionTask) []*pb.CollectionTask {
 	out := make([]*pb.CollectionTask, len(tasks))
 	for i, task := range tasks {
 		out[i] = toPBTask(task)
+		if task.PrepareState != domain.PrepareStatePending && task.PrepareState != domain.PrepareStateWaitingView && task.PrepareState != domain.PrepareStateError && out[i].GetResult() != nil {
+			out[i].GetResult().Status = taskresult.ResultStatusUnknown
+		}
 	}
-	if s == nil || s.resultManager == nil || len(tasks) == 0 {
-		return out
-	}
-	workerCount := len(tasks)
-	if workerCount > 4 {
-		workerCount = 4
-	}
-	indices := make(chan int)
-	var workers sync.WaitGroup
-	workers.Add(workerCount)
-	for worker := 0; worker < workerCount; worker++ {
-		go func() {
-			defer workers.Done()
-			for index := range indices {
-				s.enrichPBTaskResult(ctx, tasks[index], out[index])
-			}
-		}()
-	}
-	for index := range tasks {
-		indices <- index
-	}
-	close(indices)
-	workers.Wait()
 	return out
 }
 
@@ -268,14 +255,18 @@ func (s *Service) enrichPBTaskResult(ctx context.Context, task domain.Collection
 	}
 	ids, idsErr := collectionTaskResultIDs(task)
 	if idsErr != nil {
+		result.Result.Status = taskresult.ResultStatusError
+		result.LastError = idsErr.Error()
 		return
 	}
 	inspection, err := s.resultManager.InspectIDs(ctx, task.SpaceID, task.TaskID, ids)
 	if err != nil {
 		log.WarnContextf(ctx, "[Collector] inspect task result failed space=%s task=%s: %v", task.SpaceID, task.TaskID, err)
-		result.Result.Status = taskresult.ResultStatusError
-		if result.LastError == "" {
-			result.LastError = inspection.Error
+		if errors.Is(err, taskresult.ErrResultContract) {
+			result.Result.Status = taskresult.ResultStatusError
+			result.LastError = err.Error()
+		} else {
+			result.Result.Status = taskresult.ResultStatusUnknown
 		}
 		return
 	}

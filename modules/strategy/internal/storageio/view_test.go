@@ -106,6 +106,57 @@ func TestLoaderAliasesMergedSourceShortNames(t *testing.T) {
 	}
 }
 
+func TestLoaderRejectsDuplicateFactorRowsWhenSourceAndResultViewMatch(t *testing.T) {
+	reader := loaderReader{
+		subjects: []input.Subject{{SubjectID: "btc", InstrumentID: "BTC", Active: true}},
+		history:  map[string]int{"btc": 1},
+		rows: map[string][]ViewRow{
+			"merged": {
+				{InstrumentID: "BTC", SubjectID: "btc", SeriesTag: "spot", Values: map[string]string{"bias": "0.25"}},
+				{InstrumentID: "BTC", SubjectID: "btc", SeriesTag: "swap", Values: map[string]string{"bias": "0.75"}},
+			},
+		},
+	}
+	compiled := compiler.CompiledStrategy{
+		SourceView:     compiler.CompiledView{ID: "merged", Frequency: "1m"},
+		InstrumentPool: config.InstrumentPoolRule{MinHistoryPeriods: 1},
+		Rules:          []compiler.CompiledRule{{Score: &compiler.CompiledExpression{Dependencies: compiler.ExpressionDependencies{Fields: []string{"bias"}}}}},
+		Factors:        []compiler.CompiledFactor{{FactorID: "bias", ResultViewID: "merged", ColumnName: "bias"}},
+		Dependencies:   compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"merged"}},
+	}
+	_, err := (Loader{Reader: reader}).Load(context.Background(), domain.StrategyRunner{SpaceID: "space", StrategyID: "strategy"}, compiled, time.Unix(60, 0))
+	if !errors.Is(err, input.ErrStrictIncomplete) {
+		t.Fatalf("Load error = %v, want multiple-series strict incomplete", err)
+	}
+}
+
+func TestLoaderAllowsSparseSourceAndFactorRowsWhenViewsMatch(t *testing.T) {
+	reader := loaderReader{
+		subjects: []input.Subject{{SubjectID: "btc", InstrumentID: "BTC", Active: true}},
+		history:  map[string]int{"btc": 1},
+		rows: map[string][]ViewRow{
+			"merged": {
+				{InstrumentID: "BTC", SubjectID: "btc", SeriesTag: "spot", Values: map[string]string{"close": "100"}},
+				{InstrumentID: "BTC", SubjectID: "btc", SeriesTag: "factor", Values: map[string]string{"bias": "0.25"}},
+			},
+		},
+	}
+	compiled := compiler.CompiledStrategy{
+		SourceView:     compiler.CompiledView{ID: "merged", Frequency: "1m"},
+		InstrumentPool: config.InstrumentPoolRule{MinHistoryPeriods: 1},
+		Rules:          []compiler.CompiledRule{{Score: &compiler.CompiledExpression{Dependencies: compiler.ExpressionDependencies{Fields: []string{"close", "bias"}}}}},
+		Factors:        []compiler.CompiledFactor{{FactorID: "bias", ResultViewID: "merged", ColumnName: "bias"}},
+		Dependencies:   compiler.DependenciesSnapshot{FactorResultViewIDs: []string{"merged"}},
+	}
+	got, err := (Loader{Reader: reader}).Load(context.Background(), domain.StrategyRunner{SpaceID: "space", StrategyID: "strategy"}, compiled, time.Unix(60, 0))
+	if err != nil {
+		t.Fatalf("Load error = %v", err)
+	}
+	if len(got.Items) != 1 || got.Items[0].Values["close"].String() != "100" || got.Items[0].Values["bias"].String() != "0.25" {
+		t.Fatalf("loaded input = %+v", got.Items)
+	}
+}
+
 func TestLoaderScopesFactorReadinessToRulePoolAndBindingSubjects(t *testing.T) {
 	compiled := compiler.CompiledStrategy{
 		Rules: []compiler.CompiledRule{

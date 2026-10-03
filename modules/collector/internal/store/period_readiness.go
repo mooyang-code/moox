@@ -207,6 +207,39 @@ func mergeStoredCommittedPositions(raw string, next storedCommittedPosition) []s
 	return append(current, next)
 }
 
+// LatestCompletedPeriod returns the newest terminal period for one exact
+// task-result scope. Complete and degraded periods are both terminal; waiting
+// periods never advance the freshness watermark.
+func (r *PeriodReadinessRepository) LatestCompletedPeriod(ctx context.Context, spaceID, datasetID, frequency string) (*domain.PeriodReadiness, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("period readiness repository is not initialized")
+	}
+	spaceID, datasetID, frequency = strings.TrimSpace(spaceID), strings.TrimSpace(datasetID), strings.TrimSpace(frequency)
+	if spaceID == "" || datasetID == "" || frequency == "" {
+		return nil, fmt.Errorf("space_id, dataset_id and frequency are required")
+	}
+	var latest *domain.PeriodReadiness
+	for _, status := range []string{domain.PeriodStatusComplete, domain.PeriodStatusDegraded} {
+		var current domain.PeriodReadiness
+		err := r.db.WithContext(ctx).
+			Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_status = ?", spaceID, datasetID, frequency, status).
+			Order("c_period_time DESC, c_id DESC").
+			First(&current).Error
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				continue
+			}
+			return nil, err
+		}
+		if latest == nil || current.PeriodTime.After(latest.PeriodTime) ||
+			(current.PeriodTime.Equal(latest.PeriodTime) && current.ID > latest.ID) {
+			copy := current
+			latest = &copy
+		}
+	}
+	return latest, nil
+}
+
 // FinalizeDue atomically moves ready or deadline-expired parents to
 // report_pending and fixes the collection timestamp. The timestamp is fixed
 // before the reporter constructs its payload, so a crash/retry cannot change
@@ -432,70 +465,117 @@ func (r *PeriodReadinessRepository) MarkReported(ctx context.Context, readinessI
 		Updates(map[string]any{"c_report_state": domain.PeriodReportReported, "c_mtime": time.Now().UTC()}).Error
 }
 
-func (r *PeriodReadinessRepository) DeleteBefore(ctx context.Context, before time.Time) (int64, error) {
-	return r.deleteBefore(ctx, "", before)
-}
-
-// DeleteBeforeInSpace cleans only one market space's reported parents.
-func (r *PeriodReadinessRepository) DeleteBeforeInSpace(ctx context.Context, spaceID string, before time.Time) (int64, error) {
-	spaceID, err := requiredPeriodSpaceID(spaceID)
-	if err != nil {
-		return 0, err
-	}
-	return r.deleteBefore(ctx, spaceID, before)
-}
-
-func (r *PeriodReadinessRepository) deleteBefore(ctx context.Context, spaceID string, before time.Time) (int64, error) {
-	query := r.db.WithContext(ctx).Where("c_report_state = ? AND c_collected_at < ?", domain.PeriodReportReported, before.UTC())
-	if spaceID != "" {
-		query = query.Where("c_space_id = ?", spaceID)
-	}
-	result := query.Delete(&domain.PeriodReadiness{})
-	return result.RowsAffected, result.Error
-}
-
-// DeleteReportedItemsOutsideWindow keeps only the newest N reported period
-// snapshots per Dataset/frequency. Pending parents are excluded so a delayed
-// report can still be retried with its full subject state.
-func (r *PeriodReadinessRepository) DeleteReportedItemsOutsideWindow(ctx context.Context, periods int) (int64, error) {
-	return r.deleteReportedItemsOutsideWindow(ctx, "", periods)
-}
-
-// DeleteReportedItemsOutsideWindowInSpace keeps the retention policy scoped
-// to one market space when multiple reporters share the SQLite repository.
-func (r *PeriodReadinessRepository) DeleteReportedItemsOutsideWindowInSpace(ctx context.Context, spaceID string, periods int) (int64, error) {
-	spaceID, err := requiredPeriodSpaceID(spaceID)
-	if err != nil {
-		return 0, err
-	}
-	return r.deleteReportedItemsOutsideWindow(ctx, spaceID, periods)
-}
-
-func (r *PeriodReadinessRepository) deleteReportedItemsOutsideWindow(ctx context.Context, spaceID string, periods int) (int64, error) {
+// CleanupReportedRetentionInSpace removes only reported readiness rows and
+// counts every physical parent/item row against one shared per-pass budget.
+// Large periods are pruned incrementally: their child rows are deleted in
+// bounded pages and the parent is removed only after its children are gone.
+func (r *PeriodReadinessRepository) CleanupReportedRetentionInSpace(ctx context.Context, spaceID string, parentBefore time.Time, itemRetention, maxRows int) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, fmt.Errorf("period readiness repository is not initialized")
 	}
-	if periods <= 0 {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return 0, err
+	}
+	if maxRows < 0 {
+		return 0, fmt.Errorf("period readiness cleanup row budget must not be negative")
+	}
+	if maxRows == 0 || (parentBefore.IsZero() && itemRetention <= 0) {
 		return 0, nil
 	}
-	spaceClause := ""
-	args := []any{domain.PeriodReportReported, periods}
-	if spaceID != "" {
-		spaceClause = " AND c_space_id = ?"
-		args = []any{domain.PeriodReportReported, spaceID, periods}
-	}
-	query := `DELETE FROM t_period_readiness_items
-WHERE c_readiness_id IN (
-	  SELECT c_id FROM (
-	    SELECT c_id,
-	           ROW_NUMBER() OVER (PARTITION BY c_dataset_id, c_frequency ORDER BY c_period_time DESC, c_id DESC) AS c_rank
-	      FROM t_period_readiness
-	     WHERE c_report_state = ?` + spaceClause + `
-	  )
- WHERE c_rank > ?
+
+	var deleted int64
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		remaining := maxRows
+		if !parentBefore.IsZero() {
+			for remaining > 0 {
+				var readinessID int64
+				result := tx.Model(&domain.PeriodReadiness{}).
+					Select("c_id").
+					Where("c_space_id = ? AND c_report_state = ? AND c_collected_at < ?", spaceID, domain.PeriodReportReported, parentBefore.UTC()).
+					Order("c_collected_at ASC, c_id ASC").
+					Limit(1).
+					Scan(&readinessID)
+				if result.Error != nil {
+					return result.Error
+				}
+				if readinessID == 0 {
+					break
+				}
+
+				itemDelete := tx.Exec(`DELETE FROM t_period_readiness_items
+WHERE c_readiness_id = ?
+  AND c_write_target_id IN (
+    SELECT c_write_target_id FROM t_period_readiness_items
+     WHERE c_readiness_id = ?
+     ORDER BY c_write_target_id
+     LIMIT ?
+  )`, readinessID, readinessID, remaining)
+				if itemDelete.Error != nil {
+					return itemDelete.Error
+				}
+				deleted += itemDelete.RowsAffected
+				remaining -= int(itemDelete.RowsAffected)
+				if remaining == 0 {
+					break
+				}
+
+				var childCount int64
+				if err := tx.Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ?", readinessID).Count(&childCount).Error; err != nil {
+					return err
+				}
+				if childCount > 0 {
+					break
+				}
+				parentDelete := tx.Where("c_id = ? AND c_space_id = ? AND c_report_state = ? AND c_collected_at < ?", readinessID, spaceID, domain.PeriodReportReported, parentBefore.UTC()).Delete(&domain.PeriodReadiness{})
+				if parentDelete.Error != nil {
+					return parentDelete.Error
+				}
+				deleted += parentDelete.RowsAffected
+				remaining -= int(parentDelete.RowsAffected)
+				if parentDelete.RowsAffected == 0 {
+					break
+				}
+			}
+		}
+
+		if remaining == 0 || itemRetention <= 0 {
+			return nil
+		}
+		retentionCutoff := ""
+		args := []any{spaceID, domain.PeriodReportReported}
+		if !parentBefore.IsZero() {
+			retentionCutoff = " AND c_collected_at >= ?"
+			args = append(args, parentBefore.UTC())
+		}
+		args = append(args, itemRetention, remaining)
+		query := `DELETE FROM t_period_readiness_items
+WHERE rowid IN (
+  SELECT items.rowid
+    FROM t_period_readiness_items AS items
+    JOIN (
+      SELECT c_id FROM (
+        SELECT c_id,
+               ROW_NUMBER() OVER (PARTITION BY c_space_id, c_dataset_id, c_frequency ORDER BY c_period_time DESC, c_id DESC) AS c_rank
+          FROM t_period_readiness
+         WHERE c_space_id = ? AND c_report_state = ?` + retentionCutoff + `
+      )
+     WHERE c_rank > ?
+    ) AS old_periods ON old_periods.c_id = items.c_readiness_id
+   ORDER BY items.c_readiness_id, items.c_write_target_id
+   LIMIT ?
 )`
-	result := r.db.WithContext(ctx).Exec(query, args...)
-	return result.RowsAffected, result.Error
+		result := tx.Exec(query, args...)
+		if result.Error != nil {
+			return result.Error
+		}
+		deleted += result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 func requiredPeriodSpaceID(spaceID string) (string, error) {

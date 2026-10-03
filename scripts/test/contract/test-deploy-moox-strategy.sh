@@ -49,7 +49,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
   --goos linux --goarch amd64 --skip-build --node-id strategy \
   --gateway-control-url http://127.0.0.1:11000 \
-  --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode \
+  --no-admin --no-storage --no-storage-access --no-archive --no-eventbus --no-cloudnode \
   --no-collector --no-factor --no-trade --no-monitor --no-hostagent >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked"
@@ -109,6 +109,10 @@ if ROOT="${TMP_ROOT}/unpacked" MOOX_EVENTBUS_NATS_URL="tls://127.0.0.1:4222" \
 fi
 grep -Fq 'import_trade_owner_route ||' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'gateway_service_env_for strategy' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${ROOT}/scripts/deploy/deploy-moox.sh"
+grep -Fq '"MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}"' "${ROOT}/scripts/deploy/deploy-moox.sh"
+grep -Fq 'MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'config/trade-gateway.json' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'MOOX_TRADE_GATEWAY_URL=' "${TMP_ROOT}/unpacked/start.sh"
 grep -q '^  credential_file: ""$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"
@@ -140,7 +144,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --dir "${TMP_ROOT}/control-deploy" --stage "${TMP_ROOT}/control-stage" \
   --goos linux --goarch amd64 --skip-build --node-id control \
   --gateway-control-url http://127.0.0.1:11000 \
-  --no-strategy --no-web-host --no-storage --no-archive --no-eventbus --no-cloudnode \
+  --no-strategy --no-web-host --no-storage --no-storage-access --no-archive --no-eventbus --no-cloudnode \
   --no-collector --no-factor --no-trade --no-monitor --no-hostagent >/dev/null
 cmp "${TMP_ROOT}/unpacked/config/trade-gateway.json" "${TMP_ROOT}/control-stage/config/trade-gateway.json"
 [[ ! -e "${TMP_ROOT}/control-stage/strategy/config/app.yaml" ]]

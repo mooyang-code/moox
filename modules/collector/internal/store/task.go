@@ -97,6 +97,33 @@ func (r *TaskRepository) ListEnabledAll(ctx context.Context, limit int) ([]domai
 	return tasks, nil
 }
 
+// ListKlineResultTasks returns the bounded, authoritative task-result
+// inventory source. Disabled tasks are included so consumers can resolve
+// freshness checks; deleted tasks are represented by absence from the next
+// complete inventory snapshot.
+func (r *TaskRepository) ListKlineResultTasks(ctx context.Context, spaceID string, limit int) ([]domain.CollectionTask, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return nil, fmt.Errorf("kline task inventory space_id is required")
+	}
+	if limit <= 0 || limit > MaxEnabledTasks {
+		return nil, fmt.Errorf("kline task inventory limit must be between 1 and %d", MaxEnabledTasks)
+	}
+	var tasks []domain.CollectionTask
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_data_type IN ?", spaceID, []string{"kline", "kline_resample"}).
+		Order("c_id ASC").
+		Limit(limit + 1).
+		Find(&tasks).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) > limit {
+		return nil, fmt.Errorf("kline task inventory exceeds limit %d", limit)
+	}
+	return tasks, nil
+}
+
 // GetByTaskID returns a task by its business id within a space.
 func (r *TaskRepository) GetByTaskID(ctx context.Context, spaceID string, taskID string) (*domain.CollectionTask, error) {
 	var task domain.CollectionTask

@@ -80,12 +80,14 @@ moox-cli storage reset-view-consumers \
 `storage_view_period_v1`/`storage_view`、带版本后缀的 View durable 与当前 durable，并清理
 所有配置 Dataset 的精确 Storage subjects。该命令是破坏性“新一代”操作：Record/Bleve
 View 也会删除 A/B 索引和元数据，历史记录不保留；重启后只接收清理完成后的新事件。时序 View
-时序 View 会按 Storage 配置中的 `rebuild_lookback_periods` 从 Primary 回溯（默认所有频率 `1000` 根；
-根目录 `moox.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一配置），历史不足时使用当前已有数据激活并由实时事件补齐；`--lookback` 仅覆盖没有
+时序 View 会按 Storage 配置中的 `rebuild_lookback_periods` 从 Primary 回溯（默认保留最近 `5000` 根；
+根目录 `moox.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一配置）。任一序列超过 `6000` 根时触发安全 A/B 重建；容量扫描每 View 每小时执行一次，并按进程和 View 随机错开首轮，失败后等下一小时扫描再试。通用 View 维护仍每分钟执行。历史不足时使用当前已有数据激活并由实时事件补齐；`--lookback` 仅覆盖没有
 frequency 的旧 View 兼容兜底。默认不删 Primary 事实数据；只有明确传
 `--reset-all-storage-data` 才会停止全 Storage 并删除 Primary/DataNode Pebble 数据，此模式
-只等待服务健康，不要求不存在的历史回溯水位。若 purge 或索引清理中途失败，命令会保留 Storage
+	只等待服务健康，不要求不存在的历史回溯水位。若 purge 或索引清理中途失败，命令会保留 Storage
 停止状态并返回非零，避免在已部分删除历史后自动启动一个不一致的 View；修复原因后重新执行命令。
+
+Collector 的 `[collector_retention]` 配置控制维护 worker 和终态运行记录保留时间。默认每分钟维护一次、每轮最多删除 50,000 行；被新结果替代的 scheduled 执行明细保留 24 小时、scheduled Run 汇总保留 30 天、terminal retry 和 period snapshot 保留 7/30 天。被启用任务引用的最新目标、活动重试和 Timer 工作始终受保护；K 线 WriteTarget 只有在 Storage 明确报告对应 period 为 `complete` 或 `degraded` 后才可回收，缺少 Storage 状态不会被当成终态。
 
 当 Storage View 因 durable consumer 积压、重建失败或旧索引占用空间而停止追赶时，
 可在 Storage 主机上执行：
@@ -286,6 +288,12 @@ moox-cli setup private-network --file ./moox.toml --dry-run
 # 发布时先完整占满 Storage 同地域配置的节点数，再发布其他地域；同地域绑定 VPC/子网
 moox-cli collector function publish submit --file ./moox.toml --space-id crypto --same-region-first
 
+# StockCN 激活必须使用 publish 输出的每个启用地域精确 package_id
+moox-cli collector function activate-stockcn \
+  --file ./moox.toml --version <release-version> \
+  --region-package-id ap-guangzhou=<package-id-from-publish> \
+  --region-package-id ap-shanghai=<package-id-from-publish>
+
 # --host 必须显式指定 moox.toml 中的主机名
 moox-cli setup deploy-storage --file ./moox.toml --host compute
 
@@ -298,6 +306,8 @@ moox-cli setup init \
 # 仅导入/更新因子，不重新校验或写入 Storage 元数据
 moox-cli setup factors --file ./moox.toml
 ```
+
+Crypto 与 StockCN 发布会先在 reservation 专属的临时 Invoke 函数上验证候选包，之后才更新生产 Invoke/Timer fleet；激活 StockCN 时必须逐地域提供发布结果中的精确 package ID，版本字符串相同但包 ID 不同也会拒绝。
 
 如果 `moox.toml` 启用了 `[factors]`，同一个 `setup init` 还会从
 `factors.source_dir` 读取 Python 因子，调用 FactorMgr 导入定义、建立绑定并启用因子。

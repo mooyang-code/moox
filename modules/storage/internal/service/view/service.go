@@ -52,21 +52,25 @@ type Service struct {
 	// indexRevision advances after every successful write to an index. Unlike
 	// indexGeneration (which identifies a physical slot incarnation), this
 	// revision detects in-place live corrections while a reader is paginating.
-	indexRevision     map[string]uint64
-	retiringIndexes   map[string]uint64
-	preparingIndexes  map[string]uint64
-	cleanupMu         sync.Mutex
-	cleanupCandidates map[managedIndexRef]retiredIndexCandidate
-	rebuildMu         sync.Mutex
-	rebuildRunning    bool
-	idleChecks        map[viewRef]uint32
-	rebuildLogRetry   map[string]pendingRebuildLog
-	maintenanceReady  bool
-	pendingReadyMu    sync.Mutex
-	pendingReady      []pendingViewReady
-	readyFenceDir     string
-	appliedFenceMu    sync.Mutex
-	appliedFence      map[appliedFenceKey]uint64
+	indexRevision              map[string]uint64
+	retiringIndexes            map[string]uint64
+	preparingIndexes           map[string]uint64
+	cleanupMu                  sync.Mutex
+	cleanupCandidates          map[managedIndexRef]retiredIndexCandidate
+	capacityChecksMu           sync.Mutex
+	capacityChecks             map[capacityCheckRef]*seriesCapacityCheckState
+	capacityScanLive           bool
+	permanentCapacityOverLimit map[capacityCheckRef]struct{}
+	rebuildMu                  sync.Mutex
+	rebuildRunning             bool
+	idleChecks                 map[viewRef]uint32
+	rebuildLogRetry            map[string]pendingRebuildLog
+	maintenanceReady           bool
+	pendingReadyMu             sync.Mutex
+	pendingReady               []pendingViewReady
+	readyFenceDir              string
+	appliedFenceMu             sync.Mutex
+	appliedFence               map[appliedFenceKey]uint64
 }
 
 type pendingRebuildLog struct {
@@ -83,6 +87,10 @@ type pendingRebuildLog struct {
 
 type datasetRef struct{ spaceID, datasetID string }
 type viewRef struct{ spaceID, viewID string }
+type capacityCheckRef struct {
+	viewRef
+	indexID string
+}
 
 type viewRuntime struct {
 	mu     sync.Mutex

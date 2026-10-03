@@ -25,10 +25,11 @@ type Service struct {
 	credentialResolver interface {
 		Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
 	}
-	scfClientFactory     func(cloudcredential.TencentCredential) scfProvisioner
-	executeNodeBatchItem func(context.Context, store.NodeBatchItem) (string, error)
-	nodeBatchTakenHook   func([]store.NodeBatchItem)
-	moduleMetrics        *report.ModuleMetrics
+	scfClientFactory      func(cloudcredential.TencentCredential) scfProvisioner
+	executeNodeBatchItem  func(context.Context, store.NodeBatchItem) (string, error)
+	nodeBatchTakenHook    func([]store.NodeBatchItem)
+	moduleMetrics         *report.ModuleMetrics
+	publishLeaseValidator CollectorPublishLeaseValidator
 }
 
 type scfProvisioner interface {
@@ -60,6 +61,10 @@ func WithJobHistoryStore(store *jobhistory.Store) Option {
 
 func WithModuleMetrics(metrics *report.ModuleMetrics) Option {
 	return func(s *Service) { s.moduleMetrics = metrics }
+}
+
+func WithCollectorPublishLeaseValidator(validator CollectorPublishLeaseValidator) Option {
+	return func(s *Service) { s.publishLeaseValidator = validator }
 }
 
 func WithCredentialResolver(resolver interface {

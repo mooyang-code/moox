@@ -283,7 +283,7 @@ func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
 	fake := newResultMetadataFake()
 	ids := ResultIDs("crypto", "task-inspect")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
-		SpaceId: "crypto",
+		SpaceId: "crypto", DatasetId: ids.DatasetID,
 		Attributes: map[string]string{
 			"owner_module":      "collector",
 			"collector_task_id": "task-inspect",
@@ -291,6 +291,7 @@ func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
 		Status: "active",
 	}
 	fake.views[ids.ViewID] = &storagepb.View{
+		SpaceId:    "crypto",
 		ViewId:     ids.ViewID,
 		DatasetId:  ids.DatasetID,
 		Status:     "active",
@@ -311,6 +312,7 @@ func TestInspectReportsPendingWhenResultMetadataIsIncomplete(t *testing.T) {
 	fake := newResultMetadataFake()
 	ids := ResultIDs("crypto", "task-pending")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID,
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-pending"},
 		Status:     "draft",
 	}
@@ -327,6 +329,7 @@ func TestInspectRejectsResultOwnedByAnotherTask(t *testing.T) {
 	fake := newResultMetadataFake()
 	ids := ResultIDs("crypto", "task-inspect")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID,
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "other-task"},
 		Status:     "active",
 	}
@@ -334,6 +337,73 @@ func TestInspectRejectsResultOwnedByAnotherTask(t *testing.T) {
 
 	_, err := manager.Inspect(context.Background(), "crypto", "task-inspect")
 	require.ErrorContains(t, err, "owned by another task")
+	require.ErrorIs(t, err, ErrResultContract)
+}
+
+func TestInspectIDsRejectsMetadataIdentityMismatch(t *testing.T) {
+	tests := []struct {
+		name       string
+		dataset    *storagepb.Dataset
+		view       *storagepb.View
+		wantObject string
+	}{
+		{
+			name: "dataset space mismatch",
+			dataset: &storagepb.Dataset{
+				SpaceId: "other-space", DatasetId: "requested-dataset",
+				Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
+			},
+			wantObject: "dataset",
+		},
+		{
+			name: "dataset id mismatch",
+			dataset: &storagepb.Dataset{
+				SpaceId: "crypto", DatasetId: "other-dataset",
+				Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
+			},
+			wantObject: "dataset",
+		},
+		{
+			name: "view space mismatch",
+			dataset: &storagepb.Dataset{
+				SpaceId: "crypto", DatasetId: "requested-dataset",
+				Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
+			},
+			view: &storagepb.View{
+				SpaceId: "other-space", ViewId: "requested-view", DatasetId: "requested-dataset",
+				Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
+			},
+			wantObject: "view",
+		},
+		{
+			name: "view id mismatch",
+			dataset: &storagepb.Dataset{
+				SpaceId: "crypto", DatasetId: "requested-dataset",
+				Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
+			},
+			view: &storagepb.View{
+				SpaceId: "crypto", ViewId: "other-view", DatasetId: "requested-dataset",
+				Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-inspect"},
+			},
+			wantObject: "view",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newResultMetadataFake()
+			ids := IDs{DatasetID: "requested-dataset", ViewID: "requested-view"}
+			fake.datasets[ids.DatasetID] = tt.dataset
+			if tt.view != nil {
+				fake.views[ids.ViewID] = tt.view
+			}
+			manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+			_, err := manager.InspectIDs(context.Background(), "crypto", "task-inspect", ids)
+			require.ErrorIs(t, err, ErrResultContract)
+			require.ErrorContains(t, err, tt.wantObject+" identity does not match requested")
+		})
+	}
 }
 
 func TestOwnedByTaskDoesNotAcceptConflictingLegacyOwner(t *testing.T) {

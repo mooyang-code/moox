@@ -182,6 +182,23 @@ func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	}
 }
 
+func TestStorageViewMaintenancePolicyDirectDefaults(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	policy, err := storageViewMaintenancePolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.MaintenanceCheckInterval != "1m" || policy.CapacityCheckInterval != "1h" || policy.CapacityCheckJitter != "1h" {
+		t.Fatalf("maintenance intervals = %q/%q/%q", policy.MaintenanceCheckInterval, policy.CapacityCheckInterval, policy.CapacityCheckJitter)
+	}
+	if policy.RebuildLookbackPeriods != 5000 || policy.MaxPeriodsPerSeries != 6000 || policy.MaxViewFileBytes != 1<<30 {
+		t.Fatalf("maintenance limits = %#v", policy)
+	}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("direct defaults are invalid: %v", err)
+	}
+}
+
 func TestStorageViewRebuildSettingsAllowsExplicitZeroMaxPending(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
 	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), 0o600); err != nil {

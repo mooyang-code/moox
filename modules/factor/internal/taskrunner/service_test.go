@@ -211,6 +211,32 @@ func rangeTask(subject string, start, end time.Time) Task {
 	}, TriggerType: "view_ready"}
 }
 
+func TestSortCrossSectionFrameUsesDataTimeTagSubjectOrder(t *testing.T) {
+	first := time.Unix(1, 0).UTC()
+	second := time.Unix(2, 0).UTC()
+	frame := &engine.DataFrame{
+		Columns:    []string{"close"},
+		Rows:       [][]any{{"eth-okx"}, {"btc-okx"}, {"eth-binance"}, {"btc-binance"}},
+		DataTimes:  []time.Time{second, first, first, first},
+		SeriesTags: []string{"venue:okx", "venue:okx", "venue:binance", "venue:binance"},
+		SubjectIDs: []string{"ETH", "BTC", "ETH", "BTC"},
+	}
+
+	require.NoError(t, sortCrossSectionFrame(frame))
+	require.Equal(t, [][]any{{"btc-binance"}, {"eth-binance"}, {"btc-okx"}, {"eth-okx"}}, frame.Rows)
+	require.Equal(t, []time.Time{first, first, first, second}, frame.DataTimes)
+	require.Equal(t, []string{"venue:binance", "venue:binance", "venue:okx", "venue:okx"}, frame.SeriesTags)
+	require.Equal(t, []string{"BTC", "ETH", "BTC", "ETH"}, frame.SubjectIDs)
+}
+
+func TestSortCrossSectionFrameRejectsMisalignedIdentity(t *testing.T) {
+	err := sortCrossSectionFrame(&engine.DataFrame{
+		Rows: [][]any{{1.0}}, DataTimes: []time.Time{time.Unix(1, 0)},
+		SeriesTags: []string{"venue:binance"},
+	})
+	require.ErrorContains(t, err, "row identities do not align")
+}
+
 type fakeStorage struct {
 	mu           sync.Mutex
 	chunks       []*storageio.RangeChunk

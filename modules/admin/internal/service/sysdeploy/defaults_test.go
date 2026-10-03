@@ -93,7 +93,7 @@ func TestTRPCHealthAndAdminRPCServicesBindLoopback(t *testing.T) {
 		}
 		lines := strings.Split(string(raw), "\n")
 		for i, line := range lines {
-			if !strings.Contains(line, "- name:") || (!strings.Contains(line, ".Health") && !strings.Contains(line, "trpc.moox.infra.") && !strings.Contains(line, "trpc.moox.ops.") && !strings.Contains(line, "trpc.moox.admin.SpaceMgr")) {
+			if !strings.Contains(line, "- name:") || (!strings.Contains(line, ".Health") && !strings.Contains(line, "trpc.moox.infra.") && !strings.Contains(line, "trpc.moox.ops.") && !strings.Contains(line, "trpc.moox.admin.SpaceMgr") && !strings.Contains(line, "trpc.moox.admin.CollectorPublishLease")) {
 				continue
 			}
 			end := i + 7
@@ -129,6 +129,10 @@ func TestDefaultDeploymentsDefineCanonicalGatewayEndpoints(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(runtimeExtra.GatewayMethods, []string{"ClaimTimerBatch"}) || !reflect.DeepEqual(runtimeExtra.GatewayCallers, []string{"collector"}) {
 		t.Fatalf("collector runtime ACL = %#v err=%v", runtimeExtra, err)
 	}
+	lease, ok := byName["publishlease"]
+	if !ok || lease.Port != 11111 || lease.GatewayPath != "trpc.moox.admin.CollectorPublishLease" || !lease.GatewayEnabled || lease.Scope != "internal" {
+		t.Fatalf("collector publish lease deployment = %#v", lease)
+	}
 }
 
 func TestCollectorMarketRuntimeGatewayUsesNativeTRPCListener(t *testing.T) {
@@ -138,6 +142,57 @@ func TestCollectorMarketRuntimeGatewayUsesNativeTRPCListener(t *testing.T) {
 	if err != nil || len(routes) != 1 || routes[0].Address != "127.0.0.1:11422" {
 		t.Fatalf("collector market runtime native route = %#v err=%v", routes, err)
 	}
+}
+
+func TestDefaultCollectorPublishLeaseUsesCallerScopedGatewayRoutes(t *testing.T) {
+	for _, row := range DefaultDeployments(testAdminNodeID) {
+		if row.ServiceName != "publishlease" {
+			continue
+		}
+		extra, err := parseRouteExtraConfig(row.ExtraConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		routes, err := deploymentGatewayRoutes(row, extra)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]map[string]bool{
+			"AcquireCollectorPublishLease":   {"moox-cli": true, "collector": true, "cloudnode": true},
+			"RenewCollectorPublishLease":     {"moox-cli": true, "collector": true, "cloudnode": true},
+			"ReleaseCollectorPublishLease":   {"moox-cli": true, "collector": true, "cloudnode": true},
+			"ValidateCollectorPublishLease":  {"cloudnode": true},
+			"BeginCollectorPublishOperation": {"cloudnode": true},
+			"RenewCollectorPublishOperation": {"cloudnode": true},
+			"EndCollectorPublishOperation":   {"cloudnode": true},
+		}
+		for method, callers := range want {
+			matched := false
+			allowed := make(map[string]bool)
+			for _, route := range routes {
+				if !route.AllowsMethod(method) {
+					continue
+				}
+				matched = true
+				for _, caller := range []string{"admin-gateway", "collector", "cloudnode", "moox-cli"} {
+					if route.AllowsCaller(caller) {
+						allowed[caller] = true
+					}
+				}
+			}
+			if !matched {
+				t.Errorf("%s gateway route is missing", method)
+				continue
+			}
+			for _, caller := range []string{"admin-gateway", "collector", "cloudnode", "moox-cli"} {
+				if allowed[caller] != callers[caller] {
+					t.Errorf("%s route caller policy mismatch for %s: allowed=%v want=%v", method, caller, allowed[caller], callers[caller])
+				}
+			}
+		}
+		return
+	}
+	t.Fatal("publishlease deployment is missing")
 }
 
 func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {

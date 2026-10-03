@@ -133,10 +133,10 @@ storage:
     # duration only as a compatibility fallback for legacy Views without freq.
     rebuild_lookback: 24h
     rebuild_lookback_periods:
-      1m: 1000
-      1h: 1000
-      1d: 1000
-      default: 1000
+      1m: 5000
+      1h: 5000
+      1d: 5000
+      default: 5000
     max_view_file_bytes: 1073741824
     rebuild_max_pending: 32
     rebuild_idle_checks: 3

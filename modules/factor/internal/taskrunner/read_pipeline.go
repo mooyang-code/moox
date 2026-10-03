@@ -17,15 +17,15 @@ import (
 )
 
 type periodReadKey struct {
-	sourceSeriesTag                                                              string
-	filterSourceSeriesTag                                                        bool
-	inputContractVersion                                                         string
-	spaceID, sourceViewID, sourceDataset, subjectID, freq, expectedActiveIndexID string
-	storageSchemaID                                                              string
-	expectedActiveIndexRevision                                                  uint64
-	periodTime                                                                   int64
-	triggerType, triggerEventID                                                  string
-	startTime, endTime                                                           time.Time
+	sourceSeriesTag                                                                                      string
+	filterSourceSeriesTag                                                                                bool
+	inputContractVersion                                                                                 string
+	spaceID, sourceViewID, sourceDataset, preferredSourceDataset, subjectID, freq, expectedActiveIndexID string
+	storageSchemaID                                                                                      string
+	expectedActiveIndexRevision                                                                          uint64
+	periodTime                                                                                           int64
+	triggerType, triggerEventID                                                                          string
+	startTime, endTime                                                                                   time.Time
 }
 
 type indexedTask struct {
@@ -62,14 +62,14 @@ type batchPeriodStorageIO interface {
 }
 
 type periodReadBatchKey struct {
-	triggerType                                                                       string
-	sourceSeriesTag                                                                   string
-	filterSourceSeriesTag                                                             bool
-	inputContractVersion                                                              string
-	spaceID, sourceViewID, sourceDataset, freq, expectedActiveIndexID, triggerEventID string
-	storageSchemaID                                                                   string
-	expectedActiveIndexRevision                                                       uint64
-	periodTime                                                                        int64
+	triggerType                                                                                               string
+	sourceSeriesTag                                                                                           string
+	filterSourceSeriesTag                                                                                     bool
+	inputContractVersion                                                                                      string
+	spaceID, sourceViewID, sourceDataset, preferredSourceDataset, freq, expectedActiveIndexID, triggerEventID string
+	storageSchemaID                                                                                           string
+	expectedActiveIndexRevision                                                                               uint64
+	periodTime                                                                                                int64
 }
 
 type periodReadBatch struct {
@@ -200,7 +200,8 @@ func clusterPeriodReadGroups(groups []*periodReadGroup) []*periodReadBatch {
 			sourceSeriesTag: group.key.sourceSeriesTag, filterSourceSeriesTag: group.key.filterSourceSeriesTag,
 			inputContractVersion: group.key.inputContractVersion,
 			spaceID:              group.key.spaceID, sourceViewID: group.key.sourceViewID, sourceDataset: group.key.sourceDataset,
-			freq: group.key.freq, expectedActiveIndexID: group.key.expectedActiveIndexID,
+			preferredSourceDataset: group.key.preferredSourceDataset,
+			freq:                   group.key.freq, expectedActiveIndexID: group.key.expectedActiveIndexID,
 			storageSchemaID:             group.key.storageSchemaID,
 			expectedActiveIndexRevision: group.key.expectedActiveIndexRevision,
 			periodTime:                  group.key.periodTime, triggerEventID: group.key.triggerEventID,
@@ -552,6 +553,60 @@ func (p preparedTask) project() (*storageio.RangeChunk, error) {
 	return projectRangeChunk(p.shared, p.task.Factor.InputColumns)
 }
 
+func projectBatchInputFrame(tasks []engine.FactorTask, source *engine.DataFrame) (*engine.DataFrame, error) {
+	if source == nil {
+		return nil, fmt.Errorf("shared View read returned no frame")
+	}
+	columnIndex := make(map[string]int, len(source.Columns))
+	for index, column := range source.Columns {
+		columnIndex[column] = index
+	}
+	columns := make([]string, 0)
+	physicalByLogical := make(map[string]string)
+	for _, task := range tasks {
+		requested := task.Factor.InputColumns
+		physical := physicalReadColumns(Task{FactorTask: task}, requested)
+		if len(physical) != len(requested) {
+			return nil, fmt.Errorf("factor %s input mapping has %d physical columns for %d inputs", task.Factor.FactorID, len(physical), len(requested))
+		}
+		for index, logical := range requested {
+			if mapped, exists := physicalByLogical[logical]; exists && mapped != physical[index] {
+				return nil, fmt.Errorf("factor batch maps input %q to both %q and %q", logical, mapped, physical[index])
+			}
+			if _, exists := physicalByLogical[logical]; !exists {
+				columns = append(columns, logical)
+			}
+			physicalByLogical[logical] = physical[index]
+		}
+	}
+	indexes := make([]int, len(columns))
+	for index, logical := range columns {
+		physical := physicalByLogical[logical]
+		column, exists := columnIndex[physical]
+		if !exists {
+			return nil, fmt.Errorf("shared View read is missing factor input column %q", physical)
+		}
+		indexes[index] = column
+	}
+	frame := &engine.DataFrame{
+		Columns:    columns,
+		Rows:       make([][]any, len(source.Rows)),
+		DataTimes:  append([]time.Time(nil), source.DataTimes...),
+		SeriesTags: append([]string(nil), source.SeriesTags...),
+		SubjectIDs: append([]string(nil), source.SubjectIDs...),
+	}
+	for rowIndex, row := range source.Rows {
+		if len(row) != len(source.Columns) {
+			return nil, fmt.Errorf("shared View row %d has %d values for %d columns", rowIndex, len(row), len(source.Columns))
+		}
+		frame.Rows[rowIndex] = make([]any, len(indexes))
+		for columnIndex, sourceIndex := range indexes {
+			frame.Rows[rowIndex][columnIndex] = row[sourceIndex]
+		}
+	}
+	return frame, nil
+}
+
 func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 	groupsByKey := make(map[periodReadKey]*periodReadGroup)
 	groups := make([]*periodReadGroup, 0)
@@ -566,7 +621,8 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 			sourceSeriesTag: task.SourceSeriesTag, filterSourceSeriesTag: task.FilterSourceSeriesTag,
 			inputContractVersion: task.InputContractVersion,
 			spaceID:              task.SpaceID, sourceViewID: taskSourceView(task), sourceDataset: task.SourceDataset,
-			subjectID: task.SubjectID, freq: task.Freq, periodTime: task.PeriodTime,
+			preferredSourceDataset: task.PreferredSourceDataset,
+			subjectID:              task.SubjectID, freq: task.Freq, periodTime: task.PeriodTime,
 			expectedActiveIndexID:       task.ExpectedActiveIndexID,
 			expectedActiveIndexRevision: task.ExpectedActiveIndexRevision,
 			storageSchemaID:             task.StorageSchemaID,
@@ -593,7 +649,7 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 			}
 		}
 		group.members = append(group.members, member)
-		group.columns = mergeReadColumns(group.columns, task.Factor.InputColumns)
+		group.columns = mergeReadColumns(group.columns, physicalReadColumns(task, task.Factor.InputColumns))
 	}
 	return groups, singles
 }

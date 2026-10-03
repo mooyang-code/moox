@@ -106,6 +106,8 @@ type ViewMaintenancePolicyOverride struct {
 
 type ViewMaintenancePolicy struct {
 	MaintenanceCheckInterval string                          `json:"maintenance_check_interval"`
+	CapacityCheckInterval    string                          `json:"capacity_check_interval"`
+	CapacityCheckJitter      string                          `json:"capacity_check_jitter"`
 	RebuildLookbackPeriods   uint64                          `json:"rebuild_lookback_periods"`
 	MaxPeriodsPerSeries      uint64                          `json:"max_periods_per_series"`
 	MaxViewFileBytes         int64                           `json:"max_view_file_bytes"`
@@ -141,6 +143,14 @@ func (p ViewMaintenancePolicy) Validate() error {
 	interval, err := time.ParseDuration(strings.TrimSpace(p.MaintenanceCheckInterval))
 	if err != nil || interval < 30*time.Second {
 		return errors.New("maintenance_check_interval must be at least 30s")
+	}
+	capacityInterval, err := time.ParseDuration(strings.TrimSpace(p.CapacityCheckInterval))
+	if err != nil || capacityInterval <= 0 || capacityInterval > 24*time.Hour {
+		return errors.New("capacity_check_interval must be greater than 0 and at most 24h")
+	}
+	capacityJitter, err := time.ParseDuration(strings.TrimSpace(p.CapacityCheckJitter))
+	if err != nil || capacityJitter <= 0 || capacityJitter > capacityInterval {
+		return errors.New("capacity_check_jitter must be greater than 0 and at most capacity_check_interval")
 	}
 	if p.RebuildLookbackPeriods == 0 || p.RebuildLookbackPeriods > 1_000_000 || p.MaxPeriodsPerSeries == 0 || p.MaxPeriodsPerSeries > 1_000_000 || p.MaxPeriodsPerSeries <= p.RebuildLookbackPeriods || p.MaxViewFileBytes <= 0 {
 		return errors.New("view maintenance limits are invalid")
@@ -188,10 +198,20 @@ func LoadViewMaintenancePolicy(path string) (ViewMaintenancePolicy, error) {
 		policy.MaintenanceCheckInterval = "1m"
 	}
 	if policy.RebuildLookbackPeriods == 0 {
-		policy.RebuildLookbackPeriods = 1000
+		policy.RebuildLookbackPeriods = 5000
 	}
 	if policy.MaxPeriodsPerSeries == 0 {
-		policy.MaxPeriodsPerSeries = 2000
+		policy.MaxPeriodsPerSeries = 6000
+	}
+	if strings.TrimSpace(policy.CapacityCheckInterval) == "" {
+		policy.CapacityCheckInterval = "1h"
+	}
+	if strings.TrimSpace(policy.CapacityCheckJitter) == "" {
+		jitter := time.Hour
+		if interval, err := time.ParseDuration(strings.TrimSpace(policy.CapacityCheckInterval)); err == nil && interval > 0 && interval < jitter {
+			jitter = interval
+		}
+		policy.CapacityCheckJitter = jitter.String()
 	}
 	if policy.MaxViewFileBytes == 0 {
 		policy.MaxViewFileBytes = 1 << 30
@@ -659,10 +679,10 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if len(c.View.RebuildLookbackPeriods) == 0 {
 		c.View.RebuildLookbackPeriods = map[string]uint64{
-			"1m":      1000,
-			"1h":      1000,
-			"1d":      1000,
-			"default": 1000,
+			"1m":      5000,
+			"1h":      5000,
+			"1d":      5000,
+			"default": 5000,
 		}
 	} else {
 		normalized := make(map[string]uint64, len(c.View.RebuildLookbackPeriods)+1)
@@ -673,7 +693,7 @@ func (c *StorageConfig) ApplyDefaults() {
 			}
 		}
 		if normalized["default"] == 0 {
-			normalized["default"] = 1000
+			normalized["default"] = 5000
 		}
 		c.View.RebuildLookbackPeriods = normalized
 	}

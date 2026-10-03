@@ -51,6 +51,67 @@ func TestBuildPeriodReadGroupsSharesSubjectWindowAndKeepsTriggerIdentity(t *test
 	require.Equal(t, []int{0, 1, 2}, []int{shared.members[0].index, shared.members[1].index, shared.members[2].index})
 }
 
+func TestBuildPeriodReadGroupsExpandsMergedInputsForSharedRead(t *testing.T) {
+	task := oneBarTask("BTC-USDT", time.Unix(60, 0))
+	task.PeriodTime = task.StartTime.Unix()
+	task.TriggerType = "dataset_rows"
+	task.SourceDataset = "mdataset_binance_kline_1m"
+	task.PreferredSourceDataset = "dataset_binance_swap_kline_1m"
+	task.LookbackPeriods = 2
+	task.Factor.InputColumns = []string{"close"}
+
+	groups, singles := buildPeriodReadGroups([]Task{task})
+
+	require.Empty(t, singles)
+	require.Len(t, groups, 1)
+	require.Equal(t, []string{"dataset_binance_swap_kline_1m__close"}, groups[0].columns)
+}
+
+func TestBuildPeriodReadGroupsSeparatesPreferredMappedSources(t *testing.T) {
+	base := time.Unix(60, 0).UTC()
+	first := oneBarTask("BTC-USDT", base)
+	first.PeriodTime = base.Unix()
+	first.SourceDataset = "mdataset_binance_kline_1m"
+	first.PreferredSourceDataset = "dataset_binance_spot_kline_1m"
+	second := first
+	second.TaskID = "task-other-source"
+	second.PreferredSourceDataset = "dataset_binance_swap_kline_1m"
+
+	groups, singles := buildPeriodReadGroups([]Task{first, second})
+
+	require.Empty(t, singles)
+	require.Len(t, groups, 2)
+	require.Len(t, clusterPeriodReadGroups(groups), 2)
+}
+
+func TestProjectBatchInputFrameMapsMergedPhysicalColumns(t *testing.T) {
+	dataTime := time.Unix(60, 0).UTC()
+	tasks := []engine.FactorTask{
+		{
+			SourceDataset: "mdataset_binance_kline_1m", PreferredSourceDataset: "dataset_binance_spot_kline_1m",
+			Factor: engine.FactorSpec{FactorID: "close-factor", InputColumns: []string{"close"}},
+		},
+		{
+			SourceDataset: "mdataset_binance_kline_1m", PreferredSourceDataset: "dataset_binance_spot_kline_1m",
+			Factor: engine.FactorSpec{FactorID: "volume-factor", InputColumns: []string{"volume"}},
+		},
+	}
+	source := &engine.DataFrame{
+		Columns: []string{"dataset_binance_spot_kline_1m__close", "dataset_binance_spot_kline_1m__volume"},
+		Rows:    [][]any{{100.0, 7.0}}, DataTimes: []time.Time{dataTime},
+		SeriesTags: []string{"venue:binance"}, SubjectIDs: []string{"BTC-USDT"},
+	}
+
+	projected, err := projectBatchInputFrame(tasks, source)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"close", "volume"}, projected.Columns)
+	require.Equal(t, [][]any{{100.0, 7.0}}, projected.Rows)
+	require.Equal(t, []time.Time{dataTime}, projected.DataTimes)
+	require.Equal(t, source.SeriesTags, projected.SeriesTags)
+	require.Equal(t, source.SubjectIDs, projected.SubjectIDs)
+}
+
 func TestPreparedTaskProjectsAtComputeTime(t *testing.T) {
 	shared := &storageio.RangeChunk{Frame: &engine.DataFrame{
 		Columns: []string{"close", "high", "low"},

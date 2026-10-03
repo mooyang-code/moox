@@ -595,8 +595,10 @@ func cloneViewConsumerOptions(options viewservice.EventConsumerOptions) viewserv
 func storageViewMaintenancePolicy() (storageconfig.ViewMaintenancePolicy, error) {
 	policy := storageconfig.ViewMaintenancePolicy{
 		MaintenanceCheckInterval: "1m",
-		RebuildLookbackPeriods:   1000,
-		MaxPeriodsPerSeries:      2000,
+		CapacityCheckInterval:    "1h",
+		CapacityCheckJitter:      "1h",
+		RebuildLookbackPeriods:   5000,
+		MaxPeriodsPerSeries:      6000,
 		MaxViewFileBytes:         1 << 30,
 	}
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))

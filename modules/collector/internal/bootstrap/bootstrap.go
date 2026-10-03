@@ -4,6 +4,7 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -581,6 +582,7 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	for _, spaceID := range spaceIDs {
 		stockCNTimerOwned := strings.EqualFold(spaceID, marketfetch.StockCNSpaceID)
 		invokeConcurrency := marketFetchInvokeConcurrency(spaceID)
+		maintenanceBatchLimit, recoveryBatchLimit := marketFetchMaintenanceLimits(spaceID, invokeConcurrency, cfg.StockCN.ExpectedTimerFunctionCount)
 		reconciler := &marketfetch.Reconciler{
 			SCFRegionBlacklists:           cfg.SCFRegionBlacklists,
 			ResolveSourceID:               marketwiring.DefaultSourceID,
@@ -607,7 +609,8 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			// when runtime.env was rewritten). SCF invoke payloads keep the
 			// discovered public native gateway so overseas functions still work.
 			Invoker: invoker, Storage: marketfetch.NewMarketStorageForMarket, StorageTarget: deps.StorageRPCGatewayTarget, InvokeStorageTarget: deps.InvokeStorageRPCGatewayTarget,
-			InvokeConcurrency: invokeConcurrency, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
+			InvokeConcurrency: invokeConcurrency, MaintenanceBatchLimit: maintenanceBatchLimit, MaintenanceRecoveryBatchLimit: recoveryBatchLimit,
+			MaxRetryAttempts: 3, Metrics: metrics, SpaceID: spaceID, DNSCache: dnsCache,
 			Symbols:                    plannerSource,
 			InvokeNonRealtimeOnly:      stockCNTimerOwned,
 			TimerMeasuredSafeGroupSize: cfg.StockCN.MeasuredSafeGroupSize,
@@ -639,6 +642,109 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		}
 		runtimes = append(runtimes, marketFetchRuntime{spaceID: spaceID, timerOwned: stockCNTimerOwned, reconciler: reconciler, scheduler: invokeScheduler})
 	}
+	maintenanceSpaceCursor := 0
+	retentionConfig := cfg.CollectorRetention
+	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.timeout(), func(passCtx context.Context) error {
+		now := time.Now().UTC()
+		var passErrors []error
+		for index := range runtimes {
+			metrics.ObserveMaintenanceDeletes(runtimes[index].spaceID, nil)
+		}
+		if len(runtimes) > 0 {
+			budgets := collectorMaintenanceBudgets(retentionConfig.MaxRowsPerPass)
+			start := maintenanceSpaceCursor % len(runtimes)
+			maintenanceSpaceCursor = nextMaintenanceSpaceCursor(start, len(runtimes))
+			for offset := 0; offset < len(runtimes); offset++ {
+				if passCtx.Err() != nil {
+					break
+				}
+				runtimeIndex := (start + offset) % len(runtimes)
+				runtime := &runtimes[runtimeIndex]
+				deletedRows := make(map[string]int64)
+				writeTargetBudget := maintenanceBudget(budgets.writeTargets, len(runtimes), offset)
+				if runtime.scheduler != nil {
+					prunedTargets, err := runtime.scheduler.RunMaintenance(passCtx, runtime.spaceID, writeTargetBudget)
+					deletedRows["write_targets"] += prunedTargets
+					writeTargetBudget -= int(prunedTargets)
+					if err != nil {
+						passErrors = append(passErrors, fmt.Errorf("scheduler maintenance for space %s: %w", runtime.spaceID, err))
+					}
+				}
+				if passCtx.Err() != nil {
+					break
+				}
+				itemsDeleted, batchesDeleted, err := dbm.FetchBatches().CleanupSpaceWithCounts(passCtx, runtime.spaceID,
+					now.Add(-retentionConfig.duration(retentionConfig.ExecutionDetailRetention)),
+					maintenanceBudget(budgets.batchItems, len(runtimes), offset), maintenanceBudget(budgets.batches, len(runtimes), offset))
+				if err != nil {
+					passErrors = append(passErrors, fmt.Errorf("cleanup terminal FetchBatches for space %s: %w", runtime.spaceID, err))
+				}
+				deletedRows["batch_items"], deletedRows["batches"] = itemsDeleted, batchesDeleted
+				retriesDeleted, err := dbm.FetchRetries().CleanupSpaceWithCount(passCtx, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.TerminalRetryRetention)), maintenanceBudget(budgets.retries, len(runtimes), offset))
+				if err != nil {
+					passErrors = append(passErrors, fmt.Errorf("cleanup terminal FetchRetries for space %s: %w", runtime.spaceID, err))
+				}
+				deletedRows["retry"] = retriesDeleted
+				targetsDeleted, instancesDeleted, err := dbm.TaskInstances().CleanupScheduledExecutionDetailsSpace(
+					passCtx, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.ExecutionDetailRetention)),
+					writeTargetBudget, maintenanceBudget(budgets.instances, len(runtimes), offset),
+				)
+				if err != nil {
+					passErrors = append(passErrors, fmt.Errorf("cleanup scheduled execution details for space %s: %w", runtime.spaceID, err))
+				} else {
+					deletedRows["write_targets"] += targetsDeleted
+					deletedRows["instances"] = instancesDeleted
+					if targetsDeleted+instancesDeleted > 0 {
+						log.Infof("cleaned scheduled execution details space=%s write_targets=%d task_instances=%d", runtime.spaceID, targetsDeleted, instancesDeleted)
+					}
+				}
+				if runsDeleted, err := dbm.Runs().CleanupScheduledTerminalSpace(passCtx, runtime.spaceID,
+					now.Add(-retentionConfig.duration(retentionConfig.ScheduledRunSummaryRetention)), maintenanceBudget(budgets.runs, len(runtimes), offset)); err != nil {
+					passErrors = append(passErrors, fmt.Errorf("cleanup terminal scheduled Runs for space %s: %w", runtime.spaceID, err))
+				} else {
+					deletedRows["runs"] = runsDeleted
+				}
+				readinessDeleted, err := dbm.PeriodReadiness().CleanupReportedRetentionInSpace(
+					passCtx,
+					runtime.spaceID,
+					now.Add(-cfg.PeriodReadiness.ParentRetention),
+					cfg.PeriodReadiness.ItemRetention,
+					maintenanceBudget(budgets.periodReadiness, len(runtimes), offset),
+				)
+				if err != nil {
+					passErrors = append(passErrors, fmt.Errorf("cleanup reported PeriodReadiness for space %s: %w", runtime.spaceID, err))
+				} else {
+					deletedRows["period_readiness"] = readinessDeleted
+				}
+				if runtime.periodStorageCleanup == nil {
+					if err := observeCollectorMaintenanceSpace(passCtx, dbm, metrics, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.PeriodSnapshotRetention)), now, deletedRows); err != nil {
+						log.WarnContextf(passCtx, "Collector store metrics refresh failed space=%s: %v", runtime.spaceID, err)
+					}
+					continue
+				}
+				periodDeleted, err := runtime.periodStorageCleanup.ReconcileWithCleanupCounts(
+					passCtx, now, retentionConfig.duration(retentionConfig.PeriodSnapshotRetention),
+					maintenanceBudget(budgets.periodSnapshots, len(runtimes), offset),
+					maintenanceBudget(budgets.periodManifests, len(runtimes), offset),
+				)
+				deletedRows["period_snapshot"] = periodDeleted.SnapshotRows
+				deletedRows["period_state"] = periodDeleted.StateRows
+				deletedRows["period_manifest"] = periodDeleted.ManifestRows
+				if err != nil {
+					passErrors = append(passErrors, fmt.Errorf("reconcile Storage periods for space %s: %w", runtime.spaceID, err))
+				} else {
+					if periodDeleted.Total() > 0 {
+						log.Infof("cleaned terminal Collector period rows space=%s snapshot_rows=%d state_rows=%d manifest_rows=%d", runtime.spaceID, periodDeleted.SnapshotRows, periodDeleted.StateRows, periodDeleted.ManifestRows)
+					}
+				}
+				if err := observeCollectorMaintenanceSpace(passCtx, dbm, metrics, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.PeriodSnapshotRetention)), now, deletedRows); err != nil {
+					log.WarnContextf(passCtx, "Collector store metrics refresh failed space=%s: %v", runtime.spaceID, err)
+				}
+			}
+		}
+		return errors.Join(passErrors...)
+	})
+	maintenanceRunner.Metrics = metrics
 	// Resampling owns a dedicated minute timer. Its callback only schedules a
 	// bounded background scan, so slow source/target Storage I/O cannot delay the
 	// existing SCF coordination timer.
@@ -688,7 +794,8 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 			continue
 		}
 		if statusClient, ok := periodStorage.(marketfetch.PeriodStorageStatusClient); ok {
-			runtime.periodStorageCleanup = marketfetch.NewPeriodStorageReconciler(dbm.PeriodSeriesSnapshot(), dbm.PeriodStorageStates(), statusClient, runtime.spaceID)
+			runtime.periodStorageCleanup = marketfetch.NewPeriodStorageReconciler(dbm.PeriodSeriesSnapshot(), dbm.PeriodStorageStates(), statusClient, runtime.spaceID, dbm.TimerPeriodBatches())
+			runtime.periodStorageCleanup.Metrics = metrics
 		} else {
 			log.WarnContextf(trpc.BackgroundContext(), "collector Storage adapter does not support period status queries; cleanup disabled space=%s", runtime.spaceID)
 		}
@@ -700,13 +807,18 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		// The legacy readiness repository remains only for local resample jobs.
 		// Direct market-fetch Dataset completion is finalized inside Storage
 		// DataNode and no longer waits for DatasetRowsUpserted replay.
-		periodReporter := marketfetch.NewPeriodReporter(dbm.PeriodReadiness(), reporter, runtime.spaceID, cfg.PeriodReadiness.ParentRetention)
-		periodReporter.SetItemRetention(cfg.PeriodReadiness.ItemRetention)
+		periodReporter := marketfetch.NewPeriodReporter(dbm.PeriodReadiness(), reporter, runtime.spaceID)
 		periodReporter.SetMetrics(metrics)
 		if err := marketfetch.StartPeriodReporter(trpc.BackgroundContext(), periodReporter, cfg.PeriodReadiness.ReportInterval); err != nil {
 			log.WarnContextf(trpc.BackgroundContext(), "collector resample period reporter disabled space=%s: %v", runtime.spaceID, err)
 		}
 	}
+	// The maintenance pass reads each runtime's periodStorageCleanup field.
+	// Start only after all Space-specific Storage clients have been assigned.
+	if err := maintenanceRunner.Start(ctx); err != nil {
+		return
+	}
+	maintenanceRunner.Wake()
 	if service == nil {
 		return
 	}
@@ -737,20 +849,96 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 					log.WarnContextf(scheduleCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 				}
 				scheduleCancel()
-				if runtime.periodStorageCleanup != nil {
-					storageCtx, storageCancel := context.WithTimeout(trpc.BackgroundContext(), marketFetchReconcileTimeout)
-					deleted, err := runtime.periodStorageCleanup.Reconcile(storageCtx, time.Now().UTC())
-					if err != nil {
-						log.WarnContextf(storageCtx, "collector Storage period reconciliation failed space=%s: %v", spaceID, err)
-					} else if deleted > 0 {
-						log.Infof("cleaned terminal Collector period snapshots space=%s periods=%d", spaceID, deleted)
-					}
-					storageCancel()
-				}
 			}(runtime)
 		}
+		maintenanceRunner.Wake()
 		return nil
 	})
+}
+
+func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metrics *marketfetch.Metrics, spaceID string, before, now time.Time, deleted map[string]int64) error {
+	metrics.ObserveMaintenanceDeletes(spaceID, deleted)
+	statsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return metrics.RefreshOperationalStats(statsCtx, db, spaceID, before, now)
+}
+
+func maintenanceBudget(total, spaces, index int) int {
+	if total <= 0 || spaces <= 0 || index < 0 || index >= spaces {
+		return 0
+	}
+	base, remainder := total/spaces, total%spaces
+	if index < remainder {
+		base++
+	}
+	return base
+}
+
+func nextMaintenanceSpaceCursor(current, spaces int) int {
+	if spaces <= 0 {
+		return 0
+	}
+	return (current + 1) % spaces
+}
+
+type collectorMaintenanceRowBudget struct {
+	batchItems      int
+	batches         int
+	retries         int
+	writeTargets    int
+	instances       int
+	runs            int
+	periodReadiness int
+	periodSnapshots int
+	periodManifests int
+}
+
+func (b collectorMaintenanceRowBudget) total() int {
+	return b.batchItems + b.batches + b.retries + b.writeTargets + b.instances + b.runs + b.periodReadiness + b.periodSnapshots + b.periodManifests
+}
+
+func collectorMaintenanceBudgets(total int) collectorMaintenanceRowBudget {
+	if total < 9 {
+		return collectorMaintenanceRowBudget{}
+	}
+	const weightTotal = 50000 - 9
+	remainingRows := total - 9
+	budget := collectorMaintenanceRowBudget{
+		batchItems:      1 + remainingRows*(11500-1)/weightTotal,
+		batches:         1 + remainingRows*(500-1)/weightTotal,
+		retries:         1 + remainingRows*(10000-1)/weightTotal,
+		writeTargets:    1 + remainingRows*(12000-1)/weightTotal,
+		instances:       1 + remainingRows*(10000-1)/weightTotal,
+		runs:            1 + remainingRows*(3000-1)/weightTotal,
+		periodReadiness: 1 + remainingRows*(1000-1)/weightTotal,
+		periodSnapshots: 1 + remainingRows*(1000-1)/weightTotal,
+		periodManifests: 1 + remainingRows*(1000-1)/weightTotal,
+	}
+	remaining := total - budget.total()
+	for index := 0; remaining > 0; index = (index + 1) % 9 {
+		switch index {
+		case 0:
+			budget.batchItems++
+		case 1:
+			budget.batches++
+		case 2:
+			budget.retries++
+		case 3:
+			budget.writeTargets++
+		case 4:
+			budget.instances++
+		case 5:
+			budget.runs++
+		case 6:
+			budget.periodReadiness++
+		case 7:
+			budget.periodSnapshots++
+		case 8:
+			budget.periodManifests++
+		}
+		remaining--
+	}
+	return budget
 }
 
 func marketFetchInvokeConcurrency(spaceID string) int {
@@ -758,6 +946,23 @@ func marketFetchInvokeConcurrency(spaceID string) int {
 		return marketfetch.StockCNTimerInvokeConcurrency
 	}
 	return marketfetch.DefaultInvokeConcurrency
+}
+
+func marketFetchMaintenanceLimits(spaceID string, invokeConcurrency, expectedTimerFunctionCount int) (dispatch, recovery int) {
+	dispatch, recovery = invokeConcurrency, invokeConcurrency
+	if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+		return dispatch, recovery
+	}
+	if expectedTimerFunctionCount <= 0 {
+		return max(1, dispatch), max(1, recovery)
+	}
+	waveSize := max(1, expectedTimerFunctionCount)
+	// Size one full maintenance pass to cover the steady-state failure wave;
+	// faster passes are a bonus, not part of the capacity guarantee.
+	denominator := marketfetch.RetryMaintenancePassesPerMinute * 4
+	dispatch = (waveSize*3*5 + denominator - 1) / denominator
+	recovery = (waveSize*4*5 + denominator - 1) / denominator
+	return max(1, dispatch), max(1, recovery)
 }
 
 func marketFetchSpaceID() string {
@@ -795,7 +1000,7 @@ func parseMarketFetchSpaceIDs(raw string) []string {
 }
 
 func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {
-	return runtimeapp.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, TargetNode: cfg.TargetNode, CAFile: cfg.CAFile, CAPEMBase64: cfg.CAPEMBase64, ExpireSec: cfg.ExpireSeconds}
+	return runtimeapp.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, Caller: cfg.Caller, TargetNode: cfg.TargetNode, CAFile: cfg.CAFile, CAPEMBase64: cfg.CAPEMBase64, ExpireSec: cfg.ExpireSeconds}
 }
 
 func stockCNTargetDataTimeValidator(calendar *stockmarket.Calendar, settleDelay time.Duration, now func() time.Time) func(string, time.Time) bool {

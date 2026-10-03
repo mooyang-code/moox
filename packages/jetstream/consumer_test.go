@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
@@ -230,7 +231,7 @@ func TestNewConsumerAcceptsSupersetFilterSubjects(t *testing.T) {
 	_, err := client.js.AddConsumer("TEST", &nats.ConsumerConfig{
 		Name: "superset-filters", Durable: "superset-filters",
 		FilterSubjects: []string{"moox.test.alpha.>", "moox.test.beta.>", "moox.test.gamma.>"},
-		AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		AckPolicy:      nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		DeliverPolicy: nats.DeliverAllPolicy,
 	})
 	if err != nil {
@@ -262,7 +263,7 @@ func TestNewConsumerRejectsMissingFilterSubjects(t *testing.T) {
 	_, err := client.js.AddConsumer("TEST", &nats.ConsumerConfig{
 		Name: "subset-filters", Durable: "subset-filters",
 		FilterSubjects: []string{"moox.test.alpha.>"},
-		AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		AckPolicy:      nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		DeliverPolicy: nats.DeliverAllPolicy,
 	})
 	if err != nil {
@@ -391,6 +392,41 @@ func TestNewConsumerRejectsDurableOwnedByAnotherStream(t *testing.T) {
 	}
 	if _, err := client.js.ConsumerInfo("OTHER", cfg.Durable); !errors.Is(err, nats.ErrConsumerNotFound) {
 		t.Fatalf("consumer unexpectedly created in OTHER: %v", err)
+	}
+}
+
+func TestConsumerOwnershipCheckIsBestEffortWithScopedStreamPermissions(t *testing.T) {
+	port := reserveTestPort(t)
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: port, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+		Users: []*natsserver.User{{
+			Username: "scoped", Password: "secret",
+			Permissions: &natsserver.Permissions{
+				Publish:   &natsserver.SubjectPermission{Allow: []string{"$JS.API.CONSUMER.INFO.TEST.*"}, Deny: []string{"$JS.API.STREAM.NAMES"}},
+				Subscribe: &natsserver.SubjectPermission{Allow: []string{"_INBOX.>"}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Start()
+	if !srv.ReadyForConnections(5 * time.Second) {
+		srv.Shutdown()
+		t.Fatal("nats server not ready")
+	}
+	defer srv.Shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := Connect(ctx, Config{URLs: []string{fmt.Sprintf("nats://127.0.0.1:%d", port)}, Username: "scoped", Password: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	if err := client.rejectConsumerOwnedByAnotherStream(ctx, "TEST", "durable"); err != nil {
+		t.Fatalf("cross-stream ownership discovery should not block a scoped client: %v", err)
 	}
 }
 

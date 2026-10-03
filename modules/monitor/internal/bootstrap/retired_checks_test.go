@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
@@ -105,6 +106,30 @@ func TestRetireObsoleteBusinessChecksRemovesOneHourCollector(t *testing.T) {
 	if err != nil || !kept.Enabled {
 		t.Fatalf("kept 1m check = %+v err=%v", kept, err)
 	}
+}
+
+func TestRetireObsoleteBusinessChecksKeepsDynamicKlineChecksWhenEnabled(t *testing.T) {
+	repositories := openMonitorTestRepositories(t)
+	ctx := t.Context()
+	check := domain.Check{
+		SpaceID: "crypto", CheckID: "kline_freshness:crypto:task-owned-view:1m",
+		Name: "dynamic kline", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true,
+	}
+	require.NoError(t, repositories.Checks.Create(ctx, &check))
+	require.NoError(t, repositories.Alerts.CreateRule(ctx, &domain.AlertRule{
+		SpaceID: check.SpaceID, RuleID: "default:" + check.CheckID, CheckID: check.CheckID,
+		FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
+	}))
+	cfg := &config.Config{}
+	cfg.KlineFreshness.Enabled = true
+	if err := retireObsoleteBusinessChecks(ctx, repositories, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repositories.Checks.Get(ctx, check.SpaceID, check.CheckID)
+	require.NoError(t, err)
+	require.True(t, got.Enabled)
+	_, err = repositories.Alerts.GetRule(ctx, check.SpaceID, "default:"+check.CheckID)
+	require.NoError(t, err)
 }
 
 func openMonitorTestRepositories(t *testing.T) *store.Repositories {

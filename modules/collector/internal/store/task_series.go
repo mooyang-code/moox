@@ -82,6 +82,23 @@ func (r *TaskRepository) ListTaskSeries(ctx context.Context, spaceID, taskID str
 	return rows, err
 }
 
+// ReadSingleTaskSeries materializes at most two rows, enough to prove whether
+// a task has exactly one current series without scanning a potentially large
+// task roster. Callers must still verify the task's stored SeriesHash.
+func (r *TaskRepository) ReadSingleTaskSeries(ctx context.Context, spaceID, taskID string) (*domain.TaskSeries, bool, error) {
+	var rows []domain.TaskSeries
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).
+		Order("c_series_index ASC").Limit(2).Find(&rows).Error
+	if err != nil {
+		return nil, false, err
+	}
+	if len(rows) != 1 {
+		return nil, false, nil
+	}
+	return &rows[0], true, nil
+}
+
 // InvalidateTaskSeries fails closed when the current Tag union cannot be
 // materialized. Keeping an older series_hash would let a scheduler silently
 // plan stale membership after a routing/tag error.

@@ -4,7 +4,7 @@ import { Message } from "@arco-design/web-vue";
 import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
 import type { ControlResponse } from "./types";
-import { installSpaceAwareSignedClient } from "./signed-client";
+import { expireBrowserSession, installSpaceAwareSignedClient } from "./signed-client";
 
 const adminClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -50,7 +50,7 @@ export async function callControl<TReq extends object, TRsp>(
   config?: AxiosRequestConfig
 ): Promise<TRsp> {
   if (!localStorage.getItem("user-info") && !readAccessTokenFromConfig(config)) {
-    throw new Error("未登录或登录态已失效，请重新登录后再访问管理接口");
+    throw await expireBrowserSession("未登录或登录态已失效，请重新登录后再访问管理接口");
   }
   const rsp = await adminClient.post<ControlResponse<TRsp>>(`/api/admin/${service}/${method}`, req, config);
   return assertControlSuccess<TRsp>(rsp.data);

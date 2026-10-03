@@ -78,6 +78,7 @@ type DatasetPeriodExpectation struct {
 	SeriesHash     string
 	ExpectedCount  uint32
 	DeadlineAt     int64
+	ReservationID  string
 	SeriesSnapshot []DatasetPeriodSeries `json:"series_snapshot"`
 }
 
@@ -136,7 +137,7 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 		// Dataset period identity. A retry in a later scheduler tick can carry a
 		// newer deadline for the same series snapshot; keep the first persisted
 		// deadline so retries cannot indefinitely extend a waiting period.
-		if !samePeriodCommitIdentity(current, exp) || !samePeriodSeriesSnapshot(current.SeriesSnapshot, exp.SeriesSnapshot) {
+		if !samePeriodIdentityForStatus(current, exp, status) || !samePeriodSeriesSnapshot(current.SeriesSnapshot, exp.SeriesSnapshot) {
 			return DatasetPeriodResult{}, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
 		}
 		return DatasetPeriodResult{Status: status, DeadlineAt: current.DeadlineAt}, nil
@@ -162,6 +163,9 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 		return DatasetPeriodResult{}, err
 	}
 	if err := batch.Set(periodFieldKey(base, "deadline"), int64Bytes(exp.DeadlineAt), s.writeOptions); err != nil {
+		return DatasetPeriodResult{}, err
+	}
+	if err := batch.Set(periodFieldKey(base, "reservation_id"), []byte(exp.ReservationID), s.writeOptions); err != nil {
 		return DatasetPeriodResult{}, err
 	}
 	if err := batch.Set(periodFieldKey(base, "status"), []byte("waiting"), s.writeOptions); err != nil {
@@ -241,7 +245,14 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 	if err != nil {
 		return DatasetPeriodResult{}, err
 	}
-	if !samePeriodCommitIdentity(current, exp) {
+	status, found, err := s.readPeriodStatus(base)
+	if err != nil {
+		return DatasetPeriodResult{}, err
+	}
+	if !found {
+		return DatasetPeriodResult{}, invalid("dataset period is not initialized")
+	}
+	if !samePeriodIdentityForStatus(current, exp, status) {
 		return DatasetPeriodResult{}, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
 	}
 	exp = current
@@ -254,13 +265,6 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 		if isTarget {
 			setBitmapBit(delta, item.SeriesIndex)
 		}
-	}
-	status, found, err := s.readPeriodStatus(base)
-	if err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if !found {
-		return DatasetPeriodResult{}, invalid("dataset period is not initialized")
 	}
 	now := s.periodNow().UTC()
 	if status != "waiting" || periodDeadlineReached(exp, now) {
@@ -356,7 +360,14 @@ func (s *Store) RecordDatasetPeriodFailures(ctx context.Context, exp DatasetPeri
 	if err != nil {
 		return DatasetPeriodResult{}, err
 	}
-	if !samePeriodCommitIdentity(current, exp) {
+	status, found, err := s.readPeriodStatus(base)
+	if err != nil {
+		return DatasetPeriodResult{}, err
+	}
+	if !found {
+		return DatasetPeriodResult{}, invalid("dataset period is not initialized")
+	}
+	if !samePeriodIdentityForStatus(current, exp, status) {
 		return DatasetPeriodResult{}, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
 	}
 	indexes := make([]uint32, 0, len(seriesIndexes))
@@ -371,13 +382,6 @@ func (s *Store) RecordDatasetPeriodFailures(ctx context.Context, exp DatasetPeri
 		}
 	}
 	sort.Slice(indexes, func(i, j int) bool { return indexes[i] < indexes[j] })
-	status, found, err := s.readPeriodStatus(base)
-	if err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if !found {
-		return DatasetPeriodResult{}, invalid("dataset period is not initialized")
-	}
 	now := s.periodNow().UTC()
 	if periodDeadlineReached(current, now) {
 		status, err = s.finalizePeriodBaseLocked(ctx, base, now)
@@ -443,7 +447,14 @@ func (s *Store) FinalizeDatasetPeriod(ctx context.Context, exp DatasetPeriodExpe
 	if err != nil {
 		return "", err
 	}
-	if !samePeriodCommitIdentity(current, exp) {
+	status, found, err := s.readPeriodStatus(base)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", cpebble.ErrNotFound
+	}
+	if !samePeriodIdentityForStatus(current, exp, status) {
 		return "", PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
 	}
 	return s.finalizePeriodBaseLocked(ctx, base, now)
@@ -787,15 +798,15 @@ func (s *Store) GetDatasetPeriodProgress(ctx context.Context, exp DatasetPeriodE
 	if err != nil {
 		return nil, err
 	}
-	if !samePeriodCommitIdentity(current, exp) {
-		return nil, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
-	}
 	status, found, err := s.readPeriodStatus(base)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
 		return nil, cpebble.ErrNotFound
+	}
+	if !samePeriodIdentityForStatus(current, exp, status) {
+		return nil, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
 	}
 	bitmap, err := s.readPeriodBitmap(base)
 	if err != nil {
@@ -831,15 +842,15 @@ func (s *Store) GetDatasetPeriodStatus(ctx context.Context, exp DatasetPeriodExp
 	if err != nil {
 		return nil, err
 	}
-	if !samePeriodCommitIdentity(current, exp) {
-		return nil, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
-	}
 	status, found, err := s.readPeriodStatus(base)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
 		return nil, cpebble.ErrNotFound
+	}
+	if !samePeriodIdentityForStatus(current, exp, status) {
+		return nil, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
 	}
 	return &DatasetPeriodProgress{DatasetPeriodExpectation: current, Status: status}, nil
 }
@@ -849,8 +860,12 @@ func normalizePeriodExpectation(exp DatasetPeriodExpectation) (DatasetPeriodExpe
 	exp.DatasetID = strings.TrimSpace(exp.DatasetID)
 	exp.Frequency = strings.TrimSpace(exp.Frequency)
 	exp.SeriesHash = strings.TrimSpace(exp.SeriesHash)
+	exp.ReservationID = strings.TrimSpace(exp.ReservationID)
 	if exp.SpaceID == "" || exp.DatasetID == "" || exp.Frequency == "" || exp.PeriodTime <= 0 || exp.SeriesHash == "" || exp.ExpectedCount == 0 {
 		return exp, invalid("space_id, dataset_id, frequency, period_time, series_hash and expected_count are required")
+	}
+	if len(exp.ReservationID) > 128 {
+		return exp, invalid("reservation_id exceeds 128 bytes")
 	}
 	return exp, nil
 }
@@ -934,6 +949,13 @@ func samePeriodCommitIdentity(left, right DatasetPeriodExpectation) bool {
 	return left.SpaceID == right.SpaceID && left.DatasetID == right.DatasetID && left.Frequency == right.Frequency && left.PeriodTime == right.PeriodTime && left.SeriesHash == right.SeriesHash && left.ExpectedCount == right.ExpectedCount
 }
 
+func samePeriodIdentityForStatus(current, requested DatasetPeriodExpectation, status string) bool {
+	if !samePeriodCommitIdentity(current, requested) {
+		return false
+	}
+	return status != "waiting" || current.ReservationID == requested.ReservationID
+}
+
 func (s *Store) readPeriodExpectation(base string) (DatasetPeriodExpectation, error) {
 	spaceID, datasetID, frequency, periodTime, err := parsePeriodBase(base)
 	if err != nil {
@@ -962,6 +984,12 @@ func (s *Store) readPeriodExpectation(base string) (DatasetPeriodExpectation, er
 		}
 	} else if !errors.Is(seriesSnapshotErr, cpebble.ErrNotFound) {
 		return DatasetPeriodExpectation{}, seriesSnapshotErr
+	}
+	reservationRaw, reservationErr := s.readPeriodValue(periodFieldKey(base, "reservation_id"))
+	if reservationErr == nil {
+		exp.ReservationID = string(reservationRaw)
+	} else if !errors.Is(reservationErr, cpebble.ErrNotFound) {
+		return DatasetPeriodExpectation{}, reservationErr
 	}
 	return exp, nil
 }

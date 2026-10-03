@@ -393,7 +393,7 @@ func (s *Service) importSCFFunction(ctx context.Context, spaceID string, account
 	if existing != nil {
 		metadataMap = parseJSONMap(existing.Metadata)
 	}
-	for key, value := range map[string]any{"biz_type": "market_fetcher", "function_type": functionType, "runtime": info.Runtime, "deployment_ready": true, "imported_from_scf": true} {
+	for key, value := range map[string]any{"biz_type": "market_fetcher", "collector_publish_fenced": true, "function_type": functionType, "runtime": info.Runtime, "deployment_ready": true, "imported_from_scf": true} {
 		metadataMap[key] = value
 	}
 	metadata, err := json.Marshal(metadataMap)

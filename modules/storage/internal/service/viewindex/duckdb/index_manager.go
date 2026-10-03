@@ -36,13 +36,6 @@ type IndexManager struct {
 	coverageMu sync.Mutex
 }
 
-type seriesCapacityCandidate struct {
-	subject string
-	freq    string
-	tag     string
-	counter uint64
-}
-
 // duckDBContext checks cancellation before entering DuckDB, then detaches it
 // for the duration of the operation. go-duckdb implements QueryContext and
 // ExecContext by calling duckdb_interrupt when a context is cancelled. Under
@@ -378,84 +371,40 @@ func (m *IndexManager) SeriesCapacity(ctx context.Context, id string, maxPeriods
 	if maxPeriods == 0 {
 		return viewindex.SeriesCapacityResult{}, nil
 	}
-	var err error
-	if ctx, err = duckDBContext(ctx); err != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return viewindex.SeriesCapacityResult{}, err
 	}
-	db, _, _, _, err := m.getIndex(ctx, id)
+	// Capacity scans are read-only and run behind a process-wide single-scan
+	// gate. Unlike request and mutation paths, keep the deadline for this query:
+	// the driver interrupts only this connection and waits for the interrupt
+	// watcher before returning it to the pool, allowing the maintainer to release
+	// its gate and retry on the next hourly slot.
+	db, _, _, _, err := m.getIndex(context.Background(), id)
 	if err != nil {
 		return viewindex.SeriesCapacityResult{}, err
 	}
-	// view_series_counts is a cheap candidate index maintained on writes, but
-	// it is intentionally not trusted as the final value: legacy indexes (and
-	// any future cleanup) may leave its append-only counter above the physical
-	// row count. Verify only candidates above the limit instead of aggregating
-	// the whole view every maintenance tick.
-	rows, err := db.QueryContext(ctx, `
+	// Counts are updated transactionally with view_rows. This index has no
+	// in-place row deletion path; rebuilds create a new index and its counts.
+	// Treat the compact per-series table as authoritative so a capacity check
+	// never performs a physical COUNT over the potentially large View table.
+	var subject, freq, tag string
+	var rowCount uint64
+	err = db.QueryRowContext(ctx, `
 		SELECT subject_id, freq, series_tag, row_count
 		FROM view_series_counts
 		WHERE row_count > ?
-		ORDER BY row_count DESC, subject_id, freq, series_tag`, maxPeriods)
+		ORDER BY row_count DESC, subject_id, freq, series_tag
+		LIMIT 1`, maxPeriods).Scan(&subject, &freq, &tag, &rowCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return viewindex.SeriesCapacityResult{}, nil
+	}
 	if err != nil {
 		return viewindex.SeriesCapacityResult{}, err
 	}
-	candidates := make([]seriesCapacityCandidate, 0)
-	for rows.Next() {
-		var subject, freq, tag string
-		var counter uint64
-		if err := rows.Scan(&subject, &freq, &tag, &counter); err != nil {
-			_ = rows.Close()
-			return viewindex.SeriesCapacityResult{}, err
-		}
-		candidates = append(candidates, seriesCapacityCandidate{subject: subject, freq: freq, tag: tag, counter: counter})
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return viewindex.SeriesCapacityResult{}, err
-	}
-	if err := rows.Close(); err != nil {
-		return viewindex.SeriesCapacityResult{}, err
-	}
-	var repairErr error
-	for _, candidate := range candidates {
-		subject, freq, tag, counter := candidate.subject, candidate.freq, candidate.tag, candidate.counter
-		var physical uint64
-		if err := db.QueryRowContext(ctx, `
-			SELECT COUNT(*)
-			FROM view_rows
-			WHERE subject_id = ? AND freq = ? AND series_tag = ?`, subject, freq, tag).Scan(&physical); err != nil {
-			return viewindex.SeriesCapacityResult{}, err
-		}
-		// The physical result is authoritative. Return a real offender before
-		// attempting best-effort counter repair so a concurrent write cannot
-		// hide a capacity trigger behind a repair conflict.
-		if physical > maxPeriods {
-			return viewindex.SeriesCapacityResult{Exceeded: true, SubjectID: subject, Freq: freq, SeriesTag: tag, Rows: physical}, nil
-		}
-		if physical != counter {
-			// Repair stale over-counts without clobbering a concurrent write that
-			// changed the counter after the candidate query.
-			var result sql.Result
-			if physical == 0 {
-				result, err = db.ExecContext(ctx, `DELETE FROM view_series_counts WHERE subject_id = ? AND freq = ? AND series_tag = ? AND row_count = ?`, subject, freq, tag, counter)
-			} else {
-				result, err = db.ExecContext(ctx, `UPDATE view_series_counts SET row_count = ? WHERE subject_id = ? AND freq = ? AND series_tag = ? AND row_count = ?`, physical, subject, freq, tag, counter)
-			}
-			if err != nil {
-				repairErr = errors.Join(repairErr, fmt.Errorf("repair View series capacity counter for %s/%s/%s: %w", subject, freq, tag, err))
-				continue
-			}
-			affected, err := result.RowsAffected()
-			if err != nil {
-				repairErr = errors.Join(repairErr, fmt.Errorf("inspect View series capacity counter repair for %s/%s/%s: %w", subject, freq, tag, err))
-				continue
-			}
-			if affected > 1 {
-				repairErr = errors.Join(repairErr, fmt.Errorf("repair View series capacity counter for %s/%s/%s affected %d rows", subject, freq, tag, affected))
-			}
-		}
-	}
-	return viewindex.SeriesCapacityResult{}, repairErr
+	return viewindex.SeriesCapacityResult{Exceeded: true, SubjectID: subject, Freq: freq, SeriesTag: tag, Rows: rowCount}, nil
 }
 
 func batchCoverage(writes []viewindex.RowWrite) (string, string, bool) {

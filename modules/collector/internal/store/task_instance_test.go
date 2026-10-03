@@ -241,6 +241,65 @@ func TestTaskInstanceRepositoryTracksSCFAssignmentAndStorageWrite(t *testing.T) 
 	assert.Zero(t, updated)
 }
 
+func TestMarkStorageWritesQueryUsesSelectiveInstanceIndex(t *testing.T) {
+	s := newCollectorStore(t)
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	err := s.db.Raw(`EXPLAIN QUERY PLAN SELECT t_collector_task_instances.c_instance_id FROM t_collector_task_instances
+		WHERE t_collector_task_instances.c_space_id = ? AND c_subject_id = ? AND c_frequency IN (?, ?)
+		AND c_series_tag = ? AND c_function_name = ? AND c_is_deleted = ?
+		AND EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_dataset_id = ?)
+		AND (c_last_exec_time IS NULL OR c_last_exec_time < ?)
+		AND (t_collector_task_instances.c_run_id = (SELECT runs.c_run_id FROM t_collector_runs runs WHERE runs.c_space_id = ? AND runs.c_run_type = 'scheduled' ORDER BY runs.c_target_time DESC, runs.c_id DESC LIMIT 1)
+		OR (t_collector_task_instances.c_run_id = '' AND NOT EXISTS (SELECT 1 FROM t_collector_runs runs WHERE runs.c_space_id = ? AND runs.c_run_type = 'scheduled')))`,
+		"crypto", "BTC-USDT", "1m", "1M", "venue:binance", "market-fetch-1", false, "bars", time.Now().UTC(), "crypto", "crypto",
+	).Scan(&plan).Error
+	require.NoError(t, err)
+	var details []string
+	for _, row := range plan {
+		details = append(details, row.Detail)
+	}
+	assert.Contains(t, fmt.Sprint(details), "idx_collector_instances_storage_write")
+}
+
+func TestTaskInstanceFilterMatchesExactCollectionTaskIDAndUsesIndex(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instances := []domain.TaskInstance{
+		{SpaceID: "crypto", InstanceID: "instance-exact", CollectionTaskID: "task-a", Provider: "binance", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m"},
+		{SpaceID: "crypto", InstanceID: "instance-substring", CollectionTaskID: "prefix-task-a-suffix", Provider: "binance", DataType: "kline", SubjectID: "ETH-USDT", Frequency: "1m"},
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+	attachTestWriteTarget(t, s, ctx, "crypto", "instance-exact", "task-a", "bars-a")
+	attachTestWriteTarget(t, s, ctx, "crypto", "instance-substring", "prefix-task-a-suffix", "bars-b")
+
+	rows, hasMore, err := s.TaskInstances().ListPage(ctx, TaskInstanceFilter{
+		SpaceID: "crypto", CollectionTaskID: "task-a", Page: 1, PageSize: 10,
+	})
+	require.NoError(t, err)
+	require.False(t, hasMore)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "instance-exact", rows[0].InstanceID)
+
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	err = s.db.Raw(`EXPLAIN QUERY PLAN SELECT instance.c_instance_id FROM t_collector_task_instances AS instance
+		WHERE instance.c_space_id = ? AND EXISTS (
+			SELECT 1 FROM t_collector_instance_write_targets AS targets
+			WHERE targets.c_space_id = instance.c_space_id
+			  AND targets.c_instance_id = instance.c_instance_id
+			  AND targets.c_task_id = ?
+		)`, "crypto", "task-a").Scan(&plan).Error
+	require.NoError(t, err)
+	var details []string
+	for _, row := range plan {
+		details = append(details, row.Detail)
+	}
+	assert.Contains(t, fmt.Sprint(details), "sqlite_autoindex_t_collector_instance_write_targets_2")
+}
+
 func TestTaskInstanceUpsertSkipsParentTaskDisabledDuringDelete(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
@@ -631,49 +690,64 @@ func TestPruneDisabledWriteTargetsWaitsForActiveBatchAndKeepsSibling(t *testing.
 	} {
 		require.NoError(t, s.Tasks().Create(ctx, task))
 	}
-	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "shared-prune", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m"}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "shared-prune", DataType: "snapshot", SubjectID: "BTC-USDT", Frequency: "1m"}
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
 	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, "disabled", "bars-disabled")
 	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, "enabled", "bars-enabled")
-	targets, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
-	require.NoError(t, err)
-	var disabledTarget domain.WriteTarget
-	for _, target := range targets {
-		if target.TaskID == "disabled" {
-			disabledTarget = target
-		}
-	}
 	now := time.Now().UTC()
-	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{SpaceID: "crypto", RetryKey: "target-retry", InstanceID: instance.InstanceID, WriteTargetID: disabledTarget.ID, RetryScope: "write_target", Status: "pending", CreateTime: now}))
-	failureTargetsJSON, err := json.Marshal([]domain.WriteTarget{disabledTarget})
-	require.NoError(t, err)
-	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
-		SpaceID: "crypto", RetryKey: "period-receipt", InstanceID: instance.InstanceID, WriteTargetID: disabledTarget.ID,
-		RetryScope: "write_target", Frequency: "1m", TargetDataTime: now, FailureTargetsJSON: string(failureTargetsJSON),
-		Status: "permanent_failed", PeriodFailureReportState: domain.PeriodFailureReportPending,
-	}))
 	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "active-prune", ScheduleID: "schedule-prune", BatchKind: domain.BatchKindRealtime, ShardIndex: 0, Frequency: "1m", Status: domain.BatchStatusPlanned, PlannedAt: &now}
 	created, err := s.FetchBatches().CreatePlannedWithItemsForEnabledTargets(ctx, batch, []string{instance.InstanceID})
 	require.NoError(t, err)
 	require.True(t, created)
 
-	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto")
+	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
 	require.NoError(t, err)
 	require.Zero(t, deleted, "active batch must keep the target until completion")
 
 	require.NoError(t, s.db.WithContext(ctx).Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Update("c_status", domain.BatchStatusSucceeded).Error)
-	deleted, err = s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto")
+	deleted, err = s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted)
 	remaining, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
 	require.Equal(t, "enabled", remaining[0].TaskID)
-	_, err = s.FetchRetries().Get(ctx, "crypto", "target-retry")
-	require.Error(t, err)
-	receipt, err := s.FetchRetries().Get(ctx, "crypto", "period-receipt")
-	require.NoError(t, err, "disabled target pruning must preserve pending period failure outbox work")
-	require.Equal(t, domain.PeriodFailureReportPending, receipt.PeriodFailureReportState)
+}
+
+func TestPruneDisabledWriteTargetsWaitsForTimedOutLateCompletionFence(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "disabled-after-dispatch", TaskName: "Task", Enabled: true}
+	require.NoError(t, s.Tasks().Create(ctx, task))
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "late-prune", DataType: "snapshot", SubjectID: "BTC-USDT", Frequency: "1m"}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, task.TaskID, "bars")
+	targets, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+
+	now := time.Now().UTC()
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "timed-out-late-prune", ScheduleID: "schedule-late-prune", BatchKind: domain.BatchKindRealtime, ShardIndex: 0, Frequency: "1m", Status: domain.BatchStatusPlanned, PlannedAt: &now}
+	created, err := s.FetchBatches().CreatePlannedWithItemsForEnabledTargets(ctx, batch, []string{instance.InstanceID})
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NoError(t, s.Tasks().SetEnabled(ctx, "crypto", task.TaskID, false))
+	require.NoError(t, s.db.WithContext(ctx).Model(&domain.BatchInvocation{}).
+		Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).
+		Updates(map[string]any{"c_status": domain.BatchStatusTimedOut, "c_completed_at": now, "c_late_completion": false}).Error)
+
+	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
+	require.NoError(t, err)
+	require.Zero(t, deleted, "timed-out batch must retain target scope until its first late completion")
+	_, err = s.TaskInstances().GetWriteTarget(ctx, "crypto", targets[0].ID)
+	require.NoError(t, err, "late completion must still resolve the original write target")
+
+	require.NoError(t, s.db.WithContext(ctx).Model(&domain.BatchInvocation{}).
+		Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).
+		Update("c_late_completion", true).Error)
+	deleted, err = s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted, "target can be detached after the first late completion fence is consumed")
 }
 
 func TestPruneDisabledWriteTargetsSkipsEnabledOnlySpace(t *testing.T) {
@@ -684,10 +758,116 @@ func TestPruneDisabledWriteTargetsSkipsEnabledOnlySpace(t *testing.T) {
 	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
 	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, "enabled-only", "bars-enabled")
 
-	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto")
+	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
 	require.NoError(t, err)
 	require.Zero(t, deleted)
 	targets, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
 	require.NoError(t, err)
 	require.Len(t, targets, 1)
+}
+
+func TestPruneDisabledWriteTargetsPreservesRetryAndRequiresTerminalStorage(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	period := now.Add(-time.Minute).Truncate(time.Minute)
+	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "disabled-kline", TaskName: "Disabled", Enabled: false}
+	require.NoError(t, s.Tasks().Create(ctx, task))
+	instance := domain.TaskInstance{
+		SpaceID: "crypto", InstanceID: "retry-protected-kline", DataType: "kline", SubjectID: "BTC-USDT",
+		Frequency: "1m", TargetDataTime: &period,
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
+	attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, task.TaskID, "bars-disabled")
+	targets, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	target := targets[0]
+	target.SeriesHash, target.ExpectedCount = "hash", 1
+	require.NoError(t, s.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{target}))
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "retry-protects-target", InstanceID: instance.InstanceID,
+		WriteTargetID: target.ID, RetryScope: "write_target", Status: "pending",
+	}))
+	failureTargetsJSON, err := json.Marshal([]domain.WriteTarget{target})
+	require.NoError(t, err)
+	require.NoError(t, s.FetchRetries().Upsert(ctx, &domain.RetryItem{
+		SpaceID: "crypto", RetryKey: "receipt-protects-target", InstanceID: instance.InstanceID,
+		WriteTargetID: target.ID, RetryScope: "write_target", Frequency: instance.Frequency, TargetDataTime: period,
+		FailureTargetsJSON: string(failureTargetsJSON), Status: "permanent_failed",
+		PeriodFailureReportState: domain.PeriodFailureReportPending,
+	}))
+
+	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
+	require.NoError(t, err)
+	require.Zero(t, deleted, "pending retries must retain both their target scope and retry rows")
+	_, err = s.TaskInstances().GetWriteTarget(ctx, "crypto", target.ID)
+	require.NoError(t, err)
+	_, err = s.FetchRetries().Get(ctx, "crypto", "retry-protects-target")
+	require.NoError(t, err)
+	receipt, err := s.FetchRetries().Get(ctx, "crypto", "receipt-protects-target")
+	require.NoError(t, err)
+	require.Equal(t, domain.PeriodFailureReportPending, receipt.PeriodFailureReportState)
+
+	require.NoError(t, s.db.WithContext(ctx).Where("c_space_id = ? AND c_retry_key IN ?", "crypto", []string{"retry-protects-target", "receipt-protects-target"}).Delete(&domain.RetryItem{}).Error)
+	deleted, err = s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
+	require.NoError(t, err)
+	require.Zero(t, deleted, "a missing Storage period state is not proof of terminal completion")
+
+	state := domain.PeriodStorageState{
+		Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: target.DatasetID, Frequency: "1m", PeriodTime: period},
+		SeriesHash: "hash", ExpectedCount: 1, DeadlineAt: period.Add(time.Minute),
+		Status: domain.PeriodStatusWaiting, ConfirmedAt: now,
+	}
+	require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, state))
+	deleted, err = s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
+	require.NoError(t, err)
+	require.Zero(t, deleted, "a waiting Storage period must keep its target")
+
+	state.Status = domain.PeriodStatusComplete
+	state.ConfirmedAt = now.Add(time.Second)
+	require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, state))
+	deleted, err = s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+}
+
+func TestPruneDisabledWriteTargetsHonorsRowLimit(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "disabled-many", TaskName: "Disabled", Enabled: false}
+	require.NoError(t, s.Tasks().Create(ctx, task))
+	var instances []domain.TaskInstance
+	for index := 0; index < 3; index++ {
+		period := now.Add(-time.Duration(index+1) * time.Minute).Truncate(time.Minute)
+		instanceID := fmt.Sprintf("disabled-many-%d", index)
+		instances = append(instances, domain.TaskInstance{
+			SpaceID: "crypto", InstanceID: instanceID, DataType: "kline", SubjectID: fmt.Sprintf("BTC-%d", index),
+			Frequency: "1m", TargetDataTime: &period,
+		})
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+	for index, instance := range instances {
+		datasetID := fmt.Sprintf("bars-%d", index)
+		attachTestWriteTarget(t, s, ctx, "crypto", instance.InstanceID, task.TaskID, datasetID)
+		targets, err := s.TaskInstances().ListWriteTargets(ctx, "crypto", instance.InstanceID)
+		require.NoError(t, err)
+		require.Len(t, targets, 1)
+		target := targets[0]
+		target.SeriesHash, target.ExpectedCount = "hash", 1
+		require.NoError(t, s.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{target}))
+		require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
+			Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: datasetID, Frequency: instance.Frequency, PeriodTime: *instance.TargetDataTime},
+			SeriesHash: "hash", ExpectedCount: 1, DeadlineAt: instance.TargetDataTime.Add(time.Minute),
+			Status: domain.PeriodStatusComplete, ConfirmedAt: now,
+		}))
+	}
+
+	deleted, err := s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 1)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted, "disabled target cleanup must honor its caller's physical-row budget")
+	var remaining int64
+	require.NoError(t, s.db.WithContext(ctx).Model(&domain.WriteTarget{}).Where("c_space_id = ?", "crypto").Count(&remaining).Error)
+	require.EqualValues(t, 2, remaining)
 }

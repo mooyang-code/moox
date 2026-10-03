@@ -7,6 +7,7 @@ import (
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/publishlease"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	setupservice "github.com/mooyang-code/moox/modules/admin/internal/service/setup"
@@ -37,6 +38,9 @@ type Services struct {
 
 	// 系统服务部署信息
 	SysDeploy sysdeploy.Service
+
+	// Collector 发布租约由 Admin 控制面持久化与校验。
+	CollectorPublishLease *publishlease.Service
 }
 
 // StartBackgroundServices 启动 admin 本地基础服务。
@@ -114,15 +118,17 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 		return nil, err
 	}
 	setupService := setupservice.NewService(db, encryptionKey)
+	collectorPublishLease := publishlease.NewService(db, spaceService)
 
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
-		DBManager:     dbManager,
-		SpaceMgr:      spaceService,
-		SSHService:    sshService,
-		SecretService: secretService,
-		Setup:         setupService,
-		SysDeploy:     sysDeployService,
+		DBManager:             dbManager,
+		SpaceMgr:              spaceService,
+		SSHService:            sshService,
+		SecretService:         secretService,
+		Setup:                 setupService,
+		SysDeploy:             sysDeployService,
+		CollectorPublishLease: collectorPublishLease,
 	}
 
 	return services, nil

@@ -30,6 +30,38 @@ func TestBuildTaskPreservesMergedSourceDataset(t *testing.T) {
 	require.Equal(t, "mdataset_binance_kline_1m", task.ResultDatasetID)
 }
 
+func TestBuildViewReadyTaskKeepsSourceAsView(t *testing.T) {
+	task, err := BuildTask(TaskScope{
+		TriggerType: "view_ready", SpaceID: "crypto", BindingGeneration: "incarnation-1",
+		SourceViewID: "view_binance_kline_1m", ResultDatasetID: "mdataset_binance_kline_1m",
+		Freq: "1m", StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0),
+	}, domain.FactorDef{
+		FactorType: domain.FactorTypeCrossSection,
+		FactorID:   "rank", Name: "Rank", SourceHash: "h1",
+		InputColumns: []string{"close"}, Outputs: []string{"rank"},
+		ParamsJSON: `{}`, LookbackPeriods: 1, Status: domain.FactorStatusEnabled,
+	}, "/factor")
+	require.NoError(t, err)
+	require.Empty(t, task.SourceDataset, "view-ready tasks must query the registered View, not Primary by View ID")
+	require.Equal(t, "view_binance_kline_1m", task.SourceViewID)
+}
+
+func TestBuildRecalcTaskKeepsSourceAsView(t *testing.T) {
+	task, err := BuildTask(TaskScope{
+		TriggerType: "recalc", SpaceID: "crypto", BindingGeneration: "incarnation-1",
+		SourceViewID: "view_binance_kline_1m", ResultDatasetID: "mdataset_binance_kline_1m",
+		SubjectID: "BTC-USDT", Freq: "1m", StartTime: time.Unix(1, 0), EndTime: time.Unix(2, 0),
+	}, domain.FactorDef{
+		FactorType: domain.FactorTypeTimeSeries,
+		FactorID:   "bias", Name: "Bias", SourceHash: "h1",
+		InputColumns: []string{"close"}, Outputs: []string{"bias"},
+		ParamsJSON: `{}`, LookbackPeriods: 1, Status: domain.FactorStatusEnabled,
+	}, "/factor")
+	require.NoError(t, err)
+	require.Empty(t, task.SourceDataset, "recalc must query the registered View, not Primary by View ID")
+	require.Equal(t, "view_binance_kline_1m", task.SourceViewID)
+}
+
 func TestBuildTaskUsesExactlyOneFactor(t *testing.T) {
 	task, err := BuildTask(TaskScope{
 		TaskID: "task-1", TriggerType: "recalc", SpaceID: "crypto",

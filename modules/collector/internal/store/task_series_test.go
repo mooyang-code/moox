@@ -64,6 +64,35 @@ func TestTaskSeriesCanonicalIndexAndHash(t *testing.T) {
 	require.Equal(t, hash3, taskAfter.SeriesHash)
 }
 
+func TestTaskRepositoryReadSingleTaskSeriesIsBoundedAndFailsClosed(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "single", TaskName: "Single", DataType: "kline", CollectParams: `{}`, Enabled: true}))
+	require.NoError(t, s.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "multiple", TaskName: "Multiple", DataType: "kline", CollectParams: `{}`, Enabled: true}))
+	_, _, err := s.Tasks().ReplaceTaskSeries(ctx, "crypto", "single", []domain.TaskSeries{{SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", ProviderSymbol: "BTCUSDT", SeriesTag: "venue:binance"}})
+	require.NoError(t, err)
+	_, _, err = s.Tasks().ReplaceTaskSeries(ctx, "crypto", "multiple", []domain.TaskSeries{
+		{SubjectID: "BTC-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", ProviderSymbol: "BTCUSDT", SeriesTag: "venue:binance"},
+		{SubjectID: "ETH-USDT", Provider: "binance", SourceID: "spot_http", MarketType: "spot", ProviderSymbol: "ETHUSDT", SeriesTag: "venue:binance"},
+	})
+	require.NoError(t, err)
+
+	row, ok, err := s.Tasks().ReadSingleTaskSeries(ctx, "crypto", "single")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "BTC-USDT", row.SubjectID)
+
+	row, ok, err = s.Tasks().ReadSingleTaskSeries(ctx, "crypto", "multiple")
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Nil(t, row)
+
+	row, ok, err = s.Tasks().ReadSingleTaskSeries(ctx, "crypto", "missing")
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Nil(t, row)
+}
+
 func TestPeriodSeriesSnapshotSurvivesCurrentTaskSeriesChange(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()

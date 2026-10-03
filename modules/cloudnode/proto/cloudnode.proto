@@ -245,6 +245,9 @@ message NodeCreateItem {
   string deployment_id = 10;
   google.protobuf.Struct metadata = 11;
   string trigger_type = 12;
+  string collector_publish_lease_id = 13;
+  int64 collector_publish_fencing_token = 14;
+  string create_reservation_id = 15;
 }
 
 message BatchCreateNodesReq {
@@ -294,6 +297,8 @@ message GetNodeBatchChangeRsp {
 
 message BatchDeleteNodesReq {
   repeated string node_ids = 1;
+  string collector_publish_lease_id = 2;
+  int64 collector_publish_fencing_token = 3;
 }
 
 message BatchDeleteNodesRsp {
@@ -306,6 +311,10 @@ message NodeRuntimeConfigPatch {
   map<string, string> managed_environment = 2;
   bool timer_enabled = 3;
   string timer_cron = 4;
+  string collector_publish_lease_id = 5;
+  int64 collector_publish_fencing_token = 6;
+  string lifecycle_id = 7;
+  string operation_id = 8;
 }
 
 message BatchUpdateNodeRuntimeConfigsReq {
@@ -314,6 +323,10 @@ message BatchUpdateNodeRuntimeConfigsReq {
 
 message NodeDeleteItem {
   string node_id = 1;
+  string collector_publish_lease_id = 2;
+  int64 collector_publish_fencing_token = 3;
+  string lifecycle_id = 4;
+  string operation_id = 5;
 }
 
 message NodeDeployItem {
@@ -321,6 +334,10 @@ message NodeDeployItem {
   string package_id = 2;
   map<string, string> config = 3;
   map<string, string> environment = 4;
+  string collector_publish_lease_id = 5;
+  int64 collector_publish_fencing_token = 6;
+  string lifecycle_id = 7;
+  string operation_id = 8;
 }
 
 message BatchDeployNodesReq {

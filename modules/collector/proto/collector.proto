@@ -84,6 +84,61 @@ message GetTaskDetailRsp {
   CollectionTask task = 2;
 }
 
+// TaskResultInventoryEntry is one task-owned K-line result in an authoritative
+// inventory snapshot. Deleted tasks are represented by their absence from a
+// newer complete snapshot; disabled tasks remain present with enabled=false.
+message TaskResultInventoryEntry {
+  string space_id = 1;
+  string task_id = 2;
+  string dataset_id = 3;
+  string view_id = 4;
+  string frequency = 5;
+  string market_id = 6;
+  string calendar_id = 7;
+  string timezone = 8;
+  repeated string sessions = 9;
+  string latest_completed_period = 10; // RFC3339; complete or degraded
+  string latest_completed_status = 11;
+  string view_last_data_time = 12; // RFC3339 when Storage provides one
+  string observed_at = 13; // RFC3339 metadata observation time
+  bool enabled = 14;
+  bool ownership_verified = 15;
+  string result_status = 16; // ready/pending/error
+  // Canary candidate fields are populated only when the current task series
+  // set is proven to contain exactly one row and both result identities are
+  // owned by this task. Otherwise availability stays false and these fields
+  // remain empty/default.
+  bool canary_candidate_available = 17;
+  string subject_id = 18;
+  string provider_symbol = 19;
+  string provider = 20;
+  string source_id = 21;
+  string market_type = 22;
+  string series_tag = 23;
+  uint32 series_index = 24;
+  string series_hash = 25;
+  uint32 expected_count = 26;
+  repeated string output_fields = 27;
+}
+
+message GetTaskResultInventoryReq {
+  common.Page page = 1;
+  // Empty on page one creates a snapshot. Subsequent pages must echo the
+  // returned ID so a concurrent task change cannot silently mix snapshots.
+  string snapshot_id = 2;
+  // Inventory snapshots and page tokens are scoped to this Space. Admin
+  // Gateway also checks this field against the authenticated X-Space-Id.
+  string space_id = 3;
+}
+
+message GetTaskResultInventoryRsp {
+  common.RetInfo ret_info = 1;
+  repeated TaskResultInventoryEntry entries = 2;
+  common.PageResult page = 3;
+  string snapshot_id = 4;
+  string observed_at = 5;
+}
+
 message CreateTaskReq {
   CollectionTask task = 1;
   ResultConfig result_config = 2;
@@ -310,6 +365,7 @@ service CollectMgr {
   // ----- 采集任务 -----
   rpc GetTaskList(GetTaskListReq) returns (GetTaskListRsp);
   rpc GetTaskDetail(GetTaskDetailReq) returns (GetTaskDetailRsp);
+  rpc GetTaskResultInventory(GetTaskResultInventoryReq) returns (GetTaskResultInventoryRsp);
   rpc CreateTask(CreateTaskReq) returns (CreateTaskRsp);
   rpc UpdateTask(UpdateTaskReq) returns (UpdateTaskRsp);
   rpc DisableTask(DisableTaskReq) returns (DisableTaskRsp);

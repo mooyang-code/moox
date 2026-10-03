@@ -12,6 +12,10 @@
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
       <a-spin v-else :loading="metaLoading">
+        <a-alert v-if="metaError" type="error" show-icon class="query-alert">
+          {{ metaError }}
+          <a-button type="text" size="mini" :loading="metaLoading" @click="loadMeta">重试</a-button>
+        </a-alert>
         <a-empty v-if="visibleViews.length === 0" :description="props.emptyDescription" />
 
         <template v-else>
@@ -44,6 +48,7 @@
 
           <a-alert v-if="queryError" class="query-alert" :type="viewIndexPreparing ? 'warning' : 'error'" show-icon>
             {{ queryError }}
+            <span v-if="rowsStale">；数据状态待刷新，保留上次查询数据（{{ lastRowsReadAt }}）</span>
           </a-alert>
           <a-alert v-else-if="hasQueried && !loading && tableRows.length === 0" class="query-alert" type="info" show-icon>
             {{ props.emptyRowsDescription }}
@@ -456,6 +461,7 @@ import {
 import KlineModal from "./kline-modal.vue";
 import QueryControls from "./components/query-controls.vue";
 import ResultTable from "./components/result-table.vue";
+import { loadTargetedViewCatalog } from "./composables/view-browse-catalog";
 
 defineOptions({ name: "DataViewBrowse" });
 
@@ -474,6 +480,7 @@ const props = withDefaults(
     autoRefreshIntervalMs?: number;
     viewIds?: string[];
     activeViewId?: string;
+    refreshKey?: number;
     hideTechnicalIdentity?: boolean;
   }>(),
   {
@@ -490,6 +497,7 @@ const props = withDefaults(
     autoRefreshIntervalMs: 0,
     viewIds: undefined,
     activeViewId: "",
+    refreshKey: 0,
     hideTechnicalIdentity: false
   }
 );
@@ -501,9 +509,10 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 
 const views = ref<View[]>([]);
 const datasets = ref<Dataset[]>([]);
+const targetedViewIds = computed(() => [...new Set((props.viewIds || []).map(viewId => viewId.trim()).filter(Boolean))]);
 const datasetById = computed(() => new Map(datasets.value.map(item => [item.dataset_id, item])));
 const visibleViews = computed(() => {
-  const allowedViewIds = new Set((props.viewIds || []).filter(Boolean));
+  const allowedViewIds = new Set(targetedViewIds.value);
   const allowedPrimaryDatasetIds = props.allowedPrimaryDatasetIds || [];
   const allowedPrimary = new Set(allowedPrimaryDatasetIds.filter(Boolean));
   const excludedPrimary = new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean));
@@ -532,6 +541,9 @@ const visibleViews = computed(() => {
 });
 const viewColumns = ref<ViewColumn[]>([]);
 const datasetColumns = ref<DatasetColumn[]>([]);
+let metaLoadSequence = 0;
+let viewContextSequence = 0;
+let viewRowsRequestSequence = 0;
 const fields = ref<Field[]>([]);
 const factors = ref<Factor[]>([]);
 const activeViewKey = ref("");
@@ -560,8 +572,12 @@ const filters = ref<ViewFilterState[]>([]);
 // can leave the first page showing an old bar even while ingestion is healthy.
 const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "data_time", direction: "desc" });
 const metaLoading = ref(false);
+const metaError = ref("");
 const contextLoading = ref(false);
 const loading = ref(false);
+const pendingRowsRefresh = ref(false);
+const rowsStale = ref(false);
+const lastRowsReadAt = ref("");
 const queryError = ref("");
 const queryErrorIsPreparing = ref(false);
 const viewIndexPreparing = computed(() => queryErrorIsPreparing.value);
@@ -897,18 +913,32 @@ async function loadMoreRebuildLogs() {
 }
 
 async function loadMeta() {
+  const sequence = ++metaLoadSequence;
   const space_id = selectedSpaceId.value;
-  if (!space_id) return;
+  if (!space_id) {
+    metaLoading.value = false;
+    metaError.value = "";
+    return;
+  }
   metaLoading.value = true;
+  metaError.value = "";
   try {
     const page = { page: 1, size: 1000 };
     // Views and Datasets are required to render the first result page. Fields
     // and Factors only decorate labels and can arrive afterwards; keeping them
     // out of this critical path avoids making a slow metadata read delay the
     // actual data query.
-    const [viewItems, datasetItems] = await Promise.all([listAllViews(space_id), listAllDatasets(space_id)]);
-    views.value = viewItems;
-    datasets.value = datasetItems;
+    if (targetedViewIds.value.length > 0) {
+      const catalog = await loadTargetedViewCatalog(space_id, targetedViewIds.value);
+      if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
+      views.value = catalog.views;
+      datasets.value = catalog.datasets;
+    } else {
+      const [viewItems, datasetItems] = await Promise.all([listAllViews(space_id), listAllDatasets(space_id)]);
+      if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
+      views.value = viewItems;
+      datasets.value = datasetItems;
+    }
     ensureSelectedView();
     await loadViewContext();
 
@@ -917,7 +947,7 @@ async function loadMeta() {
     // blocking spinner.
     void Promise.all([listFields({ space_id, page }), listFactors({ space_id, page })])
       .then(([fieldRsp, factorRsp]) => {
-        if (selectedSpaceId.value !== space_id) return;
+        if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
         fields.value = fieldRsp.fields || [];
         factors.value = factorRsp.factors || [];
       })
@@ -925,9 +955,12 @@ async function loadMeta() {
         console.warn("加载字段/因子标签失败", error);
       });
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "加载视图失败");
+    if (sequence === metaLoadSequence) {
+      metaError.value = error instanceof Error ? error.message : "加载视图失败";
+      Message.error(metaError.value);
+    }
   } finally {
-    metaLoading.value = false;
+    if (sequence === metaLoadSequence) metaLoading.value = false;
   }
 }
 
@@ -989,7 +1022,7 @@ watch(
 );
 
 watch(
-  () => [props.activeViewId, ...(props.viewIds || [])],
+  () => props.activeViewId,
   () => {
     const current = activeViewKey.value;
     ensureSelectedView();
@@ -1000,12 +1033,43 @@ watch(
   }
 );
 
+watch(
+  () => targetedViewIds.value.join("\u0000"),
+  (next, previous) => {
+    if (next === previous) return;
+    views.value = [];
+    datasets.value = [];
+    activeViewKey.value = "";
+    clearViewState();
+    void loadMeta();
+  }
+);
+
+watch(() => props.refreshKey, () => {
+  void refreshRowsInBackground();
+});
+
+// Coalesce requests during a query/context load into a follow-up read instead
+// of silently dropping the user's refresh while the browser is busy.
+watch(
+  [pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeView.value?.view_id],
+  () => {
+    if (!pendingRowsRefresh.value || !activeView.value || loading.value || contextLoading.value || metaLoading.value) return;
+    pendingRowsRefresh.value = false;
+    void reloadRows(true);
+  }
+);
+
 async function onViewChange() {
   clearViewState();
   await loadViewContext();
 }
 
 function clearViewState() {
+  viewContextSequence += 1;
+  viewRowsRequestSequence += 1;
+  contextLoading.value = false;
+  loading.value = false;
   viewColumns.value = [];
   datasetColumns.value = [];
   tableRows.value = [];
@@ -1015,6 +1079,8 @@ function clearViewState() {
   detailRow.value = undefined;
   closeKlineModal();
   queryError.value = "";
+  rowsStale.value = false;
+  lastRowsReadAt.value = "";
   hasQueried.value = false;
   previewHasMore.value = false;
   pagination.current = 1;
@@ -1026,26 +1092,40 @@ function clearViewState() {
 }
 
 async function loadViewContext() {
+  const requestSequence = ++viewContextSequence;
   const space_id = selectedSpaceId.value;
   const view = activeView.value;
-  if (!space_id || !view) return;
+  if (!space_id || !view) {
+    contextLoading.value = false;
+    return;
+  }
 
   contextLoading.value = true;
   try {
     const contextViewId = view.view_id;
+    const isCurrent = () =>
+      requestSequence === viewContextSequence &&
+      selectedSpaceId.value === space_id &&
+      activeView.value?.view_id === contextViewId;
     const datasetColumnsPromise = loadDatasetColumns(space_id, view).catch(error => {
       console.warn("加载数据集列失败", error);
+      return [] as DatasetColumn[];
     });
     const columnsRsp = await listViewColumns({ space_id, view_id: contextViewId, page: { page: 1, size: 1000 } });
+    if (!isCurrent()) return;
     viewColumns.value = columnsRsp.columns || [];
-    await datasetColumnsPromise;
+    const loadedDatasetColumns = await datasetColumnsPromise;
+    if (!isCurrent()) return;
+    datasetColumns.value = loadedDatasetColumns;
     resetFilterRows();
     resetSortState();
     await reloadRows();
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "加载视图上下文失败");
+    if (requestSequence === viewContextSequence) {
+      Message.error(error instanceof Error ? error.message : "加载视图上下文失败");
+    }
   } finally {
-    contextLoading.value = false;
+    if (requestSequence === viewContextSequence) contextLoading.value = false;
   }
 }
 
@@ -1054,32 +1134,31 @@ async function loadDatasetColumns(space_id: string, view: View) {
   const results = await Promise.all(
     Array.from(datasetIds).map(dataset_id => listDatasetColumns({ space_id, dataset_id, page: { page: 1, size: 1000 } }))
   );
-  if (selectedSpaceId.value === space_id && activeView.value?.view_id === view.view_id) {
-    datasetColumns.value = results.flatMap(rsp => rsp.columns || []);
-  }
+  return results.flatMap(rsp => rsp.columns || []);
 }
 
-async function reloadRows() {
-  tableColumnNames.value = preferredColumnNames.value;
+async function reloadRows(retainRowsOnError = false) {
+  if (!retainRowsOnError || !lastRowsReadAt.value) tableColumnNames.value = preferredColumnNames.value;
   if (!activeView.value) return;
   if (mode.value === "time_series") {
-    await loadTimeSeriesViewRows();
+    await loadTimeSeriesViewRows(retainRowsOnError);
     return;
   }
   if (mode.value === "record") {
-    await loadRecordViewRows();
+    await loadRecordViewRows(retainRowsOnError);
   }
 }
 
 async function refreshRowsInBackground() {
-  if (!activeView.value || loading.value || contextLoading.value) return;
-  await reloadRows();
+  pendingRowsRefresh.value = true;
+  if (!activeView.value && !metaLoading.value) await loadMeta();
 }
 
-async function loadTimeSeriesViewRows() {
+async function loadTimeSeriesViewRows(retainRowsOnError = false) {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
   if (!view) return;
+  const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
   queryError.value = "";
   try {
@@ -1094,6 +1173,13 @@ async function loadTimeSeriesViewRows() {
       page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
       total_mode: "NONE"
     });
+    if (
+      requestSequence !== viewRowsRequestSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeView.value?.view_id !== view.view_id
+    ) {
+      return;
+    }
     const rows = rsp.rows || [];
     tableRows.value = timeSeriesRowsToTableRows(rows).map((row, index) => ({
       ...row,
@@ -1103,21 +1189,35 @@ async function loadTimeSeriesViewRows() {
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
+    rowsStale.value = false;
+    lastRowsReadAt.value = new Date().toLocaleTimeString();
   } catch (error) {
+    if (
+      requestSequence !== viewRowsRequestSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeView.value?.view_id !== view.view_id
+    ) {
+      return;
+    }
     queryError.value = viewQueryErrorMessage(error, "查询时序视图失败");
-    tableRows.value = [];
-    previewHasMore.value = false;
+    rowsStale.value = retainRowsOnError && !!lastRowsReadAt.value;
+    if (!rowsStale.value) {
+      tableRows.value = [];
+      previewHasMore.value = false;
+      lastRowsReadAt.value = "";
+    }
     hasQueried.value = true;
     if (!viewIndexPreparing.value) Message.error(queryError.value);
   } finally {
-    loading.value = false;
+    if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
 }
 
-async function loadRecordViewRows() {
+async function loadRecordViewRows(retainRowsOnError = false) {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
   if (!view) return;
+  const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
   queryError.value = "";
   try {
@@ -1129,19 +1229,39 @@ async function loadRecordViewRows() {
       sorts: buildViewSorts(sortState),
       page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
     });
+    if (
+      requestSequence !== viewRowsRequestSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeView.value?.view_id !== view.view_id
+    ) {
+      return;
+    }
     const rows = rsp.rows || [];
     tableRows.value = recordRowsToTableRows(rows);
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
+    rowsStale.value = false;
+    lastRowsReadAt.value = new Date().toLocaleTimeString();
   } catch (error) {
+    if (
+      requestSequence !== viewRowsRequestSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeView.value?.view_id !== view.view_id
+    ) {
+      return;
+    }
     queryError.value = viewQueryErrorMessage(error, "查询记录视图失败");
-    tableRows.value = [];
-    previewHasMore.value = false;
+    rowsStale.value = retainRowsOnError && !!lastRowsReadAt.value;
+    if (!rowsStale.value) {
+      tableRows.value = [];
+      previewHasMore.value = false;
+      lastRowsReadAt.value = "";
+    }
     hasQueried.value = true;
     if (!viewIndexPreparing.value) Message.error(queryError.value);
   } finally {
-    loading.value = false;
+    if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
 }
 

@@ -237,6 +237,7 @@ func fetchActiveDeployments(ctx context.Context, cfg *Config) (map[string]endpoi
 	auth := runtimeapp.AuthConfig{
 		AccessKey:   cfg.SysDeploy.ServiceAuth.AccessKey,
 		SecretKey:   cfg.SysDeploy.ServiceAuth.SecretKey,
+		Caller:      cfg.SysDeploy.ServiceAuth.Caller,
 		TargetNode:  cfg.SysDeploy.ServiceAuth.TargetNode,
 		CAFile:      cfg.SysDeploy.ServiceAuth.CAFile,
 		CAPEMBase64: cfg.SysDeploy.ServiceAuth.CAPEMBase64,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
@@ -75,15 +76,19 @@ type TimeSeriesRangeReader interface {
 }
 
 type MaintenanceOptions struct {
-	Metadata     MetadataClient
-	Primary      FieldReader
-	PrimaryRange TimeSeriesRangeReader
-	Interval     time.Duration
-	OwnerID      string
-	Grace        time.Duration
-	// MaxViewFileBytes triggers an A/B rebuild for a
-	// finite-retention View. The rebuilt index contains only its keep window;
-	// the tRPC cleanup Timer removes the retired physical slot later.
+	Metadata                  MetadataClient
+	Primary                   FieldReader
+	PrimaryRange              TimeSeriesRangeReader
+	Interval                  time.Duration
+	CapacityCheckInterval     time.Duration
+	CapacityCheckJitter       time.Duration
+	capacityCheckJitterSource func(time.Duration) time.Duration
+	capacityCheckNow          func() time.Time
+	OwnerID                   string
+	Grace                     time.Duration
+	// MaxViewFileBytes triggers an A/B rebuild only when the View has bounded
+	// time- or period-based retention. Permanent Views report an over-limit
+	// alert instead of rebuilding into a truncated history.
 	MaxViewFileBytes    int64
 	MaxPeriodsPerSeries uint64
 	// RebuildLookback is the preferred wall-clock history to backfill for every
@@ -95,7 +100,7 @@ type MaintenanceOptions struct {
 	// backfill. A frequency-specific value wins over default; a shortage does
 	// not block activation.
 	RebuildLookbackPeriods map[string]uint64
-	// RebuildMaxPending and RebuildIdleChecks gate optional size-limit
+	// RebuildMaxPending and RebuildIdleChecks gate optional capacity-limit
 	// rebuilds. Necessary repairs bypass this capacity gate.
 	RebuildMaxPending           uint64
 	RebuildIdleChecks           uint32
@@ -114,6 +119,51 @@ type MaintenanceOptions struct {
 	BackfillRequestInterval time.Duration
 }
 
+type seriesCapacityCheckState struct {
+	nextCheck time.Time
+	inFlight  bool
+	hasResult bool
+	result    viewindex.SeriesCapacityResult
+}
+
+type seriesCapacityScanOutcome struct {
+	result viewindex.SeriesCapacityResult
+	err    error
+}
+
+func seriesCapacityWithTimeout(
+	ctx context.Context,
+	reader viewindex.SeriesCapacityReader,
+	indexID string,
+	maxPeriods uint64,
+	timeout time.Duration,
+	completed func(viewindex.SeriesCapacityResult, error),
+) (viewindex.SeriesCapacityResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		timeout = defaultCapacityCheckTimeout
+	}
+	scanCtx, cancel := context.WithTimeout(ctx, timeout)
+	done := make(chan seriesCapacityScanOutcome, 1)
+	go func() {
+		result, err := reader.SeriesCapacity(scanCtx, indexID, maxPeriods)
+		if completed != nil {
+			completed(result, err)
+		}
+		done <- seriesCapacityScanOutcome{result: result, err: err}
+	}()
+	select {
+	case outcome := <-done:
+		cancel()
+		return outcome.result, outcome.err
+	case <-scanCtx.Done():
+		cancel()
+		return viewindex.SeriesCapacityResult{}, fmt.Errorf("capacity scan exceeded %s: %w", timeout, scanCtx.Err())
+	}
+}
+
 // Keep Primary history requests below the DataNode point-read budget. A
 // 10k-row page becomes 100k+ Pebble gets for a wide K-line schema and can
 // starve live reads; cursor pagination keeps the scan bounded instead.
@@ -123,9 +173,11 @@ type MaintenanceOptions struct {
 // overhead. Enrichment and index writes remain chunked independently.
 const viewBackfillBatchSize = 10000
 const capacityMaintenanceRetryInterval = 30 * time.Minute
+const defaultCapacityCheckInterval = time.Hour
+const defaultCapacityCheckTimeout = time.Minute
 const defaultRebuildMaxPending uint64 = 32
 const defaultRebuildIdleChecks uint32 = 3
-const defaultRebuildLookbackPeriods uint64 = 1000
+const defaultRebuildLookbackPeriods uint64 = 5000
 const defaultMaxHistoryScanRows uint64 = 1_000_000
 const capacityMaintenanceBuildBacklogThreshold = defaultRebuildMaxPending
 
@@ -200,6 +252,11 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 	if opts.Interval <= 0 {
 		opts.Interval = 30 * time.Second
 	}
+	var err error
+	opts.CapacityCheckInterval, opts.CapacityCheckJitter, err = normalizeCapacityCheckSchedule(opts)
+	if err != nil {
+		return opts, err
+	}
 	if opts.RebuildMaxPending == 0 && !opts.RebuildMaxPendingConfigured {
 		opts.RebuildMaxPending = defaultRebuildMaxPending
 	}
@@ -222,6 +279,172 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 		opts.OwnerID = "storage-view"
 	}
 	return opts, nil
+}
+
+func normalizeCapacityCheckSchedule(opts MaintenanceOptions) (time.Duration, time.Duration, error) {
+	interval := opts.CapacityCheckInterval
+	if interval == 0 {
+		configured := strings.TrimSpace(opts.Policy.CapacityCheckInterval)
+		if configured == "" {
+			interval = defaultCapacityCheckInterval
+		} else {
+			parsed, err := time.ParseDuration(configured)
+			if err != nil {
+				return 0, 0, fmt.Errorf("parse capacity_check_interval: %w", err)
+			}
+			interval = parsed
+		}
+	}
+	if interval <= 0 || interval > 24*time.Hour {
+		return 0, 0, errors.New("capacity_check_interval must be greater than 0 and at most 24h")
+	}
+	jitter := opts.CapacityCheckJitter
+	if jitter == 0 {
+		configured := strings.TrimSpace(opts.Policy.CapacityCheckJitter)
+		if configured == "" {
+			jitter = interval
+		} else {
+			parsed, err := time.ParseDuration(configured)
+			if err != nil {
+				return 0, 0, fmt.Errorf("parse capacity_check_jitter: %w", err)
+			}
+			jitter = parsed
+		}
+	}
+	if jitter <= 0 || jitter > interval {
+		return 0, 0, errors.New("capacity_check_jitter must be greater than 0 and at most capacity_check_interval")
+	}
+	return interval, jitter, nil
+}
+
+func (s *Service) beginSeriesCapacityCheck(ref capacityCheckRef, now time.Time, interval, jitter time.Duration, jitterSource func(time.Duration) time.Duration) (bool, viewindex.SeriesCapacityResult) {
+	s.capacityChecksMu.Lock()
+	defer s.capacityChecksMu.Unlock()
+	if s.capacityChecks == nil {
+		s.capacityChecks = make(map[capacityCheckRef]*seriesCapacityCheckState)
+	}
+	state := s.capacityChecks[ref]
+	if state == nil {
+		for candidate := range s.capacityChecks {
+			if candidate.viewRef == ref.viewRef {
+				delete(s.capacityChecks, candidate)
+			}
+		}
+		if jitterSource == nil {
+			jitterSource = randomCapacityCheckJitter
+		}
+		offset := jitterSource(jitter)
+		if offset < 0 {
+			offset = 0
+		} else if offset > jitter {
+			offset = jitter
+		}
+		state = &seriesCapacityCheckState{nextCheck: now.Add(offset)}
+		s.capacityChecks[ref] = state
+	}
+	if state.inFlight || s.capacityScanLive || now.Before(state.nextCheck) {
+		s.updateCapacityScanBacklogMetricLocked(now)
+		return false, state.result
+	}
+	queueDelay := now.Sub(state.nextCheck)
+	state.inFlight = true
+	s.capacityScanLive = true
+	state.nextCheck = now.Add(interval)
+	if s.metrics != nil {
+		s.metrics.ObserveCapacityScanQueueDelay(queueDelay)
+	}
+	s.updateCapacityScanBacklogMetricLocked(now)
+	return true, state.result
+}
+
+func (s *Service) finishSeriesCapacityCheck(ref capacityCheckRef, result viewindex.SeriesCapacityResult, err error) {
+	s.capacityChecksMu.Lock()
+	defer s.capacityChecksMu.Unlock()
+	s.capacityScanLive = false
+	state := s.capacityChecks[ref]
+	if state == nil {
+		return
+	}
+	state.inFlight = false
+	if err == nil {
+		state.result = result
+		state.hasResult = true
+	}
+	s.updateCapacityScanBacklogMetricLocked(time.Now().UTC())
+}
+
+func (s *Service) updateCapacityScanBacklogMetricLocked(now time.Time) {
+	var oldest time.Duration
+	for _, state := range s.capacityChecks {
+		if state == nil || state.inFlight || state.nextCheck.After(now) {
+			continue
+		}
+		if overdue := now.Sub(state.nextCheck); overdue > oldest {
+			oldest = overdue
+		}
+	}
+	if s.metrics != nil {
+		s.metrics.SetCapacityScanOldestOverdue(oldest)
+	}
+}
+
+func (s *Service) updatePermanentCapacityOverLimit(ref capacityCheckRef, exceeded bool) (bool, int64) {
+	s.capacityChecksMu.Lock()
+	defer s.capacityChecksMu.Unlock()
+	if s.permanentCapacityOverLimit == nil {
+		s.permanentCapacityOverLimit = make(map[capacityCheckRef]struct{})
+	}
+	_, wasExceeded := s.permanentCapacityOverLimit[ref]
+	if exceeded {
+		s.permanentCapacityOverLimit[ref] = struct{}{}
+	} else {
+		delete(s.permanentCapacityOverLimit, ref)
+	}
+	return exceeded && !wasExceeded, int64(len(s.permanentCapacityOverLimit))
+}
+
+func (s *Service) observePermanentViewCapacityLimit(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) {
+	if view == nil || view.GetActiveIndexId() == "" {
+		return
+	}
+	ref := capacityCheckRef{
+		viewRef: viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()},
+		indexID: view.GetActiveIndexId(),
+	}
+	exceeded := permanentViewFileCapacityExceeded(view, stats, opts)
+	newlyExceeded, count := s.updatePermanentCapacityOverLimit(ref, exceeded)
+	if s.metrics != nil {
+		s.metrics.SetPermanentViewCapacityOverLimitCount(count)
+	}
+	if newlyExceeded {
+		log.Printf("storage permanent view exceeds file capacity limit; automatic history-truncating rebuild suppressed space=%s view=%s index=%s physical_bytes=%d limit_bytes=%d", view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId(), stats.PhysicalBytes, opts.MaxViewFileBytes)
+	}
+}
+
+func (s *Service) reconcileCapacityCheckInventory(activeIndexes map[capacityCheckRef]struct{}) {
+	s.capacityChecksMu.Lock()
+	defer s.capacityChecksMu.Unlock()
+	for ref := range s.capacityChecks {
+		if _, active := activeIndexes[ref]; !active {
+			delete(s.capacityChecks, ref)
+		}
+	}
+	for ref := range s.permanentCapacityOverLimit {
+		if _, active := activeIndexes[ref]; !active {
+			delete(s.permanentCapacityOverLimit, ref)
+		}
+	}
+	if s.metrics != nil {
+		s.metrics.SetPermanentViewCapacityOverLimitCount(int64(len(s.permanentCapacityOverLimit)))
+	}
+	s.updateCapacityScanBacklogMetricLocked(time.Now().UTC())
+}
+
+func randomCapacityCheckJitter(maximum time.Duration) time.Duration {
+	if maximum <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int63n(int64(maximum)))
 }
 
 func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts MaintenanceOptions) func() {
@@ -274,9 +497,7 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 		// cold rebuild. Maintenance is deliberately single-flight; prioritizing
 		// the business source prevents a slow factor backfill from delaying the
 		// data View that downstream calculations depend on.
-		sort.SliceStable(rsp.GetViews(), func(i, j int) bool {
-			return viewMaintenancePriority(rsp.GetViews()[i]) < viewMaintenancePriority(rsp.GetViews()[j])
-		})
+		sortViewsForMaintenance(rsp.GetViews())
 		for _, view := range rsp.GetViews() {
 			if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 				continue
@@ -419,6 +640,7 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 	// transitions. Retry terminal log updates before processing the next pass.
 	s.drainRebuildLogRetries(ctx)
 	firstErr := s.ReplayPendingSubjects(ctx)
+	activeIndexes := make(map[capacityCheckRef]struct{})
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
@@ -431,10 +653,16 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 		// derived Views during a cold start. All Views still get processed in
 		// this pass; ordering only prevents a large metrics rebuild from
 		// monopolizing the PrimaryStore while the user-facing K-line is empty.
-		sort.SliceStable(rsp.GetViews(), func(i, j int) bool {
-			return viewMaintenancePriority(rsp.GetViews()[i]) < viewMaintenancePriority(rsp.GetViews()[j])
-		})
+		sortViewsForMaintenance(rsp.GetViews())
 		for _, view := range rsp.GetViews() {
+			if view != nil && view.GetSpaceId() != "" && view.GetViewId() != "" {
+				if view.GetActiveIndexId() != "" {
+					activeIndexes[capacityCheckRef{
+						viewRef: viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()},
+						indexID: view.GetActiveIndexId(),
+					}] = struct{}{}
+				}
+			}
 			if err := s.maintainView(ctx, opts, auth, view); err != nil {
 				if errors.Is(err, errActiveContractUnavailable) {
 					// Do not let the EventBus consumer ACK a legacy in-flight
@@ -452,6 +680,7 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 			}
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
+			s.reconcileCapacityCheckInventory(activeIndexes)
 			return firstErr
 		}
 	}
@@ -471,6 +700,19 @@ func viewMaintenancePriority(view *pb.View) int {
 	}
 }
 
+func sortViewsForMaintenance(views []*pb.View) {
+	sort.SliceStable(views, func(i, j int) bool {
+		left, right := views[i], views[j]
+		if viewMaintenancePriority(left) != viewMaintenancePriority(right) {
+			return viewMaintenancePriority(left) < viewMaintenancePriority(right)
+		}
+		if left.GetSpaceId() != right.GetSpaceId() {
+			return left.GetSpaceId() < right.GetSpaceId()
+		}
+		return left.GetViewId() < right.GetViewId()
+	})
+}
+
 func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View) error {
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 		return nil
@@ -483,6 +725,10 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		opts.MaxViewFileBytes = resolved.MaxViewFileBytes
 		opts.MaxPeriodsPerSeries = resolved.MaxPeriodsPerSeries
 		opts.RebuildLookbackPeriods = map[string]uint64{"default": resolved.RebuildLookbackPeriods}
+	}
+	capacityCheckInterval, capacityCheckJitter, err := normalizeCapacityCheckSchedule(opts)
+	if err != nil {
+		return err
 	}
 	// Time-series Views use a completed-bar budget rather than wall-clock
 	// retention. This keeps weekends/holidays from shortening the rebuild. The
@@ -516,6 +762,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		if err != nil {
 			return err
 		}
+		s.observePermanentViewCapacityLimit(view, stats, opts)
 		// Metadata-only stats deliberately omit coverage fields. Preserve the
 		// last full coverage snapshot instead of replacing it with empty values;
 		// otherwise TotalMode=NONE queries lose their completeness information
@@ -550,9 +797,31 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		if stats.Exists {
 			if lookbackPeriods > 0 && opts.MaxPeriodsPerSeries > 0 {
 				if reader, ok := engine.(viewindex.SeriesCapacityReader); ok {
-					capacityOffender, err = reader.SeriesCapacity(ctx, view.GetActiveIndexId(), opts.MaxPeriodsPerSeries)
-					if err != nil {
-						return fmt.Errorf("check View series capacity: %w", err)
+					capacityRef := capacityCheckRef{
+						viewRef: viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()},
+						indexID: view.GetActiveIndexId(),
+					}
+					checkNow := time.Now().UTC()
+					if opts.capacityCheckNow != nil {
+						checkNow = opts.capacityCheckNow().UTC()
+					}
+					runCheck, cached := s.beginSeriesCapacityCheck(
+						capacityRef,
+						checkNow,
+						capacityCheckInterval,
+						capacityCheckJitter,
+						opts.capacityCheckJitterSource,
+					)
+					capacityOffender = cached
+					if runCheck {
+						observed, scanErr := seriesCapacityWithTimeout(ctx, reader, view.GetActiveIndexId(), opts.MaxPeriodsPerSeries, defaultCapacityCheckTimeout, func(observed viewindex.SeriesCapacityResult, scanErr error) {
+							s.finishSeriesCapacityCheck(capacityRef, observed, scanErr)
+						})
+						if scanErr != nil {
+							log.Printf("storage View capacity scan deferred space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), scanErr)
+						} else {
+							capacityOffender = observed
+						}
 					}
 					if capacityOffender.Exceeded {
 						capacityDetails = seriesCapacityDetails(capacityOffender, opts.MaxPeriodsPerSeries, lookbackPeriods, stats.PhysicalBytes)
@@ -1693,27 +1962,17 @@ func needsCapacityMaintenanceRebuild(view *pb.View, stats viewindex.ViewIndexSta
 	if needsActiveOrRevisionRebuild(view, stats) || (!periodBased && needsRebuild(view, stats)) {
 		return true
 	}
-	if view == nil || view.GetKeepDuration() == "" || view.GetKeepDuration() == "0" {
-		// A permanent View cannot become smaller through an A/B rebuild, so do
-		// not continuously rebuild it just because a byte watermark is crossed.
-		return false
-	}
-	keep, err := time.ParseDuration(view.GetKeepDuration())
-	if err != nil || keep <= 0 {
-		return false
-	}
-	if opts.MaxViewFileBytes > 0 && stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) {
+	if opts.MaxViewFileBytes > 0 && stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) && hasBoundedViewRetention(view, opts) {
 		return true
 	}
 	return false
 }
 
 func needsCapacityMaintenanceWatermark(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) bool {
-	if view == nil || !stats.Exists || view.GetKeepDuration() == "" || view.GetKeepDuration() == "0" {
+	if view == nil || !stats.Exists || !hasBoundedViewRetention(view, opts) {
 		return false
 	}
-	keep, err := time.ParseDuration(view.GetKeepDuration())
-	if err != nil || keep <= 0 || opts.MaxViewFileBytes <= 0 {
+	if opts.MaxViewFileBytes <= 0 {
 		return false
 	}
 	if needsActiveOrRevisionRebuild(view, stats) {
@@ -1724,6 +1983,25 @@ func needsCapacityMaintenanceWatermark(view *pb.View, stats viewindex.ViewIndexS
 		return false
 	}
 	return stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes)
+}
+
+func hasBoundedViewRetention(view *pb.View, opts MaintenanceOptions) bool {
+	if view == nil {
+		return false
+	}
+	if rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods) > 0 {
+		return true
+	}
+	keepDuration := strings.TrimSpace(view.GetKeepDuration())
+	if keepDuration == "" || keepDuration == "0" {
+		return false
+	}
+	keep, err := time.ParseDuration(keepDuration)
+	return err == nil && keep > 0
+}
+
+func permanentViewFileCapacityExceeded(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) bool {
+	return view != nil && stats.Exists && opts.MaxViewFileBytes > 0 && stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) && !hasBoundedViewRetention(view, opts)
 }
 
 func (s *Service) internalAuth() *pb.AuthInfo {

@@ -26,7 +26,7 @@ func TestDataNodePeriodReceiptsDeadlineAndReadonlyStatus(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, node.Close()) })
 	auth := &pb.AuthInfo{AppId: "primary", AppKey: ServiceAuthKey("period-secret", "primary")}
-	exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: deadline.Add(-time.Minute).Unix(), SeriesHash: "hash", ExpectedCount: 2, DeadlineAt: deadline.Unix(), SeriesSnapshot: []*pb.DatasetPeriodSeries{
+	exp := &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "bars", Frequency: "1m", PeriodTime: deadline.Add(-time.Minute).Unix(), SeriesHash: "hash", ExpectedCount: 2, DeadlineAt: deadline.Unix(), ReservationId: "release-a", SeriesSnapshot: []*pb.DatasetPeriodSeries{
 		{SeriesIndex: 0, SubjectId: "BTC-USDT", SeriesTag: "okx"}, {SeriesIndex: 1, SubjectId: "BTC-USDT", SeriesTag: "binance"},
 	}}
 	query := proto.Clone(exp).(*pb.DatasetPeriodExpectation)
@@ -55,6 +55,11 @@ func TestDataNodePeriodReceiptsDeadlineAndReadonlyStatus(t *testing.T) {
 		require.Equal(t, deadline.Unix(), response.GetDeadlineAt())
 	}
 	assertStatus(query, "waiting")
+	competing := proto.Clone(query).(*pb.DatasetPeriodExpectation)
+	competing.ReservationId = "release-b"
+	status, err = node.GetDatasetPeriodStatus(ctx, &pb.GetDatasetPeriodStatusReq{NodeId: "node-a", AuthInfo: auth, Expectation: competing})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_CONFLICT, status.GetRetInfo().GetCode())
 	for _, change := range []func(*pb.DatasetPeriodExpectation){func(x *pb.DatasetPeriodExpectation) { x.SeriesHash = "wrong" }, func(x *pb.DatasetPeriodExpectation) { x.ExpectedCount++ }} {
 		bad := proto.Clone(query).(*pb.DatasetPeriodExpectation)
 		change(bad)

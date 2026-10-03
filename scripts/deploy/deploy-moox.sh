@@ -2673,7 +2673,7 @@ PY
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${NOTIFICATION_ENV[@]+"${NOTIFICATION_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "${trade_gateway_ca_env[@]}" \
+      "${trade_gateway_ca_env[@]+"${trade_gateway_ca_env[@]}"}" \
       "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}" "MOOX_NODE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_DB_PATH=${ROOT}/data/admin.db" \
       "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
@@ -2861,7 +2861,9 @@ PY
   gateway_service_env_for strategy
   runtime_identity_env moox_strategy "${ROOT}/strategy/config/app.yaml"
   start_service "strategy" "${ROOT}/strategy" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "${trade_gateway_env[@]}" "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "${trade_gateway_env[@]+"${trade_gateway_env[@]}"}" "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}" "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+      "MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" \
+      "MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
       "${ROOT}/bin/moox-strategy" -conf=config/trpc_go.yaml
 }
 
@@ -5356,7 +5358,7 @@ if [[ -n "${COUNTERPART_AUTH_FOR_DEPLOY}" ]]; then
   trap - EXIT
 fi
 HAS_SELECTED_WORKLOAD=0
-if [[ "${WITH_ARCHIVE}" == "1" || "${WITH_EVENTBUS}" == "1" || "${WITH_CLOUDNODE}" == "1" || \
+if [[ "${WITH_STORAGE_ACCESS}" == "1" || "${WITH_ARCHIVE}" == "1" || "${WITH_EVENTBUS}" == "1" || "${WITH_CLOUDNODE}" == "1" || \
   "${WITH_COLLECTOR}" == "1" || "${WITH_FACTOR}" == "1" || "${WITH_STRATEGY}" == "1" || \
   "${WITH_TRADE}" == "1" || "${WITH_MONITOR}" == "1" || "${WITH_WEB_HOST}" == "1" || \
   "${WITH_HOSTAGENT}" == "1" || \
@@ -5777,7 +5779,9 @@ fi
 
 verify_gateway_control_plane() {
   [[ "${WITH_GATEWAY}" == "1" && "${NO_START}" == "0" ]] || return 0
-  local verify_script='set -euo pipefail
+  local verify_script
+  verify_script="$(cat <<'REMOTE_VERIFY_SCRIPT'
+set -euo pipefail
 root=$1
 node_id=$2
 health_addr="$(awk '/^[[:space:]]+health_addr:/ {print $2; exit}' "$root/gateway/config/app.yaml" 2>/dev/null || true)"
@@ -5811,7 +5815,9 @@ for _ in $(seq 1 60); do
 done
 echo "gateway control-plane readiness failed: node_id=${node_id}" >&2
 tail -80 "$root/logs/gateway/stdout.log" >&2 || true
-exit 1'
+exit 1
+REMOTE_VERIFY_SCRIPT
+)"
   if is_local_target; then
     if ! bash -s -- "$(expand_local_path "${DEPLOY_DIR}")" "${NODE_ID}" <<<"${verify_script}"; then
       if rollback_local_gateway; then
@@ -5900,6 +5906,11 @@ configure_local_ca() {
 configure_local_ca
 
 verify_public_https() {
+  if [[ "${COMPONENT_OVERLAY}" == "1" || "${NO_START}" -ne 0 || -z "${PUBLIC_HOST}" || \
+    ( "${WITH_ADMIN}" != "1" && "${WITH_GATEWAY}" != "1" ) ]]; then
+    log "skip HTTPS acceptance because this deployment did not activate Caddy"
+    return 0
+  fi
   [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 ]] || return 0
   # A raw public IP has no stable ACME DNS identity. The service endpoints are
   # still checked by the Gateway readiness and the caller's external E2E probe;
@@ -5938,9 +5949,9 @@ expect_signed_status() {
   expected=$1; path=$2
   for _ in $(seq 1 30); do
     timestamp=$(date +%s); nonce=$(openssl rand -hex 32)
-    body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \\$NF}")
+    body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \$NF}")
     canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
-    signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \\$NF}")
+    signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \$NF}")
     actual=$(status -X POST -H "Content-Type: application/json" \
       -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" -H "X-Moox-Caller: $MOOX_GATEWAY_CALLER" -H "X-Moox-Timestamp: $timestamp" \
       -H "X-Moox-Nonce: $nonce" -H "X-Moox-Target-Node: $node_id" -H "X-Moox-Signature: $signature" \
@@ -5974,21 +5985,34 @@ if [[ "$with_admin" == 0 && "$with_trade" == 1 ]]; then
 fi'
   if is_local_target; then
     bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" "${WITH_TRADE}" || {
-      "$(expand_local_path "${DEPLOY_DIR}")/lib/caddy-managed.sh" rollback --deploy-dir "$(expand_local_path "${DEPLOY_DIR}")" || true
+      rollback_caddy_activation_if_attempted
       fail "public HTTPS acceptance failed"
     }
   elif [[ -n "${FETCHED_CA_FILE}" ]]; then
     ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" "${WITH_TRADE}" <<<"${verify_script}" || {
-      ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
+      rollback_caddy_activation_if_attempted
       fail "public HTTPS acceptance failed"
     }
   else
     ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" "${WITH_TRADE}" <<<"${verify_script}" || {
-      ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
+      rollback_caddy_activation_if_attempted
       fail "remote public HTTPS acceptance failed"
     }
   fi
   log "HTTPS acceptance passed: ${browser} and ${service}"
+}
+
+rollback_caddy_activation_if_attempted() {
+  if [[ "${COMPONENT_OVERLAY}" == "1" || "${NO_START}" -ne 0 || -z "${PUBLIC_HOST}" || \
+    ( "${WITH_ADMIN}" != "1" && "${WITH_GATEWAY}" != "1" ) ]]; then
+    log "skip Caddy rollback because this deployment did not activate Caddy"
+    return 0
+  fi
+  if is_local_target; then
+    "$(expand_local_path "${DEPLOY_DIR}")/lib/caddy-managed.sh" rollback --deploy-dir "$(expand_local_path "${DEPLOY_DIR}")" || true
+  else
+    ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
+  fi
 }
 
 verify_public_https

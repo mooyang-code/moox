@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -344,6 +345,13 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		logBatchMemberStart(ctx, byTaskID[task.TaskID].task, batchID)
 	}
 	log.InfoContextf(ctx, "factor_batch_start batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks))
+	batchFrame, frameErr := projectBatchInputFrame(batchTasks, batch.shared.Frame)
+	if frameErr != nil {
+		for _, member := range valid {
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, frameErr)
+		}
+		return
+	}
 	var batchResult *engine.BatchResult
 	pythonExecuteCalls := 0
 	writeFactorCount := 0
@@ -354,7 +362,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		}
 		var err error
 		pythonExecuteCalls++
-		batchResult, err = runtime.ExecuteBatch(ctx, batchTask, batch.shared.Frame)
+		batchResult, err = runtime.ExecuteBatch(ctx, batchTask, batchFrame)
 		if err != nil {
 			return engine.RetryableError{Err: err}
 		}
@@ -813,8 +821,48 @@ func (s *Service) readCrossSectionPanel(ctx context.Context, task Task, cursor t
 	if len(frame.Rows) == 0 {
 		return panel, nil
 	}
+	if err := sortCrossSectionFrame(frame); err != nil {
+		return nil, err
+	}
 	panel.Frame = frame
 	return panel, nil
+}
+
+// sortCrossSectionFrame matches the Python worker's deterministic row contract.
+func sortCrossSectionFrame(frame *engine.DataFrame) error {
+	if frame == nil || len(frame.Rows) != len(frame.DataTimes) ||
+		len(frame.Rows) != len(frame.SeriesTags) || len(frame.Rows) != len(frame.SubjectIDs) {
+		return errors.New("cross-section frame row identities do not align")
+	}
+	indices := make([]int, len(frame.Rows))
+	for index := range indices {
+		indices[index] = index
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		left, right := indices[i], indices[j]
+		if !frame.DataTimes[left].Equal(frame.DataTimes[right]) {
+			return frame.DataTimes[left].Before(frame.DataTimes[right])
+		}
+		if frame.SeriesTags[left] != frame.SeriesTags[right] {
+			return frame.SeriesTags[left] < frame.SeriesTags[right]
+		}
+		return frame.SubjectIDs[left] < frame.SubjectIDs[right]
+	})
+	sorted := &engine.DataFrame{
+		Columns:    append([]string(nil), frame.Columns...),
+		Rows:       make([][]any, len(indices)),
+		DataTimes:  make([]time.Time, len(indices)),
+		SeriesTags: make([]string, len(indices)),
+		SubjectIDs: make([]string, len(indices)),
+	}
+	for index, source := range indices {
+		sorted.Rows[index] = frame.Rows[source]
+		sorted.DataTimes[index] = frame.DataTimes[source]
+		sorted.SeriesTags[index] = frame.SeriesTags[source]
+		sorted.SubjectIDs[index] = frame.SubjectIDs[source]
+	}
+	*frame = *sorted
+	return nil
 }
 
 func (s *Service) readSubjectPeriodChunk(ctx context.Context, task Task, cursor time.Time, columns []string) (*storageio.RangeChunk, error) {

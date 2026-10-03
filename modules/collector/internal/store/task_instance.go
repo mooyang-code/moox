@@ -115,8 +115,8 @@ func (r *TaskInstanceRepository) ListPage(ctx context.Context, filter TaskInstan
 	return instances, hasMore, nil
 }
 
-// UpsertMany creates or updates stable business instances. A periodic batch
-// never changes the instance identity or resets its freshness state.
+// UpsertMany creates or updates one Provider request execution. Repeated writes
+// for the same run-scoped identity never reset its freshness state.
 func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []domain.TaskInstance) error {
 	if len(instances) == 0 {
 		return nil
@@ -562,7 +562,7 @@ func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilt
 		q = q.Where("c_instance_id LIKE ?", "%"+filter.InstanceID+"%")
 	}
 	if filter.CollectionTaskID != "" {
-		q = q.Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_task_id LIKE ?)`, "%"+filter.CollectionTaskID+"%")
+		q = q.Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_task_id = ?)`, filter.CollectionTaskID)
 	}
 	if filter.Provider != "" {
 		q = q.Where("c_provider = ?", filter.Provider)

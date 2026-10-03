@@ -34,6 +34,12 @@ func (s *Service) SubmitCreateNodes(ctx context.Context, req *pb.BatchCreateNode
 	creates := make([]store.NodeBatchItemCreate, 0, len(items))
 	seenNodes := make(map[string]struct{}, len(items))
 	for index, item := range items {
+		if item == nil {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes item is required")}, nil
+		}
+		// The control plane owns this nonce; callers cannot reuse another request's
+		// reservation identity. It is persisted in the durable request for retries.
+		item.CreateReservationId = uuid.NewString()
 		node, ret := s.preflightCreateNode(ctx, spaceID, item, index)
 		if ret != nil {
 			return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
@@ -75,10 +81,21 @@ func (s *Service) SubmitDeployNodes(ctx context.Context, req *pb.BatchDeployNode
 	if err != nil {
 		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	if req == nil {
+		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+	}
 	items := req.GetDeployments()
 	if ret := validateNodeBatchSize(len(items), "deployments"); ret != nil {
 		return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
 	}
+	nodeIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		if item != nil {
+			nodeIDs = append(nodeIDs, strings.TrimSpace(item.GetNodeId()))
+		}
+	}
+	unlockNodes := lockSCFNodes(spaceID, nodeIDs)
+	defer unlockNodes()
 
 	jobID := "node-batch-" + uuid.NewString()
 	creates := make([]store.NodeBatchItemCreate, 0, len(items))
@@ -92,6 +109,22 @@ func (s *Service) SubmitDeployNodes(ctx context.Context, req *pb.BatchDeployNode
 			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "deployments contains duplicate node_id")}, nil
 		}
 		seenNodes[nodeID] = struct{}{}
+		node, err := s.catalog.GetNode(ctx, spaceID, nodeID)
+		if err != nil {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+		}
+		if node == nil || node.IsDeleted {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found: "+nodeID)}, nil
+		}
+		lifecycleID, ensureErr := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, nodeID)
+		if ensureErr != nil {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(ensureErr)}, nil
+		}
+		if node.LifecycleID != "" && node.LifecycleID != lifecycleID {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node lifecycle changed while scheduling deploy: "+nodeID)}, nil
+		}
+		item.LifecycleId = lifecycleID
+		item.OperationId = fmt.Sprintf("%s-%03d", jobID, index)
 		raw, err := protojson.Marshal(item)
 		if err != nil {
 			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid deployment request")}, nil
@@ -121,10 +154,15 @@ func (s *Service) SubmitDeleteNodes(ctx context.Context, req *pb.BatchDeleteNode
 	if err != nil {
 		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	if req == nil {
+		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+	}
 	nodeIDs := compactStrings(req.GetNodeIds())
 	if ret := validateNodeBatchSize(len(nodeIDs), "node_ids"); ret != nil {
 		return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
 	}
+	unlockNodes := lockSCFNodes(spaceID, nodeIDs)
+	defer unlockNodes()
 	jobID := "node-batch-" + uuid.NewString()
 	items := make([]store.NodeBatchItemCreate, 0, len(nodeIDs))
 	seen := make(map[string]struct{}, len(nodeIDs))
@@ -138,9 +176,51 @@ func (s *Service) SubmitDeleteNodes(ctx context.Context, req *pb.BatchDeleteNode
 			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
 		}
 		if node == nil || node.IsDeleted {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found: "+nodeID)}, nil
+			if !collectorPublishLeaseFieldsPresent(req.GetCollectorPublishLeaseId(), req.GetCollectorPublishFencingToken()) {
+				return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found: "+nodeID)}, nil
+			}
+			// Persist fenced no-op deletes too. A node may have disappeared between
+			// the caller's snapshot and scheduling; the worker still opens the
+			// control-plane operation and then treats the missing generation as done.
+			lifecycleID := ""
+			if node != nil {
+				lifecycleID = node.LifecycleID
+			} else {
+				deletedNode, deletedErr := s.catalog.GetNodeIncludingDeleted(ctx, spaceID, nodeID)
+				if deletedErr != nil {
+					return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(deletedErr)}, nil
+				}
+				if deletedNode != nil {
+					lifecycleID = deletedNode.LifecycleID
+				}
+			}
+			if lifecycleID == "" {
+				lifecycleID = uuid.NewString()
+			}
+			raw, err := protojson.Marshal(&pb.NodeDeleteItem{
+				NodeId: nodeID, CollectorPublishLeaseId: req.GetCollectorPublishLeaseId(),
+				CollectorPublishFencingToken: req.GetCollectorPublishFencingToken(),
+				LifecycleId:                  lifecycleID, OperationId: fmt.Sprintf("%s-%03d", jobID, index),
+			})
+			if err != nil {
+				return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid delete request")}, nil
+			}
+			items = append(items, store.NodeBatchItemCreate{ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index, NodeID: nodeID, RequestJSON: string(raw)})
+			continue
 		}
-		raw, err := protojson.Marshal(&pb.NodeDeleteItem{NodeId: nodeID})
+		lifecycleID, ensureErr := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, nodeID)
+		if ensureErr != nil {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(ensureErr)}, nil
+		}
+		if node.LifecycleID != "" && node.LifecycleID != lifecycleID {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node lifecycle changed while scheduling delete: "+nodeID)}, nil
+		}
+		raw, err := protojson.Marshal(&pb.NodeDeleteItem{
+			NodeId: nodeID, CollectorPublishLeaseId: req.GetCollectorPublishLeaseId(),
+			CollectorPublishFencingToken: req.GetCollectorPublishFencingToken(),
+			LifecycleId:                  lifecycleID,
+			OperationId:                  fmt.Sprintf("%s-%03d", jobID, index),
+		})
 		if err != nil {
 			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid delete request")}, nil
 		}
@@ -245,6 +325,9 @@ func (s *Service) preflightCreateNode(
 	if pkg.Status != "available" {
 		return store.CloudNode{}, retErr(pb.ErrorCode_INVALID_PARAM, "package is not available")
 	}
+	if ret := validateCollectorPublishLeaseAtSubmit(pkg, item.GetCollectorPublishLeaseId(), item.GetCollectorPublishFencingToken()); ret != nil {
+		return store.CloudNode{}, ret
+	}
 	return node, nil
 }
 
@@ -268,6 +351,14 @@ func (s *Service) preflightDeployNode(ctx context.Context, spaceID string, item 
 	}
 	if pkg.Status != "available" {
 		return retErr(pb.ErrorCode_INVALID_PARAM, "package is not available")
+	}
+	if validateCollectorPublishLeaseAtSubmit(pkg, item.GetCollectorPublishLeaseId(), item.GetCollectorPublishFencingToken()) != nil {
+		return retErr(pb.ErrorCode_NO_PERMISSION, "collector market_fetcher deployment requires a publish lease and fencing token")
+	}
+	if currentPackage, packageErr := s.catalog.GetPackage(ctx, spaceID, node.PackageID); packageErr != nil {
+		return retFromError(packageErr)
+	} else if ret := validateCollectorPublishLeaseAtSubmit(currentPackage, item.GetCollectorPublishLeaseId(), item.GetCollectorPublishFencingToken()); ret != nil {
+		return ret
 	}
 	return nil
 }
@@ -309,6 +400,8 @@ func nodeBatchItemStatusToPB(status string) pb.NodeBatchItemStatus {
 	case store.NodeBatchPending:
 		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_PENDING
 	case store.NodeBatchRunning:
+		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_RUNNING
+	case store.NodeBatchReconciliationRequired:
 		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_RUNNING
 	case store.NodeBatchSuccess:
 		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_SUCCESS

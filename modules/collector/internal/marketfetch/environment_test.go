@@ -23,6 +23,7 @@ func TestBuildManagedEnvironmentRetainsAssignmentIdentityWithoutMembership(t *te
 	require.NoError(t, err)
 	require.NotContains(t, env, "MOOX_MARKET_FETCH_SUBJECTS")
 	require.NotEmpty(t, env["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
+	require.Equal(t, "4", env["MOOX_MARKET_FETCH_SUBJECT_COUNT"])
 }
 
 func TestBuildManagedEnvironmentCarriesSelectedOutputFields(t *testing.T) {
@@ -61,6 +62,7 @@ func TestTimerEnvironmentCarriesBindingHashWithoutMembership(t *testing.T) {
 	require.Equal(t, timerPeriodBindingHash(assignment), env["MOOX_MARKET_FETCH_BINDING_HASH"])
 	require.NotContains(t, env, "MOOX_MARKET_FETCH_SUBJECTS")
 	require.NotContains(t, env, "MOOX_MARKET_FETCH_SYMBOLS_JSON")
+	require.Equal(t, "2", env["MOOX_MARKET_FETCH_SUBJECT_COUNT"])
 }
 
 func TestManagedDNSHashIgnoresLatencyOrderedIPChanges(t *testing.T) {

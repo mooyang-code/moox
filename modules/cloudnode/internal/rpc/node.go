@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
@@ -233,6 +234,16 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	if err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	var existingPackage *store.FunctionPackage
+	if existing != nil && strings.TrimSpace(existing.PackageID) != "" {
+		existingPackage, err = s.catalog.GetPackage(ctx, spaceID, existing.PackageID)
+		if err != nil {
+			return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+	}
+	if isFencedCollectorNode(existing, existingPackage) {
+		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_NO_PERMISSION, "fenced Collector nodes must be changed through a publish-fenced operation")}, nil
+	}
 	requestedNodeType := pbNode.GetNodeType()
 	if requestedNodeType == "" && existing != nil {
 		requestedNodeType = existing.NodeType
@@ -248,6 +259,20 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	node := fromPBNode(spaceID, pbNode)
 	if existing != nil {
 		node = mergeNodeUpdate(*existing, pbNode)
+	}
+	var requestedPackage *store.FunctionPackage
+	if strings.TrimSpace(node.PackageID) != "" {
+		if existingPackage != nil && existing.PackageID == node.PackageID {
+			requestedPackage = existingPackage
+		} else {
+			requestedPackage, err = s.catalog.GetPackage(ctx, spaceID, node.PackageID)
+			if err != nil {
+				return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+			}
+		}
+	}
+	if isFencedCollectorNode(&node, requestedPackage) {
+		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_NO_PERMISSION, "fenced Collector nodes must be changed through a publish-fenced operation")}, nil
 	}
 	if err := validateTriggerType(node.NodeType, node.TriggerType); err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -267,9 +292,23 @@ func (s *Service) executeCreateNodeItem(
 	if item == nil {
 		return "", fmt.Errorf("node item is required")
 	}
+	if strings.TrimSpace(item.GetCreateReservationId()) == "" {
+		item.CreateReservationId = uuid.NewString()
+	}
 	node := cloudNodeFromCreateItem(spaceID, item, index)
+	node.LifecycleID = item.GetCreateReservationId()
 	unlockNode := lockSCFNode(spaceID, node.NodeID)
 	defer unlockNode()
+	pkg, err := s.catalog.GetPackage(ctx, spaceID, node.PackageID)
+	if err != nil {
+		return "", err
+	}
+	if requiresCollectorPublishLease(pkg) {
+		metadata := parseJSONMap(node.Metadata)
+		metadata["biz_type"] = "market_fetcher"
+		metadata["collector_publish_fenced"] = true
+		node.Metadata = jsonString(metadata)
+	}
 	if err := validateTriggerType(node.NodeType, item.GetTriggerType()); err != nil {
 		return "", err
 	}
@@ -282,15 +321,22 @@ func (s *Service) executeCreateNodeItem(
 	if strings.TrimSpace(node.PackageID) == "" {
 		return "", fmt.Errorf("package_id is required")
 	}
+	metadata := parseJSONMap(node.Metadata)
+	metadata["deployment_ready"] = false
+	metadata["create_reservation_id"] = item.GetCreateReservationId()
+	node.Metadata = jsonString(metadata)
+	if err := s.catalog.ReserveNodeCreate(ctx, node, item.GetCreateReservationId()); err != nil {
+		return "", fmt.Errorf("persist SCF create reservation: %w", err)
+	}
 	if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
 		return "", err
 	}
-	metadata := parseJSONMap(node.Metadata)
+	metadata = parseJSONMap(node.Metadata)
 	metadata["deployment_ready"] = true
 	node.Metadata = jsonString(metadata)
 	persistCtx, persistCancel := acceptedSCFPersistenceContext(ctx)
 	defer persistCancel()
-	if err := s.catalog.UpsertNode(persistCtx, node); err != nil {
+	if err := s.catalog.UpdateNodeCreateReservation(persistCtx, node, item.GetCreateReservationId()); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("created function %s", node.FunctionName), nil
@@ -360,17 +406,29 @@ func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodes
 	if err != nil {
 		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	if req == nil {
+		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+	}
 	nodeIDs := compactStrings(req.GetNodeIds())
 	if len(nodeIDs) == 0 {
 		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_ids is required")}, nil
 	}
-	for _, nodeID := range nodeIDs {
-		unlock := lockSCFNode(spaceID, nodeID)
-		err := s.catalog.DeleteNodes(ctx, spaceID, []string{nodeID})
-		unlock()
-		if err != nil {
-			return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	// Stable lock ordering serializes this catalog-only path with local
+	// create/deploy operations. The repository transaction below also checks
+	// exact row generations so a different process cannot invalidate preflight.
+	unlockNodes := lockSCFNodes(spaceID, nodeIDs)
+	defer unlockNodes()
+	deleteErr := s.catalog.DeleteNodesWithPreflight(ctx, spaceID, nodeIDs, func(node store.CloudNode, pkg *store.FunctionPackage) error {
+		if isFencedCollectorNode(&node, pkg) {
+			return errFencedCollectorCatalogDelete
 		}
+		return nil
+	})
+	if errors.Is(deleteErr, errFencedCollectorCatalogDelete) {
+		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_NO_PERMISSION, "fenced Collector nodes must be deleted through SubmitDeleteNodes")}, nil
+	}
+	if deleteErr != nil {
+		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, deleteErr.Error())}, nil
 	}
 	return &pb.BatchDeleteNodesRsp{
 		RetInfo:        retOK(),
@@ -378,19 +436,62 @@ func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodes
 	}, nil
 }
 
+var errFencedCollectorCatalogDelete = errors.New("fenced Collector node requires asynchronous deletion")
+var errNodeMutationReconciliationRequired = errors.New("node mutation requires reconciliation")
+
+type nodeBatchDurableOperationContextKey struct{}
+
+func withNodeBatchDurableOperation(ctx context.Context) context.Context {
+	return context.WithValue(ctx, nodeBatchDurableOperationContextKey{}, true)
+}
+
+func isNodeBatchDurableOperation(ctx context.Context) bool {
+	durable, _ := ctx.Value(nodeBatchDurableOperationContextKey{}).(bool)
+	return durable
+}
+
 func (s *Service) executeDeleteNodeItem(ctx context.Context, spaceID string, item *pb.NodeDeleteItem) (string, error) {
 	if item == nil || strings.TrimSpace(item.GetNodeId()) == "" {
 		return "", fmt.Errorf("node_id is required")
 	}
+	if strings.TrimSpace(item.GetLifecycleId()) == "" || strings.TrimSpace(item.GetOperationId()) == "" {
+		return "", fmt.Errorf("delete item lifecycle identity and operation id are required")
+	}
+	// Lock before reloading; an old durable delete must not observe a stale row,
+	// then race with same-ID recreation before it reaches the provider.
+	unlockNode := lockSCFNode(spaceID, item.GetNodeId())
+	defer unlockNode()
 	node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
 	if err != nil {
 		return "", err
 	}
-	if node == nil {
-		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
+	if node == nil || node.IsDeleted {
+		node, err = s.catalog.GetNodeIncludingDeleted(ctx, spaceID, item.GetNodeId())
+		if err != nil {
+			return "", err
+		}
+		if node == nil {
+			if collectorPublishLeaseFieldsPresent(item.GetCollectorPublishLeaseId(), item.GetCollectorPublishFencingToken()) {
+				return fmt.Sprintf("node %s was already absent when the fenced delete ran", item.GetNodeId()), nil
+			}
+			return "", fmt.Errorf("node not found: %s", item.GetNodeId())
+		}
 	}
-	unlockNode := lockSCFNode(spaceID, node.NodeID)
-	defer unlockNode()
+	if node.LifecycleID == "" || node.LifecycleID != item.GetLifecycleId() {
+		return "", store.ErrNodeLifecycleMismatch
+	}
+	if err := s.catalog.ClaimNodeDelete(ctx, spaceID, node.NodeID, item.GetLifecycleId(), item.GetOperationId()); err != nil {
+		return "", err
+	}
+	retainClaim := isNodeBatchDurableOperation(ctx)
+	defer func() {
+		if !retainClaim {
+			_ = s.catalog.ReleaseNodeDeleteClaim(context.WithoutCancel(ctx), spaceID, node.NodeID, item.GetLifecycleId(), item.GetOperationId())
+		}
+	}()
+	if node.IsDeleted {
+		return fmt.Sprintf("node %s was already deleted", item.GetNodeId()), nil
+	}
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil || account == nil {
 		if err != nil {
@@ -405,16 +506,52 @@ func (s *Service) executeDeleteNodeItem(ctx context.Context, spaceID string, ite
 	ref := tencentscf.FunctionRef{Region: node.Region, FunctionName: firstString(node.FunctionName, node.NodeID), Namespace: firstString(node.Namespace, "default")}
 	unlockFunction := lockSCFFunction(ref)
 	defer unlockFunction()
-	if node.TriggerType == "timer" {
-		if err := client.DeleteTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Qualifier: timerTriggerQualifier}); err != nil && !isSCFNotFound(err) {
-			return "", fmt.Errorf("delete timer trigger for %s: %w", node.NodeID, err)
+	deleteRemote := true
+	metadata := parseJSONMap(node.Metadata)
+	deploymentReady, readinessMarkerPresent := metadata["deployment_ready"].(bool)
+	reservation := readinessMarkerPresent && !deploymentReady && strings.TrimSpace(node.DeploymentID) == ""
+	if reservation {
+		info, readErr := client.GetFunction(ctx, ref)
+		if isSCFNotFound(readErr) {
+			deleteRemote = false
+		} else if readErr != nil {
+			return "", fmt.Errorf("verify SCF create reservation ownership for %s: %w", node.NodeID, readErr)
+		} else if info == nil {
+			return "", fmt.Errorf("verify SCF create reservation ownership for %s: empty function readback", node.NodeID)
+		} else if strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"]) != strings.TrimSpace(node.PackageID) ||
+			strings.TrimSpace(info.Environment["MOOX_CREATE_RESERVATION_ID"]) != strings.TrimSpace(node.LifecycleID) {
+			deleteRemote = false
 		}
 	}
-	if err := client.DeleteFunction(ctx, ref); err != nil && !isSCFNotFound(err) {
-		return "", fmt.Errorf("delete scf function %s: %w", node.NodeID, err)
+	if deleteRemote {
+		if node.TriggerType == "timer" {
+			if err := client.DeleteTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Qualifier: timerTriggerQualifier}); err != nil && !isSCFNotFound(err) {
+				retainClaim = retainClaim || isAmbiguousSCFProviderOutcome(err)
+				return "", fmt.Errorf("delete timer trigger for %s: %w", node.NodeID, err)
+			}
+			retainClaim = true
+		}
+		if err := client.DeleteFunction(ctx, ref); err != nil && !isSCFNotFound(err) {
+			retainClaim = retainClaim || isAmbiguousSCFProviderOutcome(err)
+			return "", fmt.Errorf("delete scf function %s: %w", node.NodeID, err)
+		}
+		if err := waitForSCFFunctionDeleted(ctx, client, ref); err != nil {
+			retainClaim = true
+			return "", fmt.Errorf("%w: verify scf function %s deletion: %w", errNodeMutationReconciliationRequired, ref.FunctionName, err)
+		}
 	}
-	if err := s.catalog.DeleteNodes(ctx, spaceID, []string{node.NodeID}); err != nil {
+	if err := s.catalog.CompleteNodeDelete(ctx, spaceID, node.NodeID, item.GetLifecycleId(), item.GetOperationId()); err != nil {
+		if deleteRemote {
+			retainClaim = true
+			return "", fmt.Errorf("%w: complete catalog deletion after provider delete: %v", errNodeMutationReconciliationRequired, err)
+		}
 		return "", err
+	}
+	if !isNodeBatchDurableOperation(ctx) {
+		retainClaim = false
+	}
+	if reservation && !deleteRemote {
+		return fmt.Sprintf("removed SCF create reservation %s without deleting an unverified function", ref.FunctionName), nil
 	}
 	return fmt.Sprintf("deleted function %s", ref.FunctionName), nil
 }
@@ -427,15 +564,37 @@ func (s *Service) executeDeployNodeItem(
 	if item == nil || strings.TrimSpace(item.GetNodeId()) == "" || strings.TrimSpace(item.GetPackageId()) == "" {
 		return "", fmt.Errorf("node_id and package_id are required")
 	}
+	unlockNode := lockSCFNode(spaceID, item.GetNodeId())
+	defer unlockNode()
+	// Reload only after acquiring the node lock: synchronous catalog deletion and
+	// same-process deploys must agree on the exact row that is about to be used.
 	node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
 	if err != nil {
 		return "", err
 	}
-	if node == nil {
+	if node == nil || node.IsDeleted {
 		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
 	}
-	unlockNode := lockSCFNode(spaceID, node.NodeID)
-	defer unlockNode()
+	lifecycleID, err := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, node.NodeID)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(item.GetLifecycleId()) != "" && item.GetLifecycleId() != lifecycleID {
+		return "", store.ErrNodeLifecycleMismatch
+	}
+	node.LifecycleID = lifecycleID
+	if strings.TrimSpace(item.GetOperationId()) == "" {
+		item.OperationId = uuid.NewString()
+	}
+	if err := s.catalog.ClaimNodeMutation(ctx, spaceID, node.NodeID, lifecycleID, item.GetOperationId()); err != nil {
+		return "", err
+	}
+	retainClaim := isNodeBatchDurableOperation(ctx)
+	defer func() {
+		if !retainClaim {
+			_ = s.catalog.ReleaseNodeMutationClaim(context.WithoutCancel(ctx), spaceID, node.NodeID, lifecycleID, item.GetOperationId())
+		}
+	}()
 	pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId())
 	if err != nil {
 		return "", err
@@ -447,12 +606,22 @@ func (s *Service) executeDeployNodeItem(
 		return "", fmt.Errorf("package %s is not available", pkg.PackageID)
 	}
 	if err := s.updateSCFFunctionCode(ctx, *node, *pkg, item.GetEnvironment(), item.GetConfig()); err != nil {
+		if errors.Is(err, errNodeMutationReconciliationRequired) || isAmbiguousSCFProviderOutcome(err) {
+			retainClaim = true
+			return "", fmt.Errorf("%w: deploy %s: %w", errNodeMutationReconciliationRequired, node.NodeID, err)
+		}
 		return "", err
 	}
+	retainClaim = true
 	persistCtx, persistCancel := acceptedSCFPersistenceContext(ctx)
 	defer persistCancel()
-	if err := s.catalog.UpdateNodeDeployment(persistCtx, spaceID, item.GetNodeId(), item.GetPackageId(), pkg.Version, item.GetConfig(), item.GetEnvironment()); err != nil {
-		return "", err
+	if err := s.catalog.UpdateNodeDeployment(persistCtx, spaceID, item.GetNodeId(), item.GetPackageId(), pkg.Version, item.GetConfig(), item.GetEnvironment(), isFencedCollectorNode(node, pkg), lifecycleID, item.GetOperationId()); err != nil {
+		retainClaim = true
+		return "", fmt.Errorf("%w: persist deployment for %s: %v", errNodeMutationReconciliationRequired, node.NodeID, err)
+	}
+	// The durable runner releases the claim with the terminal item transition.
+	if !isNodeBatchDurableOperation(ctx) {
+		retainClaim = false
 	}
 	return fmt.Sprintf("deployed package %s to %s", pkg.PackageID, node.NodeID), nil
 }
@@ -467,6 +636,10 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	}
 	if pkg.Status != "available" {
 		return fmt.Errorf("package %s is not available", pkg.PackageID)
+	}
+	reservationID := strings.TrimSpace(item.GetCreateReservationId())
+	if reservationID == "" {
+		return fmt.Errorf("create reservation identity is required")
 	}
 	node.PackageVersion = pkg.Version
 	metadata := parseJSONMap(node.Metadata)
@@ -538,6 +711,15 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 				pkg.PackageID,
 			)
 		}
+		remoteReservationID := strings.TrimSpace(info.Environment["MOOX_CREATE_RESERVATION_ID"])
+		if remoteReservationID != reservationID {
+			return fmt.Errorf(
+				"scf function %s already exists with create reservation %q; expected %q",
+				ref.FunctionName,
+				remoteReservationID,
+				reservationID,
+			)
+		}
 		info, err = waitForSCFActive(ctx, client, ref, info)
 		if err != nil {
 			return err
@@ -558,8 +740,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 			return err
 		}
 		// A previous attempt may have created the function before CloudNode was
-		// interrupted. The package marker proves this is the accepted create,
-		// rather than an unrelated function with the same stable name.
+		// interrupted. The reservation nonce proves ownership of this request.
 		return nil
 	}
 	if !isSCFNotFound(err) {
@@ -570,6 +751,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		environment = make(map[string]string)
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
+	environment["MOOX_CREATE_RESERVATION_ID"] = reservationID
 	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
 		return fmt.Errorf("scf function %s %w", ref.FunctionName, err)
 	}
@@ -611,11 +793,14 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 			return fmt.Errorf("create scf function %s: %w", ref.FunctionName, createErr)
 		}
 		remotePackageID := strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"])
-		if remotePackageID != pkg.PackageID {
+		remoteReservationID := strings.TrimSpace(info.Environment["MOOX_CREATE_RESERVATION_ID"])
+		if remotePackageID != pkg.PackageID || remoteReservationID != reservationID {
 			return fmt.Errorf(
-				"create scf function %s returned an ambiguous error and remote code package is %q, expected %q: %w",
+				"create scf function %s returned an ambiguous error and remote reservation identity/package is %q/%q, expected %q/%q: %w",
 				ref.FunctionName,
+				remoteReservationID,
 				remotePackageID,
+				reservationID,
 				pkg.PackageID,
 				createErr,
 			)
@@ -736,6 +921,13 @@ func (s *Service) updateSCFFunctionCode(
 	desiredEnvironment map[string]string,
 	desiredConfig map[string]string,
 ) error {
+	mutationStarted := false
+	requireReconciliationAfterMutation := func(err error) error {
+		if err == nil || !mutationStarted || errors.Is(err, errNodeMutationReconciliationRequired) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", errNodeMutationReconciliationRequired, err)
+	}
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil {
 		return err
@@ -806,6 +998,9 @@ func (s *Service) updateSCFFunctionCode(
 		}
 	}
 	if !codeCurrent {
+		// Treat every error from this point as an uncertain partial deployment:
+		// even provider errors that look deterministic may follow a committed mutation.
+		mutationStarted = true
 		_, err = client.UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{
 			FunctionRef: ref,
 			Handler:     firstString(metadataString(metadata, "handler"), "main"),
@@ -814,12 +1009,13 @@ func (s *Service) updateSCFFunctionCode(
 			COSObject:   strings.TrimPrefix(pkg.COSPath, "/"),
 		})
 		if err != nil {
-			return fmt.Errorf("update scf function %s: %w", firstString(node.FunctionName, node.NodeID), err)
+			return requireReconciliationAfterMutation(fmt.Errorf("update scf function %s: %w", firstString(node.FunctionName, node.NodeID), err))
 		}
 		if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
-			return err
+			return requireReconciliationAfterMutation(err)
 		}
 	}
+	mutationStarted = true
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
 		FunctionRef:            ref,
 		Environment:            environment,
@@ -832,25 +1028,25 @@ func (s *Service) updateSCFFunctionCode(
 		ClearVPC:               desiredSCFClearVPC(desiredConfig),
 		ClearNativeCLS:         true,
 	}); err != nil {
-		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
+		return requireReconciliationAfterMutation(fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err))
 	}
 	if _, err = waitForSCFActive(ctx, client, ref, nil); err != nil {
-		return err
+		return requireReconciliationAfterMutation(err)
 	}
 	verified, err := client.GetFunction(ctx, ref)
 	if err != nil {
-		return fmt.Errorf("verify scf function %s configuration: %w", ref.FunctionName, err)
+		return requireReconciliationAfterMutation(fmt.Errorf("verify scf function %s configuration: %w", ref.FunctionName, err))
 	}
 	if err := verifySCFFunctionConfiguration(verified, desiredConfig, desiredEnvironment, ref.FunctionName); err != nil {
-		return err
+		return requireReconciliationAfterMutation(err)
 	}
 	if err := validateMarketFetchInvokeReadback(&node, pkg, verified); err != nil {
-		return err
+		return requireReconciliationAfterMutation(err)
 	}
 	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(&node)); err != nil {
-		return err
+		return requireReconciliationAfterMutation(err)
 	}
-	return ensureInitialTimerTrigger(ctx, client, &node, ref)
+	return requireReconciliationAfterMutation(ensureInitialTimerTrigger(ctx, client, &node, ref))
 }
 
 func verifySCFFunctionConfiguration(info *tencentscf.FunctionInfo, desiredConfig, desiredEnvironment map[string]string, functionName string) error {
@@ -972,6 +1168,30 @@ func waitForSCFActive(ctx context.Context, client scfProvisioner, ref tencentscf
 			return nil, fmt.Errorf("wait for scf function %s active: %w", ref.FunctionName, waitCtx.Err())
 		case <-timer.C:
 			current = nil
+		}
+	}
+}
+
+func waitForSCFFunctionDeleted(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef) error {
+	waitCtx, cancel := context.WithTimeout(ctx, scfOperationTimeout)
+	defer cancel()
+	for {
+		_, err := client.GetFunction(waitCtx, ref)
+		if isSCFNotFound(err) {
+			return nil
+		}
+		if err != nil && !isTransientSCFProviderError(err) {
+			return fmt.Errorf("read function after delete: %w", err)
+		}
+		if waitCtx.Err() != nil {
+			return fmt.Errorf("wait for scf function deletion: %w", waitCtx.Err())
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return fmt.Errorf("wait for scf function deletion: %w", waitCtx.Err())
+		case <-timer.C:
 		}
 	}
 }
@@ -1182,6 +1402,9 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 	metadata := nodeMetadataFromPB(node)
 	if len(metadata) > 0 {
 		merged := parseJSONMap(mergeMetadataJSON(existing.Metadata, jsonString(metadata)))
+		if parseJSONMap(existing.Metadata)["collector_publish_fenced"] == true {
+			merged["collector_publish_fenced"] = true
+		}
 		removeDeprecatedNodeMetadata(merged)
 		next.Metadata = jsonString(merged)
 	} else {

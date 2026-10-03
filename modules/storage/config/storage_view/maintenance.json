@@ -1,10 +1,12 @@
 {
   "maintenance_check_interval": "1m",
-  "rebuild_lookback_periods": 1000,
-  "max_periods_per_series": 2000,
+  "capacity_check_interval": "1h",
+  "capacity_check_jitter": "1h",
+  "rebuild_lookback_periods": 5000,
+  "max_periods_per_series": 6000,
   "max_view_file_bytes": 1073741824,
   "system_monitor": {
-    "max_periods_per_series": 2000
+    "max_periods_per_series": 6000
   },
   "views": []
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -245,7 +246,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
 		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
 	}
-	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg)
+	klineInventory, err := buildKlineFreshnessInventory(cfg)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory)
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
@@ -286,7 +292,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	startMetricsStorageGate(runtimeCtx, cfg, runtime, metricsStorage)
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
-	startObservabilityConsumer(runtimeCtx, cfg, runtime, metricsStorage, hostStore)
+	startObservabilityConsumer(runtimeCtx, cfg, runtime, metricsStorage, hostStore, klineInventory)
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done
@@ -298,19 +304,42 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config) *monmetrics.KlineFreshnessEvaluator {
+func buildKlineFreshnessInventory(cfg *config.Config) (*monmetrics.TaskResultInventoryCache, error) {
+	if cfg == nil || !cfg.KlineFreshness.Enabled {
+		return nil, nil
+	}
+	credentials, err := gatewayauth.ResolveCredentials(cfg.Metrics.Storage.KeyID, cfg.Metrics.Storage.HMACKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("monitor collector inventory credentials: %w", err)
+	}
+	target, targetNode := klineFreshnessCollectorRoute(cfg)
+	options := gatewayauth.NewTRPCClientOptions(
+		target,
+		targetNode,
+		credentials,
+	)
+	client := collectorpb.NewCollectMgrClientProxy(options...)
+	source, err := monmetrics.NewCollectorTaskResultInventorySource(client, cfg.KlineFreshness.SpaceIDs, cfg.KlineFreshness.InventoryPageSize, cfg.KlineFreshness.InventoryMaxEntries)
+	if err != nil {
+		return nil, fmt.Errorf("monitor collector inventory source: %w", err)
+	}
+	cache, err := monmetrics.NewTaskResultInventoryCache(source, cfg.KlineFreshness.InventoryRefreshInterval, cfg.KlineFreshness.InventoryMaxEntries)
+	if err != nil {
+		return nil, fmt.Errorf("monitor collector inventory cache: %w", err)
+	}
+	return cache, nil
+}
+
+func klineFreshnessCollectorRoute(cfg *config.Config) (string, string) {
+	return cfg.KlineFreshness.CollectorGatewayTarget,
+		firstNonEmptyString(cfg.KlineFreshness.CollectorGatewayNodeID, gatewayauth.ServiceGatewayNodeID())
+}
+
+func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *monmetrics.TaskResultInventoryCache) *monmetrics.KlineFreshnessEvaluator {
 	if query == nil || cfg == nil || !cfg.KlineFreshness.Enabled {
 		return nil
 	}
-	rules := make([]monmetrics.KlineFreshnessRule, 0, len(cfg.KlineFreshness.Rules))
-	for _, rule := range cfg.KlineFreshness.Rules {
-		rules = append(rules, monmetrics.KlineFreshnessRule{
-			Enabled: rule.Enabled, SpaceID: rule.SpaceID, DatasetID: rule.DatasetID,
-			ViewID: rule.ViewID, Frequency: rule.Frequency, MarketID: rule.MarketID, CalendarID: rule.CalendarID,
-			Timezone: rule.Timezone, Sessions: append([]string(nil), rule.Sessions...), StaleAfter: rule.StaleAfter,
-		})
-	}
-	return monmetrics.NewKlineFreshnessEvaluator(query, rules, cfg.KlineFreshness.MaxSubjectsPerAlert)
+	return monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, inventory, cfg.KlineFreshness.StaleAfter, cfg.KlineFreshness.MaxSubjectsPerAlert)
 }
 
 func loadMonitorDatasetHealthPolicy(cfg *config.Config) (report.DatasetHealthPolicy, error) {

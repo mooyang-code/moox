@@ -113,6 +113,7 @@ func startObservabilityConsumer(
 	runtime *Runtime,
 	storage *monmetrics.StorageAdapter,
 	hostStore *hostmetrics.Store,
+	klineInventory *monmetrics.TaskResultInventoryCache,
 ) {
 	if cfg == nil || !cfg.Observability.Enabled || runtime == nil || runtime.Store == nil ||
 		runtime.Store.Ping(ctx) != nil || runtime.Repositories == nil || hostStore == nil {
@@ -147,7 +148,9 @@ func startObservabilityConsumer(
 				"storage-node": {},
 				"moox_gateway": {},
 			},
-		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled, klineViewMetricScopes(cfg)),
+		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled, func() []monmetrics.ViewMetricScope {
+			return klineViewMetricScopes(klineInventory, time.Now().UTC())
+		}),
 		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 		Health: func(routeCtx context.Context, message *eventpb.EventMessage, health *observabilitypb.HealthCheckReport) error {
 			if runtime.ObservabilityHealthRoute == nil {
@@ -231,7 +234,7 @@ func metricsObservabilityRoute(
 	moduleMetrics *report.ModuleMetrics,
 	runtime *Runtime,
 	enabled bool,
-	klineScopes []monmetrics.ViewMetricScope,
+	klineScopes func() []monmetrics.ViewMetricScope,
 ) func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error {
 	return func(ctx context.Context, message *eventpb.EventMessage, metricReport *metricspb.MetricReport) error {
 		if !enabled {
@@ -262,7 +265,11 @@ func metricsObservabilityRoute(
 			monmetrics.RecordIngest(moduleMetrics, "rejected", time.Time{})
 			return observabilityconsumer.Permanent(err)
 		}
-		samples = monmetrics.FilterHealthSamplesForKlineViews(samples, klineScopes)
+		var activeKlineScopes []monmetrics.ViewMetricScope
+		if klineScopes != nil {
+			activeKlineScopes = klineScopes()
+		}
+		samples = monmetrics.FilterHealthSamplesForKlineViews(samples, activeKlineScopes)
 		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
 		if err != nil || duplicate {
 			return err
@@ -285,17 +292,18 @@ func metricsObservabilityRoute(
 	}
 }
 
-func klineViewMetricScopes(cfg *config.Config) []monmetrics.ViewMetricScope {
-	if cfg == nil || !cfg.KlineFreshness.Enabled {
+func klineViewMetricScopes(inventory *monmetrics.TaskResultInventoryCache, now time.Time) []monmetrics.ViewMetricScope {
+	snapshot, ok := inventory.Current(now)
+	if !ok {
 		return nil
 	}
-	scopes := make([]monmetrics.ViewMetricScope, 0, len(cfg.KlineFreshness.Rules))
-	for _, rule := range cfg.KlineFreshness.Rules {
-		if !rule.Enabled {
+	scopes := make([]monmetrics.ViewMetricScope, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		if !entry.Enabled || !entry.OwnershipVerified || (entry.ResultStatus != "ready" && entry.ResultStatus != "error") {
 			continue
 		}
 		scopes = append(scopes, monmetrics.ViewMetricScope{
-			SpaceID: rule.SpaceID, ViewID: rule.ViewID, DatasetID: rule.DatasetID, Frequency: rule.Frequency,
+			SpaceID: entry.SpaceID, ViewID: entry.ViewID, DatasetID: entry.DatasetID, Frequency: entry.Frequency,
 		})
 	}
 	return scopes

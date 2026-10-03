@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -22,6 +23,12 @@ type periodStorageStateRow struct {
 	DeadlineAt    time.Time `gorm:"column:c_deadline_at"`
 	Status        string    `gorm:"column:c_status"`
 	ConfirmedAt   time.Time `gorm:"column:c_confirmed_at"`
+}
+
+type PeriodStorageStateCursor struct {
+	DatasetID  string
+	Frequency  string
+	PeriodTime time.Time
 }
 
 func (periodStorageStateRow) TableName() string { return "t_collector_period_storage_states" }
@@ -114,6 +121,68 @@ func (r *PeriodStorageStateRepository) GetPeriodStorageState(ctx context.Context
 		SeriesHash: row.SeriesHash, ExpectedCount: row.ExpectedCount, DeadlineAt: row.DeadlineAt.UTC(),
 		Status: row.Status, ConfirmedAt: row.ConfirmedAt.UTC(),
 	}, true, nil
+}
+
+// LatestTerminalPeriod returns the newest Storage-confirmed terminal period
+// for an exact dataset/frequency scope. Waiting and local Collector readiness
+// records do not advance this authoritative watermark.
+func (r *PeriodStorageStateRepository) LatestTerminalPeriod(ctx context.Context, spaceID, datasetID, frequency string) (*domain.PeriodStorageState, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("period Storage state repository is not initialized")
+	}
+	spaceID, datasetID, frequency = strings.TrimSpace(spaceID), strings.TrimSpace(datasetID), strings.TrimSpace(frequency)
+	if spaceID == "" || datasetID == "" || frequency == "" {
+		return nil, fmt.Errorf("space_id, dataset_id and frequency are required")
+	}
+	var row periodStorageStateRow
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_status IN (?, ?)",
+			spaceID, datasetID, frequency, domain.PeriodStatusComplete, domain.PeriodStatusDegraded).
+		Order("c_period_time DESC").
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &domain.PeriodStorageState{
+		Key:        domain.PeriodKey{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, PeriodTime: row.PeriodTime.UTC()},
+		SeriesHash: row.SeriesHash, ExpectedCount: row.ExpectedCount, DeadlineAt: row.DeadlineAt.UTC(),
+		Status: row.Status, ConfirmedAt: row.ConfirmedAt.UTC(),
+	}, nil
+}
+
+func (r *PeriodStorageStateRepository) ListWaiting(ctx context.Context, spaceID string, cursor *PeriodStorageStateCursor, limit int) ([]domain.PeriodStorageState, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("period Storage state repository is not initialized")
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return nil, fmt.Errorf("space_id is required")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	query := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status = 'waiting'", spaceID)
+	if cursor != nil {
+		query = query.Where("(c_dataset_id, c_frequency, c_period_time) > (?, ?, ?)",
+			cursor.DatasetID, cursor.Frequency, cursor.PeriodTime.UTC())
+	}
+	var rows []periodStorageStateRow
+	err := query.Order("c_dataset_id, c_frequency, c_period_time").Limit(limit).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	states := make([]domain.PeriodStorageState, 0, len(rows))
+	for _, row := range rows {
+		states = append(states, domain.PeriodStorageState{
+			Key:        domain.PeriodKey{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, PeriodTime: row.PeriodTime.UTC()},
+			SeriesHash: row.SeriesHash, ExpectedCount: row.ExpectedCount, DeadlineAt: row.DeadlineAt.UTC(),
+			Status: row.Status, ConfirmedAt: row.ConfirmedAt.UTC(),
+		})
+	}
+	return states, nil
 }
 
 func validPeriodStorageStatus(status string) bool {

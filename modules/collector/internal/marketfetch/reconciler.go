@@ -2,8 +2,11 @@ package marketfetch
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sort"
 	"strconv"
@@ -47,6 +50,9 @@ type runtimeConfigClient interface {
 	ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
 	SubmitRuntimeConfigs(context.Context, string, []*cloudnodepb.NodeRuntimeConfigPatch) (string, error)
 	GetRuntimeConfigBatchStatus(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, error)
+	AcquireCollectorPublishLease(context.Context, string, string) (*scfinvoker.CollectorPublishLease, error)
+	RenewCollectorPublishLease(context.Context, *scfinvoker.CollectorPublishLease) (*scfinvoker.CollectorPublishLease, error)
+	ReleaseCollectorPublishLease(context.Context, *scfinvoker.CollectorPublishLease) error
 }
 
 type dnsSnapshotter interface {
@@ -84,6 +90,8 @@ type Reconciler struct {
 	pendingJobs                 []string
 	pendingSince                time.Time
 	pendingSubmissionIncomplete bool
+	pendingUnknownSubmit        bool
+	publishLease                *scfinvoker.CollectorPublishLease
 	lastGroups                  map[string][]TaskGroup
 	lastAssignments             []NodeAssignment
 }
@@ -105,38 +113,85 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	}
 	defer r.reconcileMu.Unlock()
 	if pendingJobs, pendingSince := r.pendingRuntimeJobsState(); len(pendingJobs) > 0 {
+		unknownSubmit := r.pendingRuntimeSubmitUnknown()
+		if !unknownSubmit {
+			if err := r.renewPublishLease(ctx, spaceID); err != nil {
+				return r.fail(spaceID, "publish_lease", fmt.Errorf("renew timer reconciliation publish lease: %w", err))
+			}
+		}
+		var statusErrors, terminalFailures []error
+		stillPending := false
 		for _, pendingJob := range pendingJobs {
 			status, statusErr := r.Nodes.GetRuntimeConfigBatchStatus(ctx, spaceID, pendingJob)
 			if statusErr != nil {
-				return r.fail(spaceID, "cloudnode", fmt.Errorf("get timer runtime config job %s: %w", pendingJob, statusErr))
+				statusErrors = append(statusErrors, fmt.Errorf("get timer runtime config job %s: %w", pendingJob, statusErr))
+				continue
 			}
 			switch status.GetStatus() {
 			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING, cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING:
-				r.observeAssignmentPending(spaceID, true, pendingSince)
+				stillPending = true
 				log.InfoContextf(ctx, "collector_scf_timer_reconciliation_pending space=%s job=%s jobs=%d status=%s", spaceID, pendingJob, len(pendingJobs), status.GetStatus().String())
-				return nil
 			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED:
-				r.clearPendingRuntimeJobs()
-				r.observeAssignmentPending(spaceID, false, time.Time{})
-				return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s failed", pendingJob))
+				terminalFailures = append(terminalFailures, fmt.Errorf("timer runtime config job %s failed", pendingJob))
 			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL:
-				r.clearPendingRuntimeJobs()
-				r.observeAssignmentPending(spaceID, false, time.Time{})
-				return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s partially failed", pendingJob))
+				terminalFailures = append(terminalFailures, fmt.Errorf("timer runtime config job %s partially failed", pendingJob))
 			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS:
 				continue
 			default:
-				r.clearPendingRuntimeJobs()
-				return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s returned unknown status %s", pendingJob, status.GetStatus().String()))
+				statusErrors = append(statusErrors, fmt.Errorf("timer runtime config job %s returned unknown status %s", pendingJob, status.GetStatus().String()))
 			}
 		}
+		// Keep the entire publication fenced until every accepted job is known
+		// to be terminal, even if another job has already failed.
+		if len(statusErrors) > 0 || stillPending {
+			r.observeAssignmentPending(spaceID, true, pendingSince)
+			if len(statusErrors) > 0 {
+				return r.fail(spaceID, "cloudnode", errors.Join(statusErrors...))
+			}
+			return nil
+		}
 		fullySubmitted := r.clearPendingRuntimeJobs()
-		r.observeAssignmentPending(spaceID, false, time.Time{})
+		if unknownSubmit {
+			resolved, settleErr := r.settleUnknownRuntimeSubmit(ctx, spaceID)
+			if settleErr != nil {
+				return r.fail(spaceID, "publish_lease", fmt.Errorf("fence ambiguous timer runtime config submission: %w", settleErr))
+			}
+			if !resolved {
+				r.observeAssignmentPending(spaceID, true, pendingSince)
+				if len(terminalFailures) > 0 {
+					return r.fail(spaceID, "cloudnode", errors.Join(terminalFailures...))
+				}
+				return nil
+			}
+		} else {
+			r.observeAssignmentPending(spaceID, false, time.Time{})
+			if err := r.releasePublishLease(ctx, spaceID); err != nil {
+				return r.fail(spaceID, "publish_lease", err)
+			}
+		}
+		if len(terminalFailures) > 0 {
+			return r.fail(spaceID, "cloudnode", errors.Join(terminalFailures...))
+		}
 		// A completed batch is successful coordination even if a newer DNS
 		// snapshot immediately requires another batch. Do not wait for a no-op
 		// tick to record progress, or continuously rotating routes starve it.
-		if fullySubmitted && r.Metrics != nil {
+		if fullySubmitted && !unknownSubmit && r.Metrics != nil {
 			r.Metrics.ObserveAssignmentSuccess(spaceID, time.Now().UTC().Unix())
+		}
+	}
+	if lenUnknownJobs, pendingSince := r.pendingRuntimeJobsState(); len(lenUnknownJobs) == 0 && r.pendingRuntimeSubmitUnknown() {
+		resolved, err := r.settleUnknownRuntimeSubmit(ctx, spaceID)
+		if err != nil {
+			return r.fail(spaceID, "publish_lease", fmt.Errorf("fence ambiguous timer runtime config submission: %w", err))
+		}
+		if !resolved {
+			r.observeAssignmentPending(spaceID, true, pendingSince)
+			return nil
+		}
+	}
+	if pendingJobs, _ := r.pendingRuntimeJobsState(); len(pendingJobs) == 0 && r.publishLease != nil && !r.pendingRuntimeSubmitUnknown() {
+		if err := r.renewPublishLease(ctx, spaceID); err != nil {
+			return r.fail(spaceID, "publish_lease", fmt.Errorf("renew timer reconciliation publish lease: %w", err))
 		}
 	}
 	nodes, err := r.Nodes.ListTimerMarketFetchers(ctx, spaceID)
@@ -317,7 +372,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		}
 		environment["MOOX_FETCH_TIMEOUT_SECONDS"] = strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)
 		fingerprint := assignment.AssignmentHash + "\x00" + dnsHash + "\x00" + fmt.Sprint(desiredTimerEnabled) + "\x00" + cron
-		fingerprint += "\x00" + environment["MOOX_MARKET_FETCH_BINDING_HASH"] + "\x00" + environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] + "\x00" + environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"] + "\x00" + environment["MOOX_FETCH_TIMEOUT_SECONDS"]
+		fingerprint += "\x00" + environment["MOOX_MARKET_FETCH_BINDING_HASH"] + "\x00" + environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] + "\x00" + environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"] + "\x00" + environment["MOOX_FETCH_TIMEOUT_SECONDS"] + "\x00" + environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
 		if !r.shouldPatch(assignment, nodes, fingerprint, desiredTimerEnabled) {
 			continue
 		}
@@ -325,16 +380,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		pendingFingerprints[assignment.NodeID] = fingerprint
 	}
 	if len(patches) == 0 {
+		r.clearSubmitRetryPending()
+		if err := r.releasePublishLease(ctx, spaceID); err != nil {
+			return r.fail(spaceID, "publish_lease", err)
+		}
+		r.observeAssignmentPending(spaceID, false, time.Time{})
 		if err := r.persistAssignments(ctx, spaceID, nodes, assignments); err != nil {
 			return r.fail(spaceID, "task_instances", err)
 		}
 		r.observeAssignmentMetrics(spaceID, groups, assignments, time.Now().UTC().Unix())
 		return nil
 	}
+	lease, leaseErr := r.ensurePublishLease(ctx, spaceID)
+	if leaseErr != nil {
+		return r.fail(spaceID, "publish_lease", leaseErr)
+	}
+	for _, patch := range patches {
+		patch.CollectorPublishLeaseId = lease.LeaseID
+		patch.CollectorPublishFencingToken = lease.FencingToken
+	}
 	jobIDs := make([]string, 0, (len(patches)+runtimeConfigBatchSize-1)/runtimeConfigBatchSize)
 	acceptedFingerprints := make(map[string]string, len(pendingFingerprints))
 	for _, batch := range runtimeConfigPatchBatches(patches, runtimeConfigBatchSize) {
 		jobID, submitErr := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, batch)
+		if submitErr == nil && strings.TrimSpace(jobID) == "" {
+			submitErr = fmt.Errorf("%w: CloudNode accepted no queryable job identity", scfinvoker.ErrRuntimeConfigSubmissionUnknown)
+		}
 		if submitErr != nil {
 			// A timeout is ambiguous: CloudNode may have accepted earlier
 			// chunks. Track those jobs so the next tick observes them before
@@ -342,13 +413,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 			if len(jobIDs) > 0 {
 				r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints, false)
 			}
-			if isTimeoutError(submitErr) {
-				pendingSince := r.markSubmitRetryPending()
+			if isAmbiguousRuntimeConfigSubmitError(submitErr) {
+				pendingSince := r.markRuntimeSubmitUnknown()
 				r.observeAssignmentPending(spaceID, true, pendingSince)
 				return r.fail(spaceID, "submit_timeout", fmt.Errorf("submit timer runtime configs: %w", submitErr))
 			}
 			if len(jobIDs) == 0 {
 				r.clearSubmitRetryPending()
+				if releaseErr := r.releasePublishLease(ctx, spaceID); releaseErr != nil {
+					return r.fail(spaceID, "publish_lease", errors.Join(submitErr, releaseErr))
+				}
 			}
 			r.observeAssignmentPending(spaceID, false, time.Time{})
 			return r.fail(spaceID, "cloudnode", fmt.Errorf("submit timer runtime configs: %w", submitErr))
@@ -399,14 +473,39 @@ func (r *Reconciler) disableBlacklistedTimers(ctx context.Context, spaceID strin
 		}
 		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: node.NodeID, TimerEnabled: false, TimerCron: cron})
 	}
+	if len(patches) == 0 {
+		return false, nil
+	}
+	lease, err := r.ensurePublishLease(ctx, spaceID)
+	if err != nil {
+		return false, r.fail(spaceID, "publish_lease", fmt.Errorf("acquire timer reconciliation publish lease: %w", err))
+	}
+	for _, patch := range patches {
+		patch.CollectorPublishLeaseId = lease.LeaseID
+		patch.CollectorPublishFencingToken = lease.FencingToken
+	}
 	var jobs []string
 	for _, batch := range runtimeConfigPatchBatches(patches, runtimeConfigBatchSize) {
-		job, err := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, batch)
-		if err != nil {
+		job, submitErr := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, batch)
+		if submitErr == nil && strings.TrimSpace(job) == "" {
+			submitErr = fmt.Errorf("%w: CloudNode accepted no queryable job identity", scfinvoker.ErrRuntimeConfigSubmissionUnknown)
+		}
+		if submitErr != nil {
 			if len(jobs) > 0 {
 				r.setPendingRuntimeJobs(jobs, nil, false)
 			}
-			return false, r.fail(spaceID, "cloudnode", fmt.Errorf("disable blacklisted timers: %w", err))
+			if isAmbiguousRuntimeConfigSubmitError(submitErr) {
+				pendingSince := r.markRuntimeSubmitUnknown()
+				r.observeAssignmentPending(spaceID, true, pendingSince)
+			} else {
+				if len(jobs) == 0 {
+					if releaseErr := r.releasePublishLease(ctx, spaceID); releaseErr != nil {
+						submitErr = errors.Join(submitErr, releaseErr)
+					}
+				}
+				r.observeAssignmentPending(spaceID, false, time.Time{})
+			}
+			return false, r.fail(spaceID, "cloudnode", fmt.Errorf("disable blacklisted timers: %w", submitErr))
 		}
 		jobs = append(jobs, job)
 	}
@@ -612,8 +711,11 @@ func (r *Reconciler) observeAssignmentDesiredMetrics(spaceID string, groups []Ta
 		return
 	}
 	r.Metrics.ResetAssignmentScope(spaceID)
-	for _, scope := range assignmentMetricScopes(groups, assignments) {
-		r.Metrics.ObserveAssignmentDesired(spaceID, scope.DatasetID, scope.Frequency, scope.Required, scope.Active)
+	scopes := assignmentMetricScopes(groups, assignments)
+	for _, scope := range aggregateAssignmentMetricScopesByFrequency(scopes) {
+		r.Metrics.ObserveAssignmentDesired(spaceID, scope.Frequency, scope.Required, scope.Active)
+	}
+	for _, scope := range scopes {
 		expected, actual := scope.Required, scope.Active
 		if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
 			expected, actual = r.ExpectedStockCNTimerFunctions, len(assignments)
@@ -632,8 +734,8 @@ func (r *Reconciler) observeAssignmentRequirements(spaceID string, groups []Task
 		return
 	}
 	r.Metrics.ResetAssignmentRequirements(spaceID)
-	for _, scope := range assignmentMetricScopes(groups, nil) {
-		r.Metrics.ObserveAssignmentRequired(spaceID, scope.DatasetID, scope.Frequency, scope.Required)
+	for _, scope := range aggregateAssignmentMetricScopesByFrequency(assignmentMetricScopes(groups, nil)) {
+		r.Metrics.ObserveAssignmentRequired(spaceID, scope.Frequency, scope.Required)
 	}
 }
 
@@ -765,7 +867,7 @@ func (r *Reconciler) markSubmitRetryPending() time.Time {
 func (r *Reconciler) clearSubmitRetryPending() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.pendingJob == "" && len(r.pendingJobs) == 0 {
+	if r.pendingJob == "" && len(r.pendingJobs) == 0 && !r.pendingUnknownSubmit {
 		r.pendingSince = time.Time{}
 	}
 }
@@ -776,6 +878,150 @@ func isTimeoutError(err error) bool {
 	}
 	var timeout net.Error
 	return errors.As(err, &timeout) && timeout.Timeout()
+}
+
+func isAmbiguousRuntimeConfigSubmitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, scfinvoker.ErrRuntimeConfigSubmissionUnknown) || isTimeoutError(err) || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"connection reset", "connection refused", "broken pipe", "unexpected eof", "server closed idle connection"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Reconciler) ensurePublishLease(ctx context.Context, spaceID string) (*scfinvoker.CollectorPublishLease, error) {
+	if r.publishLease != nil {
+		if !strings.EqualFold(r.publishLease.SpaceID, spaceID) {
+			return nil, fmt.Errorf("timer reconciliation lease belongs to another space")
+		}
+		if err := r.renewPublishLease(ctx, spaceID); err != nil {
+			return nil, err
+		}
+		if r.publishLease != nil {
+			return r.publishLease, nil
+		}
+	}
+	var holder [16]byte
+	if _, err := rand.Read(holder[:]); err != nil {
+		return nil, fmt.Errorf("generate timer reconciliation lease holder: %w", err)
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	lease, err := r.Nodes.AcquireCollectorPublishLease(leaseCtx, spaceID, "timer-reconciler-"+hex.EncodeToString(holder[:]))
+	if err != nil {
+		return nil, err
+	}
+	if lease == nil || lease.LeaseID == "" || lease.FencingToken < 1 || !strings.EqualFold(lease.SpaceID, spaceID) {
+		return nil, fmt.Errorf("timer reconciliation lease response is incomplete")
+	}
+	r.publishLease = lease
+	return lease, nil
+}
+
+func (r *Reconciler) renewPublishLease(ctx context.Context, spaceID string) error {
+	if r.publishLease == nil {
+		return nil
+	}
+	if !strings.EqualFold(r.publishLease.SpaceID, spaceID) {
+		return fmt.Errorf("timer reconciliation lease belongs to another space")
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	renewed, err := r.Nodes.RenewCollectorPublishLease(leaseCtx, r.publishLease)
+	if err != nil {
+		if errors.Is(err, scfinvoker.ErrCollectorPublishLeaseStale) {
+			r.publishLease = nil
+			return nil
+		}
+		return err
+	}
+	if renewed == nil || renewed.LeaseID != r.publishLease.LeaseID || renewed.FencingToken != r.publishLease.FencingToken {
+		return fmt.Errorf("timer reconciliation lease renewal changed identity")
+	}
+	r.publishLease = renewed
+	return nil
+}
+
+func (r *Reconciler) settleUnknownRuntimeSubmit(ctx context.Context, spaceID string) (bool, error) {
+	if !r.pendingRuntimeSubmitUnknown() {
+		return true, nil
+	}
+	if jobs, _ := r.pendingRuntimeJobsState(); len(jobs) > 0 {
+		return false, nil
+	}
+	previous := r.publishLease
+	if previous != nil && time.Now().Before(previous.ExpiresAt) {
+		return false, nil
+	}
+	var holder [16]byte
+	if _, err := rand.Read(holder[:]); err != nil {
+		return false, fmt.Errorf("generate replacement timer reconciliation lease holder: %w", err)
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	lease, err := r.Nodes.AcquireCollectorPublishLease(leaseCtx, spaceID, "timer-reconciler-"+hex.EncodeToString(holder[:]))
+	if err != nil {
+		// A held lease or ambiguous acquire response is not proof that the old
+		// submission was fenced. Keep the unknown marker and retry on a later tick.
+		return false, err
+	}
+	if lease == nil || lease.LeaseID == "" || lease.FencingToken < 1 || !strings.EqualFold(lease.SpaceID, spaceID) {
+		return false, fmt.Errorf("replacement timer reconciliation lease response is incomplete")
+	}
+	r.publishLease = lease
+	if previous != nil && lease.FencingToken <= previous.FencingToken {
+		return false, fmt.Errorf("replacement timer reconciliation lease did not advance the fencing token")
+	}
+	r.clearUnknownRuntimeSubmit()
+	return true, nil
+}
+
+func (r *Reconciler) pendingRuntimeSubmitUnknown() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pendingUnknownSubmit
+}
+
+func (r *Reconciler) markRuntimeSubmitUnknown() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingUnknownSubmit = true
+	if r.pendingSince.IsZero() {
+		r.pendingSince = time.Now().UTC()
+	}
+	return r.pendingSince
+}
+
+func (r *Reconciler) clearUnknownRuntimeSubmit() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingUnknownSubmit = false
+	if len(r.pendingJobs) == 0 && r.pendingJob == "" {
+		r.pendingSince = time.Time{}
+	}
+}
+
+func (r *Reconciler) releasePublishLease(ctx context.Context, spaceID string) error {
+	if r.publishLease == nil {
+		return nil
+	}
+	if !strings.EqualFold(r.publishLease.SpaceID, spaceID) {
+		return fmt.Errorf("timer reconciliation lease belongs to another space")
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := r.Nodes.ReleaseCollectorPublishLease(leaseCtx, r.publishLease); err != nil {
+		return fmt.Errorf("release timer reconciliation publish lease: %w", err)
+	}
+	r.publishLease = nil
+	return nil
 }
 
 func (r *Reconciler) fail(spaceID, reason string, err error) error {
@@ -863,8 +1109,11 @@ func (r *Reconciler) observeAssignmentMetrics(spaceID string, groups []TaskGroup
 		return
 	}
 	r.Metrics.ResetAssignmentScope(spaceID)
-	for _, scope := range assignmentMetricScopes(groups, assignments) {
-		r.Metrics.ObserveAssignment(spaceID, scope.DatasetID, scope.Frequency, scope.Required, scope.Active, reconciledAt)
+	scopes := assignmentMetricScopes(groups, assignments)
+	for _, scope := range aggregateAssignmentMetricScopesByFrequency(scopes) {
+		r.Metrics.ObserveAssignmentDesired(spaceID, scope.Frequency, scope.Required, scope.Active)
+	}
+	for _, scope := range scopes {
 		expected, actual := scope.Required, scope.Active
 		if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
 			expected, actual = r.ExpectedStockCNTimerFunctions, len(assignments)
@@ -898,12 +1147,11 @@ func marketRouteID(spaceID, provider, marketType, frequency string) string {
 		if strings.EqualFold(strings.TrimSpace(marketType), "swap") {
 			product = "swap"
 		}
-		if parsed, err := marketdata.ParseFrequency(frequency); err == nil {
-			frequency = string(parsed)
-		} else {
-			frequency = strings.ToLower(strings.TrimSpace(frequency))
+		parsed, err := marketdata.ParseFrequency(frequency)
+		if err != nil {
+			return "unknown"
 		}
-		return "binance_" + product + "_kline_" + frequency
+		return "binance_" + product + "_kline_" + string(parsed)
 	}
 	return "unknown"
 }
@@ -911,6 +1159,28 @@ func marketRouteID(spaceID, provider, marketType, frequency string) string {
 type assignmentMetricScope struct {
 	Provider, MarketType, DatasetID, Frequency string
 	Required, Active                           int
+}
+
+func aggregateAssignmentMetricScopesByFrequency(scopes []assignmentMetricScope) []assignmentMetricScope {
+	byFrequency := make(map[string]assignmentMetricScope)
+	for _, scope := range scopes {
+		frequency := boundedPeriodFrequency(scope.Frequency)
+		aggregated := byFrequency[frequency]
+		aggregated.Frequency = frequency
+		aggregated.Required += scope.Required
+		aggregated.Active += scope.Active
+		byFrequency[frequency] = aggregated
+	}
+	frequencies := make([]string, 0, len(byFrequency))
+	for frequency := range byFrequency {
+		frequencies = append(frequencies, frequency)
+	}
+	sort.Strings(frequencies)
+	aggregated := make([]assignmentMetricScope, 0, len(frequencies))
+	for _, frequency := range frequencies {
+		aggregated = append(aggregated, byFrequency[frequency])
+	}
+	return aggregated
 }
 
 func assignmentMetricScopes(groups []TaskGroup, assignments []NodeAssignment) []assignmentMetricScope {
@@ -1228,7 +1498,7 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 		}
 		stored := fmt.Sprintf("%v\x00%v\x00%v\x00%v", metadata["assignment_hash"], storedDNSHash, metadata["timer_enabled"], metadata["timer_cron"])
 		if strings.Count(fingerprint, "\x00") > 3 {
-			stored += "\x00" + metadataStringValue(metadata, "binding_hash") + "\x00" + metadataStringValue(metadata, "collector_rpc_gateway_target") + "\x00" + metadataStringValue(metadata, "collector_gateway_target_node") + "\x00" + metadataStringValue(metadata, "fetch_timeout_seconds")
+			stored += "\x00" + metadataStringValue(metadata, "binding_hash") + "\x00" + metadataStringValue(metadata, "collector_rpc_gateway_target") + "\x00" + metadataStringValue(metadata, "collector_gateway_target_node") + "\x00" + metadataStringValue(metadata, "fetch_timeout_seconds") + "\x00" + fmt.Sprint(metadata["assignment_count"])
 		}
 		if stored == fingerprint {
 			if timerTriggerNeedsRepair(assignment, metadata, wantTimerEnabled) {

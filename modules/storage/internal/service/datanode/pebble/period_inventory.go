@@ -45,6 +45,7 @@ type PeriodLedgerEntry struct {
 	SeriesHash            string   `json:"series_hash"`
 	ExpectedCount         uint32   `json:"expected_count"`
 	DeadlineAt            int64    `json:"deadline_at"`
+	ReservationID         string   `json:"reservation_id,omitempty"`
 	SuccessfulSeriesCount int      `json:"successful_series_count"`
 	FailedSeriesCount     int      `json:"failed_series_count"`
 	SnapshotFormat        string   `json:"snapshot_format"`
@@ -532,6 +533,7 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 	}
 	entry.Status = string(fields["status"])
 	entry.SeriesHash = string(fields["series_hash"])
+	entry.ReservationID = string(fields["reservation_id"])
 	if len(fields["expected_count"]) == 4 {
 		entry.ExpectedCount = uint32(fields["expected_count"][0])<<24 | uint32(fields["expected_count"][1])<<16 | uint32(fields["expected_count"][2])<<8 | uint32(fields["expected_count"][3])
 	} else if _, ok := fields["expected_count"]; ok {
@@ -605,7 +607,7 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 				expectation := DatasetPeriodExpectation{
 					SpaceID: entry.SpaceID, DatasetID: entry.DatasetID, Frequency: entry.Frequency,
 					PeriodTime: entry.PeriodTime, SeriesHash: entry.SeriesHash, ExpectedCount: entry.ExpectedCount,
-					DeadlineAt: entry.DeadlineAt, SeriesSnapshot: series,
+					DeadlineAt: entry.DeadlineAt, ReservationID: entry.ReservationID, SeriesSnapshot: series,
 				}
 				if _, err := normalizePeriodExpectationWithSeriesSnapshot(expectation); err != nil {
 					entry.IntegrityErrors = append(entry.IntegrityErrors, "snapshot is invalid: "+err.Error())

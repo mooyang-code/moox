@@ -106,7 +106,7 @@
           type="info"
           style="margin: var(--moox-space-4) 0"
           :closable="true"
-          @close="selectedKeys = []"
+          @close="clearDeleteSelection"
         >
           <template #title> 已选择 {{ selectedKeys.length }} 个节点 </template>
           <div style="font-size: 12px; color: #86909c">
@@ -653,6 +653,7 @@ import {
   getNodeList,
   listCloudRegions,
   submitDeployNodes,
+  type BatchDeleteNodesRequest,
   type GetNodeBatchChangeResponse,
   type SubmitNodeBatchResponse
 } from "@/api/cloud-node";
@@ -664,6 +665,7 @@ import SCFSyncDialog from "./scf-sync-dialog.vue";
 import CloudNodeTable from "./components/cloud-node-table.vue";
 import { submitCloudNodeBatchChange } from "./cloud-node-batch-service";
 import { createCloudNodeBatchPoller } from "./cloud-node-batch-poller";
+import { captureDeleteSelection, updateDeleteSelection, type CloudNodeDeleteSnapshotMap } from "./delete-selection";
 import {
   formatDateTime,
   formatFileSize,
@@ -706,6 +708,7 @@ const form = reactive({
 // 数据列表
 const cloudNodeList = ref<CloudNode[]>([]);
 const selectedKeys = ref<string[]>([]);
+const selectedNodeSnapshots = ref<CloudNodeDeleteSnapshotMap>({});
 const cloudAccountOptions = ref<CloudAccount[]>([]);
 const regionOptions = ref<RegionInfo[]>([]); // 地区选项
 const scfSyncVisible = ref(false);
@@ -849,7 +852,7 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
     await replaceRouteJobId();
   }
   pagination.value.current = 1;
-  selectedKeys.value = [];
+  clearDeleteSelection();
   if (!spaceId) {
     cloudNodeList.value = [];
     pagination.value.total = 0;
@@ -927,7 +930,7 @@ const startBatchPolling = async (jobId: string) => {
       currentBatchChangeStatus.value = data;
       batchChangeProcessing.value = false;
       batchPollingTimedOut.value = false;
-      selectedKeys.value = [];
+      clearDeleteSelection();
       await replaceRouteJobId();
       await loadData();
       showBatchResult(data);
@@ -1333,22 +1336,35 @@ const batchDelete = () => {
     return;
   }
 
+  const nodeIds = [...selectedKeys.value];
+  let request: BatchDeleteNodesRequest;
+  try {
+    request = {
+      space_id: selectedSpaceId.value ?? "",
+      node_ids: nodeIds,
+      node_snapshots: captureDeleteSelection(nodeIds, selectedNodeSnapshots.value)
+    };
+  } catch (error) {
+    Message.warning(error instanceof Error ? error.message : "节点身份快照不完整，请刷新后重新选择");
+    return;
+  }
+
   Modal.warning({
     title: "批量删除确认",
     content: `确定要删除选中的 ${selectedKeys.value.length} 个节点吗？删除后将无法恢复。`,
     hideCancel: false,
     onOk: async () => {
-      await executeBatchDelete();
+      await executeBatchDelete(request);
     }
   });
 };
 
 // 执行批量删除
-const executeBatchDelete = async () => {
+const executeBatchDelete = async (request: BatchDeleteNodesRequest) => {
   try {
-    const total = selectedKeys.value.length;
-    const rsp = await batchDeleteNodes({ node_ids: selectedKeys.value });
-    selectedKeys.value = [];
+    const total = request.node_ids.length;
+    const rsp = await batchDeleteNodes(request);
+    clearDeleteSelection();
     await loadData();
     Message.success(`已删除 ${rsp.processed_count} / ${total} 个节点`);
   } catch (error: any) {
@@ -1482,8 +1498,14 @@ const select = (_rowKeys: string[], rowKey: string) => {
   const index = selectedKeys.value.indexOf(rowKey);
   if (index > -1) {
     selectedKeys.value.splice(index, 1);
+    const row = cloudNodeList.value.find(node => node.node_id === rowKey);
+    if (row) selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, [row], false);
   } else {
-    selectedKeys.value.push(rowKey);
+    const row = cloudNodeList.value.find(node => node.node_id === rowKey);
+    if (row) {
+      selectedKeys.value.push(rowKey);
+      selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, [row], true);
+    }
   }
 };
 
@@ -1495,17 +1517,29 @@ const selectAll = (checked: boolean) => {
         selectedKeys.value.push(key);
       }
     });
+    selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, cloudNodeList.value, true);
   } else {
     const currentPageKeys = cloudNodeList.value.map(item => item.node_id);
     selectedKeys.value = selectedKeys.value.filter(key => !currentPageKeys.includes(key));
+    selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, cloudNodeList.value, false);
   }
+};
+
+const clearDeleteSelection = () => {
+  selectedKeys.value = [];
+  selectedNodeSnapshots.value = {};
 };
 
 // 单个操作（保留原有实现）
 
 const onDelete = async (record: CloudNode) => {
   try {
-    const rsp = await batchDeleteNodes({ node_ids: [record.node_id] });
+    const snapshot = updateDeleteSelection({}, [record], true);
+    const rsp = await batchDeleteNodes({
+      space_id: selectedSpaceId.value ?? "",
+      node_ids: [record.node_id],
+      node_snapshots: captureDeleteSelection([record.node_id], snapshot)
+    });
     await loadData();
     Message.success(rsp.processed_count > 0 ? "删除成功" : "节点无需删除");
   } catch (error: any) {

@@ -22,6 +22,98 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestSynchronousBatchDeleteRequiresFenceForCollectorMarketFetcher(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto", NodeID: "market-fetcher", FunctionName: "market-fetcher", NodeType: "scf-event",
+		Metadata: `{"collector_publish_fenced":true,"biz_type":"market_fetcher"}`,
+	}))
+	service := &Service{catalog: catalog}
+	response, err := service.BatchDeleteNodes(nodeBatchContext("crypto"), &pb.BatchDeleteNodesReq{NodeIds: []string{"market-fetcher"}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, response.GetRetInfo().GetCode())
+	node, err := catalog.GetNodeIncludingDeleted(context.Background(), "crypto", "market-fetcher")
+	require.NoError(t, err)
+	require.False(t, node.IsDeleted)
+}
+
+func TestSynchronousBatchDeleteRejectsFencedCollectorEvenWithValidFence(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto", NodeID: "market-fetcher", FunctionName: "market-fetcher", NodeType: "scf-event",
+		Metadata: `{"collector_publish_fenced":true,"biz_type":"market_fetcher"}`,
+	}))
+	validator := &testPublishLeaseValidator{}
+	service := &Service{catalog: catalog, publishLeaseValidator: validator}
+	response, err := service.BatchDeleteNodes(nodeBatchContext("crypto"), &pb.BatchDeleteNodesReq{
+		NodeIds: []string{"market-fetcher"}, CollectorPublishLeaseId: "lease-1", CollectorPublishFencingToken: 3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, response.GetRetInfo().GetCode())
+	require.Zero(t, validator.calls.Load(), "legacy catalog-only delete must not claim a publish operation")
+	require.Zero(t, validator.ends.Load())
+	node, err := catalog.GetNodeIncludingDeleted(context.Background(), "crypto", "market-fetcher")
+	require.NoError(t, err)
+	require.False(t, node.IsDeleted)
+}
+
+func TestSynchronousBatchDeleteRejectsModernMarketFetcherPackage(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto", NodeID: "modern-fetcher", FunctionName: "modern-fetcher", PackageID: "moox-collector_dev", NodeType: "scf-event",
+	}))
+	service := &Service{catalog: catalog, publishLeaseValidator: &testPublishLeaseValidator{}}
+	response, err := service.BatchDeleteNodes(nodeBatchContext("crypto"), &pb.BatchDeleteNodesReq{
+		NodeIds: []string{"modern-fetcher"}, CollectorPublishLeaseId: "lease-1", CollectorPublishFencingToken: 3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, response.GetRetInfo().GetCode())
+	node, err := catalog.GetNodeIncludingDeleted(context.Background(), "crypto", "modern-fetcher")
+	require.NoError(t, err)
+	require.False(t, node.IsDeleted)
+}
+
+func TestSynchronousBatchDeletePreflightsEntireBatchBeforeCatalogMutation(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	for _, node := range []store.CloudNode{
+		{SpaceID: "crypto", NodeID: "ordinary", FunctionName: "ordinary", NodeType: "scf-event"},
+		{SpaceID: "crypto", NodeID: "market-fetcher", FunctionName: "market-fetcher", NodeType: "scf-event", Metadata: `{"collector_publish_fenced":true,"biz_type":"market_fetcher"}`},
+	} {
+		require.NoError(t, catalog.UpsertNode(context.Background(), node))
+	}
+	service := &Service{catalog: catalog, publishLeaseValidator: &testPublishLeaseValidator{}}
+	response, err := service.BatchDeleteNodes(nodeBatchContext("crypto"), &pb.BatchDeleteNodesReq{
+		NodeIds: []string{"ordinary", "market-fetcher"}, CollectorPublishLeaseId: "lease-1", CollectorPublishFencingToken: 3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, response.GetRetInfo().GetCode())
+	for _, nodeID := range []string{"ordinary", "market-fetcher"} {
+		node, lookupErr := catalog.GetNodeIncludingDeleted(context.Background(), "crypto", nodeID)
+		require.NoError(t, lookupErr)
+		require.False(t, node.IsDeleted, "preflight rejection must not partially delete %s", nodeID)
+	}
+}
+
+func TestUpdateNodeRejectsCatalogOnlyUpdateToFencedCollector(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
+	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{
+		SpaceID: "crypto", NodeID: "market-fetcher", CloudAccountID: "account-a", PackageID: "moox-collector_dev",
+		NodeType: "scf-event", Region: "ap-singapore", FunctionName: "market-fetcher",
+	}))
+	service := &Service{catalog: catalog}
+	response, err := service.UpdateNode(ctx, &pb.UpdateNodeReq{Node: &pb.CloudNode{
+		NodeId: "market-fetcher", Region: "ap-shanghai",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, response.GetRetInfo().GetCode())
+	node, err := catalog.GetNode(ctx, "crypto", "market-fetcher")
+	require.NoError(t, err)
+	require.Equal(t, "ap-singapore", node.Region)
+}
+
 func TestNodeMetadataBranches(t *testing.T) {
 	metadata, err := structpb.NewStruct(map[string]any{"existing": "yes"})
 	require.NoError(t, err)
@@ -33,6 +125,15 @@ func TestNodeMetadataBranches(t *testing.T) {
 	assert.NotContains(t, got, "probe_enabled")
 	assert.NotContains(t, got, "probe_url")
 	assert.Empty(t, nodeMetadataFromPB(nil))
+}
+
+func TestMergeNodeUpdateCannotClearCollectorPublishFence(t *testing.T) {
+	metadata, err := structpb.NewStruct(map[string]any{"collector_publish_fenced": false})
+	require.NoError(t, err)
+	updated := mergeNodeUpdate(store.CloudNode{
+		SpaceID: "crypto", NodeID: "custom-market-fetcher", Metadata: "{\"collector_publish_fenced\":true}",
+	}, &pb.CloudNode{NodeId: "custom-market-fetcher", Metadata: metadata})
+	assert.Equal(t, true, parseJSONMap(updated.Metadata)["collector_publish_fenced"])
 }
 
 func TestUpdateNodeAndConversion(t *testing.T) {
@@ -133,6 +234,82 @@ func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
 	assert.Equal(t, int64(64), fake.created[0].MemorySize)
 	assert.Equal(t, int64(15), fake.created[0].Timeout)
 	assert.NotContains(t, fake.created[0].Environment, "MOOX_MONITOR_READY_URL")
+}
+
+func TestExecuteCreatePersistsDiscoverableReservationBeforeSCFAndNeverMarksFailedRowReady(t *testing.T) {
+	db := newNodeSCFTestDB(t)
+	catalog := store.NewCatalogRepository(db)
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, db.Exec(`CREATE TRIGGER fail_ready_cloud_node BEFORE INSERT ON t_cloud_nodes
+		WHEN json_extract(NEW.c_metadata, '$.deployment_ready') = 1
+		BEGIN SELECT RAISE(ABORT, 'ready persistence failed'); END;
+		CREATE TRIGGER fail_ready_cloud_node_update BEFORE UPDATE ON t_cloud_nodes
+		WHEN json_extract(NEW.c_metadata, '$.deployment_ready') = 1
+		BEGIN SELECT RAISE(ABORT, 'ready persistence failed'); END`).Error)
+	createSawReservation := false
+	fake := &fakeSCFClient{
+		getResults: []fakeSCFGetResult{
+			{err: errors.New("ResourceNotFound.FunctionName")},
+			{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 15, MaxInstanceConcurrency: 1, Environment: completeInvokeEnvironment("15")}},
+		},
+		onCreate: func(req tencentscf.CreateFunctionRequest) {
+			row, err := catalog.GetNode(context.Background(), "crypto", req.FunctionName)
+			if err == nil && row != nil {
+				createSawReservation = !metadataBool(parseJSONMap(row.Metadata), "deployment_ready")
+			}
+		},
+	}
+	service := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	metadata, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher", "function_name_prefix": "moox-fetcher-crypto-reservation"})
+	require.NoError(t, err)
+	_, err = service.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
+		CloudAccountId: "account-a", Region: "ap-singapore", Namespace: "collector", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
+		Config: map[string]string{"memory_size": "64", "timeout": "15"}, Environment: completeInvokeEnvironment("15"), Metadata: metadata,
+	}, 0)
+	require.ErrorContains(t, err, "ready persistence failed")
+	require.Len(t, fake.created, 1)
+	require.True(t, createSawReservation, "catalog identity must be durable and not-ready before the SCF create side effect")
+	row, err := catalog.GetNode(context.Background(), "crypto", fake.created[0].FunctionName)
+	require.NoError(t, err)
+	require.NotNil(t, row, "failed final persistence must leave a discoverable cleanup reservation")
+	require.False(t, metadataBool(parseJSONMap(row.Metadata), "deployment_ready"))
+	require.True(t, metadataBool(parseJSONMap(row.Metadata), "collector_publish_fenced"))
+	fake.currentEnvironment = map[string]string{
+		"MOOX_CODE_PACKAGE_ID":       "moox-collector_dev",
+		"MOOX_CREATE_RESERVATION_ID": row.LifecycleID,
+	}
+	_, err = service.executeDeleteNodeItem(context.Background(), "crypto", nodeDeleteItemForTest(t, catalog, "crypto", row.NodeID))
+	require.NoError(t, err, "the exact reservation must be cleanable after provider ownership is verified")
+	require.Len(t, fake.deletedFunctions, 1)
+	deletedRow, err := catalog.GetNodeIncludingDeleted(context.Background(), "crypto", row.NodeID)
+	require.NoError(t, err)
+	require.True(t, deletedRow.IsDeleted)
+}
+
+func TestExecuteCreateDoesNotCallSCFWhenReservationCannotBePersisted(t *testing.T) {
+	db := newNodeSCFTestDB(t)
+	catalog := store.NewCatalogRepository(db)
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, db.Exec(`CREATE TRIGGER reject_create_reservation BEFORE INSERT ON t_cloud_nodes
+		BEGIN SELECT RAISE(ABORT, 'reservation unavailable'); END`).Error)
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{err: errors.New("ResourceNotFound.FunctionName")}}}
+	service := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	metadata, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher", "function_name_prefix": "moox-fetcher-crypto-reservation-failure"})
+	require.NoError(t, err)
+	_, err = service.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
+		CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
+		Config: map[string]string{"memory_size": "64", "timeout": "15"}, Environment: completeInvokeEnvironment("15"), Metadata: metadata,
+	}, 0)
+	require.ErrorContains(t, err, "reservation unavailable")
+	require.Empty(t, fake.created, "the external SCF side effect must follow a durable reservation")
 }
 
 func TestExecuteCreateInvokeMarketFetcherPreservesConfiguredTimeout(t *testing.T) {
@@ -283,6 +460,7 @@ func TestExecuteCreateExistingTimerNodeEnsuresTrigger(t *testing.T) {
 	seedSCFAccountAndPackage(t, catalog)
 	environment := completeTimerEnvironment()
 	environment["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+	environment["MOOX_CREATE_RESERVATION_ID"] = "timer-create-reservation"
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: environment}}}}
 	svc := &Service{
 		catalog:            catalog,
@@ -294,6 +472,7 @@ func TestExecuteCreateExistingTimerNodeEnsuresTrigger(t *testing.T) {
 	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
 		CloudAccountId: "account-a", Region: "ap-singapore", Namespace: "collector", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
 		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "60"}, Environment: environment, Metadata: metadata,
+		CreateReservationId: "timer-create-reservation",
 	}, 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, fake.timerEnsures)
@@ -370,6 +549,7 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 	environment := completeTimerEnvironment()
 	environment["MOOX_CODE_PACKAGE_ID"] = "pkg"
 	environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
+	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "1"
 	environment["MOOX_MARKET_FETCH_DNS_HASH"] = "dns"
 	environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"] = "2026-08-04T01:00:00Z"
 	environment["MOOX_MARKET_FETCH_SUBJECTS"] = "BTC-USDT"
@@ -426,13 +606,14 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	environment := completeTimerEnvironment()
 	environment["MOOX_SPACE_ID"] = "stockcn"
 	environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
+	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "80"
 	environment["MOOX_MARKET_FETCH_SUBJECTS"] = strings.Repeat("old-subject|", 80)
 	environment["MOOX_EVENTBUS_NATS_PASSWORD"] = "keep-password"
 	environment["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 	patch := &pb.NodeRuntimeConfigPatch{NodeId: "timer-node", TimerCron: "5 * * * * * *", TimerEnabled: true, ManagedEnvironment: map[string]string{
-		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11002", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "control-a", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "80", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11002", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "control-a", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
 	}}
 	require.Nil(t, svc.preflightRuntimeConfig(context.Background(), "stockcn", patch))
 	_, err := svc.executeRuntimeConfigItem(context.Background(), "stockcn", patch)
@@ -447,6 +628,7 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, node.Metadata, "collector_rpc_gateway_target")
 	require.Contains(t, node.Metadata, `"timeout_seconds":60`, "later redeploys must not restore the legacy catalog timeout")
+	require.Contains(t, node.Metadata, `"assignment_count":80`, "the assignment readback must persist the verified subject count")
 }
 
 func TestReconcileSCFPublicNetworkClearsPreviousVPC(t *testing.T) {
@@ -469,9 +651,14 @@ type fakeSCFClient struct {
 	respectContext       bool
 	createErr            error
 	createWaitForContext bool
+	onCreate             func(tencentscf.CreateFunctionRequest)
 	created              []tencentscf.CreateFunctionRequest
+	deletedFunctions     []tencentscf.FunctionRef
+	deleteErr            error
+	functionDeleted      bool
 	updated              []tencentscf.UpdateFunctionCodeRequest
 	configured           []tencentscf.UpdateFunctionConfigurationRequest
+	configurationErr     error
 	currentEnvironment   map[string]string
 	currentTimeout       int64
 	timerEnsures         int
@@ -503,6 +690,9 @@ func (f *fakeSCFClient) GetFunction(ctx context.Context, _ tencentscf.FunctionRe
 	if f.respectContext && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	if f.functionDeleted {
+		return nil, errors.New("ResourceNotFound.FunctionName")
+	}
 	if len(f.getResults) > 0 {
 		result := f.getResults[0]
 		f.getResults = f.getResults[1:]
@@ -521,6 +711,9 @@ func (f *fakeSCFClient) GetFunction(ctx context.Context, _ tencentscf.FunctionRe
 }
 func (f *fakeSCFClient) CreateFunction(ctx context.Context, req tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error) {
 	f.created = append(f.created, req)
+	if f.onCreate != nil {
+		f.onCreate(req)
+	}
 	if f.createWaitForContext {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -530,13 +723,28 @@ func (f *fakeSCFClient) CreateFunction(ctx context.Context, req tencentscf.Creat
 	}
 	return &tencentscf.CreateFunctionResponse{}, nil
 }
-func (f *fakeSCFClient) DeleteFunction(context.Context, tencentscf.FunctionRef) error { return nil }
+func (f *fakeSCFClient) DeleteFunction(_ context.Context, ref tencentscf.FunctionRef) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletedFunctions = append(f.deletedFunctions, ref)
+	if f.deleteErr == nil || isSCFNotFound(f.deleteErr) {
+		f.functionDeleted = true
+	}
+	return f.deleteErr
+}
 func (f *fakeSCFClient) UpdateFunctionCode(_ context.Context, req tencentscf.UpdateFunctionCodeRequest) (*tencentscf.UpdateFunctionCodeResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.updated = append(f.updated, req)
 	return &tencentscf.UpdateFunctionCodeResponse{}, nil
 }
 func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.configured = append(f.configured, req)
+	if f.configurationErr != nil {
+		return nil, f.configurationErr
+	}
 	f.currentEnvironment = req.Environment
 	if req.Timeout > 0 {
 		f.currentTimeout = req.Timeout
@@ -547,7 +755,12 @@ func (f *fakeSCFClient) InvokeFunction(context.Context, tencentscf.InvokeFunctio
 	return &tencentscf.InvokeFunctionResponse{}, nil
 }
 func (f *fakeSCFClient) EnsureTimerTrigger(_ context.Context, req tencentscf.TimerTriggerRequest) (*tencentscf.TimerTriggerInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.timerEnsures++
+	if f.timerErr != nil {
+		return nil, f.timerErr
+	}
 	return &tencentscf.TimerTriggerInfo{Name: req.Name, Type: "timer", Cron: req.Cron, Enabled: req.Enabled, AvailableStatus: "Available", Qualifier: req.Qualifier, Message: req.Message}, nil
 }
 

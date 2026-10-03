@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"gopkg.in/yaml.v3"
 )
 
@@ -112,23 +111,16 @@ type MarketHealthConfig struct {
 }
 
 type KlineFreshnessConfig struct {
-	Enabled             bool                 `yaml:"enabled"`
-	EvaluationInterval  time.Duration        `yaml:"evaluation_interval"`
-	MaxSubjectsPerAlert int                  `yaml:"max_subjects_per_alert"`
-	Rules               []KlineFreshnessRule `yaml:"rules"`
-}
-
-type KlineFreshnessRule struct {
-	Enabled    bool          `yaml:"enabled"`
-	SpaceID    string        `yaml:"space_id"`
-	DatasetID  string        `yaml:"dataset_id"`
-	ViewID     string        `yaml:"view_id"`
-	Frequency  string        `yaml:"frequency"`
-	MarketID   string        `yaml:"market_id"`
-	CalendarID string        `yaml:"calendar_id"`
-	Timezone   string        `yaml:"timezone"`
-	Sessions   []string      `yaml:"sessions"`
-	StaleAfter time.Duration `yaml:"stale_after"`
+	Enabled                  bool          `yaml:"enabled"`
+	SpaceIDs                 []string      `yaml:"space_ids"`
+	CollectorGatewayTarget   string        `yaml:"collector_gateway_target"`
+	CollectorGatewayNodeID   string        `yaml:"collector_gateway_node_id"`
+	EvaluationInterval       time.Duration `yaml:"evaluation_interval"`
+	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval"`
+	InventoryPageSize        int           `yaml:"inventory_page_size"`
+	InventoryMaxEntries      int           `yaml:"inventory_max_entries"`
+	StaleAfter               time.Duration `yaml:"stale_after"`
+	MaxSubjectsPerAlert      int           `yaml:"max_subjects_per_alert"`
 }
 
 type MarketCanarySubject struct {
@@ -221,11 +213,14 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Observability:  ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
-		MarketCanary:   MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
-		MarketHealth:   MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
-		KlineFreshness: KlineFreshnessConfig{Enabled: false, EvaluationInterval: 30 * time.Second, MaxSubjectsPerAlert: 20},
-		Metrics:        MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
+		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
+		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance")}}},
+		MarketHealth:  MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
+		KlineFreshness: KlineFreshnessConfig{
+			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, CollectorGatewayTarget: "ip://127.0.0.1:11003", EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
+			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
+		},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -326,6 +321,24 @@ func (c *Config) applyDefaults() {
 	klineDefaults := Default().KlineFreshness
 	if c.KlineFreshness.EvaluationInterval == 0 {
 		c.KlineFreshness.EvaluationInterval = klineDefaults.EvaluationInterval
+	}
+	if c.KlineFreshness.CollectorGatewayTarget == "" {
+		c.KlineFreshness.CollectorGatewayTarget = klineDefaults.CollectorGatewayTarget
+	}
+	if len(c.KlineFreshness.SpaceIDs) == 0 {
+		c.KlineFreshness.SpaceIDs = append([]string(nil), klineDefaults.SpaceIDs...)
+	}
+	if c.KlineFreshness.InventoryRefreshInterval == 0 {
+		c.KlineFreshness.InventoryRefreshInterval = klineDefaults.InventoryRefreshInterval
+	}
+	if c.KlineFreshness.InventoryPageSize == 0 {
+		c.KlineFreshness.InventoryPageSize = klineDefaults.InventoryPageSize
+	}
+	if c.KlineFreshness.InventoryMaxEntries == 0 {
+		c.KlineFreshness.InventoryMaxEntries = klineDefaults.InventoryMaxEntries
+	}
+	if c.KlineFreshness.StaleAfter == 0 {
+		c.KlineFreshness.StaleAfter = klineDefaults.StaleAfter
 	}
 	if c.KlineFreshness.MaxSubjectsPerAlert == 0 {
 		c.KlineFreshness.MaxSubjectsPerAlert = klineDefaults.MaxSubjectsPerAlert
@@ -444,6 +457,12 @@ func (c *Config) applyEnv() {
 		c.Metrics.Storage.GatewayNodeID = v
 		c.Metrics.HostStorage.GatewayNodeID = v
 	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET")); v != "" {
+		c.KlineFreshness.CollectorGatewayTarget = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE")); v != "" {
+		c.KlineFreshness.CollectorGatewayNodeID = v
+	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.KeyID = v
 	}
@@ -557,99 +576,39 @@ func (c *Config) Validate() error {
 
 func (c *Config) validateKlineFreshness() error {
 	kline := c.KlineFreshness
+	if len(kline.SpaceIDs) < 1 || len(kline.SpaceIDs) > 16 {
+		return fmt.Errorf("kline_freshness.space_ids must contain between 1 and 16 Space IDs")
+	}
+	seenSpaces := make(map[string]struct{}, len(kline.SpaceIDs))
+	for _, spaceID := range kline.SpaceIDs {
+		spaceID = strings.TrimSpace(spaceID)
+		if spaceID == "" {
+			return fmt.Errorf("kline_freshness.space_ids must not contain an empty Space ID")
+		}
+		if _, exists := seenSpaces[spaceID]; exists {
+			return fmt.Errorf("kline_freshness.space_ids contains duplicate Space %q", spaceID)
+		}
+		seenSpaces[spaceID] = struct{}{}
+	}
 	if kline.EvaluationInterval < 30*time.Second {
 		return fmt.Errorf("kline_freshness.evaluation_interval must be at least 30s")
+	}
+	if kline.InventoryRefreshInterval < 30*time.Second || kline.InventoryRefreshInterval > 10*time.Minute {
+		return fmt.Errorf("kline_freshness.inventory_refresh_interval must be between 30s and 10m")
+	}
+	if kline.InventoryPageSize < 1 || kline.InventoryPageSize > 100 {
+		return fmt.Errorf("kline_freshness.inventory_page_size must be between 1 and 100")
+	}
+	if kline.InventoryMaxEntries < 1 || kline.InventoryMaxEntries > 1000 {
+		return fmt.Errorf("kline_freshness.inventory_max_entries must be between 1 and 1000")
+	}
+	if kline.StaleAfter < 2*kline.EvaluationInterval {
+		return fmt.Errorf("kline_freshness.stale_after must be at least twice evaluation_interval")
 	}
 	if kline.MaxSubjectsPerAlert < 1 || kline.MaxSubjectsPerAlert > 100 {
 		return fmt.Errorf("kline_freshness.max_subjects_per_alert must be between 1 and 100")
 	}
-	if !kline.Enabled {
-		return nil
-	}
-	if len(kline.Rules) == 0 {
-		return fmt.Errorf("kline_freshness.rules must not be empty when enabled")
-	}
-	seen := make(map[string]struct{}, len(kline.Rules))
-	for index, rule := range kline.Rules {
-		prefix := fmt.Sprintf("kline_freshness.rules[%d]", index)
-		if strings.TrimSpace(rule.SpaceID) == "" || strings.TrimSpace(rule.Frequency) == "" || strings.TrimSpace(rule.MarketID) == "" {
-			return fmt.Errorf("%s requires space_id, frequency, and market_id", prefix)
-		}
-		if strings.TrimSpace(rule.DatasetID) == "" || strings.TrimSpace(rule.ViewID) == "" {
-			return fmt.Errorf("%s requires dataset_id and view_id", prefix)
-		}
-		if !validKlineFrequency(rule.Frequency) {
-			return fmt.Errorf("%s.frequency is invalid", prefix)
-		}
-		key := strings.Join([]string{rule.SpaceID, rule.ViewID, rule.Frequency}, "\x00")
-		if _, exists := seen[key]; exists {
-			return fmt.Errorf("%s duplicates rule identity", prefix)
-		}
-		seen[key] = struct{}{}
-		if rule.StaleAfter <= 0 || rule.StaleAfter < 2*kline.EvaluationInterval {
-			return fmt.Errorf("%s.stale_after must be at least twice evaluation_interval", prefix)
-		}
-		switch rule.MarketID {
-		case "crypto":
-			if strings.TrimSpace(rule.CalendarID) != "" || len(rule.Sessions) != 0 {
-				return fmt.Errorf("%s crypto rules must not configure calendar_id or sessions", prefix)
-			}
-		case "stockcn":
-			if strings.TrimSpace(rule.CalendarID) == "" || strings.TrimSpace(rule.Timezone) == "" || len(rule.Sessions) == 0 {
-				return fmt.Errorf("%s stockcn rules require calendar_id, timezone, and sessions", prefix)
-			}
-			if _, err := time.LoadLocation(rule.Timezone); err != nil {
-				return fmt.Errorf("%s.timezone: %w", prefix, err)
-			}
-			if _, err := marketcalendar.Load(strings.TrimSpace(rule.CalendarID)); err != nil {
-				return fmt.Errorf("%s.calendar_id: %w", prefix, err)
-			}
-			for sessionIndex, session := range rule.Sessions {
-				parts := strings.Split(strings.TrimSpace(session), "-")
-				if len(parts) != 2 {
-					return fmt.Errorf("%s.sessions[%d] must use HH:MM-HH:MM", prefix, sessionIndex)
-				}
-				start, startErr := time.Parse("15:04", strings.TrimSpace(parts[0]))
-				end, endErr := time.Parse("15:04", strings.TrimSpace(parts[1]))
-				if startErr != nil || endErr != nil || !start.Before(end) {
-					return fmt.Errorf("%s.sessions[%d] is invalid", prefix, sessionIndex)
-				}
-			}
-		default:
-			return fmt.Errorf("%s.market_id must be crypto or stockcn", prefix)
-		}
-	}
 	return nil
-}
-
-func validKlineFrequency(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	index := 0
-	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
-		index++
-	}
-	if index == 0 || index == len(value) {
-		return false
-	}
-	amount := 0
-	for _, digit := range value[:index] {
-		amount = amount*10 + int(digit-'0')
-		if amount > 1000000 {
-			return false
-		}
-	}
-	if amount <= 0 {
-		return false
-	}
-	switch value[index:] {
-	case "s", "m", "h", "d", "w", "M":
-		return true
-	default:
-		return false
-	}
 }
 
 func stringPointer(value string) *string {

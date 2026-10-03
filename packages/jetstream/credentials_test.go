@@ -112,3 +112,18 @@ func TestApplyCredentialFilePreservesConfiguredCAWhenCredentialOmitsCA(t *testin
 		t.Fatalf("configured CA was cleared: %+v", config)
 	}
 }
+
+func TestApplyCredentialFilePrefersExplicitCredentialCAOverEmbeddedCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "collector.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nusername: collector-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{TLSCAPEMBase64: "ZW1iZWRkZWQtY2E="}
+	if err := config.ApplyCredentialFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if config.TLSCAFile != filepath.Join(dir, "ca.pem") || config.TLSCAPEMBase64 != "" {
+		t.Fatalf("explicit credential CA did not win: %+v", config)
+	}
+}

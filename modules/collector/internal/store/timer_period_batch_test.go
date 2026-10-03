@@ -12,6 +12,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTimerPeriodBatchCleanupCountsZeroAfterRollback(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for index, status := range []string{domain.PeriodStatusComplete, domain.PeriodStatusDegraded} {
+		period := now.Add(-time.Duration(index+1) * time.Minute)
+		suffix := fmt.Sprintf("rollback-%d", index)
+		seedTimerPeriodBatch(t, s, suffix, "run-"+suffix, period)
+		require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_batch_id = ?", "batch-"+suffix).Updates(map[string]any{"c_status": domain.BatchStatusSucceeded, "c_completed_at": now}).Error)
+		require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
+			Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period},
+			SeriesHash: "series-hash", ExpectedCount: 1, DeadlineAt: now, Status: status, ConfirmedAt: now,
+		}))
+	}
+	require.NoError(t, s.db.Exec(`CREATE TRIGGER fail_manifest_delete BEFORE DELETE ON t_collector_timer_period_batches WHEN OLD.c_batch_id = 'batch-rollback-1' BEGIN SELECT RAISE(ABORT, 'test rollback'); END`).Error)
+	deleted, err := s.TimerPeriodBatches().CleanupStorageTerminal(ctx, "crypto", 10)
+	require.Error(t, err)
+	require.Zero(t, deleted)
+	var remaining int64
+	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Count(&remaining).Error)
+	require.EqualValues(t, 2, remaining)
+	require.NoError(t, s.db.Exec(`DROP TRIGGER fail_manifest_delete`).Error)
+	deleted, err = s.TimerPeriodBatches().CleanupStorageTerminal(ctx, "crypto", 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, deleted)
+}
+
 func TestTimerPeriodBatchClaimReplayAndTerminalNoWork(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
@@ -42,6 +69,43 @@ func TestTimerPeriodBatchClaimReplayAndTerminalNoWork(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, terminalReplay.Claimed, "terminal request replay must not return work")
 	require.Empty(t, terminalReplay.RequestJSON)
+}
+
+func TestTimerPeriodBatchCleanupRemovesOnlyStorageTerminalManifests(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	terminalPeriod := now.Add(-time.Minute)
+	waitingPeriod := now.Add(-2 * time.Minute)
+	seedTimerPeriodBatch(t, s, "cleanup-terminal", "run-terminal", terminalPeriod)
+	seedTimerPeriodBatch(t, s, "cleanup-waiting", "run-waiting", waitingPeriod)
+	for _, suffix := range []string{"cleanup-terminal", "cleanup-waiting"} {
+		require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", "batch-"+suffix).
+			Updates(map[string]any{"c_status": domain.BatchStatusSucceeded, "c_completed_at": now}).Error)
+	}
+	for _, state := range []domain.PeriodStorageState{
+		{Key: domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: terminalPeriod}, SeriesHash: "series-hash", ExpectedCount: 1, DeadlineAt: now.Add(time.Minute), Status: domain.PeriodStatusComplete, ConfirmedAt: now},
+		{Key: domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: waitingPeriod}, SeriesHash: "series-hash", ExpectedCount: 1, DeadlineAt: now.Add(time.Minute), Status: domain.PeriodStatusWaiting, ConfirmedAt: now},
+	} {
+		require.NoError(t, s.PeriodStorageStates().ObservePeriodStorageState(ctx, state))
+	}
+
+	deleted, err := s.TimerPeriodBatches().CleanupStorageTerminal(ctx, "crypto", 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+	var terminalCount, waitingCount int64
+	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", "batch-cleanup-terminal").Count(&terminalCount).Error)
+	require.Zero(t, terminalCount)
+	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", "batch-cleanup-waiting").Count(&waitingCount).Error)
+	require.EqualValues(t, 1, waitingCount)
+
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+timerManifestCleanupSQL, "crypto", domain.PeriodStatusComplete, 100).Scan(&plan).Error)
+	planText := fmt.Sprint(plan)
+	require.Contains(t, planText, "idx_collector_period_storage_terminal_cleanup")
+	require.NotContains(t, planText, "TEMP B-TREE", "terminal manifest cleanup must not sort a full period history")
 }
 
 func TestTimerPeriodBatchRejectsNegativeGroupAndShardIndexes(t *testing.T) {

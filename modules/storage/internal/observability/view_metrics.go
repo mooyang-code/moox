@@ -52,6 +52,9 @@ type ViewMetrics struct {
 	rebuildAuditPending              prometheus.Gauge
 	rebuildAuditFailures             prometheus.Counter
 	rebuildAuditDropped              prometheus.Counter
+	capacityScanQueueDelay           prometheus.Histogram
+	capacityScanOldestOverdue        prometheus.GaugeFunc
+	permanentViewCapacityOverLimit   prometheus.Gauge
 	consumerLagSnapshot              atomic.Int64
 	consumerBoundSnapshot            atomic.Bool
 	partitionMu                      sync.RWMutex
@@ -86,6 +89,7 @@ type ViewMetrics struct {
 	rebuildAuditPendingSnapshot      atomic.Int64
 	rebuildAuditFailuresSnapshot     atomic.Int64
 	rebuildAuditDroppedSnapshot      atomic.Int64
+	capacityScanOldestOverdueSince   atomic.Int64
 	pendingMu                        sync.Mutex
 	pendingDeliveries                map[*jetstream.Delivery]time.Time
 }
@@ -295,6 +299,15 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "rebuild_audit_dropped_total",
 			Help: "View rebuild audit retry records dropped after reaching the queue limit.",
 		}),
+		capacityScanQueueDelay: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "capacity_scan_queue_delay_seconds",
+			Help:    "Delay between a Storage View capacity scan becoming due and starting.",
+			Buckets: []float64{1, 5, 30, 60, 300, 900, 1800, 3600, 7200},
+		}),
+		permanentViewCapacityOverLimit: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "permanent_view_capacity_over_limit",
+			Help: "Number of active permanent Views at or above the file capacity threshold; these Views require operator action and are not automatically truncated.",
+		}),
 		pendingDeliveries:   make(map[*jetstream.Delivery]time.Time),
 		partitionStates:     make(map[string]ConsumerPartitionSnapshot),
 		viewWatermarks:      make(map[string]int64),
@@ -308,6 +321,20 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		Namespace: "moox", Subsystem: "storage_outbox", Name: "publisher_unavailable_age_seconds",
 		Help: "Continuous time the Storage outbox EventBus publisher has been unavailable.",
 	}, func() float64 { return metrics.currentOutboxPublisherUnavailableAge(time.Now().UTC()).Seconds() })
+	metrics.capacityScanOldestOverdue = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: "moox", Subsystem: "storage_view", Name: "capacity_scan_oldest_overdue_seconds",
+		Help: "Age of the oldest due Storage View capacity scan waiting in the serial maintenance loop.",
+	}, func() float64 {
+		since := metrics.capacityScanOldestOverdueSince.Load()
+		if since == 0 {
+			return 0
+		}
+		age := time.Since(time.Unix(0, since))
+		if age < 0 {
+			return 0
+		}
+		return age.Seconds()
+	})
 	var err error
 	if metrics.deriveTotal, err = registerOrReuse(registerer, metrics.deriveTotal); err != nil {
 		return nil, err
@@ -372,6 +399,18 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.outboxPublisherUnavailableAge, err = registerOrReuse(registerer, metrics.outboxPublisherUnavailableAge); err != nil {
 		return nil, err
 	}
+	if metrics.capacityScanQueueDelay, err = registerOrReuse(registerer, metrics.capacityScanQueueDelay); err != nil {
+		return nil, err
+	}
+	if metrics.capacityScanOldestOverdue, err = registerOrReuse(registerer, metrics.capacityScanOldestOverdue); err != nil {
+		return nil, err
+	}
+	if metrics.permanentViewCapacityOverLimit, err = registerOrReuse(registerer, metrics.permanentViewCapacityOverLimit); err != nil {
+		return nil, err
+	}
+	if metrics.permanentViewCapacityOverLimit, err = registerOrReuse(registerer, metrics.permanentViewCapacityOverLimit); err != nil {
+		return nil, err
+	}
 	if metrics.outboxLastPublishSuccess, err = registerOrReuse(registerer, metrics.outboxLastPublishSuccess); err != nil {
 		return nil, err
 	}
@@ -412,6 +451,42 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	return metrics, nil
+}
+
+// ObserveCapacityScanQueueDelay records how late a serial capacity scan starts.
+func (m *ViewMetrics) ObserveCapacityScanQueueDelay(delay time.Duration) {
+	if m == nil || m.capacityScanQueueDelay == nil {
+		return
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	m.capacityScanQueueDelay.Observe(delay.Seconds())
+}
+
+// SetCapacityScanOldestOverdue updates the oldest due scan age. The exported
+// GaugeFunc keeps increasing between maintenance passes while a scan waits.
+func (m *ViewMetrics) SetCapacityScanOldestOverdue(age time.Duration) {
+	if m == nil {
+		return
+	}
+	if age <= 0 {
+		m.capacityScanOldestOverdueSince.Store(0)
+		return
+	}
+	m.capacityScanOldestOverdueSince.Store(time.Now().Add(-age).UnixNano())
+}
+
+// SetPermanentViewCapacityOverLimitCount exposes a low-cardinality alert for
+// active permanent Views that cannot be safely truncated by automatic rebuild.
+func (m *ViewMetrics) SetPermanentViewCapacityOverLimitCount(count int64) {
+	if m == nil || m.permanentViewCapacityOverLimit == nil {
+		return
+	}
+	if count < 0 {
+		count = 0
+	}
+	m.permanentViewCapacityOverLimit.Set(float64(count))
 }
 
 // ObserveViewDatasetOutput records a successful active View index commit.

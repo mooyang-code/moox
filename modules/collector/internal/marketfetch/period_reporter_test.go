@@ -36,7 +36,7 @@ func TestPeriodReporterPersistsPayloadBeforeRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period}, "BTC-USDT", "fetch-1", "scf:fetch-1", period))
 	fake := &periodReporterFake{}
-	reporter := NewPeriodReporter(s.PeriodReadiness(), fake, "crypto", time.Hour)
+	reporter := NewPeriodReporter(s.PeriodReadiness(), fake, "crypto")
 	reporter.now = func() time.Time { return period.Add(10 * time.Second) }
 	require.NoError(t, reporter.Flush(context.Background()))
 	require.Len(t, fake.payloads, 1)
@@ -62,7 +62,7 @@ func TestPeriodReporterRebuildsPayloadWhenSubjectIdsMissing(t *testing.T) {
 	require.NoError(t, s.PeriodReadiness().MarkSubjectSuccess(context.Background(), key, "BTC-USDT", "fetch-1", "scf:fetch-1", period))
 	require.NoError(t, s.PeriodReadiness().PersistPayload(context.Background(), readinessID, `{"datasetId":"bars","frequency":"1m","periodTime":1,"status":"complete"}`))
 	fake := &periodReporterFake{}
-	reporter := NewPeriodReporter(s.PeriodReadiness(), fake, "crypto", time.Hour)
+	reporter := NewPeriodReporter(s.PeriodReadiness(), fake, "crypto")
 	reporter.now = func() time.Time { return period.Add(10 * time.Second) }
 	require.NoError(t, reporter.Flush(context.Background()))
 	require.Len(t, fake.payloads, 1)
@@ -74,7 +74,7 @@ func TestPeriodReporterRequiresStorageAndSchema(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	require.NoError(t, s.ApplySchema(schema.AllSQL()))
-	require.Error(t, NewPeriodReporter(s.PeriodReadiness(), nil, "crypto", time.Hour).Flush(context.Background()))
+	require.Error(t, NewPeriodReporter(s.PeriodReadiness(), nil, "crypto").Flush(context.Background()))
 }
 
 func TestPeriodReporterIsolatesSpaceBacklog(t *testing.T) {
@@ -95,8 +95,8 @@ func TestPeriodReporterIsolatesSpaceBacklog(t *testing.T) {
 
 	cryptoFake := &periodReporterFake{}
 	stockFake := &periodReporterFake{}
-	cryptoReporter := NewPeriodReporter(s.PeriodReadiness(), cryptoFake, "crypto", time.Hour)
-	stockReporter := NewPeriodReporter(s.PeriodReadiness(), stockFake, "stockcn", time.Hour)
+	cryptoReporter := NewPeriodReporter(s.PeriodReadiness(), cryptoFake, "crypto")
+	stockReporter := NewPeriodReporter(s.PeriodReadiness(), stockFake, "stockcn")
 	cryptoReporter.now = func() time.Time { return period.Add(10 * time.Second) }
 	stockReporter.now = cryptoReporter.now
 	require.NoError(t, cryptoReporter.Flush(context.Background()))

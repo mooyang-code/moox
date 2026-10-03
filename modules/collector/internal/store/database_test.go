@@ -84,9 +84,9 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 		"t_collector_runs":                   {"c_run_id", "c_run_key", "c_run_type"},
 		"t_collector_task_instances":         {"c_instance_id", "c_run_id", "c_request_key", "c_source_id", "c_series_tag"},
 		"t_collector_instance_write_targets": {"c_write_target_id", "c_instance_id", "c_task_id", "c_dataset_id", "c_series_index", "c_series_hash", "c_expected_count"},
-		"t_collector_fetch_batches":          {"c_instance_id", "c_write_target_id", "c_retry_scope"},
+		"t_collector_fetch_batches":          {"c_instance_id", "c_write_target_id", "c_retry_scope", "c_period_time", "c_period_deadline_at", "c_items_cleaned"},
 		"t_collector_fetch_batch_items":      {"c_batch_id", "c_instance_id"},
-		"t_collector_fetch_retry_items":      {"c_instance_id", "c_write_target_id", "c_retry_scope", "c_failure_targets_json", "c_period_failure_report_state", "c_period_failure_results_json", "c_period_failure_last_error", "c_period_failure_deadline_exceeded_at"},
+		"t_collector_fetch_retry_items":      {"c_instance_id", "c_write_target_id", "c_retry_scope", "c_period_time", "c_period_deadline_at", "c_failure_targets_json", "c_period_failure_report_state", "c_period_failure_results_json", "c_period_failure_last_error", "c_period_failure_deadline_exceeded_at"},
 		"t_period_readiness_items":           {"c_write_target_id", "c_series_tag"},
 	} {
 		for _, column := range columns {
@@ -99,7 +99,7 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 			}
 		}
 	}
-	for _, index := range []string{"idx_collector_instances_run", "idx_collector_instances_space_page", "idx_collector_instances_list_page", "idx_collector_instances_space_status_page", "idx_collector_batch_items_instance_batch", "idx_collector_task_period_series_lookup", "idx_collector_task_period_series_key", "idx_collector_task_period_series_retention", "idx_collector_task_period_series_space_retention", "idx_collector_fetch_retry_period_failure", "idx_collector_timer_period_batches_claim_request", "idx_collector_timer_period_batches_candidate"} {
+	for _, index := range []string{"idx_collector_instances_run", "idx_collector_instances_space_page", "idx_collector_instances_list_page", "idx_collector_instances_space_status_page", "idx_collector_instances_storage_write", "idx_collector_instances_terminal_cleanup_space", "idx_collector_batch_items_instance_batch", "idx_collector_task_period_series_lookup", "idx_collector_task_period_series_key", "idx_collector_task_period_series_retention", "idx_collector_task_period_series_space_retention", "idx_collector_period_storage_terminal_cleanup", "idx_collector_period_storage_waiting_cursor", "idx_collector_runs_terminal_cleanup", "idx_collector_runs_terminal_cleanup_space", "idx_collector_write_targets_retention_space", "idx_collector_fetch_batch_instance_ref", "idx_collector_fetch_batch_target_ref", "idx_collector_fetch_batch_period_due", "idx_collector_fetch_batch_terminal_items_cleanup", "idx_collector_fetch_batch_terminal_items_cleanup_space", "idx_collector_fetch_batch_terminal_parent_cleanup", "idx_collector_fetch_batch_terminal_parent_cleanup_space", "idx_collector_fetch_retry_instance_active", "idx_collector_fetch_retry_period_due", "idx_collector_fetch_retry_period_failure", "idx_collector_fetch_retry_cleanup_succeeded_space", "idx_collector_fetch_retry_cleanup_permanent_space", "idx_collector_timer_period_batches_claim_request", "idx_collector_timer_period_batches_candidate", "idx_period_readiness_items_write_target"} {
 		var count int64
 		if err := mgr.db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?", index).Scan(&count).Error; err != nil {
 			t.Fatalf("query index %s: %v", index, err)
@@ -119,6 +119,31 @@ func TestApplySchemaCreatesCurrentTaskAndInstanceTables(t *testing.T) {
 		}
 		if count != 0 {
 			t.Fatalf("forbidden per-run snapshot table %s exists", forbidden)
+		}
+	}
+}
+
+func TestApplySchemaAddsImmutablePeriodPriorityColumnsToCurrentDatabase(t *testing.T) {
+	mgr, err := Open(&Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	oldSchema := strings.ReplaceAll(schema.AllSQL(), "    c_period_time DATETIME,\n    c_period_deadline_at DATETIME,\n", "")
+	oldSchema = strings.ReplaceAll(oldSchema, "    c_items_cleaned INTEGER NOT NULL DEFAULT 0,\n", "")
+	oldSchema = strings.ReplaceAll(oldSchema, "CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_items_cleanup\nON t_collector_fetch_batches (c_status, c_completed_at, c_id)\nWHERE c_items_cleaned = 0;\n", "")
+	oldSchema = strings.ReplaceAll(oldSchema, "CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_items_cleanup_space\nON t_collector_fetch_batches (c_space_id, c_status, c_completed_at, c_id)\nWHERE c_items_cleaned = 0;\n", "")
+	oldSchema = strings.ReplaceAll(oldSchema, "CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_parent_cleanup\nON t_collector_fetch_batches (c_status, c_completed_at, c_id)\nWHERE c_items_cleaned = 1;\n", "")
+	oldSchema = strings.ReplaceAll(oldSchema, "CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_terminal_parent_cleanup_space\nON t_collector_fetch_batches (c_space_id, c_status, c_completed_at, c_id)\nWHERE c_items_cleaned = 1;\n", "")
+	oldSchema = strings.ReplaceAll(oldSchema, "CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_period_due\nON t_collector_fetch_batches (c_space_id, c_status, c_period_deadline_at, c_deadline_at);\n", "")
+	oldSchema = strings.ReplaceAll(oldSchema, "CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_period_due\nON t_collector_fetch_retry_items (c_space_id, c_status, c_period_deadline_at, c_next_retry_at);\n", "")
+	require.NoError(t, mgr.ApplySchema(oldSchema))
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	for table, columns := range map[string][]string{
+		"t_collector_fetch_batches":     {"c_period_time", "c_period_deadline_at", "c_items_cleaned"},
+		"t_collector_fetch_retry_items": {"c_period_time", "c_period_deadline_at"},
+	} {
+		for _, column := range columns {
+			var count int64
+			require.NoError(t, mgr.db.Raw("SELECT count(*) FROM pragma_table_info(?) WHERE name = ?", table, column).Scan(&count).Error)
+			require.EqualValues(t, 1, count, "%s.%s should be added without discarding the existing database", table, column)
 		}
 	}
 }

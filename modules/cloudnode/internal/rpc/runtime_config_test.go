@@ -42,6 +42,7 @@ func TestManagedEnvironmentAcceptsMarketIdentityKeys(t *testing.T) {
 
 func TestManagedEnvironmentAllowsStockCNRouteKeys(t *testing.T) {
 	for _, key := range []string{
+		"MOOX_MARKET_FETCH_SUBJECT_COUNT",
 		"MOOX_MARKET_FETCH_PROVIDER_CHAIN",
 		"MOOX_MARKET_FETCH_ROUTE_VERSION",
 		"MOOX_MARKET_FETCH_GROUP_ID",
@@ -51,6 +52,34 @@ func TestManagedEnvironmentAllowsStockCNRouteKeys(t *testing.T) {
 	} {
 		_, ok := managedEnvironmentKeys[key]
 		require.True(t, ok, "missing managed environment key %s", key)
+	}
+}
+
+func TestAssignmentRuntimeMetadataRequiresExplicitIdentityAndCount(t *testing.T) {
+	metadata, err := assignmentRuntimeMetadata(map[string]string{
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment-hash",
+		"MOOX_MARKET_FETCH_SUBJECT_COUNT":   "42",
+		"MOOX_MARKET_FETCH_BINDING_HASH":    "binding-hash",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "assignment-hash", metadata["assignment_hash"])
+	require.Equal(t, 42, metadata["assignment_count"])
+	require.Equal(t, "binding-hash", metadata["binding_hash"])
+
+	metadata, err = assignmentRuntimeMetadata(map[string]string{"MOOX_FETCH_TIMEOUT_SECONDS": "60"})
+	require.NoError(t, err)
+	require.Nil(t, metadata, "timer-only patches must not restore stale assignment metadata")
+}
+
+func TestAssignmentRuntimeMetadataRejectsIncompleteOrInvalidIdentity(t *testing.T) {
+	for _, managed := range []map[string]string{
+		{"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment-hash"},
+		{"MOOX_MARKET_FETCH_SUBJECT_COUNT": "1"},
+		{"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment-hash", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "-1"},
+		{"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment-hash", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "not-a-number"},
+	} {
+		_, err := assignmentRuntimeMetadata(managed)
+		require.Error(t, err, "managed=%v", managed)
 	}
 }
 

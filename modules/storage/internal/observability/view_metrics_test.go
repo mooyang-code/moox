@@ -32,6 +32,28 @@ func TestViewMetricsRecordFixedOutcomeLabels(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.deriveInFlight))
 }
 
+func TestViewMetricsObserveCapacityScanQueueAndPermanentViewOverflow(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewViewMetrics(registry)
+	require.NoError(t, err)
+
+	metrics.ObserveCapacityScanQueueDelay(17 * time.Minute)
+	metrics.SetCapacityScanOldestOverdue(3 * time.Minute)
+	metrics.SetPermanentViewCapacityOverLimitCount(2)
+
+	assert.Equal(t, float64(2), testutil.ToFloat64(metrics.permanentViewCapacityOverLimit))
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		switch family.GetName() {
+		case "moox_storage_view_capacity_scan_queue_delay_seconds":
+			assert.Equal(t, uint64(1), family.GetMetric()[0].GetHistogram().GetSampleCount())
+		case "moox_storage_view_capacity_scan_oldest_overdue_seconds":
+			assert.GreaterOrEqual(t, family.GetMetric()[0].GetGauge().GetValue(), 180.0)
+		}
+	}
+}
+
 func TestViewMetricsExposeCoreDatasetOutputOnly(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewViewMetrics(registry)

@@ -2,6 +2,30 @@
 
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS t_collector_publish_leases (
+    c_space_id TEXT NOT NULL PRIMARY KEY,
+    c_lease_id TEXT NOT NULL DEFAULT '',
+    c_holder_id TEXT NOT NULL DEFAULT '',
+    c_fencing_token INTEGER NOT NULL DEFAULT 0,
+    c_expires_at_unix_ms INTEGER NOT NULL DEFAULT 0,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_fencing_token >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS t_collector_publish_operations (
+    c_space_id TEXT NOT NULL,
+    c_operation_id TEXT NOT NULL,
+    c_lease_id TEXT NOT NULL,
+    c_fencing_token INTEGER NOT NULL,
+    c_expires_at_unix_ms INTEGER NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_operation_id),
+    CHECK (c_fencing_token > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_collector_publish_operations_expiry
+ON t_collector_publish_operations (c_space_id, c_expires_at_unix_ms);
+
 -- ************ 平台空间表 ************
 CREATE TABLE IF NOT EXISTS t_spaces (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

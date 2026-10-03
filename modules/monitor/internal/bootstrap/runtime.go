@@ -32,6 +32,7 @@ type Runtime struct {
 	MetricsReporterReady     atomic.Bool
 	observabilityIngestError atomic.Value
 	observabilityWriteError  atomic.Value
+	writeStateSequence       atomic.Int64
 	observabilityWriteFailed atomic.Int64
 	observabilityWriteOK     atomic.Int64
 	hostWriteError           atomic.Value
@@ -46,30 +47,41 @@ func (r *Runtime) recordObservabilityWriteFailure(err error) {
 	if r == nil || err == nil {
 		return
 	}
-	r.observabilityWriteFailed.Store(time.Now().UTC().UnixNano())
+	sequence := r.writeStateSequence.Add(1)
 	r.observabilityWriteError.Store(sanitizedMetricsError(err))
+	storeWriteStateSequence(&r.observabilityWriteFailed, sequence)
 }
 
 func (r *Runtime) recordObservabilityWriteSuccess() {
 	if r == nil {
 		return
 	}
-	r.observabilityWriteOK.Store(time.Now().UTC().UnixNano())
+	storeWriteStateSequence(&r.observabilityWriteOK, r.writeStateSequence.Add(1))
 }
 
 func (r *Runtime) recordHostWriteFailure(err error) {
 	if r == nil || err == nil {
 		return
 	}
-	r.hostWriteFailed.Store(time.Now().UTC().UnixNano())
+	sequence := r.writeStateSequence.Add(1)
 	r.hostWriteError.Store(sanitizedMetricsError(err))
+	storeWriteStateSequence(&r.hostWriteFailed, sequence)
 }
 
 func (r *Runtime) recordHostWriteSuccess() {
 	if r == nil {
 		return
 	}
-	r.hostWriteOK.Store(time.Now().UTC().UnixNano())
+	storeWriteStateSequence(&r.hostWriteOK, r.writeStateSequence.Add(1))
+}
+
+func storeWriteStateSequence(target *atomic.Int64, sequence int64) {
+	for {
+		current := target.Load()
+		if current >= sequence || target.CompareAndSwap(current, sequence) {
+			return
+		}
+	}
 }
 
 func (r *Runtime) observabilityWriteReady(now time.Time) (bool, string) {
@@ -82,8 +94,8 @@ func (r *Runtime) observabilityWriteReady(now time.Time) (bool, string) {
 	return writeStateReady(r.hostWriteFailed.Load(), r.hostWriteOK.Load(), &r.hostWriteError)
 }
 
-func writeStateReady(failedAt, succeededAt int64, messageValue *atomic.Value) (bool, string) {
-	if failedAt == 0 || succeededAt > failedAt {
+func writeStateReady(failedSequence, succeededSequence int64, messageValue *atomic.Value) (bool, string) {
+	if failedSequence == 0 || succeededSequence > failedSequence {
 		return true, ""
 	}
 	message, _ := messageValue.Load().(string)

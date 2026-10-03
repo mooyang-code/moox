@@ -544,7 +544,7 @@ func publishCompletionWithClient(ctx context.Context, req Request, payload proto
 	if subjectID == "" {
 		subjectID = req.BatchID
 	}
-	config := jetstream.ConfigFromEnv(nil, "moox-collector-market-fetch")
+	config := marketFetchEventBusConfig("moox-collector-market-fetch")
 	config.ConnectTimeout = completionConnectTimeout
 	var lastErr error
 	for attempt := 1; attempt <= completionConnectAttempts; attempt++ {

@@ -17,18 +17,19 @@ import (
 
 // Config is the root collector control-plane configuration.
 type Config struct {
-	SCFRegionBlacklists map[string][]string    `yaml:"scf_region_blacklists"`
-	Database            DatabaseConfig         `yaml:"database"`
-	CloudNode           CloudNodeConfig        `yaml:"cloudnode"`
-	Storage             StorageConfig          `yaml:"storage"`
-	CollectorRuntime    CollectorRuntimeConfig `yaml:"collector_runtime"`
-	StockCN             StockCNConfig          `yaml:"stockcn"`
-	PeriodReadiness     PeriodReadinessConfig  `yaml:"period_readiness"`
-	KlineResample       KlineResampleConfig    `yaml:"kline_resample"`
-	SysDeploy           SysDeployConfig        `yaml:"sysdeploy"`
-	Health              HealthConfig           `yaml:"health"`
-	DNS                 DNSConfig              `yaml:"dns"`
-	DNSResolver         DNSResolverConfig      `yaml:"dns_resolver"`
+	SCFRegionBlacklists map[string][]string      `yaml:"scf_region_blacklists"`
+	Database            DatabaseConfig           `yaml:"database"`
+	CloudNode           CloudNodeConfig          `yaml:"cloudnode"`
+	Storage             StorageConfig            `yaml:"storage"`
+	CollectorRuntime    CollectorRuntimeConfig   `yaml:"collector_runtime"`
+	CollectorRetention  CollectorRetentionConfig `yaml:"collector_retention"`
+	StockCN             StockCNConfig            `yaml:"stockcn"`
+	PeriodReadiness     PeriodReadinessConfig    `yaml:"period_readiness"`
+	KlineResample       KlineResampleConfig      `yaml:"kline_resample"`
+	SysDeploy           SysDeployConfig          `yaml:"sysdeploy"`
+	Health              HealthConfig             `yaml:"health"`
+	DNS                 DNSConfig                `yaml:"dns"`
+	DNSResolver         DNSResolverConfig        `yaml:"dns_resolver"`
 }
 
 // StockCNConfig carries the release-time capacity contract to the Collector
@@ -75,6 +76,32 @@ type CollectorRuntimeConfig struct {
 	NodeID        string `yaml:"node_id"`
 }
 
+// CollectorRetentionConfig bounds the process-level execution-history cleanup.
+type CollectorRetentionConfig struct {
+	MaintenanceInterval          string `yaml:"maintenance_interval"`
+	MaintenanceTimeout           string `yaml:"maintenance_timeout"`
+	MaxRowsPerPass               int    `yaml:"max_rows_per_pass"`
+	ExecutionDetailRetention     string `yaml:"execution_detail_retention"`
+	ScheduledRunSummaryRetention string `yaml:"scheduled_run_summary_retention"`
+	TerminalRetryRetention       string `yaml:"terminal_retry_retention"`
+	PeriodSnapshotRetention      string `yaml:"period_snapshot_retention"`
+}
+
+func (c CollectorRetentionConfig) interval() time.Duration {
+	value, _ := time.ParseDuration(c.MaintenanceInterval)
+	return value
+}
+
+func (c CollectorRetentionConfig) timeout() time.Duration {
+	value, _ := time.ParseDuration(c.MaintenanceTimeout)
+	return value
+}
+
+func (c CollectorRetentionConfig) duration(value string) time.Duration {
+	parsed, _ := time.ParseDuration(value)
+	return parsed
+}
+
 // PeriodReadinessConfig controls the durable Collector period completion
 // projection and its retry/retention loops.
 type PeriodReadinessConfig struct {
@@ -112,6 +139,7 @@ type SysDeployConfig struct {
 type ServiceAuthConfig struct {
 	AccessKey     string `yaml:"access_key"`
 	SecretKey     string `yaml:"secret_key"`
+	Caller        string `yaml:"caller"`
 	TargetNode    string `yaml:"target_node"`
 	CAFile        string `yaml:"ca_file"`
 	CAPEMBase64   string `yaml:"ca_pem_base64"`
@@ -169,6 +197,12 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateKlineResample(); err != nil {
 		return nil, err
 	}
+	if err := cfg.validatePeriodReadiness(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateCollectorRetention(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -187,6 +221,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
 		c.SysDeploy.ServiceAuth.SecretKey = v
+	}
+	if v := os.Getenv("MOOX_GATEWAY_CALLER"); v != "" {
+		c.SysDeploy.ServiceAuth.Caller = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
 		c.SysDeploy.ServiceAuth.CAFile = v
@@ -336,6 +373,43 @@ func (c *Config) validateKlineResample() error {
 	return nil
 }
 
+func (c *Config) validateCollectorRetention() error {
+	retention := c.CollectorRetention
+	interval, err := time.ParseDuration(strings.TrimSpace(retention.MaintenanceInterval))
+	if err != nil || interval <= 0 || interval > 24*time.Hour {
+		return fmt.Errorf("collector_retention.maintenance_interval must be greater than 0 and at most 24h")
+	}
+	timeout, err := time.ParseDuration(strings.TrimSpace(retention.MaintenanceTimeout))
+	if err != nil || timeout <= 0 || timeout > interval {
+		return fmt.Errorf("collector_retention.maintenance_timeout must be positive and not exceed maintenance_interval")
+	}
+	if retention.MaxRowsPerPass < 9 || retention.MaxRowsPerPass > 50000 {
+		return fmt.Errorf("collector_retention.max_rows_per_pass must be between 9 and 50000")
+	}
+	for name, raw := range map[string]string{
+		"execution_detail_retention":      retention.ExecutionDetailRetention,
+		"scheduled_run_summary_retention": retention.ScheduledRunSummaryRetention,
+		"terminal_retry_retention":        retention.TerminalRetryRetention,
+		"period_snapshot_retention":       retention.PeriodSnapshotRetention,
+	} {
+		duration, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil || duration <= 0 || duration > 365*24*time.Hour {
+			return fmt.Errorf("collector_retention.%s must be greater than 0 and at most 365 days", name)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validatePeriodReadiness() error {
+	if c.PeriodReadiness.ItemRetention < 1 {
+		return fmt.Errorf("period_readiness.item_retention must be positive")
+	}
+	if c.PeriodReadiness.ParentRetention <= 0 || c.PeriodReadiness.ParentRetention > 365*24*time.Hour {
+		return fmt.Errorf("period_readiness.parent_retention must be greater than 0 and at most 365 days")
+	}
+	return nil
+}
+
 func isPublicDNSResolverTarget(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme != "ip" || parsed.User != nil || parsed.Hostname() == "" || parsed.Port() == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -407,6 +481,11 @@ func Default() *Config {
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
+		},
+		CollectorRetention: CollectorRetentionConfig{
+			MaintenanceInterval: "1m", MaintenanceTimeout: "45s", MaxRowsPerPass: 50000,
+			ExecutionDetailRetention: "24h", ScheduledRunSummaryRetention: "720h",
+			TerminalRetryRetention: "168h", PeriodSnapshotRetention: "720h",
 		},
 		KlineResample: KlineResampleConfig{
 			Enabled: false, ScanTimeout: 30 * time.Second, WorkerConcurrency: 2, MaxClaimsPerTick: 100,

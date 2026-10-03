@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/publishlease"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -23,6 +24,8 @@ const (
 	// timeout consume the context used by the remaining retries.
 	nodeBatchItemTimeout = 16 * time.Minute
 )
+
+var errNodeBatchPublishSuperseded = errors.New("node batch publish was superseded")
 
 // StartNodeBatchRunner recovers interrupted work and starts the SQLite-backed
 // node batch loop. Startup recovery is synchronous so failures stop bootstrap.
@@ -48,6 +51,20 @@ func (s *Service) StartNodeBatchRunner(ctx context.Context, batchSize int, pollI
 	if requeued > 0 {
 		log.InfoContextf(ctx, "[CloudNode] requeued interrupted node batch items count=%d", requeued)
 	}
+	recoveredItems, err := s.catalog.RecoverFailedNodeBatchMutationClaims(recoveryCtx)
+	if err != nil {
+		return fmt.Errorf("recover failed node batch mutation claims: %w", err)
+	}
+	if recoveredItems > 0 {
+		log.InfoContextf(ctx, "[CloudNode] recovered failed node mutation items for reconciliation count=%d", recoveredItems)
+	}
+	repairedClaims, err := s.catalog.ReleaseTerminalNodeBatchClaims(recoveryCtx)
+	if err != nil {
+		return fmt.Errorf("repair terminal node batch claims: %w", err)
+	}
+	if repairedClaims > 0 {
+		log.InfoContextf(ctx, "[CloudNode] repaired successful node batch mutation claims count=%d", repairedClaims)
+	}
 	go s.runNodeBatchLoop(ctx, batchSize, pollInterval)
 	return nil
 }
@@ -59,6 +76,7 @@ func (s *Service) runNodeBatchLoop(ctx context.Context, batchSize int, pollInter
 			return
 		default:
 		}
+		s.releasePendingRecoveredPublishLeases(ctx, batchSize)
 
 		items, err := s.catalog.TakePendingNodeBatchItems(ctx, batchSize)
 		if err != nil {
@@ -114,7 +132,8 @@ func (s *Service) runTakenNodeBatch(ctx context.Context, items []store.NodeBatch
 		operation := operations[item.SpaceID+"\x00"+item.JobID]
 		handlers = append(handlers, func() error {
 			executeCtx, cancel := context.WithTimeout(ctx, nodeBatchItemTimeout)
-			summary, executeErr := s.dispatchNodeBatchItemWithRetry(executeCtx, item, operation)
+			executeCtx = withNodeBatchDurableOperation(executeCtx)
+			summary, executeErr := s.dispatchNodeBatchItemWithRetry(executeCtx, &item, operation)
 			cancel()
 			if ctx.Err() != nil && (errors.Is(executeErr, context.Canceled) || errors.Is(executeErr, context.DeadlineExceeded)) {
 				return fmt.Errorf(
@@ -125,6 +144,18 @@ func (s *Service) runTakenNodeBatch(ctx context.Context, items []store.NodeBatch
 
 			completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), nodeBatchCompletionTimeout)
 			defer completeCancel()
+			if nodeBatchMutationOperation(operation) && !errors.Is(executeErr, errNodeBatchPublishSuperseded) &&
+				(errors.Is(executeErr, errNodeMutationReconciliationRequired) || errors.Is(executeErr, store.ErrNodeMutationClaimed) || item.ResumeClaim && executeErr != nil) {
+				if err := s.catalog.RequireNodeBatchItemReconciliation(
+					completeCtx, item.SpaceID, item.JobID, item.ItemID, executeErr.Error(),
+				); err != nil {
+					return fmt.Errorf(
+						"require node batch reconciliation space=%s job=%s item=%s node=%s: %w",
+						item.SpaceID, item.JobID, item.ItemID, item.NodeID, err,
+					)
+				}
+				return nil
+			}
 			if err := s.catalog.CompleteNodeBatchItem(
 				completeCtx,
 				item.SpaceID,
@@ -138,6 +169,11 @@ func (s *Service) runTakenNodeBatch(ctx context.Context, items []store.NodeBatch
 					item.SpaceID, item.JobID, item.ItemID, item.NodeID, err,
 				)
 			}
+			if item.PublishLeaseRecoveryOwned {
+				if err := s.releaseRecoveredPublishLease(completeCtx, &item, operation); err != nil {
+					log.WarnContextf(completeCtx, "[CloudNode] completed item but recovery lease release is pending space=%s job=%s item=%s: %v", item.SpaceID, item.JobID, item.ItemID, err)
+				}
+			}
 			return nil
 		})
 	}
@@ -146,16 +182,43 @@ func (s *Service) runTakenNodeBatch(ctx context.Context, items []store.NodeBatch
 
 func (s *Service) dispatchNodeBatchItemWithRetry(
 	ctx context.Context,
-	item store.NodeBatchItem,
+	item *store.NodeBatchItem,
 	operation string,
 ) (string, error) {
 	var summary string
 	var err error
-	for attempt := 1; attempt <= nodeBatchProviderAttempts; attempt++ {
+	ambiguousMutation := false
+	takeoverAttempted := false
+	for attempt := 1; attempt <= nodeBatchProviderAttempts; {
 		attemptCtx, cancel := context.WithTimeout(ctx, scfOperationTimeout)
 		summary, err = s.dispatchNodeBatchItem(attemptCtx, item, operation)
 		cancel()
-		if err == nil || !isTransientSCFProviderError(err) || attempt == nodeBatchProviderAttempts {
+		if errors.Is(err, errStaleCollectorPublishFenceBeforeOperation) {
+			if takeoverAttempted {
+				return summary, fmt.Errorf("%w: recovered publish lease was stale again before Provider operation: %w", errNodeMutationReconciliationRequired, err)
+			}
+			takeoverAttempted = true
+			recoveryCtx, recoveryCancel := context.WithTimeout(ctx, collectorPublishOperationRequestLimit)
+			recoveryErr := s.recoverStaleNodeBatchPublishLease(recoveryCtx, item, operation)
+			recoveryCancel()
+			if recoveryErr != nil {
+				if errors.Is(recoveryErr, publishlease.ErrLeaseSuperseded) {
+					return summary, fmt.Errorf("%w: %w", errNodeBatchPublishSuperseded, recoveryErr)
+				}
+				return summary, fmt.Errorf("%w: recover stale Collector publish lease: %w", errNodeMutationReconciliationRequired, recoveryErr)
+			}
+			continue
+		}
+		if nodeBatchMutationOperation(operation) && isAmbiguousSCFProviderOutcome(err) {
+			ambiguousMutation = true
+		}
+		if err == nil {
+			return summary, err
+		}
+		if !isTransientSCFProviderError(err) || attempt == nodeBatchProviderAttempts {
+			if ambiguousMutation {
+				return summary, fmt.Errorf("%w: %w", errNodeMutationReconciliationRequired, err)
+			}
 			return summary, err
 		}
 		if ctx.Err() != nil {
@@ -171,10 +234,98 @@ func (s *Service) dispatchNodeBatchItemWithRetry(
 			item.SpaceID, item.JobID, item.ItemID, item.NodeID, attempt, nodeBatchProviderAttempts, delay, err,
 		)
 		if !waitNodeBatchPoll(ctx, delay) {
+			if ambiguousMutation {
+				return summary, fmt.Errorf("%w: %w", errNodeMutationReconciliationRequired, ctx.Err())
+			}
 			return summary, ctx.Err()
 		}
+		attempt++
 	}
 	return summary, err
+}
+
+func nodeBatchMutationOperation(operation string) bool {
+	return operation == nodeBatchOperationCreate || operation == nodeBatchOperationDeploy ||
+		operation == nodeBatchOperationDelete || operation == nodeBatchOperationRuntimeConfig
+}
+
+func (s *Service) recoverStaleNodeBatchPublishLease(ctx context.Context, item *store.NodeBatchItem, operation string) error {
+	if s.publishLeaseValidator == nil {
+		return fmt.Errorf("collector publish lease control plane is unavailable")
+	}
+	fence, required, err := s.nodeBatchPublishFence(ctx, *item, operation)
+	if err != nil {
+		return err
+	}
+	if !required {
+		return fmt.Errorf("stale publish lease was reported for an unfenced node batch item")
+	}
+	holderID := fmt.Sprintf("cloudnode-recovery:%s:%s", item.JobID, item.ItemID)
+	lease, err := s.publishLeaseValidator.AcquireLease(ctx, item.SpaceID, holderID, fence.fencingToken)
+	if err != nil {
+		return err
+	}
+	updated, err := s.catalog.ReplaceNodeBatchItemPublishFence(
+		ctx, item.SpaceID, item.JobID, item.ItemID, fence.leaseID, fence.fencingToken, lease.LeaseID, lease.FencingToken,
+	)
+	if err != nil {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), collectorPublishOperationRequestLimit)
+		releaseErr := s.publishLeaseValidator.ReleaseLease(releaseCtx, lease)
+		cancel()
+		if errors.Is(releaseErr, publishlease.ErrLeaseStale) {
+			releaseErr = nil
+		}
+		return errors.Join(err, releaseErr)
+	}
+	updated.ResumeClaim = item.ResumeClaim
+	*item = *updated
+	return nil
+}
+
+func (s *Service) releaseRecoveredPublishLease(ctx context.Context, item *store.NodeBatchItem, operation string) error {
+	if item == nil || !item.PublishLeaseRecoveryOwned {
+		return nil
+	}
+	if s.publishLeaseValidator == nil {
+		return fmt.Errorf("collector publish lease control plane is unavailable")
+	}
+	fence, err := nodeBatchRequestPublishFence(item, operation)
+	if err != nil {
+		return err
+	}
+	lease := &publishlease.Lease{SpaceID: item.SpaceID, LeaseID: fence.leaseID, FencingToken: fence.fencingToken}
+	err = s.publishLeaseValidator.ReleaseLease(ctx, lease)
+	if errors.Is(err, publishlease.ErrLeaseStale) {
+		err = nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.catalog.MarkNodeBatchItemPublishLeaseReleased(ctx, item.SpaceID, item.JobID, item.ItemID, lease.LeaseID, lease.FencingToken)
+}
+
+func (s *Service) releasePendingRecoveredPublishLeases(ctx context.Context, limit int) {
+	if s.publishLeaseValidator == nil {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nodeBatchCompletionTimeout)
+	defer cancel()
+	items, err := s.catalog.ListTerminalNodeBatchItemsForPublishLeaseRelease(releaseCtx, limit)
+	if err != nil {
+		log.WarnContextf(ctx, "[CloudNode] list completed recovery lease releases failed: %v", err)
+		return
+	}
+	for i := range items {
+		item := &items[i]
+		aggregate, err := s.catalog.GetNodeBatch(releaseCtx, item.SpaceID, item.JobID)
+		if err != nil || aggregate == nil {
+			log.WarnContextf(ctx, "[CloudNode] load completed batch for recovery lease release failed space=%s job=%s item=%s: %v", item.SpaceID, item.JobID, item.ItemID, err)
+			continue
+		}
+		if err := s.releaseRecoveredPublishLease(releaseCtx, item, aggregate.Job.Operation); err != nil {
+			log.WarnContextf(ctx, "[CloudNode] recovery-owned publish lease release remains pending space=%s job=%s item=%s: %v", item.SpaceID, item.JobID, item.ItemID, err)
+		}
+	}
 }
 
 func isTransientSCFProviderError(err error) bool {
@@ -211,11 +362,40 @@ func isTransientSCFProviderError(err error) bool {
 
 func (s *Service) dispatchNodeBatchItem(
 	ctx context.Context,
-	item store.NodeBatchItem,
+	item *store.NodeBatchItem,
 	operation string,
 ) (string, error) {
+	if item == nil {
+		return "", fmt.Errorf("node batch item is required")
+	}
+	fence, required, err := s.nodeBatchPublishFence(ctx, *item, operation)
+	if err != nil {
+		return "", err
+	}
+	if required {
+		operationCtx := ctx
+		if item.PublishLeaseRecoveryOwned {
+			operationCtx = withRecoveredPublishLease(ctx, &publishlease.Lease{
+				SpaceID: item.SpaceID, LeaseID: fence.leaseID, FencingToken: fence.fencingToken,
+			})
+		}
+		return s.withCollectorPublishOperation(operationCtx, item.SpaceID, fence, func(mutationCtx context.Context) (string, error) {
+			return s.dispatchNodeBatchItemUnfenced(mutationCtx, item, operation)
+		})
+	}
+	return s.dispatchNodeBatchItemUnfenced(ctx, item, operation)
+}
+
+func (s *Service) dispatchNodeBatchItemUnfenced(
+	ctx context.Context,
+	item *store.NodeBatchItem,
+	operation string,
+) (string, error) {
+	if item == nil {
+		return "", fmt.Errorf("node batch item is required")
+	}
 	if s.executeNodeBatchItem != nil {
-		return s.executeNodeBatchItem(ctx, item)
+		return s.executeNodeBatchItem(ctx, *item)
 	}
 	switch operation {
 	case nodeBatchOperationCreate:
@@ -228,6 +408,9 @@ func (s *Service) dispatchNodeBatchItem(
 		request := &pb.NodeDeployItem{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
 			return "", fmt.Errorf("decode deploy node item: %w", err)
+		}
+		if strings.TrimSpace(request.GetLifecycleId()) == "" || strings.TrimSpace(request.GetOperationId()) == "" {
+			return "", fmt.Errorf("deploy item lifecycle identity is missing; resubmit the deployment")
 		}
 		return s.executeDeployNodeItem(ctx, item.SpaceID, request)
 	case nodeBatchOperationDelete:

@@ -311,7 +311,7 @@ func isTradeOwnerOnlyMethod(serviceID, method string) bool {
 
 func isSpaceScopedService(serviceID string) bool {
 	switch canonicalAdminSegment(serviceID) {
-	case "tradeconsole", "strategy", "strategymgr", "mooxstrategy", "collectmgr", "collector":
+	case "tradeconsole", "strategy", "strategymgr", "mooxstrategy", "collectmgr", "collector", "cloudnode":
 		return true
 	default:
 		return false
@@ -380,20 +380,22 @@ func (hr *HTTPRouter) authorizeTradeConsoleRequest(ctx context.Context, r *http.
 }
 
 func isMachineOnlyAdminMethod(serviceID, method string) bool {
-	if canonicalAdminSegment(method) != "getsecretvalue" {
-		return false
-	}
 	switch canonicalAdminSegment(serviceID) {
 	case "secret", "secretmgr", "trpcmooxopssecretmgr":
-		return true
-	default:
-		return false
+		return canonicalAdminSegment(method) == "getsecretvalue"
+	case "publishlease", "collectorpublishlease", "trpcmooxadmincollectorpublishlease":
+		// Browser deletion still needs Acquire/Renew/Release lease access.
+		// Validation and operation claims belong only to machine callers.
+		switch canonicalAdminSegment(method) {
+		case "validatecollectorpublishlease", "begincollectorpublishoperation", "renewcollectorpublishoperation", "endcollectorpublishoperation":
+			return true
+		}
 	}
+	return false
 }
 
 func isMachineOnlyResolvedMethod(detail ServiceDetail, method string) bool {
-	return canonicalAdminSegment(method) == "getsecretvalue" &&
-		canonicalAdminSegment(detail.Path) == "trpcmooxopssecretmgr"
+	return isMachineOnlyAdminMethod(detail.Path, method)
 }
 
 func isInternalStorageService(serviceID string) bool {

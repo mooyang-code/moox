@@ -69,6 +69,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 
 	// Setup is intentionally registered only on its dedicated loopback listener.
 	adminpb.RegisterSetupService(s.Service("trpc.moox.admin.Setup"), setuprpc.NewService(services.Setup))
+	adminpb.RegisterCollectorPublishLeaseService(s.Service("trpc.moox.admin.CollectorPublishLease"), services.CollectorPublishLease)
 
 	log.Info("TRPC 服务注册完成")
 	return nil

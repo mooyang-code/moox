@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"maps"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -1052,6 +1054,7 @@ type fakeCollectorFleetAPI struct {
 	nodes       []adminclient.CloudNode
 	createCalls [][]adminclient.NodeCreateItem
 	deployCalls [][]adminclient.NodeDeployItem
+	createErr   error
 }
 
 func (f *fakeCollectorFleetAPI) ListCloudNodes(context.Context, adminclient.CloudNodeListFilter) ([]adminclient.CloudNode, error) {
@@ -1060,6 +1063,9 @@ func (f *fakeCollectorFleetAPI) ListCloudNodes(context.Context, adminclient.Clou
 
 func (f *fakeCollectorFleetAPI) SubmitCreateNodes(_ context.Context, items []adminclient.NodeCreateItem) (*adminclient.SubmitNodeBatchResponse, error) {
 	f.createCalls = append(f.createCalls, append([]adminclient.NodeCreateItem(nil), items...))
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	return &adminclient.SubmitNodeBatchResponse{
 		JobID:      fmt.Sprintf("create-%d", len(f.createCalls)),
 		Operation:  "NODE_BATCH_OPERATION_CREATE_NODES",
@@ -1114,6 +1120,200 @@ func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
 	assert.Equal(t, "default", summary.Namespace)
 	assert.Equal(t, 1, summary.TotalCount)
 	assert.Equal(t, []string{"legacy-default"}, summary.NodeIDs)
+}
+
+func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/admin/cloudnode/GetNodeList":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fetcher-1","node_type":"scf-event","biz_type":"market_fetcher","namespace":"default"}],"page":{"has_more":false}}`))
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"1","expires_at":"2026-10-03T12:02:00Z"}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	_, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
+		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: false,
+	})
+	require.ErrorContains(t, err, "requires --wait")
+	assert.Empty(t, calls, "the command must reject non-waiting deletion before reading targets or acquiring a lease")
+}
+
+func TestDeleteCollectorFunctionsAcquiresLeaseBeforeTargetSnapshot(t *testing.T) {
+	var calls []string
+	leaseHeld := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
+			leaseHeld = true
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
+		case "/api/admin/cloudnode/GetNodeList":
+			assert.True(t, leaseHeld, "target snapshot must be read inside the publish lease")
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
+		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
+			leaseHeld = false
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
+		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "nothing_to_delete", summary.Status)
+	assert.Equal(t, []string{
+		"/api/admin/publishlease/AcquireCollectorPublishLease",
+		"/api/admin/cloudnode/GetNodeList",
+		"/api/admin/publishlease/ReleaseCollectorPublishLease",
+	}, calls, "even an empty snapshot is protected and released under the lease")
+}
+
+func TestCleanupUnknownCanarySubmissionDoesNotTreatEmptyInventoryAsComplete(t *testing.T) {
+	var calls []string
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/admin/cloudnode/GetNodeList":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
+			cancel()
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+	client := adminclient.New(server.URL)
+
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, client, collectorPublishOptions{
+		SpaceID: "crypto", CloudAccountID: "account-1", Region: "ap-singapore", Namespace: "canary",
+		NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
+		FunctionNamePrefix: "r0123456789abcdef0123456789abcdef",
+	}, "", false, true)
+	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
+	assert.Equal(t, []string{"/api/admin/cloudnode/GetNodeList"}, calls, "an empty inventory is not proof that an ambiguous create job is settled; the prefix remains unsettled until caller cancellation")
+}
+
+func TestDeleteCollectorFunctionsHoldsLeaseUntilNodeBatchCompletes(t *testing.T) {
+	statusReads := 0
+	var sawFence bool
+	var released bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/admin/cloudnode/GetNodeList":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fetcher-1","node_type":"scf-event","biz_type":"market_fetcher","namespace":"default"}],"page":{"has_more":false}}`))
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
+		case "/api/admin/cloudnode/SubmitDeleteNodes":
+			var request struct {
+				LeaseID string `json:"collector_publish_lease_id"`
+				Token   int64  `json:"collector_publish_fencing_token"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			sawFence = request.LeaseID == "lease-1" && request.Token == 17
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-1","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
+		case "/api/admin/cloudnode/GetNodeBatchChange":
+			statusReads++
+			status := "NODE_BATCH_STATUS_RUNNING"
+			if statusReads > 1 {
+				status = "NODE_BATCH_STATUS_SUCCESS"
+			}
+			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":"delete-1","operation":"NODE_BATCH_OPERATION_DELETE_NODES","status":%q,"success_count":1,"total_count":1},"items":[]}`, status)
+		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
+			released = true
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
+		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "NODE_BATCH_STATUS_SUCCESS", summary.Status)
+	assert.True(t, sawFence)
+	assert.True(t, released)
+	assert.GreaterOrEqual(t, statusReads, 2)
+}
+
+func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testing.T) {
+	nodes := make([]adminclient.CloudNode, 170)
+	for index := range nodes {
+		nodes[index] = adminclient.CloudNode{NodeID: fmt.Sprintf("fetcher-%03d", index), Namespace: "default", NodeType: "scf-event", BizType: "market_fetcher"}
+	}
+	var submittedSizes []int
+	var statusReads = map[string]int{}
+	var released bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/admin/cloudnode/GetNodeList":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": nodes, "page": map[string]any{"has_more": false}})
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"stockcn","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
+		case "/api/admin/cloudnode/SubmitDeleteNodes":
+			var request struct {
+				NodeIDs []string `json:"node_ids"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			submittedSizes = append(submittedSizes, len(request.NodeIDs))
+			jobID := fmt.Sprintf("delete-%d", len(submittedSizes))
+			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job_id":%q,"operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":%d}`, jobID, len(request.NodeIDs))
+		case "/api/admin/cloudnode/GetNodeBatchChange":
+			var request struct {
+				JobID string `json:"job_id"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			statusReads[request.JobID]++
+			total := map[string]int{"delete-1": 100, "delete-2": 70}[request.JobID]
+			status := "NODE_BATCH_STATUS_SUCCESS"
+			failed, success := 0, total
+			if request.JobID == "delete-1" {
+				status, failed, success = "NODE_BATCH_STATUS_FAILED", 100, 0
+			} else if statusReads[request.JobID] == 1 {
+				status = "NODE_BATCH_STATUS_RUNNING"
+				success = 0
+			}
+			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":%q,"operation":"NODE_BATCH_OPERATION_DELETE_NODES","status":%q,"success_count":%d,"failed_count":%d,"total_count":%d},"items":[]}`, request.JobID, status, success, failed, total)
+		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
+			released = true
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
+		ControlURL: server.URL, SpaceID: "stockcn", Confirm: true, Wait: true,
+	})
+	require.ErrorContains(t, err, "delete-1 finished with status NODE_BATCH_STATUS_FAILED")
+	assert.Equal(t, []int{100, 70}, submittedSizes)
+	assert.Equal(t, "delete-1,delete-2", summary.JobID)
+	assert.Equal(t, 100, summary.FailedCount)
+	assert.Equal(t, 1, statusReads["delete-1"])
+	assert.GreaterOrEqual(t, statusReads["delete-2"], 2, "the second job must reach terminal status after the first fails")
+	assert.True(t, released, "release only after every accepted batch reaches terminal status")
 }
 
 func TestPublishSubmitReturnsAfterJobSubmission(t *testing.T) {
@@ -1203,6 +1403,68 @@ func TestPublishSubmitPartialFleetUpdatesExistingAndCreatesMissingSlots(t *testi
 	require.Len(t, api.createCalls, 1)
 	assert.Len(t, api.createCalls[0], 3)
 	assert.Equal(t, 1, api.createCalls[0][0].Metadata["index"])
+}
+
+func TestPublishSubmitRetainsAcceptedJobWhenLaterSubmissionIsAmbiguous(t *testing.T) {
+	nodes := []adminclient.CloudNode{{NodeID: "fleet-0", PackageID: "pkg-old"}, {}}
+	items := []adminclient.NodeCreateItem{{PackageID: "pkg-new"}, {PackageID: "pkg-new"}}
+	api := &fakeCollectorFleetAPI{createErr: io.EOF}
+
+	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{NodeCount: 2}, "pkg-new", items, nodes)
+
+	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
+	assert.Equal(t, "deploy-1", summary.JobID)
+	assert.Equal(t, "deploy_nodes,create_nodes", summary.Operation)
+	assert.Equal(t, 2, summary.TotalCount)
+}
+
+func TestWaitCollectorBatchChecksEveryJobAfterTerminalFailure(t *testing.T) {
+	var checked []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			JobID string `json:"job_id"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		checked = append(checked, request.JobID)
+		status := "NODE_BATCH_STATUS_SUCCESS"
+		if request.JobID == "job-failed" {
+			status = "NODE_BATCH_STATUS_FAILED"
+		}
+		_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":%q,"status":%q,"failed_count":1}}`, request.JobID, status)
+	}))
+	defer server.Close()
+
+	err := waitCollectorBatch(context.Background(), adminclient.New(server.URL), "job-failed,job-success")
+
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errCollectorBatchOutcomeUnknown)
+	assert.Equal(t, []string{"job-failed", "job-success"}, checked)
+}
+
+func TestWaitCollectorBatchCanceledReturnsUnknownOutcome(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := waitCollectorBatch(ctx, adminclient.New("http://127.0.0.1:1"), "job-pending")
+	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
+}
+
+func TestCollectorPublishUnknownSubmissionErrorsAreAmbiguous(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "gateway 503", err: fmt.Errorf("control returned HTTP 503 Service Unavailable"), want: true},
+		{name: "service 500", err: fmt.Errorf("SubmitCreateNodes: code 500: internal error"), want: true},
+		{name: "missing job id", err: fmt.Errorf("SubmitCreateNodes: empty job_id"), want: true},
+		{name: "malformed operation", err: fmt.Errorf("SubmitCreateNodes: operation: unknown enum"), want: true},
+		{name: "authorization rejection", err: fmt.Errorf("control returned HTTP 403 Forbidden"), want: false},
+		{name: "business rejection", err: fmt.Errorf("SubmitCreateNodes: code 409: lease stale"), want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, isAmbiguousCollectorPublishOutcome(test.err))
+		})
+	}
 }
 
 func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
@@ -1481,6 +1743,130 @@ func TestCollectorTimerDisablePatchesCoverEveryPublishedNode(t *testing.T) {
 	assert.Equal(t, "0 * * * * * *", patches[1].TimerCron)
 }
 
+func TestCollectorTimerAssignmentReadbackRequiresCompleteExactIdentity(t *testing.T) {
+	base := adminclient.CloudNode{
+		NodeID: "timer-1", PackageID: "package-7",
+		Metadata: map[string]any{
+			"assignment_hash": "assignment-a", "assignment_count": 12,
+			"binding_hash": "binding-a", "runtime_config_reconciled_at": "2026-10-03T00:00:00Z",
+		},
+	}
+	identity, ready := collectorTimerAssignmentFromNode(base, "package-7")
+	require.True(t, ready)
+	require.Equal(t, collectorTimerAssignment{NodeID: "timer-1", PackageID: "package-7", AssignmentHash: "assignment-a", BindingHash: "binding-a", AssignmentCount: 12}, identity)
+
+	for _, mutate := range []func(*adminclient.CloudNode){
+		func(node *adminclient.CloudNode) { node.PackageID = "package-new" },
+		func(node *adminclient.CloudNode) { delete(node.Metadata, "assignment_count") },
+		func(node *adminclient.CloudNode) { node.Metadata["assignment_count"] = 0 },
+		func(node *adminclient.CloudNode) { delete(node.Metadata, "assignment_hash") },
+		func(node *adminclient.CloudNode) { delete(node.Metadata, "binding_hash") },
+		func(node *adminclient.CloudNode) { delete(node.Metadata, "runtime_config_reconciled_at") },
+	} {
+		candidate := base
+		candidate.Metadata = maps.Clone(base.Metadata)
+		mutate(&candidate)
+		_, ready := collectorTimerAssignmentFromNode(candidate, "package-7")
+		require.False(t, ready, "candidate=%+v", candidate)
+	}
+}
+
+func TestCollectorTimerAssignmentsMatchFenceSnapshot(t *testing.T) {
+	want := map[string]collectorTimerAssignment{
+		"timer-1": {NodeID: "timer-1", PackageID: "package-7", AssignmentHash: "assignment-a", BindingHash: "binding-a", AssignmentCount: 12},
+	}
+	require.True(t, collectorTimerAssignmentsMatch(want, maps.Clone(want)))
+	changed := maps.Clone(want)
+	assignment := changed["timer-1"]
+	assignment.AssignmentHash = "assignment-b"
+	changed["timer-1"] = assignment
+	require.False(t, collectorTimerAssignmentsMatch(want, changed))
+	require.False(t, collectorTimerAssignmentsMatch(want, map[string]collectorTimerAssignment{}))
+}
+
+func TestHandoffCollectorPublishLeaseWaitsForAssignmentAndReacquiresHigherFence(t *testing.T) {
+	server, state := newStockCNHandoffTestServer(t, "assignment-a", "assignment-a", "assignment-a")
+	defer server.Close()
+	client := adminclient.New(server.URL)
+	baseCtx := context.Background()
+	_, guard, err := acquireCollectorPublishLease(baseCtx, client, "stockcn")
+	require.NoError(t, err)
+	fleets := []collectorPublishedTimerFleet{{
+		opts:      collectorPublishOptions{SpaceID: "stockcn", Region: "ap-guangzhou", Namespace: "default", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", NodeCount: 1, FunctionNamePrefix: "stock"},
+		packageID: "package-7",
+	}}
+
+	leaseCtx, assignments, err := handoffCollectorPublishLeaseForTimerAssignment(baseCtx, client, "stockcn", &guard, fleets)
+	require.NoError(t, err)
+	require.NotNil(t, leaseCtx)
+	require.Len(t, assignments, 1)
+	require.Equal(t, "assignment-a", assignments["timer-1"].AssignmentHash)
+	require.Equal(t, "package-7", fleets[0].nodes[0].PackageID)
+	require.Equal(t, int64(2), client.CollectorPublishFence().FencingToken)
+	assert.Equal(t, 2, state.acquireCount)
+	assert.True(t, state.firstLeaseReleasedBeforeSecondAcquire)
+	require.NoError(t, guard.Close())
+}
+
+func TestHandoffCollectorPublishLeaseRejectsChangedAssignmentWithoutRollbackAuthority(t *testing.T) {
+	server, _ := newStockCNHandoffTestServer(t, "assignment-a", "assignment-a", "assignment-b")
+	defer server.Close()
+	client := adminclient.New(server.URL)
+	baseCtx := context.Background()
+	_, guard, err := acquireCollectorPublishLease(baseCtx, client, "stockcn")
+	require.NoError(t, err)
+	fleets := []collectorPublishedTimerFleet{{
+		opts:      collectorPublishOptions{SpaceID: "stockcn", Region: "ap-guangzhou", Namespace: "default", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", NodeCount: 1, FunctionNamePrefix: "stock"},
+		packageID: "package-7",
+	}}
+
+	leaseCtx, _, err := handoffCollectorPublishLeaseForTimerAssignment(baseCtx, client, "stockcn", &guard, fleets)
+	require.ErrorIs(t, err, errCollectorPublishFenceChanged)
+	require.NotNil(t, leaseCtx)
+	require.NotNil(t, guard, "the new lease remains held for orderly release, but callers must not rollback across the changed assignment")
+	require.NoError(t, guard.Close())
+}
+
+type stockCNHandoffTestState struct {
+	acquireCount                          int
+	listCount                             int
+	releasedLeaseID                       string
+	firstLeaseReleasedBeforeSecondAcquire bool
+}
+
+func newStockCNHandoffTestServer(t *testing.T, assignmentHashes ...string) (*httptest.Server, *stockCNHandoffTestState) {
+	t.Helper()
+	state := &stockCNHandoffTestState{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/admin/publishlease/AcquireCollectorPublishLease":
+			state.acquireCount++
+			if state.acquireCount == 2 {
+				state.firstLeaseReleasedBeforeSecondAcquire = state.releasedLeaseID == "lease-1"
+			}
+			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"space_id":"stockcn","lease_id":"lease-%d","fencing_token":"%d","expires_at":"2026-10-03T20:02:00Z"}`, state.acquireCount, state.acquireCount)
+		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
+			var request struct {
+				LeaseID string `json:"lease_id"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			state.releasedLeaseID = request.LeaseID
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
+		case "/api/admin/cloudnode/GetNodeList":
+			state.listCount++
+			index := min(state.listCount-1, len(assignmentHashes)-1)
+			assignmentHash := assignmentHashes[index]
+			packageID := "package-7"
+			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"items":[{"node_id":"timer-1","package_id":%q,"region":"ap-guangzhou","namespace":"default","node_type":"scf-event","biz_type":"market_fetcher","trigger_type":"timer","function_name":"stock-ap-guangzhou-0","metadata":{"index":0,"assignment_hash":%q,"binding_hash":"binding-a","assignment_count":12,"runtime_config_reconciled_at":"2026-10-03T00:00:00Z"}}],"page":{"has_more":false}}`, packageID, assignmentHash)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+	return server, state
+}
+
 func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T) {
 	batchSizes := make([]int, 0, 3)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1502,6 +1888,41 @@ func TestSubmitCollectorTimerRuntimeConfigsBatchesAtCloudNodeLimit(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, []int{100, 100, 1}, batchSizes)
 	assert.Equal(t, []string{"job-1", "job-2", "job-3"}, jobs)
+}
+
+func TestSubmitCollectorTimerRuntimeConfigsRetainsAcceptedChunkOnAmbiguousNextChunk(t *testing.T) {
+	var submitCount, statusCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
+			submitCount++
+			if submitCount == 2 {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				require.NoError(t, err)
+				_ = conn.Close()
+				return
+			}
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"timer-job-1"}`))
+		case "/api/admin/cloudnode/GetNodeBatchChange":
+			statusCount++
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"timer-job-1","status":"NODE_BATCH_STATUS_SUCCESS"}}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+	patches := make([]collectorRuntimeConfigPatch, collectorRuntimeConfigBatchSize+1)
+	for index := range patches {
+		patches[index] = collectorRuntimeConfigPatch{NodeID: fmt.Sprintf("node-%03d", index)}
+	}
+
+	jobs, err := submitCollectorTimerRuntimeConfigs(context.Background(), adminclient.New(server.URL), patches)
+
+	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown)
+	assert.Equal(t, []string{"timer-job-1"}, jobs)
+	assert.Equal(t, 2, submitCount)
+	assert.Equal(t, 1, statusCount)
 }
 
 func TestBuildCollectorCreateNodeItemRejectsInvalidInflightOverride(t *testing.T) {
@@ -1593,44 +2014,15 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
 	writeMinimalSCFZip(t, zipPath, map[string]string{"main": "binary", "config.yaml": "system: {}\n", "certs/eventbus-ca.pem": string(ca), "sources/market/binance.yaml": "storage:\n  bindings:\n    spot:\n      auth_info: {app_id: moox-collector, app_key: ''}\n"})
 
-	uploadBase := ""
-	deployedEnvironments := make(chan map[string]string, 2)
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/admin/cloudnode/InitPackageUpload":
-			uploadBase = server.URL + "/cos-upload"
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"ret_info":   map[string]any{"code": 0, "msg": "ok"},
-				"package_id": "pkg-1",
-				"upload_url": uploadBase,
-			})
-		case "/cos-upload":
-			w.WriteHeader(http.StatusOK)
-		case "/api/admin/cloudnode/CompletePackageUpload":
-			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0, "msg": "ok"}})
-		case "/api/admin/cloudnode/SubmitDeployNodes":
-			var request struct {
-				Nodes []struct {
-					Environment map[string]string `json:"environment"`
-				} `json:"deployments"`
-			}
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
-			require.Len(t, request.Nodes, 1)
-			deployedEnvironments <- request.Nodes[0].Environment
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"ret_info":    map[string]any{"code": 0, "msg": "ok"},
-				"job_id":      "node-batch-1",
-				"operation":   "NODE_BATCH_OPERATION_DEPLOY_NODES",
-				"total_count": 1,
-			})
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		t.Errorf("canary-blocked deployment made unexpected control-plane request: %s", r.URL.Path)
+		http.Error(w, "control-plane request must be blocked", http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
-	summary, err := deployCollectorFunction(context.Background(), collectorDeployOptions{
+	_, err = deployCollectorFunction(context.Background(), collectorDeployOptions{
 		ControlURL:             server.URL,
 		SpaceID:                "stockcn",
 		CloudAccountID:         "account-a",
@@ -1638,24 +2030,8 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 		ZipPath:                zipPath,
 		EventBusCredentialFile: credentialFile,
 	})
-	require.NoError(t, err)
-	assert.Equal(t, zipPath, summary.ZipPath)
-	assert.Equal(t, "pkg-1", summary.PackageID)
-	assert.Equal(t, "node-batch-1", summary.JobID)
-	assert.Equal(t, "deploy_nodes", summary.Operation)
-	assert.Equal(t, 1, summary.TotalCount)
-	require.Contains(t, <-deployedEnvironments, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
-	t.Run("preserves remote routes when absent locally", func(t *testing.T) {
-		for _, key := range []string{"MOOX_STORAGE_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "MOOX_GATEWAY_NODE_ID", "MOOX_GATEWAY_TARGET_NODE", "MOOX_SCF_STORAGE_GATEWAY_NODE_ID", "MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"} {
-			t.Setenv(key, "")
-		}
-		_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{ControlURL: server.URL, CloudAccountID: "account-a", NodeID: "node-1", ZipPath: zipPath, EventBusCredentialFile: credentialFile})
-		require.NoError(t, err)
-		deployedEnvironment := <-deployedEnvironments
-		for _, key := range []string{"MOOX_STORAGE_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "MOOX_GATEWAY_NODE_ID", "MOOX_GATEWAY_TARGET_NODE", "MOOX_GATEWAY_SERVICE_KEY_ID", "MOOX_GATEWAY_SERVICE_SECRET_KEY"} {
-			assert.NotContains(t, deployedEnvironment, key, "missing local values must not replace complete remote environment")
-		}
-	})
+	require.ErrorContains(t, err, "canary verification contract is unavailable")
+	require.Zero(t, requests, "deployment must stop before package upload or node mutation")
 }
 
 func TestDeployCollectorFunctionBudgetAndMissingMasterFailBeforeUpload(t *testing.T) {

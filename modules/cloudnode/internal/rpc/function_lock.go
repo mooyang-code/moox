@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
@@ -39,4 +40,30 @@ func lockSCFNode(spaceID, nodeID string) func() {
 	scfNodeLocks.mu.Unlock()
 	lock.Lock()
 	return lock.Unlock
+}
+
+func lockSCFNodes(spaceID string, nodeIDs []string) func() {
+	ordered := orderedUniqueSCFNodeIDs(nodeIDs)
+	unlock := make([]func(), 0, len(ordered))
+	for _, nodeID := range ordered {
+		unlock = append(unlock, lockSCFNode(spaceID, nodeID))
+	}
+	return func() {
+		for i := len(unlock) - 1; i >= 0; i-- {
+			unlock[i]()
+		}
+	}
+}
+
+func orderedUniqueSCFNodeIDs(nodeIDs []string) []string {
+	ordered := append([]string(nil), nodeIDs...)
+	sort.Strings(ordered)
+	unique := ordered[:0]
+	for _, nodeID := range ordered {
+		if nodeID == "" || (len(unique) > 0 && unique[len(unique)-1] == nodeID) {
+			continue
+		}
+		unique = append(unique, nodeID)
+	}
+	return unique
 }

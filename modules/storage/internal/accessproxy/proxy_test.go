@@ -3,6 +3,7 @@ package accessproxy
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func inboundContext(t *testing.T, credentials gatewayauth.Credentials, now time.
 	msg.WithSerializationType(codec.SerializationTypePB)
 	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
 		Method: http.MethodPost, Path: rpcName, TargetNode: "access-nj",
-		Callee: PrimaryStoreName, Func: "UpsertFields", Body: body,
+		Callee: PrimaryStoreName, Func: rpcName[strings.LastIndex(rpcName, "/")+1:], Body: body,
 	}, now)
 	require.NoError(t, err)
 	metadata := codec.MetaData{}
@@ -72,6 +73,24 @@ func inboundContext(t *testing.T, credentials gatewayauth.Credentials, now time.
 	}
 	msg.WithServerMetaData(metadata)
 	return ctx
+}
+
+func TestProxyAllowsCollectorPeriodMethods(t *testing.T) {
+	for _, method := range []string{"EnsureDatasetPeriod", "CommitTimeSeriesBatch", "RecordDatasetPeriodFailures", "GetDatasetPeriodStatus"} {
+		t.Run(method, func(t *testing.T) {
+			invoker := &captureInvoker{}
+			proxy, inbound, _, now := testProxy(t, invoker, &memoryNonces{})
+			body := []byte("protobuf-body")
+			rpcName := "/trpc.moox.storage.PrimaryStore/" + method
+			ctx := inboundContext(t, inbound, now, rpcName, body)
+
+			rsp, err := proxy.Forward(ctx, &codec.Body{Data: body})
+			require.NoError(t, err)
+			require.Equal(t, []byte("upstream-response"), rsp.Data)
+			require.True(t, invoker.called)
+			require.Equal(t, method, invoker.options.CalleeMethod)
+		})
+	}
 }
 
 func TestProxyAllowsCollectorStorageMethodAndBuildsUpstreamOptions(t *testing.T) {

@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	factorstore "github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -57,7 +57,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		Secret: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET"),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	auth := &commonpb.AuthInfo{
 		AppId: "moox-factor", Operator: "factor-storage-e2e",
@@ -121,14 +121,17 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	}
 	spaceID := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_E2E_SPACE_ID"))
 	if spaceID == "" {
-		spaceID = "factor_e2e_" + suffix
+		spaceID = "crypto"
 	}
 	spaceOwner := "factor-storage-e2e-" + suffix
 	strategyScope := client.WithMetaData("space_id", []byte(spaceID))
 	// Dataset identifiers are required to use the dataset_ namespace. Keep the
 	// generated names compliant so this integration test exercises the real
 	// Metadata/Factor pipeline rather than failing during setup validation.
-	sourceID := "dataset_portfolio_" + suffix
+	// The production Engine's merged-dataset catalog is seeded from the static
+	// mdataset_binance_kline_1m definition. Reuse that identity in the isolated
+	// Storage DB so DatasetRowsUpserted exercises the same catalog contract.
+	sourceID := "mdataset_binance_kline_1m"
 	targetID := "dataset_portfolio_factor_" + suffix
 	sourceViewID := "view_source_" + suffix
 	dataSourceID := "factor_e2e_" + suffix
@@ -143,7 +146,8 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	secondSubjectID := "fund-alt-" + suffix
 	subjectIDs := []string{subjectID, secondSubjectID}
 	const freq = "1m"
-	inputFieldID := "close_" + suffix
+	inputColumn := "close"
+	inputFieldID := domain.MappedSourceField("dataset_binance_spot_kline_1m", inputColumn)
 	// Use a near-future synthetic period so the Strategy result remains inside
 	// its two-bar validity window while the asynchronous Factor/View pipeline
 	// is being exercised.
@@ -158,6 +162,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	var resultDatasetID, resultViewID string
 	var strategyInstanceID string
 	var strategyInstanceCreated bool
+	skipFactorCleanup := os.Getenv("MOOX_FACTOR_STORAGE_E2E_SKIP_FACTOR_CLEANUP") == "1"
 
 	t.Cleanup(func() {
 		// Result-view schema cleanup waits for the storage reconciler to activate a
@@ -170,21 +175,25 @@ func TestFactorRealStorageE2E(t *testing.T) {
 				reportCleanupFailure(t, "strategy instance "+strategyInstanceID, rsp, err)
 			}
 		}
-		for i := len(createdBindings) - 1; i >= 0; i-- {
-			id := createdBindings[i]
-			if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: id}); err != nil ||
-				rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				reportCleanupFailure(t, "binding "+id, rsp, err)
+		if skipFactorCleanup {
+			t.Log("skipping Factor binding/factor cleanup because the isolated deployment database is disposable")
+		} else {
+			for i := len(createdBindings) - 1; i >= 0; i-- {
+				id := createdBindings[i]
+				if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: id}); err != nil ||
+					rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+					reportCleanupFailure(t, "binding "+id, rsp, err)
+				}
 			}
-		}
-		for i := len(createdFactors) - 1; i >= 0; i-- {
-			created := createdFactors[i]
-			if rsp, err := factor.DeleteFactor(cleanupCtx, &factorpb.DeleteFactorReq{
-				FactorId: created.id,
-			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				reportCleanupFailure(t, "factor "+created.id, rsp, err)
-			} else {
-				assertFactorArtifactsRemoved(t, deployRoot, created.name)
+			for i := len(createdFactors) - 1; i >= 0; i-- {
+				created := createdFactors[i]
+				if rsp, err := factor.DeleteFactor(cleanupCtx, &factorpb.DeleteFactorReq{
+					FactorId: created.id,
+				}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+					reportCleanupFailure(t, "factor "+created.id, rsp, err)
+				} else {
+					assertFactorArtifactsRemoved(t, deployRoot, created.name)
+				}
 			}
 		}
 		if spaceCreated {
@@ -264,12 +273,15 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		requireStorageOK(t, "UpsertSubject "+currentSubjectID, subjectRsp, subjectErr)
 	}
 	tagID := sourceID + "_scope"
-	tagRsp, tagErr := metadata.UpsertTag(ctx, &storagepb.UpsertTagReq{
+	// Tag catalog mutations are admin-only on the production Storage Metadata
+	// gateway route. Keep Factor's read/write identity for the actual
+	// Factor -> Storage path and seed test metadata through the CLI credential.
+	tagRsp, tagErr := cleanupMetadata.UpsertTag(ctx, &storagepb.UpsertTagReq{
 		AuthInfo: auth,
-		Tag:      &storagepb.Tag{SpaceId: spaceID, TagId: tagID, TagName: "验标" + displaySuffix, Mode: "manual"},
+		Tag:      &storagepb.Tag{SpaceId: spaceID, TagId: tagID, TagName: "验标" + displaySuffix, Mode: "manual", Source: dataSourceID, MarketType: "equity"},
 	})
 	requireStorageOK(t, "UpsertTag", tagRsp, tagErr)
-	memberRsp, memberErr := metadata.AddTagMembers(ctx, &storagepb.TagMembersReq{
+	memberRsp, memberErr := cleanupMetadata.AddTagMembers(ctx, &storagepb.TagMembersReq{
 		AuthInfo: auth, SpaceId: spaceID, TagId: tagID, SubjectIds: append([]string(nil), subjectIDs...),
 	})
 	requireStorageOK(t, "AddTagMembers", memberRsp, memberErr)
@@ -300,6 +312,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			SpaceId: spaceID, DatasetId: sourceID, DataSourceId: dataSourceID,
 			Name: "时序" + displaySuffix, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs: []string{freq}, DataNodeId: dataNodeID, KeepDuration: "0", Status: "disabled", SubjectTags: []string{tagID},
+			Attributes: map[string]string{"dataset_role": "merged_factor"},
 		},
 	})
 	require.NoError(t, err)
@@ -344,8 +357,6 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		},
 	})
 	requireStorageOK(t, "CreateView(source)", sourceViewRsp, err)
-	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
-	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
 
 	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
@@ -365,6 +376,8 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		},
 	})
 	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
+	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
+	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
 	var sourceChunk *storageio.RangeChunk
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
@@ -387,44 +400,52 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	spreadSource := fmt.Sprintf(`import pandas as pd
 
 def compute(df, params, context):
-    left = df[df["series_tag"] == params["left_tag"]][["data_time", %q]]
-    right = df[df["series_tag"] == params["right_tag"]][["data_time", %q]]
-    joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
+    left = df[df["series_tag"] == params["left_tag"]][["subject_id", "data_time", %q]]
+    right = df[df["series_tag"] == params["right_tag"]][["subject_id", "data_time", %q]]
+    joined = left.merge(right, on=["subject_id", "data_time"], suffixes=("_left", "_right"))
     spread = joined[%q] - joined[%q]
+    rolling_spread = joined.assign(spread=spread).groupby("subject_id")["spread"].transform(
+        lambda values: values.rolling(int(params["window"]), min_periods=1).mean()
+    )
     return pd.DataFrame({
+        "subject_id": joined["subject_id"],
         "data_time": joined["data_time"],
         "series_tag": params["output_tag"],
         "spread": spread,
-        "rolling_spread": spread.rolling(int(params["window"]), min_periods=1).mean(),
+        "rolling_spread": rolling_spread,
 	})
-`, inputFieldID, inputFieldID, inputFieldID+"_left", inputFieldID+"_right")
+`, inputColumn, inputColumn, inputColumn+"_left", inputColumn+"_right")
 	midpointSource := fmt.Sprintf(`import pandas as pd
 
 def compute(df, params, context):
-    left = df[df["series_tag"] == params["left_tag"]][["data_time", %q]]
-    right = df[df["series_tag"] == params["right_tag"]][["data_time", %q]]
-    joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
+    left = df[df["series_tag"] == params["left_tag"]][["subject_id", "data_time", %q]]
+    right = df[df["series_tag"] == params["right_tag"]][["subject_id", "data_time", %q]]
+    joined = left.merge(right, on=["subject_id", "data_time"], suffixes=("_left", "_right"))
     midpoint = (joined[%q] + joined[%q]) / 2
+    rolling_midpoint = joined.assign(midpoint=midpoint).groupby("subject_id")["midpoint"].transform(
+        lambda values: values.rolling(int(params["window"]), min_periods=1).mean()
+    )
     return pd.DataFrame({
+        "subject_id": joined["subject_id"],
         "data_time": joined["data_time"],
         "series_tag": params["output_tag"],
         "midpoint": midpoint,
-        "rolling_midpoint": midpoint.rolling(int(params["window"]), min_periods=1).mean(),
+        "rolling_midpoint": rolling_midpoint,
 	})
-`, inputFieldID, inputFieldID, inputFieldID+"_left", inputFieldID+"_right")
+`, inputColumn, inputColumn, inputColumn+"_left", inputColumn+"_right")
 	factorDefs := []*factorpb.FactorDef{
 		{
 			FactorId: factorID, Name: factorName, SourceCode: spreadSource,
-			FactorType:   domain.FactorTypeTimeSeries,
-			InputColumns: []string{inputFieldID}, Outputs: []string{"spread", "rolling_spread"},
+			FactorType:   domain.FactorTypeCrossSection,
+			InputColumns: []string{inputColumn}, Outputs: []string{"spread", "rolling_spread"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,
 			LookbackPeriods: 2, Status: "disabled",
 		},
 		{
 			FactorId: secondFactorID, Name: secondFactorName, SourceCode: midpointSource,
-			FactorType:   domain.FactorTypeTimeSeries,
-			InputColumns: []string{inputFieldID}, Outputs: []string{"midpoint", "rolling_midpoint"},
+			FactorType:   domain.FactorTypeCrossSection,
+			InputColumns: []string{inputColumn}, Outputs: []string{"midpoint", "rolling_midpoint"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,
 			LookbackPeriods: 2, Status: "disabled",
@@ -480,6 +501,24 @@ def compute(df, params, context):
 			assert.Equal(collect, "enabled", statuses[id], "binding_id=%s", id)
 		}
 	}, 60*time.Second, 250*time.Millisecond, "factor bindings did not become executable")
+	engineStore, err := factorstore.Open(&factorstore.Options{Path: filepath.Join(deployRoot, "data/factor-engine-e2e/runtime.db")})
+	require.NoError(t, err)
+	defer engineStore.Close()
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		engineBindings, listErr := engineStore.Bindings().ListExecutable(ctx)
+		assert.NoError(collect, listErr)
+		if listErr != nil {
+			return
+		}
+		engineBindingIDs := make(map[string]struct{}, len(engineBindings))
+		for _, binding := range engineBindings {
+			engineBindingIDs[binding.BindingID] = struct{}{}
+		}
+		for _, id := range bindingIDs {
+			_, synced := engineBindingIDs[id]
+			assert.True(collect, synced, "Factor Engine has not activated binding %s", id)
+		}
+	}, 60*time.Second, 250*time.Millisecond, "Factor Engine catalog did not activate the test bindings")
 	var targetColumnsRsp *storagepb.ListDatasetColumnsRsp
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		var listErr error
@@ -491,6 +530,7 @@ def compute(df, params, context):
 		if listErr == nil {
 			assert.Equal(collect, commonpb.ErrorCode_SUCCESS, targetColumnsRsp.GetRetInfo().GetCode(), targetColumnsRsp.GetRetInfo().GetMsg())
 			assert.ElementsMatch(collect, []string{
+				inputFieldID,
 				factorID + "__spread", factorID + "__rolling_spread",
 				secondFactorID + "__midpoint", secondFactorID + "__rolling_midpoint",
 			}, datasetColumnNames(targetColumnsRsp.GetColumns()))
@@ -597,32 +637,61 @@ rules:
 	require.NoError(t, err)
 	defer readyConsumer.Close()
 
-	// Drive the production event chain instead of jumping straight to the
-	// run-once RPC: rows are already committed, then Collector-style period
-	// markers are appended. Storage View must publish source-ready, Factor's
-	// durable consumer must compute, and the result marker must be queryable.
-	collectorAuth := &commonpb.AuthInfo{AppId: "moox-collector", Operator: "factor-storage-e2e"}
-	collectorAuth.AppKey = mooxsecurity.HMACSHA256Hex(
+	// Cross-section factors run from the Merge completion event against the
+	// complete source View, where each subject can include both venue tags.
+	// CommitInput supplies durable positions for the Merge completion marker;
+	// DatasetRows intentionally does not execute cross-section bindings.
+	mergeAuth := &commonpb.AuthInfo{AppId: "moox-merge", Operator: "factor-storage-e2e"}
+	mergeAuth.AppKey = mooxsecurity.HMACSHA256Hex(
 		requiredEnv(t, "MOOX_STORAGE_PRIMARY_AUTH_SECRET"),
-		[]byte(collectorAuth.GetAppId()),
+		[]byte(mergeAuth.GetAppId()),
 	)
-	reportRsp, reportErr := primary.ReportCollectorPeriodCompleted(ctx, &storagepb.ReportCollectorPeriodCompletedReq{
-		AuthInfo: collectorAuth, SpaceId: spaceID,
-		Marker: &storagepb.CollectorPeriodCompletedMarker{
+	committedByStore := make(map[string]*storagepb.CommittedPosition)
+	for index, subject := range subjectIDs {
+		value := float64(108 + index*100)
+		commitRsp, commitErr := primary.CommitInput(ctx, &storagepb.PrimaryCommitInputReq{
+			AuthInfo: mergeAuth, CommitId: fmt.Sprintf("factor-storage-e2e-%s-%s-%d", suffix, subject, third.Unix()),
+			RequiredFields: []string{inputFieldID},
+			Row:            inputRow(spaceID, sourceID, subject, freq, third, "venue:binance", inputFieldID, value),
+		})
+		requireStorageOK(t, "PrimaryStore.CommitInput "+subject, commitRsp, commitErr)
+		require.NotNil(t, commitRsp.GetReceipt())
+		position := commitRsp.GetReceipt().GetPosition()
+		require.NotNil(t, position)
+		committedPosition := &storagepb.CommittedPosition{
+			NodeId: position.GetNodeId(), StoreId: position.GetStoreId(), Sequence: position.GetSequence(),
+		}
+		key := committedPosition.GetNodeId() + "\x00" + committedPosition.GetStoreId()
+		if previous := committedByStore[key]; previous == nil || committedPosition.GetSequence() > previous.GetSequence() {
+			committedByStore[key] = committedPosition
+		}
+	}
+	committedPositions := make([]*storagepb.CommittedPosition, 0, len(committedByStore))
+	for _, position := range committedByStore {
+		committedPositions = append(committedPositions, position)
+	}
+	sort.Slice(committedPositions, func(i, j int) bool {
+		if committedPositions[i].GetNodeId() != committedPositions[j].GetNodeId() {
+			return committedPositions[i].GetNodeId() < committedPositions[j].GetNodeId()
+		}
+		return committedPositions[i].GetStoreId() < committedPositions[j].GetStoreId()
+	})
+	mergeRsp, mergeErr := primary.ReportMergePeriodCompleted(ctx, &storagepb.ReportMergePeriodCompletedReq{
+		AuthInfo: mergeAuth, SpaceId: spaceID,
+		Marker: &storagepb.MergePeriodCompletedMarker{
 			DatasetId: sourceID, Frequency: freq, PeriodTime: third.Unix(), Status: "complete",
 			BatchId: "e2e-" + sourceID, ConfigSnapshotId: "e2e", ExpectedScopeRef: sourceID + ":" + freq,
-			UniverseSubjectIds: subjectIDs,
-			CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "e2e", StoreId: "e2e", Sequence: 1}},
-			CollectedAt:        timestamppb.New(time.Now().UTC()),
+			UniverseSubjectIds: subjectIDs, CommittedPositions: committedPositions,
+			CompletedAt: timestamppb.New(time.Now().UTC()),
 		},
 	})
-	requireStorageOK(t, "PrimaryStore.ReportCollectorPeriodCompleted", reportRsp, reportErr)
-	thirdSourceReadyID := sourceReadyEventID(spaceID, sourceViewID, freq, third.Unix())
+	requireStorageOK(t, "PrimaryStore.ReportMergePeriodCompleted", mergeRsp, mergeErr)
+	require.NotEmpty(t, mergeRsp.GetEventId())
 	var computed *storagepb.FactorPeriodComputedMarker
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		computedRsp, computedErr := primary.GetFactorPeriodComputed(ctx, &storagepb.GetFactorPeriodComputedReq{
 			AuthInfo: auth, SpaceId: spaceID, DatasetId: resultDatasetID,
-			TriggerEventId: thirdSourceReadyID, PeriodTime: third.Unix(),
+			TriggerEventId: mergeRsp.GetEventId(), PeriodTime: third.Unix(),
 		})
 		assert.NoError(collect, computedErr)
 		if computedErr != nil || computedRsp == nil {
@@ -632,7 +701,7 @@ rules:
 		if computedRsp.GetFound() {
 			computed = computedRsp.GetMarker()
 		} else {
-			t.Logf("factor marker still pending: source_ready_event_id=%s", thirdSourceReadyID)
+			t.Logf("factor marker still pending: merge_event_id=%s", mergeRsp.GetEventId())
 			assert.True(collect, computedRsp.GetFound(), "factor marker is not persisted yet")
 		}
 	}, 180*time.Second, 250*time.Millisecond, "source-ready did not drive Factor durable computation")
@@ -784,12 +853,6 @@ func assertPrimaryFactorRows(
 	}, 10*time.Second, 100*time.Millisecond)
 	require.True(t, ok, "last Primary rows: %v", lastRows)
 	t.Log("real Storage PrimaryStore.ReadFields returned exact output identities and values")
-}
-
-func sourceReadyEventID(spaceID, viewID, freq string, periodTime int64) string {
-	parts := strings.Join([]string{"source-ready", spaceID, viewID, freq, strconv.FormatInt(periodTime, 10)}, "\x00")
-	sum := sha256.Sum256([]byte(parts))
-	return "storage-view-" + hex.EncodeToString(sum[:16])
 }
 
 func assertCompleteBindingStates(t *testing.T, bindings []*storagepb.FactorBindingPeriodState, expected map[string]string) {
@@ -1073,9 +1136,17 @@ func waitForViewReady(t *testing.T, ctx context.Context, metadata storagepb.Meta
 		rsp, err := metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
 		require.NoError(collect, err)
 		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-		require.NotEmpty(collect, rsp.GetView().GetActiveIndexId())
+		if rsp.GetView().GetActiveIndexId() == "" {
+			state, buildError := "none", ""
+			if build := rsp.GetView().GetIndexBuild(); build != nil {
+				state, buildError = build.GetState().String(), build.GetError()
+			}
+			collect.Errorf("View %s/%s has no active index yet (desired_revision=%d active_revision=%d build_state=%s build_error=%q)",
+				spaceID, viewID, rsp.GetView().GetDesiredViewRevision(), rsp.GetView().GetActiveViewRevision(), state, buildError)
+			return
+		}
 		require.Equal(collect, rsp.GetView().GetDesiredViewRevision(), rsp.GetView().GetActiveViewRevision())
-	}, 60*time.Second, 250*time.Millisecond)
+	}, 2*time.Minute, 250*time.Millisecond)
 	t.Log("real Storage View reconcile became active")
 }
 
@@ -1130,11 +1201,17 @@ func queryViewRowsOnce(
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Len(t, rsp.GetRows(), len(times), "final-ready was published before Result View rows were readable")
-	require.True(t, factorRowsHaveExpectedValues(rsp.GetRows(), times, seriesTag, outputs),
+	outputRows := make([]*storagepb.TimeSeriesRow, 0, len(times))
+	for _, row := range rsp.GetRows() {
+		if row.GetKey().GetSeriesTag() == seriesTag {
+			outputRows = append(outputRows, row)
+		}
+	}
+	require.Len(t, outputRows, len(times), "final-ready was published before Result View rows were readable")
+	require.True(t, factorRowsHaveExpectedValues(outputRows, times, seriesTag, outputs),
 		"final-ready was published before Result View applied the exact factor patch")
 	t.Log("first Result View query after final-ready returned all expected factor rows")
-	return rsp.GetRows()
+	return outputRows
 }
 
 func datasetColumnNames(columns []*storagepb.DatasetColumn) []string {

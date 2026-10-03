@@ -85,25 +85,29 @@ type UploadPackageResponse struct {
 }
 
 type NodeCreateItem struct {
-	CloudAccountID string            `json:"cloud_account_id"`
-	NodeType       string            `json:"node_type"`
-	TriggerType    string            `json:"trigger_type,omitempty"`
-	Runtime        string            `json:"runtime,omitempty"`
-	Handler        string            `json:"handler,omitempty"`
-	Config         map[string]string `json:"config,omitempty"`
-	Environment    map[string]string `json:"environment,omitempty"`
-	Region         string            `json:"region"`
-	Namespace      string            `json:"namespace,omitempty"`
-	PackageID      string            `json:"package_id"`
-	DeploymentID   string            `json:"deployment_id,omitempty"`
-	Metadata       map[string]any    `json:"metadata,omitempty"`
+	CloudAccountID               string            `json:"cloud_account_id"`
+	NodeType                     string            `json:"node_type"`
+	TriggerType                  string            `json:"trigger_type,omitempty"`
+	Runtime                      string            `json:"runtime,omitempty"`
+	Handler                      string            `json:"handler,omitempty"`
+	Config                       map[string]string `json:"config,omitempty"`
+	Environment                  map[string]string `json:"environment,omitempty"`
+	Region                       string            `json:"region"`
+	Namespace                    string            `json:"namespace,omitempty"`
+	PackageID                    string            `json:"package_id"`
+	DeploymentID                 string            `json:"deployment_id,omitempty"`
+	Metadata                     map[string]any    `json:"metadata,omitempty"`
+	CollectorPublishLeaseID      string            `json:"collector_publish_lease_id,omitempty"`
+	CollectorPublishFencingToken int64             `json:"collector_publish_fencing_token,omitempty"`
 }
 
 type NodeDeployItem struct {
-	NodeID      string            `json:"node_id"`
-	PackageID   string            `json:"package_id"`
-	Config      map[string]string `json:"config,omitempty"`
-	Environment map[string]string `json:"environment,omitempty"`
+	NodeID                       string            `json:"node_id"`
+	PackageID                    string            `json:"package_id"`
+	Config                       map[string]string `json:"config,omitempty"`
+	Environment                  map[string]string `json:"environment,omitempty"`
+	CollectorPublishLeaseID      string            `json:"collector_publish_lease_id,omitempty"`
+	CollectorPublishFencingToken int64             `json:"collector_publish_fencing_token,omitempty"`
 }
 
 type CloudNode struct {
@@ -658,6 +662,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 }
 
 func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*SubmitNodeBatchResponse, error) {
+	nodes = c.withPublishFenceToCreateItems(nodes)
 	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitCreateNodes", map[string]any{"nodes": nodes})
 	if err != nil {
 		return nil, err
@@ -666,6 +671,7 @@ func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) 
 }
 
 func (c *Client) SubmitDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*SubmitNodeBatchResponse, error) {
+	deployments = c.withPublishFenceToDeployItems(deployments)
 	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeployNodes", map[string]any{"deployments": deployments})
 	if err != nil {
 		return nil, err
@@ -675,7 +681,12 @@ func (c *Client) SubmitDeployNodes(ctx context.Context, deployments []NodeDeploy
 
 // SubmitDeleteNodes submits durable remote SCF deletion tasks for catalog nodes.
 func (c *Client) SubmitDeleteNodes(ctx context.Context, nodeIDs []string) (*SubmitNodeBatchResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeleteNodes", map[string]any{"node_ids": nodeIDs})
+	body := map[string]any{"node_ids": nodeIDs}
+	if fence := c.CollectorPublishFence(); fence != nil {
+		body["collector_publish_lease_id"] = fence.LeaseID
+		body["collector_publish_fencing_token"] = fence.FencingToken
+	}
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeleteNodes", body)
 	if err != nil {
 		return nil, err
 	}

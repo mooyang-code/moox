@@ -34,6 +34,16 @@ func TestStartCompletionConsumerWithDoneWaitsForCancellation(t *testing.T) {
 	}
 }
 
+func TestCompletionEventBusConfigPrefersPackagedCAFile(t *testing.T) {
+	t.Setenv("MOOX_EVENTBUS_NATS_TLS_CA_FILE", "/var/task/certs/eventbus-ca.pem")
+	t.Setenv("MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64", "c3RhbGUtY2E=")
+
+	cfg, err := completionEventBusConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "/var/task/certs/eventbus-ca.pem", cfg.TLSCAFile)
+	assert.Empty(t, cfg.TLSCAPEMBase64)
+}
+
 func TestRetryCollectionItemUsesExactInstanceIDBeforeSubjectFallback(t *testing.T) {
 	request := Request{DatasetID: "dataset_stockcn_equity_kline", Items: []domain.CollectionItem{
 		{InstanceID: "snapshot-shard-0", SubjectID: "stockcn", DatasetID: "dataset_stockcn_equity_kline", DataType: "instrument", SnapshotAt: "2026-08-30T00:00:00Z", SnapshotShardIndex: 0, SnapshotShardCount: 2},
@@ -189,6 +199,11 @@ func TestHandleCompletionExhaustsWriteTargetRetriesAfterThreeRetries(t *testing.
 	retryKey := writeTargetRetryKey("task-btc", "target-btc", targetDataTime)
 
 	batch := completionTestBatch("write-target-initial")
+	periodTime, err := time.Parse(time.RFC3339Nano, targetDataTime)
+	require.NoError(t, err)
+	periodDeadline := periodTime.Add(15 * time.Minute)
+	batch.PeriodTime = &periodTime
+	batch.PeriodDeadlineAt = &periodDeadline
 	var request Request
 	require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
 	request.Items[0].TargetDataTime = targetDataTime
@@ -227,6 +242,10 @@ func TestHandleCompletionExhaustsWriteTargetRetriesAfterThreeRetries(t *testing.
 	retry, err := db.FetchRetries().Get(ctx, "crypto", retryKey)
 	require.NoError(t, err)
 	require.Equal(t, 1, retry.Attempt, "the initial write failure schedules retry 1")
+	require.NotNil(t, retry.PeriodTime)
+	require.Equal(t, periodTime, *retry.PeriodTime)
+	require.NotNil(t, retry.PeriodDeadlineAt)
+	require.Equal(t, periodDeadline, *retry.PeriodDeadlineAt)
 	for retryNumber := 1; retryNumber <= 3; retryNumber++ {
 		require.NoError(t, db.FetchRetries().MarkStatus(ctx, "crypto", retryKey, "dispatched"))
 		batch = completionTestBatch(fmt.Sprintf("write-target-retry-%d", retryNumber))

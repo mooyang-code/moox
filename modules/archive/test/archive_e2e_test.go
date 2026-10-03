@@ -191,7 +191,7 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 	requireArchiveRPCOK(t, "Metadata.CreateDataSource", dataSourceRsp.GetRetInfo(), callErr)
 	subjectRsp, callErr := metadataSetup.UpsertSubject(t.Context(), &storagepb.UpsertSubjectReq{AuthInfo: auth, Subject: &storagepb.Subject{SpaceId: "crypto", SubjectId: "APT-USDT", SubjectType: "custom", Name: "APT-USDT", Timezone: "UTC", Status: "active"}})
 	requireArchiveRPCOK(t, "Metadata.UpsertSubject", subjectRsp.GetRetInfo(), callErr)
-	tagRsp, callErr := metadataSetup.UpsertTag(t.Context(), &storagepb.UpsertTagReq{AuthInfo: auth, Tag: &storagepb.Tag{SpaceId: "crypto", TagId: "archive_e2e", TagName: "Archive E2E", Mode: "manual"}})
+	tagRsp, callErr := metadataSetup.UpsertTag(t.Context(), &storagepb.UpsertTagReq{AuthInfo: auth, Tag: &storagepb.Tag{SpaceId: "crypto", TagId: "archive_e2e", TagName: "Archive E2E", Mode: "manual", Source: "archive-e2e", MarketType: "spot"}})
 	requireArchiveRPCOK(t, "Metadata.UpsertTag", tagRsp.GetRetInfo(), callErr)
 	membersRsp, callErr := metadataSetup.AddTagMembers(t.Context(), &storagepb.TagMembersReq{AuthInfo: auth, SpaceId: "crypto", TagId: "archive_e2e", SubjectIds: []string{"APT-USDT"}})
 	requireArchiveRPCOK(t, "Metadata.AddTagMembers", membersRsp.GetRetInfo(), callErr)

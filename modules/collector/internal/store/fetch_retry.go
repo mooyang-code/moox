@@ -15,6 +15,71 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const (
+	maxTerminalRetryCleanupRows  = 10000
+	retryCleanupBatchIdentityRef = `(
+		(retries.c_write_target_id <> '' AND batches.c_write_target_id = retries.c_write_target_id)
+		OR (retries.c_instance_id <> '' AND (
+		  batches.c_instance_id = retries.c_instance_id
+		  OR EXISTS (
+		    SELECT 1 FROM t_collector_fetch_batch_items AS batch_items
+		    WHERE batch_items.c_space_id = batches.c_space_id
+		      AND batch_items.c_batch_id = batches.c_batch_id
+		      AND batch_items.c_instance_id = retries.c_instance_id
+		  )
+		))
+	)`
+	retryCleanupBatchRequestItemRef = `EXISTS (
+		SELECT 1 FROM json_each(
+		  CASE WHEN json_valid(batches.c_request_json)
+			  THEN COALESCE(json_extract(batches.c_request_json, '$.items'), '[]')
+			  ELSE '[]' END
+		) AS request_items
+		WHERE CASE WHEN json_valid(request_items.value)
+		           THEN json_extract(request_items.value, '$.source_event_id')
+		           ELSE NULL END = retries.c_retry_key
+	)`
+	retryCleanupTimedOutSyncPointRef = `retries.c_source_batch_id = COALESCE(
+		NULLIF(json_extract(
+		  CASE WHEN json_valid(batches.c_request_json) THEN batches.c_request_json ELSE '{}' END,
+		  '$.sync_point_id'
+		), ''), batches.c_batch_id
+	)`
+	retryCleanupActiveBatchGuard = `AND NOT EXISTS (
+		SELECT 1 FROM t_collector_fetch_batches AS batches
+		WHERE batches.c_space_id = retries.c_space_id
+		  AND (
+		    (batches.c_status IN ('planned', 'dispatched') AND (
+		      ` + retryCleanupBatchIdentityRef + ` OR ` + retryCleanupBatchRequestItemRef + `
+		    ))
+		    OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0 AND (
+		      ` + retryCleanupBatchIdentityRef + ` OR ` + retryCleanupBatchRequestItemRef + `
+		      OR ` + retryCleanupTimedOutSyncPointRef + `
+		    ))
+		  )
+	)`
+	retryCleanupSucceededPageSQL = `SELECT retries.c_id
+		FROM t_collector_fetch_retry_items AS retries INDEXED BY idx_collector_fetch_retry_cleanup_succeeded
+		WHERE retries.c_mtime < ? AND retries.c_status IN ('succeeded', 'superseded') ` + retryCleanupActiveBatchGuard + `
+		ORDER BY retries.c_mtime, retries.c_id
+		LIMIT ?`
+	retryCleanupPermanentPageSQL = `SELECT retries.c_id
+		FROM t_collector_fetch_retry_items AS retries INDEXED BY idx_collector_fetch_retry_cleanup_permanent
+		WHERE retries.c_mtime < ? AND retries.c_status = 'permanent_failed' AND retries.c_period_failure_report_state <> 'pending' ` + retryCleanupActiveBatchGuard + `
+		ORDER BY retries.c_mtime, retries.c_id
+		LIMIT ?`
+	retryCleanupSucceededPageSpaceSQL = `SELECT retries.c_id
+		FROM t_collector_fetch_retry_items AS retries INDEXED BY idx_collector_fetch_retry_cleanup_succeeded_space
+		WHERE retries.c_space_id = ? AND retries.c_mtime < ? AND retries.c_status IN ('succeeded', 'superseded') ` + retryCleanupActiveBatchGuard + `
+		ORDER BY retries.c_mtime, retries.c_id
+		LIMIT ?`
+	retryCleanupPermanentPageSpaceSQL = `SELECT retries.c_id
+		FROM t_collector_fetch_retry_items AS retries INDEXED BY idx_collector_fetch_retry_cleanup_permanent_space
+		WHERE retries.c_space_id = ? AND retries.c_mtime < ? AND retries.c_status = 'permanent_failed' AND retries.c_period_failure_report_state <> 'pending' ` + retryCleanupActiveBatchGuard + `
+		ORDER BY retries.c_mtime, retries.c_id
+		LIMIT ?`
+)
+
 type FetchRetryRepository struct{ db *gorm.DB }
 
 func NewFetchRetryRepository(db *gorm.DB) *FetchRetryRepository { return &FetchRetryRepository{db: db} }
@@ -48,6 +113,8 @@ func (r *FetchRetryRepository) Upsert(ctx context.Context, item *domain.RetryIte
 		DoUpdates: clause.Assignments(map[string]any{
 			"c_source_batch_id":      clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"},
 			"c_batch_kind":           clause.Expr{SQL: "excluded.c_batch_kind"},
+			"c_period_time":          clause.Expr{SQL: "CASE WHEN c_period_time IS NOT NULL THEN c_period_time ELSE excluded.c_period_time END"},
+			"c_period_deadline_at":   clause.Expr{SQL: "CASE WHEN c_period_deadline_at IS NOT NULL THEN c_period_deadline_at ELSE excluded.c_period_deadline_at END"},
 			"c_instance_id":          clause.Expr{SQL: "excluded.c_instance_id"},
 			"c_write_target_id":      clause.Expr{SQL: "excluded.c_write_target_id"},
 			"c_retry_scope":          clause.Expr{SQL: "excluded.c_retry_scope"},
@@ -71,6 +138,35 @@ func (r *FetchRetryRepository) ListDue(ctx context.Context, spaceID string, now 
 		Where("c_space_id = ? AND c_status = ? AND c_next_retry_at IS NOT NULL AND c_next_retry_at <= ?", spaceID, "pending", now.UTC()).
 		Order("c_next_retry_at ASC").Limit(limit).Find(&items).Error
 	return items, err
+}
+
+func (r *FetchRetryRepository) ListDuePrioritized(ctx context.Context, spaceID string, now time.Time, recentLimit, historicalLimit int, excludedRetryKeys ...string) (recent, historical []domain.RetryItem, err error) {
+	if recentLimit < 0 || historicalLimit < 0 {
+		return nil, nil, gorm.ErrInvalidData
+	}
+	now = now.UTC()
+	base := r.db.WithContext(ctx).Where("c_space_id = ? AND c_status = ? AND c_next_retry_at IS NOT NULL AND c_next_retry_at <= ?", spaceID, "pending", now)
+	excludedRetryKeys = uniqueNonEmptyStrings(excludedRetryKeys)
+	if len(excludedRetryKeys) > 0 {
+		base = base.Where("c_retry_key NOT IN ?", excludedRetryKeys)
+	}
+	if recentLimit > 0 {
+		err = base.Session(&gorm.Session{}).
+			Where("c_period_deadline_at IS NOT NULL AND c_period_deadline_at > ?", now).
+			Order("c_period_deadline_at ASC, c_next_retry_at ASC").Limit(recentLimit).Find(&recent).Error
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if historicalLimit > 0 {
+		err = base.Session(&gorm.Session{}).
+			Where("c_period_deadline_at IS NULL OR c_period_deadline_at <= ?", now).
+			Order("c_next_retry_at ASC").Limit(historicalLimit).Find(&historical).Error
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return recent, historical, nil
 }
 
 func (r *FetchRetryRepository) Get(ctx context.Context, spaceID, retryKey string) (*domain.RetryItem, error) {
@@ -389,7 +485,61 @@ func authoritativePeriodFailureDisposition(disposition string) bool {
 }
 
 func (r *FetchRetryRepository) Cleanup(ctx context.Context, before time.Time) error {
-	return r.db.WithContext(ctx).
-		Where("c_mtime < ? AND (c_status IN ? OR (c_status = ? AND c_period_failure_report_state <> ?))", before.UTC(), []string{"succeeded", "superseded"}, "permanent_failed", domain.PeriodFailureReportPending).
-		Delete(&domain.RetryItem{}).Error
+	return r.cleanup(ctx, "", before, maxTerminalRetryCleanupRows)
+}
+
+// CleanupSpace applies a bounded retry-history page to one Space.
+func (r *FetchRetryRepository) CleanupSpace(ctx context.Context, spaceID string, before time.Time, budget int) error {
+	_, err := r.CleanupSpaceWithCount(ctx, spaceID, before, budget)
+	return err
+}
+
+// CleanupSpaceWithCount returns only committed physical deletes.
+func (r *FetchRetryRepository) CleanupSpaceWithCount(ctx context.Context, spaceID string, before time.Time, budget int) (int64, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return 0, fmt.Errorf("space_id is required for scoped retry cleanup")
+	}
+	return r.cleanupWithCount(ctx, spaceID, before, budget)
+}
+
+func (r *FetchRetryRepository) cleanup(ctx context.Context, spaceID string, before time.Time, budget int) error {
+	_, err := r.cleanupWithCount(ctx, spaceID, before, budget)
+	return err
+}
+
+func (r *FetchRetryRepository) cleanupWithCount(ctx context.Context, spaceID string, before time.Time, budget int) (int64, error) {
+	budget = min(max(0, budget), maxTerminalRetryCleanupRows)
+	var deleted int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		remaining := budget
+		queries := []string{retryCleanupSucceededPageSQL, retryCleanupPermanentPageSQL}
+		if spaceID != "" {
+			queries = []string{retryCleanupSucceededPageSpaceSQL, retryCleanupPermanentPageSpaceSQL}
+		}
+		for pass := 0; pass < 2 && remaining > 0; pass++ {
+			for index, query := range queries {
+				limit := remaining
+				if pass == 0 {
+					remainingGroups := len(queries) - index
+					limit = (remaining + remainingGroups - 1) / remainingGroups
+				}
+				args := []any{before.UTC(), limit}
+				if spaceID != "" {
+					args = []any{spaceID, before.UTC(), limit}
+				}
+				result := tx.Exec(`DELETE FROM t_collector_fetch_retry_items WHERE c_id IN (`+query+`)`, args...)
+				if result.Error != nil {
+					return result.Error
+				}
+				remaining -= int(result.RowsAffected)
+				deleted += result.RowsAffected
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }

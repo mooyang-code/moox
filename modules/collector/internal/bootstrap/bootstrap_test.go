@@ -9,8 +9,44 @@ import (
 
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/require"
 )
+
+func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *testing.T) {
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	reg := prometheus.NewRegistry()
+	m := marketfetch.NewMetrics(reg)
+	now := time.Now().UTC()
+	require.NoError(t, observeCollectorMaintenanceSpace(context.Background(), db, m, "crypto", now.Add(-24*time.Hour), now, map[string]int64{"runs": 2}))
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	values := map[string]float64{}
+	for _, family := range families {
+		for _, metric := range family.Metric {
+			if family.GetName() == "moox_collector_maintenance_deleted_rows" {
+				for _, label := range metric.Label {
+					if label.GetName() == "table" && label.GetValue() == "runs" {
+						values["deleted"] = metric.GetGauge().GetValue()
+					}
+				}
+			}
+			if family.GetName() == "moox_collector_store_stats_healthy" {
+				values["healthy"] = metric.GetGauge().GetValue()
+			}
+		}
+	}
+	require.Equal(t, map[string]float64{"deleted": 2, "healthy": 1}, values)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Error(t, observeCollectorMaintenanceSpace(ctx, db, m, "crypto", now, now, nil))
+}
 
 type inventoryReconcilerStub struct {
 	due       bool
@@ -54,13 +90,32 @@ func TestCollectorHealthSnapshot(t *testing.T) {
 }
 
 func TestMarketFetchInvokeConcurrencyIsStockCNTimerSpecific(t *testing.T) {
-	if got := marketFetchInvokeConcurrency("stockcn"); got != 96 {
-		t.Fatalf("StockCN timer invoke concurrency = %d, want 96", got)
+	if got := marketFetchInvokeConcurrency("stockcn"); got != 256 {
+		t.Fatalf("StockCN timer invoke concurrency = %d, want 256", got)
 	}
 	for _, spaceID := range []string{"crypto", "other"} {
 		if got := marketFetchInvokeConcurrency(spaceID); got != 20 {
 			t.Fatalf("%s invoke concurrency = %d, want existing default 20", spaceID, got)
 		}
+	}
+}
+
+func TestMarketFetchMaintenanceLimitsBudgetRetryGenerations(t *testing.T) {
+	dispatch, recovery := marketFetchMaintenanceLimits("stockcn", marketFetchInvokeConcurrency("stockcn"), 170)
+	if dispatch != 638 || recovery != 850 {
+		t.Fatalf("StockCN dispatch/recovery limits = %d/%d, want 638/850 for one full pass per minute", dispatch, recovery)
+	}
+	dispatch, recovery = marketFetchMaintenanceLimits("crypto", marketFetchInvokeConcurrency("crypto"), 170)
+	if dispatch != 20 || recovery != 20 {
+		t.Fatalf("crypto dispatch/recovery limits = %d/%d, want invoke concurrency 20", dispatch, recovery)
+	}
+	dispatch, recovery = marketFetchMaintenanceLimits("stockcn", 96, 0)
+	if dispatch != 96 || recovery != 96 {
+		t.Fatalf("StockCN fallback limits = %d/%d, want invoke concurrency 96", dispatch, recovery)
+	}
+	dispatch, recovery = marketFetchMaintenanceLimits("stockcn", 0, 0)
+	if dispatch != 1 || recovery != 1 {
+		t.Fatalf("StockCN zero-concurrency fallback limits = %d/%d, want minimum one per lane", dispatch, recovery)
 	}
 }
 

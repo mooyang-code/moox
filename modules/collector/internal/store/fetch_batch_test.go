@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +66,257 @@ func TestDueMarketFetchRecordsAreIsolatedBySpace(t *testing.T) {
 	assert.Equal(t, "crypto", retries[0].SpaceID)
 }
 
+func TestFetchBatchCleanupCountsCommittedRows(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	old := time.Now().Add(-25 * time.Hour)
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "metrics-batch", ScheduleID: "metrics-batch", BatchKind: domain.BatchKindRealtime}
+	_, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_batch_id = ?", batch.BatchID).Updates(map[string]any{"c_status": domain.BatchStatusSucceeded, "c_completed_at": old}).Error)
+	require.NoError(t, s.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{"instance-secret"}))
+	require.NoError(t, s.db.Exec(`CREATE TRIGGER fail_batch_delete BEFORE DELETE ON t_collector_fetch_batches BEGIN SELECT RAISE(ABORT, 'test rollback'); END`).Error)
+	items, batches, err := s.FetchBatches().CleanupSpaceWithCounts(ctx, "crypto", time.Now(), 10, 10)
+	require.Error(t, err)
+	require.Zero(t, items)
+	require.Zero(t, batches)
+	require.NoError(t, s.db.Exec(`DROP TRIGGER fail_batch_delete`).Error)
+	items, batches, err = s.FetchBatches().CleanupSpaceWithCounts(ctx, "crypto", time.Now(), 10, 10)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, items)
+	require.EqualValues(t, 1, batches)
+	items, batches, err = s.FetchBatches().CleanupSpaceWithCounts(ctx, "crypto", time.Now(), 10, 10)
+	require.NoError(t, err)
+	require.Zero(t, items)
+	require.Zero(t, batches)
+}
+
+func TestFetchBatchCleanupDeletesItemsWithExpiredTerminalBatch(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	completedAt := now.Add(-25 * time.Hour)
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "expired-complete", ScheduleID: "expired-complete", BatchKind: domain.BatchKindRealtime, Status: domain.BatchStatusSucceeded, CompletedAt: &completedAt}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Updates(map[string]any{"c_status": domain.BatchStatusSucceeded, "c_completed_at": completedAt}).Error)
+	require.NoError(t, s.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{"retired-instance"}))
+
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, now.Add(-24*time.Hour)))
+
+	_, err = s.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	var itemCount int64
+	require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&itemCount).Error)
+	require.Zero(t, itemCount, "batch cleanup must not leave high-volume orphan item rows")
+}
+
+func TestFetchBatchCleanupUsesOneRetentionForEveryTerminalStatus(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	completedAt := now.Add(-25 * time.Hour)
+	statuses := []domain.BatchStatus{
+		domain.BatchStatusSucceeded,
+		domain.BatchStatusPartialFailed,
+		domain.BatchStatusFailed,
+		domain.BatchStatusTimedOut,
+	}
+	for _, status := range statuses {
+		batchID := "expired-" + string(status)
+		batch := &domain.BatchInvocation{
+			SpaceID: "crypto", BatchID: batchID, ScheduleID: batchID,
+			BatchKind: domain.BatchKindRealtime, Status: domain.BatchStatusPlanned,
+		}
+		created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		require.True(t, created)
+		require.NoError(t, s.db.Model(&domain.BatchInvocation{}).
+			Where("c_space_id = ? AND c_batch_id = ?", "crypto", batchID).
+			Updates(map[string]any{
+				"c_status": status, "c_completed_at": completedAt,
+				"c_late_completion": status == domain.BatchStatusTimedOut,
+			}).Error)
+		require.NoError(t, s.FetchBatches().UpsertItems(ctx, "crypto", batchID, []string{"instance-" + string(status)}))
+	}
+
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, now.Add(-24*time.Hour)))
+
+	for _, status := range statuses {
+		batchID := "expired-" + string(status)
+		_, err := s.FetchBatches().Get(ctx, "crypto", batchID)
+		require.ErrorIs(t, err, gorm.ErrRecordNotFound, "terminal batch status %q must use the common 24h retention", status)
+		var items int64
+		require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", "crypto", batchID).Count(&items).Error)
+		require.Zero(t, items, "terminal batch items must use the common 24h retention")
+	}
+}
+
+func TestFetchBatchCleanupRetainsTimedOutScopeUntilLateCompletion(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	completedAt := now.Add(-25 * time.Hour)
+	batch := &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: "late-scope", ScheduleID: "late-scope",
+		BatchKind: domain.BatchKindRealtime, Frequency: "1m", Status: domain.BatchStatusPlanned,
+		RequestJSON: `{"items":[{"instance_id":"late-instance","source_event_id":"late-retry"}]}`,
+	}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NoError(t, s.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{"late-instance"}))
+	batch.Status = domain.BatchStatusTimedOut
+	batch.CompletedAt = &completedAt
+	updated, err := s.FetchBatches().Complete(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, now.Add(-24*time.Hour)))
+	_, err = s.FetchBatches().Get(ctx, "crypto", batch.BatchID)
+	require.NoError(t, err, "a timed-out batch remains eligible for its first late completion")
+	var itemCount int64
+	require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&itemCount).Error)
+	require.EqualValues(t, 1, itemCount, "completion scope membership must survive as long as late completion is accepted")
+
+	batch.LateCompletion = true
+	batch.CompletedAt = &now
+	updated, err = s.FetchBatches().CompleteWithEffects(ctx, batch, FetchCompletionEffects{
+		Retries: []*domain.RetryItem{{
+			SpaceID: "crypto", RetryKey: "late-retry", SourceBatchID: batch.BatchID,
+			InstanceID: "late-instance", Status: "pending", Attempt: 1,
+			TargetDataTime: now, CreateTime: now, ModifyTime: now,
+		}},
+	})
+	require.NoError(t, err)
+	require.True(t, updated, "the first late completion must still pass scope validation and commit its retry effect")
+	retry, err := s.FetchRetries().Get(ctx, "crypto", "late-retry")
+	require.NoError(t, err)
+	require.Equal(t, "pending", retry.Status)
+}
+
+func TestFetchBatchCleanupSpaceDoesNotConsumeOtherSpaceBudget(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	completedAt := now.Add(-25 * time.Hour)
+	for _, spaceID := range []string{"crypto", "stockcn"} {
+		batch := &domain.BatchInvocation{SpaceID: spaceID, BatchID: "expired-" + spaceID, ScheduleID: "expired-" + spaceID, BatchKind: domain.BatchKindRealtime, Status: domain.BatchStatusSucceeded, CompletedAt: &completedAt}
+		created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+		require.NoError(t, err)
+		require.True(t, created)
+		require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", spaceID, batch.BatchID).Updates(map[string]any{"c_status": domain.BatchStatusSucceeded, "c_completed_at": completedAt}).Error)
+		require.NoError(t, s.FetchBatches().UpsertItems(ctx, spaceID, batch.BatchID, []string{"instance-" + spaceID}))
+	}
+	require.NoError(t, s.FetchBatches().CleanupSpace(ctx, "crypto", now.Add(-24*time.Hour), 1, 1))
+	for _, spaceID := range []string{"crypto", "stockcn"} {
+		var items, batches int64
+		require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ?", spaceID).Count(&items).Error)
+		require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_space_id = ?", spaceID).Count(&batches).Error)
+		if spaceID == "crypto" {
+			require.Zero(t, items)
+			require.Zero(t, batches)
+		} else {
+			require.EqualValues(t, 1, items)
+			require.EqualValues(t, 1, batches)
+		}
+	}
+}
+
+func TestFetchBatchCleanupDeletesTerminalTimerItemsButKeepsManifestBatch(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	completedAt := now.Add(-72 * time.Hour)
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "expired-timer", ScheduleID: "expired-timer", BatchKind: domain.BatchKindRealtime, Status: domain.BatchStatusSucceeded, CompletedAt: &completedAt}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Updates(map[string]any{"c_status": domain.BatchStatusSucceeded, "c_completed_at": completedAt}).Error)
+	require.NoError(t, s.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{"retired-timer-instance"}))
+	periodTime := now.Add(-time.Minute)
+	require.NoError(t, s.db.Create(&domain.TimerPeriodBatch{
+		Key: "expired-timer-manifest", SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: periodTime,
+		TaskID: "task", FirstRunID: "run", SeriesHash: "hash", ExpectedCount: 1, GroupCount: 1,
+		BindingHash: "binding", RouteVersion: "route-v1", BatchID: batch.BatchID, FunctionName: "timer-fn", NodeID: "node",
+		Region: "region", DeadlineAt: now.Add(time.Hour),
+	}).Error)
+
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, now.Add(-48*time.Hour)))
+
+	var itemCount, batchCount, manifestCount int64
+	require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&itemCount).Error)
+	require.Zero(t, itemCount, "terminal Timer items are not needed while their compact manifest is retained")
+	require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&batchCount).Error)
+	require.EqualValues(t, 1, batchCount, "the manifest must retain its terminal batch identity")
+	require.NoError(t, s.db.Model(&domain.TimerPeriodBatch{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&manifestCount).Error)
+	require.EqualValues(t, 1, manifestCount)
+}
+
+func TestFetchBatchCleanupPagesUseIndexesWithoutSorting(t *testing.T) {
+	s := newCollectorStore(t)
+	cutoff := time.Now().UTC().Add(-48 * time.Hour)
+	for _, query := range []string{fetchBatchCleanupItemsPageSQL, fetchBatchCleanupBatchesPageSQL} {
+		var plan []struct {
+			Detail string `gorm:"column:detail"`
+		}
+		require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+query, domain.BatchStatusSucceeded, cutoff, maxFetchBatchCleanupItemRows).Scan(&plan).Error)
+		details := make([]string, 0, len(plan))
+		for _, row := range plan {
+			details = append(details, row.Detail)
+		}
+		planText := fmt.Sprint(details)
+		require.Contains(t, planText, "idx_collector_fetch_batch_terminal_")
+		require.NotContains(t, planText, "TEMP B-TREE", "bounded cleanup must not sort its terminal candidate set")
+	}
+	for _, query := range []string{fetchBatchCleanupItemsPageSpaceSQL, fetchBatchCleanupBatchesPageSpaceSQL} {
+		var plan []struct {
+			Detail string `gorm:"column:detail"`
+		}
+		require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+query, "crypto", domain.BatchStatusSucceeded, cutoff, maxFetchBatchCleanupItemRows).Scan(&plan).Error)
+		details := make([]string, 0, len(plan))
+		for _, row := range plan {
+			details = append(details, row.Detail)
+		}
+		planText := fmt.Sprint(details)
+		require.Contains(t, planText, "cleanup_space")
+		require.NotContains(t, planText, "TEMP B-TREE")
+	}
+}
+
+func TestFetchBatchCleanupDeletesOnlyABoundedItemPage(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	completedAt := now.Add(-72 * time.Hour)
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "expired-many", ScheduleID: "expired-many", BatchKind: domain.BatchKindRealtime, Status: domain.BatchStatusSucceeded, CompletedAt: &completedAt}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	count := maxFetchBatchCleanupItemRows + 1
+	require.NoError(t, s.db.Exec(`WITH RECURSIVE seq(n) AS (
+		SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ?
+	) INSERT INTO t_collector_fetch_batch_items(c_space_id, c_batch_id, c_instance_id)
+	SELECT 'crypto', 'expired-many', 'instance-' || n FROM seq`, count).Error)
+
+	cutoff := now.Add(-48 * time.Hour)
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, cutoff))
+	var itemCount, batchCount int64
+	require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&itemCount).Error)
+	require.EqualValues(t, 1, itemCount, "one cleanup transaction must not delete an unbounded child set")
+	require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&batchCount).Error)
+	require.EqualValues(t, 1, batchCount, "parent batch remains until its child page is fully deleted")
+
+	require.NoError(t, s.FetchBatches().Cleanup(ctx, cutoff))
+	require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&itemCount).Error)
+	require.Zero(t, itemCount)
+	require.NoError(t, s.db.Model(&domain.BatchInvocation{}).Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&batchCount).Error)
+	require.Zero(t, batchCount)
+}
+
 func TestListDueUsesCanonicalDeadlineForUnclaimedTimerManifest(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
@@ -89,6 +342,112 @@ func TestListDueUsesCanonicalDeadlineForUnclaimedTimerManifest(t *testing.T) {
 	due, err = s.FetchBatches().ListDue(ctx, "crypto", now.Add(2*time.Hour), 10)
 	require.NoError(t, err)
 	require.Len(t, due, 1, "canonical deadline recovery must include an unclaimed manifest even when its batch deadline differs")
+}
+
+func TestListDuePrioritizedReservesHistoricalRecoveryCapacity(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < 4; index++ {
+		deadline := now.Add(-time.Hour)
+		periodDeadline := now.Add(-2 * time.Hour)
+		created, err := s.FetchBatches().CreatePlanned(ctx, &domain.BatchInvocation{
+			SpaceID: "crypto", BatchID: fmt.Sprintf("old-%d", index), ScheduleID: fmt.Sprintf("old-%d", index), Status: domain.BatchStatusPlanned,
+			DeadlineAt: &deadline, PeriodDeadlineAt: &periodDeadline,
+		})
+		require.NoError(t, err)
+		require.True(t, created)
+	}
+	for index := 0; index < 4; index++ {
+		deadline := now.Add(-time.Duration(index+1) * time.Minute)
+		periodDeadline := now.Add(time.Hour)
+		created, err := s.FetchBatches().CreatePlanned(ctx, &domain.BatchInvocation{
+			SpaceID: "crypto", BatchID: fmt.Sprintf("recent-%d", index), ScheduleID: fmt.Sprintf("recent-%d", index), Status: domain.BatchStatusPlanned,
+			DeadlineAt: &deadline, PeriodDeadlineAt: &periodDeadline,
+		})
+		require.NoError(t, err)
+		require.True(t, created)
+	}
+
+	recent, historical, err := s.FetchBatches().ListDuePrioritized(ctx, "crypto", now, 3, 1)
+	require.NoError(t, err)
+	require.Len(t, recent, 3)
+	require.Len(t, historical, 1)
+	require.Equal(t, "recent-3", recent[0].BatchID, "the oldest currently-expiring batch is most urgent")
+	require.Equal(t, "recent-2", recent[1].BatchID)
+	require.Equal(t, "recent-1", recent[2].BatchID)
+	require.Equal(t, "old-0", historical[0].BatchID, "historical recovery still makes bounded progress")
+}
+
+func TestListDuePrioritizedKeepsOldPeriodRetryHistoricalAfterDeadlineRefresh(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	oldTarget := now.Add(-20 * time.Minute).Format(time.RFC3339Nano)
+	requestJSON := fmt.Sprintf(`{"items":[{"target_data_time":%q}]}`, oldTarget)
+	plannedAt := now
+	deadline := now.Add(-time.Minute)
+	periodDeadline := now.Add(-time.Minute)
+	batch := &domain.BatchInvocation{
+		SpaceID: "crypto", BatchID: "old-period-retry", ScheduleID: "retry:old-period-retry",
+		BatchKind: domain.BatchKindRealtime, Status: domain.BatchStatusPlanned, PlannedAt: &plannedAt,
+		DeadlineAt: &deadline, PeriodDeadlineAt: &periodDeadline, RequestJSON: requestJSON,
+	}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	updated, err := s.FetchBatches().MakePlannedRetryBatchDue(ctx, "crypto", batch.BatchID, now.Add(-time.Second))
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	recent, historical, err := s.FetchBatches().ListDuePrioritized(ctx, "crypto", now, 1, 1)
+	require.NoError(t, err)
+	require.Empty(t, recent, "refreshing an old retry batch deadline must not promote its old data period")
+	require.Len(t, historical, 1)
+	require.Equal(t, batch.BatchID, historical[0].BatchID)
+}
+
+func TestListDuePrioritizedQueriesUseDeadlineIndexesWithoutSorting(t *testing.T) {
+	s := newCollectorStore(t)
+	now := time.Now().UTC()
+	queries := []struct {
+		query   string
+		args    []any
+		indexes []string
+	}{
+		{
+			query: `SELECT c_id FROM t_collector_fetch_batches WHERE c_space_id = ? AND c_status = ? AND c_period_deadline_at > ?
+				AND c_deadline_at IS NOT NULL AND c_deadline_at <= ? ORDER BY c_period_deadline_at,c_deadline_at,c_id LIMIT ?`,
+			args: []any{"crypto", domain.BatchStatusDispatched, now, now, 10}, indexes: []string{"idx_collector_fetch_batch_period_due"},
+		},
+		{
+			query: `SELECT c_id FROM t_collector_fetch_batches WHERE c_space_id = ? AND c_status = ? AND c_period_deadline_at > ? AND (
+				(c_deadline_at IS NOT NULL AND c_deadline_at <= ?) OR EXISTS (
+					SELECT 1 FROM t_collector_timer_period_batches AS manifests
+					WHERE manifests.c_space_id=t_collector_fetch_batches.c_space_id AND manifests.c_batch_id=t_collector_fetch_batches.c_batch_id
+					AND manifests.c_claim_request_id='' AND manifests.c_deadline_at <= ?))
+				ORDER BY c_period_deadline_at,c_deadline_at,c_id LIMIT ?`,
+			args: []any{"crypto", domain.BatchStatusPlanned, now, now, now, 10}, indexes: []string{"idx_collector_fetch_batch_period_due", "idx_collector_fetch_batch_deadline"},
+		},
+		{
+			query: `SELECT c_id FROM t_collector_fetch_batches WHERE c_space_id = ? AND c_status = ? AND (c_period_deadline_at IS NULL OR c_period_deadline_at <= ?)
+				AND c_deadline_at IS NOT NULL AND c_deadline_at <= ? ORDER BY c_deadline_at,c_id LIMIT ?`,
+			args: []any{"crypto", domain.BatchStatusDispatched, now, now, 10}, indexes: []string{"idx_collector_fetch_batch_due_scope", "idx_collector_fetch_batch_deadline"},
+		},
+	}
+	for _, candidate := range queries {
+		var plan []struct {
+			Detail string `gorm:"column:detail"`
+		}
+		require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+candidate.query, candidate.args...).Scan(&plan).Error)
+		planText := fmt.Sprint(plan)
+		usesDeadlineIndex := false
+		for _, index := range candidate.indexes {
+			usesDeadlineIndex = usesDeadlineIndex || strings.Contains(planText, index)
+		}
+		require.True(t, usesDeadlineIndex, "query plan should use a bounded deadline index: %s", planText)
+		require.NotContains(t, planText, "TEMP B-TREE", "prioritized recovery must not sort the active batch backlog")
+	}
 }
 
 func TestMarkDispatchedToNodeUpdatesFailoverRouting(t *testing.T) {
@@ -486,6 +845,7 @@ func TestCompleteWithEffectsRejectsInvalidAssociationsWithoutSideEffects(t *test
 			effects := tc.setup(t, s, batch, targets)
 			updated, err := s.FetchBatches().CompleteWithEffects(context.Background(), batch, effects)
 			require.Error(t, err)
+			require.ErrorIs(t, err, ErrInvalidCompletionScope)
 			require.False(t, updated, "CAS must roll back with the association validation")
 			targetID := targets[0].ID
 			if tc.name == "detached target" {

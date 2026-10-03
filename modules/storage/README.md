@@ -80,14 +80,20 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
   `MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT` 调整。
 - 每个 DuckDB View 最多打开 4 个连接、保留 1 个空闲连接，允许因子读取与实时写入并行，
   避免读取窗口把结果写入长期堵在单连接队列后。
-- View Maintainer 按 `maintenance_check_interval` 检查 DuckDB 文件和每个序列的行数；任意
-  一个 `(subject_id, frequency, series_tag)` 超过 `max_periods_per_series` 即启动 A/B
-  重建，不等待其他序列。超过 `max_view_file_bytes` 也会触发容量重建。新索引只
+- View Maintainer 按 `maintenance_check_interval` 执行轻量维护；昂贵的逐序列行数统计由
+  `capacity_check_interval` 独立限频，默认每个进程、View 和 active index 每小时至多一次。
+  进程启动或 active index 首次可见后会在 `capacity_check_jitter` 范围内随机错开首次扫描，
+  后续按上次扫描开始时间周期运行。任意一个 `(subject_id, frequency, series_tag)` 超过
+  `max_periods_per_series` 即启动 A/B 重建，不等待其他序列。超过 `max_view_file_bytes`
+  时，有界保留 View 触发容量重建；永久 View 不截断历史，改由
+  `moox_storage_view_permanent_view_capacity_over_limit` 暴露告警指标并记录一次告警日志。
+  新索引只
   backfill 保留窗口，切换完成后由独立 Cleanup Timer 删除旧 DuckDB 文件，不在 active
   索引上逐行删除。完整策略来自包内 `storage-view/config/maintenance.json`，由根目录
   `moox.toml` 的 `[storage_view]` 生成；支持 `system_monitor` 和精确 View 覆盖。
   时序 View 按每个 subject/frequency 回溯已完成的 K 线根数，不按自然时间计算，
-  因此周末、节假日不会减少有效回溯量。默认所有频率均回溯 `1000` 根；根目录
+  因此周末、节假日不会减少有效回溯量。默认所有频率保留最近 `5000` 根，单序列超过
+  `6000` 根触发重建；根目录
   `moox.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一覆盖该值。某个 subject 历史不足目标根数
   时使用当前已有历史激活 View，后续由实时事件继续补齐；`keep_duration` 仍只控制索引保留/容量整理，
   不再决定时序回填根数。
@@ -104,6 +110,9 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
   原因和阻塞原因连续跳过时会聚合 `skip_count`，不会按检查周期无限新增行。
 - 文件超限重建失败后使用固定 30 分钟的“超限重建重试间隔”，只抑制重复的全量回填尝试；
   Active View 继续提供查询和实时写入，desired revision 变化时立即允许新重建。
+- 容量扫描排在同一 View Maintainer 串行执行，排队时间由
+  `moox_storage_view_capacity_scan_queue_delay_seconds` 和
+  `moox_storage_view_capacity_scan_oldest_overdue_seconds` 暴露；不保证每个到期扫描最多延迟 1 分钟。
 - Desired Revision、关联 Dataset 或超过 `2 * keep_duration` 会触发 Maintenance。
 - Metadata 激活后，DataView 原子切换 Active 索引；宽限期后删除 OldView。
 

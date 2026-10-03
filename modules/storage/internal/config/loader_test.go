@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +32,7 @@ func TestStorageViewRebuildDefaults(t *testing.T) {
 	if cfg.View.MaintenanceCheckInterval != "1m" || cfg.View.BackfillPageSize != 2000 || cfg.View.BackfillRequestInterval != "100ms" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "24h" {
 		t.Fatalf("view rebuild defaults = %q/%d/%s/%d/%d/%s", cfg.View.MaintenanceCheckInterval, cfg.View.BackfillPageSize, cfg.View.BackfillRequestInterval, cfg.View.MaxViewFileBytes, cfg.View.RebuildMaxPending, cfg.View.RebuildLookback)
 	}
-	want := map[string]uint64{"1m": 1000, "1h": 1000, "1d": 1000, "default": 1000}
+	want := map[string]uint64{"1m": 5000, "1h": 5000, "1d": 5000, "default": 5000}
 	for frequency, periods := range want {
 		if cfg.View.RebuildLookbackPeriods[frequency] != periods {
 			t.Fatalf("view rebuild periods[%q] = %d, want %d", frequency, cfg.View.RebuildLookbackPeriods[frequency], periods)
@@ -56,31 +57,177 @@ func TestStorageViewRebuildLookbackPeriodsNormalizeFrequency(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.ApplyDefaults()
-	if cfg.Storage.View.RebuildLookbackPeriods["1h"] != 123 || cfg.Storage.View.RebuildLookbackPeriods["30s"] != 456 || cfg.Storage.View.RebuildLookbackPeriods["default"] != 1000 {
+	if cfg.Storage.View.RebuildLookbackPeriods["1h"] != 123 || cfg.Storage.View.RebuildLookbackPeriods["30s"] != 456 || cfg.Storage.View.RebuildLookbackPeriods["default"] != 5000 {
 		t.Fatalf("normalized rebuild periods = %#v", cfg.Storage.View.RebuildLookbackPeriods)
+	}
+}
+
+func TestCheckedInStorageConfigUsesOneMinuteMaintenanceAndFiveThousandLookback(t *testing.T) {
+	path := filepath.Join("..", "..", "config", "storage.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg RuntimeConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyDefaults()
+	if cfg.Storage.View.MaintenanceCheckInterval != "1m" {
+		t.Fatalf("maintenance_check_interval = %q, want 1m", cfg.Storage.View.MaintenanceCheckInterval)
+	}
+	for _, frequency := range []string{"1m", "1h", "1d", "default"} {
+		if got := cfg.Storage.View.RebuildLookbackPeriods[frequency]; got != 5000 {
+			t.Fatalf("rebuild_lookback_periods[%q] = %d, want 5000", frequency, got)
+		}
+	}
+	if cfg.Storage.View.MaxViewFileBytes != 1<<30 {
+		t.Fatalf("max_view_file_bytes = %d, want 1GiB", cfg.Storage.View.MaxViewFileBytes)
 	}
 }
 
 func TestLoadViewMaintenancePolicyRejectsUnknownFieldsAndResolvesOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "maintenance.json")
-	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":3000},"views":[{"space_id":"crypto","view_id":"view_crypto_spot_kline_1m","rebuild_lookback_periods":500}]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":7000},"views":[{"space_id":"crypto","view_id":"view_crypto_spot_kline_1m","rebuild_lookback_periods":5500}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := LoadViewMaintenancePolicy(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := policy.ResolvePolicy("mooxsys", "view_mooxsys_host_disk"); got.MaxPeriodsPerSeries != 3000 {
+	if policy.CapacityCheckInterval != "1h" || policy.CapacityCheckJitter != "1h" {
+		t.Fatalf("capacity schedule = %q/%q, want 1h/1h", policy.CapacityCheckInterval, policy.CapacityCheckJitter)
+	}
+	if got := policy.ResolvePolicy("mooxsys", "view_mooxsys_host_disk"); got.MaxPeriodsPerSeries != 7000 || got.RebuildLookbackPeriods != 5000 {
 		t.Fatalf("system policy=%#v", got)
 	}
-	if got := policy.ResolvePolicy("crypto", "view_crypto_spot_kline_1m"); got.RebuildLookbackPeriods != 500 || got.MaxPeriodsPerSeries != 2000 {
+	if got := policy.ResolvePolicy("crypto", "view_crypto_spot_kline_1m"); got.RebuildLookbackPeriods != 5500 || got.MaxPeriodsPerSeries != 6000 {
 		t.Fatalf("view policy=%#v", got)
 	}
-	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"unexpected":true}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"unexpected":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadViewMaintenancePolicy(path); err == nil {
 		t.Fatal("unknown maintenance policy field was accepted")
+	}
+}
+
+func TestCheckedInViewMaintenancePolicyUsesHourlyCapacitySchedule(t *testing.T) {
+	path := filepath.Join("..", "..", "config", "storage_view", "maintenance.json")
+	policy, err := LoadViewMaintenancePolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.MaintenanceCheckInterval != "1m" || policy.CapacityCheckInterval != "1h" || policy.CapacityCheckJitter != "1h" {
+		t.Fatalf("view intervals = %q/%q/%q", policy.MaintenanceCheckInterval, policy.CapacityCheckInterval, policy.CapacityCheckJitter)
+	}
+	if policy.RebuildLookbackPeriods != 5000 || policy.MaxPeriodsPerSeries != 6000 || policy.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").MaxPeriodsPerSeries != 6000 {
+		t.Fatalf("view capacities = %#v", policy)
+	}
+}
+
+func TestCheckedInStorageViewProfilesUseCapacityDefaults(t *testing.T) {
+	loader := NewConfigLoader("../../config")
+	for _, file := range []string{"storage.yaml", "storage_view/trpc_go.yaml"} {
+		t.Run(file, func(t *testing.T) {
+			var cfg RuntimeConfig
+			if err := loader.LoadConfigWithDefaults(file, &cfg, cfg.ApplyDefaults); err != nil {
+				t.Fatalf("LoadConfigWithDefaults(%s): %v", file, err)
+			}
+			view := cfg.Storage.View
+			if view.MaintenanceCheckInterval != "1m" || view.MaintenancePolicyFile != "config/maintenance.json" || view.MaxViewFileBytes != 1<<30 {
+				t.Fatalf("%s View settings = interval %q policy %q max bytes %d", file, view.MaintenanceCheckInterval, view.MaintenancePolicyFile, view.MaxViewFileBytes)
+			}
+			for _, frequency := range []string{"1m", "1h", "1d", "default"} {
+				if got := view.RebuildLookbackPeriods[frequency]; got != 5000 {
+					t.Fatalf("%s rebuild_lookback_periods[%q] = %d, want 5000", file, frequency, got)
+				}
+			}
+		})
+	}
+
+	policy, err := LoadViewMaintenancePolicy("../../config/storage_view/maintenance.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []struct{ spaceID, viewID string }{
+		{spaceID: "mooxsys", viewID: "view_mooxsys_host_disk"},
+		{spaceID: "crypto", viewID: "view_binance_spot_kline_1m"},
+	} {
+		resolved := policy.ResolvePolicy(target.spaceID, target.viewID)
+		if resolved.RebuildLookbackPeriods != 5000 || resolved.MaxPeriodsPerSeries != 6000 || resolved.MaxViewFileBytes != 1<<30 {
+			t.Fatalf("resolved policy for %s/%s = %#v, want 5000/6000/1GiB", target.spaceID, target.viewID, resolved)
+		}
+	}
+	if policy.MaintenanceCheckInterval != "1m" || policy.CapacityCheckInterval != "1h" || policy.CapacityCheckJitter != "1h" {
+		t.Fatalf("capacity schedule = %q/%q/%q, want 1m/1h/1h", policy.MaintenanceCheckInterval, policy.CapacityCheckInterval, policy.CapacityCheckJitter)
+	}
+}
+
+func TestLoadViewMaintenancePolicyDefaultsJitterToShorterConfiguredInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "maintenance.json")
+	body := `{"capacity_check_interval":"30m","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := LoadViewMaintenancePolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.CapacityCheckJitter != "30m0s" {
+		t.Fatalf("capacity_check_jitter = %q, want 30m0s", policy.CapacityCheckJitter)
+	}
+}
+
+func TestLoadViewMaintenancePolicyRejectsInvalidCapacitySchedule(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "zero interval", body: `"capacity_check_interval":"0s"`, want: "capacity_check_interval"},
+		{name: "interval over one day", body: `"capacity_check_interval":"25h"`, want: "capacity_check_interval"},
+		{name: "zero jitter", body: `"capacity_check_jitter":"0s"`, want: "capacity_check_jitter"},
+		{name: "negative jitter", body: `"capacity_check_jitter":"-1s"`, want: "capacity_check_jitter"},
+		{name: "jitter exceeds interval", body: `"capacity_check_interval":"30m","capacity_check_jitter":"1h"`, want: "capacity_check_jitter"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "maintenance.json")
+			body := `{"maintenance_check_interval":"1m","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,` + tt.body + `}`
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadViewMaintenancePolicy(path); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("LoadViewMaintenancePolicy error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadViewMaintenancePolicyRejectsMaxNotAboveLookback(t *testing.T) {
+	for _, maxPeriods := range []uint64{4999, 5000} {
+		t.Run(fmt.Sprint(maxPeriods), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "maintenance.json")
+			body := fmt.Sprintf(`{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":%d,"max_view_file_bytes":1073741824}`, maxPeriods)
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadViewMaintenancePolicy(path); err == nil || !strings.Contains(err.Error(), "view maintenance limits") {
+				t.Fatalf("LoadViewMaintenancePolicy error = %v, want invalid capacity limits", err)
+			}
+		})
+	}
+}
+
+func TestLoadViewMaintenancePolicyRejectsInvalidResolvedOverrideLimits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "maintenance.json")
+	body := `{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"views":[{"space_id":"crypto","view_id":"view_binance_spot_kline_1m","rebuild_lookback_periods":6000,"max_periods_per_series":6000}]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadViewMaintenancePolicy(path); err == nil || !strings.Contains(err.Error(), "invalid limits") {
+		t.Fatalf("LoadViewMaintenancePolicy error = %v, want invalid resolved override limits", err)
 	}
 }
 

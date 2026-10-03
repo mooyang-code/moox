@@ -133,7 +133,7 @@ func TestResolveSCFTimerFunctionCountsUsesConfiguredFunctionLimit(t *testing.T) 
 	require.ErrorContains(t, resolveSCFTimerFunctionCountsWithLimit(&cfg, "scf", 2), "available Timer capacity")
 }
 
-func TestResolveSCFFunctionCountsUseFullCryptoInvokeCapacity(t *testing.T) {
+func TestResolveSCFFunctionCountsReserveCryptoReleaseCanaryCapacity(t *testing.T) {
 	cfg := SCFFetcherSpace{
 		SpaceID: "crypto", TimerFunctionCount: 60,
 		Regions: []SCFFetcherRegion{
@@ -142,8 +142,8 @@ func TestResolveSCFFunctionCountsUseFullCryptoInvokeCapacity(t *testing.T) {
 		},
 	}
 	require.NoError(t, resolveSCFTimerFunctionCountsWithCapacities(&cfg, "scf", 50, nil))
-	assert.Equal(t, 10, cfg.Regions[0].FunctionCount)
-	assert.Equal(t, 50, cfg.Regions[1].FunctionCount)
+	assert.Equal(t, 11, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 49, cfg.Regions[1].FunctionCount)
 }
 
 func TestValidateSCFCapacitiesReservesPublisherAuxiliaries(t *testing.T) {
@@ -180,6 +180,56 @@ func TestValidateSCFCapacitiesAllowsOverflowNamespacesInOneRegion(t *testing.T) 
 	assert.Equal(t, "moox-crypto-ns2", shards[1].Namespace)
 	assert.Equal(t, 0, shards[1].Timers)
 	assert.Equal(t, 4, shards[1].Invokes)
+}
+
+func TestSpaceRegionReleaseCanaryNamespaceUsesReservedCapacity(t *testing.T) {
+	limits := TencentSCFLimits{RegionLimits: map[string]TencentSCFRegionLimit{
+		"ap-nanjing": {MaxNamespacesPerRegion: 3, MaxFunctionsPerNamespace: 2},
+	}}
+	space := SCFFetcherSpace{SpaceID: "crypto", Namespace: "moox-crypto"}
+	region := SCFFetcherRegion{Region: "ap-nanjing", Enabled: true, FunctionCount: 1}
+	namespace, err := SpaceRegionReleaseCanaryNamespace(space, region, limits)
+	require.NoError(t, err)
+	assert.Equal(t, "moox-crypto", namespace, "use an existing namespace with spare per-namespace quota")
+
+	region.FunctionCount = 2
+	namespace, err = SpaceRegionReleaseCanaryNamespace(space, region, limits)
+	require.NoError(t, err)
+	assert.Equal(t, "moox-crypto-ns2", namespace, "overflow into a new namespace only when every production namespace is full")
+
+	limits.RegionLimits["ap-nanjing"] = TencentSCFRegionLimit{MaxNamespacesPerRegion: 1, MaxFunctionsPerNamespace: 2}
+	_, err = SpaceRegionReleaseCanaryNamespace(space, region, limits)
+	require.ErrorContains(t, err, "no namespace capacity")
+}
+
+func TestValidateSCFCapacitiesIncludesCryptoReleaseCanary(t *testing.T) {
+	limits := TencentSCFLimits{RegionLimits: map[string]TencentSCFRegionLimit{
+		"ap-nanjing": {MaxNamespacesPerRegion: 2, MaxFunctionsPerNamespace: 2},
+	}}
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "moox-crypto",
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 3}},
+	}}}
+	require.NoError(t, ValidateSCFCapacities(cfg, limits), "the release canary occupies one slot in the second namespace")
+
+	cfg.Spaces[0].Regions[0].FunctionCount = 4
+	// Four production functions fill both namespaces and leave no namespace for
+	// the extra release canary; the validator must fail before publication.
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "release canary")
+}
+
+func TestValidateSCFCapacitiesIncludesStockCNReleaseCanary(t *testing.T) {
+	limits := TencentSCFLimits{RegionLimits: map[string]TencentSCFRegionLimit{
+		"ap-guangzhou": {MaxNamespacesPerRegion: 1, MaxFunctionsPerNamespace: 2},
+	}}
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "stockcn", Namespace: "moox-stockcn",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+	}}}
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "release canary")
+
+	limits.RegionLimits["ap-guangzhou"] = TencentSCFRegionLimit{MaxNamespacesPerRegion: 1, MaxFunctionsPerNamespace: 3}
+	require.NoError(t, ValidateSCFCapacities(cfg, limits), "Timer, production Invoke, and isolated release canary fit exactly")
 }
 
 func TestValidateSCFCapacitiesRejectsOverflowBeyondRegionalNamespaces(t *testing.T) {
@@ -477,8 +527,8 @@ func TestResolveSCFTimerFunctionCountsPrioritizesOverseasCryptoRegions(t *testin
 	}
 
 	require.NoError(t, resolveSCFTimerFunctionCounts(&cfg, "scf_fetcher.spaces[0]"))
-	assert.Equal(t, 9, cfg.Regions[0].FunctionCount)
-	assert.Equal(t, 51, cfg.Regions[1].FunctionCount)
+	assert.Equal(t, 10, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 50, cfg.Regions[1].FunctionCount)
 }
 
 func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {
@@ -538,6 +588,15 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	var manifest Manifest
 	_, err := toml.DecodeFile(filepath.Join("..", "..", "..", "..", "..", "moox.toml.example"), &manifest)
 	require.NoError(t, err)
+	assert.Equal(t, "1m", manifest.StorageView.MaintenanceCheckInterval)
+	assert.Equal(t, "1h", manifest.StorageView.CapacityCheckInterval)
+	assert.Equal(t, "1h", manifest.StorageView.CapacityCheckJitter)
+	assert.Equal(t, uint64(5000), manifest.StorageView.RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), manifest.StorageView.MaxPeriodsPerSeries)
+	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_spot_kline_1m").RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_spot_kline_1m").MaxPeriodsPerSeries)
+	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").MaxPeriodsPerSeries)
 	manifest.SCFFetcher.Enabled = true
 	for index := range manifest.SCFFetcher.Spaces {
 		space := &manifest.SCFFetcher.Spaces[index]
@@ -561,6 +620,19 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 		return
 	}
 	t.Fatal("stockcn scf_fetcher config is missing")
+}
+
+func TestSCFFetcherSpaceParsesCanaryTaskID(t *testing.T) {
+	var manifest Manifest
+	_, err := toml.Decode(`[scf_fetcher]
+enabled = true
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+canary_task_id = "task-canary-1"
+`, &manifest)
+	require.NoError(t, err)
+	require.Len(t, manifest.SCFFetcher.Spaces, 1)
+	assert.Equal(t, "task-canary-1", manifest.SCFFetcher.Spaces[0].CanaryTaskID)
 }
 
 func TestValidateSCFFetcherDefaultsAndBoundsStockCNInvokeTimeout(t *testing.T) {
@@ -661,7 +733,12 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, DefaultDeployRoot, snapshot.Manifest.Paths.DeployRoot)
 	assert.Equal(t, DefaultControlRoot, snapshot.Manifest.Paths.ControlRoot)
 	assert.Equal(t, DefaultStorageRoot, snapshot.Manifest.Paths.StorageRoot)
-	assert.Equal(t, uint64(1000), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
+	assert.Equal(t, "1m", snapshot.Manifest.StorageView.MaintenanceCheckInterval)
+	assert.Equal(t, "1h", snapshot.Manifest.StorageView.CapacityCheckInterval)
+	assert.Equal(t, "1h0m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
+	assert.Equal(t, uint64(5000), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), snapshot.Manifest.StorageView.MaxPeriodsPerSeries)
+	assert.Equal(t, int64(1<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
 	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
 	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
@@ -855,6 +932,63 @@ rebuild_lookback_periods = 777
 	assert.Equal(t, uint64(777), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
 }
 
+func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "1m", snapshot.Manifest.CollectorRetention.MaintenanceInterval)
+	assert.Equal(t, "45s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
+	assert.Equal(t, 50000, snapshot.Manifest.CollectorRetention.MaxRowsPerPass)
+	assert.Equal(t, "24h", snapshot.Manifest.CollectorRetention.ExecutionDetailRetention)
+	assert.Equal(t, "720h", snapshot.Manifest.CollectorRetention.ScheduledRunSummaryRetention)
+	assert.Equal(t, "168h", snapshot.Manifest.CollectorRetention.TerminalRetryRetention)
+	assert.Equal(t, "720h", snapshot.Manifest.CollectorRetention.PeriodSnapshotRetention)
+
+	root = t.TempDir()
+	body := validManifest + `
+[collector_retention]
+maintenance_interval = "2m"
+maintenance_timeout = "30s"
+max_rows_per_pass = 25000
+terminal_retry_retention = "336h"
+`
+	snapshot, err = Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "2m", snapshot.Manifest.CollectorRetention.MaintenanceInterval)
+	assert.Equal(t, "30s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
+	assert.Equal(t, 25000, snapshot.Manifest.CollectorRetention.MaxRowsPerPass)
+	assert.Equal(t, "336h", snapshot.Manifest.CollectorRetention.TerminalRetryRetention)
+}
+
+func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "zero row budget", body: "max_rows_per_pass = 0", want: "max_rows_per_pass"},
+		{name: "row budget below category minimum", body: "max_rows_per_pass = 8", want: "max_rows_per_pass"},
+		{name: "excessive row budget", body: "max_rows_per_pass = 50001", want: "max_rows_per_pass"},
+		{name: "timeout exceeds interval", body: `maintenance_interval = "1m"
+maintenance_timeout = "2m"`, want: "maintenance_timeout"},
+		{name: "retention over one year", body: `execution_detail_retention = "9000h"`, want: "execution_detail_retention"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, validManifest+"\n[collector_retention]\n"+tt.body+"\n", 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestLoadAcceptsMinimumCollectorRetentionBudget(t *testing.T) {
+	root := t.TempDir()
+	_, err := Load(writeManifest(t, root, validManifest+"\n[collector_retention]\nmax_rows_per_pass = 9\n", 0o600), root)
+	require.NoError(t, err)
+}
+
 func TestLoadRejectsSystemMonitorIdentityOverride(t *testing.T) {
 	body := validManifest + `
 [storage_view.system_monitor]
@@ -878,6 +1012,61 @@ func TestLoadRejectsInvalidStorageViewRebuildLookbackPeriods(t *testing.T) {
 			require.Contains(t, err.Error(), "storage_view.rebuild_lookback_periods")
 		})
 	}
+}
+
+func TestLoadRejectsInvalidStorageViewCapacitySchedule(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "nonpositive interval", body: "capacity_check_interval = \"0s\"", want: "capacity_check_interval"},
+		{name: "interval over one day", body: "capacity_check_interval = \"25h\"", want: "capacity_check_interval"},
+		{name: "zero jitter", body: "capacity_check_jitter = \"0s\"", want: "capacity_check_jitter"},
+		{name: "nonpositive jitter", body: "capacity_check_jitter = \"-1s\"", want: "capacity_check_jitter"},
+		{name: "jitter exceeds interval", body: "capacity_check_interval = \"30m\"\ncapacity_check_jitter = \"1h\"", want: "capacity_check_jitter"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + "\n[storage_view]\n" + tt.body + "\n"
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestLoadRejectsStorageViewCapacityNotAboveLookback(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "equal global limits", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 5000", want: "max_periods_per_series"},
+		{name: "invalid View override", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 6000\n\n[[storage_view.views]]\nspace_id = \"crypto\"\nview_id = \"view_binance_spot_kline_1m\"\nrebuild_lookback_periods = 6000\nmax_periods_per_series = 6000", want: "invalid limits"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + "\n[storage_view]\n" + tt.body + "\n"
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestLoadStorageViewDefaultsJitterToShorterConfiguredInterval(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[storage_view]
+capacity_check_interval = "30m"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Equal(t, "30m", snapshot.Manifest.StorageView.CapacityCheckInterval)
+	require.Equal(t, "30m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
 }
 
 func TestLoadFactorSetupDefaultsAndItems(t *testing.T) {

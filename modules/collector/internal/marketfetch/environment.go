@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,6 +94,7 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		"MOOX_MARKET_FETCH_FREQUENCY":       assignment.Frequency,
 		"MOOX_MARKET_FETCH_OUTPUT_FIELDS":   strings.Join(normalizeOutputFields(assignment.OutputFields), "|"),
 		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": hash,
+		"MOOX_MARKET_FETCH_SUBJECT_COUNT":   strconv.Itoa(len(subjects)),
 		"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": string(rawRoutes),
 		"MOOX_MARKET_FETCH_DNS_HASH":        dnsHash,
 		"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  updatedAt,

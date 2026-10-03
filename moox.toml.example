@@ -35,20 +35,33 @@ backup_count = 5
 # 后续由实时事件继续补齐。
 [storage_view]
 maintenance_check_interval = "1m"
-rebuild_lookback_periods = 1000
-max_periods_per_series = 2000
+capacity_check_interval = "1h"
+capacity_check_jitter = "1h"
+rebuild_lookback_periods = 5000
+max_periods_per_series = 6000
 max_view_file_bytes = 1073741824
 
 # 系统监控 View 可单独配置；省略字段继承 storage_view 全局值。
 [storage_view.system_monitor]
-max_periods_per_series = 2000
+max_periods_per_series = 6000
 
 # 单个 View 覆盖优先级最高；省略字段继承 system_monitor 或全局值。
 [[storage_view.views]]
 space_id = "crypto"
 view_id = "view_binance_spot_kline_1m"
-rebuild_lookback_periods = 1000
-max_periods_per_series = 2000
+rebuild_lookback_periods = 5000
+max_periods_per_series = 6000
+
+# Collector 的旧执行明细、terminal retry 和 period snapshot 按独立期限回收。
+# 活动工作以及未获 Storage complete/degraded 确认的 K 线目标不会被删除。
+[collector_retention]
+maintenance_interval = "1m"
+maintenance_timeout = "45s"
+max_rows_per_pass = 50000
+execution_detail_retention = "24h"
+scheduled_run_summary_retention = "720h"
+terminal_retry_retention = "168h"
+period_snapshot_retention = "720h"
 
 # 留空时仍采集和展示监控数据，但不发送站外告警。
 [notification]
@@ -222,6 +235,8 @@ cos_bucket = "moox-scf-<tencent-app-id>"
 
 [[scf_fetcher.spaces]]
 space_id = "crypto"
+# 发布前必须绑定一个专用、禁用且只含一个标的的 Collector task，避免与实时 Scheduler 争抢同一 period。
+# canary_task_id = "由 Collector 创建的 task ID"
 entrypoint = "market_data"
 market_id = "crypto"
 instrument_type = "spot"
@@ -297,6 +312,8 @@ function_count = 20
 # probe-egress 仅用于诊断出口分布，不再作为发布或启用 Rule 的阻断门禁。
 [[scf_fetcher.spaces]]
 space_id = "stockcn"
+# 发布前必须绑定一个专用、禁用且只含一个标的的 Collector task，避免与 Timer Scheduler 争抢同一 period。
+# canary_task_id = "由 Collector 创建的 task ID"
 entrypoint = "market_data"
 market_id = "stockcn"
 instrument_type = "equity"

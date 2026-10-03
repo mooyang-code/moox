@@ -101,6 +101,18 @@ type periodE2EProcess struct {
 	waitErr error
 }
 
+type periodE2ESchedulerDatasetSource struct {
+	subject domain.Subject
+}
+
+func (s periodE2ESchedulerDatasetSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
+	return storagesource.DatasetInfo{DataSourceID: "stockcn"}, nil
+}
+
+func (s periodE2ESchedulerDatasetSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
+	return []domain.Subject{s.subject}, nil
+}
+
 func TestPeriodStorageRPCE2E(t *testing.T) {
 	if os.Getenv(periodE2EEnabledEnv) != "1" {
 		t.Skip("set MOOX_PERIOD_E2E_RUN=1 through the E2E script to run native RPC coverage")
@@ -798,6 +810,7 @@ func (p *periodE2ESpotFetcher) FetchKlines(ctx context.Context, request marketda
 
 func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, target string, metadata *marketstorage.ResampleMetadataClient, ready periodE2EStorageReady, items []*storagegen.TagSnapshotItem, clock time.Time) {
 	t.Helper()
+	configurePeriodE2EEventBus(t)
 	applyPeriodE2ETagSnapshot(t, ctx, metadata, ready, items, clock.Add(2*time.Second))
 	db := openPeriodE2EDB(t, filepath.Join(root, "retry-exhaustion.db"))
 	params, err := json.Marshal(map[string]any{
@@ -825,8 +838,16 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	require.NoError(t, registry.Register(provider))
 	router, err := marketdata.NewRouter(registry, 1, nil, nil)
 	require.NoError(t, err)
-	now := clock.Truncate(time.Hour).Add(10 * time.Minute)
+	// Scheduler deadline recovery compares against wall time. Keep this
+	// invocation fixture on the current clock instead of the suite's historical
+	// calendar date, or every persisted deadline would already be expired.
+	now := time.Now().UTC().Add(2 * time.Minute).Truncate(time.Minute).Add(10 * time.Minute)
 	require.NoError(t, replacePeriodE2EClock(ready.ClockFile, now))
+	defer func() {
+		if err := replacePeriodE2EClock(ready.ClockFile, clock); err != nil {
+			t.Errorf("restore period E2E clock: %v", err)
+		}
+	}()
 	handler := marketfetch.NewHandler()
 	handler.Now = func() time.Time { return now }
 	publish := handler.Publish
@@ -836,7 +857,9 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 				t.Logf("worker outcome subject=%s outcome=%s error=%s targets=%v", item.GetSubjectId(), item.GetOutcome(), item.GetErrorSummary(), item.GetTargets())
 			}
 		}
-		return publish(publishCtx, request, payload)
+		publishErr := publish(publishCtx, request, payload)
+		t.Logf("completion publish returned batch=%s error=%v", request.BatchID, publishErr)
+		return publishErr
 	}
 	handler.NewCryptoKlinePipeline = func(storage marketfetch.Storage, instrument marketdata.InstrumentType) (*marketfetch.KlinePipeline, error) {
 		return &marketfetch.KlinePipeline{
@@ -860,18 +883,57 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	t.Setenv("MOOX_SPACE_ID", ready.SpaceID)
 	t.Setenv("MOOX_FETCH_MAX_RETRY_ATTEMPTS", "3")
 	var retryKey string
+	var initialBatchIDs []string
 	for attempt := 0; attempt < 4; attempt++ {
 		require.NoError(t, scheduler.Tick(ctx, ready.SpaceID))
 		expectedInvocations := 1
 		if attempt == 0 {
 			expectedInvocations = 2
+			planned, scanErr := db.FetchBatches().ListDue(ctx, ready.SpaceID, time.Now().UTC().Add(24*time.Hour), 10)
+			require.NoError(t, scanErr)
+			var plannedSubjects []string
+			for _, batch := range planned {
+				initialBatchIDs = append(initialBatchIDs, batch.BatchID)
+				var request marketfetch.Request
+				require.NoError(t, json.Unmarshal([]byte(batch.RequestJSON), &request))
+				for _, item := range request.Items {
+					plannedSubjects = append(plannedSubjects, item.SubjectID)
+				}
+			}
+			t.Logf("initial period retry plan: batches=%d subjects=%v", len(planned), plannedSubjects)
+			require.ElementsMatch(t, []string{"BTC-USDT", "ETH-USDT"}, plannedSubjects)
 		}
 		for range expectedInvocations {
 			select {
 			case invokeErr := <-invoker.results:
 				require.NoError(t, invokeErr, "real worker must publish a failed-item Completion rather than fail invocation")
-			case <-ctx.Done():
-				t.Fatal("Scheduler did not dispatch the expected retry invocation")
+			case <-time.After(20 * time.Second):
+				invoker.mu.Lock()
+				calls := invoker.calls
+				invoker.mu.Unlock()
+				pending, scanErr := db.FetchRetries().ListDue(ctx, ready.SpaceID, now.Add(time.Hour), 10)
+				batches, batchErr := db.FetchBatches().ListDue(ctx, ready.SpaceID, time.Now().UTC().Add(24*time.Hour), 10)
+				batchStates := make([]string, 0, len(batches))
+				for _, batch := range batches {
+					batchStates = append(batchStates, fmt.Sprintf("%s:%s", batch.BatchID, batch.Status))
+				}
+				for _, batchID := range initialBatchIDs {
+					batch, getErr := db.FetchBatches().Get(ctx, ready.SpaceID, batchID)
+					if getErr != nil {
+						batchStates = append(batchStates, fmt.Sprintf("%s:get_error=%v", batchID, getErr))
+					} else {
+						batchStates = append(batchStates, fmt.Sprintf("%s:%s", batchID, batch.Status))
+					}
+				}
+				stack := make([]byte, 64*1024)
+				n := runtime.Stack(stack, true)
+				var activeStacks []string
+				for _, goroutine := range strings.Split(string(stack[:n]), "\n\n") {
+					if strings.Contains(goroutine, "periodE2EInvoke") || strings.Contains(goroutine, "dispatchPlanned") || strings.Contains(goroutine, "HandleWithFunctionName") || strings.Contains(goroutine, "publishCompletion") || strings.Contains(goroutine, "jetstream.Connect") || strings.Contains(goroutine, "PublishRaw") || strings.Contains(goroutine, "nats.") {
+						activeStacks = append(activeStacks, goroutine)
+					}
+				}
+				t.Fatalf("Scheduler did not dispatch retry invocation: generation=%d calls=%d queued_results=%d retries=%+v scan_error=%v batches=%v batch_error=%v\n%s", attempt, calls, len(invoker.results), pending, scanErr, batchStates, batchErr, strings.Join(activeStacks, "\n\n"))
 			}
 		}
 		var retry *domain.RetryItem
@@ -910,7 +972,7 @@ func runPeriodRetryExhaustionRPCE2E(t *testing.T, ctx context.Context, root, tar
 	require.NoError(t, err)
 	require.Equal(t, domain.PeriodFailureReportAcknowledged, retry.PeriodFailureReportState)
 	snapshot, found, err := db.PeriodSeriesSnapshot().GetPeriodSeriesSnapshot(ctx, domain.PeriodKey{
-		SpaceID: ready.SpaceID, DatasetID: ready.DatasetID, Frequency: ready.Frequency, PeriodTime: clock.Truncate(time.Hour).Add(-time.Hour),
+		SpaceID: ready.SpaceID, DatasetID: ready.DatasetID, Frequency: ready.Frequency, PeriodTime: now.Truncate(time.Hour).Add(-time.Hour),
 	})
 	require.NoError(t, err)
 	require.True(t, found)
@@ -971,7 +1033,11 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	}
 	require.NoError(t, storage.CommitTimeSeriesBatch(ctx, complete, []*storagegen.TimeSeriesBatchRow{{SeriesIndex: 0, Row: periodE2ERow(ready, time.Unix(complete.GetPeriodTime(), 0), "BTC-USDT", periodE2ESeriesTag, 1)}}, "cleanup-complete"))
 	reconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), storage, ready.SpaceID)
-	deleted, err := reconciler.Reconcile(ctx, clock)
+	// Cleanup retention is measured from Storage's terminal confirmation, not
+	// only from the period timestamp. Advance the cleanup clock beyond that
+	// retention window so the just-confirmed complete period is eligible.
+	cleanupNow := time.Now().UTC().Add(30*24*time.Hour + time.Hour)
+	deleted, err := reconciler.Reconcile(ctx, cleanupNow)
 	require.Error(t, err, "NOT_FOUND must defer its snapshot rather than manufacture a period")
 	require.Equal(t, int64(1), deleted, "only complete, expired and quiescent period may be deleted")
 	for _, expectation := range []*storagegen.DatasetPeriodExpectation{waiting, missing} {
@@ -984,7 +1050,7 @@ func runPeriodCleanupRPCE2E(t *testing.T, ctx context.Context, root, target stri
 	unreachable, err := marketstorage.NewBatchStorageWithWriteSource(unusedPeriodE2ETarget(t), marketstorage.InstTypeSPOT, periodE2EWriteSource)
 	require.NoError(t, err)
 	networkReconciler := marketfetch.NewPeriodStorageReconciler(db.PeriodSeriesSnapshot(), db.PeriodStorageStates(), unreachable, ready.SpaceID)
-	deleted, err = networkReconciler.Reconcile(ctx, clock)
+	deleted, err = networkReconciler.Reconcile(ctx, cleanupNow)
 	require.Error(t, err)
 	require.Zero(t, deleted, "network errors must not authorize cleanup")
 	t.Log("SCENARIO PASS cleanup-waiting-not-found-network-retention")
@@ -1149,7 +1215,9 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	})
 	task := domain.CollectionTask{
 		SpaceID: ready.StockSpaceID, TaskID: taskID, TaskName: "StockCN Timer period E2E", DataType: "kline",
-		CollectParams: `{"frequency":"1m"}`, Enabled: true, PrepareState: domain.PrepareStateReady,
+		CollectParams: fmt.Sprintf(`{"market_id":%q,"instrument_type":"equity","source_id":%q,"target_dataset_id":%q,"frequency":"1m"}`,
+			ready.StockSpaceID, periodE2EStockSourceID, ready.StockDatasetID),
+		Enabled: true, PrepareState: domain.PrepareStateReady,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
 	storedTask, err := db.Tasks().GetByTaskID(ctx, ready.StockSpaceID, taskID)
@@ -1475,11 +1543,21 @@ func runStockCNPeriodTimerE2E(t *testing.T, ctx context.Context, root, gatewayBi
 	recovery := &marketfetch.Scheduler{
 		SpaceID: ready.StockSpaceID, Tasks: db.Tasks(), Batches: db.FetchBatches(), Retries: db.FetchRetries(),
 		Instances: db.TaskInstances(), Invoker: periodE2EEmptyCloudNode{}, InvokeNonRealtimeOnly: true,
+		Symbols: periodE2ESchedulerDatasetSource{subject: domain.Subject{
+			SubjectID: periodE2EStockSubjectID, Name: periodE2EStockSubjectID, Status: "active",
+		}},
+		ResolveSymbol: func(_, _, _, _ string) (string, error) {
+			return "sh600000", nil
+		},
 		Now: func() time.Time { return time.Now().UTC().Add(31 * time.Minute) },
 	}
 	require.NoError(t, recovery.Tick(ctx, ready.StockSpaceID))
-	expiredBatch, err := db.FetchBatches().Get(ctx, ready.StockSpaceID, expiredManifest.BatchID)
-	require.NoError(t, err)
+	var expiredBatch *domain.BatchInvocation
+	require.Eventually(t, func() bool {
+		var getErr error
+		expiredBatch, getErr = db.FetchBatches().Get(ctx, ready.StockSpaceID, expiredManifest.BatchID)
+		return getErr == nil && expiredBatch.Status.Terminal()
+	}, 5*time.Second, 20*time.Millisecond, "the maintenance pass must recover an expired unclaimed Timer batch")
 	require.Equal(t, domain.BatchStatusTimedOut, expiredBatch.Status)
 	require.Empty(t, expiredBatch.RequestID, "an expired batch must close without a fabricated Claim")
 	t.Log("SCENARIO PASS timer-expired-unclaimed-recovery")
@@ -1578,8 +1656,12 @@ func runPeriodTimerPublishRecoveryRPCE2E(t *testing.T, ctx context.Context, gate
 		Invoker: invoker, StorageTarget: storageTarget, InvokeNonRealtimeOnly: true, InvokeConcurrency: 1, MaxRetryAttempts: 3, Now: func() time.Time { return now },
 	}
 	require.NoError(t, scheduler.Tick(ctx, ready.StockSpaceID))
-	timedOut, err := db.FetchBatches().Get(ctx, ready.StockSpaceID, manifest.BatchID)
-	require.NoError(t, err)
+	var timedOut *domain.BatchInvocation
+	require.Eventually(t, func() bool {
+		var getErr error
+		timedOut, getErr = db.FetchBatches().Get(ctx, ready.StockSpaceID, manifest.BatchID)
+		return getErr == nil && timedOut.Status.Terminal()
+	}, 5*time.Second, 20*time.Millisecond, "the maintenance pass must recover the missed Completion")
 	require.Equal(t, domain.BatchStatusTimedOut, timedOut.Status)
 	pending, err := db.FetchRetries().ListDue(ctx, ready.StockSpaceID, now.Add(time.Hour), 10)
 	require.NoError(t, err)

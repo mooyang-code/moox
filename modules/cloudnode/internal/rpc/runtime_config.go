@@ -37,6 +37,7 @@ var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_DATASET_ID":          {},
 	"MOOX_MARKET_FETCH_FREQUENCY":           {},
 	"MOOX_MARKET_FETCH_OUTPUT_FIELDS":       {},
+	"MOOX_MARKET_FETCH_SUBJECT_COUNT":       {},
 	"MOOX_MARKET_FETCH_SUBJECTS":            {},
 	"MOOX_MARKET_FETCH_SYMBOLS_JSON":        {},
 	"MOOX_MARKET_FETCH_ASSIGNMENT_HASH":     {},
@@ -76,11 +77,18 @@ func (s *Service) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *pb.Ba
 			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes contains duplicate node_id")}, nil
 		}
 		seen[nodeID] = struct{}{}
+		lifecycleID, err := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, nodeID)
+		if err != nil {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+		}
+		itemID := fmt.Sprintf("%s-%03d", jobID, index)
+		item.LifecycleId = lifecycleID
+		item.OperationId = itemID
 		rawBytes, err := protojson.Marshal(item)
 		if err != nil {
 			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid runtime config request")}, nil
 		}
-		creates = append(creates, store.NodeBatchItemCreate{ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index, NodeID: nodeID, RequestJSON: string(rawBytes)})
+		creates = append(creates, store.NodeBatchItemCreate{ItemID: itemID, ItemIndex: index, NodeID: nodeID, RequestJSON: string(rawBytes)})
 	}
 	if err := s.catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{SpaceID: spaceID, JobID: jobID, Operation: nodeBatchOperationRuntimeConfig, Items: creates}); err != nil {
 		return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
@@ -99,6 +107,15 @@ func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, it
 	if node == nil {
 		return retErr(pb.ErrorCode_NOT_FOUND, "node not found")
 	}
+	if node.PackageID != "" {
+		pkg, packageErr := s.catalog.GetPackage(ctx, spaceID, node.PackageID)
+		if packageErr != nil {
+			return retFromError(packageErr)
+		}
+		if ret := validateCollectorPublishLeaseAtSubmit(pkg, item.GetCollectorPublishLeaseId(), item.GetCollectorPublishFencingToken()); ret != nil {
+			return ret
+		}
+	}
 	if node.NodeType != "scf-event" || node.TriggerType != "timer" {
 		return retErr(pb.ErrorCode_INVALID_PARAM, "runtime config patch requires scf-event timer node")
 	}
@@ -112,6 +129,9 @@ func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, it
 		if _, ok := managedEnvironmentKeys[key]; !ok {
 			return retErr(pb.ErrorCode_INVALID_PARAM, "environment key is not managed: "+key)
 		}
+	}
+	if _, err := assignmentRuntimeMetadata(item.GetManagedEnvironment()); err != nil {
+		return retErr(pb.ErrorCode_INVALID_PARAM, err.Error())
 	}
 	if value, ok := item.GetManagedEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"]; ok && value != strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
 		return retErr(pb.ErrorCode_INVALID_PARAM, "Timer runtime timeout must be 60 seconds")
@@ -156,6 +176,24 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 			return "", err
 		}
 		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
+	}
+	durable := isNodeBatchDurableOperation(ctx)
+	retainClaim := durable
+	if durable {
+		if strings.TrimSpace(item.GetLifecycleId()) == "" || strings.TrimSpace(item.GetOperationId()) == "" {
+			return "", fmt.Errorf("runtime config item lifecycle identity is missing; resubmit the update")
+		}
+		if node.LifecycleID != item.GetLifecycleId() {
+			return "", store.ErrNodeLifecycleMismatch
+		}
+		if err := s.catalog.ClaimNodeMutation(ctx, spaceID, node.NodeID, item.GetLifecycleId(), item.GetOperationId()); err != nil {
+			return "", err
+		}
+		defer func() {
+			if !retainClaim {
+				_ = s.catalog.ReleaseNodeMutationClaim(context.WithoutCancel(ctx), spaceID, node.NodeID, item.GetLifecycleId(), item.GetOperationId())
+			}
+		}()
 	}
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil || account == nil {
@@ -208,42 +246,82 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		return "", fmt.Errorf("scf function %s %w", ref.FunctionName, err)
 	}
 	verified := info
+	providerMutationStarted := false
+	mutationError := func(err error) error {
+		if err != nil && (providerMutationStarted || isAmbiguousSCFProviderOutcome(err)) {
+			retainClaim = true
+			return fmt.Errorf("%w: runtime config update for %s: %w", errNodeMutationReconciliationRequired, node.NodeID, err)
+		}
+		return err
+	}
 	timeout := int64(0)
 	if environment["MOOX_FETCH_TIMEOUT_SECONDS"] == strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
 		timeout = tencent.CollectorTimerTimeoutSeconds
 	}
 	if needsEnvironmentUpdate || (timeout > 0 && info.Timeout != timeout) {
 		if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{FunctionRef: ref, Environment: environment, Timeout: timeout}); err != nil {
-			return "", fmt.Errorf("update scf function %s environment: %w", ref.FunctionName, err)
+			return "", mutationError(fmt.Errorf("update scf function %s environment: %w", ref.FunctionName, err))
 		}
+		providerMutationStarted = true
 		if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
-			return "", err
+			return "", mutationError(err)
 		}
 		verified, err = client.GetFunction(ctx, ref)
 		if err != nil {
-			return "", fmt.Errorf("verify scf function %s environment: %w", ref.FunctionName, err)
+			return "", mutationError(fmt.Errorf("verify scf function %s environment: %w", ref.FunctionName, err))
 		}
 	}
 	if timeout > 0 && verified.Timeout != timeout {
-		return "", fmt.Errorf("scf function %s Timer timeout did not verify", ref.FunctionName)
+		return "", mutationError(fmt.Errorf("scf function %s Timer timeout did not verify", ref.FunctionName))
 	}
 	for key, expected := range item.GetManagedEnvironment() {
 		if verified.Environment[key] != expected {
-			return "", fmt.Errorf("scf function %s environment %q did not verify", ref.FunctionName, key)
+			return "", mutationError(fmt.Errorf("scf function %s environment %q did not verify", ref.FunctionName, key))
 		}
 	}
 	trigger, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: item.GetTimerCron(), Enabled: item.GetTimerEnabled(), Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
 	if err != nil {
-		return "", fmt.Errorf("ensure timer trigger for %s: %w", ref.FunctionName, err)
+		return "", mutationError(fmt.Errorf("ensure timer trigger for %s: %w", ref.FunctionName, err))
 	}
-	metadata := map[string]any{"assignment_hash": environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "binding_hash": environment["MOOX_MARKET_FETCH_BINDING_HASH"], "collector_rpc_gateway_target": environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"], "collector_gateway_target_node": environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	providerMutationStarted = true
+	metadata := map[string]any{"collector_rpc_gateway_target": environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"], "collector_gateway_target_node": environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	assignmentMetadata, err := assignmentRuntimeMetadata(item.GetManagedEnvironment())
+	if err != nil {
+		return "", mutationError(err)
+	}
+	for key, value := range assignmentMetadata {
+		metadata[key] = value
+	}
 	if timeout > 0 {
 		metadata["timeout_seconds"] = timeout
 	}
 	if err := s.catalog.UpdateNodeRuntimeMetadata(ctx, spaceID, node.NodeID, metadata); err != nil {
-		return "", err
+		return "", mutationError(err)
+	}
+	if !durable {
+		retainClaim = false
 	}
 	return fmt.Sprintf("updated runtime config and timer for %s", node.NodeID), nil
+}
+
+func assignmentRuntimeMetadata(managed map[string]string) (map[string]any, error) {
+	hash, hasHash := managed["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
+	rawCount, hasCount := managed["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
+	if !hasHash && !hasCount {
+		return nil, nil
+	}
+	if !hasHash || strings.TrimSpace(hash) == "" || !hasCount {
+		return nil, fmt.Errorf("assignment runtime config requires assignment hash and subject count")
+	}
+	count, err := strconv.Atoi(rawCount)
+	if err != nil || count < 0 {
+		return nil, fmt.Errorf("assignment subject count must be a non-negative integer")
+	}
+	metadata := map[string]any{"assignment_hash": hash, "assignment_count": count, "binding_hash": nil}
+	if bindingHash, ok := managed["MOOX_MARKET_FETCH_BINDING_HASH"]; ok && strings.TrimSpace(bindingHash) != "" {
+		metadata["binding_hash"] = bindingHash
+	}
+	return metadata, nil
 }
 
 func scfEnvironmentBytes(values map[string]string) int {

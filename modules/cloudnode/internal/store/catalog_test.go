@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -71,11 +72,14 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	require.NotNil(t, matched)
 	assert.Equal(t, "node-a", matched.NodeID)
 
-	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2", nil, map[string]string{"MOOX_FETCH_MAX_INFLIGHT_REQUESTS": "7"}))
+	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2", nil, map[string]string{"MOOX_FETCH_MAX_INFLIGHT_REQUESTS": "7"}, true))
 	updated, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Equal(t, "scf-event", updated.NodeType)
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(updated.Metadata), &metadata))
+	assert.Equal(t, true, metadata["collector_publish_fenced"])
 	require.NoError(t, repo.DeleteNodes(ctx, "crypto", []string{"node-a"}))
 	deleted, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)

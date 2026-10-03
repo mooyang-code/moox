@@ -1,13 +1,23 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { AuthSessionExpiredError } from "./auth-errors";
 
 const transport = vi.hoisted(() => ({ post: vi.fn(), responseUse: vi.fn() }));
 vi.mock("axios", () => ({ default: { create: () => ({ post: transport.post, interceptors: { response: { use: transport.responseUse } } }) } }));
-vi.mock("./signed-client", () => ({ installSpaceAwareSignedClient: vi.fn() }));
+vi.mock("./signed-client", async () => {
+  const { AuthSessionExpiredError } = await import("./auth-errors");
+  return {
+    installSpaceAwareSignedClient: vi.fn(),
+    expireBrowserSession: async (message?: string) => { throw new AuthSessionExpiredError(message); }
+  };
+});
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: vi.fn() } }));
 
 import { callControl } from "./http";
 
-beforeEach(() => transport.post.mockReset());
+beforeEach(() => {
+  transport.post.mockReset();
+  localStorage.removeItem("user-info");
+});
 
 it("preserves durable instance identity on a business failure", async () => {
   const response = { ret_info: { code: 1, msg: "state unavailable" }, instance: { instance_id: "instance-1", space_id: "space-1", strategy_id: "strategy-1" } };
@@ -23,4 +33,8 @@ it("preserves a recovery response returned with a non-2xx status", async () => {
   const response = { ret_info: { code: 1, msg: "enable failed" }, instance: { instance_id: "instance-1" } };
   const reject = transport.responseUse.mock.calls[0][1];
   await expect(reject({ response: { data: response } })).rejects.toMatchObject({ message: "enable failed", response });
+});
+
+it("classifies a missing browser session as an authentication expiry", async () => {
+  await expect(callControl("collector", "GetTaskDetail", {})).rejects.toBeInstanceOf(AuthSessionExpiredError);
 });

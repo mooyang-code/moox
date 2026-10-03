@@ -44,13 +44,14 @@ func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
 		{marketdata.InstrumentConvertibleBond, "113001.XSHG", "dataset_stockcn_bond_kline"},
 	} {
 		t.Run(string(test.instrument), func(t *testing.T) {
-			item := domain.CollectionItem{SubjectID: test.subject, Symbol: "sh" + test.subject[:6], DatasetID: test.dataset, Provider: "sina", SourceID: "stockcn_http", MarketType: string(test.instrument), TargetDataTime: period.Format(time.RFC3339Nano), SeriesHash: "one-logical-series", ExpectedCount: 1}
+			item := domain.CollectionItem{SubjectID: test.subject, Symbol: "sh" + test.subject[:6], DatasetID: test.dataset, Provider: "sina", SourceID: "stockcn_http", MarketType: string(test.instrument), TargetDataTime: period.Format(time.RFC3339Nano), SeriesHash: "one-logical-series", ExpectedCount: 1, PeriodReservationID: "release-canary-123"}
 			storage := &recordingPeriodFailureStorage{}
 			scheduler := &Scheduler{StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
 			require.NoError(t, scheduler.ensureDatasetPeriod(context.Background(), domain.CollectionTask{SpaceID: StockCNSpaceID}, []domain.CollectionItem{item}, "1m", period, period.Add(time.Minute)))
 			require.Len(t, storage.ensured, 1)
 			ensured := storage.ensured[0]
 			require.Equal(t, uint32(1), ensured.GetExpectedCount())
+			require.Equal(t, item.PeriodReservationID, ensured.GetReservationId())
 			// Match the composition root: no explicit SeriesTag for index or bond.
 			pipeline := &KlinePipeline{SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, InstrumentType: test.instrument, DatasetID: test.dataset, SourceID: item.SourceID}
 			req := Request{SpaceID: StockCNSpaceID, DatasetID: test.dataset, Frequency: "1m", SourceID: item.SourceID, MarketType: string(test.instrument), Items: []domain.CollectionItem{item}, RequirePeriodCommit: true}
@@ -64,6 +65,7 @@ func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
 				require.Equal(t, "default", row.GetKey().GetTimeSeries().GetSeriesTag())
 				require.Equal(t, ensured.GetSeriesSnapshot()[0].GetSeriesTag(), row.GetKey().GetTimeSeries().GetSeriesTag())
 				require.Equal(t, ensured.GetSeriesHash(), expectation.GetSeriesHash())
+				require.Equal(t, item.PeriodReservationID, expectation.GetReservationId())
 				require.Equal(t, uint32(1), expectation.GetExpectedCount())
 				require.Len(t, rows, 1)
 				require.Zero(t, rows[0].GetSeriesIndex())

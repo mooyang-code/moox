@@ -19,6 +19,13 @@ type businessFreshnessItem struct {
 	success                                    bool
 }
 
+func unixSeconds(value time.Time) float64 {
+	if value.IsZero() {
+		return 0
+	}
+	return float64(value.Unix())
+}
+
 func buildBusinessFreshnessReporter(
 	builder *monitorobservability.Builder,
 	repositories *store.Repositories,
@@ -61,31 +68,43 @@ func buildBusinessFreshnessReporterWithInterval(
 			klineEvaluationRan = true
 			reports, err := klineEvaluators[0].Evaluate(ctx, overview.GeneratedAt)
 			if err != nil {
-				return err
-			}
-			for _, report := range reports {
-				klineEvaluated[report.CheckID] = struct{}{}
-				if report.Skipped {
-					if report.Reason == "disabled" {
-						items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
-							spaceID: report.Rule.SpaceID, checkID: report.CheckID,
-							name:    fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency),
-							success: true, reason: "no_longer_expected",
+				var inventoryErr *monmetrics.TaskResultInventoryRefreshError
+				if !errors.As(err, &inventoryErr) {
+					return err
+				}
+				klineEvaluationRan = false
+				state := inventoryErr.State
+				diagnostic := fmt.Sprintf("cache_available=%t cache_age_seconds=%.0f last_success_timestamp_seconds=%.0f error=%s", state.Available, state.Age.Seconds(), unixSeconds(state.LastSuccess), inventoryErr.Cause)
+				items[monmetrics.InternalMetricSpaceID+"\x00"+monmetrics.TaskResultInventoryCheckID] = businessFreshnessItem{
+					spaceID: monmetrics.InternalMetricSpaceID, checkID: monmetrics.TaskResultInventoryCheckID,
+					name: "Collector task-result inventory", success: false,
+					reason: "inventory_refresh_failed", diagnostic: diagnostic,
+				}
+			} else {
+				for _, report := range reports {
+					klineEvaluated[report.CheckID] = struct{}{}
+					if report.Skipped {
+						if report.Reason == "disabled" {
+							items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
+								spaceID: report.Rule.SpaceID, checkID: report.CheckID,
+								name:    fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency),
+								success: true, reason: "no_longer_expected",
+							}
 						}
+						continue
 					}
-					continue
-				}
-				reason := report.Reason
-				if report.Diagnostic != "" {
-					reason += "; " + report.Diagnostic
-				}
-				items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
-					spaceID:    report.Rule.SpaceID,
-					checkID:    report.CheckID,
-					name:       fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency),
-					success:    report.Success,
-					reason:     reason,
-					diagnostic: report.Diagnostic,
+					reason := report.Reason
+					if report.Diagnostic != "" {
+						reason += "; " + report.Diagnostic
+					}
+					name := fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency)
+					if report.CheckID == monmetrics.TaskResultInventoryCheckID {
+						name = "Collector task-result inventory"
+					}
+					items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
+						spaceID: report.Rule.SpaceID, checkID: report.CheckID, name: name,
+						success: report.Success, reason: reason, diagnostic: report.Diagnostic,
+					}
 				}
 			}
 		}
@@ -175,7 +194,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			if business.Kind == "market_fetch" {
 				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
 			} else if business.Kind == "data_delivery" {
-				checkID, name = "pipeline:"+business.Module, "数据投递队列"
+				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
 			}
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
 			items[item.spaceID+"\x00"+item.checkID] = item

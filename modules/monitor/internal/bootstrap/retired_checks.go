@@ -7,7 +7,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 )
 
@@ -34,13 +33,13 @@ func retireObsoleteBusinessChecks(ctx context.Context, repositories *store.Repos
 	if err != nil {
 		return err
 	}
-	configuredKline := configuredKlineFreshnessCheckIDs(cfg)
 	for index := range checks {
 		check := &checks[index]
 		retire := retiredDatasetCheckID(check.CheckID)
 		if strings.HasPrefix(check.CheckID, "kline_freshness:") {
-			_, keep := configuredKline[check.CheckID]
-			retire = !keep
+			// K-line checks are task-owned and discovered dynamically. Keep prior
+			// identities until a successful inventory evaluation can resolve them.
+			retire = cfg == nil || !cfg.KlineFreshness.Enabled
 		}
 		if !retire {
 			continue
@@ -50,22 +49,6 @@ func retireObsoleteBusinessChecks(ctx context.Context, repositories *store.Repos
 		}
 	}
 	return deleteAlertRulesForDisabledChecks(ctx, repositories, checks)
-}
-
-func configuredKlineFreshnessCheckIDs(cfg *config.Config) map[string]struct{} {
-	ids := map[string]struct{}{}
-	if cfg == nil || !cfg.KlineFreshness.Enabled {
-		return ids
-	}
-	for _, rule := range cfg.KlineFreshness.Rules {
-		if !rule.Enabled {
-			continue
-		}
-		ids[monmetrics.KlineFreshnessCheckID(monmetrics.KlineFreshnessRule{
-			SpaceID: rule.SpaceID, ViewID: rule.ViewID, Frequency: rule.Frequency,
-		})] = struct{}{}
-	}
-	return ids
 }
 
 func disableCheckAndDeleteRules(ctx context.Context, repositories *store.Repositories, check *domain.Check) error {

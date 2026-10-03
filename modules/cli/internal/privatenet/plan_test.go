@@ -79,7 +79,7 @@ func TestCollectSCFTargetsSplitsOverflowNamespaces(t *testing.T) {
 	assert.Equal(t, "moox-crypto", targets[0].Namespace)
 	assert.Equal(t, 50, targets[0].FunctionCount)
 	assert.Equal(t, "moox-crypto-ns2", targets[1].Namespace)
-	assert.Equal(t, 4, targets[1].FunctionCount)
+	assert.Equal(t, 5, targets[1].FunctionCount, "the candidate release canary needs its own private-network slot")
 }
 
 func TestBuildPlanDoesNotCreatePrivateNetwork(t *testing.T) {
