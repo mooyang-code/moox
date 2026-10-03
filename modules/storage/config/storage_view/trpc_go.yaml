@@ -165,15 +165,12 @@ storage:
         durable: storage_view_factor
         routes:
           - space_id: crypto
-            dataset_ids: [dataset_crypto_spot_kline_1m_factor]
-        # Factor results are emitted once per factor/subject/period. Keep a
-        # deeper fetch window and more worker capacity than Kline so a brief
-        # Storage View restart can drain the durable backlog faster than the
-        # one-minute producer rate. Rows are still ordered per Dataset; the
-        # consumer coalesces contiguous rows before one index transaction.
-        fetch_batch: 16
-        max_workers: 8
-        max_ack_pending: 128
+            dataset_ids: [dataset_factor_binance_spot_kline_1m]
+        # Keep delivery serialized across process restarts so an unacked row
+        # cannot be overtaken by its FactorPeriodComputed marker.
+        fetch_batch: 1
+        max_workers: 1
+        max_ack_pending: 1
         ack_wait_ms: 120000
         ordering: dataset
         deliver_policy: new

@@ -78,6 +78,7 @@ type InventoryReconciler struct {
 	exact         map[datasetRef]struct{}
 	dynamicExact  map[datasetRef]struct{}
 	allowedSpaces map[string]struct{}
+	factor        EventConsumerOptions
 	misc          EventConsumerOptions
 	interval      time.Duration
 	bindings      map[datasetRef]*dynamicDatasetConsumerBinding
@@ -101,7 +102,7 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 	if opts.EventClient == nil {
 		return nil, errors.New("storage view inventory EventBus client is required")
 	}
-	misc, exact, dynamicExact, allowedSpaces, err := dynamicConsumerTemplate(opts.Consumer)
+	factor, misc, exact, dynamicExact, allowedSpaces, err := dynamicConsumerTemplate(opts.Consumer)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +116,7 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 	}
 	r := &InventoryReconciler{
 		service: s, metadata: opts.Metadata, primary: opts.Primary, auth: auth,
-		exact: exact, dynamicExact: dynamicExact, allowedSpaces: allowedSpaces, misc: misc, interval: interval,
+		exact: exact, dynamicExact: dynamicExact, allowedSpaces: allowedSpaces, factor: factor, misc: misc, interval: interval,
 		bindings: make(map[datasetRef]*dynamicDatasetConsumerBinding),
 	}
 	r.bind = func(ctx context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
@@ -299,7 +300,13 @@ func (r *InventoryReconciler) loadDesired(ctx context.Context) (map[datasetRef]d
 }
 
 func (r *InventoryReconciler) consumerSpec(ref datasetRef) (dynamicDatasetConsumerSpec, error) {
-	partitionID, durable := dynamicDatasetConsumerIdentity(r.misc.Consumer, ref)
+	template := r.misc
+	identityPrefix := "misc"
+	if strings.HasPrefix(strings.TrimSpace(ref.datasetID), "dataset_factor_") {
+		template = r.factor
+		identityPrefix = "factor"
+	}
+	partitionID, durable := dynamicDatasetConsumerIdentityForPartition(identityPrefix, template.Consumer, ref)
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return dynamicDatasetConsumerSpec{}, err
@@ -312,7 +319,7 @@ func (r *InventoryReconciler) consumerSpec(ref datasetRef) (dynamicDatasetConsum
 		}
 		filters = append(filters, filter)
 	}
-	config := r.misc
+	config := template
 	config.PartitionConfigs = nil
 	config.PartitionID = partitionID
 	config.Consumer = durable
@@ -382,9 +389,9 @@ func (r *InventoryReconciler) bindingRefs() []datasetRef {
 	return refs
 }
 
-func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions, map[datasetRef]struct{}, map[datasetRef]struct{}, map[string]struct{}, error) {
+func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions, EventConsumerOptions, map[datasetRef]struct{}, map[datasetRef]struct{}, map[string]struct{}, error) {
 	if len(options.PartitionConfigs) == 0 {
-		return EventConsumerOptions{}, nil, nil, nil, errors.New("storage view dynamic consumers require partition configuration")
+		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("storage view dynamic consumers require partition configuration")
 	}
 	exact := make(map[datasetRef]struct{})
 	dynamicExact := make(map[datasetRef]struct{})
@@ -394,9 +401,22 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 			allowedSpaces[spaceID] = struct{}{}
 		}
 	}
+	var factor EventConsumerOptions
 	var misc EventConsumerOptions
 	for _, partition := range options.PartitionConfigs {
-		if strings.TrimSpace(partition.Consumer) == events.StorageViewMiscConsumer {
+		consumer := strings.TrimSpace(partition.Consumer)
+		if consumer == events.StorageViewFactorConsumer {
+			factor = partition
+			for _, route := range partition.DatasetRoutes {
+				spaceID := strings.TrimSpace(route.SpaceID)
+				datasetID := strings.TrimSpace(route.DatasetID)
+				if spaceID != "" && datasetID != "" && datasetID != "*" {
+					exact[datasetRef{spaceID: spaceID, datasetID: datasetID}] = struct{}{}
+				}
+			}
+			continue
+		}
+		if consumer == events.StorageViewMiscConsumer {
 			misc = partition
 			for _, route := range partition.DatasetRoutes {
 				spaceID := strings.TrimSpace(route.SpaceID)
@@ -421,9 +441,12 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 		}
 	}
 	if strings.TrimSpace(misc.Consumer) == "" {
-		return EventConsumerOptions{}, nil, nil, nil, errors.New("storage view misc consumer partition is required")
+		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("storage view misc consumer partition is required")
 	}
-	return misc, exact, dynamicExact, allowedSpaces, nil
+	if strings.TrimSpace(factor.Consumer) == "" {
+		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("storage view factor consumer partition is required")
+	}
+	return factor, misc, exact, dynamicExact, allowedSpaces, nil
 }
 
 func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {
@@ -439,6 +462,10 @@ func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {
 }
 
 func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string, string) {
+	return dynamicDatasetConsumerIdentityForPartition("misc", miscDurable, ref)
+}
+
+func dynamicDatasetConsumerIdentityForPartition(partitionPrefix, durablePrefix string, ref datasetRef) (string, string) {
 	hash := sha256.Sum256([]byte(strings.TrimSpace(ref.spaceID) + "\x00" + strings.TrimSpace(ref.datasetID)))
 	token := hex.EncodeToString(hash[:])[:16]
 	// Keep both identities within the conservative JetStream name grammar used
@@ -446,7 +473,7 @@ func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string,
 	// every supported server, and the shortened suffix leaves room below the
 	// historical 32-character durable limit.
 	durableToken := token[:12]
-	return "misc_" + token, strings.TrimSpace(miscDurable) + "_" + durableToken
+	return strings.TrimSpace(partitionPrefix) + "_" + token, strings.TrimSpace(durablePrefix) + "_" + durableToken
 }
 
 func viewConsumerDatasetIDs(view *pb.View) []string {

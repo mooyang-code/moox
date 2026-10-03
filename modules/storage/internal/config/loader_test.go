@@ -274,6 +274,9 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	if partitions[1].ID != "factor" || partitions[1].Durable != "storage_view_factor" || partitions[1].FetchBatch != 1 || partitions[1].MaxWorkers != 1 || partitions[1].MaxAckPending != 1 {
 		t.Fatalf("factor partition = %+v", partitions[1])
 	}
+	if got := partitions[1].Datasets(); len(got) != 1 || got[0] != (StorageViewConsumerDataset{SpaceID: "crypto", DatasetID: "dataset_factor_binance_spot_kline_1m"}) {
+		t.Fatalf("factor default routes = %+v, want crypto/dataset_factor_binance_spot_kline_1m", got)
+	}
 	if partitions[2].ID != "system_metrics" || partitions[2].Durable != "storage_view_metrics" || partitions[2].FetchBatch != 16 || partitions[2].MaxWorkers != 4 || partitions[2].MaxAckPending != 64 {
 		t.Fatalf("metrics partition = %+v", partitions[2])
 	}
@@ -300,28 +303,35 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	}
 }
 
-func TestCheckedInFactorViewConsumerSerializesOrderedDeliveryBudget(t *testing.T) {
-	path := filepath.Join("..", "..", "config", "storage.yaml")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+func TestCheckedInFactorViewConsumerProfilesSerializeCanonicalRoute(t *testing.T) {
+	for _, path := range []string{
+		filepath.Join("..", "..", "config", "storage.yaml"),
+		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
+	} {
+		t.Run(path, func(t *testing.T) {
+			var cfg RuntimeConfig
+			loader := NewConfigLoader(filepath.Dir(path))
+			if err := loader.LoadConfigWithDefaults(filepath.Base(path), &cfg, cfg.ApplyDefaults); err != nil {
+				t.Fatalf("LoadConfigWithDefaults(%s): %v", path, err)
+			}
+			if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err != nil {
+				t.Fatalf("ValidateConsumerPartitions(): %v", err)
+			}
+			for _, partition := range cfg.Storage.View.ConsumerPartitions {
+				if partition.ID != "factor" {
+					continue
+				}
+				if partition.FetchBatch != 1 || partition.MaxAckPending != 1 || partition.MaxWorkers != 1 {
+					t.Fatalf("factor broker delivery budget = fetch_batch:%d max_ack_pending:%d max_workers:%d, want all 1", partition.FetchBatch, partition.MaxAckPending, partition.MaxWorkers)
+				}
+				if got := partition.Datasets(); len(got) != 1 || got[0] != (StorageViewConsumerDataset{SpaceID: "crypto", DatasetID: "dataset_factor_binance_spot_kline_1m"}) {
+					t.Fatalf("factor routes = %+v, want crypto/dataset_factor_binance_spot_kline_1m", got)
+				}
+				return
+			}
+			t.Fatal("factor consumer partition is missing")
+		})
 	}
-	var cfg RuntimeConfig
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	cfg.ApplyDefaults()
-
-	for _, partition := range cfg.Storage.View.ConsumerPartitions {
-		if partition.ID != "factor" {
-			continue
-		}
-		if partition.FetchBatch != 1 || partition.MaxAckPending != 1 || partition.MaxWorkers != 1 {
-			t.Fatalf("factor broker delivery budget = fetch_batch:%d max_ack_pending:%d max_workers:%d, want all 1", partition.FetchBatch, partition.MaxAckPending, partition.MaxWorkers)
-		}
-		return
-	}
-	t.Fatal("factor consumer partition is missing")
 }
 
 func TestStorageViewConsumerPartitionsRequireAllCryptoKlineRoutes(t *testing.T) {
@@ -383,7 +393,7 @@ func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
 func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
 		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m", "mdataset_binance_kline_1m", "dataset_spot_kline_1h", "dataset_perpetual_kline_1h", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_crypto_spot_kline_1m_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_factor_binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -43,6 +45,75 @@ func TestDynamicDatasetConsumerIdentityIsStable(t *testing.T) {
 	otherPartitionID, _ := dynamicDatasetConsumerIdentity("storage_view_misc", datasetRef{spaceID: "crypto", datasetID: "dataset_spot_kline_derived_6h"})
 	if otherPartitionID == partitionID {
 		t.Fatal("different Datasets received the same consumer identity")
+	}
+}
+
+func TestInventoryReconcilerUsesFactorTemplateForDynamicFactorDatasets(t *testing.T) {
+	metadata := &inventoryMetadataFake{views: []*pb.View{
+		{SpaceId: "crypto", ViewId: "factor_view_a", Status: "active", DatasetId: "dataset_factor_dynamic_a"},
+		{SpaceId: "crypto", ViewId: "factor_view_b", Status: "active", DatasetId: "dataset_factor_dynamic_b"},
+		{SpaceId: "crypto", ViewId: "misc_view", Status: "active", DatasetId: "dataset_misc_dynamic"},
+	}}
+	primary := &syncPointAppenderFake{}
+	service := &Service{}
+	service.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: "primary-key"})
+	reconciler, err := service.NewInventoryReconciler(InventoryReconcilerOptions{
+		Metadata: metadata, Primary: primary, EventClient: &jetstream.Client{},
+		Consumer: EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{
+			{
+				PartitionID: "factor", Consumer: "storage_view_factor", FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
+				DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_spot_kline_1m"}},
+			},
+			{
+				PartitionID: "misc", Consumer: "storage_view_misc", FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16,
+				DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "*"}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var specs []dynamicDatasetConsumerSpec
+	reconciler.bind = func(_ context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
+		specs = append(specs, spec)
+		return &dynamicDatasetConsumerBinding{partitionID: spec.partitionID, durable: spec.durable}, nil
+	}
+	if err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 3 {
+		t.Fatalf("dynamic bindings = %d, want two Factor and one misc Dataset", len(specs))
+	}
+	factorIDs := make(map[string]string)
+	factorDurables := make(map[string]string)
+	for _, spec := range specs {
+		if strings.HasPrefix(spec.ref.datasetID, "dataset_factor_") {
+			if spec.config.FetchBatch != 1 || spec.config.MaxWorkers != 1 || spec.config.MaxAckPending != 1 {
+				t.Fatalf("Factor Dataset %s delivery budget = %d/%d/%d, want 1/1/1", spec.ref.datasetID, spec.config.FetchBatch, spec.config.MaxWorkers, spec.config.MaxAckPending)
+			}
+			if !strings.HasPrefix(spec.partitionID, "factor_") || !strings.HasPrefix(spec.durable, "storage_view_factor_") {
+				t.Fatalf("Factor Dataset %s identity = %q/%q, want Factor-prefixed identity", spec.ref.datasetID, spec.partitionID, spec.durable)
+			}
+			factorIDs[spec.ref.datasetID] = spec.partitionID
+			factorDurables[spec.ref.datasetID] = spec.durable
+			again, err := reconciler.consumerSpec(spec.ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again.partitionID != spec.partitionID || again.durable != spec.durable {
+				t.Fatalf("Factor Dataset %s identity changed: first=%q/%q second=%q/%q", spec.ref.datasetID, spec.partitionID, spec.durable, again.partitionID, again.durable)
+			}
+			continue
+		}
+		if spec.ref.datasetID != "dataset_misc_dynamic" || spec.config.FetchBatch != 4 || spec.config.MaxWorkers != 2 || spec.config.MaxAckPending != 16 {
+			t.Fatalf("non-Factor dynamic consumer = %s budget %d/%d/%d, want misc Dataset with 4/2/16", spec.ref.datasetID, spec.config.FetchBatch, spec.config.MaxWorkers, spec.config.MaxAckPending)
+		}
+		if !strings.HasPrefix(spec.partitionID, "misc_") || !strings.HasPrefix(spec.durable, "storage_view_misc_") {
+			t.Fatalf("misc identity = %q/%q, want misc-prefixed identity", spec.partitionID, spec.durable)
+		}
+	}
+	if factorIDs["dataset_factor_dynamic_a"] == factorIDs["dataset_factor_dynamic_b"] || factorDurables["dataset_factor_dynamic_a"] == factorDurables["dataset_factor_dynamic_b"] {
+		t.Fatalf("Factor Datasets did not receive distinct identities: partitions=%v durables=%v", factorIDs, factorDurables)
 	}
 }
 
@@ -214,9 +285,10 @@ func TestInventoryReconcilerKeepsExactRouteOutsideWildcardSpace(t *testing.T) {
 func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 	opts := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{
 		{PartitionID: "kline", Consumer: "storage_view_kline", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m"}}},
+		{PartitionID: "factor", Consumer: "storage_view_factor", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_spot_kline_1m"}}},
 		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}, {SpaceID: "crypto", DatasetID: "*"}}},
 	}}
-	_, exact, dynamicExact, allowed, err := dynamicConsumerTemplate(opts)
+	_, _, exact, dynamicExact, allowed, err := dynamicConsumerTemplate(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,8 +312,8 @@ func TestInventoryReconcilerBindsMiscExactRouteOutsideWildcardSpace(t *testing.T
 	}}}
 	template := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{{
 		Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}, {SpaceID: "crypto", DatasetID: "*"}},
-	}}}
-	_, _, dynamicExact, allowed, err := dynamicConsumerTemplate(template)
+	}, {Consumer: "storage_view_factor"}}}
+	_, _, _, dynamicExact, allowed, err := dynamicConsumerTemplate(template)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,8 +340,8 @@ func TestInventoryReconcilerRejectsUnconfiguredMiscExactDataset(t *testing.T) {
 	}}}
 	template := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{{
 		Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}},
-	}}}
-	_, _, dynamicExact, allowed, err := dynamicConsumerTemplate(template)
+	}, {Consumer: "storage_view_factor"}}}
+	_, _, _, dynamicExact, allowed, err := dynamicConsumerTemplate(template)
 	if err != nil {
 		t.Fatal(err)
 	}
