@@ -228,6 +228,13 @@ func (c *Consumer) CurrentFilterSubjects() []string {
 	return append([]string(nil), c.filters...)
 }
 
+func (c *Consumer) LaneStatuses() []LaneStatus {
+	if c == nil || c.handler == nil || c.handler.lanes == nil {
+		return nil
+	}
+	return c.handler.lanes.Status()
+}
+
 func (c *Consumer) RefreshFilters(ctx context.Context) error {
 	if c == nil || c.sets == nil {
 		return fmt.Errorf("factor period consumer set locator is required")

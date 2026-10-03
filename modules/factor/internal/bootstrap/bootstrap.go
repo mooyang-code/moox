@@ -2,218 +2,165 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
-	"slices"
+	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/engine"
-	"github.com/mooyang-code/moox/modules/factor/internal/health"
-	factorobservability "github.com/mooyang-code/moox/modules/factor/internal/observability"
-	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
+	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
+	"github.com/mooyang-code/moox/modules/factor/internal/observability"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
+	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
+	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
+	factorrpc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
-	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
-	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
-	"github.com/mooyang-code/moox/packages/report"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/prometheus/client_golang/prometheus"
-	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-database/timer"
-	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-var factorStartedAt = time.Now()
+const factorHealthService = "trpc.moox.factor.Health"
 
-// Initialize loads config and prepares the factor service runtime.
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
-	if ctx == nil {
-		ctx = trpc.BackgroundContext()
+// Runtime owns every long-lived resource created while assembling moox-factor.
+type Runtime struct {
+	store       *store.Store
+	python      *pyexec.Pool
+	consumer    *trigger.Consumer
+	stopRecalc  func() error
+	stopCatalog func() error
+	stopMetrics func() error
+	cancel      context.CancelFunc
+	health      *factorhealth.State
+	once        sync.Once
+	err         error
+}
+
+func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime, err error) {
+	if ctx == nil || s == nil || cfg == nil {
+		return nil, errors.New("factor context, server and config are required")
 	}
-	log.InfoContextf(ctx, "开始初始化 moox-factor...")
-
-	cfg, err := Load("./config/app.yaml")
-	if err != nil {
-		log.ErrorContextf(ctx, "加载 factor 配置失败: %v", err)
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	dbm, err := store.Open(&store.Options{
-		Path:            cfg.Database.Path,
-		MaxIdleConns:    cfg.Database.MaxIdleConns,
-		MaxOpenConns:    cfg.Database.MaxOpenConns,
-		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
-		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
-	})
-	if err != nil {
-		log.ErrorContextf(ctx, "初始化 factor 数据库失败: %v", err)
-		return nil, err
+	if s.Service(factorHealthService) == nil {
+		return nil, fmt.Errorf("factor health service %q is required", factorHealthService)
 	}
-	keepResources := false
-	var pythonPool *engine.PythonWorkerPool
-	var runner *taskrunner.Service
-	var consumer *eventconsumer.Consumer
-	var stopRealtime context.CancelFunc
-	var waitRealtime func()
-	var cleanupOnce sync.Once
-	cleanup := func() {
-		cleanupOnce.Do(func() {
-			if stopRealtime != nil {
-				stopRealtime()
-			}
-			if waitRealtime != nil {
-				waitRealtime()
-			}
-			if consumer != nil {
-				_ = consumer.Close()
-			}
-			if pythonPool != nil {
-				_ = pythonPool.Close()
-			}
-			_ = dbm.Close()
-		})
+	if s.Service("trpc.moox.factor.FactorMgr") == nil && s.Service("trpc.moox.factor.FactorMgr.trpc") == nil {
+		return nil, errors.New("FactorMgr tRPC or HTTP service is required")
 	}
+
+	runtime := &Runtime{health: factorhealth.New("factor", "factor", "", "")}
+	appCtx, cancel := context.WithCancel(ctx)
+	runtime.cancel = cancel
 	defer func() {
-		if !keepResources {
-			cleanup()
+		if err != nil {
+			err = errors.Join(err, runtime.Close())
 		}
 	}()
-	if err := dbm.ApplySchema(factorschema.AllSQL()); err != nil {
-		log.ErrorContextf(ctx, "初始化 factor schema 失败: %v", err)
-		return nil, err
-	}
-	storageCredentials, err := gatewayauth.ResolveCredentials(cfg.Storage.KeyID, cfg.Storage.HMACKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load factor storage gateway credentials: %w", err)
-	}
 
-	authInfo := factorAuthInfo()
-	factorRepo := dbm.Factors()
-	bindingRepo := dbm.Bindings()
-	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials), authInfo)
-	startupRegistry := registry.NewService(
-		factorRepo,
-		meta,
-		registry.Options{FactorsDir: cfg.Engine.FactorsDir},
-	).WithBindings(bindingRepo)
-	if err := startupRegistry.EnsureSourceArtifacts(ctx); err != nil {
-		return nil, fmt.Errorf("restore factor source artifacts: %w", err)
+	db, err := store.Open(&store.Options{Path: cfg.Database.Path})
+	if err != nil {
+		return nil, fmt.Errorf("open factor database: %w", err)
 	}
-	if err := validateStartupFactorContracts(ctx, startupRegistry); err != nil {
-		return nil, err
+	runtime.store = db
+
+	credentials, err := gatewayauth.ResolveCredentials(cfg.Storage.KeyID, cfg.Storage.HMACKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load factor Storage gateway credentials: %w", err)
 	}
-	manifests := dbm.OutputManifests()
-	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials, authInfo).
-		WithViewAuth(factorViewAuthInfo()).
-		WithOutputManifests(manifests)
-	pythonPool, err = engine.NewPythonWorkerPool(ctx, cfg.Engine.PythonWorkers, process.Config{
-		PythonBin: cfg.Engine.PythonBin, WorkerPath: cfg.Engine.WorkerPath,
-		Args:        []string{"--factors-dir", cfg.Engine.FactorsDir},
-		TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond,
-		Limits:      process.DefaultLimits(),
+	auth := factorAuthInfo()
+	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, credentials, auth)
+	metadataSubjects := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, credentials)...)
+
+	pythonPool, err := pyexec.New(appCtx, cfg.Python.Workers, process.Config{
+		PythonBin: cfg.Python.Bin, WorkerPath: cfg.Python.WorkerPath,
+		Args: []string{"--factors-dir", cfg.Python.FactorsDir}, TaskTimeout: cfg.Python.TaskTimeout,
+		Limits: process.DefaultLimits(),
 	})
 	if err != nil {
-		log.ErrorContextf(ctx, "启动 factor Python worker 失败: %v", err)
+		return nil, fmt.Errorf("start factor Python pool: %w", err)
+	}
+	runtime.python = pythonPool
+
+	metrics, err := observability.NewMetrics(prometheus.DefaultRegisterer)
+	if err != nil {
+		return nil, fmt.Errorf("register factor pipeline metrics: %w", err)
+	}
+	monitor := NewHealth(cfg.Pipeline.PeriodBudgetMax)
+	observedStorage := &observedStore{Store: storage, health: monitor}
+	baseRunner := pipeline.NewRunner(observedStorage, pythonPool, mustCryptoClock(), pipeline.Config{
+		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
+		ReadTimeout: cfg.Pipeline.ReadTimeout, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
+		PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
+	})
+	measuredRunner := &measuredRunner{inner: baseRunner, metrics: metrics, health: monitor}
+
+	locator, err := trigger.NewStoreSetLocator(db)
+	if err != nil {
+		return nil, fmt.Errorf("initialize factor set locator: %w", err)
+	}
+	setNotifier := &consumerNotifier{}
+	var recalcService *recalc.Service
+	catalogService := catalog.NewService(db, storage,
+		catalog.WithFactorsDir(cfg.Python.FactorsDir),
+		catalog.WithSourceChecker(sourceChecker{python: cfg.Python}),
+		catalog.WithRecalcSubmitter(recalcSubmitter{service: func() *recalc.Service { return recalcService }}),
+		catalog.WithNotifier(setNotifier),
+	)
+	recalcService = recalc.NewService(db, measuredRunner,
+		recalc.WithChunkPeriods(cfg.Recalc.ChunkPeriods),
+		recalc.WithLocks(catalogService.Locks()),
+		recalc.WithColumnProvider(storage),
+		recalc.WithSubjectProvider(datasetSubjectProvider{client: metadataSubjects, auth: auth}),
+	)
+
+	if err := catalogService.Reconcile(appCtx); err != nil {
+		return nil, fmt.Errorf("reconcile factor result datasets at startup: %w", err)
+	}
+	stopCatalog, err := startCatalogReconciler(appCtx, catalogService, 5*time.Minute)
+	if err != nil {
 		return nil, err
 	}
-	datasetMetrics, err := factorobservability.NewDatasetMetrics(prometheus.DefaultRegisterer)
-	if err != nil {
-		return nil, fmt.Errorf("initialize factor dataset metrics: %w", err)
-	}
-	moduleMetrics, err := report.NewModuleMetrics(
-		prometheus.DefaultRegisterer,
-		"factor",
-		report.HealthCheckIDsForModule("factor"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("initialize factor module metrics: %w", err)
-	}
-	runMetrics, err := report.NewDatasetModuleObserver(
-		datasetMetrics,
-		moduleMetrics,
-		"calculate",
-		"factor-calculation",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("initialize factor run metrics: %w", err)
-	}
-	periodMetrics, err := factorobservability.NewPeriodMetrics(prometheus.DefaultRegisterer)
-	if err != nil {
-		return nil, fmt.Errorf("initialize factor period metrics: %w", err)
-	}
-	realtimeInventory := factorobservability.NewRealtimeInventory(bindingRepo, datasetMetrics)
-	if err := realtimeInventory.Refresh(ctx); err != nil {
-		return nil, fmt.Errorf("initialize factor realtime dataset inventory: %w", err)
-	}
-	factorGate := taskrunner.NewFactorGate()
-	operationGate := taskrunner.NewOperationGate()
-	storageHealth := &factorStorageHealth{}
-	runner = taskrunner.NewService(cfg.Engine.PythonWorkers, storage, pythonPool,
-		taskrunner.WithBatchExecution(cfg.Engine.BatchEnabled),
-		taskrunner.WithViewReadConfig(
-			cfg.Engine.ViewReadWorkers,
-			time.Duration(cfg.Engine.ViewReadTimeoutMS)*time.Millisecond,
-		),
-		taskrunner.WithDatasetMetrics(runMetrics),
-		taskrunner.WithStorageWriteFailureObserver(storageHealth),
-		taskrunner.WithFactorGate(factorGate),
-		taskrunner.WithTaskValidator(newTaskValidator(factorRepo, bindingRepo)),
-	)
+	runtime.stopCatalog = stopCatalog
 
-	viewReadyRunner := trigger.NewViewReadyRunner(bindingRepo, factorRepo, runner, storage, cfg.Engine.FactorsDir,
-		trigger.WithOperationGate(operationGate), trigger.WithPeriodMetrics(periodMetrics),
-		trigger.WithExecutionUnitTimeout(time.Duration(cfg.Engine.TaskTimeoutMS)*time.Millisecond),
-		trigger.WithExecutionParallelism(cfg.Engine.PythonWorkers),
-		trigger.WithBatchExecution(cfg.Engine.BatchEnabled))
-	if len(cfg.EventBus.URLs) == 0 {
-		log.WarnContextf(ctx, "factor eventbus.urls is empty, realtime trigger startup skipped")
-	} else {
-		consumer = eventconsumer.New(eventconsumer.Config{
-			URLs:                 cfg.EventBus.URLs,
-			FetchMaxWait:         cfg.EventBus.FetchMaxWait,
-			CredentialFile:       cfg.EventBus.CredentialFile,
-			ExecutionTimeout:     cfg.EventBus.ExecutionTimeout,
-			StallThreshold:       cfg.EventBus.StallThreshold,
-			MaxExecutionAttempts: cfg.EventBus.MaxExecutionAttempts,
-		}, viewReadyRunner)
-		if err := consumer.Start(ctx); err != nil {
-			log.ErrorContextf(ctx, "启动 factor EventBus trigger 失败: %v", err)
-			return nil, err
-		}
+	stopRecalc, err := recalcService.Start(appCtx)
+	if err != nil {
+		return nil, fmt.Errorf("start factor recalc worker: %w", err)
 	}
-	registerMetricsReporter(s, realtimeInventory)
+	runtime.stopRecalc = stopRecalc
 
-	factorService := factorsvc.NewWithRuntime(
-		dbm,
-		runner,
-		factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
-		factorsvc.WithMetadataSync(meta),
-		factorsvc.WithRealtimeInventory(realtimeInventory),
-		factorsvc.WithFactorGate(factorGate),
-		factorsvc.WithOperationGate(operationGate),
-		factorsvc.WithBindingOutputCleaner(bindingOutputCleaner{storage: storage, manifests: dbm.OutputManifests()}),
-		factorsvc.WithBindingSchemaCleaner(meta),
-		factorsvc.WithViewReadyExecutor(viewReadyRunner, storage),
-	)
-	reconcileCtx, cancelReconcile := context.WithCancel(ctx)
-	stopRealtime = cancelReconcile
-	waitRealtime = startPendingBindingReconciler(reconcileCtx, factorService)
-	startManifestRetention(reconcileCtx, manifests, time.Hour, factorManifestRetention())
+	consumer, err := trigger.NewConsumer(appCtx, trigger.ConsumerConfig{
+		URLs: cfg.EventBus.URLs, CredentialFile: cfg.EventBus.CredentialFile,
+		FetchMaxWait: cfg.EventBus.FetchMaxWait, PeriodBudgetMin: cfg.Pipeline.PeriodBudgetMin,
+		PeriodBudgetMax: cfg.Pipeline.PeriodBudgetMax,
+	}, locator, observedStorage, measuredRunner, catalogService.Locks())
+	if err != nil {
+		return nil, fmt.Errorf("start factor period consumer: %w", err)
+	}
+	runtime.consumer = consumer
+	setNotifier.setConsumer(consumer)
+	runtime.stopMetrics = startMetricsReporter(appCtx, consumer, pythonPool, metrics)
+
+	status := runtimeStatus{consumer: consumer, python: pythonPool, workers: cfg.Python.Workers, metrics: metrics}
+	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithStatusAPI(status))
 	registered := false
 	for _, name := range []string{"trpc.moox.factor.FactorMgr", "trpc.moox.factor.FactorMgr.trpc"} {
 		if service := s.Service(name); service != nil {
@@ -222,472 +169,368 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 	}
 	if !registered {
-		log.WarnContextf(ctx, "FactorMgr service is not configured, skip register")
+		return nil, errors.New("FactorMgr tRPC or HTTP service is required")
 	}
-	if err := registerHealth(s, cfg, dbm, runner, pythonPool, consumer, storageHealth); err != nil {
-		return nil, err
+	runtime.health.SnapshotFunc = runtime.healthSnapshot(db, consumer, pythonPool, monitor)
+	if err := factorhealth.Register(s.Service(factorHealthService), runtime.health); err != nil {
+		return nil, fmt.Errorf("register factor health service: %w", err)
 	}
-
-	keepResources = true
-	if done := ctx.Done(); done != nil {
-		go func() {
-			<-done
-			cleanup()
-		}()
-	}
-	log.InfoContextf(ctx, "moox-factor 初始化完成")
-	return s, nil
+	runtime.health.SetReady(true)
+	return runtime, nil
 }
 
-type bindingOutputCleaner struct {
-	storage interface {
-		ClearFactorOutputs(context.Context, *engine.FactorTask) error
-	}
-	manifests *store.OutputManifestRepository
-}
-
-func (c bindingOutputCleaner) ClearBindingOutputs(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
-	return c.clearBindingOutputs(ctx, binding, factor, func(string) bool { return true })
-}
-
-// ClearBindingOutputsOutsideScope removes only subjects no longer allowed by
-// the updated binding, preserving historical rows for subjects that remain in
-// its include scope.
-func (c bindingOutputCleaner) ClearBindingOutputsOutsideScope(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
-	return c.clearBindingOutputs(ctx, binding, factor, func(subjectID string) bool {
-		return !domain.BindingAllowsSubject(binding, subjectID)
-	})
-}
-
-func (c bindingOutputCleaner) clearBindingOutputs(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef, shouldClear func(string) bool) error {
-	if c.storage == nil || c.manifests == nil {
+func (r *Runtime) Close() error {
+	if r == nil {
 		return nil
 	}
-	keys, err := c.manifests.ListByBinding(ctx, binding.BindingID)
-	if err != nil {
-		return err
-	}
-	// A lifecycle cleanup is a new mutation even when it targets the same
-	// period as an earlier cleanup. Keep this invocation's IDs stable while
-	// preventing a later disable/re-enable cycle from reusing old outbox IDs.
-	cleanupID := fmt.Sprintf("binding-cleanup-%s-%d", binding.BindingID, time.Now().UnixNano())
-	for _, key := range keys {
-		if !shouldClear(key.SubjectID) {
-			continue
+	r.once.Do(func() {
+		if r.health != nil {
+			r.health.SetReady(false)
 		}
-		period := key.PeriodTime.UTC()
-		task := &engine.FactorTask{}
-		if key.CleanupTaskJSON == "" {
-			return fmt.Errorf("manifest %s generation %s lacks cleanup ownership", key.BindingID, key.BindingGeneration)
+		if r.cancel != nil {
+			r.cancel()
 		}
-		if err := json.Unmarshal([]byte(key.CleanupTaskJSON), task); err != nil {
-			return fmt.Errorf("decode manifest cleanup ownership: %w", err)
+		if r.stopMetrics != nil {
+			r.err = errors.Join(r.err, r.stopMetrics())
 		}
-		task.TaskID, task.TriggerEventID = cleanupID, cleanupID
-		if task.BindingID != key.BindingID || task.BindingGeneration != key.BindingGeneration || task.SubjectID != key.SubjectID || task.Freq != key.Frequency || task.PeriodTime != key.PeriodTime.Unix() || task.FilterSourceSeriesTag != key.FilterSourceSeriesTag || task.SourceSeriesTag != key.SourceSeriesTag {
-			return fmt.Errorf("manifest cleanup ownership does not match key")
+		if r.consumer != nil {
+			r.err = errors.Join(r.err, r.consumer.Close())
 		}
-		if err := c.storage.ClearFactorOutputs(ctx, task); err != nil {
-			return fmt.Errorf("clear binding %s subject %s period %s: %w", binding.BindingID, key.SubjectID, period.Format(time.RFC3339), err)
+		if r.stopRecalc != nil {
+			r.err = errors.Join(r.err, r.stopRecalc())
 		}
-	}
-	return nil
+		if r.stopCatalog != nil {
+			r.err = errors.Join(r.err, r.stopCatalog())
+		}
+		if r.python != nil {
+			r.err = errors.Join(r.err, r.python.Close())
+		}
+		if r.store != nil {
+			r.err = errors.Join(r.err, r.store.Close())
+		}
+	})
+	return r.err
 }
 
-type pendingBindingReconciler interface{ ReconcilePendingBindings(context.Context) error }
-
-func startPendingBindingReconciler(ctx context.Context, reconciler pendingBindingReconciler) func() {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := reconciler.ReconcilePendingBindings(ctx); err != nil {
-					log.WarnContextf(ctx, "reconcile pending factor bindings failed: %v", err)
-				}
-			}
+func (r *Runtime) healthSnapshot(db *store.Store, consumer *trigger.Consumer, python *pyexec.Pool, monitor *Health) healthz.SnapshotFunc {
+	return func(ctx context.Context) healthz.Response {
+		if ctx == nil {
+			ctx = context.Background()
 		}
-	}()
-	return wg.Wait
+		dbReady := db != nil && db.Ping(ctx) == nil
+		pythonReady := python != nil
+		consumerReady := consumer != nil && consumer.Ready()
+		monitor.SetDependency("sqlite", dbReady)
+		monitor.SetDependency("python", pythonReady)
+		monitor.SetDependency("eventbus", consumerReady)
+		status := monitor.Check(time.Now())
+		state := "ok"
+		if !status.Healthy {
+			state = "error"
+		}
+		return healthz.Response{
+			Module: "factor", Ready: status.Healthy, Status: state, Time: time.Now().UTC(),
+			Details: map[string]any{"reasons": status.Reasons, "consumer_ready": consumerReady, "python_busy": python.Busy()},
+		}
+	}
 }
 
-func startManifestRetention(ctx context.Context, manifests *store.OutputManifestRepository, interval, retention time.Duration) {
-	if manifests == nil || retention <= 0 {
-		return
+func startCatalogReconciler(ctx context.Context, service *catalog.Service, interval time.Duration) (func() error, error) {
+	if ctx == nil || service == nil || interval <= 0 {
+		return nil, errors.New("catalog reconciliation context, service and interval are required")
 	}
-	if interval <= 0 {
-		interval = 24 * time.Hour
-	}
-	cleanup := func() {
-		if _, err := manifests.DeleteBefore(ctx, time.Now().UTC().Add(-retention)); err != nil {
-			log.WarnContextf(ctx, "factor output manifest retention cleanup failed: %v", err)
-		}
-	}
-	cleanup()
+	reconcileCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-reconcileCtx.Done():
 				return
 			case <-ticker.C:
-				cleanup()
+				if err := service.Reconcile(reconcileCtx); err != nil && reconcileCtx.Err() == nil {
+					log.ErrorContextf(reconcileCtx, "factor catalog reconciliation failed: %v", err)
+				}
 			}
 		}
 	}()
+	return func() error {
+		cancel()
+		<-done
+		return nil
+	}, nil
 }
 
-func factorManifestRetention() time.Duration {
-	if raw := strings.TrimSpace(os.Getenv("MOOX_FACTOR_MANIFEST_RETENTION")); raw != "" {
-		if retention, err := time.ParseDuration(raw); err == nil && retention > 0 {
-			return retention
-		}
-		log.Warnf("invalid MOOX_FACTOR_MANIFEST_RETENTION=%q; manifest cleanup disabled", raw)
-	}
-	// Keep manifests by default. They are the only durable ownership index for
-	// lifecycle cleanup, and Result Views may legally retain facts longer than
-	// any single global window. Operators can opt into cleanup after choosing a
-	// cutoff no shorter than their longest managed Result View retention.
-	return 0
-}
-
-type realtimeInventoryReconciler interface {
-	Due(time.Time) bool
-	Refresh(context.Context) error
-}
-
-type metricsReporter interface {
-	Handle(context.Context) error
-}
-
-type startupContractValidator interface {
-	ReconcileAllEnabledBindings(context.Context) error
-}
-
-func validateStartupFactorContracts(ctx context.Context, validator startupContractValidator) error {
-	if validator == nil {
-		return fmt.Errorf("factor startup contract validator is required")
-	}
-	if err := validator.ReconcileAllEnabledBindings(ctx); err != nil {
-		return fmt.Errorf("reconcile persisted factor contracts: %w", err)
-	}
-	return nil
-}
-
-func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler) {
-	registerNamedMetricsReporter(s, inventory, "factor", "moox_factor", "trpc.moox.factor.metrics.timer")
-}
-
-func registerNamedMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler, module, serviceName, timerService string) {
-	if s == nil {
-		return
-	}
-	h, err := report.NewHandler(report.DefaultConfig(module, serviceName))
-	if err != nil {
-		log.Warnf("%s metrics reporter disabled: %v", module, err)
-		return
-	}
-	service := s.Service(timerService)
-	if service == nil {
-		log.Warnf("%s metrics timer service is not configured, skip register", timerService)
-		return
-	}
-	timer.RegisterHandlerService(service, metricsTimerHandler(inventory, h, time.Now))
-}
-
-func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metricsReporter, now func() time.Time) func(context.Context) error {
-	return func(ctx context.Context) error {
-		if inventory != nil && inventory.Due(now()) {
-			if err := inventory.Refresh(ctx); err != nil {
-				log.WarnContextf(ctx, "factor realtime dataset inventory refresh failed: %v", err)
+func startMetricsReporter(ctx context.Context, consumer *trigger.Consumer, python *pyexec.Pool, metrics *observability.Metrics) func() error {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		knownSets := make(map[string]struct{})
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				metrics.PythonBusy.Set(float64(python.Busy()))
+				currentSets := make(map[string]struct{})
+				for _, lane := range consumer.LaneStatuses() {
+					currentSets[lane.SetID] = struct{}{}
+					metrics.LaneBacklog.WithLabelValues(lane.SetID).Set(float64(lane.Queued))
+				}
+				for setID := range knownSets {
+					if _, ok := currentSets[setID]; !ok {
+						metrics.LaneBacklog.WithLabelValues(setID).Set(0)
+					}
+				}
+				knownSets = currentSets
 			}
 		}
-		return reporter.Handle(ctx)
-	}
-}
-
-type realtimeStatus interface {
-	Ready() bool
-	Status() eventconsumer.Status
-}
-
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus, storageHealth *factorStorageHealth) error {
-	if cfg == nil {
+	}()
+	return func() error {
+		<-done
 		return nil
 	}
-	state := health.New("factor", "factor-01", "", "")
-	state.SnapshotFunc = factorHealthSnapshot(cfg, dbm, runner, pythonPool, consumer, storageHealth, state)
-	if s == nil {
-		return fmt.Errorf("factor health service is unavailable")
+}
+
+func mustCryptoClock() periodclock.Clock { return periodclock.Continuous{} }
+
+func factorAuthInfo() *commonpb.AuthInfo {
+	auth := &commonpb.AuthInfo{AppId: "moox-factor", Operator: "moox-factor", RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano())}
+	if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
+		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
 	}
-	if err := health.Register(s.Service("trpc.moox.factor.Health"), state); err != nil {
-		return fmt.Errorf("factor health server failed to start: %w", err)
+	return auth
+}
+
+type observedStore struct {
+	storageio.Store
+	health *Health
+}
+
+func (s *observedStore) WriteRows(ctx context.Context, spaceID, datasetID, commitID string, rows []storageio.ResultRow) error {
+	err := s.Store.WriteRows(ctx, spaceID, datasetID, commitID, rows)
+	s.health.RecordStorageWrite(err == nil)
+	return err
+}
+
+type measuredRunner struct {
+	inner interface {
+		Run(context.Context, pipeline.Plan) (pipeline.Outcome, error)
+	}
+	metrics *observability.Metrics
+	health  *Health
+}
+
+func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
+	started := time.Now()
+	r.health.StartLane(plan.Set.SetID, started)
+	defer r.health.EndLane(plan.Set.SetID)
+	log.InfoContextf(ctx, "factor_period_start set_id=%s period_time=%s mode=%d", plan.Set.SetID, plan.TargetStart.UTC().Format(time.RFC3339), plan.Mode)
+	outcome, err := r.inner.Run(ctx, plan)
+	setID := plan.Set.SetID
+	for stage, duration := range outcome.StageDurations {
+		r.metrics.PeriodDuration.WithLabelValues(setID, stage).Observe(duration.Seconds())
+	}
+	status := outcome.Status
+	if err != nil {
+		status = "failed"
+	}
+	if status == "" {
+		status = "complete"
+	}
+	if plan.Mode == pipeline.ModeLive {
+		r.metrics.PeriodTotal.WithLabelValues(setID, status).Inc()
+		r.metrics.PeriodLag.WithLabelValues(setID).Set(max(0, time.Since(plan.TargetStart).Seconds()))
+		if !plan.TargetStart.IsZero() && (err == nil || outcome.Status != "") {
+			r.metrics.LastPeriodTime.WithLabelValues(setID).Set(float64(plan.TargetStart.Unix()))
+		}
+	}
+	for _, factor := range outcome.Factors {
+		if factor.Status != "complete" {
+			reason := factor.Status
+			if reason == "" {
+				reason = "failed"
+			}
+			r.metrics.Failures.WithLabelValues(setID, factor.FactorID, reason).Inc()
+			log.ErrorContextf(ctx, "factor_compute_failed set_id=%s factor_id=%s reason=%s", setID, factor.FactorID, reason)
+		}
+	}
+	if err != nil {
+		log.ErrorContextf(ctx, "factor_period_failed set_id=%s period_time=%s error=%v", setID, plan.TargetStart.UTC().Format(time.RFC3339), err)
+	} else {
+		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d duration=%s", setID, plan.TargetStart.UTC().Format(time.RFC3339), status, outcome.RowsWritten, time.Since(started))
+	}
+	return outcome, err
+}
+
+type consumerNotifier struct {
+	mu       sync.RWMutex
+	consumer *trigger.Consumer
+}
+
+func (n *consumerNotifier) setConsumer(consumer *trigger.Consumer) {
+	n.mu.Lock()
+	n.consumer = consumer
+	n.mu.Unlock()
+}
+
+func (n *consumerNotifier) SetsChanged() {
+	n.mu.RLock()
+	consumer := n.consumer
+	n.mu.RUnlock()
+	if consumer != nil {
+		consumer.SetsChanged()
+	}
+}
+
+type sourceChecker struct{ python PythonConfig }
+
+func (s sourceChecker) CheckSource(ctx context.Context, factor domain.FactorDef, sourcePath string) error {
+	const validator = "import ast,pathlib,sys\np=pathlib.Path(sys.argv[1])\nt=ast.parse(p.read_text())\nif not any(isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name=='compute' for n in t.body): raise ValueError('compute(df, params, context) is required')"
+	cmd := exec.CommandContext(ctx, s.python.Bin, "-c", validator, sourcePath)
+	if err := cmd.Run(); err != nil {
+		return errors.New("source must be valid Python and define compute(df, params, context)")
 	}
 	return nil
 }
 
-func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus, storageHealth *factorStorageHealth, state *health.State) healthz.SnapshotFunc {
-	return func(ctx context.Context) healthz.Response {
-		workerStatus := engine.ExecutorStatus{}
-		if pythonPool != nil {
-			workerStatus = pythonPool.Status()
-		}
-		workerReady := workerStatus.Ready && workerStatus.Workers > 0
-		taskRunnerReady := runner != nil
-		runnerStatus := taskrunner.Status{}
-		if runner != nil {
-			runnerStatus = runner.Status()
-		}
-		// A busy SQLite writer must not block /readyz behind the 5s busy
-		// timeout. Active task failures still surface through the dataset
-		// checks; probe the catalog when the runner is idle.
-		databaseReady := dbm != nil
-		if databaseReady && runnerStatus.ActiveTasks == 0 && runnerStatus.PendingTasks == 0 {
-			pingCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
-			databaseReady = dbm.Ping(pingCtx) == nil
-			cancel()
-		}
-		eventBusReady := realtimeConsumerReady(cfg, consumer)
-		storageWriteReady := storageHealth == nil || storageHealth.Ready()
-		consumerStatus := eventconsumer.Status{}
-		if consumer != nil {
-			consumerStatus = consumer.Status()
-		}
-		ready := databaseReady && storageWriteReady && workerReady && taskRunnerReady && eventBusReady
-		state.SetReady(ready)
-		rsp := healthz.Base("factor", "factor-01", "", "", factorStartedAt, ready)
-		rsp.Details = map[string]any{
-			"database":                 databaseReady,
-			"storage_write_ready":      storageWriteReady,
-			"worker_ready":             workerReady,
-			"worker_version":           workerStatus.WorkerVersion,
-			"python_version":           workerStatus.PythonVersion,
-			"task_runner_ready":        taskRunnerReady,
-			"eventbus_ready":           eventBusReady,
-			"python_workers":           cfg.Engine.PythonWorkers,
-			"active_tasks":             runnerStatus.ActiveTasks,
-			"pending_tasks":            runnerStatus.PendingTasks,
-			"eventbus_enabled":         len(cfg.EventBus.URLs) > 0,
-			"eventbus_stalled":         consumerStatus.Stalled,
-			"last_event_received_at":   healthTime(consumerStatus.LastReceivedAt),
-			"last_period_completed_at": healthTime(consumerStatus.LastCompletedAt),
-			"last_event_ack_at":        healthTime(consumerStatus.LastAckAt),
-			"event_in_flight_since":    healthTime(consumerStatus.InFlightStartedAt),
-			"event_in_flight_id":       consumerStatus.InFlightEventID,
-			"event_execution_timeouts": consumerStatus.ExecutionTimeouts,
-			"last_event_failure_at":    healthTime(consumerStatus.LastFailureAt),
-			"last_event_failure":       consumerStatus.LastFailure,
-			"storage_gateway":          cfg.Storage.GatewayTarget,
-		}
-		if storageHealth != nil {
-			message, at := storageHealth.Error()
-			if message != "" {
-				rsp.Details["storage_write_error"] = message
-				rsp.Details["storage_write_error_at"] = healthTime(at)
-			}
-		}
-		return rsp
+type recalcSubmitter struct{ service func() *recalc.Service }
+
+func (s recalcSubmitter) Submit(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef, start, end time.Time) error {
+	service := s.service()
+	if service == nil {
+		return errors.New("factor recalc service is not initialized")
+	}
+	factorIDs := make([]string, 0, len(factors))
+	for _, factor := range factors {
+		factorIDs = append(factorIDs, factor.FactorID)
+	}
+	sort.Strings(factorIDs)
+	requestID, err := newRequestID()
+	if err != nil {
+		return err
+	}
+	_, err = service.Submit(ctx, set.SetID, factorIDs, nil, requestID, start, end)
+	return err
+}
+
+type recalcRPCAdapter struct{ service *recalc.Service }
+
+func (a recalcRPCAdapter) Submit(ctx context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
+	job, err := a.service.Submit(ctx, setID, factorIDs, subjects, requestID, start, end)
+	return rpcJob(job), err
+}
+
+func (a recalcRPCAdapter) Get(ctx context.Context, jobID string) (factorrpc.RecalcJob, error) {
+	job, err := a.service.Get(ctx, jobID)
+	return rpcJob(job), err
+}
+
+func (a recalcRPCAdapter) Cancel(ctx context.Context, jobID string) (factorrpc.RecalcJob, error) {
+	job, err := a.service.Cancel(ctx, jobID)
+	return rpcJob(job), err
+}
+
+func rpcJob(job store.RecalcJob) factorrpc.RecalcJob {
+	return factorrpc.RecalcJob{
+		JobID: job.JobID, RequestID: job.RequestID, SetID: job.SetID,
+		FactorIDs: append([]string(nil), job.FactorIDs...), Subjects: append([]string(nil), job.Subjects...),
+		StartTime: unixTime(job.StartTime), EndTime: unixTime(job.EndTime), ProgressTime: unixTime(job.ProgressTime),
+		Status: job.Status, Error: job.Error, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 	}
 }
 
-func healthTime(value time.Time) string {
-	if value.IsZero() {
-		return ""
+func unixTime(value int64) time.Time {
+	if value == 0 {
+		return time.Time{}
 	}
-	return value.UTC().Format(time.RFC3339Nano)
+	return time.Unix(value, 0).UTC()
 }
 
-func realtimeConsumerReady(cfg *Config, consumer realtimeStatus) bool {
-	if cfg == nil || len(cfg.EventBus.URLs) == 0 {
-		return true
+func newRequestID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate recalc request id: %w", err)
 	}
-	return consumer != nil && consumer.Ready() && !consumer.Status().Stalled
+	return "factor-enable-" + hex.EncodeToString(value[:]), nil
 }
 
-type metadataClientAdapter struct {
+type datasetSubjectProvider struct {
 	client storagepb.MetadataClientProxy
+	auth   *commonpb.AuthInfo
 }
 
-func newMetadataClient(target, targetNode string, credentials gatewayauth.Credentials) *metadataClientAdapter {
-	// Metadata follows the explicit Storage target used by PrimaryStore and
-	// DataView. The process-local service gateway is not a valid replacement
-	// when Storage is deployed on a separate host.
-	target = storageio.NormalizeStorageTarget(target, "11003")
-	return &metadataClientAdapter{
-		client: storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(target, targetNode, credentials)...),
+func (p datasetSubjectProvider) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error) {
+	if p.client == nil {
+		return nil, errors.New("Storage Metadata client is required")
 	}
-}
-
-func (c *metadataClientAdapter) CreateFactor(ctx context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error) {
-	return c.client.CreateFactor(ctx, req)
-}
-
-func (c *metadataClientAdapter) UpdateFactor(ctx context.Context, req *storagepb.UpdateFactorReq) (*storagepb.UpdateFactorRsp, error) {
-	return c.client.UpdateFactor(ctx, req)
-}
-
-func (c *metadataClientAdapter) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
-	return c.client.CreateDataset(ctx, req)
-}
-
-func (c *metadataClientAdapter) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
-	return c.client.UpdateDataset(ctx, req)
-}
-
-func (c *metadataClientAdapter) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
-	return c.client.UpsertDatasetColumn(ctx, req)
-}
-
-func (c *metadataClientAdapter) GetFactor(ctx context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error) {
-	return c.client.GetFactor(ctx, req)
-}
-
-func (c *metadataClientAdapter) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
-	return c.client.GetDataset(ctx, req)
-}
-
-func (c *metadataClientAdapter) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	return c.client.CheckDatasetActivation(ctx, req)
-}
-
-func (c *metadataClientAdapter) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	return c.client.ActivateDataset(ctx, req)
-}
-
-func (c *metadataClientAdapter) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
-	return c.client.ListDatasetColumns(ctx, req)
-}
-
-func (c *metadataClientAdapter) ListViews(ctx context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
-	return c.client.ListViews(ctx, req)
-}
-
-func (c *metadataClientAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
-	return c.client.ListDatasetSubjects(ctx, req)
-}
-
-func (c *metadataClientAdapter) CreateView(ctx context.Context, req *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
-	return c.client.CreateView(ctx, req)
-}
-
-func (c *metadataClientAdapter) UpdateView(ctx context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
-	return c.client.UpdateView(ctx, req)
-}
-
-func (c *metadataClientAdapter) GetView(ctx context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
-	return c.client.GetView(ctx, req)
-}
-
-func (c *metadataClientAdapter) ListViewColumns(ctx context.Context, req *storagepb.ListViewColumnsReq) (*storagepb.ListViewColumnsRsp, error) {
-	return c.client.ListViewColumns(ctx, req)
-}
-
-func (c *metadataClientAdapter) UpsertViewColumn(ctx context.Context, req *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
-	return c.client.UpsertViewColumn(ctx, req)
-}
-
-func factorAuthInfo() *commonpb.AuthInfo {
-	auth := &commonpb.AuthInfo{
-		AppId:     "moox-factor",
-		Operator:  "moox-factor",
-		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
-	}
-	if secret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
-		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
-	}
-	return auth
-}
-
-func factorViewAuthInfo() *commonpb.AuthInfo {
-	auth := factorAuthInfo()
-	if secret := os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
-		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
-	}
-	return auth
-}
-
-func listExecutableBindings(ctx context.Context, repo *store.BindingRepository) ([]domain.FactorBinding, error) {
-	return repo.ListExecutable(ctx)
-}
-
-type factorTaskRepository interface {
-	Get(context.Context, string) (*domain.FactorDef, error)
-}
-
-type bindingTaskRepository interface {
-	ListExecutable(context.Context) ([]domain.FactorBinding, error)
-}
-
-func newTaskValidator(
-	factors factorTaskRepository,
-	bindings bindingTaskRepository,
-) taskrunner.TaskValidator {
-	return func(ctx context.Context, task taskrunner.Task) error {
-		if factors == nil || bindings == nil {
-			return fmt.Errorf("factor task repositories are unavailable")
-		}
-		factor, err := factors.Get(ctx, task.Factor.FactorID)
+	const pageSize = 1000
+	seen := make(map[string]struct{})
+	for page := uint32(1); ; page++ {
+		response, err := p.client.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
+			AuthInfo: p.auth, SpaceId: spaceID, DatasetId: datasetID,
+			Page: &commonpb.Page{Page: page, Size: pageSize},
+		})
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf(
-					"%w: factor %q no longer exists: %w",
-					taskrunner.ErrStaleTask, task.Factor.FactorID, err,
-				)
-			}
-			return fmt.Errorf("load factor %q: %w", task.Factor.FactorID, err)
+			return nil, fmt.Errorf("list dataset subjects: %w", err)
 		}
-		if factor.Status != domain.FactorStatusEnabled {
-			return fmt.Errorf("%w: factor %q is not enabled", taskrunner.ErrStaleTask, factor.FactorID)
+		if response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+			return nil, errors.New("list dataset subjects returned an unsuccessful response")
 		}
-		if factor.SourceHash != task.Factor.SourceHash {
-			return fmt.Errorf("%w: factor %q source hash changed", taskrunner.ErrStaleTask, factor.FactorID)
-		}
-		if !slices.Equal(factor.InputColumns, task.Factor.InputColumns) ||
-			!slices.Equal(factor.Outputs, task.Factor.Outputs) ||
-			factor.FactorType != task.Factor.FactorType ||
-			factor.ParamsJSON != task.Factor.ParamsJSON ||
-			factor.LookbackPeriods != task.LookbackPeriods {
-			return fmt.Errorf("%w: factor %q definition changed", taskrunner.ErrStaleTask, factor.FactorID)
-		}
-		executable, err := bindings.ListExecutable(ctx)
-		if err != nil {
-			return fmt.Errorf("list executable bindings: %w", err)
-		}
-		taskSource := task.SourceViewID
-		if taskSource == "" {
-			taskSource = task.SourceDataset
-		}
-		taskResult := task.ResultDatasetID
-		if taskResult == "" {
-			taskResult = task.TargetDataset
-		}
-		for _, binding := range executable {
-			resultMatches := binding.ResultDatasetID == taskResult || binding.ResultDatasetID == ""
-			if binding.FactorID == task.Factor.FactorID &&
-				binding.BindingID == task.BindingID &&
-				binding.SpaceID == task.SpaceID &&
-				binding.SourceViewID == taskSource &&
-				resultMatches &&
-				binding.Freq == task.Freq &&
-				domain.BindingAllowsSubject(binding, task.SubjectID) {
-				expectedGeneration := taskrunner.ExecutionGeneration(taskrunner.TaskScope{
-					BindingID: binding.BindingID, BindingGeneration: binding.BindingGeneration,
-					SpaceID: binding.SpaceID, SourceViewID: binding.SourceViewID,
-					ResultDatasetID: binding.ResultDatasetID, Freq: binding.Freq,
-				}, *factor)
-				if binding.BindingGeneration == "" || task.BindingGeneration != expectedGeneration {
-					return fmt.Errorf("%w: binding %q execution generation changed", taskrunner.ErrStaleTask, binding.BindingID)
-				}
-				return nil
+		for _, item := range response.GetDatasetSubjects() {
+			if item != nil && item.GetSubjectId() != "" && item.GetStatus() == "active" {
+				seen[item.GetSubjectId()] = struct{}{}
 			}
 		}
-		return fmt.Errorf("%w: no executable binding matches task scope", taskrunner.ErrStaleTask)
+		result := response.GetPageResult()
+		if result == nil || !result.GetHasMore() || len(response.GetDatasetSubjects()) == 0 {
+			break
+		}
+		if page >= 100000 {
+			return nil, errors.New("dataset subject pagination exceeded the page limit")
+		}
 	}
+	subjects := make([]string, 0, len(seen))
+	for subject := range seen {
+		subjects = append(subjects, subject)
+	}
+	sort.Strings(subjects)
+	return subjects, nil
 }
+
+type runtimeStatus struct {
+	consumer *trigger.Consumer
+	python   *pyexec.Pool
+	workers  int
+	metrics  *observability.Metrics
+}
+
+func (s runtimeStatus) GetStatus(context.Context) (factorrpc.RuntimeStatus, error) {
+	status := factorrpc.RuntimeStatus{PythonWorkers: int32(s.workers)}
+	if s.consumer != nil {
+		status.ConsumerRunning = s.consumer.Ready()
+		for _, lane := range s.consumer.LaneStatuses() {
+			status.Lanes = append(status.Lanes, factorrpc.FactorLaneStatus{SetID: lane.SetID, Queued: int32(lane.Queued), Active: lane.Active})
+		}
+	}
+	if s.python != nil {
+		status.PythonBusy = int32(s.python.Busy())
+		s.metrics.PythonBusy.Set(float64(s.python.Busy()))
+	}
+	return status, nil
+}
+
+func (s runtimeStatus) LatestRun(context.Context, string) (factorrpc.SetRunSummary, error) {
+	return factorrpc.SetRunSummary{}, nil
+}
+
+var _ catalog.Notifier = (*consumerNotifier)(nil)
+var _ catalog.SourceChecker = sourceChecker{}
+var _ catalog.RecalcSubmitter = recalcSubmitter{}
+var _ factorrpc.RecalcAPI = recalcRPCAdapter{}
+var _ factorrpc.StatusAPI = runtimeStatus{}
+var _ factorrpc.RunSummaryAPI = runtimeStatus{}

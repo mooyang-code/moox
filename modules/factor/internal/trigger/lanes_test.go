@@ -87,3 +87,40 @@ func TestLaneHoldsSetLockDuringRun(t *testing.T) {
 	require.Zero(t, locks.active["set-a"])
 	locks.mu.Unlock()
 }
+
+func TestLaneStatusReportsActiveAndQueuedPeriods(t *testing.T) {
+	lanes := NewLanes(nil)
+	defer lanes.Close()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = lanes.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
+			close(started)
+			<-release
+			return pipeline.Outcome{}, nil
+		})
+		done <- struct{}{}
+	}()
+	<-started
+	go func() {
+		_, _ = lanes.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
+			return pipeline.Outcome{}, nil
+		})
+		done <- struct{}{}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		status := lanes.Status()
+		if len(status) == 1 && status[0].Active && status[0].Queued == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("lane status did not include active and queued work: %#v", status)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	<-done
+	<-done
+}

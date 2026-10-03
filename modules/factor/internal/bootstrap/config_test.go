@@ -6,139 +6,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/stretchr/testify/require"
 )
 
-func TestFactorConfigContainsOnlyRuntimeInputs(t *testing.T) {
-	cfg := Default()
-	require.Equal(t, 32, cfg.Engine.PythonWorkers)
-	require.Equal(t, 2, cfg.Engine.ViewReadWorkers)
-	require.Equal(t, 20000, cfg.Engine.ViewReadTimeoutMS)
-	require.True(t, cfg.Engine.BatchEnabled)
-	require.NotEmpty(t, cfg.Engine.PythonBin)
-	require.NotEmpty(t, cfg.Engine.WorkerPath)
-	require.NotEmpty(t, cfg.Engine.FactorsDir)
-}
-
-func TestBatchEnabledEnvOverride(t *testing.T) {
-	t.Setenv("MOOX_FACTOR_ENGINE_BATCH_ENABLED", "false")
-	cfg := Default()
-	require.NoError(t, cfg.applyEnv())
-	require.False(t, cfg.Engine.BatchEnabled)
-
-	t.Setenv("MOOX_FACTOR_ENGINE_BATCH_ENABLED", "true")
-	require.NoError(t, cfg.applyEnv())
-	require.True(t, cfg.Engine.BatchEnabled)
-}
-
-func TestInvalidBatchEnabledEnvIsRejected(t *testing.T) {
-	t.Setenv("MOOX_FACTOR_ENGINE_BATCH_ENABLED", "maybe")
-	cfg := Default()
-	require.Error(t, cfg.applyEnv())
-	require.True(t, cfg.Engine.BatchEnabled)
-}
-
-func TestViewReadPipelineEnvOverrides(t *testing.T) {
-	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS", "24")
-	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS", "7500")
-	cfg := Default()
-	cfg.applyEnv()
-	require.Equal(t, 24, cfg.Engine.ViewReadWorkers)
-	require.Equal(t, 7500, cfg.Engine.ViewReadTimeoutMS)
-}
-
-func TestInvalidViewReadPipelineEnvKeepsDefaults(t *testing.T) {
-	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS", "0")
-	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS", "-1")
-	cfg := Default()
-	cfg.applyEnv()
-	require.Equal(t, 2, cfg.Engine.ViewReadWorkers)
-	require.Equal(t, 20000, cfg.Engine.ViewReadTimeoutMS)
-}
-
-func writeConfig(t *testing.T, raw string) string {
-	t.Helper()
+func TestLoadConfigDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(raw), 0o644))
-	return path
-}
-
-func TestLoadUsesPythonWorkersAsOnlyConcurrencySetting(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "engine:\n  python_workers: 100\n"))
-	require.NoError(t, err)
-	require.Equal(t, 100, cfg.Engine.PythonWorkers)
-}
-
-func TestLoadReadsBatchEnabledFromYAML(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "engine:\n  batch_enabled: false\n"))
-	require.NoError(t, err)
-	require.False(t, cfg.Engine.BatchEnabled)
-}
-
-func TestLoadRejectsLegacyWorkersAndScheduler(t *testing.T) {
-	for _, raw := range []string{
-		"engine:\n  workers: 24\n",
-		"scheduler:\n  queue_capacity: 2048\n",
-	} {
-		_, err := Load(writeConfig(t, raw))
-		require.Error(t, err)
-	}
-}
-
-func TestPythonWorkersEnvOverride(t *testing.T) {
-	t.Setenv("MOOX_FACTOR_ENGINE_PYTHON_WORKERS", "37")
-	cfg := Default()
-	cfg.applyEnv()
-	require.Equal(t, 37, cfg.Engine.PythonWorkers)
-}
-
-func TestFactorEventBusCredentialEnvOverride(t *testing.T) {
-	t.Setenv("MOOX_EVENTBUS_CREDENTIAL_FILE", "/tmp/shared.yaml")
-	t.Setenv("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE", "/tmp/factor.yaml")
-	cfg := Default()
-	cfg.applyEnv()
-	require.Equal(t, "/tmp/factor.yaml", cfg.EventBus.CredentialFile)
-}
-
-func TestFactorEventConsumerSafetyDefaults(t *testing.T) {
-	cfg := Default()
-	require.Equal(t, 15*time.Minute, cfg.EventBus.ExecutionTimeout)
-	require.Equal(t, 5*time.Minute, cfg.EventBus.StallThreshold)
-	require.Equal(t, 5, cfg.EventBus.MaxExecutionAttempts)
-}
-
-func TestLoadFactorEventConsumerSafetySettings(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "eventbus:\n  execution_timeout: 20m\n  stall_threshold: 7m\n  max_execution_attempts: 3\n"))
-	require.NoError(t, err)
-	require.Equal(t, 20*time.Minute, cfg.EventBus.ExecutionTimeout)
-	require.Equal(t, 7*time.Minute, cfg.EventBus.StallThreshold)
-	require.Equal(t, 3, cfg.EventBus.MaxExecutionAttempts)
-}
-
-func TestLegacyWorkersEnvIsIgnored(t *testing.T) {
-	t.Setenv("MOOX_FACTOR_ENGINE_WORKERS", "24")
-	cfg := Default()
-	cfg.applyEnv()
-	require.Equal(t, 32, cfg.Engine.PythonWorkers)
-}
-
-func TestLoadWorkerPathFromYAMLAndEnv(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("engine:\n  worker_path: ./yaml-worker.py\n"), 0o644))
-
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	require.Equal(t, "./yaml-worker.py", cfg.Engine.WorkerPath)
-
-	t.Setenv("MOOX_FACTOR_ENGINE_WORKER_PATH", "/tmp/env-worker.py")
-	cfg, err = Load(path)
-	require.NoError(t, err)
-	require.Equal(t, "/tmp/env-worker.py", cfg.Engine.WorkerPath)
+	require.Equal(t, "./data/factor/factor.db", cfg.Database.Path)
+	require.Equal(t, "ip://127.0.0.1:11003", cfg.Storage.GatewayTarget)
+	require.Equal(t, []string{"nats://127.0.0.1:4222"}, cfg.EventBus.URLs)
+	require.Equal(t, "~/.config/moox/eventbus/factor-eventbus.yaml", cfg.EventBus.CredentialFile)
+	require.Equal(t, 10*time.Second, cfg.EventBus.FetchMaxWait)
+	require.Equal(t, "python3", cfg.Python.Bin)
+	require.Equal(t, "./pyworker/worker.py", cfg.Python.WorkerPath)
+	require.Equal(t, "./data/factor/factors", cfg.Python.FactorsDir)
+	require.Equal(t, 8, cfg.Python.Workers)
+	require.Equal(t, 30*time.Second, cfg.Python.TaskTimeout)
+	require.Equal(t, 100, cfg.Pipeline.ReadBatchSubjects)
+	require.Equal(t, 4, cfg.Pipeline.ReadWorkers)
+	require.Equal(t, 20*time.Second, cfg.Pipeline.ReadTimeout)
+	require.Equal(t, 1000, cfg.Pipeline.WriteBatchRows)
+	require.Equal(t, time.Minute, cfg.Pipeline.PeriodBudgetMin)
+	require.Equal(t, 15*time.Minute, cfg.Pipeline.PeriodBudgetMax)
+	require.Equal(t, 2000, cfg.Recalc.ChunkPeriods)
 }
 
-func TestLoadRejectsUnknownField(t *testing.T) {
+func TestLoadConfigRejectsInvalidBudget(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("engine:\n  sections_dir: ./sections\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("pipeline:\n  period_budget_min: 2m\n  period_budget_max: 1m\n"), 0o600))
+	_, err := Load(path)
+	require.ErrorContains(t, err, "period_budget_min must not exceed")
+}
+
+func TestLoadRejectsLegacyConfigSections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("engine:\n  workers: 24\n"), 0o600))
 	_, err := Load(path)
 	require.Error(t, err)
+}
+
+func TestSourceCheckerValidatesSyntaxAndComputeContract(t *testing.T) {
+	checker := sourceChecker{python: PythonConfig{Bin: "python3"}}
+	path := filepath.Join(t.TempDir(), "factor.py")
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params, context):\n    return df\n"), 0o600))
+	require.NoError(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path))
+	require.NoError(t, os.WriteFile(path, []byte("def other():\n    return 1\n"), 0o600))
+	require.Error(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path))
+	require.NoError(t, os.WriteFile(path, []byte("def compute(:\n"), 0o600))
+	require.Error(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
@@ -22,9 +23,16 @@ type laneResult struct {
 	err     error
 }
 
+type LaneStatus struct {
+	SetID  string
+	Queued int
+	Active bool
+}
+
 type periodLane struct {
-	setID string
-	jobs  chan laneJob
+	setID  string
+	jobs   chan laneJob
+	active bool
 }
 
 // Lanes serializes periods for each set while allowing independent sets to run
@@ -104,6 +112,8 @@ func (l *Lanes) runJob(setID string, job laneJob) {
 		job.done <- result
 		return
 	}
+	l.setActive(setID, true)
+	defer l.setActive(setID, false)
 	if l.locks != nil {
 		unlock := l.locks.Lock(setID)
 		if unlock != nil {
@@ -136,4 +146,26 @@ func (l *Lanes) Close() {
 	}
 	l.mu.Unlock()
 	l.wg.Wait()
+}
+
+func (l *Lanes) Status() []LaneStatus {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	status := make([]LaneStatus, 0, len(l.lanes))
+	for setID, lane := range l.lanes {
+		status = append(status, LaneStatus{SetID: setID, Queued: len(lane.jobs), Active: lane.active})
+	}
+	sort.Slice(status, func(i, j int) bool { return status[i].SetID < status[j].SetID })
+	return status
+}
+
+func (l *Lanes) setActive(setID string, active bool) {
+	l.mu.Lock()
+	if lane := l.lanes[setID]; lane != nil {
+		lane.active = active
+	}
+	l.mu.Unlock()
 }

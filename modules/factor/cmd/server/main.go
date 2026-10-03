@@ -27,10 +27,10 @@ func main() {
 }
 
 func run() (err error) {
-	app := flag.String("config", "config/app.yaml", "control application config")
-	framework := flag.String("conf", "config/trpc_go.yaml", "control tRPC config")
+	app := flag.String("config", "config/app.yaml", "factor application config")
+	framework := flag.String("conf", "config/trpc_go.yaml", "factor tRPC config")
 	flag.Parse()
-	cfg, err := bootstrap.LoadControlConfig(*app)
+	cfg, err := bootstrap.Load(*app)
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func run() (err error) {
 	trpclog.InstallServiceName("factor")
 	ctx, cancel := context.WithCancel(trpc.BackgroundContext())
 	defer cancel()
-	runtime, err := bootstrap.InitializeControl(ctx, s, cfg)
+	runtime, err := bootstrap.Initialize(ctx, s, cfg)
 	if err != nil {
 		return err
 	}
