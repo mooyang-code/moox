@@ -655,7 +655,7 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	validSelector := &pb.TimeSeriesSelector{
-		SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m", SubjectId: "BTC-USDT",
+		SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", SubjectId: "BTC-USDT",
 		Freq: "1m", SeriesTag: stringPtr("venue:binance"),
 	}
 	tests := []struct {
@@ -667,11 +667,11 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 			Selectors: []*pb.TimeSeriesSelector{validSelector}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 		{name: "exact keys", req: &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m",
-			Selectors: []*pb.TimeSeriesSelector{validSelector}, Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m"}}, Order: pb.SortOrder_SORT_ORDER_DESC,
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m",
+			Selectors: []*pb.TimeSeriesSelector{validSelector}, Keys: []*pb.TimeSeriesKey{{SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m"}}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 		{name: "page size", req: &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m",
+			AuthInfo: &pb.AuthInfo{AppId: "moox-skill"}, SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m",
 			Selectors: []*pb.TimeSeriesSelector{validSelector}, Page: &commonpb.Page{Size: 1001}, Order: pb.SortOrder_SORT_ORDER_DESC,
 		}},
 	}
@@ -690,6 +690,7 @@ func TestMooxSkillReadIsBoundToKlineScope(t *testing.T) {
 
 func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing.T) {
 	cryptoTag := "venue:binance"
+	cryptoSwapTag := "venue:binance|market:swap"
 	emptyTag := ""
 	defaultTag := "default"
 	otherTag := "venue:okx"
@@ -707,10 +708,12 @@ func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing
 		req     *pb.ReadTimeSeriesRowsReq
 		wantErr bool
 	}{
-		{name: "crypto binance 1m", req: request("crypto", "dataset_binance_spot_kline_1m", "1m", &cryptoTag)},
-		{name: "crypto wildcard series", req: request("crypto", "dataset_binance_spot_kline_1m", "1m", nil), wantErr: true},
-		{name: "crypto empty series", req: request("crypto", "dataset_binance_spot_kline_1m", "1m", &emptyTag), wantErr: true},
-		{name: "crypto other series", req: request("crypto", "dataset_binance_spot_kline_1m", "1m", &otherTag), wantErr: true},
+		{name: "crypto binance spot 1m", req: request("crypto", "dataset_binance_kline_1m", "1m", &cryptoTag)},
+		{name: "crypto binance swap 1m", req: request("crypto", "dataset_binance_kline_1m", "1m", &cryptoSwapTag)},
+		{name: "crypto wildcard series", req: request("crypto", "dataset_binance_kline_1m", "1m", nil), wantErr: true},
+		{name: "crypto empty series", req: request("crypto", "dataset_binance_kline_1m", "1m", &emptyTag), wantErr: true},
+		{name: "crypto other series", req: request("crypto", "dataset_binance_kline_1m", "1m", &otherTag), wantErr: true},
+		{name: "crypto old dataset", req: request("crypto", "dataset_binance_spot_kline_1m", "1m", &cryptoTag), wantErr: true},
 		{name: "stock cn default series 1m", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", &defaultTag)},
 		{name: "stock cn wildcard series", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", nil), wantErr: true},
 		{name: "stock cn provider series", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", &cryptoTag), wantErr: true},
@@ -720,7 +723,7 @@ func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing
 		{name: "mixed allowed datasets", req: func() *pb.ReadTimeSeriesRowsReq {
 			req := request("stockcn", "dataset_stockcn_equity_kline", "1m", &defaultTag)
 			req.Selectors[0].SpaceId = "crypto"
-			req.Selectors[0].DatasetId = "dataset_binance_spot_kline_1m"
+			req.Selectors[0].DatasetId = "dataset_binance_kline_1m"
 			req.Selectors[0].SeriesTag = &cryptoTag
 			return req
 		}(), wantErr: true},

@@ -46,7 +46,7 @@ func accessRead() error {
 			readAppID = strings.TrimSpace(os.Getenv("MOOX_SPOT_APP_ID"))
 			readAppKey = strings.TrimSpace(os.Getenv("MOOX_SPOT_APP_KEY"))
 		}
-		series := "venue:binance"
+		series := binanceSeriesTag(dataset.marketType)
 		rsp, err := reader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
 			AuthInfo: &pb.AuthInfo{AppId: readAppID, AppKey: readAppKey},
 			Selectors: []*pb.TimeSeriesSelector{{
@@ -82,15 +82,15 @@ func viewRead() error {
 	appID := strings.TrimSpace(os.Getenv("MOOX_STORAGE_APP_ID"))
 	appKey := strings.TrimSpace(os.Getenv("MOOX_STORAGE_APP_KEY"))
 	views := []struct {
-		view, dataset, freq, subject string
+		view, dataset, freq, subject, marketType string
 	}{
-		{"view_binance_kline_1m", "dataset_binance_kline_1m", "1m", "BTC-USDT"},
-		{"view_binance_kline_1m", "dataset_binance_kline_1m", "1m", "ZORA-USDT"},
-		{"view_crypto_spot_kline_1h", "dataset_spot_kline_1h", "1H", "MRNAB-USDT"},
-		{"view_crypto_swap_kline_1h", "dataset_perpetual_kline_1h", "1H", "LTC-USDT"},
+		{"view_binance_kline_1m", "dataset_binance_kline_1m", "1m", "BTC-USDT", "spot"},
+		{"view_binance_kline_1m", "dataset_binance_kline_1m", "1m", "ZORA-USDT", "swap"},
+		{"view_crypto_spot_kline_1h", "dataset_spot_kline_1h", "1H", "MRNAB-USDT", "spot"},
+		{"view_crypto_swap_kline_1h", "dataset_perpetual_kline_1h", "1H", "LTC-USDT", "swap"},
 	}
 	for _, view := range views {
-		series := "venue:binance"
+		series := binanceSeriesTag(view.marketType)
 		rsp, err := reader.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
 			AuthInfo: &pb.AuthInfo{AppId: appID, AppKey: appKey}, SpaceId: "crypto", ViewId: view.view,
 			Selectors: []*pb.TimeSeriesSelector{{SpaceId: "crypto", DatasetId: view.dataset, SubjectId: view.subject, Freq: view.freq, SeriesTag: &series}},
@@ -109,4 +109,11 @@ func viewRead() error {
 		}
 	}
 	return nil
+}
+
+func binanceSeriesTag(marketType string) string {
+	if marketType == "swap" {
+		return "venue:binance|market:swap"
+	}
+	return "venue:binance"
 }

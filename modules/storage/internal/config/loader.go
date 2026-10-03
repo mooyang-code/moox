@@ -278,9 +278,7 @@ func (v *StorageView) applyConsumerPartitionDefaults() {
 	if len(v.ConsumerPartitions) == 0 {
 		v.ConsumerPartitions = []StorageViewConsumerPartition{
 			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{
-				"dataset_binance_spot_kline_1m",
-				"dataset_binance_swap_kline_1m",
-				"mdataset_binance_kline_1m",
+				"dataset_binance_kline_1m",
 				"dataset_spot_kline_1h",
 				"dataset_perpetual_kline_1h",
 			}}}, FetchBatch: 32, MaxWorkers: 8, MaxAckPending: 256},
@@ -419,9 +417,7 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		space   string
 		dataset string
 	}{
-		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_spot_kline_1m"},
-		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_swap_kline_1m"},
-		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "mdataset_binance_kline_1m"},
+		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_kline_1m"},
 		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_spot_kline_1h"},
 		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_perpetual_kline_1h"},
 		{name: "factor", durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "dataset_factor_binance_spot_kline_1m"},

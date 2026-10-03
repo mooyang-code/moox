@@ -97,7 +97,7 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_crypto_kline_1m \
+  --view-id view_binance_kline_1m \
   --consumer storage_view_kline \
   --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \

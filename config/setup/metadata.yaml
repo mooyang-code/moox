@@ -3069,6 +3069,15 @@ view_columns:
   attributes:
     display_name: 报价量
 - space_id: crypto
+  view_id: view_binance_kline_1m
+  column_name: dataset_binance_kline_1m.trade_num
+  origin_type: dataset_column
+  origin_id: dataset_binance_kline_1m.trade_num
+  value_type: int
+  sort_order: 70
+  attributes:
+    display_name: 成交笔数
+- space_id: crypto
   view_id: view_crypto_spot_kline_1h
   column_name: dataset_spot_kline_1h.open
   origin_type: dataset_column
