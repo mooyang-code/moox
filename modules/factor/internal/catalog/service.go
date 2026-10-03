@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -20,7 +21,8 @@ type SourceChecker interface {
 	CheckSource(ctx context.Context, factor domain.FactorDef, sourcePath string) error
 }
 
-// RecalcSubmitter queues the initial historical backfill for enabled factors.
+// RecalcSubmitter durably accepts an initial historical backfill before the
+// factor becomes visible to live triggers.
 type RecalcSubmitter interface {
 	Submit(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef, start, end time.Time) error
 }
@@ -82,7 +84,7 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 	}
 	in.SpaceID = strings.TrimSpace(in.SpaceID)
 	in.SourceDatasetID = strings.TrimSpace(in.SourceDatasetID)
-	in.Freq = strings.TrimSpace(in.Freq)
+	in.Freq = strings.ToLower(strings.TrimSpace(in.Freq))
 	if in.SetID == "" {
 		in.SetID = domain.SetID(in.SourceDatasetID, in.Freq)
 	}
@@ -285,15 +287,18 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 }
 
 func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
+	initial, err := s.db.GetFactor(ctx, in.FactorID)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
+	unlock := s.locks.Lock(initial.SetID)
+	defer unlock()
 	existing, err := s.db.GetFactor(ctx, in.FactorID)
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	unlock := s.locks.Lock(existing.SetID)
-	defer unlock()
-	existing, err = s.db.GetFactor(ctx, in.FactorID)
-	if err != nil {
-		return domain.FactorDef{}, err
+	if existing.SetID != initial.SetID {
+		return domain.FactorDef{}, errors.New("factor set changed while waiting for its lifecycle lock")
 	}
 	if existing.Status != domain.FactorStatusDisabled {
 		return domain.FactorDef{}, errors.New("factor must be disabled before updating its definition")
@@ -347,8 +352,14 @@ func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) 
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
+	if factor.SetID != initial.SetID {
+		return domain.FactorDef{}, errors.New("factor set changed while waiting for its lifecycle lock")
+	}
 	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
 		return domain.FactorDef{}, fmt.Errorf("status must be %q or %q", domain.FactorStatusEnabled, domain.FactorStatusDisabled)
+	}
+	if status == domain.FactorStatusEnabled && factor.Status == domain.FactorStatusEnabled {
+		return factor, nil
 	}
 	if status == domain.FactorStatusDisabled {
 		if factor.Status == domain.FactorStatusDisabled {
@@ -395,6 +406,12 @@ func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) 
 	if err := s.ensureResultColumns(ctx, set, source, columns, activeFactors...); err != nil {
 		return domain.FactorDef{}, err
 	}
+	// Submit persists the backfill intent before the factor becomes visible to
+	// live triggers. A crash after Submit is recoverable from the accepted job;
+	// a Submit error leaves the factor disabled.
+	if err := s.recalc.Submit(ctx, set, []domain.FactorDef{factor}, start, end); err != nil {
+		return domain.FactorDef{}, fmt.Errorf("submit factor backfill: %w", err)
+	}
 	if factor.Status != domain.FactorStatusEnabled {
 		if err := s.db.SetFactorStatus(ctx, factor.FactorID, factor.Status, domain.FactorStatusEnabled); err != nil {
 			return domain.FactorDef{}, err
@@ -402,22 +419,22 @@ func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) 
 		factor.Status = domain.FactorStatusEnabled
 		s.notify()
 	}
-	if err := s.recalc.Submit(ctx, set, []domain.FactorDef{factor}, start, end); err != nil {
-		return domain.FactorDef{}, fmt.Errorf("submit factor backfill: %w", err)
-	}
 	return factor, nil
 }
 
 func (s *Service) DeleteFactor(ctx context.Context, factorID string) error {
+	initial, err := s.db.GetFactor(ctx, factorID)
+	if err != nil {
+		return err
+	}
+	unlock := s.locks.Lock(initial.SetID)
+	defer unlock()
 	factor, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
 		return err
 	}
-	unlock := s.locks.Lock(factor.SetID)
-	defer unlock()
-	factor, err = s.db.GetFactor(ctx, factorID)
-	if err != nil {
-		return err
+	if factor.SetID != initial.SetID {
+		return errors.New("factor set changed while waiting for its lifecycle lock")
 	}
 	if factor.Status != domain.FactorStatusDisabled {
 		return errors.New("factor must be disabled before deletion")
@@ -437,12 +454,24 @@ func (s *Service) loadSource(ctx context.Context, factor domain.FactorDef) error
 	if s.sourceChecker == nil {
 		return errors.New("factor source checker is required")
 	}
-	path, err := s.artifacts.Materialize(factor)
+	tmp, err := os.CreateTemp("", "moox-factor-check-*.py")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temporary factor source: %w", err)
 	}
-	if err := s.sourceChecker.CheckSource(ctx, factor, path); err != nil {
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.WriteString(factor.SourceCode); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary factor source: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary factor source: %w", err)
+	}
+	if err := s.sourceChecker.CheckSource(ctx, factor, tmpPath); err != nil {
 		return fmt.Errorf("load factor source: %w", err)
+	}
+	if _, err := s.artifacts.Materialize(factor); err != nil {
+		return err
 	}
 	return nil
 }
@@ -520,13 +549,9 @@ func sameSetIdentity(existing, requested domain.FactorSet) error {
 }
 
 func resultDatasetSpec(set domain.FactorSet, source storageio.DatasetInfo, columns []storageio.ColumnInfo) storageio.ResultDatasetSpec {
-	name := strings.TrimSpace(source.Name)
-	if name == "" {
-		name = source.DatasetID
-	}
 	return storageio.ResultDatasetSpec{
 		SpaceID: set.SpaceID, DatasetID: set.ResultDatasetID, SourceDatasetID: set.SourceDatasetID,
-		Name: name + " factors", Description: "Factor results for " + source.DatasetID,
+		Name: "因子结果", Description: "Factor results for " + source.DatasetID,
 		DataSourceID: source.DataSourceID, DataNodeID: source.DataNodeID,
 		DataKind: storageio.DataKindTimeSeries, Frequency: set.Freq, KeepDuration: source.KeepDuration,
 		SubjectTags: append([]string(nil), source.SubjectTags...), Attributes: map[string]string{
@@ -577,6 +602,7 @@ func appendFactorColumns(columns []storageio.ColumnInfo, factors ...domain.Facto
 			columns = append(columns, storageio.ColumnInfo{
 				ColumnName: output, OriginType: storageio.ColumnOriginFactor, OriginID: factor.FactorID,
 				ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive,
+				Attributes: map[string]string{"display_name": output, "factor_output": output, "origin_factor_id": factor.FactorID},
 			})
 		}
 	}

@@ -187,7 +187,7 @@ func (c *Client) CreateResultDataset(ctx context.Context, spec ResultDatasetSpec
 		}
 		return c.UpsertColumns(ctx, spec.SpaceID, spec.DatasetID, spec.Columns)
 	}
-	if existing.GetRetInfo() == nil || existing.GetRetInfo().GetCode() != commonpb.ErrorCode_NOT_FOUND {
+	if existing.GetRetInfo() == nil || (existing.GetRetInfo().GetCode() != commonpb.ErrorCode_NOT_FOUND && existing.GetRetInfo().GetCode() != commonpb.ErrorCode_DATASET_NOT_FOUND) {
 		return responseError("check result dataset", existing.GetRetInfo())
 	}
 	created, err := c.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.auth, Dataset: expected})
@@ -296,17 +296,97 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 	if err := c.metadataReady("delete dataset"); err != nil {
 		return err
 	}
-	rsp, err := c.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
-		return rpcError("delete dataset", err)
+		return rpcError("get dataset before delete", err)
 	}
-	if rsp == nil {
-		return fmt.Errorf("%w: delete dataset returned an empty response", ErrInfra)
+	if current == nil || current.GetRetInfo() == nil {
+		return fmt.Errorf("%w: get dataset before delete returned an empty response", ErrInfra)
 	}
-	if rsp.GetRetInfo() != nil && rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_NOT_FOUND {
+	if isDatasetNotFound(current.GetRetInfo().GetCode()) {
 		return nil
 	}
-	return responseError("delete dataset", rsp.GetRetInfo())
+	if err := responseError("get dataset before delete", current.GetRetInfo()); err != nil {
+		return err
+	}
+	if current.GetDataset() == nil {
+		return fmt.Errorf("%w: get dataset before delete omitted the dataset", ErrInfra)
+	}
+	purgeRows := current.GetDataset().GetAttributes()["dataset_role"] == DatasetRoleFactorResult
+	if purgeRows {
+		if err := c.primaryReady("delete factor result rows"); err != nil {
+			return err
+		}
+		deleted, err := c.primary.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+		if err != nil {
+			return rpcError("delete factor result rows", err)
+		}
+		if deleted == nil {
+			return fmt.Errorf("%w: delete factor result rows returned an empty response", ErrInfra)
+		}
+		if err := responseError("delete factor result rows", deleted.GetRetInfo()); err != nil {
+			return err
+		}
+	}
+	rsp, err := c.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		deleteErr := rpcError("delete dataset", err)
+		if purgeRows {
+			return errors.Join(deleteErr, c.restoreFactorResultRowsIfPresent(ctx, spaceID, datasetID))
+		}
+		return deleteErr
+	}
+	if rsp == nil {
+		deleteErr := fmt.Errorf("%w: delete dataset returned an empty response", ErrInfra)
+		if purgeRows {
+			return errors.Join(deleteErr, c.restoreFactorResultRowsIfPresent(ctx, spaceID, datasetID))
+		}
+		return deleteErr
+	}
+	if rsp.GetRetInfo() != nil && isDatasetNotFound(rsp.GetRetInfo().GetCode()) {
+		return nil
+	}
+	if err := responseError("delete dataset", rsp.GetRetInfo()); err != nil {
+		if purgeRows {
+			return errors.Join(err, c.restoreFactorResultRowsIfPresent(ctx, spaceID, datasetID))
+		}
+		return err
+	}
+	return nil
+}
+
+func (c *Client) restoreFactorResultRowsIfPresent(ctx context.Context, spaceID, datasetID string) error {
+	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return rpcError("check factor result after delete failure", err)
+	}
+	if current == nil || current.GetRetInfo() == nil {
+		return fmt.Errorf("%w: check factor result after delete failure returned an empty response", ErrInfra)
+	}
+	if isDatasetNotFound(current.GetRetInfo().GetCode()) {
+		return nil
+	}
+	if err := responseError("check factor result after delete failure", current.GetRetInfo()); err != nil {
+		return err
+	}
+	if current.GetDataset() == nil || current.GetDataset().GetAttributes()["dataset_role"] != DatasetRoleFactorResult {
+		return nil
+	}
+	if err := c.primaryReady("restore factor result rows"); err != nil {
+		return err
+	}
+	restored, err := c.primary.RestoreDatasetRows(ctx, &storagepb.PrimaryRestoreDatasetRowsReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return rpcError("restore factor result rows", err)
+	}
+	if restored == nil {
+		return fmt.Errorf("%w: restore factor result rows returned an empty response", ErrInfra)
+	}
+	return responseError("restore factor result rows", restored.GetRetInfo())
+}
+
+func isDatasetNotFound(code commonpb.ErrorCode) bool {
+	return code == commonpb.ErrorCode_NOT_FOUND || code == commonpb.ErrorCode_DATASET_NOT_FOUND
 }
 
 func validateResultDatasetSpec(spec ResultDatasetSpec) error {

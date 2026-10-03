@@ -18,15 +18,16 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var reconcileErrors []error
 	for _, set := range sets {
 		if set.Status != domain.SetStatusEnabled {
 			continue
 		}
 		if err := s.ReconcileSet(ctx, set.SetID); err != nil {
-			return fmt.Errorf("reconcile factor set %q: %w", set.SetID, err)
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile factor set %q: %w", set.SetID, err))
 		}
 	}
-	return nil
+	return errors.Join(reconcileErrors...)
 }
 
 func (s *Service) ReconcileSet(ctx context.Context, setID string) error {
@@ -47,7 +48,11 @@ func (s *Service) reconcileSetUnlocked(ctx context.Context, set domain.FactorSet
 	if err != nil {
 		return err
 	}
-	return s.ensureResultColumns(ctx, set, source, columns)
+	factors, err := s.db.ListFactors(ctx, set.SetID, domain.FactorStatusEnabled)
+	if err != nil {
+		return fmt.Errorf("list enabled factors: %w", err)
+	}
+	return s.ensureResultColumns(ctx, set, source, columns, factors...)
 }
 
 func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet, source storageio.DatasetInfo, sourceColumns []storageio.ColumnInfo, factors ...domain.FactorDef) error {
@@ -74,17 +79,36 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 		return fmt.Errorf("list factor result columns: %w", err)
 	}
 	wanted := append([]storageio.ColumnInfo(nil), sourceColumns...)
+	sourceNames := make(map[string]struct{}, len(sourceColumns))
+	for _, col := range sourceColumns {
+		sourceNames[col.ColumnName] = struct{}{}
+	}
+	for _, factor := range factors {
+		for _, output := range factor.Outputs {
+			if _, exists := sourceNames[output]; exists {
+				return fmt.Errorf("source column %q collides with enabled factor output", output)
+			}
+		}
+	}
 	wanted = appendFactorColumns(wanted, factors...)
-	known := make(map[string]struct{}, len(current))
+	known := make(map[string]storageio.ColumnInfo, len(current))
 	for _, col := range current {
-		known[col.ColumnName] = struct{}{}
+		known[col.ColumnName] = col
 	}
 	missing := make([]storageio.ColumnInfo, 0, len(wanted))
+	wantedNames := make(map[string]struct{}, len(wanted))
 	for _, col := range wanted {
-		if _, ok := known[col.ColumnName]; ok {
+		if _, duplicate := wantedNames[col.ColumnName]; duplicate {
+			return fmt.Errorf("duplicate result column contract %q", col.ColumnName)
+		}
+		wantedNames[col.ColumnName] = struct{}{}
+		if existing, ok := known[col.ColumnName]; ok {
+			if !compatibleResultColumn(existing, col) {
+				return fmt.Errorf("result column %q conflicts with the current source/factor contract", col.ColumnName)
+			}
 			continue
 		}
-		known[col.ColumnName] = struct{}{}
+		known[col.ColumnName] = col
 		missing = append(missing, col)
 	}
 	if len(missing) == 0 {
@@ -95,6 +119,17 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 		return fmt.Errorf("upsert factor result columns: %w", err)
 	}
 	return nil
+}
+
+func compatibleResultColumn(existing, wanted storageio.ColumnInfo) bool {
+	if existing.OriginType != wanted.OriginType || existing.OriginID != wanted.OriginID || existing.ValueType != wanted.ValueType {
+		return false
+	}
+	if wanted.OriginType == storageio.ColumnOriginFactor {
+		return existing.Attributes["origin_factor_id"] == wanted.Attributes["origin_factor_id"] &&
+			existing.Attributes["factor_output"] == wanted.Attributes["factor_output"]
+	}
+	return true
 }
 
 func (s *Service) sourceDataset(ctx context.Context, set domain.FactorSet) (storageio.DatasetInfo, []storageio.ColumnInfo, error) {
@@ -114,7 +149,14 @@ func (s *Service) sourceDataset(ctx context.Context, set domain.FactorSet) (stor
 	if source.DataKind != storageio.DataKindTimeSeries {
 		return storageio.DatasetInfo{}, nil, errors.New("factor sets require a time_series source dataset")
 	}
-	if !contains(source.Freqs, set.Freq) {
+	frequencyDeclared := false
+	for _, frequency := range source.Freqs {
+		if strings.EqualFold(strings.TrimSpace(frequency), set.Freq) {
+			frequencyDeclared = true
+			break
+		}
+	}
+	if !frequencyDeclared {
 		return storageio.DatasetInfo{}, nil, fmt.Errorf("source dataset does not declare frequency %q", set.Freq)
 	}
 	if source.SpaceID != set.SpaceID || source.DatasetID != set.SourceDatasetID || source.DataNodeID == "" || source.DataSourceID == "" {

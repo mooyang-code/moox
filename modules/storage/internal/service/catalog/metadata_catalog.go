@@ -557,8 +557,19 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	if err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetAttributes(), isFactorResultDataset(dataset)); err != nil {
+	factorResult := isFactorResultDataset(dataset)
+	factorOutput := factorResult && item.GetOriginType() == pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
+	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetAttributes(), factorOutput); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if factorOutput {
+		attrs := item.GetAttributes()
+		factorID := strings.TrimSpace(attrs["origin_factor_id"])
+		output := strings.TrimSpace(attrs["factor_output"])
+		if factorID == "" || factorID != strings.TrimSpace(item.GetOriginId()) || output != strings.TrimSpace(item.GetColumnName()) {
+			err := errors.New("factor result columns require matching origin_factor_id and factor_output")
+			return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {

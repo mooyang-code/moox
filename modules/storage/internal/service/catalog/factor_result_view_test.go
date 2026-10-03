@@ -152,6 +152,35 @@ func TestFactorResultColumnUsesOriginFactorIDWithoutFactorEntity(t *testing.T) {
 	require.Equal(t, "bias", rsp.GetColumn().GetOriginId())
 }
 
+func TestFactorResultDatasetAcceptsCarriedSourceColumns(t *testing.T) {
+	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	column := &pb.DatasetColumn{
+		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "volume",
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD,
+		OriginId:   "volume",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Attributes: map[string]string{"display_name": "成交量"},
+	}
+	rsp, err := service.UpsertDatasetColumn(context.Background(), &pb.UpsertDatasetColumnReq{Column: column})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, rsp.GetColumn().GetOriginType())
+}
+
+func TestFactorResultFactorColumnRequiresOriginMetadata(t *testing.T) {
+	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	column := &pb.DatasetColumn{
+		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "bias_10",
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
+		OriginId:   "bias",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Attributes: map[string]string{"display_name": "bias_10", "factor_output": "bias_10"},
+	}
+	rsp, err := service.UpsertDatasetColumn(context.Background(), &pb.UpsertDatasetColumnReq{Column: column})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
 func TestActivateFactorResultDatasetRejectsInvalidSchemaBeforeCommit(t *testing.T) {
 	cases := []struct {
 		name  string

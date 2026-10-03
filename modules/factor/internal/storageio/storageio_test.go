@@ -191,6 +191,49 @@ func TestCreateResultDatasetUsesSourceOwnershipAndRetention(t *testing.T) {
 	require.Equal(t, "close", metadata.upsertRequests[0].GetColumn().GetColumnName())
 }
 
+func TestCreateResultDatasetTreatsDatasetNotFoundAsCreateable(t *testing.T) {
+	spec := resultDatasetSpec()
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND, Msg: "missing"}}},
+	}
+	require.NoError(t, NewClient(nil, metadata, nil).CreateResultDataset(context.Background(), spec))
+	require.Len(t, metadata.createRequests, 1)
+}
+
+func TestDeleteFactorResultDatasetPurgesRowsBeforeMetadata(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "factor_result", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}
+	metadata := &metadataFake{getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}}}
+	primary := &primaryFake{}
+	client := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+
+	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
+	require.Len(t, primary.deleteRowsRequests, 1)
+	require.Len(t, metadata.deleteRequests, 1)
+	require.Equal(t, "factor", primary.deleteRowsRequests[0].GetAuthInfo().GetAppId())
+}
+
+func TestDeleteFactorResultDatasetRestoresRowsWhenMetadataDeleteFails(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "factor_result", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{
+			{RetInfo: successRet(), Dataset: dataset},
+			{RetInfo: successRet(), Dataset: dataset},
+		},
+		deleteRsp: &storagepb.DeleteDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "metadata unavailable"}},
+	}
+	primary := &primaryFake{}
+	client := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+
+	err := client.DeleteDataset(context.Background(), "crypto", "factor_result")
+	require.ErrorContains(t, err, "metadata unavailable")
+	require.Len(t, primary.deleteRowsRequests, 1)
+	require.Len(t, primary.restoreRowsRequests, 1)
+}
+
 func TestCreateResultDatasetRetryIsIdempotent(t *testing.T) {
 	spec := resultDatasetSpec()
 	existing := datasetFromResultSpec(spec)
@@ -225,16 +268,18 @@ func resultDatasetSpec() ResultDatasetSpec {
 }
 
 type primaryFake struct {
-	pages         []*storagepb.ReadTimeSeriesRowsRsp
-	readRequests  []*storagepb.ReadTimeSeriesRowsReq
-	readErr       error
-	readRet       *commonpb.RetInfo
-	writeRequests []*storagepb.PrimaryWriteFactorRowsReq
-	writeErr      error
-	writeRet      *commonpb.RetInfo
-	reportIDs     []string
-	computedRsp   *storagepb.GetFactorPeriodComputedRsp
-	computedReq   *storagepb.GetFactorPeriodComputedReq
+	pages               []*storagepb.ReadTimeSeriesRowsRsp
+	readRequests        []*storagepb.ReadTimeSeriesRowsReq
+	readErr             error
+	readRet             *commonpb.RetInfo
+	writeRequests       []*storagepb.PrimaryWriteFactorRowsReq
+	writeErr            error
+	writeRet            *commonpb.RetInfo
+	reportIDs           []string
+	computedRsp         *storagepb.GetFactorPeriodComputedRsp
+	computedReq         *storagepb.GetFactorPeriodComputedReq
+	deleteRowsRequests  []*storagepb.PrimaryDeleteDatasetRowsReq
+	restoreRowsRequests []*storagepb.PrimaryRestoreDatasetRowsReq
 }
 
 type metadataFake struct {
@@ -246,6 +291,8 @@ type metadataFake struct {
 	createRsp        *storagepb.CreateDatasetRsp
 	upsertRequests   []*storagepb.UpsertDatasetColumnReq
 	activateRequests []*storagepb.ActivateDatasetReq
+	deleteRequests   []*storagepb.DeleteDatasetReq
+	deleteRsp        *storagepb.DeleteDatasetRsp
 }
 
 func (f *metadataFake) GetDataset(_ context.Context, req *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {
@@ -294,7 +341,11 @@ func (f *metadataFake) ActivateDataset(_ context.Context, req *storagepb.Activat
 	return &storagepb.ActivateDatasetRsp{RetInfo: successRet()}, nil
 }
 
-func (*metadataFake) DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
+func (f *metadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq, _ ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
+	f.deleteRequests = append(f.deleteRequests, proto.Clone(req).(*storagepb.DeleteDatasetReq))
+	if f.deleteRsp != nil {
+		return f.deleteRsp, nil
+	}
 	return &storagepb.DeleteDatasetRsp{RetInfo: successRet()}, nil
 }
 
@@ -345,6 +396,16 @@ func (f *primaryFake) GetFactorPeriodComputed(_ context.Context, req *storagepb.
 		return f.computedRsp, nil
 	}
 	return &storagepb.GetFactorPeriodComputedRsp{RetInfo: successRet()}, nil
+}
+
+func (f *primaryFake) DeleteDatasetRows(_ context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq, _ ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
+	f.deleteRowsRequests = append(f.deleteRowsRequests, proto.Clone(req).(*storagepb.PrimaryDeleteDatasetRowsReq))
+	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: successRet()}, nil
+}
+
+func (f *primaryFake) RestoreDatasetRows(_ context.Context, req *storagepb.PrimaryRestoreDatasetRowsReq, _ ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
+	f.restoreRowsRequests = append(f.restoreRowsRequests, proto.Clone(req).(*storagepb.PrimaryRestoreDatasetRowsReq))
+	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: successRet()}, nil
 }
 
 func readRow(subject string, at time.Time, tag string, fields map[string]*storagepb.TypedValue) *storagepb.TimeSeriesRow {

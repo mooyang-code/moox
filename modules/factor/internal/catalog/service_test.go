@@ -3,6 +3,8 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -29,8 +31,26 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	require.Equal(t, "720h", meta.createdSpec.KeepDuration)
 	require.Equal(t, storageio.DatasetRoleFactorResult, meta.createdSpec.Attributes["dataset_role"])
 	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close")}, meta.createdSpec.Columns)
+	require.Equal(t, "因子结果", meta.createdSpec.Name)
+	require.LessOrEqual(t, len([]rune(meta.createdSpec.Name)), 10)
 	require.Equal(t, storageio.DatasetStatusActive, meta.datasets[resultKey("crypto", set.ResultDatasetID)].Status)
 	require.Equal(t, []string{"create", "activate"}, meta.writeOps)
+}
+
+func TestCreateSetCanonicalizesUppercaseFrequency(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	source := meta.datasets[resultKey("crypto", "dataset_prices")]
+	source.Freqs = []string{"1H"}
+	meta.datasets[resultKey("crypto", "dataset_prices")] = source
+	set := newSet()
+	set.Freq = "1H"
+
+	created, err := NewService(db, meta, WithFactorsDir(t.TempDir())).CreateSet(context.Background(), set)
+	require.NoError(t, err)
+	require.Equal(t, "1h", created.Freq)
+	require.Equal(t, "fset_prices_1h", created.SetID)
+	require.Equal(t, "dataset_factor_prices_1h", created.ResultDatasetID)
 }
 
 func TestCreateSetRetryResumesFromPending(t *testing.T) {
@@ -79,6 +99,30 @@ func TestCreateSetRejectsMissingFreq(t *testing.T) {
 	require.Empty(t, meta.writeOps)
 }
 
+func TestDeleteSetKeepsResultDatasetUnlessPurging(t *testing.T) {
+	for _, purge := range []bool{false, true} {
+		t.Run(fmt.Sprintf("purge_%t", purge), func(t *testing.T) {
+			db := openCatalogStore(t)
+			meta := newMetadataFake()
+			svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+			set, err := svc.CreateSet(context.Background(), newSet())
+			require.NoError(t, err)
+			require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
+
+			require.NoError(t, svc.DeleteSet(context.Background(), set.SetID, purge))
+			_, err = db.GetSet(context.Background(), set.SetID)
+			require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+			dataset, datasetErr := meta.GetDataset(context.Background(), "crypto", set.ResultDatasetID)
+			if purge {
+				require.Error(t, datasetErr)
+			} else {
+				require.NoError(t, datasetErr)
+				require.Equal(t, storageio.DatasetStatusActive, dataset.Status)
+			}
+		})
+	}
+}
+
 func TestCreateFactorValidatesAgainstSourceColumnsAndLoadsSource(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
@@ -89,6 +133,9 @@ func TestCreateFactorValidatesAgainstSourceColumnsAndLoadsSource(t *testing.T) {
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.ErrorContains(t, err, "syntax error")
 	require.Equal(t, 1, checker.calls)
+	factorPath := filepath.Join(svc.artifacts.FactorsDir, testFactor().Name, domain.SourceHash(testFactor().SourceCode)+".py")
+	_, statErr := os.Stat(factorPath)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 	_, err = db.GetFactor(context.Background(), "momentum")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
@@ -120,7 +167,7 @@ func TestEnableFactorAddsColumnsThenSubmitsRecalc(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.FactorStatusEnabled, factor.Status)
 	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
-	require.Equal(t, []string{"enabled"}, recalc.order)
+	require.Equal(t, []string{"disabled"}, recalc.order)
 	require.Equal(t, domain.SetID("dataset_prices", "1m"), recalc.set.SetID)
 	require.Equal(t, []string{"momentum"}, factorIDs(recalc.factors))
 	require.Equal(t, now.Add(-720*time.Hour), recalc.start)
@@ -132,6 +179,42 @@ func TestEnableFactorAddsColumnsThenSubmitsRecalc(t *testing.T) {
 		}
 	}
 	require.Equal(t, storageio.ColumnOriginFactor, output.OriginType)
+	require.Equal(t, map[string]string{
+		"display_name": "momentum", "factor_output": "momentum", "origin_factor_id": "momentum",
+	}, output.Attributes)
+}
+
+func TestEnableFactorSubmitFailureLeavesFactorDisabled(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	recalc := &recalcFake{db: db, err: errors.New("durable job store unavailable")}
+	svc.recalc = recalc
+	_, err := svc.CreateFactor(context.Background(), testFactor())
+	require.NoError(t, err)
+
+	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	require.ErrorContains(t, err, "durable job store unavailable")
+	stored, err := db.GetFactor(context.Background(), "momentum")
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusDisabled, stored.Status)
+	require.Equal(t, []string{"disabled"}, recalc.order)
+}
+
+func TestEnableFactorIsIdempotentAfterBackfillIntentIsAccepted(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	recalc := &recalcFake{db: db}
+	svc.recalc = recalc
+	_, err := svc.CreateFactor(context.Background(), testFactor())
+	require.NoError(t, err)
+
+	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	require.NoError(t, err)
+	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	require.NoError(t, err)
+	require.Len(t, recalc.order, 1)
 }
 
 func TestDisableFactorKeepsColumns(t *testing.T) {
@@ -196,6 +279,64 @@ func TestReconcileSetAddsNewSourceColumns(t *testing.T) {
 	require.NoError(t, svc.ReconcileSet(context.Background(), domain.SetID("dataset_prices", "1m")))
 	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
 	require.ElementsMatch(t, []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume")}, meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))])
+}
+
+func TestReconcileRejectsSourceColumnCollisionWithEnabledFactor(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	recalc := &recalcFake{db: db}
+	svc.recalc = recalc
+	_, err := svc.CreateFactor(context.Background(), testFactor())
+	require.NoError(t, err)
+	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	require.NoError(t, err)
+	meta.sourceColumns = append(meta.sourceColumns, sourceColumn("momentum"))
+	meta.writeOps = nil
+
+	err = svc.ReconcileSet(context.Background(), domain.SetID("dataset_prices", "1m"))
+	require.ErrorContains(t, err, `source column "momentum" collides with enabled factor output`)
+	require.Empty(t, meta.writeOps)
+}
+
+func TestReconcileContinuesAfterOneSetFailure(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	secondSource := meta.datasets[resultKey("crypto", "dataset_zzz")]
+	secondSource = storageio.DatasetInfo{
+		SpaceID: "crypto", DatasetID: "dataset_zzz", DataSourceID: "other", DataNodeID: "storage-node-0",
+		Name: "Other", DataKind: storageio.DataKindTimeSeries, Freqs: []string{"1m"}, KeepDuration: "720h",
+		Status: storageio.DatasetStatusActive, Attributes: map[string]string{},
+	}
+	meta.datasets[resultKey("crypto", "dataset_zzz")] = secondSource
+	meta.columns[resultKey("crypto", "dataset_zzz")] = []storageio.ColumnInfo{sourceColumn("close")}
+	meta.sourceColumnsByDataset = map[string][]storageio.ColumnInfo{"dataset_zzz": {sourceColumn("close")}}
+	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	first, err := svc.CreateSet(context.Background(), newSet())
+	require.NoError(t, err)
+	secondInput := newSet()
+	secondInput.SourceDatasetID = "dataset_zzz"
+	secondInput.SetID = ""
+	secondInput.ResultDatasetID = ""
+	second, err := svc.CreateSet(context.Background(), secondInput)
+	require.NoError(t, err)
+	firstSet, err := db.GetSet(context.Background(), first.SetID)
+	require.NoError(t, err)
+	firstSet.Status = domain.SetStatusEnabled
+	secondSet, err := db.GetSet(context.Background(), second.SetID)
+	require.NoError(t, err)
+	secondSet.Status = domain.SetStatusEnabled
+	require.NoError(t, db.UpdateSet(context.Background(), firstSet))
+	require.NoError(t, db.UpdateSet(context.Background(), secondSet))
+	meta.datasets[resultKey("crypto", first.SourceDatasetID)] = storageio.DatasetInfo{}
+	meta.sourceColumnsByDataset[second.SourceDatasetID] = []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume")}
+	meta.writeOps = nil
+
+	err = svc.Reconcile(context.Background())
+	require.ErrorContains(t, err, "reconcile factor set")
+	columns, err := meta.ListColumns(context.Background(), "crypto", second.ResultDatasetID)
+	require.NoError(t, err)
+	require.Contains(t, metadataColumnNames(columns), "volume")
 }
 
 func TestFactorStatusChangesNotifyTrigger(t *testing.T) {
@@ -305,19 +446,20 @@ func metadataColumnNames(columns []storageio.ColumnInfo) []string {
 func resultKey(spaceID, datasetID string) string { return spaceID + "/" + datasetID }
 
 func sourceColumn(name string) storageio.ColumnInfo {
-	return storageio.ColumnInfo{ColumnName: name, OriginType: storageio.ColumnOriginField, OriginID: name, ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive}
+	return storageio.ColumnInfo{ColumnName: name, OriginType: storageio.ColumnOriginField, OriginID: name, ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive, Attributes: map[string]string{"display_name": "收盘价"}}
 }
 
 type metadataFake struct {
-	mu              sync.Mutex
-	datasets        map[string]storageio.DatasetInfo
-	columns         map[string][]storageio.ColumnInfo
-	sourceColumns   []storageio.ColumnInfo
-	createdSpec     storageio.ResultDatasetSpec
-	createCalls     int
-	createdDatasets int
-	activateErrs    int
-	writeOps        []string
+	mu                     sync.Mutex
+	datasets               map[string]storageio.DatasetInfo
+	columns                map[string][]storageio.ColumnInfo
+	sourceColumns          []storageio.ColumnInfo
+	sourceColumnsByDataset map[string][]storageio.ColumnInfo
+	createdSpec            storageio.ResultDatasetSpec
+	createCalls            int
+	createdDatasets        int
+	activateErrs           int
+	writeOps               []string
 }
 
 func newMetadataFake() *metadataFake {
@@ -332,6 +474,7 @@ func newMetadataFake() *metadataFake {
 	return &metadataFake{
 		datasets: map[string]storageio.DatasetInfo{resultKey("crypto", "dataset_prices"): source},
 		columns:  map[string][]storageio.ColumnInfo{}, sourceColumns: cols,
+		sourceColumnsByDataset: map[string][]storageio.ColumnInfo{"dataset_prices": cols},
 	}
 }
 
@@ -350,6 +493,9 @@ func (f *metadataFake) ListColumns(_ context.Context, spaceID, datasetID string)
 	defer f.mu.Unlock()
 	if datasetID == "dataset_prices" {
 		return append([]storageio.ColumnInfo(nil), f.sourceColumns...), nil
+	}
+	if columns, ok := f.sourceColumnsByDataset[datasetID]; ok {
+		return append([]storageio.ColumnInfo(nil), columns...), nil
 	}
 	return append([]storageio.ColumnInfo(nil), f.columns[resultKey(spaceID, datasetID)]...), nil
 }
@@ -441,6 +587,7 @@ type recalcFake struct {
 	start   time.Time
 	end     time.Time
 	order   []string
+	err     error
 }
 
 func (f *recalcFake) Submit(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef, start, end time.Time) error {
@@ -449,11 +596,8 @@ func (f *recalcFake) Submit(ctx context.Context, set domain.FactorSet, factors [
 		if err != nil {
 			return err
 		}
-		if stored.Status != domain.FactorStatusEnabled {
-			return errors.New("submitted factor is not enabled")
-		}
 		f.order = append(f.order, stored.Status)
 	}
 	f.set, f.factors, f.start, f.end = set, factors, start, end
-	return nil
+	return f.err
 }

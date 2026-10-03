@@ -15,10 +15,8 @@ type datasetAdminDataNodeClient interface {
 	RestoreDatasetRows(context.Context, *pb.RestoreDatasetRowsReq) (*pb.RestoreDatasetRowsRsp, error)
 }
 
-// DeleteDatasetRows removes the physical rows before Metadata deletes the
-// Dataset object. Only Collector-owned result Datasets may use this destructive
-// path. The caller-side task check is still required, but the Storage boundary
-// must also reject a valid Collector credential pointed at an unrelated Dataset.
+// DeleteDatasetRows removes physical rows before Metadata deletes the Dataset.
+// Collector task results and Factor result datasets use separate credentials.
 func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.PrimaryDeleteDatasetRowsReq) (*pb.PrimaryDeleteDatasetRowsRsp, error) {
 	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
@@ -32,11 +30,11 @@ func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.PrimaryDeleteDa
 	if !found || dataset == nil {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("dataset not found"))}, nil
 	}
-	attrs := dataset.GetAttributes()
-	if strings.TrimSpace(attrs["owner_module"]) != "collector" || (strings.TrimSpace(attrs["collector_task_id"]) == "" && strings.TrimSpace(attrs["resample_task_id"]) == "") {
-		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not a Collector task result"))}, nil
+	owner := datasetRowsOwner(dataset, req.GetAuthInfo())
+	if owner == "" {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not owned by the authorized destructive caller"))}, nil
 	}
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), "collector"); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), owner); err != nil {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: markerError(err)}, nil
 	}
 	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
@@ -74,11 +72,11 @@ func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.PrimaryRestore
 	if !found || dataset == nil {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("dataset not found"))}, nil
 	}
-	attrs := dataset.GetAttributes()
-	if strings.TrimSpace(attrs["owner_module"]) != "collector" || (strings.TrimSpace(attrs["collector_task_id"]) == "" && strings.TrimSpace(attrs["resample_task_id"]) == "") {
-		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not a Collector task result"))}, nil
+	owner := datasetRowsOwner(dataset, req.GetAuthInfo())
+	if owner == "" {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not owned by the authorized destructive caller"))}, nil
 	}
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), "collector"); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), owner); err != nil {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: markerError(err)}, nil
 	}
 	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
@@ -98,4 +96,20 @@ func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.PrimaryRestore
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: response.GetRetInfo()}, nil
+}
+
+func datasetRowsOwner(dataset *pb.Dataset, auth *pb.AuthInfo) string {
+	if dataset == nil || auth == nil {
+		return ""
+	}
+	appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
+	attrs := dataset.GetAttributes()
+	if isFactorAppID(appID) && attrs["dataset_role"] == "factor_result" && attrs["write_owner"] == "factor" {
+		return "factor"
+	}
+	if isOwnedAppID(appID, "collector") && strings.TrimSpace(attrs["owner_module"]) == "collector" &&
+		(strings.TrimSpace(attrs["collector_task_id"]) != "" || strings.TrimSpace(attrs["resample_task_id"]) != "") {
+		return "collector"
+	}
+	return ""
 }
