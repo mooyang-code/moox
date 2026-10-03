@@ -1,96 +1,90 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseRecalcAcceptsWithoutPythonFlags(t *testing.T) {
+func TestParseImport(t *testing.T) {
 	cfg, err := parseArgs([]string{
-		"recalc", "--request-id", "req-1", "--space", "crypto", "--dataset", "bars",
-		"--subject", "BTC-USDT", "--freq", "1m",
-		"--start-time", "2026-07-26T00:00:00Z", "--end-time", "2026-07-26T01:00:00Z",
+		"import", "--set", "fset_bars_1m", "--file", "./Bias.py", "--factor-id", "Bias",
+		"--inputs", "close, volume", "--outputs", "bias", "--lookback", "20",
+		"--params", `{"window":20}`,
 	})
 	require.NoError(t, err)
-	require.Equal(t, "recalc", cfg.Command)
-	require.Equal(t, "req-1", cfg.RequestID)
-	require.Equal(t, time.Hour, cfg.EndTime.Sub(cfg.StartTime))
-	require.Equal(t, "./data/factor-control/catalog.db", cfg.DBPath)
+	require.Equal(t, "fset_bars_1m", cfg.SetID)
+	require.Equal(t, []string{"close", "volume"}, cfg.InputColumns)
+	require.Equal(t, []string{"bias"}, cfg.Outputs)
+	require.Equal(t, 20, cfg.LookbackPeriods)
+	require.Equal(t, "timeseries", cfg.FactorType)
 }
 
-func TestParseRunOnceRange(t *testing.T) {
+func TestParseImportRejectsBlankColumns(t *testing.T) {
+	_, err := parseArgs([]string{"import", "--set", "s", "--file", "f.py", "--factor-id", "f", "--inputs", "close,,open", "--outputs", "value", "--lookback", "1"})
+	require.Error(t, err)
+}
+
+func TestParseImportCatalogUsesDirectoryAndSet(t *testing.T) {
+	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/opt/factors"})
+	require.NoError(t, err)
+	require.Equal(t, "fset_bars_1m", cfg.SetID)
+	require.Equal(t, "/opt/factors", cfg.FactorsDir)
+}
+
+func TestParseRecalcRangeAndSelectors(t *testing.T) {
 	cfg, err := parseArgs([]string{
-		"run-once", "--config", "/opt/moox/factor/config/app.yaml",
-		"--space", "crypto", "--dataset", "bars", "--subject", "BTC",
-		"--freq", "1m", "--start-time", "2026-07-26T00:00:00Z",
-		"--end-time", "2026-07-26T01:00:00Z", "--factors", "Bias,Cci",
+		"recalc", "--set", "fset_bars_1m", "--start", "2026-10-04T00:00:00Z",
+		"--end", "2026-10-04T01:00:00Z", "--factor", "Bias", "--factor", "Cci",
+		"--subject", "BTC,ETH",
 	})
 	require.NoError(t, err)
-	require.Equal(t, "/opt/moox/factor/config/app.yaml", cfg.ConfigPath)
-	require.Empty(t, cfg.DBPath)
-	require.Empty(t, cfg.FactorsDir)
 	require.Equal(t, time.Hour, cfg.EndTime.Sub(cfg.StartTime))
 	require.Equal(t, []string{"Bias", "Cci"}, cfg.FactorIDs)
+	require.Equal(t, []string{"BTC", "ETH"}, cfg.Subjects)
+	require.Empty(t, cfg.DBPath)
 }
 
-func TestRunOnceCLIPathDefaultsInheritAppConfig(t *testing.T) {
-	cfg, err := parseArgs([]string{
-		"run-once", "--space", "crypto", "--dataset", "bars", "--subject", "BTC",
-		"--freq", "1m", "--start-time", "2026-07-26T00:00:00Z",
-		"--end-time", "2026-07-26T01:00:00Z",
-	})
+func TestParseRunOncePeriod(t *testing.T) {
+	cfg, err := parseArgs([]string{"run-once", "--set", "fset_bars_1m", "--period", "2026-10-04T00:10:00Z"})
 	require.NoError(t, err)
-	require.Equal(t, "./config/app.yaml", cfg.ConfigPath)
+	require.Equal(t, time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC), cfg.Period)
 	require.Empty(t, cfg.DBPath)
 	require.Empty(t, cfg.FactorsDir)
 }
 
-func TestParseImportGenericDefinition(t *testing.T) {
-	cfg, err := parseArgs([]string{
-		"import", "--file", "./Bias.py", "--factor-id", "Bias",
-		"--input-columns", "close, benchmark_return", "--outputs", "bias_20,bias_96",
-		"--params-json", `{"windows":[20,96]}`, "--lookback-periods", "200",
-	})
+func TestStatusRequiresFactorTarget(t *testing.T) {
+	_, err := parseArgs([]string{"status"})
 	require.NoError(t, err)
-	require.Equal(t, "./Bias.py", cfg.File)
-	require.Equal(t, []string{"close", "benchmark_return"}, cfg.InputColumns)
-	require.Equal(t, []string{"bias_20", "bias_96"}, cfg.Outputs)
-	require.Equal(t, 200, cfg.LookbackPeriods)
+	var output bytes.Buffer
+	err = runStatus(t.Context(), cliConfig{}, &output)
+	require.ErrorContains(t, err, "FactorMgr target is required")
 }
 
-func TestParseImportRejectsStatusFlag(t *testing.T) {
-	_, err := parseArgs([]string{
-		"import", "--file", "./Bias.py", "--factor-id", "Bias",
-		"--input-columns", "close", "--outputs", "bias",
-		"--lookback-periods", "20", "--status", "enabled",
-	})
-	require.Error(t, err)
-}
-
-func TestParseImportRejectsRetiredLookbackRowsFlag(t *testing.T) {
-	_, err := parseArgs([]string{
-		"import", "--file", "./Bias.py", "--factor-id", "Bias",
-		"--input-columns", "close", "--outputs", "bias",
-		"--lookback-rows", "20",
-	})
-	require.Error(t, err)
-}
-
-func TestParseImportRejectsBlankColumnTokens(t *testing.T) {
-	tests := [][]string{
-		{"--input-columns", "close,,", "--outputs", "bias"},
-		{"--input-columns", "close", "--outputs", ",bias,,"},
-	}
-	for _, flags := range tests {
-		args := append([]string{"import"}, flags...)
-		_, err := parseArgs(args)
-		require.Error(t, err)
+func TestLegacyCLICommandsAreRemoved(t *testing.T) {
+	for _, command := range []string{"recalc-cancel", "recalc-status", "clear-queue", "replay"} {
+		_, err := parseArgs([]string{command})
+		require.ErrorContains(t, err, "unknown command")
 	}
 }
 
-func TestReplayCommandIsRemoved(t *testing.T) {
-	_, err := parseArgs([]string{"replay"})
-	require.Error(t, err)
+func TestRunInitCreatesFactorSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "factor.db")
+	var output bytes.Buffer
+	require.NoError(t, runInit(cliConfig{DBPath: dbPath}, &output))
+	var result struct {
+		OK     bool     `json:"ok"`
+		Tables []string `json:"tables"`
+	}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	require.True(t, result.OK)
+	require.Equal(t, []string{"t_factor_sets", "t_factor_defs", "t_factor_recalc_jobs"}, result.Tables)
+	db, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 }

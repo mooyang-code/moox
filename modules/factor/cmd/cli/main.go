@@ -9,49 +9,33 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type cliConfig struct {
-	Command           string
-	ConfigPath        string
-	DBPath            string
-	FactorsDir        string
-	File              string
-	CatalogPath       string
-	FactorID          string
-	FactorType        string
-	InputColumns      []string
-	Outputs           []string
-	ParamsJSON        string
-	LookbackPeriods   int
-	SpaceID           string
-	DatasetID         string
-	ViewID            string
-	SubjectID         string
-	Freq              string
-	StartTime         time.Time
-	EndTime           time.Time
-	FactorIDs         []string
-	TaskID            string
-	JobID             string
-	RequestID         string
-	FactorSourcePaths map[string]string
-	Stream            string
-	Consumer          string
-	CredentialFile    string
-	EventBusURL       string
-	PackageRoot       string
-	Service           string
-	Timeout           time.Duration
-	Yes               bool
-	DryRun            bool
-	Restart           bool
+	Command         string
+	ConfigPath      string
+	DBPath          string
+	FactorsDir      string
+	SetID           string
+	File            string
+	CatalogDir      string
+	FactorID        string
+	FactorType      string
+	InputColumns    []string
+	Outputs         []string
+	ParamsJSON      string
+	LookbackPeriods int
+	StartTime       time.Time
+	EndTime         time.Time
+	Period          time.Time
+	FactorIDs       []string
+	Subjects        []string
+	RequestID       string
+	RPCTarget       string
 }
 
 func main() {
-	if err := run(trpc.BackgroundContext(), os.Args[1:], os.Stdout); err != nil {
+	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "{\"ok\":false,\"error\":%q}\n", err.Error())
 		os.Exit(1)
 	}
@@ -64,21 +48,17 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	switch cfg.Command {
 	case "init":
-		return runInit(ctx, cfg, out)
+		return runInit(cfg, out)
 	case "import":
 		return runImport(ctx, cfg, out)
 	case "import-catalog":
 		return runImportCatalog(ctx, cfg, out)
-	case "run-once":
-		return runOnce(ctx, cfg, out)
 	case "recalc":
 		return runRecalc(ctx, cfg, out)
-	case "recalc-cancel":
-		return runRecalcCancel(ctx, cfg, out)
-	case "recalc-status":
-		return runRecalcStatus(ctx, cfg, out)
-	case "clear-queue":
-		return runClearQueue(ctx, cfg, out)
+	case "run-once":
+		return runOnce(ctx, cfg, out)
+	case "status":
+		return runStatus(ctx, cfg, out)
 	default:
 		return fmt.Errorf("unknown command %q", cfg.Command)
 	}
@@ -88,146 +68,104 @@ func parseArgs(args []string) (cliConfig, error) {
 	if len(args) == 0 {
 		return cliConfig{}, errors.New("command is required")
 	}
-	cfg := cliConfig{Command: args[0], ParamsJSON: "{}"}
-	switch args[0] {
+	cfg := cliConfig{
+		Command: args[0], DBPath: "./data/factor/factor.db",
+		FactorsDir: "./factors", ConfigPath: "./config/app.yaml",
+		FactorType: "timeseries", ParamsJSON: "{}",
+	}
+	fs := newFlagSet(cfg.Command)
+	var inputs, outputs string
+	var start, end, period string
+	switch cfg.Command {
 	case "init":
-		cfg.DBPath = "./data/factor/factor.db"
-		fs := newFlagSet("init")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
-		if err := fs.Parse(args[1:]); err != nil {
-			return cliConfig{}, err
-		}
+		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "Factor SQLite database")
 	case "import":
-		cfg.DBPath = "./data/factor/factor.db"
-		cfg.FactorsDir = "./factors"
-		var inputColumns, outputs string
-		fs := newFlagSet("import")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
-		fs.StringVar(&cfg.File, "file", "", "single Python factor file")
+		cfg.DBPath, cfg.FactorsDir = "", ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "immutable factor artifact directory (overrides config)")
+		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&cfg.File, "file", "", "Python factor source file")
 		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
-		fs.StringVar(&cfg.FactorType, "factor-type", "", "required: timeseries or cross_section")
-		fs.StringVar(&inputColumns, "input-columns", "", "comma-separated input columns")
+		fs.StringVar(&cfg.FactorType, "factor-type", cfg.FactorType, "timeseries or cross_section")
+		fs.StringVar(&inputs, "inputs", "", "comma-separated input columns")
 		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
-		fs.StringVar(&cfg.ParamsJSON, "params-json", "{}", "factor parameter JSON object")
-		fs.IntVar(&cfg.LookbackPeriods, "lookback-periods", 0, "input lookback periods")
-		if err := fs.Parse(args[1:]); err != nil {
-			return cliConfig{}, err
-		}
-		var err error
-		cfg.InputColumns, err = parseImportCSV("--input-columns", inputColumns)
-		if err != nil {
-			return cliConfig{}, err
-		}
-		cfg.Outputs, err = parseImportCSV("--outputs", outputs)
-		if err != nil {
-			return cliConfig{}, err
-		}
+		fs.IntVar(&cfg.LookbackPeriods, "lookback", 0, "input lookback periods")
+		fs.StringVar(&cfg.ParamsJSON, "params", cfg.ParamsJSON, "factor parameter JSON object")
 	case "import-catalog":
-		cfg.DBPath = "./data/factor/factor.db"
-		cfg.FactorsDir = "./factors"
-		fs := newFlagSet("import-catalog")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
-		fs.StringVar(&cfg.CatalogPath, "catalog", "", "JSON factor catalog")
-		if err := fs.Parse(args[1:]); err != nil {
-			return cliConfig{}, err
-		}
-	case "run-once":
-		cfg.ConfigPath = "./config/app.yaml"
-		var startTime, endTime string
-		var factors string
-		fs := newFlagSet("run-once")
-		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "factor application config")
-		fs.StringVar(&cfg.DBPath, "db", "", "factor sqlite database (overrides config)")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "factor source directory (overrides config)")
-		fs.StringVar(&cfg.SpaceID, "space", "", "space id")
-		fs.StringVar(&cfg.DatasetID, "dataset", "", "source dataset id")
-		fs.StringVar(&cfg.ViewID, "view-id", "", "source View id (defaults to dataset id)")
-		fs.StringVar(&cfg.SubjectID, "subject", "", "subject id")
-		fs.StringVar(&cfg.Freq, "freq", "", "frequency")
-		fs.StringVar(&startTime, "start-time", "", "inclusive start time RFC3339")
-		fs.StringVar(&endTime, "end-time", "", "exclusive end time RFC3339")
-		fs.StringVar(&factors, "factors", "", "comma-separated factor ids")
-		if err := fs.Parse(args[1:]); err != nil {
-			return cliConfig{}, err
-		}
-		var err error
-		if cfg.StartTime, err = time.Parse(time.RFC3339Nano, startTime); err != nil {
-			return cliConfig{}, fmt.Errorf("parse --start-time: %w", err)
-		}
-		if cfg.EndTime, err = time.Parse(time.RFC3339Nano, endTime); err != nil {
-			return cliConfig{}, fmt.Errorf("parse --end-time: %w", err)
-		}
-		if !cfg.StartTime.Before(cfg.EndTime) {
-			return cliConfig{}, errors.New("--start-time must be before --end-time")
-		}
-		cfg.FactorIDs = parseStringCSV(factors)
+		cfg.DBPath, cfg.FactorsDir = "", ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.FactorsDir, "dir", "", "directory containing catalog.json and Python files (overrides config)")
+		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
 	case "recalc":
-		cfg.DBPath = "./data/factor-control/catalog.db"
-		var startTime, endTime string
-		fs := newFlagSet("recalc")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor control sqlite database")
-		fs.StringVar(&cfg.RequestID, "request-id", "", "idempotent recalc request id")
-		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
-		fs.StringVar(&cfg.SpaceID, "space", "", "space id")
-		fs.StringVar(&cfg.DatasetID, "dataset", "", "source dataset or view id")
-		fs.StringVar(&cfg.ViewID, "view-id", "", "source View id (defaults to dataset id)")
-		fs.StringVar(&cfg.SubjectID, "subject", "", "subject id")
-		fs.StringVar(&cfg.Freq, "freq", "", "frequency")
-		fs.StringVar(&startTime, "start-time", "", "inclusive start time RFC3339")
-		fs.StringVar(&endTime, "end-time", "", "exclusive end time RFC3339")
-		if err := fs.Parse(args[1:]); err != nil {
+		cfg.DBPath = ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&cfg.RequestID, "request-id", "", "idempotent request id (generated when omitted)")
+		fs.StringVar(&start, "start", "", "inclusive start timestamp RFC3339")
+		fs.StringVar(&end, "end", "", "exclusive end timestamp RFC3339")
+		fs.Var((*listFlag)(&cfg.FactorIDs), "factor", "factor id (repeatable)")
+		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
+	case "run-once":
+		cfg.DBPath = ""
+		cfg.FactorsDir = ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "factor artifact directory (overrides config)")
+		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&period, "period", "", "period start timestamp RFC3339")
+		fs.Var((*listFlag)(&cfg.FactorIDs), "factor", "factor id (repeatable)")
+		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
+	case "status":
+		fs.StringVar(&cfg.RPCTarget, "target", os.Getenv("MOOX_FACTOR_RPC_TARGET"), "FactorMgr tRPC target")
+	default:
+		return cliConfig{}, fmt.Errorf("unknown command %q", cfg.Command)
+	}
+	if err := fs.Parse(args[1:]); err != nil {
+		return cliConfig{}, err
+	}
+	if fs.NArg() > 0 {
+		return cliConfig{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if cfg.Command == "import" {
+		var err error
+		cfg.InputColumns, err = parseCSV("--inputs", inputs)
+		if err != nil {
 			return cliConfig{}, err
+		}
+		cfg.Outputs, err = parseCSV("--outputs", outputs)
+		if err != nil {
+			return cliConfig{}, err
+		}
+	}
+	if cfg.Command == "recalc" {
+		if strings.TrimSpace(cfg.SetID) == "" {
+			return cliConfig{}, errors.New("--set is required")
 		}
 		var err error
-		if cfg.StartTime, err = time.Parse(time.RFC3339Nano, startTime); err != nil {
-			return cliConfig{}, fmt.Errorf("parse --start-time: %w", err)
+		cfg.StartTime, err = parseTimeFlag("--start", start)
+		if err != nil {
+			return cliConfig{}, err
 		}
-		if cfg.EndTime, err = time.Parse(time.RFC3339Nano, endTime); err != nil {
-			return cliConfig{}, fmt.Errorf("parse --end-time: %w", err)
+		cfg.EndTime, err = parseTimeFlag("--end", end)
+		if err != nil {
+			return cliConfig{}, err
 		}
 		if !cfg.StartTime.Before(cfg.EndTime) {
-			return cliConfig{}, errors.New("--start-time must be before --end-time")
+			return cliConfig{}, errors.New("--start must be before --end")
 		}
-	case "recalc-cancel":
-		cfg.DBPath = "./data/factor-control/catalog.db"
-		fs := newFlagSet("recalc-cancel")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor control sqlite database")
-		fs.StringVar(&cfg.JobID, "job-id", "", "recalc job id")
-		if err := fs.Parse(args[1:]); err != nil {
+	}
+	if cfg.Command == "run-once" {
+		if strings.TrimSpace(cfg.SetID) == "" {
+			return cliConfig{}, errors.New("--set is required")
+		}
+		var err error
+		cfg.Period, err = parseTimeFlag("--period", period)
+		if err != nil {
 			return cliConfig{}, err
 		}
-	case "recalc-status":
-		cfg.DBPath = "./data/factor-control/catalog.db"
-		fs := newFlagSet("recalc-status")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor control sqlite database")
-		fs.StringVar(&cfg.JobID, "job-id", "", "recalc job id")
-		if err := fs.Parse(args[1:]); err != nil {
-			return cliConfig{}, err
-		}
-	case "clear-queue":
-		cfg.Stream = "MOOX_STORAGE"
-		cfg.Consumer = "factor_view_ready_v1"
-		cfg.Timeout = 2 * time.Minute
-		cfg.Restart = true
-		cfg.Service = "factor-engine"
-		fs := newFlagSet("clear-queue")
-		fs.StringVar(&cfg.Stream, "stream", cfg.Stream, "JetStream stream")
-		fs.StringVar(&cfg.Consumer, "consumer", cfg.Consumer, "durable Factor consumer")
-		fs.StringVar(&cfg.CredentialFile, "credential-file", "", "NATS admin credential file")
-		fs.StringVar(&cfg.EventBusURL, "eventbus-url", "", "NATS URL override")
-		fs.StringVar(&cfg.PackageRoot, "package-root", "", "engine or control deployment root containing start.sh")
-		fs.StringVar(&cfg.Service, "service", cfg.Service, "lifecycle service name passed to start.sh/stop.sh")
-		fs.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "overall operation timeout")
-		fs.BoolVar(&cfg.Yes, "yes", false, "confirm clearing the durable consumer")
-		fs.BoolVar(&cfg.DryRun, "dry-run", false, "validate the operation without changing the consumer or restarting Factor")
-		fs.BoolVar(&cfg.Restart, "restart", cfg.Restart, "stop and restart Factor around the consumer reset")
-		if err := fs.Parse(args[1:]); err != nil {
-			return cliConfig{}, err
-		}
-	default:
-		return cliConfig{}, fmt.Errorf("unknown command %q", args[0])
 	}
 	return cfg, nil
 }
@@ -238,28 +176,33 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-func parseStringCSV(raw string) []string {
+func parseCSV(name, raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
-		return nil
+		return nil, nil
 	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if v := strings.TrimSpace(part); v != "" {
-			out = append(out, v)
-		}
-	}
-	return out
+	return normalizeCLIList(name, strings.Split(raw, ","))
 }
 
-func parseImportCSV(flagName, raw string) ([]string, error) {
-	parts := strings.Split(raw, ",")
-	out := make([]string, len(parts))
-	for i, part := range parts {
-		out[i] = strings.TrimSpace(part)
-		if out[i] == "" {
-			return nil, fmt.Errorf("%s contains an empty value", flagName)
-		}
+func parseTimeFlag(name, raw string) (time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, fmt.Errorf("%s is required", name)
 	}
-	return out, nil
+	timeValue, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse %s as RFC3339: %w", name, err)
+	}
+	return timeValue.UTC(), nil
 }
+
+type listFlag []string
+
+func (v *listFlag) Set(raw string) error {
+	values, err := normalizeCLIList("list", strings.Split(raw, ","))
+	if err != nil {
+		return err
+	}
+	*v = append(*v, values...)
+	return nil
+}
+
+func (v *listFlag) String() string { return strings.Join(*v, ",") }
