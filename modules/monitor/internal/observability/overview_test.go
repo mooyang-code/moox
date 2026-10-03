@@ -660,7 +660,7 @@ func TestBuilderIgnoresDatasetEnabledFromSupersededFactorBoot(t *testing.T) {
 	oldBoot := "af0221ff-91e9-4cb2-b1e3-00d434de7bf1"
 	newBoot := "200c376c-2528-4ac9-a17b-f443b3fa49c0"
 	retired := `{"dataset_id":"dataset_crypto_spot_kline_1m_factor","freq":"1m","space_id":"crypto"}`
-	live := `{"dataset_id":"mdataset_binance_kline_1m","freq":"1m","space_id":"crypto"}`
+	live := `{"dataset_id":"dataset_factor_binance_kline_1m","freq":"1m","space_id":"crypto"}`
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		require.NoError(t, db.Create([]monmetrics.MetricService{
 			{
@@ -674,14 +674,14 @@ func TestBuilderIgnoresDatasetEnabledFromSupersededFactorBoot(t *testing.T) {
 		}).Error)
 		seedOverviewMetricForInstance(t, db, "retired-enabled", "moox_factor", "moox_factor@control", "moox_factor_dataset_enabled", retired, 1, now)
 		require.NoError(t, db.Model(&monmetrics.MetricLatest{}).Where("c_series_id = ?", "retired-enabled").Updates(map[string]any{
-			"c_message_id":        oldBoot + "-00000000000000009261",
+			"c_message_id":       oldBoot + "-00000000000000009261",
 			"c_producer_version": "sha256:old",
 		}).Error)
 		seedOverviewMetricForInstance(t, db, "retired-interval", "moox_factor", "moox_factor@control", "moox_factor_dataset_expected_interval_seconds", retired, 60, now)
 		seedOverviewMetricForInstance(t, db, "retired-run", "moox_factor", "moox_factor@control", "moox_factor_dataset_last_run_timestamp_seconds", retired, float64(now.Add(-3*24*time.Hour).Unix()), now)
 		seedOverviewMetricForInstance(t, db, "live-enabled", "moox_factor", "moox_factor@control", "moox_factor_dataset_enabled", live, 1, now)
 		require.NoError(t, db.Model(&monmetrics.MetricLatest{}).Where("c_series_id = ?", "live-enabled").Updates(map[string]any{
-			"c_message_id":        newBoot + "-00000000000000000007",
+			"c_message_id":       newBoot + "-00000000000000000007",
 			"c_producer_version": "sha256:new",
 		}).Error)
 		seedOverviewMetricForInstance(t, db, "live-interval", "moox_factor", "moox_factor@control", "moox_factor_dataset_expected_interval_seconds", live, 60, now)
@@ -695,7 +695,7 @@ func TestBuilderIgnoresDatasetEnabledFromSupersededFactorBoot(t *testing.T) {
 			ids = append(ids, item.DatasetID)
 		}
 	}
-	require.Equal(t, []string{"mdataset_binance_kline_1m"}, ids)
+	require.Equal(t, []string{"dataset_factor_binance_kline_1m"}, ids)
 }
 
 func TestBuilderIncludesStorageCommitFactsWithoutEnabledInventory(t *testing.T) {
@@ -738,7 +738,7 @@ func TestBuilderIncludesStorageCommitFactsWithoutEnabledInventory(t *testing.T) 
 func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 	now := time.Date(2026, 8, 20, 15, 0, 0, 0, time.UTC)
 	watermark := now.Add(-20 * time.Minute)
-	labels := `{"space_id":"crypto","view_id":"view_crypto_spot_kline_1m_factor","freq":"1m"}`
+	labels := `{"space_id":"crypto","view_id":"view_crypto_kline_1m_factor","freq":"1m"}`
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		seedOverviewMetricForInstance(t, db, "factor-view-watermark", "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels, float64(watermark.Unix()), now)
 	})
@@ -750,7 +750,7 @@ func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 		t.Fatalf("datasets = %+v", got.Datasets)
 	}
 	row := got.Datasets[0]
-	if row.Producer != "storage_view" || row.DatasetID != "view_crypto_spot_kline_1m_factor" || row.Freq != "1m" || row.Status != "stale" {
+	if row.Producer != "storage_view" || row.DatasetID != "view_crypto_kline_1m_factor" || row.Freq != "1m" || row.Status != "stale" {
 		t.Fatalf("storage view status = %+v", row)
 	}
 	if !row.OutputWatermarkAt.Equal(watermark) || row.LagSeconds != int64((20*time.Minute).Seconds()) {

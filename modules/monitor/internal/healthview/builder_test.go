@@ -108,15 +108,15 @@ func TestHealthViewExcludesHostMonitoringDatasetsAndAlerts(t *testing.T) {
 			t.Fatalf("host check %q was not filtered", checkID)
 		}
 	}
-	if isHostMonitoringCheck("dataset:storage:dataset_binance_spot_kline_1m:1m") {
+	if isHostMonitoringCheck("dataset:storage:dataset_binance_kline_1m:1m") {
 		t.Fatal("market dataset check was incorrectly classified as host monitoring")
 	}
 }
 
 func TestCollectorDatasetUsesStorageAsAuthoritativeHealthFact(t *testing.T) {
 	items := []observability.DatasetFrequencyStatus{
-		{Producer: "collector", SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Freq: "1m"},
-		{Producer: "storage", SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Freq: "1m"},
+		{Producer: "collector", SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Freq: "1m"},
+		{Producer: "storage", SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Freq: "1m"},
 		{Producer: "collector", SpaceID: "crypto", DatasetID: "new_dataset", Freq: "1m"},
 	}
 	scopes := storageDatasetScopes(items)
@@ -184,7 +184,7 @@ func TestAlertTitleUsesHumanReadableHostAndServiceNames(t *testing.T) {
 	if got := alertTitle("dataset:storage:crypto_spot_kline_1m_factor:1m"); got != "因子结果数据 · crypto_spot_kline_1m_factor / 1m" {
 		t.Fatalf("storage alert title = %q", got)
 	}
-	if got := alertTitle("dataset:storage_view:view_crypto_spot_kline_1m:1m"); got != "行情结果视图 · view_crypto_spot_kline_1m / 1m" {
+	if got := alertTitle("dataset:storage_view:view_crypto_kline_1m:1m"); got != "行情结果视图 · view_crypto_kline_1m / 1m" {
 		t.Fatalf("market view alert title = %q", got)
 	}
 	if got := alertTitle("sysdeploy:control:moox_factor"); got != "因子计算服务" {

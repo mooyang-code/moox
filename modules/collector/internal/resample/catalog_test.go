@@ -299,7 +299,7 @@ func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
 		"market_type":           "spot",
 		"storage_model":         "wide_common_metrics",
 		"dataset_role":          "kline_resample_result",
-		"source_dataset_id":     "dataset_binance_spot_kline_1m",
+		"source_dataset_id":     "dataset_binance_kline_1m",
 		"source_data_source_id": "binance",
 		"source_freq":           "1m",
 		"source_series_tag":     "venue:binance",

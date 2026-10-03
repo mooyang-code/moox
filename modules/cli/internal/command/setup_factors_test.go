@@ -74,7 +74,7 @@ func TestLoadSetupFactorsReadsConfiguredPythonSources(t *testing.T) {
 	items, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "./examples/factors", Items: []setupconfig.FactorSetupItem{{
 			FactorType: "timeseries", FactorID: "bias", File: "timeseries/bias.py", InputColumns: []string{"close"}, Outputs: []string{"bias_5"},
-			ParamsJSON: `{"windows":[5]}`, SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m",
+			ParamsJSON: `{"windows":[5]}`, SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m",
 		}},
 	}}, root)
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestRemoteSetupFactorApplyCreatesBindingAndEnablesFactor(t *testing.T) {
 		FactorType: "cross_section",
 		FactorID:   "Bias", Name: "Bias", SourceCode: "def compute(df, params):\n    return df\n", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias_5"}, ParamsJSON: "{}",
-		SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m", SubjectMode: "all", Status: "enabled",
+		SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m", SubjectMode: "all", Status: "enabled",
 	}})
 	require.NoError(t, err)
 	require.Equal(t, setupFactorSummary{Enabled: true, Planned: 1, Imported: 1, Bound: 1}, result)
@@ -216,7 +216,7 @@ func TestRemoteSetupFactorApplyRemovesObsoleteSetupBinding(t *testing.T) {
 	_, err := service.Apply(context.Background(), []setupFactorItem{{
 		FactorID: "Bias", Name: "Bias", SourceCode: "def compute(df, params):\n    return df", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias_5"}, ParamsJSON: "{}", LookbackPeriods: 1,
-		SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m", SubjectMode: "all", Status: "disabled",
+		SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m", SubjectMode: "all", Status: "disabled",
 	}})
 	require.NoError(t, err)
 	require.Contains(t, client.calls, "/api/admin/factormgr/DeleteBinding")

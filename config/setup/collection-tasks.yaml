@@ -7,7 +7,11 @@ tasks:
   tag_ids: [binance_spot]
   enabled: true
   creator: moox-setup
+  result_dataset_id: dataset_binance_kline_1m
+  result_view_id: view_binance_kline_1m
   collect_params:
+    provider: binance
+    market_type: spot
     output_fields: [open, high, low, close, volume, quote_volume, trade_num]
     frequency: 1m
 - space_id: crypto
@@ -17,7 +21,11 @@ tasks:
   tag_ids: [binance_swap]
   enabled: true
   creator: moox-setup
+  result_dataset_id: dataset_binance_kline_1m
+  result_view_id: view_binance_kline_1m
   collect_params:
+    provider: binance
+    market_type: swap
     output_fields: [open, high, low, close, volume, quote_volume, trade_num]
     frequency: 1m
 - space_id: crypto

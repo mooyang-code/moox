@@ -287,6 +287,15 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				}
 				return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
 			}
+			_, shared, sharedErr := builtinSharedTaskResultTarget(task, params)
+			if sharedErr != nil {
+				return sharedErr
+			}
+			if shared {
+				// The shared raw Dataset and its query View are provisioned by setup
+				// metadata. Do not let the task-result manager claim or rewrite them.
+				continue
+			}
 			originalParams := task.CollectParams
 			cleanParams, _, splitErr := domain.SplitSubjectTags(originalParams)
 			if splitErr != nil {
@@ -354,6 +363,22 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 		}
 	}
 	return nil
+}
+
+func builtinSharedTaskResultTarget(task domain.CollectionTask, params *domain.CollectParams) (collectorresult.IDs, bool, error) {
+	if !collectorresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
+		return collectorresult.IDs{}, false, nil
+	}
+	if params == nil {
+		return collectorresult.IDs{}, false, fmt.Errorf("task %s/%s shared result parameters are missing", task.SpaceID, task.TaskID)
+	}
+	ids, allowed := collectorresult.BuiltinSharedResultIDsForRoute(
+		task.SpaceID, task.TaskID, task.DataType, params.Frequency, params.Provider, params.MarketType, task.TagIDs,
+	)
+	if !allowed || task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID || params.TargetDatasetID != ids.DatasetID {
+		return collectorresult.IDs{}, false, fmt.Errorf("task %s/%s shared result has an invalid provider, market_type, tag, or target", task.SpaceID, task.TaskID)
+	}
+	return ids, true, nil
 }
 
 func firstNonEmptyResultID(values ...string) string {

@@ -281,7 +281,7 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if !reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
 		t.Fatalf("loaded kline freshness Space IDs = %v", cfg.KlineFreshness.SpaceIDs)
 	}
-	if strings.Contains(string(raw), "view_binance_spot_kline_1m") || strings.Contains(string(raw), "  rules:") {
+	if strings.Contains(string(raw), "view_binance_kline_1m") || strings.Contains(string(raw), "  rules:") {
 		t.Fatal("Monitor app config still pins a static K-line View")
 	}
 	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].Symbol != "BTC-USDT" {

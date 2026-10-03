@@ -2,10 +2,15 @@ package marketmanifest
 
 import "testing"
 
-func TestDefaultCatalogHasDistinctCanonicalDatasets(t *testing.T) {
+func TestDefaultCatalogUsesCanonicalDatasetIDs(t *testing.T) {
 	catalog, err := DefaultCatalog()
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, instrumentType := range []string{"spot", "swap"} {
+		if got, ok := catalog.Lookup("crypto", instrumentType); !ok || got.DatasetID != "dataset_binance_kline_1m" {
+			t.Fatalf("%s manifest = %+v, found=%v; want shared Binance K-line dataset", instrumentType, got, ok)
+		}
 	}
 	if got, ok := catalog.Lookup("stockcn", "index"); !ok || got.DatasetID != "dataset_stockcn_index_kline" {
 		t.Fatalf("index manifest = %+v, found=%v", got, ok)

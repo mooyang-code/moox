@@ -97,14 +97,14 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_crypto_spot_kline_1m \
+  --view-id view_crypto_kline_1m \
   --consumer storage_view_kline \
   --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
   --yes
 ```
 
-独立 Storage 主机上的业务配置是 `storage/config/storage.yaml`，不要传 View 的 `trpc_go.yaml`。控制机 `internal-admin.yaml` 的 NATS URL 是回环地址，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。四个 crypto kline View 共用 `storage_view_kline`。
+独立 Storage 主机上的业务配置是 `storage/config/storage.yaml`，不要传 View 的 `trpc_go.yaml`。控制机 `internal-admin.yaml` 的 NATS URL 是回环地址，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。三个 crypto kline View 共用 `storage_view_kline`。
 
 默认流程会停止并重启 `storage-view`、删除指定 durable consumer、
 备份 Metadata SQLite，并递增 View desired revision，让服务走正常的 A/B 构建和切换；
@@ -312,7 +312,7 @@ Crypto 与 StockCN 发布会先在 reservation 专属的临时 Invoke 函数上�
 如果 `moox.toml` 启用了 `[factors]`，同一个 `setup init` 还会从
 `factors.source_dir` 读取 Python 因子，调用 FactorMgr 导入定义、建立绑定并启用因子。
 仓库的 `moox.toml.example` 已给出 `Bias`、`Cci` 到
-`crypto/view_binance_spot_kline_1m` 的默认配置；修改
+`crypto/view_binance_kline_1m` 的默认配置；修改
 `[[factors.items]]` 的 `space_id`、`source_view_id`、`freq` 和参数即可切换默认关联。
 重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，命令会停止而不会静默覆盖已有因子。修改同一因子的默认 View 或频率后再次执行，会删除此前由 `setup factors` 创建的旧绑定。
 

@@ -593,8 +593,8 @@ func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
 	assert.Equal(t, "1h", manifest.StorageView.CapacityCheckJitter)
 	assert.Equal(t, uint64(5000), manifest.StorageView.RebuildLookbackPeriods)
 	assert.Equal(t, uint64(6000), manifest.StorageView.MaxPeriodsPerSeries)
-	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_spot_kline_1m").RebuildLookbackPeriods)
-	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_spot_kline_1m").MaxPeriodsPerSeries)
+	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_kline_1m").RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_kline_1m").MaxPeriodsPerSeries)
 	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").RebuildLookbackPeriods)
 	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").MaxPeriodsPerSeries)
 	manifest.SCFFetcher.Enabled = true
@@ -1044,7 +1044,7 @@ func TestLoadRejectsStorageViewCapacityNotAboveLookback(t *testing.T) {
 		want string
 	}{
 		{name: "equal global limits", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 5000", want: "max_periods_per_series"},
-		{name: "invalid View override", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 6000\n\n[[storage_view.views]]\nspace_id = \"crypto\"\nview_id = \"view_binance_spot_kline_1m\"\nrebuild_lookback_periods = 6000\nmax_periods_per_series = 6000", want: "invalid limits"},
+		{name: "invalid View override", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 6000\n\n[[storage_view.views]]\nspace_id = \"crypto\"\nview_id = \"view_binance_kline_1m\"\nrebuild_lookback_periods = 6000\nmax_periods_per_series = 6000", want: "invalid limits"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1085,7 +1085,7 @@ outputs = ["bias_5"]
 params_json = '{"windows":[5]}'
 lookback_periods = 5
 space_id = "crypto"
-source_view_id = "view_crypto_spot_kline_1m"
+source_view_id = "view_crypto_kline_1m"
 freq = "1m"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)

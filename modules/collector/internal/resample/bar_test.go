@@ -176,7 +176,7 @@ func testTaskSpec(t *testing.T, sourceRaw, targetRaw string) TaskSpec {
 	return TaskSpec{
 		InstanceID:      "rule-1",
 		SpaceID:         "crypto",
-		SourceDatasetID: "dataset_binance_spot_kline_1m",
+		SourceDatasetID: "dataset_binance_kline_1m",
 		SourceFrequency: source,
 		SourceSeriesTag: "venue:binance",
 		TargetDatasetID: "dataset_spot_kline_derived_" + target.Slug,
@@ -188,7 +188,7 @@ func testTaskSpec(t *testing.T, sourceRaw, targetRaw string) TaskSpec {
 func testSourceBar(at time.Time, open, high, low, close, volume, quoteVolume float64, tradeNum int64) SourceBar {
 	return SourceBar{
 		SpaceID:     "crypto",
-		DatasetID:   "dataset_binance_spot_kline_1m",
+		DatasetID:   "dataset_binance_kline_1m",
 		SubjectID:   "BTC-USDT",
 		Frequency:   "1m",
 		DataTime:    at,

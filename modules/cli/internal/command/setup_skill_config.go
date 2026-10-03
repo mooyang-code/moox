@@ -230,7 +230,7 @@ func buildSkillDataAccessConfig(
 				Exchanges: map[string]exchangeConfig{
 					"binance": {
 						SpaceID: "crypto", SeriesTag: "venue:binance",
-						KlineDatasets: map[string]string{"1m": "dataset_binance_spot_kline_1m"},
+						KlineDatasets: map[string]string{"1m": "dataset_binance_kline_1m"},
 					},
 				},
 			},

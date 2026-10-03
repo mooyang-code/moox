@@ -111,7 +111,7 @@ func TestBuildManagedEnvironmentFitsTypicalThirtySymbols(t *testing.T) {
 		externals[subject] = fmt.Sprintf("COIN%dUSDT", index)
 	}
 	_, err := BuildManagedEnvironment(NodeAssignment{
-		Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals, Enabled: true,
+		Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals, Enabled: true,
 	}, map[string]sources.DNSResolution{"data-api.binance.vision": {IPs: []string{"203.0.113.1", "203.0.113.2"}}})
 	require.NoError(t, err)
 }

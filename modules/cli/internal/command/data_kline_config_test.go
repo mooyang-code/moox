@@ -28,7 +28,7 @@ data_types:
         space_id: crypto
         series_tag: venue:binance
         kline_datasets:
-          1m: dataset_binance_spot_kline_1m
+          1m: dataset_binance_kline_1m
   stockcn:
     default_exchange: stockcn
     exchanges:
@@ -63,7 +63,7 @@ func TestDataAccessConfigLoadsStrictCatalog(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "binance", selection.Exchange)
 	assert.Equal(t, "crypto", selection.SpaceID)
-	assert.Equal(t, "dataset_binance_spot_kline_1m", selection.DatasetID)
+	assert.Equal(t, "dataset_binance_kline_1m", selection.DatasetID)
 	assert.Equal(t, "venue:binance", selection.SeriesTag)
 
 	selection, err = cfg.resolveKline(" stockcn ", "", " 1M ")

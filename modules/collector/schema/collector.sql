@@ -26,7 +26,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_name ON t_collector_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_definition
 ON t_collector_tasks (c_space_id, c_definition_hash)
 WHERE c_definition_hash <> '';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_result_view
+CREATE INDEX IF NOT EXISTS idx_collector_tasks_space_result_view
 ON t_collector_tasks (c_space_id, c_result_view_id)
 WHERE c_result_view_id <> '';
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_space ON t_collector_tasks (c_space_id);

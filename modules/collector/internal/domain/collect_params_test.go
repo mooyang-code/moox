@@ -39,7 +39,7 @@ func TestParseCollectParamsAddsExplicitDefaultKlineHistoryPolicy(t *testing.T) {
 		"provider":"binance",
 		"market_type":"spot",
 		"subject_tags":["binance_spot"],
-		"target_dataset_id":"dataset_binance_spot_kline_1m",
+		"target_dataset_id":"dataset_binance_kline_1m",
 		"frequency":"1m"
 	}`, "", "", "kline")
 	require.NoError(t, err)
@@ -61,7 +61,7 @@ func TestParseCollectParamsAcceptsExplicitKlineHistoryPolicy(t *testing.T) {
 		"provider":"binance",
 		"market_type":"spot",
 		"subject_tags":["binance_spot"],
-		"target_dataset_id":"dataset_binance_spot_kline_1m",
+		"target_dataset_id":"dataset_binance_kline_1m",
 		"frequency":"1m",
 		"history_policy":{
 			"mode":"since",
@@ -132,7 +132,7 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 				"provider":"binance",
 				"market_type":"spot",
 				"subject_tags":["binance_spot"],
-				"target_dataset_id":"dataset_binance_spot_kline_1m",
+				"target_dataset_id":"dataset_binance_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"lookback","lookback":0}
 			}`,
@@ -144,7 +144,7 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 				"provider":"binance",
 				"market_type":"spot",
 				"subject_tags":["binance_spot"],
-				"target_dataset_id":"dataset_binance_spot_kline_1m",
+				"target_dataset_id":"dataset_binance_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"since","since":"yesterday"}
 			}`,
@@ -156,7 +156,7 @@ func TestCollectParamsValidateRejectsInvalidKlineHistoryPolicy(t *testing.T) {
 				"provider":"binance",
 				"market_type":"spot",
 				"subject_tags":["binance_spot"],
-				"target_dataset_id":"dataset_binance_spot_kline_1m",
+				"target_dataset_id":"dataset_binance_kline_1m",
 				"frequency":"1m",
 				"history_policy":{"mode":"live_only","rate_budget_ratio":1.5}
 			}`,
@@ -220,7 +220,7 @@ func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":" MOOX ",
 		"market_type":" SPOT ",
-		"source_dataset_id":" dataset_binance_spot_kline_1m ",
+		"source_dataset_id":" dataset_binance_kline_1m ",
 		"source_frequency":"60m",
 		"source_series_tag":" venue:binance ",
 		"target_dataset_id":" dataset_spot_kline_derived_4h ",
@@ -234,7 +234,7 @@ func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 	assert.Equal(t, "moox", params.Provider)
 	assert.Equal(t, "spot", params.MarketType)
 	assert.Equal(t, "dataset", params.Source.Kind)
-	assert.Equal(t, "dataset_binance_spot_kline_1m", params.Source.DatasetID)
+	assert.Equal(t, "dataset_binance_kline_1m", params.Source.DatasetID)
 	assert.Equal(t, "1H", params.SourceFrequency)
 	assert.Equal(t, "venue:binance", params.SourceSeriesTag)
 	assert.Equal(t, "dataset_spot_kline_derived_4h", params.Target.DatasetID)
@@ -247,7 +247,7 @@ func TestParseCollectParamsRejectsResampleRepairOverride(t *testing.T) {
 	_, err := ParseCollectParams(`{
 		"provider":"moox",
 		"market_type":"spot",
-		"source_dataset_id":"dataset_binance_spot_kline_1m",
+		"source_dataset_id":"dataset_binance_kline_1m",
 		"source_frequency":"1m",
 		"source_series_tag":"venue:binance",
 		"target_dataset_id":"dataset_spot_kline_derived_4h",

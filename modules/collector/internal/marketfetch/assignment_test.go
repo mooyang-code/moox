@@ -475,8 +475,8 @@ func TestSelectCryptoGroupsForCapacityKeepsMinuteBars(t *testing.T) {
 	}
 	groups := []TaskGroup{
 		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
-		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
-		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
 		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
 	}
 	nodes := make([]scfinvoker.Node, 0, 4)
@@ -505,8 +505,8 @@ func TestSelectCryptoGroupsForCapacityKeepsBinanceCryptoInOverseasRegion(t *test
 	}
 	groups := []TaskGroup{
 		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
-		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
-		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
 		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
 	}
 	nodes := []scfinvoker.Node{
@@ -538,8 +538,8 @@ func TestBuildAssignmentsPinsBinanceCryptoToOverseasRegions(t *testing.T) {
 		{NodeID: "hk-1", FunctionName: "fn-hk-1", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
 	}
 	assignments, err := BuildAssignments([]TaskGroup{
-		{Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
-		{Provider: "binance", MarketType: "swap", MarketID: "crypto", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", MarketID: "crypto", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
 	}, nodes, 30)
 	require.NoError(t, err)
 	byMarket := map[string]NodeAssignment{}
@@ -559,7 +559,7 @@ func TestRequiresOverseasEgressPinsBinanceCryptoSpotAndSwap(t *testing.T) {
 	for _, marketType := range []string{"spot", "swap"} {
 		require.True(t, requiresOverseasEgress(TaskGroup{
 			Provider: "binance", MarketID: "crypto", MarketType: marketType,
-			DatasetID: "dataset_binance_" + marketType + "_kline_1m",
+			DatasetID: "dataset_binance_kline_1m",
 		}), marketType)
 	}
 	require.False(t, requiresOverseasEgress(TaskGroup{Provider: "eastmoney", MarketID: "stockcn", MarketType: "equity"}))
@@ -569,7 +569,7 @@ func TestBuildAssignmentsRejectsOverseasCapacity(t *testing.T) {
 	subjects := []string{"AAA-USDT", "BTC-USDT"}
 	externals := map[string]string{"AAA-USDT": "AAAUSDT", "BTC-USDT": "BTCUSDT"}
 	_, err := BuildAssignments([]TaskGroup{
-		{Provider: "binance", MarketType: "swap", MarketID: "crypto", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", MarketID: "crypto", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
 	}, []scfinvoker.Node{
 		{NodeID: "nj-0", Region: "ap-nanjing", NodeType: "scf-event", TriggerType: "timer"},
 		{NodeID: "hk-0", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},

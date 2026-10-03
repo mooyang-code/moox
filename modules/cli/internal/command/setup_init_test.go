@@ -67,7 +67,7 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 		FactorType: "timeseries",
 		FactorID:   "bias", File: "timeseries/bias.py", InputColumns: []string{"close"},
 		Outputs: []string{"bias_5"}, ParamsJSON: `{"windows":[5]}`, LookbackPeriods: 5,
-		SpaceID: "crypto", SourceViewID: "view_binance_spot_kline_1m", Freq: "1m",
+		SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m",
 	}}
 	factor := &fakeSetupInitFactor{}
 	cmd := newSetupCommand(setupDeps{
@@ -88,7 +88,7 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bundle.Spaces, 4)
 	require.NotEmpty(t, bundle.Calls)
-	require.Len(t, bundle.Datasets, 17)
+	require.Len(t, bundle.Datasets, 15)
 	assert.Equal(t, "crypto", bundle.Spaces[0].SpaceID)
 	assert.Equal(t, "stockcn", bundle.Spaces[1].SpaceID)
 	assert.Equal(t, "stockhk", bundle.Spaces[2].SpaceID)
@@ -357,34 +357,30 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 	}
 }
 
-func TestSetupInitAllowsMappedMergeColumnOrigin(t *testing.T) {
+func TestSetupInitAllowsRawDatasetFieldColumnOrigin(t *testing.T) {
 	seed := metadataSeed{
 		Spaces:      []seedSpace{{SpaceID: "crypto"}},
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance"}},
 		Datasets: []seedDataset{
 			{
-				SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m",
-				DataSourceID: "binance", DataKind: "time_series", Freqs: []string{"1m"},
-			},
-			{
-				SpaceID: "crypto", DatasetID: "mdataset_binance_kline_1m",
+				SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
 				DataSourceID: "binance", DataKind: "time_series", Freqs: []string{"1m"},
 			},
 		},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "open"}},
 		DatasetColumns: []seedDatasetColumn{{
-			SpaceID: "crypto", DatasetID: "mdataset_binance_kline_1m",
-			ColumnName: "dataset_binance_spot_kline_1m__open",
-			OriginType: "field", OriginID: "dataset_binance_spot_kline_1m__open",
+			SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
+			ColumnName: "open",
+			OriginType: "field", OriginID: "open",
 		}},
 	}
 	require.NoError(t, validateSetupMetadataDependencies(seed))
 
-	seed.DatasetColumns[0].OriginID = "dataset_binance_spot_kline_1m__missing"
+	seed.DatasetColumns[0].OriginID = "missing"
 	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `undefined field "missing"`)
 
 	seed.DatasetColumns[0].OriginID = "dataset_missing_source__open"
-	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `undefined source dataset "dataset_missing_source"`)
+	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `undefined field "dataset_missing_source__open"`)
 }
 
 func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {

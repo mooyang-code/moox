@@ -58,9 +58,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		"view_stockcn_equity_kline_1m", "view_stockcn_index_kline_1d", "view_stockcn_bond_kline_1m",
 	}, stockCNViews)
 	require.ElementsMatch(t, []string{
-		"dataset_binance_spot_kline_1m",
-		"dataset_binance_swap_kline_1m",
-		"mdataset_binance_kline_1m",
+		"dataset_binance_kline_1m",
 		"dataset_spot_kline_1h",
 		"dataset_perpetual_kline_1h",
 	}, datasetIDs)
@@ -76,8 +74,6 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	require.True(t, foundStockKline)
 	require.Equal(t, []string{"1m"}, stockKline.Freqs)
 	require.ElementsMatch(t, []string{
-		"view_binance_spot_kline_1m",
-		"view_binance_swap_kline_1m",
 		"view_binance_kline_1m",
 		"view_crypto_spot_kline_1h",
 		"view_crypto_swap_kline_1h",
@@ -94,9 +90,9 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 			require.Equal(t, "24h", item.KeepDuration)
 		}
 		if item.SpaceID == "crypto" {
-			if item.DatasetID == "mdataset_binance_kline_1m" {
+			if item.DatasetID == "dataset_binance_kline_1m" {
 				require.Equal(t, "binance", item.DataSourceID, item.DatasetID)
-			} else if item.DatasetID != "dataset_binance_spot_kline_1m" && item.DatasetID != "dataset_binance_swap_kline_1m" {
+			} else {
 				require.Equal(t, "crypto", item.DataSourceID, item.DatasetID)
 			}
 		}

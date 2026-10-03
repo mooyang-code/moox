@@ -407,10 +407,10 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 			id, name, labels string
 			value            float64
 		}{
-			{"enabled", "moox_collector_dataset_enabled", `{"dataset_id":"dataset_binance_spot_kline_1m","freq":"1m","space_id":"crypto"}`, 1},
-			{"interval", "moox_collector_dataset_expected_interval_seconds", `{"dataset_id":"dataset_binance_spot_kline_1m","freq":"1m","space_id":"crypto"}`, 60},
+			{"enabled", "moox_collector_dataset_enabled", `{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto"}`, 1},
+			{"interval", "moox_collector_dataset_expected_interval_seconds", `{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto"}`, 60},
 			{"inventory", "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix())},
-			{"view-watermark", "moox_storage_view_output_watermark_timestamp_seconds", `{"freq":"1m","space_id":"crypto","view_id":"view_binance_spot_kline_1m"}`, float64(now.Add(-time.Minute).Unix())},
+			{"view-watermark", "moox_storage_view_output_watermark_timestamp_seconds", `{"freq":"1m","space_id":"crypto","view_id":"view_binance_kline_1m"}`, float64(now.Add(-time.Minute).Unix())},
 		}
 		for _, metric := range metrics {
 			if err := db.Create(&monmetrics.MetricSeries{
@@ -451,14 +451,14 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	results, err := repositories.Results.Recent(t.Context(), "crypto", "dataset:collector:dataset_binance_spot_kline_1m:1m", 1)
+	results, err := repositories.Results.Recent(t.Context(), "crypto", "dataset:collector:dataset_binance_kline_1m:1m", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 0 {
 		t.Fatalf("collector result should be covered by storage view: %+v", results)
 	}
-	viewResults, err := repositories.Results.Recent(t.Context(), "crypto", "dataset:storage_view:view_binance_spot_kline_1m:1m", 1)
+	viewResults, err := repositories.Results.Recent(t.Context(), "crypto", "dataset:storage_view:view_binance_kline_1m:1m", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,6 +33,71 @@ func TestResultIDsUseTagTaskTypeFrequencyViewIdentity(t *testing.T) {
 	require.Equal(t, "view_task_one_kline_1m", ResultIDsForTask("crypto", "task-one", "", "kline", "1m").ViewID)
 }
 
+func TestBuiltinSharedResultIDsAreRestrictedToSeededBinanceOneMinuteTasks(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		taskID string
+		tagID  string
+	}{
+		{name: "spot", taskID: BinanceSpotKline1mTaskID, tagID: "binance_spot"},
+		{name: "swap", taskID: BinanceSwapKline1mTaskID, tagID: "binance_swap"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ids, ok := BuiltinSharedResultIDs("crypto", test.taskID, "kline", "1m", []string{test.tagID})
+			require.True(t, ok)
+			require.Equal(t, IDs{DatasetID: BinanceKline1mDatasetID, ViewID: BinanceKline1mViewID}, ids)
+		})
+	}
+
+	for _, test := range []struct {
+		name      string
+		spaceID   string
+		taskID    string
+		taskType  string
+		frequency string
+		tagIDs    []string
+	}{
+		{name: "other space", spaceID: "other", taskID: BinanceSpotKline1mTaskID, taskType: "kline", frequency: "1m", tagIDs: []string{"binance_spot"}},
+		{name: "other task", spaceID: "crypto", taskID: "custom-task", taskType: "kline", frequency: "1m", tagIDs: []string{"binance_spot"}},
+		{name: "other data type", spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline_resample", frequency: "1m", tagIDs: []string{"binance_spot"}},
+		{name: "other frequency", spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", frequency: "1h", tagIDs: []string{"binance_spot"}},
+		{name: "other tag", spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", frequency: "1m", tagIDs: []string{"binance_swap"}},
+		{name: "multiple tags", spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", frequency: "1m", tagIDs: []string{"binance_spot", "other"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, ok := BuiltinSharedResultIDs(test.spaceID, test.taskID, test.taskType, test.frequency, test.tagIDs)
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestBuiltinSharedResultRouteMustMatchReservedTask(t *testing.T) {
+	tests := []struct {
+		name       string
+		taskID     string
+		provider   string
+		marketType string
+		tagID      string
+		want       bool
+	}{
+		{name: "spot", taskID: BinanceSpotKline1mTaskID, provider: "binance", marketType: "spot", tagID: "binance_spot", want: true},
+		{name: "swap", taskID: BinanceSwapKline1mTaskID, provider: "binance", marketType: "swap", tagID: "binance_swap", want: true},
+		{name: "spot task with swap route", taskID: BinanceSpotKline1mTaskID, provider: "binance", marketType: "swap", tagID: "binance_spot"},
+		{name: "swap task with spot route", taskID: BinanceSwapKline1mTaskID, provider: "binance", marketType: "spot", tagID: "binance_swap"},
+		{name: "other provider", taskID: BinanceSpotKline1mTaskID, provider: "other", marketType: "spot", tagID: "binance_spot"},
+		{name: "missing route", taskID: BinanceSpotKline1mTaskID, tagID: "binance_spot"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ids, allowed := BuiltinSharedResultIDsForRoute("crypto", test.taskID, "kline", "1m", test.provider, test.marketType, []string{test.tagID})
+			require.Equal(t, test.want, allowed)
+			if test.want {
+				require.Equal(t, IDs{DatasetID: BinanceKline1mDatasetID, ViewID: BinanceKline1mViewID}, ids)
+			}
+		})
+	}
+}
+
 func TestBuiltinResultIDsRemainTaskOwnedAndDoNotReuseCatalogIDs(t *testing.T) {
 	spot := ResultIDs("crypto", "builtin-binance-spot-kline-1h")
 	require.Equal(t, "dataset_builtin_binance_spot_kline_1h", spot.DatasetID)
@@ -43,6 +108,55 @@ func TestBuiltinResultIDsRemainTaskOwnedAndDoNotReuseCatalogIDs(t *testing.T) {
 	require.Equal(t, "dataset_builtin_binance_swap_kline_1h", swap.DatasetID)
 	require.Equal(t, "view_builtin_binance_swap_kline_1h", swap.ViewID)
 	require.NotEqual(t, "dataset_perpetual_kline_1h", swap.DatasetID)
+}
+
+func TestInspectBuiltinSharedResultRequiresAllowlistedTaskAndRawDataset(t *testing.T) {
+	ids := IDs{DatasetID: BinanceKline1mDatasetID, ViewID: BinanceKline1mViewID}
+	fake := newResultMetadataFake()
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
+		Attributes: map[string]string{"dataset_role": "raw_collection"},
+	}
+	fake.views[ids.ViewID] = &storagepb.View{SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active"}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+
+	inspection, err := manager.InspectBuiltinSharedIDs(context.Background(), "crypto", BinanceSpotKline1mTaskID, "kline", "1m", []string{"binance_spot"}, ids)
+	require.NoError(t, err)
+	require.Equal(t, ResultStatusReady, inspection.Status)
+	require.NotNil(t, inspection.Dataset)
+	require.NotNil(t, inspection.View)
+
+	for name, input := range []struct {
+		spaceID  string
+		taskID   string
+		taskType string
+		freq     string
+		tags     []string
+		ids      IDs
+	}{
+		{spaceID: "crypto", taskID: "custom-task", taskType: "kline", freq: "1m", tags: []string{"binance_spot"}, ids: ids},
+		{spaceID: "other", taskID: BinanceSpotKline1mTaskID, taskType: "kline", freq: "1m", tags: []string{"binance_spot"}, ids: ids},
+		{spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", freq: "1m", tags: []string{"binance_swap"}, ids: ids},
+		{spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", freq: "1m", tags: []string{"binance_spot"}, ids: IDs{DatasetID: "dataset_other", ViewID: "view_other"}},
+	} {
+		_, err := manager.InspectBuiltinSharedIDs(context.Background(), input.spaceID, input.taskID, input.taskType, input.freq, input.tags, input.ids)
+		require.Error(t, err, "case %d", name)
+		require.ErrorIs(t, err, ErrResultContract)
+	}
+
+	fake.datasets[ids.DatasetID].Attributes["dataset_role"] = "factor_result"
+	_, err = manager.InspectBuiltinSharedIDs(context.Background(), "crypto", BinanceSpotKline1mTaskID, "kline", "1m", []string{"binance_spot"}, ids)
+	require.ErrorIs(t, err, ErrResultContract)
+	fake.datasets[ids.DatasetID].Attributes["dataset_role"] = "raw_collection"
+	fake.views[ids.ViewID].DatasetId = "dataset_other"
+	_, err = manager.InspectBuiltinSharedIDs(context.Background(), "crypto", BinanceSpotKline1mTaskID, "kline", "1m", []string{"binance_spot"}, ids)
+	require.ErrorIs(t, err, ErrResultContract)
+}
+
+func TestValidateBuiltinSharedOutputFieldsDoesNotExpandSetupSchema(t *testing.T) {
+	require.NoError(t, ValidateBuiltinSharedOutputFields([]string{"open", "close", "trade_num"}))
+	require.ErrorIs(t, ValidateBuiltinSharedOutputFields([]string{"new_dynamic_field"}), ErrUnsupportedOutputFields)
+	require.Error(t, ValidateBuiltinSharedOutputFields(nil))
 }
 
 func TestResultDisplayNameUsesShortChinese(t *testing.T) {

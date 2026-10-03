@@ -812,7 +812,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	defer mergeJS.Close()
 	mergeRows, err := mergeJS.NewConsumer(engineCtx, jetstream.ConsumerConfig{
 		Stream: "MOOX_STORAGE", Durable: "merge_rows_v1",
-		FilterSubject: "moox.event.storage.dataset.rows.upserted.v2.crypto.dataset_binance_spot_kline_1m",
+		FilterSubject: "moox.event.storage.dataset.rows.upserted.v2.crypto.dataset_binance_kline_1m",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
 	})
@@ -820,7 +820,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, mergeRows.Close())
 	mergeCollector, err := mergeJS.NewConsumer(engineCtx, jetstream.ConsumerConfig{
 		Stream: "MOOX_STORAGE", Durable: "merge_collector_v1",
-		FilterSubject: "moox.event.storage.collector.period.completed.v1.crypto.dataset_binance_spot_kline_1m",
+		FilterSubject: "moox.event.storage.collector.period.completed.v1.crypto.dataset_binance_kline_1m",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
 	})

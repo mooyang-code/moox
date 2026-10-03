@@ -259,7 +259,7 @@ func (s *Service) enrichPBTaskResult(ctx context.Context, task domain.Collection
 		result.LastError = idsErr.Error()
 		return
 	}
-	inspection, err := s.resultManager.InspectIDs(ctx, task.SpaceID, task.TaskID, ids)
+	inspection, err := inspectCollectionTaskResult(ctx, s.resultManager, task, ids)
 	if err != nil {
 		log.WarnContextf(ctx, "[Collector] inspect task result failed space=%s task=%s: %v", task.SpaceID, task.TaskID, err)
 		if errors.Is(err, taskresult.ErrResultContract) {
@@ -298,6 +298,9 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "result.view_id cannot be specified when creating a task")}, nil
 	}
 	task := fromPBTask(req.GetTask())
+	if taskresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "reserved shared-result task IDs can only be created by the setup seed")}, nil
+	}
 	if err := validateCreateTaskResultIdentity(task.CollectParams); err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -525,6 +528,14 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	if taskresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
+		sharedIDs, allowed := taskresult.BuiltinSharedResultIDsForRoute(
+			task.SpaceID, task.TaskID, task.DataType, requestedParams.Frequency, requestedParams.Provider, requestedParams.MarketType, existing.TagIDs,
+		)
+		if !allowed || existing.ResultDatasetID != sharedIDs.DatasetID || existing.ResultViewID != sharedIDs.ViewID || requestedParams.TargetDatasetID != sharedIDs.DatasetID {
+			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "shared-result task provider, market_type, tag, and target are immutable")}, nil
+		}
+	}
 	cleanParams, subjectTags, err := s.resolveSubjectTags(ctx, task, requestedParams, existing.ResultDatasetID)
 	if err != nil {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
@@ -538,7 +549,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	}
 	task.CollectParams = cleanParams
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
-		task.CollectParams, err = stripCollectionTaskRouting(task.CollectParams)
+		task.CollectParams, err = stripCollectionTaskRoutingForTask(task.CollectParams, task)
 		if err != nil {
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 		}
@@ -588,6 +599,10 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if outputFieldsChanged && len(requestedParams.OutputFields) == 0 {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "output_fields cannot be cleared; specify the fields to persist")}, nil
 	}
+	_, sharedResult, sharedResultErr := builtinSharedResultIDsForTask(task, requestedParams)
+	if sharedResultErr != nil {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, sharedResultErr.Error())}, nil
+	}
 	task.DefinitionHash = collectionTaskDefinitionHash(task)
 	if duplicate, lookupErr := s.taskRepo.GetByDefinitionHash(ctx, task.SpaceID, task.DefinitionHash); lookupErr == nil {
 		if duplicate != nil && duplicate.TaskID != task.TaskID {
@@ -600,15 +615,20 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 		if s.resultManager == nil {
 			return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "task result manager is not configured")}, nil
 		}
-		// Provision result metadata before changing the active task definition.
-		// These additions are idempotent; this avoids exposing a projection that
-		// refers to columns the Dataset/View cannot yet accept.
-		if err := s.resultManager.EnsureOutputFields(ctx, task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID, task.DataType, requestedParams.OutputFields); err != nil {
-			code := pb.ErrorCode_INNER_ERR
-			if errors.Is(err, taskresult.ErrUnsupportedOutputFields) {
-				code = pb.ErrorCode_INVALID_PARAM
+		if sharedResult {
+			if err := taskresult.ValidateBuiltinSharedOutputFields(requestedParams.OutputFields); err != nil {
+				return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 			}
-			return &pb.UpdateTaskRsp{RetInfo: retErr(code, err.Error())}, nil
+		} else {
+			// Provision task-owned result metadata before changing the active
+			// definition. Setup-owned shared metadata is never rewritten here.
+			if err := s.resultManager.EnsureOutputFields(ctx, task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID, task.DataType, requestedParams.OutputFields); err != nil {
+				code := pb.ErrorCode_INNER_ERR
+				if errors.Is(err, taskresult.ErrUnsupportedOutputFields) {
+					code = pb.ErrorCode_INVALID_PARAM
+				}
+				return &pb.UpdateTaskRsp{RetInfo: retErr(code, err.Error())}, nil
+			}
 		}
 	}
 	updated, err := s.taskRepo.UpdateValidatedTaskByTaskID(ctx, spaceID, taskID, task)
@@ -622,7 +642,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 		}
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	if s.resultManager != nil && !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+	if s.resultManager != nil && !sharedResult && !strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
 		if err := s.resultManager.UpdateSubjectTags(ctx, task.SpaceID, task.ResultDatasetID, subjectTags); err != nil {
 			// The task row is the local source of truth. Restore it when the
 			// cross-service Dataset update fails so a retry cannot observe a task
@@ -1337,6 +1357,24 @@ func stripCollectionTaskRouting(raw string) (string, error) {
 	return string(encoded), nil
 }
 
+func stripCollectionTaskRoutingForTask(raw string, task domain.CollectionTask) (string, error) {
+	if !taskresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
+		return stripCollectionTaskRouting(raw)
+	}
+	values := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return "", fmt.Errorf("invalid collect_params: %w", err)
+	}
+	for _, key := range []string{"market_id", "instrument_type", "source_id", "series_tag"} {
+		delete(values, key)
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("encode collect_params: %w", err)
+	}
+	return string(encoded), nil
+}
+
 type collectionTaskTagSource interface {
 	GetTag(context.Context, string, string) (*storagepb.Tag, error)
 }
@@ -1367,6 +1405,14 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		}
 		if err := params.Validate(); err != nil {
 			return fmt.Errorf("tag %s route is invalid: %w", tagID, err)
+		}
+		if taskresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
+			_, allowed := taskresult.BuiltinSharedResultIDsForRoute(
+				task.SpaceID, task.TaskID, task.DataType, params.Frequency, params.Provider, params.MarketType, task.TagIDs,
+			)
+			if !allowed || !strings.EqualFold(source, params.Provider) || !strings.EqualFold(market, params.MarketType) {
+				return fmt.Errorf("shared-result task %s route does not match tag %s", task.TaskID, tagID)
+			}
 		}
 		definition, exists := jobs.JobDefinitionByDataType(params.Collector.DataType)
 		if !exists || !definition.ExecutionMode.Valid() || !definition.Matches(params) {

@@ -153,7 +153,7 @@ func invoke(ctx context.Context, client *adminclient.Client, nodes []adminclient
 			"space_id":        "crypto",
 			"market_id":       "crypto",
 			"instrument_type": "spot",
-			"dataset_id":      "dataset_binance_spot_kline_1m",
+			"dataset_id":      "dataset_binance_kline_1m",
 			"frequency":       "1m",
 			"provider":        "binance",
 			"source_id":       "spot_http",
@@ -162,7 +162,7 @@ func invoke(ctx context.Context, client *adminclient.Client, nodes []adminclient
 			"node_id":         "moox-fetcher-crypto-binance-invoke-ap-hongkong-0",
 			"items": []map[string]any{{
 				"subject_id": "BTC-USDT", "symbol": "BTCUSDT", "provider": "binance", "source_id": "spot_http",
-				"market_type": "spot", "data_type": "kline", "dataset_id": "dataset_binance_spot_kline_1m", "frequency": "1m", "bar_limit": 2,
+				"market_type": "spot", "data_type": "kline", "dataset_id": "dataset_binance_kline_1m", "frequency": "1m", "bar_limit": 2,
 			}},
 		},
 	}

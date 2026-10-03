@@ -64,9 +64,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		}
 		if dataset.SpaceID == "crypto" {
 			switch dataset.DatasetID {
-			case "dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m":
-				// Binance 1m source datasets use their own granularity.
-			case "mdataset_binance_kline_1m":
+			case "dataset_binance_kline_1m":
 				require.Equal(t, []string{"1m"}, dataset.Freqs, dataset.DatasetID)
 			default:
 				require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
@@ -74,10 +72,14 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		}
 		if dataset.SpaceID == "crypto" {
 			switch dataset.DatasetID {
-			case "dataset_binance_spot_kline_1m", "dataset_spot_kline_1h":
+			case "dataset_spot_kline_1h":
 				require.Equal(t, "spot", dataset.Attributes["market_type"], dataset.DatasetID)
-			case "dataset_binance_swap_kline_1m", "dataset_perpetual_kline_1h":
+			case "dataset_perpetual_kline_1h":
 				require.Equal(t, "swap", dataset.Attributes["market_type"], dataset.DatasetID)
+			case "dataset_binance_kline_1m":
+				require.Equal(t, "raw_collection", dataset.Attributes["dataset_role"], dataset.DatasetID)
+				require.Equal(t, "storage-node-0", dataset.DataNodeID, dataset.DatasetID)
+				require.Equal(t, "720h", dataset.KeepDuration, dataset.DatasetID)
 			}
 		}
 	}
@@ -89,8 +91,6 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		viewCount[view.SpaceID+"/"+view.PrimaryDatasetID]++
 		if view.SpaceID == "crypto" {
 			switch view.ViewID {
-			case "view_binance_spot_kline_1m", "view_binance_swap_kline_1m":
-				// Source 1m views.
 			case "view_binance_kline_1m":
 				require.Contains(t, view.FilterJSON, `"freq":"1m"`, view.ViewID)
 			default:
@@ -122,7 +122,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"dataset_stockcn_financial_summary",
 		"dataset_stockcn_index_kline",
 	}, datasetsBySpace["stockcn"])
-	require.Equal(t, []string{"dataset_binance_spot_kline_1m", "dataset_binance_swap_kline_1m", "dataset_perpetual_kline_1h", "dataset_spot_kline_1h", "mdataset_binance_kline_1m"}, datasetsBySpace["crypto"])
+	require.Equal(t, []string{"dataset_binance_kline_1m", "dataset_perpetual_kline_1h", "dataset_spot_kline_1h"}, datasetsBySpace["crypto"])
 }
 
 func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {

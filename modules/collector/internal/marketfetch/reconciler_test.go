@@ -901,7 +901,7 @@ func TestReconcilerSkipsUnavailableTaskWithoutBlockingHealthyGroups(t *testing.T
 	}
 	goodTask := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "spot-bars", DataType: "kline", Enabled: true,
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset_binance_spot_kline_1m","frequency":"1m"}`,
+		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`,
 	}
 	nodes := &reconcilerNodesStub{nodes: []scfinvoker.Node{{NodeID: "timer-0", FunctionName: "moox-fetcher-crypto-0", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}}
 	reconciler := &Reconciler{
@@ -917,7 +917,7 @@ func TestReconcilerSkipsUnavailableTaskWithoutBlockingHealthyGroups(t *testing.T
 	require.NoError(t, reconciler.Reconcile(context.Background(), "crypto"))
 	require.Equal(t, 1, nodes.submits)
 	require.Len(t, nodes.patches, 1)
-	require.Equal(t, "dataset_binance_spot_kline_1m", nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_DATASET_ID"])
+	require.Equal(t, "dataset_binance_kline_1m", nodes.patches[0].GetManagedEnvironment()["MOOX_MARKET_FETCH_DATASET_ID"])
 }
 
 func TestReconcilerFailsClosedWhenStockRequiredGroupSizeExceedsMeasuredSafeSize(t *testing.T) {

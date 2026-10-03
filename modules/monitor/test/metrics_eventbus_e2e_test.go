@@ -112,7 +112,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 
 	observed := time.Now().UTC().Truncate(time.Millisecond)
 	dataTime := observed.Add(-time.Minute)
-	labels := `space_id="crypto",view_id="view_crypto_spot_kline_1m",dataset_id="dataset_binance_spot_kline_1m",subject_id="OPG-USDT-SPOT",freq="1m",series_tag="venue:binance"`
+	labels := `space_id="crypto",view_id="view_crypto_kline_1m",dataset_id="dataset_binance_kline_1m",subject_id="OPG-USDT-SPOT",freq="1m",series_tag="venue:binance"`
 	raw := []byte(fmt.Sprintf("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n"+
 		"moox_storage_view_dataset_output_last_data_time_seconds{%s} %d\n", labels, dataTime.Unix()))
 	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 2, SampleCount: 2}
@@ -154,8 +154,8 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	}
 	query := metrics.NewQueryService(messageStore, nil)
 	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m",
-		ViewID: "view_crypto_spot_kline_1m", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
+		ViewID: "view_crypto_kline_1m", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
 	}}, 20).Evaluate(ctx, observed)
 	if err != nil || len(reports) != 1 || !reports[0].Success || reports[0].ObservedCount != 1 {
 		t.Fatalf("kline freshness reports=%+v err=%v", reports, err)

@@ -298,7 +298,7 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 	if s.resultManager == nil {
 		return nil, fmt.Errorf("task result metadata manager is not configured")
 	}
-	inspection, err := s.resultManager.InspectIDs(ctx, task.SpaceID, task.TaskID, ids)
+	inspection, err := inspectCollectionTaskResult(ctx, s.resultManager, task, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +322,7 @@ func (s *Service) inspectDisabledTaskResult(ctx context.Context, entry *pb.TaskR
 	if series == nil {
 		return nil
 	}
-	inspection, err := s.resultManager.InspectIDs(ctx, task.SpaceID, task.TaskID, ids)
+	inspection, err := inspectCollectionTaskResult(ctx, s.resultManager, task, ids)
 	if err != nil {
 		entry.ResultStatus = "error"
 		return nil

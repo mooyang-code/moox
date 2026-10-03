@@ -62,11 +62,11 @@ func TestConsumerEventFiltersAcceptExactSubjectPartition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := registry.RenderSubject(DatasetRowsUpserted, "crypto", "dataset_binance_spot_kline_1m")
+	row, err := registry.RenderSubject(DatasetRowsUpserted, "crypto", "dataset_binance_kline_1m")
 	if err != nil {
 		t.Fatal(err)
 	}
-	marker, err := registry.RenderSubject(CollectorPeriodCompleted, "crypto", "dataset_binance_spot_kline_1m")
+	marker, err := registry.RenderSubject(CollectorPeriodCompleted, "crypto", "dataset_binance_kline_1m")
 	if err != nil {
 		t.Fatal(err)
 	}

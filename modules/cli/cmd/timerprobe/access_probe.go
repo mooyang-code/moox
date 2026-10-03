@@ -27,21 +27,22 @@ func accessRead() error {
 	appID := strings.TrimSpace(os.Getenv("MOOX_STORAGE_APP_ID"))
 	appKey := strings.TrimSpace(os.Getenv("MOOX_STORAGE_APP_KEY"))
 	datasets := []struct {
-		id      string
-		freq    string
-		subject string
+		id         string
+		freq       string
+		subject    string
+		marketType string
 	}{
-		{"dataset_binance_spot_kline_1m", "1m", "BTC-USDT"},
-		{"dataset_binance_swap_kline_1m", "1m", "ZORA-USDT"},
-		{"dataset_spot_kline_1h", "1H", "MRNAB-USDT"},
-		{"dataset_perpetual_kline_1h", "1H", "LTC-USDT"},
+		{"dataset_binance_kline_1m", "1m", "BTC-USDT", "spot"},
+		{"dataset_binance_kline_1m", "1m", "ZORA-USDT", "swap"},
+		{"dataset_spot_kline_1h", "1H", "MRNAB-USDT", "spot"},
+		{"dataset_perpetual_kline_1h", "1H", "LTC-USDT", "swap"},
 	}
 	for _, dataset := range datasets {
 		readAppID, readAppKey := appID, appKey
-		if strings.Contains(dataset.id, "swap") {
+		if dataset.marketType == "swap" {
 			readAppID = strings.TrimSpace(os.Getenv("MOOX_SWAP_APP_ID"))
 			readAppKey = strings.TrimSpace(os.Getenv("MOOX_SWAP_APP_KEY"))
-		} else if strings.Contains(dataset.id, "spot") {
+		} else if dataset.marketType == "spot" {
 			readAppID = strings.TrimSpace(os.Getenv("MOOX_SPOT_APP_ID"))
 			readAppKey = strings.TrimSpace(os.Getenv("MOOX_SPOT_APP_KEY"))
 		}
@@ -83,8 +84,8 @@ func viewRead() error {
 	views := []struct {
 		view, dataset, freq, subject string
 	}{
-		{"view_binance_spot_kline_1m", "dataset_binance_spot_kline_1m", "1m", "BTC-USDT"},
-		{"view_binance_swap_kline_1m", "dataset_binance_swap_kline_1m", "1m", "ZORA-USDT"},
+		{"view_binance_kline_1m", "dataset_binance_kline_1m", "1m", "BTC-USDT"},
+		{"view_binance_kline_1m", "dataset_binance_kline_1m", "1m", "ZORA-USDT"},
 		{"view_crypto_spot_kline_1h", "dataset_spot_kline_1h", "1H", "MRNAB-USDT"},
 		{"view_crypto_swap_kline_1h", "dataset_perpetual_kline_1h", "1H", "LTC-USDT"},
 	}

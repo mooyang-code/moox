@@ -113,7 +113,7 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 			product = got
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",
-				InstrumentType: got, DatasetID: "dataset_binance_swap_kline_1m",
+				InstrumentType: got, DatasetID: "dataset_binance_kline_1m",
 				SourceID: "swap_http", Now: func() time.Time { return now },
 			}, nil
 		},
@@ -125,9 +125,9 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 	}
 	req := Request{
 		BatchID: "swap-pipeline", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", MarketID: "crypto",
-		DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Provider: "binance", SourceID: "swap_http",
+		DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Provider: "binance", SourceID: "swap_http",
 		MarketType: "swap", InstrumentType: "swap", RequestID: "swap-pipeline",
-		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "swap_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", BarLimit: 1}},
+		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "swap_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
 	}
 	response, err := handler.handleRequest(context.Background(), req, "storage", false)
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType) (*KlinePipeline, error) {
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",
-				InstrumentType: got, DatasetID: "dataset_binance_swap_kline_1m",
+				InstrumentType: got, DatasetID: "dataset_binance_kline_1m",
 				SourceID: "swap_http", Now: func() time.Time { return now },
 			}, nil
 		},
@@ -161,9 +161,9 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 	}
 	req := Request{
 		BatchID: "stale-source", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", MarketID: "crypto",
-		DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", Provider: "binance", SourceID: "spot_http",
+		DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Provider: "binance", SourceID: "spot_http",
 		MarketType: "swap", InstrumentType: "swap", RequestID: "stale-source",
-		Items: []domain.CollectionItem{{SubjectID: "ETH-USDT", Symbol: "ETHUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_swap_kline_1m", Frequency: "1m", BarLimit: 1}},
+		Items: []domain.CollectionItem{{SubjectID: "ETH-USDT", Symbol: "ETHUSDT", Provider: "binance", SourceID: "spot_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
 	}
 	response, err := handler.handleRequest(context.Background(), req, "storage", false)
 	require.NoError(t, err)

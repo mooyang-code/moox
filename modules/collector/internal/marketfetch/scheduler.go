@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -2314,6 +2315,16 @@ func (s *Scheduler) expandTaskWithCache(ctx context.Context, task domain.Collect
 	if dataType != "kline" {
 		return nil, nil, fmt.Errorf("unsupported data_type %q", dataType)
 	}
+	sharedRoute := false
+	if taskresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
+		sharedIDs, allowed := taskresult.BuiltinSharedResultIDsForRoute(
+			task.SpaceID, task.TaskID, dataType, params.Frequency, params.Provider, params.MarketType, task.TagIDs,
+		)
+		if !allowed || task.ResultDatasetID != sharedIDs.DatasetID || task.ResultViewID != sharedIDs.ViewID || targetDataset != sharedIDs.DatasetID {
+			return nil, nil, fmt.Errorf("collection task %s has an invalid shared result route or target", task.TaskID)
+		}
+		sharedRoute = true
+	}
 	if s.Symbols == nil {
 		return nil, nil, fmt.Errorf("dataset subject resolver is not initialized")
 	}
@@ -2423,6 +2434,9 @@ func (s *Scheduler) expandTaskWithCache(ctx context.Context, task domain.Collect
 		// separately from provider + instrument type.
 		groupProvider := strings.ToLower(firstNonEmpty(group.source, provider))
 		groupMarket := strings.ToLower(firstNonEmpty(group.market, marketType))
+		if sharedRoute && (groupProvider != provider || groupMarket != marketType) {
+			return nil, nil, fmt.Errorf("shared result task %s tag route does not match its reserved Binance market", task.TaskID)
+		}
 		for _, subject := range group.subjects {
 			if strings.TrimSpace(subject.SubjectID) == "" {
 				continue
@@ -2526,6 +2540,13 @@ func (s *Scheduler) taskPeriodDefinition(task domain.CollectionTask) (*domain.Co
 		return nil, "", nil, fmt.Errorf("unsupported data_type %q", dataType)
 	}
 	targetDataset := firstNonEmpty(params.Target.DatasetID, task.ResultDatasetID)
+	if taskresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
+		sharedIDs, allowed := taskresult.BuiltinSharedResultIDsForRoute(task.SpaceID, task.TaskID, dataType, params.Frequency, params.Provider, params.MarketType, task.TagIDs)
+		if !allowed || task.ResultDatasetID != sharedIDs.DatasetID || task.ResultViewID != sharedIDs.ViewID || params.Target.DatasetID != sharedIDs.DatasetID {
+			return nil, "", nil, fmt.Errorf("collection task %s has an invalid shared result target", task.TaskID)
+		}
+		targetDataset = sharedIDs.DatasetID
+	}
 	if strings.TrimSpace(targetDataset) == "" {
 		return nil, "", nil, fmt.Errorf("target dataset is required")
 	}

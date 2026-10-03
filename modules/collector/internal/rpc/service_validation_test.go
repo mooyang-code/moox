@@ -377,6 +377,35 @@ func openCollectorTestStore(t *testing.T) *store.Store {
 	return db
 }
 
+func TestEnrichPBTaskResultReadsOnlyAllowlistedSharedRawDataset(t *testing.T) {
+	ids := taskresult.IDs{DatasetID: taskresult.BinanceKline1mDatasetID, ViewID: taskresult.BinanceKline1mViewID}
+	metadata := &taskResultMetadataFake{
+		datasets: map[string]*storagepb.Dataset{
+			ids.DatasetID: {SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: map[string]string{"dataset_role": "raw_collection"}},
+		},
+		views: map[string]*storagepb.View{
+			ids.ViewID: {SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active"},
+		},
+	}
+	service := &Service{resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}
+	sharedTask := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: taskresult.BinanceSpotKline1mTaskID, DataType: "kline", TagIDs: []string{"binance_spot"},
+		CollectParams:   `{"target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`,
+		ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID, PrepareState: domain.PrepareStateReady,
+	}
+	result := toPBTask(sharedTask)
+	service.enrichPBTaskResult(context.Background(), sharedTask, result)
+	require.Equal(t, taskresult.ResultStatusReady, result.GetResult().GetStatus())
+	require.Empty(t, result.GetLastError())
+
+	maliciousTask := sharedTask
+	maliciousTask.TaskID = "custom-task"
+	result = toPBTask(maliciousTask)
+	service.enrichPBTaskResult(context.Background(), maliciousTask, result)
+	require.Equal(t, taskresult.ResultStatusError, result.GetResult().GetStatus())
+	require.Contains(t, result.GetLastError(), "owned by another task")
+}
+
 func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T) {
 	db := openCollectorTestStore(t)
 	ctx := context.Background()
@@ -583,6 +612,67 @@ func TestUpdateTaskRejectsResultDatasetReplacement(t *testing.T) {
 	require.Equal(t, before, after, "a rejected target change must not alter the owning Dataset or persisted task")
 }
 
+func TestUpdateBuiltinSharedTaskRejectsMismatchedProviderOrMarketType(t *testing.T) {
+	db := openCollectorTestStore(t)
+	ctx := context.Background()
+	ids := taskresult.IDs{DatasetID: taskresult.BinanceKline1mDatasetID, ViewID: taskresult.BinanceKline1mViewID}
+	task := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: taskresult.BinanceSpotKline1mTaskID, TaskName: "Binance spot 1m", DataType: "kline",
+		TagIDs: []string{"binance_spot"}, CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m","output_fields":["open"]}`,
+		Enabled: true, PrepareState: domain.PrepareStateReady, ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+	}
+	require.NoError(t, db.Tasks().Create(ctx, task))
+	service := &Service{taskRepo: db.Tasks(), datasetSrc: acceptingKlineDatasetSource{}}
+	params, err := structpb.NewStruct(map[string]any{"provider": "binance", "market_type": "swap", "frequency": "1m", "output_fields": []any{"open"}})
+	require.NoError(t, err)
+	rsp, err := service.UpdateTask(ctx, &pb.UpdateTaskReq{
+		SpaceId: task.SpaceID, TaskId: task.TaskID,
+		Task: &pb.CollectionTask{TaskName: task.TaskName, DataType: task.DataType, CollectParams: params},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "provider, market_type")
+	stored, err := db.Tasks().GetByTaskID(ctx, task.SpaceID, task.TaskID)
+	require.NoError(t, err)
+	require.Equal(t, task.CollectParams, stored.CollectParams)
+}
+
+func TestUpdateSharedTaskDoesNotRewriteSetupOwnedDatasetOrView(t *testing.T) {
+	db := openCollectorTestStore(t)
+	ctx := context.Background()
+	ids := taskresult.IDs{DatasetID: taskresult.BinanceKline1mDatasetID, ViewID: taskresult.BinanceKline1mViewID}
+	task := domain.CollectionTask{
+		SpaceID: "crypto", TaskID: taskresult.BinanceSpotKline1mTaskID, TaskName: "Binance spot 1m", DataType: "kline",
+		TagIDs: []string{"binance_spot"}, CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m","output_fields":["open"]}`,
+		Enabled: true, PrepareState: domain.PrepareStateReady, ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+	}
+	require.NoError(t, db.Tasks().Create(ctx, task))
+	metadata := &taskResultMetadataFake{
+		datasets: map[string]*storagepb.Dataset{
+			ids.DatasetID: {SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", SubjectTags: []string{"binance_spot", "binance_swap"}, Attributes: map[string]string{"dataset_role": "raw_collection"}},
+		},
+		views: map[string]*storagepb.View{
+			ids.ViewID: {SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active", Columns: []*storagepb.ViewColumn{{ColumnName: "dataset_binance_kline_1m.open"}}},
+		},
+	}
+	beforeDataset := *metadata.datasets[ids.DatasetID]
+	beforeView := *metadata.views[ids.ViewID]
+	service := &Service{
+		taskRepo: db.Tasks(), datasetSrc: acceptingKlineDatasetSource{},
+		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+	}
+	params, err := structpb.NewStruct(map[string]any{"provider": "binance", "market_type": "spot", "frequency": "1m", "output_fields": []any{"close"}})
+	require.NoError(t, err)
+	rsp, err := service.UpdateTask(ctx, &pb.UpdateTaskReq{
+		SpaceId: task.SpaceID, TaskId: task.TaskID,
+		Task: &pb.CollectionTask{TaskName: task.TaskName, DataType: task.DataType, CollectParams: params},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.Equal(t, &beforeDataset, metadata.datasets[ids.DatasetID], "one task must not replace the shared Dataset tag scope")
+	require.Equal(t, &beforeView, metadata.views[ids.ViewID], "one task must not replace the setup-owned shared View projection")
+}
+
 type acceptingKlineDatasetSource struct{}
 
 func (acceptingKlineDatasetSource) GetDataset(_ context.Context, _ string, _ string) (storagesource.DatasetInfo, error) {
@@ -752,6 +842,20 @@ func TestUpdateTaskRejectsChangingSubjectTags(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, updated.CollectParams, "subject_tags")
 	require.Equal(t, []string{"old_tag"}, metadata.datasets[ids.DatasetID].GetSubjectTags())
+}
+
+func TestCreateTaskRejectsReservedBuiltinSharedResultTaskID(t *testing.T) {
+	db := openCollectorTestStore(t)
+	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+	service := &Service{taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}
+	rsp, err := service.CreateTask(context.Background(), &pb.CreateTaskReq{Task: &pb.CollectionTask{
+		SpaceId: "crypto", TaskId: taskresult.BinanceSpotKline1mTaskID, TaskName: "Reserved spot", DataType: "kline",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "setup seed")
+	require.Empty(t, metadata.datasets)
+	require.Empty(t, metadata.views)
 }
 
 func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {

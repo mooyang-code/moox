@@ -43,7 +43,7 @@ func TestFilterHealthSamplesKeepsBusinessFactsOnly(t *testing.T) {
 func TestFilterHealthSamplesForKlineViewsDropsUnconfiguredViewSeries(t *testing.T) {
 	samples := []Sample{
 		{MetricName: ViewDatasetOutputLastDataTimeMetric, Labels: map[string]string{
-			"space_id": "crypto", "view_id": "view_crypto_spot_kline_1m", "dataset_id": "dataset_binance_spot_kline_1m", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
+			"space_id": "crypto", "view_id": "view_crypto_kline_1m", "dataset_id": "dataset_binance_kline_1m", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
 		}},
 		{MetricName: ViewDatasetOutputLastDataTimeMetric, Labels: map[string]string{
 			"space_id": "mooxsys", "view_id": "view_mooxsys_service_metrics", "dataset_id": "dataset_mooxsys_service_metrics", "subject_id": "service/metric", "freq": "30s", "series_tag": "default",
@@ -52,7 +52,7 @@ func TestFilterHealthSamplesForKlineViewsDropsUnconfiguredViewSeries(t *testing.
 	}
 
 	got := FilterHealthSamplesForKlineViews(samples, []ViewMetricScope{{
-		SpaceID: "crypto", ViewID: "view_crypto_spot_kline_1m", DatasetID: "dataset_binance_spot_kline_1m", Frequency: "1m",
+		SpaceID: "crypto", ViewID: "view_crypto_kline_1m", DatasetID: "dataset_binance_kline_1m", Frequency: "1m",
 	}})
 	if len(got) != 2 {
 		t.Fatalf("filtered samples = %+v, want configured View metric and operational metric", got)

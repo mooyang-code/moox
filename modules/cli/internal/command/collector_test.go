@@ -562,7 +562,7 @@ func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
 
 	crypto := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "crypto"}}, "crypto-node", "batch-crypto")
 	cryptoData := crypto["data"].(map[string]any)
-	assert.Equal(t, "dataset_binance_spot_kline_1m", cryptoData["dataset_id"])
+	assert.Equal(t, "dataset_binance_kline_1m", cryptoData["dataset_id"])
 	assert.Equal(t, "binance", cryptoData["provider"])
 	assert.Equal(t, "spot", cryptoData["market_type"])
 	assert.Equal(t, "realtime", cryptoData["batch_kind"])

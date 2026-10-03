@@ -990,7 +990,7 @@ func (f *collectorCanaryTestView) QueryTimeSeriesRows(_ context.Context, _ *stor
 
 func collectorCanaryTestEntry() *collectorpb.TaskResultInventoryEntry {
 	return &collectorpb.TaskResultInventoryEntry{
-		SpaceId: "crypto", TaskId: "task-canary", DatasetId: "dataset_binance_spot_kline_1m", ViewId: "view-canary",
+		SpaceId: "crypto", TaskId: "task-canary", DatasetId: "dataset_binance_kline_1m", ViewId: "view-canary",
 		Frequency: "1m", MarketId: "crypto", Enabled: false, OwnershipVerified: true, CanaryCandidateAvailable: true,
 		SubjectId: "BTC-USDT", ProviderSymbol: "BTCUSDT", Provider: "binance", SourceId: "spot_http", MarketType: "spot",
 		SeriesTag: "venue:binance|market:spot|source:spot_http", SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1,

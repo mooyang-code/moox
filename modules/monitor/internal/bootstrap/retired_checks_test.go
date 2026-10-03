@@ -21,12 +21,12 @@ func TestRetiredDatasetCheckID(t *testing.T) {
 	}{
 		{id: "dataset:collector:dataset_perpetual_kline_1h:1H", want: true},
 		{id: "dataset:collector:dataset_binance_spot_kline_1h:1H", want: true},
-		{id: "dataset:storage_view:view_crypto_spot_kline_1m:1m", want: true},
+		{id: "dataset:storage_view:view_crypto_kline_1m:1m", want: true},
 		{id: "dataset:collector:dataset_collector_df4b3afb3ff5547c:1m", want: true},
 		{id: "dataset:storage_view:view_collector_e85209cd9eb4d363:1m", want: true},
-		{id: "dataset:collector:dataset_binance_spot_kline_1m:1m", want: false},
-		{id: "dataset:storage_view:view_binance_swap_kline_1m:1m", want: false},
-		{id: "market_canary:dataset_binance_spot_kline_1m:BTC-USDT:1m:venue:binance", want: false},
+		{id: "dataset:collector:dataset_binance_kline_1m:1m", want: false},
+		{id: "dataset:storage_view:view_binance_kline_1m:1m", want: false},
+		{id: "market_canary:dataset_binance_kline_1m:BTC-USDT:1m:venue:binance", want: false},
 		{id: "sysdeploy:control:storage-view", want: false},
 	}
 	for _, tc := range cases {
@@ -41,7 +41,7 @@ func TestEnsureDefaultCheckAlertRulesSkipsDisabledAndRetired(t *testing.T) {
 	repositories := openMonitorTestRepositories(t)
 	ctx := t.Context()
 	for _, check := range []domain.Check{
-		{SpaceID: "crypto", CheckID: "dataset:collector:dataset_binance_spot_kline_1m:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
+		{SpaceID: "crypto", CheckID: "dataset:collector:dataset_binance_kline_1m:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 		{SpaceID: "crypto", CheckID: "dataset:collector:dataset_perpetual_kline_1h:1H", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 		{CheckID: "sysdeploy:control:storage-view", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, Enabled: false},
 	} {
@@ -53,7 +53,7 @@ func TestEnsureDefaultCheckAlertRulesSkipsDisabledAndRetired(t *testing.T) {
 	if err := ensureDefaultCheckAlertRules(ctx, repositories); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repositories.Alerts.GetRule(ctx, "crypto", "default:dataset:collector:dataset_binance_spot_kline_1m:1m"); err != nil {
+	if _, err := repositories.Alerts.GetRule(ctx, "crypto", "default:dataset:collector:dataset_binance_kline_1m:1m"); err != nil {
 		t.Fatalf("kept 1m collector rule: %v", err)
 	}
 	if _, err := repositories.Alerts.GetRule(ctx, "crypto", "default:dataset:collector:dataset_perpetual_kline_1h:1H"); !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -69,7 +69,7 @@ func TestRetireObsoleteBusinessChecksRemovesOneHourCollector(t *testing.T) {
 	repositories := openMonitorTestRepositories(t)
 	ctx := t.Context()
 	keep := domain.Check{
-		SpaceID: "crypto", CheckID: "dataset:collector:dataset_binance_spot_kline_1m:1m",
+		SpaceID: "crypto", CheckID: "dataset:collector:dataset_binance_kline_1m:1m",
 		Name: "keep", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true,
 	}
 	drop := domain.Check{

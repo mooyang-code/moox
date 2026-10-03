@@ -2871,7 +2871,7 @@ func appendCollectorBatchIDs(jobIDs []string, value string) []string {
 
 func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID string) map[string]any {
 	spaceID := firstNonEmpty(opts.SpaceID, opts.collectorPackageOptions.SpaceID)
-	datasetID, provider, marketType := "dataset_binance_spot_kline_1m", "binance", "spot"
+	datasetID, provider, marketType := "dataset_binance_kline_1m", "binance", "spot"
 	sourceID := "spot_http"
 	subjectID, symbol, barLimit := "BTC-USDT", "BTCUSDT", 2
 	batchKind := "realtime"

@@ -59,7 +59,7 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 		require.Equal(t, klineStorageAppID, req.GetAuthInfo().GetAppId())
 		require.Equal(t, klineStorageAppKey, req.GetAuthInfo().GetAppKey())
 		require.Equal(t, "crypto", req.GetSpaceId())
-		require.Equal(t, "dataset_binance_spot_kline_1m", req.GetDatasetId())
+		require.Equal(t, "dataset_binance_kline_1m", req.GetDatasetId())
 		require.Len(t, req.GetSelectors(), 1)
 		require.Equal(t, "BTC-USDT", req.GetSelectors()[0].GetSubjectId())
 		require.Equal(t, "venue:binance", req.GetSelectors()[0].GetSeriesTag())
@@ -131,7 +131,7 @@ func (stub *klineStorageStub) ReadTimeSeriesRows(_ context.Context, req *pb.Read
 	return &pb.ReadTimeSeriesRowsRsp{
 		RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
 		Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
-			SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m", SubjectId: "BTC-USDT",
+			SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", SubjectId: "BTC-USDT",
 			Freq: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
 		}}},
 		Complete: true,
@@ -318,7 +318,7 @@ data_types:
         space_id: crypto
         series_tag: venue:binance
         kline_datasets:
-          1m: dataset_binance_spot_kline_1m
+          1m: dataset_binance_kline_1m
 `, gatewayTarget, klineGatewayNode, klineGatewayKeyID, klineGatewaySecret, klineStorageAppID, klineStorageAppKey)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
