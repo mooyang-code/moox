@@ -58,18 +58,6 @@ func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *e
 	})
 }
 
-func (s *Service) HandleMergePeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.MergePeriodCompleted) error {
-	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("merge period event is empty"))
-	}
-	return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
-		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
-		status: payload.GetStatus(), universeSubjectIDs: payload.GetUniverseSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
-		expectedScopeRef: payload.GetExpectedScopeRef(), committedPositions: payload.GetCommittedPositions(),
-		completionKind: events.MergePeriodCompleted.Name(),
-	})
-}
-
 func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.EventMessage, completion periodCompletionInput) error {
 	metadata, publisher := s.periodDependencies()
 	if metadata == nil || publisher == nil {
@@ -157,8 +145,8 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 		}
 		return nil
 	}
-	var failed []string
-	for _, state := range payload.GetBindings() {
+	failed := append([]string(nil), payload.GetFailedSubjects()...)
+	for _, state := range payload.GetFactors() {
 		if state != nil {
 			failed = append(failed, state.GetFailedSubjects()...)
 		}
@@ -167,14 +155,15 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 		ready := &storageeventpb.ViewDataReady{
 			ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
 			CompletionKind: events.FactorPeriodComputed.Name(),
-			DatasetId:      payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, firstNonEmpty(payload.GetExpectedScopeRef(), "view:"+view.GetViewId())),
+			DatasetId:      payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, "view:"+view.GetViewId()),
 			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), FailedScopeRef: degradedScopeRef(payload.GetStatus(), failed),
-			CommittedPositions: cloneCommittedPositions(payload.GetCommittedPositions()), ReadyAt: cloneTimestamp(message.GetOccurredAt()),
-			UniverseSubjectIds: viewUniverseSubjectIDs(view, payload.GetUniverseSubjectIds()),
-			Bindings:           cloneFactorBindingStates(payload.GetBindings()),
+			ReadyAt: cloneTimestamp(message.GetOccurredAt()),
+			// Factor states retain their frozen universe even when the View filters rows.
+			UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
+			Factors:            cloneFactorStates(payload.GetFactors()),
 		}
 		eventID := stableViewEventID("data-ready", message.GetEventId(), view.GetViewId())
-		s.enqueueViewDataReady(view, payload.GetCommittedPositions(), ready, message, eventID)
+		s.enqueueViewDataReady(view, nil, ready, message, eventID)
 		if err := s.FlushViewDataReady(ctx, message.GetSpaceId(), view.GetViewId()); err != nil {
 			return err
 		}
@@ -455,11 +444,11 @@ func cloneCommittedPositions(values []*storageeventpb.CommittedPosition) []*stor
 	return out
 }
 
-func cloneFactorBindingStates(values []*storageeventpb.FactorBindingPeriodState) []*storageeventpb.FactorBindingPeriodState {
-	out := make([]*storageeventpb.FactorBindingPeriodState, 0, len(values))
-	for _, value := range values {
+func cloneFactorStates(values []*storageeventpb.FactorPeriodState) []*storageeventpb.FactorPeriodState {
+	out := make([]*storageeventpb.FactorPeriodState, len(values))
+	for i, value := range values {
 		if value != nil {
-			out = append(out, proto.Clone(value).(*storageeventpb.FactorBindingPeriodState))
+			out[i] = proto.Clone(value).(*storageeventpb.FactorPeriodState)
 		}
 	}
 	return out

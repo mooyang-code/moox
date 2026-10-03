@@ -225,18 +225,6 @@ message AppendCollectorPeriodCompletedRsp {
   string event_id = 2;
 }
 
-message AppendMergePeriodCompletedReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  string space_id = 3;
-  MergePeriodCompletedMarker marker = 4;
-}
-
-message AppendMergePeriodCompletedRsp {
-  common.RetInfo ret_info = 1;
-  string event_id = 2;
-}
-
 message AppendFactorPeriodComputedReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
@@ -311,7 +299,6 @@ service DataNodeDatasetAdminRuntime {
 // writes gain an explicit, narrow internal API.
 service DataNodeMarkerRuntime {
   rpc AppendCollectorPeriodCompleted(AppendCollectorPeriodCompletedReq) returns (AppendCollectorPeriodCompletedRsp);
-  rpc AppendMergePeriodCompleted(AppendMergePeriodCompletedReq) returns (AppendMergePeriodCompletedRsp);
   rpc AppendFactorPeriodComputed(AppendFactorPeriodComputedReq) returns (AppendFactorPeriodComputedRsp);
   rpc AppendDatasetSyncPointMarker(AppendDatasetSyncPointMarkerReq) returns (AppendDatasetSyncPointMarkerRsp);
   rpc GetFactorPeriodComputedMarker(GetFactorPeriodComputedMarkerReq) returns (GetFactorPeriodComputedMarkerRsp);

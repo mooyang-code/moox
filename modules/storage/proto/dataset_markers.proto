@@ -35,20 +35,6 @@ message CollectorPeriodCompletedMarker {
   google.protobuf.Timestamp collected_at = 11;
 }
 
-message MergePeriodCompletedMarker {
-  string dataset_id = 1;
-  string frequency = 2;
-  int64 period_time = 3;
-  string status = 4;
-  string batch_id = 5;
-  string config_snapshot_id = 6;
-  string expected_scope_ref = 7;
-  repeated string universe_subject_ids = 8;
-  repeated string failed_subjects = 9;
-  repeated CommittedPosition committed_positions = 10;
-  google.protobuf.Timestamp completed_at = 11;
-}
-
 message FactorPeriodState {
   string factor_id = 1;
   string status = 2; // complete | degraded | skipped

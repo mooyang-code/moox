@@ -49,7 +49,7 @@ func TestDynamicDatasetConsumerIdentityIsStable(t *testing.T) {
 func TestInventoryReconcilerBindsDynamicDatasetAndPublishesRouteReadyOnce(t *testing.T) {
 	metadata := &inventoryMetadataFake{views: []*pb.View{{
 		SpaceId: "crypto", ViewId: "view_spot_kline_derived_4h", Status: "active",
-		DatasetId: "dataset_spot_kline_derived_4h",
+		DatasetId:  "dataset_spot_kline_derived_4h",
 		Attributes: map[string]string{routeReadyRequestIDAttribute: "kline-resample-route:rule-1:7"},
 	}}}
 	primary := &syncPointAppenderFake{}
@@ -71,8 +71,8 @@ func TestInventoryReconcilerBindsDynamicDatasetAndPublishesRouteReadyOnce(t *tes
 	if got := specs[0].ref; got != (datasetRef{spaceID: "crypto", datasetID: "dataset_spot_kline_derived_4h"}) {
 		t.Fatalf("bound Dataset = %#v", got)
 	}
-	if len(specs[0].filters) != 5 {
-		t.Fatalf("filters = %#v, want five event families", specs[0].filters)
+	if len(specs[0].filters) != 4 {
+		t.Fatalf("filters = %#v, want four event families", specs[0].filters)
 	}
 	if specs[0].config.DeliverPolicy != "all" {
 		t.Fatalf("dynamic deliver policy = %q, want all for migration replay", specs[0].config.DeliverPolicy)

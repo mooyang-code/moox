@@ -38,53 +38,24 @@ func BuildCollectorPeriodCompletedMessage(spaceID string, marker *pb.CollectorPe
 	return buildMarkerMessage(events.CollectorPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCollectedAt()), payload)
 }
 
-func BuildMergePeriodCompletedMessage(spaceID string, marker *pb.MergePeriodCompletedMarker) ([]byte, string, error) {
-	if marker == nil {
-		return nil, "", invalid("merge period marker is required")
-	}
-	payload := &storageeventpb.MergePeriodCompleted{
-		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
-		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
-		ExpectedScopeRef: marker.GetExpectedScopeRef(), UniverseSubjectIds: normalizedIDs(marker.GetUniverseSubjectIds()),
-		FailedSubjects:     normalizedIDs(marker.GetFailedSubjects()),
-		CommittedPositions: eventPositions(marker.GetCommittedPositions()),
-		CompletedAt:        marker.GetCompletedAt(),
-	}
-	encodedPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
-	if err != nil {
-		return nil, "", fmt.Errorf("marshal merge period marker payload: %w", err)
-	}
-	payloadHash := sha256.Sum256(encodedPayload)
-	eventID := stableMarkerID("merge-period", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
-	return buildMarkerMessage(events.MergePeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
-}
-
 func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodComputedMarker) ([]byte, string, error) {
 	if marker == nil {
 		return nil, "", invalid("factor period marker is required")
 	}
-	bindings := make([]*storageeventpb.FactorBindingPeriodState, 0, len(marker.GetBindings()))
-	for _, state := range marker.GetBindings() {
+	factors := make([]*storageeventpb.FactorPeriodState, 0, len(marker.GetFactors()))
+	for _, state := range marker.GetFactors() {
 		if state == nil {
-			continue
+			return nil, "", invalid("factor period state is required")
 		}
-		bindings = append(bindings, &storageeventpb.FactorBindingPeriodState{
-			BindingId: state.GetBindingId(), FactorId: state.GetFactorId(), Status: state.GetStatus(),
-			SkippedSubjects: normalizedIDs(state.GetSkippedSubjects()), FailedSubjects: normalizedIDs(state.GetFailedSubjects()),
+		factors = append(factors, &storageeventpb.FactorPeriodState{
+			FactorId: state.GetFactorId(), Status: state.GetStatus(), FailedSubjects: append([]string(nil), state.GetFailedSubjects()...),
 			SourceHash: state.GetSourceHash(),
 		})
 	}
-	sort.Slice(bindings, func(i, j int) bool {
-		if bindings[i].GetBindingId() != bindings[j].GetBindingId() {
-			return bindings[i].GetBindingId() < bindings[j].GetBindingId()
-		}
-		return bindings[i].GetFactorId() < bindings[j].GetFactorId()
-	})
 	payload := &storageeventpb.FactorPeriodComputed{
-		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
-		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
-		ExpectedScopeRef: marker.GetExpectedScopeRef(), UniverseSubjectIds: normalizedIDs(marker.GetUniverseSubjectIds()),
-		Bindings: bindings, CommittedPositions: eventPositions(marker.GetCommittedPositions()),
+		DatasetId: marker.GetDatasetId(), SourceDatasetId: marker.GetSourceDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
+		Status: marker.GetStatus(), UniverseSubjectIds: append([]string(nil), marker.GetUniverseSubjectIds()...),
+		FailedSubjects: append([]string(nil), marker.GetFailedSubjects()...), Factors: factors,
 		ComputedAt: marker.GetComputedAt(), TriggerEventId: marker.GetTriggerEventId(),
 	}
 	eventID := stableMarkerID("factor-period", spaceID, payload.GetDatasetId(), payload.GetTriggerEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
@@ -187,7 +158,6 @@ func isDataNodeOutboxEvent(event events.Event) bool {
 	for _, allowed := range []events.Event{
 		events.DatasetRowsUpserted,
 		events.CollectorPeriodCompleted,
-		events.MergePeriodCompleted,
 		events.FactorPeriodComputed,
 		events.DatasetSyncPoint,
 	} {

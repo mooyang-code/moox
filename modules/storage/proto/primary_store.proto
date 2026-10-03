@@ -156,17 +156,6 @@ message ReportCollectorPeriodCompletedRsp {
   string event_id = 2;
 }
 
-message ReportMergePeriodCompletedReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  MergePeriodCompletedMarker marker = 3;
-}
-
-message ReportMergePeriodCompletedRsp {
-  common.RetInfo ret_info = 1;
-  string event_id = 2;
-}
-
 message ReportFactorPeriodComputedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -237,7 +226,6 @@ service PrimaryStore {
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
   rpc ReportCollectorPeriodCompleted(ReportCollectorPeriodCompletedReq) returns (ReportCollectorPeriodCompletedRsp);
-  rpc ReportMergePeriodCompleted(ReportMergePeriodCompletedReq) returns (ReportMergePeriodCompletedRsp);
   rpc ReportFactorPeriodComputed(ReportFactorPeriodComputedReq) returns (ReportFactorPeriodComputedRsp);
   rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);
   rpc GetFactorPeriodComputed(GetFactorPeriodComputedReq) returns (GetFactorPeriodComputedRsp);

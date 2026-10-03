@@ -307,11 +307,6 @@ func (n *recordingMarkerNode) AppendCollectorPeriodCompleted(context.Context, *p
 	return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: successRetInfo()}, nil
 }
 
-func (n *recordingMarkerNode) AppendMergePeriodCompleted(context.Context, *pb.AppendMergePeriodCompletedReq) (*pb.AppendMergePeriodCompletedRsp, error) {
-	n.markerCalls = append(n.markerCalls, "merge")
-	return &pb.AppendMergePeriodCompletedRsp{RetInfo: successRetInfo()}, nil
-}
-
 func (n *recordingMarkerNode) AppendFactorPeriodComputed(context.Context, *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
 	n.markerCalls = append(n.markerCalls, "factor")
 	return &pb.AppendFactorPeriodComputedRsp{RetInfo: successRetInfo()}, nil
@@ -401,12 +396,6 @@ func TestMooxSkillWriteMethodsAreDeniedBeforeDataNodeResolution(t *testing.T) {
 		"ReportCollectorPeriodCompleted": func() (*pb.RetInfo, error) {
 			rsp, callErr := svc.ReportCollectorPeriodCompleted(context.Background(), &pb.ReportCollectorPeriodCompletedReq{
 				AuthInfo: auth, SpaceId: "space", Marker: &pb.CollectorPeriodCompletedMarker{DatasetId: "dataset"},
-			})
-			return rsp.GetRetInfo(), callErr
-		},
-		"ReportMergePeriodCompleted": func() (*pb.RetInfo, error) {
-			rsp, callErr := svc.ReportMergePeriodCompleted(context.Background(), &pb.ReportMergePeriodCompletedReq{
-				AuthInfo: auth, SpaceId: "space", Marker: &pb.MergePeriodCompletedMarker{DatasetId: "dataset"},
 			})
 			return rsp.GetRetInfo(), callErr
 		},

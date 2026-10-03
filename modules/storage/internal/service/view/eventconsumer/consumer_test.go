@@ -3,6 +3,7 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,25 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if config.Consumer != events.StorageViewKlineConsumer || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "dataset" || config.DeliverPolicy != "all" {
 		t.Fatalf("config = %+v", config)
+	}
+}
+
+func TestViewConsumerIgnoresUnknownMergeSubject(t *testing.T) {
+	config := eventConsumerConfig(Config{})
+	if len(config.Events) != 4 {
+		t.Fatalf("subscribed event families=%d, want 4", len(config.Events))
+	}
+	for _, event := range config.Events {
+		if strings.Contains(event.Name(), ".merge.") {
+			t.Fatalf("unknown Merge topic is still subscribed: %s", event.Name())
+		}
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := registry.Lookup("event.storage.merge.period.completed", 1); found {
+		t.Fatal("unknown Merge topic is registered")
 	}
 }
 

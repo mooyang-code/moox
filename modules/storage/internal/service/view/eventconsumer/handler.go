@@ -30,10 +30,6 @@ type CollectorPeriodCompletedHandler interface {
 	HandleCollectorPeriodCompleted(context.Context, *eventpb.EventMessage, *storagepb.CollectorPeriodCompleted) error
 }
 
-type MergePeriodCompletedHandler interface {
-	HandleMergePeriodCompleted(context.Context, *eventpb.EventMessage, *storagepb.MergePeriodCompleted) error
-}
-
 type FactorPeriodComputedHandler interface {
 	HandleFactorPeriodComputed(context.Context, *eventpb.EventMessage, *storagepb.FactorPeriodComputed) error
 }

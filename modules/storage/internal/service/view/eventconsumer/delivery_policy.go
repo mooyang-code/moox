@@ -438,12 +438,6 @@ func (c *Consumer) applyDelivery(ctx context.Context, delivery *jetstream.Delive
 			return Permanent(errors.New("storage view collector-period handler is unavailable"))
 		}
 		return handler.HandleCollectorPeriodCompleted(ctx, message, value)
-	case *storagepb.MergePeriodCompleted:
-		handler, ok := c.handler.(MergePeriodCompletedHandler)
-		if !ok {
-			return Permanent(errors.New("storage view merge-period handler is unavailable"))
-		}
-		return handler.HandleMergePeriodCompleted(ctx, message, value)
 	case *storagepb.FactorPeriodComputed:
 		handler, ok := c.handler.(FactorPeriodComputedHandler)
 		if !ok {

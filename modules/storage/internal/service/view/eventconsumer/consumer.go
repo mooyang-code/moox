@@ -201,7 +201,6 @@ func eventConsumerConfig(opts Config) events.ConsumerConfig {
 	cfg.Events = []events.Event{
 		events.DatasetRowsUpserted,
 		events.CollectorPeriodCompleted,
-		events.MergePeriodCompleted,
 		events.FactorPeriodComputed,
 		events.DatasetSyncPoint,
 	}

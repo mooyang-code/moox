@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -223,13 +224,14 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	})
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	message := periodMessage("factor-marker-1", occurredAt)
-	service.NoteAppliedPosition("quant", "result-view", "result-view-a", "node-a", "store-a", 2)
 	payload := &storageeventpb.FactorPeriodComputed{
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-		BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:factor:1m", UniverseSubjectIds: []string{"ETH-USDT"},
-		Bindings:           []*storageeventpb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash-1"}},
-		CommittedPositions: []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 2}},
-		ComputedAt:         timestamppb.New(occurredAt), TriggerEventId: "source-ready-1",
+		SourceDatasetId: "prices", UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
+		Factors: []*storageeventpb.FactorPeriodState{
+			{FactorId: "z-factor", Status: "degraded", FailedSubjects: []string{"ETH-USDT", "BTC-USDT"}, SourceHash: "hash-z"},
+			{FactorId: "a-factor", Status: "complete", SourceHash: "hash-a"},
+		},
+		ComputedAt: timestamppb.New(occurredAt), TriggerEventId: "source-ready-1",
 	}
 	if err := service.HandleFactorPeriodComputed(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
@@ -244,21 +246,30 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	if !ok || publisher.attempts[0].event.Name() != events.ViewDataReady.Name() {
 		t.Fatalf("published event=%s payload=%T", publisher.attempts[0].event.Name(), publisher.attempts[0].payload)
 	}
-	if ready.GetViewId() != "result-view" || ready.GetDatasetId() != "factor-results" || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "ETH-USDT" {
+	if ready.GetViewId() != "result-view" || ready.GetDatasetId() != "factor-results" || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "BTC-USDT,ETH-USDT" {
 		t.Fatalf("factor ready payload=%v", ready)
 	}
 	if ready.GetCompletionKind() != events.FactorPeriodComputed.Name() {
 		t.Fatalf("completion_kind=%q", ready.GetCompletionKind())
 	}
-	if got := ready.GetUniverseSubjectIds(); len(got) != 1 || got[0] != "ETH-USDT" {
+	if got := ready.GetUniverseSubjectIds(); !reflect.DeepEqual(got, payload.GetUniverseSubjectIds()) {
 		t.Fatalf("factor universe_subject_ids=%v", got)
 	}
-	if len(ready.GetBindings()) != 1 || ready.GetBindings()[0].GetBindingId() != "binding-1" || ready.GetBindings()[0].GetStatus() != "degraded" {
-		t.Fatalf("factor bindings=%v", ready.GetBindings())
+	if len(ready.GetFactors()) != len(payload.GetFactors()) {
+		t.Fatalf("factor count=%d, want %d", len(ready.GetFactors()), len(payload.GetFactors()))
+	}
+	for i, state := range payload.GetFactors() {
+		if !proto.Equal(state, ready.GetFactors()[i]) {
+			t.Fatalf("factor %d changed: got=%v want=%v", i, ready.GetFactors()[i], state)
+		}
+	}
+	payload.Factors[0].FailedSubjects[0] = "changed-after-handling"
+	if ready.Factors[0].FailedSubjects[0] != "ETH-USDT" {
+		t.Fatal("ready factor state aliases input payload")
 	}
 }
 
-func TestHandleFactorPeriodComputedEmptyPositionsDoesNotPublishReady(t *testing.T) {
+func TestHandleFactorPeriodComputedEmptyFactorsPublishesDegradedReady(t *testing.T) {
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(nil, publisher, &pb.View{
 		SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-view-a",
@@ -266,33 +277,49 @@ func TestHandleFactorPeriodComputedEmptyPositionsDoesNotPublishReady(t *testing.
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	payload := &storageeventpb.FactorPeriodComputed{
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-		UniverseSubjectIds: []string{"ETH-USDT"},
-		Bindings:           []*storageeventpb.FactorBindingPeriodState{{BindingId: "binding-1", Status: "degraded", SkippedSubjects: []string{"ETH-USDT"}}},
+		SourceDatasetId: "prices", UniverseSubjectIds: []string{"ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"},
 	}
 	if err := service.HandleFactorPeriodComputed(context.Background(), periodMessage("factor-empty", occurredAt), payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(publisher.attempts) != 0 {
-		t.Fatalf("empty committed positions published ViewDataReady: %d", len(publisher.attempts))
+	if len(publisher.attempts) != 1 {
+		t.Fatalf("empty degraded factors did not publish ViewDataReady: %d", len(publisher.attempts))
+	}
+	ready := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
+	if len(ready.GetFactors()) != 0 || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "ETH-USDT" {
+		t.Fatalf("empty factors ready=%v", ready)
 	}
 }
 
-func TestHandleMergePeriodCompletedEmptyPositionsDoesNotPublishReady(t *testing.T) {
-	metadata := newPeriodMetadataFake()
+func TestHandleFactorPeriodComputedFilteredViewPreservesFactorUniverse(t *testing.T) {
 	publisher := newReadyPublisherFake()
-	service := newPeriodTestService(metadata, publisher, &pb.View{
-		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	service := newPeriodTestService(nil, publisher, &pb.View{
+		SpaceId: "quant", ViewId: "filtered-result", DatasetId: "factor-results", ActiveIndexId: "filtered-result-a",
+		FilterJson: `{"subject_id":"BTC-USDT"}`,
 	})
-	at := time.Date(2026, 9, 13, 16, 0, 0, 0, time.UTC)
-	payload := &storageeventpb.MergePeriodCompleted{
-		DatasetId: "prices", Frequency: "1m", PeriodTime: at.Unix(), Status: "degraded",
-		UniverseSubjectIds: []string{"BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
+	at := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
+	payload := &storageeventpb.FactorPeriodComputed{
+		DatasetId: "factor-results", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: at.Unix(), Status: "degraded",
+		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"},
+		Factors: []*storageeventpb.FactorPeriodState{{FactorId: "factor", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash"}},
 	}
-	if err := service.HandleMergePeriodCompleted(context.Background(), periodMessage("merge-empty", at), payload); err != nil {
+	if err := service.HandleFactorPeriodComputed(context.Background(), periodMessage("factor-filtered", at), payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(publisher.attempts) != 0 {
-		t.Fatalf("empty merge positions published ViewDataReady: %d", len(publisher.attempts))
+	if len(publisher.attempts) != 1 {
+		t.Fatalf("publish attempts=%d", len(publisher.attempts))
+	}
+	attempt := publisher.attempts[0]
+	ready := attempt.payload.(*storageeventpb.ViewDataReady)
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Encode(attempt.event, ready, attempt.opts); err != nil {
+		t.Fatalf("filtered factor ready violates event contract: %v", err)
+	}
+	if ready.GetVisibleScope() != "view:filtered-result" || !reflect.DeepEqual(ready.GetUniverseSubjectIds(), payload.GetUniverseSubjectIds()) {
+		t.Fatalf("filtered factor ready scope/universe=%v", ready)
 	}
 }
 

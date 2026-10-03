@@ -48,8 +48,6 @@ type PrimaryStoreService interface {
 
 	ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq) (*ReportCollectorPeriodCompletedRsp, error)
 
-	ReportMergePeriodCompleted(ctx context.Context, req *ReportMergePeriodCompletedReq) (*ReportMergePeriodCompletedRsp, error)
-
 	ReportFactorPeriodComputed(ctx context.Context, req *ReportFactorPeriodComputedReq) (*ReportFactorPeriodComputedRsp, error)
 
 	AppendDatasetSyncPoint(ctx context.Context, req *AppendDatasetSyncPointReq) (*AppendDatasetSyncPointRsp, error)
@@ -311,24 +309,6 @@ func PrimaryStoreService_ReportCollectorPeriodCompleted_Handler(svr interface{},
 	return rsp, nil
 }
 
-func PrimaryStoreService_ReportMergePeriodCompleted_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReportMergePeriodCompletedReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).ReportMergePeriodCompleted(ctx, reqbody.(*ReportMergePeriodCompletedReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func PrimaryStoreService_ReportFactorPeriodComputed_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReportFactorPeriodComputedReq{}
 	filters, err := f(req)
@@ -463,10 +443,6 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_ReportCollectorPeriodCompleted_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/ReportMergePeriodCompleted",
-			Func: PrimaryStoreService_ReportMergePeriodCompleted_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReportFactorPeriodComputed",
 			Func: PrimaryStoreService_ReportFactorPeriodComputed_Handler,
 		},
@@ -539,9 +515,6 @@ func (s *UnimplementedPrimaryStore) ReadRecordRows(ctx context.Context, req *Rea
 func (s *UnimplementedPrimaryStore) ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq) (*ReportCollectorPeriodCompletedRsp, error) {
 	return nil, errors.New("rpc ReportCollectorPeriodCompleted of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) ReportMergePeriodCompleted(ctx context.Context, req *ReportMergePeriodCompletedReq) (*ReportMergePeriodCompletedRsp, error) {
-	return nil, errors.New("rpc ReportMergePeriodCompleted of service PrimaryStore is not implemented")
-}
 func (s *UnimplementedPrimaryStore) ReportFactorPeriodComputed(ctx context.Context, req *ReportFactorPeriodComputedReq) (*ReportFactorPeriodComputedRsp, error) {
 	return nil, errors.New("rpc ReportFactorPeriodComputed of service PrimaryStore is not implemented")
 }
@@ -591,8 +564,6 @@ type PrimaryStoreClientProxy interface {
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
 
 	ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq, opts ...client.Option) (rsp *ReportCollectorPeriodCompletedRsp, err error)
-
-	ReportMergePeriodCompleted(ctx context.Context, req *ReportMergePeriodCompletedReq, opts ...client.Option) (rsp *ReportMergePeriodCompletedRsp, err error)
 
 	ReportFactorPeriodComputed(ctx context.Context, req *ReportFactorPeriodComputedReq, opts ...client.Option) (rsp *ReportFactorPeriodComputedRsp, err error)
 
@@ -886,26 +857,6 @@ func (c *PrimaryStoreClientProxyImpl) ReportCollectorPeriodCompleted(ctx context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReportCollectorPeriodCompletedRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *PrimaryStoreClientProxyImpl) ReportMergePeriodCompleted(ctx context.Context, req *ReportMergePeriodCompletedReq, opts ...client.Option) (*ReportMergePeriodCompletedRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReportMergePeriodCompleted")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("ReportMergePeriodCompleted")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReportMergePeriodCompletedRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

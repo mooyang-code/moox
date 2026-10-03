@@ -14,7 +14,6 @@ import (
 
 type markerDataNodeClient interface {
 	AppendCollectorPeriodCompleted(context.Context, *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error)
-	AppendMergePeriodCompleted(context.Context, *pb.AppendMergePeriodCompletedReq) (*pb.AppendMergePeriodCompletedRsp, error)
 	AppendFactorPeriodComputed(context.Context, *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error)
 	AppendDatasetSyncPointMarker(context.Context, *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error)
 	GetFactorPeriodComputedMarker(context.Context, *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error)
@@ -45,33 +44,6 @@ func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.Re
 		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
-}
-
-func (s *Service) ReportMergePeriodCompleted(ctx context.Context, req *pb.ReportMergePeriodCompletedReq) (*pb.ReportMergePeriodCompletedRsp, error) {
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.ReportMergePeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "merge"); err != nil {
-		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(err)}, nil
-	}
-	ctx = s.requestContext(ctx)
-	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
-	if err != nil {
-		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(err)}, nil
-	}
-	markerNode, ok := node.(markerDataNodeClient)
-	if !ok {
-		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
-	}
-	auth, err := s.signAuth(req.GetAuthInfo())
-	if err != nil {
-		return &pb.ReportMergePeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	rsp, err := markerNode.AppendMergePeriodCompleted(ctx, &pb.AppendMergePeriodCompletedReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), Marker: req.GetMarker()})
-	if err != nil {
-		return &pb.ReportMergePeriodCompletedRsp{RetInfo: markerError(err)}, nil
-	}
-	return &pb.ReportMergePeriodCompletedRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
 }
 
 func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.ReportFactorPeriodComputedReq) (*pb.ReportFactorPeriodComputedRsp, error) {
