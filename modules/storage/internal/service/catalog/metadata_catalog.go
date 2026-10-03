@@ -272,8 +272,12 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	}
 	// An active, locked Dataset is the successful terminal state. Return it
 	// before readiness checks so retries remain idempotent even when the node
-	// is temporarily disabled or unreachable.
+	// is temporarily disabled or unreachable. Factor result View creation is
+	// retried here too because it follows the Dataset activation transaction.
 	if dataset.GetStatus() == "active" && dataset.GetBindingLocked() {
+		if err := s.ensureFactorResultDefaultView(ctx, dataset); err != nil {
+			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset is active but its default factor View is pending; retry activation")), Dataset: dataset}, nil
+		}
 		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: dataset}, nil
 	}
 	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret).checks(ctx, dataset)
@@ -289,6 +293,12 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	activated, err := s.metadata.CommitDatasetActivation(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetExpectedRevision())
 	if err != nil {
 		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err), Checks: checks}, nil
+	}
+	if err := s.ensureFactorResultDefaultView(ctx, activated); err != nil {
+		return &pb.ActivateDatasetRsp{
+			RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset activated but its default factor View is pending; retry activation")),
+			Dataset: activated, Checks: checks,
+		}, nil
 	}
 	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
 		return &pb.ActivateDatasetRsp{

@@ -25,6 +25,7 @@ type maintenanceMetadata struct {
 	view         *pb.View
 	activated    bool
 	claims       int
+	extensions   int
 	claimedIndex string
 	activateErr  error
 	activateRet  *pb.RetInfo
@@ -107,6 +108,21 @@ func (m *maintenanceMetadata) ActivateViewIndex(context.Context, *pb.ActivateVie
 		ret = successRetInfo()
 	}
 	return &pb.ActivateViewIndexRsp{RetInfo: ret, View: view}, nil
+}
+
+func (m *maintenanceMetadata) CommitViewSchemaExtension(_ context.Context, req *pb.CommitViewSchemaExtensionReq, _ ...client.Option) (*pb.CommitViewSchemaExtensionRsp, error) {
+	m.extensions++
+	view := proto.Clone(m.view).(*pb.View)
+	view.ActiveViewRevision = req.GetExpectedDesiredRevision()
+	view.ActiveViewSchemaHash = req.GetViewSchemaHash()
+	view.ActiveColumns = nil
+	for _, column := range req.GetColumns() {
+		if column != nil {
+			view.ActiveColumns = append(view.ActiveColumns, proto.Clone(column).(*pb.ViewColumn))
+		}
+	}
+	m.view = view
+	return &pb.CommitViewSchemaExtensionRsp{RetInfo: successRetInfo(), View: proto.Clone(view).(*pb.View)}, nil
 }
 
 func (m *maintenanceMetadata) FailViewIndexBuild(context.Context, *pb.FailViewIndexBuildReq, ...client.Option) (*pb.FailViewIndexBuildRsp, error) {

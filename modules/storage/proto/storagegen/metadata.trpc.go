@@ -51,6 +51,8 @@ type MetadataService interface {
 	UpdateViewIndexBuild(ctx context.Context, req *UpdateViewIndexBuildReq) (*UpdateViewIndexBuildRsp, error)
 	// ActivateViewIndex 原子激活已就绪的 View 索引。
 	ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq) (*ActivateViewIndexRsp, error)
+	// CommitViewSchemaExtension CAS 提交同一 active index 上已完成的追加列 schema 扩展。
+	CommitViewSchemaExtension(ctx context.Context, req *CommitViewSchemaExtensionReq) (*CommitViewSchemaExtensionRsp, error)
 	// FailViewIndexBuild 记录 View 索引构建失败。
 	FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq) (*FailViewIndexBuildRsp, error)
 	// ListViewRebuildLogs 查询 View 索引构建历史。
@@ -459,6 +461,24 @@ func MetadataService_ActivateViewIndex_Handler(svr interface{}, ctx context.Cont
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).ActivateViewIndex(ctx, reqbody.(*ActivateViewIndexReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_CommitViewSchemaExtension_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CommitViewSchemaExtensionReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).CommitViewSchemaExtension(ctx, reqbody.(*CommitViewSchemaExtensionReq))
 	}
 
 	var rsp interface{}
@@ -1691,6 +1711,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_ActivateViewIndex_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/CommitViewSchemaExtension",
+			Func: MetadataService_CommitViewSchemaExtension_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/FailViewIndexBuild",
 			Func: MetadataService_FailViewIndexBuild_Handler,
 		},
@@ -2040,6 +2064,11 @@ func (s *UnimplementedMetadata) ActivateViewIndex(ctx context.Context, req *Acti
 	return nil, errors.New("rpc ActivateViewIndex of service Metadata is not implemented")
 }
 
+// CommitViewSchemaExtension CAS 提交同一 active index 上已完成的追加列 schema 扩展。
+func (s *UnimplementedMetadata) CommitViewSchemaExtension(ctx context.Context, req *CommitViewSchemaExtensionReq) (*CommitViewSchemaExtensionRsp, error) {
+	return nil, errors.New("rpc CommitViewSchemaExtension of service Metadata is not implemented")
+}
+
 // FailViewIndexBuild 记录 View 索引构建失败。
 func (s *UnimplementedMetadata) FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq) (*FailViewIndexBuildRsp, error) {
 	return nil, errors.New("rpc FailViewIndexBuild of service Metadata is not implemented")
@@ -2366,6 +2395,8 @@ type MetadataClientProxy interface {
 	UpdateViewIndexBuild(ctx context.Context, req *UpdateViewIndexBuildReq, opts ...client.Option) (rsp *UpdateViewIndexBuildRsp, err error)
 	// ActivateViewIndex 原子激活已就绪的 View 索引。
 	ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq, opts ...client.Option) (rsp *ActivateViewIndexRsp, err error)
+	// CommitViewSchemaExtension CAS 提交同一 active index 上已完成的追加列 schema 扩展。
+	CommitViewSchemaExtension(ctx context.Context, req *CommitViewSchemaExtensionReq, opts ...client.Option) (rsp *CommitViewSchemaExtensionRsp, err error)
 	// FailViewIndexBuild 记录 View 索引构建失败。
 	FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq, opts ...client.Option) (rsp *FailViewIndexBuildRsp, err error)
 	// ListViewRebuildLogs 查询 View 索引构建历史。
@@ -2819,6 +2850,26 @@ func (c *MetadataClientProxyImpl) ActivateViewIndex(ctx context.Context, req *Ac
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ActivateViewIndexRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) CommitViewSchemaExtension(ctx context.Context, req *CommitViewSchemaExtensionReq, opts ...client.Option) (*CommitViewSchemaExtensionRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CommitViewSchemaExtension")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("CommitViewSchemaExtension")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CommitViewSchemaExtensionRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

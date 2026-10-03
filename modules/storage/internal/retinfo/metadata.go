@@ -25,6 +25,9 @@ func MetadataStoreCode(err error) pb.ErrorCode {
 	if errors.Is(err, sqlitemetadata.ErrViewIndexBuildConflict) {
 		return pb.ErrorCode_CONFLICT
 	}
+	if errors.Is(err, metadatastore.ErrViewSchemaExtensionConflict) {
+		return pb.ErrorCode_CONFLICT
+	}
 	if errors.Is(err, metadatastore.ErrTagInvalid) || errors.Is(err, metadatastore.ErrTagBuiltin) ||
 		errors.Is(err, metadatastore.ErrTagReferenced) || errors.Is(err, metadatastore.ErrTagAutoMembers) ||
 		errors.Is(err, metadatastore.ErrTagSnapshotEmpty) {

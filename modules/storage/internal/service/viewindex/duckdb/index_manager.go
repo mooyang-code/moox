@@ -185,6 +185,144 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 	return nil
 }
 
+func (m *IndexManager) ExtendColumns(ctx context.Context, id string, current, next viewindex.ViewIndexSchema) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
+	if id == "" || current.SpaceID == "" || current.ViewID == "" || current.PrimaryDatasetID == "" ||
+		current.Engine != "duckdb" || next.Engine != current.Engine || next.SpaceID != current.SpaceID ||
+		next.ViewID != current.ViewID || next.PrimaryDatasetID != current.PrimaryDatasetID ||
+		current.ViewVersion == 0 || next.ViewVersion <= current.ViewVersion || current.SchemaHash == "" || next.SchemaHash == "" {
+		return errors.New("DuckDB schema extension requires matching index identity and increasing revisions")
+	}
+	if viewindex.HashViewIndexSchema(current) != current.SchemaHash || viewindex.HashViewIndexSchema(next) != next.SchemaHash {
+		return errors.New("DuckDB schema extension hash does not match its columns")
+	}
+	if !viewindex.IsAppendOnlyViewColumns(current.Columns, next.Columns) {
+		return errors.New("DuckDB schema extension must append columns without changing existing columns")
+	}
+	oldColumns, targetColumns := schemaColumns(current.Columns), schemaColumns(next.Columns)
+	if len(oldColumns) != len(current.Columns) || len(targetColumns) != len(next.Columns) {
+		return errors.New("DuckDB schema extension contains an invalid or system column")
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var version uint64
+	var schemaHash, datasetID, spaceID string
+	if err := tx.QueryRowContext(ctx, `SELECT view_version, schema_hash, primary_dataset_id, space_id FROM view_meta WHERE singleton = 1`).Scan(&version, &schemaHash, &datasetID, &spaceID); err != nil {
+		return err
+	}
+	physicalColumns, err := readViewColumns(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if datasetID != current.PrimaryDatasetID || spaceID != current.SpaceID {
+		return errors.New("DuckDB schema extension index identity conflicts with physical metadata")
+	}
+	if version == next.ViewVersion && schemaHash == next.SchemaHash && samePhysicalColumns(physicalColumns, targetColumns) {
+		return nil
+	}
+	if version < current.ViewVersion || version > next.ViewVersion ||
+		!isPhysicalAppendOnlyState(physicalColumns, oldColumns, targetColumns) {
+		return fmt.Errorf("DuckDB schema extension physical state conflicts: revision=%d", version)
+	}
+	if version == current.ViewVersion {
+		if schemaHash != current.SchemaHash || !samePhysicalColumns(physicalColumns, oldColumns) {
+			return errors.New("DuckDB active schema does not match the expected current contract")
+		}
+	} else if version == next.ViewVersion {
+		return errors.New("DuckDB target revision has a conflicting physical schema")
+	}
+	for _, column := range next.Columns {
+		name := column.GetColumnName()
+		if _, exists := physicalColumns[name]; exists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE view_rows ADD COLUMN `+quote(name)+` `+duckType(column.GetValueType())); err != nil {
+			return fmt.Errorf("add DuckDB View column %q: %w", name, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO view_columns (column_name, value_type) VALUES (?, ?)`, name, int32(column.GetValueType())); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE view_meta SET view_version = ?, schema_hash = ?, updated_at = ?
+		WHERE singleton = 1 AND view_version = ? AND schema_hash = ?`, next.ViewVersion, next.SchemaHash,
+		time.Now().UTC().Format(time.RFC3339Nano), version, schemaHash)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return errors.New("DuckDB schema extension lost its physical metadata compare-and-swap")
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.schema[id] = targetColumns
+	m.mu.Unlock()
+	return nil
+}
+
+func readViewColumns(ctx context.Context, tx *sql.Tx) (map[string]pb.FieldValueType, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT column_name, value_type FROM view_columns`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	columns := make(map[string]pb.FieldValueType)
+	for rows.Next() {
+		var name string
+		var valueType int32
+		if err := rows.Scan(&name, &valueType); err != nil {
+			return nil, err
+		}
+		if _, duplicate := columns[name]; duplicate {
+			return nil, fmt.Errorf("DuckDB View index has duplicate column %q", name)
+		}
+		columns[name] = pb.FieldValueType(valueType)
+	}
+	return columns, rows.Err()
+}
+
+func samePhysicalColumns(left, right map[string]pb.FieldValueType) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for name, valueType := range left {
+		if right[name] != valueType {
+			return false
+		}
+	}
+	return true
+}
+
+func isPhysicalAppendOnlyState(physical, current, target map[string]pb.FieldValueType) bool {
+	if len(physical) < len(current) || len(physical) > len(target) {
+		return false
+	}
+	for name, valueType := range current {
+		if physical[name] != valueType {
+			return false
+		}
+	}
+	for name, valueType := range physical {
+		if target[name] != valueType {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {

@@ -1696,6 +1696,25 @@ message ListViewRebuildLogsRsp {
   common.PageResult page_result = 3;
 }
 
+// CommitViewSchemaExtension advances the schema contract of the same active
+// index after its engine has applied an append-only column extension.
+message CommitViewSchemaExtensionReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string active_index_id = 4;
+  uint64 expected_active_revision = 5;
+  uint64 expected_desired_revision = 6;
+  string expected_active_schema_hash = 7;
+  repeated ViewColumn columns = 8;
+  string view_schema_hash = 9;
+}
+
+message CommitViewSchemaExtensionRsp {
+  common.RetInfo ret_info = 1;
+  View view = 2;
+}
+
 // Metadata 管理量化存储系统的核心元数据。
 service Metadata {
   // 创建使用空间。
@@ -1731,6 +1750,8 @@ service Metadata {
   rpc UpdateViewIndexBuild(UpdateViewIndexBuildReq) returns (UpdateViewIndexBuildRsp);
   // 原子激活已就绪的 View 索引。
   rpc ActivateViewIndex(ActivateViewIndexReq) returns (ActivateViewIndexRsp);
+  // CAS 提交同一 active index 上已完成的追加列 schema 扩展。
+  rpc CommitViewSchemaExtension(CommitViewSchemaExtensionReq) returns (CommitViewSchemaExtensionRsp);
   // 记录 View 索引构建失败。
   rpc FailViewIndexBuild(FailViewIndexBuildReq) returns (FailViewIndexBuildRsp);
   // 查询 View 索引构建历史。

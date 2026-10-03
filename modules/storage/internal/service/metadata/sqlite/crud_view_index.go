@@ -8,8 +8,10 @@ import (
 	"slices"
 	"strings"
 
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 const viewIndexBuildColumns = `
@@ -246,6 +248,101 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, view.GetSpaceId(), view.GetViewId()); err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+}
+
+func (s *Store) CommitViewSchemaExtension(ctx context.Context, req *pb.CommitViewSchemaExtensionReq) (*pb.View, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" || req.GetActiveIndexId() == "" ||
+		req.GetExpectedActiveRevision() == 0 || req.GetExpectedDesiredRevision() <= req.GetExpectedActiveRevision() ||
+		req.GetExpectedActiveSchemaHash() == "" || req.GetViewSchemaHash() == "" || len(req.GetColumns()) == 0 {
+		return nil, errors.New("active View schema extension identity and columns are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{req.GetSpaceId(), req.GetViewId()}, func() *pb.View { return &pb.View{} })
+	if err != nil {
+		return nil, err
+	}
+	if view.GetActiveViewRevision() == req.GetExpectedDesiredRevision() &&
+		view.GetDesiredViewRevision() == req.GetExpectedDesiredRevision() &&
+		view.GetActiveIndexId() == req.GetActiveIndexId() && view.GetActiveViewSchemaHash() == req.GetViewSchemaHash() &&
+		view.GetStatus() == "active" && view.GetEngine() == "duckdb" &&
+		view.GetAttributes()["primary_dataset_role"] == "factor_result" &&
+		proto.Equal(&pb.View{ActiveColumns: view.GetActiveColumns()}, &pb.View{ActiveColumns: req.GetColumns()}) {
+		_ = tx.Rollback()
+		return s.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	}
+	if view.GetActiveIndexId() != req.GetActiveIndexId() ||
+		view.GetActiveViewRevision() != req.GetExpectedActiveRevision() ||
+		view.GetDesiredViewRevision() != req.GetExpectedDesiredRevision() ||
+		view.GetActiveViewSchemaHash() != req.GetExpectedActiveSchemaHash() ||
+		view.GetEngine() != "duckdb" || view.GetStatus() != "active" ||
+		view.GetAttributes()["primary_dataset_role"] != "factor_result" {
+		return nil, metadatastore.ErrViewSchemaExtensionConflict
+	}
+	activeHash := coreviewindex.HashViewIndexSchema(coreviewindex.ViewIndexSchema{
+		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(),
+		ViewVersion: view.GetActiveViewRevision(), Engine: view.GetEngine(), Columns: view.GetActiveColumns(),
+	})
+	if activeHash != req.GetExpectedActiveSchemaHash() {
+		return nil, metadatastore.ErrViewSchemaExtensionConflict
+	}
+	var buildCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, req.GetSpaceId(), req.GetViewId()).Scan(&buildCount); err != nil {
+		return nil, err
+	}
+	if buildCount != 0 {
+		return nil, metadatastore.ErrViewSchemaExtensionConflict
+	}
+	desired, err := activationViewColumns(ctx, tx, view)
+	if err != nil {
+		return nil, err
+	}
+	if !proto.Equal(&pb.View{Columns: desired}, &pb.View{Columns: req.GetColumns()}) || !coreviewindex.IsAppendOnlyViewColumns(view.GetActiveColumns(), desired) {
+		return nil, metadatastore.ErrViewSchemaExtensionConflict
+	}
+	wantHash := coreviewindex.HashViewIndexSchema(coreviewindex.ViewIndexSchema{
+		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(),
+		ViewVersion: req.GetExpectedDesiredRevision(), Engine: view.GetEngine(), Columns: desired,
+	})
+	if wantHash != req.GetViewSchemaHash() {
+		return nil, errors.New("view schema extension hash does not match desired columns")
+	}
+	view.ActiveViewRevision = req.GetExpectedDesiredRevision()
+	view.ActiveColumns = cloneViewColumns(desired)
+	view.ActiveViewSchemaHash = wantHash
+	view.Columns = nil
+	view.IndexBuild = nil
+	raw, err := marshal(view)
+	if err != nil {
+		return nil, err
+	}
+	activeColumns, err := marshalJSON(view.GetActiveColumns())
+	if err != nil {
+		return nil, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE t_views SET c_active_view_revision = ?, c_active_columns_json = ?,
+			c_active_view_schema_hash = ?, c_attrs_json = ?
+		WHERE c_space_id = ? AND c_view_id = ? AND c_active_index_id = ? AND c_status = 'active'
+		  AND c_active_view_revision = ? AND c_desired_view_revision = ? AND c_active_view_schema_hash = ?
+	`, view.GetActiveViewRevision(), activeColumns, view.GetActiveViewSchemaHash(), raw,
+		req.GetSpaceId(), req.GetViewId(), req.GetActiveIndexId(), req.GetExpectedActiveRevision(),
+		req.GetExpectedDesiredRevision(), req.GetExpectedActiveSchemaHash())
+	if err != nil {
+		return nil, err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return nil, err
+	} else if affected != 1 {
+		return nil, metadatastore.ErrViewSchemaExtensionConflict
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

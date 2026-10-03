@@ -19,6 +19,7 @@ type Service struct {
 	metadataCache  *metacache.Store
 	nodeAuthSecret string
 	operatorSecret string
+	viewAuthSecret string
 	nodeState      NodeStateChecker
 }
 
@@ -29,7 +30,9 @@ type Options struct {
 	// storage-primary role, while tests and legacy callers may use AuthSecret
 	// as a fallback.
 	OperatorAuthSecret string
-	NodeStateChecker   NodeStateChecker
+	// ViewAuthSecret authenticates the View role's append-only active-schema CAS.
+	ViewAuthSecret   string
+	NodeStateChecker NodeStateChecker
 }
 
 func NewMetadataService(store metadata.Store, cache *metacache.Store, options Options) (*Service, error) {
@@ -47,10 +50,14 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if operatorSecret == "" {
 		operatorSecret = secret
 	}
+	viewSecret := options.ViewAuthSecret
+	if viewSecret == "" {
+		viewSecret = os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
+	}
 	if options.NodeStateChecker == nil {
 		options.NodeStateChecker = rpcNodeStateChecker{}
 	}
-	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, operatorSecret: operatorSecret, nodeState: options.NodeStateChecker}, nil
+	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, operatorSecret: operatorSecret, viewAuthSecret: viewSecret, nodeState: options.NodeStateChecker}, nil
 }
 
 func (s *Service) refreshMetadataCache(ctx context.Context) error {

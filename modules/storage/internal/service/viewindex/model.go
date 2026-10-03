@@ -175,6 +175,63 @@ type Engine interface {
 	Remove(context.Context, string) error
 }
 
+// SchemaExtender applies an append-only schema revision to an existing active
+// physical index without replacing the index or rebuilding its rows.
+type SchemaExtender interface {
+	ExtendColumns(context.Context, string, ViewIndexSchema, ViewIndexSchema) error
+}
+
+// IsAppendOnlyViewColumns reports whether desired preserves every physical
+// column in active and appends at least one new column after its sort order.
+func IsAppendOnlyViewColumns(active, desired []*pb.ViewColumn) bool {
+	if len(active) == 0 || len(desired) <= len(active) {
+		return false
+	}
+	activeByName := make(map[string]*pb.ViewColumn, len(active))
+	usedOrder := make(map[uint32]struct{}, len(desired))
+	var maxOrder uint32
+	for index, column := range active {
+		if column == nil || column.GetColumnName() == "" {
+			return false
+		}
+		if _, exists := activeByName[column.GetColumnName()]; exists {
+			return false
+		}
+		activeByName[column.GetColumnName()] = column
+		if index == 0 || column.GetSortOrder() > maxOrder {
+			maxOrder = column.GetSortOrder()
+		}
+	}
+	seen := make(map[string]struct{}, len(desired))
+	appended := 0
+	for _, column := range desired {
+		if column == nil || column.GetColumnName() == "" {
+			return false
+		}
+		if _, exists := seen[column.GetColumnName()]; exists {
+			return false
+		}
+		seen[column.GetColumnName()] = struct{}{}
+		if _, exists := usedOrder[column.GetSortOrder()]; exists {
+			return false
+		}
+		usedOrder[column.GetSortOrder()] = struct{}{}
+		previous := activeByName[column.GetColumnName()]
+		if previous == nil {
+			if column.GetSortOrder() <= maxOrder {
+				return false
+			}
+			appended++
+			continue
+		}
+		if previous.GetOriginId() != column.GetOriginId() || previous.GetOriginType() != column.GetOriginType() ||
+			previous.GetValueType() != column.GetValueType() || previous.GetSortOrder() != column.GetSortOrder() {
+			return false
+		}
+	}
+	return appended == len(desired)-len(active)
+}
+
 // ManagedIndexLister returns only official physical index IDs owned by this
 // engine. Callers may remove returned IDs through Engine.Remove; filesystem
 // paths never cross this boundary.

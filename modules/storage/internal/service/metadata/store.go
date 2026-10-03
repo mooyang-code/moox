@@ -8,7 +8,10 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-var ErrViewExists = errors.New("view already exists")
+var (
+	ErrViewExists                  = errors.New("view already exists")
+	ErrViewSchemaExtensionConflict = errors.New("view schema extension conflict")
+)
 
 // FieldQuery contains the supported server-side field filters and ordering.
 type FieldQuery struct {
@@ -132,6 +135,7 @@ type Writer interface {
 	ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error)
 	UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIndexBuildReq) (*pb.ViewIndexBuild, error)
 	ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.View, error)
+	CommitViewSchemaExtension(ctx context.Context, req *pb.CommitViewSchemaExtensionReq) (*pb.View, error)
 	FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error)
 	CreateViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLog) (*pb.ViewRebuildLog, error)
 	UpdateViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLog) (*pb.ViewRebuildLog, error)

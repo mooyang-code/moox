@@ -699,6 +699,11 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 	if err != nil {
 		return nil, err
 	}
+	if (newColumn || projectionChanged) && isActive {
+		if err := addFactorResultViewColumn(ctx, tx, item); err != nil {
+			return nil, err
+		}
+	}
 	if projectionChanged {
 		if err := bumpViewsForDataset(ctx, tx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
 			return nil, err
@@ -708,6 +713,62 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 		return nil, err
 	}
 	return item, nil
+}
+
+func addFactorResultViewColumn(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
+	dataset, err := getDatasetTx(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	if dataset.GetAttributes()["dataset_role"] != "factor_result" || dataset.GetStatus() != "active" || !dataset.GetBindingLocked() {
+		return nil
+	}
+	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), viewID}, func() *pb.View { return &pb.View{} })
+	if err != nil {
+		return fmt.Errorf("factor result default View %s/%s must exist before adding columns: %w", item.GetSpaceId(), viewID, err)
+	}
+	if view.GetDatasetId() != item.GetDatasetId() || view.GetStatus() != "active" {
+		return fmt.Errorf("factor result default View %s/%s is not active for its Dataset", item.GetSpaceId(), viewID)
+	}
+	var sortOrder uint32
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(c_sort_order) + 1, 0) FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, item.GetSpaceId(), viewID).Scan(&sortOrder); err != nil {
+		return err
+	}
+	columnName := item.GetDatasetId() + "." + item.GetColumnName()
+	changed, err := upsertViewColumn(ctx, tx, &pb.ViewColumn{
+		SpaceId: item.GetSpaceId(), ViewId: viewID, ColumnName: columnName,
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: columnName,
+		ValueType: item.GetValueType(), SortOrder: sortOrder, Attributes: cloneMetadataStringMap(item.GetAttributes()),
+	})
+	if err != nil {
+		return err
+	}
+	if changed {
+		return bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID)
+	}
+	return nil
+}
+
+func factorResultDefaultViewID(datasetID string) (string, error) {
+	if !strings.HasPrefix(datasetID, "dataset_") || len(datasetID) == len("dataset_") {
+		return "", fmt.Errorf("factor_result Dataset ID %q must start with dataset_ and include a suffix", datasetID)
+	}
+	return "view_" + strings.TrimPrefix(datasetID, "dataset_"), nil
+}
+
+func cloneMetadataStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
 }
 
 func bumpViewsForDataset(ctx context.Context, db execQueryRower, spaceID, datasetID string) error {

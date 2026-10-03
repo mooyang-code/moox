@@ -17,6 +17,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 func duckRowKey(space, dataset, subject, freq, at, tag string) *pb.RowKey {
@@ -29,6 +30,96 @@ func duckRowKey(space, dataset, subject, freq, at, tag string) *pb.RowKey {
 }
 
 func stringPtr(value string) *string { return &value }
+
+func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close() }()
+	current := viewindex.ViewIndexSchema{
+		SpaceID: "space", ViewID: "factor-view", PrimaryDatasetID: "dataset_factor_btc_1m",
+		ViewVersion: 1, Engine: "duckdb", Columns: []*pb.ViewColumn{{
+			ColumnName: "dataset_factor_btc_1m.close", OriginId: "dataset_factor_btc_1m.close",
+			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		}},
+	}
+	current.SchemaHash = viewindex.HashViewIndexSchema(current)
+	if err := manager.Prepare(ctx, "factor-view-a", current); err != nil {
+		t.Fatal(err)
+	}
+	rowKey := duckRowKey("space", current.PrimaryDatasetID, "BTC-USDT", "1m", "2026-10-04T00:00:00Z", "")
+	if err := manager.Write(ctx, "factor-view-a", viewindex.ViewIndexWriteBatch{
+		ViewRevision: 1, ViewSchemaHash: current.SchemaHash, WriteMode: viewindex.LiveWrite,
+		RowWrites: []viewindex.RowWrite{{
+			Key: viewindex.RowKey{Key: rowKey},
+			Fields: []*pb.FieldValue{{FieldId: "dataset_factor_btc_1m.close", Value: &pb.TypedValue{
+				Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.25},
+			}}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	v2 := proto.Clone(&pb.ViewColumn{ColumnName: "dataset_factor_btc_1m.bias_20", OriginId: "dataset_factor_btc_1m.bias_20",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1}).(*pb.ViewColumn)
+	v2.SpaceId, v2.ViewId = current.SpaceID, current.ViewID
+	version2 := viewindex.ViewIndexSchema{
+		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
+		ViewVersion: 2, Engine: current.Engine, Columns: append(append([]*pb.ViewColumn(nil), current.Columns...), v2),
+	}
+	version2.SchemaHash = viewindex.HashViewIndexSchema(version2)
+	if err := manager.ExtendColumns(ctx, "factor-view-a", current, version2); err != nil {
+		t.Fatalf("first schema extension: %v", err)
+	}
+
+	// Simulate a process exit after the DuckDB transaction committed but before
+	// Metadata's active-schema CAS. On restart the physical schema is an
+	// intermediate append-only revision and must converge to the latest target.
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err = OpenIndexManager(IndexManagerOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close() }()
+	v3 := proto.Clone(&pb.ViewColumn{ColumnName: "dataset_factor_btc_1m.volume", OriginId: "dataset_factor_btc_1m.volume",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2}).(*pb.ViewColumn)
+	v3.SpaceId, v3.ViewId = current.SpaceID, current.ViewID
+	version3 := viewindex.ViewIndexSchema{
+		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
+		ViewVersion: 3, Engine: current.Engine,
+		Columns: append(append(append([]*pb.ViewColumn(nil), current.Columns...), v2), v3),
+	}
+	version3.SchemaHash = viewindex.HashViewIndexSchema(version3)
+	if err := manager.ExtendColumns(ctx, "factor-view-a", current, version3); err != nil {
+		t.Fatalf("restart recovery extension: %v", err)
+	}
+	if err := manager.ExtendColumns(ctx, "factor-view-a", current, version3); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+
+	stats, err := manager.StatMetadata(ctx, "factor-view-a")
+	if err != nil || !stats.Exists || stats.ViewVersion != 3 || stats.SchemaHash != version3.SchemaHash {
+		t.Fatalf("final physical schema = %#v err=%v, want revision 3", stats, err)
+	}
+	rows, _, err := manager.Query(ctx, "factor-view-a", viewindex.QuerySpec{
+		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: current.PrimaryDatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
+		Includes:  []string{"dataset_factor_btc_1m.bias_20", "dataset_factor_btc_1m.volume"},
+	})
+	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 2 {
+		t.Fatalf("query extended row = %v err=%v", rows, err)
+	}
+	for _, field := range rows[0].GetFields() {
+		if field.GetValue().GetNullValue() != pb.NullValue_NULL_VALUE_NULL {
+			t.Errorf("new field %q = %v, want NULL", field.GetFieldId(), field.GetValue())
+		}
+	}
+}
 
 func TestDuckDBContextDetachesCancellationAfterStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

@@ -54,6 +54,7 @@ type MetadataClient interface {
 	ClaimViewIndexBuild(context.Context, *pb.ClaimViewIndexBuildReq, ...client.Option) (*pb.ClaimViewIndexBuildRsp, error)
 	UpdateViewIndexBuild(context.Context, *pb.UpdateViewIndexBuildReq, ...client.Option) (*pb.UpdateViewIndexBuildRsp, error)
 	ActivateViewIndex(context.Context, *pb.ActivateViewIndexReq, ...client.Option) (*pb.ActivateViewIndexRsp, error)
+	CommitViewSchemaExtension(context.Context, *pb.CommitViewSchemaExtensionReq, ...client.Option) (*pb.CommitViewSchemaExtensionRsp, error)
 	FailViewIndexBuild(context.Context, *pb.FailViewIndexBuildReq, ...client.Option) (*pb.FailViewIndexBuildRsp, error)
 }
 
@@ -838,6 +839,11 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 			} else {
 				if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
 					return err
+				}
+				if extended, err := s.extendActiveFactorResultSchema(ctx, opts, auth, view, engine); err != nil {
+					return err
+				} else if extended {
+					return nil
 				}
 				_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
 				if !metadataOnly || stats.IndexedFrom != "" || stats.IndexedTo != "" || stats.EntryCount != 0 {
