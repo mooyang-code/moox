@@ -2,7 +2,6 @@
   {"file":"Bias.py","factor_type":"timeseries","factor_id":"Bias","input_columns":["close"],"outputs":["bias_20"],"params":{"window":20},"lookback_periods":20},
   {"file":"BiasQ.py","factor_type":"timeseries","factor_id":"BiasQ","input_columns":["close"],"outputs":["bias_q_20"],"params":{"window":20},"lookback_periods":39},
   {"file":"Cci.py","factor_type":"timeseries","factor_id":"Cci","input_columns":["high","low","close"],"outputs":["cci"],"params":{"window":20},"lookback_periods":39},
-  {"file":"CirculatingMcap.py","factor_type":"timeseries","factor_id":"CirculatingMcap","input_columns":["circulating_supply","close"],"outputs":["circulating_mcap"],"params":{},"lookback_periods":1},
   {"file":"MinMax.py","factor_type":"timeseries","factor_id":"MinMax","input_columns":["high","low","close"],"outputs":["minmax_20"],"params":{"window":20},"lookback_periods":20},
   {"file":"QuoteVolumeMean.py","factor_type":"timeseries","factor_id":"QuoteVolumeMean","input_columns":["quote_volume"],"outputs":["quote_volume_mean_20"],"params":{"window":20},"lookback_periods":20},
   {"file":"QuoteVolumeMeanQ.py","factor_type":"timeseries","factor_id":"QuoteVolumeMeanQ","input_columns":["quote_volume"],"outputs":["quote_volume_mean_q_20"],"params":{"window":20},"lookback_periods":39},

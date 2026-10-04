@@ -263,7 +263,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, consumerACL, "$JS.API.>")
 	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
 	assert.Contains(t, aclLine(factorACL, "publish:"), "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1")
-	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.factor.internal.catalog.snapshot", "moox.factor.internal.recalc.>", "moox.event.storage.collector.period.completed.v1.>"]}`, aclLine(factorACL, "subscribe:"))
+	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.collector.period.completed.v1.>"]}`, aclLine(factorACL, "subscribe:"))
 	assert.Equal(t, `responses: {max_messages: 1, expires: 10s}`, aclLine(factorACL, "responses:"))
 	for _, forbidden := range []string{"CONSUMER.CREATE", "CONSUMER.DELETE", "STREAM.NAMES", "$KV.", "moox.event.cloudnode.job.execution"} {
 		assert.NotContains(t, workerACL, forbidden)
@@ -278,7 +278,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		if role == "strategy-eventbus" {
 			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.data.ready.v1.>"]}`)
 		} else if role == "factor-eventbus" {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.factor.internal.catalog.snapshot", "moox.factor.internal.recalc.>", "moox.event.storage.collector.period.completed.v1.>"]}`)
+			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.collector.period.completed.v1.>"]}`)
 		} else {
 			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
 		}
@@ -339,7 +339,7 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 	assert.Contains(t, text, "moox.event.trade.target.weight_requested.v1.>")
 	assert.Contains(t, text, "moox.event.storage.view.data.ready.v1.>")
 	assert.Contains(t, text, "moox.event.storage.view.source_subject.ready.v1.>")
-	assert.Contains(t, text, "moox.factor.internal.catalog.snapshot")
+	assert.NotContains(t, text, "moox.factor.internal")
 	assert.Contains(t, text, "factor_collector_period_v1")
 	assert.Contains(t, text, "strategy-token")
 	assert.Contains(t, text, "factor-token")
