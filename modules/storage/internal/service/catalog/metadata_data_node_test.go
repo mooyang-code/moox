@@ -10,6 +10,7 @@ import (
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type dataNodeMetadataStore struct {
@@ -39,9 +40,9 @@ func (s *datasetOwnershipMetadataStore) UpsertDataset(_ context.Context, item *p
 
 func (s *datasetOwnershipMetadataStore) RebindDatasetDataNode(_ context.Context, _, _ string, nodeID string, _ uint64) (*pb.Dataset, error) {
 	s.rebindCall++
-	updated := *s.dataset
+	updated := proto.Clone(s.dataset).(*pb.Dataset)
 	updated.DataNodeId = nodeID
-	return &updated, nil
+	return updated, nil
 }
 
 func (s *dataNodeMetadataStore) RegisterDataNode(context.Context, string, string, string) (*pb.DataNode, error) {

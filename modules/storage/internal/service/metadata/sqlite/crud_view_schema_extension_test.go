@@ -8,6 +8,7 @@ import (
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	coreviewindex "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCommitViewSchemaExtensionCASAndRetry(t *testing.T) {
@@ -97,9 +98,9 @@ func TestCommitViewSchemaExtensionCASAndRetry(t *testing.T) {
 		t.Fatalf("retry response = %v", retried)
 	}
 
-	stale := *req
+	stale := proto.Clone(req).(*pb.CommitViewSchemaExtensionReq)
 	stale.ViewSchemaHash = "stale"
-	if _, err := store.CommitViewSchemaExtension(ctx, &stale); !errors.Is(err, metadatastore.ErrViewSchemaExtensionConflict) {
+	if _, err := store.CommitViewSchemaExtension(ctx, stale); !errors.Is(err, metadatastore.ErrViewSchemaExtensionConflict) {
 		t.Fatalf("stale CAS error = %v, want conflict", err)
 	}
 	latest, err := store.GetView(ctx, "space", "source-view")
