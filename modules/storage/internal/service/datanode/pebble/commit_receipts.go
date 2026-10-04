@@ -1,6 +1,7 @@
 package pebble
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -66,6 +67,13 @@ func (s *Store) loadReceiptLocked(commitID string) (*commitReceipt, []byte, erro
 	}, fingerprint, nil
 }
 
+// receiptDigest reduces a canonical write payload to the fixed-size value kept
+// beside the receipt, so retries can be compared without retaining whole batches.
+func receiptDigest(fingerprint []byte) []byte {
+	sum := sha256.Sum256(fingerprint)
+	return sum[:]
+}
+
 func persistReceipt(batch *cpebble.Batch, opts *cpebble.WriteOptions, receipt *commitReceipt, fingerprint []byte) error {
 	payload, err := json.Marshal(persistedReceipt{
 		CommitID: receipt.CommitID, SpaceID: receipt.SpaceID, DatasetID: receipt.DatasetID, NodeID: receipt.Position.NodeID, StoreID: receipt.Position.StoreID,
@@ -77,7 +85,7 @@ func persistReceipt(batch *cpebble.Batch, opts *cpebble.WriteOptions, receipt *c
 	if err := batch.Set([]byte(writeReceiptPrefix+receipt.CommitID), payload, opts); err != nil {
 		return err
 	}
-	return batch.Set([]byte(writeReceiptBodyPref+receipt.CommitID), fingerprint, opts)
+	return batch.Set([]byte(writeReceiptBodyPref+receipt.CommitID), receiptDigest(fingerprint), opts)
 }
 
 func validateCommitID(commitID string) error {

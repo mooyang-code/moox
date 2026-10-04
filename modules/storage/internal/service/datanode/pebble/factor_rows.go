@@ -74,7 +74,7 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 	if existing, body, err := s.loadReceiptLocked(commitID); err != nil {
 		return 0, err
 	} else if existing != nil {
-		if existing.WriteKind != WriteKindFactorResult || !bytes.Equal(body, fingerprint) {
+		if existing.WriteKind != WriteKindFactorResult || !bytes.Equal(body, receiptDigest(fingerprint)) {
 			return 0, CommitConflictError{CommitID: commitID}
 		}
 		return uint64(len(normalized)), nil

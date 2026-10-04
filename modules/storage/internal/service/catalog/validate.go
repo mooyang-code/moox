@@ -117,6 +117,34 @@ func validateColumnDisplayName(field string, spaceID string, attrs map[string]st
 	return validateChineseDisplayName(field, displayName)
 }
 
+const factorResultDatasetPrefix = "dataset_factor_"
+
+// normalizeDatasetRole canonicalises the role attribute in place so that every
+// later strict comparison (write guards, default View creation, column sync)
+// sees the same value, then enforces the role-specific contract.
+func normalizeDatasetRole(dataset *pb.Dataset) error {
+	if dataset == nil {
+		return nil
+	}
+	role := strings.ToLower(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]))
+	if dataset.GetAttributes() != nil {
+		if _, ok := dataset.Attributes["dataset_role"]; ok {
+			dataset.Attributes["dataset_role"] = role
+		}
+	}
+	switch role {
+	case "merged_factor":
+		return errors.New("dataset_role merged_factor is retired; use raw_collection or factor_result")
+	case "factor_result":
+		// View consumers route result datasets to the ordered factor durable by
+		// this prefix, so the naming is part of the role contract.
+		if !strings.HasPrefix(dataset.GetDatasetId(), factorResultDatasetPrefix) {
+			return fmt.Errorf("factor_result dataset_id must start with %s", factorResultDatasetPrefix)
+		}
+	}
+	return nil
+}
+
 func isFactorResultDataset(dataset *pb.Dataset) bool {
 	return dataset != nil && strings.EqualFold(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]), "factor_result")
 }

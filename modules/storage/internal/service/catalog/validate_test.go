@@ -60,3 +60,20 @@ func TestFactorViewColumnIdentity(t *testing.T) {
 	viewColumn.OriginId = "result.other__bias_20"
 	require.False(t, isFactorViewColumn(viewColumn))
 }
+
+func TestNormalizeDatasetRoleCanonicalisesAndEnforcesContract(t *testing.T) {
+	dataset := &pb.Dataset{DatasetId: "dataset_factor_bars_1m", Attributes: map[string]string{"dataset_role": " Factor_Result "}}
+	require.NoError(t, normalizeDatasetRole(dataset))
+	require.Equal(t, "factor_result", dataset.Attributes["dataset_role"])
+
+	misnamed := &pb.Dataset{DatasetId: "dataset_bars_1m", Attributes: map[string]string{"dataset_role": "factor_result"}}
+	require.ErrorContains(t, normalizeDatasetRole(misnamed), "must start with dataset_factor_")
+
+	retired := &pb.Dataset{DatasetId: "dataset_bars_1m", Attributes: map[string]string{"dataset_role": "merged_factor"}}
+	require.ErrorContains(t, normalizeDatasetRole(retired), "retired")
+
+	raw := &pb.Dataset{DatasetId: "dataset_bars_1m", Attributes: map[string]string{"dataset_role": "raw_collection"}}
+	require.NoError(t, normalizeDatasetRole(raw))
+	require.NoError(t, normalizeDatasetRole(&pb.Dataset{DatasetId: "dataset_plain"}))
+	require.NoError(t, normalizeDatasetRole(nil))
+}

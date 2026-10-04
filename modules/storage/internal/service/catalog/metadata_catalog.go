@@ -146,6 +146,9 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
+	if err := normalizeDatasetRole(item); err != nil {
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	created, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -166,6 +169,9 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := normalizeDatasetRole(item); err != nil {
+		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	current, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
 	if err != nil {
