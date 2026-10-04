@@ -2625,14 +2625,12 @@ PY
       # still gain any subjects introduced by this release (notably Strategy's
       # target-weight subject). Rebuild only the ACL file from the existing
       # tokens; TLS keys and role credentials are never rotated here.
-      if [[ "${MOOX_RESET_CONTROL_DATA:-0}" == "1" ]]; then
-        "${ROOT}/bin/moox-admin-cli" eventbus-credentials reconcile \
-          --output-dir "${eventbus_credentials_dir}" \
-          >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
-            echo "EventBus ACL reconciliation failed" >&2
-            exit 1
-          }
-      fi
+      "${ROOT}/bin/moox-admin-cli" eventbus-credentials reconcile \
+        --output-dir "${eventbus_credentials_dir}" \
+        >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
+          echo "EventBus ACL reconciliation failed" >&2
+          exit 1
+        }
     elif [[ "${eventbus_credentials_complete}" -eq 1 ]]; then
       echo "reuse EventBus identities and ensure missing roles in ${eventbus_credentials_dir}"
       "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure \
