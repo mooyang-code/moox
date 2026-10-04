@@ -5,78 +5,85 @@ import (
 	"testing"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type fakeMetadataClient struct {
-	subjects []*storagepb.DatasetSubject
-	symbols  []*storagepb.SubjectSymbol
+	dataset  *storagepb.Dataset
+	subjects []*storagepb.Subject
+	tag      *storagepb.Tag
+	tagErr   error
 }
 
-func (f *fakeMetadataClient) ListDatasetSubjects(_ context.Context, _ *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
-	return &storagepb.ListDatasetSubjectsRsp{
-		RetInfo:         &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
-		DatasetSubjects: f.subjects,
-		PageResult:      &storagepb.PageResult{HasMore: false},
-	}, nil
+func (f *fakeMetadataClient) GetDataset(_ context.Context, _ *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {
+	return &storagepb.GetDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Dataset: f.dataset}, nil
 }
 
-func (f *fakeMetadataClient) ListSubjectSymbols(_ context.Context, _ *storagepb.ListSubjectSymbolsReq, _ ...client.Option) (*storagepb.ListSubjectSymbolsRsp, error) {
-	return &storagepb.ListSubjectSymbolsRsp{
-		RetInfo:        &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
-		SubjectSymbols: f.symbols,
-		PageResult:     &storagepb.PageResult{HasMore: false},
-	}, nil
+func (f *fakeMetadataClient) GetTag(_ context.Context, _ *storagepb.GetTagReq, _ ...client.Option) (*storagepb.GetTagRsp, error) {
+	if f.tagErr != nil {
+		return nil, f.tagErr
+	}
+	return &storagepb.GetTagRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Tag: f.tag}, nil
 }
 
-func TestDatasetSource_ListSubjects_EmptyDatasetID_ShouldReturnError(t *testing.T) {
-	src := newDatasetSourceWithClient(&fakeMetadataClient{})
-	_, err := src.ListSubjects(context.Background(), "space-1", "", "ds-src")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "dataset_id is required")
+func (f *fakeMetadataClient) ResolveSubjects(_ context.Context, _ *storagepb.ResolveSubjectsReq, _ ...client.Option) (*storagepb.ResolveSubjectsRsp, error) {
+	return &storagepb.ResolveSubjectsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Subjects: f.subjects}, nil
 }
 
-func TestDatasetSource_ListSubjects_ValidBindings_ShouldMergeSymbols(t *testing.T) {
-	src := newDatasetSourceWithClient(&fakeMetadataClient{
-		subjects: []*storagepb.DatasetSubject{
-			{SubjectId: "BTC-USDT", Status: "active"},
-			{SubjectId: "ETH-USDT", Status: "inactive"},
-		},
-		symbols: []*storagepb.SubjectSymbol{
-			{SubjectId: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
-		},
-	})
-	subjects, err := src.ListSubjects(context.Background(), "space-1", "ds-1", "src-1")
+func TestDatasetSourceGetDatasetReturnsTagsAndValidationContract(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{dataset: &storagepb.Dataset{
+		DataSourceId: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"},
+		SubjectTags: []string{"binance_spot"}, Attributes: map[string]string{"market_type": "spot"},
+	}}}
+	info, err := src.GetDataset(context.Background(), "crypto", "kline")
 	require.NoError(t, err)
-	require.Len(t, subjects, 1)
-	assert.Equal(t, "BTCUSDT", subjects[0].ExternalSymbol)
+	require.Equal(t, "binance", info.DataSourceID)
+	require.Equal(t, []string{"binance_spot"}, info.SubjectTags)
+	require.Equal(t, "spot", info.Attributes["market_type"])
 }
 
-func TestMergeDatasetSubjects_AttributeSymbol_ShouldTakePrecedence(t *testing.T) {
-	subjects := mergeDatasetSubjects([]*storagepb.DatasetSubject{
-		{SubjectId: "BTC-USDT", Status: "active", Attributes: map[string]string{"external_symbol": "BTCUSDT_ATTR"}},
-	}, map[string]string{"BTC-USDT": "BTCUSDT_MAP"})
-	require.Len(t, subjects, 1)
-	assert.Equal(t, "BTCUSDT_ATTR", subjects[0].ExternalSymbol)
+func TestDatasetSourceResolveSubjectsUsesStorageUnion(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{subjects: []*storagepb.Subject{
+		{SpaceId: "crypto", SubjectId: "BTC-USDT", Name: "BTC/USDT", Status: "active"},
+		{SpaceId: "crypto", SubjectId: "ETH-USDT", Status: "active"},
+	}}}
+	items, err := src.ResolveSubjects(context.Background(), "crypto", []string{"binance_spot"})
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.Equal(t, "BTC-USDT", items[0].SubjectID)
 }
 
-func TestIsInactive_StatusValues_ShouldClassifyCorrectly(t *testing.T) {
-	assert.False(t, isInactive("active"))
-	assert.False(t, isInactive("enabled"))
-	assert.False(t, isInactive(""))
-	assert.True(t, isInactive("inactive"))
+func TestDatasetSourceResolveSubjectsDerivesFromTagsWithoutSymbolMapping(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{
+		dataset:  &storagepb.Dataset{SpaceId: "crypto", SubjectTags: []string{"binance_spot"}},
+		subjects: []*storagepb.Subject{{SpaceId: "crypto", SubjectId: "BTC-USDT", Name: "BTC/USDT", Status: "active"}},
+	}}
+	items, err := src.ResolveSubjects(context.Background(), "crypto", []string{"binance_spot"})
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, "BTC-USDT", items[0].SubjectID)
 }
 
-func TestEnsureStorageOK_ErrorCode_ShouldReturnError(t *testing.T) {
-	err := ensureStorageOK("list subjects", &storagepb.RetInfo{Code: 1, Msg: "boom"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "boom")
+func TestMetadataFailoverClientSupportsGetTag(t *testing.T) {
+	primary := &fakeMetadataClient{tagErr: context.DeadlineExceeded}
+	secondary := &fakeMetadataClient{tag: &storagepb.Tag{SpaceId: "crypto", TagId: "binance_spot", Source: "binance", MarketType: "spot"}}
+	src := &DatasetSource{metadata: &metadataFailoverClient{primary: primary, secondary: secondary}}
+	tag, err := src.GetTag(context.Background(), "crypto", "binance_spot")
+	require.NoError(t, err)
+	require.Equal(t, "binance_spot", tag.GetTagId())
+	require.Equal(t, "binance", tag.GetSource())
 }
 
-func TestNormalizeTRPCTarget_RawFormats_ShouldNormalize(t *testing.T) {
-	assert.Equal(t, "ip://127.0.0.1:20100", normalizeTRPCTarget("", "20100"))
-	assert.Equal(t, "ip://10.0.0.1:20100", normalizeTRPCTarget("10.0.0.1:20100", "20100"))
-	assert.Equal(t, "ip://custom", normalizeTRPCTarget("ip://custom", "20100"))
+func TestNormalizeTRPCTargetRawFormats(t *testing.T) {
+	require.Equal(t, "ip://127.0.0.1:20100", normalizeTRPCTarget("", "20100"))
+	require.Equal(t, "ip://10.0.0.1:20100", normalizeTRPCTarget("10.0.0.1:20100", "20100"))
+	require.Equal(t, "ip://custom", normalizeTRPCTarget("ip://custom", "20100"))
+}
+
+func TestDirectMetadataTargetDerivesPrivateMetadataListener(t *testing.T) {
+	require.Equal(t, "ip://146.56.196.204:20100", directMetadataTarget("ip://146.56.196.204:11003"))
+	require.Empty(t, directMetadataTarget("http://127.0.0.1:11002"))
+	t.Setenv("MOOX_COLLECTOR_STORAGE_METADATA_TARGET", "146.56.196.204:20100")
+	require.Equal(t, "ip://146.56.196.204:20100", directMetadataTarget("ip://127.0.0.1:11003"))
 }

@@ -7,13 +7,82 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 import "moox_common.proto";
 import "common.proto";
 import "rows.proto";
+import "dataset_markers.proto";
+import "data_node.proto";
 
-message PrimaryWriteFieldsReq {
+
+message PrimaryEnsureDatasetPeriodReq {
   common.AuthInfo auth_info = 1;
-  repeated RowFieldUpsert rows = 2;
+  DatasetPeriodExpectation expectation = 2;
 }
 
-message PrimaryWriteFieldsRsp {
+message PrimaryEnsureDatasetPeriodRsp {
+  common.RetInfo ret_info = 1;
+  string status = 2;
+  int64 deadline_at = 3;
+}
+
+message PrimaryGetDatasetPeriodStatusReq {
+  common.AuthInfo auth_info = 1;
+  DatasetPeriodExpectation expectation = 2;
+}
+
+message PrimaryGetDatasetPeriodStatusRsp {
+  common.RetInfo ret_info = 1;
+  string status = 2;
+  string series_hash = 3;
+  uint32 expected_count = 4;
+  int64 deadline_at = 5;
+}
+
+message PrimaryCommitTimeSeriesBatchReq {
+  common.AuthInfo auth_info = 1;
+  DatasetPeriodExpectation expectation = 2;
+  repeated TimeSeriesBatchRow items = 3;
+  string source_event_id = 4;
+  string write_source = 5;
+}
+
+message PrimaryCommitTimeSeriesBatchRsp {
+  common.RetInfo ret_info = 1;
+  repeated RowKey keys = 2;
+  string period_status = 3;
+  repeated uint32 accepted_series_indexes = 4;
+}
+
+message PrimaryRecordDatasetPeriodFailuresReq {
+  common.AuthInfo auth_info = 1;
+  DatasetPeriodExpectation expectation = 2;
+  repeated uint32 series_indexes = 3;
+}
+
+message PrimaryRecordDatasetPeriodFailuresRsp {
+  common.RetInfo ret_info = 1;
+  string period_status = 2;
+  repeated DatasetPeriodFailureResult results = 3;
+}
+
+message PrimaryWriteFactorRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string commit_id = 4;
+  repeated RowFieldUpsert rows = 5;
+}
+
+message PrimaryWriteFactorRowsRsp {
+  common.RetInfo ret_info = 1;
+  uint64 rows_written = 2;
+}
+
+message PrimaryUpsertFieldsReq {
+  common.AuthInfo auth_info = 1;
+  repeated RowFieldUpsert rows = 2;
+  string source_event_id = 3;
+  string write_source = 4;
+}
+
+message PrimaryUpsertFieldsRsp {
   common.RetInfo ret_info = 1;
   repeated RowKey keys = 2;
 }
@@ -28,11 +97,111 @@ message PrimaryReadFieldsReq {
 message PrimaryReadFieldsRsp {
   common.RetInfo ret_info = 1;
   repeated RowFieldValues rows = 2;
+  repeated RowKey existing_keys = 3;
 }
 
-// PrimaryStore is the metadata-validating user boundary. It never exposes
-// DataNode merge/scan terminology and routes one Dataset to its owner node.
+message PrimaryDeleteDatasetRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+}
+
+message PrimaryDeleteDatasetRowsRsp {
+  common.RetInfo ret_info = 1;
+  uint64 deleted_ranges = 2;
+}
+
+message PrimaryRestoreDatasetRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+}
+
+message PrimaryRestoreDatasetRowsRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message ReportCollectorPeriodCompletedReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  CollectorPeriodCompletedMarker marker = 3;
+}
+
+message ReportCollectorPeriodCompletedRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message ReportFactorPeriodComputedReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  FactorPeriodComputedMarker marker = 3;
+}
+
+message ReportFactorPeriodComputedRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message AppendDatasetSyncPointReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  DatasetSyncPointMarker sync_point = 3;
+}
+
+message AppendDatasetSyncPointRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message GetFactorPeriodComputedReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string trigger_event_id = 4;
+  int64 period_time = 5;
+}
+
+message GetFactorPeriodComputedRsp {
+  common.RetInfo ret_info = 1;
+  bool found = 2;
+  string event_id = 3;
+  FactorPeriodComputedMarker marker = 4;
+}
+
+message WaitViewSyncPointReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string request_id = 4;
+  repeated string dataset_ids = 5;
+  uint32 wait_timeout_ms = 6;
+}
+
+message WaitViewSyncPointRsp {
+  common.RetInfo ret_info = 1;
+  bool ready = 2;
+  repeated string pending_dataset_ids = 3;
+}
+
+// PrimaryStore is the metadata-validating user boundary and routes one Dataset
+// to its owner node.
 service PrimaryStore {
-  rpc WriteFields(PrimaryWriteFieldsReq) returns (PrimaryWriteFieldsRsp);
+  // UpsertFields applies partial updates; omitted fields and attributes are retained.
+  rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
+  rpc EnsureDatasetPeriod(PrimaryEnsureDatasetPeriodReq) returns (PrimaryEnsureDatasetPeriodRsp);
+  rpc GetDatasetPeriodStatus(PrimaryGetDatasetPeriodStatusReq) returns (PrimaryGetDatasetPeriodStatusRsp);
+  rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
+  rpc RecordDatasetPeriodFailures(PrimaryRecordDatasetPeriodFailuresReq) returns (PrimaryRecordDatasetPeriodFailuresRsp);
+  rpc WriteFactorRows(PrimaryWriteFactorRowsReq) returns (PrimaryWriteFactorRowsRsp);
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
+  rpc DeleteDatasetRows(PrimaryDeleteDatasetRowsReq) returns (PrimaryDeleteDatasetRowsRsp);
+  rpc RestoreDatasetRows(PrimaryRestoreDatasetRowsReq) returns (PrimaryRestoreDatasetRowsRsp);
+  rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
+  rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
+  rpc ReportCollectorPeriodCompleted(ReportCollectorPeriodCompletedReq) returns (ReportCollectorPeriodCompletedRsp);
+  rpc ReportFactorPeriodComputed(ReportFactorPeriodComputedReq) returns (ReportFactorPeriodComputedRsp);
+  rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);
+  rpc GetFactorPeriodComputed(GetFactorPeriodComputedReq) returns (GetFactorPeriodComputedRsp);
+  rpc WaitViewSyncPoint(WaitViewSyncPointReq) returns (WaitViewSyncPointRsp);
 }

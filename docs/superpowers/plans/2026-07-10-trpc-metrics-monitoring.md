@@ -50,7 +50,7 @@ Tests in this plan may start a test-only NATS server, but production code must c
 | D12 | Ingestion is at least once. Monitor writes idempotent Storage rows and commits its dedupe/latest transaction before ACKing JetStream delivery. |
 | D13 | Storage metadata is a deployment-time control-plane concern. Root `moox-cli metadata apply` registers and verifies the metrics schema before Monitor ingestion starts; `moox-monitor` never creates or mutates Storage metadata at runtime. |
 | D14 | A metric `series_id` is the Storage `subject_id`. Dynamic series do not create `Subject` or `DatasetSubject` records; wildcard PrimaryStore routes partition them by `subject_id`. |
-| D15 | Storage Space IDs beginning with `moox_` are reserved for MooX-managed internal data. Metrics use `moox_system`; the prefix is a classification convention, not an authorization boundary. |
+| D15 | Storage Space IDs beginning with `moox_` are reserved for MooX-managed internal data. Metrics use `mooxsys`; the prefix is a classification convention, not an authorization boundary. |
 
 ## End-To-End Data Flow
 
@@ -128,8 +128,8 @@ The first exceeded limit fails that snapshot and increments a local reporter err
 The deployment registers one Storage dataset before Monitor starts:
 
 ```text
-space_id:   moox_system
-dataset_id: moox_service_metrics
+space_id:   mooxsys
+dataset_id: dataset_mooxsys_service_metrics
 data_kind:  TIME_SERIES
 ```
 
@@ -155,7 +155,7 @@ Reserve the lower-snake prefix `moox_` for internal Storage Spaces. It begins wi
 
 ```yaml
 spaces:
-  - space_id: moox_system
+  - space_id: mooxsys
     name: MooX System
     description: MooX internal platform data
     owner: moox
@@ -166,7 +166,7 @@ spaces:
       managed_by: moox-cli
 
 data_sources:
-  - space_id: moox_system
+  - space_id: mooxsys
     data_source_id: moox_monitor
     name: MooX Monitor
     kind: internal
@@ -174,8 +174,8 @@ data_sources:
     status: active
 
 datasets:
-  - space_id: moox_system
-    dataset_id: moox_service_metrics
+  - space_id: mooxsys
+    dataset_id: dataset_mooxsys_service_metrics
     data_source_id: moox_monitor
     name: MooX Service Metrics
     description: Historical tRPC application and business metrics
@@ -184,18 +184,18 @@ datasets:
     status: active
 
 fields:
-  - {space_id: moox_system, field_id: monitor_metric_value, name: Metric value, value_type: double, status: active}
-  - {space_id: moox_system, field_id: monitor_metric_labels, name: Canonical labels, value_type: json, status: active}
-  - {space_id: moox_system, field_id: monitor_metric_producer_node_id, name: Producer node ID, value_type: string, status: active}
-  - {space_id: moox_system, field_id: monitor_metric_producer_version, name: Producer version, value_type: string, status: active}
-  - {space_id: moox_system, field_id: monitor_metric_message_id, name: Message ID, value_type: string, status: active}
+  - {space_id: mooxsys, field_id: monitor_metric_value, name: Metric value, value_type: double, status: active}
+  - {space_id: mooxsys, field_id: monitor_metric_labels, name: Canonical labels, value_type: json, status: active}
+  - {space_id: mooxsys, field_id: monitor_metric_producer_node_id, name: Producer node ID, value_type: string, status: active}
+  - {space_id: mooxsys, field_id: monitor_metric_producer_version, name: Producer version, value_type: string, status: active}
+  - {space_id: mooxsys, field_id: monitor_metric_message_id, name: Message ID, value_type: string, status: active}
 
 dataset_columns:
-  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: value, origin_type: field, origin_id: monitor_metric_value, value_type: double, required: true, status: active}
-  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: labels_json, origin_type: field, origin_id: monitor_metric_labels, value_type: json, required: true, status: active}
-  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: producer_node_id, origin_type: field, origin_id: monitor_metric_producer_node_id, value_type: string, status: active}
-  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: producer_version, origin_type: field, origin_id: monitor_metric_producer_version, value_type: string, status: active}
-  - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: message_id, origin_type: field, origin_id: monitor_metric_message_id, value_type: string, required: true, status: active}
+  - {space_id: mooxsys, dataset_id: dataset_mooxsys_service_metrics, column_name: value, origin_type: field, origin_id: monitor_metric_value, value_type: double, required: true, status: active}
+  - {space_id: mooxsys, dataset_id: dataset_mooxsys_service_metrics, column_name: labels_json, origin_type: field, origin_id: monitor_metric_labels, value_type: json, required: true, status: active}
+  - {space_id: mooxsys, dataset_id: dataset_mooxsys_service_metrics, column_name: producer_node_id, origin_type: field, origin_id: monitor_metric_producer_node_id, value_type: string, status: active}
+  - {space_id: mooxsys, dataset_id: dataset_mooxsys_service_metrics, column_name: producer_version, origin_type: field, origin_id: monitor_metric_producer_version, value_type: string, status: active}
+  - {space_id: mooxsys, dataset_id: dataset_mooxsys_service_metrics, column_name: message_id, origin_type: field, origin_id: monitor_metric_message_id, value_type: string, required: true, status: active}
 ```
 
 The schema deliberately contains no `subjects` or `dataset_subjects`. Storage accepts any non-empty `subject_id`, and `series_id` is already the stable identity of one metric/label set.
@@ -204,9 +204,9 @@ Routes remain deployment topology rather than logical schema. The bundled single
 
 ```yaml
 primary_store_routes:
-  - space_id: moox_system
+  - space_id: mooxsys
     route_id: route-monitor-metrics-local
-    dataset_id: moox_service_metrics
+    dataset_id: dataset_mooxsys_service_metrics
     subject_pattern: "*"
     hash_rule: subject_id
     node_id: local
@@ -495,8 +495,8 @@ metrics:
   storage:
     access_target: ip://127.0.0.1:20102
     metadata_target: ip://127.0.0.1:20100
-    space_id: moox_system
-    dataset_id: moox_service_metrics
+    space_id: mooxsys
+    dataset_id: dataset_mooxsys_service_metrics
     frequency: 30s
     metadata_validation_interval: 30s
     write_batch_size: 1000
@@ -931,9 +931,9 @@ git commit -m "feat(web): add structured metric alert rules"
 - Create: `docs/运维/MooX指标监控.md`
 - Modify: `modules/monitor/README.md`
 - Modify: root `README.md`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-eventbus.sh`
 
 - [ ] **Step 1: Verify complete local flow**
 
@@ -969,7 +969,7 @@ For an external or clustered Storage, always apply the logical seed and require 
 go test -count=1 ./modules/cli/...
 go test -count=1 ./modules/monitor/... ./packages/metricspb
 go test -count=1 ./modules/admin/... ./modules/collector/... ./modules/cloudnode/... ./modules/factor/... ./modules/trade/... ./modules/storage/...
-./scripts/build.sh all
+./scripts/build/build.sh all
 cd web && node scripts/check-metric-monitor.mjs && pnpm build:prod
 ```
 
@@ -993,7 +993,7 @@ git commit -m "docs(monitor): add metrics reporting operations guide"
 - `/metrics` remains reachable for debugging, while Prometheus Pushgateway mode remains disabled.
 - No central component performs HTTP scraping and no manual monitoring target API exists.
 - `MetricSnapshot` has no version suffix; wire compatibility is carried by `schema_version` and the versioned Topic.
-- `moox_` is reserved for MooX-managed Storage Spaces; the monitoring history lives in `moox_system` and is marked with internal ownership attributes.
+- `moox_` is reserved for MooX-managed Storage Spaces; the monitoring history lives in `mooxsys` and is marked with internal ownership attributes.
 - Storage logical metadata and an environment-specific wildcard route are registered through root `moox-cli` before metric ingestion; Monitor never creates or updates Storage metadata.
 - Dynamic metric series use `series_id` as `subject_id` and require no per-series Subject or DatasetSubject registration.
 - Monitor rejects unknown producers and bounded/cardinality-invalid snapshots without affecting business services.

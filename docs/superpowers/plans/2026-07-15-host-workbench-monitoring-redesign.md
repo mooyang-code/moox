@@ -222,7 +222,7 @@ cd web-host
 statik -src=../web/dist -dest=./internal
 gofmt -w internal/statik/statik.go
 go test -count=1 ./...
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ../scripts/build.sh web-host
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ../scripts/build/build.sh web-host
 ```
 
 Expected: tests pass and `bin/moox-web-host` is a Linux amd64 executable.
@@ -246,7 +246,7 @@ Expected: `web-host` restarts with a new PID.
 
 ```bash
 go test -count=1 ./modules/hostagent/...
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh hostagent
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh hostagent
 file bin/moox-host-agent
 ```
 

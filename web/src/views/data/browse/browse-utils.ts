@@ -1,13 +1,13 @@
 import type {
-  ColumnValue,
+  FieldValue,
   Dataset,
   DatasetColumn,
   DatasetColumnOriginType,
-  Factor,
   Field,
   RecordRow,
   DatasetSubject,
   Subject,
+  TimeSeriesSelector,
   TimeSeriesRow,
   TypedValue
 } from "@/api/storage/types";
@@ -22,6 +22,7 @@ export interface BrowseTableRow {
   id: string;
   key: string;
   version: string;
+  seriesTag?: string;
   values: Record<string, string>;
 }
 
@@ -35,6 +36,7 @@ const systemColumnLabels: Record<string, string> = {
   record_id: "记录ID",
   freq: "频率",
   data_time: "时间",
+  series_tag: "序列标签",
   version: "版本"
 };
 
@@ -68,22 +70,32 @@ export function buildSubjectDataIds(datasetSubjects: DatasetSubject[], subjects:
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+export function buildSubjectDataIdsFromRows(rows: TimeSeriesRow[]): BrowseDataId[] {
+  const subjectIDs = new Set<string>();
+  for (const row of rows) {
+    const subjectID = row.key?.subject_id?.trim();
+    if (subjectID) subjectIDs.add(subjectID);
+  }
+  return [...subjectIDs]
+    .sort((a, b) => a.localeCompare(b))
+    .map(id => ({ id, name: id, description: "" }));
+}
+
 export function displayDataIdText(item: BrowseDataId) {
   return item.id;
 }
 
-export function buildColumnLabels(columns: DatasetColumn[], fields: Field[], factors: Factor[]) {
+export function buildColumnLabels(columns: DatasetColumn[], fields: Field[]) {
   const fieldByID = new Map(fields.map(item => [item.field_id, item]));
-  const factorByID = new Map(factors.map(item => [item.factor_id, item]));
   const labels: Record<string, string> = {};
   for (const column of columns) {
     if (!column.column_name) continue;
-    labels[column.column_name] = resolveColumnLabel(column, fieldByID, factorByID);
+    labels[column.column_name] = resolveColumnLabel(column, fieldByID);
   }
   return labels;
 }
 
-function resolveColumnLabel(column: DatasetColumn, fieldByID: Map<string, Field>, factorByID: Map<string, Factor>) {
+function resolveColumnLabel(column: DatasetColumn, fieldByID: Map<string, Field>) {
   const columnDisplayName = displayName(column.attributes);
   if (columnDisplayName) return columnDisplayName;
   if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FIELD", 1)) {
@@ -93,10 +105,7 @@ function resolveColumnLabel(column: DatasetColumn, fieldByID: Map<string, Field>
     );
   }
   if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FACTOR", 2)) {
-    return readableColumnLabel(
-      column.column_name,
-      factorByID.get(column.origin_id)?.name || factorByID.get(column.column_name)?.name
-    );
+    return readableColumnLabel(column.column_name);
   }
   return systemColumnLabels[column.origin_id] || readableColumnLabel(column.column_name);
 }
@@ -129,9 +138,9 @@ function isOriginType(value: DatasetColumnOriginType, name: string, alias: numbe
   return value === name || value === alias;
 }
 
-export function columnValueText(column?: ColumnValue) {
-  if (!column?.value) return "-";
-  return typedValueText(column.value);
+export function fieldValueText(field?: FieldValue) {
+  if (!field?.value) return "-";
+  return typedValueText(field.value);
 }
 
 export function typedValueText(value?: TypedValue): string {
@@ -155,23 +164,46 @@ export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, prefer
     seen.add(name);
     out.push(name);
   }
+  // A declared View/Dataset projection is the table schema. Do not append
+  // leftover field_ids from the live index (for example retired factor outputs).
+  if (out.length > 0) return out;
   for (const row of rows) {
-    for (const column of row.columns || []) {
-      if (!column.column_name || seen.has(column.column_name)) continue;
-      seen.add(column.column_name);
-      out.push(column.column_name);
+    for (const field of row.fields || []) {
+      if (!field.field_id || seen.has(field.field_id)) continue;
+      seen.add(field.field_id);
+      out.push(field.field_id);
     }
   }
   return out;
 }
 
 export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[]): BrowseTableRow[] {
-  return rows.map((row, index) => ({
-    id: `ts-${index}-${row.key?.subject_id || ""}-${row.key?.data_time || ""}`,
+  return rows.map(row => ({
+    id: `ts-${row.key?.subject_id || ""}-${row.key?.freq || ""}-${row.key?.series_tag || ""}-${row.key?.data_time || ""}`,
     key: row.key?.subject_id || "-",
     version: row.key?.data_time || "-",
-    values: columnsToValueMap(row.columns || [])
+    seriesTag: row.key?.series_tag || "",
+    values: fieldsToValueMap(row.fields || [])
   }));
+}
+
+export function buildTimeSeriesBrowseSelector(
+  spaceId: string,
+  datasetId: string,
+  subjectId: string,
+  freq: string,
+  seriesTag: string,
+  exactSeriesTag: boolean
+): TimeSeriesSelector {
+  const normalizedSeriesTag =
+    spaceId === "stockcn" && datasetId === "dataset_stockcn_equity_kline" && !seriesTag.trim() ? "default" : seriesTag.trim();
+  return {
+    space_id: spaceId,
+    dataset_id: datasetId,
+    subject_id: subjectId,
+    freq,
+    ...(exactSeriesTag ? { series_tag: normalizedSeriesTag } : {})
+  };
 }
 
 export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
@@ -179,7 +211,7 @@ export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
     id: `record-${index}-${row.key?.record_id || ""}-${row.key?.version || ""}`,
     key: row.key?.record_id || "-",
     version: row.key?.version || "-",
-    values: columnsToValueMap(row.columns || [])
+    values: fieldsToValueMap(row.fields || [])
   }));
 }
 
@@ -196,13 +228,14 @@ export function sortBrowseTableRows(rows: BrowseTableRow[], fieldName: string, d
 function browseSortValue(row: BrowseTableRow, fieldName: string) {
   if (fieldName === "subject_id" || fieldName === "record_id") return row.key;
   if (fieldName === "data_time" || fieldName === "version") return row.version;
+  if (fieldName === "series_tag") return row.seriesTag || "";
   return row.values[fieldName] || "";
 }
 
-function columnsToValueMap(columns: ColumnValue[]) {
+function fieldsToValueMap(fields: FieldValue[]) {
   const out: Record<string, string> = {};
-  for (const column of columns) {
-    out[column.column_name] = columnValueText(column);
+  for (const field of fields) {
+    out[field.field_id] = fieldValueText(field);
   }
   return out;
 }

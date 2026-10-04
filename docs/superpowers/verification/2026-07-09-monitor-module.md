@@ -18,14 +18,14 @@ go test ./modules/admin/internal/gateway ./modules/admin/internal/service/sysdep
 Result: PASS.
 
 ```bash
-bash -n scripts/build.sh scripts/release.sh scripts/deploy-moox.sh
-./scripts/build.sh monitor
+bash -n scripts/build/build.sh scripts/release/release.sh scripts/deploy/deploy-moox.sh
+./scripts/build/build.sh monitor
 ```
 
 Result: PASS. Built `moox-monitor` and `moox-monitor-cli`.
 
 ```bash
-./scripts/deploy-moox.sh \
+./scripts/deploy/deploy-moox.sh \
   --target localhost \
   --dir /tmp/moox-deploy-noweb \
   --stage /tmp/moox-stage-noweb \
@@ -75,7 +75,7 @@ Deploy dir: `/home/ubuntu/moox/prod`
 Final successful deploy for admin/monitor/web-host:
 
 ```bash
-./scripts/deploy-moox.sh \
+./scripts/deploy/deploy-moox.sh \
   --target ubuntu@106.53.107.122 \
   --dir /home/ubuntu/moox/prod \
   --goos linux \
@@ -93,10 +93,10 @@ Storage was then rebuilt on the Linux target because macOS cross-compiling the C
 ```bash
 ssh ubuntu@106.53.107.122 '$HOME/.local/go1.24.7/bin/go version'
 rsync -az --delete ... /tmp/moox-build/
-ssh ubuntu@106.53.107.122 'cd /tmp/moox-build && PATH=$HOME/.local/go1.24.7/bin:$PATH GOFLAGS=-buildvcs=false ./scripts/build.sh storage'
+ssh ubuntu@106.53.107.122 'cd /tmp/moox-build && PATH=$HOME/.local/go1.24.7/bin:$PATH GOFLAGS=-buildvcs=false ./scripts/build/build.sh storage'
 rsync -avP ubuntu@106.53.107.122:/tmp/moox-build/bin/moox-storage \
   ubuntu@106.53.107.122:/tmp/moox-build/bin/moox-storage-cli ./bin/
-./scripts/deploy-moox.sh \
+./scripts/deploy/deploy-moox.sh \
   --target ubuntu@106.53.107.122 \
   --dir /home/ubuntu/moox/prod \
   --skip-build \

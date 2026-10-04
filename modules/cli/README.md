@@ -7,77 +7,368 @@ MooX 命令行工具，用于本地运维与数据初始化：用户注册、Sto
 ```bash
 moox-cli metadata import ...        # 导入 Storage 元数据 seed
 moox-cli metadata apply ...         # 创建并校验 Storage 元数据契约（不覆盖已有不兼容资源）
+moox-cli setup init ...             # 一次初始化 Admin 空间、Storage 元数据与 Dataset
 moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
+moox-cli storage repair-view ...    # 清理 View durable consumer 积压并触发 A/B 重建
+moox-cli storage reset-view-consumers ... # 删除全部 View durable/消息/索引并从 Primary 回溯重建
 moox-cli data rows export ...       # 导出行数据
-moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
+moox-cli collector function ...     # 采集 SCF 代码包、发布/部署及 Timer 只读盘点
+moox-cli collector period-inventory ... # 一致只读盘点 Collector SQLite 周期与运行态
+moox-cli collector task purge ...   # 预览或重置 Collector 任务运行数据（默认只读）
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
 moox-cli setup ...                  # 初始化控制面、发布服务包、部署 Storage、导入元数据
 ```
 
+`collector period-inventory` 仅用于受信 Control 主机上的单 Space 只读盘点。它识别 `pre_remediation` 与 `current` 完整 Schema profile，不做迁移；目标 Space 无数据时 fail closed；`--max-items` 对周期键、active batch、pending retry 三类数组分别限额。发布门禁还须独立核对 DB 路径、Space 身份和已知任务数。`work_type=resample` 使用 Storage canonical 固定周期且不要求 Collector period snapshot；Storage deadline/confirmed 状态及 Timer 请求、Claim、Completion、batch item、WriteTarget 与 snapshot 的绑定按运行契约校验。报告不能单独证明生产者已停止或 drain 完成。
+
+`collector function timer-inventory` 是只读的 SCF Timer fleet 盘点。必须指定 Control URL、Space、云账号、namespace 和 region；命令先按 `biz_type=market_fetcher` 列出目标目录，再逐个省略 `biz_type` 并精确核对 NodeID 以触发 provider readback，每个服务端请求最多刷新一个 Timer。只有每个 Timer 都有本次命令开始后的 readback（且观察时不超过 5 分钟）、desired/actual enabled 与 cron 一致、实际 trigger type/qualifier/message 分别匹配 `timer`、`$LATEST`、`market_fetch_timer_v1`，provider 状态为 `Available` 时才报告 `complete=true`。服务端缓存中的旧 readback 会令命令 fail closed；输出不包含原始 provider 错误详情。
+
+```bash
+moox-cli collector function timer-inventory \
+  --control-url http://127.0.0.1:11002 \
+  --file ./moox.toml \
+  --space-id crypto \
+  --cloud-account-id <account-id> \
+  --namespace <namespace> \
+  --region <region>
+```
+
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
+
+### Doctor 自助修复
+
+当 Storage View 因 JetStream durable consumer 的 `FilterSubjects` 与当前配置不一致而启动失败，或页面出现
+`tcp client transport connection pool` 时，先检查实际消费范围，再只重建发生漂移的静态 View consumer：
+
+```bash
+moox-cli doctor repair-view-consumers \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
+  --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
+  --dry-run
+
+moox-cli doctor repair-view-consumers \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
+  --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
+  --yes
+```
+
+该命令只检查并删除过滤范围漂移的 `storage_view_kline`、`storage_view_factor`、
+`storage_view_metrics`，随后重启 `storage-view`；不会删除 Primary 数据、View 索引，也不会触碰由库存对账器管理的
+`storage_view_misc` 动态 consumer。删除 JetStream consumer 需要权限为 `0600` 的 internal-admin 凭据，
+也可通过 `MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE` 指定。`doctor diagnose` 仍是只读诊断，
+`doctor repair-view-consumers` 才执行修复。
+
+### View 自助修复
+
+项目尚未上线或需要彻底丢弃 View 历史时，可先预览再执行一次性分区清理：
+
+```bash
+moox-cli storage reset-view-consumers \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
+  --lookback 24h --dry-run
+moox-cli storage reset-view-consumers \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
+  --lookback 24h --yes
+```
+
+命令停止整个 Storage 生命周期（Primary、DataNode、View），删除旧的
+`storage_view_period_v1`/`storage_view`、带版本后缀的 View durable 与当前 durable，并清理
+所有配置 Dataset 的精确 Storage subjects。该命令是破坏性“新一代”操作：Record/Bleve
+View 也会删除 A/B 索引和元数据，历史记录不保留；重启后只接收清理完成后的新事件。时序 View
+时序 View 会按 Storage 配置中的 `rebuild_lookback_periods` 从 Primary 回溯（默认保留最近 `5000` 根；
+根目录 `moox.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一配置）。任一序列超过 `6000` 根时触发安全 A/B 重建；容量扫描每 View 每小时执行一次，并按进程和 View 随机错开首轮，失败后等下一小时扫描再试。通用 View 维护仍每分钟执行。历史不足时使用当前已有数据激活并由实时事件补齐；`--lookback` 仅覆盖没有
+frequency 的旧 View 兼容兜底。默认不删 Primary 事实数据；只有明确传
+`--reset-all-storage-data` 才会停止全 Storage 并删除 Primary/DataNode Pebble 数据，此模式
+	只等待服务健康，不要求不存在的历史回溯水位。若 purge 或索引清理中途失败，命令会保留 Storage
+停止状态并返回非零，避免在已部分删除历史后自动启动一个不一致的 View；修复原因后重新执行命令。
+
+Collector 的 `[collector_retention]` 配置控制维护 worker 和终态运行记录保留时间。默认每分钟维护一次、每轮最多删除 50,000 行；被新结果替代的 scheduled 执行明细保留 24 小时、scheduled Run 汇总保留 30 天、terminal retry 和 period snapshot 保留 7/30 天。被启用任务引用的最新目标、活动重试和 Timer 工作始终受保护；K 线 WriteTarget 只有在 Storage 明确报告对应 period 为 `complete` 或 `degraded` 后才可回收，缺少 Storage 状态不会被当成终态。
+
+当 Storage View 因 durable consumer 积压、重建失败或旧索引占用空间而停止追赶时，
+可在 Storage 主机上执行：
+
+```bash
+moox-cli storage repair-view \
+  --storage-conf /data/moox/storage/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
+  --space-id crypto \
+  --view-id view_binance_kline_1m \
+  --consumer storage_view_kline \
+  --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
+  --eventbus-url tls://<EventBus公网IP>:4222 \
+  --yes
+```
+
+独立 Storage 主机上的业务配置是 `storage/config/storage.yaml`，不要传 View 的 `trpc_go.yaml`。控制机 `internal-admin.yaml` 的 NATS URL 是回环地址，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。三个 crypto kline View 共用 `storage_view_kline`。
+
+默认流程会停止并重启 `storage-view`、删除指定 durable consumer、
+备份 Metadata SQLite，并递增 View desired revision，让服务走正常的 A/B 构建和切换；
+active 索引不会被删除。NATS 删除 consumer 需要 EventBus internal-admin 凭据，使用
+`--credential-file` 或 `MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE` 指定，命令不会输出凭据。
+先执行 `--dry-run` 可只检查 View 和将要执行的动作。
+
+全量丢弃 View 历史时优先使用上面的 `reset-view-consumers`。它直接从保留的 Primary
+事实数据回溯构建，不依赖 JetStream 旧消息，也不会误删 Primary。
 
 ## 控制面初始化
 
-在仓库根目录根据 `custom.toml.example` 创建权限为 `0600` 的
-`custom.toml`，然后依次执行：
+在仓库根目录根据 `moox.toml.example` 创建权限为 `0600` 的
+`moox.toml`，然后依次执行：
 
 ```bash
-moox-cli setup validate --file ./custom.toml
-moox-cli setup deploy-control --file ./custom.toml
-moox-cli setup apply --file ./custom.toml
-moox-cli setup status --file ./custom.toml
+moox-cli setup validate --file ./moox.toml
+moox-cli setup deploy-control --file ./moox.toml
+moox-cli setup apply --file ./moox.toml
+moox-cli setup status --file ./moox.toml
+moox-cli setup e2e-eventbus --file ./moox.toml
 ```
+
+`setup deploy-control` 会在部署控制面前幂等打开控制面和 EventBus 的腾讯云入站端口。
+完整初始化 `setup init` 还会在写入 Admin/Storage 前幂等打开 Storage Gateway 和 Trade
+Console 所在主机的端口；也可以单独执行：
+
+```bash
+moox-cli setup firewall --file ./moox.toml
+```
+
+该命令只提交 `ACCEPT` 规则，不输出云凭据；Lighthouse 使用实例防火墙，Storage
+部署到 CVM 时自动回退到 VPC 安全组规则。编译主机不运行 MooX 服务，因此不会开放端口。
+
+`[tencent_cloud]` 中的 `secret_id`/`secret_key` 是腾讯云 API 凭据，也用于
+访问 CLS；不要在仓库或部署包中重复保存 SecretKey。CLS Logset/Topic 是初始化后
+由云端生成的资源，不写入 `moox.toml`。启用 CLS 的发布会运行
+`moox-cli ops tencent cls prepare`，并在部署根目录生成只读的
+`config/resources.env`，供各服务统一读取：
+
+```dotenv
+MOOX_CLS_ACCOUNT_ID='<cloud account id>'
+MOOX_CLS_REGION='ap-guangzhou'
+MOOX_CLS_HOST='ap-guangzhou.cls.tencentyun.com'
+MOOX_CLS_LOGSET_ID='<resolved logset id>'
+MOOX_CLS_TOPIC_ID='<resolved topic id>'
+```
+
+该文件不包含 SecretId/SecretKey，服务启动脚本会自动加载；凭据仍只通过受保护的
+`secrets/cls.env` 或云账户凭据链提供。需要诊断资源时使用
+`moox-cli ops tencent cls resolve --region ap-guangzhou`，不要把返回的 ID 回写到
+`moox.toml`。
+
+`setup deploy-control` also installs the managed Caddy edge, selects the
+certificate trust model, performs HTTPS acceptance, and installs the
+healthcheck that keeps Caddy available for automatic renewal. Public IP/DNS
+targets use Let's Encrypt certificates trusted by normal browsers; private or
+loopback targets use Caddy internal CA. The command's sanitized JSON includes
+`certificate.mode`, `certificate.issuer`, and `certificate.automatic_renewal`.
+No certificate private key is printed or copied into the release package.
+
+For internal CA deployments, the CLI now checks the operator machine's browser
+trust store after control initialization and before publishing the `admin` or
+`web-host` packages. If the Caddy root is missing from the trust store, it runs
+the platform installer and asks for administrator approval when required. The
+same repair can be run explicitly:
+
+```bash
+moox-cli setup trust-browser --file ./moox.toml
+```
+
+This prevents the management page from loading while its WebSocket terminal
+still fails with `ERR_CERT_AUTHORITY_INVALID`. Public ACME deployments skip
+the local trust-store operation.
+
+`[eventbus]` 只填写 Collector SCF 能访问的公网 IPv4/DNS、端口和
+`tls_enabled = true`。EventBus 用户名、token、私有 CA 和
+`cloudnode-worker.yaml` 由部署流程生成，不写入 `moox.toml`。控制面部署单元包含
+Admin、Gateway、Web、EventBus、CloudNode 和 Collector。
+
+`[paths]` 将部署根、控制面根和独立 Storage 根统一放到 `/data/moox` 云磁盘下；省略时
+默认分别为 `/data/moox`、`/data/moox/prod` 和 `/data/moox/storage`。
+
+`[notification].channel_type` 选择 `wecom` 或 `feishu`，`[notification].webhook_url` 填写对应机器人 HTTPS webhook；留空时 Monitor
+仍采集和计算状态，但不发送站外告警。标准服务、健康 URL 和实时 Dataset 清单不写入
+`moox.toml`：标准服务由 SysDeploy 维护，启用中的 TimeSeries Dataset + Frequency
+由运行时自动对账。需要 CPU、内存和磁盘监控的每台机器仍需部署 HostAgent。
+
+`deploy-control` 默认保留控制面数据。仅在允许删除 Admin、EventBus 等全部控制面
+数据并重新初始化时使用 `--reset-data`；凭据目录和部署密钥仍会保留。
+`e2e-eventbus` 从本机经公网 TLS 连接 EventBus，验证 CloudNode worker 只能绑定、
+拉取和确认既有作业消费者，不能创建消费者或发布作业事件。
+
+当 `[dns_resolver]` 启用且 `trade_node` 指向 `other_hosts` 中的交易节点时，
+`deploy-control` 会在 Admin 的控制节点记录该节点的
+`trpc.moox.trade.TradeConsoleService`（`11200`）地址。这样浏览器访问交易页面时
+不会使用单机默认的 `127.0.0.1:11200`。交易节点随后用 `setup deploy-service`
+发布 Trade；两次操作都可重复执行，重新部署控制面也会重新写入该路由。
+远端 Trade 的控制台监听会由 `setup deploy-service` 绑定到 `0.0.0.0:11200`，以兼容
+云主机公网地址与内网网卡不一致的情况；生产环境应在云防火墙中仅允许
+`control_host` 访问 TCP `11200`，不要对公网开放。
+
+`setup validate` performs the full Tencent Cloud STS identity check. The
+`deploy-control` and `deploy-storage` commands only repeat immutable-config
+and SSH host validation; copying and starting MooX binaries does not require a
+Tencent Cloud API call. Tencent credentials are required when applying the
+cloud account or running other cloud-resource operations.
 
 服务发布以 ZIP 包为单位，包中包含二进制、配置和生命周期脚本。示例包目录必须至少包含
 `bin/`、`config/`、`start.sh`、`stop.sh` 和 `healthcheck.sh`，使用仓库脚本打包：
 
 ```bash
-./scripts/package-service.sh \
+./scripts/build/package-service.sh \
   --service-dir ./release/service-package \
   --output ./release/moox-admin-linux-amd64.zip
 moox-cli setup deploy-service \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --host control \
   --service admin \
   --package ./release/moox-admin-linux-amd64.zip
 ```
 
+发布成功后，CLI 会以幂等方式把服务写入 Admin 的 `t_service_deployments`。
+Monitor 会从该目录同步系统服务检查，因此服务总览无需再手工创建服务记录。
+
 包内路径必须是相对路径，不能包含 `data/`、`logs/`、`run/`、`secrets/` 或 `certs/`。
 凭据不得打入 ZIP 包；远端已有的凭据和运行数据由 CLI 保留。默认远端目录为
-`~/moox/prod`，可通过 `--deploy-dir` 覆盖。
+`/data/moox/prod`，可通过 `--deploy-dir` 覆盖。
 
 命令不会输出或拼接 SSH 密码；密码只在 CLI 进程内读取和使用。
 
 首次连接未知 SSH 主机时，先通过独立渠道核验命令报告的 SHA256 指纹，
 再执行 `setup trust-host --host <name> --fingerprint <SHA256:...>`。初始化命令只在
-进程内读取凭据；部署包、JSON 输出和命令参数均不携带这些凭据。`custom.toml`
+进程内读取凭据；部署包、JSON 输出和命令参数均不携带这些凭据。`moox.toml`
 是用户维护的只读输入，CLI 不修改或删除该文件。
 
-控制面初始化完成后，再单独选择 Storage 主机和业务元数据。Admin、Gateway、
-Web 固定部署在 `control_host`；Storage 的四个初始组件作为一个单元部署到明确
+控制面初始化完成后，再选择 Storage 主机并导入默认业务元数据。Admin、Gateway、Web、
+EventBus、CloudNode 和 Collector 固定部署在 `control_host`；Storage 的四个初始组件作为一个单元部署到明确
 选择的 `control_host` 或 `other_hosts` 主机：
 
 ```bash
 # 只输出主机名、地址、端口、用户名和角色，不输出密码
-moox-cli setup hosts --file ./custom.toml
+moox-cli setup hosts --file ./moox.toml
 
-# --host 必须显式指定 custom.toml 中的主机名
-moox-cli setup deploy-storage --file ./custom.toml --host compute
+# 发现 Storage 地域并生成 SCF 同地域私网、跨地域公网路由计划（只读）
+moox-cli setup scf-network-plan --file ./moox.toml
+moox-cli setup private-network --file ./moox.toml --dry-run
+# private-network 会输出主机拓扑和同一份路由计划；默认不创建 CCN、不修改主机。
+# 操作说明：skills/moox/references/private-network.md
 
-# 展示默认 seed 中可选的业务空间
-moox-cli metadata spaces --file ./examples/metadata-quant-initial.seed.yaml
+# 发布时先完整占满 Storage 同地域配置的节点数，再发布其他地域；同地域绑定 VPC/子网
+moox-cli collector function publish submit --file ./moox.toml --space-id crypto --same-region-first
 
-# 用户确认空间后，通过 Storage 主机的 SSH 隧道导入完整依赖闭包
-moox-cli setup metadata-import \
-  --file ./custom.toml \
-  --storage-host compute \
-  --seed ./examples/metadata-quant-initial.seed.yaml \
-  --spaces stock_cn,crypto
+# StockCN 激活必须使用 publish 输出的每个启用地域精确 package_id
+moox-cli collector function activate-stockcn \
+  --file ./moox.toml --version <release-version> \
+  --region-package-id ap-guangzhou=<package-id-from-publish> \
+  --region-package-id ap-shanghai=<package-id-from-publish>
+
+# --host 必须显式指定 moox.toml 中的主机名
+moox-cli setup deploy-storage --file ./moox.toml --host compute
+
+# 同步 Admin 业务空间和 Storage 元数据，并激活通过检查的 Dataset
+moox-cli setup init \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
+  --storage-host compute
+
+# 仅导入/更新因子，不重新校验或写入 Storage 元数据
+moox-cli setup factors --file ./moox.toml
 ```
 
+Crypto 与 StockCN 发布会先在 reservation 专属的临时 Invoke 函数上验证候选包，之后才更新生产 Invoke/Timer fleet；激活 StockCN 时必须逐地域提供发布结果中的精确 package ID，版本字符串相同但包 ID 不同也会拒绝。
+
+如果 `moox.toml` 启用了 `[factors]`，同一个 `setup init` 还会从
+`factors.source_dir` 读取 Python 因子，先创建对应的 FactorSet，再导入定义并按配置启用。
+`[[factors.sets]]` 用 `space_id`、`source_dataset_id`、`freq` 和 subject scope 描述因子集；
+`[[factors.items]]` 通过相同的 `source_dataset_id` 与 `freq` 关联到因子集。
+仓库的 `moox.toml.example` 展示了 `dataset_binance_kline_1m` 上的示例。
+重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，
+命令会停止而不会静默覆盖已有因子。
+
 `deploy-storage` 同机部署 `storage-primary` 和统一的 `storage-view`，并更新控制面的 Storage 服务
-位置。业务空间选择不写入 `custom.toml`；用户可以导入全部、部分或暂不导入。
-自然语言理解由 MooX Skill 负责，CLI 始终接收明确的主机名和稳定 Space ID。
+位置。主机 SSH 账号、密码、端口和运营商标记统一维护在 `moox.toml` 的
+`[hosts."<address>"]` 中，各角色段只通过 `host` 引用。在 macOS 上发布 Linux Storage 时，CLI 自动通过 `compile_host` 构建 CGO
+二进制后再打包。`setup init` 固定从配置目录读取 `metadata.yaml`，把
+`stockcn`、`crypto` 写入 Admin，把它们和内部 `mooxsys` 元数据写入
+Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。
+
+如果 Storage 已经初始化过且当前 seed 与线上元数据不同，`setup init` 会按设计停止；此时使用
+`setup factors` 可以只补齐因子集和因子定义，不会触碰现有 Storage 元数据。
+
+`deploy-storage` 成功启动 Storage 后会自动安装并启用每 10 秒检查一次的
+`systemd` watchdog；如需只补装或更新 watchdog，可执行：
+
+```bash
+moox-cli setup install-storage-watchdog --file ./moox.toml --host compute
+```
+
+### Storage 全量重建
+
+需要同时清理 Storage Primary、DataNode、View A/B 索引、View durable consumers 和
+Storage 元数据时，使用专用的一键编排命令。省略 `--yes` 只执行远端 dry-run；确认汇总中的
+目标主机、View 数量和消费者后，再加 `--yes` 执行删除、重启、metadata seed 导入、Dataset
+激活和 Storage 验证：
+
+```bash
+moox-cli setup rebuild-storage \
+  --file ./moox.toml \
+  --host storage \
+  --config-dir ./config/setup
+
+moox-cli setup rebuild-storage \
+  --file ./moox.toml \
+  --host storage \
+  --config-dir ./config/setup \
+  --yes
+```
+
+命令只会在 `--yes` 下进入破坏性阶段；执行前先停写入 Storage 的 Collector、Factor、Strategy
+和 Trade，远端 reset CLI 先完成 EventBus/消费者预检，再停止 Storage 并清理 `/data/moox/storage/data`、
+View 索引和元数据数据库。初始化失败时仍会尝试恢复之前运行的写入服务，命令返回的 JSON 会包含
+`quiesced`、`reset`、`initialization` 和 `verification` 四个阶段的结果。
+
+`metadata spaces` 和 `setup metadata-import` 保留给只导入部分业务空间的高级操作；
+标准新系统初始化不需要逐个选择 YAML 或 Space。
+
+### Storage Schema v6 验证
+
+当前 scalar `series_tag` 使用 Schema v6。只有在用户明确确认可破坏性重建的环境后才允许
+使用 `--reset-storage-data`：
+
+```bash
+moox-cli setup deploy-storage \
+  --file ./moox.toml \
+  --host compute \
+  --reset-storage-data
+```
+
+该选项默认关闭，并会清除远端 `/data/moox/storage/data` 后重新初始化 Storage；远端
+`secrets/` 保留。它不是生产迁移或日常重部署选项，也不会修改 `moox.toml`。
+
+部署完成后可以使用三条边界明确的验证命令：
+
+```bash
+moox-cli setup verify-storage --file ./moox.toml --host compute
+moox-cli setup e2e-storage --file ./moox.toml --host compute --namespace codex-storage
+moox-cli setup browser-e2e-storage --file ./moox.toml --host compute --repo-root .
+# 可选：额外核对默认 stockcn/crypto 业务 Space
+moox-cli setup browser-e2e-storage --file ./moox.toml --host compute --repo-root . --default-spaces
+```
+
+`verify-storage` 通过 CLI 管理的 SSH 隧道检查组件就绪、Schema v12、二进制哈希、
+签名 DataNode 身份以及 Dataset 汇总，并只输出脱敏的状态、ID、数量和版本信息。
+`e2e-storage` 使用调用方提供的短命名空间创建禁用 Dataset，执行激活自检和 revision
+激活，再通过支持的接口清理临时 Space、DataSource 和 Dataset；即使断言失败也会报告
+清理结果。命名空间必须是安全的短标识符。
+
+`browser-e2e-storage` 只启动远端 Storage 管理台 Playwright 用例，覆盖桌面和 390px
+移动视口的 DataNode 列表、详情、Info 提示，以及隔离 Dataset 在 DataNode 上的绑定摘要。
+传入 `--default-spaces` 时额外核对 `stockcn`、`crypto` 两个业务 Space 的 Fields；该浏览器流程只读远端
+业务元数据，Dataset 激活/锁定和 rebind 生命周期由 `e2e-storage` 的服务 E2E 覆盖。
+登录材料由 setup CLI 通过子进程 stdin 传给 global setup，只在验证进程内存中使用；不会
+出现在 argv、日志、临时文件、截图、trace、video 或 Playwright `storageState` 中。
+三个命令都要求显式指定 Storage 主机，`moox.toml` 只能由 setup CLI 读取且始终保持不变。
 
 ## 构建
 
@@ -86,7 +377,7 @@ moox-cli setup metadata-import \
 make build
 
 # 仓库根目录
-./scripts/build.sh cli
+./scripts/build/build.sh cli
 # 产物：bin/moox-cli
 ```
 
@@ -108,10 +399,10 @@ go run ./cmd/moox-cli --help
 
 ```yaml
 moox:
-  auth_target: "127.0.0.1:11100"   # admin Auth HTTP 端口
+  auth_target: "127.0.0.1:11100" # admin Auth HTTP 端口
 
 storage:
-  target: "127.0.0.1:20102"        # Storage Access tRPC；HTTP 元数据一般为 :20200
+  target: "127.0.0.1:20102" # Storage Access tRPC；HTTP 元数据一般为 :20200
 ```
 
 经网关访问时使用 `:11000`；直连服务时使用各进程 HTTP/tRPC 端口（见各模块 README）。
@@ -122,22 +413,25 @@ storage:
 
 ```bash
 moox-cli metadata import \
-  --file ../../examples/metadata-quant-initial.seed.yaml \
+  --file ../../config/setup/metadata.yaml \
   --metadata-url http://127.0.0.1:20200 \
   --if-not-exists \
   --spaces crypto
 
-moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml --dry-run
+moox-cli metadata import --file ../../config/setup/metadata.yaml --dry-run
 
 moox-cli metadata apply \
-  --file ../../examples/metadata-monitor-metrics.seed.yaml \
-  --metadata-url http://127.0.0.1:20200
-moox-cli metadata apply \
-  --file ../../examples/metadata-monitor-metrics-local-route.seed.yaml \
+  --file ../../config/setup/metadata.yaml \
   --metadata-url http://127.0.0.1:20200
 ```
 
+DataNode 的注册和 `service_target` 由 `setup deploy-storage` 的部署流程完成；元数据
+seed 只声明 Dataset 的直接绑定，不再单独维护节点或路由 seed。
+
 ### 历史 CSV 导入
+
+> `--series-tag` 使用当前 scalar tag 契约；空值精确写入默认序列，Storage 不解析
+> `venue:binance` 等字符串。
 
 ```bash
 moox-cli storage import \
@@ -146,10 +440,11 @@ moox-cli storage import \
   --access-url http://127.0.0.1:20201 \
   --metadata-url http://127.0.0.1:20200 \
   --space crypto \
-  --view ar_usdt_close_view \
-  --dataset binance_spot_kline_1h \
+  --view view_crypto_spot_kline_1h \
+  --dataset dataset_spot_kline_1h \
   --subject ARB-USDT \
-  --data-source binance \
+  --data-source crypto \
+  --series-tag venue:binance \
   --freq 1h \
   --time-column candle_begin_time
 ```

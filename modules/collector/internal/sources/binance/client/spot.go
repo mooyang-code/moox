@@ -3,12 +3,11 @@ package binance
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
-	"time"
+	"strings"
 
-	"github.com/avast/retry-go"
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -23,11 +22,40 @@ func NewSpotAPI(client *Client) *SpotAPI {
 	return &SpotAPI{client: client}
 }
 
+// GetRecentTrades 获取现货最近成交。
+func (api *SpotAPI) GetRecentTrades(ctx context.Context, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
+	return getRecentTrades(ctx, api.client, api.client.SpotDomain(), SpotTradesEndpoint, "SpotAPI", true, req)
+}
+
+// GetRecentTradesWithIPs uses the Collector DNS snapshot when available and
+// falls back to the hostname resolver when every snapshot address fails.
+func (api *SpotAPI) GetRecentTradesWithIPs(ctx context.Context, req *exchange.TradeRequest, ips []string) ([]*exchange.Trade, error) {
+	return getRecentTradesWithIPs(ctx, api.client, api.client.SpotDomain(), ips, SpotTradesEndpoint, "SpotAPI", true, req)
+}
+
 // GetKline 获取现货K线数据
 // API: GET https://api.binance.com/api/v3/klines
 func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	return api.GetKlineWithIPs(ctx, req, nil)
+}
+
+// GetKlineWithIPs uses the collector's DNS snapshot when one is available.
+func (api *SpotAPI) GetKlineWithIPs(ctx context.Context, req *exchange.KlineRequest, ips []string) ([]*exchange.Kline, error) {
+	return api.GetKlineWithDomainIPs(ctx, req, api.client.SpotDomain(), ips)
+}
+
+// GetKlineWithDomainIPs requests one explicitly selected official Spot
+// endpoint. The collector uses this narrow method to try the configured
+// endpoint order while keeping each endpoint's DNS snapshot separate.
+func (api *SpotAPI) GetKlineWithDomainIPs(ctx context.Context, req *exchange.KlineRequest, domain string, ips []string) ([]*exchange.Kline, error) {
+	if api == nil || api.client == nil || req == nil {
+		return nil, fmt.Errorf("现货 K 线请求无效")
+	}
 	params := url.Values{}
-	domain := api.client.SpotDomain()
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		domain = api.client.SpotDomain()
+	}
 
 	// 转换交易对格式
 	symbol := FormatSymbol(req.Symbol)
@@ -46,41 +74,13 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 		params.Set("endTime", strconv.FormatInt(req.EndTime.UnixMilli(), 10))
 	}
 
-	// 发送请求（带重试，失败时切换IP）
+	// GetDirectWithIPs falls back to hostname DNS after the supplied addresses.
 	var rawKlines []CandleStick
-	var triedIPs []string // 记录已尝试失败的IP列表
 
-	err := retry.Do(
+	err := retryBinance(ctx,
 		func() error {
-			// 获取下一个可用的IP（排除已失败的IP）
-			currentIP := httpclient.GetNextAvailableIP(domain, triedIPs)
-
-			// DNS proxy 记录可能尚未同步，允许降级为标准域名访问。
-			if currentIP == "" {
-				log.WarnContextf(ctx, "[SpotAPI] 无可用DNS优选IP，降级为域名直连, symbol=%s, interval=%s, 已尝试IP: %v",
-					symbol, req.Interval, triedIPs)
-			}
-
-			// 使用指定IP发送请求
-			err := api.client.GetWithIP(ctx, domain, SpotKlineEndpoint, params, &rawKlines, currentIP)
-			if err != nil {
-				if currentIP != "" {
-					// 请求失败，记录这个IP
-					triedIPs = append(triedIPs, currentIP)
-					log.WarnContextf(ctx, "[SpotAPI] IP %s 请求失败，加入排除列表", currentIP)
-				}
-				return err
-			}
-			return nil
+			return api.client.GetDirectWithIPs(ctx, domain, ips, SpotKlineEndpoint, params, &rawKlines)
 		},
-		retry.Attempts(3),
-		retry.Delay(1*time.Second),
-		retry.LastErrorOnly(true),
-		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "[SpotAPI] 获取K线重试 #%d, symbol=%s, interval=%s, err=%v",
-				n+1, symbol, req.Interval, err)
-		}),
-		retry.Context(ctx),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("获取现货K线失败: %w", err)
@@ -101,49 +101,55 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 // GetExchangeInfo 获取现货交易所信息（交易规则和交易对）
 // API: GET https://api.binance.com/api/v3/exchangeInfo
 func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo, error) {
-	var result ExchangeInfoResponse
-	var triedIPs []string
-	domain := api.client.SpotDomain()
+	return api.getExchangeInfo(ctx, nil)
+}
 
-	err := retry.Do(
+func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithIPs(ctx, query, nil)
+}
+
+func (api *SpotAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.GetExchangeInfoWithDomainIPs(ctx, api.client.SpotDomain(), ips)
+}
+
+// GetExchangeInfoWithDomainIPs requests Spot exchange metadata from the
+// explicitly selected official endpoint. The caller owns endpoint fallback so
+// each configured domain can use its own DNS snapshot.
+func (api *SpotAPI) GetExchangeInfoWithDomainIPs(ctx context.Context, domain string, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithDomainIPs(ctx, domain, nil, ips)
+}
+
+func (api *SpotAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithDomainIPs(ctx, api.client.SpotDomain(), query, ips)
+}
+
+func (api *SpotAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain string, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
+	var symbols []*exchange.SymbolInfo
+	var total int
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		domain = api.client.SpotDomain()
+	}
+
+	err := retryBinance(ctx,
 		func() error {
-			currentIP := httpclient.GetNextAvailableIP(domain, triedIPs)
-			if currentIP == "" {
-				log.WarnContextf(ctx, "[SpotAPI] 无可用DNS优选IP获取ExchangeInfo，降级为域名直连, 已尝试IP: %v", triedIPs)
-			}
-
-			err := api.client.GetWithIP(ctx, domain, SpotExchangeInfoEndpoint, nil, &result, currentIP)
-			if err != nil {
-				if currentIP != "" {
-					triedIPs = append(triedIPs, currentIP)
-					log.WarnContextf(ctx, "[SpotAPI] IP %s 获取ExchangeInfo失败，加入排除列表", currentIP)
-				}
-				return err
-			}
-			return nil
+			return api.client.GetDirectStreamWithIPs(ctx, domain, ips, SpotExchangeInfoEndpoint, query, func(reader io.Reader) error {
+				var decodeErr error
+				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
+					if raw.Status != "TRADING" {
+						return false
+					}
+					return true
+				})
+				return decodeErr
+			})
 		},
-		retry.Attempts(3),
-		retry.Delay(1*time.Second),
-		retry.LastErrorOnly(true),
-		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "[SpotAPI] 获取ExchangeInfo重试 #%d, err=%v", n+1, err)
-		}),
-		retry.Context(ctx),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("获取现货交易所信息失败: %w", err)
 	}
 
-	// 转换为通用格式
-	symbols := make([]*exchange.SymbolInfo, 0, len(result.Symbols))
-	for _, raw := range result.Symbols {
-		// 只包含状态为 TRADING 的交易对
-		if raw.Status == "TRADING" {
-			symbols = append(symbols, raw.ToSymbolInfo())
-		}
-	}
-
 	log.InfoContextf(ctx, "[SpotAPI] 获取ExchangeInfo成功，总计%d个交易对，活跃%d个",
-		len(result.Symbols), len(symbols))
+		total, len(symbols))
 	return symbols, nil
 }

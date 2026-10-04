@@ -2,6 +2,8 @@ package jetstream
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,13 +12,14 @@ import (
 )
 
 type CredentialFile struct {
-	Version              int    `yaml:"version"`
-	Username             string `yaml:"username"`
-	Password             string `yaml:"password"`
-	Token                string `yaml:"token"`
-	EventBusToken        string `yaml:"eventbus_token"`
-	MonitorEventBusToken string `yaml:"monitor_eventbus_token"`
-	CAFile               string `yaml:"ca_file"`
+	URLs                 []string `yaml:"urls"`
+	Version              int      `yaml:"version"`
+	Username             string   `yaml:"username"`
+	Password             string   `yaml:"password"`
+	Token                string   `yaml:"token"`
+	EventBusToken        string   `yaml:"eventbus_token"`
+	MonitorEventBusToken string   `yaml:"monitor_eventbus_token"`
+	CAFile               string   `yaml:"ca_file"`
 }
 
 // ExpandCredentialPath resolves environment variables and a leading ~/ so
@@ -71,6 +74,67 @@ func (c *Config) ApplyCredentialFile(path string) error {
 	if caFile != "" && !filepath.IsAbs(caFile) {
 		caFile = filepath.Join(filepath.Dir(path), caFile)
 	}
-	c.Username, c.Password, c.TLSCAFile = file.Username, file.Password, caFile
+	c.Username, c.Password = file.Username, file.Password
+	// Keep a deployment-wide CA supplied by the environment when a legacy or
+	// externally managed role file omits ca_file. A credential file with an
+	// explicit CA remains authoritative and is resolved relative to itself.
+	if caFile != "" {
+		c.TLSCAFile = caFile
+		c.TLSCAPEMBase64 = ""
+	}
+	// The deployment endpoint is supplied by the module config or the
+	// deployment-wide environment. Credential exports on the control host may
+	// deliberately contain its loopback URL, which must not override a remote
+	// service endpoint. Example YAML loopback URLs must not hide a non-local
+	// role file, which is how intranet engine clients reach the public EventBus.
+	if len(file.URLs) > 0 && (len(c.URLs) == 0 || (allEventBusURLsLoopback(c.URLs) && anyEventBusURLRoutable(file.URLs))) {
+		c.URLs = append([]string(nil), file.URLs...)
+	}
 	return nil
+}
+
+func eventBusURLHost(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(value); err == nil && parsed.Host != "" {
+		return parsed.Hostname()
+	}
+	value = strings.TrimPrefix(strings.TrimPrefix(value, "tls://"), "nats://")
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		return value
+	}
+	return host
+}
+
+func eventBusURLIsLoopback(raw string) bool {
+	switch strings.ToLower(eventBusURLHost(raw)) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	default:
+		return false
+	}
+}
+
+func allEventBusURLsLoopback(urls []string) bool {
+	if len(urls) == 0 {
+		return true
+	}
+	for _, item := range urls {
+		if strings.TrimSpace(item) == "" || !eventBusURLIsLoopback(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func anyEventBusURLRoutable(urls []string) bool {
+	for _, item := range urls {
+		if strings.TrimSpace(item) != "" && !eventBusURLIsLoopback(item) {
+			return true
+		}
+	}
+	return false
 }

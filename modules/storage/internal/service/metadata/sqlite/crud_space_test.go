@@ -1,0 +1,94 @@
+package sqlite
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+)
+
+func TestCreateSpaceDoesNotOverwriteExistingSpace(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	wantTime := time.Date(2026, time.September, 7, 1, 2, 3, 456000000, time.UTC)
+	store.now = func() time.Time { return wantTime }
+	created, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Original", Owner: "owner-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.GetCreatedAt() != wantTime.Format(time.RFC3339Nano) || created.GetUpdatedAt() != wantTime.Format(time.RFC3339Nano) {
+		t.Fatalf("CreateSpace timestamps = %q/%q", created.GetCreatedAt(), created.GetUpdatedAt())
+	}
+	if _, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Replacement", Owner: "owner-b"}); err == nil {
+		t.Fatal("duplicate CreateSpace unexpectedly succeeded")
+	}
+	space, err := store.GetSpace(ctx, "space")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if space.GetName() != "Original" || space.GetOwner() != "owner-a" {
+		t.Fatalf("existing Space was overwritten: %+v", space)
+	}
+	if space.GetCreatedAt() != wantTime.Format(time.RFC3339Nano) || space.GetUpdatedAt() != wantTime.Format(time.RFC3339Nano) {
+		t.Fatalf("persisted timestamps = %q/%q", space.GetCreatedAt(), space.GetUpdatedAt())
+	}
+}
+
+func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	_, err := store.db.ExecContext(ctx, `
+		INSERT INTO t_spaces(c_space_id,c_name) VALUES ('target','Target'),('keep','Keep');
+		INSERT INTO t_data_nodes(c_node_id,c_name,c_service_target) VALUES ('node','Node','ip://127.0.0.1:1');
+		INSERT INTO t_storage_devices(c_device_id,c_name,c_engine) VALUES ('device','Device','duckdb');
+		INSERT INTO t_data_sources(c_space_id,c_data_source_id,c_name,c_kind) VALUES ('target','source','Source','internal');
+		INSERT INTO t_subjects(c_space_id,c_subject_id,c_subject_type,c_name) VALUES ('target','subject','fund','Subject');
+		INSERT INTO t_tags(c_space_id,c_tag_id,c_tag_name,c_mode,c_source_id,c_market_type) VALUES ('target','tag','Tag','manual','source','equity');
+		INSERT INTO t_subject_tags(c_space_id,c_tag_id,c_subject_id) VALUES ('target','tag','subject');
+		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name) VALUES ('target','root','Root');
+		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name,c_parent_group_id) VALUES ('target','child','Child','root');
+		INSERT INTO t_fields(c_space_id,c_field_id,c_group_id,c_name,c_value_type) VALUES ('target','value','child','Value','double');
+		INSERT INTO t_datasets(c_space_id,c_dataset_id,c_data_source_id,c_data_node_id,c_name,c_data_kind,c_keep_duration)
+			VALUES ('target','dataset','source','node','Dataset','time_series','24h');
+		UPDATE t_datasets SET c_subject_tags_json = '["tag"]' WHERE c_space_id = 'target' AND c_dataset_id = 'dataset';
+		INSERT INTO t_dataset_columns(c_space_id,c_dataset_id,c_column_name,c_origin_type,c_origin_id,c_value_type)
+			VALUES ('target','dataset','value','field','value','double');
+		INSERT INTO t_views(c_space_id,c_view_id,c_name,c_dataset_id) VALUES ('target','view','View','dataset');
+		INSERT INTO t_view_columns(c_space_id,c_view_id,c_column_name,c_origin_type,c_origin_id,c_value_type)
+			VALUES ('target','view','value','dataset_column','dataset.value','double');
+		INSERT INTO t_view_index_builds(
+			c_space_id,c_view_id,c_build_id,c_index_id,c_engine,c_target_view_version,c_state,
+			c_owner_id,c_new_slot,c_status,c_started_at,c_updated_at
+		) VALUES ('target','view','build','index','duckdb',1,1,'owner','slot-b','building','now','now');
+		INSERT INTO t_archive_files(c_space_id,c_archive_file_id,c_dataset_id,c_device_id,c_partition_key,c_file_uri)
+			VALUES ('target','archive','dataset','device','2026-07-28','file:///archive.parquet');
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteSpace(ctx, "target"); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{
+		"t_spaces", "t_data_sources", "t_subjects", "t_tags", "t_subject_tags",
+		"t_field_groups", "t_fields", "t_datasets",
+		"t_dataset_columns", "t_views", "t_view_columns", "t_view_index_builds",
+		"t_archive_files",
+	} {
+		var count int
+		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE c_space_id = 'target'").Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s retained %d target rows", table, count)
+		}
+	}
+	var keep int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_spaces WHERE c_space_id = 'keep'`).Scan(&keep); err != nil {
+		t.Fatal(err)
+	}
+	if keep != 1 {
+		t.Fatalf("unrelated space count = %d", keep)
+	}
+}

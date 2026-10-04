@@ -10,17 +10,6 @@ export interface StorageAuthInfo {
   request_id: string;
 }
 
-export function getAppInfo() {
-  return { ...APP_AUTH_INFO };
-}
-
-export function appAuthHeaders() {
-  return {
-    app_id: APP_AUTH_INFO.app_id,
-    app_key: APP_AUTH_INFO.app_key
-  };
-}
-
 export function getStorageAuthInfo(): StorageAuthInfo {
   return {
     ...APP_AUTH_INFO,

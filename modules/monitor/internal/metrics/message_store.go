@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	messagepb "github.com/mooyang-code/moox/packages/messagepb"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -17,6 +18,18 @@ import (
 type MetricMessageStore struct {
 	db              *gorm.DB
 	DedupeRetention time.Duration
+}
+
+const (
+	// K-line freshness reads are scoped to configured Views and need only cover
+	// the active subject set. Keep a hard cap so a malformed configuration cannot
+	// turn the timer into an unbounded database read.
+	defaultKlineLatestLimit = 20000
+	maxKlineLatestLimit     = 100000
+)
+
+var viewDatasetMetricNames = map[string]struct{}{
+	ViewDatasetOutputLastDataTimeMetric: {},
 }
 
 func NewMetricMessageStore(db *gorm.DB) *MetricMessageStore {
@@ -33,11 +46,11 @@ func (r *MetricMessageStore) IsDuplicate(ctx context.Context, messageID string) 
 
 // CommitIngest atomically records dedupe/catalog/latest state. Storage history
 // is deliberately written before this method and is independently idempotent.
-func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.MooxMessage, samples []Sample) (bool, error) {
+func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.EventMessage, report *metricspb.MetricReport, samples []Sample) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, errors.New("metrics store is not initialized")
 	}
-	if msg == nil || msg.GetMessageId() == "" {
+	if msg == nil || msg.GetEventId() == "" || report == nil {
 		return false, errors.New("message_id is required")
 	}
 	retention := r.DedupeRetention
@@ -48,7 +61,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 	expires := now.Add(retention)
 	var duplicate bool
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		row := &MetricIngestMessage{MessageID: msg.GetMessageId(), ServiceName: msg.GetProducer().GetServiceName(), InstanceID: msg.GetProducer().GetInstanceId(), ProcessedAt: now, ExpiresAt: expires}
+		row := &MetricIngestMessage{MessageID: msg.GetEventId(), ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), ProcessedAt: now, ExpiresAt: expires}
 		if at := msg.GetOccurredAt(); at != nil {
 			t := at.AsTime()
 			row.OccurredAt = &t
@@ -61,11 +74,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 			duplicate = true
 			return nil
 		}
-		producer := msg.GetProducer()
-		serviceName, instanceID, bootID, nodeID, version := "", "", "", "", ""
-		if producer != nil {
-			serviceName, instanceID, bootID, nodeID, version = producer.GetServiceName(), producer.GetInstanceId(), producer.GetBootId(), producer.GetNodeId(), producer.GetVersion()
-		}
+		serviceName, instanceID, bootID, nodeID, version := report.GetServiceName(), report.GetInstanceId(), report.GetBootId(), report.GetNodeId(), report.GetServiceVersion()
 		if serviceName == "" {
 			return errors.New("producer.service_name is required")
 		}
@@ -89,12 +98,15 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 			find := tx.Where("c_series_id = ?", sample.SeriesID).First(&latest)
 			if errors.Is(find.Error, gorm.ErrRecordNotFound) {
 				latest = MetricLatest{SeriesID: sample.SeriesID}
-				find = nil
-			}
-			if find != nil {
+			} else if find.Error != nil {
 				return find.Error
 			}
 			if latest.ID != 0 && !sample.ObservedAt.After(latest.ObservedAt) {
+				continue
+			}
+			if latest.ID != 0 && monotonicMetric(sample.MetricName) && sample.Value < latest.Value {
+				// Reporter 重启后内存水位可能为空。此时保留已提交的最新值，
+				// 避免较新的抓取结果携带旧业务水位并造成数值倒退。
 				continue
 			}
 			latest.ServiceName, latest.InstanceID, latest.MetricName, latest.MetricType, latest.LabelsJSON = sample.ServiceName, sample.InstanceID, sample.MetricName, sample.MetricType, sample.LabelsJSON
@@ -103,7 +115,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 				if err := tx.Create(&latest).Error; err != nil {
 					return err
 				}
-			} else if err := tx.Model(&MetricLatest{}).Where("c_series_id = ? AND c_observed_at < ?", latest.SeriesID, sample.ObservedAt).Updates(map[string]any{"c_value": latest.Value, "c_service_name": latest.ServiceName, "c_instance_id": latest.InstanceID, "c_metric_name": latest.MetricName, "c_metric_type": latest.MetricType, "c_labels_json": latest.LabelsJSON, "c_observed_at": latest.ObservedAt, "c_interval_seconds": latest.IntervalSeconds, "c_message_id": latest.MessageID, "c_producer_node_id": latest.ProducerNodeID, "c_producer_version": latest.ProducerVersion}).Error; err != nil {
+			} else if err := tx.Save(&latest).Error; err != nil {
 				return err
 			}
 		}
@@ -113,6 +125,18 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *messagepb.Mo
 		return false, fmt.Errorf("commit metrics ingest: %w", err)
 	}
 	return duplicate, nil
+}
+
+func monotonicMetric(name string) bool {
+	return strings.HasSuffix(name, "_dataset_input_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_dataset_output_watermark_timestamp_seconds") ||
+		name == ViewDatasetOutputLastDataTimeMetric ||
+		strings.HasSuffix(name, "_view_output_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_business_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_input_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_last_success_timestamp_seconds") ||
+		strings.HasSuffix(name, "_last_error_timestamp_seconds") ||
+		strings.HasSuffix(name, "_metrics_errors_total")
 }
 
 func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (int64, error) {
@@ -127,6 +151,9 @@ func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (in
 }
 
 func (r *MetricMessageStore) GetLatest(ctx context.Context, seriesID string) (*MetricLatest, error) {
+	if r == nil || r.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
 	var row MetricLatest
 	err := r.db.WithContext(ctx).Where("c_series_id = ?", seriesID).First(&row).Error
 	if err != nil {
@@ -134,6 +161,102 @@ func (r *MetricMessageStore) GetLatest(ctx context.Context, seriesID string) (*M
 	}
 	return &row, nil
 }
+
+// ListLatestByMetricNames is intentionally limited to the generic View output
+// watermark family. Scoped freshness evaluation should prefer
+// ListLatestByViewScopes so unrelated View series are not loaded.
+func (r *MetricMessageStore) ListLatestByMetricNames(ctx context.Context, names []string, limit int) ([]MetricLatest, error) {
+	if r == nil || r.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if limit <= 0 {
+		limit = defaultKlineLatestLimit
+	}
+	if limit > maxKlineLatestLimit {
+		return nil, fmt.Errorf("view dataset latest limit %d exceeds maximum %d", limit, maxKlineLatestLimit)
+	}
+	if len(names) == 0 {
+		return nil, errors.New("view dataset metric names must not be empty")
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if _, ok := viewDatasetMetricNames[name]; !ok {
+			return nil, fmt.Errorf("metric name %q is not a supported View dataset metric", name)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, fmt.Errorf("duplicate View dataset metric name %q", name)
+		}
+		seen[name] = struct{}{}
+	}
+	var rows []MetricLatest
+	err := r.db.WithContext(ctx).
+		Where("c_metric_name IN ?", names).
+		Order("c_metric_name ASC, c_labels_json ASC, c_series_id ASC").
+		Limit(limit + 1).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > limit {
+		return nil, fmt.Errorf("view dataset latest result exceeds limit %d", limit)
+	}
+	return rows, nil
+}
+
+// ListLatestByViewScopes reads only the output watermark rows belonging to
+// configured freshness Views. Keeping the scope in SQL avoids loading service
+// metrics and unrelated Views into the K-line evaluator before filtering them.
+func (r *MetricMessageStore) ListLatestByViewScopes(ctx context.Context, metricName string, scopes []ViewMetricScope, limit int) ([]MetricLatest, error) {
+	if r == nil || r.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if _, ok := viewDatasetMetricNames[metricName]; !ok {
+		return nil, fmt.Errorf("metric name %q is not a supported View dataset metric", metricName)
+	}
+	if len(scopes) == 0 {
+		return []MetricLatest{}, nil
+	}
+	if limit <= 0 {
+		limit = defaultKlineLatestLimit
+	}
+	if limit > maxKlineLatestLimit {
+		return nil, fmt.Errorf("view dataset latest limit %d exceeds maximum %d", limit, maxKlineLatestLimit)
+	}
+	conditions := make([]string, 0, len(scopes))
+	args := make([]interface{}, 0, len(scopes)*4+1)
+	for _, scope := range scopes {
+		spaceID, viewID := strings.TrimSpace(scope.SpaceID), strings.TrimSpace(scope.ViewID)
+		datasetID, frequency := strings.TrimSpace(scope.DatasetID), strings.TrimSpace(scope.Frequency)
+		if spaceID == "" || viewID == "" || frequency == "" {
+			continue
+		}
+		condition := "(json_extract(c_labels_json, '$.space_id') = ? AND json_extract(c_labels_json, '$.view_id') = ? AND json_extract(c_labels_json, '$.freq') = ?"
+		args = append(args, spaceID, viewID, frequency)
+		if datasetID != "" {
+			condition += " AND json_extract(c_labels_json, '$.dataset_id') = ?"
+			args = append(args, datasetID)
+		}
+		conditions = append(conditions, condition+")")
+	}
+	if len(conditions) == 0 {
+		return []MetricLatest{}, nil
+	}
+	args = append([]interface{}{metricName}, args...)
+	var rows []MetricLatest
+	err := r.db.WithContext(ctx).
+		Where("c_metric_name = ? AND ("+strings.Join(conditions, " OR ")+")", args...).
+		Order("c_labels_json ASC, c_series_id ASC").
+		Limit(limit + 1).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > limit {
+		return nil, fmt.Errorf("view dataset latest result exceeds limit %d", limit)
+	}
+	return rows, nil
+}
+
 func (r *MetricMessageStore) ListSeries(ctx context.Context, serviceName, metricName string, limit int) ([]MetricSeries, error) {
 	if limit <= 0 {
 		limit = 500

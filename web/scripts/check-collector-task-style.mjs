@@ -11,7 +11,7 @@ const required = [
   'class="task-toolbar"',
   'class="task-filters"',
   ':bordered="{ cell: true }"',
-  ':scroll="{ x: 1650 }"',
+  ':scroll="{ x: 1600 }"',
   'pageSize: 20',
   'class="task-id-button"',
   '<icon-eye />',

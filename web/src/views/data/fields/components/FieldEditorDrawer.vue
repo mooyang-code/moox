@@ -15,7 +15,10 @@
       <a-divider orientation="left">基本信息</a-divider>
       <div class="form-grid">
         <a-form-item field="field_id" label="字段 ID" required>
-          <a-input v-model="form.field_id" :disabled="editing" placeholder="例如 close" />
+          <a-tooltip v-if="editing && displayFieldId(form.field_id) !== form.field_id" :content="`内部字段名：${form.field_id}`">
+            <a-input :model-value="displayFieldId(form.field_id)" disabled />
+          </a-tooltip>
+          <a-input v-else v-model="form.field_id" :disabled="editing" placeholder="例如 close" />
         </a-form-item>
         <a-form-item field="name" label="中文名" required><a-input v-model="form.name" /></a-form-item>
         <a-form-item class="span-2" field="description" label="描述"
@@ -78,7 +81,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import type { Field, FieldGroup } from "@/api/storage/types";
-import { fieldValueTypeOptions, jsonText } from "@/views/data/shared/metadata-utils";
+import { displayFieldId, fieldValueTypeOptions, jsonText } from "@/views/data/shared/metadata-utils";
 import { groupPath } from "../field-workbench";
 
 const props = defineProps<{

@@ -2,10 +2,6 @@ package alerting
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,284 +9,98 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/notification"
 )
 
-func TestAlertEvaluatorThresholdReminderAndResolve(t *testing.T) {
-	ctx := context.Background()
-	mgr := openAlertDB(t)
-	alerts := mgr.Repositories().Alerts
-	check := testCheck()
-	createAlertFixture(t, alerts, domain.AlertRule{
-		SpaceID:                        "space-a",
-		RuleID:                         "rule-a",
-		CheckID:                        "check-a",
-		WebhookID:                      "webhook-a",
-		FailureThreshold:               3,
-		SuccessThreshold:               2,
-		MinimumReminderIntervalSeconds: 300,
-		SendOnResolved:                 true,
-		Enabled:                        true,
-	})
-
-	now := time.Now()
-	notifier := &recordingNotifier{}
-	evaluator := NewEvaluator(mgr.Repositories().Alerts, Options{
-		InstanceID: "monitor-a",
-		Notifier:   notifier,
-		Now:        func() time.Time { return now },
-	})
-
-	for i := 0; i < 2; i++ {
-		if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
-			t.Fatalf("evaluate failure %d: %v", i, err)
-		}
-	}
-	if notifier.Count() != 0 {
-		t.Fatalf("notifier count = %d, want 0", notifier.Count())
-	}
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
-		t.Fatalf("third failure: %v", err)
-	}
-	if notifier.Count() != 1 || notifier.Events()[0] != domain.AlertEventTriggered {
-		t.Fatalf("events = %#v", notifier.Events())
-	}
-
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
-		t.Fatalf("early reminder: %v", err)
-	}
-	if notifier.Count() != 1 {
-		t.Fatalf("early reminder sent count = %d", notifier.Count())
-	}
-	now = now.Add(301 * time.Second)
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
-		t.Fatalf("late reminder: %v", err)
-	}
-	if notifier.Count() != 2 || notifier.Events()[1] != domain.AlertEventReminder {
-		t.Fatalf("events = %#v", notifier.Events())
-	}
-
-	if err := evaluator.Evaluate(ctx, check, okResult(check), nil); err != nil {
-		t.Fatalf("first success: %v", err)
-	}
-	if notifier.Count() != 2 {
-		t.Fatalf("first success sent count = %d", notifier.Count())
-	}
-	if err := evaluator.Evaluate(ctx, check, okResult(check), nil); err != nil {
-		t.Fatalf("second success: %v", err)
-	}
-	if notifier.Count() != 3 || notifier.Events()[2] != domain.AlertEventResolved {
-		t.Fatalf("events = %#v", notifier.Events())
-	}
-}
-
-func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
-	ctx := context.Background()
-	mgr := openAlertDB(t)
-	alerts := mgr.Repositories().Alerts
-	check := testCheck()
-	createAlertFixture(t, alerts, domain.AlertRule{
-		SpaceID:          "space-a",
-		RuleID:           "rule-a",
-		CheckID:          "check-a",
-		WebhookID:        "webhook-a",
-		FailureThreshold: 1,
-		SuccessThreshold: 1,
-		SendOnResolved:   false,
-		Enabled:          true,
-	})
-
-	notifier := &recordingNotifier{fail: true}
-	evaluator := NewEvaluator(mgr.Repositories().Alerts, Options{
-		InstanceID: "monitor-a",
-		Notifier:   notifier,
-	})
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
-		t.Fatalf("trigger: %v", err)
-	}
-	events, err := alerts.ListEvents(ctx, "space-a", 10)
-	if err != nil {
-		t.Fatalf("list events: %v", err)
-	}
-	if len(events) != 2 || events[0].EventType != domain.AlertEventSendFailed {
-		t.Fatalf("events = %+v", events)
-	}
-
-	notifier.fail = false
-	if err := evaluator.Evaluate(ctx, check, okResult(check), nil); err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if notifier.Count() != 1 {
-		t.Fatalf("resolved should not send; notifier count = %d", notifier.Count())
-	}
-	events, _ = alerts.ListEvents(ctx, "space-a", 10)
-	if events[0].EventType != domain.AlertEventResolved {
-		t.Fatalf("latest event = %+v", events[0])
-	}
-}
-
-func TestAlertEvaluatorRecordsLocalEventWithoutWebhook(t *testing.T) {
-	ctx := context.Background()
-	mgr := openAlertDB(t)
-	alerts := mgr.Repositories().Alerts
-	check := testCheck()
-	if err := alerts.CreateRule(ctx, &domain.AlertRule{
-		SpaceID: "space-a", RuleID: "local-rule", CheckID: check.CheckID,
-		FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
-	}); err != nil {
-		t.Fatalf("create local rule: %v", err)
-	}
-
-	notifier := &recordingNotifier{}
-	evaluator := NewEvaluator(alerts, Options{InstanceID: "monitor-a", Notifier: notifier})
-	if err := evaluator.Evaluate(ctx, check, failedResult(check), nil); err != nil {
-		t.Fatalf("evaluate local alert: %v", err)
-	}
-	if notifier.Count() != 0 {
-		t.Fatalf("local alert unexpectedly sent webhook count=%d", notifier.Count())
-	}
-	events, err := alerts.ListEvents(ctx, "space-a", 10)
-	if err != nil || len(events) != 1 || events[0].EventType != domain.AlertEventTriggered {
-		t.Fatalf("local events = %+v, err=%v", events, err)
-	}
-	state, err := alerts.GetState(ctx, "space-a", "local-rule", check.CheckID)
-	if err != nil || state.Status != domain.AlertStatusFiring {
-		t.Fatalf("local state = %+v, err=%v", state, err)
-	}
-}
-
-func TestRenderTemplateEscapesJSONValues(t *testing.T) {
-	body := renderTemplate("", Event{
-		EventType: domain.AlertEventTriggered,
-		Status:    domain.AlertStatusFiring,
-		Check: domain.Check{
-			CheckID: "check-a",
-			Name:    "API \"prod\"",
-			Kind:    domain.CheckKindHTTP,
-			URL:     "http://example.com/healthz?name=\"api\"",
-		},
-		Result: domain.CheckResult{
-			ErrorMessage: "failed with \"quote\"\nand newline",
-			CheckedAt:    time.Now(),
-		},
-	})
-	if !json.Valid([]byte(body)) {
-		t.Fatalf("rendered body is invalid JSON: %s", body)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		t.Fatalf("unmarshal rendered body: %v", err)
-	}
-	if payload["error_message"] != "failed with \"quote\"\nand newline" {
-		t.Fatalf("error_message = %q", payload["error_message"])
-	}
-}
-
-type recordingNotifier struct {
-	fail   bool
-	events []string
-}
-
-func (n *recordingNotifier) Send(ctx context.Context, webhook domain.WebhookChannel, event Event) error {
-	n.events = append(n.events, event.EventType)
-	if n.fail {
-		return fmt.Errorf("send failed")
-	}
-	return nil
-}
-
-func (n *recordingNotifier) Count() int {
-	return len(n.events)
-}
-
-func (n *recordingNotifier) Events() []string {
-	return append([]string(nil), n.events...)
-}
-
-func createAlertFixture(t *testing.T, alerts *store.AlertRepository, rule domain.AlertRule) {
-	t.Helper()
-	ctx := context.Background()
-	if err := alerts.CreateWebhook(ctx, &domain.WebhookChannel{
-		SpaceID:      "space-a",
-		WebhookID:    "webhook-a",
-		Name:         "Ops",
-		URL:          "http://127.0.0.1/webhook",
-		Method:       "POST",
-		Headers:      "{}",
-		BodyTemplate: "{}",
-		Enabled:      true,
-	}); err != nil {
-		t.Fatalf("create webhook: %v", err)
-	}
-	if err := alerts.CreateRule(ctx, &rule); err != nil {
-		t.Fatalf("create rule: %v", err)
-	}
-}
-
-func testCheck() domain.Check {
-	return domain.Check{
-		SpaceID: "space-a",
-		CheckID: "check-a",
-		Name:    "API",
-		Kind:    domain.CheckKindHTTP,
-		URL:     "http://127.0.0.1/healthz",
-	}
-}
-
-func failedResult(check domain.Check) domain.CheckResult {
-	return domain.CheckResult{SpaceID: check.SpaceID, CheckID: check.CheckID, Success: false, Status: domain.CheckStatusDown, ErrorMessage: "boom", CheckedAt: time.Now()}
-}
-
-func okResult(check domain.Check) domain.CheckResult {
-	return domain.CheckResult{SpaceID: check.SpaceID, CheckID: check.CheckID, Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now()}
-}
-
-func openAlertDB(t *testing.T) *store.Store {
-	t.Helper()
+func TestEvaluatorRecordsNotificationConstructionFailure(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mgr.Close() })
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
-		t.Fatalf("apply schema: %v", err)
+		t.Fatal(err)
 	}
-	return mgr
-}
-
-func TestParseHeadersAndEventTarget(t *testing.T) {
-	if got := parseHeaders(`{"X-Token":"abc"}`); got["X-Token"] != "abc" {
-		t.Fatalf("parseHeaders = %#v", got)
+	repos := mgr.Repositories()
+	ctx := context.Background()
+	check := domain.Check{SpaceID: "crypto", CheckID: "collector:market", Name: "行情采集", Enabled: true}
+	if err := repos.Checks.Create(ctx, &check); err != nil {
+		t.Fatal(err)
 	}
-	if parseHeaders("bad-json") != nil {
-		t.Fatal("invalid headers should return nil")
+	if err := repos.Alerts.CreateRule(ctx, &domain.AlertRule{SpaceID: check.SpaceID, RuleID: "default:collector:market", CheckID: check.CheckID, FailureThreshold: 1, SuccessThreshold: 1, Enabled: true}); err != nil {
+		t.Fatal(err)
 	}
-	check := domain.Check{Kind: domain.CheckKindTCP, TCPHost: "127.0.0.1", TCPPort: 8080}
-	if eventTarget(check) != "127.0.0.1:8080" {
-		t.Fatalf("tcp target = %q", eventTarget(check))
-	}
-	check = domain.Check{Kind: domain.CheckKindHTTP, URL: "https://example.com"}
-	if eventTarget(check) != "https://example.com" {
-		t.Fatalf("http target = %q", eventTarget(check))
-	}
-}
-
-func TestJsonStringValueEscapesQuotes(t *testing.T) {
-	if got := jsonStringValue(`say "hi"`); got != `say \"hi\"` {
-		t.Fatalf("jsonStringValue = %q", got)
-	}
-}
-
-func TestWebhookNotifierSendUsesDefaultClient(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-	notifier := WebhookNotifier{}
-	err := notifier.Send(context.Background(), domain.WebhookChannel{URL: server.URL}, Event{
-		Check: testCheck(), Status: domain.AlertStatusFiring, EventType: domain.AlertEventTriggered,
-		Result: failedResult(testCheck()),
+	evaluator := NewEvaluator(repos.Alerts, Options{
+		Channel: func(context.Context) (*domain.NotificationChannel, error) {
+			return &domain.NotificationChannel{ChannelType: "wecom", WebhookURL: "https://not-approved.example/hook"}, nil
+		},
+		Now: func() time.Time { return time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC) },
 	})
+	if err := evaluator.Evaluate(ctx, check, domain.CheckResult{SpaceID: check.SpaceID, CheckID: check.CheckID, Success: false, Status: domain.CheckStatusDown, ErrorMessage: "Timer 不可用", CheckedAt: time.Now().UTC()}); err == nil {
+		t.Fatal("expected notification construction error")
+	}
+	events, err := repos.Alerts.ListEvents(ctx, check.SpaceID, 10)
 	if err != nil {
-		t.Fatalf("Send returned %v", err)
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].EventType != domain.AlertEventSendFailed || events[1].EventType != domain.AlertEventTriggered {
+		t.Fatalf("events = %+v", events)
+	}
+	if events[1].Message == "" || events[1].Message == "Timer 不可用" {
+		t.Fatalf("alert message was not human-readable: %q", events[1].Message)
+	}
+}
+
+func TestNotificationSeverityMatchesAlertLifecycle(t *testing.T) {
+	if notificationSeverity(domain.AlertEventTriggered) != notification.SeverityCritical {
+		t.Fatal("triggered alerts must be critical")
+	}
+	if notificationSeverity(domain.AlertEventReminder) != notification.SeverityWarning {
+		t.Fatal("reminders must be warnings")
+	}
+	if notificationSeverity(domain.AlertEventResolved) != notification.SeverityInfo {
+		t.Fatal("resolved alerts must be informational")
+	}
+}
+
+func TestRecoveryNotificationFailureKeepsAlertFiringForRetry(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	if err := mgr.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	repos := mgr.Repositories()
+	ctx := context.Background()
+	check := domain.Check{SpaceID: "crypto", CheckID: "collector:recovery", Name: "行情采集", Enabled: true}
+	if err := repos.Checks.Create(ctx, &check); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Alerts.CreateRule(ctx, &domain.AlertRule{SpaceID: check.SpaceID, RuleID: "default:collector:recovery", CheckID: check.CheckID, FailureThreshold: 1, SuccessThreshold: 1, SendOnResolved: true, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	evaluator := NewEvaluator(repos.Alerts, Options{
+		Channel: func(context.Context) (*domain.NotificationChannel, error) {
+			return &domain.NotificationChannel{ChannelType: "wecom", WebhookURL: "https://not-approved.example/hook"}, nil
+		},
+		Now: func() time.Time { return time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC) },
+	})
+	failure := domain.CheckResult{SpaceID: check.SpaceID, CheckID: check.CheckID, Success: false, Status: domain.CheckStatusDown, ErrorMessage: "Timer 不可用", CheckedAt: time.Now().UTC()}
+	_ = evaluator.Evaluate(ctx, check, failure)
+	recovery := failure
+	recovery.Success = true
+	recovery.Status = domain.CheckStatusOK
+	recovery.ErrorMessage = ""
+	if err := evaluator.Evaluate(ctx, check, recovery); err == nil {
+		t.Fatal("expected recovery notification failure")
+	}
+	state, err := repos.Alerts.GetState(ctx, check.SpaceID, "default:collector:recovery", check.CheckID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != domain.AlertStatusFiring || state.ResolvedAt != nil {
+		t.Fatalf("recovery failure lost firing state: %+v", state)
 	}
 }

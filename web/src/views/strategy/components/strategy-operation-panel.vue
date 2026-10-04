@@ -1,81 +1,46 @@
 <template>
-  <a-card title="运行控制" :bordered="false">
-    <a-alert v-if="!canOperate" type="info" show-icon>当前账号只有查看权限。</a-alert>
-    <a-space v-else>
-      <a-button v-if="status !== 'disabled'" status="warning" :loading="loading" @click="pause">暂停 Binding</a-button>
-      <a-button v-else type="primary" :loading="loading" @click="resume">恢复 Binding</a-button>
-      <a-select v-model="mode" style="width: 130px" :disabled="loading"
-        ><a-option value="observe">Observe</a-option><a-option value="paper">Paper</a-option
-        ><a-option v-if="store.liveExecutionEnabled" value="live">Live</a-option></a-select
-      >
-      <a-button :loading="loading" @click="changeMode">应用模式</a-button>
-    </a-space>
-    <a-modal v-model:visible="reasonVisible" title="填写操作原因" @ok="submitReason">
-      <a-textarea v-model="reason" placeholder="请输入操作原因" :auto-size="{ minRows: 3, maxRows: 6 }" />
-    </a-modal>
-  </a-card>
+  <div class="operation-bar">
+    <div><strong>实例控制</strong><span class="hint">启停只控制策略计算与目标投递，不执行清仓。</span></div>
+    <a-popconfirm
+      :content="currentEnabled ? '停用后不会再计算新目标，也不会自动清仓。确认继续？' : '启用会校验绑定并在交易模式下认领账户会话。确认继续？'"
+      @ok="change(!currentEnabled)"
+    >
+      <a-button :type="currentEnabled ? 'outline' : 'primary'" :status="currentEnabled ? 'warning' : 'success'" :loading="loading" :disabled="uncertain">
+        {{ currentEnabled ? "停用实例" : "启用实例" }}
+      </a-button>
+    </a-popconfirm>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { useStrategyStore } from "@/store/modules/strategy";
-import { useUserInfoStore } from "@/store/modules/user-info";
-const props = defineProps<{ bindingId: string; status?: string; currentMode?: string }>();
-const emit = defineEmits<{ changed: [] }>();
-const store = useStrategyStore();
-const userStore = useUserInfoStore();
-const canOperate = computed(() => userStore.account.roles.includes("admin"));
-const mode = ref(props.currentMode || "observe");
-const reason = ref("");
-const pending = ref<"pause" | "resume" | "mode">("pause");
-const reasonVisible = ref(false);
+import { setInstanceEnabled } from "@/api/strategy";
+
+const props = defineProps<{ instanceId: string; enabled: boolean; uncertain?: boolean }>();
+const emit = defineEmits<{ started: []; changed: []; failed: [unknown] }>();
 const loading = ref(false);
-watch(
-  () => props.currentMode,
-  currentMode => {
-    mode.value = currentMode || "observe";
-    if (!store.liveExecutionEnabled && mode.value === "live") mode.value = "observe";
-  },
-  { immediate: true }
-);
-watch(
-  () => store.liveExecutionEnabled,
-  () => {
-    if (!store.liveExecutionEnabled && mode.value === "live") mode.value = "observe";
-  }
-);
-function ask(action: "pause" | "resume" | "mode") {
-  pending.value = action;
-  reason.value = "";
-  reasonVisible.value = true;
-}
-function pause() {
-  ask("pause");
-}
-function resume() {
-  ask("resume");
-}
-function changeMode() {
-  ask("mode");
-}
-async function submitReason() {
-  if (!reason.value.trim()) {
-    Message.warning("请填写操作原因");
-    return;
-  }
+const currentEnabled = computed(() => Boolean(props.enabled));
+async function change(enabled: boolean) {
+  if (loading.value || props.uncertain) return;
   loading.value = true;
+  emit("started");
   try {
-    if (pending.value === "pause") await store.pause(props.bindingId, reason.value);
-    else if (pending.value === "resume") await store.resume(props.bindingId, reason.value);
-    else await store.changeMode(props.bindingId, mode.value, reason.value);
-    reasonVisible.value = false;
-    Message.success("操作已提交");
-    emit("changed");
-  } catch (err) {
-    Message.error(err instanceof Error ? err.message : "操作失败");
+    await setInstanceEnabled(props.instanceId, enabled);
+    Message.success(enabled ? "实例已启用" : "实例已停用");
+  } catch (error) {
+    Message.error("控制请求失败，正在重新读取实例状态");
+    emit("failed", error);
   } finally {
     loading.value = false;
+    emit("changed");
   }
 }
 </script>
+
+<style scoped>
+.operation-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: var(--moox-space-2); padding: 12px 0; border-top: 1px solid var(--color-border-2); border-bottom: 1px solid var(--color-border-2); }
+.operation-bar > div { display: grid; gap: 3px; }
+.hint { color: var(--color-text-3); font-size: 12px; }
+@media (max-width: 640px) { .operation-bar { align-items: flex-start; flex-direction: column; } }
+</style>

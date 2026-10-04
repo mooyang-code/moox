@@ -1,164 +1,763 @@
-// Package bootstrap 是 moox-trade 进程的启动入口编排：
-// 加载配置 → 初始化 SQLite/DAO → 装配 service → 注册 9 个 tRPC service。
 package bootstrap
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
+	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
+	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	_ "github.com/mooyang-code/moox/modules/trade/internal/exchange/all" // 注册 binance/okx 适配器
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
-	"github.com/mooyang-code/moox/modules/trade/internal/infra/exchangebridge"
-	kernelstore "github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	tradeobservability "github.com/mooyang-code/moox/modules/trade/internal/observability"
+	tradeResolver "github.com/mooyang-code/moox/modules/trade/internal/resolver"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
+	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
-	"github.com/mooyang-code/moox/modules/trade/internal/service"
-	"github.com/mooyang-code/moox/modules/trade/internal/service/dao"
-	"github.com/mooyang-code/moox/modules/trade/internal/service/database"
-	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
-	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
-
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-var tradeStartedAt = time.Now()
-var kernelEventBus struct {
-	sync.RWMutex
-	client *jetstream.Client
-}
+var startedAt = time.Now()
 
-func setKernelEventBusClient(client *jetstream.Client) {
-	kernelEventBus.Lock()
-	kernelEventBus.client = client
-	kernelEventBus.Unlock()
-}
-func kernelEventBusReady() bool {
-	kernelEventBus.RLock()
-	defer kernelEventBus.RUnlock()
-	return kernelEventBus.client != nil && kernelEventBus.client.Ready()
-}
-
-// Initialize 初始化 moox-trade 进程：配置 + 持久化 + 服务注册。
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
-	log.InfoContextf(ctx, "开始初始化 moox-trade...")
-
-	// 1. 加载应用配置（trpc_go.yaml 由 trpc-go 运行时自动加载）
-	appCfg, err := config.Load("./config/app.yaml")
-	if err != nil {
-		log.ErrorContextf(ctx, "加载应用配置失败: %v", err)
-		return nil, err
-	}
-	config.SetGlobalConfig(appCfg)
-	log.InfoContextf(ctx, "应用配置加载成功: db=%s", appCfg.Database.Path)
-
-	// 2. 初始化数据库（建表）
-	dm := database.NewManager()
-	if err := dm.Initialize(&appCfg.Database); err != nil {
-		log.ErrorContextf(ctx, "初始化数据库失败: %v", err)
-		return nil, err
-	}
-	store := dao.New(dm.GetDB(), appCfg.Security.EncryptionKey)
-	tradeStore, err := kernelstore.Open(appCfg.Database.Path)
+func Initialize(ctx context.Context, serverInstance *server.Server) (*server.Server, error) {
+	cfg, err := config.Load("./config/app.yaml")
 	if err != nil {
 		return nil, err
 	}
-	kernel := &command.Engine{Store: tradeStore, Resolver: exchangebridge.Resolver{Store: store, Factory: exchange.New}}
+	return initialize(ctx, serverInstance, cfg)
+}
 
-	// 3. 装配领域服务
-	secretSource := secretclient.New(secretclient.Config{
-		GatewayBaseURL: appCfg.ControlGateway.BaseURL,
+func initialize(
+	ctx context.Context,
+	serverInstance *server.Server,
+	cfg *config.AppConfig,
+) (*server.Server, error) {
+	if serverInstance == nil || cfg == nil {
+		return nil, errors.New("trade bootstrap: server and config are required")
+	}
+	tradeStore, err := store.Open(cfg.Database.Path)
+	if err != nil {
+		return nil, err
+	}
+	cleanupStore := true
+	defer func() {
+		if cleanupStore {
+			_ = tradeStore.Close()
+		}
+	}()
+
+	secrets := secretclient.New(secretclient.Config{
+		GatewayBaseURL: cfg.Admin.BaseURL,
 		ServiceAuth: secretclient.ServiceAuthConfig{
-			AccessKey:  appCfg.ControlGateway.ServiceAuth.AccessKey,
-			SecretKey:  appCfg.ControlGateway.ServiceAuth.SecretKey,
-			TargetNode: appCfg.ControlGateway.ServiceAuth.TargetNode,
-			CAFile:     appCfg.ControlGateway.ServiceAuth.CAFile,
-			ExpireSecs: appCfg.ControlGateway.ServiceAuth.ExpireSeconds,
+			AccessKey:  cfg.Admin.ServiceAuth.AccessKey,
+			SecretKey:  cfg.Admin.ServiceAuth.SecretKey,
+			TargetNode: cfg.Admin.ServiceAuth.TargetNode,
+			CAFile:     cfg.Admin.ServiceAuth.CAFile,
+			ExpireSecs: cfg.Admin.ServiceAuth.ExpireSeconds,
 		},
 	})
-	svc := service.New("trade", service.WithStore(store), service.WithExchangeSecretSource(secretSource))
+	registry := execution.NewRegistry()
+	registerBuiltins(registry)
+	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
 
-	// 4. 注册 9 个 tRPC service
-	rpc.RegisterAll(s, svc, kernel)
-	if err := startKernelWorkers(ctx, appCfg.EventBus, tradeStore, kernel); err != nil {
-		return nil, err
+	manager := &traderuntime.Manager{
+		Accounts: tradeStore, PollInterval: 5 * time.Second,
+		RetryMin: time.Second, RetryMax: 30 * time.Second,
 	}
-	if err := registerKernelTimers(s, tradeStore, kernel); err != nil {
-		return nil, err
+	accounts := &accountapp.Service{
+		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
+		SessionState: manager, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 	}
-	registerMetricsReporter(s)
-	if err := registerHealth(s, appCfg, tradeStore); err != nil {
-		return nil, err
+	orderService := &orderapp.Service{
+		Store: tradeStore, Adapters: manager,
+		Validator: orderapp.Validator{
+			Accounts:         accounts,
+			Instruments:      instrumentSource{store: tradeStore},
+			Positions:        positionSource{store: tradeStore},
+			MaxReferenceAge:  10 * time.Second,
+			MaxChildNotional: shared.MustDecimal("100000"),
+			MaxLeverage:      shared.MustDecimal("20"),
+			FeeBufferRate:    shared.MustDecimal("0.002"),
+		},
 	}
-
-	log.InfoContextf(ctx, "moox-trade 初始化完成，交易主链路使用 EventBus，定时轮询同步已停用")
-	return s, nil
-}
-
-func registerMetricsReporter(s *server.Server) {
-	if s == nil {
-		return
-	}
-	h, err := report.NewHandler(report.DefaultConfig("trade_account"))
+	balanceMetrics, err := tradeobservability.DefaultBalanceMetrics()
 	if err != nil {
-		log.Warnf("trade metrics reporter disabled: %v", err)
-		return
+		return nil, fmt.Errorf("register trade balance metrics: %w", err)
 	}
-	service := s.Service("trpc.moox.trade.metrics.timer")
-	if service == nil {
-		log.Warn("trade metrics timer service is not configured, skip register")
-		return
+	manager.OnSessionRemoved = balanceMetrics.Remove
+	equityService := &equityapp.Service{Store: tradeStore, Adapters: manager}
+	equitySampler := traderuntime.NewEquitySampler(equityService)
+	registerEquitySamplerTimer(serverInstance, equitySampler)
+	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
+	syncService := &accountsync.Service{
+		Store: tradeStore, Adapters: manager, SessionState: manager,
+		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics,
 	}
-	timer.RegisterHandlerService(service, h.Handle)
-}
-
-func registerHealth(s *server.Server, cfg *config.AppConfig, store *kernelstore.Store) error {
-	if cfg == nil {
+	paperMatcher := &executionpaper.Matcher{
+		Store:   tradeStore,
+		Reducer: fillReducer,
+		Enqueue: equitySampler.Enqueue,
+	}
+	paperMatcher.Refresh = func(refreshCtx context.Context, tradingAccountID string) error {
+		adapter, adapterErr := manager.Adapter(tradingAccountID)
+		if adapterErr != nil {
+			return adapterErr
+		}
+		snapshot, snapshotErr := adapter.GetAccountSnapshot(refreshCtx)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		account, accountErr := tradeStore.GetTradingAccountByID(refreshCtx, tradingAccountID)
+		if accountErr != nil {
+			return executionpaper.InfrastructureError{Err: accountErr}
+		}
+		err := tradeStore.Transaction(refreshCtx, func(tx *store.Tx) error {
+			// The paper snapshot is reconstructed from the same SQLite facts that
+			// back reservations. Advance the sync watermark together with it so
+			// the next order does not count already-reflected resting reservations
+			// a second time, while orders created after this refresh remain visible
+			// through GetUnreflectedReservation.
+			at := snapshot.ExchangeUpdatedAt.UnixMilli()
+			return tx.UpdateTradingAccountFacts(
+				account.SpaceID,
+				tradingAccountID,
+				account.FillCursors,
+				paperSnapshotRecord(snapshot),
+				at,
+				at,
+			)
+		})
+		if err != nil {
+			return executionpaper.InfrastructureError{Err: err}
+		}
 		return nil
 	}
-	state := health.New("trade", "trade", "", "")
-	state.SnapshotFunc = tradeHealthSnapshot(store, state)
-	if s == nil {
-		return fmt.Errorf("trade health service is unavailable")
+	paperMatcher.DecideContext = (&executionpaper.Decider{Store: tradeStore, Adapters: manager}).Decide
+	paperMatcherWorker := traderuntime.NewPaperMatcherWorker(paperMatcher, time.Second)
+	orderService.Syncer = accountSyncer{service: syncService}
+	targetExecutor := &targetapp.Executor{
+		Store: tradeStore, Orders: orderService,
+		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
+		MaxChildNotional: shared.MustDecimal("100000"),
 	}
-	if err := health.Register(s.Service("trpc.moox.trade.Health"), state); err != nil {
-		return fmt.Errorf("trade health server failed to start: %w", err)
+	weightResolver := &targetapp.WeightResolver{
+		Store:  tradeStore,
+		Prices: targetapp.ExchangePriceSource{Adapters: manager},
+		Equity: equityService,
 	}
-	return nil
+	targetWorker := &traderuntime.TargetWorker{
+		Store: tradeStore, Executor: targetExecutor, Interval: time.Second,
+		Metrics: tradeStore.ModuleMetrics(),
+	}
+	factsObserver := &accountsync.LogicalAccountFactsObserver{
+		Store: tradeStore,
+		Wake:  targetWorker.Wake,
+	}
+	syncService.Facts = factsObserver
+	logicalAccounts := &logicalapp.Service{
+		Store: tradeStore, Syncer: accountSyncer{service: syncService},
+	}
+	operatorService := &operatorapp.Service{
+		Store: tradeStore, Orders: orderService,
+		Syncer: accountSyncer{service: syncService},
+		Prices: targetapp.ExchangePriceSource{Adapters: manager},
+	}
+	operatorWorker := &traderuntime.OperatorWorker{
+		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
+	}
+	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
+		credential := exchange.Credential{}
+		if exchange.ExecutionMode(record.ExecutionMode) == exchange.ExecutionModeLive {
+			var credentialErr error
+			credential, credentialErr = exchangeCredential(
+				context.Background(),
+				secrets,
+				exchange.Exchange(record.Exchange),
+				record.CredentialSecretID,
+			)
+			if credentialErr != nil {
+				return nil, credentialErr
+			}
+		}
+		accountConfig := exchange.AccountConfig{
+			TradingAccountID: record.TradingAccountID,
+			Exchange:         exchange.Exchange(record.Exchange),
+			MarketType:       exchange.MarketType(record.MarketType),
+			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
+			Environment:      exchange.AccountEnvironment(record.Environment),
+			SettlementAsset:  record.SettlementAsset,
+			MarginMode:       exchange.MarginMode(record.MarginMode),
+		}
+		var adapter execution.ExecutionAdapter
+		var marketData execution.MarketDataSource
+		var accountEvents execution.AccountEventSource
+		if accountConfig.ExecutionMode == exchange.ExecutionModePaper {
+			publicConfig := accountConfig
+			// Public market-data endpoints do not require private credentials. Keep
+			// this binding PAPER so the registry does not apply live credential
+			// requirements; the environment still pins it to production.
+			publicConfig.ExecutionMode = exchange.ExecutionModePaper
+			publicConfig.Environment = exchange.AccountEnvironmentProduction
+			publicAdapter, bindErr := registry.Bind(publicConfig, exchange.Credential{})
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			marketData = publicMarketData(publicAdapter)
+			if marketData == nil {
+				return nil, errors.New("trade bootstrap: paper adapter does not provide public market data")
+			}
+			adapter = &executionpaper.Adapter{Account: record, Store: tradeStore, MarketData: marketData, Wake: paperMatcherWorker.Wake}
+		} else {
+			var bindErr error
+			adapter, bindErr = registry.Bind(accountConfig, credential)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			marketData = publicMarketData(adapter)
+			accountEvents, _ = adapter.(execution.AccountEventSource)
+			if marketData == nil || accountEvents == nil {
+				return nil, errors.New("trade bootstrap: live adapter does not provide execution ports")
+			}
+		}
+		reservationPolicy := execution.ReservationPolicy(execution.LiveReservationPolicy{})
+		if accountConfig.ExecutionMode == exchange.ExecutionModePaper {
+			reservationPolicy = execution.PaperReservationPolicy{}
+		}
+		return &traderuntime.ExchangeSession{
+			Account: record, Adapter: adapter, MarketData: marketData, AccountEvents: accountEvents,
+			ReservationPolicy: reservationPolicy, Sync: syncService,
+			PaperMatcherReady:     paperMatcherWorker.Ready,
+			PaperAccountState:     paperMatcher.AccountState,
+			PaperAccountRecovered: paperMatcher.RecoverAccount,
+			OnReady:               equitySampler.Enqueue,
+			SyncInterval:          30 * time.Second,
+		}, nil
+	}
+
+	var dnsResolver *tradeResolver.Resolver
+	if cfg.DNSResolver.Enabled {
+		dnsMetrics, metricsErr := tradeResolver.NewMetrics(prometheus.DefaultRegisterer)
+		if metricsErr != nil {
+			return nil, fmt.Errorf("register Trade DNS resolver metrics: %w", metricsErr)
+		}
+		dnsResolver = tradeResolver.New(tradeResolver.Config{
+			Domains:         cfg.DNSResolver.Domains,
+			LookupTimeout:   time.Duration(cfg.DNSResolver.LookupTimeoutMS) * time.Millisecond,
+			ProbeTimeout:    time.Duration(cfg.DNSResolver.ProbeTimeoutMS) * time.Millisecond,
+			ProbePort:       cfg.DNSResolver.ProbePort,
+			CacheTTL:        time.Duration(cfg.DNSResolver.CacheTTLSeconds) * time.Second,
+			MaxIPsPerDomain: cfg.DNSResolver.MaxIPsPerDomain,
+			Metrics:         dnsMetrics,
+		})
+	}
+
+	var eventBus *jetstream.Client
+	var targetConsumerReady atomic.Bool
+	if cfg.EventBus.Enabled {
+		clientConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-trade")
+		if cfg.EventBus.CredentialFile != "" {
+			if err := clientConfig.ApplyCredentialFile(
+				jetstream.ExpandCredentialPath(cfg.EventBus.CredentialFile),
+			); err != nil {
+				return nil, err
+			}
+		}
+		eventBus, err = jetstream.Connect(ctx, clientConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
+	var workers sync.WaitGroup
+	runWorker := func(run func(context.Context) error) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if runErr := run(runtimeCtx); runErr != nil &&
+				!errors.Is(runErr, context.Canceled) {
+				log.Warnf("trade runtime worker stopped: %v", runErr)
+			}
+		}()
+	}
+	runWorker(manager.Run)
+	runWorker(factsObserver.Run)
+	runWorker(targetWorker.Run)
+	runWorker(operatorWorker.Run)
+	runWorker(paperMatcherWorker.Run)
+	runWorker(equitySampler.Run)
+	if eventBus != nil {
+		client := eventBus
+		runWorker(func(workerCtx context.Context) error {
+			return eventconsumer.RunTarget(workerCtx, eventconsumer.TargetOptions{
+				Client: client, ConsumerName: cfg.EventBus.TargetConsumer,
+				Store: tradeStore, WakeTarget: targetWorker.WakeTarget,
+				SetReady:       targetConsumerReady.Store,
+				WeightResolver: weightResolver,
+			})
+		})
+	}
+	rpc.RegisterAll(
+		serverInstance,
+		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore},
+		&rpc.LogicalAccountServer{
+			LogicalAccounts: logicalAccounts,
+			Store:           tradeStore,
+			Flatten: func(
+				callCtx context.Context,
+				spaceID string,
+				actionID string,
+				logicalAccountID string,
+				reason string,
+			) (store.OperatorActionRecord, error) {
+				result, flattenErr := operatorService.FlattenLogicalAccount(
+					callCtx,
+					operatorapp.FlattenCommand{
+						SpaceID: spaceID, ActionID: actionID,
+						LogicalAccountID: logicalAccountID, Reason: reason,
+					},
+				)
+				return result.Action, flattenErr
+			},
+		},
+		&rpc.ExecutionServer{
+			Store: tradeStore,
+			PlaceManual: func(
+				callCtx context.Context,
+				command rpc.ManualOrderCommand,
+			) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, placeErr := operatorService.PlaceManualOrder(
+					callCtx,
+					operatorapp.ManualOrderCommand{
+						SpaceID: command.SpaceID, ActionID: command.ActionID,
+						TradingAccountID: command.TradingAccountID,
+						ClientOrderID:    command.ClientOrderID,
+						InstrumentID:     command.InstrumentID,
+						Type:             command.OrderType, FillPolicy: command.FillPolicy,
+						Side: command.Side, PositionSide: command.PositionSide,
+						Quantity: command.Quantity, LimitPrice: command.LimitPrice,
+						Reason: command.Reason, DeadlineAt: command.DeadlineAt,
+					},
+				)
+				return result.Action, result.Order, placeErr
+			},
+			SubmitOrdinary: func(callCtx context.Context, command rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, submitErr := operatorService.SubmitOrder(callCtx, operatorapp.SubmitOrderCommand{
+					LogicalAccountID: command.LogicalAccountID,
+					ManualOrderCommand: operatorapp.ManualOrderCommand{
+						SpaceID: command.SpaceID, ActionID: command.ActionID,
+						TradingAccountID: command.TradingAccountID, ClientOrderID: command.ClientOrderID,
+						InstrumentID: command.InstrumentID, Type: command.OrderType, FillPolicy: command.FillPolicy,
+						Side: command.Side, PositionSide: command.PositionSide,
+						Quantity: command.Quantity, LimitPrice: command.LimitPrice,
+						Reason: command.Reason, DeadlineAt: command.DeadlineAt,
+					},
+				})
+				return result.Action, result.Order, submitErr
+			},
+			Cancel: func(
+				callCtx context.Context,
+				spaceID string,
+				actionID string,
+				orderID string,
+				reason string,
+			) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, cancelErr := operatorService.CancelOrder(
+					callCtx,
+					operatorapp.CancelOrderCommand{
+						SpaceID: spaceID, ActionID: actionID,
+						OrderID: orderID, Reason: reason,
+					},
+				)
+				return result.Action, result.Order, cancelErr
+			},
+		},
+		&rpc.DNSResolverServer{Resolver: dnsResolver},
+		rpc.ConsoleOptions{
+			Paper:              &papersimulation.Service{Store: tradeStore},
+			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+			MatcherReady:       paperMatcherWorker.Ready,
+			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
+		},
+	)
+	if err := registerHealth(
+		serverInstance,
+		tradeStore,
+		manager,
+		factsObserver,
+		targetWorker,
+		operatorWorker,
+		paperMatcherWorker,
+		paperMatcher,
+		cfg.EventBus.Enabled,
+		eventBus,
+		&targetConsumerReady,
+	); err != nil {
+		cancelRuntime()
+		if eventBus != nil {
+			eventBus.Close()
+		}
+		workers.Wait()
+		return nil, err
+	}
+
+	serverInstance.RegisterOnShutdown(func() {
+		cancelRuntime()
+		if eventBus != nil {
+			eventBus.Close()
+		}
+		workers.Wait()
+		_ = tradeStore.Close()
+	})
+	cleanupStore = false
+	return serverInstance, nil
 }
 
-func tradeHealthSnapshot(store *kernelstore.Store, state *health.State) healthz.SnapshotFunc {
-	return func(ctx context.Context) healthz.Response {
-		stats, err := store.Health(ctx)
-		busReady := kernelEventBusReady()
-		outboxLag := time.Duration(0)
-		if !stats.OldestOutbox.IsZero() {
-			outboxLag = time.Since(stats.OldestOutbox)
+func registerBuiltins(registry *execution.Registry) {
+	registry.Register(exchange.ExchangeBinance, func(
+		config exchange.AccountConfig,
+		credential exchange.Credential,
+	) (execution.ExecutionAdapter, error) {
+		return binance.New(config, credential), nil
+	})
+	registry.Register(exchange.ExchangeOKX, func(
+		config exchange.AccountConfig,
+		credential exchange.Credential,
+	) (execution.ExecutionAdapter, error) {
+		if config.ExecutionMode == exchange.ExecutionModeLive &&
+			strings.TrimSpace(credential.Passphrase) == "" {
+			return nil, errors.New("OKX live account requires passphrase")
 		}
-		privateReady := stats.OpenOrders == 0 || telemetry.PrivateStreamsReady()
-		ready := err == nil && busReady && outboxLag <= time.Minute && privateReady
-		state.SetReady(ready)
-		telemetry.UnknownOrders.Set(float64(stats.UnknownOrders))
-		telemetry.OutboxLag.Set(outboxLag.Seconds())
-		rsp := healthz.Base("trade", "trade", "", "", tradeStartedAt, ready)
-		rsp.Details = map[string]any{
-			"database_ready":             err == nil,
-			"eventbus_ready":             busReady,
-			"outbox_pending":             stats.PendingOutbox,
-			"outbox_lag_seconds":         outboxLag.Seconds(),
-			"unknown_orders":             stats.UnknownOrders,
-			"open_orders":                stats.OpenOrders,
-			"private_stream_ready":       privateReady,
-			"private_stream_connections": telemetry.PrivateConnectedCount(),
-		}
-		return rsp
+		return okx.New(config, credential), nil
+	})
+}
+
+func publicMarketData(adapter execution.ExecutionAdapter) execution.MarketDataSource {
+	source, _ := adapter.(execution.MarketDataSource)
+	return source
+}
+
+func exchangeCredential(
+	ctx context.Context,
+	secrets accountapp.SecretSource,
+	exchangeName exchange.Exchange,
+	secretID string,
+) (exchange.Credential, error) {
+	value, err := secrets.GetExchangeSecret(ctx, secretID)
+	if err != nil {
+		return exchange.Credential{}, err
 	}
+	if value.SecretID != secretID ||
+		value.Exchange != exchangeName ||
+		value.Category != "exchange" ||
+		value.Status != "active" {
+		return exchange.Credential{}, fmt.Errorf(
+			"trade bootstrap: Exchange credential %q metadata mismatch",
+			secretID,
+		)
+	}
+	var extra struct {
+		Passphrase string `json:"passphrase"`
+	}
+	if strings.TrimSpace(value.ExtraConfig) != "" {
+		if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
+			return exchange.Credential{}, fmt.Errorf(
+				"trade bootstrap: decode credential extra config: %w",
+				err,
+			)
+		}
+	}
+	return exchange.Credential{
+		APIKey: value.KeyID, APISecret: value.SecretValue,
+		Passphrase: extra.Passphrase,
+	}, nil
+}
+
+type accountSyncer struct {
+	service *accountsync.Service
+}
+
+func (s accountSyncer) SyncAccount(ctx context.Context, accountID string) error {
+	_, err := s.service.SyncAccount(ctx, accountID)
+	return err
+}
+
+func (s accountSyncer) ConfirmCancel(ctx context.Context, spaceID, orderID string) error {
+	return s.service.ConfirmCancel(ctx, spaceID, orderID)
+}
+
+type instrumentSource struct {
+	store *store.Store
+}
+
+func (s instrumentSource) GetInstrument(
+	ctx context.Context,
+	exchangeName exchange.Exchange,
+	market exchange.MarketType,
+	symbol string,
+) (exchange.Instrument, error) {
+	// Order specs carry the canonical InstrumentID. Resolve that identity and
+	// retain the native symbol only at the adapter boundary.
+	record, err := s.store.GetInstrumentByIDScoped(ctx, symbol, string(exchangeName), string(market))
+	if err != nil {
+		return exchange.Instrument{}, err
+	}
+	return instrumentFromRecord(exchangeName, market, record), nil
+}
+
+func (s instrumentSource) GetInstrumentForAccount(
+	ctx context.Context,
+	tradingAccountID string,
+	exchangeName exchange.Exchange,
+	market exchange.MarketType,
+	symbol string,
+) (exchange.Instrument, error) {
+	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return exchange.Instrument{}, err
+	}
+	record, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol)
+	if err != nil {
+		return exchange.Instrument{}, err
+	}
+	return instrumentFromRecord(exchangeName, market, record), nil
+}
+
+func instrumentFromRecord(exchangeName exchange.Exchange, market exchange.MarketType, record store.InstrumentRecord) exchange.Instrument {
+	return exchange.Instrument{
+		Exchange: exchangeName, MarketType: market, ExchangeSymbol: record.ExchangeSymbol,
+		InstrumentID: record.InstrumentID, BaseAsset: record.BaseAsset,
+		QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
+		Linear: record.Linear, ContractValue: decimal(record.ContractValue),
+		ContractValueAsset:   record.ContractValueAsset,
+		ExchangeQuantityStep: decimal(record.ExchangeQuantityStep),
+		MinExchangeQuantity:  decimal(record.MinExchangeQuantity),
+		PriceTick:            decimal(record.PriceTick), MinNotional: decimal(record.MinNotional),
+		Status: record.Status, ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
+	}
+}
+
+type positionSource struct {
+	store *store.Store
+}
+
+func (s positionSource) GetPosition(
+	ctx context.Context,
+	tradingAccountID string,
+	symbol string,
+) (exchange.Position, error) {
+	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return exchange.Position{}, err
+	}
+	record, found, err := s.store.GetPosition(
+		ctx,
+		account.SpaceID,
+		tradingAccountID,
+		symbol,
+		string(exchange.PositionSideNet),
+	)
+	if err != nil {
+		return exchange.Position{}, err
+	}
+	if !found {
+		return exchange.Position{
+			TradingAccountID: tradingAccountID, ExchangeSymbol: symbol,
+			PositionSide: exchange.PositionSideNet,
+		}, nil
+	}
+	return exchange.Position{
+		TradingAccountID: tradingAccountID, ExchangeSymbol: symbol,
+		PositionSide:   exchange.PositionSide(record.PositionSide),
+		SignedQuantity: decimal(record.SignedQuantity),
+		EntryPrice:     decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice),
+		Leverage:          decimal(record.Leverage),
+		MarginMode:        exchange.MarginMode(record.MarginMode),
+		UsedMargin:        decimal(record.UsedMargin),
+		LiquidationPrice:  decimal(record.LiquidationPrice),
+		UnrealizedPnL:     decimal(record.UnrealizedPnL),
+		RealizedPnL:       decimal(record.RealizedPnL),
+		ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
+	}, nil
+}
+
+func (s positionSource) GetPositionForAccount(
+	ctx context.Context,
+	tradingAccountID string,
+	symbol string,
+) (exchange.Position, error) {
+	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return exchange.Position{}, err
+	}
+	record, found, err := s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, symbol, string(exchange.PositionSideNet))
+	if err != nil {
+		return exchange.Position{}, err
+	}
+	if !found {
+		if instrument, instrumentErr := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol); instrumentErr == nil {
+			record, found, err = s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, instrument.ExchangeSymbol, string(exchange.PositionSideNet))
+			if err != nil {
+				return exchange.Position{}, err
+			}
+		}
+	}
+	if !found {
+		return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, nil
+	}
+	return exchange.Position{
+		TradingAccountID: tradingAccountID, InstrumentID: record.InstrumentID,
+		ExchangeSymbol: record.ExchangeSymbol,
+		PositionSide:   exchange.PositionSide(record.PositionSide), SignedQuantity: decimal(record.SignedQuantity),
+		EntryPrice: decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice), Leverage: decimal(record.Leverage),
+		MarginMode: exchange.MarginMode(record.MarginMode), UsedMargin: decimal(record.UsedMargin),
+		LiquidationPrice: decimal(record.LiquidationPrice), UnrealizedPnL: decimal(record.UnrealizedPnL),
+		RealizedPnL: decimal(record.RealizedPnL), ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
+	}, nil
+}
+
+func decimal(value string) shared.Decimal {
+	if strings.TrimSpace(value) == "" {
+		return shared.Zero()
+	}
+	parsed, err := shared.ParseDecimal(value)
+	if err != nil {
+		return shared.Zero()
+	}
+	return parsed
+}
+
+func paperSnapshotRecord(snapshot exchange.AccountSnapshot) store.TradingAccountSnapshot {
+	balances := make([]store.AssetBalance, 0, len(snapshot.Balances))
+	for _, balance := range snapshot.Balances {
+		balances = append(balances, store.AssetBalance{
+			Asset: balance.Asset, Available: balance.Available.String(), Locked: balance.Locked.String(), Total: balance.Total.String(),
+		})
+	}
+	return store.TradingAccountSnapshot{
+		Balances: balances, Equity: snapshot.Equity.String(), AvailableFunds: snapshot.AvailableFunds.String(),
+		UsedMargin: snapshot.UsedMargin.String(), MaintenanceMargin: snapshot.MaintenanceMargin.String(),
+		UnrealizedPnL: snapshot.UnrealizedPnL.String(), ExchangeUpdatedAt: snapshot.ExchangeUpdatedAt.UnixMilli(),
+	}
+}
+
+func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetrics {
+	if serverInstance == nil {
+		return nil
+	}
+	moduleMetrics, err := report.NewModuleMetrics(
+		prometheus.DefaultRegisterer,
+		"trade",
+		report.HealthCheckIDsForModule("trade"),
+	)
+	if err != nil {
+		log.Warnf("trade module metrics disabled: %v", err)
+		return nil
+	}
+	handler, err := report.NewHandler(report.DefaultConfig("trade", "moox_trade"))
+	if err != nil {
+		log.Warnf("trade metrics reporter disabled: %v", err)
+		return moduleMetrics
+	}
+	service := serverInstance.Service("trpc.moox.trade.metrics.timer")
+	if service == nil {
+		log.Warn("trade metrics timer service is not configured")
+		return moduleMetrics
+	}
+	timer.RegisterHandlerService(
+		service,
+		handler.Handle,
+	)
+	return moduleMetrics
+}
+
+func registerEquitySamplerTimer(
+	serverInstance *server.Server,
+	sampler *traderuntime.EquitySampler,
+) {
+	if serverInstance == nil || sampler == nil {
+		return
+	}
+	service := serverInstance.Service("trpc.moox.trade.equity.timer")
+	if service == nil {
+		log.Warn("trade equity timer service is not configured")
+		return
+	}
+	timer.RegisterHandlerService(service, sampler.Handle)
+}
+
+func registerHealth(
+	serverInstance *server.Server,
+	tradeStore *store.Store,
+	manager *traderuntime.Manager,
+	factsObserver *accountsync.LogicalAccountFactsObserver,
+	targetWorker *traderuntime.TargetWorker,
+	operatorWorker *traderuntime.OperatorWorker,
+	paperMatcherWorker *traderuntime.PaperMatcherWorker,
+	paperMatcher *executionpaper.Matcher,
+	eventBusEnabled bool,
+	eventBus *jetstream.Client,
+	targetConsumerReady *atomic.Bool,
+) error {
+	state := health.New("trade", "trade", "", "")
+	readiness := health.Readiness{
+		DatabaseReady: func(ctx context.Context) error {
+			return tradeStore.Ping(ctx)
+		},
+		EventBusEnabled: eventBusEnabled,
+		EventBusReady: func() bool {
+			return eventBus != nil && eventBus.Ready() &&
+				targetConsumerReady != nil && targetConsumerReady.Load()
+		},
+		Sessions: manager,
+		LogicalAccountWorker: func() (bool, string) {
+			snapshot := factsObserver.Snapshot()
+			return snapshot.Ready, snapshot.LastError
+		},
+		TargetWorker:       targetWorker.Snapshot,
+		OperatorWorker:     operatorWorker.Snapshot,
+		PaperMatcherWorker: paperMatcherWorker.State,
+		PaperAccountErrors: paperMatcher.AccountErrors,
+	}
+	state.SnapshotFunc = health.SnapshotFunc(
+		state,
+		readiness,
+		"trade",
+		"trade",
+		"",
+		"",
+		startedAt,
+	)
+	if err := health.Register(
+		serverInstance.Service("trpc.moox.trade.Health"),
+		state,
+	); err != nil {
+		return fmt.Errorf("trade health server failed to register: %w", err)
+	}
+	return nil
 }

@@ -116,6 +116,30 @@ const setTerminalRef = (tabId: string, el: HTMLElement | null) => {
   }
 };
 
+// The terminal is mounted inside an Arco modal. During the modal transition
+// the wrapper can briefly report a zero-sized layout, which makes xterm's
+// first fit produce invalid PTY dimensions for the WebSocket handshake.
+const waitForTerminalLayout = async (el: HTMLElement) => {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return true;
+
+    await new Promise<void>(resolve => {
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 16);
+      }
+    });
+  }
+  return false;
+};
+
+const terminalDimensions = (term: Terminal) => ({
+  width: Math.max(Number.isFinite(term.cols) ? term.cols : 80, 40),
+  height: Math.max(Number.isFinite(term.rows) ? term.rows : 24, 2)
+});
+
 // ---------- ResizeObserver ----------
 
 let resizeObserver: ResizeObserver | null = null;
@@ -133,9 +157,12 @@ const setupResizeObserver = (tabId: string) => {
     const tab = tabs.value.find(t => t.id === tabId);
     if (tab?.fitAddon && tab.terminal) {
       try {
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
         tab.fitAddon.fit();
         if (tab.connected && tab.ws?.readyState === WebSocket.OPEN) {
-          resizeSSHTerminal(tab.id, tab.terminal.cols, tab.terminal.rows);
+          const { width, height } = terminalDimensions(tab.terminal);
+          resizeSSHTerminal(tab.id, width, height);
         }
       } catch {
         // ignore fit errors during transition
@@ -154,7 +181,8 @@ const handleWindowResize = () => {
   try {
     tab.fitAddon.fit();
     if (tab.connected && tab.ws?.readyState === WebSocket.OPEN) {
-      resizeSSHTerminal(tab.id, tab.terminal.cols, tab.terminal.rows);
+      const { width, height } = terminalDimensions(tab.terminal);
+      resizeSSHTerminal(tab.id, width, height);
     }
   } catch {
     // ignore
@@ -238,6 +266,7 @@ const initTerminal = async (tab: TerminalTab) => {
   term.loadAddon(fitAddon);
   term.open(container);
 
+  const hasLayout = await waitForTerminalLayout(container);
   try {
     fitAddon.fit();
   } catch {
@@ -247,9 +276,32 @@ const initTerminal = async (tab: TerminalTab) => {
   tab.terminal = term;
   tab.fitAddon = fitAddon;
 
-  // Build WebSocket URL and connect
-  const wsUrl = await getSSHWebSocketUrl(tab.id, term.cols, term.rows);
-  const ws = new WebSocket(wsUrl);
+  // The server rejects dimensions below 40x2. Keep a valid fallback for a
+  // slow modal transition; the observer below will resize the PTY afterwards.
+  const { width, height } = terminalDimensions(term);
+  if (!hasLayout) {
+    term.writeln("\r\n\x1b[33m正在等待终端布局完成...\x1b[0m");
+  }
+
+  // Build WebSocket URL and connect. Ticket issuance and WebSocket creation
+  // are both asynchronous and can fail before an actual socket exists.
+  let ws: WebSocket;
+  try {
+    const wsUrl = await getSSHWebSocketUrl(tab.id, width, height);
+    ws = new WebSocket(wsUrl);
+  } catch (error: any) {
+    tab.connected = false;
+    term.writeln(`\r\n\x1b[31m[连接失败] ${error?.message || "无法建立终端连接"}\x1b[0m`);
+    Message.error(`SSH 终端连接失败：${error?.message || "请稍后重试"}`);
+    try {
+      await disconnectSSHSession(tab.id);
+    } catch {
+      // ignore cleanup errors
+    }
+    return;
+  }
+
+  let connectionErrorShown = false;
 
   ws.onopen = () => {
     tab.connected = true;
@@ -260,12 +312,15 @@ const initTerminal = async (tab: TerminalTab) => {
 
   ws.onclose = () => {
     tab.connected = false;
-    term.writeln("\r\n\x1b[31m[连接已断开]\x1b[0m");
+    if (!connectionErrorShown) {
+      term.writeln("\r\n\x1b[31m[连接已断开]\x1b[0m");
+    }
   };
 
   ws.onerror = () => {
     tab.connected = false;
-    term.writeln("\r\n\x1b[31m[连接发生错误]\x1b[0m");
+    connectionErrorShown = true;
+    term.writeln("\r\n\x1b[31m[连接发生错误，请点击“重连”再试]\x1b[0m");
   };
 
   tab.ws = ws;

@@ -157,7 +157,7 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 			require.NoError(t, err)
 			enabledIDs := map[string]bool{}
 			for _, row := range rows {
-				assert.NotContains(t, []string{"service_gateway", "service_gateway_internal"}, row.ServiceName)
+				assert.NotEqual(t, "service_gateway_internal", row.ServiceName)
 				if row.GatewayEnabled {
 					assert.Equal(t, "127.0.0.1", row.Host)
 					assert.NotEmpty(t, row.GatewayServiceID)
@@ -167,48 +167,12 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 			for _, serviceID := range []string{"collectmgr", "cloudnode", "factormgr", "strategymgr", "monitor", "hostagent", "sysdeploy", "secret"} {
 				assert.True(t, enabledIDs[serviceID], "canonical gateway service %s missing", serviceID)
 			}
-			for _, serviceID := range []string{"trade_account", "trade_apikey", "trade_order", "trade_tradeop"} {
+			for _, serviceID := range []string{"trade_console"} {
 				assert.False(t, enabledIDs[serviceID], "sensitive gateway service %s exposed", serviceID)
 			}
+			assert.True(t, enabledIDs["trade_dns_resolver"], "trade DNS resolver gateway service missing")
 		})
 	}
-}
-
-func TestSeedDefaultsRemovesPersistedObsoleteGatewayRows(t *testing.T) {
-	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db, "configured-node")
-	ctx := context.Background()
-	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "configured-node", Name: "configured-node", PublicAddress: "https://a.example", Status: "enabled"}))
-	for _, name := range []string{"service_gateway", "service_gateway_internal"} {
-		row := Deployment{NodeID: "configured-node", ServiceName: name, Host: "127.0.0.1", Port: 11001, Status: "active"}
-		require.NoError(t, svc.dao.Create(ctx, &row))
-	}
-	require.NoError(t, svc.SeedDefaults(ctx))
-	var count int64
-	require.NoError(t, db.Model(&Deployment{}).Where("c_service_name IN ?", []string{"service_gateway", "service_gateway_internal"}).Count(&count).Error)
-	assert.Zero(t, count)
-}
-
-func TestSeedDefaultsRemovesSplitViewRowsAndMigratesUnifiedHealth(t *testing.T) {
-	db := setupEmptySysDeployTestDB(t)
-	svc := newTestService(db, "configured-node")
-	ctx := context.Background()
-	require.NoError(t, svc.dao.CreateGatewayNode(ctx, &GatewayNode{NodeID: "configured-node", Name: "configured-node", PublicAddress: "https://a.example", Status: "enabled"}))
-	for _, name := range []string{"storage_view_builder", "storage_view_query", "storage_view_index"} {
-		require.NoError(t, svc.dao.Create(ctx, &Deployment{NodeID: "configured-node", ServiceName: name, Host: "127.0.0.1", Port: 1, Status: "active"}))
-	}
-	require.NoError(t, svc.dao.Create(ctx, &Deployment{
-		NodeID: "configured-node", ServiceName: "storage-view", Host: "127.0.0.1", Port: 20202, Status: "active",
-		ExtraConfig: `{"health_url":"http://127.0.0.1:20212/readyz","health_kind":"readiness","monitor_enabled":true}`,
-	}))
-
-	require.NoError(t, svc.SeedDefaults(ctx))
-	var count int64
-	require.NoError(t, db.Model(&Deployment{}).Where("c_service_name IN ?", []string{"storage_view_builder", "storage_view_query", "storage_view_index"}).Count(&count).Error)
-	assert.Zero(t, count)
-	view, err := svc.dao.Get(ctx, "configured-node", "storage-view")
-	require.NoError(t, err)
-	assert.Equal(t, "http://127.0.0.1:20211/readyz", healthURL(view.ExtraConfig))
 }
 
 func TestReportGatewayStatusExactHeartbeatAndUnknownNode(t *testing.T) {
@@ -272,7 +236,7 @@ func TestSeedDefaultsSensitiveServicesCannotEnterSnapshot(t *testing.T) {
 	for _, route := range snapshot.Routes {
 		ids[route.ServiceID] = true
 	}
-	for _, id := range []string{"trade_account", "trade_apikey", "trade_order", "trade_tradeop"} {
+	for _, id := range []string{"trade_console"} {
 		assert.False(t, ids[id], "sensitive route %s compiled", id)
 	}
 }
@@ -292,7 +256,7 @@ func TestUniqueConstraintClassificationIsNarrow(t *testing.T) {
 
 func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
 	allowed := map[string]string{"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret"}
-	sensitive := map[string]bool{"trade_account": true, "trade_apikey": true, "trade_order": true, "trade_tradeop": true}
+	sensitive := map[string]bool{"trade_console": true}
 	for _, row := range DefaultDeployments("node-a") {
 		if serviceID, ok := allowed[row.ServiceName]; ok {
 			assert.True(t, row.GatewayEnabled)
@@ -303,10 +267,16 @@ func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
 			assert.False(t, row.GatewayEnabled)
 			assert.Empty(t, row.GatewayServiceID)
 		}
+		if row.ServiceName == "trade_dns_resolver" {
+			assert.True(t, row.GatewayEnabled)
+			assert.Equal(t, "trade_dns_resolver", row.GatewayServiceID)
+			assert.Contains(t, row.ExtraConfig, `"ResolveDomains"`)
+			assert.Contains(t, row.ExtraConfig, `"collector"`)
+		}
 	}
 }
 
-func TestDefaultSysdeployRouteAllowsOnlyCollectorLookup(t *testing.T) {
+func TestDefaultSysdeployRouteAllowsBoundedInventoryLookup(t *testing.T) {
 	svc := newTestService(setupEmptySysDeployTestDB(t), "node-a")
 	ctx := context.Background()
 	require.NoError(t, svc.SeedDefaults(ctx))
@@ -320,14 +290,16 @@ func TestDefaultSysdeployRouteAllowsOnlyCollectorLookup(t *testing.T) {
 	}
 	require.Equal(t, "sysdeploy", sysdeployRoute.ServiceID)
 	assert.True(t, sysdeployRoute.AllowsMethod("ListActiveServiceDeployments"))
+	assert.True(t, sysdeployRoute.AllowsMethod("ListServiceDeployments"))
 	assert.False(t, sysdeployRoute.AllowsMethod("CreateGatewayNode"))
-	assert.Equal(t, []string{"ListActiveServiceDeployments"}, sysdeployRoute.AllowedMethods)
+	assert.True(t, sysdeployRoute.AllowsCaller("collector"))
+	assert.Equal(t, []string{"ListActiveServiceDeployments", "ListServiceDeployments"}, sysdeployRoute.AllowedMethods)
 	rsp, err := svc.GetGatewayNodeRoutes(ctx, &pb.GetGatewayNodeRoutesReq{NodeId: "node-a"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	for _, route := range rsp.GetRoutes() {
 		if route.GetServiceId() == "sysdeploy" {
-			assert.Equal(t, []string{"ListActiveServiceDeployments"}, route.GetAllowedMethods())
+			assert.Equal(t, []string{"ListActiveServiceDeployments", "ListServiceDeployments"}, route.GetAllowedMethods())
 		}
 	}
 	var secretRoute gatewayproxy.Route
@@ -337,9 +309,10 @@ func TestDefaultSysdeployRouteAllowsOnlyCollectorLookup(t *testing.T) {
 		}
 	}
 	require.Equal(t, "secret", secretRoute.ServiceID)
-	assert.Equal(t, []string{"ListSecrets", "RevealSecret"}, secretRoute.AllowedMethods)
+	assert.Equal(t, []string{"GetSecretValue", "ListSecrets"}, secretRoute.AllowedMethods)
 	assert.True(t, secretRoute.AllowsMethod("ListSecrets"))
-	assert.True(t, secretRoute.AllowsMethod("RevealSecret"))
+	assert.True(t, secretRoute.AllowsMethod("GetSecretValue"))
+	assert.True(t, secretRoute.AllowsCaller("trade"))
 	assert.False(t, secretRoute.AllowsMethod("DeleteSecret"))
 	assert.False(t, secretRoute.AllowsMethod("CreateSecret"))
 }

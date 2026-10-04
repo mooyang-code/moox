@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"path/filepath"
 	"testing"
@@ -9,17 +10,19 @@ import (
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	observabilityconsumer "github.com/mooyang-code/moox/modules/monitor/internal/observability/eventconsumer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	messagepb "github.com/mooyang-code/moox/packages/messagepb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/mooyang-code/moox/packages/observabilitypb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -51,7 +54,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		control.Close()
 		t.Fatal(err)
 	}
-	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_METRICS", Subjects: []string{"moox.metrics.>"}, Retention: nats.LimitsPolicy, Storage: nats.FileStorage, MaxAge: 24 * time.Hour, MaxBytes: 32 << 20, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}); err != nil {
+	if _, err := js.AddStream(&nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Retention: nats.LimitsPolicy, Storage: nats.FileStorage, MaxAge: 24 * time.Hour, MaxBytes: 32 << 20, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}); err != nil {
 		control.Close()
 		t.Fatal(err)
 	}
@@ -71,35 +74,65 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	access := &metricsE2EAccess{}
-	storageCfg := monconfig.MetricsStorageConfig{SpaceID: metrics.InternalMetricSpaceID, DatasetID: "moox_service_metrics", Frequency: "30s", WriteBatchSize: 20}
+	storageCfg := monconfig.MetricsStorageConfig{SpaceID: metrics.InternalMetricSpaceID, DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", WriteBatchSize: 20}
 	storage := metrics.NewStorageAdapter(access, nil, storageCfg)
 	messageStore, err := store.WithDatabase(mgr, metrics.NewMetricMessageStore)
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := metrics.NewConsumer(ctx, metrics.ConsumerOptions{Client: eventClient, Storage: storage, MessageStore: messageStore, ServiceName: "moox-monitor", InstanceID: "monitor-e2e", Config: monconfig.MetricsConfig{Stream: "MOOX_METRICS", Topic: metrics.MetricTopic, Consumer: "monitor-e2e-ingest", FetchBatchSize: 4, FetchMaxWait: time.Second, AckWait: time.Second, MaxAckPending: 8}})
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := observabilityconsumer.Routes{
+		Metrics: func(routeCtx context.Context, message *eventpb.EventMessage, report *metricspb.MetricReport) error {
+			observedAt := message.GetOccurredAt().AsTime()
+			samples, parseErr := metrics.ParseSnapshot(report.GetSnapshot(), metrics.Envelope{
+				ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(),
+				MessageID: message.GetEventId(), ProducerNodeID: report.GetNodeId(),
+				ProducerVersion: report.GetServiceVersion(), ObservedAt: observedAt,
+			}, metrics.DefaultLimits())
+			if parseErr != nil {
+				return observabilityconsumer.Permanent(parseErr)
+			}
+			if writeErr := storage.WriteSamples(routeCtx, samples); writeErr != nil {
+				return writeErr
+			}
+			_, commitErr := messageStore.CommitIngest(routeCtx, message, report, samples)
+			return commitErr
+		},
+		Host:   func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
+		Health: func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error { return nil },
+	}
+	consumer, err := observabilityconsumer.NewConsumer(ctx, eventClient, registry, observabilityconsumer.DefaultConfig(), routes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer consumer.Close()
 
 	observed := time.Now().UTC().Truncate(time.Millisecond)
-	raw := []byte("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n")
-	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 1, SampleCount: 1}
-	payload, err := proto.Marshal(snapshot)
+	dataTime := observed.Add(-time.Minute)
+	labels := `space_id="crypto",view_id="view_crypto_kline_1m",dataset_id="dataset_binance_kline_1m",subject_id="OPG-USDT-SPOT",freq="1m",series_tag="venue:binance"`
+	raw := []byte(fmt.Sprintf("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n"+
+		"moox_storage_view_dataset_output_last_data_time_seconds{%s} %d\n", labels, dataTime.Unix()))
+	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 2, SampleCount: 2}
+	publisher, err := events.NewPublisher(eventClient, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := timestamppb.New(observed)
-	message := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: "monitor-metric-e2e-1", Topic: metrics.MetricTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "fixture-service", InstanceId: "fixture-1", BootId: "boot-1", NodeId: "node-1", Version: "test"}, SpaceId: metrics.InternalMetricSpaceID, OccurredAt: now, PublishedAt: now, ContentType: metrics.MetricContentType, MessageType: "moox.metrics.snapshot.reported.v1", Payload: payload}
-	if _, err := eventClient.Publish(ctx, message); err != nil {
+	messageID := "monitor-metric-e2e-1"
+	if _, err := publisher.Publish(ctx, events.ObservabilityMetricsSnapshotReported, &metricspb.MetricReport{ServiceName: "fixture-service", InstanceId: "fixture-1", NodeId: "node-1", BootId: "boot-1", ServiceVersion: "test", Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: observed, SpaceID: metrics.InternalMetricSpaceID, SubjectID: "fixture-service/fixture-1"}); err != nil {
 		t.Fatal(err)
 	}
 	deliveries, err := fetchMetricsEventually(ctx, consumer, 5*time.Second)
 	if err != nil || len(deliveries) != 1 {
 		t.Fatalf("metrics Fetch() deliveries=%d err=%v", len(deliveries), err)
 	}
-	if err := consumer.HandleDelivery(ctx, deliveries[0]); err != nil {
+	result := consumer.Handle(ctx, deliveries[0])
+	if result.Decision != jetstream.ACK {
+		t.Fatalf("consumer decision=%v err=%v", result.Decision, result.Err)
+	}
+	if err := jetstream.ApplyHandlerResult(ctx, deliveries[0], result); err != nil {
 		t.Fatal(err)
 	}
 	series, err := messageStore.ListSeries(ctx, "fixture-service", "moox_e2e_requests", 10)
@@ -113,28 +146,36 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest.Value != 7 || latest.MessageID != message.MessageId {
-		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, message.MessageId)
+	if latest.Value != 7 || latest.MessageID != messageID {
+		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, messageID)
 	}
-	if len(access.rows) != 1 || access.rows[0].GetKey().GetSubjectId() != series[0].SeriesID {
-		t.Fatalf("storage rows=%d row=%+v", len(access.rows), access.rows)
+	if len(access.rows) != 2 {
+		t.Fatalf("storage rows=%d, want two reporter samples", len(access.rows))
+	}
+	query := metrics.NewQueryService(messageStore, nil)
+	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
+		ViewID: "view_crypto_kline_1m", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+	}}, 20).Evaluate(ctx, observed)
+	if err != nil || len(reports) != 1 || !reports[0].Success || reports[0].ObservedCount != 1 {
+		t.Fatalf("kline freshness reports=%+v err=%v", reports, err)
 	}
 }
 
 type metricsE2EAccess struct {
-	rows []*storagepb.TimeSeriesRow
+	rows []*storagepb.RowFieldUpsert
 }
 
-func (a *metricsE2EAccess) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
+func (a *metricsE2EAccess) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	a.rows = append(a.rows, req.GetRows()...)
-	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
 func (a *metricsE2EAccess) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
-func fetchMetricsEventually(ctx context.Context, consumer *metrics.Consumer, timeout time.Duration) ([]*jetstream.Delivery, error) {
+func fetchMetricsEventually(ctx context.Context, consumer *observabilityconsumer.Consumer, timeout time.Duration) ([]*jetstream.Delivery, error) {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	for {

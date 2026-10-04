@@ -24,50 +24,67 @@ healthcheck.sh
 原子方式生成权限为 `0600` 的 ZIP 文件：
 
 ```bash
-./scripts/package-service.sh \
+./scripts/build/package-service.sh \
   --service-dir ./release/service-package \
   --output ./release/moox-admin-linux-amd64.zip
 ```
 
+Factor 控制面与计算流水线由单个 `factor` 服务承载。构建目标为 `factor`；发布包使用
+通用 `package-service.sh` 和 `moox-cli setup deploy-service`，配置含 `python`、`pipeline`
+和 `eventbus` 段，不再单独发布计算引擎。
+
 ## 前置条件
 
-- 用户维护且权限为 `0600` 的 `custom.toml`。
-- 目标主机已在 `custom.toml` 中定义，例如 `control`。
+- 用户维护且权限为 `0600` 的 `moox.toml`。
+- 目标主机已在 `moox.toml` 中定义，例如 `control`。
 - SSH 主机指纹已通过独立可信渠道核验，并已写入 MooX known hosts：
 
 ```bash
 ./bin/moox-cli setup trust-host \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --host control \
   --fingerprint 'SHA256:<已独立核验的指纹>'
 ```
 
-Agent 不得读取、解析、打印、复制或 `source` `custom.toml` 中的密码和密钥。
+Agent 不得读取、解析、打印、复制或 `source` `moox.toml` 中的密码和密钥。
+
+## EventBus 凭据
+
+服务包禁止打入 EventBus 口令或 CA。发布前确认目标主机 `~/.config/moox/eventbus/` 的
+`ca.pem` 与 control 权威目录指纹一致，且该服务对应的 role YAML 已同步。EventBus CA
+或 token 刚轮换时，先完成 [`eventbus-credentials.md`](eventbus-credentials.md) 的
+fan-out，再 `deploy-service`。只换 ZIP 不会更新远端凭据；`deploy-service` 也不会更新
+其他主机上的 user-systemd Host Agent。
 
 ## 发布命令
 
 ```bash
 ./bin/moox-cli setup deploy-service \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --host control \
   --service admin \
   --package ./release/moox-admin-linux-amd64.zip
 ```
 
-默认远端部署目录为 `~/moox/prod`，服务部署到其他目录时显式指定：
+默认远端部署目录为 `/data/moox/prod`，服务部署到其他目录时显式指定：
 
 ```bash
 ./bin/moox-cli setup deploy-service \
-  --file ./custom.toml \
+  --file ./moox.toml \
   --host compute \
   --service storage-primary \
   --package ./release/moox-storage-primary-linux-amd64.zip \
-  --deploy-dir ~/moox/storage
+  --deploy-dir /data/moox/storage
 ```
 
 ## 发布流程
 
 CLI 会按以下顺序执行：
+
+当 `--service` 为 `admin`、`admin_gateway`、`web-host` 或 `web_host` 时，CLI
+会在上传前检查控制面 Caddy internal CA 是否已被当前浏览器机器信任，必要时自动
+执行平台证书安装。这样发布 Web 前端或 Admin 后端后，SSH WebSocket 不会因为
+`ERR_CERT_AUTHORITY_INVALID` 才暴露问题。公网 ACME 模式会跳过该检查。
 
 1. 在本地校验 ZIP 路径、大小、目录穿越、符号链接、必要文件和 SHA-256 摘要。
 2. 通过 SSH/SFTP 将 ZIP 上传到远端受限的临时路径，并再次校验远端摘要。
@@ -90,7 +107,7 @@ ssh -o StrictHostKeyChecking=no ...
 
 也不要将密码导出到环境变量、写入命令行、shell 历史、临时脚本、CI 日志或 ZIP 包。
 如果密码已经出现在命令行、聊天记录或日志中，应立即轮换远端密码，并更新用户维护的
-`custom.toml`。
+`moox.toml`。
 
 ## 常见失败
 

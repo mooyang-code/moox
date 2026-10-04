@@ -1,39 +1,1933 @@
+//go:build cgo
+
 package duckdb
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
+	_ "github.com/marcboeker/go-duckdb/v2"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type IndexManagerOptions struct{ Root string }
-type IndexManager struct{ core *viewindex.MemoryEngine }
+
+type IndexManager struct {
+	root       string
+	mu         sync.Mutex
+	dbs        map[string]*sql.DB
+	schema     map[string]map[string]pb.FieldValueType
+	dataset    map[string]string
+	space      map[string]string
+	coverageMu sync.Mutex
+}
+
+// duckDBContext checks cancellation before entering DuckDB, then detaches it
+// for the duration of the operation. go-duckdb implements QueryContext and
+// ExecContext by calling duckdb_interrupt when a context is cancelled. Under
+// concurrent connections that interrupt can cross the cgo boundary as an
+// uncaught C++ exception ("duckdb::Exception: Interrupted!") and abort the
+// storage-view process. A request may still be rejected before it starts, but
+// an in-flight DuckDB operation must run to its transaction/query boundary.
+func duckDBContext(ctx context.Context) (context.Context, error) {
+	if ctx == nil {
+		return context.Background(), nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return context.WithoutCancel(ctx), nil
+}
+
+var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
+var duckDBMemoryLimitRE = regexp.MustCompile(`^[1-9][0-9]*(?:KB|MB|GB|TB)$`)
+
+const (
+	duckDBMemoryLimitEnv  = "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT"
+	duckDBThreadsEnv      = "MOOX_STORAGE_VIEW_DUCKDB_THREADS"
+	duckDBMaxOpenConnsEnv = "MOOX_STORAGE_VIEW_DUCKDB_MAX_OPEN_CONNS"
+	defaultDuckDBMemory   = "256MB"
+	defaultDuckDBThreads  = 1
+	defaultMaxOpenConns   = 4
+	defaultMaxIdleConns   = 1
+	// DuckDB accepts a large parameter count, but keeping each statement
+	// bounded avoids oversized SQL packets during a 10k-row backfill while
+	// still amortizing per-row Exec overhead for the event consumer.
+	maxWriteRowsPerStatement = 256
+	// internalAttributesColumn keeps row attributes that are not part of the
+	// declared View projection (notably factor.source_hash) available to
+	// downstream readers without exposing them as user columns.
+	internalAttributesColumn = "__moox_attributes"
+)
 
 func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 	if strings.TrimSpace(opts.Root) == "" {
 		return nil, errors.New("view index root is required")
 	}
-	return &IndexManager{core: viewindex.NewMemoryEngine("duckdb", opts.Root)}, nil
+	if err := os.MkdirAll(opts.Root, 0o755); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(opts.Root)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".duckdb.prepare-") {
+			// A process may have been interrupted after creating the temporary
+			// build file. It is never an authoritative slot and is safe to
+			// remove before Metadata restores active indexes.
+			_ = os.Remove(filepath.Join(opts.Root, entry.Name()))
+			_ = os.Remove(filepath.Join(opts.Root, entry.Name()+".wal"))
+		}
+	}
+	return &IndexManager{root: opts.Root, dbs: make(map[string]*sql.DB), schema: make(map[string]map[string]pb.FieldValueType), dataset: make(map[string]string), space: make(map[string]string)}, nil
 }
+
 func (m *IndexManager) Engine() string { return "duckdb" }
-func (m *IndexManager) Prepare(c context.Context, id string, s viewindex.ViewIndexSchema) error {
-	return m.core.Prepare(c, id, s)
+
+func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.ViewIndexSchema) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
+	path, err := m.path(id)
+	if err != nil {
+		return err
+	}
+	// Build into a sibling temporary file. The active slot stays intact until
+	// the complete schema and metadata have been committed and the file is
+	// closed; the final rename is atomic on the same filesystem. A crash during
+	// DDL therefore leaves the previous active file (or only an ignored temp
+	// file), never a half-created official slot.
+	tempPath := fmt.Sprintf("%s.prepare-%d", path, time.Now().UnixNano())
+	db, err := open(tempPath)
+	if err != nil {
+		return err
+	}
+	cleanupTemp := func() {
+		_ = db.Close()
+		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath + ".wal")
+	}
+	columns := schemaColumns(schema.Columns)
+	createColumns := []string{
+		"subject_id VARCHAR NOT NULL",
+		"freq VARCHAR NOT NULL",
+		"data_time TIMESTAMP_NS NOT NULL",
+		"series_tag VARCHAR NOT NULL",
+		internalAttributesColumn + " JSON",
+	}
+	for name, valueType := range columns {
+		if isSystemColumn(name) {
+			continue
+		}
+		createColumns = append(createColumns, quote(name)+" "+duckType(valueType))
+	}
+	statement := fmt.Sprintf(`
+		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '');
+		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
+		CREATE TABLE view_series_counts (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, series_tag VARCHAR NOT NULL, row_count UBIGINT NOT NULL, PRIMARY KEY (subject_id, freq, series_tag));
+		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
+		CREATE INDEX idx_view_rows_data_time ON view_rows (data_time);`, strings.Join(createColumns, ", "))
+	if _, err := db.ExecContext(ctx, statement); err != nil {
+		cleanupTemp()
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at) VALUES (1, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		cleanupTemp()
+		return err
+	}
+	for name, valueType := range columns {
+		if _, err := db.ExecContext(ctx, `INSERT INTO view_columns VALUES (?, ?)`, name, int32(valueType)); err != nil {
+			cleanupTemp()
+			return err
+		}
+	}
+	if err := db.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath + ".wal")
+		return err
+	}
+	if err := m.closeIndex(id); err != nil {
+		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath + ".wal")
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath + ".wal")
+		return err
+	}
+	db, err = open(path)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.dbs[id] = db
+	m.schema[id] = columns
+	m.dataset[id] = schema.PrimaryDatasetID
+	m.space[id] = schema.SpaceID
+	m.mu.Unlock()
+	return nil
 }
-func (m *IndexManager) Apply(c context.Context, id string, b viewindex.ViewIndexApplyBatch) error {
-	return m.core.Apply(c, id, b)
+
+func (m *IndexManager) ExtendColumns(ctx context.Context, id string, current, next viewindex.ViewIndexSchema) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
+	if id == "" || current.SpaceID == "" || current.ViewID == "" || current.PrimaryDatasetID == "" ||
+		current.Engine != "duckdb" || next.Engine != current.Engine || next.SpaceID != current.SpaceID ||
+		next.ViewID != current.ViewID || next.PrimaryDatasetID != current.PrimaryDatasetID ||
+		current.ViewVersion == 0 || next.ViewVersion <= current.ViewVersion || current.SchemaHash == "" || next.SchemaHash == "" {
+		return fmt.Errorf("%w: DuckDB requires matching index identity and increasing revisions", viewindex.ErrSchemaExtensionConflict)
+	}
+	if viewindex.HashViewIndexSchema(current) != current.SchemaHash || viewindex.HashViewIndexSchema(next) != next.SchemaHash {
+		return fmt.Errorf("%w: DuckDB schema hash does not match its columns", viewindex.ErrSchemaExtensionConflict)
+	}
+	if !viewindex.IsAppendOnlyViewColumns(current.Columns, next.Columns) {
+		return fmt.Errorf("%w: DuckDB columns are not append-only", viewindex.ErrSchemaExtensionConflict)
+	}
+	oldColumns, targetColumns := schemaColumns(current.Columns), schemaColumns(next.Columns)
+	if len(oldColumns) != len(current.Columns) || len(targetColumns) != len(next.Columns) {
+		return fmt.Errorf("%w: DuckDB schema contains an invalid or system column", viewindex.ErrSchemaExtensionConflict)
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var version uint64
+	var schemaHash, datasetID, spaceID string
+	if err := tx.QueryRowContext(ctx, `SELECT view_version, schema_hash, primary_dataset_id, space_id FROM view_meta WHERE singleton = 1`).Scan(&version, &schemaHash, &datasetID, &spaceID); err != nil {
+		return err
+	}
+	physicalColumns, err := readViewColumns(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if datasetID != current.PrimaryDatasetID || spaceID != current.SpaceID {
+		return fmt.Errorf("%w: DuckDB index identity differs from physical metadata", viewindex.ErrSchemaExtensionConflict)
+	}
+	if version == next.ViewVersion && schemaHash == next.SchemaHash && samePhysicalColumns(physicalColumns, targetColumns) {
+		return nil
+	}
+	if version < current.ViewVersion || version > next.ViewVersion ||
+		!isPhysicalAppendOnlyState(physicalColumns, oldColumns, targetColumns) {
+		return fmt.Errorf("%w: DuckDB physical state is not an append-only prefix at revision %d", viewindex.ErrSchemaExtensionConflict, version)
+	}
+	if version == current.ViewVersion {
+		if schemaHash != current.SchemaHash || !samePhysicalColumns(physicalColumns, oldColumns) {
+			return fmt.Errorf("%w: DuckDB active schema differs from the expected current contract", viewindex.ErrSchemaExtensionConflict)
+		}
+	} else if version == next.ViewVersion {
+		return fmt.Errorf("%w: DuckDB target revision has a conflicting physical schema", viewindex.ErrSchemaExtensionConflict)
+	} else if !matchesAppendOnlyPhysicalPrefix(physicalColumns, next, version, schemaHash) {
+		return fmt.Errorf("%w: DuckDB intermediate schema is not an append-only target prefix", viewindex.ErrSchemaExtensionConflict)
+	}
+	for _, column := range next.Columns {
+		name := column.GetColumnName()
+		if _, exists := physicalColumns[name]; exists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE view_rows ADD COLUMN `+quote(name)+` `+duckType(column.GetValueType())); err != nil {
+			return fmt.Errorf("add DuckDB View column %q: %w", name, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO view_columns (column_name, value_type) VALUES (?, ?)`, name, int32(column.GetValueType())); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE view_meta SET view_version = ?, schema_hash = ?, updated_at = ?
+		WHERE singleton = 1 AND view_version = ? AND schema_hash = ?`, next.ViewVersion, next.SchemaHash,
+		time.Now().UTC().Format(time.RFC3339Nano), version, schemaHash)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return errors.New("DuckDB schema extension lost its physical metadata compare-and-swap")
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.schema[id] = targetColumns
+	m.mu.Unlock()
+	return nil
 }
-func (m *IndexManager) Write(c context.Context, id string, b viewindex.BatchWrite) error {
-	return m.core.Write(c, id, b)
+
+func readViewColumns(ctx context.Context, tx *sql.Tx) (map[string]pb.FieldValueType, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT column_name, value_type FROM view_columns`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	columns := make(map[string]pb.FieldValueType)
+	for rows.Next() {
+		var name string
+		var valueType int32
+		if err := rows.Scan(&name, &valueType); err != nil {
+			return nil, err
+		}
+		if _, duplicate := columns[name]; duplicate {
+			return nil, fmt.Errorf("DuckDB View index has duplicate column %q", name)
+		}
+		columns[name] = pb.FieldValueType(valueType)
+	}
+	return columns, rows.Err()
 }
-func (m *IndexManager) Stat(c context.Context, id string) (viewindex.ViewIndexStats, error) {
-	return m.core.Stat(c, id)
+
+func samePhysicalColumns(left, right map[string]pb.FieldValueType) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for name, valueType := range left {
+		if right[name] != valueType {
+			return false
+		}
+	}
+	return true
 }
-func (m *IndexManager) Remove(c context.Context, id string) error { return m.core.Remove(c, id) }
-func (m *IndexManager) List(c context.Context) ([]string, error)  { return m.core.List(c) }
-func (m *IndexManager) Query(ctx context.Context, id string, keys []*pb.RowKey, fields []string) ([]*pb.RowFieldValues, error) {
-	return m.core.Query(ctx, id, keys, fields)
+
+func isPhysicalAppendOnlyState(physical, current, target map[string]pb.FieldValueType) bool {
+	if len(physical) < len(current) || len(physical) > len(target) {
+		return false
+	}
+	for name, valueType := range current {
+		if physical[name] != valueType {
+			return false
+		}
+	}
+	for name, valueType := range physical {
+		if target[name] != valueType {
+			return false
+		}
+	}
+	return true
 }
-func (m *IndexManager) Close() error { return nil }
+
+func matchesAppendOnlyPhysicalPrefix(physical map[string]pb.FieldValueType, target viewindex.ViewIndexSchema, version uint64, schemaHash string) bool {
+	if len(physical) == 0 || len(physical) > len(target.Columns) {
+		return false
+	}
+	columns := target.Columns[:len(physical)]
+	if !samePhysicalColumns(physical, schemaColumns(columns)) {
+		return false
+	}
+	prefix := viewindex.ViewIndexSchema{
+		SpaceID: target.SpaceID, ViewID: target.ViewID, PrimaryDatasetID: target.PrimaryDatasetID,
+		ViewVersion: version, Engine: target.Engine, Columns: columns,
+	}
+	return viewindex.HashViewIndexSchema(prefix) == schemaHash
+}
+
+func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
+	if err := batch.Validate(); err != nil {
+		return err
+	}
+	batch.RowWrites = collapseRowWrites(batch.RowWrites)
+	db, columns, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var revision uint64
+	var schemaHash string
+	if err := tx.QueryRowContext(ctx, `SELECT view_version, schema_hash FROM view_meta WHERE singleton = 1`).Scan(&revision, &schemaHash); err != nil {
+		return err
+	}
+	if revision != batch.ViewRevision {
+		return fmt.Errorf("view revision conflict: current=%d requested=%d", revision, batch.ViewRevision)
+	}
+	if schemaHash != batch.ViewSchemaHash {
+		return errors.New("view schema hash conflict")
+	}
+	for _, group := range groupRowWrites(batch.RowWrites) {
+		if err := ensureSeriesRowsAndCounts(ctx, tx, group.writes); err != nil {
+			return err
+		}
+		names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, group.columns...)
+		names = append(names, internalAttributesColumn)
+		for start := 0; start < len(group.writes); start += maxWriteRowsPerStatement {
+			end := start + maxWriteRowsPerStatement
+			if end > len(group.writes) {
+				end = len(group.writes)
+			}
+			writes := group.writes[start:end]
+			args := make([]any, 0, len(writes)*len(names))
+			for _, write := range writes {
+				rowValues, err := rowArgs(columns, names, write, batch.WriteMode)
+				if err != nil {
+					return err
+				}
+				args = append(args, rowValues...)
+			}
+			if _, err := tx.ExecContext(ctx, upsertSQLBatch(names, batch.WriteMode, len(writes)), args...); err != nil {
+				// Older DuckDB builds can still reject a multi-value UPSERT when
+				// equivalent physical keys arrive through differently shaped event
+				// fragments. Retry the same rows one at a time so an existing row is
+				// resolved by the conflict clause instead of poisoning the durable
+				// consumer forever. Non-duplicate constraint errors remain fatal.
+				if !isDuplicateConstraintError(err) {
+					return err
+				}
+				for _, write := range writes {
+					rowValues, rowErr := rowArgs(columns, names, write, batch.WriteMode)
+					if rowErr != nil {
+						return rowErr
+					}
+					if _, rowErr = tx.ExecContext(ctx, upsertSQLBatch(names, batch.WriteMode, 1), rowValues...); rowErr != nil {
+						return rowErr
+					}
+				}
+			}
+		}
+	}
+	if from, to, ok := batchCoverage(batch.RowWrites); ok {
+		var currentFrom, currentTo string
+		if err := tx.QueryRowContext(ctx, `SELECT indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&currentFrom, &currentTo); err != nil {
+			return err
+		}
+		if currentFrom == "" || beforeCanonicalTime(from, currentFrom) {
+			currentFrom = from
+		}
+		if currentTo == "" || beforeCanonicalTime(currentTo, to) {
+			currentTo = to
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ?, indexed_to = ? WHERE singleton = 1`, currentFrom, currentTo); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func ensureSeriesRowsAndCounts(ctx context.Context, tx *sql.Tx, writes []viewindex.RowWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	type candidate struct {
+		subject, freq, tag string
+		when               time.Time
+	}
+	unique := make(map[string]candidate, len(writes))
+	for _, write := range writes {
+		key := write.Key.Key.GetTimeSeries()
+		if key == nil {
+			continue
+		}
+		when, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
+		if err != nil {
+			return fmt.Errorf("invalid data_time: %w", err)
+		}
+		when = when.UTC()
+		item := candidate{subject: key.GetSubjectId(), freq: key.GetFreq(), tag: key.GetSeriesTag(), when: when}
+		unique[encodePhysicalKeyParts(item.subject, item.freq, canonicalCoverageTime(when), item.tag)] = item
+	}
+	items := make([]candidate, 0, len(unique))
+	for _, item := range unique {
+		items = append(items, item)
+	}
+	counts := make(map[string]struct {
+		subject string
+		freq    string
+		tag     string
+		count   uint64
+	})
+	for start := 0; start < len(items); start += maxWriteRowsPerStatement {
+		end := min(start+maxWriteRowsPerStatement, len(items))
+		chunk := items[start:end]
+		placeholders := make([]string, 0, len(chunk))
+		args := make([]any, 0, len(chunk)*4)
+		for _, item := range chunk {
+			placeholders = append(placeholders, "(?, ?, ?, ?)")
+			args = append(args, item.subject, item.freq, item.when, item.tag)
+		}
+		query := `INSERT INTO view_rows (subject_id, freq, data_time, series_tag) VALUES ` + strings.Join(placeholders, ",") + ` ON CONFLICT (subject_id, freq, data_time, series_tag) DO NOTHING RETURNING subject_id, freq, data_time, series_tag`
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var subject, freq, tag string
+			var when time.Time
+			if err := rows.Scan(&subject, &freq, &when, &tag); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			countKey := subject + "\x00" + freq + "\x00" + tag
+			entry := counts[countKey]
+			entry.subject, entry.freq, entry.tag = subject, freq, tag
+			entry.count++
+			counts[countKey] = entry
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+	}
+	countItems := make([]struct {
+		subject string
+		freq    string
+		tag     string
+		count   uint64
+	}, 0, len(counts))
+	for _, item := range counts {
+		countItems = append(countItems, item)
+	}
+	for start := 0; start < len(countItems); start += maxWriteRowsPerStatement {
+		end := min(start+maxWriteRowsPerStatement, len(countItems))
+		chunk := countItems[start:end]
+		values := make([]string, 0, len(chunk))
+		args := make([]any, 0, len(chunk)*4)
+		for _, item := range chunk {
+			values = append(values, "(?, ?, ?, ?)")
+			args = append(args, item.subject, item.freq, item.tag, item.count)
+		}
+		query := `INSERT INTO view_series_counts (subject_id, freq, series_tag, row_count) VALUES ` + strings.Join(values, ",") + ` ON CONFLICT (subject_id, freq, series_tag) DO UPDATE SET row_count = view_series_counts.row_count + excluded.row_count`
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *IndexManager) SeriesCapacity(ctx context.Context, id string, maxPeriods uint64) (viewindex.SeriesCapacityResult, error) {
+	if maxPeriods == 0 {
+		return viewindex.SeriesCapacityResult{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return viewindex.SeriesCapacityResult{}, err
+	}
+	// Capacity scans are read-only and run behind a process-wide single-scan
+	// gate. Unlike request and mutation paths, keep the deadline for this query:
+	// the driver interrupts only this connection and waits for the interrupt
+	// watcher before returning it to the pool, allowing the maintainer to release
+	// its gate and retry on the next hourly slot.
+	db, _, _, _, err := m.getIndex(context.Background(), id)
+	if err != nil {
+		return viewindex.SeriesCapacityResult{}, err
+	}
+	// Counts are updated transactionally with view_rows. This index has no
+	// in-place row deletion path; rebuilds create a new index and its counts.
+	// Treat the compact per-series table as authoritative so a capacity check
+	// never performs a physical COUNT over the potentially large View table.
+	var subject, freq, tag string
+	var rowCount uint64
+	err = db.QueryRowContext(ctx, `
+		SELECT subject_id, freq, series_tag, row_count
+		FROM view_series_counts
+		WHERE row_count > ?
+		ORDER BY row_count DESC, subject_id, freq, series_tag
+		LIMIT 1`, maxPeriods).Scan(&subject, &freq, &tag, &rowCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return viewindex.SeriesCapacityResult{}, nil
+	}
+	if err != nil {
+		return viewindex.SeriesCapacityResult{}, err
+	}
+	return viewindex.SeriesCapacityResult{Exceeded: true, SubjectID: subject, Freq: freq, SeriesTag: tag, Rows: rowCount}, nil
+}
+
+func batchCoverage(writes []viewindex.RowWrite) (string, string, bool) {
+	var from, to time.Time
+	for _, write := range writes {
+		if write.Key.Key == nil {
+			continue
+		}
+		series := write.Key.Key.GetTimeSeries()
+		if series == nil {
+			continue
+		}
+		value, err := time.Parse(time.RFC3339Nano, series.GetDataTime())
+		if err != nil {
+			continue
+		}
+		value = value.UTC()
+		if from.IsZero() || value.Before(from) {
+			from = value
+		}
+		if to.IsZero() || value.After(to) {
+			to = value
+		}
+	}
+	if from.IsZero() || to.IsZero() {
+		return "", "", false
+	}
+	return canonicalCoverageTime(from), canonicalCoverageTime(to), true
+}
+
+const canonicalCoverageLayout = "2006-01-02T15:04:05.000000000Z"
+
+func canonicalCoverageTime(value time.Time) string {
+	return value.UTC().Format(canonicalCoverageLayout)
+}
+
+func beforeCanonicalTime(left, right string) bool {
+	l, lerr := time.Parse(time.RFC3339Nano, left)
+	r, rerr := time.Parse(time.RFC3339Nano, right)
+	if lerr == nil && rerr == nil {
+		return l.Before(r)
+	}
+	return left < right
+}
+
+type rowWriteGroup struct {
+	columns []string
+	writes  []viewindex.RowWrite
+}
+
+func collapseRowWrites(writes []viewindex.RowWrite) []viewindex.RowWrite {
+	if len(writes) < 2 {
+		return writes
+	}
+	result := make([]viewindex.RowWrite, 0, len(writes))
+	positions := make(map[string]int, len(writes))
+	for _, write := range writes {
+		// DuckDB's primary key intentionally contains only the four physical
+		// time-series columns below. RowKey also carries space/dataset metadata,
+		// which may differ between equivalent source rows; using the full
+		// protobuf here would leave those rows in one multi-value INSERT and
+		// DuckDB would reject the batch with a duplicate primary key.
+		id := physicalRowKeyID(write.Key.Key)
+		position, ok := positions[id]
+		if !ok {
+			clone := viewindex.RowWrite{Key: write.Key, Fields: append([]*pb.FieldValue(nil), write.Fields...), Attributes: cloneAttributes(write.Attributes)}
+			positions[id] = len(result)
+			result = append(result, clone)
+			continue
+		}
+		mergeRowWrite(&result[position], write)
+	}
+	return result
+}
+
+func physicalRowKeyID(key *pb.RowKey) string {
+	if series := key.GetTimeSeries(); series != nil {
+		dataTime := series.GetDataTime()
+		if parsed, err := time.Parse(time.RFC3339Nano, dataTime); err == nil {
+			// rowArgs converts the same value to time.Time before binding it to
+			// DuckDB. Canonicalize here too so equivalent RFC3339 spellings
+			// collapse to one physical primary key within a batch.
+			dataTime = parsed.UTC().Format("2006-01-02T15:04:05.000000000Z")
+		}
+		// Length-prefix every component instead of joining with a delimiter.
+		// User-controlled subject/frequency/tag values may contain any byte
+		// sequence accepted by the protobuf contract, including NUL.
+		return encodePhysicalKeyParts(series.GetSubjectId(), series.GetFreq(), dataTime, series.GetSeriesTag())
+	}
+	return viewindex.RowKeyID(key)
+}
+
+func encodePhysicalKeyParts(parts ...string) string {
+	var builder strings.Builder
+	for _, part := range parts {
+		builder.WriteString(strconv.Itoa(len(part)))
+		builder.WriteByte(':')
+		builder.WriteString(part)
+	}
+	return builder.String()
+}
+
+func mergeRowWrite(dst *viewindex.RowWrite, src viewindex.RowWrite) {
+	for _, field := range src.Fields {
+		if field == nil {
+			continue
+		}
+		replaced := false
+		for index, existing := range dst.Fields {
+			if existing != nil && existing.GetFieldId() == field.GetFieldId() {
+				dst.Fields[index] = field
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			dst.Fields = append(dst.Fields, field)
+		}
+	}
+	if len(src.Attributes) > 0 {
+		if dst.Attributes == nil {
+			dst.Attributes = make(map[string]*pb.TypedValue, len(src.Attributes))
+		}
+		for name, value := range src.Attributes {
+			dst.Attributes[name] = value
+		}
+	}
+}
+
+func cloneAttributes(attributes map[string]*pb.TypedValue) map[string]*pb.TypedValue {
+	if len(attributes) == 0 {
+		return nil
+	}
+	cloned := make(map[string]*pb.TypedValue, len(attributes))
+	for name, value := range attributes {
+		cloned[name] = value
+	}
+	return cloned
+}
+
+func groupRowWrites(writes []viewindex.RowWrite) []rowWriteGroup {
+	groups := make([]rowWriteGroup, 0)
+	byKey := make(map[string]int)
+	for _, write := range writes {
+		fieldSet := make(map[string]struct{}, len(write.Fields)+len(write.Attributes))
+		for _, field := range write.Fields {
+			if field != nil {
+				fieldSet[field.GetFieldId()] = struct{}{}
+			}
+		}
+		fieldNames := make([]string, 0, len(fieldSet))
+		for name := range fieldSet {
+			fieldNames = append(fieldNames, name)
+		}
+		sort.Strings(fieldNames)
+		key := strings.Join(fieldNames, "\x00")
+		groupIndex, ok := byKey[key]
+		if !ok {
+			groupIndex = len(groups)
+			byKey[key] = groupIndex
+			groups = append(groups, rowWriteGroup{columns: fieldNames})
+		}
+		groups[groupIndex].writes = append(groups[groupIndex].writes, write)
+	}
+	return groups
+}
+
+func upsertColumnNames(columns map[string]pb.FieldValueType) []string {
+	names := []string{"subject_id", "freq", "data_time", "series_tag"}
+	for name := range columns {
+		if isSystemColumn(name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names[4:])
+	return names
+}
+
+func upsertSQL(names []string, mode viewindex.WriteMode) string {
+	return upsertSQLBatch(names, mode, 1)
+}
+
+func upsertSQLBatch(names []string, mode viewindex.WriteMode, rowCount int) string {
+	if rowCount < 1 {
+		rowCount = 1
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(names)), ",")
+	values := make([]string, rowCount)
+	for i := range values {
+		values[i] = "(" + placeholders + ")"
+	}
+	sets := make([]string, 0, len(names)-4)
+	for _, name := range names[4:] {
+		// Live writes overwrite complete rows. Backfill only fills missing values.
+		set := fmt.Sprintf("%s = excluded.%s", quote(name), quote(name))
+		if name == internalAttributesColumn {
+			// Dataset events often carry only a subset of provenance attributes.
+			// Merge JSON objects by key so a later factor patch cannot erase hashes
+			// written by earlier factors on the same projected row.
+			set = fmt.Sprintf("%s = CASE WHEN excluded.%s IS NULL THEN view_rows.%s ELSE json_merge_patch(COALESCE(view_rows.%s, '{}'), excluded.%s) END", quote(name), quote(name), quote(name), quote(name), quote(name))
+		}
+		if mode == viewindex.Backfill {
+			if name == internalAttributesColumn {
+				// Backfill must never overwrite live provenance. Put the
+				// backfill object first so existing/live keys win on conflicts.
+				set = fmt.Sprintf("%s = CASE WHEN view_rows.%s IS NULL THEN excluded.%s ELSE json_merge_patch(COALESCE(excluded.%s, '{}'), view_rows.%s) END", quote(name), quote(name), quote(name), quote(name), quote(name))
+			} else {
+				set = fmt.Sprintf("%s = COALESCE(view_rows.%s, excluded.%s)", quote(name), quote(name), quote(name))
+			}
+		}
+		sets = append(sets, set)
+	}
+	conflict := "ON CONFLICT (subject_id, freq, data_time, series_tag) DO NOTHING"
+	if len(sets) > 0 {
+		conflict = "ON CONFLICT (subject_id, freq, data_time, series_tag) DO UPDATE SET " + strings.Join(sets, ", ")
+	}
+	return fmt.Sprintf("INSERT INTO view_rows (%s) VALUES %s %s", joinQuoted(names), strings.Join(values, ","), conflict)
+}
+
+func isDuplicateConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "duplicate key") ||
+		(strings.Contains(message, "primary key") && strings.Contains(message, "constraint"))
+}
+
+func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewindex.RowWrite, mode viewindex.WriteMode) ([]any, error) {
+	key := write.Key.Key.GetTimeSeries()
+	if key == nil {
+		return nil, errors.New("duckdb only accepts time-series row keys")
+	}
+	when, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
+	if err != nil {
+		return nil, fmt.Errorf("invalid data_time: %w", err)
+	}
+	values := make(map[string]any, len(write.Fields)+len(write.Attributes))
+	for _, field := range write.Fields {
+		if field == nil {
+			continue
+		}
+		if _, ok := columns[field.GetFieldId()]; !ok {
+			return nil, fmt.Errorf("unknown view column %q", field.GetFieldId())
+		}
+		value, err := typedValueToDB(field.GetValue())
+		if err != nil {
+			return nil, fmt.Errorf("column %q: %w", field.GetFieldId(), err)
+		}
+		value, err = normalizeColumnValue(value, columns[field.GetFieldId()], mode)
+		if err != nil {
+			return nil, fmt.Errorf("column %q: %w", field.GetFieldId(), err)
+		}
+		values[field.GetFieldId()] = value
+	}
+	args := make([]any, 0, len(names))
+	args = append(args, key.GetSubjectId(), key.GetFreq(), when, key.GetSeriesTag())
+	for _, name := range names[4:] {
+		if name == internalAttributesColumn {
+			encoded, encodeErr := encodeRowAttributes(write.Attributes)
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
+			args = append(args, encoded)
+			continue
+		}
+		args = append(args, values[name])
+	}
+	return args, nil
+}
+
+func encodeRowAttributes(attributes map[string]*pb.TypedValue) (any, error) {
+	if len(attributes) == 0 {
+		return nil, nil
+	}
+	encoded := make(map[string]json.RawMessage, len(attributes))
+	for name, value := range attributes {
+		if strings.TrimSpace(name) == "" || value == nil {
+			continue
+		}
+		raw, err := protojson.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("attribute %q: %w", name, err)
+		}
+		encoded[name] = raw
+	}
+	if len(encoded) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("encode row attributes: %w", err)
+	}
+	return string(raw), nil
+}
+
+func decodeRowAttributes(value any) (map[string]*pb.TypedValue, error) {
+	if value == nil {
+		return nil, nil
+	}
+	var raw []byte
+	switch value := value.(type) {
+	case string:
+		raw = []byte(value)
+	case []byte:
+		raw = value
+	case map[string]any:
+		// DuckDB's JSON scanner may expose a logical JSON object as a Go map
+		// rather than its encoded text. Re-encode it before decoding the
+		// protobuf JSON values stored under each attribute key.
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("encode scanned row attributes: %w", err)
+		}
+		raw = encoded
+	case map[string]string:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("encode scanned row attributes: %w", err)
+		}
+		raw = encoded
+	default:
+		raw = []byte(valueString(value))
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	encoded := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		return nil, fmt.Errorf("decode row attributes: %w", err)
+	}
+	result := make(map[string]*pb.TypedValue, len(encoded))
+	for name, item := range encoded {
+		value := &pb.TypedValue{}
+		if err := protojson.Unmarshal(item, value); err != nil {
+			return nil, fmt.Errorf("decode row attribute %q: %w", name, err)
+		}
+		result[name] = value
+	}
+	return result, nil
+}
+
+func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex.WriteMode) (any, error) {
+	if value == nil || valueType != pb.FieldValueType_FIELD_VALUE_TYPE_JSON {
+		return value, nil
+	}
+	var raw []byte
+	switch v := value.(type) {
+	case string:
+		raw = []byte(v)
+	case []byte:
+		raw = v
+	default:
+		return value, nil
+	}
+	if json.Valid(raw) {
+		return value, nil
+	}
+	if mode == viewindex.Backfill {
+		// Historical rows may contain malformed JSON from older writers. Keep
+		// the time-series row during a rebuild, but do not copy the bad field.
+		return nil, nil
+	}
+	return nil, errors.New("invalid JSON value")
+}
+
+func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+	if spec.RowsPerSeries < 0 || (spec.RowsPerSeries > 0 && (spec.Limit != 0 || spec.Offset != 0 || len(spec.Sorts) != 0 || spec.Order == pb.SortOrder_SORT_ORDER_DESC || spec.AfterKey != nil || spec.TotalMode != pb.TotalMode_NONE)) {
+		return nil, 0, fmt.Errorf("series window requires positive row count and no pagination, custom sort or exact total")
+	}
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return nil, 0, err
+	}
+	db, columns, datasetID, spaceID, err := m.getIndex(ctx, id)
+	if err != nil {
+		return nil, 0, err
+	}
+	where, args, err := buildWhere(spec, columns)
+	if err != nil {
+		return nil, 0, err
+	}
+	if spec.TotalMode != pb.TotalMode_NONE {
+		var total int64
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM view_rows"+where.sql, where.args...).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+		args = args[:0]
+		args = append(args, where.args...)
+		rows, err := m.queryRows(ctx, db, columns, spaceID, datasetID, spec, where.sql, args)
+		return rows, total, err
+	}
+	rows, err := m.queryRows(ctx, db, columns, spaceID, datasetID, spec, where.sql, args)
+	return rows, -1, err
+}
+
+type whereClause struct {
+	sql  string
+	args []any
+}
+
+func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[string]pb.FieldValueType, spaceID, datasetID string, spec viewindex.QuerySpec, where string, args []any) ([]*pb.RowFieldValues, error) {
+	selectColumns := []string{"subject_id", "freq", "data_time", "series_tag", internalAttributesColumn}
+	projected, err := resolveIncludedColumns(columns, spec.Includes)
+	if err != nil {
+		return nil, err
+	}
+	selectColumns = append(selectColumns, projected...)
+	sort.Strings(selectColumns[4:])
+	projections := make([]string, len(selectColumns))
+	for i, name := range selectColumns {
+		projections[i] = quote(name)
+		// Avoid the driver's JSON -> interface{} conversion, which rounds
+		// numbers through float64 and collapses JSON null into SQL NULL.
+		if columns[name] == pb.FieldValueType_FIELD_VALUE_TYPE_JSON {
+			projections[i] = "CAST(" + quote(name) + " AS VARCHAR) AS " + quote(name)
+		}
+	}
+	query := "SELECT " + strings.Join(projections, ",") + " FROM view_rows" + where
+	if spec.RowsPerSeries > 0 {
+		query += " QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id, freq, series_tag ORDER BY data_time DESC) <= ? ORDER BY subject_id, freq, series_tag, data_time ASC"
+		args = append(args, spec.RowsPerSeries)
+	} else {
+		query += orderSQL(spec.Sorts, spec.Order, columns)
+		limit := spec.Limit
+		if limit <= 0 {
+			limit = 1000
+		}
+		if spec.Offset < 0 {
+			spec.Offset = 0
+		}
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, limit, spec.Offset)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]*pb.RowFieldValues, 0)
+	for rows.Next() {
+		values := make([]any, len(selectColumns))
+		dest := make([]any, len(values))
+		for i := range values {
+			dest[i] = &values[i]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		dataTime, err := scanTime(values[2])
+		if err != nil {
+			return nil, err
+		}
+		row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Freq: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
+		for index, name := range selectColumns[4:] {
+			value := values[index+4]
+			if name == internalAttributesColumn {
+				attributes, decodeErr := decodeRowAttributes(value)
+				if decodeErr != nil {
+					return nil, decodeErr
+				}
+				row.Attributes = attributes
+				continue
+			}
+			if value == nil {
+				if len(spec.Includes) == 0 && spec.RowsPerSeries == 0 {
+					continue
+				}
+				row.Fields = append(row.Fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{
+					Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL},
+				}})
+				continue
+			}
+			typed, err := dbToTypedValue(value, columns[name])
+			if err != nil {
+				return nil, fmt.Errorf("column %q: %w", name, err)
+			}
+			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: name, Value: typed})
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func resolveIncludedColumns(columns map[string]pb.FieldValueType, includes []string) ([]string, error) {
+	if len(includes) == 0 {
+		selected := make([]string, 0, len(columns))
+		for name := range columns {
+			if !isSystemColumn(name) {
+				selected = append(selected, name)
+			}
+		}
+		return selected, nil
+	}
+	selected := make(map[string]struct{}, len(includes))
+	for _, include := range includes {
+		if _, ok := columns[include]; ok && !isSystemColumn(include) {
+			selected[include] = struct{}{}
+			continue
+		}
+		matches := make([]string, 0, 1)
+		for name := range columns {
+			if !isSystemColumn(name) && strings.HasSuffix(name, "."+include) {
+				matches = append(matches, name)
+			}
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("View column %q is not projected", include)
+		}
+		if len(matches) > 1 {
+			sort.Strings(matches)
+			return nil, fmt.Errorf("View column %q is ambiguous: %s", include, strings.Join(matches, ", "))
+		}
+		selected[matches[0]] = struct{}{}
+	}
+	result := make([]string, 0, len(selected))
+	for name := range selected {
+		result = append(result, name)
+	}
+	return result, nil
+}
+
+func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	path, err := m.path(id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	fileInfo, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return viewindex.ViewIndexStats{}, nil
+	}
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	var stats viewindex.ViewIndexStats
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM view_rows`).Scan(&stats.EntryCount); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	var from, to sql.NullTime
+	if err := db.QueryRowContext(ctx, `SELECT MIN(data_time), MAX(data_time) FROM view_rows`).Scan(&from, &to); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	if from.Valid {
+		stats.IndexedFrom = canonicalCoverageTime(from.Time)
+	}
+	if to.Valid {
+		stats.IndexedTo = canonicalCoverageTime(to.Time)
+	}
+	if stats.IndexedFrom != "" || stats.IndexedTo != "" {
+		mergedFrom, mergedTo, err := persistCoverageBounds(ctx, db, stats.IndexedFrom, stats.IndexedTo)
+		if err != nil {
+			return viewindex.ViewIndexStats{}, err
+		}
+		stats.IndexedFrom, stats.IndexedTo = mergedFrom, mergedTo
+	}
+	stats.Exists = true
+	stats.PhysicalBytes = uint64(fileInfo.Size())
+	if walInfo, walErr := os.Stat(path + ".wal"); walErr == nil {
+		stats.PhysicalBytes += uint64(walInfo.Size())
+	}
+	return stats, nil
+}
+
+func persistCoverageBounds(ctx context.Context, db *sql.DB, from, to string) (string, string, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentFrom, currentTo string
+	if err := tx.QueryRowContext(ctx, `SELECT indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&currentFrom, &currentTo); err != nil {
+		return "", "", err
+	}
+	mergedFrom, mergedTo := mergeCoverageBounds(currentFrom, currentTo, from, to)
+	if mergedFrom != canonicalizeCoverageTime(currentFrom) || mergedTo != canonicalizeCoverageTime(currentTo) {
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ?, indexed_to = ? WHERE singleton = 1`, mergedFrom, mergedTo); err != nil {
+			return "", "", err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
+	return mergedFrom, mergedTo, nil
+}
+
+func mergeCoverageBounds(currentFrom, currentTo, observedFrom, observedTo string) (string, string) {
+	currentFrom = canonicalizeCoverageTime(currentFrom)
+	currentTo = canonicalizeCoverageTime(currentTo)
+	observedFrom = canonicalizeCoverageTime(observedFrom)
+	observedTo = canonicalizeCoverageTime(observedTo)
+	if observedFrom != "" && (currentFrom == "" || beforeCanonicalTime(observedFrom, currentFrom)) {
+		currentFrom = observedFrom
+	}
+	if observedTo != "" && (currentTo == "" || beforeCanonicalTime(currentTo, observedTo)) {
+		currentTo = observedTo
+	}
+	return currentFrom, currentTo
+}
+
+func canonicalizeCoverageTime(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	return canonicalCoverageTime(parsed)
+}
+
+// StatMetadata is the lightweight counterpart used during process startup.
+// It deliberately avoids COUNT/MIN/MAX over view_rows; those scans belong to
+// periodic reconciliation and can otherwise keep the RPC listeners offline
+// for the duration of a large View restore.
+func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.ViewIndexStats, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	path, err := m.path(id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	fileInfo, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return viewindex.ViewIndexStats{}, nil
+	}
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	var stats viewindex.ViewIndexStats
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	stats.Exists = true
+	stats.PhysicalBytes = uint64(fileInfo.Size())
+	if walInfo, walErr := os.Stat(path + ".wal"); walErr == nil {
+		stats.PhysicalBytes += uint64(walInfo.Size())
+	}
+	return stats, nil
+}
+
+func (m *IndexManager) Exists(_ context.Context, id string) (bool, error) {
+	path, err := m.path(id)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (m *IndexManager) Remove(_ context.Context, id string) error {
+	path, err := m.path(id)
+	if err != nil {
+		return err
+	}
+	if err := m.closeIndex(id); err != nil {
+		return err
+	}
+	// DuckDB may leave a write-ahead log beside the database. Remove it with
+	// the retired index so an A/B rotation does not strand storage on disk. The
+	// WAL is removed first: if that removal fails, the main managed file remains
+	// discoverable and the cleanup Timer can retry the complete artifact.
+	if err := os.Remove(path + ".wal"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (m *IndexManager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result error
+	for id, db := range m.dbs {
+		result = errors.Join(result, db.Close())
+		delete(m.dbs, id)
+		delete(m.schema, id)
+		delete(m.dataset, id)
+		delete(m.space, id)
+	}
+	return result
+}
+
+func (m *IndexManager) closeIndex(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if db := m.dbs[id]; db != nil {
+		if err := db.Close(); err != nil {
+			return err
+		}
+		delete(m.dbs, id)
+	}
+	delete(m.schema, id)
+	delete(m.dataset, id)
+	delete(m.space, id)
+	return nil
+}
+
+func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[string]pb.FieldValueType, string, string, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return nil, nil, "", "", err
+	}
+	path, err := m.path(id)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	m.mu.Lock()
+	if db := m.dbs[id]; db != nil {
+		columns := m.schema[id]
+		datasetID := m.dataset[id]
+		spaceID := m.space[id]
+		m.mu.Unlock()
+		return db, columns, datasetID, spaceID, nil
+	}
+	m.mu.Unlock()
+	if _, err := os.Stat(path); err != nil {
+		return nil, nil, "", "", err
+	}
+	db, err := open(path)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	if err := m.ensureCoverageColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, nil, "", "", err
+	}
+	if err := ensureInternalAttributesColumn(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, nil, "", "", err
+	}
+	if err := validateSystemSchema(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, nil, "", "", err
+	}
+	columns := make(map[string]pb.FieldValueType)
+	rows, err := db.QueryContext(ctx, `SELECT column_name, value_type FROM view_columns`)
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, "", "", err
+	}
+	for rows.Next() {
+		var name string
+		var valueType int32
+		if err := rows.Scan(&name, &valueType); err != nil {
+			_ = rows.Close()
+			_ = db.Close()
+			return nil, nil, "", "", err
+		}
+		columns[name] = pb.FieldValueType(valueType)
+	}
+	if err := rows.Close(); err != nil {
+		_ = db.Close()
+		return nil, nil, "", "", err
+	}
+	var datasetID, spaceID string
+	if err := db.QueryRowContext(ctx, `SELECT primary_dataset_id, space_id FROM view_meta WHERE singleton = 1`).Scan(&datasetID, &spaceID); err != nil {
+		_ = db.Close()
+		return nil, nil, "", "", err
+	}
+	m.mu.Lock()
+	if existing := m.dbs[id]; existing != nil {
+		_ = db.Close()
+		columns := m.schema[id]
+		datasetID := m.dataset[id]
+		spaceID := m.space[id]
+		m.mu.Unlock()
+		return existing, columns, datasetID, spaceID, nil
+	}
+	m.dbs[id], m.schema[id], m.dataset[id] = db, columns, datasetID
+	m.space[id] = spaceID
+	m.mu.Unlock()
+	return db, columns, datasetID, spaceID, nil
+}
+
+func (m *IndexManager) ensureCoverageColumns(ctx context.Context, db *sql.DB) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
+	m.coverageMu.Lock()
+	defer m.coverageMu.Unlock()
+	for _, column := range []string{"indexed_from", "indexed_to"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'view_meta' AND column_name = ?`, column).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE view_meta ADD COLUMN `+column+` VARCHAR DEFAULT ''`); err != nil {
+			return fmt.Errorf("add view_meta coverage column %s: %w", column, err)
+		}
+	}
+	return nil
+}
+
+func ensureInternalAttributesColumn(ctx context.Context, db *sql.DB) error {
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'view_rows' AND column_name = ?`, internalAttributesColumn).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE view_rows ADD COLUMN `+internalAttributesColumn+` JSON`); err != nil {
+		return fmt.Errorf("add internal View attributes column: %w", err)
+	}
+	return nil
+}
+
+func (m *IndexManager) path(id string) (string, error) {
+	if id == "" || filepath.Base(id) != id {
+		return "", errors.New("invalid view index id")
+	}
+	return filepath.Join(m.root, id+".duckdb"), nil
+}
+
+func (m *IndexManager) ListManagedIndexes(ctx context.Context) ([]string, error) {
+	entries, err := os.ReadDir(m.root)
+	if err != nil {
+		return nil, fmt.Errorf("list DuckDB view indexes: %w", err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".duckdb") || strings.Contains(entry.Name(), ".prepare-") {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".duckdb")
+		if _, err := viewindex.ParseViewIndexID(id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+func open(path string) (*sql.DB, error) {
+	db, err := sql.Open("duckdb", path)
+	if err != nil {
+		return nil, err
+	}
+	// Factor reads arrive concurrently while the View consumer keeps applying
+	// result rows. A single database/sql connection serializes all readers and
+	// can starve the writer behind an entire read-worker window. DuckDB supports
+	// concurrent readers and one writer within the same process; keep a modest
+	// fixed pool so read concurrency is useful without mirroring the much larger
+	// Factor worker count.
+	maxOpenConns := defaultMaxOpenConns
+	if raw := strings.TrimSpace(os.Getenv(duckDBMaxOpenConnsEnv)); raw != "" {
+		maxOpenConns, err = strconv.Atoi(raw)
+		if err != nil || maxOpenConns < 1 || maxOpenConns > 64 {
+			_ = db.Close()
+			return nil, fmt.Errorf("invalid %s %q", duckDBMaxOpenConnsEnv, raw)
+		}
+	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(defaultMaxIdleConns)
+	memoryLimit := strings.TrimSpace(os.Getenv(duckDBMemoryLimitEnv))
+	if memoryLimit == "" {
+		memoryLimit = defaultDuckDBMemory
+	}
+	if !duckDBMemoryLimitRE.MatchString(memoryLimit) {
+		_ = db.Close()
+		return nil, fmt.Errorf("invalid %s %q", duckDBMemoryLimitEnv, memoryLimit)
+	}
+	threads := defaultDuckDBThreads
+	if raw := strings.TrimSpace(os.Getenv(duckDBThreadsEnv)); raw != "" {
+		threads, err = strconv.Atoi(raw)
+		if err != nil || threads < 1 || threads > 8 {
+			_ = db.Close()
+			return nil, fmt.Errorf("invalid %s %q", duckDBThreadsEnv, raw)
+		}
+	}
+	// The storage host is intentionally small. Bound every view connection and
+	// spill temporary query state beside the index instead of allowing DuckDB's
+	// host-sized default memory limit to compete with the other services.
+	settings := fmt.Sprintf(
+		"SET memory_limit = %s; SET threads = %d; SET temp_directory = %s",
+		sqlStringLiteral(memoryLimit), threads, sqlStringLiteral(filepath.Dir(path)),
+	)
+	if _, err := db.Exec(settings); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure duckdb resource limits: %w", err)
+	}
+	return db, nil
+}
+
+func sqlStringLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func validateSystemSchema(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info('view_rows')`)
+	if err != nil {
+		return invalidSchemaError(err)
+	}
+	defer rows.Close()
+	found := make(map[string]bool)
+	systemTypes := map[string]string{
+		"subject_id":             "VARCHAR",
+		"freq":                   "VARCHAR",
+		"data_time":              "TIMESTAMP_NS",
+		"series_tag":             "VARCHAR",
+		internalAttributesColumn: "JSON",
+	}
+	for rows.Next() {
+		var cid int
+		var notNull, primary bool
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primary); err != nil {
+			return invalidSchemaError(err)
+		}
+		_, _ = cid, primary
+		if isSystemColumn(name) {
+			if !strings.EqualFold(columnType, systemTypes[name]) {
+				return invalidSchemaError(fmt.Errorf("system column %q has type %s, want %s", name, columnType, systemTypes[name]))
+			}
+			found[name] = notNull
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return invalidSchemaError(err)
+	}
+	for _, name := range []string{"subject_id", "freq", "data_time", "series_tag"} {
+		if !found[name] {
+			return invalidSchemaError(fmt.Errorf("required NOT NULL system column %q is missing", name))
+		}
+	}
+	var primaryKey string
+	if err := db.QueryRowContext(ctx, `
+		SELECT array_to_string(constraint_column_names, ',')
+		FROM duckdb_constraints()
+		WHERE table_name = 'view_rows' AND constraint_type = 'PRIMARY KEY'`).Scan(&primaryKey); err != nil {
+		return invalidSchemaError(err)
+	}
+	if primaryKey != "subject_id,freq,data_time,series_tag" {
+		return invalidSchemaError(fmt.Errorf("primary key is (%s), want (subject_id,freq,data_time,series_tag)", primaryKey))
+	}
+	return nil
+}
+
+func invalidSchemaError(cause error) error {
+	return fmt.Errorf("duckdb view schema is incompatible; clean the index and rebuild it: %w", cause)
+}
+
+func schemaColumns(columns []*pb.ViewColumn) map[string]pb.FieldValueType {
+	out := make(map[string]pb.FieldValueType, len(columns))
+	for _, column := range columns {
+		if column == nil || !identifierRE.MatchString(column.GetColumnName()) || isSystemColumn(column.GetColumnName()) {
+			continue
+		}
+		out[column.GetColumnName()] = column.GetValueType()
+	}
+	return out
+}
+
+func isSystemColumn(name string) bool {
+	return name == "subject_id" || name == "freq" || name == "data_time" || name == "series_tag" || name == internalAttributesColumn
+}
+
+func duckType(valueType pb.FieldValueType) string {
+	switch valueType {
+	case pb.FieldValueType_FIELD_VALUE_TYPE_INT:
+		return "BIGINT"
+	case pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE:
+		return "DOUBLE"
+	case pb.FieldValueType_FIELD_VALUE_TYPE_BOOL:
+		return "BOOLEAN"
+	case pb.FieldValueType_FIELD_VALUE_TYPE_TIME:
+		return "TIMESTAMP_NS"
+	case pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:
+		return "BLOB"
+	case pb.FieldValueType_FIELD_VALUE_TYPE_JSON:
+		return "JSON"
+	case pb.FieldValueType_FIELD_VALUE_TYPE_STRING:
+		return "VARCHAR"
+	default:
+		log.Printf("duckdb view index: unknown field value type %s, falling back to VARCHAR", valueType)
+		return "VARCHAR"
+	}
+}
+
+func quote(name string) string {
+	if !identifierRE.MatchString(name) {
+		return "\"invalid_column\""
+	}
+	return "\"" + name + "\""
+}
+
+func joinQuoted(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = quote(name)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func valueString(value any) string {
+	switch value := value.(type) {
+	case string:
+		return value
+	case []byte:
+		return string(value)
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
+func scanTime(value any) (string, error) {
+	switch value := value.(type) {
+	case time.Time:
+		return value.UTC().Format(time.RFC3339Nano), nil
+	case string:
+		return value, nil
+	case []byte:
+		return string(value), nil
+	default:
+		return "", fmt.Errorf("unexpected timestamp type %T", value)
+	}
+}
+
+func typedValueToDB(value *pb.TypedValue) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	switch v := value.GetValue().(type) {
+	case *pb.TypedValue_StringValue:
+		return v.StringValue, nil
+	case *pb.TypedValue_IntValue:
+		return v.IntValue, nil
+	case *pb.TypedValue_DoubleValue:
+		return v.DoubleValue, nil
+	case *pb.TypedValue_BoolValue:
+		return v.BoolValue, nil
+	case *pb.TypedValue_TimeValue:
+		return time.Parse(time.RFC3339Nano, v.TimeValue)
+	case *pb.TypedValue_JsonValue:
+		return v.JsonValue, nil
+	case *pb.TypedValue_BytesValue:
+		return v.BytesValue, nil
+	case *pb.TypedValue_NullValue:
+		return nil, nil
+	default:
+		return nil, errors.New("unsupported typed value")
+	}
+}
+
+func dbToTypedValue(value any, valueType pb.FieldValueType) (*pb.TypedValue, error) {
+	switch valueType {
+	case pb.FieldValueType_FIELD_VALUE_TYPE_INT:
+		var number int64
+		switch v := value.(type) {
+		case int64:
+			number = v
+		case int32:
+			number = int64(v)
+		case float64:
+			number = int64(v)
+		default:
+			return nil, fmt.Errorf("unexpected int type %T", value)
+		}
+		return &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: number}}, nil
+	case pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE:
+		var number float64
+		switch v := value.(type) {
+		case float64:
+			number = v
+		case float32:
+			number = float64(v)
+		case int64:
+			number = float64(v)
+		default:
+			return nil, fmt.Errorf("unexpected double type %T", value)
+		}
+		return &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: number}}, nil
+	case pb.FieldValueType_FIELD_VALUE_TYPE_BOOL:
+		v, ok := value.(bool)
+		if !ok {
+			return nil, fmt.Errorf("unexpected bool type %T", value)
+		}
+		return &pb.TypedValue{Value: &pb.TypedValue_BoolValue{BoolValue: v}}, nil
+	case pb.FieldValueType_FIELD_VALUE_TYPE_TIME:
+		value, err := scanTime(value)
+		if err != nil {
+			return nil, err
+		}
+		return &pb.TypedValue{Value: &pb.TypedValue_TimeValue{TimeValue: value}}, nil
+	case pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:
+		return &pb.TypedValue{Value: &pb.TypedValue_BytesValue{BytesValue: append([]byte(nil), value.([]byte)...)}}, nil
+	default:
+		return &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: valueString(value)}}, nil
+	}
+}
+
+func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) (whereClause, []any, error) {
+	parts := make([]string, 0)
+	args := make([]any, 0)
+	if len(spec.Keys) != 0 {
+		keys := make([]string, 0, len(spec.Keys))
+		for _, key := range spec.Keys {
+			if key == nil || key.GetTimeSeries() == nil {
+				return whereClause{}, nil, errors.New("duckdb query key must be time-series")
+			}
+			row := key.GetTimeSeries()
+			if row.GetDataTime() == "" {
+				return whereClause{}, nil, errors.New("duckdb exact query key data_time is required")
+			}
+			when, err := time.Parse(time.RFC3339Nano, row.GetDataTime())
+			if err != nil {
+				return whereClause{}, nil, err
+			}
+			keys = append(keys, "(subject_id = ? AND freq = ? AND data_time = ? AND series_tag = ?)")
+			args = append(args, row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag())
+		}
+		parts = append(parts, "("+strings.Join(keys, " OR ")+")")
+	}
+	if len(spec.Selectors) != 0 {
+		selectors := make([]string, 0, len(spec.Selectors))
+		for _, selector := range spec.Selectors {
+			if selector.SubjectID == "" || selector.Freq == "" {
+				return whereClause{}, nil, errors.New("duckdb selector subject_id and freq are required")
+			}
+			part := "(subject_id = ? AND freq = ?"
+			args = append(args, selector.SubjectID, selector.Freq)
+			if selector.SeriesTag != nil {
+				part += " AND series_tag = ?"
+				args = append(args, *selector.SeriesTag)
+			}
+			selectors = append(selectors, part+")")
+		}
+		parts = append(parts, "("+strings.Join(selectors, " OR ")+")")
+	}
+	if spec.TimeRange != nil {
+		if value := spec.TimeRange.GetStartTime(); value != "" {
+			when, err := time.Parse(time.RFC3339Nano, value)
+			if err != nil {
+				return whereClause{}, nil, err
+			}
+			parts = append(parts, "data_time >= ?")
+			args = append(args, when)
+		}
+		if value := spec.TimeRange.GetEndTime(); value != "" {
+			when, err := time.Parse(time.RFC3339Nano, value)
+			if err != nil {
+				return whereClause{}, nil, err
+			}
+			parts = append(parts, "data_time < ?")
+			args = append(args, when)
+		}
+	}
+	if after := spec.AfterKey; after != nil {
+		row := after.GetTimeSeries()
+		if row == nil {
+			return whereClause{}, nil, errors.New("duckdb cursor key must be time-series")
+		}
+		when, err := time.Parse(time.RFC3339Nano, row.GetDataTime())
+		if err != nil {
+			return whereClause{}, nil, err
+		}
+		if hasDataTimeFirstSort(spec.Sorts) {
+			parts = append(parts, "(data_time > ? OR (data_time = ? AND subject_id > ?) OR (data_time = ? AND subject_id = ? AND freq > ?) OR (data_time = ? AND subject_id = ? AND freq = ? AND series_tag > ?))")
+			args = append(args,
+				when,
+				when, row.GetSubjectId(),
+				when, row.GetSubjectId(), row.GetFreq(),
+				when, row.GetSubjectId(), row.GetFreq(), row.GetSeriesTag(),
+			)
+		} else {
+			parts = append(parts, "(subject_id > ? OR (subject_id = ? AND freq > ?) OR (subject_id = ? AND freq = ? AND data_time > ?) OR (subject_id = ? AND freq = ? AND data_time = ? AND series_tag > ?))")
+			args = append(args,
+				row.GetSubjectId(),
+				row.GetSubjectId(), row.GetFreq(),
+				row.GetSubjectId(), row.GetFreq(), when,
+				row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag(),
+			)
+		}
+	}
+	filter, filterArgs, err := filterSQL(spec.Groups, spec.GroupLogical, columns)
+	if err != nil {
+		return whereClause{}, nil, err
+	}
+	if filter != "" {
+		parts = append(parts, filter)
+		args = append(args, filterArgs...)
+	}
+	if len(parts) == 0 {
+		return whereClause{}, args, nil
+	}
+	return whereClause{sql: " WHERE " + strings.Join(parts, " AND "), args: args}, args, nil
+}
+
+func hasDataTimeFirstSort(sorts []*pb.SortSpec) bool {
+	return len(sorts) > 0 && sorts[0] != nil && sorts[0].GetFieldName() == "data_time" && !sorts[0].GetDesc()
+}
+
+func filterSQL(groups []viewindex.FilterGroup, groupLogical pb.FilterLogical, columns map[string]pb.FieldValueType) (string, []any, error) {
+	if len(groups) == 0 {
+		return "", nil, nil
+	}
+	groupSQL := make([]string, 0, len(groups))
+	args := make([]any, 0)
+	for _, group := range groups {
+		conds := make([]string, 0, len(group.Conds))
+		for _, cond := range group.Conds {
+			if !identifierRE.MatchString(cond.Column) || (!isSystemColumn(cond.Column) && columns[cond.Column] == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED && !containsKey(columns, cond.Column)) {
+				return "", nil, fmt.Errorf("unknown or invalid filter column %q", cond.Column)
+			}
+			part, values, err := conditionSQL(cond, columns[cond.Column])
+			if err != nil {
+				return "", nil, err
+			}
+			conds = append(conds, part)
+			args = append(args, values...)
+		}
+		if len(conds) == 0 {
+			continue
+		}
+		join := " AND "
+		if group.Logical == pb.FilterLogical_FILTER_LOGICAL_OR {
+			join = " OR "
+		}
+		groupSQL = append(groupSQL, "("+strings.Join(conds, join)+")")
+	}
+	if len(groupSQL) == 0 {
+		return "", args, nil
+	}
+	join := " AND "
+	if groupLogical == pb.FilterLogical_FILTER_LOGICAL_OR {
+		join = " OR "
+	}
+	return "(" + strings.Join(groupSQL, join) + ")", args, nil
+}
+
+func containsKey(columns map[string]pb.FieldValueType, name string) bool {
+	_, ok := columns[name]
+	return ok
+}
+
+func conditionSQL(cond viewindex.Filter, valueType pb.FieldValueType) (string, []any, error) {
+	if len(cond.Values) == 0 {
+		return "", nil, errors.New("filter values are required")
+	}
+	values := make([]any, 0, len(cond.Values))
+	for _, value := range cond.Values {
+		dbValue, err := typedValueToDB(value)
+		if err != nil {
+			return "", nil, err
+		}
+		values = append(values, dbValue)
+	}
+	column := quote(cond.Column)
+	switch cond.Op {
+	case pb.FilterOp_FILTER_OP_EQ, pb.FilterOp_FILTER_OP_NE, pb.FilterOp_FILTER_OP_GT, pb.FilterOp_FILTER_OP_GTE, pb.FilterOp_FILTER_OP_LT, pb.FilterOp_FILTER_OP_LTE:
+		if len(values) != 1 {
+			return "", nil, errors.New("comparison filter requires one value")
+		}
+		if values[0] == nil {
+			if cond.Op == pb.FilterOp_FILTER_OP_EQ {
+				return column + " IS NULL", nil, nil
+			}
+			if cond.Op == pb.FilterOp_FILTER_OP_NE {
+				return column + " IS NOT NULL", nil, nil
+			}
+			return "", nil, errors.New("null filter only supports equality or inequality")
+		}
+		operator := map[pb.FilterOp]string{pb.FilterOp_FILTER_OP_EQ: "=", pb.FilterOp_FILTER_OP_NE: "!=", pb.FilterOp_FILTER_OP_GT: ">", pb.FilterOp_FILTER_OP_GTE: ">=", pb.FilterOp_FILTER_OP_LT: "<", pb.FilterOp_FILTER_OP_LTE: "<="}[cond.Op]
+		return column + " " + operator + " ?", values, nil
+	case pb.FilterOp_FILTER_OP_IN, pb.FilterOp_FILTER_OP_NOT_IN:
+		marks := strings.TrimRight(strings.Repeat("?,", len(values)), ",")
+		operator := "IN"
+		if cond.Op == pb.FilterOp_FILTER_OP_NOT_IN {
+			operator = "NOT IN"
+		}
+		return fmt.Sprintf("%s %s (%s)", column, operator, marks), values, nil
+	case pb.FilterOp_FILTER_OP_LIKE:
+		if len(values) != 1 {
+			return "", nil, errors.New("like filter requires one value")
+		}
+		// Substring match: LIKE '%' || ? || '%' with the bound literal.
+		return column + " LIKE '%' || ? || '%'", values, nil
+	case pb.FilterOp_FILTER_OP_NOT_LIKE:
+		if len(values) != 1 {
+			return "", nil, errors.New("not-like filter requires one value")
+		}
+		return column + " NOT LIKE '%' || ? || '%'", values, nil
+	case pb.FilterOp_FILTER_OP_BETWEEN:
+		if len(values) != 2 {
+			return "", nil, errors.New("between filter requires two values")
+		}
+		return column + " BETWEEN ? AND ?", values, nil
+	default:
+		return "", nil, fmt.Errorf("unsupported filter operator %s", cond.Op)
+	}
+}
+
+func orderSQL(sorts []*pb.SortSpec, order pb.SortOrder, columns map[string]pb.FieldValueType) string {
+	identity := []string{"subject_id", "freq", "data_time", "series_tag"}
+	if len(sorts) == 0 {
+		direction := "ASC"
+		if order == pb.SortOrder_SORT_ORDER_DESC {
+			direction = "DESC"
+		}
+		parts := make([]string, 0, len(identity))
+		for _, name := range identity {
+			parts = append(parts, quote(name)+" "+direction)
+		}
+		return " ORDER BY " + strings.Join(parts, ", ")
+	}
+	parts := make([]string, 0, len(sorts)+len(identity))
+	seen := make(map[string]struct{}, len(sorts))
+	for _, sortSpec := range sorts {
+		if sortSpec == nil || !identifierRE.MatchString(sortSpec.GetFieldName()) {
+			continue
+		}
+		if !isSystemColumn(sortSpec.GetFieldName()) && !containsKey(columns, sortSpec.GetFieldName()) {
+			continue
+		}
+		if _, exists := seen[sortSpec.GetFieldName()]; exists {
+			continue
+		}
+		direction := "ASC"
+		if sortSpec.GetDesc() {
+			direction = "DESC"
+		}
+		parts = append(parts, quote(sortSpec.GetFieldName())+" "+direction)
+		seen[sortSpec.GetFieldName()] = struct{}{}
+	}
+	for _, name := range identity {
+		if _, exists := seen[name]; !exists {
+			parts = append(parts, quote(name)+" ASC")
+		}
+	}
+	return " ORDER BY " + strings.Join(parts, ", ")
+}

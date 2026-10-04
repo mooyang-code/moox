@@ -14,7 +14,7 @@
 
 - 设计基线：`docs/行情数据归档模块设计.md`。
 - 实现目录：`modules/archive`；不得导入任何 `modules/storage/internal` 包。
-- Market Space ID 固定为 `stock_cn`、`stock_us`、`crypto_binance`、`crypto_okx`，不得从名称拆分推导市场。
+- Market Space ID 固定为 `stockcn`、`stockus`、`crypto_binance`、`crypto_okx`，不得从名称拆分推导市场。
 - 文件布局固定为：
 
 ```text
@@ -232,9 +232,9 @@ modules/eventbus/internal/config/config_test.go
 modules/eventbus/internal/registry/registry_test.go
 modules/admin/internal/service/sysdeploy/defaults.go
 modules/admin/internal/service/sysdeploy/defaults_test.go
-scripts/build.sh
-scripts/release.sh
-scripts/deploy-moox.sh
+scripts/build/build.sh
+scripts/release/release.sh
+scripts/deploy/deploy-moox.sh
 ```
 
 ### 移除或收敛的旧 Storage 归档文件
@@ -287,7 +287,7 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	if cfg.Archive.DeviceID != "parquet-local" || cfg.Health.Addr != "127.0.0.1:11416" {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
-	want := []string{"crypto_binance", "crypto_okx", "stock_cn", "stock_us"}
+	want := []string{"crypto_binance", "crypto_okx", "stockcn", "stockus"}
 	if got := cfg.SourceSpaceIDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("SourceSpaceIDs() = %v, want %v", got, want)
 	}
@@ -392,14 +392,14 @@ archive:
   state_dir: ../data/archive-state
   device_id: parquet-local
   sources:
-    stock_cn: {datasets: [equity_kline, etf_kline, index_kline]}
-    stock_us: {datasets: [equity_kline, etf_kline, index_kline]}
+    stockcn: {datasets: [equity_kline, etf_kline, index_kline]}
+    stockus: {datasets: [equity_kline, etf_kline, index_kline]}
     crypto_binance: {datasets: [spot_kline, swap_kline]}
     crypto_okx: {datasets: [spot_kline, swap_kline]}
   eventbus:
     urls: [nats://127.0.0.1:4222]
     stream: MOOX_STORAGE
-    subject: moox.storage.time_series.rows_updated.v1
+    subject: moox.event.storage.time_series.rows_updated.v1
     durable: moox_archive_kline_v1
     fetch_batch: 128
     fetch_max_wait: 1s
@@ -1411,7 +1411,7 @@ func TestDefaultIncludesArchiveConsumer(t *testing.T) {
 	cfg := Default()
 	for _, consumer := range cfg.Consumers {
 		if consumer.Stream == "MOOX_STORAGE" && consumer.Durable == "moox_archive_kline_v1" {
-			if consumer.FilterSubject != "moox.storage.time_series.rows_updated.v1" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
+			if consumer.FilterSubject != "moox.event.storage.time_series.rows_updated.v1" || consumer.DeliverPolicy != "all" || consumer.AckWait != 5*time.Minute || consumer.MaxDeliver != -1 {
 				t.Fatalf("archive consumer = %#v", consumer)
 			}
 			return
@@ -1432,7 +1432,7 @@ Expected: FAIL，默认 consumer 列表缺少 `moox_archive_kline_v1`。
 ```yaml
   - stream: MOOX_STORAGE
     durable: moox_archive_kline_v1
-    filter_subject: moox.storage.time_series.rows_updated.v1
+    filter_subject: moox.event.storage.time_series.rows_updated.v1
     ack_policy: explicit
     deliver_policy: all
     replay_policy: instant
@@ -1518,9 +1518,9 @@ git commit -m "test(archive): cover end-to-end recovery paths"
 ### Task 14: 接入构建、发布、部署和系统服务清单
 
 **Files:**
-- Modify: `scripts/build.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/build/build.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
 
@@ -1535,22 +1535,22 @@ if archive.Protocol != "http" || archive.Port != 11416 || healthURL(archive.Extr
 }
 ```
 
-新增 shell smoke test 或现有脚本测试，断言 `scripts/build.sh archive` 生成 `bin/moox-archive` 与 `bin/moox-archive-cli`，deploy stage 包含 `archive/config/app.yaml`。
+新增 shell smoke test 或现有脚本测试，断言 `scripts/build/build.sh archive` 生成 `bin/moox-archive` 与 `bin/moox-archive-cli`，deploy stage 包含 `archive/config/app.yaml`。
 
 - [ ] **Step 2: 修改 build/release**
 
-`scripts/build.sh` 的 `all` 和新增 `archive)` case 都执行：
+`scripts/build/build.sh` 的 `all` 和新增 `archive)` case 都执行：
 
 ```bash
 build_go modules/archive ./cmd/server moox-archive 0
 build_go modules/archive ./cmd/cli moox-archive-cli 0
 ```
 
-`scripts/release.sh` 创建 `archive/bin`、`archive/config`，复制两个 binary 与 `modules/archive/config/.`。
+`scripts/release/release.sh` 创建 `archive/bin`、`archive/config`，复制两个 binary 与 `modules/archive/config/.`。
 
 - [ ] **Step 3: 完整接入 deploy 开关和运行脚本**
 
-在 `scripts/deploy-moox.sh` 所有与 factor/monitor 同层的分支加入 `WITH_ARCHIVE=1` 和 `--no-archive`，覆盖 build、stage mkdir、binary/config copy、start、stop、restart、status、healthcheck、rsync exclude、远端旧 binary 清理、变量替换和 SSH 环境传递。启动命令固定为：
+在 `scripts/deploy/deploy-moox.sh` 所有与 factor/monitor 同层的分支加入 `WITH_ARCHIVE=1` 和 `--no-archive`，覆盖 build、stage mkdir、binary/config copy、start、stop、restart、status、healthcheck、rsync exclude、远端旧 binary 清理、变量替换和 SSH 环境传递。启动命令固定为：
 
 ```bash
 start_service "archive" "${ROOT}/archive" \
@@ -1583,22 +1583,22 @@ withExtra(
 
 - [ ] **Step 6: 构建和 stage 验证**
 
-Run: `./scripts/build.sh archive`
+Run: `./scripts/build/build.sh archive`
 
 Expected: PASS，生成两个纯 Go binary。
 
-Run: `TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh archive`
+Run: `TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh archive`
 
 Expected: PASS，`file bin/moox-archive` 显示 Linux x86-64。
 
-Run: `./scripts/deploy-moox.sh --target localhost --dir /tmp/moox-archive-plan-check --stage /tmp/moox-archive-stage --skip-build --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor`
+Run: `./scripts/deploy/deploy-moox.sh --target localhost --dir /tmp/moox-archive-plan-check --stage /tmp/moox-archive-stage --skip-build --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-monitor`
 
 Expected: PASS，stage 和目标目录包含 archive binary/config，归档 sentinel 未删除。
 
 - [ ] **Step 7: 提交**
 
 ```bash
-git add scripts/build.sh scripts/release.sh scripts/deploy-moox.sh modules/admin/internal/service/sysdeploy
+git add scripts/build/build.sh scripts/release/release.sh scripts/deploy/deploy-moox.sh modules/admin/internal/service/sysdeploy
 git commit -m "build(archive): package and deploy archive service"
 ```
 
@@ -1646,7 +1646,7 @@ func TestValidateRejectsLegacyArchiveRole(t *testing.T) {
 
 - [ ] **Step 5: 删除旧 packages 并更新 README**
 
-README 明确：Storage 只负责提交后发布 `moox.storage.time_series.rows_updated.v1`；归档由 `moox-archive` durable consumer 完成。删除旧 role/timer/long-form archive 的说明，增加新模块入口与路径示例。
+README 明确：Storage 只负责提交后发布 `moox.event.storage.time_series.rows_updated.v1`；归档由 `moox-archive` durable consumer 完成。删除旧 role/timer/long-form archive 的说明，增加新模块入口与路径示例。
 
 - [ ] **Step 6: 验证旧入口完全消失**
 
@@ -1794,8 +1794,8 @@ Expected: 无输出或全部成功。
 - [ ] **Step 3: 构建验证**
 
 ```bash
-./scripts/build.sh archive
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh archive
+./scripts/build/build.sh archive
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh archive
 ```
 
 Expected: `moox-archive` 和 `moox-archive-cli` 的本机及 Linux 构建均成功。

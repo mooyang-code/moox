@@ -256,7 +256,7 @@
 
   ```bash
   go test -count=1 ./modules/... ./packages/...
-  bash scripts/check-module-boundaries.sh
+  bash scripts/check/check-module-boundaries.sh
   git diff --check
   ```
 
@@ -302,8 +302,8 @@
 ## Task 7: Add Enforceable Checks And Finish Repository Hygiene
 
 **Files:**
-- Modify: `scripts/check-module-boundaries.sh`
-- Create: `scripts/check-package-boundaries.sh`
+- Modify: `scripts/check/check-module-boundaries.sh`
+- Create: `scripts/check/check-package-boundaries.sh`
 - Modify: `.gitignore` only if a new generated/runtime artifact is found
 - Modify: affected README and architecture documents
 
@@ -330,8 +330,8 @@
   while IFS= read -r dir; do
     (cd "$dir" && go vet ./...)
   done < <(awk '/^[[:space:]]+\.\// {print substr($1, 3)}' go.work)
-  bash scripts/check-module-boundaries.sh
-  bash scripts/check-package-boundaries.sh
+  bash scripts/check/check-module-boundaries.sh
+  bash scripts/check/check-package-boundaries.sh
   git diff --check
   git status --short
   ```

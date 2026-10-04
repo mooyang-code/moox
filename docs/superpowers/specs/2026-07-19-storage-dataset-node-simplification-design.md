@@ -2,7 +2,11 @@
 
 ## 状态与优先级
 
-本设计已于 2026-07-19 完成讨论确认。它是 Storage 当前实现的目标事实源，取代此前关于 DataShard、多 Consumer、Pebble 行级 Merge、不可变整行、字段级删除、Snapshot Scan、Sequence Progress、Dataset 迁移和通用 Schema 演进的设计。
+本设计已于 2026-07-19 完成讨论确认，仍作为字段级存储、Dataset 单归属和 View 物化的基础设计。
+其中关于 DataNode/节点管理、Dataset 激活、绑定锁定和部署流程的内容已被 2026-07-22
+《Storage DataNode 管理模型收敛设计》取代；不要从本文恢复节点管理或拓扑管理方案。
+
+DataNode 管理、Dataset 激活和绑定锁定规则已由《Storage DataNode 管理模型收敛设计》（2026-07-22）修订；两份文档冲突时，以 2026-07-22 设计为准。
 
 MooX 是个人量化交易系统。本设计优先保证数据正确、边界清楚和长期可维护，不建设高可用、在线迁移和通用分布式存储平台。
 
@@ -24,7 +28,7 @@ MooX 是个人量化交易系统。本设计优先保证数据正确、边界清
 ### Dataset 单归属
 
 - Dataset 创建时必须指定 `data_node_id`。
-- `data_node_id` 创建后永久不可修改。
+- Dataset 首次激活前可以通过专用命令原子更换 `data_node_id`；首次激活后永久不可修改。
 - Dataset 不按 Subject、RowKey、时间范围或权重继续分片。
 - 系统不提供 Dataset 迁移、复制、切换、回滚或 Rebalance。
 - 用户的停机复制和重新部署属于系统外人工操作。
@@ -64,7 +68,7 @@ Record RowKey 是：
 space_id + dataset_id + record_id + version
 ```
 
-`WriteFields` 对每个 `RowKey + FieldID` 或 `RowKey + AttributeKey` 直接执行 Upsert：
+`UpsertFields` 对每个 `RowKey + FieldID` 或 `RowKey + AttributeKey` 直接执行 Upsert：
 
 - Key 不存在时新增；
 - Key 已存在时覆盖旧值；
@@ -169,6 +173,8 @@ DataNode
 Dataset
   data_node_id
   keep_duration
+  binding_locked
+  revision
 
 View
   keep_duration
@@ -239,13 +245,13 @@ record
 
 实际实现使用保持字节排序的长度前缀二进制 Tuple Codec，不继续使用字符串分隔和手工 `%` 转义。
 
-### WriteFields
+### UpsertFields
 
 ```text
 PrimaryStore
   1. 从 Metadata Cache 获取 Dataset、Fields 和 DataNode
   2. 校验 RowKey、Field 归属、重复 Field、TypedValue 和请求上限
-  3. direct tRPC 调用 DataNode.WriteFields
+  3. direct tRPC 调用 DataNode.UpsertFields
 
 DataNode
   4. 将每个 Field/Attribute 编码为独立 Pebble Key
@@ -279,7 +285,7 @@ Record 未指定 Version 时，DataNode 在已知 `record_id` 的 Prefix 内使�
 
 ### 原子提交与 Outbox
 
-每次 `WriteFields` 在一个 Pebble Batch 中提交：
+每次 `UpsertFields` 在一个 Pebble Batch 中提交：
 
 ```text
 Field Keys
@@ -335,7 +341,7 @@ Bleve 使用对应的 `slot-a/` 和 `slot-b/` 目录。Metadata 的 `active_slot
 ```text
 Stream: MOOX_STORAGE
 Subjects:
-  - moox.storage.fields_changed.v1.>
+  - moox.event.storage.fields_changed.v1.>
 ```
 
 `MOOX_STORAGE` 使用 JetStream `InterestPolicy` 和 `DiscardNew`。
@@ -343,7 +349,7 @@ Subjects:
 每个 Dataset 使用独立 Subject：
 
 ```text
-moox.storage.fields_changed.v1.<space-token>.<dataset-token>
+moox.event.storage.fields_changed.v1.<space-token>.<dataset-token>
 ```
 
 `space-token` 和 `dataset-token` 使用统一的 `EncodeSubjectToken`：把非空 UTF-8 ID 编码为小写、无 Padding 的 Base32 单个 NATS Token。Consumer 使用 `DecodeSubjectToken` 解码，并校验 Subject 中的 Space/Dataset 与 Payload 一致。
@@ -356,7 +362,7 @@ View 只创建一个固定 Durable Consumer：
 
 ```text
 Durable: storage_view
-FilterSubject: moox.storage.fields_changed.v1.>
+FilterSubject: moox.event.storage.fields_changed.v1.>
 MaxAckPending: 1
 FetchBatch: 1
 ```
@@ -489,7 +495,7 @@ Apply 锁保证 Backfill 完成到切换之间没有只写 ActiveView 的事件�
 
 ## 两服务器 E2E
 
-E2E 从仓库根被忽略的 `custom.toml` 读取两个服务器节点，不打印或提交凭证。
+E2E 从仓库根被忽略的 `moox.toml` 读取两个服务器节点，不打印或提交凭证。
 
 推荐拓扑：
 
@@ -525,10 +531,10 @@ Server B: storage-node-factor
 - 不存在 Required、Dimensions、字段删除、DeleteRows、ReadRows、ScanRows 或 Snapshot RPC。
 - TimeSeries 使用可配置时间桶；Record 不自动清理。
 - Field 使用 `0x01`，Attribute 使用 `0x02`，不存在 RowMarker。
-- `WriteFields` 对 Field/Attribute 直接 Upsert，允许补写历史新增字段和覆盖旧值。
+- `UpsertFields` 对 Field/Attribute 直接 Upsert，允许补写历史新增字段和覆盖旧值。
 - DataNode `ReadFields` 必须指定 RowKey 和 Field；Record 空 Version 返回字符最大版本。
 - 字段和内部 Outbox 条目在一个 Pebble Batch 中提交。
-- 每个 Dataset 使用 `moox.storage.fields_changed.v1.<space-token>.<dataset-token>`。
+- 每个 Dataset 使用 `moox.event.storage.fields_changed.v1.<space-token>.<dataset-token>`。
 - 事件不携带 Node/Dataset Sequence，ViewIndex 不保存 Source Progress。
 - JetStream 只有一个 `storage_view` Durable Consumer，`MaxAckPending=1`、`FetchBatch=1`。
 - 每个 View 使用独立 A/B DB；ActiveView/NewView/OldView 生命周期明确。

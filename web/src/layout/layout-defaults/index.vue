@@ -33,5 +33,6 @@ const { isPc } = useDevicesSize();
 .layout-right {
   display: grid;
   grid-template-rows: auto 1fr auto;
+  min-width: 0;
 }
 </style>

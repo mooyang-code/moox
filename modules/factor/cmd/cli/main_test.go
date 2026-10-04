@@ -1,123 +1,98 @@
 package main
 
 import (
-	"reflect"
+	"bytes"
+	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/stretchr/testify/require"
 )
 
-func TestRunOnceSuccessPayloadKeepsRunIDCompatibility(t *testing.T) {
-	task := &engine.FactorTask{TaskID: "manual-123"}
-
-	payload := runOncePayload(task, domain.RunStatusSucceeded, 2, 7)
-
-	if payload["task_id"] != "manual-123" {
-		t.Fatalf("task_id = %v", payload["task_id"])
-	}
-	if payload["run_id"] != "manual-123-succeeded" {
-		t.Fatalf("run_id = %v", payload["run_id"])
-	}
-}
-
-func TestParseInitArgs(t *testing.T) {
-	cfg, err := parseArgs([]string{"init", "--db", "./tmp/factor.db"})
-	if err != nil {
-		t.Fatalf("parseArgs() error = %v", err)
-	}
-	if cfg.Command != "init" || cfg.DBPath != "./tmp/factor.db" {
-		t.Fatalf("cfg = %+v", cfg)
-	}
-}
-
-func TestParseImportArgs(t *testing.T) {
-	cfg, err := parseArgs([]string{"import", "--db", "./tmp/factor.db", "--factors-dir", "./factors", "--default-params", "20,96,288"})
-	if err != nil {
-		t.Fatalf("parseArgs() error = %v", err)
-	}
-	if cfg.Command != "import" || cfg.FactorsDir != "./factors" {
-		t.Fatalf("cfg = %+v", cfg)
-	}
-	if !reflect.DeepEqual(cfg.DefaultParams, []int{20, 96, 288}) {
-		t.Fatalf("default params = %#v", cfg.DefaultParams)
-	}
-}
-
-func TestParseRunOnceArgs(t *testing.T) {
+func TestParseImport(t *testing.T) {
 	cfg, err := parseArgs([]string{
-		"run-once",
-		"--space", "crypto",
-		"--dataset", "binance_spot_kline",
-		"--subject", "BTC-USDT",
-		"--freq", "1m",
-		"--bar-time", "2026-07-06T09:15:00Z",
-		"--factors", "bias,cci",
+		"import", "--set", "fset_bars_1m", "--file", "./Bias.py", "--factor-id", "Bias",
+		"--inputs", "close, volume", "--outputs", "bias", "--lookback", "20",
+		"--params", `{"window":20}`,
 	})
-	if err != nil {
-		t.Fatalf("parseArgs() error = %v", err)
-	}
-	if cfg.Command != "run-once" || cfg.SpaceID != "crypto" || cfg.DatasetID != "binance_spot_kline" || cfg.SubjectID != "BTC-USDT" || cfg.Freq != "1m" {
-		t.Fatalf("cfg = %+v", cfg)
-	}
-	if cfg.BarTime != time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC) {
-		t.Fatalf("bar time = %s", cfg.BarTime)
-	}
-	if !reflect.DeepEqual(cfg.FactorIDs, []string{"bias", "cci"}) {
-		t.Fatalf("factor ids = %#v", cfg.FactorIDs)
+	require.NoError(t, err)
+	require.Equal(t, "fset_bars_1m", cfg.SetID)
+	require.Equal(t, []string{"close", "volume"}, cfg.InputColumns)
+	require.Equal(t, []string{"bias"}, cfg.Outputs)
+	require.Equal(t, 20, cfg.LookbackPeriods)
+	require.Equal(t, "timeseries", cfg.FactorType)
+}
+
+func TestParseImportRejectsBlankColumns(t *testing.T) {
+	_, err := parseArgs([]string{"import", "--set", "s", "--file", "f.py", "--factor-id", "f", "--inputs", "close,,open", "--outputs", "value", "--lookback", "1"})
+	require.Error(t, err)
+}
+
+func TestParseImportCatalogUsesDirectoryAndSet(t *testing.T) {
+	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/opt/factors"})
+	require.NoError(t, err)
+	require.Equal(t, "fset_bars_1m", cfg.SetID)
+	require.Equal(t, "/opt/factors", cfg.CatalogDir)
+	require.Empty(t, cfg.FactorsDir, "the catalog source directory must not double as the artifact directory")
+}
+
+func TestParseImportCatalogArtifactDirectoryIsSeparate(t *testing.T) {
+	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/src/factors", "--factors-dir", "/var/lib/moox/factors"})
+	require.NoError(t, err)
+	require.Equal(t, "/src/factors", cfg.CatalogDir)
+	require.Equal(t, "/var/lib/moox/factors", cfg.FactorsDir)
+}
+
+func TestParseRecalcRangeAndSelectors(t *testing.T) {
+	cfg, err := parseArgs([]string{
+		"recalc", "--set", "fset_bars_1m", "--start", "2026-10-04T00:00:00Z",
+		"--end", "2026-10-04T01:00:00Z", "--factor", "Bias", "--factor", "Cci",
+		"--subject", "BTC,ETH",
+	})
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, cfg.EndTime.Sub(cfg.StartTime))
+	require.Equal(t, []string{"Bias", "Cci"}, cfg.FactorIDs)
+	require.Equal(t, []string{"BTC", "ETH"}, cfg.Subjects)
+	require.Empty(t, cfg.DBPath)
+}
+
+func TestParseRunOncePeriod(t *testing.T) {
+	cfg, err := parseArgs([]string{"run-once", "--set", "fset_bars_1m", "--period", "2026-10-04T00:10:00Z"})
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC), cfg.Period)
+	require.Empty(t, cfg.DBPath)
+	require.Empty(t, cfg.FactorsDir)
+}
+
+func TestStatusRequiresFactorTarget(t *testing.T) {
+	_, err := parseArgs([]string{"status"})
+	require.NoError(t, err)
+	var output bytes.Buffer
+	err = runStatus(t.Context(), cliConfig{}, &output)
+	require.ErrorContains(t, err, "FactorMgr target is required")
+}
+
+func TestLegacyCLICommandsAreRemoved(t *testing.T) {
+	for _, command := range []string{"recalc-cancel", "recalc-status", "clear-queue", "replay"} {
+		_, err := parseArgs([]string{command})
+		require.ErrorContains(t, err, "unknown command")
 	}
 }
 
-func TestFilterFactorsKeepsOnlyRequestedIDs(t *testing.T) {
-	factors := []domain.FactorDef{
-		{FactorID: "bias"},
-		{FactorID: "cci"},
-		{FactorID: "macd"},
+func TestRunInitCreatesFactorSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "factor.db")
+	var output bytes.Buffer
+	require.NoError(t, runInit(cliConfig{DBPath: dbPath}, &output))
+	var result struct {
+		OK     bool     `json:"ok"`
+		Tables []string `json:"tables"`
 	}
-	got := filterFactors(factors, []string{"cci"})
-	if len(got) != 1 || got[0].FactorID != "cci" {
-		t.Fatalf("filterFactors() = %+v", got)
-	}
-}
-
-func TestFilterFactorsReturnsAllWhenNoFilter(t *testing.T) {
-	factors := []domain.FactorDef{{FactorID: "bias"}, {FactorID: "cci"}}
-	got := filterFactors(factors, nil)
-	if len(got) != 2 {
-		t.Fatalf("filterFactors() = %+v", got)
-	}
-}
-
-func TestMustParseParamsDefaultsToEmptySlice(t *testing.T) {
-	if got := mustParseParams(""); len(got) != 0 {
-		t.Fatalf("mustParseParams() = %#v", got)
-	}
-	if got := mustParseParams(`[1,2,3]`); !reflect.DeepEqual(got, []int{1, 2, 3}) {
-		t.Fatalf("mustParseParams() = %#v", got)
-	}
-}
-
-func TestBuildTaskUsesMaxLookbackAndSourcePaths(t *testing.T) {
-	cfg := cliConfig{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", FactorsDir: "/tmp/factors", BarTime: time.Unix(0, 0).UTC()}
-	factors := []domain.FactorDef{
-		{FactorID: "bias", Name: "bias", ParamsJSON: `[5]`, LookbackBars: 20, WritebackBars: 1},
-		{FactorID: "cci", Name: "cci", ParamsJSON: `[14]`, LookbackBars: 96},
-	}
-	task := buildTask(cfg, factors)
-	if task.LookbackBars != 96 || len(task.Factors) != 2 || task.Factors[0].SourcePath != "/tmp/factors/bias.py" {
-		t.Fatalf("buildTask() = %+v", task)
-	}
-}
-
-func TestInputColumnsDedupesExtraColumns(t *testing.T) {
-	specs := []engine.FactorSpec{
-		{ExtraColumns: []string{"close", "volume"}},
-		{ExtraColumns: []string{"volume", "open_interest"}},
-	}
-	got := inputColumns(specs)
-	want := append([]string(nil), "open", "high", "low", "close", "volume", "quote_volume", "trade_num", "open_interest")
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("inputColumns() = %#v, want %#v", got, want)
-	}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	require.True(t, result.OK)
+	require.Equal(t, []string{"t_factor_sets", "t_factor_defs", "t_factor_recalc_jobs"}, result.Tables)
+	db, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 }

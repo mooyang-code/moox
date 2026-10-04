@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 const defaultExpireSec = int64(60)
@@ -17,6 +16,7 @@ const defaultExpireSec = int64(60)
 type AuthConfig struct {
 	AccessKey   string
 	SecretKey   string
+	Caller      string
 	TargetNode  string
 	CAFile      string
 	CAPEMBase64 string
@@ -29,6 +29,7 @@ func DefaultAuthConfig() AuthConfig {
 	return AuthConfig{
 		AccessKey:   cfg.AccessKey,
 		SecretKey:   cfg.SecretKey,
+		Caller:      cfg.Caller,
 		TargetNode:  cfg.TargetNode,
 		CAFile:      cfg.CAFile,
 		CAPEMBase64: cfg.CAPEMBase64,
@@ -52,11 +53,7 @@ func normalizeAuthConfig(cfg AuthConfig) AuthConfig {
 
 func GenerateAuthHeader(cfg AuthConfig, method, path string, body []byte) (http.Header, error) {
 	cfg = normalizeAuthConfig(cfg)
-	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: cfg.AccessKey, Secret: cfg.SecretKey, Expire: time.Duration(cfg.ExpireSec) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: cfg.TargetNode}, time.Unix(cfg.NowUnix, 0))
-}
-
-func NewSignedRequest(method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {
-	return NewSignedRequestWithContext(trpc.BackgroundContext(), method, url, body, cfg)
+	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: cfg.AccessKey, Caller: cfg.Caller, Secret: cfg.SecretKey, Expire: time.Duration(cfg.ExpireSec) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: cfg.TargetNode}, time.Unix(cfg.NowUnix, 0))
 }
 
 func NewSignedRequestWithContext(ctx context.Context, method string, url string, body []byte, cfg AuthConfig) (*http.Request, error) {

@@ -2,237 +2,180 @@ package jobstate
 
 import (
 	"context"
-	"fmt"
-	"net"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/structpb"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestKVStoreCreatePendingDeduplicates(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-	item := testJobItem(t, "crypto", "ji-1")
+type memoryKV struct {
+	mu   sync.Mutex
+	data map[string]jetstream.KVEntry
+}
 
-	first, err := store.CreatePending(ctx, item, QueueMeta{})
-	if err != nil {
-		t.Fatalf("CreatePending first error = %v", err)
+func newMemoryKV() *memoryKV { return &memoryKV{data: map[string]jetstream.KVEntry{}} }
+func (m *memoryKV) Create(_ context.Context, key string, value []byte) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.data[key]; ok {
+		return 0, jetstream.ErrKVKeyExists
 	}
-	if !first.Created || first.Status != pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED {
-		t.Fatalf("first = %+v", first)
+	m.data[key] = jetstream.KVEntry{Value: append([]byte(nil), value...), Revision: 1}
+	return 1, nil
+}
+func (m *memoryKV) Get(_ context.Context, key string) (*jetstream.KVEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.data[key]
+	if !ok {
+		return nil, jetstream.ErrKVKeyNotFound
 	}
+	return &jetstream.KVEntry{Value: append([]byte(nil), entry.Value...), Revision: entry.Revision}, nil
+}
+func (m *memoryKV) Update(_ context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.data[key]
+	if !ok {
+		return 0, jetstream.ErrKVKeyNotFound
+	}
+	if entry.Revision != revision {
+		return 0, jetstream.ErrKVKeyExists
+	}
+	entry.Revision++
+	entry.Value = append([]byte(nil), value...)
+	m.data[key] = entry
+	return entry.Revision, nil
+}
+func (m *memoryKV) Keys(_ context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keys := make([]string, 0, len(m.data))
+	for key := range m.data {
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
 
-	second, err := store.CreatePending(ctx, item, QueueMeta{})
-	if err != nil {
-		t.Fatalf("CreatePending second error = %v", err)
+func TestMarkReportedFirstTerminalWins(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline"}
+	if _, err := store.CreatePending(context.Background(), item); err != nil {
+		t.Fatal(err)
 	}
-	if !second.Deduplicated || second.Status != pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED {
-		t.Fatalf("second = %+v", second)
+	finished := time.Unix(100, 0).UTC()
+	state, changed, err := store.MarkReported(context.Background(), ReportEvent{
+		SpaceID: "crypto", JobItemID: "item-1", NodeID: "node-1", Status: StatusFailed,
+		DurationMS: 25, Time: finished,
+	})
+	if err != nil || !changed || state.Status != StatusFailed {
+		t.Fatalf("first report state=%+v changed=%v err=%v", state, changed, err)
+	}
+	state, changed, err = store.MarkReported(context.Background(), ReportEvent{
+		SpaceID: "crypto", JobItemID: "item-1", NodeID: "node-2", Status: StatusSuccess, DurationMS: 50,
+	})
+	if err != nil || changed || state.Status != StatusFailed || state.ExecutionNode != "node-1" || state.DurationMS != 25 {
+		t.Fatalf("late report state=%+v changed=%v err=%v", state, changed, err)
 	}
 }
 
-func TestKVStoreRunningAndTerminalReport(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-	_, err := store.CreatePending(ctx, testJobItem(t, "crypto", "ji-2"), QueueMeta{Subject: "sub"})
+func TestMarkReportedMissingIsIdempotent(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	state, changed, err := store.MarkReported(context.Background(), ReportEvent{
+		SpaceID: "crypto", JobItemID: "missing", Status: StatusSuccess,
+	})
+	if err != nil || changed || state != nil {
+		t.Fatalf("state=%+v changed=%v err=%v", state, changed, err)
+	}
+}
+
+func TestCreatePendingRepublishesOnlyEnqueueFailedDuplicate(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline"}
+	first, err := store.CreatePending(context.Background(), item)
+	if err != nil || !first.ShouldPublish {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	duplicate, err := store.CreatePending(context.Background(), item)
+	if err != nil || !duplicate.Deduplicated || duplicate.ShouldPublish {
+		t.Fatalf("pending duplicate=%+v err=%v", duplicate, err)
+	}
+	if err := store.MarkEnqueueFailed(context.Background(), "crypto", "item-1", "publish failed"); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.CreatePending(context.Background(), item)
+	if err != nil || !retry.Created || !retry.ShouldPublish {
+		t.Fatalf("enqueue_failed retry=%+v err=%v", retry, err)
+	}
+	if _, _, err := store.MarkReported(context.Background(), ReportEvent{
+		SpaceID: "crypto", JobItemID: "item-1", Status: StatusSuccess,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := store.CreatePending(context.Background(), item)
+	if err != nil || !terminal.Deduplicated || terminal.ShouldPublish {
+		t.Fatalf("terminal duplicate=%+v err=%v", terminal, err)
+	}
+}
+
+func TestCreatePendingPersistsExecuteAt(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	executeAt := time.Date(2026, 7, 26, 9, 30, 0, 123, time.FixedZone("CST", 8*60*60))
+	item := &pb.JobItem{
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
+		ExecuteAt: timestamppb.New(executeAt),
+	}
+	if _, err := store.CreatePending(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Get(context.Background(), "crypto", "item-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkPublished(ctx, "crypto", "ji-2", QueueMeta{Subject: "sub", Stream: "EXEC", StreamSeq: 42}); err != nil {
-		t.Fatal(err)
-	}
-	ok, running, err := store.TryMarkRunning(ctx, RunningRequest{
-		SpaceID: "crypto", JobItemID: "ji-2", NodeID: "node-1", AckSubject: "ack", StreamSeq: 42,
-	})
-	if err != nil || !ok {
-		t.Fatalf("TryMarkRunning ok=%v state=%+v err=%v", ok, running, err)
-	}
-	if running.AttemptNo != 1 {
-		t.Fatalf("attempt = %d, want 1", running.AttemptNo)
-	}
-	updated, err := store.MarkReported(ctx, ReportEvent{
-		SpaceID: "crypto", JobItemID: "ji-2", NodeID: "node-1", AttemptNo: 1,
-		Status: StatusSuccess, ResultSummary: map[string]any{"rows": float64(3)}, Time: time.Now(),
-	})
-	if err != nil {
-		t.Fatalf("MarkReported error = %v", err)
-	}
-	if updated.Status != StatusSuccess || !updated.IsTerminal() || len(updated.Attempts) != 1 {
-		t.Fatalf("updated = %+v", updated)
+	if state.ExecuteAt == nil || !state.ExecuteAt.Equal(executeAt.UTC()) || state.ExecuteAt.Location() != time.UTC {
+		t.Fatalf("execute_at = %v, want %v in UTC", state.ExecuteAt, executeAt.UTC())
 	}
 }
 
-func TestKVStoreRetryableFailureReturnsPending(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-	_, err := store.CreatePending(ctx, testJobItem(t, "crypto", "ji-retry"), QueueMeta{})
+func TestCreatePendingWithoutExecuteAtMeansImmediate(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	item := &pb.JobItem{
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
+	}
+	if _, err := store.CreatePending(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Get(context.Background(), "crypto", "item-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ok, _, err := store.TryMarkRunning(ctx, RunningRequest{SpaceID: "crypto", JobItemID: "ji-retry", NodeID: "node-1", AckSubject: "ack"})
-	if err != nil || !ok {
-		t.Fatalf("TryMarkRunning ok=%v err=%v", ok, err)
-	}
-
-	updated, err := store.MarkReported(ctx, ReportEvent{
-		SpaceID: "crypto", JobItemID: "ji-retry", NodeID: "node-1", AttemptNo: 1,
-		Status: StatusFailed, ErrorKind: ErrorRetryable, ErrorMessage: "try again", Time: time.Now(),
-	})
-	if err != nil {
-		t.Fatalf("MarkReported error = %v", err)
-	}
-	if updated.Status != StatusPending || updated.RunningNode != "" || updated.Attempts[0].Status != AttemptFailed {
-		t.Fatalf("updated = %+v", updated)
+	if state.ExecuteAt != nil {
+		t.Fatalf("execute_at = %v, want nil immediate execution", state.ExecuteAt)
 	}
 }
 
-func TestKVStoreCancelDirectiveForRunningNode(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-	_, err := store.CreatePending(ctx, testJobItem(t, "crypto", "ji-cancel"), QueueMeta{})
-	if err != nil {
-		t.Fatal(err)
+func TestJobItemDetailReturnsExecuteAt(t *testing.T) {
+	executeAt := time.Date(2026, 7, 26, 1, 30, 0, 0, time.UTC)
+	detail := (State{ExecuteAt: &executeAt}).ToDetail()
+	if detail.GetExecuteAt() == nil || !detail.GetExecuteAt().AsTime().Equal(executeAt) {
+		t.Fatalf("execute_at = %v, want %v", detail.GetExecuteAt(), executeAt)
 	}
-	ok, _, err := store.TryMarkRunning(ctx, RunningRequest{SpaceID: "crypto", JobItemID: "ji-cancel", NodeID: "node-1", AckSubject: "ack"})
-	if err != nil || !ok {
-		t.Fatalf("TryMarkRunning ok=%v err=%v", ok, err)
-	}
-	if err := store.MarkCanceled(ctx, "crypto", "ji-cancel", "operator cancel"); err != nil {
-		t.Fatalf("MarkCanceled error = %v", err)
-	}
-	directives, err := store.ListCancelDirectives(ctx, "crypto", "node-1", 20)
-	if err != nil {
-		t.Fatalf("ListCancelDirectives error = %v", err)
-	}
-	if len(directives) != 1 || directives[0].GetJobItemId() != "ji-cancel" || directives[0].GetAttemptNo() != 1 {
-		t.Fatalf("directives = %+v", directives)
-	}
-	if err := store.ClearCancelDirective(ctx, "crypto", "ji-cancel", 1); err != nil {
-		t.Fatalf("ClearCancelDirective error = %v", err)
-	}
-	directives, err = store.ListCancelDirectives(ctx, "crypto", "node-1", 20)
-	if err != nil {
-		t.Fatalf("ListCancelDirectives after clear error = %v", err)
-	}
-	if len(directives) != 0 {
-		t.Fatalf("directives after clear = %+v", directives)
+	if immediate := (State{}).ToDetail(); immediate.GetExecuteAt() != nil {
+		t.Fatalf("missing execute_at became %v", immediate.GetExecuteAt())
 	}
 }
 
-func TestKVStoreListAndListAttempts(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-
-	for _, id := range []string{"ji-list-1", "ji-list-2"} {
-		_, err := store.CreatePending(ctx, testJobItem(t, "crypto", id), QueueMeta{})
-		require.NoError(t, err)
+func TestCreatePendingRejectsInvalidExecuteAt(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	item := &pb.JobItem{
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
+		ExecuteAt: &timestamppb.Timestamp{Seconds: 253402300800},
 	}
-
-	items, page, err := store.List(ctx, &pb.ListJobItemsReq{SpaceId: "crypto"})
-	require.NoError(t, err)
-	require.Len(t, items, 2)
-	assert.Equal(t, uint32(2), page.GetTotal())
-	assert.False(t, page.GetHasMore())
-
-	filtered, page, err := store.List(ctx, &pb.ListJobItemsReq{
-		SpaceId: "crypto",
-		JobId:   "job-1",
-		Page:    &commonpb.Page{Page: 1, Size: 1},
-	})
-	require.NoError(t, err)
-	require.Len(t, filtered, 1)
-	assert.True(t, page.GetHasMore())
-
-	_, _, err = store.TryMarkRunning(ctx, RunningRequest{
-		SpaceID: "crypto", JobItemID: "ji-list-1", NodeID: "node-1", AckSubject: "ack",
-	})
-	require.NoError(t, err)
-	attempts, err := store.ListAttempts(ctx, &pb.ListJobItemAttemptsReq{
-		SpaceId: "crypto", JobItemId: "ji-list-1",
-	})
-	require.NoError(t, err)
-	require.Len(t, attempts, 1)
-	assert.Equal(t, int32(1), attempts[0].GetAttemptNo())
-}
-
-func TestKVStoreListEmptyBucket(t *testing.T) {
-	ctx := context.Background()
-	store := newTestKVStore(t, 48*time.Hour)
-
-	items, page, err := store.List(ctx, &pb.ListJobItemsReq{SpaceId: "crypto"})
-	require.NoError(t, err)
-	assert.Empty(t, items)
-	assert.Equal(t, uint32(0), page.GetTotal())
-}
-
-func newTestKVStore(t *testing.T, ttl time.Duration) *KVStore {
-	t.Helper()
-	port := freeTCPPort(t)
-	cfg := config.Default().JetStream
-	cfg.NATSURL = "nats://127.0.0.1:" + port
-	cfg.Embedded = config.EmbeddedJetStreamConfig{
-		Enabled:          true,
-		Host:             "127.0.0.1",
-		Port:             mustAtoi(t, port),
-		StoreDir:         t.TempDir(),
-		StartupTimeoutMS: 5000,
+	if _, err := store.CreatePending(context.Background(), item); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("CreatePending() error = %v, want ErrInvalid", err)
 	}
-	rt := testfixture.StartRuntime(t, cfg)
-	t.Cleanup(func() { _ = rt.Close() })
-	bucket := fmt.Sprintf("TEST_JOB_ACTIVE_%d", time.Now().UnixNano())
-	kv, err := rt.Client().CreateKeyValue(bucket, ttl)
-	if err != nil {
-		t.Fatalf("CreateKeyValue() error = %v", err)
-	}
-	return NewKVStore(kv, Options{RecoverAfterMillis: 600000, DefaultMaxAttempts: 3})
-}
-
-func testJobItem(t *testing.T, spaceID, jobItemID string) *pb.JobItem {
-	t.Helper()
-	params, err := structpb.NewStruct(map[string]any{"symbol": "BTC/USDT"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &pb.JobItem{
-		SpaceId:       spaceID,
-		JobId:         "job-1",
-		JobItemId:     jobItemID,
-		JobType:       "collector.kline",
-		CodePackageId: "pkg-1",
-		Params:        params,
-		Priority:      5,
-	}
-}
-
-func freeTCPPort(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen free port: %v", err)
-	}
-	defer listener.Close()
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatalf("split listener addr: %v", err)
-	}
-	return port
-}
-
-func mustAtoi(t *testing.T, raw string) int {
-	t.Helper()
-	var out int
-	for _, r := range raw {
-		if r < '0' || r > '9' {
-			t.Fatalf("invalid port %q", raw)
-		}
-		out = out*10 + int(r-'0')
-	}
-	return out
 }

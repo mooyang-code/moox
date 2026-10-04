@@ -24,12 +24,12 @@ $:
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends make nodejs npm python3 ca-certificates
             npm install --global pnpm@10.28.2
         - name: Verify release contract
-          script: bash scripts/test-release-contract.sh
+          script: bash scripts/test/contract/test-release-contract.sh
         - name: Build release matrix
           script: |
             VERSION="$CNB_BRANCH" \
             RELEASE_PLATFORMS="linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64" \
-              ./scripts/release-matrix.sh
+              ./scripts/release/release-matrix.sh
         - name: Create CNB Release
           type: git:release
           options:

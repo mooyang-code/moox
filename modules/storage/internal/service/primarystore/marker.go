@@ -1,0 +1,282 @@
+package primarystore
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+)
+
+type markerDataNodeClient interface {
+	AppendCollectorPeriodCompleted(context.Context, *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error)
+	AppendFactorPeriodComputed(context.Context, *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error)
+	AppendDatasetSyncPointMarker(context.Context, *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error)
+	GetFactorPeriodComputedMarker(context.Context, *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error)
+}
+
+func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.ReportCollectorPeriodCompletedReq) (*pb.ReportCollectorPeriodCompletedRsp, error) {
+	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "collector"); err != nil {
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
+	}
+	ctx = s.requestContext(ctx)
+	ownerNodeID, err := ownedDatasetNodeID(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId(), "collector")
+	if err != nil {
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
+	}
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
+	if err != nil {
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
+	}
+	markerNode, ok := node.(markerDataNodeClient)
+	if !ok {
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := markerNode.AppendCollectorPeriodCompleted(ctx, &pb.AppendCollectorPeriodCompletedReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), Marker: req.GetMarker()})
+	if err != nil {
+		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
+	}
+	return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
+}
+
+func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.ReportFactorPeriodComputedReq) (*pb.ReportFactorPeriodComputedRsp, error) {
+	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
+		return &pb.ReportFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor"); err != nil {
+		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
+	}
+	ctx = s.requestContext(ctx)
+	ownerNodeID, err := ownedDatasetNodeID(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor")
+	if err != nil {
+		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
+	}
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
+	if err != nil {
+		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
+	}
+	markerNode, ok := node.(markerDataNodeClient)
+	if !ok {
+		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.ReportFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := markerNode.AppendFactorPeriodComputed(ctx, &pb.AppendFactorPeriodComputedReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), Marker: req.GetMarker()})
+	if err != nil {
+		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
+	}
+	return &pb.ReportFactorPeriodComputedRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
+}
+
+func (s *Service) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendDatasetSyncPointReq) (*pb.AppendDatasetSyncPointRsp, error) {
+	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	marker := req.GetSyncPoint()
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), marker.GetDatasetId(), ""); err != nil {
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
+	}
+	if marker.GetRequestId() == "" || (marker.GetSource() != "import" && marker.GetSource() != "catchup") {
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request_id and source import|catchup are required"))}, nil
+	}
+	ctx = s.requestContext(ctx)
+	node, err := s.resolve(ctx, req.GetSpaceId(), marker.GetDatasetId())
+	if err != nil {
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
+	}
+	markerNode, ok := node.(markerDataNodeClient)
+	if !ok {
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
+	}
+	ownerNodeID, err := datasetOwnerNodeID(ctx, req.GetSpaceId(), marker.GetDatasetId())
+	if err != nil {
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := markerNode.AppendDatasetSyncPointMarker(ctx, &pb.AppendDatasetSyncPointMarkerReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), SyncPoint: marker})
+	if err != nil {
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
+	}
+	return &pb.AppendDatasetSyncPointRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
+}
+
+func (s *Service) GetFactorPeriodComputed(ctx context.Context, req *pb.GetFactorPeriodComputedReq) (*pb.GetFactorPeriodComputedRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetTriggerEventId() == "" || req.GetPeriodTime() <= 0 {
+		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, trigger_event_id and period_time are required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	ctx = s.requestContext(ctx)
+	ownerNodeID, err := ownedDatasetNodeID(ctx, req.GetSpaceId(), req.GetDatasetId(), "factor")
+	if err != nil {
+		return &pb.GetFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
+	}
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.GetFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
+	}
+	markerNode, ok := node.(markerDataNodeClient)
+	if !ok {
+		return &pb.GetFactorPeriodComputedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := markerNode.GetFactorPeriodComputedMarker(ctx, &pb.GetFactorPeriodComputedMarkerReq{
+		AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(),
+		TriggerEventId: req.GetTriggerEventId(), PeriodTime: req.GetPeriodTime(),
+	})
+	if err != nil {
+		return &pb.GetFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
+	}
+	return &pb.GetFactorPeriodComputedRsp{RetInfo: rsp.GetRetInfo(), Found: rsp.GetFound(), EventId: rsp.GetEventId(), Marker: rsp.GetMarker()}, nil
+}
+
+func datasetOwnerNodeID(ctx context.Context, spaceID, datasetID string) (string, error) {
+	dataset, err := snapshotDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return "", err
+	}
+	nodeID := strings.TrimSpace(dataset.GetDataNodeId())
+	if nodeID == "" {
+		return "", errors.New("dataset has no owner DataNode")
+	}
+	return nodeID, nil
+}
+
+func ownedDatasetNodeID(ctx context.Context, spaceID, datasetID, owner string) (string, error) {
+	dataset, err := snapshotDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return "", err
+	}
+	attrs := dataset.GetAttributes()
+	validOwner := false
+	switch owner {
+	case "collector":
+		validOwner = strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "collector") &&
+			strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "raw_collection")
+	case "factor":
+		validOwner = strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") &&
+			strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "factor_result") &&
+			strings.EqualFold(strings.TrimSpace(attrs["write_owner"]), "factor")
+	}
+	if !validOwner {
+		return "", markerPermissionError{fmt.Errorf("%s marker requires a %s-owned Dataset", owner, owner)}
+	}
+	return datasetOwnerNodeID(ctx, spaceID, datasetID)
+}
+
+func snapshotDataset(ctx context.Context, spaceID, datasetID string) (*pb.Dataset, error) {
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return nil, errors.New("metadata snapshot is unavailable for DataNode routing")
+	}
+	dataset, found := snapshot.GetDataset(spaceID, datasetID)
+	if !found || dataset == nil {
+		return nil, errors.New("dataset is missing from metadata snapshot")
+	}
+	if dataset.GetSpaceId() != spaceID || dataset.GetDatasetId() != datasetID {
+		return nil, errors.New("dataset identity does not match metadata snapshot request")
+	}
+	return dataset, nil
+}
+
+func (s *Service) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" || req.GetRequestId() == "" || len(req.GetDatasetIds()) == 0 {
+		return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id, request_id and dataset_ids are required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if s.syncPoint == nil {
+		return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("view sync point reader is unavailable"))}, nil
+	}
+	datasetIDs := uniqueSorted(req.GetDatasetIds())
+	wait := time.Duration(req.GetWaitTimeoutMs()) * time.Millisecond
+	if wait > 30*time.Second {
+		wait = 30 * time.Second
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		missing, err := s.syncPoint.MissingViewSyncPointDatasets(ctx, req.GetSpaceId(), req.GetViewId(), req.GetRequestId(), datasetIDs)
+		if err != nil {
+			return &pb.WaitViewSyncPointRsp{RetInfo: markerError(err)}, nil
+		}
+		if len(missing) == 0 {
+			return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Success("success"), Ready: true}, nil
+		}
+		if wait == 0 || !time.Now().Before(deadline) {
+			return &pb.WaitViewSyncPointRsp{RetInfo: retinfo.Success("pending"), PendingDatasetIds: missing}, nil
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return &pb.WaitViewSyncPointRsp{RetInfo: markerError(ctx.Err()), PendingDatasetIds: missing}, nil
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *Service) validateMarkerCaller(auth *pb.AuthInfo, spaceID, datasetID, owner string) error {
+	if spaceID == "" || datasetID == "" {
+		return markerValidationError{errors.New("space_id and dataset_id are required")}
+	}
+	if err := s.authorizeRequest(auth); err != nil {
+		return markerPermissionError{err}
+	}
+	appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
+	if owner != "" && !isOwnedAppID(appID, owner) {
+		return markerPermissionError{fmt.Errorf("%s marker requires %s caller", owner, owner)}
+	}
+	return nil
+}
+
+type markerValidationError struct{ error }
+type markerPermissionError struct{ error }
+
+func markerError(err error) *pb.RetInfo {
+	var validation markerValidationError
+	if errors.As(err, &validation) {
+		return retinfo.Error(pb.ErrorCode_INVALID_PARAM, validation)
+	}
+	var permission markerPermissionError
+	if errors.As(err, &permission) {
+		return retinfo.Error(pb.ErrorCode_NO_PERMISSION, permission)
+	}
+	return retinfo.Error(pb.ErrorCode_INNER_ERR, err)
+}
+
+func uniqueSorted(values []string) []string {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			set[value] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for value := range set {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}

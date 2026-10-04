@@ -10,7 +10,7 @@
       <!-- 路由内容 -->
       <router-view v-else v-slot="{ Component, route }">
         <MainTransition>
-          <keep-alive :include="cacheRoutes">
+          <keep-alive :include="cacheRouteNames">
             <Suspense>
               <template #default>
                 <component :is="Component" :key="route.fullPath" v-if="refreshPage" />
@@ -41,6 +41,8 @@ let { refreshPage, isTabs, watermark, watermarkStyle, watermarkRotate, watermark
 const routerStore = useRoutesConfigStore();
 const { cacheRoutes } = storeToRefs(routerStore);
 const loadingStore = useLoadingStore();
+// The orders workbench needs its per-tab filters and pagination to survive URL tab changes.
+const cacheRouteNames = computed(() => [...new Set([...cacheRoutes.value, "trade-record"])]);
 
 // 水印配置
 const watermarkConfig = computed(() => {
@@ -56,7 +58,9 @@ const watermarkConfig = computed(() => {
 .layout-main-content {
   display: flex;
   flex-direction: column;
+  width: 100%;
   height: 100%;
+  min-width: 0;
 }
 
 .loading-container,

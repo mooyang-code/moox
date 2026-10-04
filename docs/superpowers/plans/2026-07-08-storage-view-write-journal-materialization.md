@@ -160,8 +160,8 @@ EOF
 - [ ] **Step 1: Rename subjects**
 
 ```go
-DefaultTimeSeriesRowsUpdatedSubject = "moox.storage.time_series.rows_updated.v1"
-DefaultRecordRowsUpdatedSubject     = "moox.storage.record.rows_updated.v1"
+DefaultTimeSeriesRowsUpdatedSubject = "moox.event.storage.time_series.rows_updated.v1"
+DefaultRecordRowsUpdatedSubject     = "moox.event.storage.record.rows_updated.v1"
 ```
 
 Bus 方法：`PublishTimeSeriesRowsUpdated` / `SubscribeTimeSeriesRowsUpdated`（Record 同理）。

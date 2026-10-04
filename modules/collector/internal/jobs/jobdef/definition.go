@@ -9,7 +9,7 @@ import (
 )
 
 // Planner builds atomic task specs for one collector job definition.
-type Planner func(ctx context.Context, rule *domain.TaskRule, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error)
+type Planner func(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error)
 
 // Option is a UI option value exposed through CollectMgr data type configs.
 type Option struct {
@@ -22,12 +22,24 @@ type OptionList struct {
 	Options []Option `json:"options"`
 }
 
-// Support describes an exchange/market/data_type tuple handled by a definition.
+// Support describes an exchange/market/data_type tuple handled by a job definition.
 type Support struct {
 	Exchange   string
 	Market     string
 	DataType   string
 	SourceKind string
+}
+
+// ExecutionMode separates queue-backed exchange jobs from Collector-local jobs.
+type ExecutionMode string
+
+const (
+	ExecutionModeCloudInvoke    ExecutionMode = "cloud_invoke"
+	ExecutionModeCollectorLocal ExecutionMode = "collector_local"
+)
+
+func (m ExecutionMode) Valid() bool {
+	return m == ExecutionModeCloudInvoke || m == ExecutionModeCollectorLocal
 }
 
 // FieldDefinition describes one rule form field for a collector data type.
@@ -44,8 +56,8 @@ type FieldDefinition struct {
 	SortOrder         int32
 }
 
-// Definition describes one collector data type.
-type Definition struct {
+// JobDefinition describes one collector data type and its rule-planning metadata.
+type JobDefinition struct {
 	ID                int32
 	DataType          string
 	TypeName          string
@@ -56,17 +68,19 @@ type Definition struct {
 	Fields            []FieldDefinition
 	Supports          []Support
 	Planner           Planner
+	ExecutionMode     ExecutionMode
 }
 
-// Matches returns whether params can be planned by this definition.
-func (d Definition) Matches(params *domain.CollectParams) bool {
+// Matches returns whether params can be planned by this job definition.
+func (d JobDefinition) Matches(params *domain.CollectParams) bool {
 	if params == nil {
 		return false
 	}
 	for _, support := range d.Supports {
 		if equalFoldTrim(support.Exchange, params.Collector.Exchange) &&
 			equalFoldTrim(support.Market, params.Collector.Market) &&
-			equalFoldTrim(support.DataType, params.Collector.DataType) {
+			equalFoldTrim(support.DataType, params.Collector.DataType) &&
+			equalFoldTrim(support.SourceKind, params.Source.Kind) {
 			return true
 		}
 	}

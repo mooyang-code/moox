@@ -7,35 +7,31 @@ server:
     - recovery
     - validation
     - prometheus
-  timeout: 5000
+  timeout: 120000
   admin:
     ip: 127.0.0.1
     port: 11944
     read_timeout: 3000
     write_timeout: 60000
   service:
+    - name: trpc.moox.factor.FactorMgr.trpc
+      ip: 127.0.0.1
+      port: 11403
+      network: tcp
+      protocol: trpc
+      timeout: 120000
     - name: trpc.moox.factor.FactorMgr
       ip: 127.0.0.1
       port: 11404
       network: tcp
       protocol: http
-      timeout: 30000
+      timeout: 120000
     - name: trpc.moox.factor.Health
       ip: 127.0.0.1
       port: 11414
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.factor.reconcile.timer
-      port: 11405
-      network: "0 */10 * * * *?scheduler=factorReconcileSchedule"
-      protocol: timer
-      timeout: 60000
-    - name: trpc.moox.factor.metrics.timer
-      port: 11414
-      network: "*/30 * * * * *"
-      protocol: timer
-      timeout: 10000
 
 client:
   filter:

@@ -1,6 +1,26 @@
 package tencentscf
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+	scf "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf/v20180416"
+)
+
+func TestGetFunctionResponseMapsNestedInstanceConcurrency(t *testing.T) {
+	response := &scf.GetFunctionResponseParams{
+		InstanceConcurrencyConfig: &scf.InstanceConcurrencyConfig{
+			MaxConcurrency: common.Uint64Ptr(1),
+		},
+	}
+
+	if got := functionMaxInstanceConcurrency(response); got != 1 {
+		t.Fatalf("MaxConcurrency = %d, want 1", got)
+	}
+	if got := functionMaxInstanceConcurrency(&scf.GetFunctionResponseParams{}); got != 0 {
+		t.Fatalf("missing MaxConcurrency = %d, want 0", got)
+	}
+}
 
 func TestBuildCreateFunctionRequestUsesCOSPackage(t *testing.T) {
 	req := buildCreateFunctionRequest(CreateFunctionRequest{
@@ -17,12 +37,11 @@ func TestBuildCreateFunctionRequestUsesCOSPackage(t *testing.T) {
 		Environment: map[string]string{
 			"MOOX_ENV": "prod",
 		},
-		COSBucket:   "moox-scf-1255382561",
-		COSRegion:   "ap-guangzhou",
-		COSObject:   "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip",
-		ClsLogsetID: "logset-a",
-		ClsTopicID:  "topic-a",
-		Type:        "Event",
+		COSBucket:       "moox-scf-1255382561",
+		COSRegion:       "ap-guangzhou",
+		COSObject:       "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip",
+		Type:            "Event",
+		PublicNetStatus: "ENABLE",
 	})
 
 	if req.GetAction() == "" {
@@ -64,11 +83,17 @@ func TestBuildCreateFunctionRequestUsesCOSPackage(t *testing.T) {
 	if got := deref(req.Environment.Variables[0].Value); got != "prod" {
 		t.Fatalf("env value = %q", got)
 	}
-	if got := deref(req.ClsLogsetId); got != "logset-a" {
-		t.Fatalf("ClsLogsetId = %q", got)
+	if req.ClsLogsetId != nil || req.ClsTopicId != nil {
+		t.Fatalf("native CLS must not be configured: %q/%q", deref(req.ClsLogsetId), deref(req.ClsTopicId))
 	}
-	if got := deref(req.ClsTopicId); got != "topic-a" {
-		t.Fatalf("ClsTopicId = %q", got)
+	if got := deref(req.AutoCreateClsTopic); got != "FALSE" {
+		t.Fatalf("AutoCreateClsTopic = %q, want FALSE", got)
+	}
+	if got := deref(req.AutoDeployClsTopicIndex); got != "FALSE" {
+		t.Fatalf("AutoDeployClsTopicIndex = %q, want FALSE", got)
+	}
+	if req.PublicNetConfig == nil || deref(req.PublicNetConfig.PublicNetStatus) != "ENABLE" || req.PublicNetConfig.EipConfig == nil || deref(req.PublicNetConfig.EipConfig.EipStatus) != "DISABLE" {
+		t.Fatalf("PublicNetConfig = %#v, want ENABLE", req.PublicNetConfig)
 	}
 }
 

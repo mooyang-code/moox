@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestAllSQLDropsLegacyInvocationTables(t *testing.T) {
+func TestAllSQLDoesNotContainDeletedInvocationTables(t *testing.T) {
 	sql := AllSQL()
 	for _, forbidden := range []string{
 		"CREATE TABLE IF NOT EXISTS t_cloud_invocations",
@@ -15,17 +15,9 @@ func TestAllSQLDropsLegacyInvocationTables(t *testing.T) {
 			t.Fatalf("cloudnode schema must not recreate %s", forbidden)
 		}
 	}
-	for _, want := range []string{
-		"DROP TABLE IF EXISTS t_cloud_invocation_results",
-		"DROP TABLE IF EXISTS t_cloud_invocations",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("cloudnode schema must include %q", want)
-		}
-	}
 }
 
-func TestAllSQLDropsLegacyOnlineJobItemTables(t *testing.T) {
+func TestAllSQLDoesNotContainDeletedOnlineJobItemTables(t *testing.T) {
 	sql := AllSQL()
 	for _, forbidden := range []string{
 		"CREATE TABLE IF NOT EXISTS t_cloud_job_items",
@@ -35,12 +27,19 @@ func TestAllSQLDropsLegacyOnlineJobItemTables(t *testing.T) {
 			t.Fatalf("cloudnode schema must not recreate %s", forbidden)
 		}
 	}
-	for _, want := range []string{
-		"DROP TABLE IF EXISTS t_cloud_job_item_attempts",
-		"DROP TABLE IF EXISTS t_cloud_job_items",
+}
+
+func TestSchemaContainsNodeBatchTablesAndIndexes(t *testing.T) {
+	sql := AllSQL()
+	for _, required := range []string{
+		"t_cloud_node_batches",
+		"t_cloud_node_batch_items",
+		"idx_cloud_node_batches_space_job",
+		"idx_cloud_node_batch_items_job_index",
+		"idx_cloud_node_batch_items_status_id",
 	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("cloudnode schema must include %q", want)
+		if !strings.Contains(sql, required) {
+			t.Errorf("cloudnode schema does not contain %s", required)
 		}
 	}
 }

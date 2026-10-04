@@ -4,7 +4,13 @@ package trpc.moox.hostagent;
 
 option go_package = "github.com/mooyang-code/moox/packages/hostmetricpb;hostmetricpb";
 
-message HostMetric { HostSnapshot snapshot = 1; }
+message HostMetric {
+  string agent_id = 1;
+  string hostname = 2;
+  string boot_id = 3;
+  string agent_version = 4;
+  HostSnapshot snapshot = 5;
+}
 message HostSnapshot {
   CpuMetric cpu = 1;
   MemoryMetric memory = 2;
@@ -60,6 +66,9 @@ message NetworkMetric {
   double receive_bytes_per_second = 9;
   double transmit_bytes_per_second = 10;
   bool rate_available = 11;
+  double receive_errors_per_second = 12;
+  double transmit_errors_per_second = 13;
+  bool error_rate_available = 14;
 }
 message CollectorStatus {
   string collector = 1;

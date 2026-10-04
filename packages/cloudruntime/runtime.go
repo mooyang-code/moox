@@ -1,78 +1,77 @@
-// Package cloudruntime contains the generic CloudNode SCF runtime loop shared by workload modules.
+// Package cloudruntime contains the generic CloudNode SCF job execution boundary.
 package cloudruntime
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
-	defaultHTTPTimeout     = 8 * time.Second
-	defaultJobItemLimit    = 8
-	defaultProtocolVersion = "cloudnode-jobitem-v1"
-
-	jobItemReportStatusSuccess = 1
-	jobItemReportStatusFailed  = 2
-
-	jobItemErrorKindRetryable = 1
-	jobItemErrorKindPermanent = 2
+	defaultHTTPTimeout = 8 * time.Second
+	normalRetryDelay   = time.Second
+	reportSuccess      = 1
+	reportFailed       = 2
+	errorRetryable     = 1
+	errorPermanent     = 2
+	jobStatusSuccess   = 3
+	jobStatusFailed    = 4
 )
 
-// Config describes the MooX control plane and node capabilities for an SCF runtime.
 type Config struct {
 	ServiceGatewayTarget string
-	ServerIP             string
-	ServerPort           int
 	SpaceID              string
 	NodeID               string
-	SupportedJobTypes    []string
-	Limit                int
-	RuntimeVersion       string
-	ProtocolVersion      string
 	Auth                 AuthConfig
 	HTTPTimeout          time.Duration
 }
 
-// JobItem is a CloudNode async execution unit.
 type JobItem struct {
-	SpaceID       string
-	JobID         string
-	JobItemID     string
-	JobType       string
-	CodePackageID string
-	Params        map[string]any
-	AttemptNo     int
+	SpaceID   string
+	JobID     string
+	JobItemID string
+	JobType   string
+	Params    map[string]any
+	ExecuteAt time.Time
+	Consumer  string
+	MessageID string
+	// DeliveryCount is runtime metadata for lifecycle correlation. It is set by
+	// ExecuteJobItem and is not part of the CloudNode status request.
+	DeliveryCount uint64
+	MaxDeliver    int
 }
 
-// Result is the execution summary reported back to CloudNode.
-type Result struct {
-	Summary map[string]any
-}
+type Result struct{ Summary map[string]any }
 
-// Handler executes one CloudNode JobItem.
 type Handler interface {
 	Execute(context.Context, JobItem) (Result, error)
 }
 
-// HandlerFunc adapts a function to Handler.
 type HandlerFunc func(context.Context, JobItem) (Result, error)
 
 func (fn HandlerFunc) Execute(ctx context.Context, item JobItem) (Result, error) {
 	return fn(ctx, item)
 }
+
+type ErrorKind string
+
+const (
+	ErrorKindRetryable ErrorKind = "retryable"
+	ErrorKindPermanent ErrorKind = "permanent"
+)
 
 type runtimeError struct {
 	kind ErrorKind
@@ -86,25 +85,11 @@ func (e *runtimeError) Error() string {
 	}
 	return e.err.Error()
 }
+func (e *runtimeError) Unwrap() error { return e.err }
 
-func (e *runtimeError) Unwrap() error {
-	return e.err
-}
-
-// ErrorKind classifies whether a failed JobItem should be retried by CloudNode.
-type ErrorKind string
-
-const (
-	ErrorKindRetryable ErrorKind = "retryable"
-	ErrorKindPermanent ErrorKind = "permanent"
-)
-
-// Retryable marks an execution error as retryable.
 func Retryable(err error, code string) error {
 	return &runtimeError{kind: ErrorKindRetryable, code: normalizeErrorCode(code, "RETRYABLE_ERROR"), err: err}
 }
-
-// Permanent marks an execution error as permanent.
 func Permanent(err error, code string) error {
 	return &runtimeError{kind: ErrorKindPermanent, code: normalizeErrorCode(code, "PERMANENT_ERROR"), err: err}
 }
@@ -116,22 +101,11 @@ type registry struct {
 
 var globalRegistry = &registry{handlers: map[string]Handler{}}
 
-var logCompletion = func(ctx context.Context, line string) {
-	log.InfoContextf(ctx, "%s", line)
-}
-
-// Register adds a JobItem handler for jobType.
-func Register(jobType string, handler Handler) {
-	globalRegistry.register(jobType, handler)
-}
-
+func Register(jobType string, handler Handler) { globalRegistry.register(jobType, handler) }
 func (r *registry) register(jobType string, handler Handler) {
 	jobType = strings.TrimSpace(jobType)
-	if jobType == "" {
-		panic("cloudruntime: job_type is required")
-	}
-	if handler == nil {
-		panic("cloudruntime: handler is required")
+	if jobType == "" || handler == nil {
+		panic("cloudruntime: job_type and handler are required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -140,7 +114,6 @@ func (r *registry) register(jobType string, handler Handler) {
 	}
 	r.handlers[jobType] = handler
 }
-
 func (r *registry) get(jobType string) (Handler, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -148,46 +121,15 @@ func (r *registry) get(jobType string) (Handler, bool) {
 	return handler, ok
 }
 
-func resetRegistryForTest() {
-	globalRegistry.mu.Lock()
-	defer globalRegistry.mu.Unlock()
-	globalRegistry.handlers = map[string]Handler{}
-}
-
 type retInfo struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 }
 
-type pollJobItemsRequest struct {
-	SpaceID           string   `json:"space_id"`
-	NodeID            string   `json:"node_id"`
-	SupportedJobTypes []string `json:"supported_job_types"`
-	Limit             int      `json:"limit"`
-	RuntimeVersion    string   `json:"runtime_version"`
-	ProtocolVersion   string   `json:"protocol_version"`
-}
-
-type polledJobItem struct {
-	SpaceID       string         `json:"space_id"`
-	JobID         string         `json:"job_id"`
-	JobItemID     string         `json:"job_item_id"`
-	JobType       string         `json:"job_type"`
-	CodePackageID string         `json:"code_package_id"`
-	Params        map[string]any `json:"params"`
-	AttemptNo     int            `json:"attempt_no"`
-}
-
-type pollJobItemsResponse struct {
-	RetInfo *retInfo        `json:"ret_info"`
-	Items   []polledJobItem `json:"items"`
-}
-
-type reportJobItemStatusRequest struct {
+type reportRequest struct {
 	SpaceID       string         `json:"space_id"`
 	NodeID        string         `json:"node_id"`
 	JobItemID     string         `json:"job_item_id"`
-	AttemptNo     int            `json:"attempt_no"`
 	Status        int            `json:"status"`
 	ErrorKind     int            `json:"error_kind"`
 	ErrorCode     string         `json:"error_code"`
@@ -196,316 +138,319 @@ type reportJobItemStatusRequest struct {
 	DurationMS    int64          `json:"duration_ms"`
 }
 
-// Run polls CloudNode JobItems, dispatches them through registered handlers, and reports final status.
-func Run(ctx context.Context, cfg Config) error {
-	if err := cfg.validate(); err != nil {
-		return err
-	}
-	items, err := pollJobItems(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	if len(items) == 0 {
-		log.DebugContextf(ctx, "[CloudRuntime] no cloud job items")
-		return nil
-	}
-	for _, item := range items {
-		executeJobItem(ctx, cfg, item)
-	}
-	return nil
-}
-
-func (cfg *Config) validate() error {
+func (cfg *Config) Validate() error {
 	cfg.ServiceGatewayTarget = normalizeGatewayTarget(cfg.ServiceGatewayTarget)
-	cfg.ServerIP = strings.TrimSpace(cfg.ServerIP)
 	cfg.SpaceID = strings.TrimSpace(cfg.SpaceID)
 	cfg.NodeID = strings.TrimSpace(cfg.NodeID)
-	if cfg.ServiceGatewayTarget == "" && cfg.ServerIP != "" && cfg.ServerPort > 0 {
-		cfg.ServiceGatewayTarget = fmt.Sprintf("http://%s:%d", cfg.ServerIP, cfg.ServerPort)
-	}
 	if cfg.ServiceGatewayTarget == "" || cfg.SpaceID == "" || cfg.NodeID == "" {
 		return fmt.Errorf("cloud runtime requires service_gateway_target, space_id and node_id")
 	}
-	cfg.SupportedJobTypes = compactStrings(cfg.SupportedJobTypes)
-	if len(cfg.SupportedJobTypes) == 0 {
-		return fmt.Errorf("cloud runtime supported_job_types is required")
-	}
-	if cfg.Limit <= 0 {
-		cfg.Limit = defaultJobItemLimit
+	if _, err := (cloudjobqueue.Identity{SpaceID: cfg.SpaceID, JobType: "validation"}).ConsumerName(); err != nil {
+		return err
 	}
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = defaultHTTPTimeout
 	}
-	if strings.TrimSpace(cfg.ProtocolVersion) == "" {
-		cfg.ProtocolVersion = defaultProtocolVersion
+	return nil
+}
+
+// ExecuteJobItem reports a terminal state before selecting ACK or TERM.
+// Retryable non-final failures are intentionally not reported as terminal.
+func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount uint64, maxDeliver int) jetstream.HandlerResult {
+	defer log.Sync()
+	item.DeliveryCount = deliveryCount
+	item.MaxDeliver = maxDeliver
+	if err := cfg.Validate(); err != nil {
+		logCloudJob(ctx, cloudJobLogFields{
+			Event: "collector_job_done", Config: cfg, Item: item, DeliveryCount: deliveryCount,
+			Status: "failed", ErrorCode: "INVALID_RUNTIME_CONFIG", Err: err,
+		}, true)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
+	if deliveryCount > 1 {
+		decision, terminal, err := terminalRedeliveryDecision(ctx, cfg, item)
+		if err != nil {
+			log.WarnContextf(ctx,
+				"cloud job terminal-state check failed; executing idempotently job_item_id=%s error=%q",
+				item.JobItemID, errorString(err))
+		}
+		if terminal {
+			return jetstream.HandlerResult{Decision: decision}
+		}
+	}
+	started := time.Now()
+	result, execErr := invokeHandler(ctx, item)
+	duration := time.Since(started)
+
+	kind, code := classifyError(execErr)
+	status := "success"
+	if execErr != nil {
+		status = "failed"
+	}
+	logCloudJob(ctx, cloudJobLogFields{
+		Event: "collector_job_done", Config: cfg, Item: item, DeliveryCount: deliveryCount,
+		Status: status, Duration: duration, ErrorCode: code, Err: execErr,
+	}, execErr != nil)
+	if execErr != nil && kind == errorRetryable && maxDeliver > 0 && deliveryCount < uint64(maxDeliver) {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: execErr}
+	}
+
+	req := reportRequest{
+		SpaceID: cfg.SpaceID, NodeID: cfg.NodeID, JobItemID: item.JobItemID,
+		Status: reportSuccess, ResultSummary: normalizeMap(result.Summary), DurationMS: duration.Milliseconds(),
+	}
+	decision := jetstream.ACK
+	if execErr != nil {
+		req.Status = reportFailed
+		req.ErrorKind = kind
+		req.ErrorCode = code
+		req.ErrorMessage = execErr.Error()
+		decision = jetstream.TERM
+	}
+	reportErr := reportJobItem(ctx, cfg, req)
+	reportLogErr := execErr
+	reportErrorCode := code
+	if reportErr != nil {
+		reportLogErr = reportErr
+		reportErrorCode = "CLOUDNODE_REPORT_FAILED"
+	}
+	logCloudJob(ctx, cloudJobLogFields{
+		Event: "collector_job_cloudnode_reported", Config: cfg, Item: item, DeliveryCount: deliveryCount,
+		Status: status, Duration: duration, ErrorCode: reportErrorCode, Err: reportLogErr,
+	}, reportLogErr != nil)
+	if reportErr != nil {
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: reportErr}
+	}
+	return jetstream.HandlerResult{Decision: decision, Err: execErr}
+}
+
+func terminalRedeliveryDecision(
+	ctx context.Context,
+	cfg Config,
+	item JobItem,
+) (jetstream.HandlerDecision, bool, error) {
+	request := struct {
+		SpaceID   string `json:"space_id"`
+		JobItemID string `json:"job_item_id"`
+	}{SpaceID: cfg.SpaceID, JobItemID: item.JobItemID}
+	var response struct {
+		RetInfo *retInfo `json:"ret_info"`
+		Item    *struct {
+			Status json.RawMessage `json:"status"`
+		} `json:"item"`
+	}
+	if err := postService(ctx, cfg, "cloudnode", "GetJobItem", request, &response); err != nil {
+		return jetstream.RETRY, false, fmt.Errorf("get redelivered job item: %w", err)
+	}
+	if response.RetInfo == nil || response.RetInfo.Code != 0 || response.Item == nil {
+		message := ""
+		if response.RetInfo != nil {
+			message = response.RetInfo.Msg
+		}
+		return jetstream.RETRY, false, fmt.Errorf("get redelivered job item rejected: %s", message)
+	}
+	status, err := decodeJobItemStatus(response.Item.Status)
+	if err != nil {
+		return jetstream.RETRY, false, err
+	}
+	switch status {
+	case jobStatusSuccess:
+		return jetstream.ACK, true, nil
+	case jobStatusFailed:
+		return jetstream.TERM, true, nil
+	default:
+		return jetstream.RETRY, false, nil
+	}
+}
+
+func decodeJobItemStatus(raw json.RawMessage) (int, error) {
+	var numeric int
+	if err := json.Unmarshal(raw, &numeric); err == nil {
+		return numeric, nil
+	}
+	var name string
+	if err := json.Unmarshal(raw, &name); err != nil {
+		return 0, fmt.Errorf("decode job item status: %w", err)
+	}
+	switch name {
+	case "JOB_ITEM_STATUS_SUCCESS":
+		return jobStatusSuccess, nil
+	case "JOB_ITEM_STATUS_FAILED":
+		return jobStatusFailed, nil
+	default:
+		return 0, nil
+	}
+}
+
+func invokeHandler(ctx context.Context, item JobItem) (result Result, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = Permanent(fmt.Errorf("panic: %v", recovered), "HANDLER_PANIC")
+		}
+	}()
+	handler, ok := globalRegistry.get(item.JobType)
+	if !ok {
+		return Result{}, Permanent(fmt.Errorf("handler not found for job_type %s", item.JobType), "HANDLER_NOT_FOUND")
+	}
+	return handler.Execute(ctx, item)
+}
+
+func reportJobItem(ctx context.Context, cfg Config, request reportRequest) error {
+	var response struct {
+		RetInfo *retInfo `json:"ret_info"`
+	}
+	if err := postService(ctx, cfg, "cloudnode", "ReportJobItemStatus", request, &response); err != nil {
+		return fmt.Errorf("report job item: %w", err)
+	}
+	if response.RetInfo == nil || response.RetInfo.Code != 0 {
+		message := ""
+		if response.RetInfo != nil {
+			message = response.RetInfo.Msg
+		}
+		return fmt.Errorf("report job item rejected: %s", message)
 	}
 	return nil
 }
 
-func pollJobItems(ctx context.Context, cfg Config) ([]JobItem, error) {
-	reqBody := pollJobItemsRequest{
-		SpaceID:           cfg.SpaceID,
-		NodeID:            cfg.NodeID,
-		SupportedJobTypes: cfg.SupportedJobTypes,
-		Limit:             cfg.Limit,
-		RuntimeVersion:    strings.TrimSpace(cfg.RuntimeVersion),
-		ProtocolVersion:   strings.TrimSpace(cfg.ProtocolVersion),
+func classifyError(err error) (int, string) {
+	if err == nil {
+		return 0, ""
 	}
-	var rsp pollJobItemsResponse
-	if err := postService(ctx, cfg, "cloudnode", "PollJobItems", reqBody, &rsp); err != nil {
-		return nil, err
-	}
-	if rsp.RetInfo == nil || rsp.RetInfo.Code != 0 {
-		msg := ""
-		if rsp.RetInfo != nil {
-			msg = rsp.RetInfo.Msg
+	var runtimeErr *runtimeError
+	if errors.As(err, &runtimeErr) {
+		if runtimeErr.kind == ErrorKindRetryable {
+			return errorRetryable, runtimeErr.code
 		}
-		return nil, fmt.Errorf("poll job items failed: %s", msg)
+		return errorPermanent, runtimeErr.code
 	}
-	out := make([]JobItem, 0, len(rsp.Items))
-	for _, item := range rsp.Items {
-		out = append(out, JobItem{
-			SpaceID:       firstNonEmpty(item.SpaceID, cfg.SpaceID),
-			JobID:         item.JobID,
-			JobItemID:     item.JobItemID,
-			JobType:       item.JobType,
-			CodePackageID: item.CodePackageID,
-			Params:        normalizeMap(item.Params),
-			AttemptNo:     item.AttemptNo,
-		})
-	}
-	return out, nil
+	return errorPermanent, "HANDLER_ERROR"
 }
 
-func executeJobItem(ctx context.Context, cfg Config, item JobItem) {
-	start := time.Now()
-	var result Result
-	var execErr error
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			execErr = Permanent(fmt.Errorf("panic: %v", recovered), "HANDLER_PANIC")
-		}
-		duration := time.Since(start)
-		status := jobItemReportStatusSuccess
-		if execErr != nil {
-			status = jobItemReportStatusFailed
-		}
-		logCompletion(ctx, jobCompletionLogLine(cfg, item, status, duration, execErr))
-		reportJobItem(ctx, cfg, item, result, execErr, duration)
-	}()
-	handler, ok := globalRegistry.get(item.JobType)
-	if !ok {
-		execErr = Permanent(fmt.Errorf("handler not found for job_type %s", item.JobType), "HANDLER_NOT_FOUND")
+type cloudJobLogFields struct {
+	Event         string
+	Config        Config
+	Item          JobItem
+	DeliveryCount uint64
+	Status        string
+	Duration      time.Duration
+	ErrorCode     string
+	Err           error
+}
+
+func (fields cloudJobLogFields) String() string {
+	return fmt.Sprintf(
+		"event=%s space_id=%s job_id=%s job_item_id=%s task_id=%s job_type=%s "+
+			"runtime_code_package_id=%s node_id=%s consumer=%s message_id=%s "+
+			"delivery_count=%d execute_at=%s "+
+			"dataset_id=%s subject_id=%s symbol=%s interval=%s status=%s "+
+			"duration_ms=%d error_code=%s error=%s",
+		quotedLogValue(fields.Event),
+		quotedLogValue(fields.Item.SpaceID),
+		quotedLogValue(fields.Item.JobID),
+		quotedLogValue(fields.Item.JobItemID),
+		quotedLogValue(paramString(fields.Item.Params, "task_id")),
+		quotedLogValue(fields.Item.JobType),
+		quotedLogValue(os.Getenv("MOOX_CODE_PACKAGE_ID")),
+		quotedLogValue(fields.Config.NodeID),
+		quotedLogValue(fields.Item.Consumer),
+		quotedLogValue(fields.Item.MessageID),
+		fields.DeliveryCount,
+		quotedLogValue(formatLogTime(fields.Item.ExecuteAt)),
+		quotedLogValue(paramString(fields.Item.Params, "dataset_id")),
+		quotedLogValue(paramString(fields.Item.Params, "subject_id")),
+		quotedLogValue(paramString(fields.Item.Params, "symbol")),
+		quotedLogValue(paramString(fields.Item.Params, "interval")),
+		quotedLogValue(fields.Status),
+		fields.Duration.Milliseconds(),
+		quotedLogValue(fields.ErrorCode),
+		quotedLogValue(errorString(fields.Err)),
+	)
+}
+
+func logCloudJob(ctx context.Context, fields cloudJobLogFields, failed bool) {
+	if failed {
+		log.ErrorContextf(ctx, "%s", fields.String())
 		return
 	}
-	result, execErr = handler.Execute(ctx, item)
+	log.InfoContextf(ctx, "%s", fields.String())
 }
 
-func jobCompletionLogLine(cfg Config, item JobItem, status int, duration time.Duration, execErr error) string {
-	errorMessage := ""
-	if execErr != nil {
-		errorMessage = execErr.Error()
-	}
-	fields := []struct {
-		key   string
-		value string
-		quote bool
-	}{
-		{key: "space_id", value: firstNonEmpty(item.SpaceID, cfg.SpaceID)},
-		{key: "task_id", value: firstNonEmpty(stringParam(item.Params, "task_id"), taskIDFromJobItemID(item.JobItemID))},
-		{key: "job_item_id", value: item.JobItemID},
-		{key: "node_id", value: cfg.NodeID},
-		{key: "job_type", value: item.JobType},
-		{key: "attempt_no", value: strconv.Itoa(item.AttemptNo)},
-		{key: "symbol", value: stringParam(item.Params, "symbol")},
-		{key: "interval", value: stringParam(item.Params, "interval")},
-		{key: "status", value: jobItemStatusText(status)},
-		{key: "duration_ms", value: strconv.FormatInt(duration.Milliseconds(), 10)},
-		{key: "error", value: errorMessage, quote: true},
-	}
-	var b strings.Builder
-	b.WriteString("collector_job_done")
-	for _, field := range fields {
-		b.WriteByte(' ')
-		b.WriteString(field.key)
-		b.WriteByte('=')
-		if field.quote {
-			b.WriteString(strconv.Quote(field.value))
-			continue
-		}
-		b.WriteString(logValue(field.value))
-	}
-	return b.String()
+func quotedLogValue(value string) string {
+	return strconv.Quote(strings.TrimSpace(value))
 }
 
-func jobItemStatusText(status int) string {
-	if status == jobItemReportStatusFailed {
-		return "failed"
-	}
-	return "success"
-}
-
-func taskIDFromJobItemID(jobItemID string) string {
-	jobItemID = strings.TrimSpace(jobItemID)
-	if jobItemID == "" {
+func formatLogTime(value time.Time) string {
+	if value.IsZero() {
 		return ""
 	}
-	if before, _, ok := strings.Cut(jobItemID, ":"); ok {
-		return strings.TrimSpace(before)
-	}
-	return jobItemID
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
-func stringParam(params map[string]any, key string) string {
-	if len(params) == 0 {
-		return ""
-	}
-	raw, ok := params[key]
-	if !ok || raw == nil {
-		return ""
-	}
-	switch v := raw.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case fmt.Stringer:
-		return strings.TrimSpace(v.String())
-	default:
-		return strings.TrimSpace(fmt.Sprint(v))
-	}
+func paramString(params map[string]any, key string) string {
+	value, _ := params[key].(string)
+	return value
 }
 
-func logValue(value string) string {
-	if value == "" || strings.ContainsAny(value, " \t\r\n\"") {
-		return strconv.Quote(value)
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	value := strings.Join(strings.Fields(err.Error()), " ")
+	const maxErrorBytes = 256
+	if len(value) > maxErrorBytes {
+		value = value[:maxErrorBytes]
 	}
 	return value
 }
 
-func reportJobItem(ctx context.Context, cfg Config, item JobItem, result Result, execErr error, duration time.Duration) {
-	reqBody := reportJobItemStatusRequest{
-		SpaceID:       cfg.SpaceID,
-		NodeID:        cfg.NodeID,
-		JobItemID:     item.JobItemID,
-		AttemptNo:     item.AttemptNo,
-		Status:        jobItemReportStatusSuccess,
-		ResultSummary: normalizeMap(result.Summary),
-		DurationMS:    duration.Milliseconds(),
+func normalizeMap(value map[string]any) map[string]any {
+	if value == nil {
+		return map[string]any{}
 	}
-	if execErr != nil {
-		kind, code := classifyError(execErr)
-		reqBody.Status = jobItemReportStatusFailed
-		reqBody.ErrorKind = kind
-		reqBody.ErrorCode = code
-		reqBody.ErrorMessage = execErr.Error()
-	}
-	var rsp struct {
-		RetInfo *retInfo `json:"ret_info"`
-	}
-	if err := postService(ctx, cfg, "cloudnode", "ReportJobItemStatus", reqBody, &rsp); err != nil {
-		log.WarnContextf(ctx, "[CloudRuntime] report job item failed job_item_id=%s err=%v", item.JobItemID, err)
-		return
-	}
-	if rsp.RetInfo == nil || rsp.RetInfo.Code != 0 {
-		msg := ""
-		if rsp.RetInfo != nil {
-			msg = rsp.RetInfo.Msg
-		}
-		log.WarnContextf(ctx, "[CloudRuntime] report job item rejected job_item_id=%s msg=%s", item.JobItemID, msg)
-	}
+	return value
 }
 
-func classifyError(err error) (int, string) {
-	var runtimeErr *runtimeError
-	if errors.As(err, &runtimeErr) {
-		if runtimeErr.kind == ErrorKindRetryable {
-			return jobItemErrorKindRetryable, runtimeErr.code
-		}
-		return jobItemErrorKindPermanent, runtimeErr.code
+func normalizeErrorCode(value, fallback string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "" {
+		return fallback
 	}
-	return jobItemErrorKindPermanent, "HANDLER_ERROR"
+	return value
 }
 
-func postService(ctx context.Context, cfg Config, module string, method string, body any, out any) error {
-	auth := normalizeAuthConfig(cfg.Auth)
+func postService(ctx context.Context, cfg Config, module, method string, body, out any) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
+	auth := normalizeAuthConfig(cfg.Auth)
 	url := fmt.Sprintf("%s/api/service/%s/%s", cfg.ServiceGatewayTarget, module, method)
 	req, err := newSignedRequestWithNormalizedAuth(ctx, http.MethodPost, url, raw, auth)
 	if err != nil {
 		return err
 	}
-	httpClient, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.HTTPTimeout, CAFile: auth.CAFile, CAPEMBase64: auth.CAPEMBase64})
+	client, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: cfg.HTTPTimeout, CAFile: auth.CAFile, CAPEMBase64: auth.CAPEMBase64})
 	if err != nil {
 		return err
 	}
-	resp, err := httpClient.Do(req)
+	response, err := client.Do(req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	defer response.Body.Close()
+	rawResponse, err := io.ReadAll(response.Body)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("request %s failed status=%d body=%s", url, resp.StatusCode, string(respBody))
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("service request failed with status %d", response.StatusCode)
 	}
-	if len(bytes.TrimSpace(respBody)) == 0 {
-		return nil
+	if err := json.Unmarshal(rawResponse, out); err != nil {
+		return fmt.Errorf("decode service response: %w", err)
 	}
-	return json.Unmarshal(respBody, out)
+	return nil
 }
 
-func normalizeGatewayTarget(raw string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return ""
-	}
-	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		return raw
-	}
-	return "http://" + raw
-}
-
-func normalizeErrorCode(code string, fallback string) string {
-	code = strings.TrimSpace(code)
-	if code == "" {
-		return fallback
-	}
-	return code
-}
-
-func normalizeMap(values map[string]any) map[string]any {
-	if values == nil {
-		return map[string]any{}
-	}
-	return values
-}
-
-func compactStrings(values []string) []string {
-	out := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
+func normalizeGatewayTarget(value string) string {
+	return strings.TrimRight(strings.TrimSpace(value), "/")
 }

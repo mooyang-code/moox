@@ -1,324 +1,283 @@
 import { callTrade } from "./http";
+export { TradeResponseError } from "./http";
 import type {
-  CreateAccountReq,
-  CreateAccountRsp,
-  UpdateAccountReq,
-  UpdateAccountRsp,
-  DeleteAccountReq,
-  DeleteAccountRsp,
-  GetAccountReq,
-  GetAccountRsp,
-  ListAccountsReq,
-  ListAccountsRsp,
-  SyncExchangeAccountsReq,
-  SyncExchangeAccountsRsp,
-  GetBalancesReq,
-  GetBalancesRsp,
-  SyncBalancesReq,
-  SyncBalancesRsp,
-  ListFundFlowsReq,
-  ListFundFlowsRsp,
-  TransferReq,
-  TransferRsp,
-  CreateApiKeyReq,
-  CreateApiKeyRsp,
-  DeleteApiKeyReq,
-  DeleteApiKeyRsp,
-  ListApiKeysReq,
-  ListApiKeysRsp,
-  CreateChannelReq,
-  CreateChannelRsp,
-  UpdateChannelReq,
-  UpdateChannelRsp,
-  DeleteChannelReq,
-  DeleteChannelRsp,
-  ListChannelsReq,
-  ListChannelsRsp,
-  TestChannelReq,
-  TestChannelRsp,
-  ListInstrumentsReq,
-  ListInstrumentsRsp,
-  PlaceOrderReq,
-  PlaceOrderRsp,
-  CancelOrderReq,
-  CancelOrderRsp,
-  CancelAllOrdersReq,
-  CancelAllOrdersRsp,
-  AmendOrderReq,
-  AmendOrderRsp,
-  SetLeverageReq,
-  SetLeverageRsp,
-  ConvertDustReq,
-  ConvertDustRsp,
-  GetOrderReq,
-  GetOrderRsp,
+  AccountResponse,
+  AddLogicalAccountMemberReq,
+  CreateTradingAccountReq,
+  CreatePaperSimulationReq,
+  CreateLogicalAccountReq,
+  TradingAccount,
+  ExecutionCapabilities,
+  EquityPoint,
+  Fill,
+  Holding,
+  ListTradingAccountsReq,
+  ListFillsReq,
   ListOrdersReq,
-  ListOrdersRsp,
-  SyncOrdersReq,
-  SyncOrdersRsp,
-  ListTradesReq,
-  ListTradesRsp,
-  SyncTradesReq,
-  SyncTradesRsp,
   ListPositionsReq,
-  ListPositionsRsp,
-  SyncPositionsReq,
-  SyncPositionsRsp
+  LogicalAccount,
+  LogicalAccountResponse,
+  LogicalAccountTarget,
+  OperatorAction,
+  Order,
+  Page,
+  PageResult,
+  PlaceManualOrderReq,
+  SubmitOrderReq,
+  Position,
+  RetInfo,
+  UpdateTradingAccountReq
 } from "./types";
 
-// ========== AccountSvc ==========
+export * from "./types";
+export { tradeServiceMap } from "./http";
 
-export function createAccount(req: CreateAccountReq) {
-  return callTrade<CreateAccountReq, CreateAccountRsp>("account", "CreateAccount", req);
+export function createTradingAccount(req: CreateTradingAccountReq) {
+  return callTrade<CreateTradingAccountReq, AccountResponse>("console", "CreateTradingAccount", req);
 }
 
-export function updateAccount(req: UpdateAccountReq) {
-  return callTrade<UpdateAccountReq, UpdateAccountRsp>("account", "UpdateAccount", req);
+export function updateTradingAccount(req: UpdateTradingAccountReq) {
+  return callTrade<UpdateTradingAccountReq, AccountResponse>("console", "UpdateTradingAccount", req);
 }
 
-export function deleteAccount(account_id: string) {
-  return callTrade<DeleteAccountReq, DeleteAccountRsp>("account", "DeleteAccount", { account_id });
+export function getTradingAccount(trading_account_id: string) {
+  return callTrade<{ trading_account_id: string }, AccountResponse>("console", "GetTradingAccount", {
+    trading_account_id
+  });
 }
 
-export function getAccount(account_id: string) {
-  return callTrade<GetAccountReq, GetAccountRsp>("account", "GetAccount", { account_id });
+export function listTradingAccounts(req: ListTradingAccountsReq = {}) {
+  return callTrade<ListTradingAccountsReq, { ret_info: RetInfo; accounts: TradingAccount[]; page_result: PageResult }>(
+    "console",
+    "ListTradingAccounts",
+    req
+  );
 }
 
-export function listAccounts(params: ListAccountsReq) {
-  return callTrade<ListAccountsReq, ListAccountsRsp>("account", "ListAccounts", params);
+export function setLeverage(req: { trading_account_id: string; instrument_id: string; leverage: string }) {
+  return callTrade<typeof req, AccountResponse>("console", "SetLeverage", req);
 }
 
-export function syncExchangeAccounts(req: SyncExchangeAccountsReq = {}) {
-  return callTrade<SyncExchangeAccountsReq, SyncExchangeAccountsRsp>("account", "SyncExchangeAccounts", req);
+export function syncTradingAccount(trading_account_id: string) {
+  return callTrade<
+    { trading_account_id: string },
+    {
+      ret_info: RetInfo;
+      fills_ingested: number;
+      orders_updated: number;
+      positions_updated: number;
+      account_snapshot_updated: boolean;
+      unknown_orders_resolved: number;
+      ready: boolean;
+      warnings: string[];
+    }
+  >("console", "SyncTradingAccount", { trading_account_id });
 }
 
-// ========== BalanceSvc ==========
-
-export function getBalances(account_id: string, currencies?: string[]) {
-  return callTrade<GetBalancesReq, GetBalancesRsp>("balance", "GetBalances", { account_id, currencies });
+export function createPaperSimulation(req: CreatePaperSimulationReq) {
+  return callTrade<CreatePaperSimulationReq, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
+    "console",
+    "CreatePaperSimulation",
+    req
+  );
 }
 
-export function syncBalances(account_id: string) {
-  return callTrade<SyncBalancesReq, SyncBalancesRsp>("balance", "SyncBalances", { account_id });
+export function closePaperSimulation(trading_account_id: string) {
+  return callTrade<
+    { trading_account_id: string },
+    { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }
+  >("console", "ClosePaperSimulation", { trading_account_id });
 }
 
-// ========== FundSvc ==========
-
-export function listFundFlows(params: ListFundFlowsReq) {
-  return callTrade<ListFundFlowsReq, ListFundFlowsRsp>("fund", "ListFundFlows", params);
+export function getExecutionCapabilities(trading_account_id: string) {
+  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; capabilities: ExecutionCapabilities }>(
+    "console",
+    "GetExecutionCapabilities",
+    { trading_account_id }
+  );
 }
 
-export function transfer(req: TransferReq) {
-  return callTrade<TransferReq, TransferRsp>("fund", "Transfer", req);
+export function queryEquityCurve(req: {
+  trading_account_id?: string;
+  logical_account_id?: string;
+  start_time?: string;
+  end_time?: string;
+}) {
+  return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req);
 }
 
-// ========== ApiKeySvc ==========
-
-export function createApiKey(req: CreateApiKeyReq) {
-  return callTrade<CreateApiKeyReq, CreateApiKeyRsp>("apikey", "CreateApiKey", req);
+export function listHoldings(trading_account_id: string) {
+  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>("console", "ListHoldings", {
+    trading_account_id
+  });
 }
 
-export function deleteApiKey(api_key_id: string) {
-  return callTrade<DeleteApiKeyReq, DeleteApiKeyRsp>("apikey", "DeleteApiKey", { api_key_id });
+export function createLogicalAccount(req: CreateLogicalAccountReq) {
+  return callTrade<CreateLogicalAccountReq, LogicalAccountResponse>("console", "CreateLogicalAccount", req);
 }
 
-export function listApiKeys(account_id: string) {
-  return callTrade<ListApiKeysReq, ListApiKeysRsp>("apikey", "ListApiKeys", { account_id });
+export function getLogicalAccount(logical_account_id: string) {
+  return callTrade<{ logical_account_id: string }, LogicalAccountResponse>("console", "GetLogicalAccount", {
+    logical_account_id
+  });
 }
 
-// ========== ChannelSvc ==========
-
-export function createChannel(req: CreateChannelReq) {
-  return callTrade<CreateChannelReq, CreateChannelRsp>("channel", "CreateChannel", req);
+export function listLogicalAccounts(page: Page = {}) {
+  return callTrade<{ page: Page }, { ret_info: RetInfo; logical_accounts: LogicalAccount[]; page_result: PageResult }>(
+    "console",
+    "ListLogicalAccounts",
+    { page }
+  );
 }
 
-export function updateChannel(req: UpdateChannelReq) {
-  return callTrade<UpdateChannelReq, UpdateChannelRsp>("channel", "UpdateChannel", req);
+export function updateLogicalAccount(logical_account_id: string, name: string) {
+  return callTrade<{ logical_account_id: string; name: string }, LogicalAccountResponse>("console", "UpdateLogicalAccount", {
+    logical_account_id,
+    name
+  });
 }
 
-export function deleteChannel(channel_id: string) {
-  return callTrade<DeleteChannelReq, DeleteChannelRsp>("channel", "DeleteChannel", { channel_id });
+export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
+  return callTrade<AddLogicalAccountMemberReq, LogicalAccountResponse>("console", "AddLogicalAccountMember", req);
 }
 
-export function listChannels(params: ListChannelsReq) {
-  return callTrade<ListChannelsReq, ListChannelsRsp>("channel", "ListChannels", params);
+export function removeLogicalAccountMember(logical_account_id: string, trading_account_id: string) {
+  return callTrade<{ logical_account_id: string; trading_account_id: string }, LogicalAccountResponse>(
+    "console",
+    "RemoveLogicalAccountMember",
+    { logical_account_id, trading_account_id }
+  );
 }
 
-export function testChannel(channel_id: string) {
-  return callTrade<TestChannelReq, TestChannelRsp>("channel", "TestChannel", { channel_id });
+export function pauseLogicalAccount(logical_account_id: string, reason: string) {
+  return callTrade<{ logical_account_id: string; reason: string }, LogicalAccountResponse>("console", "PauseLogicalAccount", {
+    logical_account_id,
+    reason
+  });
 }
 
-export function listInstruments(channel_id: string, market_type?: ListInstrumentsReq["market_type"]) {
-  return callTrade<ListInstrumentsReq, ListInstrumentsRsp>("channel", "ListInstruments", { channel_id, market_type });
+export function resumeLogicalAccount(logical_account_id: string) {
+  return callTrade<{ logical_account_id: string }, LogicalAccountResponse & { warning?: string }>(
+    "console",
+    "ResumeLogicalAccount",
+    { logical_account_id }
+  );
 }
 
-// ========== TradeOpSvc ==========
-
-export function placeOrder(req: PlaceOrderReq) {
-  return callTrade<PlaceOrderReq, PlaceOrderRsp>("tradeop", "PlaceOrder", req);
+export function flattenLogicalAccount(action_id: string, logical_account_id: string, reason: string) {
+  return callTrade<
+    { action_id: string; logical_account_id: string; reason: string },
+    { ret_info: RetInfo; action: OperatorAction }
+  >("console", "FlattenLogicalAccount", { action_id, logical_account_id, reason });
 }
 
-export function cancelOrder(req: CancelOrderReq) {
-  return callTrade<CancelOrderReq, CancelOrderRsp>("tradeop", "CancelOrder", req);
+export function submitOrder(req: SubmitOrderReq) {
+  return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order: Order }>("console", "SubmitOrder", req);
 }
 
-export function cancelAllOrders(req: CancelAllOrdersReq) {
-  return callTrade<CancelAllOrdersReq, CancelAllOrdersRsp>("tradeop", "CancelAllOrders", req);
+export function placeManualOrder(req: PlaceManualOrderReq) {
+  return callTrade<PlaceManualOrderReq, { ret_info: RetInfo; action: OperatorAction; order?: Order }>(
+    "console",
+    "PlaceManualOrder",
+    req
+  );
 }
 
-export function amendOrder(req: AmendOrderReq) {
-  return callTrade<AmendOrderReq, AmendOrderRsp>("tradeop", "AmendOrder", req);
+export function cancelOrder(action_id: string, order_id: string, reason: string) {
+  return callTrade<
+    { action_id: string; order_id: string; reason: string },
+    { ret_info: RetInfo; action: OperatorAction; order: Order }
+  >("console", "CancelOrder", { action_id, order_id, reason });
 }
 
-export function setLeverage(req: SetLeverageReq) {
-  return callTrade<SetLeverageReq, SetLeverageRsp>("tradeop", "SetLeverage", req);
+export function getOperatorAction(action_id: string) {
+  return callTrade<{ action_id: string }, { ret_info: RetInfo; action: OperatorAction }>("console", "GetOperatorAction", {
+    action_id
+  });
 }
 
-export function convertDust(req: ConvertDustReq) {
-  return callTrade<ConvertDustReq, ConvertDustRsp>("tradeop", "ConvertDust", req);
+export function getLogicalAccountTarget(logical_account_id: string) {
+  return callTrade<{ logical_account_id: string }, { ret_info: RetInfo; target?: LogicalAccountTarget }>(
+    "console",
+    "GetLogicalAccountTarget",
+    { logical_account_id }
+  );
 }
-
-// ========== OrderSvc ==========
 
 export function getOrder(order_id: string) {
-  return callTrade<GetOrderReq, GetOrderRsp>("order", "GetOrder", { order_id });
+  return callTrade<{ order_id: string }, { ret_info: RetInfo; order: Order }>("console", "GetOrder", { order_id });
 }
 
-export function listOrders(params: ListOrdersReq) {
-  return callTrade<ListOrdersReq, ListOrdersRsp>("order", "ListOrders", params);
+export function listOrders(req: ListOrdersReq = {}) {
+  return callTrade<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>("console", "ListOrders", req);
 }
 
-export function syncOrders(params: SyncOrdersReq) {
-  return callTrade<SyncOrdersReq, SyncOrdersRsp>("order", "SyncOrders", params);
+export function listFills(req: ListFillsReq = {}) {
+  return callTrade<ListFillsReq, { ret_info: RetInfo; fills: Fill[]; page_result: PageResult }>("console", "ListFills", req);
 }
 
-// ========== TradeQuerySvc ==========
-
-export function listTrades(params: ListTradesReq) {
-  return callTrade<ListTradesReq, ListTradesRsp>("tradeq", "ListTrades", params);
+export function listPositions(req: ListPositionsReq) {
+  return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req);
 }
 
-export function syncTrades(params: SyncTradesReq) {
-  return callTrade<SyncTradesReq, SyncTradesRsp>("tradeq", "SyncTrades", params);
+export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
+export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "SPOT", 2: "SWAP" };
+export const executionModeLabels: Record<number, string> = { 0: "-", 1: "Paper", 2: "Live" };
+export const environmentLabels: Record<number, string> = { 0: "-", 1: "Testnet", 2: "Production" };
+export const orderTypeLabels: Record<number, string> = { 0: "-", 1: "MARKET", 2: "LIMIT" };
+export const fillPolicyLabels: Record<number, string> = { 0: "-", 1: "GTC", 2: "IOC", 3: "FOK" };
+export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };
+export const orderSideColors: Record<number, string> = { 0: "gray", 1: "red", 2: "green" };
+export const logicalAutomationStateLabels: Record<string, string> = {
+  ACTIVE: "运行中",
+  PAUSED: "已暂停"
+};
+export const orderStateLabels: Record<string, string> = {
+  PENDING: "等待提交",
+  SUBMITTING: "提交中",
+  SUBMIT_UNKNOWN: "提交状态未知",
+  OPEN: "挂单中",
+  PARTIALLY_FILLED: "部分成交",
+  CANCELING: "撤单中",
+  CANCEL_UNKNOWN: "撤单状态未知",
+  FILLED: "已成交",
+  CANCELED: "已撤销",
+  PARTIALLY_CANCELED: "部分撤销",
+  REJECTED: "已拒绝",
+  EXPIRED: "已过期"
+};
+export const actionStateLabels: Record<string, string> = {
+  PENDING: "等待中",
+  RUNNING: "执行中",
+  SUCCEEDED: "已完成",
+  FAILED: "失败",
+  CANCELED: "已取消"
+};
+export const targetStateLabels: Record<string, string> = {
+  ACCEPTED: "已接收",
+  RUNNING: "执行中",
+  SUCCEEDED: "已完成",
+  BLOCKED: "已阻塞",
+  FAILED: "失败"
+};
+
+export function canCancelOrderState(state: string): boolean {
+  return ["OPEN", "PARTIALLY_FILLED", "SUBMIT_UNKNOWN"].includes(state.toUpperCase());
 }
 
-// ========== PositionSvc ==========
-
-export function listPositions(account_id: string, symbol?: string) {
-  return callTrade<ListPositionsReq, ListPositionsRsp>("position", "ListPositions", { account_id, symbol });
+export function formatTimestamp(value?: string): string {
+  if (!value) return "-";
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "-";
+  return new Date(milliseconds).toLocaleString();
 }
 
-export function syncPositions(account_id: string, symbol?: string) {
-  return callTrade<SyncPositionsReq, SyncPositionsRsp>("position", "SyncPositions", { account_id, symbol });
-}
-
-// ========== 枚举标签映射 ==========
-
-export const accountTypeLabels: Record<number, string> = {
-  0: "现货",
-  1: "杠杆",
-  2: "合约",
-  3: "模拟"
-};
-
-export const accountStatusLabels: Record<number, string> = {
-  0: "禁用",
-  1: "正常",
-  2: "冻结",
-  3: "只读"
-};
-
-export const accountStatusColors: Record<number, string> = {
-  0: "gray",
-  1: "green",
-  2: "orange",
-  3: "blue"
-};
-
-export const marketTypeLabels: Record<number, string> = {
-  0: "现货",
-  1: "杠杆",
-  2: "永续",
-  3: "交割"
-};
-
-export const orderSideLabels: Record<number, string> = {
-  0: "买入",
-  1: "卖出"
-};
-
-export const orderSideColors: Record<number, string> = {
-  0: "red",
-  1: "green"
-};
-
-export const orderTypeLabels: Record<number, string> = {
-  0: "限价",
-  1: "市价",
-  2: "止损市价",
-  3: "止损限价",
-  4: "只挂单",
-  5: "IOC",
-  6: "FOK"
-};
-
-export const orderStatusLabels: Record<number, string> = {
-  0: "待提交",
-  1: "已提交",
-  2: "部分成交",
-  3: "完全成交",
-  4: "已撤销",
-  5: "部分撤销",
-  6: "拒绝",
-  7: "过期"
-};
-
-export const orderStatusColors: Record<number, string> = {
-  0: "gray",
-  1: "blue",
-  2: "orange",
-  3: "green",
-  4: "gray",
-  5: "orange",
-  6: "red",
-  7: "gray"
-};
-
-export const channelStatusLabels: Record<number, string> = {
-  0: "禁用",
-  1: "在线",
-  2: "离线",
-  3: "异常"
-};
-
-export const channelStatusColors: Record<number, string> = {
-  0: "gray",
-  1: "green",
-  2: "gray",
-  3: "red"
-};
-
-export const bizTypeLabels: Record<string, string> = {
-  deposit: "充值",
-  withdraw: "提现",
-  transfer_in: "转入",
-  transfer_out: "转出",
-  trade: "成交",
-  fee: "手续费",
-  funding: "资金费",
-  adjust: "调整"
-};
-
-// ========== 工具函数 ==========
-
-export function formatTimestamp(ts?: number): string {
-  if (!ts) return "-";
-  return new Date(ts * 1000).toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
+export function parseFlattenResult(action?: OperatorAction): import("./types").FlattenResult | null {
+  if (!action?.result_json) return null;
+  try {
+    const parsed = JSON.parse(action.result_json) as import("./types").FlattenResult;
+    return Array.isArray(parsed.accounts) ? parsed : null;
+  } catch {
+    return null;
+  }
 }

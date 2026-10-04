@@ -44,7 +44,7 @@ func TestHTTPProbeLeavesManualAndNonHealthChecksUnsigned(t *testing.T) {
 	defer srv.Close()
 	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
 
-	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceManual, URL: srv.URL + "/readyz"})
+	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceObservability, URL: srv.URL + "/readyz"})
 	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, URL: srv.URL + "/status"})
 	require.Equal(t, []string{"", ""}, headers)
 }
@@ -93,6 +93,22 @@ func TestHTTPProbe(t *testing.T) {
 		if result.Success || result.HTTPStatus != http.StatusInternalServerError {
 			t.Fatalf("result = %+v", result)
 		}
+	})
+
+	t.Run("health status includes diagnostic detail", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"ready":false,"details":{"storage_write_error":"database disk image is malformed (11)"}}`))
+		}))
+		defer srv.Close()
+
+		result := HTTPRunner{}.Run(context.Background(), domain.Check{
+			Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy,
+			URL: srv.URL + "/readyz", ExpectedStatus: "200-299",
+		})
+		require.False(t, result.Success)
+		require.Equal(t, "健康检查失败：database disk image is malformed (11)", result.ErrorMessage)
 	})
 
 	t.Run("max latency", func(t *testing.T) {

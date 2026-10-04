@@ -102,7 +102,7 @@ Also confirm the first secondary tab, `.page-title-tabs`, and the first `.arco-t
 
 ```bash
 make -C web-host statik
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 ```
 
 Expected: `bin/moox-web-host` is produced successfully.

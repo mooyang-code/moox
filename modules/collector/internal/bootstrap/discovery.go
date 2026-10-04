@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +22,15 @@ type Dependencies struct {
 	ServiceGatewayTarget    string
 	ServiceAuth             ServiceAuthConfig
 	StorageRPCGatewayTarget string
+	// CollectorRuntimeGatewayTarget is the native tRPC Gateway on the node
+	// hosting MarketFetchRuntime. It must not be inferred from Storage routing.
+	CollectorRuntimeGatewayTarget string
+	CollectorRuntimeGatewayNodeID string
+	// InvokeStorageRPCGatewayTarget is the address sent to SCF invoke
+	// payloads. Overseas functions cannot reach a mainland private IP, so this
+	// stays on the discovered public native gateway when an explicit private
+	// target is used for Collector's own Storage RPC.
+	InvokeStorageRPCGatewayTarget string
 }
 
 type retInfo struct {
@@ -35,6 +47,7 @@ type endpoint struct {
 	BaseURL     string `json:"base_url"`
 	RPCAddress  string `json:"rpc_address"`
 	GatewayPath string `json:"gateway_path"`
+	NodeID      string `json:"node_id"`
 	Scope       string `json:"scope"`
 	Status      string `json:"status"`
 }
@@ -48,13 +61,19 @@ type activeDeploymentsRsp struct {
 //
 // Local config remains the fallback so a developer can run collector without admin.
 // When sysdeploy.admin_gateway_url and service auth are configured, active
-// deployment records from t_service_deployments override local defaults.
+// deployment records from t_service_deployments supply the public native
+// gateway used for SCF invoke payloads. An explicit non-loopback
+// storage.gateway_target (including a private IP from runtime.env) is kept for
+// Collector's own Storage RPC.
 func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	deps := Dependencies{
-		AdminGatewayURL:         defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceGatewayTarget:    defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
-		ServiceAuth:             cfg.SysDeploy.ServiceAuth,
-		StorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
+		AdminGatewayURL:               defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceGatewayTarget:          defaultAdminGatewayURL(cfg.SysDeploy.AdminGatewayURL),
+		ServiceAuth:                   cfg.SysDeploy.ServiceAuth,
+		StorageRPCGatewayTarget:       cfg.Storage.GatewayTarget,
+		InvokeStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
+		CollectorRuntimeGatewayTarget: cfg.CollectorRuntime.GatewayTarget,
+		CollectorRuntimeGatewayNodeID: cfg.CollectorRuntime.NodeID,
 	}
 	if strings.TrimSpace(cfg.SysDeploy.AdminGatewayURL) == "" {
 		return deps, nil
@@ -67,16 +86,141 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 		_ = v // cloudnode RPC address is resolved for runtime deployments; control plane uses admin gateway.
 	}
 	if v := endpointGatewayTarget(active, "service_gateway"); v != "" {
-		deps.ServiceGatewayTarget = v
+		deps.ServiceGatewayTarget = preferLocalServiceGatewayTarget(v, cfg.SysDeploy.AdminGatewayURL)
 	}
-	// Storage clients use the native tRPC listener, never the public HTTP
-	// gateway endpoint. A deployment without a native target leaves the local
-	// gateway configuration intact rather than silently falling back to a
-	// physical Storage listener.
-	if v := endpointTRPCTarget(active, "service_gateway_internal", "service_gateway"); v != "" {
-		deps.StorageRPCGatewayTarget = v
+	// Storage clients use the native tRPC listener selected for the Storage
+	// deployment. The active-deployment response contains endpoints from every
+	// node, keyed as "node_id/service_name". Selecting the generic name here
+	// makes the chosen gateway depend on map iteration order and can send the
+	// Collector to a gateway that does not own the Storage routes.
+	nativeGateway := "service_gateway_native"
+	if nodeID := strings.TrimSpace(cfg.Storage.GatewayNodeID); nodeID != "" {
+		nativeGateway = nodeID + "/" + nativeGateway
 	}
+	discovered := strings.TrimSpace(endpointTRPCTarget(active, nativeGateway))
+	configured := strings.TrimSpace(cfg.Storage.GatewayTarget)
+	local, invoke, err := selectStorageRPCTargets(configured, discovered)
+	if err != nil {
+		return deps, fmt.Errorf("active %s deployment has no native tRPC target", nativeGateway)
+	}
+	deps.StorageRPCGatewayTarget = local
+	deps.InvokeStorageRPCGatewayTarget = invoke
+	runtimeTarget, runtimeNodeID, runtimeErr := resolveCollectorRuntimeGateway(active, cfg.CollectorRuntime)
+	if runtimeErr != nil {
+		return deps, runtimeErr
+	}
+	deps.CollectorRuntimeGatewayTarget = runtimeTarget
+	deps.CollectorRuntimeGatewayNodeID = runtimeNodeID
 	return deps, nil
+}
+
+func resolveCollectorRuntimeGateway(active map[string]endpoint, config CollectorRuntimeConfig) (string, string, error) {
+	nodeID := strings.TrimSpace(config.NodeID)
+	target := strings.TrimSpace(config.GatewayTarget)
+	if nodeID == "" {
+		var err error
+		nodeID, err = collectorRuntimeNodeID(active)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if nodeID == "" {
+		if target != "" {
+			return "", "", fmt.Errorf("collector runtime node_id is required for configured gateway target")
+		}
+		return "", "", nil
+	}
+	if target != "" {
+		return target, nodeID, nil
+	}
+	key := nodeID + "/service_gateway_native"
+	_, ok := active[key]
+	if !ok {
+		return "", "", fmt.Errorf("collector runtime native Gateway endpoint %q is missing", key)
+	}
+	target = strings.TrimSpace(endpointTRPCTarget(active, key))
+	if target == "" {
+		return "", "", fmt.Errorf("collector runtime native Gateway endpoint %q has no tRPC target", key)
+	}
+	return target, nodeID, nil
+}
+
+func collectorRuntimeNodeID(active map[string]endpoint) (string, error) {
+	nodes := make(map[string]struct{})
+	for key, item := range active {
+		if normalizeEndpointName(item.ServiceName) != "collector_market_runtime" || normalizeEndpointName(item.ServiceKind) != "collector_runtime" || (strings.TrimSpace(item.Status) != "" && !strings.EqualFold(strings.TrimSpace(item.Status), "active")) {
+			continue
+		}
+		nodeID := strings.TrimSpace(item.NodeID)
+		if nodeID == "" {
+			nodeID, _, _ = strings.Cut(key, "/")
+		}
+		if nodeID != "" {
+			nodes[nodeID] = struct{}{}
+		}
+	}
+	if len(nodes) > 1 {
+		return "", fmt.Errorf("collector runtime deployment is ambiguous across nodes")
+	}
+	for nodeID := range nodes {
+		return nodeID, nil
+	}
+	return "", nil
+}
+
+func selectStorageRPCTargets(configured, discovered string) (local, invoke string, err error) {
+	configured = strings.TrimSpace(configured)
+	discovered = strings.TrimSpace(discovered)
+	switch {
+	case isUsableConfiguredStorageTarget(configured):
+		local = configured
+	case discovered != "":
+		local = discovered
+	default:
+		return "", "", fmt.Errorf("storage rpc target missing")
+	}
+	if discovered != "" {
+		return local, discovered, nil
+	}
+	return local, local, nil
+}
+
+// preferLocalServiceGatewayTarget avoids sending same-host control-plane
+// calls through the public HTTPS edge. The public address is not hairpin-safe
+// on the control machine, so a healthy local Gateway can otherwise appear as
+// a timeout to Collector (and stall timer reconciliation and EventBus work).
+// Keep remote deployments on the discovered public endpoint.
+func preferLocalServiceGatewayTarget(discovered, adminGatewayURL string) string {
+	discovered = strings.TrimRight(strings.TrimSpace(discovered), "/")
+	admin := normalizeBaseURL(adminGatewayURL)
+	parsed, err := url.Parse(admin)
+	if err != nil || parsed.Hostname() == "" || parsed.Port() != "11002" {
+		return discovered
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		return discovered
+	}
+	return admin
+}
+
+func isUsableConfiguredStorageTarget(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "ip" || parsed.Hostname() == "" || parsed.Port() == "" {
+		return false
+	}
+	port, portErr := strconv.Atoi(parsed.Port())
+	if portErr != nil || port < 1 || port > 65535 {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "localhost" || host == "ip6-localhost" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return false
+	}
+	return true
 }
 
 func defaultAdminGatewayURL(raw string) string {
@@ -93,6 +237,7 @@ func fetchActiveDeployments(ctx context.Context, cfg *Config) (map[string]endpoi
 	auth := runtimeapp.AuthConfig{
 		AccessKey:   cfg.SysDeploy.ServiceAuth.AccessKey,
 		SecretKey:   cfg.SysDeploy.ServiceAuth.SecretKey,
+		Caller:      cfg.SysDeploy.ServiceAuth.Caller,
 		TargetNode:  cfg.SysDeploy.ServiceAuth.TargetNode,
 		CAFile:      cfg.SysDeploy.ServiceAuth.CAFile,
 		CAPEMBase64: cfg.SysDeploy.ServiceAuth.CAPEMBase64,

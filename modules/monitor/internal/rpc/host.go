@@ -13,16 +13,17 @@ func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgent
 	if store == nil {
 		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(errors.New("host monitor is unavailable")), StorageAvailable: false}, nil
 	}
-	if err := store.EnsureSchema(); err != nil {
-		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(err), StorageAvailable: false}, nil
-	}
 	rows, err := store.ListAgents(ctx)
 	if err != nil {
 		return &monitorpb.ListHostAgentsRsp{RetInfo: inner(err), StorageAvailable: false}, nil
 	}
 	out := make([]*monitorpb.HostAgentInfo, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, &monitorpb.HostAgentInfo{AgentId: row.AgentID, Hostname: row.Hostname, BootId: row.BootID, LastSeenAt: row.LastSeenAt, Archived: row.Archived, Snapshot: row.Snapshot})
+		out = append(out, &monitorpb.HostAgentInfo{
+			AgentId: row.AgentID, Hostname: row.Hostname, BootId: row.BootID,
+			LastSeenAt: row.LastSeenAt, Archived: row.Archived, Snapshot: row.Snapshot,
+			Reachable: row.Reachable, StaleSeconds: row.StaleSeconds,
+		})
 	}
 	available := s.hostStorageReady == nil || s.hostStorageReady()
 	return &monitorpb.ListHostAgentsRsp{RetInfo: success(), Agents: out, StorageAvailable: available, DataGap: !available}, nil

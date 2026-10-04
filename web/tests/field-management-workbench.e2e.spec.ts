@@ -2,15 +2,15 @@ import { expect, test, type Route } from '@playwright/test';
 import { installE2ESession } from './e2e-session';
 
 const groups = [
-  { space_id: 'stock_cn', group_id: 'market', name: '市场数据', status: 'active', sort_order: 20 },
-  { space_id: 'stock_cn', group_id: 'quote', parent_group_id: 'market', name: '行情价格', status: 'active', sort_order: 10 },
-  { space_id: 'stock_cn', group_id: 'trading', parent_group_id: 'market', name: '成交数据', status: 'active', sort_order: 20 },
+  { space_id: 'stockcn', group_id: 'market', name: '市场数据', status: 'active', sort_order: 20 },
+  { space_id: 'stockcn', group_id: 'quote', parent_group_id: 'market', name: '行情价格', status: 'active', sort_order: 10 },
+  { space_id: 'stockcn', group_id: 'trading', parent_group_id: 'market', name: '成交数据', status: 'active', sort_order: 20 },
 ];
 
 let fields = [
-  { space_id: 'stock_cn', group_id: 'quote', field_id: 'close', name: '收盘价', description: '每日收盘价格', value_type: 'FIELD_VALUE_TYPE_DOUBLE', unit: 'CNY', validation_rule_json: '{}', sort_order: 10, status: 'active', updated_at: '2026-07-15T10:00:00Z' },
-  { space_id: 'stock_cn', group_id: 'quote', field_id: 'open', name: '开盘价', description: '每日开盘价格', value_type: 'FIELD_VALUE_TYPE_DOUBLE', unit: 'CNY', validation_rule_json: '{}', sort_order: 20, status: 'active', updated_at: '2026-07-15T09:00:00Z' },
-  { space_id: 'stock_cn', group_id: 'trading', field_id: 'volume', name: '成交量', description: '每日成交数量', value_type: 'FIELD_VALUE_TYPE_DOUBLE', unit: 'share', validation_rule_json: '{}', sort_order: 10, status: 'disabled', updated_at: '2026-07-14T09:00:00Z' },
+  { space_id: 'stockcn', group_id: 'quote', field_id: 'close', name: '收盘价', description: '每日收盘价格', value_type: 'FIELD_VALUE_TYPE_DOUBLE', unit: 'CNY', validation_rule_json: '{}', sort_order: 10, status: 'active', updated_at: '2026-07-15T10:00:00Z' },
+  { space_id: 'stockcn', group_id: 'quote', field_id: 'open', name: '开盘价', description: '每日开盘价格', value_type: 'FIELD_VALUE_TYPE_DOUBLE', unit: 'CNY', validation_rule_json: '{}', sort_order: 20, status: 'active', updated_at: '2026-07-15T09:00:00Z' },
+  { space_id: 'stockcn', group_id: 'trading', field_id: 'volume', name: '成交量', description: '每日成交数量', value_type: 'FIELD_VALUE_TYPE_DOUBLE', unit: 'share', validation_rule_json: '{}', sort_order: 10, status: 'disabled', updated_at: '2026-07-14T09:00:00Z' },
 ];
 
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: 'success' }, ...data });
@@ -22,7 +22,7 @@ async function mockGateway(route: Route) {
     return route.fulfill({ json: ok({ user_info: { user_id: 'e2e', username: 'reviewer', nickname: 'Reviewer', role: 3, status: 1 } }) });
   }
   if (method === 'ListSpaces') {
-    return route.fulfill({ json: ok({ spaces: [{ space_id: 'stock_cn', name: 'A股市场', owner: 'e2e', status: 'active' }, { space_id: 'crypto', name: '加密货币', owner: 'e2e', status: 'active' }], page_result: { page: 1, size: 20, total: 2, has_more: false } }) });
+    return route.fulfill({ json: ok({ spaces: [{ space_id: 'stockcn', name: 'A股市场', owner: 'e2e', status: 'active' }, { space_id: 'crypto', name: '加密货币', owner: 'e2e', status: 'active' }], page_result: { page: 1, size: 20, total: 2, has_more: false } }) });
   }
   if (method === 'ListFieldGroups') {
     return route.fulfill({ json: ok({ field_groups: groups, field_counts: { market: 3, quote: 2, trading: 1 }, total_field_count: 3, ungrouped_field_count: 0, page_result: { page: 1, size: 200, total: 3, has_more: false } }) });
@@ -47,7 +47,7 @@ async function mockGateway(route: Route) {
 
 test.beforeEach(async ({ page }) => {
   fields = fields.map((field) => field.field_id === 'volume' ? { ...field, status: 'disabled', group_id: 'trading' } : { ...field, status: 'active', group_id: 'quote' });
-  await installE2ESession(page, 'stock_cn');
+  await installE2ESession(page, 'stockcn');
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockGateway);
 });
 

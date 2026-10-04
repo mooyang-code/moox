@@ -30,7 +30,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 
 	// 2. 初始化网关服务
 	log.Info("正在初始化网关服务...")
-	if err := gateway.InitGatewayServices(s, services.SysDeploy, cfg.AdminNodeID); err != nil {
+	if err := gateway.InitGatewayServices(s, services.SysDeploy, cfg.AdminNodeID, services.SpaceMgr); err != nil {
 		return err
 	}
 	if err := adminhealth.Register(s.Service("trpc.moox.admin.Health"), time.Now()); err != nil {
@@ -69,6 +69,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 
 	// Setup is intentionally registered only on its dedicated loopback listener.
 	adminpb.RegisterSetupService(s.Service("trpc.moox.admin.Setup"), setuprpc.NewService(services.Setup))
+	adminpb.RegisterCollectorPublishLeaseService(s.Service("trpc.moox.admin.CollectorPublishLease"), services.CollectorPublishLease)
 
 	log.Info("TRPC 服务注册完成")
 	return nil

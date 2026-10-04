@@ -41,6 +41,9 @@ func Load(path string) (*Config, error) {
 	if cfg.IdentityPath == "" || cfg.EventBusConfig == "" {
 		return nil, fmt.Errorf("identity_path and eventbus_config are required")
 	}
+	if healthAddr := strings.TrimSpace(os.Getenv("MOOX_HOST_AGENT_HEALTH_ADDR")); healthAddr != "" {
+		cfg.HealthAddr = healthAddr
+	}
 	cfg.IdentityPath, cfg.EventBusConfig = Expand(cfg.IdentityPath), Expand(cfg.EventBusConfig)
 	cfg.HostName = strings.TrimSpace(cfg.HostName)
 	return cfg, nil
@@ -66,6 +69,9 @@ func LoadEventBus(path string) (EventBusConfig, error) {
 		return cfg, fmt.Errorf("eventbus config requires urls, username, and eventbus_token")
 	}
 	cfg.CAFile = Expand(cfg.CAFile)
+	if cfg.CAFile != "" && !filepath.IsAbs(cfg.CAFile) {
+		cfg.CAFile = filepath.Join(filepath.Dir(path), cfg.CAFile)
+	}
 	return cfg, nil
 }
 func Expand(path string) string {

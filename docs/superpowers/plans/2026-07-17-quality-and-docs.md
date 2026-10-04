@@ -12,7 +12,7 @@
 
 - [ ] Capture the exact pre-change lists in the task report. Enumerate Go modules using `go work edit -json`; do not scan `.worktrees`, vendored code, build output, or arbitrary parent directories.
 - [ ] Run `gofmt -w` only on reported Go files and Prettier `--write` only on `web/src`. Fix the five warnings in `cloud-account-manage.vue`, `function-package-manage.vue`, and `ssh-file-manager.vue` without behavior changes.
-- [ ] Update every statik generation path (`web-host/Makefile`, `scripts/release.sh`, `scripts/deploy-moox.sh`) to immediately `gofmt -w web-host/internal/statik/statik.go`; cover this in `scripts/test-release-contract.sh`.
+- [ ] Update every statik generation path (`web-host/Makefile`, `scripts/release/release.sh`, `scripts/deploy/deploy-moox.sh`) to immediately `gofmt -w web-host/internal/statik/statik.go`; cover this in `scripts/test/contract/test-release-contract.sh`.
 - [ ] Review the diff for formatting-only semantics and commit it before any refactor:
 
 ```bash
@@ -22,10 +22,10 @@ git commit -am "style: normalize repository formatting"
 ### Task 2: Add read-only quality gates
 
 **Files:**
-- Create: `scripts/check-go-format.sh`
-- Create: `scripts/check-web-format.sh`
-- Create: `scripts/check-web-lint.sh`
-- Create focused shell tests: `scripts/test-check-go-format.sh`, `scripts/test-check-web-quality.sh`
+- Create: `scripts/check/check-go-format.sh`
+- Create: `scripts/check/check-web-format.sh`
+- Create: `scripts/check/check-web-lint.sh`
+- Create focused shell tests: `scripts/test/contract/test-check-go-format.sh`, `scripts/test/contract/test-check-web-quality.sh`
 - Modify: `web/package.json`
 - Modify: `Makefile`
 - Modify if necessary: `.github/workflows/ci.yml`
@@ -40,8 +40,8 @@ git commit -am "style: normalize repository formatting"
 
 **Files:**
 - Create: `scripts/check-doc-consistency.mjs`
-- Create: `scripts/check-doc-consistency.sh`
-- Create: `scripts/test-check-doc-consistency.sh`
+- Create: `scripts/check/check-doc-consistency.sh`
+- Create: `scripts/test/contract/test-check-doc-consistency.sh`
 - Modify: `README.md`, `modules/README.md`, `modules/storage/README.md`
 - Create: `modules/strategy/README.md`
 - Modify: `docs/架构总览.md`, `docs/大仓架构.md`, `docs/存储引擎架构.md`, `docs/策略模块架构设计.md`, `docs/策略模块Python策略接入手册.md`
@@ -53,8 +53,8 @@ git commit -am "style: normalize repository formatting"
 - [ ] Run:
 
 ```bash
-bash scripts/test-check-doc-consistency.sh
-./scripts/check-doc-consistency.sh
+bash scripts/test/contract/test-check-doc-consistency.sh
+./scripts/check/check-doc-consistency.sh
 pnpm docs:build
 ```
 

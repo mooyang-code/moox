@@ -8,7 +8,7 @@ case "${ARCH}" in amd64|arm64) ;; *) echo "host agent supports amd64/arm64 only"
 OUT="${ROOT}/release/moox-host-agent-${VERSION}-linux-${ARCH}"
 rm -rf "${OUT}" "${OUT}.tar.gz"
 mkdir -p "${OUT}/bin" "${OUT}/config" "${OUT}/systemd/user"
-TARGET_GOOS=linux TARGET_GOARCH="${ARCH}" "${ROOT}/scripts/build.sh" hostagent
+TARGET_GOOS=linux TARGET_GOARCH="${ARCH}" "${ROOT}/scripts/build/build.sh" hostagent
 cp "${ROOT}/bin/moox-host-agent" "${OUT}/bin/"
 cp "${ROOT}/bin/moox-host-agent-cli" "${OUT}/bin/"
 cp "${ROOT}/modules/hostagent/config/app.yaml" "${OUT}/config/app.yaml"

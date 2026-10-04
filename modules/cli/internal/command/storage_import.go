@@ -2,8 +2,11 @@ package command
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,15 +14,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
-	defaultStorageImportFormat    = "auto"
-	defaultStorageImportBatchSize = 1000
-	maxStorageImportFileSize      = 512 << 20
+	defaultStorageImportFormat     = "auto"
+	defaultStorageImportBatchSize  = 1000
+	maxStorageImportFileSize       = 512 << 20
+	maxStorageImportSeriesTagBytes = 128
 )
 
 var storageImportFlags storageImportOptions
@@ -36,21 +42,22 @@ var storageImportCmd = &cobra.Command{
 示例:
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
     --access-url http://127.0.0.1:20201 --metadata-url http://127.0.0.1:20200 \
-    --space crypto --dataset binance_spot_kline --subject ARB-USDT --freq 1m \
+    --space crypto --dataset dataset_spot_kline_1h --subject ARB-USDT --freq 1h \
+    --series-tag venue:binance \
     --time-column candle_begin_time
 
   moox-cli storage import --file ~/Downloads/ARB-USDT.csv --dry-run \
-    --metadata-url http://127.0.0.1:20200 --space crypto --dataset binance_spot_kline \
-    --subject ARB-USDT --freq 1m --time-column candle_begin_time
+    --metadata-url http://127.0.0.1:20200 --space crypto --dataset dataset_spot_kline_1h \
+    --subject ARB-USDT --freq 1h --time-column candle_begin_time
 
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
-    --view swap_spot_kline_view --dataset binance_swap_kline --subject ARB-USDT --freq 1h`,
+    --view view_crypto_swap_kline_1h --dataset dataset_perpetual_kline_1h --subject ARB-USDT --freq 1h`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		opts := storageImportFlags
 		opts.Format = defaultFlag(opts.Format, defaultStorageImportFormat)
 		opts.MetadataURL = defaultMetadataImportURL(opts.MetadataURL)
 		meta := httpStorageImportMetadataClient{URL: opts.MetadataURL}
-		writer := httpStorageDataWriter{URL: opts.AccessURL}
+		writer := httpStorageDataWriter{URL: opts.AccessURL, SpaceID: opts.SpaceID}
 		summary, err := runStorageImport(cmd.Context(), opts, meta, writer)
 		if err != nil {
 			return err
@@ -72,8 +79,9 @@ type storageImportOptions struct {
 	DataSourceID string
 	Freq         string
 	TimeColumn   string
-	Dimensions   []string
+	SeriesTag    string
 	BatchSize    int
+	RequestID    string
 	DryRun       bool
 }
 
@@ -97,22 +105,23 @@ type storageImportStats struct {
 
 // storageImportSummary 汇总数据导入命令的执行结果。
 type storageImportSummary struct {
-	Status                   string `json:"status"`
-	File                     string `json:"file"`
-	Format                   string `json:"format"`
-	AccessURL                string `json:"access_url,omitempty"`
-	MetadataURL              string `json:"metadata_url"`
-	SpaceID                  string `json:"space"`
-	ViewID                   string `json:"view,omitempty"`
-	DatasetID                string `json:"dataset"`
-	SubjectID                string `json:"subject"`
-	Freq                     string `json:"freq,omitempty"`
-	ValidatedRows            int    `json:"validated_rows"`
-	WrittenRows              int    `json:"written_rows,omitempty"`
-	WouldMergeTimeSeriesRows int    `json:"would_write_time_series_rows,omitempty"`
-	Batches                  int    `json:"batches,omitempty"`
-	BoundSubject             bool   `json:"bound_subject,omitempty"`
-	WouldBindSubject         bool   `json:"would_bind_subject,omitempty"`
+	Status            string `json:"status"`
+	File              string `json:"file"`
+	Format            string `json:"format"`
+	AccessURL         string `json:"access_url,omitempty"`
+	MetadataURL       string `json:"metadata_url"`
+	SpaceID           string `json:"space"`
+	ViewID            string `json:"view,omitempty"`
+	DatasetID         string `json:"dataset"`
+	SubjectID         string `json:"subject"`
+	Freq              string `json:"freq,omitempty"`
+	SeriesTag         string `json:"series_tag"`
+	ValidatedRows     int    `json:"validated_rows"`
+	WrittenRows       int    `json:"written_rows,omitempty"`
+	WouldUpsertFields int    `json:"would_upsert_fields,omitempty"`
+	Batches           int    `json:"batches,omitempty"`
+	BoundSubject      bool   `json:"bound_subject,omitempty"`
+	WouldBindSubject  bool   `json:"would_bind_subject,omitempty"`
 }
 
 // storageImportMetadataClient 定义数据导入所需的元数据查询接口。
@@ -122,12 +131,19 @@ type storageImportMetadataClient interface {
 	GetSubject(context.Context, string, string) (*pb.Subject, error)
 	ListDatasetColumns(context.Context, string, string) ([]*pb.DatasetColumn, error)
 	ListDatasetSubjects(context.Context, string, string, string) ([]*pb.DatasetSubject, error)
-	BindDatasetSubject(context.Context, *pb.DatasetSubject) error
 }
 
 // storageDataWriter 定义数据导入写入 Storage 的接口。
 type storageDataWriter interface {
-	MergeTimeSeriesRows(context.Context, *pb.MergeTimeSeriesRowsReq) error
+	UpsertFields(context.Context, *pb.PrimaryUpsertFieldsReq) error
+}
+
+// storageImportSyncWriter is implemented by the real Access client. It is
+// optional so existing offline/test writers can continue to validate batches
+// without needing a Metadata/View service.
+type storageImportSyncWriter interface {
+	AppendDatasetSyncPoint(context.Context, *pb.DatasetSyncPointMarker) error
+	WaitViewSyncPoint(context.Context, *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error)
 }
 
 // storageFileImporter 定义一种本地数据文件格式的导入器。
@@ -146,7 +162,8 @@ type httpStorageImportMetadataClient struct {
 
 // httpStorageDataWriter 通过 tRPC 将数据写入 Access 服务。
 type httpStorageDataWriter struct {
-	URL string
+	URL     string
+	SpaceID string
 }
 
 func runStorageImport(ctx context.Context, opts storageImportOptions, meta storageImportMetadataClient, writer storageDataWriter) (storageImportSummary, error) {
@@ -181,7 +198,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		if err != nil {
 			return storageImportSummary{}, err
 		}
-		if view == nil || !stringSliceContains(view.GetDatasetIds(), opts.DatasetID) {
+		if view == nil || view.GetDatasetId() != opts.DatasetID {
 			return storageImportSummary{}, fmt.Errorf("view %s does not include dataset %s", opts.ViewID, opts.DatasetID)
 		}
 	}
@@ -226,42 +243,79 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		DatasetID:     opts.DatasetID,
 		SubjectID:     opts.SubjectID,
 		Freq:          opts.Freq,
+		SeriesTag:     opts.SeriesTag,
 		ValidatedRows: result.Stats.ValidatedRows,
 	}
 	if opts.DryRun {
 		summary.Status = "dry_run"
-		summary.WouldMergeTimeSeriesRows = len(result.Rows)
+		summary.WouldUpsertFields = len(result.Rows)
 		summary.WouldBindSubject = needsBind
 		return summary, nil
 	}
 	if needsBind {
-		if err := meta.BindDatasetSubject(ctx, &pb.DatasetSubject{
-			SpaceId:     opts.SpaceID,
-			DatasetId:   opts.DatasetID,
-			SubjectId:   opts.SubjectID,
-			SubjectRole: "normal",
-			Status:      "active",
-		}); err != nil {
-			return storageImportSummary{}, err
-		}
-		summary.BoundSubject = true
+		return storageImportSummary{}, fmt.Errorf("subject %s/%s is not in dataset tag scope", opts.SpaceID, opts.SubjectID)
 	}
+	summary.BoundSubject = true
 	for start := 0; start < len(result.Rows); start += opts.BatchSize {
 		end := start + opts.BatchSize
 		if end > len(result.Rows) {
 			end = len(result.Rows)
 		}
-		if err := writeStorageImportRows(ctx, writer, &pb.MergeTimeSeriesRowsReq{Rows: result.Rows[start:end]}, true); err != nil {
+		if err := writeStorageImportRows(ctx, writer, &pb.PrimaryUpsertFieldsReq{Rows: storageImportUpserts(result.Rows[start:end])}, true); err != nil {
 			return storageImportSummary{}, err
 		}
 		summary.Batches++
 		summary.WrittenRows += end - start
 	}
+	if syncWriter, ok := writer.(storageImportSyncWriter); ok {
+		requestID := strings.TrimSpace(opts.RequestID)
+		if requestID == "" {
+			requestID = stableStorageImportRequestID(opts, result)
+		}
+		if err := syncWriter.AppendDatasetSyncPoint(ctx, &pb.DatasetSyncPointMarker{
+			RequestId: requestID, DatasetId: opts.DatasetID, Source: "import",
+		}); err != nil {
+			return storageImportSummary{}, fmt.Errorf("append import sync point: %w", err)
+		}
+		if opts.ViewID != "" {
+			rsp, err := syncWriter.WaitViewSyncPoint(ctx, &pb.WaitViewSyncPointReq{
+				SpaceId: opts.SpaceID, ViewId: opts.ViewID, RequestId: requestID,
+				DatasetIds: []string{opts.DatasetID}, WaitTimeoutMs: 30000,
+			})
+			if err != nil {
+				return storageImportSummary{}, fmt.Errorf("wait view sync point: %w", err)
+			}
+			if rsp == nil || !rsp.GetReady() {
+				return storageImportSummary{}, fmt.Errorf("view %s did not apply import sync point", opts.ViewID)
+			}
+		}
+	}
 	return summary, nil
 }
 
-func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *pb.MergeTimeSeriesRowsReq, allowMetadataRetry bool) error {
-	err := writer.MergeTimeSeriesRows(ctx, req)
+func stableStorageImportRequestID(opts storageImportOptions, result storageImportParseResult) string {
+	// Include the canonical parsed rows, not only the path and row count. A
+	// modified file with the same number of rows must receive a new fence;
+	// otherwise the old View sync-point would make a subsequent Recalc race
+	// ahead of the newly written rows.
+	h := sha256.New()
+	for _, value := range []string{opts.SpaceID, opts.DatasetID, opts.SubjectID, opts.Freq, opts.SeriesTag, opts.File, strconv.Itoa(result.Stats.ValidatedRows)} {
+		_, _ = fmt.Fprintf(h, "%d:%s;", len(value), value)
+	}
+	for _, row := range result.Rows {
+		raw, err := (proto.MarshalOptions{Deterministic: true}).Marshal(row)
+		if err != nil {
+			// Parsed rows are already protobuf values; this is defensive only.
+			continue
+		}
+		_, _ = fmt.Fprintf(h, "%d:", len(raw))
+		_, _ = h.Write(raw)
+	}
+	return "import-" + hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *pb.PrimaryUpsertFieldsReq, allowMetadataRetry bool) error {
+	err := writer.UpsertFields(ctx, req)
 	if err == nil || !allowMetadataRetry || !retryableStorageImportWriteError(err) {
 		return err
 	}
@@ -272,7 +326,7 @@ func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *
 			return ctx.Err()
 		case <-time.After(storageImportRetryDelay):
 		}
-		err = writer.MergeTimeSeriesRows(ctx, req)
+		err = writer.UpsertFields(ctx, req)
 		if err == nil {
 			return nil
 		}
@@ -351,6 +405,24 @@ func validateStorageImportOptions(opts storageImportOptions) error {
 	for name, value := range required {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("必须指定 --%s", name)
+		}
+	}
+	return validateStorageImportSeriesTag(opts.SeriesTag)
+}
+
+func validateStorageImportSeriesTag(tag string) error {
+	if !utf8.ValidString(tag) {
+		return errors.New("series_tag must be valid UTF-8")
+	}
+	if len(tag) > maxStorageImportSeriesTagBytes {
+		return errors.New("series_tag must not exceed 128 bytes")
+	}
+	if strings.TrimSpace(tag) != tag {
+		return errors.New("series_tag must not have leading or trailing whitespace")
+	}
+	for i := 0; i < len(tag); i++ {
+		if tag[i] < 0x20 || tag[i] == 0x7f {
+			return errors.New("series_tag must not contain ASCII control characters")
 		}
 	}
 	return nil
@@ -449,10 +521,6 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 	if err != nil {
 		return storageImportParseResult{}, err
 	}
-	dimensions, err := parseStorageImportDimensions(ctx.Options.Dimensions)
-	if err != nil {
-		return storageImportParseResult{}, err
-	}
 	var result storageImportParseResult
 	line := 1
 	for {
@@ -477,16 +545,31 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 		}
 		row := &pb.TimeSeriesRow{
 			Key: &pb.TimeSeriesKey{
-				SpaceId:    ctx.Options.SpaceID,
-				DatasetId:  ctx.Options.DatasetID,
-				SubjectId:  ctx.Options.SubjectID,
-				Freq:       ctx.Options.Freq,
-				Dimensions: dimensions,
-				DataTime:   dataTime,
+				SpaceId:   ctx.Options.SpaceID,
+				DatasetId: ctx.Options.DatasetID,
+				SubjectId: ctx.Options.SubjectID,
+				Freq:      ctx.Options.Freq,
+				DataTime:  dataTime,
+				SeriesTag: ctx.Options.SeriesTag,
 			},
 		}
 		for index, name := range normalizedHeader {
 			if name == "" || name == ctx.Options.TimeColumn {
+				continue
+			}
+			if isStorageImportKeyColumn(name) {
+				if expected, flag, validate := storageImportScopeColumn(name, ctx.Options); validate {
+					actual := ""
+					if index < len(record) {
+						actual = strings.TrimSpace(record[index])
+					}
+					if actual != expected {
+						return storageImportParseResult{}, fmt.Errorf(
+							"row %d %s %q does not match %s %q",
+							line, name, actual, flag, expected,
+						)
+					}
+				}
 				continue
 			}
 			column := ctx.Columns[name]
@@ -504,10 +587,9 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 			if err != nil {
 				return storageImportParseResult{}, fmt.Errorf("row %d column %s invalid %s value %q: %w", line, name, storageImportValueTypeName(column.GetValueType()), value, err)
 			}
-			row.Columns = append(row.Columns, &pb.ColumnValue{
-				ColumnName: name,
-				ValueType:  column.GetValueType(),
-				Value:      typed,
+			row.Fields = append(row.Fields, &pb.FieldValue{
+				FieldId: name,
+				Value:   typed,
 			})
 		}
 		result.Rows = append(result.Rows, row)
@@ -517,36 +599,6 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 		return storageImportParseResult{}, fmt.Errorf("CSV %s has no data rows", path)
 	}
 	return result, nil
-}
-
-func parseStorageImportDimensions(values []string) (map[string]string, error) {
-	if len(values) == 0 {
-		return nil, nil
-	}
-	dimensions := make(map[string]string, len(values))
-	for _, raw := range values {
-		item := strings.TrimSpace(raw)
-		if item == "" {
-			continue
-		}
-		parts := strings.SplitN(item, "=", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("dimension %q must use name=value format", raw)
-		}
-		name := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		if name == "" || value == "" {
-			return nil, fmt.Errorf("dimension %q must use non-empty name=value format", raw)
-		}
-		if _, ok := dimensions[name]; ok {
-			return nil, fmt.Errorf("duplicate dimension %s", name)
-		}
-		dimensions[name] = value
-	}
-	if len(dimensions) == 0 {
-		return nil, nil
-	}
-	return dimensions, nil
 }
 
 func readStorageCSVHeader(reader *csv.Reader, timeColumn string) ([]string, error) {
@@ -584,6 +636,9 @@ func validateStorageCSVHeader(header []string, ctx storageImportContext) ([]stri
 			timeIndex = index
 			continue
 		}
+		if isStorageImportKeyColumn(name) {
+			continue
+		}
 		if _, ok := ctx.Columns[name]; !ok {
 			return nil, -1, fmt.Errorf("CSV column %s is not registered in dataset %s", name, ctx.Options.DatasetID)
 		}
@@ -599,6 +654,32 @@ func validateStorageCSVHeader(header []string, ctx storageImportContext) ([]stri
 		}
 	}
 	return normalized, timeIndex, nil
+}
+
+func isStorageImportKeyColumn(name string) bool {
+	switch name {
+	case "space_id", "dataset_id", "subject_id", "freq", "data_time", "series_tag":
+		return true
+	default:
+		return false
+	}
+}
+
+func storageImportScopeColumn(name string, options storageImportOptions) (expected string, flag string, validate bool) {
+	switch name {
+	case "space_id":
+		return options.SpaceID, "--space", true
+	case "dataset_id":
+		return options.DatasetID, "--dataset", true
+	case "subject_id":
+		return options.SubjectID, "--subject", true
+	case "freq":
+		return options.Freq, "--freq", true
+	case "series_tag":
+		return options.SeriesTag, "--series-tag", true
+	default:
+		return "", "", false
+	}
 }
 
 func emptyCSVRecord(record []string) bool {
@@ -740,12 +821,41 @@ func (c httpStorageImportMetadataClient) ListDatasetSubjects(ctx context.Context
 	return rsp.GetDatasetSubjects(), nil
 }
 
-func (c httpStorageImportMetadataClient) BindDatasetSubject(ctx context.Context, item *pb.DatasetSubject) error {
-	return postStorage(ctx, c.URL, metadataServiceName, "BindDatasetSubject", &pb.BindDatasetSubjectReq{DatasetSubject: item}, &pb.BindDatasetSubjectRsp{})
+func (w httpStorageDataWriter) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) error {
+	return postStorage(ctx, w.URL, accessServiceName, "UpsertFields", req, &pb.PrimaryUpsertFieldsRsp{})
 }
 
-func (w httpStorageDataWriter) MergeTimeSeriesRows(ctx context.Context, req *pb.MergeTimeSeriesRowsReq) error {
-	return postStorage(ctx, w.URL, accessServiceName, "MergeTimeSeriesRows", req, &pb.MergeTimeSeriesRowsRsp{})
+func (w httpStorageDataWriter) AppendDatasetSyncPoint(ctx context.Context, marker *pb.DatasetSyncPointMarker) error {
+	return postStorage(ctx, w.URL, accessServiceName, "AppendDatasetSyncPoint", &pb.AppendDatasetSyncPointReq{SpaceId: w.SpaceID, SyncPoint: marker}, &pb.AppendDatasetSyncPointRsp{})
+}
+
+func (w httpStorageDataWriter) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error) {
+	rsp := &pb.WaitViewSyncPointRsp{}
+	if err := postStorage(ctx, w.URL, accessServiceName, "WaitViewSyncPoint", req, rsp); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func storageImportUpserts(rows []*pb.TimeSeriesRow) []*pb.RowFieldUpsert {
+	out := make([]*pb.RowFieldUpsert, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		key := row.GetKey()
+		attributes := make(map[string]*pb.TypedValue, len(row.GetAttributes()))
+		for name, value := range row.GetAttributes() {
+			attributes[name] = &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}
+		}
+		out = append(out, &pb.RowFieldUpsert{
+			Key: &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
+			}}},
+			Fields: row.GetFields(), Attributes: attributes,
+		})
+	}
+	return out
 }
 
 func init() {
@@ -761,7 +871,8 @@ func init() {
 	storageImportCmd.Flags().StringVar(&storageImportFlags.DataSourceID, "data-source", "", "可选 DataSource ID；传入时校验 dataset 归属")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.Freq, "freq", "", "时序频率，例如 1m/1h/1d")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.TimeColumn, "time-column", "candle_begin_time", "CSV 时间列名")
-	storageImportCmd.Flags().StringArrayVar(&storageImportFlags.Dimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.SeriesTag, "series-tag", "", "序列标签；为空表示默认序列")
 	storageImportCmd.Flags().IntVar(&storageImportFlags.BatchSize, "batch-size", defaultStorageImportBatchSize, "每批写入行数")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.RequestID, "request-id", "", "可选的稳定导入请求 ID；重试同一请求可复用")
 	storageImportCmd.Flags().BoolVar(&storageImportFlags.DryRun, "dry-run", false, "只校验并输出导入计划，不绑定 subject，不写入数据")
 }

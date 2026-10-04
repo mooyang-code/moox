@@ -1,0 +1,34 @@
+{
+  "commit": "26bfdeaacb4b429c1528c3f1c599aa4ead79ce4f",
+  "control_plane": {
+    "setup_status": "completed",
+    "missing": 0,
+    "conflicts": 0
+  },
+  "storage": {
+    "status": "passed",
+    "components": {
+      "storage-node": "ready",
+      "storage-primary": "ready",
+      "storage-view": "ready"
+    },
+    "schema_version": 10,
+    "data_node": {
+      "node_id": "storage-node-0",
+      "status": "READY"
+    },
+    "node_count": 1,
+    "dataset_count": 20,
+    "route_rpc_registered": false
+  },
+  "scf_publish": {
+    "space_id": "stockcn",
+    "requested_timer_function_count": 170,
+    "measured_safe_group_size": 40,
+    "status": "aborted_before_final_summary",
+    "last_gate": "instrument_snapshot_canary",
+    "elapsed": "about 60 minutes",
+    "success_job_readback": false,
+    "formal_acceptance": false
+  }
+}

@@ -78,6 +78,31 @@ func (d *DAO) UpdateSpace(ctx context.Context, item *Space) error {
 	return nil
 }
 
+// DeleteSpace permanently removes an isolated management Space and its members.
+func (d *DAO) DeleteSpace(ctx context.Context, spaceID string) error {
+	if strings.TrimSpace(spaceID) == "" {
+		return fmt.Errorf("space_id is required")
+	}
+	tx := d.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Exec("DELETE FROM t_space_members WHERE c_space_id = ?", spaceID).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	result := tx.Exec("DELETE FROM t_spaces WHERE c_space_id = ? AND c_is_deleted = ?", spaceID, softdelete.IsDeletedFalse)
+	if result.Error != nil {
+		tx.Rollback()
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		tx.Rollback()
+		return fmt.Errorf("space not found: %s", spaceID)
+	}
+	return tx.Commit().Error
+}
+
 // ListSpaces 按 owner/status 分页查询有效 Space。
 func (d *DAO) ListSpaces(ctx context.Context, owner string, status string, offset int, limit int) ([]Space, int64, error) {
 	query := d.db.WithContext(ctx).Model(&Space{}).Where("c_is_deleted = ?", softdelete.IsDeletedFalse)
@@ -110,6 +135,52 @@ func (d *DAO) ListSpaceMembers(ctx context.Context, spaceID string, offset int, 
 		return nil, 0, err
 	}
 	return rows, total, nil
+}
+
+// AuthorizeTradeRequest enforces the Admin BFF's Space boundary. Global
+// administrators may operate any active Space; ordinary users must have an
+// active membership, and mutating Trade operations require owner/admin role.
+func (d *DAO) AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method string, globalRole int32) error {
+	userID, spaceID = strings.TrimSpace(userID), strings.TrimSpace(spaceID)
+	if userID == "" || spaceID == "" {
+		return fmt.Errorf("user_id and space_id are required")
+	}
+	var item Space
+	if err := d.db.WithContext(ctx).Where("c_space_id = ? AND c_is_deleted = ? AND c_status = ?", spaceID, softdelete.IsDeletedFalse, "active").First(&item).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return fmt.Errorf("space is unavailable: %s", spaceID)
+		}
+		return err
+	}
+	if globalRole >= 2 {
+		return nil
+	}
+	var member SpaceMember
+	if err := d.db.WithContext(ctx).Where("c_space_id = ? AND c_user_id = ? AND c_status = ?", spaceID, userID, "active").First(&member).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return fmt.Errorf("user is not an active member of space")
+		}
+		return err
+	}
+	if tradeMethodMutates(method) {
+		role := strings.ToLower(strings.TrimSpace(member.Role))
+		if role != "owner" && role != "admin" {
+			return fmt.Errorf("trade mutation requires space owner or admin role")
+		}
+	}
+	return nil
+}
+
+func tradeMethodMutates(method string) bool {
+	method = strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(strings.TrimSpace(method)))
+	switch method {
+	case "gettradingaccount", "listtradingaccounts", "getlogicalaccount", "listlogicalaccounts", "getoperatoraction", "getlogicalaccounttarget", "getorder", "listorders", "listfills", "listpositions", "getexecutioncapabilities", "queryequitycurve", "listholdings", "getstrategy", "liststrategies", "getrunner", "listrunners", "liststrategyresults", "getstrategyresult", "liststrategytargets", "getstrategyinstance", "liststrategyinstances":
+		return false
+	default:
+		// Mutations are deny-by-default for ordinary Space members. Keeping a
+		// read-only allowlist avoids silently exposing a newly added Trade RPC.
+		return true
+	}
 }
 
 func (d *DAO) spaceExists(ctx context.Context, spaceID string) (bool, error) {

@@ -24,6 +24,10 @@ type queryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 type execQueryRower interface {
 	queryRower
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -37,20 +41,6 @@ var (
 var ErrViewIndexBuildConflict = errors.New("view index build conflict")
 
 const sqliteBuildTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
-
-const viewIndexBuildColumns = `
-	c_space_id, c_view_id, c_build_id, c_index_id, c_engine,
-	c_target_view_version, c_state, c_owner_id, c_lease_expires_at,
-	c_cursor_json, c_snapshot_end, c_coverage_start, c_coverage_end,
-	c_entries_written, c_schema_hash, c_columns_json, c_started_at,
-	c_updated_at, c_finished_at, c_error`
-
-func buildLeaseTTL(seconds uint32) time.Duration {
-	if seconds == 0 {
-		seconds = 90
-	}
-	return time.Duration(seconds) * time.Second
-}
 
 func requireChangedRow(result sql.Result) error {
 	rows, err := result.RowsAffected()
@@ -68,7 +58,7 @@ func getMessage[T proto.Message](ctx context.Context, db queryRower, query strin
 	return scanMessage(row, newMessage)
 }
 
-func queryMessages[T proto.Message](ctx context.Context, db *sql.DB, query string, args []any, newMessage func() T) ([]T, error) {
+func queryMessages[T proto.Message](ctx context.Context, db queryer, query string, args []any, newMessage func() T) ([]T, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -86,7 +76,12 @@ func queryMessages[T proto.Message](ctx context.Context, db *sql.DB, query strin
 	return items, rows.Err()
 }
 
-func queryPagedMessages[T proto.Message](ctx context.Context, db *sql.DB, query string, countQuery string, args []any, page *pb.Page, newMessage func() T) ([]T, *pb.PageResult, error) {
+type readDB interface {
+	queryRower
+	queryer
+}
+
+func queryPagedMessages[T proto.Message](ctx context.Context, db readDB, query string, countQuery string, args []any, page *pb.Page, newMessage func() T) ([]T, *pb.PageResult, error) {
 	pageNo, size, offset := normalizePage(page)
 	limit := int(size)
 	pagedArgs := append([]any{}, args...)
@@ -103,7 +98,7 @@ func queryPagedMessages[T proto.Message](ctx context.Context, db *sql.DB, query 
 	return items, &pb.PageResult{Page: pageNo, Size: size, Total: total, HasMore: hasMore}, nil
 }
 
-func countRows(ctx context.Context, db *sql.DB, query string, args []any) (uint32, error) {
+func countRows(ctx context.Context, db queryRower, query string, args []any) (uint32, error) {
 	var total int64
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
 		return 0, err
@@ -208,28 +203,6 @@ func marshalJSON(v any) (string, error) {
 	return string(data), nil
 }
 
-func pageItems[T any](items []T, page *pb.Page) ([]T, *pb.PageResult, error) {
-	pageNo := uint32(1)
-	size := uint32(1000)
-	if page != nil {
-		if page.GetPage() > 0 {
-			pageNo = page.GetPage()
-		}
-		if page.GetSize() > 0 {
-			size = page.GetSize()
-		}
-	}
-	start := int((pageNo - 1) * size)
-	if start > len(items) {
-		start = len(items)
-	}
-	end := start + int(size)
-	if end > len(items) {
-		end = len(items)
-	}
-	return items[start:end], &pb.PageResult{Page: pageNo, Size: size, Total: uint32(len(items)), HasMore: end < len(items)}, nil
-}
-
 func defaultStatus(status string) string {
 	if status == "" {
 		return "active"
@@ -302,23 +275,6 @@ func datasetOriginSQL(origin pb.DatasetColumnOriginType) string {
 	default:
 		return "field"
 	}
-}
-
-func stringSet(values []string) map[string]bool {
-	out := make(map[string]bool, len(values))
-	for _, value := range values {
-		out[value] = true
-	}
-	return out
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func mapsEqual(left map[string]string, right map[string]string) bool {

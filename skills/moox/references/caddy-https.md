@@ -11,9 +11,11 @@ skills/moox/scripts/caddy-prerequisite.sh status --target user@host --deploy-dir
 
 The browser edge listens on `9527` and exposes the site plus `/api/admin/*`. The service edge listens on `11001` and exposes only `/api/service/*`. Their HTTP upstreams (`9528`, `11000`, and `11002`) bind to loopback. An unrelated listener causes deployment to fail; MooX never takes over a system Caddy.
 
-Caddy state lives under `data/caddy` and survives ordinary deploys and data resets. The public root is copied to `certs/caddy/root.crt`; `root.key` must never leave the target. A changed root fingerprint fails closed and requires an explicit CA rotation procedure.
+Caddy state lives under `data/caddy` and survives ordinary deploys and data resets. `--tls-mode auto` selects public ACME for public IP/DNS hosts and internal CA for private, loopback, and `.localhost` hosts.
 
-Fetch and install trust on each browser machine:
+Public mode uses the Let's Encrypt `shortlived` profile and HTTP-01. TCP 80 must remain publicly reachable for issuance and renewal. Browsers and backends use the operating-system trust store; no MooX root certificate is generated or installed. Caddy renews automatically from ACME ARI while it remains running, and the generated `healthcheck.sh` restarts an unhealthy managed Caddy.
+
+Internal mode copies its public root to `certs/caddy/root.crt`; `root.key` must never leave the target. Fetch and install that root on each browser machine:
 
 ```bash
 skills/moox/scripts/caddy-ca.sh fetch --target user@host --deploy-dir /home/user/moox --output ~/.moox/certs/moox-caddy-root-<public-host>.crt
@@ -27,6 +29,4 @@ Install the published CA directly on the web-host target when preparing it outsi
 skills/moox/scripts/caddy-ca.sh install-target --target user@host --deploy-dir /home/user/moox
 ```
 
-Normal deployment uses `--target-ca auto` for the target and `--local-ca auto` for the operator machine. After each public deployment it fetches the root CA into `~/.moox/certs/moox-caddy-root-<public-host>.crt`, checks the local trust store by fingerprint, and installs it when missing. The filename contains the public IP/DNS so certificates from different servers can be identified safely. If local administrator permission is unavailable, deployment stops with an explicit command; use `--local-ca skip` only for an intentional non-browser deployment. The manual `install-target` command remains strict.
-
-Interactive deployment may offer to install trust on the operator machine once. Other browser machines must run the helper locally. Backend processes receive `MOOX_SERVICE_GATEWAY_CA_FILE`; SCF configuration uses the equivalent base64 PEM. Never use insecure TLS verification. Caddy renews leaf certificates automatically while its data directory persists.
+Only internal mode uses `--target-ca`, `--local-ca`, `MOOX_SERVICE_GATEWAY_CA_FILE`, or `MOOX_SERVICE_GATEWAY_CA_PEM_B64`. Never inject the internal root into public-mode callers and never use insecure TLS verification.

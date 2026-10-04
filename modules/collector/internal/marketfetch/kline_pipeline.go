@@ -1,0 +1,948 @@
+package marketfetch
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	StockCNSpaceID   = "stockcn"
+	StockCNDatasetID = "dataset_stockcn_equity_kline"
+	StockCNRouteID   = "stockcn_equity_kline_1m_v4"
+	// Each provider gets three attempts before the next provider in the route.
+	klineProviderAttemptBudget = 3
+)
+
+// KlinePipeline is the provider-independent stock write boundary. Fetchers
+// return complete bars; the pipeline writes each bar as one complete row.
+type KlinePipeline struct {
+	Router         *marketdata.Router
+	Storage        Storage
+	CandidateChain []string
+	RouteID        string
+	SpaceID        string
+	MarketID       string
+	InstrumentType marketdata.InstrumentType
+	DatasetID      string
+	SourceID       string
+	AutoBindSource bool
+	SeriesTag      string
+	SettleDelay    time.Duration
+	Now            func() time.Time
+	Calendar       *stockmarket.Calendar
+	Metrics        *Metrics
+}
+
+func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+	if p == nil || p.Router == nil || p.Storage == nil {
+		return nil, fmt.Errorf("stock kline pipeline is not initialized")
+	}
+	if err := req.validate(); err != nil {
+		return nil, err
+	}
+	spaceID := firstNonEmptyString(p.SpaceID, req.SpaceID)
+	datasetID := firstNonEmptyString(p.DatasetID, req.DatasetID)
+	frequency, frequencyErr := marketdata.ParseFrequency(req.Frequency)
+	if frequencyErr != nil {
+		return nil, frequencyErr
+	}
+	isStock := p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID
+	isStockEquity := isStock && (p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity)
+	if req.SpaceID != spaceID || req.DatasetID != datasetID || (isStockEquity && frequency != marketdata.FrequencyMinute) {
+		return nil, fmt.Errorf("kline pipeline requires %s/%s/1m for stockcn", spaceID, datasetID)
+	}
+	sourceID := firstNonEmptyString(p.SourceID, req.SourceID)
+	if p.SourceID != "" && req.SourceID != "" && !strings.EqualFold(strings.TrimSpace(p.SourceID), strings.TrimSpace(req.SourceID)) {
+		return nil, fmt.Errorf("kline pipeline source binding differs: pipeline=%s request=%s", p.SourceID, req.SourceID)
+	}
+	chain := normalizeCandidateChain(p.CandidateChain, req.Provider)
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("kline pipeline requires at least one candidate provider")
+	}
+	stockRouteVersion := ""
+	var stockSources []stockCNSource
+	if isStock && p.AutoBindSource && sourceID == "" {
+		stockRouteVersion, stockSources, frequencyErr = stockCNAssignmentRoute()
+		if frequencyErr != nil {
+			return nil, frequencyErr
+		}
+	}
+	if p.SourceID != "" {
+		if req.Provider != "" && !strings.EqualFold(strings.TrimSpace(req.Provider), strings.TrimSpace(chain[0])) {
+			return nil, fmt.Errorf("kline pipeline provider binding differs: pipeline=%s request=%s", chain[0], req.Provider)
+		}
+		chain = []string{chain[0]}
+	}
+	started := time.Now()
+	if p.Now != nil {
+		started = p.Now()
+	}
+	if req.BatchKind == domain.BatchKindRealtime && !req.RequirePeriodCommit && p.Calendar != nil && frequency == marketdata.FrequencyMinute {
+		shouldCollect, err := stockCNShouldCollectMinute(p.Calendar, started, p.SettleDelay)
+		if err != nil {
+			return nil, err
+		}
+		if !shouldCollect {
+			results := make([]domain.ItemResult, len(req.Items))
+			for index, item := range req.Items {
+				results[index] = successResult(item)
+			}
+			return buildCompletion(req, results, started, 0), nil
+		}
+	}
+	instrumentNames := map[string]string(nil)
+	if isStockEquity {
+		instrumentNames = loadInstrumentNames(ctx, p.Storage, spaceID, req.Items)
+	}
+	results := make([]domain.ItemResult, len(req.Items))
+	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
+	routerSession := p.Router.NewSession()
+	concurrency := req.Concurrency
+	if concurrency <= 0 {
+		concurrency = DefaultConcurrency
+	}
+	if concurrency > len(req.Items) {
+		concurrency = len(req.Items)
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var rowsMu sync.Mutex
+	for index, item := range req.Items {
+		index, item := index, item
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results[index] = failureResult(item, domain.ItemOutcomeNetworkError, "deadline_exhausted", ctx.Err())
+				return
+			}
+			providerSymbol := strings.TrimSpace(item.Symbol)
+			if p.MarketID == StockCNSpaceID || p.MarketID == "" && req.SpaceID == StockCNSpaceID {
+				converted, symbolErr := stockProviderSymbol(item.SubjectID)
+				if symbolErr != nil {
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", symbolErr)
+					return
+				}
+				providerSymbol = converted
+			}
+			if providerSymbol == "" {
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", fmt.Errorf("provider symbol is required"))
+				return
+			}
+			itemSourceID := firstNonEmptyString(item.SourceID, sourceID)
+			itemChain := chain
+			if isStock && p.AutoBindSource && itemSourceID == "" {
+				selectedSource, ok := stockSourceForSubject(stockSources, stockRouteVersion, item.SubjectID)
+				if !ok {
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", fmt.Errorf("stockcn has no source assignment for %s", item.SubjectID))
+					return
+				}
+				itemSourceID = selectedSource.SourceID
+				itemChain = append([]string{selectedSource.Provider}, chain...)
+			}
+			limit := item.BarLimit
+			if limit <= 0 {
+				limit = MaxRealtimeRows
+			}
+			marketID := marketdata.MarketID(firstNonEmptyString(p.MarketID, req.SpaceID))
+			instrumentType := p.InstrumentType
+			if instrumentType == "" {
+				instrumentType = marketdata.InstrumentEquity
+			}
+			exchangeID := marketdata.ExchangeID("")
+			if p.MarketID == StockCNSpaceID || p.MarketID == "" && req.SpaceID == StockCNSpaceID {
+				exchangeID = stockProviderExchange(item.SubjectID)
+			}
+			coverageStart := parseOptionalTime(item.StartTime)
+			coverageEnd := parseOptionalTime(item.EndTime)
+			requiredTarget := time.Time{}
+			if req.RequirePeriodCommit {
+				var targetErr error
+				requiredTarget, targetErr = parseRequestTime(item.TargetDataTime)
+				if targetErr != nil || requiredTarget.IsZero() {
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "period_identity", fmt.Errorf("period commit target_data_time is required"))
+					return
+				}
+				coverageStart = requiredTarget.UTC()
+				coverageEnd = frequency.BarEnd(coverageStart)
+				limit = 1
+			}
+			historyAsOf := started.UTC()
+			if item.Canary && isStock && p.Calendar != nil && !req.RequirePeriodCommit {
+				canaryStart, canaryEnd, calendarErr := p.Calendar.LatestClosedMinute(started.UTC(), p.SettleDelay)
+				if calendarErr != nil {
+					results[index] = failureResult(item, domain.ItemOutcomeProviderError, "calendar", calendarErr)
+					return
+				}
+				coverageStart, coverageEnd, historyAsOf = canaryStart, canaryEnd, canaryEnd
+			}
+			// Each provider request owns its DNS snapshot, including the IP slices.
+			var dnsRoutes map[string][]string
+			if len(req.DNSRoutes) > 0 {
+				dnsRoutes = make(map[string][]string, len(req.DNSRoutes))
+				for host, route := range req.DNSRoutes {
+					dnsRoutes[host] = append([]string(nil), route.IPs...)
+				}
+			}
+			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			if err != nil {
+				item.CandidateIndex = nextCandidateIndex
+				p.observeFeed(req, selectedProvider, "kline", metricKlineResult(err))
+				results[index] = failureResult(item, classifyError(err), errorType(err), err)
+				return
+			}
+			if err := bindKlineSource(fetched, selectedProvider, ""); err != nil {
+				item.CandidateIndex = nextCandidateIndex
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", err)
+				return
+			}
+			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
+			for _, bar := range fetched {
+				if req.RequirePeriodCommit && !bar.BarStart.UTC().Equal(requiredTarget.UTC()) {
+					continue
+				}
+				// The scheduler normally selects a settled target bar, but the
+				// provider response is still an untrusted boundary. Realtime rows
+				// must remain outside the settle window even when a feed returns a
+				// newer, just-closed bar or ignores the requested range.
+				if req.BatchKind == domain.BatchKindRealtime && p.SettleDelay > 0 && bar.BarEnd.Add(p.SettleDelay).After(started.UTC()) {
+					continue
+				}
+				if !coverageStart.IsZero() && bar.BarStart.Before(coverageStart) {
+					continue
+				}
+				// Some public feeds ignore range parameters and return their
+				// latest page. Enforce the half-open requested interval at the
+				// common write boundary so GapRepair cannot write the wrong bar.
+				if !coverageEnd.IsZero() && !bar.BarStart.Before(coverageEnd) {
+					continue
+				}
+				rank := providerRank(itemChain, bar.ProviderID)
+				row, rowErr := p.rowFor(bar, req, requestKlineRouteID(p, req.Frequency), rank, instrumentNames[bar.SubjectID])
+				if rowErr != nil {
+					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "normalize", rowErr)
+					return
+				}
+				if len(req.Targets) == 0 {
+					row.Fields = selectOutputFields(row.Fields, item.OutputFields)
+					if len(row.Fields) == 0 {
+						results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("selected output fields contain no fields supported by the kline dataset"))
+						return
+					}
+				}
+				itemRows = append(itemRows, row)
+			}
+			if len(itemRows) == 0 {
+				p.observeFeed(req, selectedProvider, "kline", "invalid")
+				outcome := domain.ItemOutcomeInvalid
+				errorValue := error(fmt.Errorf("provider returned no bars inside the requested coverage"))
+				if req.RequirePeriodCommit {
+					outcome = domain.ItemOutcomeProviderError
+					errorValue = marketdata.ErrHistoryCoverage
+				}
+				results[index] = failureResult(item, outcome, "coverage", errorValue)
+				return
+			}
+			result := "success"
+			if providerRank(itemChain, selectedProvider) > 1 {
+				result = "fallback"
+			}
+			p.observeFeed(req, selectedProvider, "kline", result)
+			rowsMu.Lock()
+			targets := req.Targets
+			if item.InstanceID != "" {
+				targets = make([]domain.WriteTarget, 0, len(req.Targets))
+				for _, candidate := range req.Targets {
+					if candidate.InstanceID == "" || candidate.InstanceID == item.InstanceID {
+						targets = append(targets, candidate)
+					}
+				}
+			}
+			var missingTargets []domain.TargetResult
+			for _, target := range targets {
+				targetRowCount := 0
+				for _, sourceRow := range itemRows {
+					row, ok := proto.Clone(sourceRow).(*storagepb.RowFieldUpsert)
+					if !ok || row.GetKey() == nil {
+						continue
+					}
+					row.GetKey().DatasetId = target.DatasetID
+					fields := item.OutputFields
+					if target.OutputFields != "" {
+						var selected []string
+						if json.Unmarshal([]byte(target.OutputFields), &selected) == nil {
+							fields = selected
+						}
+					}
+					row.Fields = selectOutputFields(row.Fields, fields)
+					if len(row.Fields) > 0 {
+						rows = append(rows, row)
+						targetRowCount++
+					}
+				}
+				if req.RequirePeriodCommit && targetRowCount == 0 {
+					missingTargets = append(missingTargets, domain.TargetResult{WriteTargetID: target.ID, DatasetID: target.DatasetID, Status: "failed", ErrorSummary: "required period target has no supported output rows"})
+				}
+			}
+			if len(req.Targets) == 0 {
+				rows = append(rows, itemRows...)
+			}
+			rowsMu.Unlock()
+			if len(missingTargets) > 0 {
+				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("required period target has no supported output rows"))
+				results[index].TargetResults = missingTargets
+			} else {
+				results[index] = successResult(item)
+			}
+		}()
+	}
+	wg.Wait()
+	sort.Slice(rows, func(i, j int) bool {
+		left, right := rows[i].GetKey().GetTimeSeries(), rows[j].GetKey().GetTimeSeries()
+		if left.GetSubjectId() == right.GetSubjectId() {
+			return left.GetDataTime() < right.GetDataTime()
+		}
+		return left.GetSubjectId() < right.GetSubjectId()
+	})
+	if len(rows) > 0 {
+		// Write each destination independently. A failed target must not prevent
+		// successful targets of the same shared acquisition from committing.
+		targetRows := make(map[string][]*storagepb.RowFieldUpsert)
+		for _, row := range rows {
+			if row.GetKey() != nil {
+				targetRows[row.GetKey().GetDatasetId()] = append(targetRows[row.GetKey().GetDatasetId()], row)
+			}
+		}
+		var writeErr error
+		writeSuccesses := 0
+		targetStatus := make(map[string]domain.TargetResult)
+		for datasetID, datasetRows := range targetRows {
+			var err error
+			expectation, periodItems, periodEnabled, periodErr := periodCommitForDataset(req, datasetID, datasetRows)
+			if periodErr != nil {
+				err = periodErr
+			} else if periodEnabled {
+				storage, ok := p.Storage.(periodStorage)
+				if !ok {
+					err = fmt.Errorf("dataset %s requires CommitTimeSeriesBatch but storage client does not support period commits", datasetID)
+				} else {
+					err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems, sourceEventID(req))
+				}
+			} else if storage, ok := p.Storage.(sourceStorage); ok {
+				err = storage.UpsertFieldsWithSource(ctx, datasetRows, sourceEventID(req))
+			} else {
+				err = p.Storage.UpsertFields(ctx, datasetRows)
+			}
+			if err != nil {
+				if writeErr == nil {
+					writeErr = fmt.Errorf("dataset %s: %w", datasetID, err)
+				}
+				targetStatus[datasetID] = domain.TargetResult{DatasetID: datasetID, Status: "failed", ErrorSummary: err.Error()}
+			} else if err == nil {
+				writeSuccesses++
+				targetStatus[datasetID] = domain.TargetResult{DatasetID: datasetID, Status: "succeeded"}
+			}
+		}
+		for index := range results {
+			if results[index].Outcome != domain.ItemOutcomeSuccess && len(results[index].TargetResults) == 0 {
+				continue
+			}
+			for _, target := range req.Targets {
+				if target.InstanceID != "" && target.InstanceID != results[index].InstanceID {
+					continue
+				}
+				alreadyFailed := false
+				for _, prior := range results[index].TargetResults {
+					if prior.WriteTargetID == target.ID {
+						alreadyFailed = true
+						break
+					}
+				}
+				if alreadyFailed {
+					continue
+				}
+				if status, ok := targetStatus[target.DatasetID]; ok {
+					status.WriteTargetID = target.ID
+					results[index].TargetResults = append(results[index].TargetResults, status)
+					if req.RequirePeriodCommit && status.Status != "succeeded" {
+						results[index].Outcome = domain.ItemOutcomeStorageError
+						results[index].ErrorType = "storage"
+						results[index].ErrorSummary = status.ErrorSummary
+					}
+				}
+			}
+		}
+		if writeErr != nil && writeSuccesses == 0 {
+			for index := range results {
+				if results[index].Outcome == domain.ItemOutcomeSuccess {
+					results[index] = failureResult(results[index].CollectionItem, domain.ItemOutcomeStorageError, "storage", writeErr)
+				}
+			}
+		}
+	}
+	completed := time.Now()
+	if p.Now != nil {
+		completed = p.Now()
+	}
+	return buildCompletion(req, results, completed, completed.Sub(started)), nil
+}
+
+func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.RowFieldUpsert) (*storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, bool, error) {
+	if !req.RequirePeriodCommit {
+		return nil, nil, false, nil
+	}
+	type binding struct {
+		index         uint32
+		hash          string
+		count         uint32
+		targetTime    string
+		reservationID string
+	}
+	bindings := make(map[string]binding)
+	for _, item := range req.Items {
+		seriesTag := collectionItemSeriesTag(req.SpaceID, item)
+		if len(req.Targets) == 0 {
+			if item.DatasetID == datasetID && item.SeriesHash != "" && item.ExpectedCount > 0 {
+				bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: item.SeriesIndex, hash: item.SeriesHash, count: item.ExpectedCount, targetTime: item.TargetDataTime, reservationID: item.PeriodReservationID}
+			}
+			continue
+		}
+		for _, target := range req.Targets {
+			if target.DatasetID != datasetID || target.SeriesHash == "" || target.ExpectedCount == 0 {
+				continue
+			}
+			if target.InstanceID != "" && item.InstanceID != "" && target.InstanceID != item.InstanceID {
+				continue
+			}
+			bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: target.SeriesIndex, hash: target.SeriesHash, count: target.ExpectedCount, targetTime: item.TargetDataTime, reservationID: item.PeriodReservationID}
+		}
+	}
+	if len(bindings) == 0 {
+		if req.RequirePeriodCommit {
+			return nil, nil, false, fmt.Errorf("dataset %s requires period bindings but none are available", datasetID)
+		}
+		return nil, nil, false, nil
+	}
+	items := make([]*storagepb.TimeSeriesBatchRow, 0, len(rows))
+	var expectation *storagepb.DatasetPeriodExpectation
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
+			return nil, nil, false, fmt.Errorf("period commit row is not time-series")
+		}
+		ts := row.GetKey().GetTimeSeries()
+		binding, ok := bindings[periodRowBindingKey(datasetID, ts.GetSubjectId(), ts.GetSeriesTag())]
+		if !ok {
+			return nil, nil, false, fmt.Errorf("dataset %s row %s/%s has no series_index binding", datasetID, ts.GetSubjectId(), ts.GetSeriesTag())
+		}
+		target, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(binding.targetTime))
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("dataset %s target_data_time is invalid: %w", datasetID, err)
+		}
+		if req.RequirePeriodCommit {
+			rowTime, timeErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(ts.GetDataTime()))
+			if timeErr != nil || !rowTime.UTC().Equal(target.UTC()) {
+				return nil, nil, false, fmt.Errorf("dataset %s row %s does not cover target_data_time", datasetID, ts.GetDataTime())
+			}
+		}
+		if expectation == nil {
+			if _, err := marketdata.ParseFrequency(req.Frequency); err != nil {
+				return nil, nil, false, fmt.Errorf("dataset %s period frequency is invalid: %w", datasetID, err)
+			}
+			expectation = &storagepb.DatasetPeriodExpectation{SpaceId: req.SpaceID, DatasetId: datasetID, Frequency: strings.TrimSpace(req.Frequency), PeriodTime: target.UTC().Unix(), SeriesHash: binding.hash, ExpectedCount: binding.count, ReservationId: binding.reservationID}
+		} else if expectation.GetSeriesHash() != binding.hash || expectation.GetExpectedCount() != binding.count || expectation.GetPeriodTime() != target.UTC().Unix() || expectation.GetReservationId() != binding.reservationID {
+			return nil, nil, false, fmt.Errorf("dataset %s has mixed period expectation in one SCF request", datasetID)
+		}
+		items = append(items, &storagepb.TimeSeriesBatchRow{SeriesIndex: binding.index, Row: row})
+	}
+	if expectation == nil || len(items) == 0 {
+		return nil, nil, false, nil
+	}
+	return expectation, items, true, nil
+}
+
+func periodRowBindingKey(datasetID, subjectID, seriesTag string) string {
+	return strings.Join([]string{strings.TrimSpace(datasetID), strings.ToUpper(strings.TrimSpace(subjectID)), strings.TrimSpace(seriesTag)}, "\x00")
+}
+
+func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, error) {
+	var lastErr error
+	lastProvider := "none"
+	if len(chain) == 0 {
+		return nil, lastProvider, 0, fmt.Errorf("kline candidate chain is empty")
+	}
+	startIndex %= len(chain)
+	if startIndex < 0 {
+		startIndex += len(chain)
+	}
+	attempts := 0
+	attemptBudget := RuntimeKlineProviderAttemptBudget()
+	for index := 0; index < len(chain); index++ {
+		chainIndex := (startIndex + index) % len(chain)
+		provider := chain[chainIndex]
+		lastProvider = provider
+		for retry := 0; retry < attemptBudget; retry++ {
+			attemptCtx := ctx
+			cancel := func() {}
+			if deadline, ok := ctx.Deadline(); ok {
+				remaining := time.Until(deadline)
+				attemptsLeft := (len(chain)-index-1)*attemptBudget + attemptBudget - retry
+				if remaining <= 0 {
+					return nil, provider, (startIndex + attempts) % len(chain), ctx.Err()
+				}
+				attemptCtx, cancel = context.WithTimeout(ctx, remaining/time.Duration(attemptsLeft))
+			}
+			rows, err := session.FetchKlines(attemptCtx, req, []string{provider})
+			cancel()
+			attempts++
+			if err == nil {
+				spec, specErr := session.KlineSpec(provider)
+				if specErr != nil {
+					lastErr = specErr
+					break
+				}
+				if coverageErr := spec.History.ValidateCoverage(rows, req.StartTime); coverageErr != nil {
+					lastErr = coverageErr
+					break
+				}
+				if !hasRowsWithinCoverage(rows, req.StartTime, req.EndTime) {
+					lastErr = fmt.Errorf("%w: provider %s returned no bars inside requested interval", marketdata.ErrHistoryCoverage, provider)
+					break
+				}
+				return rows, provider, startIndex, nil
+			}
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
+			}
+			if errors.Is(err, marketdata.ErrProviderNotFound) || errors.Is(err, marketdata.ErrHistoryOutOfRange) || errors.Is(err, marketdata.ErrHistoryCoverage) {
+				lastErr = err
+				break
+			}
+			if !marketdata.CanFallback(ctx, err) {
+				return nil, provider, (startIndex + attempts) % len(chain), err
+			}
+			lastErr = err
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("kline provider chain exhausted")
+	}
+	return nil, lastProvider, (startIndex + attempts) % len(chain), lastErr
+}
+
+// selectOutputFields keeps the canonical row field order while dropping fields
+// not selected by the task. Empty selection deliberately preserves legacy rows.
+func selectOutputFields(fields []*storagepb.FieldValue, selected []string) []*storagepb.FieldValue {
+	if len(selected) == 0 {
+		return fields
+	}
+	wanted := make(map[string]struct{}, len(selected))
+	for _, fieldID := range selected {
+		if fieldID = strings.TrimSpace(fieldID); fieldID != "" {
+			wanted[fieldID] = struct{}{}
+		}
+	}
+	filtered := make([]*storagepb.FieldValue, 0, len(wanted))
+	for _, field := range fields {
+		if field == nil {
+			continue
+		}
+		if _, ok := wanted[field.GetFieldId()]; ok {
+			filtered = append(filtered, field)
+		}
+	}
+	return filtered
+}
+
+func stockSourceForSubject(sources []stockCNSource, routeVersion, subject string) (stockCNSource, bool) {
+	totalWeight := 0
+	for _, source := range sources {
+		totalWeight += source.Weight
+	}
+	if totalWeight <= 0 || len(sources) == 0 {
+		return stockCNSource{}, false
+	}
+	selected := weightedSourceBucket(routeVersion, subject, sources, totalWeight)
+	return selected, selected.Provider != "" && selected.SourceID != ""
+}
+
+func bindKlineSource(rows []marketdata.NormalizedKline, providerID, sourceID string) error {
+	if strings.TrimSpace(sourceID) == "" {
+		return nil
+	}
+	providerID = strings.ToLower(strings.TrimSpace(providerID))
+	sourceID = strings.ToLower(strings.TrimSpace(sourceID))
+	for index := range rows {
+		if providerID != "" && !strings.EqualFold(strings.TrimSpace(rows[index].ProviderID), providerID) {
+			return fmt.Errorf("bar[%d] provider_id %q differs from bound provider %q", index, rows[index].ProviderID, providerID)
+		}
+		if strings.TrimSpace(rows[index].SourceID) == "" {
+			rows[index].SourceID = sourceID
+		} else if sourceID != "" && !strings.EqualFold(strings.TrimSpace(rows[index].SourceID), sourceID) {
+			return fmt.Errorf("bar[%d] source_id %q differs from bound source %q", index, rows[index].SourceID, sourceID)
+		}
+	}
+	return nil
+}
+
+func hasRowsWithinCoverage(rows []marketdata.NormalizedKline, start, end time.Time) bool {
+	if start.IsZero() && end.IsZero() {
+		return len(rows) > 0
+	}
+	for _, row := range rows {
+		if !start.IsZero() && row.BarStart.Before(start) {
+			continue
+		}
+		if !end.IsZero() && !row.BarStart.Before(end) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (p *KlinePipeline) observeFeed(req Request, providerID, feedKind, result string) {
+	if p == nil || p.Metrics == nil {
+		return
+	}
+	p.Metrics.ObserveFeedResult(FeedMetric{
+		MarketID: firstNonEmptyString(p.MarketID, req.SpaceID), RouteID: requestKlineRouteID(p, req.Frequency),
+		ProviderID: providerID, SourceID: firstNonEmptyString(p.SourceID, req.SourceID),
+		InstrumentType: string(p.InstrumentType), Frequency: req.Frequency, FeedKind: feedKind,
+		BatchKind: string(req.BatchKind), Result: result, SourceKind: "provider", Transport: "https",
+		SCFRegion: req.Region, EgressScope: "scf-public", Rows: 0, FallbackRank: providerRank([]string{providerID}, providerID),
+		ErrorKind: result, CalendarID: firstNonEmptyString(req.SpaceID, "none"),
+		GroupID: req.GroupID, GroupCount: req.GroupCount,
+	})
+}
+
+func requestKlineRouteID(p *KlinePipeline, frequency string) string {
+	if p == nil {
+		return StockCNRouteID
+	}
+	if strings.EqualFold(strings.TrimSpace(firstNonEmptyString(p.MarketID, p.SpaceID)), "crypto") {
+		product := "spot"
+		if p.InstrumentType == marketdata.InstrumentSwap {
+			product = "swap"
+		}
+		if parsed, err := marketdata.ParseFrequency(frequency); err == nil {
+			frequency = string(parsed)
+		} else {
+			frequency = strings.ToLower(strings.TrimSpace(frequency))
+		}
+		return "binance_" + product + "_kline_" + frequency
+	}
+	return firstNonEmptyString(p.RouteID, StockCNRouteID)
+}
+
+func metricKlineResult(err error) string {
+	if err == nil {
+		return "success"
+	}
+	switch classifyError(err) {
+	case domain.ItemOutcomeHTTP429:
+		return "http_429"
+	case domain.ItemOutcomeHTTP5xx:
+		return "http_5xx"
+	case domain.ItemOutcomeNetworkError:
+		return "timeout"
+	case domain.ItemOutcomeInvalid:
+		return "invalid"
+	default:
+		return "no_candidate"
+	}
+}
+
+func sourceEventID(req Request) string {
+	if strings.TrimSpace(req.SyncPointID) != "" {
+		return strings.TrimSpace(req.SyncPointID)
+	}
+	if len(req.Items) == 1 && strings.TrimSpace(req.Items[0].SourceEventID) != "" {
+		return strings.TrimSpace(req.Items[0].SourceEventID)
+	}
+	return req.BatchID
+}
+
+func stockProviderExchange(subjectID string) marketdata.ExchangeID {
+	parts := strings.SplitN(strings.ToUpper(strings.TrimSpace(subjectID)), ".", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	switch parts[1] {
+	case "XSHG", "XSHE", "XBSE":
+		return marketdata.ExchangeID(parts[1])
+	default:
+		return ""
+	}
+}
+
+func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {
+	if strings.TrimSpace(req.Frequency) != "" {
+		requestedFrequency, err := marketdata.ParseFrequency(req.Frequency)
+		if err != nil {
+			return nil, fmt.Errorf("request frequency is invalid: %w", err)
+		}
+		barFrequency, err := marketdata.ParseFrequency(bar.Frequency)
+		if err != nil || requestedFrequency != barFrequency {
+			return nil, fmt.Errorf("provider frequency %q does not match request frequency %q", bar.Frequency, req.Frequency)
+		}
+		bar.Frequency = strings.TrimSpace(req.Frequency)
+	}
+	if (p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID) &&
+		(p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity) {
+		name := ""
+		if len(instrumentName) > 0 {
+			name = instrumentName[0]
+		}
+		return stockKlineRow(bar, firstNonEmptyString(p.DatasetID, req.DatasetID), routeID, routeRank, name)
+	}
+	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
+		bar.SubjectID = strings.ToUpper(strings.TrimSpace(bar.SubjectID))
+	}
+	seriesTag := strings.TrimSpace(p.SeriesTag)
+	if p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID {
+		seriesTag = "default"
+	} else if seriesTag == "" {
+		seriesTag = defaultMarketSeriesTag(bar.ProviderID, firstNonEmptyString(bar.SourceID, req.SourceID), req.MarketType)
+	}
+	fields := []*storagepb.FieldValue{
+		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
+		doubleValue("volume", bar.VolumeShares),
+	}
+	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
+		fields = append(fields, doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount))
+	} else {
+		fields = append(fields, doubleValue("amount", bar.AmountCNY))
+		if p.InstrumentType == marketdata.InstrumentIndex {
+			fields = append(fields, stringValue("index_code", bar.ProviderSymbol))
+		}
+	}
+	fields = append(fields,
+		stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID),
+		stringValue("provider_symbol", bar.ProviderSymbol),
+	)
+	return &storagepb.RowFieldUpsert{
+		Key: &storagepb.RowKey{SpaceId: req.SpaceID, DatasetId: req.DatasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+			SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
+		}}},
+		Fields: fields,
+	}, nil
+}
+
+// defaultMarketSeriesTag builds the storage-series identity for Provider data.
+// The long-standing venue:<provider> form is retained for the common spot route
+// where source == provider. Non-default market/source dimensions are appended so
+// rows from one task-owned Dataset cannot overwrite each other when a task spans
+// multiple market routes. Storage treats this value as opaque.
+func defaultMarketSeriesTag(provider, source, market string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	source = strings.ToLower(strings.TrimSpace(source))
+	market = strings.ToLower(strings.TrimSpace(market))
+	if provider == "" {
+		provider = source
+	}
+	if source == "" {
+		source = provider
+	}
+	base := "venue:" + provider
+	if (market == "" || market == "spot") && source == provider {
+		return base
+	}
+	parts := []string{base}
+	if market != "" {
+		parts = append(parts, "market:"+market)
+	}
+	if source != "" && source != provider {
+		parts = append(parts, "source:"+source)
+	}
+	return strings.Join(parts, "|")
+}
+
+func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time, settleDelay time.Duration) (bool, error) {
+	if calendar == nil {
+		return false, fmt.Errorf("stockcn calendar is required")
+	}
+	if err := calendar.ValidateHorizon(now, 14); err != nil {
+		return false, fmt.Errorf("stockcn calendar horizon: %w", err)
+	}
+	location := calendar.Location()
+	if location == nil {
+		return false, fmt.Errorf("stockcn calendar timezone is unavailable")
+	}
+	local := now.In(location)
+	expected, err := calendar.ExpectedMinuteBars(local.Format("2006-01-02"))
+	if err != nil {
+		return false, err
+	}
+	if settleDelay < 0 {
+		settleDelay = 0
+	}
+	target := now.UTC().Add(-settleDelay).Truncate(time.Minute).Add(-time.Minute)
+	for _, barStart := range expected {
+		if barStart.Equal(target) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
+	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
+		return nil, err
+	}
+	qualityStatus := "accepted"
+	if routeRank > 1 {
+		qualityStatus = "fallback"
+	}
+	amountQuality := "reported"
+	if bar.AmountEstimated {
+		amountQuality = "estimated_close_x_volume"
+	}
+	instrumentName = strings.TrimSpace(instrumentName)
+	if instrumentName == "" {
+		instrumentName = bar.SubjectID
+	}
+	fields := []*storagepb.FieldValue{
+		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
+		doubleValue("volume", bar.VolumeShares), doubleValue("amount", bar.AmountCNY),
+		stringValue("instrument_name", instrumentName),
+		timeValue("trade_date", tradeDateUTC(bar.BarStart)), timeValue("close_time", bar.BarEnd),
+		stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
+		stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
+		timeValue("fetched_at", bar.FetchedAt), stringValue("request_id", bar.RequestID),
+		stringValue("route_id", routeID), intValue("route_rank", int64(routeRank)),
+		stringValue("source_provider", bar.ProviderID),
+		stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
+	}
+	if strings.TrimSpace(bar.SourceID) != "" {
+		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
+	}
+	return &storagepb.RowFieldUpsert{
+		Key: &storagepb.RowKey{
+			SpaceId: StockCNSpaceID, DatasetId: firstNonEmptyString(datasetID, StockCNDatasetID),
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: bar.SubjectID, Freq: "1m", DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "default",
+			}},
+		},
+		Fields: fields,
+	}, nil
+}
+
+type instrumentNameReader interface {
+	ListInstrumentNames(context.Context, string, []string) (map[string]string, error)
+}
+
+func loadInstrumentNames(ctx context.Context, storage Storage, spaceID string, items []domain.CollectionItem) map[string]string {
+	reader, ok := storage.(instrumentNameReader)
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	subjectIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		subjectID := strings.TrimSpace(item.SubjectID)
+		if subjectID == "" {
+			continue
+		}
+		if _, exists := seen[subjectID]; exists {
+			continue
+		}
+		seen[subjectID] = struct{}{}
+		subjectIDs = append(subjectIDs, subjectID)
+	}
+	if len(subjectIDs) == 0 {
+		return nil
+	}
+	names, err := reader.ListInstrumentNames(ctx, spaceID, subjectIDs)
+	if err != nil {
+		// Instrument names are presentation metadata. A metadata outage must not
+		// discard an otherwise valid market bar; stockKlineRow falls back to the
+		// canonical subject ID.
+		return nil
+	}
+	return names
+}
+
+func normalizeCandidateChain(configured []string, primary string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(configured)+1)
+	for _, provider := range append([]string{primary}, configured...) {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if provider == "" || provider == "stockcn_multi" {
+			continue
+		}
+		if _, ok := seen[provider]; ok {
+			continue
+		}
+		seen[provider] = struct{}{}
+		result = append(result, provider)
+	}
+	return result
+}
+
+func providerRank(chain []string, provider string) int {
+	for index, candidate := range chain {
+		if candidate == provider {
+			return index + 1
+		}
+	}
+	return len(chain) + 1
+}
+
+func parseOptionalTime(raw string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	return parsed.UTC()
+}
+
+func tradeDateUTC(value time.Time) time.Time {
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	local := value.In(location)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location).UTC()
+}
+
+func amountUnit(bar marketdata.NormalizedKline) string {
+	return "cny"
+}
+
+func doubleValue(field string, value float64) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: field, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}}}
+}
+
+func intValue(field string, value int64) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: field, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: value}}}
+}
+
+func stringValue(field, value string) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: field, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}}}
+}
+
+func timeValue(field string, value time.Time) *storagepb.FieldValue {
+	return &storagepb.FieldValue{FieldId: field, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: value.UTC().Format(time.RFC3339Nano)}}}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}

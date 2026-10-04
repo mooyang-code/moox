@@ -6,14 +6,14 @@ not a deployment artifact.
 
 ## User Preparation
 
-Show the user `custom.toml.example`. The user must fill it as repository-root
-`custom.toml` and protect it before the Agent continues:
+Show the user `moox.toml.example`. The user must fill it as repository-root
+`moox.toml` and protect it before the Agent continues:
 
 ```bash
-chmod 0600 ./custom.toml
+chmod 0600 ./moox.toml
 ```
 
-用户必须在部署前填写 `custom.toml`。该文件包含明文凭据，初始化完成后仍由用户保管；
+用户必须在部署前填写 `moox.toml`。该文件包含明文凭据，初始化完成后仍由用户保管；
 CLI 对文件保持不变，不删除、不改写。
 
 The checked-in template is:
@@ -27,47 +27,111 @@ password = ""
 secret_id = ""
 secret_key = ""
 
-[control_host]
-name = "control"
-address = ""
+[eventbus]
+host = "106.53.107.122"
+port = 4222
+tls_enabled = true
+
+[paths]
+deploy_root = "/data/moox"
+control_root = "/data/moox/prod"
+storage_root = "/data/moox/storage"
+
+# 留空时仍采集和展示监控数据，但不发送站外告警。
+[notification]
+channel_type = "wecom"
+webhook_url = ""
+
+[hosts."106.53.107.122"]
 port = 22
 username = "ubuntu"
 password = ""
+provider = "tencent"
+
+[hosts."43.132.204.177"]
+port = 22
+username = "ubuntu"
+password = ""
+provider = "tencent"
+
+[control_host]
+name = "control"
+host = "106.53.107.122"
+
+[compile_host]
+name = "compile"
+host = "106.53.107.122"
 
 [[other_hosts]]
 name = "compute-1"
-address = ""
-port = 22
-username = "ubuntu"
-password = ""
+host = "43.132.204.177"
 ```
 
-Only `control_host` determines the first control-plane deployment. `other_hosts`
-are imported as available hosts, but later service placement is decided after
-Admin is working.
+`[hosts."<address>"]` 是唯一的主机凭据目录，集中维护 SSH 端口、账号、密码和可选的
+`provider`（例如 `tencent`）。`control_host`、`storage_host`、`view_host`、
+`strategy_host`、`compile_host` 和 `other_hosts` 只通过 `host = "<address>"` 引用目录；
+EventBus 与 SCF 的 Storage Gateway 地址也使用同一目录，避免在模块配置中复制 IP。
 
-## Phase 1: custom.toml And Control Initialization
+`eventbus` 只包含公网连接事实：SCF 可访问的 IPv4 或 DNS 地址、监听端口和必须开启的
+TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时生成这些材料以及
+`cloudnode-worker.yaml`。
+
+`paths` 统一声明运行时根目录。默认布局使用云磁盘 `/data/moox`：控制面在
+`/data/moox/prod`，独立 Storage 在 `/data/moox/storage`；数据、日志、证书、密钥和
+升级暂存目录都只能落在这些目录下，不再使用用户 home 目录。
+
+`notification.webhook_url` 是唯一需要用户提前填写的监控专用信息。填写企业微信或飞书机器人
+HTTPS webhook 后，部署会以 mode `0600` 的运行时环境文件交给 Monitor；留空不会
+关闭监控采集、查询和规则计算，只是不发送站外告警。
+
+不在 `moox.toml` 中重复登记标准微服务、健康检查 URL、指标 subject 或实时
+Dataset + Frequency。标准服务由 SysDeploy 默认清单维护；所有启用中的实时
+TimeSeries Dataset + Frequency 由 Monitor 从 Collector 规则和 Factor 因子集
+自动刷新。用户自行增加的非标准服务，应在控制面就绪后注册到 SysDeploy，而不是写进
+初始化清单。
+
+Only `control_host` determines the first control-plane deployment. `compile_host`
+is optional, is used only by `scripts/build/build-storage-linux.sh` for native Linux
+CGO builds, and is not a service-placement target. The native builder uses the
+local SSH key/agent and the trusted host-key store; its `password` field is not
+used by the shell transport. `other_hosts` are imported as available hosts, but
+later service placement is decided after Admin is working. `control_host` and
+every `other_hosts` entry are also the physical-server inventory for monitoring;
+`compile_host` is not monitored unless it is also registered as a deployment host.
+`moox-cli setup deploy-control` 会在控制主机一并安装并启动 HostAgent；其他主机仍应按
+`references/host-agent.md` 安装并启动各自的 HostAgent。
+
+## Phase 1: moox.toml And Control Initialization
 
 The Agent may inspect existence only, then invoke these commands in order:
 
 ```bash
-test -e ./custom.toml || exit 2
-./bin/moox-cli setup validate --file ./custom.toml
-./bin/moox-cli setup deploy-control --file ./custom.toml
-./bin/moox-cli setup apply --file ./custom.toml
-./bin/moox-cli setup status --file ./custom.toml
+test -e ./moox.toml || exit 2
+./bin/moox-cli setup validate --file ./moox.toml
+./bin/moox-cli setup deploy-control --file ./moox.toml
+./bin/moox-cli setup apply --file ./moox.toml
+./bin/moox-cli setup status --file ./moox.toml
 ```
+
+`setup deploy-control` 同时负责受管 Caddy 的安装、证书模式选择、HTTPS 验收和
+健康检查续期调度。公网 IP/DNS 自动使用操作系统信任的 Let's Encrypt 证书，不需要
+用户安装根证书；私网、回环地址和 `.localhost` 自动使用 Caddy internal CA。该命令的
+脱敏 JSON `certificate` 字段会报告 `mode`、`issuer` 和 `automatic_renewal`，Skill
+只根据这些字段确认结果，不读取证书私钥。internal CA 部署会自动检查并安装当前
+操作机的浏览器信任；需要提权时 CLI 会直接提示管理员授权。若中断后需要单独修复，
+执行 `./bin/moox-cli setup trust-browser --file ./moox.toml`。
 
 If validation reports `host_key_unknown`, obtain each SHA256 host fingerprint
 through an independent trusted channel, run `setup trust-host`, and repeat
 validation. Never accept a fingerprint merely because the same SSH connection
 reported it.
 
-`apply` is successful only when its JSON includes `login_api: valid`. Ask the
-user to confirm browser login when interactive browser acceptance is required.
+`apply` is successful only when its JSON includes `login_api: valid`. Internal
+CA trust is checked before the login probe, so a browser WebSocket certificate
+failure is surfaced during initialization instead of being deferred to the UI.
 Do not ask about Storage or business metadata until status 返回 `completed`.
-This phase ends after Admin, Gateway, and Web are ready, the manifest records are
-written, and the public login API is valid.
+This phase ends after Admin, Gateway, Web, EventBus, CloudNode, and Collector are
+ready, the manifest records are written, and the public login API is valid.
 
 ## Phase 2: Storage Host Selection
 
@@ -75,7 +139,7 @@ List the sanitized host choices through the CLI. This command may display host
 names, addresses, ports, usernames, and roles, but never passwords:
 
 ```bash
-./bin/moox-cli setup hosts --file ./custom.toml
+./bin/moox-cli setup hosts --file ./moox.toml
 ```
 
 Use 自然语言 to ask the user where Storage should run. Accept answers such
@@ -83,7 +147,7 @@ as "Storage 放到 compute-1" or "就放 control" and map only the selected host
 name into the deterministic command:
 
 ```bash
-./bin/moox-cli setup deploy-storage --file ./custom.toml --host <host-name>
+./bin/moox-cli setup deploy-storage --file ./moox.toml --host <host-name>
 ```
 
 The initial Storage unit contains `storage-primary` and the unified
@@ -93,38 +157,39 @@ index, materialization, and query responsibilities behind one `trpc_go.yaml`.
 Admin, Gateway, and Web remain on `control_host`. The command also updates the
 Storage endpoints in SysDeploy. Never silently choose a Storage host.
 
-## Phase 3: Optional Business Metadata
+## Phase 3: Default Metadata Initialization
 
-Storage deployment and metadata selection are separate from `custom.toml`
-initialization. First list the selectable spaces from the checked-in seed:
-
-```bash
-./bin/moox-cli metadata spaces --file examples/metadata-quant-initial.seed.yaml
-```
-
-Ask which spaces the user wants. Support natural-language answers including
-"全部", "只导入 A 股和币安", and "暂不导入". For a concrete
-selection, map the names to the IDs returned by `metadata spaces`, then run:
+After Storage is ready, initialize the checked-in A-share and crypto spaces,
+their Dataset and Field contracts, and the internal monitoring metadata:
 
 ```bash
-./bin/moox-cli setup metadata-import \
-  --file ./custom.toml \
-  --seed examples/metadata-quant-initial.seed.yaml \
-  --storage-host <host-name> \
-  --spaces stock_cn,crypto_binance
+./bin/moox-cli setup init \
+  --file ./moox.toml \
+  --config-dir ./config/setup \
+  --storage-host <host-name>
 ```
 
-Only `setup metadata-import` may use the manifest to open the SSH tunnel to the
-selected Storage host. It imports the selected Space dependency closure and
-uses create-if-missing semantics. Never construct a filtered YAML file in the
-Agent context. If the user chooses "暂不导入", stop after Storage is ready.
+Only `setup init` may use the manifest to open the SSH tunnels to Admin and the
+selected Storage host. It creates or verifies the Admin business spaces and all
+Storage metadata, activates ready Datasets, and verifies the result. Never
+construct a filtered YAML file in the Agent context. Use `metadata spaces` and
+`setup metadata-import` only when the user explicitly requests a partial import.
+
+主机已经在腾讯云上之后，按 `references/private-network.md` 执行分地域路由发现。`setup init`
+会在写入 Admin/Metadata 前生成 `scf_routes`；后续 `collector function publish` 优先发布
+Storage 同地域并绑定其 VPC/子网，跨地域不创建 CCN 而走公网回退。
 
 ## Secret Boundary
 
-禁止 Agent 读取或解析 `custom.toml`. In particular, never use `cat custom.toml`,
-`sed custom.toml`, `rg custom.toml`, Python 读取 the file, or `source custom.toml`.
+禁止 Agent 把 `moox.toml` 全文读入对话、复制、打印或 `source`。In particular, never use `cat moox.toml`,
+`sed moox.toml`、`rg moox.toml`，不要把整个文件 Python 读取进对话，or `source moox.toml`。
 Do not copy it into an archive, pipe it through another process, print it, or
-derive shell variables from it. Only `moox-cli setup` may read the manifest.
+derive shell variables from it. Only `moox-cli setup` may read secrets in the manifest.
+
+`storage_gateway_host` 是跨地域/故障回退地址，`storage_private_gateway_host` 是可选私网
+提示。Storage 数据面是否使用私网由 CLI 按地域和实例 VPC/子网自动决定；EventBus、Caddy、
+`MOOX_PUBLIC_HOST` 仍按各自协议和证书配置，不因 Storage 路由改变。
+确认后只回显 space_id 与网关路径摘要，然后执行 `setup validate`。
 
 The CLI may report typed status codes, host names, and verified fingerprints. It
 must not print Admin passwords, SSH passwords, Tencent SecretId/SecretKey,

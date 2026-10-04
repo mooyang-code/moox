@@ -3,185 +3,213 @@ package httpclient
 import (
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNewHTTPClient_ShouldInitializeClient(t *testing.T) {
-	client := NewHTTPClient()
-	require.NotNil(t, client)
-	require.NotNil(t, client.httpClient)
+func TestHTTPClientGetWithIPsReusesTLSConnection(t *testing.T) {
+	var connections atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.StartTLS()
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	client := NewHTTPClient(server.Client())
+	for i := 0; i < 3; i++ {
+		var result map[string]string
+		require.NoError(t, client.GetWithIPs(context.Background(), parsed.Host, []string{"127.0.0.1"}, "/", nil, &result))
+	}
+	require.Equal(t, int32(1), connections.Load())
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var result map[string]string
+			assert.NoError(t, client.GetWithIPs(context.Background(), parsed.Host, []string{"127.0.0.1"}, "/", nil, &result))
+		}()
+	}
+	wg.Wait()
 }
 
-func TestHTTPClient_GetWithIP_UnreachableHost_ShouldReturnError(t *testing.T) {
+func TestHTTPClientIPClientCacheConcurrentAndBounded(t *testing.T) {
 	client := NewHTTPClient()
-	var result map[string]string
-	err := client.GetWithIP(context.Background(), "invalid.example.test", "/api/v3/ping", nil, &result, "")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "请求 invalid.example.test 失败")
+	want := client.clientForIP("127.0.0.1")
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.Same(t, want, client.clientForIP("127.0.0.1"))
+		}()
+	}
+	wg.Wait()
+	for i := 1; i <= maxIPClients; i++ {
+		require.NotNil(t, client.clientForIP(fmt.Sprintf("192.0.2.%d", i)))
+	}
+	require.Len(t, client.ipClients, maxIPClients)
+	require.Len(t, client.ipOrder, maxIPClients)
+	require.NotSame(t, want, client.clientForIP("127.0.0.1"), "oldest client must be evicted")
+	require.Len(t, client.ipClients, maxIPClients)
 }
 
-func TestHTTPClient_Get_ShouldDelegateToGetWithIP(t *testing.T) {
+func TestHTTPClientGetUsesDomainDirectly(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer server.Close()
-
 	parsed, err := url.Parse(server.URL)
 	require.NoError(t, err)
-
-	client := NewHTTPClient()
-	client.httpClient = server.Client()
-
 	var result map[string]string
-	err = client.Get(context.Background(), parsed.Host, parsed.Path, nil, &result)
-	require.NoError(t, err)
+	require.NoError(t, NewHTTPClient(server.Client()).Get(context.Background(), parsed.Host, parsed.Path, nil, &result))
 	assert.Equal(t, "ok", result["status"])
 }
 
-func TestHTTPClient_Get_ShouldDecodeJSONResponse(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+func TestHTTPClientGetRejectsNonOK(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	err = NewHTTPClient(server.Client()).Get(context.Background(), parsed.Host, parsed.Path, nil, &map[string]string{})
+	statusErr := &StatusError{}
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode)
+}
+
+func TestHTTPClientGetWithIPsPreservesHostnameRequest(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "" {
+			t.Fatalf("request host is empty")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"host": r.Host})
 	}))
 	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	var result map[string]string
+	require.NoError(t, NewHTTPClient(server.Client()).GetWithIPs(context.Background(), parsed.Host, []string{"127.0.0.1"}, parsed.Path, nil, &result))
+	assert.Equal(t, parsed.Host, result["host"])
+}
 
+func TestHTTPClientGetWithIPsFallsBackToHostnameAfterIPFailure(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"host": r.Host})
+	}))
+	defer server.Close()
 	parsed, err := url.Parse(server.URL)
 	require.NoError(t, err)
 
-	client := NewHTTPClient()
-	client.httpClient = server.Client()
-
+	// httptest binds to 127.0.0.1. The neighbouring loopback address is not
+	// serving this port. Bound the test so platform-specific loopback routing
+	// cannot hold the suite for the default five-second HTTP timeout.
 	var result map[string]string
-	err = client.GetWithIP(context.Background(), parsed.Host, parsed.Path, nil, &result, "")
-	require.NoError(t, err)
-	assert.Equal(t, "ok", result["status"])
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	require.NoError(t, NewHTTPClient(server.Client()).GetWithIPs(
+		ctx, parsed.Host, []string{"127.0.0.2"}, parsed.Path, nil, &result,
+	))
+	assert.Equal(t, parsed.Host, result["host"])
 }
 
-func TestHTTPClient_Get_ShouldRejectNonOKStatus(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
+func TestHTTPClientGetWithIPsReservesTimeForHostnameAfterIPTimeout(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"host": r.Host})
 	}))
 	defer server.Close()
-
 	parsed, err := url.Parse(server.URL)
 	require.NoError(t, err)
 
-	client := NewHTTPClient()
-	client.httpClient = server.Client()
+	base, ok := server.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	transport := base.Clone()
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if strings.HasPrefix(address, "192.0.2.1:") {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
+	client := NewHTTPClient(&http.Client{Transport: transport})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
 	var result map[string]string
-	err = client.GetWithIP(context.Background(), parsed.Host, parsed.Path, nil, &result, "")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "HTTP 错误")
+	started := time.Now()
+	require.NoError(t, client.GetWithIPs(ctx, parsed.Host, []string{"192.0.2.1"}, parsed.Path, nil, &result))
+	assert.Equal(t, parsed.Host, result["host"])
+	assert.Less(t, time.Since(started), time.Second, "hostname fallback should receive a reserved portion of the request deadline")
 }
 
-func TestParseBestIPs_ShouldSplitPlusSeparatedValues(t *testing.T) {
-	assert.Equal(t, []string{"1.2.3.4", "5.6.7.8"}, parseBestIPs("1.2.3.4+5.6.7.8"))
-	assert.Nil(t, parseBestIPs(""))
+func TestSkipControlPlaneIPsForBinanceFuturesHosts(t *testing.T) {
+	require.True(t, skipControlPlaneIPs("fapi.binance.com"))
+	require.True(t, skipControlPlaneIPs("FAPI1.BINANCE.COM"))
+	require.False(t, skipControlPlaneIPs("api.binance.com"))
+	require.False(t, skipControlPlaneIPs("data-api.binance.vision"))
 }
 
-func TestConvertMapToSlice_ShouldCollectKeys(t *testing.T) {
-	m := &sync.Map{}
-	m.Store("1.1.1.1", struct{}{})
-	m.Store("2.2.2.2", struct{}{})
-	assert.ElementsMatch(t, []string{"1.1.1.1", "2.2.2.2"}, convertMapToSlice(m))
+func TestHTTPClientGetWithIPsDoesNotDialSnapshotIPsForFAPI(t *testing.T) {
+	var dialed []string
+	var mu sync.Mutex
+	client := NewHTTPClient(&http.Client{
+		Timeout: 200 * time.Millisecond,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				mu.Lock()
+				dialed = append(dialed, address)
+				mu.Unlock()
+				return nil, fmt.Errorf("blocked dial %s", address)
+			},
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_ = client.GetWithIPs(ctx, "fapi.binance.com", []string{"192.0.2.1"}, "/fapi/v1/ping", nil, nil)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, address := range dialed {
+		require.False(t, strings.HasPrefix(address, "192.0.2.1:"), "futures snapshot IP must not be dialed: %s", address)
+	}
 }
 
-func TestCreateResolver_ShouldReturnResolver(t *testing.T) {
-	assert.NotNil(t, createResolver("localhost", time.Second))
-	assert.NotNil(t, createResolver("8.8.8.8", time.Second))
-}
-
-func TestParseServerResponse_ShouldValidateRetInfo(t *testing.T) {
-	records, err := parseServerResponse([]byte(`{"ret_info":{"code":0,"msg":"ok"},"records":[{"domain":"a.com","best_ips":"1.1.1.1","success":true}]}`))
-	assert.NoError(t, err)
-	assert.Len(t, records, 1)
-
-	_, err = parseServerResponse([]byte(`{"ret_info":{"code":1,"msg":"bad"}}`))
-	assert.Error(t, err)
-}
-
-func TestParseBestIPs_ValidString_ShouldSplitIPs(t *testing.T) {
-	ips := parseBestIPs("1.2.3.4+5.6.7.8+ 9.10.11.12 ")
-	assert.Equal(t, []string{"1.2.3.4", "5.6.7.8", "9.10.11.12"}, ips)
-}
-
-func TestParseBestIPs_EmptyString_ShouldReturnNil(t *testing.T) {
-	assert.Nil(t, parseBestIPs(""))
-}
-
-func TestParseServerResponse_SuccessCode_ShouldReturnRecords(t *testing.T) {
-	raw := []byte(`{"ret_info":{"code":0,"msg":"ok"},"records":[{"domain":"api.binance.com","best_ips":"1.2.3.4","resolve_at":"2026-01-01T00:00:00Z","success":true}]}`)
-	records, err := parseServerResponse(raw)
+func TestHTTPClientGetWithIPsTriesNextAddressAfterFirstTimeout(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"host": r.Host})
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
 	require.NoError(t, err)
-	require.Len(t, records, 1)
-	assert.Equal(t, "api.binance.com", records[0].Domain)
-}
-
-func TestParseServerResponse_ErrorCode_ShouldReturnError(t *testing.T) {
-	raw := []byte(`{"ret_info":{"code":1,"msg":"failed"},"records":[]}`)
-	_, err := parseServerResponse(raw)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed")
-}
-
-func TestGetBestIP_WithAvailableRecord_ShouldReturnFirstAvailable(t *testing.T) {
-	Init()
-	updateDNSRecords([]*DNSRecord{{
-		Domain: "api.binance.com",
-		IPList: []*IPInfo{
-			{IP: "1.1.1.1", Available: false},
-			{IP: "2.2.2.2", Available: true},
-		},
-	}})
-	assert.Equal(t, "2.2.2.2", GetBestIP("api.binance.com"))
-}
-
-func TestGetNextAvailableIP_WithExcludeList_ShouldSkipExcluded(t *testing.T) {
-	Init()
-	updateDNSRecords([]*DNSRecord{{
-		Domain: "api.binance.com",
-		IPList: []*IPInfo{
-			{IP: "1.1.1.1", Available: true},
-			{IP: "2.2.2.2", Available: true},
-		},
-	}})
-	assert.Equal(t, "2.2.2.2", GetNextAvailableIP("api.binance.com", []string{"1.1.1.1"}))
-}
-
-func TestGetAvailableIPs_ShouldReturnOnlyAvailable(t *testing.T) {
-	Init()
-	now := time.Now()
-	updateDNSRecords([]*DNSRecord{{
-		Domain:    "api.binance.com",
-		ResolveAt: now,
-		IPList:    []*IPInfo{{IP: "1.1.1.1", Available: true}, {IP: "2.2.2.2", Available: false}},
-		Success:   true,
-	}})
-	assert.Equal(t, []string{"1.1.1.1"}, GetAvailableIPs("api.binance.com"))
-}
-
-func TestGetDNSRecord_MissingDomain_ShouldReturnNil(t *testing.T) {
-	Init()
-	assert.Nil(t, GetDNSRecord("missing.example"))
-}
-
-func TestGetAllDNSRecords_ShouldReturnCopy(t *testing.T) {
-	Init()
-	updateDNSRecords([]*DNSRecord{{Domain: "api.binance.com", IPList: []*IPInfo{{IP: "1.1.1.1", Available: true}}}})
-	all := GetAllDNSRecords()
-	require.Contains(t, all, "api.binance.com")
-	all["api.binance.com"] = nil
-	assert.NotNil(t, GetDNSRecord("api.binance.com"))
-}
-
-func TestProbeTCP_Localhost_ShouldSucceed(t *testing.T) {
-	latency, available := probeTCP(t.Context(), "127.0.0.1", 1, 500*time.Millisecond)
-	assert.False(t, available)
-	assert.Equal(t, int64(0), latency)
+	base, ok := server.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	transport := base.Clone()
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if strings.HasPrefix(address, "192.0.2.1:") {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
+	client := NewHTTPClient(&http.Client{Transport: transport})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	var result map[string]string
+	require.NoError(t, client.GetWithIPs(ctx, parsed.Host, []string{"192.0.2.1", "127.0.0.1"}, parsed.Path, nil, &result))
+	assert.Equal(t, parsed.Host, result["host"])
 }

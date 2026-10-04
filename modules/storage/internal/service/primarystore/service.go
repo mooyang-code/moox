@@ -1,266 +1,498 @@
-//go:build legacy_storage
-
 package primarystore
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	primary "github.com/mooyang-code/moox/modules/storage/internal/service/datashard"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datashard/messagepublisher"
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
-	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
-	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore/schema"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/primarystore/shardrouter"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	trpc "trpc.group/trpc-go/trpc-go"
+	"github.com/mooyang-code/moox/packages/report"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Service 实现元数据、写入、权威读取和视图查询入口。
+type Validator interface {
+	ValidateRow(context.Context, *pb.RowFieldUpsert) error
+}
+type DataNodeClient interface {
+	UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)
+	ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
+}
+
+type historyDataNodeClient interface {
+	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
+}
+
+// NodeResolver is the legacy resolver shape used by the server and existing
+// in-process tests. Marker-capable calls are discovered with a small
+// type-asserted extension, so old DataNode fakes do not need to implement the
+// new methods.
+type NodeResolver func(context.Context, string, string) (pb.DataNodeRuntimeService, error)
+type dataNodeResolver func(context.Context, string, string) (DataNodeClient, error)
+type ViewResolver func(context.Context, string, string) (pb.DataViewService, string, error)
+type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
+type Authorizer func(*pb.AuthInfo) error
+type SnapshotProvider func() metadata.RequestSnapshot
+type ResultDatasetResolver func(context.Context, string, string) (string, error)
+type ViewSyncPointReader interface {
+	MissingViewSyncPointDatasets(context.Context, string, string, string, []string) ([]string, error)
+}
+type routeKey struct{ spaceID, datasetID string }
+type DatasetRunObserver interface {
+	ObserveRun(report.DatasetObservation) error
+}
+
+const mooxSkillAppID = "moox-skill"
+
 type Service struct {
-	root              string
-	metadata          metadata.Store
-	metadataReader    metadata.Reader
-	metadataCache     *metacache.Store
-	validator         *schema.Validator
-	router            *router.Resolver
-	primary           primary.Client
-	events            messagepublisher.Publisher
-	report            ViewErrorReporter
-	cleanupDeleteRows func(context.Context, *pb.DeleteTimeSeriesRowsReq) (*pb.DeleteTimeSeriesRowsRsp, error)
-	topologyMu        sync.Mutex
-	recordVersionMu   sync.Mutex
-	lastRecordVersion time.Time
+	resolve   dataNodeResolver
+	validate  Validator
+	sign      AuthSigner
+	authorize Authorizer
+	view      ViewResolver
+	snapshot  SnapshotProvider
+	metrics   DatasetRunObserver
+	result    ResultDatasetResolver
+	syncPoint ViewSyncPointReader
 }
 
-var (
-	_ pb.MetadataService         = (*Service)(nil)
-	_ pb.PrimaryStoreService     = (*Service)(nil)
-	_ pb.PrimaryStoreScanService = (*Service)(nil)
-)
+type Options struct {
+	Node DataNodeClient
+	// Resolver accepts NodeResolver and the minimal function shape used by
+	// focused tests. Keeping this as any preserves source compatibility while
+	// the constructor normalizes it to the internal resolver.
+	Resolver       any
+	Validator      Validator
+	AuthSigner     AuthSigner
+	Authorizer     Authorizer
+	View           ViewResolver
+	Snapshot       SnapshotProvider
+	DatasetMetrics DatasetRunObserver
+	ResultDataset  ResultDatasetResolver
+	SyncPoints     ViewSyncPointReader
+}
 
-func NewServiceWithOptions(opts Options) *Service {
-	root := storageRoot(opts.Root)
-	meta := opts.Metadata
-	reader := opts.MetadataReader
-	var cacheReader *metacache.Store
-	if meta == nil {
-		var err error
-		meta, cacheReader, err = openDefaultMetadataStores(trpc.BackgroundContext(), root, opts.MetadataPath, opts.InitSchemaPath)
+func New(opts Options) (*Service, error) {
+	var resolve dataNodeResolver
+	switch resolver := opts.Resolver.(type) {
+	case NodeResolver:
+		resolve = func(ctx context.Context, spaceID, datasetID string) (DataNodeClient, error) {
+			return resolver(ctx, spaceID, datasetID)
+		}
+	case func(context.Context, string, string) (pb.DataNodeRuntimeService, error):
+		resolve = func(ctx context.Context, spaceID, datasetID string) (DataNodeClient, error) {
+			return resolver(ctx, spaceID, datasetID)
+		}
+	case func(context.Context, string, string) (DataNodeClient, error):
+		resolve = resolver
+	case nil:
+		// handled by the fixed Node fallback below
+	default:
+		return nil, errors.New("unsupported data node resolver type")
+	}
+	if resolve == nil && opts.Node != nil {
+		resolve = func(context.Context, string, string) (DataNodeClient, error) { return opts.Node, nil }
+	}
+	if resolve == nil {
+		return nil, errors.New("data node resolver is required")
+	}
+	return &Service{
+		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
+		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
+	}, nil
+}
+
+// requestContext captures one immutable metadata generation before a request
+// starts grouping or routing rows. The snapshot is cache-only; it must never
+// fall back to the persistent metadata store on the PrimaryStore hot path.
+func (s *Service) requestContext(ctx context.Context) context.Context {
+	if metadata.RequestSnapshotFromContext(ctx) != nil {
+		return ctx
+	}
+	var snapshot metadata.RequestSnapshot
+	if s.snapshot != nil {
+		snapshot = s.snapshot()
+	} else if provider, ok := s.validate.(interface {
+		RequestSnapshot() metadata.RequestSnapshot
+	}); ok {
+		snapshot = provider.RequestSnapshot()
+	}
+	if snapshot == nil {
+		return ctx
+	}
+	return metadata.WithRequestSnapshot(ctx, snapshot)
+}
+
+func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {
+	if req == nil || len(req.GetRows()) == 0 {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
+	}
+	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if req.GetAuthInfo().GetAppId() == "scf-market-canary" {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("read-only primary credential"))}, nil
+	}
+	if err := rejectUnauthorizedUpsertSemantics(req.GetRows(), req.GetWriteSource()); err != nil {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rows := normalizeStockCNSeriesTags(req.GetRows())
+	ctx = s.requestContext(ctx)
+	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), rows); err != nil {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	groups := make(map[routeKey][]*pb.RowFieldUpsert)
+	order := make([]routeKey, 0)
+	if batchValidator, ok := s.validate.(interface {
+		ValidateRows(context.Context, []*pb.RowFieldUpsert) error
+	}); ok {
+		if err := batchValidator.ValidateRows(ctx, rows); err != nil {
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+	}
+	for _, row := range rows {
+		validator := s.validate
+		if _, batched := s.validate.(interface {
+			ValidateRows(context.Context, []*pb.RowFieldUpsert) error
+		}); batched {
+			validator = nil
+		}
+		if err := validateRow(ctx, row, validator); err != nil {
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		group := routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}
+		if _, ok := groups[group]; !ok {
+			order = append(order, group)
+		}
+		groups[group] = append(groups[group], row)
+	}
+	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
+	for _, group := range order {
+		rows := groups[group]
+		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
 		if err != nil {
-			panic(fmt.Sprintf("open storage metadata store: %v", err))
+			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: route %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
-	}
-	if reader == nil {
-		if cacheReader != nil {
-			reader = cacheReader
-		} else {
-			reader = meta
-		}
-	}
-	primaryClient := opts.PrimaryClient
-	if primaryClient == nil && opts.PrimaryServiceName != "" {
-		primaryClient = primary.NewRemoteClient(opts.PrimaryServiceName)
-	}
-	if primaryClient == nil {
-		primaryClient = primary.NewLocalClient(primary.LocalClientOptions{Root: root, PebblePath: opts.PebblePath, ShardID: opts.ShardID})
-	}
-	events := opts.Events
-	if events == nil {
-		events = messagepublisher.NewMemoryBus()
-	}
-	reporter := opts.ViewErrors
-	if reporter == nil {
-		reporter = logViewError
-	}
-	svc := &Service{
-		root:           root,
-		metadata:       meta,
-		metadataReader: reader,
-		metadataCache:  cacheReader,
-		validator:      schema.NewValidator(reader),
-		router:         router.NewResolver(reader),
-		primary:        primaryClient,
-		events:         events,
-		report:         reporter,
-	}
-	return svc
-}
-
-func (s *Service) MetadataStore() metadata.Store {
-	if s == nil {
-		return nil
-	}
-	return s.metadata
-}
-
-func (s *Service) MetadataReader() metadata.Reader {
-	if s == nil {
-		return nil
-	}
-	return s.metadataReader
-}
-
-func (s *Service) refreshMetadataCache(ctx context.Context) error {
-	if s == nil || s.metadataCache == nil {
-		return nil
-	}
-	return s.metadataCache.Refresh(ctx)
-}
-
-func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation string) {
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		log.ErrorContextf(ctx, "%s committed but metadata cache refresh failed: %v", operation, err)
-	}
-}
-
-// Close releases dependencies owned by the access service. Event transport is
-// bootstrap-owned and is deliberately not closed here.
-func (s *Service) Close() error {
-	var firstErr error
-	if closer, ok := s.primary.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if s.metadataCache != nil {
-		if err := s.metadataCache.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if closer, ok := s.metadata.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-// Ready verifies that the metadata schema is queryable and the configured
-// primary client exists. Filesystem checks alone cannot establish that the
-// access service is able to route or serve requests.
-func (s *Service) Ready() bool {
-	if s == nil || s.metadata == nil || s.primary == nil {
-		return false
-	}
-	ctx := trpc.BackgroundContext()
-	if _, err := s.metadata.TableNames(ctx); err != nil {
-		return false
-	}
-	var routes []*pb.PrimaryStoreRoute
-	for pageNo := uint32(1); ; pageNo++ {
-		pageRoutes, page, err := s.metadata.ListPrimaryStoreRoutes(ctx, "", "", "", "", &pb.Page{Page: pageNo, Size: 1000})
+		auth, err := s.signAuth(req.GetAuthInfo())
 		if err != nil {
-			return false
+			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
 		}
-		routes = append(routes, pageRoutes...)
-		if page == nil || !page.GetHasMore() || len(pageRoutes) == 0 {
-			break
+		rsp, err := node.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: auth, Rows: rows, SourceEventId: req.GetSourceEventId(), WriteSource: req.GetWriteSource()})
+		if err != nil {
+			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: write %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
+		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(rsp.GetRetInfo().GetCode(), fmt.Errorf("partial success after %d rows: %s", len(keys), rsp.GetRetInfo().GetMsg())), Keys: keys}, nil
+		}
+		keys = append(keys, rsp.GetKeys()...)
+		s.observeTimeSeriesRows(ctx, rows, "success", true, len(rsp.GetKeys()) == len(rows))
 	}
-	if len(routes) == 0 {
-		return true
-	}
-	headReader, ok := s.primary.(primary.HeadReader)
-	if !ok {
-		return false
-	}
-	for _, route := range routes {
-		if route == nil || (route.GetStatus() != "" && route.GetStatus() != "active") {
+	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+}
+
+const stockCNDefaultSeriesTag = "default"
+
+func normalizeStockCNSeriesTags(input []*pb.RowFieldUpsert) []*pb.RowFieldUpsert {
+	rows := make([]*pb.RowFieldUpsert, 0, len(input))
+	for _, row := range input {
+		if row == nil {
+			rows = append(rows, nil)
 			continue
 		}
-		target, err := s.router.Resolve(ctx, route.GetSpaceId(), route.GetDatasetId(), route.GetSubjectId())
-		if err != nil {
-			return false
+		copyRow := proto.Clone(row).(*pb.RowFieldUpsert)
+		key := copyRow.GetKey()
+		series := key.GetTimeSeries()
+		if key.GetSpaceId() == "stockcn" && key.GetDatasetId() == "dataset_stockcn_equity_kline" && series != nil && strings.TrimSpace(series.GetSeriesTag()) == "" {
+			series.SeriesTag = stockCNDefaultSeriesTag
 		}
-		if _, err := headReader.HeadSequence(ctx, target); err != nil {
-			return false
-		}
+		rows = append(rows, copyRow)
 	}
-	return true
+	return rows
 }
 
-func openDefaultMetadataStores(ctx context.Context, root string, metadataPath string, initSchemaPath string) (metadata.Store, *metacache.Store, error) {
-	if metadataPath == "" {
-		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")
-	}
-	metaDir := filepath.Dir(metadataPath)
-	if err := os.MkdirAll(metaDir, 0o755); err != nil {
-		return nil, nil, err
-	}
-	store, err := metasqlite.Open(ctx, metasqlite.Options{
-		Path:       metadataPath,
-		SchemaPath: initSchemaPath,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	if initSchemaPath != "" {
-		if err := store.InitSchema(ctx); err != nil {
-			_ = store.Close()
-			return nil, nil, err
-		}
-	} else if err := requireMetadataSchema(ctx, store); err != nil {
-		_ = store.Close()
-		return nil, nil, err
-	}
-	cached, err := metacache.New(ctx, store, metacache.Options{})
-	if err != nil {
-		_ = store.Close()
-		return nil, nil, err
-	}
-	return store, cached, nil
-}
-
-func requireMetadataSchema(ctx context.Context, store metadata.Store) error {
-	tables, err := store.TableNames(ctx)
-	if err != nil {
-		return err
-	}
-	required := map[string]bool{
-		"t_spaces":               false,
-		"t_datasets":             false,
-		"t_primary_store_routes": false,
-	}
-	for _, table := range tables {
-		if _, ok := required[table]; ok {
-			required[table] = true
-		}
-	}
-	var missing []string
-	for table, exists := range required {
-		if !exists {
-			missing = append(missing, table)
-		}
-	}
-	sort.Strings(missing)
-	if len(missing) > 0 {
-		return fmt.Errorf("metadata schema not initialized, missing tables: %s", strings.Join(missing, ", "))
+func rejectMooxSkillWrite(auth *pb.AuthInfo) error {
+	if strings.EqualFold(strings.TrimSpace(auth.GetAppId()), mooxSkillAppID) {
+		return errors.New("read-only primary credential")
 	}
 	return nil
 }
 
-func storageRoot(root string) string {
-	if root != "" {
-		return root
+func isFactorAppID(appID string) bool {
+	switch strings.ToLower(strings.TrimSpace(appID)) {
+	case "factor", "moox-factor":
+		return true
+	default:
+		return false
 	}
-	if env := os.Getenv("MOOX_STORAGE_HOME"); env != "" {
-		return env
-	}
-	return "var/storage"
 }
 
-func logViewError(ctx context.Context, stage string, err error) {
-	if err == nil {
+func isOwnedAppID(appID, owner string) bool {
+	appID = strings.ToLower(strings.TrimSpace(appID))
+	owner = strings.ToLower(strings.TrimSpace(owner))
+	if appID == owner || appID == "moox-"+owner {
+		return true
+	}
+	return owner == "factor" && isFactorAppID(appID)
+}
+
+func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*pb.RowFieldUpsert) error {
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return nil
+	}
+	checked := make(map[routeKey]struct{})
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		key := routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}
+		if _, ok := checked[key]; ok {
+			continue
+		}
+		checked[key] = struct{}{}
+		dataset, ok := snapshot.GetDataset(key.spaceID, key.datasetID)
+		if !ok || dataset == nil {
+			continue
+		}
+		attrs := dataset.GetAttributes()
+		if attrs["dataset_role"] == "factor_result" {
+			return fmt.Errorf("dataset %s/%s requires WriteFactorRows", key.spaceID, key.datasetID)
+		}
+		if attrs["write_owner"] != "factor" {
+			continue
+		}
+		appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
+		if !isFactorAppID(appID) {
+			return fmt.Errorf("dataset %s/%s is writable only by Factor", key.spaceID, key.datasetID)
+		}
+	}
+	return nil
+}
+
+func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed, accepted bool) {
+	if s == nil || s.metrics == nil {
 		return
 	}
-	log.WarnContextf(ctx, "[StoragePrimary] view stage %s failed: %v", stage, err)
+	type aggregate struct {
+		key       report.DatasetKey
+		rows      uint64
+		watermark time.Time
+	}
+	groups := make(map[report.DatasetKey]*aggregate)
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		key := row.GetKey()
+		timeSeries := key.GetTimeSeries()
+		if timeSeries == nil {
+			continue
+		}
+		if s.metrics != nil {
+			datasetKey := report.DatasetKey{
+				SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), Freq: timeSeries.GetFreq(),
+			}
+			item := groups[datasetKey]
+			if item == nil {
+				item = &aggregate{key: datasetKey}
+				groups[datasetKey] = item
+			}
+			item.rows++
+		}
+		if !committed {
+			continue
+		}
+		dataTime, err := time.Parse(time.RFC3339Nano, timeSeries.GetDataTime())
+		if err != nil {
+			if s.metrics != nil {
+				log.WarnContextf(ctx, "storage dataset metrics skipped invalid data_time=%q: %v", timeSeries.GetDataTime(), err)
+			}
+			continue
+		}
+		if s.metrics != nil {
+			datasetKey := report.DatasetKey{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), Freq: timeSeries.GetFreq()}
+			if item := groups[datasetKey]; item.watermark.IsZero() || dataTime.After(item.watermark) {
+				item.watermark = dataTime
+			}
+		}
+	}
+	finishedAt := time.Now().UTC()
+	if s.metrics != nil {
+		for _, item := range groups {
+			observation := report.DatasetObservation{
+				Key: item.key, Result: result, FinishedAt: finishedAt,
+			}
+			if committed {
+				observation.Rows = item.rows
+				observation.OutputWatermark = item.watermark
+			}
+			if err := s.metrics.ObserveRun(observation); err != nil {
+				log.WarnContextf(ctx, "storage dataset metrics observe failed key=%+v result=%s: %v", item.key, result, err)
+			}
+		}
+	}
 }
+
+func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) (*pb.PrimaryReadFieldsRsp, error) {
+	if req == nil || len(req.GetKeys()) == 0 {
+		return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	ctx = s.requestContext(ctx)
+	groups := make(map[routeKey][]*pb.RowKey)
+	order := make([]routeKey, 0)
+	for _, key := range req.GetKeys() {
+		if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
+			return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row key is invalid"))}, nil
+		}
+		group := routeKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+		if _, ok := groups[group]; !ok {
+			order = append(order, group)
+		}
+		groups[group] = append(groups[group], key)
+	}
+	rowsByKey := make(map[string][]*pb.RowFieldValues, len(req.GetKeys()))
+	existingByKey := make(map[string]bool, len(req.GetKeys()))
+	existingLatest := make(map[string]bool, len(req.GetKeys()))
+	latestRecordRows := make(map[string][]*pb.RowFieldValues)
+	for _, group := range order {
+		keys := groups[group]
+		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
+		if err != nil {
+			return nil, err
+		}
+		auth, err := s.signAuth(req.GetAuthInfo())
+		if err != nil {
+			return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		}
+		rsp, err := node.ReadFields(ctx, &pb.ReadFieldsReq{AuthInfo: auth, DatasetId: group.datasetID, Keys: keys, FieldIds: req.GetFieldIds(), AttributeKeys: req.GetAttributeKeys()})
+		if err != nil {
+			return nil, err
+		}
+		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return &pb.PrimaryReadFieldsRsp{RetInfo: rsp.GetRetInfo()}, nil
+		}
+		for _, row := range rsp.GetRows() {
+			id := rowKeyIdentity(row.GetKey())
+			rowsByKey[id] = append(rowsByKey[id], row)
+			if row.GetKey().GetRecord() != nil {
+				latestID := latestRecordIdentity(row.GetKey())
+				latestRecordRows[latestID] = append(latestRecordRows[latestID], row)
+			}
+		}
+		for _, key := range rsp.GetExistingKeys() {
+			existingByKey[rowKeyIdentity(key)] = true
+			if key.GetRecord() != nil {
+				existingLatest[latestRecordIdentity(key)] = true
+			}
+		}
+	}
+	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+	for _, key := range req.GetKeys() {
+		if record := key.GetRecord(); record != nil && record.GetVersion() == "" {
+			id := latestRecordIdentity(key)
+			matches := latestRecordRows[id]
+			if len(matches) != 0 {
+				rows = append(rows, matches[0])
+				latestRecordRows[id] = matches[1:]
+			}
+			continue
+		}
+		id := rowKeyIdentity(key)
+		matches := rowsByKey[id]
+		if len(matches) == 0 {
+			continue
+		}
+		rows = append(rows, matches[0])
+		rowsByKey[id] = matches[1:]
+	}
+	existing := make([]*pb.RowKey, 0, len(existingByKey))
+	for _, key := range req.GetKeys() {
+		if existingByKey[rowKeyIdentity(key)] || (key.GetRecord() != nil && existingLatest[latestRecordIdentity(key)]) {
+			existing = append(existing, key)
+		}
+	}
+	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
+}
+
+func latestRecordIdentity(key *pb.RowKey) string {
+	if key == nil || key.GetRecord() == nil {
+		return ""
+	}
+	return key.GetSpaceId() + "\x00" + key.GetDatasetId() + "\x00" + key.GetRecord().GetRecordId()
+}
+
+func (s *Service) authorizeRequest(auth *pb.AuthInfo) error {
+	if auth == nil {
+		return errors.New("auth_info is required")
+	}
+	if s.authorize != nil {
+		return s.authorize(auth)
+	}
+	return nil
+}
+
+func validateRow(ctx context.Context, row *pb.RowFieldUpsert, validator Validator) error {
+	if row == nil || row.GetKey() == nil {
+		return errors.New("row key is required")
+	}
+	key := row.GetKey()
+	if strings.TrimSpace(key.GetSpaceId()) == "" || strings.TrimSpace(key.GetDatasetId()) == "" {
+		return errors.New("space_id and dataset_id are required")
+	}
+	if key.GetTimeSeries() == nil && key.GetRecord() == nil {
+		return errors.New("row key kind is required")
+	}
+	if record := key.GetRecord(); record != nil && strings.TrimSpace(record.GetVersion()) == "" {
+		return errors.New("record version is required for writes")
+	}
+	if len(row.GetFields()) == 0 && len(row.GetAttributes()) == 0 {
+		return errors.New("at least one field or attribute is required")
+	}
+	for _, field := range row.GetFields() {
+		if field == nil || strings.TrimSpace(field.GetFieldId()) == "" || field.GetValue() == nil {
+			return errors.New("field_id and value are required")
+		}
+	}
+	for name, value := range row.GetAttributes() {
+		if strings.TrimSpace(name) == "" || value == nil {
+			return errors.New("attribute key and value are required")
+		}
+	}
+	if validator != nil {
+		return validator.ValidateRow(ctx, row)
+	}
+	return nil
+}
+
+func (s *Service) signAuth(auth *pb.AuthInfo) (*pb.AuthInfo, error) {
+	if auth == nil {
+		return nil, errors.New("auth_info is required")
+	}
+	if s.sign == nil {
+		return auth, nil
+	}
+	return s.sign(auth)
+}
+
+func rowKeyIdentity(key *pb.RowKey) string {
+	raw, _ := proto.MarshalOptions{Deterministic: true}.Marshal(key)
+	return string(raw)
+}
+
+var _ pb.PrimaryStoreService = (*Service)(nil)
+
+func (s *Service) String() string { return fmt.Sprintf("PrimaryStore[%p]", s) }

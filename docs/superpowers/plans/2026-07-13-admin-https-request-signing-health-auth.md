@@ -138,7 +138,7 @@ Expected: no modified or untracked files. Do not combine these files with later 
 **Files:**
 - Modify: `packages/crypto/crypto.go`
 - Modify: `packages/crypto/crypto_test.go`
-- Modify: `scripts/check-package-boundaries.sh`
+- Modify: `scripts/check/check-package-boundaries.sh`
 
 - [ ] **Step 1: Add a failing bcrypt length test**
 
@@ -178,15 +178,15 @@ Replace the `Encrypt` comment with:
 
 - [ ] **Step 4: Delete the unused boundary helper**
 
-Delete `check_forbidden_imports()` from `scripts/check-package-boundaries.sh`. Do not rewrite the active domain/core and infra loops in this task.
+Delete `check_forbidden_imports()` from `scripts/check/check-package-boundaries.sh`. Do not rewrite the active domain/core and infra loops in this task.
 
 - [ ] **Step 5: Verify and commit**
 
 ```bash
 go test -count=1 ./packages/crypto/...
-bash -n scripts/check-package-boundaries.sh
-bash scripts/check-package-boundaries.sh
-git add packages/crypto/crypto.go packages/crypto/crypto_test.go scripts/check-package-boundaries.sh
+bash -n scripts/check/check-package-boundaries.sh
+bash scripts/check/check-package-boundaries.sh
+git add packages/crypto/crypto.go packages/crypto/crypto_test.go scripts/check/check-package-boundaries.sh
 git commit -m "chore: clarify crypto contracts and remove dead boundary code"
 ```
 
@@ -500,7 +500,7 @@ git commit -m "feat: issue 24 hour signed admin sessions"
 - Create: `modules/admin/cmd/cli/admin_user_test.go`
 - Modify: `modules/admin/cmd/cli/main.go`
 - Modify: `modules/admin/cmd/cli/init_schema.go`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 
 - [ ] **Step 1: Write CLI contract tests**
 
@@ -541,8 +541,8 @@ Interactive deployment uses a hidden terminal prompt twice. Send the password ov
 
 ```bash
 go test -count=1 ./modules/admin/cmd/cli/...
-bash -n scripts/deploy-moox.sh
-git add modules/admin/cmd/cli scripts/deploy-moox.sh
+bash -n scripts/deploy/deploy-moox.sh
+git add modules/admin/cmd/cli scripts/deploy/deploy-moox.sh
 git commit -m "feat: add local admin user provisioning"
 ```
 
@@ -752,7 +752,7 @@ git commit -m "refactor: keep web host behind the edge proxy"
 
 **Files:**
 - Create: `deploy/caddy/Caddyfile`
-- Create: `scripts/test-caddy-config.sh`
+- Create: `scripts/test/contract/test-caddy-config.sh`
 - Modify: `.gitignore` only if generated Caddy data needs an explicit rule
 
 - [ ] **Step 1: Write the Caddy configuration contract test**
@@ -827,13 +827,13 @@ Run:
 
 ```bash
 bin/caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
-bash scripts/test-caddy-config.sh
+bash scripts/test/contract/test-caddy-config.sh
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add deploy/caddy scripts/test-caddy-config.sh .gitignore
+git add deploy/caddy scripts/test/contract/test-caddy-config.sh .gitignore
 git commit -m "feat: add isolated caddy https edges"
 ```
 
@@ -843,12 +843,12 @@ git commit -m "feat: add isolated caddy https edges"
 
 **Files:**
 - Create: `scripts/deps/caddy-v2.11.4-checksums.txt`
-- Create: `scripts/install-caddy-ca.sh`
-- Create: `scripts/test-install-caddy-ca.sh`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/test-deploy-moox-preserve-disabled.sh`
-- Create: `scripts/test-deploy-moox-https.sh`
+- Create: `scripts/deploy/install-caddy-ca.sh`
+- Create: `scripts/test/contract/test-install-caddy-ca.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-preserve-disabled.sh`
+- Create: `scripts/test/contract/test-deploy-moox-https.sh`
 - Modify: `Makefile`
 
 - [ ] **Step 1: Add a deployment-contract test before implementation**
@@ -923,14 +923,14 @@ After Caddy starts, wait for `${DEPLOY_DIR}/data/caddy/caddy/pki/authorities/loc
 2. Configure all same-host MooX backend processes with `MOOX_SERVICE_GATEWAY_CA_FILE=${DEPLOY_DIR}/certs/caddy/root.crt`.
 3. Encode the same root for SCF/backend environment generation through `MOOX_SERVICE_GATEWAY_CA_PEM_B64`.
 4. Fetch the root certificate to the deployment operator's machine unless `--local-ca skip` is set.
-5. Under `auto`/`install`, run the platform adapter from `scripts/install-caddy-ca.sh` according to the confirmation rules above.
+5. Under `auto`/`install`, run the platform adapter from `scripts/deploy/install-caddy-ca.sh` according to the confirmation rules above.
 6. Verify `https://<public-host>:9527` and `https://<public-host>:11001` with the fetched CA before declaring deployment successful.
 
 Treat CA fingerprint changes as a high-signal event: ordinary redeployment must fail and require an explicit `--accept-ca-change <expected-old-fingerprint>` or separate CA-rotation command. This prevents silently trusting a replaced or compromised deployment.
 
 - [ ] **Step 7: Implement cross-platform local CA installation**
 
-`scripts/install-caddy-ca.sh` must support:
+`scripts/deploy/install-caddy-ca.sh` must support:
 
 - macOS: add/update the certificate in the System keychain using `security add-trusted-cert`, allowing the OS to request authorization;
 - Windows Git Bash/PowerShell: import into `LocalMachine\\Root` when elevated, otherwise `CurrentUser\\Root`, and report which store was used;
@@ -947,10 +947,10 @@ Deployment tests must prove that Caddy alone owns `0.0.0.0:9527` and `0.0.0.0:11
 - [ ] **Step 9: Verify and commit**
 
 ```bash
-bash -n scripts/deploy-moox.sh scripts/release.sh scripts/install-caddy-ca.sh scripts/test-deploy-moox-https.sh scripts/test-install-caddy-ca.sh
-bash scripts/test-deploy-moox-https.sh
-bash scripts/test-install-caddy-ca.sh
-bash scripts/test-deploy-moox-preserve-disabled.sh
+bash -n scripts/deploy/deploy-moox.sh scripts/release/release.sh scripts/deploy/install-caddy-ca.sh scripts/test/contract/test-deploy-moox-https.sh scripts/test/contract/test-install-caddy-ca.sh
+bash scripts/test/contract/test-deploy-moox-https.sh
+bash scripts/test/contract/test-install-caddy-ca.sh
+bash scripts/test/contract/test-deploy-moox-preserve-disabled.sh
 git add scripts Makefile
 git commit -m "feat: deploy pinned caddy https edges"
 ```
@@ -961,9 +961,9 @@ git commit -m "feat: deploy pinned caddy https edges"
 
 **Files:**
 - Create: `skills/moox/scripts/caddy-ca.sh`
-- Create: `skills/moox/scripts/test-caddy-ca.sh`
+- Create: `skills/moox/scripts/test/contract/test-caddy-ca.sh`
 - Create: `skills/moox/scripts/caddy-prerequisite.sh`
-- Create: `skills/moox/scripts/test-caddy-prerequisite.sh`
+- Create: `skills/moox/scripts/test/contract/test-caddy-prerequisite.sh`
 - Create: `skills/moox/references/caddy-https.md`
 - Modify: `skills/moox/SKILL.md`
 - Modify: `skills/moox/references/release.md`
@@ -982,7 +982,7 @@ skills/moox/scripts/caddy-prerequisite.sh status --target <user@host> --deploy-d
 
 The helper must be idempotent and non-interactive for normal prerequisite installation. It must not require package-manager Caddy, modify a system Caddy, install a systemd service, or request root privileges because MooX uses unprivileged ports and a deployment-local binary.
 
-Keep prerequisite logic single-sourced: the skill helper invokes the repository deployment helper from Task 11 instead of maintaining a second download/version/process implementation. `scripts/deploy-moox.sh` and the MooX skill must therefore produce identical checks, installation layout, ownership rules, and rollback behavior.
+Keep prerequisite logic single-sourced: the skill helper invokes the repository deployment helper from Task 11 instead of maintaining a second download/version/process implementation. `scripts/deploy/deploy-moox.sh` and the MooX skill must therefore produce identical checks, installation layout, ownership rules, and rollback behavior.
 
 - [ ] **Step 2: Test prerequisite installation through the skill entrypoint**
 
@@ -992,7 +992,7 @@ Do not test only the low-level script: invoke the same MooX skill command sequen
 
 - [ ] **Step 3: Write a certificate-helper contract test**
 
-Assert that the helper fetches only Caddy's root certificate from `${DEPLOY_DIR}/data/caddy/caddy/pki/authorities/local/root.crt`, rejects private-key paths, uses SSH `BatchMode` and safe quoting, verifies the expected fingerprint, and delegates trust changes to the tested `scripts/install-caddy-ca.sh` adapter only after explicit confirmation or an explicit `install` command.
+Assert that the helper fetches only Caddy's root certificate from `${DEPLOY_DIR}/data/caddy/caddy/pki/authorities/local/root.crt`, rejects private-key paths, uses SSH `BatchMode` and safe quoting, verifies the expected fingerprint, and delegates trust changes to the tested `scripts/deploy/install-caddy-ca.sh` adapter only after explicit confirmation or an explicit `install` command.
 
 - [ ] **Step 4: Implement the certificate helper**
 
@@ -1019,9 +1019,9 @@ Make the initial-deployment section begin with an automatic prerequisite phase: 
 - [ ] **Step 7: Verify and commit**
 
 ```bash
-bash -n skills/moox/scripts/caddy-prerequisite.sh skills/moox/scripts/test-caddy-prerequisite.sh skills/moox/scripts/caddy-ca.sh skills/moox/scripts/test-caddy-ca.sh
-bash skills/moox/scripts/test-caddy-prerequisite.sh
-bash skills/moox/scripts/test-caddy-ca.sh
+bash -n skills/moox/scripts/caddy-prerequisite.sh skills/moox/scripts/test/contract/test-caddy-prerequisite.sh skills/moox/scripts/caddy-ca.sh skills/moox/scripts/test/contract/test-caddy-ca.sh
+bash skills/moox/scripts/test/contract/test-caddy-prerequisite.sh
+bash skills/moox/scripts/test/contract/test-caddy-ca.sh
 git add skills/moox
 git commit -m "feat: automate caddy prerequisite deployment"
 ```
@@ -1247,12 +1247,12 @@ git commit -m "feat: sign monitor health probes"
 ### Task 16: Generate and Inject Dedicated Health Credentials During Deployment
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-eventbus.sh`
-- Modify: `scripts/test-deploy-moox-storage-split.sh`
-- Modify: `scripts/test-deploy-moox-https.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-storage-split.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-https.sh`
 - Modify: `skills/moox/scripts/hostagent-deploy.sh`
-- Modify: `skills/moox/scripts/test-hostagent-deploy.sh`
+- Modify: `skills/moox/scripts/test/contract/test-hostagent-deploy.sh`
 
 - [ ] **Step 1: Add deployment tests for secret lifecycle**
 
@@ -1295,10 +1295,10 @@ Allow `hostagent-deploy.sh --health-auth-file <path>` and install it as `0600`. 
 - [ ] **Step 5: Verify and commit**
 
 ```bash
-bash scripts/test-deploy-moox-https.sh
-bash scripts/test-deploy-moox-eventbus.sh
-bash scripts/test-deploy-moox-storage-split.sh
-bash skills/moox/scripts/test-hostagent-deploy.sh
+bash scripts/test/contract/test-deploy-moox-https.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-storage-split.sh
+bash skills/moox/scripts/test/contract/test-hostagent-deploy.sh
 git add scripts skills/moox/scripts
 git commit -m "feat: provision dedicated health authentication"
 ```
@@ -1366,8 +1366,8 @@ Expected: the grep returns no stale normative statements; historical review docu
 
 ```bash
 gofmt -w packages/crypto packages/requestauth packages/healthz web-host modules/admin modules/monitor packages/cloudruntime
-bash scripts/check-package-boundaries.sh
-bash scripts/check-module-boundaries.sh
+bash scripts/check/check-package-boundaries.sh
+bash scripts/check/check-module-boundaries.sh
 bash -n scripts/*.sh skills/moox/scripts/*.sh
 bin/caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
 ```
@@ -1399,15 +1399,15 @@ go test -count=1 ./modules/hostagent/...
 ```bash
 pnpm --dir web test --run
 pnpm --dir web build:prod
-bash scripts/test-deploy-moox-https.sh
-bash scripts/test-deploy-moox-eventbus.sh
-bash scripts/test-deploy-moox-storage-split.sh
-bash scripts/test-deploy-moox-preserve-disabled.sh
-bash scripts/test-caddy-config.sh
-bash scripts/test-install-caddy-ca.sh
-bash skills/moox/scripts/test-caddy-prerequisite.sh
-bash skills/moox/scripts/test-caddy-ca.sh
-bash skills/moox/scripts/test-hostagent-deploy.sh
+bash scripts/test/contract/test-deploy-moox-https.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-storage-split.sh
+bash scripts/test/contract/test-deploy-moox-preserve-disabled.sh
+bash scripts/test/contract/test-caddy-config.sh
+bash scripts/test/contract/test-install-caddy-ca.sh
+bash skills/moox/scripts/test/contract/test-caddy-prerequisite.sh
+bash skills/moox/scripts/test/contract/test-caddy-ca.sh
+bash skills/moox/scripts/test/contract/test-hostagent-deploy.sh
 ```
 
 - [ ] **Step 4: Run local end-to-end security probes**

@@ -10,28 +10,49 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// Package uploads cross regions. Two minutes leaves room for a slow but
+// healthy transfer while preventing an unbounded publish process when COS
+// stops responding.
+const packageUploadTimeout = 2 * time.Minute
+
+var newPackageUploadHTTPClient = func() *http.Client {
+	// Tencent COS occasionally advertises an HTTP/2 endpoint that replies with
+	// a plaintext HTTP response during the TLS handshake. The default Go
+	// transport then reports "server gave HTTP response to HTTPS client" and a
+	// publish fails before CloudNode can finish the package transaction. Keep
+	// package uploads on an explicit HTTP/1.1 transport; the URL remains HTTPS
+	// and certificate verification is unchanged.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ForceAttemptHTTP2 = false
+	return &http.Client{Timeout: packageUploadTimeout, Transport: transport}
+}
 
 // CloudAccount 云账户（脱敏，仅用于列举与取 account_id）。
 type CloudAccount struct {
-	AccountID   string `json:"account_id"`
-	AccountName string `json:"account_name"`
-	Provider    string `json:"provider"`
-	AppID       string `json:"app_id"`
-	COSRegion   string `json:"cos_region"`
-	COSBucket   string `json:"cos_bucket"`
-	IsDeleted   bool   `json:"is_deleted"`
+	AccountID          string `json:"account_id"`
+	AccountName        string `json:"account_name"`
+	Provider           string `json:"provider"`
+	CredentialSecretID string `json:"credential_secret_id"`
+	AppID              string `json:"app_id"`
+	COSRegion          string `json:"cos_region"`
+	COSBucket          string `json:"cos_bucket"`
+	IsDeleted          bool   `json:"is_deleted"`
 }
 
-// COSAccountInfo 云账户凭证信息（reveal=true 时含明文 secret_id/secret_key）。
-type COSAccountInfo struct {
-	AccountID string `json:"account_id"`
-	Provider  string `json:"provider"`
-	AppID     string `json:"app_id"`
-	COSRegion string `json:"cos_region"`
-	COSBucket string `json:"cos_bucket"`
-	SecretID  string `json:"secret_id"`
-	SecretKey string `json:"secret_key"`
+// CloudAccountInput registers one Tencent credential and its package-upload
+// COS location with CloudNode. The same account can operate SCF in every
+// configured region. It never contains SecretID/SecretKey.
+type CloudAccountInput struct {
+	AccountID          string `json:"account_id"`
+	AccountName        string `json:"account_name"`
+	Provider           string `json:"provider"`
+	CredentialSecretID string `json:"credential_secret_id"`
+	AppID              string `json:"app_id"`
+	COSRegion          string `json:"cos_region"`
+	COSBucket          string `json:"cos_bucket"`
 }
 
 type UploadPackageRequest struct {
@@ -64,27 +85,477 @@ type UploadPackageResponse struct {
 }
 
 type NodeCreateItem struct {
-	CloudAccountID string            `json:"cloud_account_id"`
-	NodeType       string            `json:"node_type"`
-	Runtime        string            `json:"runtime,omitempty"`
-	Handler        string            `json:"handler,omitempty"`
-	Config         map[string]string `json:"config,omitempty"`
-	Environment    map[string]string `json:"environment,omitempty"`
-	Region         string            `json:"region"`
-	Namespace      string            `json:"namespace,omitempty"`
-	PackageID      string            `json:"package_id"`
-	DeploymentID   string            `json:"deployment_id,omitempty"`
-	Metadata       map[string]any    `json:"metadata,omitempty"`
+	CloudAccountID               string            `json:"cloud_account_id"`
+	NodeType                     string            `json:"node_type"`
+	TriggerType                  string            `json:"trigger_type,omitempty"`
+	Runtime                      string            `json:"runtime,omitempty"`
+	Handler                      string            `json:"handler,omitempty"`
+	Config                       map[string]string `json:"config,omitempty"`
+	Environment                  map[string]string `json:"environment,omitempty"`
+	Region                       string            `json:"region"`
+	Namespace                    string            `json:"namespace,omitempty"`
+	PackageID                    string            `json:"package_id"`
+	DeploymentID                 string            `json:"deployment_id,omitempty"`
+	Metadata                     map[string]any    `json:"metadata,omitempty"`
+	CollectorPublishLeaseID      string            `json:"collector_publish_lease_id,omitempty"`
+	CollectorPublishFencingToken int64             `json:"collector_publish_fencing_token,omitempty"`
 }
 
 type NodeDeployItem struct {
-	NodeID    string `json:"node_id"`
-	PackageID string `json:"package_id"`
+	NodeID                       string            `json:"node_id"`
+	PackageID                    string            `json:"package_id"`
+	Config                       map[string]string `json:"config,omitempty"`
+	Environment                  map[string]string `json:"environment,omitempty"`
+	CollectorPublishLeaseID      string            `json:"collector_publish_lease_id,omitempty"`
+	CollectorPublishFencingToken int64             `json:"collector_publish_fencing_token,omitempty"`
 }
 
-type BatchChangeResponse struct {
-	BatchID        string
-	ProcessedCount int
+type CloudNode struct {
+	NodeID         string         `json:"node_id"`
+	CloudAccountID string         `json:"cloud_account_id"`
+	PackageID      string         `json:"package_id"`
+	Region         string         `json:"region"`
+	Namespace      string         `json:"namespace"`
+	NodeType       string         `json:"node_type"`
+	TriggerType    string         `json:"trigger_type"`
+	BizType        string         `json:"biz_type"`
+	FunctionName   string         `json:"function_name"`
+	Metadata       map[string]any `json:"metadata"`
+	Status         any            `json:"status"`
+	IsDeleted      bool           `json:"is_deleted"`
+}
+
+type CloudNodeListFilter struct {
+	CloudAccountID string
+	Namespace      string
+	Region         string
+	NodeID         string
+	NodeType       string
+	BizType        string
+	TriggerType    string
+	PageSize       int
+}
+
+type CollectionTaskSummary struct {
+	SpaceID  string                      `json:"space_id"`
+	TaskID   string                      `json:"task_id"`
+	TaskName string                      `json:"task_name"`
+	DataType string                      `json:"data_type"`
+	TagIDs   []string                    `json:"tag_ids"`
+	Enabled  bool                        `json:"enabled"`
+	Result   CollectionTaskResultSummary `json:"result"`
+}
+
+// CollectionTaskResultSummary is the user-visible result state returned with
+// a collection task. Storage Dataset IDs remain internal to Collector.
+type CollectionTaskResultSummary struct {
+	ResultName   string `json:"result_name"`
+	ViewID       string `json:"view_id"`
+	Status       string `json:"status"`
+	LastDataTime string `json:"last_data_time"`
+	DataKind     string `json:"data_kind"`
+}
+
+// ResultConfig contains optional storage settings for a newly created task
+// result. It cannot select an existing Dataset or View.
+type ResultConfig struct {
+	DataNodeID   string `json:"data_node_id,omitempty"`
+	KeepDuration string `json:"keep_duration,omitempty"`
+	Description  string `json:"description,omitempty"`
+}
+
+// CreateTask creates a disabled task through the Collector control plane.
+// Task IDs are generated by Collector; callers bind collection range through
+// tag_ids and must not persist Provider/market routing on the task itself.
+func (c *Client) CreateTask(ctx context.Context, spaceID, taskName, dataType, creator string, tagIDs []string, collectParams map[string]any, resultConfig *ResultConfig) (string, error) {
+	taskName = strings.TrimSpace(taskName)
+	if taskName == "" {
+		return "", fmt.Errorf("CreateTask: task_name is required")
+	}
+	for _, field := range []string{"target_dataset_id", "target_view_id", "result_dataset_id", "result_view_id", "result_id", "view_id"} {
+		if _, exists := collectParams[field]; exists {
+			return "", fmt.Errorf("CreateTask: collect_params.%s cannot be specified when creating a task", field)
+		}
+	}
+	var response struct {
+		RetInfo retInfo `json:"ret_info"`
+		TaskID  string  `json:"task_id"`
+	}
+	request := map[string]any{
+		"task": map[string]any{
+			"space_id":       spaceID,
+			"task_name":      taskName,
+			"data_type":      dataType,
+			"tag_ids":        tagIDs,
+			"enabled":        false,
+			"creator":        creator,
+			"collect_params": collectParams,
+		},
+	}
+	if resultConfig != nil {
+		request["result_config"] = resultConfig
+	}
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/CreateTask", request, &response); err != nil {
+		return "", fmt.Errorf("CreateTask: %w", err)
+	}
+	if !isRetInfoSuccess(response.RetInfo.Code) {
+		return "", fmt.Errorf("CreateTask rejected: %s", response.RetInfo.Msg)
+	}
+	response.TaskID = strings.TrimSpace(response.TaskID)
+	if response.TaskID == "" {
+		return "", fmt.Errorf("CreateTask returned empty task_id")
+	}
+	return response.TaskID, nil
+}
+
+// EnableCollectionTask preserves the server's canonical task definition and only
+// changes its enabled state. This keeps coverage and dataset fields under the
+// control plane rather than reconstructing them in an operator command.
+func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, taskID string) error {
+	var detail struct {
+		RetInfo retInfo        `json:"ret_info"`
+		Task    map[string]any `json:"task"`
+	}
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskDetail", map[string]any{
+		"space_id": spaceID, "task_id": taskID,
+	}, &detail); err != nil {
+		return fmt.Errorf("GetTaskDetail: %w", err)
+	}
+	if !isRetInfoSuccess(detail.RetInfo.Code) {
+		return fmt.Errorf("GetTaskDetail rejected: %s", detail.RetInfo.Msg)
+	}
+	if len(detail.Task) == 0 {
+		return fmt.Errorf("GetTaskDetail returned no task")
+	}
+	detail.Task["space_id"] = spaceID
+	detail.Task["task_id"] = taskID
+	detail.Task["enabled"] = true
+	var updated struct {
+		RetInfo retInfo `json:"ret_info"`
+	}
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/UpdateTask", map[string]any{
+		"space_id": spaceID, "task_id": taskID, "task": detail.Task,
+	}, &updated); err != nil {
+		return fmt.Errorf("UpdateTask: %w", err)
+	}
+	if !isRetInfoSuccess(updated.RetInfo.Code) {
+		return fmt.Errorf("UpdateTask rejected: %s", updated.RetInfo.Msg)
+	}
+	return nil
+}
+
+// DisableTask disables a task without deleting its runtime history. It is
+// used to roll back an activation when the Timer assignment/readback gate
+// fails after collection-task enablement.
+func (c *Client) DisableTask(ctx context.Context, spaceID, taskID string) error {
+	var response struct {
+		RetInfo retInfo `json:"ret_info"`
+	}
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DisableTask", map[string]any{
+		"space_id": spaceID, "task_id": taskID,
+	}, &response); err != nil {
+		return fmt.Errorf("DisableTask: %w", err)
+	}
+	if !isRetInfoSuccess(response.RetInfo.Code) {
+		return fmt.Errorf("DisableTask rejected: %s", response.RetInfo.Msg)
+	}
+	return nil
+}
+
+// DeleteTask removes a collection task. When deleteResultData is true the
+// Collector performs its ownership check and removes the task-exclusive
+// result View, Dataset, and physical rows before deleting the task record.
+func (c *Client) DeleteTask(ctx context.Context, spaceID, taskID string, deleteResultData bool) error {
+	var response struct {
+		RetInfo retInfo `json:"ret_info"`
+	}
+	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DeleteTask", map[string]any{
+		"space_id": spaceID, "task_id": taskID, "delete_result_data": deleteResultData,
+	}, &response); err != nil {
+		return fmt.Errorf("DeleteTask: %w", err)
+	}
+	if isRetInfoNotFound(response.RetInfo) {
+		return nil
+	}
+	if !isRetInfoSuccess(response.RetInfo.Code) {
+		return fmt.Errorf("DeleteTask rejected: %s", response.RetInfo.Msg)
+	}
+	return nil
+}
+
+// ListTasks pages CollectionTasks using only fields supported by the current
+// Collector API. Provider/market routing is derived from tags and is not a task
+// filter.
+func (c *Client) ListTasks(ctx context.Context, spaceID, dataType string, enabled *bool) ([]CollectionTaskSummary, error) {
+	var result []CollectionTaskSummary
+	for page := 1; page <= 100; page++ {
+		var response struct {
+			RetInfo retInfo                 `json:"ret_info"`
+			Tasks   []CollectionTaskSummary `json:"tasks"`
+			Page    struct {
+				HasMore bool `json:"has_more"`
+			} `json:"page"`
+		}
+		request := map[string]any{
+			"space_id": spaceID,
+			"page":     map[string]any{"page": page, "size": 1000},
+		}
+		if strings.TrimSpace(dataType) != "" {
+			request["data_type"] = strings.TrimSpace(dataType)
+		}
+		if enabled != nil {
+			request["enabled"] = *enabled
+		}
+		if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskList", request, &response); err != nil {
+			return nil, fmt.Errorf("GetTaskList: %w", err)
+		}
+		if !isRetInfoSuccess(response.RetInfo.Code) {
+			return nil, fmt.Errorf("GetTaskList rejected: %s", response.RetInfo.Msg)
+		}
+		result = append(result, response.Tasks...)
+		if !response.Page.HasMore {
+			return result, nil
+		}
+	}
+	return nil, fmt.Errorf("GetTaskList exceeded 100 pages")
+}
+
+func (c *Client) ListEnabledTasks(ctx context.Context, spaceID string) ([]CollectionTaskSummary, error) {
+	enabled := true
+	return c.ListTasks(ctx, spaceID, "", &enabled)
+}
+
+type SubmitNodeBatchResponse struct {
+	JobID      string `json:"job_id"`
+	Operation  string `json:"operation"`
+	TotalCount int    `json:"total_count"`
+}
+
+type NodeBatchSummary struct {
+	JobID           string `json:"job_id"`
+	Operation       string `json:"operation"`
+	Status          string `json:"status"`
+	TotalCount      int    `json:"total_count"`
+	PendingCount    int    `json:"pending_count"`
+	RunningCount    int    `json:"running_count"`
+	SuccessCount    int    `json:"success_count"`
+	FailedCount     int    `json:"failed_count"`
+	ProgressPercent int    `json:"progress_percent"`
+	CreatedAt       string `json:"created_at"`
+	CompletedAt     string `json:"completed_at,omitempty"`
+}
+
+type NodeBatchItemResult struct {
+	ItemID        string `json:"item_id"`
+	NodeID        string `json:"node_id"`
+	Status        string `json:"status"`
+	ResultSummary string `json:"result_summary,omitempty"`
+	ErrorMessage  string `json:"error_message,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
+	CompletedAt   string `json:"completed_at,omitempty"`
+}
+
+type NodeBatchChangeResponse struct {
+	Job   *NodeBatchSummary     `json:"job"`
+	Items []NodeBatchItemResult `json:"items"`
+}
+
+var (
+	nodeBatchOperationNames = map[int]string{
+		0: "NODE_BATCH_OPERATION_UNSPECIFIED",
+		1: "NODE_BATCH_OPERATION_CREATE_NODES",
+		2: "NODE_BATCH_OPERATION_DEPLOY_NODES",
+		3: "NODE_BATCH_OPERATION_DELETE_NODES",
+		4: "NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS",
+	}
+	nodeBatchStatusNames = map[int]string{
+		0: "NODE_BATCH_STATUS_UNSPECIFIED",
+		1: "NODE_BATCH_STATUS_PENDING",
+		2: "NODE_BATCH_STATUS_RUNNING",
+		3: "NODE_BATCH_STATUS_SUCCESS",
+		4: "NODE_BATCH_STATUS_FAILED",
+		5: "NODE_BATCH_STATUS_PARTIAL",
+	}
+	nodeBatchItemStatusNames = map[int]string{
+		0: "NODE_BATCH_ITEM_STATUS_UNSPECIFIED",
+		1: "NODE_BATCH_ITEM_STATUS_PENDING",
+		2: "NODE_BATCH_ITEM_STATUS_RUNNING",
+		3: "NODE_BATCH_ITEM_STATUS_SUCCESS",
+		4: "NODE_BATCH_ITEM_STATUS_FAILED",
+	}
+)
+
+func (s *NodeBatchSummary) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		JobID           string `json:"job_id"`
+		Operation       any    `json:"operation"`
+		Status          any    `json:"status"`
+		TotalCount      int    `json:"total_count"`
+		PendingCount    int    `json:"pending_count"`
+		RunningCount    int    `json:"running_count"`
+		SuccessCount    int    `json:"success_count"`
+		FailedCount     int    `json:"failed_count"`
+		ProgressPercent int    `json:"progress_percent"`
+		CreatedAt       string `json:"created_at"`
+		CompletedAt     string `json:"completed_at"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	operation, err := normalizeProtoEnum(wire.Operation, nodeBatchOperationNames)
+	if err != nil {
+		return fmt.Errorf("node batch operation: %w", err)
+	}
+	status, err := normalizeProtoEnum(wire.Status, nodeBatchStatusNames)
+	if err != nil {
+		return fmt.Errorf("node batch status: %w", err)
+	}
+	*s = NodeBatchSummary{
+		JobID: wire.JobID, Operation: operation, Status: status,
+		TotalCount: wire.TotalCount, PendingCount: wire.PendingCount,
+		RunningCount: wire.RunningCount, SuccessCount: wire.SuccessCount,
+		FailedCount: wire.FailedCount, ProgressPercent: wire.ProgressPercent,
+		CreatedAt: wire.CreatedAt, CompletedAt: wire.CompletedAt,
+	}
+	return nil
+}
+
+func (item *NodeBatchItemResult) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ItemID        string `json:"item_id"`
+		NodeID        string `json:"node_id"`
+		Status        any    `json:"status"`
+		ResultSummary string `json:"result_summary"`
+		ErrorMessage  string `json:"error_message"`
+		StartedAt     string `json:"started_at"`
+		CompletedAt   string `json:"completed_at"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	status, err := normalizeProtoEnum(wire.Status, nodeBatchItemStatusNames)
+	if err != nil {
+		return fmt.Errorf("node batch item status: %w", err)
+	}
+	*item = NodeBatchItemResult{
+		ItemID: wire.ItemID, NodeID: wire.NodeID, Status: status,
+		ResultSummary: wire.ResultSummary, ErrorMessage: wire.ErrorMessage,
+		StartedAt: wire.StartedAt, CompletedAt: wire.CompletedAt,
+	}
+	return nil
+}
+
+func normalizeProtoEnum(value any, names map[int]string) (string, error) {
+	switch typed := value.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return "", nil
+		}
+		return typed, nil
+	case float64:
+		number := int(typed)
+		if typed != float64(number) {
+			return "", fmt.Errorf("invalid numeric enum %v", typed)
+		}
+		name, ok := names[number]
+		if !ok {
+			return "", fmt.Errorf("unknown numeric enum %d", number)
+		}
+		return name, nil
+	case nil:
+		return "", nil
+	default:
+		return "", fmt.Errorf("unsupported enum value %T", value)
+	}
+}
+
+// ListCloudNodes returns every catalog node matching the server-side fleet filters.
+func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter) ([]CloudNode, error) {
+	pageSize := filter.PageSize
+	if pageSize == 0 {
+		pageSize = 500
+	}
+	if pageSize < 1 || pageSize > 1000 {
+		return nil, fmt.Errorf("cloud node page size must be between 1 and 1000")
+	}
+	var nodes []CloudNode
+	for page := 1; ; page++ {
+		raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", map[string]any{
+			"cloud_account_id": filter.CloudAccountID,
+			"namespace":        filter.Namespace,
+			"region":           filter.Region,
+			"node_id":          filter.NodeID,
+			"node_type":        filter.NodeType,
+			"biz_type":         filter.BizType,
+			"trigger_type":     filter.TriggerType,
+			"page":             map[string]int{"page": page, "size": pageSize},
+		})
+		if err != nil {
+			return nil, err
+		}
+		var resp struct {
+			RetInfo *retInfo    `json:"ret_info"`
+			Items   []CloudNode `json:"items"`
+			Page    struct {
+				HasMore bool `json:"has_more"`
+			} `json:"page"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, err
+		}
+		if resp.RetInfo == nil || !isRetInfoSuccess(resp.RetInfo.Code) {
+			return nil, fmt.Errorf("GetNodeList rejected")
+		}
+		nodes = append(nodes, resp.Items...)
+		if !resp.Page.HasMore {
+			return nodes, nil
+		}
+	}
+}
+
+// InvokeFunction executes a request-response CloudNode SCF invocation. It is
+// intentionally small because the short-lived fetcher only needs the probe
+// action during deployment validation.
+func (c *Client) InvokeFunction(ctx context.Context, nodeID string, event map[string]any) (map[string]any, error) {
+	if strings.TrimSpace(nodeID) == "" {
+		return nil, fmt.Errorf("node_id is required")
+	}
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/InvokeFunction", map[string]any{
+		"node_id": nodeID, "event_data": event, "scf_invoke_type": "SCF_INVOKE_TYPE_REQUEST_RESPONSE",
+	})
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		RetInfo *retInfo `json:"ret_info"`
+		SCF     struct {
+			Code      int            `json:"code"`
+			Message   string         `json:"message"`
+			RequestID string         `json:"request_id"`
+			Result    map[string]any `json:"result"`
+		} `json:"scf"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, err
+	}
+	if response.RetInfo != nil && response.RetInfo.Code != 0 {
+		return nil, fmt.Errorf("invoke SCF: %s", response.RetInfo.Msg)
+	}
+	if response.SCF.Code != 0 {
+		return nil, fmt.Errorf("invoke SCF: %s", response.SCF.Message)
+	}
+	if len(response.SCF.Result) == 0 {
+		// Preserve provider execution metadata when a synchronous invocation
+		// returns an empty RetMsg. This is particularly useful for deployment
+		// probes: an empty payload is not success, and the request id/message
+		// are the only actionable clues available from CloudNode.
+		return map[string]any{
+			"_cloudnode_code":       response.SCF.Code,
+			"_cloudnode_message":    response.SCF.Message,
+			"_cloudnode_request_id": response.SCF.RequestID,
+		}, nil
+	}
+	return response.SCF.Result, nil
 }
 
 // ListCloudAccounts 调 cloudnode/ListCloudAccounts，返回脱敏账户列表。
@@ -108,6 +579,29 @@ func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]Clou
 		return nil, fmt.Errorf("ListCloudAccounts: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
 	}
 	return resp.Accounts, nil
+}
+
+// CreateCloudAccount registers a cloud account before a fleet publish. COS
+// bucket creation remains CloudNode's responsibility during package upload.
+func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput) (*CloudAccount, error) {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CreateCloudAccount", map[string]CloudAccountInput{"account": input})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		RetInfo *retInfo      `json:"ret_info"`
+		Account *CloudAccount `json:"account"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
+		return nil, fmt.Errorf("CreateCloudAccount: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
+	}
+	if resp.Account == nil || strings.TrimSpace(resp.Account.AccountID) == "" {
+		return nil, fmt.Errorf("CreateCloudAccount returned no account")
+	}
+	return resp.Account, nil
 }
 
 // UploadPackage 两阶段上传：InitPackageUpload -> COS PUT -> CompletePackageUpload。
@@ -135,7 +629,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 	if err != nil {
 		return nil, err
 	}
-	putResp, err := http.DefaultClient.Do(putReq)
+	putResp, err := newPackageUploadHTTPClient().Do(putReq)
 	if err != nil {
 		return nil, fmt.Errorf("COS upload: %w", err)
 	}
@@ -167,62 +661,96 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 	return &UploadPackageResponse{PackageID: initResp.PackageID}, nil
 }
 
-func (c *Client) BatchCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*BatchChangeResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchCreateNodes", map[string]any{"nodes": nodes})
+func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*SubmitNodeBatchResponse, error) {
+	nodes = c.withPublishFenceToCreateItems(nodes)
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitCreateNodes", map[string]any{"nodes": nodes})
 	if err != nil {
 		return nil, err
 	}
-	return parseBatchChangeResponse(raw, "BatchCreateNodes")
+	return parseSubmitNodeBatchResponse(raw, "SubmitCreateNodes")
 }
 
-func (c *Client) BatchDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*BatchChangeResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchDeployNodes", map[string]any{"deployments": deployments})
+func (c *Client) SubmitDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*SubmitNodeBatchResponse, error) {
+	deployments = c.withPublishFenceToDeployItems(deployments)
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeployNodes", map[string]any{"deployments": deployments})
 	if err != nil {
 		return nil, err
 	}
-	return parseBatchChangeResponse(raw, "BatchDeployNodes")
+	return parseSubmitNodeBatchResponse(raw, "SubmitDeployNodes")
 }
 
-func parseBatchChangeResponse(raw []byte, method string) (*BatchChangeResponse, error) {
-	var resp struct {
-		RetInfo        *retInfo `json:"ret_info"`
-		BatchID        string   `json:"batch_id"`
-		ProcessedCount int      `json:"processed_count"`
+// SubmitDeleteNodes submits durable remote SCF deletion tasks for catalog nodes.
+func (c *Client) SubmitDeleteNodes(ctx context.Context, nodeIDs []string) (*SubmitNodeBatchResponse, error) {
+	body := map[string]any{"node_ids": nodeIDs}
+	if fence := c.CollectorPublishFence(); fence != nil {
+		body["collector_publish_lease_id"] = fence.LeaseID
+		body["collector_publish_fencing_token"] = fence.FencingToken
 	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeleteNodes", body)
+	if err != nil {
 		return nil, err
 	}
-	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
-		return nil, fmt.Errorf("%s: code %d: %s", method, resp.RetInfo.Code, resp.RetInfo.Msg)
-	}
-	if resp.BatchID == "" {
-		return nil, fmt.Errorf("%s: empty batch_id", method)
-	}
-	return &BatchChangeResponse{BatchID: resp.BatchID, ProcessedCount: resp.ProcessedCount}, nil
+	return parseSubmitNodeBatchResponse(raw, "SubmitDeleteNodes")
 }
 
-// GetCOSAccountInfo 调 cloudnode/GetCOSAccountInfo（reveal=true），返回明文凭证。
-func (c *Client) GetCOSAccountInfo(ctx context.Context, accountID string) (*COSAccountInfo, error) {
-	if c.ServiceAuth == nil {
-		return nil, fmt.Errorf("service authentication is required to reveal cloud account credentials")
+func (c *Client) GetNodeBatchChange(ctx context.Context, jobID string) (*NodeBatchChangeResponse, error) {
+	if strings.TrimSpace(jobID) == "" {
+		return nil, fmt.Errorf("GetNodeBatchChange: job_id is required")
 	}
-	body := map[string]any{"account_id": accountID, "reveal": true}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetCOSAccountInfo", body)
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeBatchChange", map[string]any{"job_id": jobID})
 	if err != nil {
 		return nil, err
 	}
 	var resp struct {
-		RetInfo *retInfo        `json:"ret_info"`
-		Secret  *COSAccountInfo `json:"secret"`
+		RetInfo *retInfo              `json:"ret_info"`
+		Job     *NodeBatchSummary     `json:"job"`
+		Items   []NodeBatchItemResult `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, err
 	}
-	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
-		return nil, fmt.Errorf("GetCOSAccountInfo: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
+	if err := validateCloudNodeRetInfo(resp.RetInfo, "GetNodeBatchChange"); err != nil {
+		return nil, err
 	}
-	if resp.Secret == nil {
-		return nil, fmt.Errorf("GetCOSAccountInfo: empty secret for %s", accountID)
+	if resp.Job == nil || strings.TrimSpace(resp.Job.JobID) == "" {
+		return nil, fmt.Errorf("GetNodeBatchChange: empty job")
 	}
-	return resp.Secret, nil
+	return &NodeBatchChangeResponse{Job: resp.Job, Items: resp.Items}, nil
+}
+
+func parseSubmitNodeBatchResponse(raw []byte, method string) (*SubmitNodeBatchResponse, error) {
+	var resp struct {
+		RetInfo    *retInfo `json:"ret_info"`
+		JobID      string   `json:"job_id"`
+		Operation  any      `json:"operation"`
+		TotalCount int      `json:"total_count"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	if err := validateCloudNodeRetInfo(resp.RetInfo, method); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(resp.JobID) == "" {
+		return nil, fmt.Errorf("%s: empty job_id", method)
+	}
+	operation, err := normalizeProtoEnum(resp.Operation, nodeBatchOperationNames)
+	if err != nil {
+		return nil, fmt.Errorf("%s: operation: %w", method, err)
+	}
+	return &SubmitNodeBatchResponse{
+		JobID:      resp.JobID,
+		Operation:  operation,
+		TotalCount: resp.TotalCount,
+	}, nil
+}
+
+func validateCloudNodeRetInfo(info *retInfo, method string) error {
+	if info == nil {
+		return fmt.Errorf("%s: missing ret_info", method)
+	}
+	if !isRetInfoSuccess(info.Code) {
+		return fmt.Errorf("%s: code %d: %s", method, info.Code, info.Msg)
+	}
+	return nil
 }

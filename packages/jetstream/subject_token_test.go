@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestSubjectTokenRoundTripUsesLowercaseUnpaddedBase32(t *testing.T) {
+func TestSubjectTokenUsesLowercaseUnpaddedBase32(t *testing.T) {
 	for _, test := range []struct {
 		value string
 		want  string
@@ -27,13 +27,6 @@ func TestSubjectTokenRoundTripUsesLowercaseUnpaddedBase32(t *testing.T) {
 				t.Fatalf("EncodeSubjectToken() = %q, want lowercase unpadded token", token)
 			}
 
-			decoded, err := DecodeSubjectToken(token)
-			if err != nil {
-				t.Fatalf("DecodeSubjectToken() error = %v", err)
-			}
-			if decoded != test.value {
-				t.Fatalf("DecodeSubjectToken() = %q, want %q", decoded, test.value)
-			}
 		})
 	}
 }
@@ -43,14 +36,6 @@ func TestSubjectTokenRejectsInvalidInput(t *testing.T) {
 		t.Run("encode", func(t *testing.T) {
 			if _, err := EncodeSubjectToken(value); err == nil {
 				t.Fatalf("EncodeSubjectToken(%q) succeeded, want error", value)
-			}
-		})
-	}
-
-	for _, token := range []string{"", "MY", "mzxw6=", "mzxw60", "mzxw6.", "7y", "a"} {
-		t.Run(token, func(t *testing.T) {
-			if _, err := DecodeSubjectToken(token); err == nil {
-				t.Fatalf("DecodeSubjectToken(%q) succeeded, want error", token)
 			}
 		})
 	}

@@ -87,9 +87,9 @@ func TestDecryptWebCryptoVector(t *testing.T) {
 	}
 }
 
-func TestDecryptLegacyKeyNormalization(t *testing.T) {
-	secret := "moox-admin-secret-key-32bytes"
-	block, err := aes.NewCipher(legacyKey(secret))
+func TestDecryptRejectsNonCanonicalKeyDerivation(t *testing.T) {
+	secret := "0123456789abcdef"
+	block, err := aes.NewCipher([]byte(secret))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,13 +101,9 @@ func TestDecryptLegacyKeyNormalization(t *testing.T) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		t.Fatal(err)
 	}
-	payload := gcm.Seal(nonce, nonce, []byte("legacy-secret"), nil)
-	plaintext, err := Decrypt(base64.StdEncoding.EncodeToString(payload), secret)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plaintext != "legacy-secret" {
-		t.Fatalf("plaintext=%q", plaintext)
+	payload := gcm.Seal(nonce, nonce, []byte("noncanonical-secret"), nil)
+	if _, err := Decrypt(base64.StdEncoding.EncodeToString(payload), secret); err == nil {
+		t.Fatal("Decrypt accepted a noncanonical key derivation")
 	}
 }
 
@@ -158,7 +154,7 @@ func TestParseTokenRejectsNonHS256(t *testing.T) {
 	}
 }
 
-func TestNewSaltAndMaskSecret(t *testing.T) {
+func TestNewSalt(t *testing.T) {
 	first, err := NewSalt()
 	if err != nil {
 		t.Fatal(err)
@@ -169,12 +165,6 @@ func TestNewSaltAndMaskSecret(t *testing.T) {
 	}
 	if len(first) != 32 || len(second) != 32 || first == second {
 		t.Fatalf("salts=%q,%q", first, second)
-	}
-	if got := MaskSecret("abcdefghijklwxyz", 4, 4); got != "abcd****wxyz" {
-		t.Fatalf("MaskSecret=%q", got)
-	}
-	if got := MaskSecret("short", 4, 4); got != "****" {
-		t.Fatalf("short MaskSecret=%q", got)
 	}
 }
 

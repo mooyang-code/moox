@@ -23,9 +23,7 @@ const (
 type Encoding string
 
 const (
-	EncodingJSON        Encoding = "json"
-	EncodingArrowStream Encoding = "arrow_stream"
-	EncodingArrowMMap   Encoding = "arrow_mmap"
+	EncodingJSON Encoding = "json"
 )
 
 type Hello struct {

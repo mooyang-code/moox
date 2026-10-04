@@ -6,7 +6,7 @@
         <h1>从这里开始你的量化数据栈</h1>
         <p>
           MOOX 把行情采集、时序存储、因子计算与宽表查询串成一条链路。
-          先创建一个<strong>空间</strong>，所有数据资产与采集配置都在空间内隔离管理。
+          先创建一个<strong>空间</strong>，所有采集配置与计算资源都在空间内隔离管理。
         </p>
         <a-button type="primary" status="success" size="large" @click="go('/settings/spaces')"> 创建第一个空间 </a-button>
       </div>
@@ -101,14 +101,14 @@
               :key="item.name"
               class="freshness-row"
               :class="`tone-${item.tone}`"
-              @click="go('/collector/views?tab=browse')"
+              @click="go('/collector/tasks?tab=results')"
             >
               <span>
                 <strong>{{ item.name }}</strong>
                 <small>{{ item.dataset }}</small>
               </span>
               <b>{{ item.delay }}</b>
-              <em>{{ item.status }}</em>
+              <em>{{ statusLabel(item.status) }}</em>
             </button>
           </div>
         </section>
@@ -155,7 +155,7 @@
         <section class="dash-card trade-card">
           <div class="dash-card-head compact">
             <div>
-              <h2>交易账户摘要</h2>
+              <h2>执行账户摘要</h2>
               <p>连接、订单与持仓状态</p>
             </div>
             <span class="dash-chip ok">{{ tradeSummary.online }}/{{ tradeSummary.total }} 可用</span>
@@ -175,7 +175,7 @@
               @click="go('/trading/accounts')"
             >
               <span>{{ account.name }}</span>
-              <b>{{ account.status }}</b>
+              <b>{{ statusLabel(account.status) }}</b>
               <em>{{ account.detail }}</em>
             </button>
           </div>
@@ -187,7 +187,7 @@
               <h2>采集任务脉搏</h2>
               <p>用任务实例和最近执行状态判断链路是否在工作。</p>
             </div>
-            <a-button size="small" @click="go('/collector/tasks')">查看任务</a-button>
+            <a-button size="small" @click="go('/collector/tasks?tab=instances')">查看任务</a-button>
           </div>
           <div class="pulse-bars">
             <div v-for="bar in taskPulse" :key="bar.label" class="pulse-bar">
@@ -211,10 +211,10 @@
               :key="dep.name"
               class="service-line"
               :class="`tone-${dep.tone}`"
-              @click="go('/settings/service-deployments')"
+              @click="go('/ops/services?tab=instances')"
             >
               <span>{{ dep.name }}</span>
-              <b>{{ dep.status }}</b>
+              <b>{{ statusLabel(dep.status) }}</b>
               <em>{{ dep.addr }}</em>
             </button>
           </div>
@@ -260,9 +260,10 @@ import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
-import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from "@/api/storage/metadata";
+import { listFactorSets } from "@/api/factor";
+import { listDataSources, listDatasets, listSubjects, listViews } from "@/api/storage/metadata";
 import type { Dataset, PageResult, View } from "@/api/storage/types";
-import { pageResultTotal } from "@/views/data/shared/metadata-utils";
+import { pageResultTotal, statusLabel } from "@/views/data/shared/metadata-utils";
 import {
   datasetMatchesAttribution,
   isLikelyFactorResultDataset,
@@ -272,9 +273,10 @@ import {
 import { callControl } from "@/api/admin/http";
 import { listServiceDeployments } from "@/api/admin/sysdeploy";
 import type { ServiceDeployment } from "@/api/admin/types";
-import { listAccounts } from "@/api/trade";
+import { listTradingAccounts } from "@/api/trade";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { getNodeList } from "@/api/cloud-node";
+import { RequestGate } from "@/utils/request-gate";
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -333,80 +335,87 @@ const counts = reactive<Record<string, number | null>>({
   datasets: null,
   views: null,
   factors: null,
+  factorSets: null,
   accounts: null,
   subjects: null,
   tasks: null
 });
+const taskCountLabel = ref<string | null>(null);
+const spaceLoadGate = new RequestGate();
 
 const pipeline = [
   { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
-  { key: "rules", stage: "02", label: "采集规则", color: "#0d9488", path: "/collector/rules" },
-  { key: "datasets", stage: "03", label: "数据集合", color: "#059669", path: "/collector/datasets" },
-  { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
-  { key: "views", stage: "05", label: "数据视图", color: "#ea580c", path: "/collector/views" },
-  { key: "accounts", stage: "06", label: "交易账户", color: "#b45309", path: "/trading/accounts" }
+  { key: "rules", stage: "02", label: "采集任务", color: "#0d9488", path: "/collector/tasks" },
+  { key: "datasets", stage: "03", label: "采集结果", color: "#059669", path: "/collector/tasks?tab=results" },
+  { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/workbench?tab=factors" },
+  { key: "factorSets", stage: "05", label: "因子集", color: "#ea580c", path: "/factor/workbench" },
+  { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
 ];
 
 const workflowLinks = [
   {
     title: "K 线浏览",
     description: "检查最新 bar 是否入库",
-    path: "/collector/views?tab=browse",
+    path: "/collector/tasks?tab=results",
     icon: "K",
     tint: "rgba(59, 111, 217, 12%)"
   },
   {
-    title: "视图查询",
-    description: "查看数据集合生成的视图",
-    path: "/collector/views?tab=browse",
+    title: "索引查询",
+    description: "查看采集结果上的索引",
+    path: "/collector/tasks?tab=results",
     icon: "Q",
     tint: "rgba(234, 88, 12, 12%)"
   },
   {
     title: "采集实例",
     description: "任务执行状态与失败明细",
-    path: "/collector/tasks",
+    path: "/collector/tasks?tab=instances",
     icon: "T",
     tint: "rgba(13, 148, 136, 12%)"
   },
   {
-    title: "数据集合",
-    description: "定义采集写入的数据契约",
-    path: "/collector/datasets",
+    title: "采集结果",
+    description: "查看采集任务产生的真实数据",
+    path: "/collector/tasks?tab=results",
     icon: "D",
     tint: "rgba(5, 150, 105, 12%)"
   },
-  { title: "因子结果", description: "查看因子计算写回结果", path: "/factor/results", icon: "F", tint: "rgba(192, 38, 211, 12%)" },
-  { title: "交易账户", description: "账户余额与下单通道", path: "/trading/accounts", icon: "A", tint: "rgba(180, 83, 9, 12%)" }
+  {
+    title: "因子结果",
+    description: "查看因子计算写回结果",
+    path: "/factor/workbench?tab=results",
+    icon: "F",
+    tint: "rgba(192, 38, 211, 12%)"
+  },
+  { title: "执行账户", description: "账户余额与下单通道", path: "/trading/accounts", icon: "A", tint: "rgba(180, 83, 9, 12%)" }
 ];
 
 const setupSteps = [
-  { title: "创建空间", description: "空间是数据资产、采集与交易的隔离边界，管理台所有请求都带空间上下文。" },
-  { title: "登记数据资产", description: "配置数据源、数据对象、字段，再到数据采集里定义数据集合与视图。" },
-  { title: "启动采集链路", description: "collector 按规则展开任务，经 cloudnode 下发到云节点执行写入。" },
-  { title: "查询与因子", description: "用数据视图浏览 K 线；因子模块自动写回独立结果数据集合。" }
+  { title: "创建空间", description: "空间是采集、计算与交易的隔离边界，管理台所有请求都带空间上下文。" },
+  { title: "创建采集任务", description: "在数据采集中配置数据源、采集对象、基础字段和任务结果。" },
+  { title: "启动采集链路", description: "collector 按采集任务展开执行，经 cloudnode 下发到云节点写入结果。" },
+  { title: "查询与因子", description: "用采集结果索引浏览 K 线；因子输出写入结果数据集和结果索引。" }
 ];
 
-const nodesOnline = ref<number | null>(null);
 const nodesTotal = ref<number | null>(null);
 const deployments = ref<ServiceDeployment[]>([]);
 const deploymentsLoaded = ref(false);
 const hosts = ref<HostMetrics[]>([]);
 
-const nodesAllOnline = computed(() => nodesTotal.value !== null && nodesOnline.value === nodesTotal.value);
 const nodesNote = computed(() => {
   if (nodesTotal.value === null) return "加载中";
   if (nodesTotal.value === 0) return "尚未注册节点";
-  return nodesAllOnline.value ? "全部在线" : "存在离线节点";
+  return "已登记云函数节点";
 });
 
 const healthBreakdown = computed(() => [
   { key: "freshness", label: "数据新鲜度", score: 26, max: 30, tone: "ok", note: "主力 K 线 6 分钟前入库" },
   { key: "collector", label: "采集任务健康", score: 16, max: 20, tone: "warn", note: "7 个任务需要处理" },
-  { key: "nodes", label: "云节点健康", score: 12, max: 15, tone: "warn", note: "96 / 101 节点在线" },
-  { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务 active" },
-  { key: "assets", label: "数据资产完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
-  { key: "trade", label: "交易账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
+  { key: "nodes", label: "云节点登记", score: 15, max: 15, tone: "ok", note: "已登记云函数节点" },
+  { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务已启用" },
+  { key: "assets", label: "基础数据完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
+  { key: "trade", label: "执行账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
 ]);
 
 const healthScore = computed(() => healthBreakdown.value.reduce((sum, item) => sum + item.score, 0));
@@ -434,17 +443,17 @@ const dashboardKpis = computed(() => [
     note: "最新 K 线延迟",
     delta: "APT-USDT",
     tone: "ok",
-    path: "/collector/views?tab=browse"
+    path: "/collector/tasks?tab=results"
   },
   {
     key: "tasks",
     label: "今日采集任务",
-    value: fmt(counts.tasks ?? 443),
+    value: fmt(taskCountLabel.value ?? counts.tasks ?? 443),
     unit: "",
-    note: "规则展开实例",
+    note: "任务展开实例",
     delta: "运行中 18",
     tone: "neutral",
-    path: "/collector/tasks"
+    path: "/collector/tasks?tab=instances"
   },
   {
     key: "incidents",
@@ -454,27 +463,27 @@ const dashboardKpis = computed(() => [
     note: "失败 / 超时",
     delta: "需处理",
     tone: "danger",
-    path: "/collector/tasks"
+    path: "/collector/tasks?tab=instances"
   },
   {
     key: "nodes",
-    label: "云节点在线",
-    value: "96",
-    unit: "/101",
+    label: "云节点",
+    value: String(countOrFallback(nodesTotal.value, 0)),
+    unit: "",
     note: nodesNote.value,
-    delta: "5 离线",
-    tone: "warn",
-    path: "/collector/cloudnodes"
+    delta: "已登记",
+    tone: "neutral",
+    path: "/collector/tasks?tab=executors"
   },
   {
     key: "services",
     label: "服务在线",
     value: String(deploymentsLoaded.value ? deployments.value.length : 28),
     unit: "",
-    note: "active 部署",
+    note: "已启用部署",
     delta: "gateway ok",
     tone: "ok",
-    path: "/settings/service-deployments"
+    path: "/ops/services?tab=instances"
   }
 ]);
 
@@ -491,28 +500,20 @@ const incidentItems = [
     title: "factor.momentum 今日未刷新",
     meta: "因子结果延迟 48m",
     action: "打开结果",
-    path: "/factor/results",
+    path: "/factor/workbench?tab=results",
     tone: "danger"
-  },
-  {
-    level: "P2",
-    title: "云节点离线 5 台",
-    meta: "SCF runtime 心跳缺失",
-    action: "查看节点",
-    path: "/collector/cloudnodes",
-    tone: "warn"
   },
   {
     level: "P2",
     title: "7 个采集实例失败",
     meta: "交易所限频 / 网络超时",
     action: "处理任务",
-    path: "/collector/tasks",
+    path: "/collector/tasks?tab=instances",
     tone: "warn"
   },
   {
     level: "P3",
-    title: "1 个交易账户同步较慢",
+    title: "1 个执行账户同步较慢",
     meta: "Binance futures 14m 未更新",
     action: "账户摘要",
     path: "/trading/accounts",
@@ -589,7 +590,7 @@ const visibleHosts = computed(() => {
   }));
 });
 
-function fmt(v: number | null | undefined): string {
+function fmt(v: number | string | null | undefined): string {
   return v === null || v === undefined ? "—" : String(v);
 }
 
@@ -606,50 +607,65 @@ const go = (path: string) => {
 };
 
 async function loadSpaceScoped() {
-  const space_id = selectedSpaceId.value;
-  if (!space_id) return;
+  const token = spaceLoadGate.next();
+  const spaceId = selectedSpaceId.value;
+  if (!spaceId) return;
   const page = { page: 1, size: 1 };
+  const isCurrent = () => spaceLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
 
   const jobs: Array<Promise<void>> = [
-    listDataSources({ space_id, page }).then(rsp => {
-      counts.sources = countFrom(rsp.page_result, rsp.data_sources?.length);
+    listDataSources({ space_id: spaceId, page }).then(rsp => {
+      if (isCurrent()) counts.sources = countFrom(rsp.page_result, rsp.data_sources?.length);
     }),
-    loadCollectorAssetCounts(space_id),
-    listFactors({ space_id, page }).then(rsp => {
-      counts.factors = countFrom(rsp.page_result, rsp.factors?.length);
+    loadCollectorAssetCounts(spaceId).then(result => {
+      if (!isCurrent()) return;
+      counts.datasets = result.datasets;
+      counts.views = result.views;
     }),
-    listSubjects({ space_id, page }).then(rsp => {
-      counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
+    listFactorSets({ page: { page: 1, size: 500 } }).then(rsp => {
+      if (!isCurrent()) return;
+      const sets = (rsp.factor_sets ?? []).filter(item => item.factor_set.space_id === spaceId);
+      counts.factorSets = sets.length;
+      counts.factors = sets.reduce((total, item) => total + (item.factors?.length ?? 0), 0);
     }),
-    callControl<{ page: { page: number; size: number } }, { rules?: unknown[]; page?: { total?: number } }>(
+    listSubjects({ space_id: spaceId, page }).then(rsp => {
+      if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
+    }),
+    callControl<{ space_id: string; page: { page: number; size: number } }, { tasks?: unknown[]; page?: { total?: number } }>(
       "collectmgr",
-      "GetTaskRuleList",
-      { page: { page: 1, size: 1 } }
+      "GetTaskList",
+      { space_id: spaceId, page: { page: 1, size: 1 } }
     ).then(rsp => {
-      counts.rules = Number(rsp.page?.total) || rsp.rules?.length || 0;
+      if (isCurrent()) counts.rules = Number(rsp.page?.total) || rsp.tasks?.length || 0;
     }),
     callControl<
       { filter: { space_id: string; page: { page: number; size: number } } },
-      { instances?: unknown[]; page?: { total?: number } }
-    >("collectmgr", "GetTaskInstanceList", { filter: { space_id, page: { page: 1, size: 1 } } }).then(rsp => {
+      { instances?: unknown[]; page?: { total?: number; total_state?: number | string; has_more?: boolean } }
+    >("collectmgr", "GetTaskInstanceList", { filter: { space_id: spaceId, page: { page: 1, size: 1 } } }).then(rsp => {
+      if (!isCurrent()) return;
+      const totalState = rsp.page?.total_state;
+      const skipped = totalState === 2 || totalState === "SKIPPED" || totalState === "TOTAL_STATE_SKIPPED";
       counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
+      taskCountLabel.value = skipped
+        ? (rsp.page?.has_more ? "2+" : String(rsp.instances?.length ?? 0))
+        : null;
     }),
-    listAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
-      counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
+    listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
+      if (isCurrent()) counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
     }),
     getNodeList({ page: 1, page_size: 200 }).then(({ items, total }) => {
+      if (!isCurrent()) return;
       nodesTotal.value = total || items.length;
-      nodesOnline.value = items.filter(n => String(n.status ?? "").includes("ONLINE")).length;
     })
   ];
 
   await Promise.allSettled(jobs);
 }
 
-async function loadCollectorAssetCounts(spaceId: string) {
+async function loadCollectorAssetCounts(spaceId: string): Promise<{ datasets: number; views: number }> {
   const [datasetItems, viewItems] = await Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]);
   const datasetById = new Map(datasetItems.map(item => [item.dataset_id, item]));
-  counts.datasets = datasetItems.filter(
+  const datasets = datasetItems.filter(
     item =>
       !isLikelyFactorResultDataset(item) &&
       datasetMatchesAttribution(item, {
@@ -658,7 +674,7 @@ async function loadCollectorAssetCounts(spaceId: string) {
         includeUnowned: true
       })
   ).length;
-  counts.views = viewItems.filter(
+  const views = viewItems.filter(
     item =>
       !viewUsesLikelyFactorDataset(item, datasetById) &&
       viewMatchesAttribution(item, {
@@ -667,6 +683,7 @@ async function loadCollectorAssetCounts(spaceId: string) {
         includeUnowned: true
       })
   ).length;
+  return { datasets, views };
 }
 
 async function listAllDatasets(spaceId: string) {
@@ -694,11 +711,11 @@ async function listAllViews(spaceId: string) {
 }
 
 function viewUsesLikelyFactorDataset(view: View, datasetById: Map<string, Dataset>) {
-  const dataset = datasetById.get(view.primary_dataset_id);
+  const dataset = datasetById.get(view.dataset_id);
   if (dataset) {
     return isLikelyFactorResultDataset(dataset);
   }
-  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
+  return isLikelyFactorResultDatasetId(view.dataset_id);
 }
 
 async function loadGlobal() {
@@ -728,7 +745,7 @@ function resetCounts() {
   Object.keys(counts).forEach(k => {
     counts[k] = null;
   });
-  nodesOnline.value = null;
+  taskCountLabel.value = null;
   nodesTotal.value = null;
 }
 
@@ -745,6 +762,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  spaceLoadGate.next();
   if (bannerTimer) {
     clearInterval(bannerTimer);
     bannerTimer = null;

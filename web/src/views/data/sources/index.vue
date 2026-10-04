@@ -41,7 +41,7 @@
           <a-table-column title="时区" data-index="timezone" :width="150" />
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
@@ -98,6 +98,7 @@ import {
   formatTime,
   jsonText,
   statusColor,
+  statusLabel,
   statusOptions
 } from "@/views/data/shared/metadata-utils";
 

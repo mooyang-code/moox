@@ -33,14 +33,17 @@ message QueryTimeSeriesRowsReq {
   string space_id = 2;
   // view_id 是已登记的查询入口。
   string view_id = 3;
-  // keys 是时序查询 key；范围读时 key.data_time 可为空，实际版本集合由 time_range 表达。
-  repeated TimeSeriesKey keys = 4;
-  // time_range 是闭区间时间范围。
+  // selectors 是时序范围查询条件；series_tag 未设置时匹配该 scope 下的全部序列。
+  repeated TimeSeriesSelector selectors = 4;
+  // time_range 是左闭右开时间范围。
   TimeRange time_range = 5;
   // column_names 是要返回的列名；为空时返回 View 默认列。
+  // In rows_per_series mode, empty means every business column with explicit
+  // NULL values; response columns contains the locked source schema and TS keys.
+  // All series windows are bounded to 500000 cells including four TS key columns.
   repeated string column_names = 6;
-  // filters 是结构化过滤条件列表。
-  repeated FilterExpr filters = 7;
+  // filter 是结构化过滤条件。
+  FilterSpec filter = 7;
   // sorts 是排序条件列表。
   repeated SortSpec sorts = 8;
   // page 是分页参数。
@@ -49,6 +52,18 @@ message QueryTimeSeriesRowsReq {
   uint32 limit = 10;
   // total_mode 控制是否计算精确总数。
   common.TotalMode total_mode = 11;
+  // expected_active_index_id pins a multi-page read to the index observed by
+  // the caller. A mismatch means the A/B active index switched and the caller
+  // must restart the complete read instead of mixing pages from both indexes.
+  string expected_active_index_id = 12;
+  // expected_active_index_revision pins a read to the write revision observed
+  // by the caller. A mismatch means the same active index was updated in
+  // place, so the caller must restart instead of mixing generations.
+  uint64 expected_active_index_revision = 13;
+  // Nonzero selects a single-snapshot window per explicit subject/frequency/tag.
+  // Requires selectors, an end time, and no paging, limit, sorting or exact total.
+  uint32 rows_per_series = 14;
+  string expected_input_contract_version = 15;
 }
 
 // QueryTimeSeriesRowsRsp 表示时序 View 数据查询结果。
@@ -64,6 +79,10 @@ message QueryTimeSeriesRowsRsp {
   string served_indexed_from = 5;
   string served_indexed_to = 6;
   bool complete = 7;
+  // served_active_index_revision is the write revision used for this page.
+  uint64 served_active_index_revision = 8;
+  string served_active_index_id = 9;
+  string served_input_contract_version = 10;
 }
 
 // SearchRecordRowsReq 表示搜索记录 View 数据。
@@ -83,8 +102,8 @@ message SearchRecordRowsReq {
   string text_query = 5;
   // version_range 是可选版本范围。
   VersionRange version_range = 6;
-  // filters 是结构化过滤条件列表。
-  repeated FilterExpr filters = 7;
+  // filter 是结构化字段过滤，与 text_query 取 AND。
+  FilterSpec filter = 7;
   // sorts 是排序条件列表。
   repeated SortSpec sorts = 8;
   // column_names 是要返回的列名；为空时返回 View 默认列。
@@ -110,8 +129,8 @@ message SearchRecordRowsRsp {
 
 // DataView 是用户侧 View 查询服务。
 // View 索引是可从 PrimaryStore 重建的有界派生结果，不是完整事实存储；
-// 完整历史以 PrimaryStore KV/Pebble 为准。索引生命周期统一由 viewbuilder
-// 角色的 op=maintain 调度驱动（schema 抢占重建、容量切换、ready switch、
+// 完整历史以 PrimaryStore KV/Pebble 为准。索引生命周期统一由 view
+// 角色的 View Maintainer 调度驱动（schema 抢占重建、容量切换、ready switch、
 // 陈旧清理），不提供手动重建 RPC。
 service DataView {
   // QueryTimeSeriesRows 查询 DuckDB 中当前 active View 索引。

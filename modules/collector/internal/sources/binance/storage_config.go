@@ -2,6 +2,7 @@ package binance
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,35 +11,36 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type StorageBinding struct {
-	SpaceID         string          `yaml:"space_id"`
-	DataSourceID    string          `yaml:"data_source_id"`
-	SubjectType     string          `yaml:"subject_type"`
-	SubjectMarket   string          `yaml:"subject_market"`
-	RecordDatasetID string          `yaml:"record_dataset_id"`
-	KlineDatasetID  string          `yaml:"kline_dataset_id"`
-	BindDatasetIDs  []string        `yaml:"bind_dataset_ids"`
-	AuthInfo        StorageAuthInfo `yaml:"auth_info"`
-}
-
-type StorageAuthInfo struct {
-	AppID     string `yaml:"app_id"`
-	AppKey    string `yaml:"app_key"`
-	Operator  string `yaml:"operator"`
-	RequestID string `yaml:"request_id"`
-}
-
 type APIConfig struct {
-	BaseURL     string `yaml:"base_url"`
-	SpotBaseURL string `yaml:"spot_base_url"`
-	SwapBaseURL string `yaml:"swap_base_url"`
+	BaseURL      string   `yaml:"base_url"`
+	SpotBaseURL  string   `yaml:"spot_base_url"`
+	SpotBaseURLs []string `yaml:"spot_base_urls"`
+	SwapBaseURL  string   `yaml:"swap_base_url"`
+	SwapBaseURLs []string `yaml:"swap_base_urls"`
+}
+
+// InstTypeForMarket converts the scheduler's lower-case market label to the
+// Binance API product type used by the existing collectors.
+func InstTypeForMarket(market string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(market)) {
+	case "spot", "现货":
+		return InstTypeSPOT, nil
+	case "swap", "futures", "future", "perpetual", "合约", "永续合约":
+		return InstTypeSWAP, nil
+	default:
+		return "", fmt.Errorf("unsupported market type %q", market)
+	}
 }
 
 type binanceSourceConfig struct {
-	API     APIConfig `yaml:"api"`
-	Storage struct {
-		Bindings map[string]StorageBinding `yaml:"bindings"`
-	} `yaml:"storage"`
+	App struct {
+		ID          string `yaml:"id"`
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+		Type        string `yaml:"type"`
+	} `yaml:"app"`
+	API     APIConfig      `yaml:"api"`
+	Storage map[string]any `yaml:"storage"`
 }
 
 func ResolveAPIConfig() (APIConfig, error) {
@@ -47,76 +49,24 @@ func ResolveAPIConfig() (APIConfig, error) {
 		return APIConfig{}, err
 	}
 	cfg := source.API
-	if cfg.SpotBaseURL == "" {
-		cfg.SpotBaseURL = cfg.BaseURL
+	if len(cfg.SpotBaseURLs) == 0 {
+		if cfg.SpotBaseURL == "" {
+			cfg.SpotBaseURL = cfg.BaseURL
+		}
+		if cfg.SpotBaseURL != "" {
+			cfg.SpotBaseURLs = []string{cfg.SpotBaseURL}
+		}
+	}
+	if len(cfg.SwapBaseURLs) == 0 && cfg.SwapBaseURL != "" {
+		cfg.SwapBaseURLs = []string{cfg.SwapBaseURL}
+	}
+	if len(cfg.SpotBaseURLs) > 0 {
+		cfg.SpotBaseURL = cfg.SpotBaseURLs[0]
+	}
+	if len(cfg.SwapBaseURLs) > 0 {
+		cfg.SwapBaseURL = cfg.SwapBaseURLs[0]
 	}
 	return cfg, nil
-}
-
-func ResolveStorageBinding(instType string) (StorageBinding, error) {
-	key, defaultMarket, err := storageBindingKey(instType)
-	if err != nil {
-		return StorageBinding{}, err
-	}
-
-	source, err := loadBinanceSourceConfig()
-	if err != nil {
-		return StorageBinding{}, err
-	}
-
-	binding, ok := source.Storage.Bindings[key]
-	if !ok {
-		return StorageBinding{}, fmt.Errorf("未配置 Binance 存储绑定: %s", key)
-	}
-	applyBindingDefaults(&binding, defaultMarket)
-	return binding, nil
-}
-
-func storageBindingKey(instType string) (string, string, error) {
-	switch instType {
-	case InstTypeSPOT:
-		return "spot", "spot", nil
-	case InstTypeSWAP:
-		return "swap", "swap", nil
-	default:
-		return "", "", fmt.Errorf("不支持的产品类型: %s", instType)
-	}
-}
-
-func applyBindingDefaults(binding *StorageBinding, subjectMarket string) {
-	if binding.DataSourceID == "" {
-		binding.DataSourceID = "binance"
-	}
-	if binding.SubjectType == "" {
-		binding.SubjectType = "crypto_pair"
-	}
-	if binding.SubjectMarket == "" {
-		binding.SubjectMarket = subjectMarket
-	}
-	binding.BindDatasetIDs = appendMissingDatasetIDs(binding.BindDatasetIDs, binding.RecordDatasetID, binding.KlineDatasetID)
-}
-
-func appendMissingDatasetIDs(ids []string, defaults ...string) []string {
-	out := make([]string, 0, len(ids)+len(defaults))
-	seen := make(map[string]struct{}, len(ids)+len(defaults))
-	appendID := func(id string) {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			return
-		}
-		if _, ok := seen[id]; ok {
-			return
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	for _, id := range ids {
-		appendID(id)
-	}
-	for _, id := range defaults {
-		appendID(id)
-	}
-	return out
 }
 
 func loadBinanceSourceConfig() (*binanceSourceConfig, error) {
@@ -125,13 +75,20 @@ func loadBinanceSourceConfig() (*binanceSourceConfig, error) {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close()
 
+	return decodeBinanceSourceConfig(file)
+}
+
+func decodeBinanceSourceConfig(reader io.Reader) (*binanceSourceConfig, error) {
 	var source binanceSourceConfig
-	if err := yaml.Unmarshal(data, &source); err != nil {
+	decoder := yaml.NewDecoder(reader)
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&source); err != nil {
 		return nil, err
 	}
 	return &source, nil

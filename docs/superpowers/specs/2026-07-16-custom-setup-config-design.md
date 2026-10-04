@@ -12,17 +12,17 @@ rest of the system can be configured:
 
 Today these values are collected through separate commands and deployment
 flags. That exposes credentials to whichever operator or Agent assembles the
-commands. The new flow makes the repository-root `custom.toml` the only
+commands. The new flow makes the repository-root `moox.toml` the only
 user-authored setup input. High-level CLI commands consume the file without
 printing its sensitive fields.
 
-`custom.toml` is not an application runtime configuration file. It is a
+`moox.toml` is not an application runtime configuration file. It is a
 persistent, user-owned setup manifest. MooX never modifies, renames, or
 deletes it.
 
 ## Goals
 
-- Let the user write every initial credential directly into `custom.toml`.
+- Let the user write every initial credential directly into `moox.toml`.
 - Let an Agent run validation, control-plane deployment, and initialization
   without reading or reproducing those credentials.
 - Deploy only Admin, Gateway, and Web during the first deployment stage.
@@ -38,12 +38,12 @@ deletes it.
 
 - Defining the placement of Storage, CloudNode, Collector, Factor, Monitor,
   Trade, or other data-plane services.
-- Supporting SSH certificate authentication in `custom.toml`.
+- Supporting SSH certificate authentication in `moox.toml`.
 - Supporting multiple setup file formats or format versions.
 - Rotating credentials through `setup apply`.
 - Preserving compatibility with existing deployment flags that create the
   first Admin user.
-- Copying `custom.toml` to a deployment host.
+- Copying `moox.toml` to a deployment host.
 
 ## Configuration Contract
 
@@ -82,15 +82,15 @@ Host names and addresses must be unique across `control_host` and
 Admin password follows the bcrypt 72-byte limit already enforced by
 `moox-admin-cli`.
 
-`custom.toml` must:
+`moox.toml` must:
 
-- resolve to `<repository-root>/custom.toml`;
+- resolve to `<repository-root>/moox.toml`;
 - be a regular file rather than a symbolic link;
 - be owned by the current user;
 - have mode `0600`;
 - remain unchanged for the duration of each command.
 
-MooX adds `/custom.toml` to `.gitignore`. Commands open the file read-only and
+MooX adds `/moox.toml` to `.gitignore`. Commands open the file read-only and
 compare its identity, size, modification time, and SHA-256 digest before and
 after the operation. They never repair its permissions or rewrite its content.
 
@@ -99,18 +99,18 @@ after the operation. They never repair its permissions or rewrite its content.
 The CLI adds one top-level command group:
 
 ```text
-moox-cli setup validate --file ./custom.toml
-moox-cli setup trust-host --file ./custom.toml --host control --fingerprint <sha256>
-moox-cli setup deploy-control --file ./custom.toml
-moox-cli setup apply --file ./custom.toml
-moox-cli setup status --file ./custom.toml
-moox-cli setup hosts --file ./custom.toml
-moox-cli setup deploy-storage --file ./custom.toml --host <host-name>
+moox-cli setup validate --file ./moox.toml
+moox-cli setup trust-host --file ./moox.toml --host control --fingerprint <sha256>
+moox-cli setup deploy-control --file ./moox.toml
+moox-cli setup apply --file ./moox.toml
+moox-cli setup status --file ./moox.toml
+moox-cli setup hosts --file ./moox.toml
+moox-cli setup deploy-storage --file ./moox.toml --host <host-name>
 moox-cli metadata spaces --file ./examples/metadata-quant-initial.seed.yaml
-moox-cli setup metadata-import --file ./custom.toml --storage-host <host-name> --spaces <space-id,...>
+moox-cli setup metadata-import --file ./moox.toml --storage-host <host-name> --spaces <space-id,...>
 ```
 
-`--file` defaults to `./custom.toml`, but the resolved path must still be the
+`--file` defaults to `./moox.toml`, but the resolved path must still be the
 repository-root file. This prevents an Agent from silently substituting a
 different manifest.
 
@@ -132,7 +132,8 @@ signature or credential fragment.
 
 ### `setup deploy-control`
 
-This command runs `validate`, builds the release, and deploys only:
+This command runs deployment validation (the immutable manifest and SSH host
+checks, without Tencent Cloud STS), builds the release, and deploys only:
 
 - `moox-admin` and `moox-admin-cli`;
 - `moox-gateway` and `moox-gateway-cli`;
@@ -148,6 +149,9 @@ depends on shell `ssh`/`scp` password handling.
 The control deployment does not create the first Admin user. It waits for
 Admin readiness, setup listener readiness, Gateway readiness, Web
 readiness, and the browser HTTPS endpoint before returning success.
+Tencent Cloud identity validation is intentionally not repeated here. The
+read-only STS check belongs to `setup validate` and cloud-resource commands;
+deploying control-plane binaries itself only needs the configured SSH access.
 The remote deployment directory is fixed to `~/moox/prod` for this first-stage
 workflow. Later deployment commands may expose explicit placement options, but
 the setup manifest does not grow deployment-tuning fields.
@@ -185,7 +189,7 @@ so all initial records commit or roll back together.
 
 ### `setup status`
 
-Status loads the same immutable `custom.toml` snapshot and sends it through the
+Status loads the same immutable `moox.toml` snapshot and sends it through the
 SSH tunnel for a read-only comparison against the actual Admin records. It
 returns only `completed`, `incomplete`, or `conflict` plus sanitized counts.
 Credentials are used only for bcrypt or decrypted-value comparison and never
@@ -208,10 +212,16 @@ installed under `~/moox/storage`, separate from the control deployment at
 Web. After readiness succeeds, the CLI updates the Storage service placement
 through the private SysDeploy endpoint on the control host.
 
+`setup deploy-storage` uses the same deployment validation as
+`deploy-control`; it does not require a Tencent Cloud STS call. Tencent
+credentials remain required for the full `setup validate` command and for
+cloud-resource operations, but are not a prerequisite for copying and
+starting Storage binaries over SSH.
+
 ### Metadata Space Selection And Import
 
 Business metadata initialization is a separate, optional step. It does not add
-fields to or modify `custom.toml`. `metadata spaces` lists the stable Space IDs,
+fields to or modify `moox.toml`. `metadata spaces` lists the stable Space IDs,
 names, and descriptions in the default seed without connecting to a server.
 The Skill presents that list in natural language and lets the user select all,
 some, or none.
@@ -220,8 +230,47 @@ For a non-empty selection, `setup metadata-import` first verifies that control
 setup is complete, then connects to the explicitly named Storage host and
 forwards its loopback Metadata API through SSH. Filtering retains the complete
 dependency closure for each selected Space, including its data sources,
-datasets, views, fields, columns, subjects, routes, and shared global storage
+datasets, views, fields, columns, subjects, and shared global storage
 resources. Unknown or duplicate Space selections fail before any import call.
+
+### Storage Schema v5 Reset And Verification
+
+Storage deployment is a clean-break Schema v5 replacement for this pre-release
+project. `deploy-storage` keeps `--reset-storage-data` false by default. The
+operator must explicitly confirm a pre-production reset before using it; the
+option is not a production migration mechanism or a normal redeploy shortcut.
+When enabled, the remote installer removes only the Storage data directory and
+recreates it from the current package. The remote Storage `secrets/` directory
+is preserved, and the CLI never writes or deletes `moox.toml`.
+
+After deployment, the setup CLI provides three explicit verification boundaries:
+
+```text
+setup verify-storage --file ./moox.toml --host <storage-host>
+setup e2e-storage --file ./moox.toml --host <storage-host> --namespace <short-id>
+setup browser-e2e-storage --file ./moox.toml --host <storage-host> --repo-root <repo>
+```
+
+`verify-storage` is read-only. It uses the setup SSH tunnel and signed service
+requests to report only component readiness, exact commit, binary hashes,
+Schema version, DataNode identity/status, counts, and the absence of route RPCs.
+`e2e-storage` uses a caller-supplied namespace, creates a disabled temporary
+Space/DataSource/Dataset, checks and activates it with revision CAS, verifies
+the metadata lifecycle through supported APIs, and cleans up the temporary
+resources even after an assertion failure. Its JSON contains only sanitized
+IDs, check IDs, revisions, statuses, and cleanup state.
+
+`browser-e2e-storage` runs the remote Playwright spec against the named Admin
+UI and covers DataNode details plus the CLI-created isolated Dataset binding at
+desktop and 390px mobile viewports. Passing `--default-spaces` additionally checks
+Fields in the `stockcn` and `crypto` business Spaces. Dataset activation/locking and
+rebind lifecycle remain in `e2e-storage` and Storage service E2E tests; the
+browser run only reads existing business metadata and cleans up its own fixture.
+The setup process sends `base_url`, username, and password through the child
+process stdin to `remote-auth-global-setup.ts`; credentials remain in memory
+for the run and are never placed in argv, logs, artifacts, or browser storage.
+Remote mode registers only the remote project, disables trace/video, leaves
+`storageState` unset, and does not start a local web server.
 
 ## Admin Setup Service
 
@@ -267,7 +316,7 @@ the result.
 
 ## Deployment Boundary
 
-The current `scripts/deploy-moox.sh` creates the first Admin user before service
+The current `scripts/deploy/deploy-moox.sh` creates the first Admin user before service
 startup. That behavior moves out of deployment. The deprecated
 `--admin-username` and `--admin-password-file` flags are removed rather than
 retained as a second setup path.
@@ -276,7 +325,7 @@ Control-plane packaging becomes an explicit profile instead of a long list of
 negative flags:
 
 ```text
-scripts/deploy-moox.sh --profile control ...
+scripts/deploy/deploy-moox.sh --profile control ...
 ```
 
 The `control` profile includes Admin, Gateway, Web, and managed edge assets. It
@@ -295,7 +344,7 @@ or Admin password.
 - Do not print masked credential fragments; even partial values are needless.
 - Do not put sensitive values in argv, environment variables, release archives,
   stage directories, process titles, shell history, or temporary files.
-- Keep `custom.toml` open only while taking an immutable in-memory snapshot.
+- Keep `moox.toml` open only while taking an immutable in-memory snapshot.
 - Zero mutable secret byte slices when a command finishes where practical.
 - Wrap Tencent and SSH errors in stable, sanitized error codes.
 - Reject symlinks and permission changes observed during execution.
@@ -339,7 +388,7 @@ commands containing secrets, or decrypted database values.
 
 The Skill must:
 
-1. If `custom.toml` is absent, show the exact template and stop so the user can
+1. If `moox.toml` is absent, show the exact template and stop so the user can
    fill it and set mode `0600`.
 2. Never read the file with `cat`, `sed`, `rg`, a language parser, or an Agent
    tool. Only the high-level CLI may open it.
@@ -352,7 +401,7 @@ The Skill must:
 7. Run `moox-cli setup apply`, then `setup status`.
 8. Let `setup apply` verify the public login API from the in-memory manifest;
    ask the user to confirm interactive browser login when required.
-9. Tell the user that `custom.toml` remains unchanged and still contains
+9. Tell the user that `moox.toml` remains unchanged and still contains
    plaintext credentials.
 10. Run `setup hosts` and ask the user in natural language which listed host
     should run Storage. Do not silently default to the control host.
@@ -362,8 +411,12 @@ The Skill must:
     business spaces, and let the user choose all, some, or no spaces.
 13. If the selection is non-empty, translate names to stable Space IDs and run
     `setup metadata-import` with the selected Storage host and Space IDs.
-14. Keep `custom.toml` initialization and metadata import as visibly separate
+14. Keep `moox.toml` initialization and metadata import as visibly separate
     steps. Never write deployment placement or metadata choices into the file.
+15. Treat `--reset-storage-data` as an explicit pre-production-only action;
+    never infer it from a Schema mismatch or retry it silently.
+16. Run `verify-storage`, `e2e-storage`, and `browser-e2e-storage` only through
+    the setup CLI. Keep their JSON sanitized and do not persist browser state.
 
 ## Tests And Acceptance
 
@@ -384,7 +437,7 @@ Automated tests must cover:
 - exact retry, partial completion, adoption of matching existing records, and
   rejection of conflicting existing rows;
 - encrypted database values and bcrypt password hashing;
-- `custom.toml` byte-for-byte stability across every command;
+- `moox.toml` byte-for-byte stability across every command;
 - sanitized host listing and mandatory explicit Storage placement;
 - one-unit Storage packaging, separate remote directory, readiness checks, and
   private SysDeploy placement updates;
@@ -406,11 +459,11 @@ then a real remote control host:
    all configured hosts with encrypted sensitive columns.
 6. The public login API accepts the configured account, and the user can log in
    through the browser.
-7. `custom.toml` has the same bytes, owner, and `0600` mode after the workflow.
+7. `moox.toml` has the same bytes, owner, and `0600` mode after the workflow.
 8. The user can choose control or another listed host; both Storage processes
    become ready there without replacing the control deployment.
 9. The metadata catalog is shown only after Storage readiness, and importing a
    subset creates resources only for the selected Spaces and their complete
    dependencies.
-10. Choosing no metadata Spaces performs no import and leaves `custom.toml`
+10. Choosing no metadata Spaces performs no import and leaves `moox.toml`
     unchanged.

@@ -2,6 +2,7 @@ package gatewayauth
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,14 @@ import (
 	"testing"
 	"time"
 )
+
+type idleConnectionTrackingTransport struct{ closed int }
+
+func (t *idleConnectionTrackingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("unexpected request")
+}
+
+func (t *idleConnectionTrackingTransport) CloseIdleConnections() { t.closed++ }
 
 func TestHTTPClientRejectsNonLoopbackPlaintext(t *testing.T) {
 	client, err := NewHTTPClient(ClientOptions{Timeout: time.Second})
@@ -118,6 +127,17 @@ func TestHTTPClientRejectsRedirectWithoutContactingTarget(t *testing.T) {
 	}
 	if targetCalls != 0 {
 		t.Fatalf("redirect target contacted %d times", targetCalls)
+	}
+}
+
+func TestCloseIdleConnectionsForwardsThroughSecureTransport(t *testing.T) {
+	transport := &idleConnectionTrackingTransport{}
+	client := &http.Client{Transport: secureRoundTripper{next: transport}}
+
+	CloseIdleConnections(client)
+
+	if transport.closed != 1 {
+		t.Fatalf("closed idle connections = %d, want 1", transport.closed)
 	}
 }
 

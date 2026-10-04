@@ -26,12 +26,6 @@ server:
       port: 20102
       network: tcp
       protocol: trpc
-    - name: trpc.moox.storage.PrimaryStoreScan.trpc
-      ip: 127.0.0.1
-      port: 20105
-      network: tcp
-      protocol: trpc
-      timeout: 120000
     - name: trpc.moox.storage.DataView.trpc
       ip: 127.0.0.1
       port: 20103
@@ -59,22 +53,11 @@ server:
       port: 20100
       network: tcp
       protocol: trpc
-    - name: trpc.moox.storage.view.timer
-      port: 20300
-      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1"
-      protocol: timer
-      timeout: 900000
     - name: trpc.moox.storage.primary.metrics.timer
       port: 20303
       network: "*/30 * * * * *"
       protocol: timer
-      timeout: 10000
-    - name: trpc.moox.storage.host_metrics_cleanup.timer
-      port: 20308
-      network: "0 0 * * * *?startAtOnce=1"
-      protocol: timer
       timeout: 60000
-
     - name: trpc.moox.storage.PrimaryStore.http
       ip: 127.0.0.1
       port: 20201
@@ -107,11 +90,6 @@ client:
       network: tcp
       protocol: http
       timeout: 3000
-    - name: trpc.moox.storage.PrimaryStoreScan
-      target: ip://127.0.0.1:20105
-      network: tcp
-      protocol: trpc
-      timeout: 120000
     - name: trpc.moox.storage.Metadata
       target: ip://127.0.0.1:20200
       network: tcp

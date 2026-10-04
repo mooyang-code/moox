@@ -1,41 +1,41 @@
 # Binance source configuration used by collector runtime.
-# Current code reads only api.* and storage.bindings.* from this file.
+# Strictly decoded Binance source configuration.
 app:
   id: "binance"
-  name: "币安交易所"
-  description: "币安现货/合约 K 线与标的采集"
+  name: "加密交易所"
+  description: "加密现货/永续合约 K 线与标的采集"
   type: "market"
 
 api:
   base_url: "https://data-api.binance.vision"
-  spot_base_url: "https://data-api.binance.vision"
-  swap_base_url: "https://fapi.binance.com"
+  spot_base_urls:
+    - "https://data-api.binance.vision"
+    - "https://api.binance.com"
+    - "https://api1.binance.com"
+    - "https://api2.binance.com"
+    - "https://api3.binance.com"
+    - "https://api4.binance.com"
+    - "https://api-gcp.binance.com"
+  swap_base_urls:
+    - "https://fapi.binance.com"
+    - "https://fapi1.binance.com"
+    - "https://fapi2.binance.com"
+    - "https://fapi3.binance.com"
+    - "https://fapi4.binance.com"
 
 storage:
   bindings:
     spot:
-      space_id: "crypto"
       data_source_id: "binance"
       subject_type: "crypto_pair"
       subject_market: "spot"
-      record_dataset_id: "binance_spot_symbols"
-      kline_dataset_id: "binance_spot_kline_1h"
-      bind_dataset_ids:
-        - "binance_spot_symbols"
-        - "binance_spot_kline_1h"
       auth_info:
         app_id: "moox-collector"
         app_key: "binance-spot-collector"
     swap:
-      space_id: "crypto"
       data_source_id: "binance"
       subject_type: "crypto_pair"
       subject_market: "swap"
-      record_dataset_id: "binance_swap_symbols"
-      kline_dataset_id: "binance_swap_kline"
-      bind_dataset_ids:
-        - "binance_swap_symbols"
-        - "binance_swap_kline"
       auth_info:
         app_id: "moox-collector"
         app_key: "binance-swap-collector"

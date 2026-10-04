@@ -8,7 +8,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	messagepb "github.com/mooyang-code/moox/packages/messagepb"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	metricspb "github.com/mooyang-code/moox/packages/metricspb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -23,13 +25,14 @@ func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
 	}
 	r := metricMessageStoreForTest(t, mgr)
 	at := time.Unix(10, 0).UTC()
-	msg := &messagepb.MooxMessage{MessageId: "m1", Producer: &messagepb.Producer{ServiceName: "svc", InstanceId: "i", BootId: "b"}, OccurredAt: nil}
+	msg := &eventpb.EventMessage{EventId: "m1"}
+	report := &metricspb.MetricReport{ServiceName: "svc", InstanceId: "i", BootId: "b"}
 	s := Sample{SeriesID: "series", ServiceName: "svc", InstanceID: "i", MetricName: "g", MetricType: "gauge", Value: 1, ObservedAt: at, MessageID: "m1"}
-	dup, err := r.CommitIngest(context.Background(), msg, []Sample{s})
+	dup, err := r.CommitIngest(context.Background(), msg, report, []Sample{s})
 	if err != nil || dup {
 		t.Fatalf("first commit dup=%v err=%v", dup, err)
 	}
-	dup, err = r.CommitIngest(context.Background(), msg, []Sample{{SeriesID: "series", ServiceName: "svc", InstanceID: "i", MetricName: "g", MetricType: "gauge", Value: 9, ObservedAt: at.Add(time.Second), MessageID: "m1"}})
+	dup, err = r.CommitIngest(context.Background(), msg, report, []Sample{{SeriesID: "series", ServiceName: "svc", InstanceID: "i", MetricName: "g", MetricType: "gauge", Value: 9, ObservedAt: at.Add(time.Second), MessageID: "m1"}})
 	if err != nil || !dup {
 		t.Fatalf("duplicate dup=%v err=%v", dup, err)
 	}
@@ -39,6 +42,19 @@ func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
 	}
 	if latest.Value != 1 {
 		t.Fatalf("duplicate changed latest=%v", latest.Value)
+	}
+	msg = &eventpb.EventMessage{EventId: "m2"}
+	s.Value, s.ObservedAt, s.MessageID = 2, at.Add(2*time.Second), "m2"
+	dup, err = r.CommitIngest(context.Background(), msg, report, []Sample{s})
+	if err != nil || dup {
+		t.Fatalf("newer commit dup=%v err=%v", dup, err)
+	}
+	latest, err = r.GetLatest(context.Background(), "series")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Value != 2 || !latest.ObservedAt.Equal(s.ObservedAt) {
+		t.Fatalf("latest was not advanced: %+v", latest)
 	}
 }
 
@@ -52,18 +68,19 @@ func TestCommitIngestDoesNotMoveSeriesLastSeenBackwards(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := metricMessageStoreForTest(t, mgr)
-	producer := &messagepb.Producer{ServiceName: "svc", InstanceId: "i", BootId: "b"}
-	newMessage := func(id string) *messagepb.MooxMessage {
-		return &messagepb.MooxMessage{MessageId: id, Producer: producer}
+	newMessage := func(id string) (*eventpb.EventMessage, *metricspb.MetricReport) {
+		return &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.Now()}, &metricspb.MetricReport{ServiceName: "svc", InstanceId: "i", BootId: "b"}
 	}
 	newSample := func(at time.Time, id string) Sample {
 		return Sample{SeriesID: "series", ServiceName: "svc", InstanceID: "i", MetricName: "g", MetricType: "gauge", Value: 1, ObservedAt: at, MessageID: id}
 	}
 	newest := time.Unix(20, 0).UTC()
-	if _, err := r.CommitIngest(context.Background(), newMessage("new"), []Sample{newSample(newest, "new")}); err != nil {
+	msg, report := newMessage("new")
+	if _, err := r.CommitIngest(context.Background(), msg, report, []Sample{newSample(newest, "new")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.CommitIngest(context.Background(), newMessage("old"), []Sample{newSample(newest.Add(-time.Minute), "old")}); err != nil {
+	msg, report = newMessage("old")
+	if _, err := r.CommitIngest(context.Background(), msg, report, []Sample{newSample(newest.Add(-time.Minute), "old")}); err != nil {
 		t.Fatal(err)
 	}
 	var series MetricSeries
@@ -83,8 +100,34 @@ func TestCommitIngestDoesNotMoveSeriesLastSeenBackwards(t *testing.T) {
 	}
 }
 
-func TestRunWhenReadyRequiresStorage(t *testing.T) {
-	if err := RunWhenReady(context.Background(), ConsumerOptions{}); err == nil {
-		t.Fatal("expected missing storage error")
+func TestCommitIngestDoesNotMoveDatasetWatermarkBackwardsAfterRestart(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	requireNoError(t, err)
+	defer mgr.Close()
+	requireNoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	newMessage := func(id string) (*eventpb.EventMessage, *metricspb.MetricReport) {
+		return &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.Now()}, &metricspb.MetricReport{ServiceName: "factor", InstanceId: "factor@node-a", BootId: "boot-a"}
+	}
+	name := "moox_factor_dataset_output_watermark_timestamp_seconds"
+	msg, report := newMessage("new")
+	if _, err := r.CommitIngest(context.Background(), msg, report, []Sample{{SeriesID: "watermark", ServiceName: "factor", InstanceID: "factor@node-a", MetricName: name, MetricType: "gauge", Value: 200, ObservedAt: time.Unix(20, 0).UTC(), MessageID: "new"}}); err != nil {
+		t.Fatal(err)
+	}
+	msg, report = newMessage("restart")
+	if _, err := r.CommitIngest(context.Background(), msg, report, []Sample{{SeriesID: "watermark", ServiceName: "factor", InstanceID: "factor@node-a", MetricName: name, MetricType: "gauge", Value: 100, ObservedAt: time.Unix(21, 0).UTC(), MessageID: "restart"}}); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := r.GetLatest(context.Background(), "watermark")
+	requireNoError(t, err)
+	if latest.Value != 200 {
+		t.Fatalf("watermark regressed to %v", latest.Value)
+	}
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

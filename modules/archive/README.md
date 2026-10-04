@@ -2,6 +2,10 @@
 
 `moox-archive` 消费 Storage 行变更事件，把事实写入本地 Journal，并物化为按月分区的 Parquet 文件；启用 COS 时还会同步长期副本。Parquet 默认永久保留，COS 副本不会自动删除本地文件，部署者仍需规划本地容量。
 
+Archive 从本地配置读取 EventBus 地址、凭据和 `fetch_max_wait`，
+`internal/eventconsumer` 启动并持有固定身份的 Consumer。Stream、Consumer 名称、
+filter、ACK、DeliverPolicy 和投递限制由事件 Registry 与 Archive 代码声明。
+
 ## 定时任务
 
 - `trpc.moox.archive.materialize.timer`：每 10 分钟物化 Journal、清理 7 天去重回执，启动时立即执行，单次超时 120 秒。
@@ -12,7 +16,7 @@
 ## 运行
 
 ```bash
-../../scripts/build.sh archive
+../../scripts/build/build.sh archive
 ./bin/moox-archive -config=config/app.yaml -conf=config/trpc_go.yaml
 ```
 

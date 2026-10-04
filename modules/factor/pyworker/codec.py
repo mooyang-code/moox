@@ -1,107 +1,72 @@
 import json
-import struct
 
+import numpy as np
 import pandas as pd
 
-
-MAGIC = b"MX"
-MAX_META_BYTES = 4 * 1024 * 1024
-MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
-FRAME_READY = 0x01
-FRAME_REQUEST = 0x02
-FRAME_RESPONSE = 0x03
-FRAME_LOAD = 0x02
-FRAME_RUN = 0x03
-FRAME_RESULT = 0x04
-FRAME_ERROR = 0x05
-FRAME_PING = 0x05
-FRAME_RELOAD = 0x06
-
-
-def _read_exact(stream, n):
-    data = stream.read(n)
-    if data == b"" and n > 0:
-        raise EOFError("end of stream")
-    if len(data) != n:
-        raise ValueError(f"truncated frame: expected {n} bytes, got {len(data)}")
-    return data
-
-
-def _read_frame_legacy(stream):
-    magic = _read_exact(stream, 2)
-    if magic != MAGIC:
-        raise ValueError("invalid frame magic")
-    frame_type = _read_exact(stream, 1)[0]
-    meta_len = struct.unpack(">I", _read_exact(stream, 4))[0]
-    if meta_len > MAX_META_BYTES:
-        raise ValueError("frame meta too large")
-    meta = json.loads(_read_exact(stream, meta_len).decode("utf-8"))
-    payload_len = struct.unpack(">Q", _read_exact(stream, 8))[0]
-    if payload_len > MAX_PAYLOAD_BYTES:
-        raise ValueError("frame payload too large")
-    payload = _read_exact(stream, payload_len) if payload_len else b""
-    return frame_type, meta, payload
-
-
-def _write_frame_legacy(stream, frame_type, meta, payload=b""):
-    meta_bytes = json.dumps(meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    stream.write(MAGIC)
-    stream.write(bytes([frame_type]))
-    stream.write(struct.pack(">I", len(meta_bytes)))
-    stream.write(meta_bytes)
-    stream.write(struct.pack(">Q", len(payload)))
-    if payload:
-        stream.write(payload)
-    stream.flush()
-
-try:
-    from moox_pyruntime.protocol import read_frame as read_frame, write_frame as write_frame
-except ImportError:
-    read_frame = _read_frame_legacy
-    write_frame = _write_frame_legacy
+from moox_pyruntime.protocol import (
+    TYPE_ERROR,
+    TYPE_HELLO,
+    TYPE_LOAD,
+    TYPE_RESULT,
+    TYPE_RUN,
+    read_frame,
+    write_frame,
+)
 
 
 def decode_json_df(meta):
     spec = meta.get("df", {})
-    columns = spec.get("columns", {})
-    if isinstance(columns, dict):
-        df = pd.DataFrame(columns)
-    else:
-        names = list(columns)
-        df = pd.DataFrame(spec.get("rows", []), columns=names)
-    index_ms = spec.get("index_ms")
-    if index_ms is True and "candle_begin_time" in df.columns:
-        df["candle_begin_time"] = _utc_ns(df["candle_begin_time"])
-    elif isinstance(index_ms, list):
-        df.insert(0, "candle_begin_time", _utc_ns(index_ms))
+    columns = spec.get("columns")
+    rows = spec.get("rows")
+    if not isinstance(columns, list) or columns[:2] != ["data_time", "series_tag"]:
+        raise ValueError("dataframe columns must start with data_time, series_tag")
+    if len(set(columns)) != len(columns):
+        raise ValueError("dataframe columns must be unique")
+    if not isinstance(rows, list):
+        raise ValueError("dataframe rows must be an array")
+    if any(not isinstance(row, list) or len(row) != len(columns) for row in rows):
+        raise ValueError("dataframe row width must match columns")
+    df = pd.DataFrame(rows, columns=columns)
+    df["data_time"] = pd.to_datetime(df["data_time"], format="ISO8601", utc=True)
+    _validate_series_tags(df["series_tag"])
+    identity = ["data_time", "series_tag"]
+    if "subject_id" in df:
+        if any(not isinstance(value, str) or not value for value in df["subject_id"]):
+            raise ValueError("dataframe subject_id must be a nonempty string")
+        identity.append("subject_id")
+    if df.duplicated(identity).any():
+        raise ValueError(f"dataframe contains duplicate {', '.join(identity)}")
+    if not df.sort_values(identity, kind="stable").index.equals(df.index):
+        raise ValueError(f"dataframe must be sorted by {', '.join(identity)}")
     return df
 
 
-def encode_json_results(task_id, results, tail, per_factor_ms, elapsed_ms, result_tails=None, logs=None):
-    encoded = {}
-    for name, values in results.items():
-        item_tail = int((result_tails or {}).get(name, tail))
-        encoded[name] = {"tail": item_tail, "values": [_json_value(v) for v in list(values)[-item_tail:]]}
-    response = {
-        "id": task_id,
+def encode_json_batch_results(batch_id, items):
+    return {
+        "id": batch_id,
         "ok": True,
         "encoding": "json",
-        "results": encoded,
-        "per_factor_ms": per_factor_ms,
-        "elapsed_ms": elapsed_ms,
+        "items": items,
     }
-    if logs:
-        response["logs"] = logs
-    return response
 
 
 def _json_value(value):
     if pd.isna(value):
         return None
     if hasattr(value, "item"):
-        return value.item()
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
     return value
 
 
-def _utc_ns(values):
-    return pd.to_datetime(values, unit="ms", utc=True).astype("datetime64[ns, UTC]")
+def _validate_series_tags(tags):
+    for tag in tags:
+        if not isinstance(tag, str):
+            raise TypeError("series_tag must be a string")
+        if len(tag.encode("utf-8")) > 128:
+            raise ValueError("series_tag must not exceed 128 bytes")
+        if tag.strip() != tag:
+            raise ValueError("series_tag must not have leading or trailing whitespace")
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in tag):
+            raise ValueError("series_tag must not contain ASCII control characters")

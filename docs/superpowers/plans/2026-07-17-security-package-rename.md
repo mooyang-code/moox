@@ -143,7 +143,7 @@ Expected: no matches and the old directory does not exist.
 - [x] **Step 3: Run documentation and architecture contracts**
 
 ```bash
-bash scripts/test-docs-architecture.sh
+bash scripts/test/contract/test-docs-architecture.sh
 git diff --check
 ```
 

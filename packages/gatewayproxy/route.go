@@ -14,8 +14,11 @@ import (
 )
 
 const (
-	defaultTimeoutMS    int64 = 5000
-	maxTimeoutMS        int64 = 120000
+	defaultTimeoutMS int64 = 5000
+	// CloudNode SCF request-response calls may consume the full 900s function
+	// timeout. Keep a bounded proxy ceiling while leaving room for transport
+	// overhead and the public Gateway write timeout.
+	maxTimeoutMS        int64 = 960000
 	defaultMaxBodyBytes int64 = 4 << 20
 	maxMaxBodyBytes     int64 = 64 << 20
 )
@@ -52,11 +55,6 @@ var storageViewMetadataMethods = map[string]struct{}{
 }
 
 var storagePrivilegedMethods = map[string]map[string]struct{}{
-	"trpc.moox.storage.PrimaryStoreScan": {
-		"ScanTimeSeriesRows": {},
-		"ScanRecordRows":     {},
-		"GetShardHeads":      {},
-	},
 	"trpc.moox.storage.DataShard": {
 		"MergeRows":     {},
 		"ReadRows":      {},
@@ -164,21 +162,6 @@ func ValidateRoute(route Route) error {
 			}
 		}
 	}
-	if route.ServicePath == "trpc.moox.storage.PrimaryStoreScan" {
-		for _, method := range route.AllowedMethods {
-			if method == "*" {
-				return fmt.Errorf("PrimaryStoreScan routes cannot use wildcard allowed_methods")
-			}
-			if _, ok := storagePrivilegedMethods[route.ServicePath][method]; !ok {
-				return fmt.Errorf("PrimaryStoreScan method %q is not routable", method)
-			}
-		}
-		for _, caller := range route.AllowedCallers {
-			if caller == "*" || (caller != "storage-view" && caller != "archive") {
-				return fmt.Errorf("PrimaryStoreScan routes only allow storage-view or archive callers")
-			}
-		}
-	}
 	for _, method := range route.AllowedMethods {
 		_, internal := storageInternalMethods[method]
 		_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
@@ -278,35 +261,26 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 		}
 		return normalized[i].ServiceID < normalized[j].ServiceID
 	})
-	for index := 1; index < len(normalized); index++ {
-		if normalized[index-1].ServiceID == normalized[index].ServiceID {
-			left, right := normalized[index-1], normalized[index]
-			for _, method := range left.AllowedMethods {
-				if right.AllowsMethod(method) {
-					return Snapshot{}, fmt.Errorf("duplicate service_id %q method %q", left.ServiceID, method)
-				}
+	for i := range normalized {
+		for j := i + 1; j < len(normalized); j++ {
+			if normalized[i].ServiceID != normalized[j].ServiceID {
+				continue
+			}
+			left, right := normalized[i], normalized[j]
+			if nativeMethodsOverlap(left.AllowedMethods, right.AllowedMethods) {
+				method := overlappingNativeMethod(left.AllowedMethods, right.AllowedMethods)
+				return Snapshot{}, fmt.Errorf("duplicate service_id %q method %q", left.ServiceID, method)
 			}
 		}
 	}
-	seenRPC := make(map[string]string)
-	for _, route := range normalized {
-		for _, method := range route.AllowedMethods {
-			if method == "*" {
-				key := route.ServicePath + "/*"
-				if owner, exists := seenRPC[key]; exists {
-					return Snapshot{}, fmt.Errorf("duplicate native RPC route %q owned by %q and %q", key, owner, route.ServiceID)
-				}
-				seenRPC[key] = route.ServiceID
+	for i := range normalized {
+		for j := i + 1; j < len(normalized); j++ {
+			left, right := normalized[i], normalized[j]
+			if left.ServicePath != right.ServicePath || !nativeMethodsOverlap(left.AllowedMethods, right.AllowedMethods) || nativeCallersDisjoint(left.AllowedCallers, right.AllowedCallers) {
 				continue
 			}
-			key := route.ServicePath + "/" + method
-			if owner, exists := seenRPC[route.ServicePath+"/*"]; exists {
-				return Snapshot{}, fmt.Errorf("native RPC route %q overlaps wildcard owner %q", key, owner)
-			}
-			if owner, exists := seenRPC[key]; exists {
-				return Snapshot{}, fmt.Errorf("duplicate native RPC route %q owned by %q and %q", key, owner, route.ServiceID)
-			}
-			seenRPC[key] = route.ServiceID
+			method := overlappingNativeMethod(left.AllowedMethods, right.AllowedMethods)
+			return Snapshot{}, fmt.Errorf("duplicate native RPC route %q owned by %q and %q", left.ServicePath+"/"+method, left.ServiceID, right.ServiceID)
 		}
 	}
 	hash, err := hashSnapshot(Snapshot{NodeID: nodeID, Disabled: disabled, Routes: normalized})
@@ -320,6 +294,45 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 		Disabled:    disabled,
 		Routes:      normalized,
 	}, nil
+}
+
+func nativeCallersDisjoint(left, right []string) bool {
+	for _, l := range left {
+		for _, r := range right {
+			if l == "*" || r == "*" || l == r {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func nativeMethodsOverlap(left, right []string) bool {
+	for _, l := range left {
+		for _, r := range right {
+			if l == "*" || r == "*" || l == r {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func overlappingNativeMethod(left, right []string) string {
+	for _, l := range left {
+		for _, r := range right {
+			if l == "*" {
+				if r != "*" {
+					return r
+				}
+				return "*"
+			}
+			if r == "*" || l == r {
+				return l
+			}
+		}
+	}
+	return "*"
 }
 
 func normalizeRouteDefaults(route *Route) {

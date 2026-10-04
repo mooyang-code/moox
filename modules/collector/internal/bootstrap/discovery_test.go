@@ -3,10 +3,12 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
@@ -22,19 +24,19 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 			"deployment_map": map[string]any{
 				"service_gateway": map[string]any{
 					"service_name": "service_gateway",
-					"protocol":     "http",
+					"protocol":     "https",
 					"host":         "gw.example.com",
-					"port":         11000,
+					"port":         11001,
 					"gateway_path": "/api/service",
 					"scope":        "public",
 					"status":       "active",
 				},
-				"service_gateway_internal": map[string]any{
-					"service_name": "service_gateway_internal",
+				"service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native",
 					"protocol":     "trpc",
-					"host":         "127.0.0.1",
+					"host":         "gw.example.com",
 					"port":         11003,
-					"scope":        "internal",
+					"scope":        "public",
 					"status":       "active",
 				},
 				"storage-primary": map[string]any{
@@ -61,37 +63,195 @@ func TestResolveUsesActiveServiceGatewayAndStorageTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deps.ServiceGatewayTarget != "http://gw.example.com:11000" {
+	if deps.ServiceGatewayTarget != "https://gw.example.com:11001" {
 		t.Fatalf("ServiceGatewayTarget = %q, want service_gateway deployment target", deps.ServiceGatewayTarget)
 	}
-	if deps.StorageRPCGatewayTarget != "127.0.0.1:11003" {
-		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
-	}
-	if deps.StorageRPCGatewayTarget != "127.0.0.1:11003" {
+	if deps.StorageRPCGatewayTarget != "gw.example.com:11003" {
 		t.Fatalf("StorageRPCGatewayTarget = %q, want native service gateway target", deps.StorageRPCGatewayTarget)
 	}
 }
 
-func TestResolvePrefersInternalServiceGateway(t *testing.T) {
+func TestPreferLocalServiceGatewayTargetForSameHostControlPlane(t *testing.T) {
+	assert.Equal(t, "http://127.0.0.1:11002", preferLocalServiceGatewayTarget("https://106.53.107.122:11001", "http://127.0.0.1:11002"))
+	assert.Equal(t, "https://gw.example.com:11001", preferLocalServiceGatewayTarget("https://gw.example.com:11001", "https://control.example.com:11002"))
+}
+
+func TestResolveUsesPublicGatewayEndpoints(t *testing.T) {
 	items := map[string]endpoint{
 		"service_gateway": {
 			ServiceName: "service_gateway",
-			Protocol:    "http",
+			Protocol:    "https",
 			Host:        "106.53.107.122",
-			Port:        11000,
+			Port:        11001,
 			Scope:       "public",
 		},
-		"service_gateway_internal": {
-			ServiceName: "service_gateway_internal",
-			Protocol:    "http",
-			Host:        "127.0.0.1",
-			Port:        11002,
-			Scope:       "internal",
+		"service_gateway_native": {
+			ServiceName: "service_gateway_native",
+			Protocol:    "trpc",
+			Host:        "106.53.107.122",
+			Port:        11003,
+			Scope:       "public",
 		},
 	}
 
-	got := endpointGatewayTarget(items, "service_gateway_internal", "service_gateway")
-	assert.Equal(t, "http://127.0.0.1:11002", got)
+	assert.Equal(t, "https://106.53.107.122:11001", endpointGatewayTarget(items, "service_gateway"))
+	assert.Equal(t, "106.53.107.122:11003", endpointTRPCTarget(items, "service_gateway_native"))
+}
+
+func TestResolveSelectsStorageGatewayNode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{
+				"control/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "control.example.com", "port": 11003,
+				},
+				"compute-1/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "compute.example.com", "port": 11003,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "compute-1"
+
+	deps, err := Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "compute.example.com:11003", deps.StorageRPCGatewayTarget)
+}
+
+func TestResolveSelectsCollectorRuntimeGatewayOnCollectorNode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{
+				"collector-2/collector_market_runtime": map[string]any{
+					"service_name": "collector_market_runtime", "service_kind": "collector_runtime", "protocol": "http", "host": "127.0.0.1", "port": 11418,
+				},
+				"storage-1/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "storage-gw.example.com", "port": 11003,
+				},
+				"collector-2/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "collector-gw.example.com", "port": 11003,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "storage-1"
+
+	deps, err := Resolve(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "storage-gw.example.com:11003", deps.StorageRPCGatewayTarget)
+	assert.Equal(t, "collector-gw.example.com:11003", deps.CollectorRuntimeGatewayTarget)
+	assert.Equal(t, "collector-2", deps.CollectorRuntimeGatewayNodeID)
+}
+
+func TestResolveNeverFallsBackCollectorRuntimeToStorageGateway(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{
+				"collector-2/collector_market_runtime": map[string]any{
+					"service_name": "collector_market_runtime", "service_kind": "collector_runtime", "protocol": "http", "host": "127.0.0.1", "port": 11418,
+				},
+				"storage-1/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "storage-gw.example.com", "port": 11003,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "storage-1"
+
+	_, err := Resolve(context.Background(), cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collector runtime native Gateway")
+}
+
+func TestResolveFallsBackToExplicitStorageTargetWhenRouteIsIncomplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info":       map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{"storage/service_gateway_native": map[string]any{"service_name": "service_gateway_native", "protocol": "http"}},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "storage"
+	cfg.Storage.GatewayTarget = "ip://storage.example.com:11003"
+
+	deps, err := Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "ip://storage.example.com:11003", deps.StorageRPCGatewayTarget)
+}
+
+func TestResolvePrefersExplicitPrivateStorageTargetForLocalRPC(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{
+				"storage/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "146.56.196.204", "port": 11003,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "storage"
+	cfg.Storage.GatewayTarget = "ip://10.206.0.5:11003"
+
+	deps, err := Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "ip://10.206.0.5:11003", deps.StorageRPCGatewayTarget)
+	assert.Equal(t, "146.56.196.204:11003", deps.InvokeStorageRPCGatewayTarget)
+}
+
+func TestSelectStorageRPCTargets(t *testing.T) {
+	local, invoke, err := selectStorageRPCTargets("ip://10.206.0.5:11003", "146.56.196.204:11003")
+	require.NoError(t, err)
+	assert.Equal(t, "ip://10.206.0.5:11003", local)
+	assert.Equal(t, "146.56.196.204:11003", invoke)
+
+	local, invoke, err = selectStorageRPCTargets("ip://127.0.0.1:11003", "gw.example.com:11003")
+	require.NoError(t, err)
+	assert.Equal(t, "gw.example.com:11003", local)
+	assert.Equal(t, "gw.example.com:11003", invoke)
 }
 
 func TestIsHTTPURL(t *testing.T) {

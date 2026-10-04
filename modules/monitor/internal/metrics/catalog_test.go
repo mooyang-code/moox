@@ -1,10 +1,16 @@
 package metrics
 
 import (
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"context"
+	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBoundedPage(t *testing.T) {
@@ -14,6 +20,82 @@ func TestBoundedPage(t *testing.T) {
 	offset, limit = boundedPage(10, 1000)
 	assert.Equal(t, 10, offset)
 	assert.Equal(t, 500, limit)
+}
+
+func TestListServicesForFiltersBeforeApplyingLimit(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messageStore := metricMessageStoreForTest(t, mgr)
+	require.NoError(t, messageStore.db.Create([]MetricService{
+		{ServiceName: "unrelated", InstanceID: "unrelated@node-a", NodeID: "node-a", BootID: "b1"},
+		{ServiceName: "selected", InstanceID: "selected@node-a", NodeID: "node-a", BootID: "b2"},
+		{ServiceName: "selected", InstanceID: "selected-2@node-a", NodeID: "node-a", BootID: "b3"},
+	}).Error)
+	rows, err := NewCatalog(messageStore).ListServicesFor(context.Background(), []string{"selected"}, "node-a", 2)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "selected", rows[0].ServiceName)
+	_, err = NewCatalog(messageStore).ListServicesFor(context.Background(), []string{"selected"}, "node-a", 1)
+	require.Error(t, err)
+}
+
+func TestCurrentBootIDsPrefersNewestCtimeAmongFreshBoots(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messageStore := metricMessageStoreForTest(t, mgr)
+	now := time.Date(2026, 9, 15, 12, 30, 0, 0, time.UTC)
+	require.NoError(t, messageStore.db.Create([]MetricService{
+		{
+			ServiceName: "moox_factor", InstanceID: "moox_factor@control", NodeID: "control",
+			BootID: "old-boot", Version: "old", LastSeenAt: now, CreatedAt: now.Add(-72 * time.Hour),
+		},
+		{
+			ServiceName: "moox_factor", InstanceID: "moox_factor@control", NodeID: "control",
+			BootID: "new-boot", Version: "new", LastSeenAt: now.Add(-time.Second), CreatedAt: now.Add(-time.Minute),
+		},
+		{
+			ServiceName: "moox_factor", InstanceID: "moox_factor@control", NodeID: "control",
+			BootID: "stale-boot", Version: "stale", LastSeenAt: now.Add(-time.Hour), CreatedAt: now.Add(-time.Hour),
+		},
+	}).Error)
+
+	got, err := NewCatalog(messageStore).CurrentBootIDs(context.Background(), now)
+	require.NoError(t, err)
+	require.Equal(t, "new-boot", got[ReporterInstanceKey("moox_factor", "moox_factor@control")])
+}
+
+func TestListServicesCountsLogicalInstancesInsteadOfBootHistory(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messageStore := metricMessageStoreForTest(t, mgr)
+	now := time.Now().UTC().Truncate(time.Second)
+	boots := make([]MetricService, 1001)
+	for i := range boots {
+		boots[i] = MetricService{
+			ServiceName: "moox_monitor", InstanceID: "monitor@node-a", NodeID: "node-a",
+			BootID: fmt.Sprintf("boot-%04d", i), LastSeenAt: now.Add(time.Duration(i) * time.Second),
+		}
+	}
+	require.NoError(t, messageStore.db.CreateInBatches(boots, 100).Error)
+
+	rows, total, err := NewCatalog(messageStore).ListServices(context.Background(), InternalMetricSpaceID, 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, rows, 1)
+	require.Equal(t, "boot-1000", rows[0].BootID)
+
+	selected, err := NewCatalog(messageStore).ListServicesForAt(
+		context.Background(), []string{"moox_monitor"}, "node-a", 1, now.Add(1001*time.Second),
+	)
+	require.NoError(t, err)
+	require.Len(t, selected, 1)
+	require.Equal(t, "boot-1000", selected[0].BootID)
 }
 
 func TestCanonicalJSON(t *testing.T) {
@@ -26,6 +108,41 @@ func TestMetricCatalogNoDataAfter(t *testing.T) {
 	assert.Equal(t, 2*time.Minute, c.NoDataAfter())
 	c.SetNoDataAfter(5 * time.Minute)
 	assert.Equal(t, 5*time.Minute, c.NoDataAfter())
+}
+
+func TestListFreshSeriesForInstanceFiltersHistoricalLabelsBeforeLimit(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messageStore := metricMessageStoreForTest(t, mgr)
+	now := time.Now().UTC().Truncate(time.Second)
+	rows := make([]MetricSeries, 0, 503)
+	for i := 0; i < 501; i++ {
+		rows = append(rows, MetricSeries{
+			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			SeriesID: fmt.Sprintf("stale-%03d", i), MetricName: "heartbeat",
+			LabelsJSON: `{}`, LastSeenAt: now.Add(-3 * time.Minute),
+		})
+	}
+	rows = append(rows,
+		MetricSeries{
+			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			SeriesID: "fresh-a", MetricName: "heartbeat", LabelsJSON: `{}`, LastSeenAt: now,
+		},
+		MetricSeries{
+			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			SeriesID: "fresh-b", MetricName: "heartbeat", LabelsJSON: `{}`, LastSeenAt: now,
+		},
+	)
+	require.NoError(t, messageStore.db.CreateInBatches(rows, 100).Error)
+
+	got, err := NewCatalog(messageStore).ListFreshSeriesForInstanceAt(
+		context.Background(), "cloudnode@control", "heartbeat", now, 500,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, []string{"fresh-a", "fresh-b"}, []string{got[0].SeriesID, got[1].SeriesID})
 }
 
 func TestMetricCatalogTimeScansRFC3339(t *testing.T) {

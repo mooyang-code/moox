@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -19,9 +18,6 @@ type Runtime struct {
 
 func Connect(ctx context.Context, cfg config.JetStreamConfig) (*Runtime, error) {
 	urls := append([]string(nil), cfg.URLs...)
-	if len(urls) == 0 && strings.TrimSpace(cfg.NATSURL) != "" {
-		urls = []string{cfg.NATSURL}
-	}
 	clientCfg := jetstream.ConfigFromEnv(urls, "moox-cloudnode")
 	if cfg.CredentialFile != "" {
 		if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {
@@ -53,11 +49,11 @@ func (r *Runtime) EnsureStreams(_ config.JetStreamConfig, _ config.JobItemConfig
 	}
 	return nil
 }
-func (r *Runtime) KeyValue(bucket string) (jetstream.KeyValue, error) {
+func (r *Runtime) BindKV(ctx context.Context, bucket string) (jetstream.KVStore, error) {
 	if r == nil || r.client == nil {
 		return nil, fmt.Errorf("jetstream runtime is not initialized")
 	}
-	return r.client.KeyValue(bucket)
+	return r.client.BindKV(ctx, bucket)
 }
 func (r *Runtime) Close() error {
 	if r == nil || r.client == nil {

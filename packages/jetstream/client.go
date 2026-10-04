@@ -2,6 +2,10 @@ package jetstream
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -18,8 +22,31 @@ type Client struct {
 	js  nats.JetStreamContext
 	cfg Config
 
-	mu     sync.RWMutex
-	closed bool
+	mu          sync.RWMutex
+	reconnectMu sync.Mutex
+	closed      bool
+}
+
+// Fork opens an independent NATS/JetStream connection using the same
+// credentials and endpoint configuration. Long-lived consumers that must be
+// failure-isolated should use a fork instead of sharing a connection whose
+// reconnect can invalidate unrelated subscriptions.
+func (c *Client) Fork(ctx context.Context, name string) (*Client, error) {
+	if c == nil {
+		return nil, ErrConnection
+	}
+	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return nil, ErrClosed
+	}
+	cfg := c.cfg
+	cfg.URLs = append([]string(nil), c.cfg.URLs...)
+	c.mu.RUnlock()
+	if strings.TrimSpace(name) != "" {
+		cfg.Name = strings.TrimSpace(name)
+	}
+	return Connect(ctx, cfg)
 }
 
 func (c *Client) Ready() bool {
@@ -29,6 +56,67 @@ func (c *Client) Ready() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return !c.closed && c.nc != nil && c.nc.IsConnected()
+}
+
+// Reconnect replaces the underlying NATS connection with a fresh connection.
+// It is intended for JetStream subscriptions that remain invalid after the
+// server has restarted. The durable consumer is preserved on the server and
+// callers can bind a new subscription after this method returns.
+func (c *Client) Reconnect(ctx context.Context) error {
+	if c == nil {
+		return ErrConnection
+	}
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return ErrClosed
+	}
+	cfg := c.cfg
+	c.mu.RUnlock()
+
+	replacement, err := Connect(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		_ = replacement.Close()
+		return ErrClosed
+	}
+	old := c.nc
+	c.nc = replacement.nc
+	c.js = replacement.js
+	c.cfg = replacement.cfg
+	c.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	return nil
+}
+
+func (c *Client) jetStream() (nats.JetStreamContext, error) {
+	if c == nil {
+		return nil, ErrConnection
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closed || c.js == nil {
+		return nil, ErrClosed
+	}
+	return c.js, nil
+}
+
+func (c *Client) maxPayload() int {
+	if c == nil {
+		return defaultMaxPayload
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg.MaxPayload
 }
 
 // Connect establishes a NATS connection and creates a JetStream context.
@@ -49,6 +137,9 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if len(cfg.URLs) == 0 || strings.TrimSpace(strings.Join(cfg.URLs, ",")) == "" {
 		return nil, fmt.Errorf("%w: at least one NATS URL is required", ErrConnection)
 	}
+	if cfg.TLSCAFile != "" && cfg.TLSCAPEMBase64 != "" {
+		return nil, fmt.Errorf("%w: TLS CA file and embedded PEM are mutually exclusive", ErrConnection)
+	}
 	for _, rawURL := range cfg.URLs {
 		parsed, err := url.Parse(strings.TrimSpace(rawURL))
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -57,7 +148,7 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		if !isLoopbackHost(parsed.Hostname()) && parsed.Scheme != "tls" {
 			return nil, fmt.Errorf("%w: non-loopback NATS URL %q must use tls", ErrConnection, rawURL)
 		}
-		if !isLoopbackHost(parsed.Hostname()) && cfg.TLSCAFile == "" {
+		if !isLoopbackHost(parsed.Hostname()) && cfg.TLSCAFile == "" && cfg.TLSCAPEMBase64 == "" {
 			return nil, fmt.Errorf("%w: non-loopback NATS URL %q requires TLS CA", ErrConnection, rawURL)
 		}
 	}
@@ -74,6 +165,17 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.TLSCAFile != "" {
 		opts = append(opts, nats.RootCAs(cfg.TLSCAFile))
 	}
+	if cfg.TLSCAPEMBase64 != "" {
+		pemBytes, err := base64.StdEncoding.DecodeString(cfg.TLSCAPEMBase64)
+		if err != nil {
+			return nil, fmt.Errorf("%w: decode TLS CA PEM: %w", ErrConnection, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pemBytes) {
+			return nil, fmt.Errorf("%w: TLS CA PEM contains no certificates", ErrConnection)
+		}
+		opts = append(opts, nats.Secure(&tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}))
+	}
 	if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 			return nil, fmt.Errorf("%w: TLS certificate and key must be configured together", ErrConnection)
@@ -82,6 +184,14 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	if cfg.TLSCAFile != "" || cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 		opts = append(opts, nats.Secure())
+	}
+	if tlsHandshakeFirstRequired(cfg.URLs) {
+		opts = append(opts, nats.TLSHandshakeFirst())
+	}
+	if cfg.AsyncErrorHandler != nil {
+		opts = append(opts, nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			cfg.AsyncErrorHandler(err)
+		}))
 	}
 	reconnectBuffer := cfg.ReconnectBufferBytes
 	if reconnectBuffer == 0 {
@@ -93,6 +203,8 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		nats.ReconnectWait(cfg.ReconnectWait),
 		nats.MaxReconnects(cfg.MaxReconnects),
 		nats.ReconnectBufSize(reconnectBuffer),
+		nats.SetCustomDialer(newTrackingDialer(cfg.ConnectTimeout)),
+		nats.PingInterval(20*time.Second),
 	)
 
 	connectCtx := ctx
@@ -132,13 +244,28 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	if res.err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConnection, res.err)
 	}
-	if res.nc == nil || !res.nc.IsConnected() {
-		status := "unknown"
-		if res.nc != nil {
-			status = res.nc.Status().String()
-			res.nc.Close()
+	if res.nc == nil {
+		return nil, fmt.Errorf("%w: nats connection is nil", ErrConnection)
+	}
+	// RetryOnFailedConnect can return a live Conn while the first handshake is
+	// still RECONNECTING. Closing that Conn is what leaked CLOSE-WAIT sockets
+	// on Host Agent: the reconnect loop dialed again after we already rejected
+	// the client. Wait until CONNECTED or the connect deadline.
+	for !res.nc.IsConnected() {
+		if res.nc.IsClosed() {
+			return nil, fmt.Errorf("%w: initial NATS connection is not ready (status=%s last=%v)", ErrConnection, res.nc.Status(), res.nc.LastError())
 		}
-		return nil, fmt.Errorf("%w: initial NATS connection is not ready (status=%s)", ErrConnection, status)
+		select {
+		case <-connectCtx.Done():
+			status := res.nc.Status().String()
+			lastErr := res.nc.LastError()
+			res.nc.Close()
+			if lastErr != nil {
+				return nil, fmt.Errorf("%w: initial NATS connection is not ready (status=%s last=%v)", ErrConnection, status, lastErr)
+			}
+			return nil, fmt.Errorf("%w: initial NATS connection is not ready (status=%s)", ErrConnection, status)
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 	js, err := res.nc.JetStream()
 	if err != nil {
@@ -146,6 +273,16 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("%w: create jetstream context: %w", ErrConnection, err)
 	}
 	return &Client{nc: res.nc, js: js, cfg: cfg}, nil
+}
+
+func tlsHandshakeFirstRequired(urls []string) bool {
+	for _, rawURL := range urls {
+		parsed, err := url.Parse(strings.TrimSpace(rawURL))
+		if err == nil && parsed.Scheme == "tls" {
+			return true
+		}
+	}
+	return false
 }
 
 func isLoopbackHost(host string) bool {
@@ -168,6 +305,20 @@ func (c *Client) Close() error {
 	c.mu.Unlock()
 	if nc != nil {
 		nc.Close()
+	}
+	return nil
+}
+
+func (c *Client) DeleteConsumer(ctx context.Context, stream, durable string) error {
+	js, err := c.jetStream()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(stream) == "" || strings.TrimSpace(durable) == "" {
+		return fmt.Errorf("%w: stream and durable are required", ErrInvalidConsumer)
+	}
+	if err := js.DeleteConsumer(stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+		return fmt.Errorf("%w: delete consumer %s/%s: %w", ErrInvalidConsumer, stream, durable, err)
 	}
 	return nil
 }

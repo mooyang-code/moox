@@ -502,7 +502,7 @@ Expected: `web-host/internal/statik/statik.go` contains the current `web/dist` b
 Run:
 
 ```bash
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 ```
 
 Expected: `bin/moox-web-host` is an x86-64 Linux executable.

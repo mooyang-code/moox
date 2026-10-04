@@ -17,9 +17,12 @@ import (
 
 // START ======================================= Server Service Definition ======================================= START
 
-// DataNodeService defines service.
-type DataNodeService interface {
-	WriteFields(ctx context.Context, req *WriteFieldsReq) (*WriteFieldsRsp, error)
+// DataNodeRuntimeService defines service.
+type DataNodeRuntimeService interface {
+	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
+	UpsertFields(ctx context.Context, req *UpsertFieldsReq) (*UpsertFieldsRsp, error)
+
+	WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq) (*WriteFactorRowsRsp, error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error)
 
@@ -28,14 +31,14 @@ type DataNodeService interface {
 	CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error)
 }
 
-func DataNodeService_WriteFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &WriteFieldsReq{}
+func DataNodeRuntimeService_UpsertFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertFieldsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).WriteFields(ctx, reqbody.(*WriteFieldsReq))
+		return svr.(DataNodeRuntimeService).UpsertFields(ctx, reqbody.(*UpsertFieldsReq))
 	}
 
 	var rsp interface{}
@@ -46,14 +49,32 @@ func DataNodeService_WriteFields_Handler(svr interface{}, ctx context.Context, f
 	return rsp, nil
 }
 
-func DataNodeService_ReadFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataNodeRuntimeService_WriteFactorRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &WriteFactorRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeRuntimeService).WriteFactorRows(ctx, reqbody.(*WriteFactorRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodeRuntimeService_ReadFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReadFieldsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).ReadFields(ctx, reqbody.(*ReadFieldsReq))
+		return svr.(DataNodeRuntimeService).ReadFields(ctx, reqbody.(*ReadFieldsReq))
 	}
 
 	var rsp interface{}
@@ -64,14 +85,14 @@ func DataNodeService_ReadFields_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
-func DataNodeService_GetNodeState_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataNodeRuntimeService_GetNodeState_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetNodeStateReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).GetNodeState(ctx, reqbody.(*GetNodeStateReq))
+		return svr.(DataNodeRuntimeService).GetNodeState(ctx, reqbody.(*GetNodeStateReq))
 	}
 
 	var rsp interface{}
@@ -82,14 +103,14 @@ func DataNodeService_GetNodeState_Handler(svr interface{}, ctx context.Context, 
 	return rsp, nil
 }
 
-func DataNodeService_CleanupExpiredBuckets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func DataNodeRuntimeService_CleanupExpiredBuckets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &CleanupExpiredBucketsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeService).CleanupExpiredBuckets(ctx, reqbody.(*CleanupExpiredBucketsReq))
+		return svr.(DataNodeRuntimeService).CleanupExpiredBuckets(ctx, reqbody.(*CleanupExpiredBucketsReq))
 	}
 
 	var rsp interface{}
@@ -100,52 +121,441 @@ func DataNodeService_CleanupExpiredBuckets_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-// DataNodeServer_ServiceDesc descriptor for server.RegisterService.
-var DataNodeServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.storage.DataNode",
-	HandlerType: ((*DataNodeService)(nil)),
+// DataNodeRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var DataNodeRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataNodeRuntime",
+	HandlerType: ((*DataNodeRuntimeService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.storage.DataNode/WriteFields",
-			Func: DataNodeService_WriteFields_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/UpsertFields",
+			Func: DataNodeRuntimeService_UpsertFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNode/ReadFields",
-			Func: DataNodeService_ReadFields_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/WriteFactorRows",
+			Func: DataNodeRuntimeService_WriteFactorRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNode/GetNodeState",
-			Func: DataNodeService_GetNodeState_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/ReadFields",
+			Func: DataNodeRuntimeService_ReadFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNode/CleanupExpiredBuckets",
-			Func: DataNodeService_CleanupExpiredBuckets_Handler,
+			Name: "/trpc.moox.storage.DataNodeRuntime/GetNodeState",
+			Func: DataNodeRuntimeService_GetNodeState_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodeRuntime/CleanupExpiredBuckets",
+			Func: DataNodeRuntimeService_CleanupExpiredBuckets_Handler,
 		},
 	},
 }
 
-// RegisterDataNodeService registers service.
-func RegisterDataNodeService(s server.Service, svr DataNodeService) {
-	if err := s.Register(&DataNodeServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("DataNode register error:%v", err))
+// RegisterDataNodeRuntimeService registers service.
+func RegisterDataNodeRuntimeService(s server.Service, svr DataNodeRuntimeService) {
+	if err := s.Register(&DataNodeRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataNodeRuntime register error:%v", err))
+	}
+}
+
+// DataNodePeriodRuntimeService defines service.
+type DataNodePeriodRuntimeService interface {
+	EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq) (*EnsureDatasetPeriodRsp, error)
+
+	GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq) (*GetDatasetPeriodStatusRsp, error)
+
+	CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq) (*CommitTimeSeriesBatchRsp, error)
+
+	RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq) (*RecordDatasetPeriodFailuresRsp, error)
+}
+
+func DataNodePeriodRuntimeService_EnsureDatasetPeriod_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &EnsureDatasetPeriodReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodePeriodRuntimeService).EnsureDatasetPeriod(ctx, reqbody.(*EnsureDatasetPeriodReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodePeriodRuntimeService_GetDatasetPeriodStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetDatasetPeriodStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodePeriodRuntimeService).GetDatasetPeriodStatus(ctx, reqbody.(*GetDatasetPeriodStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodePeriodRuntimeService_CommitTimeSeriesBatch_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CommitTimeSeriesBatchReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodePeriodRuntimeService).CommitTimeSeriesBatch(ctx, reqbody.(*CommitTimeSeriesBatchReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodePeriodRuntimeService_RecordDatasetPeriodFailures_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RecordDatasetPeriodFailuresReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodePeriodRuntimeService).RecordDatasetPeriodFailures(ctx, reqbody.(*RecordDatasetPeriodFailuresReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodePeriodRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var DataNodePeriodRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataNodePeriodRuntime",
+	HandlerType: ((*DataNodePeriodRuntimeService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.storage.DataNodePeriodRuntime/EnsureDatasetPeriod",
+			Func: DataNodePeriodRuntimeService_EnsureDatasetPeriod_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodePeriodRuntime/GetDatasetPeriodStatus",
+			Func: DataNodePeriodRuntimeService_GetDatasetPeriodStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodePeriodRuntime/CommitTimeSeriesBatch",
+			Func: DataNodePeriodRuntimeService_CommitTimeSeriesBatch_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodePeriodRuntime/RecordDatasetPeriodFailures",
+			Func: DataNodePeriodRuntimeService_RecordDatasetPeriodFailures_Handler,
+		},
+	},
+}
+
+// RegisterDataNodePeriodRuntimeService registers service.
+func RegisterDataNodePeriodRuntimeService(s server.Service, svr DataNodePeriodRuntimeService) {
+	if err := s.Register(&DataNodePeriodRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataNodePeriodRuntime register error:%v", err))
+	}
+}
+
+// DataNodeDatasetAdminRuntimeService defines service.
+type DataNodeDatasetAdminRuntimeService interface {
+	DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq) (*DeleteDatasetRowsRsp, error)
+
+	RestoreDatasetRows(ctx context.Context, req *RestoreDatasetRowsReq) (*RestoreDatasetRowsRsp, error)
+}
+
+func DataNodeDatasetAdminRuntimeService_DeleteDatasetRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteDatasetRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeDatasetAdminRuntimeService).DeleteDatasetRows(ctx, reqbody.(*DeleteDatasetRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodeDatasetAdminRuntimeService_RestoreDatasetRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RestoreDatasetRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeDatasetAdminRuntimeService).RestoreDatasetRows(ctx, reqbody.(*RestoreDatasetRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodeDatasetAdminRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var DataNodeDatasetAdminRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataNodeDatasetAdminRuntime",
+	HandlerType: ((*DataNodeDatasetAdminRuntimeService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.storage.DataNodeDatasetAdminRuntime/DeleteDatasetRows",
+			Func: DataNodeDatasetAdminRuntimeService_DeleteDatasetRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodeDatasetAdminRuntime/RestoreDatasetRows",
+			Func: DataNodeDatasetAdminRuntimeService_RestoreDatasetRows_Handler,
+		},
+	},
+}
+
+// RegisterDataNodeDatasetAdminRuntimeService registers service.
+func RegisterDataNodeDatasetAdminRuntimeService(s server.Service, svr DataNodeDatasetAdminRuntimeService) {
+	if err := s.Register(&DataNodeDatasetAdminRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataNodeDatasetAdminRuntime register error:%v", err))
+	}
+}
+
+// DataNodeMarkerRuntimeService defines service.
+type DataNodeMarkerRuntimeService interface {
+	AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq) (*AppendCollectorPeriodCompletedRsp, error)
+
+	AppendFactorPeriodComputed(ctx context.Context, req *AppendFactorPeriodComputedReq) (*AppendFactorPeriodComputedRsp, error)
+
+	AppendDatasetSyncPointMarker(ctx context.Context, req *AppendDatasetSyncPointMarkerReq) (*AppendDatasetSyncPointMarkerRsp, error)
+
+	GetFactorPeriodComputedMarker(ctx context.Context, req *GetFactorPeriodComputedMarkerReq) (*GetFactorPeriodComputedMarkerRsp, error)
+}
+
+func DataNodeMarkerRuntimeService_AppendCollectorPeriodCompleted_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AppendCollectorPeriodCompletedReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeMarkerRuntimeService).AppendCollectorPeriodCompleted(ctx, reqbody.(*AppendCollectorPeriodCompletedReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodeMarkerRuntimeService_AppendFactorPeriodComputed_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AppendFactorPeriodComputedReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeMarkerRuntimeService).AppendFactorPeriodComputed(ctx, reqbody.(*AppendFactorPeriodComputedReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodeMarkerRuntimeService_AppendDatasetSyncPointMarker_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AppendDatasetSyncPointMarkerReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeMarkerRuntimeService).AppendDatasetSyncPointMarker(ctx, reqbody.(*AppendDatasetSyncPointMarkerReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataNodeMarkerRuntimeService_GetFactorPeriodComputedMarker_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetFactorPeriodComputedMarkerReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeMarkerRuntimeService).GetFactorPeriodComputedMarker(ctx, reqbody.(*GetFactorPeriodComputedMarkerReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodeMarkerRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var DataNodeMarkerRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataNodeMarkerRuntime",
+	HandlerType: ((*DataNodeMarkerRuntimeService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/AppendCollectorPeriodCompleted",
+			Func: DataNodeMarkerRuntimeService_AppendCollectorPeriodCompleted_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/AppendFactorPeriodComputed",
+			Func: DataNodeMarkerRuntimeService_AppendFactorPeriodComputed_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/AppendDatasetSyncPointMarker",
+			Func: DataNodeMarkerRuntimeService_AppendDatasetSyncPointMarker_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/GetFactorPeriodComputedMarker",
+			Func: DataNodeMarkerRuntimeService_GetFactorPeriodComputedMarker_Handler,
+		},
+	},
+}
+
+// RegisterDataNodeMarkerRuntimeService registers service.
+func RegisterDataNodeMarkerRuntimeService(s server.Service, svr DataNodeMarkerRuntimeService) {
+	if err := s.Register(&DataNodeMarkerRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataNodeMarkerRuntime register error:%v", err))
+	}
+}
+
+// DataNodeHistoryRuntimeService defines service.
+type DataNodeHistoryRuntimeService interface {
+	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
+}
+
+func DataNodeHistoryRuntimeService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReadTimeSeriesRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeHistoryRuntimeService).ReadTimeSeriesRows(ctx, reqbody.(*ReadTimeSeriesRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodeHistoryRuntimeServer_ServiceDesc descriptor for server.RegisterService.
+var DataNodeHistoryRuntimeServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.storage.DataNodeHistoryRuntime",
+	HandlerType: ((*DataNodeHistoryRuntimeService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.storage.DataNodeHistoryRuntime/ReadTimeSeriesRows",
+			Func: DataNodeHistoryRuntimeService_ReadTimeSeriesRows_Handler,
+		},
+	},
+}
+
+// RegisterDataNodeHistoryRuntimeService registers service.
+func RegisterDataNodeHistoryRuntimeService(s server.Service, svr DataNodeHistoryRuntimeService) {
+	if err := s.Register(&DataNodeHistoryRuntimeServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("DataNodeHistoryRuntime register error:%v", err))
 	}
 }
 
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
-type UnimplementedDataNode struct{}
+type UnimplementedDataNodeRuntime struct{}
 
-func (s *UnimplementedDataNode) WriteFields(ctx context.Context, req *WriteFieldsReq) (*WriteFieldsRsp, error) {
-	return nil, errors.New("rpc WriteFields of service DataNode is not implemented")
+// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
+func (s *UnimplementedDataNodeRuntime) UpsertFields(ctx context.Context, req *UpsertFieldsReq) (*UpsertFieldsRsp, error) {
+	return nil, errors.New("rpc UpsertFields of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNode) ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error) {
-	return nil, errors.New("rpc ReadFields of service DataNode is not implemented")
+func (s *UnimplementedDataNodeRuntime) WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq) (*WriteFactorRowsRsp, error) {
+	return nil, errors.New("rpc WriteFactorRows of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNode) GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error) {
-	return nil, errors.New("rpc GetNodeState of service DataNode is not implemented")
+func (s *UnimplementedDataNodeRuntime) ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error) {
+	return nil, errors.New("rpc ReadFields of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNode) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error) {
-	return nil, errors.New("rpc CleanupExpiredBuckets of service DataNode is not implemented")
+func (s *UnimplementedDataNodeRuntime) GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error) {
+	return nil, errors.New("rpc GetNodeState of service DataNodeRuntime is not implemented")
+}
+func (s *UnimplementedDataNodeRuntime) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq) (*CleanupExpiredBucketsRsp, error) {
+	return nil, errors.New("rpc CleanupExpiredBuckets of service DataNodeRuntime is not implemented")
+}
+
+type UnimplementedDataNodePeriodRuntime struct{}
+
+func (s *UnimplementedDataNodePeriodRuntime) EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq) (*EnsureDatasetPeriodRsp, error) {
+	return nil, errors.New("rpc EnsureDatasetPeriod of service DataNodePeriodRuntime is not implemented")
+}
+func (s *UnimplementedDataNodePeriodRuntime) GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq) (*GetDatasetPeriodStatusRsp, error) {
+	return nil, errors.New("rpc GetDatasetPeriodStatus of service DataNodePeriodRuntime is not implemented")
+}
+func (s *UnimplementedDataNodePeriodRuntime) CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq) (*CommitTimeSeriesBatchRsp, error) {
+	return nil, errors.New("rpc CommitTimeSeriesBatch of service DataNodePeriodRuntime is not implemented")
+}
+func (s *UnimplementedDataNodePeriodRuntime) RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq) (*RecordDatasetPeriodFailuresRsp, error) {
+	return nil, errors.New("rpc RecordDatasetPeriodFailures of service DataNodePeriodRuntime is not implemented")
+}
+
+type UnimplementedDataNodeDatasetAdminRuntime struct{}
+
+func (s *UnimplementedDataNodeDatasetAdminRuntime) DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq) (*DeleteDatasetRowsRsp, error) {
+	return nil, errors.New("rpc DeleteDatasetRows of service DataNodeDatasetAdminRuntime is not implemented")
+}
+func (s *UnimplementedDataNodeDatasetAdminRuntime) RestoreDatasetRows(ctx context.Context, req *RestoreDatasetRowsReq) (*RestoreDatasetRowsRsp, error) {
+	return nil, errors.New("rpc RestoreDatasetRows of service DataNodeDatasetAdminRuntime is not implemented")
+}
+
+type UnimplementedDataNodeMarkerRuntime struct{}
+
+func (s *UnimplementedDataNodeMarkerRuntime) AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq) (*AppendCollectorPeriodCompletedRsp, error) {
+	return nil, errors.New("rpc AppendCollectorPeriodCompleted of service DataNodeMarkerRuntime is not implemented")
+}
+func (s *UnimplementedDataNodeMarkerRuntime) AppendFactorPeriodComputed(ctx context.Context, req *AppendFactorPeriodComputedReq) (*AppendFactorPeriodComputedRsp, error) {
+	return nil, errors.New("rpc AppendFactorPeriodComputed of service DataNodeMarkerRuntime is not implemented")
+}
+func (s *UnimplementedDataNodeMarkerRuntime) AppendDatasetSyncPointMarker(ctx context.Context, req *AppendDatasetSyncPointMarkerReq) (*AppendDatasetSyncPointMarkerRsp, error) {
+	return nil, errors.New("rpc AppendDatasetSyncPointMarker of service DataNodeMarkerRuntime is not implemented")
+}
+func (s *UnimplementedDataNodeMarkerRuntime) GetFactorPeriodComputedMarker(ctx context.Context, req *GetFactorPeriodComputedMarkerReq) (*GetFactorPeriodComputedMarkerRsp, error) {
+	return nil, errors.New("rpc GetFactorPeriodComputedMarker of service DataNodeMarkerRuntime is not implemented")
+}
+
+type UnimplementedDataNodeHistoryRuntime struct{}
+
+func (s *UnimplementedDataNodeHistoryRuntime) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc ReadTimeSeriesRows of service DataNodeHistoryRuntime is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -154,9 +564,12 @@ func (s *UnimplementedDataNode) CleanupExpiredBuckets(ctx context.Context, req *
 
 // START ======================================= Client Service Definition ======================================= START
 
-// DataNodeClientProxy defines service client proxy
-type DataNodeClientProxy interface {
-	WriteFields(ctx context.Context, req *WriteFieldsReq, opts ...client.Option) (rsp *WriteFieldsRsp, err error)
+// DataNodeRuntimeClientProxy defines service client proxy
+type DataNodeRuntimeClientProxy interface {
+	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
+	UpsertFields(ctx context.Context, req *UpsertFieldsReq, opts ...client.Option) (rsp *UpsertFieldsRsp, err error)
+
+	WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq, opts ...client.Option) (rsp *WriteFactorRowsRsp, err error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (rsp *ReadFieldsRsp, err error)
 
@@ -165,43 +578,63 @@ type DataNodeClientProxy interface {
 	CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq, opts ...client.Option) (rsp *CleanupExpiredBucketsRsp, err error)
 }
 
-type DataNodeClientProxyImpl struct {
+type DataNodeRuntimeClientProxyImpl struct {
 	client client.Client
 	opts   []client.Option
 }
 
-var NewDataNodeClientProxy = func(opts ...client.Option) DataNodeClientProxy {
-	return &DataNodeClientProxyImpl{client: client.DefaultClient, opts: opts}
+var NewDataNodeRuntimeClientProxy = func(opts ...client.Option) DataNodeRuntimeClientProxy {
+	return &DataNodeRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *DataNodeClientProxyImpl) WriteFields(ctx context.Context, req *WriteFieldsReq, opts ...client.Option) (*WriteFieldsRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) UpsertFields(ctx context.Context, req *UpsertFieldsReq, opts ...client.Option) (*UpsertFieldsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/WriteFields")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/UpsertFields")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
-	msg.WithCalleeMethod("WriteFields")
+	msg.WithCalleeService("DataNodeRuntime")
+	msg.WithCalleeMethod("UpsertFields")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &WriteFieldsRsp{}
+	rsp := &UpsertFieldsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *DataNodeClientProxyImpl) ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (*ReadFieldsRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq, opts ...client.Option) (*WriteFactorRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/ReadFields")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/WriteFactorRows")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
+	msg.WithCalleeService("DataNodeRuntime")
+	msg.WithCalleeMethod("WriteFactorRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &WriteFactorRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeRuntimeClientProxyImpl) ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (*ReadFieldsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/ReadFields")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeRuntime")
 	msg.WithCalleeMethod("ReadFields")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -214,14 +647,14 @@ func (c *DataNodeClientProxyImpl) ReadFields(ctx context.Context, req *ReadField
 	return rsp, nil
 }
 
-func (c *DataNodeClientProxyImpl) GetNodeState(ctx context.Context, req *GetNodeStateReq, opts ...client.Option) (*GetNodeStateRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) GetNodeState(ctx context.Context, req *GetNodeStateReq, opts ...client.Option) (*GetNodeStateRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/GetNodeState")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/GetNodeState")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
+	msg.WithCalleeService("DataNodeRuntime")
 	msg.WithCalleeMethod("GetNodeState")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
@@ -234,20 +667,310 @@ func (c *DataNodeClientProxyImpl) GetNodeState(ctx context.Context, req *GetNode
 	return rsp, nil
 }
 
-func (c *DataNodeClientProxyImpl) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq, opts ...client.Option) (*CleanupExpiredBucketsRsp, error) {
+func (c *DataNodeRuntimeClientProxyImpl) CleanupExpiredBuckets(ctx context.Context, req *CleanupExpiredBucketsReq, opts ...client.Option) (*CleanupExpiredBucketsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNode/CleanupExpiredBuckets")
-	msg.WithCalleeServiceName(DataNodeServer_ServiceDesc.ServiceName)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/CleanupExpiredBuckets")
+	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNode")
+	msg.WithCalleeService("DataNodeRuntime")
 	msg.WithCalleeMethod("CleanupExpiredBuckets")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CleanupExpiredBucketsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodePeriodRuntimeClientProxy defines service client proxy
+type DataNodePeriodRuntimeClientProxy interface {
+	EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq, opts ...client.Option) (rsp *EnsureDatasetPeriodRsp, err error)
+
+	GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq, opts ...client.Option) (rsp *GetDatasetPeriodStatusRsp, err error)
+
+	CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq, opts ...client.Option) (rsp *CommitTimeSeriesBatchRsp, err error)
+
+	RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq, opts ...client.Option) (rsp *RecordDatasetPeriodFailuresRsp, err error)
+}
+
+type DataNodePeriodRuntimeClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewDataNodePeriodRuntimeClientProxy = func(opts ...client.Option) DataNodePeriodRuntimeClientProxy {
+	return &DataNodePeriodRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *DataNodePeriodRuntimeClientProxyImpl) EnsureDatasetPeriod(ctx context.Context, req *EnsureDatasetPeriodReq, opts ...client.Option) (*EnsureDatasetPeriodRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/EnsureDatasetPeriod")
+	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodePeriodRuntime")
+	msg.WithCalleeMethod("EnsureDatasetPeriod")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &EnsureDatasetPeriodRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodePeriodRuntimeClientProxyImpl) GetDatasetPeriodStatus(ctx context.Context, req *GetDatasetPeriodStatusReq, opts ...client.Option) (*GetDatasetPeriodStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/GetDatasetPeriodStatus")
+	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodePeriodRuntime")
+	msg.WithCalleeMethod("GetDatasetPeriodStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetDatasetPeriodStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodePeriodRuntimeClientProxyImpl) CommitTimeSeriesBatch(ctx context.Context, req *CommitTimeSeriesBatchReq, opts ...client.Option) (*CommitTimeSeriesBatchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/CommitTimeSeriesBatch")
+	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodePeriodRuntime")
+	msg.WithCalleeMethod("CommitTimeSeriesBatch")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CommitTimeSeriesBatchRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodePeriodRuntimeClientProxyImpl) RecordDatasetPeriodFailures(ctx context.Context, req *RecordDatasetPeriodFailuresReq, opts ...client.Option) (*RecordDatasetPeriodFailuresRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodePeriodRuntime/RecordDatasetPeriodFailures")
+	msg.WithCalleeServiceName(DataNodePeriodRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodePeriodRuntime")
+	msg.WithCalleeMethod("RecordDatasetPeriodFailures")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RecordDatasetPeriodFailuresRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodeDatasetAdminRuntimeClientProxy defines service client proxy
+type DataNodeDatasetAdminRuntimeClientProxy interface {
+	DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq, opts ...client.Option) (rsp *DeleteDatasetRowsRsp, err error)
+
+	RestoreDatasetRows(ctx context.Context, req *RestoreDatasetRowsReq, opts ...client.Option) (rsp *RestoreDatasetRowsRsp, err error)
+}
+
+type DataNodeDatasetAdminRuntimeClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewDataNodeDatasetAdminRuntimeClientProxy = func(opts ...client.Option) DataNodeDatasetAdminRuntimeClientProxy {
+	return &DataNodeDatasetAdminRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *DataNodeDatasetAdminRuntimeClientProxyImpl) DeleteDatasetRows(ctx context.Context, req *DeleteDatasetRowsReq, opts ...client.Option) (*DeleteDatasetRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeDatasetAdminRuntime/DeleteDatasetRows")
+	msg.WithCalleeServiceName(DataNodeDatasetAdminRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeDatasetAdminRuntime")
+	msg.WithCalleeMethod("DeleteDatasetRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteDatasetRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeDatasetAdminRuntimeClientProxyImpl) RestoreDatasetRows(ctx context.Context, req *RestoreDatasetRowsReq, opts ...client.Option) (*RestoreDatasetRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeDatasetAdminRuntime/RestoreDatasetRows")
+	msg.WithCalleeServiceName(DataNodeDatasetAdminRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeDatasetAdminRuntime")
+	msg.WithCalleeMethod("RestoreDatasetRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RestoreDatasetRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodeMarkerRuntimeClientProxy defines service client proxy
+type DataNodeMarkerRuntimeClientProxy interface {
+	AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq, opts ...client.Option) (rsp *AppendCollectorPeriodCompletedRsp, err error)
+
+	AppendFactorPeriodComputed(ctx context.Context, req *AppendFactorPeriodComputedReq, opts ...client.Option) (rsp *AppendFactorPeriodComputedRsp, err error)
+
+	AppendDatasetSyncPointMarker(ctx context.Context, req *AppendDatasetSyncPointMarkerReq, opts ...client.Option) (rsp *AppendDatasetSyncPointMarkerRsp, err error)
+
+	GetFactorPeriodComputedMarker(ctx context.Context, req *GetFactorPeriodComputedMarkerReq, opts ...client.Option) (rsp *GetFactorPeriodComputedMarkerRsp, err error)
+}
+
+type DataNodeMarkerRuntimeClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewDataNodeMarkerRuntimeClientProxy = func(opts ...client.Option) DataNodeMarkerRuntimeClientProxy {
+	return &DataNodeMarkerRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *DataNodeMarkerRuntimeClientProxyImpl) AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq, opts ...client.Option) (*AppendCollectorPeriodCompletedRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/AppendCollectorPeriodCompleted")
+	msg.WithCalleeServiceName(DataNodeMarkerRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeMarkerRuntime")
+	msg.WithCalleeMethod("AppendCollectorPeriodCompleted")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AppendCollectorPeriodCompletedRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeMarkerRuntimeClientProxyImpl) AppendFactorPeriodComputed(ctx context.Context, req *AppendFactorPeriodComputedReq, opts ...client.Option) (*AppendFactorPeriodComputedRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/AppendFactorPeriodComputed")
+	msg.WithCalleeServiceName(DataNodeMarkerRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeMarkerRuntime")
+	msg.WithCalleeMethod("AppendFactorPeriodComputed")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AppendFactorPeriodComputedRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeMarkerRuntimeClientProxyImpl) AppendDatasetSyncPointMarker(ctx context.Context, req *AppendDatasetSyncPointMarkerReq, opts ...client.Option) (*AppendDatasetSyncPointMarkerRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/AppendDatasetSyncPointMarker")
+	msg.WithCalleeServiceName(DataNodeMarkerRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeMarkerRuntime")
+	msg.WithCalleeMethod("AppendDatasetSyncPointMarker")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AppendDatasetSyncPointMarkerRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeMarkerRuntimeClientProxyImpl) GetFactorPeriodComputedMarker(ctx context.Context, req *GetFactorPeriodComputedMarkerReq, opts ...client.Option) (*GetFactorPeriodComputedMarkerRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/GetFactorPeriodComputedMarker")
+	msg.WithCalleeServiceName(DataNodeMarkerRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeMarkerRuntime")
+	msg.WithCalleeMethod("GetFactorPeriodComputedMarker")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetFactorPeriodComputedMarkerRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// DataNodeHistoryRuntimeClientProxy defines service client proxy
+type DataNodeHistoryRuntimeClientProxy interface {
+	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
+}
+
+type DataNodeHistoryRuntimeClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewDataNodeHistoryRuntimeClientProxy = func(opts ...client.Option) DataNodeHistoryRuntimeClientProxy {
+	return &DataNodeHistoryRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *DataNodeHistoryRuntimeClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (*ReadTimeSeriesRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeHistoryRuntime/ReadTimeSeriesRows")
+	msg.WithCalleeServiceName(DataNodeHistoryRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeHistoryRuntime")
+	msg.WithCalleeMethod("ReadTimeSeriesRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReadTimeSeriesRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

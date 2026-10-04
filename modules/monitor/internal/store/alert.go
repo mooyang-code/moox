@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -29,49 +31,40 @@ func (r *AlertRepository) CountFiring(ctx context.Context, spaceID string) (int6
 	return count, nil
 }
 
-func (r *AlertRepository) CreateWebhook(ctx context.Context, webhook *domain.WebhookChannel) error {
-	return r.db.WithContext(ctx).Create(webhook).Error
-}
-
-func (r *AlertRepository) UpdateWebhook(ctx context.Context, webhook *domain.WebhookChannel) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.WebhookChannel{}).
-		Where("c_space_id = ? AND c_webhook_id = ? AND c_is_deleted = 0", webhook.SpaceID, webhook.WebhookID).
-		Updates(map[string]any{
-			"c_name":          webhook.Name,
-			"c_url":           webhook.URL,
-			"c_method":        webhook.Method,
-			"c_headers":       webhook.Headers,
-			"c_body_template": webhook.BodyTemplate,
-			"c_enabled":       webhook.Enabled,
-		}).Error
-}
-
-func (r *AlertRepository) ListWebhooks(ctx context.Context, spaceID string) ([]domain.WebhookChannel, error) {
-	var webhooks []domain.WebhookChannel
-	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_is_deleted = 0", spaceID).
-		Order("c_name ASC").
-		Find(&webhooks).Error
-	return webhooks, err
-}
-
-func (r *AlertRepository) GetWebhook(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
-	var webhook domain.WebhookChannel
-	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_webhook_id = ? AND c_is_deleted = 0", spaceID, webhookID).
-		First(&webhook).Error
-	if err != nil {
-		return nil, err
+func (r *AlertRepository) ListFiringStates(ctx context.Context, spaceID string, limit int) ([]domain.AlertState, error) {
+	query := r.db.WithContext(ctx).Where("c_status = ?", domain.AlertStatusFiring)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
 	}
-	return &webhook, nil
+	query = query.Order("c_triggered_at DESC, c_id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var states []domain.AlertState
+	err := query.Find(&states).Error
+	return states, err
 }
 
-func (r *AlertRepository) DeleteWebhook(ctx context.Context, spaceID, webhookID string) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.WebhookChannel{}).
-		Where("c_space_id = ? AND c_webhook_id = ? AND c_is_deleted = 0", spaceID, webhookID).
-		Updates(map[string]any{"c_is_deleted": true}).Error
+// ListEnabledFiringStates applies the code-owned check/rule filter in SQL
+// before limiting the response. This keeps the health page bounded without
+// letting disabled rows crowd out active alerts or issuing N+1 lookups.
+func (r *AlertRepository) ListEnabledFiringStates(ctx context.Context, spaceID string, limit int) ([]domain.AlertState, error) {
+	query := r.db.WithContext(ctx).
+		Table("t_monitor_alert_states AS s").
+		Select("s.*").
+		Joins("JOIN t_monitor_alert_rules AS r ON r.c_space_id = s.c_space_id AND r.c_rule_id = s.c_rule_id AND r.c_check_id = s.c_check_id").
+		Where("s.c_status = ? AND r.c_enabled = 1 AND r.c_rule_id LIKE ?", domain.AlertStatusFiring, "default:%").
+		Where("s.c_check_id LIKE ? OR EXISTS (SELECT 1 FROM t_monitor_checks AS c WHERE c.c_space_id = s.c_space_id AND c.c_check_id = s.c_check_id AND c.c_enabled = 1)", "host:%").
+		Order("s.c_triggered_at DESC, s.c_id DESC")
+	if spaceID != "" {
+		query = query.Where("s.c_space_id = ?", spaceID)
+	}
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var states []domain.AlertState
+	err := query.Find(&states).Error
+	return states, err
 }
 
 func (r *AlertRepository) CreateRule(ctx context.Context, rule *domain.AlertRule) error {
@@ -79,25 +72,30 @@ func (r *AlertRepository) CreateRule(ctx context.Context, rule *domain.AlertRule
 }
 
 func (r *AlertRepository) UpdateRule(ctx context.Context, rule *domain.AlertRule) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.AlertRule{}).
-		Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = 0", rule.SpaceID, rule.RuleID).
+	updated := r.db.WithContext(ctx).Model(&domain.AlertRule{}).
+		Where("c_space_id = ? AND c_rule_id = ?", rule.SpaceID, rule.RuleID).
 		Updates(map[string]any{
 			"c_check_id":                          rule.CheckID,
-			"c_webhook_id":                        rule.WebhookID,
 			"c_failure_threshold":                 rule.FailureThreshold,
 			"c_success_threshold":                 rule.SuccessThreshold,
 			"c_minimum_reminder_interval_seconds": rule.MinimumReminderIntervalSeconds,
 			"c_send_on_resolved":                  rule.SendOnResolved,
 			"c_enabled":                           rule.Enabled,
 			"c_description":                       rule.Description,
-		}).Error
+		})
+	if updated.Error != nil {
+		return updated.Error
+	}
+	if updated.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (r *AlertRepository) ListRules(ctx context.Context, spaceID string) ([]domain.AlertRule, error) {
 	var rules []domain.AlertRule
 	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_is_deleted = 0", spaceID).
+		Where("c_space_id = ?", spaceID).
 		Order("c_ctime ASC").
 		Find(&rules).Error
 	return rules, err
@@ -106,36 +104,114 @@ func (r *AlertRepository) ListRules(ctx context.Context, spaceID string) ([]doma
 func (r *AlertRepository) ListRulesForCheck(ctx context.Context, spaceID, checkID string) ([]domain.AlertRule, error) {
 	var rules []domain.AlertRule
 	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_check_id = ? AND c_is_deleted = 0", spaceID, checkID).
+		Where("c_space_id = ? AND c_check_id = ?", spaceID, checkID).
 		Order("c_ctime ASC").
 		Find(&rules).Error
 	return rules, err
 }
 
-func (r *AlertRepository) ListEnabledRulesForCheck(ctx context.Context, spaceID, checkID string) ([]domain.AlertRule, error) {
-	var rules []domain.AlertRule
-	err := r.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_check_id = ? AND c_enabled = 1 AND c_is_deleted = 0", spaceID, checkID).
-		Find(&rules).Error
-	return rules, err
-}
-
-func (r *AlertRepository) DeleteRule(ctx context.Context, spaceID, ruleID string) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.AlertRule{}).
-		Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = 0", spaceID, ruleID).
-		Updates(map[string]any{"c_is_deleted": true}).Error
-}
-
-func (r *AlertRepository) GetRuleByID(ctx context.Context, ruleID string) (*domain.AlertRule, error) {
+func (r *AlertRepository) GetRule(ctx context.Context, spaceID, ruleID string) (*domain.AlertRule, error) {
 	var rule domain.AlertRule
 	err := r.db.WithContext(ctx).
-		Where("c_rule_id = ? AND c_is_deleted = 0", ruleID).
+		Where("c_space_id = ? AND c_rule_id = ?", spaceID, ruleID).
 		First(&rule).Error
 	if err != nil {
 		return nil, err
 	}
 	return &rule, nil
+}
+
+func (r *AlertRepository) ListEnabledRulesForCheck(ctx context.Context, spaceID, checkID string) ([]domain.AlertRule, error) {
+	var rules []domain.AlertRule
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_check_id = ? AND c_enabled = 1 AND c_rule_id LIKE ?", spaceID, checkID, "default:%").
+		Find(&rules).Error
+	return rules, err
+}
+
+// PurgeRetiredRules removes user-created rules from a pre-greenfield database.
+func (r *AlertRepository) PurgeRetiredRules(ctx context.Context) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, gorm.ErrInvalidDB
+	}
+	var deleted int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var rules []domain.AlertRule
+		if err := tx.Where("c_rule_id NOT LIKE ?", "default:%").Find(&rules).Error; err != nil {
+			return err
+		}
+		for _, rule := range rules {
+			if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_check_id = ?", rule.SpaceID, rule.RuleID, rule.CheckID).Delete(&domain.AlertState{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_check_id = ?", rule.SpaceID, rule.RuleID, rule.CheckID).Delete(&domain.AlertEvent{}).Error; err != nil {
+				return err
+			}
+			result := tx.Where("c_space_id = ? AND c_rule_id = ?", rule.SpaceID, rule.RuleID).Delete(&domain.AlertRule{})
+			if result.Error != nil {
+				return result.Error
+			}
+			deleted += result.RowsAffected
+		}
+		return nil
+	})
+	return deleted, err
+}
+
+func (r *AlertRepository) DeleteRule(ctx context.Context, spaceID, ruleID string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var rule domain.AlertRule
+		if err := tx.Where("c_space_id = ? AND c_rule_id = ?", spaceID, ruleID).First(&rule).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("c_space_id = ? AND c_rule_id = ?", spaceID, ruleID).
+			Delete(&domain.AlertState{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&rule).Error
+	})
+}
+
+func (r *AlertRepository) GetRuleByID(ctx context.Context, ruleID string) (*domain.AlertRule, error) {
+	var rule domain.AlertRule
+	err := r.db.WithContext(ctx).
+		Where("c_rule_id = ?", ruleID).
+		First(&rule).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
+func validateAlertRuleReferences(tx *gorm.DB, rule *domain.AlertRule) error {
+	if rule == nil {
+		return fmt.Errorf("alert rule is required")
+	}
+	if !isHostMetricRuleKey(rule.CheckID) {
+		var enabledChecks int64
+		if err := tx.Model(&domain.Check{}).
+			Where("c_space_id = ? AND c_check_id = ? AND c_enabled = 1", rule.SpaceID, rule.CheckID).
+			Count(&enabledChecks).Error; err != nil {
+			return err
+		}
+		if enabledChecks != 1 {
+			return fmt.Errorf("%w: check %q", ErrInvalidReference, rule.CheckID)
+		}
+	}
+	return nil
+}
+
+func isHostMetricRuleKey(checkID string) bool {
+	parts := strings.Split(checkID, ":")
+	if len(parts) != 3 || parts[0] != "host" || strings.TrimSpace(parts[1]) == "" {
+		return false
+	}
+	switch parts[2] {
+	case "cpu", "memory", "filesystem_usage", "disk_utilization", "network_errors":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *AlertRepository) UpsertState(ctx context.Context, state *domain.AlertState) error {
@@ -149,7 +225,6 @@ func (r *AlertRepository) UpsertState(ctx context.Context, state *domain.AlertSt
 			"c_status",
 			"c_failure_count",
 			"c_success_count",
-			"c_owner_instance_id",
 			"c_triggered_at",
 			"c_resolved_at",
 			"c_last_reminder_at",
@@ -191,7 +266,7 @@ func (r *AlertRepository) ListEvents(ctx context.Context, spaceID string, limit 
 	return events, err
 }
 
-// ListRecentEvents returns recent alert transitions across all spaces for peer snapshots.
+// ListRecentEvents returns recent alert transitions across all spaces.
 func (r *AlertRepository) ListRecentEvents(ctx context.Context, limit int) ([]domain.AlertEvent, error) {
 	if limit <= 0 {
 		limit = 100

@@ -1,10 +1,10 @@
 import type {
   Dataset,
   DatasetColumn,
-  Factor,
   Field,
   FieldValueType,
-  FilterExpr,
+  FilterCond,
+  FilterSpec,
   PageResult,
   SortSpec,
   TypedValue,
@@ -44,6 +44,7 @@ export interface KlineTableRow {
   key: string;
   version: string;
   freq?: string;
+  seriesTag?: string;
   values: Record<string, string>;
 }
 
@@ -68,9 +69,53 @@ const systemViewLabels: Record<string, string> = {
   version: "版本"
 };
 
+export type ViewFilterFieldOption = {
+  value: string;
+  label: string;
+  valueType: FieldValueType;
+};
+
+export function buildViewFilterFieldOptions(
+  mode: ViewBrowseMode,
+  viewColumns: Array<Pick<ViewColumn, "column_name" | "value_type">>,
+  datasetColumns: Array<Pick<DatasetColumn, "column_name" | "value_type">>,
+  labels: Record<string, string> = {}
+): ViewFilterFieldOption[] {
+  const options: ViewFilterFieldOption[] = [];
+  const seen = new Set<string>();
+  const push = (value: string, label: string, valueType: FieldValueType) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    options.push({ value, label, valueType });
+  };
+  if (mode === "time_series") {
+    push("subject_id", "数据ID", "FIELD_VALUE_TYPE_STRING");
+    push("freq", "频率", "FIELD_VALUE_TYPE_STRING");
+    push("series_tag", "序列标签", "FIELD_VALUE_TYPE_STRING");
+    push("data_time", "时间", "FIELD_VALUE_TYPE_TIME");
+  } else if (mode === "record") {
+    push("record_id", "记录ID", "FIELD_VALUE_TYPE_STRING");
+    push("version", "版本", "FIELD_VALUE_TYPE_STRING");
+  }
+  const projected = viewColumns.some(column => column.column_name) ? viewColumns : datasetColumns;
+  for (const column of projected) {
+    if (!column.column_name) continue;
+    push(
+      column.column_name,
+      labels[column.column_name] || column.column_name,
+      column.value_type || "FIELD_VALUE_TYPE_STRING"
+    );
+  }
+  return options;
+}
+
 export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   if (!view) return "";
   return view.name || view.view_id || "";
+}
+
+export function viewBoundDatasetId(view?: { dataset_id?: string; primary_dataset_id?: string } | null) {
+  return (view?.dataset_id || view?.primary_dataset_id || "").trim();
 }
 
 export function viewModeFromPrimaryDataset(
@@ -87,11 +132,10 @@ export function buildViewColumnLabels(
   viewColumns: ViewColumn[],
   datasetColumns: DatasetColumn[],
   fields: Field[],
-  factors: Factor[],
   datasets: Array<Pick<Dataset, "dataset_id" | "name">> = [],
-  view?: Pick<View, "primary_dataset_id" | "dataset_ids"> | null
+  view?: Pick<View, "dataset_id"> | null
 ) {
-  const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields, factors);
+  const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields);
   const datasetColumnByQualifiedName = new Map<string, DatasetColumn>();
   for (const column of datasetColumns) {
     if (!column.dataset_id || !column.column_name) continue;
@@ -105,6 +149,8 @@ export function buildViewColumnLabels(
     const fromDataset = datasetColumnByQualifiedName.get(column.origin_id);
     if (fromDataset) {
       const label =
+        factorOutputName(column.attributes) ||
+        factorOutputName(fromDataset.attributes) ||
         displayName(column.attributes) ||
         datasetColumnLabels[qualifiedDatasetColumnName(fromDataset)] ||
         datasetColumnLabels[fromDataset.column_name] ||
@@ -113,6 +159,7 @@ export function buildViewColumnLabels(
       continue;
     }
     labels[column.column_name] =
+      factorOutputName(column.attributes) ||
       displayName(column.attributes) || systemViewLabels[column.origin_id] || readableViewColumnLabel(column.column_name);
   }
   return labels;
@@ -146,63 +193,69 @@ export function previewPagerText(limit: number) {
   return `仅展示前${limit}条数据`;
 }
 
-export function buildViewFilterExprs(filters: ViewFilterState[]): FilterExpr[] {
-  const out: FilterExpr[] = [];
+export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | undefined {
+  const out: FilterCond[] = [];
   for (const filter of filters) {
     const fieldName = filter.fieldName.trim();
     if (!fieldName) continue;
-    const argPrefix = safeArgName(fieldName);
     const valueType = filter.valueType || "FIELD_VALUE_TYPE_STRING";
 
     if (filter.operator === "empty") {
-      out.push({ expr: `is_empty(${fieldName})`, args: {} });
+      out.push({
+        column: fieldName,
+        op: "FILTER_OP_EQ",
+        values: [fieldName === "series_tag" ? { string_value: "" } : { null_value: "NULL_VALUE_NULL" }]
+      });
       continue;
     }
     if (filter.operator === "not_empty") {
-      out.push({ expr: `is_not_empty(${fieldName})`, args: {} });
+      out.push({
+        column: fieldName,
+        op: "FILTER_OP_NE",
+        values: [fieldName === "series_tag" ? { string_value: "" } : { null_value: "NULL_VALUE_NULL" }]
+      });
       continue;
     }
     if (filter.operator === "range") {
       const startValue = (filter.startValue || "").trim();
       const endValue = (filter.endValue || "").trim();
       if (startValue) {
-        const argName = `${argPrefix}_start`;
-        out.push({ expr: `${fieldName} >= $${argName}`, args: { [argName]: typedFilterValue(startValue, valueType) } });
+        out.push({ column: fieldName, op: "FILTER_OP_GTE", values: [typedFilterValue(startValue, valueType)] });
       }
       if (endValue) {
-        const argName = `${argPrefix}_end`;
-        out.push({ expr: `${fieldName} <= $${argName}`, args: { [argName]: typedFilterValue(endValue, valueType) } });
+        out.push({ column: fieldName, op: "FILTER_OP_LTE", values: [typedFilterValue(endValue, valueType)] });
       }
       continue;
     }
 
     const value = (filter.value || "").trim();
     if (!value) continue;
-    const argName = `${argPrefix}_${filter.operator}`;
     const typedValue = typedFilterValue(value, valueType);
     if (filter.operator === "prefix") {
-      out.push({ expr: `starts_with(${fieldName}, $${argName})`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `${value}%` }] });
       continue;
     }
     if (filter.operator === "suffix") {
-      out.push({ expr: `ends_with(${fieldName}, $${argName})`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `%${value}` }] });
       continue;
     }
     if (filter.operator === "not_contains") {
-      out.push({ expr: `not_contains(${fieldName}, $${argName})`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_NOT_LIKE", values: [{ string_value: `%${value}%` }] });
       continue;
     }
     if (filter.operator === "eq") {
-      out.push({ expr: `${fieldName} == $${argName}`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_EQ", values: [typedValue] });
       continue;
     }
     if (filter.operator === "neq") {
-      out.push({ expr: `${fieldName} != $${argName}`, args: { [argName]: typedValue } });
+      out.push({ column: fieldName, op: "FILTER_OP_NE", values: [typedValue] });
       continue;
     }
-    out.push({ expr: `${fieldName} contains $${argName}`, args: { [argName]: typedValue } });
+    out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `%${value}%` }] });
   }
-  return out;
+  return out.length === 0
+    ? undefined
+    : { groups: [{ conds: out, logical: "FILTER_LOGICAL_AND" }], group_logical: "FILTER_LOGICAL_AND" };
 }
 
 export function klineSubjectIdFromFilters(filters: ViewFilterState[]) {
@@ -217,22 +270,26 @@ export function klineRowsHaveFreq(rows: KlineTableRow[]) {
   return rows.some(row => isMeaningfulKlineText(row.freq));
 }
 
-export function buildKlineChartRecords(rows: KlineTableRow[], subjectId = ""): KlineChartRecord[] {
-  return buildKlineRecords(rows, subjectId).map(item => item.record);
+export function buildKlineChartRecords(rows: KlineTableRow[], subjectId: string, seriesTag: string): KlineChartRecord[] {
+  return buildKlineRecords(rows, subjectId, seriesTag).map(item => item.record);
+}
+
+export function exactSeriesTagFromFilters(filters: ViewFilterState[]) {
+  const filter = filters.find(item => item.fieldName.trim() === "series_tag");
+  if (!filter) return undefined;
+  if (filter.operator === "empty") return "";
+  if (filter.operator !== "eq") return undefined;
+  const value = (filter.value || "").trim();
+  return value || undefined;
 }
 
 function readableViewColumnLabel(columnName: string) {
   return systemViewLabels[columnName] || columnName;
 }
 
-function viewDatasetCount(view?: Pick<View, "primary_dataset_id" | "dataset_ids"> | null) {
-  if (!view) return 0;
-  const datasetIds = new Set<string>();
-  if (view.primary_dataset_id) datasetIds.add(view.primary_dataset_id);
-  for (const datasetId of view.dataset_ids || []) {
-    if (datasetId) datasetIds.add(datasetId);
-  }
-  return datasetIds.size;
+function viewDatasetCount(view?: Pick<View, "dataset_id"> | null) {
+  if (!view?.dataset_id) return 0;
+  return 1;
 }
 
 function appendDatasetName(label: string, datasetId: string, datasets: Array<Pick<Dataset, "dataset_id" | "name">>) {
@@ -240,9 +297,8 @@ function appendDatasetName(label: string, datasetId: string, datasets: Array<Pic
   return `${label}（${dataset?.name || datasetId}）`;
 }
 
-function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field[], factors: Factor[]) {
+function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field[]) {
   const fieldByID = new Map(fields.map(item => [item.field_id, item]));
-  const factorByID = new Map(factors.map(item => [item.factor_id, item]));
   const labels: Record<string, string> = {};
   for (const column of datasetColumns) {
     if (!column.column_name) continue;
@@ -263,10 +319,7 @@ function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field
       continue;
     }
     if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FACTOR", 2)) {
-      const label = readableMetadataLabel(
-        column.column_name,
-        factorByID.get(column.origin_id)?.name || factorByID.get(column.column_name)?.name
-      );
+      const label = readableMetadataLabel(column.column_name);
       labels[labelKey] = label;
       if (!column.dataset_id) labels[column.column_name] = label;
       continue;
@@ -290,16 +343,16 @@ function displayName(attributes?: Record<string, string>) {
   return attributes?.display_name?.trim() || "";
 }
 
+function factorOutputName(attributes?: Record<string, string>) {
+  return attributes?.factor_output?.trim() || "";
+}
+
 function isOriginType(value: unknown, name: string, alias: number) {
   return value === name || value === alias;
 }
 
 function isTimeSeriesDataKind(value: unknown) {
-  return value === "DATA_KIND_TIME_SERIES" || value === 2;
-}
-
-function safeArgName(value: string) {
-  return value.replace(/[^A-Za-z0-9_]/g, "_") || "value";
+  return value === "DATA_KIND_TIME_SERIES" || value === "time_series" || value === 2;
 }
 
 function typedFilterValue(value: string, valueType: FieldValueType): TypedValue {
@@ -334,10 +387,11 @@ function parseKlineTimestamp(value: string) {
   return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
-function buildKlineRecords(rows: KlineTableRow[], subjectId = "") {
-  const exactRows = subjectId ? rows.filter(row => row.key === subjectId) : [];
-  const fuzzyRows = subjectId ? rows.filter(row => row.key.includes(subjectId)) : [];
-  const sourceRows = exactRows.length > 0 ? exactRows : fuzzyRows.length > 0 ? fuzzyRows : rows;
+function buildKlineRecords(rows: KlineTableRow[], subjectId: string, seriesTag: string) {
+  const taggedRows = rows.filter(row => row.seriesTag === seriesTag);
+  const exactRows = subjectId ? taggedRows.filter(row => row.key === subjectId) : [];
+  const fuzzyRows = subjectId ? taggedRows.filter(row => row.key.includes(subjectId)) : [];
+  const sourceRows = exactRows.length > 0 ? exactRows : fuzzyRows.length > 0 ? fuzzyRows : taggedRows;
   const recordsByTime = new Map<number, { record: KlineChartRecord }>();
 
   for (const row of sourceRows) {

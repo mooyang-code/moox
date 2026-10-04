@@ -48,6 +48,19 @@ export function statusColor(status?: string) {
   return "gray";
 }
 
+export function statusLabel(status?: string) {
+  switch (status?.toLowerCase()) {
+    case "active":
+    case "enabled":
+      return "已启用";
+    case "disabled":
+    case "inactive":
+      return "已停用";
+    default:
+      return status || "-";
+  }
+}
+
 export function formatTime(value?: string) {
   if (!value) return "-";
   return value.replace("T", " ").replace(/Z$/, "");
@@ -78,12 +91,38 @@ export function validateLowerSnakeId(value: string | undefined, maxLength: numbe
   return "";
 }
 
+export function validateDatasetId(value: string | undefined, maxLength = 50) {
+  const id = (value || "").trim();
+  const error = validateLowerSnakeId(id, maxLength);
+  if (error) return error;
+  if (!id.startsWith("dataset_")) {
+    return "Dataset ID 必须以 dataset_ 开头";
+  }
+  return "";
+}
+
+export function validateViewId(value: string | undefined, maxLength = 30) {
+  const id = (value || "").trim();
+  const error = validateLowerSnakeId(id, maxLength);
+  if (error) return error;
+  if (!id.startsWith("view_")) return "View ID 必须以 view_ 开头";
+  return "";
+}
+
 export function validateChineseDisplayName(value: string | undefined, maxLength = 10) {
   const name = (value || "").trim();
   if (!name) return "中文名不能为空";
   if ([...name].length > maxLength) return `中文名不能超过 ${maxLength} 个字符`;
   if (!/\p{Script=Han}/u.test(name)) return "中文名必须包含中文";
   return "";
+}
+
+const internalFieldPrefixPattern = /^dataset_[0-9a-z_]+__(.+)$/;
+
+export function displayFieldId(fieldId: string | undefined) {
+  const id = (fieldId || "").trim();
+  const matched = internalFieldPrefixPattern.exec(id);
+  return matched?.[1] || id;
 }
 
 export const statusOptions: SelectOption[] = [
@@ -124,8 +163,8 @@ export function optionLabel<T extends string | number>(options: SelectOption<T>[
   return matched?.label || String(value);
 }
 
-export function isTimeSeriesDataKind(value?: DataKind) {
-  return value === "DATA_KIND_TIME_SERIES" || value === 2;
+export function isTimeSeriesDataKind(value?: DataKind | string | number) {
+  return value === "DATA_KIND_TIME_SERIES" || value === "time_series" || value === 2;
 }
 
 export type ViewRebuildKind = "time_series" | "record" | "missing";

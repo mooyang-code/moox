@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,33 +11,47 @@ import (
 
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 // rowScanner 抽象 sql.Row 和 sql.Rows 的扫描能力。
 
 func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error) {
-	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetDataSourceId() == "" || item.GetName() == "" {
-		return nil, errors.New("space_id, dataset_id, data_source_id and name are required")
+	if item == nil {
+		return nil, errors.New("dataset is required")
 	}
-	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
-		return nil, errors.New("data_kind must be record or time_series")
+	if _, err := s.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err == nil {
+		return s.UpdateDataset(ctx, item)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
 	}
-	keepDuration, err := normalizeKeepDuration(item.GetKeepDuration(), item.GetDataKind())
+	return s.CreateDataset(ctx, item)
+}
+
+func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error) {
+	item, keepDuration, err := normalizeDatasetForCreate(item)
 	if err != nil {
 		return nil, err
 	}
-	item.KeepDuration = keepDuration
-	if existing, getErr := s.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); getErr == nil {
-		if existing.GetDataNodeId() != "" && item.GetDataNodeId() != "" && existing.GetDataNodeId() != item.GetDataNodeId() {
-			return nil, errors.New("dataset data_node_id is immutable")
-		}
-		if item.GetDataNodeId() == "" {
-			item.DataNodeId = existing.GetDataNodeId()
-		}
-	} else if !errors.Is(getErr, sql.ErrNoRows) {
-		return nil, getErr
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
 	}
-	item.Status = defaultStatus(item.GetStatus())
+	defer func() { _ = tx.Rollback() }()
+	if err := requireActiveDataNode(ctx, tx, item.GetDataNodeId()); err != nil {
+		return nil, err
+	}
+	item.SubjectTags = normalizeSubjectTags(item.GetSubjectTags())
+	if err := validateSubjectTagsExist(ctx, tx, item.GetSpaceId(), item.GetSubjectTags()); err != nil {
+		return nil, err
+	}
+	item.KeepDuration = keepDuration
+	item.Status = "disabled"
+	item.BindingLocked = false
+	item.Revision = 1
+	now := s.nowUTC().Format(time.RFC3339Nano)
+	item.CreatedAt = now
+	item.UpdatedAt = now
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err
@@ -45,24 +60,123 @@ func (s *Store) UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_datasets (c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name, c_description, c_data_kind, c_freqs_json, c_keep_duration, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_dataset_id) DO UPDATE SET
-			c_data_source_id = excluded.c_data_source_id,
-			c_data_node_id = CASE WHEN excluded.c_data_node_id <> '' THEN excluded.c_data_node_id ELSE t_datasets.c_data_node_id END,
-			c_name = excluded.c_name,
-			c_description = excluded.c_description,
-			c_data_kind = excluded.c_data_kind,
-			c_freqs_json = excluded.c_freqs_json,
-			c_keep_duration = excluded.c_keep_duration,
-			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetDataSourceId(), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetKeepDuration(), item.GetStatus(), raw)
+	subjectTags, err := marshalJSON(item.GetSubjectTags())
 	if err != nil {
 		return nil, err
 	}
-	return s.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO t_datasets (
+			c_space_id, c_dataset_id, c_data_source_id, c_data_node_id, c_name,
+			c_description, c_data_kind, c_freqs_json, c_keep_duration,
+			c_binding_locked, c_revision, c_status, c_attrs_json, c_subject_tags_json, c_ctime, c_mtime
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, item.GetSpaceId(), item.GetDatasetId(), nullableDatasetSource(item.GetDataSourceId()), item.GetDataNodeId(), item.GetName(), item.GetDescription(), dataKindSQL(item.GetDataKind()), freqs, item.GetKeepDuration(), boolInt(item.GetBindingLocked()), item.GetRevision(), item.GetStatus(), raw, subjectTags, now, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error) {
+	if item == nil || strings.TrimSpace(item.GetSpaceId()) == "" || strings.TrimSpace(item.GetDatasetId()) == "" || strings.TrimSpace(item.GetName()) == "" {
+		return nil, errors.New("space_id, dataset_id and name are required")
+	}
+	item = proto.Clone(item).(*pb.Dataset)
+	item.SpaceId = strings.TrimSpace(item.GetSpaceId())
+	item.DatasetId = strings.TrimSpace(item.GetDatasetId())
+	item.Name = strings.TrimSpace(item.GetName())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	existing, err := getDatasetTx(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
+	if err != nil {
+		return nil, err
+	}
+	if err := coremetadata.PreserveDatasetOwnerAttributes(existing, item); err != nil {
+		return nil, err
+	}
+	if item.GetRevision() != 0 && item.GetRevision() != existing.GetRevision() {
+		return nil, ErrRevisionConflict
+	}
+	if item.GetDataNodeId() != "" && strings.TrimSpace(item.GetDataNodeId()) != existing.GetDataNodeId() {
+		return nil, errors.New("dataset data_node_id is immutable; use rebind")
+	}
+	if item.GetDataSourceId() != "" && item.GetDataSourceId() != existing.GetDataSourceId() {
+		return nil, errors.New("dataset data_source_id is immutable")
+	}
+	if item.GetDataKind() != pb.DataKind_DATA_KIND_UNSPECIFIED && item.GetDataKind() != existing.GetDataKind() {
+		return nil, errors.New("dataset data_kind is immutable")
+	}
+	status := existing.GetStatus()
+	if candidate := strings.TrimSpace(item.GetStatus()); candidate != "" {
+		if err := validateDatasetStatus(candidate); err != nil {
+			return nil, err
+		}
+		if existing.GetStatus() == "disabled" && candidate == "active" {
+			return nil, ErrDatasetMustBeDisabled
+		}
+		status = candidate
+	}
+	keepDuration := item.GetKeepDuration()
+	if keepDuration == "" {
+		keepDuration = existing.GetKeepDuration()
+	}
+	keepDuration, err = normalizeKeepDuration(keepDuration, existing.GetDataKind())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateDatasetKeepDuration(ctx, tx, item.GetSpaceId(), item.GetDatasetId(), keepDuration); err != nil {
+		return nil, err
+	}
+	item.DataSourceId = existing.GetDataSourceId()
+	item.DataNodeId = existing.GetDataNodeId()
+	item.DataKind = existing.GetDataKind()
+	item.SubjectTags = normalizeSubjectTags(item.GetSubjectTags())
+	if err := validateSubjectTagsExist(ctx, tx, item.GetSpaceId(), item.GetSubjectTags()); err != nil {
+		return nil, err
+	}
+	item.KeepDuration = keepDuration
+	item.Status = status
+	item.BindingLocked = existing.GetBindingLocked()
+	item.Revision = existing.GetRevision() + 1
+	item.CreatedAt = existing.GetCreatedAt()
+	item.UpdatedAt = s.nowUTC().Format(time.RFC3339Nano)
+	raw, err := marshal(item)
+	if err != nil {
+		return nil, err
+	}
+	freqs, err := marshalJSON(item.GetFreqs())
+	if err != nil {
+		return nil, err
+	}
+	subjectTags, err := marshalJSON(item.GetSubjectTags())
+	if err != nil {
+		return nil, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE t_datasets SET
+			c_name = ?, c_description = ?, c_freqs_json = ?, c_keep_duration = ?,
+			c_status = ?, c_attrs_json = ?, c_subject_tags_json = ?, c_revision = c_revision + 1, c_mtime = ?
+		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
+	`, item.GetName(), item.GetDescription(), freqs, item.GetKeepDuration(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
+	if err != nil {
+		return nil, err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return nil, err
+	} else if affected != 1 {
+		return nil, ErrRevisionConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return item, nil
 }
 
 func normalizeKeepDuration(value string, kind pb.DataKind) (string, error) {
@@ -84,34 +198,326 @@ func normalizeKeepDuration(value string, kind pb.DataKind) (string, error) {
 }
 
 func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, []any{spaceID, datasetID}, func() *pb.Dataset { return &pb.Dataset{} })
+	return scanMessageWithSQLTimestamps(s.queryDB(ctx).QueryRowContext(ctx, `
+		SELECT c_attrs_json, c_ctime, c_mtime FROM t_datasets
+		WHERE c_space_id = ? AND c_dataset_id = ?
+	`, spaceID, datasetID), func() *pb.Dataset { return &pb.Dataset{} })
+}
+
+func (s *Store) DeleteDataset(ctx context.Context, spaceID string, datasetID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	dataset, err := getDatasetTx(ctx, tx, spaceID, datasetID)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]), "factor_result") {
+		if err := deleteManagedFactorResultDefaultView(ctx, tx, dataset); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
+}
+
+func deleteManagedFactorResultDefaultView(ctx context.Context, tx *sql.Tx, dataset *pb.Dataset) error {
+	attrs := dataset.GetAttributes()
+	if !strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") || !strings.EqualFold(strings.TrimSpace(attrs["write_owner"]), "factor") {
+		return errors.New("factor_result Dataset ownership metadata is invalid")
+	}
+	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`,
+		[]any{dataset.GetSpaceId(), viewID}, func() *pb.View { return &pb.View{} })
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !isManagedFactorResultDefaultView(dataset, view) {
+		return fmt.Errorf("factor_result default View %s/%s does not match its managed contract", dataset.GetSpaceId(), viewID)
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, dataset.GetSpaceId(), viewID)
+	return err
+}
+
+func isManagedFactorResultDefaultView(dataset *pb.Dataset, view *pb.View) bool {
+	if dataset == nil || view == nil || dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES || len(dataset.GetFreqs()) != 1 || strings.TrimSpace(dataset.GetFreqs()[0]) == "" {
+		return false
+	}
+	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
+	if err != nil || view.GetViewId() != viewID || view.GetDatasetId() != dataset.GetDatasetId() || view.GetStatus() != "active" ||
+		view.GetEngine() != "duckdb" || view.GetKeepDuration() != dataset.GetKeepDuration() ||
+		!equalStrings(view.GetGrainKeys(), []string{"subject_id", "freq", "data_time", "series_tag"}) {
+		return false
+	}
+	viewAttrs := view.GetAttributes()
+	if viewAttrs["owner_module"] != "factor" || viewAttrs["view_role"] != "factor_result" ||
+		viewAttrs["managed_by"] != "storage" || viewAttrs["primary_dataset_role"] != "factor_result" {
+		return false
+	}
+	var filter map[string]string
+	if json.Unmarshal([]byte(view.GetFilterJson()), &filter) != nil || len(filter) != 1 {
+		return false
+	}
+	return strings.TrimSpace(filter["freq"]) == strings.TrimSpace(dataset.GetFreqs()[0])
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`, []any{spaceID, datasetID, columnName}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`, []any{spaceID, datasetID, columnName}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
 }
 
-func (s *Store) ListDatasets(ctx context.Context, spaceID string, dataSourceID string, dataKind pb.DataKind, freq string, page *pb.Page) ([]*pb.Dataset, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_datasets
-		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_data_source_id = ?)
-		  AND (? = '' OR c_data_kind = ?)
-		ORDER BY c_space_id, c_dataset_id
-	`, []any{spaceID, spaceID, dataSourceID, dataSourceID, dataKindFilter(dataKind), dataKindFilter(dataKind)}, func() *pb.Dataset { return &pb.Dataset{} })
-	if err != nil {
-		return nil, nil, err
+type DatasetQuery = coremetadata.DatasetQuery
+
+func (s *Store) ListDatasets(ctx context.Context, query coremetadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
+	where := []string{"1 = 1"}
+	args := make([]any, 0, 12+len(query.DataNodeIDs))
+	if spaceID := strings.TrimSpace(query.SpaceID); spaceID != "" {
+		where = append(where, "c_space_id = ?")
+		args = append(args, spaceID)
 	}
-	if freq != "" {
-		filtered := items[:0]
-		for _, item := range items {
-			if containsString(item.GetFreqs(), freq) {
-				filtered = append(filtered, item)
-			}
+	if dataSourceID := strings.TrimSpace(query.DataSourceID); dataSourceID != "" {
+		where = append(where, "c_data_source_id = ?")
+		args = append(args, dataSourceID)
+	}
+	if dataNodeID := strings.TrimSpace(query.DataNodeID); dataNodeID != "" {
+		where = append(where, "c_data_node_id = ?")
+		args = append(args, dataNodeID)
+	}
+	dataNodeIDs := make([]string, 0, len(query.DataNodeIDs))
+	for _, nodeID := range query.DataNodeIDs {
+		if nodeID = strings.TrimSpace(nodeID); nodeID != "" {
+			dataNodeIDs = append(dataNodeIDs, nodeID)
 		}
-		items = filtered
 	}
-	return pageItems(items, page)
+	if len(dataNodeIDs) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(dataNodeIDs)), ",")
+		where = append(where, "c_data_node_id IN ("+placeholders+")")
+		for _, nodeID := range dataNodeIDs {
+			args = append(args, nodeID)
+		}
+	}
+	if kind := dataKindFilter(query.DataKind); kind != "" {
+		where = append(where, "c_data_kind = ?")
+		args = append(args, kind)
+	}
+	if freq := strings.TrimSpace(query.Freq); freq != "" {
+		where = append(where, "EXISTS (SELECT 1 FROM json_each(c_freqs_json) WHERE value = ?)")
+		args = append(args, freq)
+	}
+	whereSQL := strings.Join(where, " AND ")
+	return queryPagedMessages(ctx, s.queryDB(ctx),
+		`SELECT c_attrs_json FROM t_datasets WHERE `+whereSQL+` ORDER BY c_space_id, c_dataset_id`,
+		`SELECT COUNT(1) FROM t_datasets WHERE `+whereSQL,
+		args, query.Page, func() *pb.Dataset { return &pb.Dataset{} },
+	)
+}
+
+func (s *Store) RebindDatasetDataNode(ctx context.Context, spaceID, datasetID, nodeID string, expectedRevision uint64) (*pb.Dataset, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	datasetID = strings.TrimSpace(datasetID)
+	nodeID = strings.TrimSpace(nodeID)
+	if spaceID == "" || datasetID == "" || nodeID == "" {
+		return nil, errors.New("space_id, dataset_id and node_id are required")
+	}
+	tx, err := beginImmediate(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	existing, err := getDatasetTx(ctx, tx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	if existing.GetRevision() != expectedRevision {
+		return nil, ErrRevisionConflict
+	}
+	if existing.GetStatus() != "disabled" {
+		return nil, ErrDatasetMustBeDisabled
+	}
+	if existing.GetBindingLocked() {
+		return nil, ErrBindingLocked
+	}
+	if existing.GetDataNodeId() == nodeID {
+		return nil, errors.New("dataset is already bound to this data node")
+	}
+	if err := requireActiveDataNode(ctx, tx, nodeID); err != nil {
+		return nil, err
+	}
+	updated := proto.Clone(existing).(*pb.Dataset)
+	updated.DataNodeId = nodeID
+	updated.Revision++
+	updated.UpdatedAt = s.nowUTC().Format(time.RFC3339Nano)
+	raw, err := marshal(updated)
+	if err != nil {
+		return nil, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE t_datasets
+		SET c_data_node_id = ?, c_revision = c_revision + 1, c_attrs_json = ?, c_mtime = ?
+		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
+	`, nodeID, raw, updated.GetUpdatedAt(), spaceID, datasetID, expectedRevision)
+	if err != nil {
+		return nil, err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return nil, err
+	} else if affected != 1 {
+		return nil, ErrRevisionConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func (s *Store) CommitDatasetActivation(ctx context.Context, spaceID, datasetID string, expectedRevision uint64) (*pb.Dataset, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	datasetID = strings.TrimSpace(datasetID)
+	if spaceID == "" || datasetID == "" {
+		return nil, errors.New("space_id and dataset_id are required")
+	}
+	tx, err := beginImmediate(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	existing, err := getDatasetTx(ctx, tx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	if existing.GetStatus() == "active" && existing.GetBindingLocked() {
+		return existing, nil
+	}
+	if existing.GetStatus() == "active" {
+		return nil, ErrDatasetMustBeDisabled
+	}
+	if existing.GetRevision() != expectedRevision {
+		return nil, ErrRevisionConflict
+	}
+	if err := requireActiveDataNode(ctx, tx, existing.GetDataNodeId()); err != nil {
+		return nil, err
+	}
+	updated := proto.Clone(existing).(*pb.Dataset)
+	updated.Status = "active"
+	updated.BindingLocked = true
+	updated.Revision++
+	updated.UpdatedAt = s.nowUTC().Format(time.RFC3339Nano)
+	raw, err := marshal(updated)
+	if err != nil {
+		return nil, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE t_datasets
+		SET c_status = 'active', c_binding_locked = 1, c_revision = c_revision + 1,
+			c_attrs_json = ?, c_mtime = ?
+		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
+	`, raw, updated.GetUpdatedAt(), spaceID, datasetID, expectedRevision)
+	if err != nil {
+		return nil, err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return nil, err
+	} else if affected != 1 {
+		return nil, ErrRevisionConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, string, error) {
+	if item == nil {
+		return nil, "", errors.New("dataset is required")
+	}
+	item = proto.Clone(item).(*pb.Dataset)
+	item.SpaceId = strings.TrimSpace(item.GetSpaceId())
+	item.DatasetId = strings.TrimSpace(item.GetDatasetId())
+	item.DataSourceId = strings.TrimSpace(item.GetDataSourceId())
+	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
+	item.Name = strings.TrimSpace(item.GetName())
+	if item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetDataNodeId() == "" || item.GetName() == "" {
+		return nil, "", errors.New("space_id, dataset_id, data_node_id and name are required")
+	}
+	if item.GetDataSourceId() == "" && !collectorOwnedDataset(item) {
+		return nil, "", errors.New("data_source_id is required unless owner_module is collector")
+	}
+	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
+		return nil, "", errors.New("data_kind must be record or time_series")
+	}
+	keepDuration, err := normalizeKeepDuration(item.GetKeepDuration(), item.GetDataKind())
+	return item, keepDuration, err
+}
+
+func collectorOwnedDataset(item *pb.Dataset) bool {
+	if item == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(item.GetAttributes()["owner_module"]), "collector")
+}
+
+func nullableDatasetSource(sourceID string) any {
+	if sourceID = strings.TrimSpace(sourceID); sourceID != "" {
+		return sourceID
+	}
+	return nil
+}
+
+func validateDatasetStatus(status string) error {
+	if status != "active" && status != "disabled" {
+		return fmt.Errorf("dataset status must be active or disabled: %q", status)
+	}
+	return nil
+}
+
+func getDatasetTx(ctx context.Context, tx queryRower, spaceID, datasetID string) (*pb.Dataset, error) {
+	return scanMessageWithSQLTimestamps(tx.QueryRowContext(ctx, `
+		SELECT c_attrs_json, c_ctime, c_mtime FROM t_datasets
+		WHERE c_space_id = ? AND c_dataset_id = ?
+	`, spaceID, datasetID), func() *pb.Dataset { return &pb.Dataset{} })
+}
+
+func requireActiveDataNode(ctx context.Context, tx queryRower, nodeID string) error {
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT c_status FROM t_data_nodes WHERE c_node_id = ?`, nodeID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("data node %q: %w", nodeID, sql.ErrNoRows)
+		}
+		return err
+	}
+	if status != "active" {
+		return ErrDataNodeDisabled
+	}
+	return nil
 }
 
 func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, error) {
@@ -209,7 +615,7 @@ func (s *Store) prepareField(ctx context.Context, item *pb.Field) (string, error
 }
 
 func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_fields WHERE c_space_id = ? AND c_field_id = ?`, []any{spaceID, fieldID}, func() *pb.Field { return &pb.Field{} })
+	return getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_fields WHERE c_space_id = ? AND c_field_id = ?`, []any{spaceID, fieldID}, func() *pb.Field { return &pb.Field{} })
 }
 
 func (s *Store) ListFields(ctx context.Context, query coremetadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
@@ -263,13 +669,12 @@ func (s *Store) ListFields(ctx context.Context, query coremetadata.FieldQuery) (
 		args = append(args, pattern, pattern, pattern)
 	}
 
-	statement := `SELECT c_attrs_json FROM t_fields WHERE ` + strings.Join(where, " AND ") +
-		` ORDER BY ` + sortColumn + ` ` + direction + `, c_field_id ` + direction
-	items, err := queryMessages(ctx, s.db, statement, args, func() *pb.Field { return &pb.Field{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, query.Page)
+	whereSQL := strings.Join(where, " AND ")
+	return queryPagedMessages(ctx, s.queryDB(ctx),
+		`SELECT c_attrs_json FROM t_fields WHERE `+whereSQL+` ORDER BY `+sortColumn+` `+direction+`, c_field_id `+direction,
+		`SELECT COUNT(1) FROM t_fields WHERE `+whereSQL,
+		args, query.Page, func() *pb.Field { return &pb.Field{} },
+	)
 }
 
 func escapeLikePattern(value string) string {
@@ -278,65 +683,14 @@ func escapeLikePattern(value string) string {
 	return strings.ReplaceAll(value, `_`, `\_`)
 }
 
-func (s *Store) UpsertFactor(ctx context.Context, item *pb.Factor) (*pb.Factor, error) {
-	if item == nil || item.GetSpaceId() == "" || item.GetFactorId() == "" || item.GetName() == "" {
-		return nil, errors.New("space_id, factor_id and name are required")
-	}
-	item.Status = defaultStatus(item.GetStatus())
-	raw, err := marshal(item)
-	if err != nil {
-		return nil, err
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_factors (c_space_id, c_factor_id, c_name, c_description, c_algorithm, c_params_json, c_value_type, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_factor_id) DO UPDATE SET
-			c_name = excluded.c_name,
-			c_description = excluded.c_description,
-			c_algorithm = excluded.c_algorithm,
-			c_params_json = excluded.c_params_json,
-			c_value_type = excluded.c_value_type,
-			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetFactorId(), item.GetName(), item.GetDescription(), item.GetAlgorithm(), defaultJSON(item.GetParamsJson()), valueTypeSQL(item.GetValueType()), item.GetStatus(), raw)
-	if err != nil {
-		return nil, err
-	}
-	return s.GetFactor(ctx, item.GetSpaceId(), item.GetFactorId())
-}
-
-func (s *Store) GetFactor(ctx context.Context, spaceID string, factorID string) (*pb.Factor, error) {
-	return getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_factors WHERE c_space_id = ? AND c_factor_id = ?`, []any{spaceID, factorID}, func() *pb.Factor { return &pb.Factor{} })
-}
-
-func (s *Store) ListFactors(ctx context.Context, spaceID string, algorithm string, page *pb.Page) ([]*pb.Factor, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_factors
-		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_algorithm = ?)
-		ORDER BY c_space_id, c_factor_id
-	`, []any{spaceID, spaceID, algorithm, algorithm}, func() *pb.Factor { return &pb.Factor{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
 func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return nil, errors.New("space_id, dataset_id and column_name are required")
 	}
-	item.Status = defaultStatus(item.GetStatus())
-	newColumn := false
-	if existing, getErr := s.GetDatasetColumn(ctx, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()); getErr == nil {
-		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
-			return nil, errors.New("dataset column identity and value_type are immutable")
-		}
-	} else if !errors.Is(getErr, sql.ErrNoRows) {
-		return nil, getErr
-	} else {
-		newColumn = true
+	if item.GetValueType() == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
+		return nil, errors.New("dataset column value_type must be declared")
 	}
+	item.Status = defaultStatus(item.GetStatus())
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err
@@ -345,73 +699,154 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_is_unique, c_aliases_json, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	existing, getErr := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`,
+		[]any{item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	newColumn := errors.Is(getErr, sql.ErrNoRows)
+	if getErr == nil {
+		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
+			return nil, errors.New("dataset column identity and value_type are immutable")
+		}
+	} else if !newColumn {
+		return nil, getErr
+	}
+	wasActive := getErr == nil && (existing.GetStatus() == "" || existing.GetStatus() == "active")
+	isActive := item.GetStatus() == "active"
+	projectionChanged := wasActive != isActive
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_aliases_json, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_dataset_id, c_column_name) DO UPDATE SET
 			c_origin_type = excluded.c_origin_type,
 			c_origin_id = excluded.c_origin_id,
 			c_value_type = excluded.c_value_type,
-			c_is_unique = excluded.c_is_unique,
 			c_aliases_json = excluded.c_aliases_json,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), boolInt(item.GetIsUnique()), aliases, item.GetStatus(), raw)
+	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), aliases, item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
-	if newColumn {
-		if err := s.bumpViewsForDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
+	if (newColumn || projectionChanged) && isActive {
+		if err := addFactorResultViewColumn(ctx, tx, item); err != nil {
 			return nil, err
 		}
+	}
+	if projectionChanged {
+		if err := bumpViewsForDataset(ctx, tx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return item, nil
 }
 
-func (s *Store) bumpViewsForDataset(ctx context.Context, spaceID, datasetID string) error {
-	_, err := s.db.ExecContext(ctx, `
+func addFactorResultViewColumn(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
+	dataset, err := getDatasetTx(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	if dataset.GetAttributes()["dataset_role"] != "factor_result" || dataset.GetStatus() != "active" || !dataset.GetBindingLocked() {
+		return nil
+	}
+	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), viewID}, func() *pb.View { return &pb.View{} })
+	if err != nil {
+		return fmt.Errorf("factor result default View %s/%s must exist before adding columns: %w", item.GetSpaceId(), viewID, err)
+	}
+	if view.GetDatasetId() != item.GetDatasetId() || view.GetStatus() != "active" {
+		return fmt.Errorf("factor result default View %s/%s is not active for its Dataset", item.GetSpaceId(), viewID)
+	}
+	var sortOrder uint32
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(c_sort_order) + 1, 0) FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, item.GetSpaceId(), viewID).Scan(&sortOrder); err != nil {
+		return err
+	}
+	columnName := item.GetDatasetId() + "." + item.GetColumnName()
+	changed, err := upsertViewColumn(ctx, tx, &pb.ViewColumn{
+		SpaceId: item.GetSpaceId(), ViewId: viewID, ColumnName: columnName,
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: columnName,
+		ValueType: item.GetValueType(), SortOrder: sortOrder, Attributes: cloneMetadataStringMap(item.GetAttributes()),
+	})
+	if err != nil {
+		return err
+	}
+	if changed {
+		return bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID)
+	}
+	return nil
+}
+
+func factorResultDefaultViewID(datasetID string) (string, error) {
+	if !strings.HasPrefix(datasetID, "dataset_") || len(datasetID) == len("dataset_") {
+		return "", fmt.Errorf("factor_result Dataset ID %q must start with dataset_ and include a suffix", datasetID)
+	}
+	return "view_" + strings.TrimPrefix(datasetID, "dataset_"), nil
+}
+
+func cloneMetadataStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func bumpViewsForDataset(ctx context.Context, db execQueryRower, spaceID, datasetID string) error {
+	_, err := db.ExecContext(ctx, `
 		UPDATE t_views
-		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END
-		WHERE c_space_id = ? AND (
-			c_primary_dataset_id = ? OR EXISTS (
-				SELECT 1 FROM json_each(t_views.c_dataset_ids_json) ref WHERE ref.value = ?
-			)
-		)`, spaceID, datasetID, datasetID)
+		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END,
+			c_attrs_json = json_set(c_attrs_json, '$.desired_view_revision', CAST(CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END AS TEXT))
+		WHERE c_space_id = ? AND c_dataset_id = ?
+		  AND COALESCE(json_extract(c_attrs_json, '$.attributes."moox.columns_explicit"'), '') <> 'true'
+		  AND NOT EXISTS (
+			SELECT 1 FROM t_view_columns view_column
+			WHERE view_column.c_space_id = t_views.c_space_id
+			  AND view_column.c_view_id = t_views.c_view_id
+		  )`, spaceID, datasetID)
 	return err
 }
 
 func (s *Store) bumpViewsForField(ctx context.Context, spaceID, fieldID string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE t_views
-		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END
+		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END,
+			c_attrs_json = json_set(c_attrs_json, '$.desired_view_revision', CAST(CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END AS TEXT))
 		WHERE c_space_id = ? AND EXISTS (
 			SELECT 1
 			FROM t_dataset_columns column_ref
 			WHERE column_ref.c_space_id = t_views.c_space_id
 			  AND column_ref.c_origin_type = 'field'
 			  AND column_ref.c_origin_id = ?
-			  AND (
-				column_ref.c_dataset_id = t_views.c_primary_dataset_id OR EXISTS (
-					SELECT 1 FROM json_each(t_views.c_dataset_ids_json) ref WHERE ref.value = column_ref.c_dataset_id
-				)
-			  )
+			  AND column_ref.c_dataset_id = t_views.c_dataset_id
 		)`, spaceID, fieldID)
 	return err
 }
 
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_dataset_columns
+	const where = `
+		FROM t_dataset_columns
 		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_dataset_id = ?)
-		ORDER BY c_space_id, c_dataset_id, c_column_name
-	`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_dataset_id = ?)`
+	args := []any{spaceID, spaceID, datasetID, datasetID}
+	return queryPagedMessages(ctx, s.queryDB(ctx),
+		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_dataset_id, c_column_name`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.DatasetColumn { return &pb.DatasetColumn{} },
+	)
 }
 
 func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	return queryMessages(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE (? = '' OR c_space_id = ?) AND (? = '' OR c_primary_dataset_id = ? OR EXISTS (SELECT 1 FROM json_each(c_dataset_ids_json) ref WHERE ref.value = ?)) AND c_status = 'active' ORDER BY c_space_id, c_view_id`, []any{spaceID, spaceID, datasetID, datasetID, datasetID}, func() *pb.View { return &pb.View{} })
+	return queryMessages(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_views WHERE (? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND c_status = 'active' ORDER BY c_space_id, c_view_id`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.View { return &pb.View{} })
 }

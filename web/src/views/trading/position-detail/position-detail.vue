@@ -1,591 +1,537 @@
 <template>
-  <div class="moox-page">
+  <div class="moox-page position-page">
     <div class="moox-inner">
-      <div class="page-head"><h2>持仓详情</h2></div>
-      <section class="positions-panel">
-        <div v-if="positionAccountTabs.length" class="account-tabs-block">
-          <div
-            class="position-account-tabs"
-            :class="{ expanded: positionAccountTabsExpanded }"
-            role="tablist"
-            aria-label="持仓账户"
-          >
-            <button
-              v-for="acc in positionAccountTabs"
-              :key="acc.account_id"
-              type="button"
-              class="position-account-tab"
-              :class="{ active: positionFilter.account_id === acc.account_id }"
-              role="tab"
-              :aria-selected="positionFilter.account_id === acc.account_id"
-              @click="onPositionAccountTabClick(acc.account_id)"
-            >
-              <span class="account-tab-name">{{ acc.account_name }}</span>
-              <span class="account-tab-type">{{ accountTypeLabels[acc.account_type] || acc.account_type }}</span>
-              <span class="account-tab-balance">余额 {{ nonZeroBalanceCount(acc.account_id) }}</span>
-            </button>
-          </div>
-          <a-button
-            class="account-tabs-toggle"
-            size="small"
-            type="text"
-            :aria-label="positionAccountTabsExpanded ? '收起账户' : '展开账户'"
-            :title="positionAccountTabsExpanded ? '收起账户' : '展开账户'"
-            @click="togglePositionAccountTabs"
-          >
-            <template #icon>
-              <icon-up v-if="positionAccountTabsExpanded" />
-              <icon-down v-else />
-            </template>
-          </a-button>
+      <div class="page-head">
+        <div>
+          <h2>持仓</h2>
+          <span>查看账户当前资产、合约仓位和风险指标。</span>
         </div>
-        <a-empty v-else description="暂无账户" />
+        <a-space>
+          <a-button :loading="loading" aria-label="刷新持仓" @click="refresh">
+            <template #icon><icon-refresh /></template>
+            刷新
+          </a-button>
+          <a-button :loading="syncing" :disabled="!tradingAccountId" @click="sync">
+            <template #icon><icon-sync /></template>
+            同步账户
+          </a-button>
+        </a-space>
+      </div>
 
-        <div v-if="selectedAccount" class="account-balance-panel">
-          <div class="account-balance-head">
-            <div>
-              <span class="balance-label">余额快照</span>
-              <strong>{{ selectedAccount.account_name }}</strong>
-              <span class="balance-total">非零 {{ selectedNonZeroBalanceCount }} / {{ selectedBalanceCount }}</span>
-            </div>
-            <a-space>
-              <a-button size="small" @click="loadSelectedBalances" :loading="selectedBalanceLoading">
-                <template #icon><icon-refresh /></template>
-                刷新余额
-              </a-button>
-              <a-button size="small" type="primary" @click="syncBalancesForCurrent" :loading="syncingBalances">
-                <template #icon><icon-sync /></template>
-                同步余额
-              </a-button>
-            </a-space>
-          </div>
+      <a-space class="position-filter-bar" wrap>
+        <a-select
+          v-model="tradingAccountId"
+          placeholder="执行账户"
+          class="account-select"
+          :loading="accountsLoading"
+          :disabled="accountsLoading || accounts.length === 0"
+          @change="onAccountChange"
+        >
+          <a-option v-for="account in accounts" :key="account.trading_account_id" :value="account.trading_account_id">
+            {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
+          </a-option>
+        </a-select>
+        <a-input v-model="instrumentId" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="loadPositions" />
+        <a-button type="primary" :loading="loading" :disabled="!tradingAccountId" @click="loadPositions">
+          <template #icon><icon-search /></template>
+          查询
+        </a-button>
+        <div v-if="selectedAccount" class="account-context-meta">
+          <a-tag
+            >{{ localExchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[selectedAccount.market_type] }}</a-tag
+          >
+          <a-tag :color="selectedAccount.ready ? 'green' : 'orange'">
+            {{ selectedAccount.ready ? "已就绪" : "未就绪" }}
+          </a-tag>
+          <span class="sync-time">最近同步 {{ formatTimestamp(selectedAccount.last_sync_at) }}</span>
+        </div>
+      </a-space>
 
-          <div v-if="selectedAccountBalances.length" class="balance-chip-list">
-            <span v-for="item in selectedTopBalances" :key="item.currency" class="balance-chip">
-              <b>{{ item.currency }}</b>
-              <em>{{ formatBalanceAmount(balanceDisplayAmount(item)) }}</em>
-            </span>
+      <a-alert v-if="accountsError" type="error" show-icon class="account-load-error">
+        {{ accountsError }}
+        <template #action>
+          <a-button type="text" size="small" @click="refresh">重新加载</a-button>
+        </template>
+      </a-alert>
+
+      <a-alert
+        v-if="selectedAccount && (!selectedAccount.ready || selectedAccount.last_error)"
+        class="account-status"
+        :type="selectedAccount.ready ? 'info' : 'warning'"
+      >
+        {{ selectedAccount.last_error || "账户尚未完成同步，请先同步账户" }}
+      </a-alert>
+
+      <template v-if="selectedAccount">
+        <div class="summary-grid">
+          <div class="summary-card">
+            <span>权益</span><strong>{{ snapshotValue(selectedAccount.snapshot?.equity) }}</strong
+            ><small>{{ selectedAccount.settlement_asset }}</small>
           </div>
-          <div v-else class="balance-empty">
-            {{ selectedBalanceLoading ? "读取余额中" : "暂无非零余额" }}
+          <div class="summary-card">
+            <span>可用资金</span><strong>{{ snapshotValue(selectedAccount.snapshot?.available_funds) }}</strong
+            ><small>可用于新订单</small>
           </div>
+          <div class="summary-card" :class="pnlTone(selectedAccount.snapshot?.unrealized_pnl)">
+            <span>未实现盈亏</span><strong>{{ snapshotValue(selectedAccount.snapshot?.unrealized_pnl) }}</strong
+            ><small>按最新同步数据</small>
+          </div>
+          <div class="summary-card">
+            <span>{{ selectedAccount.market_type === 1 ? "资产数" : "持仓数" }}</span
+            ><strong>{{ selectedAccount.market_type === 1 ? visibleHoldings.length : positions.length }}</strong
+            ><small>当前账户</small>
+          </div>
+        </div>
+
+        <a-alert v-if="positionsError" type="error" show-icon class="position-load-error">
+          {{ positionsError }}
+          <template #action>
+            <a-button type="text" size="small" @click="loadPositions">重新加载</a-button>
+          </template>
+        </a-alert>
+
+        <div v-if="!positionsError" class="position-table-region">
+          <a-empty
+            v-if="
+              !loading &&
+              ((selectedAccount.market_type === 1 && !visibleHoldings.length) ||
+                (selectedAccount.market_type === 2 && !positions.length))
+            "
+            class="position-empty-state"
+            description="暂无持仓数据"
+          />
 
           <a-table
-            v-if="selectedAccountBalances.length"
-            row-key="currency"
+            v-else-if="selectedAccount.market_type === 1"
+            row-key="asset"
             size="small"
             :bordered="{ cell: true }"
-            :data="selectedAccountBalances"
-            :pagination="{ pageSize: 12, simple: true }"
+            :data="visibleHoldings"
+            :loading="loading"
+            :pagination="false"
+            :scroll="{ x: 960 }"
+          >
+            <template #columns>
+              <a-table-column title="资产" data-index="asset" :width="100" />
+              <a-table-column title="数量" data-index="quantity" :width="110" />
+              <a-table-column title="平均成本" data-index="average_cost" :width="130" />
+              <a-table-column title="标记价" data-index="mark_price" :width="130" />
+              <a-table-column title="市值" data-index="market_value" :width="130" />
+              <a-table-column title="未实现盈亏" :width="140">
+                <template #cell="{ record }"
+                  ><span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl || "-" }}</span></template
+                >
+              </a-table-column>
+              <a-table-column title="交易标的" data-index="instrument_id" :width="180" />
+            </template>
+          </a-table>
+
+          <a-table
+            v-else
+            row-key="instrument_id"
+            size="small"
+            :bordered="{ cell: true }"
+            :data="positions"
+            :loading="loading"
+            :pagination="false"
             :scroll="{ x: 'max-content' }"
           >
             <template #columns>
-              <a-table-column title="币种" data-index="currency" :width="100" />
-              <a-table-column title="可用" :width="160">
-                <template #cell="{ record }">{{ formatBalanceAmount(record.available) }}</template>
+              <a-table-column title="市场" :width="90">
+                <template #cell>{{ localMarketTypeLabels[selectedAccount.market_type] }}</template>
               </a-table-column>
-              <a-table-column title="冻结" :width="160">
-                <template #cell="{ record }">{{ formatBalanceAmount(record.frozen) }}</template>
+              <a-table-column title="交易标的" data-index="instrument_id" />
+              <a-table-column title="方向" :width="90">
+                <template #cell="{ record }">{{ quantitySide(record.signed_quantity) }}</template>
               </a-table-column>
-              <a-table-column title="总额" :width="160">
-                <template #cell="{ record }">{{ formatBalanceAmount(record.total) }}</template>
+              <a-table-column title="持仓数量" data-index="signed_quantity" />
+              <a-table-column title="开仓价" data-index="entry_price" />
+              <a-table-column title="标记价" data-index="mark_price" />
+              <a-table-column title="强平价" data-index="liquidation_price" />
+              <a-table-column title="杠杆" data-index="leverage" />
+              <a-table-column title="保证金" data-index="used_margin" />
+              <a-table-column title="未实现盈亏">
+                <template #cell="{ record }">
+                  <span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl }}</span>
+                </template>
+              </a-table-column>
+              <a-table-column title="更新时间">
+                <template #cell="{ record }">{{ formatTimestamp(record.exchange_updated_at) }}</template>
               </a-table-column>
             </template>
           </a-table>
         </div>
-
-        <div class="position-toolbar">
-          <a-space>
-            <a-input
-              v-model="positionFilter.symbol"
-              placeholder="交易对"
-              style="width: 140px"
-              allow-clear
-              @press-enter="loadPositions"
-            />
-            <a-button type="primary" size="small" :disabled="!positionFilter.account_id" @click="loadPositions">
-              <template #icon><icon-search /></template>
-              查询
-            </a-button>
-            <a-button size="small" @click="onSyncPositions" :loading="syncingPositions" :disabled="!positionFilter.account_id">
-              <template #icon><icon-sync /></template>
-              同步持仓
-            </a-button>
-          </a-space>
-        </div>
-
-        <a-table
-          row-key="position_id"
-          size="small"
-          :bordered="{ cell: true }"
-          :loading="positionLoading"
-          :data="positions"
-          :pagination="false"
-          :scroll="{ x: 'max-content' }"
-        >
-          <template #columns>
-            <a-table-column title="账户" :width="120">
-              <template #cell="{ record }">{{ accountName(record.account_id) }}</template>
-            </a-table-column>
-            <a-table-column title="交易所" data-index="exchange" :width="90" />
-            <a-table-column title="交易对" data-index="symbol" :width="120" />
-            <a-table-column title="方向" :width="70">
-              <template #cell="{ record }">
-                <a-tag size="small" :color="record.pos_side === 'long' ? 'red' : record.pos_side === 'short' ? 'green' : 'gray'">
-                  {{ record.pos_side || "-" }}
-                </a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="数量" data-index="quantity" :width="120" />
-            <a-table-column title="均价" data-index="avg_price" :width="120" />
-            <a-table-column title="杠杆" data-index="leverage" :width="70" />
-            <a-table-column title="保证金" data-index="margin" :width="120" />
-            <a-table-column title="强平价" data-index="liq_price" :width="120" />
-            <a-table-column title="未实现盈亏" :width="120">
-              <template #cell="{ record }">
-                <span :style="{ color: pnlColor(record.unrealized_pnl) }">{{ record.unrealized_pnl || "-" }}</span>
-              </template>
-            </a-table-column>
-            <a-table-column title="已实现盈亏" :width="120">
-              <template #cell="{ record }">
-                <span :style="{ color: pnlColor(record.realized_pnl) }">{{ record.realized_pnl || "-" }}</span>
-              </template>
-            </a-table-column>
-            <a-table-column title="更新时间" :width="170">
-              <template #cell="{ record }">{{ formatTimestamp(record.updated_at) }}</template>
-            </a-table-column>
-          </template>
-          <template #empty>
-            <a-empty :description="positionFilter.account_id ? '暂无持仓' : '暂无账户'" />
-          </template>
-        </a-table>
-      </section>
+      </template>
+      <div v-else class="position-empty-workbench">
+        <a-empty :description="accountsLoading ? '正在加载执行账户' : '暂无可用执行账户'" />
+        <p v-if="!accountsLoading && !accountsError">请先在账户总览中创建或启用执行账户。</p>
+        <a-button v-if="!accountsLoading && !accountsError" type="text" @click="goAccounts">去账户总览</a-button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import {
-  getBalances,
-  listAccounts,
-  listPositions,
-  syncBalances,
-  syncPositions,
-  accountTypeLabels,
-  formatTimestamp
-} from "@/api/trade";
-import type { Account, Balance, Position } from "@/api/trade/types";
+import { useRoute, useRouter } from "vue-router";
+import { createLatestRequestGuard } from "@/utils/latest-request";
+import { formatTimestamp, listTradingAccounts, listHoldings, listPositions, syncTradingAccount } from "@/api/trade";
+import type { TradingAccount, Holding, Position } from "@/api/trade/types";
 
 defineOptions({ name: "position-detail" });
 
-const accounts = ref<Account[]>([]);
-const positionAccountTabs = computed(() => accounts.value);
-const positionAccountTabsExpanded = ref(false);
-const selectedAccount = computed(() => accounts.value.find(acc => acc.account_id === positionFilter.account_id) || null);
+const accounts = ref<TradingAccount[]>([]);
+const positions = ref<Position[]>([]);
+const holdings = ref<Holding[]>([]);
+const route = useRoute();
+const router = useRouter();
+const tradingAccountId = ref(typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "");
+const instrumentId = ref("");
+const loading = ref(false);
+const syncing = ref(false);
+const accountsLoading = ref(false);
+const accountsError = ref("");
+const positionsError = ref("");
+const accountsLoaded = ref(false);
+const accountRequests = createLatestRequestGuard();
+const positionRequests = createLatestRequestGuard();
+const selectedAccount = computed(
+  () => accounts.value.find(account => account.trading_account_id === tradingAccountId.value) || null
+);
+const visibleHoldings = computed(() => {
+  const filter = instrumentId.value.trim().toUpperCase();
+  if (!filter) return holdings.value;
+  return holdings.value.filter(item =>
+    [item.instrument_id, item.exchange_symbol, item.asset].some(value => value?.toUpperCase().includes(filter))
+  );
+});
+const localExchangeLabels: Record<number, string> = { 0: "-", 1: "币安", 2: "欧易" };
+const localMarketTypeLabels: Record<number, string> = { 0: "-", 1: "现货", 2: "合约" };
 
-function togglePositionAccountTabs() {
-  positionAccountTabsExpanded.value = !positionAccountTabsExpanded.value;
+function snapshotValue(value?: string) {
+  return value && value !== "0" ? value : value === "0" ? "0" : "-";
+}
+function pnlTone(value?: string) {
+  const parsed = Number(value);
+  return parsed > 0 ? "positive" : parsed < 0 ? "negative" : "";
 }
 
 async function loadAccounts() {
-  const rsp = await listAccounts({ page: { page: 1, size: 200 } });
-  accounts.value = rsp.accounts || [];
-}
-
-function defaultPositionAccountID(): string {
-  return (
-    accounts.value.find(acc => acc.account_type === 2)?.account_id ||
-    accounts.value.find(acc => acc.is_default)?.account_id ||
-    accounts.value[0]?.account_id ||
-    ""
-  );
-}
-
-function positionAccountCandidates(): string[] {
-  const ids: string[] = [];
-  const add = (id?: string) => {
-    if (id && !ids.includes(id)) {
-      ids.push(id);
+  const request = accountRequests.begin();
+  accountsLoading.value = true;
+  accountsError.value = "";
+  try {
+    const response = await listTradingAccounts({ page: { page: 1, size: 200 } });
+    if (!request.isLatest()) return;
+    accounts.value = response.accounts || [];
+    accountsLoaded.value = true;
+    const requested = typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "";
+    const hasRequested = accounts.value.some(account => account.trading_account_id === requested);
+    tradingAccountId.value = hasRequested ? requested : requested ? "" : accounts.value[0]?.trading_account_id || "";
+    if (requested && !hasRequested) {
+      await router.replace({ query: { ...route.query, trading_account_id: undefined } });
+      Message.warning("账户不存在或无权限");
     }
-  };
-  accounts.value.filter(acc => acc.account_type === 2).forEach(acc => add(acc.account_id));
-  add(defaultPositionAccountID());
-  add(accounts.value[0]?.account_id);
-  return ids;
+  } catch {
+    if (!request.isLatest()) return;
+    accounts.value = [];
+    tradingAccountId.value = "";
+    accountsLoaded.value = true;
+    accountsError.value = "执行账户加载失败，请检查交易服务后重试。";
+  } finally {
+    if (request.isLatest()) accountsLoading.value = false;
+  }
 }
 
-async function onPositionAccountTabClick(accountID: string) {
-  if (!accountID || positionFilter.account_id === accountID) {
+async function applyRouteAccount() {
+  if (!accountsLoaded.value) return;
+  const requested = typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "";
+  if (!requested) {
+    if (tradingAccountId.value) {
+      tradingAccountId.value = "";
+      positionRequests.invalidate();
+      loading.value = false;
+      positions.value = [];
+      holdings.value = [];
+    }
     return;
   }
-  positionFilter.account_id = accountID;
-  await Promise.all([loadPositions(), loadBalancesForAccount(accountID)]);
+  if (!accounts.value.some(account => account.trading_account_id === requested)) {
+    tradingAccountId.value = "";
+    positionRequests.invalidate();
+    loading.value = false;
+    positions.value = [];
+    holdings.value = [];
+    await router.replace({ query: { ...route.query, trading_account_id: undefined } });
+    Message.warning("账户不存在或无权限");
+    return;
+  }
+  if (tradingAccountId.value === requested) {
+    await loadPositions();
+    return;
+  }
+  tradingAccountId.value = requested;
+  await loadPositions();
 }
-
-function accountName(accountId: string): string {
-  const acc = accounts.value.find(a => a.account_id === accountId);
-  return acc ? acc.account_name : accountId || "-";
-}
-
-function pnlColor(val?: string): string {
-  if (!val) return "";
-  const n = parseFloat(val);
-  if (isNaN(n)) return "";
-  return n > 0 ? "#f53f3f" : n < 0 ? "#00b42a" : "";
-}
-
-// ========== 持仓列表 ==========
-const positions = ref<Position[]>([]);
-const positionLoading = ref(false);
-const syncingPositions = ref(false);
-const positionFilter = reactive({ account_id: "", symbol: "" });
 
 async function loadPositions() {
-  if (!positionFilter.account_id) {
+  if (!tradingAccountId.value) {
+    positionRequests.invalidate();
+    loading.value = false;
     positions.value = [];
+    holdings.value = [];
     return;
   }
-  positionLoading.value = true;
+  const request = positionRequests.begin();
+  const accountId = tradingAccountId.value;
+  const requestedSymbol = instrumentId.value.trim().toUpperCase();
+  loading.value = true;
+  positionsError.value = "";
   try {
-    const rsp = await listPositions(positionFilter.account_id, positionFilter.symbol || undefined);
-    positions.value = rsp.positions || [];
-  } finally {
-    positionLoading.value = false;
-  }
-}
-
-async function onSyncPositions() {
-  if (!positionFilter.account_id) {
-    Message.warning("请先选择账户");
-    return;
-  }
-  await syncPositionsForCurrent(true);
-}
-
-async function syncPositionsForCurrent(showMessage: boolean): Promise<number> {
-  syncingPositions.value = true;
-  try {
-    const rsp = await syncPositions(positionFilter.account_id, positionFilter.symbol || undefined);
-    positions.value = rsp.positions || [];
-    await loadBalancesForAccount(positionFilter.account_id);
-    if (showMessage) {
-      Message.success(`已同步 ${positions.value.length} 条持仓`);
-    }
-    return positions.value.length;
-  } finally {
-    syncingPositions.value = false;
-  }
-}
-
-// ========== 余额快照 ==========
-const accountBalanceMap = reactive<Record<string, Balance[]>>({});
-const balanceLoadingMap = reactive<Record<string, boolean>>({});
-const syncingBalances = ref(false);
-
-const selectedAccountBalances = computed(() => nonZeroBalances(positionFilter.account_id));
-const selectedTopBalances = computed(() => selectedAccountBalances.value.slice(0, 12));
-const selectedBalanceCount = computed(() => balanceCount(positionFilter.account_id));
-const selectedNonZeroBalanceCount = computed(() => selectedAccountBalances.value.length);
-const selectedBalanceLoading = computed(() => Boolean(balanceLoadingMap[positionFilter.account_id]));
-
-async function loadBalancePreviews() {
-  await Promise.allSettled(accounts.value.map(account => loadBalancesForAccount(account.account_id)));
-}
-
-async function loadBalancesForAccount(accountID: string) {
-  if (!accountID) return;
-  balanceLoadingMap[accountID] = true;
-  try {
-    const rsp = await getBalances(accountID);
-    accountBalanceMap[accountID] = rsp.balances || [];
-  } finally {
-    balanceLoadingMap[accountID] = false;
-  }
-}
-
-async function loadSelectedBalances() {
-  if (!positionFilter.account_id) {
-    return;
-  }
-  await loadBalancesForAccount(positionFilter.account_id);
-}
-
-async function syncBalancesForCurrent() {
-  if (!positionFilter.account_id) {
-    Message.warning("请先选择账户");
-    return;
-  }
-  syncingBalances.value = true;
-  try {
-    const rsp = await syncBalances(positionFilter.account_id);
-    accountBalanceMap[positionFilter.account_id] = rsp.balances || [];
-    Message.success(`已同步 ${nonZeroBalanceCount(positionFilter.account_id)} 个非零余额`);
-  } finally {
-    syncingBalances.value = false;
-  }
-}
-
-function balanceCount(accountID: string) {
-  return accountBalanceMap[accountID]?.length || 0;
-}
-
-function nonZeroBalances(accountID: string) {
-  return (accountBalanceMap[accountID] || [])
-    .filter(item => hasNonZeroBalance(item))
-    .sort((a, b) => balancePriority(b) - balancePriority(a));
-}
-
-function nonZeroBalanceCount(accountID: string) {
-  return nonZeroBalances(accountID).length;
-}
-
-function balancePriority(item: Balance) {
-  const preferred: Record<string, number> = { USDT: 1000, USDC: 900, BTC: 800, ETH: 700, BNB: 600, SOL: 500 };
-  const amount = Number.parseFloat(balanceDisplayAmount(item));
-  return (preferred[item.currency] || 0) + (Number.isFinite(amount) && amount > 0 ? Math.min(amount, 100) : 0);
-}
-
-function hasNonZeroBalance(item: Balance) {
-  return [item.total, item.available, item.frozen].some(value => isNonZeroAmount(value));
-}
-
-function balanceDisplayAmount(item: Balance) {
-  if (isNonZeroAmount(item.total)) return item.total;
-  if (isNonZeroAmount(item.available)) return item.available;
-  return item.frozen || "0";
-}
-
-function isNonZeroAmount(value?: string) {
-  const parsed = Number.parseFloat(value || "0");
-  return Number.isFinite(parsed) && Math.abs(parsed) > 0;
-}
-
-function formatBalanceAmount(value?: string) {
-  const raw = (value || "0").trim();
-  if (!raw) return "0";
-  if (!raw.includes(".")) return raw;
-  const trimmed = raw.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
-  return trimmed.length > 16 ? `${trimmed.slice(0, 16)}...` : trimmed;
-}
-
-async function loadInitialPositions() {
-  const candidates = positionAccountCandidates();
-  for (const accountID of candidates) {
-    positionFilter.account_id = accountID;
-    const count = await syncPositionsForCurrent(false);
-    if (count > 0) {
+    if (selectedAccount.value?.market_type === 1) {
+      const response = await listHoldings(accountId);
+      if (!request.isLatest() || tradingAccountId.value !== accountId) return;
+      holdings.value = response.holdings || [];
+      positions.value = [];
       return;
     }
+    const response = await listPositions({ trading_account_id: accountId, instrument_id: requestedSymbol });
+    if (!request.isLatest() || tradingAccountId.value !== accountId) return;
+    positions.value = response.positions || [];
+    holdings.value = [];
+  } catch {
+    if (!request.isLatest() || tradingAccountId.value !== accountId) return;
+    positions.value = [];
+    holdings.value = [];
+    positionsError.value = "持仓加载失败，请稍后重试。";
+  } finally {
+    if (request.isLatest()) loading.value = false;
   }
+}
+
+async function sync() {
+  const accountId = tradingAccountId.value;
+  syncing.value = true;
+  try {
+    const response = await syncTradingAccount(accountId);
+    if (tradingAccountId.value === accountId) Message.success(`同步完成：${response.positions_updated} 个仓位`);
+    await Promise.all([loadAccounts(), loadPositions()]);
+  } finally {
+    syncing.value = false;
+  }
+}
+
+function onAccountChange(id: string) {
+  tradingAccountId.value = id;
+  void router.replace({ query: { ...route.query, trading_account_id: id } });
+}
+
+async function refresh() {
+  await loadAccounts();
+  await loadPositions();
+}
+
+function goAccounts() {
+  void router.push({ path: "/trading/accounts" });
+}
+
+watch(
+  () => route.query.trading_account_id,
+  () => {
+    void applyRouteAccount();
+  }
+);
+
+function quantitySide(quantity: string) {
+  const value = Number(quantity);
+  if (value > 0) return "多头";
+  if (value < 0) return "空头";
+  return "空仓";
+}
+
+function pnlClass(value: string) {
+  const parsed = Number(value);
+  return parsed > 0 ? "positive" : parsed < 0 ? "negative" : "";
 }
 
 onMounted(async () => {
   await loadAccounts();
-  const balancePreviewPromise = loadBalancePreviews();
-  await loadInitialPositions();
-  await balancePreviewPromise;
+  await loadPositions();
 });
 </script>
 
 <style scoped>
-.positions-panel {
+.position-page {
   display: flex;
+  min-height: 0;
   flex-direction: column;
-  gap: 14px;
-}
-
-.account-tabs-block {
-  position: relative;
-  padding-bottom: var(--moox-space-3);
-}
-
-.position-account-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  max-height: 42px;
-  padding: var(--moox-space-1);
   overflow: hidden;
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-  background: var(--color-fill-1);
 }
-
-.position-account-tabs.expanded {
-  max-height: none;
+.position-page > .moox-inner {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
-
-.account-tabs-toggle {
-  position: absolute;
-  bottom: -9px;
-  left: 50%;
-  z-index: 2;
-  width: 34px;
-  min-width: 34px;
-  height: 18px;
-  min-height: 18px;
-  padding: 0;
-  color: rgb(var(--primary-6));
-  background: var(--color-bg-1);
-  border: 1px solid var(--color-border-2);
-  border-radius: 999px;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.1);
-  transform: translateX(-50%);
-}
-
-.account-tabs-toggle:hover {
-  background: var(--color-fill-2);
-}
-
-.account-tabs-toggle :deep(.arco-btn-icon) {
-  margin: 0;
-  font-size: 12px;
-}
-
-.position-account-tab {
-  display: inline-flex;
+.page-head {
+  display: flex;
   flex: 0 0 auto;
-  align-items: center;
-  gap: var(--moox-space-2);
-  min-height: 32px;
-  padding: 5px var(--moox-space-3);
-  color: var(--color-text-2);
-  white-space: nowrap;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  outline: none;
-  transition:
-    background-color 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
-}
-
-.position-account-tab:hover {
-  color: rgb(var(--primary-6));
-  background: var(--color-fill-2);
-}
-
-.position-account-tab.active {
-  color: rgb(var(--primary-6));
-  background: var(--color-bg-1);
-  border-color: rgb(var(--primary-6));
-}
-
-.account-tab-name {
-  max-width: 180px;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-}
-
-.account-tab-type {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.account-tab-balance {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.account-balance-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: var(--moox-space-3);
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-  background: var(--color-bg-1);
-}
-
-.account-balance-head {
-  display: flex;
-  gap: var(--moox-space-3);
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 16px;
+  margin-bottom: var(--moox-space-3);
 }
-
-.account-balance-head strong {
-  margin-left: var(--moox-space-2);
-  color: var(--color-text-1);
-  font-size: 14px;
+.page-head h2 {
+  margin: 0 0 4px;
 }
-
-.balance-label,
-.balance-total {
+.page-head > div > span {
   color: var(--color-text-3);
   font-size: 12px;
 }
-
-.balance-total {
-  margin-left: 10px;
-}
-
-.balance-chip-list {
+.position-filter-bar {
   display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  margin-bottom: var(--moox-space-tight);
+}
+.account-context-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 10px;
+  color: var(--color-text-3);
+  font-size: 12px;
+  line-height: 24px;
 }
-
-.balance-chip {
-  display: inline-flex;
-  gap: 6px;
-  align-items: baseline;
-  max-width: 220px;
-  padding: var(--moox-space-1) var(--moox-space-2);
-  color: var(--color-text-2);
-  background: var(--color-fill-1);
-  border: 1px solid var(--color-border-1);
-  border-radius: 4px;
+.position-filter-bar :deep(.arco-space-item) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
-
-.balance-chip b {
-  color: var(--color-text-1);
-  font-weight: 600;
-}
-
-.balance-chip em {
-  overflow: hidden;
-  color: var(--color-text-2);
-  font-style: normal;
-  text-overflow: ellipsis;
+.sync-time {
   white-space: nowrap;
 }
-
-.balance-empty {
+.account-load-error,
+.position-load-error {
+  flex: 0 0 auto;
+  margin-bottom: var(--moox-space-2);
+}
+.account-select {
+  width: 200px;
+}
+.position-filter-bar :deep(.account-select) {
+  width: 200px;
+}
+.symbol-input {
+  width: 240px;
+}
+.account-status {
+  margin-bottom: var(--moox-space-3);
+}
+.summary-grid {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: var(--moox-space-4);
+}
+.summary-card {
+  display: grid;
+  gap: 4px;
+  min-height: 86px;
+  padding: 13px 15px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+.summary-card span,
+.summary-card small {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.summary-card strong {
+  color: var(--color-text-1);
+  font-size: 20px;
+  line-height: 1.1;
+}
+.summary-card.positive strong {
+  color: rgb(var(--red-6));
+}
+.summary-card.negative strong {
+  color: rgb(var(--green-6));
+}
+.position-table-region {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+.position-page :deep(.arco-table-container) {
+  border-radius: 7px;
+}
+.position-page :deep(.arco-table-th) {
+  white-space: nowrap;
+}
+.position-page :deep(.arco-empty) {
+  padding: 42px 0;
+}
+.position-empty-state {
+  display: flex;
+  width: 100%;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+}
+.position-empty-workbench {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 240px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  border: 1px dashed var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-bg-2);
+}
+.position-empty-workbench p {
+  margin: 4px 0 8px;
   color: var(--color-text-3);
   font-size: 13px;
 }
-
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--moox-space-2);
+.positive {
+  color: rgb(var(--red-6));
 }
-
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
+.negative {
+  color: rgb(var(--green-6));
 }
-.position-toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--moox-space-3);
-  margin-bottom: var(--moox-space-2);
-}
-
 @media (max-width: 760px) {
-  .account-tabs-block,
-  .account-balance-head,
-  .position-toolbar {
-    align-items: stretch;
+  .page-head {
     flex-direction: column;
+  }
+  .position-filter-bar {
+    align-items: stretch;
+  }
+  .position-filter-bar :deep(.account-select) {
+    width: 100%;
+  }
+  .account-context-meta {
+    justify-content: flex-start;
+  }
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .account-select,
+  .symbol-input {
+    width: 100%;
   }
 }
 </style>

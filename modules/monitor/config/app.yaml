@@ -16,7 +16,6 @@ health_auth:
 
 instance:
   instance_id: ""
-  base_url: "http://127.0.0.1:11409"
 
 scheduler:
   result_retention_days: 14
@@ -31,37 +30,70 @@ sysdeploy:
     target_node: ""
     ca_file: ""
 
-peer:
-  enabled: true
-  timeout_seconds: 5
-  service_auth:
-    key_id: ""
-    secret_key: ""
-    ca_file: ""
-  peers: []
-
 alert:
   send_timeout_seconds: 10
 
+observability:
+  enabled: true
+  deliver_policy: all
+  eventbus_urls:
+    - nats://127.0.0.1:4222
+  credential_file: ~/.config/moox/eventbus/monitor-observability.yaml
+  balance_difference_threshold: 0.05
+
+market_canary:
+  enabled: true
+  freshness: 3m
+  return_threshold: 0.05
+  settle_delay: 5s
+  post_close_delay: 1m
+  calendar_warning_lead: 336h
+  closed_bar_count: 3
+  closed_bar_min_coverage: 0.99
+  subjects:
+    - space_id: crypto
+      dataset_id: dataset_binance_kline_1m
+      # Use a liquid, currently listed spot subject. The catalog may still
+      # store the unsuffixed identity; the canary resolver maps either form.
+      symbol: BTC-USDT
+      frequency: 1m
+      series_tag: venue:binance|market:spot|source:spot_http
+
+market_health:
+  timer_coordination_stale_after: 15m
+  timer_coordination_pending_grace: 5m
+  low_capacity_headroom: 2
+  feed_failure_rate_window: 5m
+  feed_failure_rate_threshold: 0.2
+  instrument_snapshot_max_age: 36h
+  instrument_minimum_count: 4000
+  instrument_required_exchanges: [XSHG, XSHE, XBSE]
+
+kline_freshness:
+  enabled: true
+  space_ids:
+    - crypto
+    - stockcn
+  collector_gateway_target: ip://127.0.0.1:11003
+  collector_gateway_node_id: ""
+  evaluation_interval: 30s
+  inventory_refresh_interval: 1m
+  inventory_page_size: 100
+  inventory_max_entries: 1000
+  stale_after: 5m
+  max_subjects_per_alert: 20
+
 metrics:
   enabled: true
-  eventbus_url: nats://127.0.0.1:4222
-  eventbus_credential_file: ~/.config/moox/monitor/eventbus.yaml
-  stream: MOOX_METRICS
-  topic: moox.metrics.snapshot.reported.v1
-  consumer: monitor_metrics_ingest_v1
-  fetch_batch_size: 64
-  fetch_max_wait: 1s
-  ack_wait: 60s
-  max_ack_pending: 256
+  dataset_health_policy_path: ../../config/setup/dataset-health-policy.yaml
   no_data_intervals: 2
   storage:
     gateway_target: ip://127.0.0.1:11003
     gateway_node_id: ""
     key_id: monitor
-    hmac_key_file: ""
-    space_id: moox_system
-    dataset_id: moox_service_metrics
+    hmac_key_file: "../secrets/gateway-monitor.key"
+    space_id: mooxsys
+    dataset_id: dataset_mooxsys_service_metrics
     frequency: 30s
     metadata_validation_interval: 30s
     write_batch_size: 1000
@@ -70,14 +102,14 @@ metrics:
     gateway_target: ip://127.0.0.1:11003
     gateway_node_id: ""
     key_id: monitor
-    hmac_key_file: ""
-    space_id: moox_system
+    hmac_key_file: "../secrets/gateway-monitor.key"
+    space_id: mooxsys
     frequency: 1m
     write_timeout: 5s
     read_limit: 500
     metadata_refresh_interval: 1m
     rule_refresh_interval: 30s
-    resource_dataset_id: host_resource_v1
-    filesystem_dataset_id: host_fs_v1
-    disk_dataset_id: host_disk_v1
-    network_dataset_id: host_net_v1
+    resource_dataset_id: dataset_mooxsys_host_resource
+    filesystem_dataset_id: dataset_mooxsys_host_filesystem
+    disk_dataset_id: dataset_mooxsys_host_disk
+    network_dataset_id: dataset_mooxsys_host_network

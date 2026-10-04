@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,16 +16,22 @@ import (
 
 // Response is the shared process-level health payload exposed by MooX services.
 type Response struct {
-	Module     string         `json:"module"`
-	Service    string         `json:"service,omitempty"`
-	InstanceID string         `json:"instance_id,omitempty"`
-	Ready      bool           `json:"ready"`
-	Status     string         `json:"status"`
-	Version    string         `json:"version,omitempty"`
-	GitCommit  string         `json:"git_commit,omitempty"`
-	StartTime  time.Time      `json:"start_time,omitempty"`
-	Time       time.Time      `json:"time"`
-	Details    map[string]any `json:"details,omitempty"`
+	Module                  string         `json:"module"`
+	Service                 string         `json:"service,omitempty"`
+	InstanceID              string         `json:"instance_id,omitempty"`
+	NodeID                  string         `json:"node_id,omitempty"`
+	Ready                   bool           `json:"ready"`
+	Status                  string         `json:"status"`
+	Version                 string         `json:"version,omitempty"`
+	GitCommit               string         `json:"git_commit,omitempty"`
+	BinarySHA256            string         `json:"binary_sha256,omitempty"`
+	BootID                  string         `json:"boot_id,omitempty"`
+	BuildTime               string         `json:"build_time,omitempty"`
+	ConfigHash              string         `json:"config_hash,omitempty"`
+	DatasetHealthPolicyHash string         `json:"dataset_health_policy_hash,omitempty"`
+	StartTime               time.Time      `json:"start_time,omitempty"`
+	Time                    time.Time      `json:"time"`
+	Details                 map[string]any `json:"details,omitempty"`
 }
 
 // SnapshotFunc returns a health snapshot for the current request.
@@ -32,18 +39,29 @@ type SnapshotFunc func(context.Context) Response
 
 // State contains the shared process health state used by module wrappers.
 type State struct {
-	Module       string
-	InstanceID   string
-	Version      string
-	GitCommit    string
-	StartedAt    time.Time
-	ReadyFlag    atomic.Bool
-	SnapshotFunc SnapshotFunc
+	Module                  string
+	InstanceID              string
+	Version                 string
+	GitCommit               string
+	BinarySHA256            string
+	BootID                  string
+	BuildTime               string
+	ConfigHash              string
+	DatasetHealthPolicyHash string
+	StartedAt               time.Time
+	ReadyFlag               atomic.Bool
+	SnapshotFunc            SnapshotFunc
 }
 
 // NewState creates a shared health state.
 func NewState(module, instance, version, commit string) *State {
-	return &State{Module: module, InstanceID: instance, Version: version, GitCommit: commit, StartedAt: time.Now().UTC()}
+	return &State{
+		Module: module, InstanceID: instance, Version: runtimeValue(version, "MOOX_VERSION"), GitCommit: runtimeValue(commit, "MOOX_GIT_COMMIT"),
+		BinarySHA256: os.Getenv("MOOX_BINARY_SHA256"),
+		BootID:       os.Getenv("MOOX_BOOT_ID"), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
+		ConfigHash: os.Getenv("MOOX_CONFIG_HASH"), DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),
+		StartedAt: time.Now().UTC(),
+	}
 }
 
 // Ready reports the current readiness flag.
@@ -67,12 +85,49 @@ func (s *State) Snapshot(ctx context.Context) Response {
 				rsp.Status = "degraded"
 			}
 		}
+		s.enrich(&rsp)
 		return rsp
 	}
 	if s == nil {
 		return Response{Ready: false, Status: "error", Time: time.Now()}
 	}
 	return Base(s.Module, s.InstanceID, s.Version, s.GitCommit, s.StartedAt, s.Ready())
+}
+
+func (s *State) enrich(rsp *Response) {
+	if s == nil || rsp == nil {
+		return
+	}
+	if rsp.BootID == "" {
+		rsp.BootID = s.BootID
+	}
+	if service := strings.TrimSpace(os.Getenv("MOOX_SERVICE_NAME")); service != "" {
+		rsp.Service = service
+	}
+	if instance := strings.TrimSpace(os.Getenv("MOOX_INSTANCE_ID")); instance != "" {
+		rsp.InstanceID = instance
+	}
+	if node := strings.TrimSpace(os.Getenv("MOOX_NODE_ID")); node != "" {
+		rsp.NodeID = node
+	}
+	if rsp.BuildTime == "" {
+		rsp.BuildTime = s.BuildTime
+	}
+	if rsp.Version == "" {
+		rsp.Version = s.Version
+	}
+	if rsp.GitCommit == "" {
+		rsp.GitCommit = s.GitCommit
+	}
+	if rsp.BinarySHA256 == "" {
+		rsp.BinarySHA256 = s.BinarySHA256
+	}
+	if rsp.ConfigHash == "" {
+		rsp.ConfigHash = s.ConfigHash
+	}
+	if rsp.DatasetHealthPolicyHash == "" {
+		rsp.DatasetHealthPolicyHash = s.DatasetHealthPolicyHash
+	}
 }
 
 // Mux is the exact-path router used by MooX standard HTTP services.
@@ -122,6 +177,11 @@ func (m *Mux) HandlePrefix(path string, handler http.Handler) {
 func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if m != nil {
 		if handler, ok := m.routes[r.URL.Path]; ok {
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", http.MethodGet)
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
 			handler.ServeHTTP(w, r)
 			return
 		}
@@ -142,26 +202,41 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Base constructs a standard health payload with stable fields populated.
 func Base(module, instanceID, version, gitCommit string, start time.Time, ready bool) Response {
+	service := strings.TrimSpace(os.Getenv("MOOX_SERVICE_NAME"))
+	if service == "" {
+		service = module
+	}
+	if configured := strings.TrimSpace(os.Getenv("MOOX_INSTANCE_ID")); configured != "" {
+		instanceID = configured
+	}
 	status := "degraded"
 	if ready {
 		status = "ok"
 	}
 	return Response{
-		Module:     module,
-		Service:    module,
-		InstanceID: instanceID,
-		Ready:      ready,
-		Status:     status,
-		Version:    version,
-		GitCommit:  gitCommit,
-		StartTime:  start,
-		Time:       time.Now(),
+		Module:                  module,
+		Service:                 service,
+		InstanceID:              instanceID,
+		NodeID:                  strings.TrimSpace(os.Getenv("MOOX_NODE_ID")),
+		Ready:                   ready,
+		Status:                  status,
+		Version:                 runtimeValue(version, "MOOX_VERSION"),
+		GitCommit:               runtimeValue(gitCommit, "MOOX_GIT_COMMIT"),
+		BinarySHA256:            strings.TrimSpace(os.Getenv("MOOX_BINARY_SHA256")),
+		BootID:                  os.Getenv("MOOX_BOOT_ID"),
+		BuildTime:               os.Getenv("MOOX_BUILD_TIME"),
+		ConfigHash:              os.Getenv("MOOX_CONFIG_HASH"),
+		DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),
+		StartTime:               start,
+		Time:                    time.Now(),
 	}
 }
 
-// Handler converts a SnapshotFunc into a readiness JSON HTTP handler.
-func Handler(snapshot SnapshotFunc) http.Handler {
-	return readinessHandler(snapshot)
+func runtimeValue(value, envName string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return strings.TrimSpace(os.Getenv(envName))
 }
 
 // LivenessHandler returns HTTP 200 when the process can execute the handler.
@@ -211,7 +286,7 @@ func readinessHandler(snapshot SnapshotFunc) http.Handler {
 
 // RegisterNoProtocolServiceMux exposes health endpoints through a tRPC
 // http_no_protocol service. This keeps health traffic on the tRPC server's
-// lifecycle, filters, timeout and monitoring pipeline instead of opening a
+// lifecycle, filters, timeout, and monitoring middleware instead of opening a
 // second net/http listener.
 func RegisterNoProtocolServiceMux(service server.Service, mux http.Handler) error {
 	if service == nil {

@@ -72,7 +72,7 @@ func (s hostRuleSource) Fetch(ctx context.Context) ([]domain.AlertRule, error) {
 	}
 	filtered := make([]domain.AlertRule, 0, len(rules))
 	for _, rule := range rules {
-		if rule.SpaceID != SpaceID || !rule.Enabled || rule.IsDeleted {
+		if rule.SpaceID != SpaceID || !rule.Enabled {
 			continue
 		}
 		if _, _, ok := ParseHostRuleKey(rule.CheckID); !ok {
@@ -93,7 +93,7 @@ type RuleCacheOptions struct {
 	InitialLoadTimeout time.Duration
 }
 
-// RuleCache keeps enabled moox_system host rules out of the HostMetric hot
+// RuleCache keeps enabled mooxsys host rules out of the HostMetric hot
 // path.  Each published snapshot is immutable from the consumer's point of
 // view; callers receive values or freshly allocated slices.
 type RuleCache struct {

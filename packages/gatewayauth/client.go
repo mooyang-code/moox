@@ -66,6 +66,18 @@ func NewHTTPClient(options ClientOptions) (*http.Client, error) {
 	}, nil
 }
 
+// CloseIdleConnections drops keep-alive sockets held by a gateway client.
+// Some short-lived local gateway workers close an idle connection from their
+// side; the next request can otherwise fail before a fresh socket is opened.
+func CloseIdleConnections(client *http.Client) {
+	if client == nil || client.Transport == nil {
+		return
+	}
+	if closer, ok := client.Transport.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 type secureRoundTripper struct {
 	next http.RoundTripper
 }
@@ -75,6 +87,12 @@ func (t secureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		return nil, err
 	}
 	return t.next.RoundTrip(req)
+}
+
+func (t secureRoundTripper) CloseIdleConnections() {
+	if closer, ok := t.next.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
 }
 
 func validateURL(target *url.URL) error {

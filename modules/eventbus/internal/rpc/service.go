@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
+	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
 	eventbusgen "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/nats-io/nats.go"
 )
 
@@ -76,21 +78,29 @@ func (s *Service) GetOverview(ctx context.Context, _ *eventbusgen.GetOverviewReq
 	return &eventbusgen.GetOverviewRsp{RetInfo: retOK(), Overview: &eventbusgen.Overview{JetstreamReady: ready, Connections: connections, Streams: uint32(len(streams)), Consumers: consumers, Messages: messages, Bytes: bytes, TotalPending: pending}}, nil
 }
 
-func (s *Service) ListTopics(ctx context.Context, req *eventbusgen.ListTopicsReq) (*eventbusgen.ListTopicsRsp, error) {
+func (s *Service) ListEvents(ctx context.Context, req *eventbusgen.ListEventsReq) (*eventbusgen.ListEventsRsp, error) {
 	if err := s.statusErr(); err != nil {
-		return &eventbusgen.ListTopicsRsp{RetInfo: retErr(err)}, nil
+		return &eventbusgen.ListEventsRsp{RetInfo: retErr(err)}, nil
 	}
-	items := make([]config.TopicConfig, 0)
-	for _, t := range s.cfg.Topics {
-		items = append(items, t)
+	eventRegistry, err := events.DefaultRegistry()
+	if err != nil {
+		return &eventbusgen.ListEventsRsp{RetInfo: retErr(err)}, nil
+	}
+	items := make([]registry.Topic, 0)
+	for _, event := range eventRegistry.Events() {
+		family, familyErr := eventRegistry.FamilyPattern(event)
+		if familyErr != nil {
+			return &eventbusgen.ListEventsRsp{RetInfo: retErr(familyErr)}, nil
+		}
+		items = append(items, registry.Topic{Topic: family, Stream: event.Stream(), EventName: event.Name(), EventVersion: event.Version(), Payload: string(event.PayloadFullName()), Enabled: true, Owner: event.Owner()})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Topic < items[j].Topic })
 	page, rows := paginateRows(req.GetPage(), items)
-	out := make([]*eventbusgen.TopicInfo, 0, len(rows))
+	out := make([]*eventbusgen.EventInfo, 0, len(rows))
 	for _, t := range rows {
-		out = append(out, &eventbusgen.TopicInfo{Topic: t.Topic, Stream: t.Stream, Kind: t.Kind, PayloadContentType: t.PayloadContentType, PayloadVersion: t.PayloadVersion, Enabled: t.Enabled})
+		out = append(out, &eventbusgen.EventInfo{SubjectPattern: t.Topic, Stream: t.Stream, EventName: t.EventName, EventVersion: t.EventVersion, PayloadType: t.Payload, Enabled: t.Enabled, Owner: t.Owner})
 	}
-	return &eventbusgen.ListTopicsRsp{RetInfo: retOK(), Topics: out, PageResult: page}, nil
+	return &eventbusgen.ListEventsRsp{RetInfo: retOK(), Events: out, PageResult: page}, nil
 }
 
 func (s *Service) ListStreams(ctx context.Context, req *eventbusgen.ListStreamsReq) (*eventbusgen.ListStreamsRsp, error) {

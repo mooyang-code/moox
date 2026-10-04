@@ -241,7 +241,7 @@ Open `/#/collector/cloudnodes` with the existing authenticated API-mock browser 
 
 ```bash
 make -C web-host statik
-env TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+env TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 ```
 
 Expected: `web-host/internal/statik/statik.go` changes and `bin/moox-web-host` is produced.

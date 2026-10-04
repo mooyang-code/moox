@@ -49,6 +49,12 @@ message UpdateSpaceRsp {
   common.RetInfo ret_info = 1;
   Space space = 2;
 }
+message DeleteSpaceReq {
+  string space_id = 1;
+}
+message DeleteSpaceRsp {
+  common.RetInfo ret_info = 1;
+}
 message ListSpacesReq {
   string owner = 1;
   string status = 2;
@@ -74,6 +80,7 @@ message ListSpaceMembersRsp {
 service SpaceMgr {
   rpc CreateSpace(CreateSpaceReq) returns (CreateSpaceRsp);
   rpc UpdateSpace(UpdateSpaceReq) returns (UpdateSpaceRsp);
+  rpc DeleteSpace(DeleteSpaceReq) returns (DeleteSpaceRsp);
   rpc ListSpaces(ListSpacesReq) returns (ListSpacesRsp);
   rpc ListSpaceMembers(ListSpaceMembersReq) returns (ListSpaceMembersRsp);
 }

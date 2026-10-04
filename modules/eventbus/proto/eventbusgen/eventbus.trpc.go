@@ -21,7 +21,7 @@ import (
 type EventBusMgrService interface {
 	GetOverview(ctx context.Context, req *GetOverviewReq) (*GetOverviewRsp, error)
 
-	ListTopics(ctx context.Context, req *ListTopicsReq) (*ListTopicsRsp, error)
+	ListEvents(ctx context.Context, req *ListEventsReq) (*ListEventsRsp, error)
 
 	ListStreams(ctx context.Context, req *ListStreamsReq) (*ListStreamsRsp, error)
 
@@ -48,14 +48,14 @@ func EventBusMgrService_GetOverview_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
-func EventBusMgrService_ListTopics_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListTopicsReq{}
+func EventBusMgrService_ListEvents_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListEventsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(EventBusMgrService).ListTopics(ctx, reqbody.(*ListTopicsReq))
+		return svr.(EventBusMgrService).ListEvents(ctx, reqbody.(*ListEventsReq))
 	}
 
 	var rsp interface{}
@@ -130,8 +130,8 @@ var EventBusMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: EventBusMgrService_GetOverview_Handler,
 		},
 		{
-			Name: "/trpc.moox.eventbus.EventBusMgr/ListTopics",
-			Func: EventBusMgrService_ListTopics_Handler,
+			Name: "/trpc.moox.eventbus.EventBusMgr/ListEvents",
+			Func: EventBusMgrService_ListEvents_Handler,
 		},
 		{
 			Name: "/trpc.moox.eventbus.EventBusMgr/ListStreams",
@@ -162,8 +162,8 @@ type UnimplementedEventBusMgr struct{}
 func (s *UnimplementedEventBusMgr) GetOverview(ctx context.Context, req *GetOverviewReq) (*GetOverviewRsp, error) {
 	return nil, errors.New("rpc GetOverview of service EventBusMgr is not implemented")
 }
-func (s *UnimplementedEventBusMgr) ListTopics(ctx context.Context, req *ListTopicsReq) (*ListTopicsRsp, error) {
-	return nil, errors.New("rpc ListTopics of service EventBusMgr is not implemented")
+func (s *UnimplementedEventBusMgr) ListEvents(ctx context.Context, req *ListEventsReq) (*ListEventsRsp, error) {
+	return nil, errors.New("rpc ListEvents of service EventBusMgr is not implemented")
 }
 func (s *UnimplementedEventBusMgr) ListStreams(ctx context.Context, req *ListStreamsReq) (*ListStreamsRsp, error) {
 	return nil, errors.New("rpc ListStreams of service EventBusMgr is not implemented")
@@ -185,7 +185,7 @@ func (s *UnimplementedEventBusMgr) GetConsumer(ctx context.Context, req *GetCons
 type EventBusMgrClientProxy interface {
 	GetOverview(ctx context.Context, req *GetOverviewReq, opts ...client.Option) (rsp *GetOverviewRsp, err error)
 
-	ListTopics(ctx context.Context, req *ListTopicsReq, opts ...client.Option) (rsp *ListTopicsRsp, err error)
+	ListEvents(ctx context.Context, req *ListEventsReq, opts ...client.Option) (rsp *ListEventsRsp, err error)
 
 	ListStreams(ctx context.Context, req *ListStreamsReq, opts ...client.Option) (rsp *ListStreamsRsp, err error)
 
@@ -223,20 +223,20 @@ func (c *EventBusMgrClientProxyImpl) GetOverview(ctx context.Context, req *GetOv
 	return rsp, nil
 }
 
-func (c *EventBusMgrClientProxyImpl) ListTopics(ctx context.Context, req *ListTopicsReq, opts ...client.Option) (*ListTopicsRsp, error) {
+func (c *EventBusMgrClientProxyImpl) ListEvents(ctx context.Context, req *ListEventsReq, opts ...client.Option) (*ListEventsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.eventbus.EventBusMgr/ListTopics")
+	msg.WithClientRPCName("/trpc.moox.eventbus.EventBusMgr/ListEvents")
 	msg.WithCalleeServiceName(EventBusMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("eventbus")
 	msg.WithCalleeService("EventBusMgr")
-	msg.WithCalleeMethod("ListTopics")
+	msg.WithCalleeMethod("ListEvents")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListTopicsRsp{}
+	rsp := &ListEventsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

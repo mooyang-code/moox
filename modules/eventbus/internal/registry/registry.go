@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
+	"github.com/mooyang-code/moox/packages/events"
 	nats "github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -55,77 +56,7 @@ func (r *Registry) Reconcile(ctx context.Context) (Result, error) {
 			return Result{}, err
 		}
 	}
-	for i := range r.cfg.Consumers {
-		if err := reconcileConsumer(ctx, r.js, &r.cfg.Consumers[i]); err != nil {
-			return Result{}, err
-		}
-	}
 	return Result{Streams: len(r.cfg.Streams), KV: len(r.cfg.KV), Topics: enabledTopics(r.cfg)}, nil
-}
-
-func reconcileConsumer(ctx context.Context, js nats.JetStreamContext, spec *config.ConsumerConfig) error {
-	want := consumerConfig(spec)
-	info, err := js.ConsumerInfo(spec.Stream, spec.Durable, nats.Context(ctx))
-	if errors.Is(err, nats.ErrConsumerNotFound) {
-		if _, err := js.AddConsumer(spec.Stream, want, nats.Context(ctx)); err != nil {
-			return fmt.Errorf("create consumer %q/%q: %w", spec.Stream, spec.Durable, err)
-		}
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect consumer %q/%q: %w", spec.Stream, spec.Durable, err)
-	}
-	if info == nil {
-		return fmt.Errorf("consumer %q/%q info is empty", spec.Stream, spec.Durable)
-	}
-	actual := info.Config
-	if actual.FilterSubject != want.FilterSubject || actual.AckPolicy != want.AckPolicy || actual.DeliverPolicy != want.DeliverPolicy || actual.ReplayPolicy != want.ReplayPolicy {
-		return fmt.Errorf("consumer %q/%q immutable configuration mismatch", spec.Stream, spec.Durable)
-	}
-	if actual.AckWait == want.AckWait && actual.MaxAckPending == want.MaxAckPending && actual.MaxDeliver == want.MaxDeliver {
-		return nil
-	}
-	next := actual
-	next.AckWait = want.AckWait
-	next.MaxAckPending = want.MaxAckPending
-	next.MaxDeliver = want.MaxDeliver
-	if _, err := js.UpdateConsumer(spec.Stream, &next, nats.Context(ctx)); err != nil {
-		return fmt.Errorf("update consumer %q/%q: %w", spec.Stream, spec.Durable, err)
-	}
-	return nil
-}
-
-func consumerConfig(spec *config.ConsumerConfig) *nats.ConsumerConfig {
-	return &nats.ConsumerConfig{
-		Name: spec.Durable, Durable: spec.Durable, FilterSubject: spec.FilterSubject,
-		AckPolicy: parseAckPolicy(spec.AckPolicy), DeliverPolicy: parseDeliverPolicy(spec.DeliverPolicy),
-		ReplayPolicy: parseReplayPolicy(spec.ReplayPolicy), AckWait: spec.AckWait,
-		MaxAckPending: spec.MaxAckPending, MaxDeliver: spec.MaxDeliver,
-	}
-}
-
-func parseAckPolicy(value string) nats.AckPolicy {
-	if strings.EqualFold(value, "none") {
-		return nats.AckNonePolicy
-	}
-	if strings.EqualFold(value, "all") {
-		return nats.AckAllPolicy
-	}
-	return nats.AckExplicitPolicy
-}
-
-func parseDeliverPolicy(value string) nats.DeliverPolicy {
-	if strings.EqualFold(value, "new") {
-		return nats.DeliverNewPolicy
-	}
-	return nats.DeliverAllPolicy
-}
-
-func parseReplayPolicy(value string) nats.ReplayPolicy {
-	if strings.EqualFold(value, "original") {
-		return nats.ReplayOriginalPolicy
-	}
-	return nats.ReplayInstantPolicy
 }
 
 func (r *Registry) rejectOverlappingUnmanagedStreams(ctx context.Context) error {
@@ -175,21 +106,12 @@ func (r *Registry) JS() nats.JetStreamContext {
 	}
 	return r.js
 }
-func (r *Registry) Config() *config.Config {
-	if r == nil {
-		return nil
-	}
-	return r.cfg
-}
-
 func enabledTopics(c *config.Config) int {
-	n := 0
-	for _, t := range c.Topics {
-		if t.Enabled {
-			n++
-		}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return 0
 	}
-	return n
+	return len(registry.Events())
 }
 
 func streamConfig(s *config.StreamConfig) *nats.StreamConfig {
@@ -205,7 +127,11 @@ func streamConfig(s *config.StreamConfig) *nats.StreamConfig {
 	if strings.EqualFold(s.Discard, "new") {
 		discard = nats.DiscardNew
 	}
-	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: s.Replicas, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: discard, Duplicates: 2 * time.Minute}
+	duplicates := s.Duplicates
+	if duplicates == 0 {
+		duplicates = 2 * time.Minute
+	}
+	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: s.Replicas, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: discard, Duplicates: duplicates}
 }
 
 func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config.StreamConfig, cfg *config.Config) error {
@@ -258,7 +184,7 @@ func reconcileKV(js nats.JetStreamContext, spec *config.KVConfig, cfg *config.Co
 	} else if err != nil {
 		return fmt.Errorf("inspect kv %q: %w", spec.Bucket, err)
 	}
-	// The legacy KV API does not expose an atomic update operation. Inspect the
+	// The NATS KV API does not expose an atomic update operation. Inspect the
 	// backing stream and update only fields that are safe to reconcile.
 	streamName := "KV_" + spec.Bucket
 	info, err := js.StreamInfo(streamName)
@@ -325,34 +251,12 @@ func subjectRemoved(old, next []string) bool {
 	return false
 }
 
-func TopicStream(cfg *config.Config, topic string) (config.TopicConfig, string, error) {
-	for _, t := range cfg.Topics {
-		if t.Enabled && t.Topic == topic {
-			return t, t.Stream, nil
-		}
-	}
-	for _, family := range cfg.TopicFamilies {
-		if family.Enabled && topicMatchesPattern(topic, family.Pattern) {
-			return config.TopicConfig{Topic: topic, Stream: family.Stream, Kind: family.Kind, PayloadContentType: family.PayloadContentType, PayloadVersion: family.PayloadVersion, Enabled: family.Enabled}, family.Stream, nil
-		}
-	}
-	return config.TopicConfig{}, "", fmt.Errorf("topic %q is not registered", topic)
-}
-
-func topicMatchesPattern(topic, pattern string) bool {
-	a, b := strings.Split(topic, "."), strings.Split(pattern, ".")
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if b[i] != "*" && b[i] != a[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func (r *Registry) ValidateTopic(topic string) error {
-	_, _, err := TopicStream(r.cfg, strings.TrimSpace(topic))
-	return err
+type Topic struct {
+	Topic        string
+	Stream       string
+	EventName    string
+	EventVersion uint32
+	Payload      string
+	Enabled      bool
+	Owner        string
 }

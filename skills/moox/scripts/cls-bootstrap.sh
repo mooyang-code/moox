@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TARGET=localhost
-DEPLOY_DIR="~/moox"
+DEPLOY_DIR="/data/moox"
 STAGE_DIR="${ROOT}/release/deploy-stage/moox"
 ADMIN_URL=http://127.0.0.1:11002
 CLOUD_ACCOUNT_ID=""
@@ -17,6 +17,16 @@ CONFIG_PATHS=()
 CONFIG_BACKUPS=()
 COMMITTED_COUNT=0
 TOKEN="$$.${RANDOM}.${RANDOM}"
+RESOURCE_PATH=""
+RESOURCE_TMP=""
+RESOURCE_BACKUP=""
+RESOURCE_HAD_OLD=0
+RESOURCE_COMMITTED=0
+RESOURCE_FINALIZED=0
+RESOURCE_ACCOUNT_ID=""
+RESOURCE_REGION=""
+RESOURCE_LOGSET_ID=""
+RESOURCE_TOPIC_ID=""
 STAGE_LOCK=""
 DEPLOY_LOCK=""
 STAGE_LOCK_HELD=0
@@ -98,6 +108,10 @@ while [[ $# -gt 0 ]]; do
     *) fail "unknown option: $1" ;;
   esac
 done
+
+RESOURCE_PATH="${STAGE_DIR}/config/resources.env"
+RESOURCE_TMP="${RESOURCE_PATH}.cls.${TOKEN}.tmp"
+RESOURCE_BACKUP="${RESOURCE_PATH}.cls.${TOKEN}.backup"
 
 if [[ -n "${CLOUD_ACCOUNT_ID}" ]] && ! valid_cloud_account_id "${CLOUD_ACCOUNT_ID}"; then
   fail "cloud account ID must match [A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
@@ -506,6 +520,14 @@ cleanup() {
   fi
   [[ -z "${NEXT_PATH}" ]] || rm -f "${NEXT_PATH}"
   [[ -z "${CREDENTIAL_BACKUP}" ]] || rm -f "${CREDENTIAL_BACKUP}"
+  if (( RESOURCE_COMMITTED && !RESOURCE_FINALIZED )); then
+    if (( RESOURCE_HAD_OLD )); then
+      mv -f "${RESOURCE_BACKUP}" "${RESOURCE_PATH}" 2>/dev/null || cp -p "${RESOURCE_BACKUP}" "${RESOURCE_PATH}" || true
+    else
+      rm -f "${RESOURCE_PATH}"
+    fi
+  fi
+  rm -f "${RESOURCE_TMP}" "${RESOURCE_BACKUP}"
   if (( ${#CONFIG_TEMPS[@]} > 0 )); then
     for path in "${CONFIG_TEMPS[@]}"; do
       rm -f "${path}"
@@ -552,20 +574,55 @@ cleanup() {
   fi
 }
 
+validate_gateway_cli_env() {
+  local file=$1 mode
+  [[ -f "${file}" && ! -L "${file}" && -O "${file}" ]] || fail "unsafe gateway-moox-cli.env"
+  if mode=$(stat -c '%a' "${file}" 2>/dev/null); then :; else mode=$(stat -f '%Lp' "${file}"); fi
+  [[ "${mode}" == 600 ]] || fail "unsafe gateway-moox-cli.env mode"
+  awk -F= '
+    BEGIN {
+      allowed["MOOX_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_GATEWAY_CALLER"]=1
+      allowed["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; allowed["MOOX_GATEWAY_TARGET_NODE"]=1
+      allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]=1
+      allowed["MOOX_SERVICE_GATEWAY_TARGET"]=1; allowed["MOOX_GATEWAY_CA_FILE"]=1
+      required["MOOX_GATEWAY_SERVICE_KEY_ID"]=1; required["MOOX_GATEWAY_CALLER"]=1
+      required["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; required["MOOX_GATEWAY_TARGET_NODE"]=1
+      required["MOOX_SERVICE_GATEWAY_TARGET"]=1; required["MOOX_GATEWAY_CA_FILE"]=1
+    }
+    !/^[A-Z0-9_]+=/ || !($1 in allowed) { exit 1 }
+    {
+      value=substr($0, index($0, "=")+1)
+      if (value == "") exit 1
+      for (i=1; i<=length(value); i++) {
+        char=substr(value, i, 1)
+        if (char == "\\") { if (i == length(value)) exit 1; i++; continue }
+        if (char !~ /^[A-Za-z0-9_\.\/:@%+=,-]$/) exit 1
+      }
+      seen[$1]++
+    }
+    END {
+      for (key in allowed) if (seen[key] > 1) exit 1
+      for (key in required) if (seen[key] != 1) exit 1
+      if (seen["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"] != seen["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]) exit 1
+    }
+  ' "${file}" || fail "unsafe gateway-moox-cli.env content"
+}
+
 run_local_prepare() {
   local deploy=$1
-  [[ -r "${deploy}/secrets/gateway-service.env" ]] || fail "missing gateway-service.env"
+  validate_gateway_cli_env "${deploy}/secrets/gateway-moox-cli.env"
   [[ -r "${deploy}/certs/gateway/peers.pem" ]] || fail "missing Gateway CA bundle"
   mkdir -p "${deploy}/secrets"
   rm -f "${NEXT_PATH}"
   set -a
   # shellcheck disable=SC1090
-  source "${deploy}/secrets/gateway-service.env"
+  source "${deploy}/secrets/gateway-moox-cli.env"
   MOOX_GATEWAY_CA_FILE="${deploy}/certs/gateway/peers.pem"
   set +a
-  [[ -n "${MOOX_GATEWAY_NODE_ID:-}" ]] || fail "missing MOOX_GATEWAY_NODE_ID in gateway-service.env"
-  [[ -n "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" ]] || fail "missing MOOX_GATEWAY_SERVICE_KEY_ID in gateway-service.env"
-  [[ -n "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" ]] || fail "missing MOOX_GATEWAY_SERVICE_SECRET_KEY in gateway-service.env"
+  [[ -n "${MOOX_GATEWAY_TARGET_NODE:-}" ]] || fail "missing MOOX_GATEWAY_TARGET_NODE in gateway-moox-cli.env"
+  [[ -n "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" ]] || fail "missing MOOX_GATEWAY_SERVICE_KEY_ID in gateway-moox-cli.env"
+  [[ -n "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" ]] || fail "missing MOOX_GATEWAY_SERVICE_SECRET_KEY in gateway-moox-cli.env"
+  [[ "${MOOX_GATEWAY_CALLER:-}" == moox-cli ]] || fail "MOOX_GATEWAY_CALLER in gateway-moox-cli.env must be moox-cli"
   if [[ -n "${CLOUD_ACCOUNT_ID}" ]]; then
     if ! "${STAGE_DIR}/bin/moox-cli" ops tencent cls prepare \
       --control-url "${ADMIN_URL}" --credentials-output "${NEXT_PATH}" \
@@ -608,15 +665,47 @@ esac
 mkdir -p "${deploy}/secrets"
 next="${deploy}/secrets/.cls.env.${token}.next"
 trap 'status=$?; if [[ ${status} -ne 0 ]]; then rm -f "${next}"; fi; exit ${status}' EXIT
-[[ -r "${deploy}/secrets/gateway-service.env" ]] || { echo "missing gateway-service.env" >&2; exit 1; }
+[[ -r "${deploy}/secrets/gateway-moox-cli.env" ]] || { echo "missing gateway-moox-cli.env" >&2; exit 1; }
 [[ -r "${deploy}/certs/gateway/peers.pem" ]] || { echo "missing Gateway CA bundle" >&2; exit 1; }
+gateway_env="${deploy}/secrets/gateway-moox-cli.env"
+[[ -f "${gateway_env}" && ! -L "${gateway_env}" && -O "${gateway_env}" ]] || { echo "unsafe gateway-moox-cli.env" >&2; exit 1; }
+if mode=$(stat -c '%a' "${gateway_env}" 2>/dev/null); then :; else mode=$(stat -f '%Lp' "${gateway_env}"); fi
+[[ "${mode}" == 600 ]] || { echo "unsafe gateway-moox-cli.env mode" >&2; exit 1; }
+awk -F= '
+  BEGIN {
+    allowed["MOOX_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_GATEWAY_CALLER"]=1
+    allowed["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; allowed["MOOX_GATEWAY_TARGET_NODE"]=1
+    allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"]=1; allowed["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]=1
+    allowed["MOOX_SERVICE_GATEWAY_TARGET"]=1; allowed["MOOX_GATEWAY_CA_FILE"]=1
+    required["MOOX_GATEWAY_SERVICE_KEY_ID"]=1; required["MOOX_GATEWAY_CALLER"]=1
+    required["MOOX_GATEWAY_SERVICE_SECRET_KEY"]=1; required["MOOX_GATEWAY_TARGET_NODE"]=1
+    required["MOOX_SERVICE_GATEWAY_TARGET"]=1; required["MOOX_GATEWAY_CA_FILE"]=1
+  }
+  !/^[A-Z0-9_]+=/ || !($1 in allowed) { exit 1 }
+  {
+    value=substr($0, index($0, "=")+1)
+    if (value == "") exit 1
+    for (i=1; i<=length(value); i++) {
+      char=substr(value, i, 1)
+      if (char == "\\") { if (i == length(value)) exit 1; i++; continue }
+      if (char !~ /^[A-Za-z0-9_\.\/:@%+=,-]$/) exit 1
+    }
+    seen[$1]++
+  }
+  END {
+    for (key in allowed) if (seen[key] > 1) exit 1
+    for (key in required) if (seen[key] != 1) exit 1
+    if (seen["MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"] != seen["MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"]) exit 1
+  }
+' "${gateway_env}" || { echo "unsafe gateway-moox-cli.env content" >&2; exit 1; }
 set -a
-source "${deploy}/secrets/gateway-service.env"
+source "${deploy}/secrets/gateway-moox-cli.env"
 MOOX_GATEWAY_CA_FILE="${deploy}/certs/gateway/peers.pem"
 set +a
-[[ -n "${MOOX_GATEWAY_NODE_ID:-}" ]] || { echo "missing MOOX_GATEWAY_NODE_ID in gateway-service.env" >&2; exit 1; }
-[[ -n "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" ]] || { echo "missing MOOX_GATEWAY_SERVICE_KEY_ID in gateway-service.env" >&2; exit 1; }
-[[ -n "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" ]] || { echo "missing MOOX_GATEWAY_SERVICE_SECRET_KEY in gateway-service.env" >&2; exit 1; }
+[[ -n "${MOOX_GATEWAY_TARGET_NODE:-}" ]] || { echo "missing MOOX_GATEWAY_TARGET_NODE in gateway-moox-cli.env" >&2; exit 1; }
+[[ -n "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" ]] || { echo "missing MOOX_GATEWAY_SERVICE_KEY_ID in gateway-moox-cli.env" >&2; exit 1; }
+[[ -n "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" ]] || { echo "missing MOOX_GATEWAY_SERVICE_SECRET_KEY in gateway-moox-cli.env" >&2; exit 1; }
+[[ "${MOOX_GATEWAY_CALLER:-}" == moox-cli ]] || { echo "MOOX_GATEWAY_CALLER in gateway-moox-cli.env must be moox-cli" >&2; exit 1; }
 chmod 0700 "${cli}"
 rm -f "${next}"
 if [[ -n "${account_id}" ]]; then
@@ -658,6 +747,48 @@ print(topic)
   printf '%s\n' "${topic}"
 }
 
+write_runtime_resources() {
+  local result_json=$1
+  python3 - "${RESOURCE_TMP}" "${result_json}" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+data = json.loads(sys.argv[2])
+if data.get("status") != "configured":
+    raise SystemExit(1)
+resources = data.get("resources")
+if not isinstance(resources, dict):
+    raise SystemExit(1)
+account = resources.get("account_id")
+region = resources.get("region") or data.get("region")
+logset = resources.get("logset_id")
+topic = resources.get("topic_id")
+if not all(isinstance(value, str) and value for value in (account, region, logset, topic)):
+    raise SystemExit(1)
+if any(any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-" for ch in value) for value in (account, region, logset, topic)):
+    raise SystemExit(1)
+host = f"{region}.cls.tencentyun.com"
+content = (
+    f"# Generated by moox-cli; do not edit.\n"
+    f"MOOX_CLS_ACCOUNT_ID='{account}'\n"
+    f"MOOX_CLS_REGION='{region}'\n"
+    f"MOOX_CLS_HOST='{host}'\n"
+    f"MOOX_CLS_LOGSET_ID='{logset}'\n"
+    f"MOOX_CLS_TOPIC_ID='{topic}'\n"
+    f"MOOX_CLS_RESOURCE_NAME='moox/moox-application'\n"
+)
+directory = os.path.dirname(path)
+os.makedirs(directory, exist_ok=True)
+with open(path, "w", encoding="utf-8") as output:
+    output.write(content)
+    output.flush()
+    os.fsync(output.fileno())
+os.chmod(path, 0o644)
+PY
+}
+
 strip_managed_block() {
   awk '
     $0 == "# BEGIN MOOX MANAGED CLS" { skip=1; next }
@@ -693,18 +824,31 @@ has_log_default() {
   ' "$1"
 }
 
+# Factor emits one structured completion/read record per calculation.  Keep
+# those records in CLS so operators can trace freshness and retries without
+# changing the repository's local console defaults.  Other long-running
+# services retain the lower-volume warn/error policy.
+cls_log_level() {
+  case "/$1" in
+    */factor/config/trpc_go*.yaml) printf 'info\n' ;;
+    *) printf 'warn\n' ;;
+  esac
+}
+
 render_config() {
   local config=$1 output=$2 topic_id=$3 cleaned=$4
+  local level
+  level=$(cls_log_level "${config}")
   validate_managed_markers "${config}" || return 1
   strip_managed_block "${config}" "${cleaned}"
   if has_log_default "${cleaned}"; then
-    awk -v topic_id="${topic_id}" '
+    awk -v topic_id="${topic_id}" -v level="${level}" '
       function block() {
         print "# BEGIN MOOX MANAGED CLS"
         print "      - writer: cls"
-        print "        level: warn"
+        print "        level: " level
         print "        remote_config:"
-        print "          topic_id: " topic_id
+        print "          topic_id: ${MOOX_CLS_TOPIC_ID}"
         print "          host: ${MOOX_CLS_HOST}"
         print "          secret_id: ${MOOX_CLS_SECRET_ID}"
         print "          secret_key: ${MOOX_CLS_SECRET_KEY}"
@@ -724,15 +868,15 @@ render_config() {
       }
     ' "${cleaned}" >"${output}"
   elif grep -q '^plugins:[[:space:]]*$' "${cleaned}"; then
-    awk -v topic_id="${topic_id}" '
+    awk -v topic_id="${topic_id}" -v level="${level}" '
       function block() {
         print "# BEGIN MOOX MANAGED CLS"
         print "  log:"
         print "    default:"
         print "      - writer: cls"
-        print "        level: warn"
+        print "        level: " level
         print "        remote_config:"
-        print "          topic_id: " topic_id
+        print "          topic_id: ${MOOX_CLS_TOPIC_ID}"
         print "          host: ${MOOX_CLS_HOST}"
         print "          secret_id: ${MOOX_CLS_SECRET_ID}"
         print "          secret_key: ${MOOX_CLS_SECRET_KEY}"
@@ -750,9 +894,9 @@ plugins:
   log:
     default:
       - writer: cls
-        level: warn
+        level: ${level}
         remote_config:
-          topic_id: ${topic_id}
+          topic_id: \${MOOX_CLS_TOPIC_ID}
           host: \${MOOX_CLS_HOST}
           secret_id: \${MOOX_CLS_SECRET_ID}
           secret_key: \${MOOX_CLS_SECRET_KEY}
@@ -822,6 +966,7 @@ class UniqueKeySafeLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 path, expected_topic = sys.argv[1:]
+expected_level = "info" if "/factor/config/trpc_go" in "/" + path else "warn"
 with open(path, encoding="utf-8") as stream:
     document = yaml.load(stream, Loader=UniqueKeySafeLoader)
 if not isinstance(document, dict):
@@ -836,10 +981,10 @@ if len(managed) != 1:
     raise SystemExit(1)
 writer = managed[0]
 remote = writer.get("remote_config")
-if writer.get("level") != "warn" or not isinstance(remote, dict):
+if writer.get("level") != expected_level or not isinstance(remote, dict):
     raise SystemExit(1)
 expected_remote = {
-    "topic_id": expected_topic,
+    "topic_id": "${MOOX_CLS_TOPIC_ID}",
     "host": "${MOOX_CLS_HOST}",
     "secret_id": "${MOOX_CLS_SECRET_ID}",
     "secret_key": "${MOOX_CLS_SECRET_KEY}",
@@ -915,35 +1060,71 @@ commit_local_credentials() {
   return 1
 }
 
-commit_remote_credentials() {
-  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${TOKEN}" <<'REMOTE'
+commit_remote_runtime() {
+  ssh -o BatchMode=yes -- "${TARGET}" bash -s -- \
+    "${DEPLOY_DIR}" "${TOKEN}" "${RESOURCE_ACCOUNT_ID}" "${RESOURCE_REGION}" "${RESOURCE_LOGSET_ID}" "${RESOURCE_TOPIC_ID}" <<'REMOTE'
 set -euo pipefail
 deploy=$1
 token=$2
+account=$3
+region=$4
+logset=$5
+topic=$6
 case "${deploy}" in
   "~") deploy="${HOME}" ;;
   "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
 esac
-next="${deploy}/secrets/.cls.env.${token}.next"
-destination="${deploy}/secrets/cls.env"
-backup="${deploy}/secrets/.cls.env.${token}.backup"
-had_old=0
-trap 'rm -f "${next}" "${backup}"' EXIT
-[[ -f "${next}" ]]
-chmod 0600 "${next}"
-if [[ -e "${destination}" ]]; then
-  cp -p "${destination}" "${backup}"
-  had_old=1
+resource_dir="${deploy}/config"
+resource_tmp="${resource_dir}/.resources.env.${token}.next"
+resource_path="${resource_dir}/resources.env"
+resource_backup="${resource_dir}/.resources.env.${token}.backup"
+credential_next="${deploy}/secrets/.cls.env.${token}.next"
+credential_path="${deploy}/secrets/cls.env"
+credential_backup="${deploy}/secrets/.cls.env.${token}.backup"
+resource_had_old=0
+credential_had_old=0
+restore() {
+  local status=$?
+  if (( status != 0 )); then
+    if (( resource_had_old )); then
+      mv -f "${resource_backup}" "${resource_path}" 2>/dev/null || cp -p "${resource_backup}" "${resource_path}" || true
+    else
+      rm -f "${resource_path}"
+    fi
+    if (( credential_had_old )); then
+      mv -f "${credential_backup}" "${credential_path}" 2>/dev/null || cp -p "${credential_backup}" "${credential_path}" || true
+    else
+      rm -f "${credential_path}"
+    fi
+  fi
+  rm -f "${resource_tmp}" "${resource_backup}" "${credential_backup}"
+  exit "${status}"
+}
+trap restore EXIT
+[[ -f "${credential_next}" ]]
+mkdir -p "${resource_dir}" "${deploy}/secrets"
+printf '%s\n' \
+  '# Generated by moox-cli; do not edit.' \
+  "MOOX_CLS_ACCOUNT_ID='${account}'" \
+  "MOOX_CLS_REGION='${region}'" \
+  "MOOX_CLS_HOST='${region}.cls.tencentyun.com'" \
+  "MOOX_CLS_LOGSET_ID='${logset}'" \
+  "MOOX_CLS_TOPIC_ID='${topic}'" \
+  "MOOX_CLS_RESOURCE_NAME='moox/moox-application'" >"${resource_tmp}"
+chmod 0644 "${resource_tmp}"
+chmod 0600 "${credential_next}"
+if [[ -e "${resource_path}" ]]; then
+  resource_had_old=1
+  cp -p "${resource_path}" "${resource_backup}"
 fi
-if mv -f "${next}" "${destination}"; then
-  exit 0
+if [[ -e "${credential_path}" ]]; then
+  credential_had_old=1
+  cp -p "${credential_path}" "${credential_backup}"
 fi
-if (( had_old )); then
-  mv -f "${backup}" "${destination}" || cp -p "${backup}" "${destination}"
-else
-  rm -f "${destination}"
-fi
-exit 1
+mv -f "${resource_tmp}" "${resource_path}"
+mv -f "${credential_next}" "${credential_path}"
+trap - EXIT
+rm -f "${resource_backup}" "${credential_backup}"
 REMOTE
 }
 
@@ -978,6 +1159,36 @@ else
 fi
 
 topic_id=$(extract_topic_id "${result}") || fail "CLS prepare returned invalid sanitized JSON or no topic_id"
+write_runtime_resources "${result}" || fail "CLS prepare returned invalid resource metadata"
+RESOURCE_ACCOUNT_ID=$(sed -n "s/^MOOX_CLS_ACCOUNT_ID='\([^']*\)'$/\1/p" "${RESOURCE_TMP}")
+RESOURCE_REGION=$(sed -n "s/^MOOX_CLS_REGION='\([^']*\)'$/\1/p" "${RESOURCE_TMP}")
+RESOURCE_LOGSET_ID=$(sed -n "s/^MOOX_CLS_LOGSET_ID='\([^']*\)'$/\1/p" "${RESOURCE_TMP}")
+RESOURCE_TOPIC_ID=$(sed -n "s/^MOOX_CLS_TOPIC_ID='\([^']*\)'$/\1/p" "${RESOURCE_TMP}")
+[[ -n "${RESOURCE_ACCOUNT_ID}" && -n "${RESOURCE_REGION}" && -n "${RESOURCE_LOGSET_ID}" && -n "${RESOURCE_TOPIC_ID}" ]] || fail "CLS resource metadata is incomplete"
+
+prepare_runtime_resources_backup() {
+  rm -f "${RESOURCE_BACKUP}"
+  if [[ -e "${RESOURCE_PATH}" ]]; then
+    cp -p "${RESOURCE_PATH}" "${RESOURCE_BACKUP}"
+    RESOURCE_HAD_OLD=1
+  else
+    RESOURCE_HAD_OLD=0
+  fi
+}
+
+commit_runtime_resources() {
+  prepare_runtime_resources_backup
+  if mv -f "${RESOURCE_TMP}" "${RESOURCE_PATH}"; then
+    RESOURCE_COMMITTED=1
+    return 0
+  fi
+  if (( RESOURCE_HAD_OLD )); then
+    mv -f "${RESOURCE_BACKUP}" "${RESOURCE_PATH}" || cp -p "${RESOURCE_BACKUP}" "${RESOURCE_PATH}" || true
+  else
+    rm -f "${RESOURCE_PATH}"
+  fi
+  return 1
+}
 
 while IFS= read -r -d '' config; do
   tmp="${config}.cls.${TOKEN}.tmp"
@@ -998,17 +1209,23 @@ if is_local; then
 fi
 
 commit_stage || fail "failed to commit staged CLS configuration"
+commit_runtime_resources || {
+  rollback_stage || true
+  fail "failed to commit generated CLS resource configuration"
+}
 if is_local; then
   if ! commit_local_credentials; then
     rollback_stage || true
     fail "failed to commit CLS credentials"
   fi
 else
-  if ! commit_remote_credentials; then
+  if ! commit_remote_runtime; then
     rollback_stage || true
-    fail "failed to commit remote CLS credentials"
+    fail "failed to commit remote CLS resources and credentials"
   fi
 fi
+
+RESOURCE_FINALIZED=1
 
 COMMITTED_COUNT=0
 if (( ${#CONFIG_BACKUPS[@]} > 0 )); then

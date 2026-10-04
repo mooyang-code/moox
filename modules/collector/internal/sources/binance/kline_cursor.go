@@ -8,7 +8,10 @@ import (
 )
 
 const (
-	klineInitialLimit   = 1000
+	// A new Dataset starts with a small recent window. Historical backfill is a
+	// separate workflow and must not make the minute collector exceed its SCF
+	// execution budget.
+	klineInitialLimit   = 10
 	klineCatchupLimit   = 5000
 	klineFetchPageLimit = 1000
 )

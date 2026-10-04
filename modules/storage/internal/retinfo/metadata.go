@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	sqlitemetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -20,8 +22,28 @@ func MetadataStoreCode(err error) pb.ErrorCode {
 	if errors.Is(err, sql.ErrNoRows) {
 		return pb.ErrorCode_NOT_FOUND
 	}
+	if errors.Is(err, sqlitemetadata.ErrViewIndexBuildConflict) {
+		return pb.ErrorCode_CONFLICT
+	}
+	if errors.Is(err, metadatastore.ErrViewSchemaExtensionConflict) {
+		return pb.ErrorCode_CONFLICT
+	}
+	if errors.Is(err, metadatastore.ErrTagInvalid) || errors.Is(err, metadatastore.ErrTagBuiltin) ||
+		errors.Is(err, metadatastore.ErrTagReferenced) || errors.Is(err, metadatastore.ErrTagAutoMembers) ||
+		errors.Is(err, metadatastore.ErrTagSnapshotEmpty) {
+		return pb.ErrorCode_INVALID_PARAM
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(msg, "revision conflict"), strings.Contains(msg, "state conflict"), strings.Contains(msg, "sync point conflict"):
+		return pb.ErrorCode_CONFLICT
+	case strings.Contains(msg, "binding is locked"),
+		strings.Contains(msg, "data_node_id is immutable"),
+		strings.Contains(msg, "already bound to this data node"),
+		strings.Contains(msg, "must be disabled"),
+		strings.Contains(msg, "data node is disabled"),
+		strings.Contains(msg, "data node still has datasets"):
+		return pb.ErrorCode_INVALID_PARAM
 	case strings.Contains(msg, "not found"),
 		strings.Contains(msg, "不存在"):
 		return pb.ErrorCode_NOT_FOUND

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -26,7 +27,7 @@ func TestCatalogRepository_AccountCRUD(t *testing.T) {
 
 	require.NoError(t, repo.UpsertAccount(ctx, CloudAccount{
 		AccountID: "acct-1", AccountName: "main", Provider: "tencent",
-		SecretID: "sid", SecretKey: "skey", AppID: "app",
+		CredentialSecretID: "secret-1", AppID: "app",
 	}))
 	got, err := repo.GetAccount(ctx, "acct-1")
 	require.NoError(t, err)
@@ -50,8 +51,8 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 
 	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "acct-1",
-		Region: "ap-guangzhou", Namespace: "default", Status: "online",
-		SupportedWorkloads: `["collect.kline"]`, DeploymentID: "dep-1",
+		NodeType: "scf-event", Region: "ap-guangzhou", Namespace: "default",
+		DeploymentID: "dep-1",
 	}))
 	node, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
@@ -59,7 +60,7 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	assert.Equal(t, "tencent-scf", node.Provider)
 
 	nodes, total, err := repo.ListNodes(ctx, "crypto", &pb.GetNodeListReq{
-		NodeId: "node", Region: "ap-guangzhou", Status: pb.NodeStatusCode_NODE_STATUS_ONLINE,
+		NodeId: "node", Region: "ap-guangzhou",
 		Keyword: "node", Page: &pb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
@@ -71,12 +72,43 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	require.NotNil(t, matched)
 	assert.Equal(t, "node-a", matched.NodeID)
 
-	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2"))
-	require.NoError(t, repo.UpsertHeartbeat(ctx, "crypto", "node-a", "scf", "v2", `["collect.kline"]`, `{}`))
+	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2", nil, map[string]string{"MOOX_FETCH_MAX_INFLIGHT_REQUESTS": "7"}, true))
+	updated, err := repo.GetNode(ctx, "crypto", "node-a")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "scf-event", updated.NodeType)
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(updated.Metadata), &metadata))
+	assert.Equal(t, true, metadata["collector_publish_fenced"])
 	require.NoError(t, repo.DeleteNodes(ctx, "crypto", []string{"node-a"}))
 	deleted, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
 	assert.Nil(t, deleted)
+}
+
+func TestCatalogRepository_ListNodesFiltersBizType(t *testing.T) {
+	repo := newTestCatalog(t)
+	ctx := context.Background()
+	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
+		SpaceID: "crypto", NodeID: "collector-0", NodeType: "scf-event",
+		Region:   "ap-guangzhou",
+		Metadata: `{"biz_type":"data_collector","function_name_prefix":"collector","index":0}`,
+	}))
+	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
+		SpaceID: "crypto", NodeID: "factor-0", NodeType: "scf-event",
+		Region:   "ap-guangzhou",
+		Metadata: `{"biz_type":"factor_calculator","function_name_prefix":"collector","index":0}`,
+	}))
+
+	nodes, total, err := repo.ListNodes(ctx, "crypto", &pb.GetNodeListReq{
+		NodeType: "scf-event", Region: "ap-guangzhou", BizType: "data_collector",
+		Page: &pb.Page{Page: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, nodes, 1)
+	assert.Equal(t, "collector-0", nodes[0].NodeID)
+	assert.JSONEq(t, `{"biz_type":"data_collector","function_name_prefix":"collector","index":0}`, nodes[0].Metadata)
 }
 
 func TestPageFromCommon_NormalizesBounds(t *testing.T) {

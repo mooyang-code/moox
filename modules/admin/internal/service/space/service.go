@@ -13,6 +13,7 @@ import (
 // DAO 层保留 GORM model（Space/SpaceMember），service 内完成 model→PB 映射。
 type Service interface {
 	pb.SpaceMgrService
+	AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method string, globalRole int32) error
 }
 
 type service struct {
@@ -22,6 +23,13 @@ type service struct {
 // NewService 创建 Space 服务。
 func NewService(dbManager *database.Manager) Service {
 	return &service{dao: NewDAO(dbManager.GetDB())}
+}
+
+// AuthorizeTradeRequest is deliberately exposed separately from the Space RPC
+// surface so the Admin HTTP BFF can enforce the same membership boundary
+// before forwarding a browser Trade request.
+func (s *service) AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method string, globalRole int32) error {
+	return s.dao.AuthorizeTradeRequest(ctx, userID, spaceID, method, globalRole)
 }
 
 func normalizePage(page *pb.Page) (int, int, int) {
@@ -76,6 +84,16 @@ func (s *service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 		RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"},
 		Space:   modelToPBSpace(item),
 	}, nil
+}
+
+func (s *service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.DeleteSpaceRsp, error) {
+	if req == nil || req.GetSpaceId() == "" {
+		return nil, fmt.Errorf("space_id is required")
+	}
+	if err := s.dao.DeleteSpace(ctx, req.GetSpaceId()); err != nil {
+		return nil, err
+	}
+	return &pb.DeleteSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}}, nil
 }
 
 func (s *service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.ListSpacesRsp, error) {

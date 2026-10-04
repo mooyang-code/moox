@@ -1,0 +1,108 @@
+package resample
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+)
+
+type fakePrimary struct {
+	rows   []*storagepb.RowFieldValues
+	writes []*storagepb.RowFieldUpsert
+}
+
+func (f *fakePrimary) ReadFields(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
+	if len(attrs) > 0 {
+		for _, key := range keys {
+			for _, row := range f.writes {
+				if sameKey(key, row.GetKey()) {
+					return []*storagepb.RowFieldValues{{Key: key, Attributes: row.GetAttributes()}}, nil
+				}
+			}
+		}
+		return nil, nil
+	}
+	return f.rows, nil
+}
+func (f *fakePrimary) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, _ string) error {
+	f.writes = append(f.writes, rows...)
+	return nil
+}
+func sameKey(a, b *storagepb.RowKey) bool {
+	return a.GetSpaceId() == b.GetSpaceId() && a.GetDatasetId() == b.GetDatasetId() && a.GetTimeSeries().GetSubjectId() == b.GetTimeSeries().GetSubjectId() && a.GetTimeSeries().GetFreq() == b.GetTimeSeries().GetFreq() && a.GetTimeSeries().GetDataTime() == b.GetTimeSeries().GetDataTime() && a.GetTimeSeries().GetSeriesTag() == b.GetTimeSeries().GetSeriesTag()
+}
+
+func TestBucketStorageProcessBucketIsIdempotentBySourceHash(t *testing.T) {
+	freq1, _ := ParseFixedFrequency("1m")
+	freq5, _ := ParseFixedFrequency("5m")
+	start := time.Unix(300, 0).UTC()
+	end := start.Add(freq5.Duration)
+	rows := make([]*storagepb.RowFieldValues, 0, 5)
+	for i := 0; i < 5; i++ {
+		at := start.Add(time.Duration(i) * time.Minute)
+		fields := []*storagepb.FieldValue{}
+		for _, item := range []struct {
+			name  string
+			value float64
+		}{{"open", float64(i + 1)}, {"high", float64(i + 2)}, {"low", float64(i)}, {"close", float64(i + 1)}, {"volume", 1}, {"quote_volume", 2}} {
+			fields = append(fields, &storagepb.FieldValue{FieldId: item.name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: item.value}}})
+		}
+		fields = append(fields, &storagepb.FieldValue{FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 1}}})
+		rows = append(rows, &storagepb.RowFieldValues{Key: rowKey("s", "src", "BTC", "1m", at, "venue:binance"), Fields: fields})
+	}
+	fake := &fakePrimary{rows: rows}
+	spec := TaskSpec{InstanceID: "r", SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, SourceSeriesTag: "venue:binance", TargetDatasetID: "dataset_spot_kline_derived_5m", TargetFrequency: freq5, Alignment: AlignmentEpochUTC}
+	result, wrote, err := (&BucketStorage{Primary: fake}).ProcessBucket(context.Background(), spec, "BTC", start, end)
+	if err != nil || !wrote {
+		t.Fatalf("first process = %#v/%v/%v", result, wrote, err)
+	}
+	if len(fake.writes) != 1 {
+		t.Fatalf("writes=%d", len(fake.writes))
+	}
+	_, wrote, err = (&BucketStorage{Primary: fake}).ProcessBucket(context.Background(), spec, "BTC", start, end)
+	if err != nil || wrote {
+		t.Fatalf("second process wrote=%v err=%v", wrote, err)
+	}
+}
+
+func TestBucketStorageWritesOnlySelectedOutputFields(t *testing.T) {
+	freq1, _ := ParseFixedFrequency("1m")
+	freq5, _ := ParseFixedFrequency("5m")
+	start := time.Unix(300, 0).UTC()
+	rows := make([]*storagepb.RowFieldValues, 0, 5)
+	for i := 0; i < 5; i++ {
+		at := start.Add(time.Duration(i) * time.Minute)
+		fields := []*storagepb.FieldValue{}
+		for _, item := range []struct {
+			name  string
+			value float64
+		}{{"open", 1}, {"high", 2}, {"low", 0}, {"close", 1}, {"volume", 1}, {"quote_volume", 2}} {
+			fields = append(fields, &storagepb.FieldValue{FieldId: item.name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: item.value}}})
+		}
+		fields = append(fields, &storagepb.FieldValue{FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 1}}})
+		rows = append(rows, &storagepb.RowFieldValues{Key: rowKey("s", "src", "BTC", "1m", at, "venue:binance"), Fields: fields})
+	}
+	fake := &fakePrimary{rows: rows}
+	spec := TaskSpec{InstanceID: "r", SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, TargetDatasetID: "dataset_target", TargetFrequency: freq5, Alignment: AlignmentEpochUTC, SourceSeriesTag: "venue:binance", OutputFields: []string{"close", "volume"}}
+	_, wrote, err := (&BucketStorage{Primary: fake}).ProcessBucket(context.Background(), spec, "BTC", start, start.Add(freq5.Duration))
+	if err != nil || !wrote {
+		t.Fatalf("process wrote=%v err=%v", wrote, err)
+	}
+	if len(fake.writes) != 1 || len(fake.writes[0].GetFields()) != 2 || fake.writes[0].GetFields()[0].GetFieldId() != "close" || fake.writes[0].GetFields()[1].GetFieldId() != "volume" {
+		t.Fatalf("writes=%#v", fake.writes)
+	}
+}
+
+func TestBucketStorageRejectsOversizedSourceWindow(t *testing.T) {
+	freq1, _ := ParseFixedFrequency("1m")
+	freq5, _ := ParseFixedFrequency("5m")
+	start := time.Unix(300, 0).UTC()
+	spec := TaskSpec{SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, TargetDatasetID: "target", TargetFrequency: freq5}
+	_, _, err := (&BucketStorage{Primary: &fakePrimary{}, MaxSourceKeys: 4}).ProcessBucket(context.Background(), spec, "BTC", start, start.Add(freq5.Duration))
+	if err == nil || !strings.Contains(err.Error(), "max_source_keys=4") {
+		t.Fatalf("expected max_source_keys error, got %v", err)
+	}
+}

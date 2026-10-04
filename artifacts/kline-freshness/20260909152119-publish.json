@@ -1,0 +1,26 @@
+{
+  "zip_path": "/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/modules/collector/collector-scf-stockcn-dev.zip",
+  "package_id": "moox-collector-stockcn_dev_680bfed9-91ee-4c67-9edc-bba3de056b40",
+  "cls_topic_id": "c7ff7bb7-622f-43c6-86ac-800552762a2c",
+  "fleet_mode": "updated",
+  "job_id": "node-batch-744dcce7-2e7e-4be3-b466-e66c0b5484cf,node-batch-7529aea8-03ed-4500-a948-4b18eb28c10b,node-batch-0469c73b-fd40-453e-afbe-4fa537df4f9e",
+  "job_ids": [
+    "node-batch-744dcce7-2e7e-4be3-b466-e66c0b5484cf",
+    "node-batch-7529aea8-03ed-4500-a948-4b18eb28c10b",
+    "node-batch-0469c73b-fd40-453e-afbe-4fa537df4f9e"
+  ],
+  "operation": "deploy_nodes",
+  "total_count": 32,
+  "regions": [
+    {
+      "region": "ap-singapore",
+      "cloud_account_id": "tencent-scf",
+      "package_id": "moox-collector-stockcn_dev_680bfed9-91ee-4c67-9edc-bba3de056b40",
+      "cls_logset_id": "d0b62f5c-81ea-489c-bb82-3cff99ae34af",
+      "cls_topic_id": "c7ff7bb7-622f-43c6-86ac-800552762a2c",
+      "job_id": "node-batch-0469c73b-fd40-453e-afbe-4fa537df4f9e",
+      "total_count": 31
+    }
+  ]
+}
+publish_rc=1

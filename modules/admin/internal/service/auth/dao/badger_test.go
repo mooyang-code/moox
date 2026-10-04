@@ -6,13 +6,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupCacheDB(t *testing.T) *CacheDB {
 	t.Helper()
-	cdb, err := NewCacheDB(t.TempDir())
+	return openTestCacheDB(t, t.TempDir())
+}
+
+func openTestCacheDB(t *testing.T, dir string) *CacheDB {
+	t.Helper()
+	db, err := badger.Open(badger.DefaultOptions(dir).WithLogger(nil))
+	require.NoError(t, err)
+	cdb, err := NewCacheDBFromBadger(db)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cdb.Close() })
 	return cdb

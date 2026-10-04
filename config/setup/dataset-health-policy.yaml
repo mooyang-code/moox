@@ -1,0 +1,8 @@
+version: 2
+realtime_timeseries:
+  defaults:
+    run_missed_intervals: 2
+    success_missed_intervals: 3
+    watermark_periods: 3
+    minimum_watermark_lag: 10m
+  overrides: []

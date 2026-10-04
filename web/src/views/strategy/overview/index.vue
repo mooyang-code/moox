@@ -1,160 +1,46 @@
 <template>
-  <div class="strategy-page">
-    <div class="moox-inner">
-      <div class="page-head">
-        <div>
-          <h2>策略运行概览</h2>
-          <span>查看当前策略的运行健康、目标偏差和绩效来源。</span>
-        </div>
-        <a-button :loading="store.loading" @click="refresh"
-          ><template #icon><icon-refresh /></template>刷新</a-button
-        >
-      </div>
-
-      <a-alert v-if="store.error" type="error" show-icon class="top-alert">{{ store.error }}</a-alert>
-
-      <a-grid :cols="5" :col-gap="12" :row-gap="12" class="summary-grid">
-        <a-grid-item v-for="item in summary" :key="item.label">
-          <a-card class="summary-card" :bordered="false">
-            <a-statistic :title="item.label" :value="item.value" />
-          </a-card>
-        </a-grid-item>
-      </a-grid>
-
-      <a-card class="table-card" :bordered="false">
-        <div class="filters">
-          <a-input v-model="filters.strategy_id" allow-clear placeholder="策略 ID" style="width: 180px" @press-enter="refresh" />
-          <a-select v-model="filters.mode" allow-clear placeholder="运行模式" style="width: 140px" @change="refresh">
-            <a-option value="observe">Observe</a-option><a-option value="paper">Paper</a-option
-            ><a-option value="live">Live</a-option>
-          </a-select>
-          <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 140px" @change="refresh">
-            <a-option value="enabled">enabled</a-option><a-option value="disabled">disabled</a-option
-            ><a-option value="failed">failed</a-option>
-          </a-select>
-          <a-button type="primary" @click="refresh">查询</a-button>
-        </div>
-        <a-table
-          row-key="binding_id"
-          size="small"
-          :loading="store.loading"
-          :data="store.rows"
-          :pagination="pagination"
-          @page-change="onPageChange"
-          @page-size-change="onPageSizeChange"
-        >
-          <template #columns>
-            <a-table-column title="策略" :width="180"
-              ><template #cell="{ record }"
-                ><a-link @click="openDetail(record.binding_id)">{{ record.strategy_id }}@{{ record.version }}</a-link></template
-              ></a-table-column
-            >
-            <a-table-column title="Binding" data-index="binding_id" :width="150" />
-            <a-table-column title="模式" :width="100"
-              ><template #cell="{ record }"
-                ><a-tag size="small" :color="modeColor(record.mode)">{{ record.mode }}</a-tag></template
-              ></a-table-column
-            >
-            <a-table-column title="状态" :width="130"
-              ><template #cell="{ record }"><StatusBadge :status="record.health?.status || record.status" /></template
-            ></a-table-column>
-            <a-table-column title="版本 Hash" :width="170" :ellipsis="true" :tooltip="true"
-              ><template #cell="{ record }">{{ shortHash(record.source_hash) }}</template></a-table-column
-            >
-            <a-table-column title="最近运行" :width="180"
-              ><template #cell="{ record }">{{ formatTime(record.health?.observed_at) }}</template></a-table-column
-            >
-            <a-table-column title="数据版本" data-index="last_data_revision" :width="180" :ellipsis="true" :tooltip="true" />
-            <a-table-column title="操作" :width="100"
-              ><template #cell="{ record }"
-                ><a-button size="mini" type="text" @click="openDetail(record.binding_id)">查看</a-button></template
-              ></a-table-column
-            >
-          </template>
-        </a-table>
-      </a-card>
+  <div class="moox-page"><div class="moox-inner">
+    <div class="page-head">
+      <div><h2>策略定义</h2><span>DSL 是唯一策略配置来源，保存定义不会启用任何实例。</span></div>
+      <a-space><a-button :loading="store.listLoading" aria-label="刷新策略定义" @click="refresh"><template #icon><icon-refresh /></template>刷新</a-button><a-button type="primary" status="success" @click="router.push({ name: 'strategy-definition-new' })"><template #icon><icon-plus /></template>新建策略</a-button></a-space>
     </div>
-  </div>
+    <a-alert v-if="store.error" type="error" show-icon class="top-alert">策略定义加载失败：{{ store.error }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert>
+    <a-table row-key="strategy_id" :data="store.strategies" :loading="store.listLoading" :pagination="pagination" @page-change="changePage">
+      <template #columns>
+        <a-table-column title="策略名称" :width="260"><template #cell="{ record }"><a-link @click="edit(record.strategy_id)">{{ record.name || "未命名策略" }}</a-link><div class="muted">{{ record.strategy_id }}</div></template></a-table-column>
+        <a-table-column title="DSL 摘要"><template #cell="{ record }"><span class="summary">{{ summarize(record.dsl_yaml) }}</span></template></a-table-column>
+        <a-table-column title="创建时间" :width="190"><template #cell="{ record }">{{ formatTime(record.created_at) }}</template></a-table-column>
+        <a-table-column title="操作" :width="120"><template #cell="{ record }"><a-button type="text" size="small" @click="edit(record.strategy_id)">编辑 DSL</a-button></template></a-table-column>
+      </template>
+    </a-table>
+    <a-empty v-if="!store.listLoading && !store.error && !store.strategies.length" description="暂无策略定义" />
+  </div></div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive } from "vue";
+import { computed, onMounted, reactive } from "vue";
 import { useRouter } from "vue-router";
 import { useStrategyStore } from "@/store/modules/strategy";
-import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
-import type { RunningStrategySummary } from "@/api/strategy-types";
+import { parseDSL } from "@/views/strategy/dsl";
+import { formatStrategyTime } from "@/views/strategy/model";
 
 defineOptions({ name: "StrategyOverview" });
 const router = useRouter();
 const store = useStrategyStore();
-const filters = reactive({ strategy_id: "", mode: "", status: "" });
-const pagination = reactive({ current: 1, pageSize: 20, total: 0, showTotal: true, showPageSize: true });
-const summary = computed(() => {
-  const rows: RunningStrategySummary[] = store.rows;
-  return [
-    { label: "运行中策略", value: store.total },
-    { label: "正常运行", value: rows.filter(row => ["enabled", "running"].includes(row.health?.status || row.status)).length },
-    {
-      label: "异常策略",
-      value: rows.filter(row => ["failed", "unknown", "stale"].includes(row.health?.status || row.status)).length
-    },
-    { label: "Paper", value: rows.filter(row => row.mode === "paper").length },
-    { label: "Live", value: rows.filter(row => row.mode === "live").length }
-  ];
-});
-
-async function refresh() {
-  await store.loadRunning({ ...filters, page: pagination.current, page_size: pagination.pageSize });
-  pagination.total = store.total;
-}
-function onPageChange(page: number) {
-  pagination.current = page;
-  refresh();
-}
-function onPageSizeChange(size: number) {
-  pagination.pageSize = size;
-  pagination.current = 1;
-  refresh();
-}
-function openDetail(bindingId: string) {
-  router.push({ name: "strategy-detail", params: { bindingId } });
-}
-function shortHash(value?: string) {
-  return value ? value.slice(0, 12) : "-";
-}
-function formatTime(value?: string) {
-  return value ? new Date(value).toLocaleString() : "-";
-}
-function modeColor(value?: string) {
-  return value === "live" ? "red" : value === "paper" ? "orange" : "blue";
-}
-
-onMounted(() => {
-  refresh();
-  store.startPolling(refresh);
-});
-onUnmounted(() => store.stopPolling());
+const pagination = reactive({ current: 1, pageSize: 20, total: computed(() => store.totalStrategies) });
+async function refresh() { await store.loadStrategies({ page: pagination.current, page_size: pagination.pageSize }); }
+function changePage(page: number) { pagination.current = page; refresh(); }
+function edit(strategyId: string) { router.push({ name: "strategy-definition-edit", params: { strategyId } }); }
+function summarize(source: string) { const preview = parseDSL(source).preview; return preview ? `${preview.bar} · ${preview.calendar} · ${preview.triggers.join("、") || "无触发器"} · ${preview.rules.length} 条规则` : "DSL 无法解析"; }
+function formatTime(value?: string) { return formatStrategyTime(value); }
+onMounted(refresh);
 </script>
 
 <style scoped>
-.strategy-page {
-  min-height: 100%;
-  background: var(--color-fill-2);
-}
-.summary-grid {
-  margin-bottom: var(--moox-space-2);
-}
-.summary-card,
-.table-card {
-  border-radius: 6px;
-}
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--moox-space-2);
-  margin-bottom: var(--moox-space-2);
-}
-.top-alert {
-  margin-bottom: var(--moox-space-2);
-}
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: var(--moox-space-2); }
+.page-head h2 { margin: 0 0 4px; }
+.page-head span, .muted { color: var(--color-text-3); font-size: 12px; }
+.top-alert { margin-bottom: var(--moox-space-2); }
+.summary { color: var(--color-text-2); }
+@media (max-width: 640px) { .page-head { align-items: flex-start; flex-direction: column; } }
 </style>

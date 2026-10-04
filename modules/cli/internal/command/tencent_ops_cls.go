@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
@@ -79,8 +80,8 @@ func init() {
 	f.StringVar(&clsBootstrapFlags.Endpoint, "endpoint", "cls.tencentcloudapi.com", "CLS API endpoint")
 	f.StringVar(&clsBootstrapFlags.LogsetName, "logset-name", "moox", "日志集名称")
 	f.StringVar(&clsBootstrapFlags.TopicName, "topic-name", "moox-application", "日志主题名称")
-	f.Int64Var(&clsBootstrapFlags.RetentionDays, "retention-days", 30, "日志保留天数（1-3600，3640 表示永久）")
-	f.Int64Var(&clsBootstrapFlags.Partitions, "partitions", 1, "初始分区数（1-10）")
+	f.Int64Var(&clsBootstrapFlags.RetentionDays, "retention-days", clsprepare.RetentionDays, "日志保留天数（默认 2 天；1-3600，3640 表示永久）")
+	f.Int64Var(&clsBootstrapFlags.Partitions, "partitions", clsprepare.Partitions, "初始分区数（默认 1；1-10）")
 	f.BoolVar(&clsBootstrapFlags.DryRun, "dry-run", false, "仅输出初始化计划，不访问凭证或调用云 API")
 }
 

@@ -4,11 +4,10 @@ Copyright © 2025 NAME HERE <EMAIL ADDRESS>
 package command
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/mooyang-code/moox/modules/cli/internal/config"
 
 	"github.com/spf13/cobra"
 )
@@ -22,9 +21,6 @@ var (
 
 // 版本标志
 var versionFlag bool
-
-// 全局配置变量
-var AppConfig *config.Config
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -44,14 +40,6 @@ var rootCmd = &cobra.Command{
 		// 否则显示帮助信息
 		cmd.Help()
 	},
-}
-
-// GetVersionInfo 返回格式化的版本信息
-func GetVersionInfo() string {
-	if Version == "" {
-		Version = "dev"
-	}
-	return fmt.Sprintf("moox CLI %s", Version)
 }
 
 // GetFullVersionInfo 返回完整的版本信息
@@ -153,8 +141,8 @@ func showLogo() {
 	fmt.Println("🛠️  可用命令:")
 	fmt.Println("    🔐 auth (认证)         用户注册、登录、密码管理")
 	fmt.Println("    🧭 metadata (元数据)   通过服务导入存储元数据")
-	fmt.Println("    📦 storage (存储)      高性能数据读写服务")
-	fmt.Println("    🛠️  ops (云运维)        腾讯云轻量应用服务器防火墙管理")
+	fmt.Println("    📦 storage (存储)      高性能数据读写与 View 重建服务")
+	fmt.Println("    🛠️  ops (云运维)        腾讯云防火墙与内网组网")
 	fmt.Println()
 	fmt.Println("📖 使用帮助:")
 	fmt.Println("    📚 查看命令帮助       ./moox-cli --help")
@@ -184,6 +172,10 @@ func Execute() {
 	// 先执行命令解析，这样可以检查是否使用了--version标志
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			os.Exit(coded.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
@@ -195,19 +187,4 @@ func init() {
 	// 禁用默认的completion命令
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
-}
-
-// loadGlobalConfig 加载全局配置
-func loadGlobalConfig() {
-	var err error
-	AppConfig, err = config.LoadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		fmt.Fprintln(os.Stderr, "\033[93m💡 将使用默认配置，某些功能可能无法正常工作\033[0m")
-		// 创建默认配置，避免panic
-		AppConfig = &config.Config{}
-		if AppConfig.MooX == nil {
-			AppConfig.MooX = &config.MooxConfig{}
-		}
-	}
 }

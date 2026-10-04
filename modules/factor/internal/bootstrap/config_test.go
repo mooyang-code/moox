@@ -1,110 +1,66 @@
 package bootstrap
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/stretchr/testify/require"
 )
 
-func TestDefaultFactorConfig(t *testing.T) {
-	cfg := Default()
-
-	if cfg.Storage.GatewayTarget != "ip://127.0.0.1:11003" {
-		t.Fatalf("gateway target = %q", cfg.Storage.GatewayTarget)
-	}
-	if cfg.NATS.Stream != "MOOX_STORAGE" {
-		t.Fatalf("nats stream = %q", cfg.NATS.Stream)
-	}
-	if cfg.Engine.Workers <= 0 {
-		t.Fatalf("engine workers = %d, want > 0", cfg.Engine.Workers)
-	}
-	if cfg.Health.Addr != ":11414" {
-		t.Fatalf("health addr = %q", cfg.Health.Addr)
-	}
-	if cfg.Scheduler.EventBatchWindowMS != 2000 {
-		t.Fatalf("event batch window = %d, want 2000", cfg.Scheduler.EventBatchWindowMS)
-	}
-}
-
-func TestCheckedInConfigUsesEventBatchWindow(t *testing.T) {
-	path := filepath.Join("..", "..", "config", "app.yaml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read checked-in config: %v", err)
-	}
-	legacyKey := "debounce_" + "window_ms"
-	if bytes.Contains(data, []byte(legacyKey)) {
-		t.Fatalf("checked-in config still contains legacy scheduler key %q", legacyKey)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.Scheduler.EventBatchWindowMS != 2000 {
-		t.Fatalf("event batch window = %d, want 2000", cfg.Scheduler.EventBatchWindowMS)
-	}
-}
-
-func TestLoadHonorsCustomEventBatchWindow(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "scheduler:\n  event_batch_window_ms: 3500\n"))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.Scheduler.EventBatchWindowMS != 3500 {
-		t.Fatalf("event batch window = %d, want 3500", cfg.Scheduler.EventBatchWindowMS)
-	}
-}
-
-func TestLoadAppliesFactorEnvOverrides(t *testing.T) {
-	t.Setenv("MOOX_FACTOR_DB_PATH", "./override/factor.db")
-	t.Setenv("MOOX_FACTOR_NATS_URL", "")
-	t.Setenv("MOOX_FACTOR_ENGINE_PYTHON_BIN", "/tmp/factor-python")
-	t.Setenv("MOOX_FACTOR_HEALTH_ADDR", "127.0.0.1:16014")
-
-	path := writeConfig(t, `
-database:
-  path: ./original/factor.db
-nats:
-  url: nats://127.0.0.1:4222
-`)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.Database.Path != "./override/factor.db" {
-		t.Fatalf("database path = %q", cfg.Database.Path)
-	}
-	if cfg.NATS.URL != "" {
-		t.Fatalf("nats url = %q, want empty override", cfg.NATS.URL)
-	}
-	if cfg.Engine.PythonBin != "/tmp/factor-python" {
-		t.Fatalf("python bin = %q", cfg.Engine.PythonBin)
-	}
-	if cfg.Health.Addr != "127.0.0.1:16014" {
-		t.Fatalf("health addr = %q", cfg.Health.Addr)
-	}
-}
-
-func TestLoadRejectsLegacyStorageTargets(t *testing.T) {
-	_, err := Load(writeConfig(t, `
-storage:
-  metadata_target: 127.0.0.1:20100
-  access_target: 127.0.0.1:20102
-`))
-	if err == nil {
-		t.Fatal("Load() error = nil, want unknown legacy storage fields")
-	}
-}
-
-func writeConfig(t *testing.T, content string) string {
-	t.Helper()
-
+func TestLoadConfigDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "./data/factor/factor.db", cfg.Database.Path)
+	require.Equal(t, "ip://127.0.0.1:11003", cfg.Storage.GatewayTarget)
+	require.Equal(t, []string{"nats://127.0.0.1:4222"}, cfg.EventBus.URLs)
+	require.Equal(t, "~/.config/moox/eventbus/factor-eventbus.yaml", cfg.EventBus.CredentialFile)
+	require.Equal(t, 10*time.Second, cfg.EventBus.FetchMaxWait)
+	require.Equal(t, "python3", cfg.Python.Bin)
+	require.Equal(t, "./pyworker/worker.py", cfg.Python.WorkerPath)
+	require.Equal(t, "./data/factor/factors", cfg.Python.FactorsDir)
+	require.Equal(t, 8, cfg.Python.Workers)
+	require.Equal(t, 30*time.Second, cfg.Python.TaskTimeout)
+	require.Equal(t, 100, cfg.Pipeline.ReadBatchSubjects)
+	require.Equal(t, 4, cfg.Pipeline.ReadWorkers)
+	require.Equal(t, 20*time.Second, cfg.Pipeline.ReadTimeout)
+	require.Equal(t, 1000, cfg.Pipeline.WriteBatchRows)
+	require.Equal(t, time.Minute, cfg.Pipeline.PeriodBudgetMin)
+	require.Equal(t, 15*time.Minute, cfg.Pipeline.PeriodBudgetMax)
+	require.Equal(t, 2000, cfg.Recalc.ChunkPeriods)
+}
+
+func TestLoadConfigRejectsInvalidBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("pipeline:\n  period_budget_min: 2m\n  period_budget_max: 1m\n"), 0o600))
+	_, err := Load(path)
+	require.ErrorContains(t, err, "period_budget_min must not exceed")
+}
+
+func TestLoadRejectsLegacyConfigSections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("engine:\n  workers: 24\n"), 0o600))
+	_, err := Load(path)
+	require.Error(t, err)
+}
+
+func TestSourceCheckerLoadsModuleAndValidatesComputeContract(t *testing.T) {
+	checker := sourceChecker{python: PythonConfig{Bin: "python3"}}
+	path := filepath.Join(t.TempDir(), "factor.py")
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params, context):\n    return df\n"), 0o600))
+	require.NoError(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path))
+	for _, source := range []string{
+		"def other():\n    return 1\n",
+		"def compute(:\n",
+		"import moox_missing_factor_dependency_for_test\ndef compute(df, params, context):\n    return df\n",
+		"raise RuntimeError('top-level load failure')\ndef compute(df, params, context):\n    return df\n",
+		"def compute():\n    return 1\n",
+	} {
+		require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
+		require.Error(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path), source)
 	}
-	return path
 }

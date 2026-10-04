@@ -1,5 +1,3 @@
-//go:build legacy_storage
-
 package rpc
 
 import (
@@ -17,7 +15,7 @@ import (
 )
 
 func TestReadOnlyManagementPaginationAndStableOrdering(t *testing.T) {
-	c := config.Default()
+	c := rpcTestConfig(t)
 	for i := range c.Streams {
 		c.Streams[i].MaxBytes = 1 << 20
 	}
@@ -50,15 +48,20 @@ func TestReadOnlyManagementPaginationAndStableOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := New(js, c, Options{Ready: func() bool { return true }, Connections: b.Connections})
-	list, err := svc.ListTopics(ctx, &eventbuspb.ListTopicsReq{Page: &commonpb.Page{Page: 1, Size: 2}})
+	list, err := svc.ListEvents(ctx, &eventbuspb.ListEventsReq{Page: &commonpb.Page{Page: 1, Size: 2}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if list.RetInfo.GetCode() != commonpb.ErrorCode_SUCCESS || len(list.Topics) != 2 || !list.PageResult.GetHasMore() {
+	if list.RetInfo.GetCode() != commonpb.ErrorCode_SUCCESS || len(list.Events) != 2 || !list.PageResult.GetHasMore() {
 		t.Fatalf("unexpected list response: %#v", list)
 	}
-	if list.Topics[0].GetTopic() >= list.Topics[1].GetTopic() {
-		t.Fatalf("topics not sorted: %q, %q", list.Topics[0].GetTopic(), list.Topics[1].GetTopic())
+	if list.Events[0].GetSubjectPattern() >= list.Events[1].GetSubjectPattern() {
+		t.Fatalf("events not sorted: %q, %q", list.Events[0].GetSubjectPattern(), list.Events[1].GetSubjectPattern())
+	}
+	for _, event := range list.GetEvents() {
+		if event.GetOwner() == "" {
+			t.Fatalf("event %q is missing owner", event.GetEventName())
+		}
 	}
 	streams, err := svc.ListStreams(ctx, &eventbuspb.ListStreamsReq{})
 	if err != nil || len(streams.Streams) != len(c.Streams) {
@@ -74,7 +77,7 @@ func TestReadOnlyManagementPaginationAndStableOrdering(t *testing.T) {
 }
 
 func TestGetOverviewAndListConsumers(t *testing.T) {
-	c := config.Default()
+	c := rpcTestConfig(t)
 	for i := range c.Streams {
 		c.Streams[i].MaxBytes = 1 << 20
 	}
@@ -125,4 +128,13 @@ func freePort(t *testing.T) int {
 	}
 	defer listener.Close()
 	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func rpcTestConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg, err := config.Load("../../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }

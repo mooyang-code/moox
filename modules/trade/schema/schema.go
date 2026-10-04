@@ -1,46 +1,34 @@
-// Package schema embeds the Trade module SQLite schema for explicit initialization flows.
+// Package schema embeds the Trade execution SQLite schema.
 package schema
 
 import _ "embed"
 
-// accountSQL 是 Trade 模块账户域的 SQLite schema。
-//
 //go:embed account.sql
 var accountSQL string
 
-// orderSQL 保留交易通道和操作审计表；订单、成交和持仓事实由 Kernel schema 承载。
-//
-//go:embed order.sql
-var orderSQL string
-
-// syncSQL 是 Trade 模块定时同步游标的 SQLite schema。
-//
-//go:embed sync.sql
-var syncSQL string
-
-//go:embed ledger.sql
-var ledgerSQL string
+//go:embed instrument.sql
+var instrumentSQL string
 
 //go:embed execution.sql
 var executionSQL string
 
-//go:embed bus.sql
-var busSQL string
+//go:embed logical_account.sql
+var logicalAccountSQL string
 
-//go:embed rebalance.sql
-var rebalanceSQL string
+//go:embed paper_account_config.sql
+var paperAccountConfigSQL string
 
-// AccountSQL 返回账户域（账户/余额/流水/凭证）的 SQLite schema。
-func AccountSQL() string {
-	return accountSQL
-}
+//go:embed paper_balance.sql
+var paperBalanceSQL string
 
-// OrderSQL 返回交易通道和操作审计 DDL。
-func OrderSQL() string {
-	return orderSQL
-}
+//go:embed equity.sql
+var equitySQL string
 
-// AllSQL 返回 Trade 模块全部 schema（账户域 + 交易域）。
+//go:embed target_receipt.sql
+var targetReceiptSQL string
+
+// AllSQL returns the complete greenfield schema in foreign-key dependency order.
 func AllSQL() string {
-	return accountSQL + "\n" + orderSQL + "\n" + syncSQL + "\n" + ledgerSQL + "\n" + executionSQL + "\n" + busSQL + "\n" + rebalanceSQL
+	return accountSQL + "\n" + instrumentSQL + "\n" + logicalAccountSQL + "\n" +
+		paperAccountConfigSQL + "\n" + equitySQL + "\n" + targetReceiptSQL + "\n" + executionSQL + "\n" + paperBalanceSQL
 }

@@ -1,12 +1,55 @@
 package binance
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPublicAggregateTradeAPIsUseCursorAndExpectedEndpoints(t *testing.T) {
+	tests := []struct {
+		name       string
+		setBaseURL func(*Client, string) error
+		call       func(*Client, *exchange.TradeRequest) ([]*exchange.Trade, error)
+		path       string
+	}{
+		{name: "spot", setBaseURL: (*Client).SetSpotBaseURL, call: func(c *Client, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
+			return NewSpotAPI(c).GetRecentTrades(context.Background(), req)
+		}, path: SpotTradesEndpoint},
+		{name: "swap", setBaseURL: (*Client).SetSwapBaseURL, call: func(c *Client, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
+			return NewSwapAPI(c).GetRecentTrades(context.Background(), req)
+		}, path: SwapTradesEndpoint},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPath, gotFromID string
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				gotFromID = r.URL.Query().Get("fromId")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`[{"a":41,"p":"100.5","q":"0.2","T":1700000000000,"m":true}]`))
+			}))
+			defer server.Close()
+			client := NewClient()
+			client.HTTPClient = httpclient.NewHTTPClient(server.Client())
+			require.NoError(t, tt.setBaseURL(client, server.URL))
+			trades, err := tt.call(client, &exchange.TradeRequest{Symbol: "BTCUSDT", Limit: 100, FromID: 41})
+			require.NoError(t, err)
+			require.Len(t, trades, 1)
+			assert.Equal(t, tt.path, gotPath)
+			assert.Equal(t, "41", gotFromID)
+			assert.Equal(t, int64(41), trades[0].ID)
+		})
+	}
+}
 
 func TestFormatSymbol_HyphenatedSymbol_ShouldRemoveSeparator(t *testing.T) {
 	assert.Equal(t, "BTCUSDT", FormatSymbol("BTC-USDT"))
@@ -21,6 +64,17 @@ func TestClient_SetSpotBaseURL_ValidURL_ShouldUpdateDomain(t *testing.T) {
 	c := NewClient()
 	require.NoError(t, c.SetSpotBaseURL("https://testnet.binance.vision"))
 	assert.Equal(t, "testnet.binance.vision", c.SpotDomain())
+}
+
+func TestClient_SetSpotBaseURLs_PreservesConfiguredFallbackOrder(t *testing.T) {
+	c := NewClient()
+	require.NoError(t, c.SetSpotBaseURLs([]string{
+		"https://data-api.binance.vision",
+		"https://api-gcp.binance.com",
+	}))
+
+	assert.Equal(t, "data-api.binance.vision", c.SpotDomain())
+	assert.Equal(t, []string{"data-api.binance.vision", "api-gcp.binance.com"}, c.SpotDomains())
 }
 
 func TestClient_SetSwapBaseURL_InvalidURL_ShouldReturnError(t *testing.T) {
@@ -74,10 +128,19 @@ func TestSymbolInfoRaw_ToSymbolInfo_ShouldMapTradingPair(t *testing.T) {
 	assert.Equal(t, "0.01", info.TickSize)
 }
 
-func TestAPIError_Error_ShouldFormatMessage(t *testing.T) {
-	err := (&APIError{Code: -1000, Message: "invalid"}).Error()
-	assert.Contains(t, err, "-1000")
-	assert.Contains(t, err, "invalid")
+func TestDecodeExchangeInfoStreamsOnlySelectedSymbolFields(t *testing.T) {
+	payload := `{"timezone":"UTC","serverTime":1,"symbols":[` +
+		`{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","orderTypes":["LIMIT","MARKET"],"permissions":["SPOT"],"filters":[{"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"}]},` +
+		`{"symbol":"OLDUSDT","status":"BREAK","baseAsset":"OLD","quoteAsset":"USDT","orderTypes":["LIMIT"],"permissions":["SPOT"],"filters":[]}]}`
+
+	total, symbols, err := decodeExchangeInfo(strings.NewReader(payload), func(raw *exchangeInfoSymbolRaw) bool {
+		return raw.Status == "TRADING"
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	require.Len(t, symbols, 1)
+	assert.Equal(t, "BTC-USDT", symbols[0].Symbol)
+	assert.Equal(t, "0.001", symbols[0].MinQty)
 }
 
 func TestClient_DefaultDomains_ShouldUseBinanceHosts(t *testing.T) {

@@ -24,25 +24,39 @@ use (
 	./modules/strategy/proto/strategygen
 	./modules/trade
 	./modules/trade/proto/tradegen
+	./packages/cloudjobpb
+	./packages/cloudjobqueue
 	./packages/cloudprovider
 	./packages/cloudruntime
+	./packages/clsreporter
 	./packages/commonpb
-	./packages/security
+	./packages/doctor
+	./packages/events
 	./packages/gatewayauth
 	./packages/gatewayproxy
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream
-	./packages/messagepb
+	./packages/marketcalendar
+	./packages/marketfetchpb
+	./packages/marketmanifest
 	./packages/metricspb
+	./packages/notification
+	./packages/observabilitypb
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
-	./packages/trpcretry
+	./packages/routeprobe
+	./packages/security
+	./packages/storagepb
+	./packages/tdx
 	./packages/timerjob
+	./packages/tradeeventpb
+	./packages/trpcretry
+	./tools/moox-mcp
 	./web-host
 )
 
-// Keep the legacy aggregate module past the googleapis api/rpc split so the
+// Keep the aggregate module past the googleapis api/rpc split so the
 // workspace graph cannot select overlapping package copies.
 replace google.golang.org/genproto => google.golang.org/genproto v0.0.0-20230822172742-b8732ec3820d

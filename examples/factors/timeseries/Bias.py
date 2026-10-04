@@ -1,13 +1,9 @@
-def signal(df, n, factor_name):
-    n = int(n)
-    df[factor_name] = df["close"] / df["close"].rolling(n, min_periods=1).mean()
-    return df
-
-
-def signal_multi_params(df, param_list):
-    close = df["close"]
-    result = {}
-    for param in param_list:
-        n = int(param)
-        result[str(param)] = close / close.rolling(n, min_periods=1).mean()
-    return result
+def compute(df, params, context):
+    output = df[["data_time", "series_tag"]].copy()
+    close = df.groupby("series_tag", sort=False)["close"]
+    for window in params["windows"]:
+        average = close.transform(
+            lambda values: values.rolling(window, min_periods=1).mean()
+        )
+        output[f"bias_{window}"] = df["close"] / average - 1
+    return output

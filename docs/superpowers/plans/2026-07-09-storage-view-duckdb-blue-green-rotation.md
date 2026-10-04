@@ -507,10 +507,10 @@ import (
 
 func TestViewIndexIDAlternatesBetweenSlots(t *testing.T) {
 	slotA := ViewIndexID("crypto", "spot_kline_1m_view", "a")
-	if slotA != "view_crypto_spot_kline_1m_view_a" {
+	if slotA != "view_view_crypto_spot_kline_1m_a" {
 		t.Fatalf("slot a = %q", slotA)
 	}
-	if got := InactiveViewIndexID("crypto", "spot_kline_1m_view", slotA); got != "view_crypto_spot_kline_1m_view_b" {
+	if got := InactiveViewIndexID("crypto", "spot_kline_1m_view", slotA); got != "view_view_crypto_spot_kline_1m_b" {
 		t.Fatalf("inactive slot = %q", got)
 	}
 }
@@ -704,9 +704,9 @@ func TestUpsertViewColumnBumpsVersionAndClearsBuildingIndex(t *testing.T) {
 	view := testView("crypto", "spot_kline_1m_view")
 	view.ViewVersion = 1
 	view.ActiveViewVersion = 1
-	view.ActiveResult = "view_crypto_spot_kline_1m_view_a"
+	view.ActiveResult = "view_view_crypto_spot_kline_1m_a"
 	view.BuildingViewVersion = 1
-	view.BuildingResult = "view_crypto_spot_kline_1m_view_b"
+	view.BuildingResult = "view_view_crypto_spot_kline_1m_b"
 	view.BuildStatus = "building"
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatalf("UpsertView: %v", err)
@@ -728,7 +728,7 @@ func TestUpsertViewColumnBumpsVersionAndClearsBuildingIndex(t *testing.T) {
 	if got.GetBuildingResult() != "" || got.GetBuildingViewVersion() != 0 {
 		t.Fatalf("building pointer = %q/%d, want cleared", got.GetBuildingResult(), got.GetBuildingViewVersion())
 	}
-	if got.GetActiveResult() != "view_crypto_spot_kline_1m_view_a" {
+	if got.GetActiveResult() != "view_view_crypto_spot_kline_1m_a" {
 		t.Fatalf("active result changed to %q", got.GetActiveResult())
 	}
 }
@@ -1410,7 +1410,7 @@ rsync -az --delete \
   /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/ \
   ubuntu@106.53.107.122:/tmp/moox-build/
 
-ssh ubuntu@106.53.107.122 'cd /tmp/moox-build/modules/storage && GOFLAGS=-buildvcs=false CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh storage'
+ssh ubuntu@106.53.107.122 'cd /tmp/moox-build/modules/storage && GOFLAGS=-buildvcs=false CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh storage'
 ```
 
 Expected: storage binaries build successfully.

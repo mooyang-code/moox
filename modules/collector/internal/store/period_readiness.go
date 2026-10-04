@@ -1,0 +1,591 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+type PeriodReadinessRepository struct {
+	db *gorm.DB
+}
+
+func NewPeriodReadinessRepository(db *gorm.DB) *PeriodReadinessRepository {
+	return &PeriodReadinessRepository{db: db}
+}
+
+// EnsurePeriod creates the immutable expected task set. An existing period is
+// deliberately left untouched so a later assignment reconciliation cannot
+// change the meaning of a period that is already in flight.
+func (r *PeriodReadinessRepository) EnsurePeriod(ctx context.Context, seed domain.PeriodSeed) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("period readiness repository is not initialized")
+	}
+	if strings.TrimSpace(seed.SpaceID) == "" || strings.TrimSpace(seed.DatasetID) == "" || strings.TrimSpace(seed.Frequency) == "" || seed.PeriodTime.IsZero() || seed.DeadlineAt.IsZero() {
+		return 0, fmt.Errorf("space_id, dataset_id, frequency, period_time and deadline_at are required")
+	}
+	if len(seed.Tasks) == 0 {
+		return 0, fmt.Errorf("period readiness requires at least one task")
+	}
+	seenTargets := make(map[string]struct{}, len(seed.Tasks))
+	for _, task := range seed.Tasks {
+		if strings.TrimSpace(task.InstanceID) == "" || strings.TrimSpace(task.WriteTargetID) == "" || strings.TrimSpace(task.SubjectID) == "" {
+			return 0, fmt.Errorf("instance_id, write_target_id and subject_id are required")
+		}
+		if _, exists := seenTargets[task.WriteTargetID]; exists {
+			return 0, fmt.Errorf("duplicate period write target %q", task.WriteTargetID)
+		}
+		seenTargets[task.WriteTargetID] = struct{}{}
+	}
+
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		workType := strings.TrimSpace(seed.WorkType)
+		if workType == "" {
+			workType = "collection"
+		}
+		parent := &domain.PeriodReadiness{
+			SpaceID: seed.SpaceID, DatasetID: seed.DatasetID, Frequency: seed.Frequency, WorkType: workType,
+			PeriodTime: seed.PeriodTime.UTC(), DeadlineAt: seed.DeadlineAt.UTC(),
+			Status: domain.PeriodStatusWaiting, ReportState: domain.PeriodReportWaiting,
+		}
+		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(parent)
+		if result.Error != nil {
+			return result.Error
+		}
+		// A period is an immutable subject snapshot.  Do not append newly
+		// assigned tasks when the parent already existed; they belong to the
+		// next period created after the assignment change.
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		if err := tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", seed.SpaceID, seed.DatasetID, seed.Frequency, seed.PeriodTime.UTC()).First(parent).Error; err != nil {
+			return err
+		}
+		for _, task := range seed.Tasks {
+			item := &domain.PeriodReadinessItem{
+				ReadinessID: parent.ID, InstanceID: task.InstanceID, SubjectID: task.SubjectID, SeriesTag: task.SeriesTag,
+				WriteTargetID: task.WriteTargetID,
+				FunctionName:  task.FunctionName, WriteSource: task.WriteSource,
+				RequiredFields: task.RequiredFields, State: domain.PeriodItemPending,
+				UpdatedAt: time.Now().UTC(),
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(item).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	var current domain.PeriodReadiness
+	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", seed.SpaceID, seed.DatasetID, seed.Frequency, seed.PeriodTime.UTC()).First(&current).Error; err != nil {
+		return 0, err
+	}
+	return current.ID, nil
+}
+
+func (r *PeriodReadinessRepository) MarkSubjectSuccess(ctx context.Context, key domain.PeriodKey, subjectID, functionName, writeSource string, at time.Time) error {
+	return r.MarkSubjectSuccessWithFields(ctx, key, subjectID, functionName, writeSource, nil, at)
+}
+
+// MarkSubjectSuccessWithFields advances a period item only when its immutable
+// required-field snapshot is satisfied by the storage row. A nil field list
+// preserves the legacy caller contract for providers without a field schema.
+func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Context, key domain.PeriodKey, subjectID, functionName, writeSource string, fields []string, at time.Time) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("period readiness repository is not initialized")
+	}
+	if key.PeriodTime.IsZero() || strings.TrimSpace(subjectID) == "" || at.IsZero() {
+		return fmt.Errorf("period, subject_id and event time are required")
+	}
+	var items []domain.PeriodReadinessItem
+	query := r.db.WithContext(ctx).Where("c_readiness_id IN (SELECT c_id FROM t_period_readiness WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?)", key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime.UTC()).Where("c_subject_id = ? AND c_series_tag = ? AND c_state = ?", subjectID, strings.TrimSpace(key.SeriesTag), domain.PeriodItemPending)
+	if strings.TrimSpace(key.WriteTargetID) != "" {
+		query = query.Where("c_write_target_id = ?", strings.TrimSpace(key.WriteTargetID))
+	}
+	if strings.TrimSpace(functionName) != "" {
+		// An empty function/source denotes a subject-level item created from
+		// overlapping rules; either writer may satisfy it.
+		query = query.Where("(c_function_name = ? OR c_function_name = '')", functionName)
+	}
+	if strings.TrimSpace(writeSource) != "" {
+		query = query.Where("(c_write_source = ? OR c_write_source = '')", writeSource)
+	}
+	if err := query.Find(&items).Error; err != nil {
+		return err
+	}
+	available := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		available[field] = struct{}{}
+		if _, suffix, ok := strings.Cut(field, "."); ok {
+			available[suffix] = struct{}{}
+		}
+	}
+	for _, item := range items {
+		if fields != nil {
+			var required []string
+			if strings.TrimSpace(item.RequiredFields) != "" && json.Unmarshal([]byte(item.RequiredFields), &required) != nil {
+				return fmt.Errorf("invalid required fields for instance %s", item.InstanceID)
+			}
+			complete := true
+			for _, field := range required {
+				if _, ok := available[field]; !ok {
+					complete = false
+					break
+				}
+			}
+			if !complete {
+				continue
+			}
+		}
+		if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ? AND c_write_target_id = ? AND c_state = ?", item.ReadinessID, item.WriteTargetID, domain.PeriodItemPending).Updates(map[string]any{"c_state": domain.PeriodItemSuccess, "c_updated_at": at.UTC()}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type storedCommittedPosition struct {
+	NodeID   string `json:"node_id"`
+	StoreID  string `json:"store_id"`
+	Sequence uint64 `json:"sequence"`
+}
+
+// NoteWritePosition records the durable DataNode outbox coordinate for a
+// successful row event. Sequence is kept as the per-(node, store) maximum.
+func (r *PeriodReadinessRepository) NoteWritePosition(ctx context.Context, key domain.PeriodKey, nodeID, storeID string, sequence uint64) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("period readiness repository is not initialized")
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	storeID = strings.TrimSpace(storeID)
+	if key.PeriodTime.IsZero() || nodeID == "" || storeID == "" || sequence == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var parent domain.PeriodReadiness
+		err := tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_period_time = ?", key.SpaceID, key.DatasetID, key.Frequency, key.PeriodTime.UTC()).First(&parent).Error
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
+		merged := mergeStoredCommittedPositions(parent.CommittedPositionsJSON, storedCommittedPosition{NodeID: nodeID, StoreID: storeID, Sequence: sequence})
+		raw, err := json.Marshal(merged)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&parent).Updates(map[string]any{"c_committed_positions_json": string(raw), "c_mtime": time.Now().UTC()}).Error
+	})
+}
+
+func mergeStoredCommittedPositions(raw string, next storedCommittedPosition) []storedCommittedPosition {
+	var current []storedCommittedPosition
+	if strings.TrimSpace(raw) != "" && strings.TrimSpace(raw) != "[]" {
+		_ = json.Unmarshal([]byte(raw), &current)
+	}
+	for i, item := range current {
+		if item.NodeID == next.NodeID && item.StoreID == next.StoreID {
+			if next.Sequence > item.Sequence {
+				current[i].Sequence = next.Sequence
+			}
+			return current
+		}
+	}
+	return append(current, next)
+}
+
+// LatestCompletedPeriod returns the newest terminal period for one exact
+// task-result scope. Complete and degraded periods are both terminal; waiting
+// periods never advance the freshness watermark.
+func (r *PeriodReadinessRepository) LatestCompletedPeriod(ctx context.Context, spaceID, datasetID, frequency string) (*domain.PeriodReadiness, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("period readiness repository is not initialized")
+	}
+	spaceID, datasetID, frequency = strings.TrimSpace(spaceID), strings.TrimSpace(datasetID), strings.TrimSpace(frequency)
+	if spaceID == "" || datasetID == "" || frequency == "" {
+		return nil, fmt.Errorf("space_id, dataset_id and frequency are required")
+	}
+	var latest *domain.PeriodReadiness
+	for _, status := range []string{domain.PeriodStatusComplete, domain.PeriodStatusDegraded} {
+		var current domain.PeriodReadiness
+		err := r.db.WithContext(ctx).
+			Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_status = ?", spaceID, datasetID, frequency, status).
+			Order("c_period_time DESC, c_id DESC").
+			First(&current).Error
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				continue
+			}
+			return nil, err
+		}
+		if latest == nil || current.PeriodTime.After(latest.PeriodTime) ||
+			(current.PeriodTime.Equal(latest.PeriodTime) && current.ID > latest.ID) {
+			copy := current
+			latest = &copy
+		}
+	}
+	return latest, nil
+}
+
+// FinalizeDue atomically moves ready or deadline-expired parents to
+// report_pending and fixes the collection timestamp. The timestamp is fixed
+// before the reporter constructs its payload, so a crash/retry cannot change
+// the event's timestamp.
+func (r *PeriodReadinessRepository) FinalizeDue(ctx context.Context, now time.Time, limit int) ([]domain.PeriodReport, error) {
+	return r.finalizeDue(ctx, "", now, limit)
+}
+
+// FinalizeDueInSpace is the space-scoped form used when one Collector owns
+// readiness state for more than one market. Keeping the filter in the
+// repository prevents per-space reporters from finalizing each other's rows.
+func (r *PeriodReadinessRepository) FinalizeDueInSpace(ctx context.Context, spaceID string, now time.Time, limit int) ([]domain.PeriodReport, error) {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return r.finalizeDue(ctx, spaceID, now, limit)
+}
+
+func (r *PeriodReadinessRepository) finalizeDue(ctx context.Context, spaceID string, now time.Time, limit int) ([]domain.PeriodReport, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("period readiness repository is not initialized")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	var parents []domain.PeriodReadiness
+	query := r.db.WithContext(ctx).Where(`c_report_state = ? AND (
+		c_deadline_at <= ? OR (
+			EXISTS (SELECT 1 FROM t_period_readiness_items items WHERE items.c_readiness_id = t_period_readiness.c_id)
+			AND NOT EXISTS (SELECT 1 FROM t_period_readiness_items pending_items WHERE pending_items.c_readiness_id = t_period_readiness.c_id AND pending_items.c_state = ?)
+		)
+	)`, domain.PeriodReportWaiting, now.UTC(), domain.PeriodItemPending)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	if err := query.Order("c_deadline_at ASC, c_id ASC").Limit(limit).Find(&parents).Error; err != nil {
+		return nil, err
+	}
+	result := make([]domain.PeriodReport, 0, len(parents))
+	for i := range parents {
+		parent := &parents[i]
+		// Resample source windows may legitimately arrive after the normal
+		// collection deadline. Keep the parent waiting and retry its deadline
+		// later instead of timing out items and publishing an irreversible
+		// degraded marker.
+		if parent.WorkType == "resample" && !parent.DeadlineAt.After(now.UTC()) {
+			var pending int64
+			if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).
+				Where("c_readiness_id = ? AND c_state = ?", parent.ID, domain.PeriodItemPending).
+				Count(&pending).Error; err != nil {
+				return nil, err
+			}
+			if pending > 0 {
+				terminal, err := r.resamplePendingTasksTerminal(ctx, parent.ID, parent.SpaceID, pending)
+				if err != nil {
+					return nil, err
+				}
+				if terminal {
+					// A retention-expired/malformed source is a terminal source
+					// failure, not a degraded realtime marker. Close the internal
+					// readiness row as suppressed (report_state=reported keeps it
+					// out of the marker reporter) and let retention cleanup remove it.
+					if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).
+						Where("c_readiness_id = ? AND c_state = ?", parent.ID, domain.PeriodItemPending).
+						Updates(map[string]any{"c_state": domain.PeriodItemTimedOut, "c_updated_at": now.UTC()}).Error; err != nil {
+						return nil, err
+					}
+					if err := r.db.WithContext(ctx).Model(parent).Where("c_report_state = ?", domain.PeriodReportWaiting).Updates(map[string]any{
+						"c_status": domain.PeriodStatusDegraded, "c_report_state": domain.PeriodReportReported,
+						"c_collected_at": now.UTC(), "c_mtime": now.UTC(),
+					}).Error; err != nil {
+						return nil, err
+					}
+					continue
+				}
+				if err := r.db.WithContext(ctx).Model(parent).Where("c_report_state = ?", domain.PeriodReportWaiting).Updates(map[string]any{
+					"c_deadline_at": now.UTC().Add(time.Minute), "c_mtime": now.UTC(),
+				}).Error; err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
+		if !parent.DeadlineAt.After(now.UTC()) {
+			if err := r.db.WithContext(ctx).Model(&domain.PeriodReadinessItem{}).
+				Where("c_readiness_id = ? AND c_state = ?", parent.ID, domain.PeriodItemPending).
+				Updates(map[string]any{"c_state": domain.PeriodItemTimedOut, "c_updated_at": now.UTC()}).Error; err != nil {
+				return nil, err
+			}
+		}
+		var items []domain.PeriodReadinessItem
+		if err := r.db.WithContext(ctx).Where("c_readiness_id = ?", parent.ID).Order("c_subject_id ASC").Find(&items).Error; err != nil {
+			return nil, err
+		}
+		status := domain.PeriodStatusComplete
+		for _, item := range items {
+			if item.State != domain.PeriodItemSuccess {
+				status = domain.PeriodStatusDegraded
+				break
+			}
+		}
+		if err := r.db.WithContext(ctx).Model(parent).Where("c_report_state = ?", domain.PeriodReportWaiting).Updates(map[string]any{
+			"c_status": status, "c_report_state": domain.PeriodReportPending,
+			"c_event_id":     periodEventID(parent.SpaceID, parent.DatasetID, parent.Frequency, parent.PeriodTime),
+			"c_collected_at": now.UTC(), "c_mtime": now.UTC(),
+		}).Error; err != nil {
+			return nil, err
+		}
+		result = append(result, domain.PeriodReport{Readiness: *parent, Items: items})
+		result[len(result)-1].Readiness.Status = status
+		result[len(result)-1].Readiness.ReportState = domain.PeriodReportPending
+		result[len(result)-1].Readiness.CollectedAt = now.UTC()
+		result[len(result)-1].Readiness.EventID = periodEventID(parent.SpaceID, parent.DatasetID, parent.Frequency, parent.PeriodTime)
+	}
+	return result, nil
+}
+
+func (r *PeriodReadinessRepository) resamplePendingTasksTerminal(ctx context.Context, readinessID int64, spaceID string, pending int64) (bool, error) {
+	var failed int64
+	err := r.db.WithContext(ctx).Table("t_period_readiness_items AS items").
+		Joins("LEFT JOIN t_collector_task_instances AS tasks ON tasks.c_space_id = ? AND tasks.c_instance_id = items.c_instance_id", spaceID).
+		Where("items.c_readiness_id = ? AND items.c_state = ? AND (tasks.c_is_deleted = 1 OR (json_valid(tasks.c_result) AND json_extract(tasks.c_result, '$.state') = ?))", readinessID, domain.PeriodItemPending, domain.ResampleTaskStateFailed).
+		Count(&failed).Error
+	if err != nil {
+		return false, err
+	}
+	return pending > 0 && failed == pending, nil
+}
+
+func (r *PeriodReadinessRepository) PersistPayload(ctx context.Context, readinessID int64, payloadJSON string) error {
+	if readinessID <= 0 || strings.TrimSpace(payloadJSON) == "" {
+		return fmt.Errorf("readiness_id and payload are required")
+	}
+	return r.db.WithContext(ctx).Model(&domain.PeriodReadiness{}).
+		Where("c_id = ? AND c_report_state = ? AND (c_payload_json = '{}' OR c_payload_json = '')", readinessID, domain.PeriodReportPending).
+		Updates(map[string]any{"c_payload_json": payloadJSON, "c_mtime": time.Now().UTC()}).Error
+}
+
+func (r *PeriodReadinessRepository) ListPendingReports(ctx context.Context, limit int) ([]domain.PeriodReport, error) {
+	return r.listPendingReports(ctx, "", limit)
+}
+
+// ListPendingReportsInSpace returns only reports owned by one market space.
+func (r *PeriodReadinessRepository) ListPendingReportsInSpace(ctx context.Context, spaceID string, limit int) ([]domain.PeriodReport, error) {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return r.listPendingReports(ctx, spaceID, limit)
+}
+
+func (r *PeriodReadinessRepository) listPendingReports(ctx context.Context, spaceID string, limit int) ([]domain.PeriodReport, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var parents []domain.PeriodReadiness
+	query := r.db.WithContext(ctx).Where("c_report_state = ?", domain.PeriodReportPending)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	if err := query.Order("c_id ASC").Limit(limit).Find(&parents).Error; err != nil {
+		return nil, err
+	}
+	result := make([]domain.PeriodReport, 0, len(parents))
+	for _, parent := range parents {
+		var items []domain.PeriodReadinessItem
+		if err := r.db.WithContext(ctx).Where("c_readiness_id = ?", parent.ID).Order("c_subject_id ASC").Find(&items).Error; err != nil {
+			return nil, err
+		}
+		result = append(result, domain.PeriodReport{Readiness: parent, Items: items})
+	}
+	return result, nil
+}
+
+// CountPendingReports returns the current pending backlog grouped by
+// dataset/frequency. It is intentionally unbounded by the delivery page so
+// operational gauges cannot report zero merely because the first page drained.
+func (r *PeriodReadinessRepository) CountPendingReports(ctx context.Context) (map[string]int, error) {
+	return r.countPendingReports(ctx, "")
+}
+
+// CountPendingReportsInSpace reports the pending backlog for one market
+// space, keeping metrics from the two reporters independent.
+func (r *PeriodReadinessRepository) CountPendingReportsInSpace(ctx context.Context, spaceID string) (map[string]int, error) {
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return r.countPendingReports(ctx, spaceID)
+}
+
+func (r *PeriodReadinessRepository) countPendingReports(ctx context.Context, spaceID string) (map[string]int, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("period readiness repository is not initialized")
+	}
+	type countRow struct {
+		DatasetID string `gorm:"column:c_dataset_id"`
+		Frequency string `gorm:"column:c_frequency"`
+		Count     int    `gorm:"column:c_count"`
+	}
+	var rows []countRow
+	query := r.db.WithContext(ctx).Table("t_period_readiness").Select("c_dataset_id, c_frequency, count(*) AS c_count").Where("c_report_state = ?", domain.PeriodReportPending)
+	if spaceID != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	if err := query.Group("c_dataset_id, c_frequency").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]int, len(rows))
+	for _, row := range rows {
+		result[row.DatasetID+"\x00"+row.Frequency] = row.Count
+	}
+	return result, nil
+}
+
+func (r *PeriodReadinessRepository) MarkReported(ctx context.Context, readinessID int64) error {
+	if readinessID <= 0 {
+		return fmt.Errorf("readiness_id is required")
+	}
+	return r.db.WithContext(ctx).Model(&domain.PeriodReadiness{}).
+		Where("c_id = ? AND c_report_state = ? AND c_payload_json <> '{}'", readinessID, domain.PeriodReportPending).
+		Updates(map[string]any{"c_report_state": domain.PeriodReportReported, "c_mtime": time.Now().UTC()}).Error
+}
+
+// CleanupReportedRetentionInSpace removes only reported readiness rows and
+// counts every physical parent/item row against one shared per-pass budget.
+// Large periods are pruned incrementally: their child rows are deleted in
+// bounded pages and the parent is removed only after its children are gone.
+func (r *PeriodReadinessRepository) CleanupReportedRetentionInSpace(ctx context.Context, spaceID string, parentBefore time.Time, itemRetention, maxRows int) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("period readiness repository is not initialized")
+	}
+	spaceID, err := requiredPeriodSpaceID(spaceID)
+	if err != nil {
+		return 0, err
+	}
+	if maxRows < 0 {
+		return 0, fmt.Errorf("period readiness cleanup row budget must not be negative")
+	}
+	if maxRows == 0 || (parentBefore.IsZero() && itemRetention <= 0) {
+		return 0, nil
+	}
+
+	var deleted int64
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		remaining := maxRows
+		if !parentBefore.IsZero() {
+			for remaining > 0 {
+				var readinessID int64
+				result := tx.Model(&domain.PeriodReadiness{}).
+					Select("c_id").
+					Where("c_space_id = ? AND c_report_state = ? AND c_collected_at < ?", spaceID, domain.PeriodReportReported, parentBefore.UTC()).
+					Order("c_collected_at ASC, c_id ASC").
+					Limit(1).
+					Scan(&readinessID)
+				if result.Error != nil {
+					return result.Error
+				}
+				if readinessID == 0 {
+					break
+				}
+
+				itemDelete := tx.Exec(`DELETE FROM t_period_readiness_items
+WHERE c_readiness_id = ?
+  AND c_write_target_id IN (
+    SELECT c_write_target_id FROM t_period_readiness_items
+     WHERE c_readiness_id = ?
+     ORDER BY c_write_target_id
+     LIMIT ?
+  )`, readinessID, readinessID, remaining)
+				if itemDelete.Error != nil {
+					return itemDelete.Error
+				}
+				deleted += itemDelete.RowsAffected
+				remaining -= int(itemDelete.RowsAffected)
+				if remaining == 0 {
+					break
+				}
+
+				var childCount int64
+				if err := tx.Model(&domain.PeriodReadinessItem{}).Where("c_readiness_id = ?", readinessID).Count(&childCount).Error; err != nil {
+					return err
+				}
+				if childCount > 0 {
+					break
+				}
+				parentDelete := tx.Where("c_id = ? AND c_space_id = ? AND c_report_state = ? AND c_collected_at < ?", readinessID, spaceID, domain.PeriodReportReported, parentBefore.UTC()).Delete(&domain.PeriodReadiness{})
+				if parentDelete.Error != nil {
+					return parentDelete.Error
+				}
+				deleted += parentDelete.RowsAffected
+				remaining -= int(parentDelete.RowsAffected)
+				if parentDelete.RowsAffected == 0 {
+					break
+				}
+			}
+		}
+
+		if remaining == 0 || itemRetention <= 0 {
+			return nil
+		}
+		retentionCutoff := ""
+		args := []any{spaceID, domain.PeriodReportReported}
+		if !parentBefore.IsZero() {
+			retentionCutoff = " AND c_collected_at >= ?"
+			args = append(args, parentBefore.UTC())
+		}
+		args = append(args, itemRetention, remaining)
+		query := `DELETE FROM t_period_readiness_items
+WHERE rowid IN (
+  SELECT items.rowid
+    FROM t_period_readiness_items AS items
+    JOIN (
+      SELECT c_id FROM (
+        SELECT c_id,
+               ROW_NUMBER() OVER (PARTITION BY c_space_id, c_dataset_id, c_frequency ORDER BY c_period_time DESC, c_id DESC) AS c_rank
+          FROM t_period_readiness
+         WHERE c_space_id = ? AND c_report_state = ?` + retentionCutoff + `
+      )
+     WHERE c_rank > ?
+    ) AS old_periods ON old_periods.c_id = items.c_readiness_id
+   ORDER BY items.c_readiness_id, items.c_write_target_id
+   LIMIT ?
+)`
+		result := tx.Exec(query, args...)
+		if result.Error != nil {
+			return result.Error
+		}
+		deleted += result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
+func requiredPeriodSpaceID(spaceID string) (string, error) {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return "", fmt.Errorf("space_id is required")
+	}
+	return spaceID, nil
+}
+
+func periodEventID(spaceID, datasetID, frequency string, period time.Time) string {
+	return "collector-period-completed/" + strings.Join([]string{spaceID, datasetID, frequency, period.UTC().Format(time.RFC3339)}, "/")
+}

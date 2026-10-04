@@ -17,7 +17,7 @@ pnpm build:prod
 pnpm preview
 ```
 
-仓库根目录的 `./scripts/build.sh web-host` 只构建当前已嵌入 statik 资源的 `moox-web-host` 二进制。需要重建前端资源时，先运行 `pnpm build:prod`，再到 `web-host` 目录执行 `make statik`；也可以直接使用 `./scripts/deploy-moox.sh --build-web-assets`。
+仓库根目录的 `./scripts/build/build.sh web-host` 只构建当前已嵌入 statik 资源的 `moox-web-host` 二进制。需要重建前端资源时，先运行 `pnpm build:prod`，再到 `web-host` 目录执行 `make statik`；也可以直接使用 `./scripts/deploy/deploy-moox.sh --build-web-assets`。
 
 ## 本地联调
 

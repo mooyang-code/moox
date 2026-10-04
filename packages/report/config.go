@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -8,23 +9,23 @@ import (
 )
 
 const (
-	DefaultTopic  = "moox.metrics.snapshot.reported.v1"
-	DefaultSpace  = "moox_system"
+	DefaultSpace  = "mooxsys"
 	DefaultBusURL = "nats://127.0.0.1:4222"
 )
 
 // Config controls one process-local metrics reporter. The timer schedule is
 // owned by tRPC; this config only controls gathering and publication.
 type Config struct {
-	ServiceName string
-	InstanceID  string
-	NodeID      string
-	BootID      string
-	Version     string
-	EventBusURL string
-	Topic       string
-	SpaceID     string
-	Interval    time.Duration
+	Module         string
+	ServiceName    string
+	InstanceID     string
+	NodeID         string
+	BootID         string
+	Version        string
+	EventBusURL    string
+	CredentialFile string
+	SpaceID        string
+	Interval       time.Duration
 
 	MaxUncompressedBytes int
 	MaxCompressedBytes   int
@@ -34,31 +35,28 @@ type Config struct {
 	MaxLabelNameBytes    int
 	MaxLabelValueBytes   int
 	GzipLevel            int
-	IncludeRegex         string
-	ExcludeRegex         string
 }
 
-func DefaultConfig(serviceName string) Config {
+func DefaultConfig(module, serviceName string) Config {
 	c := Config{
+		Module:               module,
 		ServiceName:          serviceName,
-		InstanceID:           firstEnv("MOOX_INSTANCE_ID", "HOSTNAME"),
-		NodeID:               firstEnv("MOOX_NODE_ID", "HOSTNAME"),
+		InstanceID:           firstEnv("MOOX_INSTANCE_ID"),
+		NodeID:               firstEnv("MOOX_NODE_ID"),
 		BootID:               firstEnv("MOOX_BOOT_ID"),
 		Version:              firstEnv("MOOX_VERSION", "MOOX_SERVICE_VERSION"),
 		EventBusURL:          firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_URL", "NATS_URL"),
-		Topic:                DefaultTopic,
+		CredentialFile:       firstEnv("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"),
 		SpaceID:              DefaultSpace,
 		Interval:             30 * time.Second,
-		MaxUncompressedBytes: 4 * 1024 * 1024,
-		MaxCompressedBytes:   1 * 1024 * 1024,
+		MaxUncompressedBytes: 16 * 1024 * 1024,
+		MaxCompressedBytes:   4 * 1024 * 1024,
 		MaxMetricFamilies:    2000,
-		MaxSamples:           20000,
+		MaxSamples:           100000,
 		MaxLabelsPerSample:   20,
 		MaxLabelNameBytes:    128,
 		MaxLabelValueBytes:   512,
 		GzipLevel:            1,
-		IncludeRegex:         `^.*$`,
-		ExcludeRegex:         `^(go_gc_.*debug.*)$`,
 	}
 	c.MaxUncompressedBytes = envInt("MOOX_METRICS_MAX_UNCOMPRESSED_BYTES", c.MaxUncompressedBytes)
 	c.MaxCompressedBytes = envInt("MOOX_METRICS_MAX_COMPRESSED_BYTES", c.MaxCompressedBytes)
@@ -68,23 +66,8 @@ func DefaultConfig(serviceName string) Config {
 	c.MaxLabelNameBytes = envInt("MOOX_METRICS_MAX_LABEL_NAME_BYTES", c.MaxLabelNameBytes)
 	c.MaxLabelValueBytes = envInt("MOOX_METRICS_MAX_LABEL_VALUE_BYTES", c.MaxLabelValueBytes)
 	c.GzipLevel = envInt("MOOX_METRICS_GZIP_LEVEL", c.GzipLevel)
-	if value := firstEnv("MOOX_METRICS_INCLUDE_REGEX"); value != "" {
-		c.IncludeRegex = value
-	}
-	if value := firstEnv("MOOX_METRICS_EXCLUDE_REGEX"); value != "" {
-		c.ExcludeRegex = value
-	}
-	if c.InstanceID == "" {
-		c.InstanceID = serviceName + "-local"
-	}
-	if c.NodeID == "" {
-		c.NodeID = c.InstanceID
-	}
 	if c.EventBusURL == "" {
 		c.EventBusURL = DefaultBusURL
-	}
-	if c.Topic == "" {
-		c.Topic = DefaultTopic
 	}
 	if c.SpaceID == "" {
 		c.SpaceID = DefaultSpace
@@ -96,7 +79,7 @@ func DefaultConfig(serviceName string) Config {
 }
 
 func (c Config) withDefaults() Config {
-	d := DefaultConfig(c.ServiceName)
+	d := DefaultConfig(c.Module, c.ServiceName)
 	if c.InstanceID == "" {
 		c.InstanceID = d.InstanceID
 	}
@@ -112,8 +95,8 @@ func (c Config) withDefaults() Config {
 	if c.EventBusURL == "" {
 		c.EventBusURL = d.EventBusURL
 	}
-	if c.Topic == "" {
-		c.Topic = d.Topic
+	if c.CredentialFile == "" {
+		c.CredentialFile = d.CredentialFile
 	}
 	if c.SpaceID == "" {
 		c.SpaceID = d.SpaceID
@@ -145,13 +128,20 @@ func (c Config) withDefaults() Config {
 	if c.GzipLevel == 0 {
 		c.GzipLevel = d.GzipLevel
 	}
-	if c.IncludeRegex == "" {
-		c.IncludeRegex = d.IncludeRegex
-	}
-	if c.ExcludeRegex == "" {
-		c.ExcludeRegex = d.ExcludeRegex
-	}
 	return c
+}
+
+func (c Config) validateIdentity() error {
+	for _, identity := range []struct{ name, value string }{
+		{name: "MOOX_INSTANCE_ID", value: c.InstanceID},
+		{name: "MOOX_NODE_ID", value: c.NodeID},
+		{name: "MOOX_BOOT_ID", value: c.BootID},
+	} {
+		if strings.TrimSpace(identity.value) == "" {
+			return fmt.Errorf("metrics reporter identity requires %s", identity.name)
+		}
+	}
+	return nil
 }
 
 func firstEnv(names ...string) string {

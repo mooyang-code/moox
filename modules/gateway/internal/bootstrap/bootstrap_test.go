@@ -32,6 +32,23 @@ func TestInitializeLoadsCacheBeforeInitialPull(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedHealthHandlerRejectsUnsignedDiagnostics(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	handler, err := authenticatedHealthHandler(health.NewState().Handler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s status = %d, want %d", path, recorder.Code, http.StatusUnauthorized)
+		}
+	}
+}
+
 func TestInitializeRequiresCacheOrSuccessfulPull(t *testing.T) {
 	runtime := New(Options{NodeID: "node-a", Routes: &fakeRoutes{loadErr: errors.New("no cache")}, Control: &fakeControl{pullErr: errors.New("admin down")}, Health: health.NewState()})
 	if err := runtime.Initialize(context.Background()); err == nil {
@@ -153,8 +170,8 @@ func TestContinuousSyncFailureWarnsAfterThresholdAndResetsOnRecovery(t *testing.
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "node_id=node-a") {
 		t.Fatalf("warnings at threshold = %v", warnings)
 	}
-	if !state.Ready() {
-		t.Fatal("warning cleared readiness")
+	if state.Ready() {
+		t.Fatal("stale control-plane sync remained ready")
 	}
 	if _, ok := runtime.Table().Resolve("monitor"); !ok {
 		t.Fatal("warning discarded cached route")
@@ -182,6 +199,31 @@ func TestContinuousSyncFailureWarnsAfterThresholdAndResetsOnRecovery(t *testing.
 	}
 	if strings.Contains(strings.Join(warnings, " "), "admin unavailable") {
 		t.Fatalf("warning leaked error details: %v", warnings)
+	}
+}
+
+func TestRefreshReportFailureDegradesReadinessWithoutDiscardingRoutes(t *testing.T) {
+	snapshot := testSnapshot(t, "node-a", "monitor")
+	state := health.NewState()
+	control := &fakeControl{pull: snapshot}
+	runtime := New(Options{NodeID: "node-a", Routes: &fakeRoutes{load: snapshot}, Control: control, Health: state})
+	if err := runtime.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() = %v", err)
+	}
+	control.reportErr = errors.New("admin heartbeat unavailable")
+	if err := runtime.Refresh(context.Background()); err == nil {
+		t.Fatal("Refresh() succeeded")
+	}
+	if !state.Ready() {
+		t.Fatal("transient report failure degraded gateway before stale window")
+	}
+	if _, ok := runtime.Table().Resolve("monitor"); !ok {
+		t.Fatal("report failure discarded cached route")
+	}
+	recorder := httptest.NewRecorder()
+	state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(recorder.Body.String(), "gateway_route_report_errors_total 1") {
+		t.Fatalf("metrics = %q", recorder.Body.String())
 	}
 }
 

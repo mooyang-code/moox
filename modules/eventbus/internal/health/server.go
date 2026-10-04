@@ -3,7 +3,6 @@ package health
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -78,27 +77,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.sub = nil
 	}
 	return nil
-}
-
-func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
-	rsp := s.snapshot(r.Context())
-	rsp.Ready = true
-	rsp.Status = "ok"
-	writeHealth(w, rsp, true)
-}
-func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
-	rsp := s.snapshot(r.Context())
-	ready := rsp.Ready
-	writeHealth(w, rsp, ready)
-}
-func writeHealth(w http.ResponseWriter, rsp healthz.Response, ready bool) {
-	w.Header().Set("Content-Type", "application/json")
-	if !ready {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	} else {
-		w.WriteHeader(http.StatusOK)
-	}
-	_ = json.NewEncoder(w).Encode(rsp)
 }
 
 func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {

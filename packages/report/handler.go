@@ -4,82 +4,110 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-const (
-	SnapshotContentType = "application/vnd.moox.metrics.snapshot+protobuf"
-	SnapshotTopic       = DefaultTopic
-)
-
 type Publisher interface {
-	Publish(context.Context, *messagepb.MooxMessage, ...jetstream.PublishOption) (*jetstream.PublishAck, error)
+	Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
 }
 
 type Connector func(context.Context, Config) (Publisher, error)
 
+// ErrInFlight means a timer tick was skipped because the previous snapshot
+// is still gathering or publishing. Callers should retain the previous
+// health state rather than treating this as a successful fresh report.
+var ErrInFlight = errors.New("metrics report already in flight")
+
 type Handler struct {
-	cfg        Config
-	gatherer   prometheus.Gatherer
-	connector  Connector
-	mu         sync.Mutex
-	client     Publisher
-	sequence   atomic.Uint64
-	errorCount atomic.Uint64
-	bootID     string
+	cfg             Config
+	gatherer        prometheus.Gatherer
+	connector       Connector
+	handleMu        sync.Mutex
+	inFlight        atomic.Bool
+	mu              sync.Mutex
+	client          Publisher
+	sequence        atomic.Uint64
+	bootID          string
+	reportErrors    prometheus.Counter
+	reportLastError prometheus.Gauge
 }
 
 func NewHandler(cfg Config) (*Handler, error) {
+	return newHandler(cfg, prometheus.DefaultRegisterer, prometheus.DefaultGatherer)
+}
+
+// NewHandlerWithRegistry is the SCF Sentinel mode: the caller owns the
+// process-local registry, updates it in a timer handler, and invokes Handle.
+// NewHandler remains the long-running service mode using Prometheus defaults.
+func NewHandlerWithRegistry(cfg Config, registry *prometheus.Registry) (*Handler, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("metrics reporter registry is required")
+	}
+	return newHandler(cfg, registry, registry)
+}
+
+func newHandler(cfg Config, registerer prometheus.Registerer, gatherer prometheus.Gatherer) (*Handler, error) {
 	cfg = cfg.withDefaults()
+	if err := validateModuleName(cfg.Module); err != nil {
+		return nil, fmt.Errorf("metrics reporter: %w", err)
+	}
 	if strings.TrimSpace(cfg.ServiceName) == "" {
 		return nil, fmt.Errorf("metrics reporter service name is required")
 	}
-	if _, err := regexp.Compile(cfg.IncludeRegex); err != nil {
-		return nil, fmt.Errorf("include regex: %w", err)
+	if err := cfg.validateIdentity(); err != nil {
+		return nil, err
 	}
-	if _, err := regexp.Compile(cfg.ExcludeRegex); err != nil {
-		return nil, fmt.Errorf("exclude regex: %w", err)
-	}
-	bootID := cfg.BootID
-	if bootID == "" {
-		bootID = newID()
-	}
-	return &Handler{cfg: cfg, gatherer: prometheus.DefaultGatherer, connector: connect, bootID: bootID}, nil
-}
-
-func NewHandlerWithPublisher(cfg Config, p Publisher, gatherer prometheus.Gatherer) (*Handler, error) {
-	h, err := NewHandler(cfg)
+	reportErrors, err := registerOrReuseCounter(registerer, prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "moox_" + cfg.Module + "_report_errors_total",
+		Help: "Metric snapshot reporting failures.",
+	}))
 	if err != nil {
 		return nil, err
 	}
-	if p != nil {
-		h.client = p
+	reportLastError, err := registerOrReuseGauge(registerer, prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "moox_" + cfg.Module + "_report_last_error_timestamp_seconds",
+		Help: "Unix timestamp of the last metric snapshot reporting failure.",
+	}))
+	if err != nil {
+		return nil, err
 	}
-	if gatherer != nil {
-		h.gatherer = gatherer
-	}
-	return h, nil
+	return &Handler{
+		cfg: cfg, gatherer: gatherer, connector: connect, bootID: cfg.BootID,
+		reportErrors: reportErrors, reportLastError: reportLastError,
+	}, nil
 }
 
 func (h *Handler) Handle(ctx context.Context) error {
+	// Cron invokes each tick in a new goroutine. Do not queue a second snapshot
+	// behind a slow gather/publish: the next tick can use the following cadence.
+	// The handle mutex below still serializes publisher state for manual calls
+	// that arrive after the current report has finished.
+	if !h.inFlight.CompareAndSwap(false, true) {
+		return ErrInFlight
+	}
+	defer h.inFlight.Store(false)
+
+	// A handler owns one monotonic report sequence and one reconnectable
+	// publisher. Serializing timer/manual invocations prevents a stale failing
+	// call from invalidating a publisher installed by a concurrent call.
+	h.handleMu.Lock()
+	defer h.handleMu.Unlock()
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -89,47 +117,95 @@ func (h *Handler) Handle(ctx context.Context) error {
 	}
 	seq := h.sequence.Add(1)
 	messageID := fmt.Sprintf("%s-%020d", h.bootID, seq)
-	payload, err := proto.Marshal(snapshot)
-	if err != nil {
-		return h.reportError(ctx, fmt.Errorf("marshal metric snapshot: %w", err))
-	}
-	msg := &messagepb.MooxMessage{
-		ProtocolVersion: jetstream.ProtocolVersion,
-		MessageId:       messageID,
-		Topic:           h.cfg.Topic,
-		Kind:            messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT,
-		Producer:        &messagepb.Producer{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, Version: h.cfg.Version},
-		SpaceId:         h.cfg.SpaceID,
-		Sequence:        seq,
-		OccurredAt:      timestamppb.Now(),
-		PublishedAt:     timestamppb.Now(),
-		ContentType:     SnapshotContentType,
-		MessageType:     "moox.metrics.snapshot.reported.v1",
-		Payload:         payload,
-	}
 	client, err := h.publisher(ctx)
 	if err != nil {
 		return h.reportError(ctx, err)
 	}
-	if _, err := client.Publish(ctx, msg, jetstream.WithOrderingKey(h.cfg.ServiceName+"/"+h.cfg.InstanceID)); err != nil {
-		return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
+	report := &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}
+	options := events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}
+	if _, err := client.Publish(ctx, events.ObservabilityMetricsSnapshotReported, report, options); err != nil {
+		if !isTransientPublishError(err) {
+			return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
+		}
+		if ctx.Err() != nil {
+			return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
+		}
+		h.invalidatePublisher(client)
+		client, reconnectErr := h.publisher(ctx)
+		if reconnectErr != nil {
+			return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: reconnect after %v: %w", err, reconnectErr))
+		}
+		if _, retryErr := client.Publish(ctx, events.ObservabilityMetricsSnapshotReported, report, options); retryErr != nil {
+			if isTransientPublishError(retryErr) && ctx.Err() == nil {
+				h.invalidatePublisher(client)
+			}
+			return h.reportError(ctx, fmt.Errorf("publish metrics snapshot after reconnect: %w", retryErr))
+		}
 	}
 	return nil
 }
 
+func isTransientPublishError(err error) bool {
+	return errors.Is(err, jetstream.ErrConnection) || errors.Is(err, jetstream.ErrPublishTimeout)
+}
+
+func (h *Handler) invalidatePublisher(client Publisher) {
+	h.mu.Lock()
+	h.client = nil
+	h.mu.Unlock()
+	if closer, ok := client.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
+}
+
+func (h *Handler) EventReporter(ctx context.Context) (*EventReporter, error) {
+	if h == nil {
+		return nil, fmt.Errorf("metrics reporter handler is nil")
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return nil, err
+	}
+	return &EventReporter{Registry: registry, publisherFn: h.publisher}, nil
+}
+
 func (h *Handler) reportError(ctx context.Context, err error) error {
 	if err != nil {
-		h.errorCount.Add(1)
+		h.reportErrors.Inc()
+		h.reportLastError.Set(float64(time.Now().Unix()))
 		log.WarnContextf(ctx, "metrics snapshot report failed for %s: %v", h.cfg.ServiceName, err)
 	}
 	return err
 }
 
-func (h *Handler) ErrorCount() uint64 {
-	if h == nil {
-		return 0
+func registerOrReuseCounter(registerer prometheus.Registerer, collector prometheus.Counter) (prometheus.Counter, error) {
+	if err := registerer.Register(collector); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
+			return nil, fmt.Errorf("register reporter error counter: %w", err)
+		}
+		existing, ok := already.ExistingCollector.(prometheus.Counter)
+		if !ok {
+			return nil, fmt.Errorf("registered reporter error metric has type %T", already.ExistingCollector)
+		}
+		return existing, nil
 	}
-	return h.errorCount.Load()
+	return collector, nil
+}
+
+func registerOrReuseGauge(registerer prometheus.Registerer, collector prometheus.Gauge) (prometheus.Gauge, error) {
+	if err := registerer.Register(collector); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
+			return nil, fmt.Errorf("register reporter error gauge: %w", err)
+		}
+		existing, ok := already.ExistingCollector.(prometheus.Gauge)
+		if !ok {
+			return nil, fmt.Errorf("registered reporter error metric has type %T", already.ExistingCollector)
+		}
+		return existing, nil
+	}
+	return collector, nil
 }
 
 func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
@@ -137,14 +213,12 @@ func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gather prometheus metrics: %w", err)
 	}
-	include := regexp.MustCompile(h.cfg.IncludeRegex)
-	exclude := regexp.MustCompile(h.cfg.ExcludeRegex)
 	var raw bytes.Buffer
 	encoder := expfmt.NewEncoder(&raw, expfmt.NewFormat(expfmt.TypeTextPlain))
 	familyCount, sampleCount := 0, 0
 	for _, family := range families {
 		name := family.GetName()
-		if !include.MatchString(name) || exclude.MatchString(name) {
+		if !strings.HasPrefix(name, "moox_") {
 			continue
 		}
 		familyCount++
@@ -155,7 +229,9 @@ func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
 			generatedLabels := 0
 			switch family.GetType() {
 			case io_prometheus_client.MetricType_HISTOGRAM:
-				sampleCount += 2 + len(sample.GetHistogram().GetBucket())
+				// Prometheus text exposition emits the implicit +Inf bucket in
+				// addition to the finite buckets held by the DTO.
+				sampleCount += 3 + len(sample.GetHistogram().GetBucket())
 				if len(sample.GetHistogram().GetBucket()) > 0 {
 					generatedLabels = 1
 				}
@@ -226,15 +302,22 @@ func (h *Handler) publisher(ctx context.Context) (Publisher, error) {
 }
 
 func connect(ctx context.Context, cfg Config) (Publisher, error) {
-	return jetstream.Connect(ctx, jetstream.ConfigFromEnv(strings.Split(cfg.EventBusURL, ","), "moox-"+cfg.ServiceName+"-metrics"))
-}
-
-func newID() string {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return fmt.Sprintf("boot-%d", time.Now().UnixNano())
+	jsConfig := jetstream.ConfigFromEnv(strings.Split(cfg.EventBusURL, ","), "moox-"+cfg.ServiceName+"-metrics")
+	if strings.TrimSpace(cfg.CredentialFile) != "" {
+		if err := jsConfig.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {
+			return nil, fmt.Errorf("load metrics publisher credential: %w", err)
+		}
 	}
-	return fmt.Sprintf("%x", raw[:])
+	client, err := jetstream.Connect(ctx, jsConfig)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return events.NewPublisher(client, registry)
 }
 
 // Keep the generated client_model import in this module-owned implementation;

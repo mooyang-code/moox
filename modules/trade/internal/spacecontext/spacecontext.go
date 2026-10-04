@@ -9,7 +9,6 @@ package spacecontext
 
 import (
 	"context"
-	"fmt"
 
 	"trpc.group/trpc-go/trpc-go/filter"
 	thttp "trpc.group/trpc-go/trpc-go/http"
@@ -53,13 +52,4 @@ func FromContext(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return v, v != ""
-}
-
-// MustFromContext 从 context 读取 spaceID，未设置返回错误。
-func MustFromContext(ctx context.Context) (string, error) {
-	spaceID, ok := FromContext(ctx)
-	if !ok || spaceID == "" {
-		return "", fmt.Errorf("space_id is required but not set in context")
-	}
-	return spaceID, nil
 }

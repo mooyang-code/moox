@@ -1,8 +1,9 @@
-// Package store owns Factor's SQLite connection and persistence repositories.
+// Package store persists Factor configuration and asynchronous recalc jobs.
 package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,15 +11,15 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Store owns the Factor SQLite connection and repositories.
+var ErrConflict = errors.New("factor store conflict")
+
+// Store owns the Factor SQLite connection.
 type Store struct {
-	db       *gorm.DB
-	factors  *FactorRepository
-	bindings *BindingRepository
+	db *gorm.DB
 }
 
 // Options configures the Factor SQLite store.
@@ -30,7 +31,7 @@ type Options struct {
 	ConnMaxIdleTime time.Duration
 }
 
-// Open opens the Factor SQLite store. Schema creation is handled by bootstrap.
+// Open opens the SQLite store and creates its schema on a fresh database.
 func Open(opts *Options) (*Store, error) {
 	dbPath := "./data/factor/factor.db"
 	if opts != nil && opts.Path != "" {
@@ -43,31 +44,17 @@ func Open(opts *Options) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	s := &Store{db: db}
-	s.factors = NewFactorRepository(db)
-	s.bindings = NewBindingRepository(db)
 	applySQLitePoolConfig(db, opts)
-	log.Infof("初始化 Factor SQLite 数据库: %s", dbPath)
+	s := &Store{db: db}
+	if err := s.ApplySchema(factorschema.AllSQL()); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("initialize factor schema: %w", err)
+	}
 	return s, nil
 }
 
-// Factors returns the factor repository.
-func (s *Store) Factors() *FactorRepository {
-	if s == nil {
-		return nil
-	}
-	return s.factors
-}
-
-// Bindings returns the factor binding repository.
-func (s *Store) Bindings() *BindingRepository {
-	if s == nil {
-		return nil
-	}
-	return s.bindings
-}
-
-// ApplySchema applies schema SQL during service startup.
+// ApplySchema executes the embedded schema on a new database and rejects a
+// database whose Factor tables do not match the current schema.
 func (s *Store) ApplySchema(sql string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
@@ -75,7 +62,94 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("factor schema sql is empty")
 	}
-	return s.db.Exec(sql).Error
+	existing, err := s.factorSchemaTables()
+	if err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		if err := s.validateSchemaTables(existing); err != nil {
+			return err
+		}
+	}
+	if err := s.db.Exec(sql).Error; err != nil {
+		return err
+	}
+	tables, err := s.factorSchemaTables()
+	if err != nil {
+		return err
+	}
+	return s.validateSchemaTables(tables)
+}
+
+func (s *Store) factorSchemaTables() ([]string, error) {
+	var tables []string
+	if err := s.db.Raw(
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't_factor_%' ORDER BY name",
+	).Scan(&tables).Error; err != nil {
+		return nil, fmt.Errorf("inspect factor schema tables: %w", err)
+	}
+	return tables, nil
+}
+
+func (s *Store) validateSchemaTables(tables []string) error {
+	expected := map[string][]string{
+		"t_factor_defs": {
+			"c_factor_id", "c_set_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash",
+			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
+			"c_allow_partial_universe", "c_status", "c_ctime", "c_mtime",
+		},
+		"t_factor_recalc_jobs": {
+			"c_job_id", "c_request_id", "c_set_id", "c_factor_ids_json", "c_subjects_json",
+			"c_factors_omitted", "c_subjects_omitted",
+			"c_start_time", "c_end_time", "c_status", "c_progress_time", "c_error", "c_ctime", "c_mtime",
+		},
+		"t_factor_sets": {
+			"c_set_id", "c_space_id", "c_source_dataset_id", "c_freq", "c_subject_mode",
+			"c_subjects_json", "c_result_dataset_id", "c_status", "c_ctime", "c_mtime",
+		},
+	}
+	if len(tables) != len(expected) {
+		return fmt.Errorf("factor database must contain only factor sets, definitions, and recalc jobs; create a fresh database")
+	}
+	for _, table := range tables {
+		want, ok := expected[table]
+		if !ok {
+			return fmt.Errorf("factor database contains unexpected table %s; create a fresh database", table)
+		}
+		var columns []string
+		if err := s.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", table).Scan(&columns).Error; err != nil {
+			return fmt.Errorf("inspect factor schema table %s: %w", table, err)
+		}
+		if strings.Join(columns, "\x00") != strings.Join(want, "\x00") {
+			return fmt.Errorf("factor database table %s uses an obsolete schema; create a fresh database", table)
+		}
+	}
+	for name := range expected {
+		if !contains(tables, name) {
+			return fmt.Errorf("factor database missing table %s; create a fresh database", name)
+		}
+	}
+	return nil
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+// WithTx runs fn inside a Factor SQLite transaction.
+func (s *Store) WithTx(ctx context.Context, fn func(*gorm.DB) error) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	if fn == nil {
+		return fmt.Errorf("factor transaction callback is required")
+	}
+	return s.db.WithContext(ctx).Transaction(fn)
 }
 
 // Ping verifies that the database is available.
@@ -100,6 +174,7 @@ func (s *Store) Close() error {
 
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
+		"_pragma=foreign_keys(ON)",
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(NORMAL)",
 		"_pragma=busy_timeout(5000)",
@@ -119,8 +194,8 @@ func applySQLitePoolConfig(db *gorm.DB, cfg *Options) {
 	if err != nil {
 		return
 	}
-	maxOpen := 30
-	maxIdle := 20
+	maxOpen := 1
+	maxIdle := 1
 	if cfg != nil {
 		if cfg.MaxOpenConns > 0 {
 			maxOpen = cfg.MaxOpenConns

@@ -7,14 +7,16 @@ Storage components have different jobs:
 - Parquet: cold archive, offline export, and disaster recovery data.
 - Bleve: text search for documents, announcements, news, notes, and metadata.
 
-Factor values should be stored as long-form records keyed by:
+Time-series and factor-result rows share one logical identity:
 
 - space
-- data source
-- subject
 - dataset
+- subject
+- frequency
 - time
-- factor instance
-- dimensions
+- optional scalar `series_tag`, such as `venue:binance`
+
+Factor outputs are dataset fields. Factor definition identity and source hash
+belong in write attributes, not in the time-series primary key.
 
 DuckDB can materialize a DataView into versioned wide tables instead of altering an existing wide table in place. A new view version can add dynamic factor columns without blocking readers of the previous version.

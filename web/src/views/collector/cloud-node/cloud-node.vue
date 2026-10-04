@@ -2,9 +2,6 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <div class="page-head">
-          <h2>云节点</h2>
-        </div>
         <a-space class="cloud-node-action-bar" wrap>
           <a-button type="primary" status="success" @click="onBatchAdd" :disabled="batchChangeProcessing">
             <template #icon><icon-plus-circle /></template>
@@ -25,6 +22,10 @@
           <a-button type="outline" @click="onFunctionPackageManage">
             <template #icon><icon-code /></template>
             <span>代码包版本</span>
+          </a-button>
+          <a-button type="outline" @click="onSCFSyncOpen">
+            <template #icon><icon-sync /></template>
+            <span>同步云节点</span>
           </a-button>
         </a-space>
         <a-space class="cloud-node-filter-bar" wrap>
@@ -52,10 +53,6 @@
             <a-option value="scf-web">云函数（Web型）</a-option>
             <a-option value="server">服务器</a-option>
           </a-select>
-          <a-select placeholder="节点状态" v-model="form.status" style="width: 120px" allow-clear>
-            <a-option value="online">在线</a-option>
-            <a-option value="offline">离线</a-option>
-          </a-select>
           <a-button type="primary" @click="search">
             <template #icon><icon-search /></template>
             <span>查询</span>
@@ -64,7 +61,7 @@
 
         <!-- 批量变更进度提示 -->
         <a-alert
-          v-if="batchChangeStatuses.length > 0"
+          v-if="currentBatchChangeStatus"
           type="info"
           style="margin: var(--moox-space-4) 0"
           closable
@@ -72,49 +69,31 @@
         >
           <template #title>
             <a-space>
-              <icon-loading spin />
-              <span>云节点批量变更处理中</span>
-            </a-space>
-          </template>
-          <div
-            v-for="(batchChange, index) in batchChangeStatuses"
-            :key="batchChange.batch_id || index"
-            style="margin-bottom: var(--moox-space-3)"
-          >
-            <div>批次 {{ index + 1 }}：{{ getBatchChangeTypeText(batchChange.batch_change_type) }}</div>
-            <div>处理进度：{{ batchChange.success_count + batchChange.failed_count }} / {{ batchChange.total_count }}</div>
-            <div>成功：{{ batchChange.success_count }}，失败：{{ batchChange.failed_count }}</div>
-            <a-progress
-              :percent="(Number(batchChange.progress) || 0) / 100"
-              :status="batchChange.failed_count > 0 ? 'warning' : 'normal'"
-              :stroke-width="8"
-              style="margin-top: var(--moox-space-2)"
-            />
-          </div>
-        </a-alert>
-        <a-alert
-          v-else-if="currentBatchChangeStatus && currentBatchChangeStatus.batch_change_status === 1"
-          type="info"
-          style="margin: var(--moox-space-4) 0"
-          closable
-          @close="handleCloseBatchChangeAlert"
-        >
-          <template #title>
-            <a-space>
-              <icon-loading spin />
-              <span>云节点批量变更处理中</span>
+              <icon-loading v-if="batchChangeProcessing" spin />
+              <span>
+                {{
+                  batchChangeProcessing
+                    ? "云节点批量变更处理中"
+                    : batchPollingTimedOut
+                      ? "已停止自动查询任务进度"
+                      : "云节点批量变更已完成"
+                }}
+              </span>
             </a-space>
           </template>
           <div>
-            <div>变更类型：{{ getBatchChangeTypeText(currentBatchChangeStatus.batch_change_type) }}</div>
+            <div>任务：{{ currentBatchChangeStatus.job.job_id }}</div>
+            <div>变更类型：{{ getBatchChangeTypeText(currentBatchChangeStatus.job.operation) }}</div>
             <div>
-              处理进度：{{ currentBatchChangeStatus.success_count + currentBatchChangeStatus.failed_count }} /
-              {{ currentBatchChangeStatus.total_count }}
+              处理进度：{{ currentBatchChangeStatus.job.success_count + currentBatchChangeStatus.job.failed_count }} /
+              {{ currentBatchChangeStatus.job.total_count }}
             </div>
-            <div>成功：{{ currentBatchChangeStatus.success_count }}，失败：{{ currentBatchChangeStatus.failed_count }}</div>
+            <div>
+              成功：{{ currentBatchChangeStatus.job.success_count }}，失败：{{ currentBatchChangeStatus.job.failed_count }}
+            </div>
             <a-progress
-              :percent="(Number(currentBatchChangeStatus.progress) || 0) / 100"
-              :status="currentBatchChangeStatus.failed_count > 0 ? 'warning' : 'normal'"
+              :percent="(Number(currentBatchChangeStatus.job.progress_percent) || 0) / 100"
+              :status="currentBatchChangeStatus.job.failed_count > 0 ? 'warning' : 'normal'"
               :stroke-width="8"
               style="margin-top: var(--moox-space-2)"
             />
@@ -127,7 +106,7 @@
           type="info"
           style="margin: var(--moox-space-4) 0"
           :closable="true"
-          @close="selectedKeys = []"
+          @close="clearDeleteSelection"
         >
           <template #title> 已选择 {{ selectedKeys.length }} 个节点 </template>
           <div style="font-size: 12px; color: #86909c">
@@ -152,25 +131,25 @@
             @page-size-change="onPageSizeChange"
           >
             <template #columns>
-              <a-table-column title="节点ID" data-index="node_id" :width="120">
+              <a-table-column title="节点ID" data-index="node_id" :width="360">
                 <template #cell="{ record }">
-                  <a-link @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
+                  <a-link class="node-id-link" @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
                 </template>
               </a-table-column>
-              <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
-              <a-table-column title="地区" data-index="region" :width="150">
+              <a-table-column title="命名空间" data-index="namespace" :width="90"></a-table-column>
+              <a-table-column title="节点类型" data-index="node_type" :width="135">
+                <template #cell="{ record }">
+                  <a-tag size="small" :color="getNodeTypeColor(record.node_type)">
+                    {{ getNodeTypeLabel(record.node_type) }}
+                  </a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="触发方式" data-index="trigger_type" :width="100">
+                <template #cell="{ record }">{{ getTriggerTypeLabel(record.trigger_type) }}</template>
+              </a-table-column>
+              <a-table-column title="地区" data-index="region" :width="110">
                 <template #cell="{ record }">
                   {{ getRegionName(record.region) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="最后心跳时间" data-index="last_heartbeat" :width="170">
-                <template #cell="{ record }">
-                  {{ formatDateTime(record.last_heartbeat) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="CLS 主题 ID" data-index="cls_topic_id" :width="180" :ellipsis="true" :tooltip="true">
-                <template #cell="{ record }">
-                  {{ record.cls_topic_id || "-" }}
                 </template>
               </a-table-column>
               <a-table-column title="标签" data-index="tag" :width="80">
@@ -178,21 +157,6 @@
                   <a-tag v-if="record.tag" size="small" :color="record.tag === '国内' ? 'blue' : 'orange'">
                     {{ record.tag }}
                   </a-tag>
-                  <span v-else>-</span>
-                </template>
-              </a-table-column>
-              <a-table-column title="支持的工作负载" data-index="supported_workloads" :width="150">
-                <template #cell="{ record }">
-                  <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" class="node-workloads">
-                    <a-tag
-                      v-for="(workload, index) in getSupportedWorkloads(record.supported_workloads)"
-                      :key="index"
-                      size="small"
-                      :color="getCollectorColor(workload)"
-                    >
-                      {{ getCollectorName(workload) }}
-                    </a-tag>
-                  </div>
                   <span v-else>-</span>
                 </template>
               </a-table-column>
@@ -208,33 +172,21 @@
                   <span v-else>-</span>
                 </template>
               </a-table-column>
-              <a-table-column title="状态" :width="80" align="center">
+              <a-table-column title="操作" :width="72" align="center" fixed="right">
                 <template #cell="{ record }">
-                  <a-tag bordered size="small" :color="getStatusColor(record.status)">
-                    {{ getStatusText(record.status) }}
-                  </a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="操作" :width="170" align="center" fixed="right">
-                <template #cell="{ record }">
-                  <a-space>
-                    <a-button type="outline" size="mini" @click="onEdit(record)" :disabled="batchChangeProcessing">
-                      <template #icon><icon-edit /></template>
-                      <span>编辑</span>
-                    </a-button>
-                    <a-popconfirm
-                      content="确定要删除该节点吗？删除后将无法恢复。"
-                      ok-text="确定"
-                      cancel-text="取消"
-                      @ok="() => onDelete(record)"
-                      position="tr"
-                    >
+                  <a-popconfirm
+                    content="确定要删除该节点吗？删除后将无法恢复。"
+                    ok-text="确定"
+                    cancel-text="取消"
+                    @ok="() => onDelete(record)"
+                    position="tr"
+                  >
+                    <a-tooltip content="删除节点">
                       <a-button type="primary" size="mini" status="danger" :disabled="batchChangeProcessing">
                         <template #icon><icon-delete /></template>
-                        <span>删除</span>
                       </a-button>
-                    </a-popconfirm>
-                  </a-space>
+                    </a-tooltip>
+                  </a-popconfirm>
                 </template>
               </a-table-column>
             </template>
@@ -265,7 +217,14 @@
           <a-select v-model="batchAddForm.nodeType" placeholder="请选择节点类型" style="width: 100%">
             <a-option value="scf-event">云函数（事件型）</a-option>
             <a-option value="scf-web">云函数（Web型）</a-option>
-            <a-option value="server">服务器</a-option>
+          <a-option value="server">服务器</a-option>
+          </a-select>
+        </a-form-item>
+
+        <a-form-item v-if="batchAddForm.nodeType === 'scf-event'" field="triggerType" label="触发方式" required>
+          <a-select v-model="batchAddForm.triggerType" style="width: 100%">
+            <a-option value="timer">定时器</a-option>
+            <a-option value="invoke">手动调用</a-option>
           </a-select>
         </a-form-item>
 
@@ -322,44 +281,15 @@
         </a-form-item>
 
         <a-form-item field="nodeCount" label="节点数量" required>
-          <a-input-number v-model="batchAddForm.nodeCount" :min="1" placeholder="请输入要创建的节点数量" style="width: 100%" />
-        </a-form-item>
-
-        <!-- 心跳配置 -->
-        <a-divider orientation="left">心跳配置</a-divider>
-
-        <a-form-item field="timeoutThreshold" label="超时阈值（秒）">
           <a-input-number
-            v-model="batchAddForm.timeoutThreshold"
-            :min="0"
-            :max="3600"
-            placeholder="0表示使用全局默认值"
+            v-model="batchAddForm.nodeCount"
+            :min="1"
+            :max="100"
+            placeholder="请输入要创建的节点数量"
             style="width: 100%"
           />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为30秒）</div>
-          </template>
         </a-form-item>
 
-        <a-form-item field="heartbeatInterval" label="心跳间隔（秒）">
-          <a-input-number
-            v-model="batchAddForm.heartbeatInterval"
-            :min="0"
-            :max="300"
-            placeholder="0表示使用全局默认值"
-            style="width: 100%"
-          />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为10秒）</div>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="probeEnabled" label="启用探测">
-          <a-switch v-model="batchAddForm.probeEnabled" />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">是否启用节点健康检查探测</div>
-          </template>
-        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -527,6 +457,8 @@
     <!-- 云账户管理弹窗 -->
     <CloudAccountManage v-model="cloudAccountManageVisible" @refresh="loadCloudAccounts" />
 
+    <SCFSyncDialog v-model:visible="scfSyncVisible" :accounts="cloudAccountOptions" @refresh="loadData" />
+
     <!-- 代码包版本管理弹窗 -->
     <FunctionPackageManage
       v-model="functionPackageManageVisible"
@@ -554,6 +486,34 @@
               {{ getNodeTypeLabel(selectedNodeDetail.node_type) }}
             </a-tag>
           </a-descriptions-item>
+          <a-descriptions-item label="触发方式">
+            {{ getTriggerTypeLabel(selectedNodeDetail.trigger_type) }}
+          </a-descriptions-item>
+          <template v-if="selectedNodeDetail.trigger_type === 'timer'">
+            <a-descriptions-item label="Timer 状态">
+              <a-tag size="small" :color="timerAvailableColor(selectedTimerMetadata.timer_available_status)">
+                {{ timerAvailableLabel(selectedTimerMetadata.timer_available_status) }}
+              </a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="Timer Cron">
+              {{ timerMetadataText("timer_cron") }}
+            </a-descriptions-item>
+            <a-descriptions-item label="Timer 开关">
+              {{ timerEnabledLabel() }}
+            </a-descriptions-item>
+            <a-descriptions-item label="分配标的数">
+              {{ timerMetadataText("assignment_count") }}
+            </a-descriptions-item>
+            <a-descriptions-item label="任务指纹">
+              {{ timerMetadataText("assignment_hash") }}
+            </a-descriptions-item>
+            <a-descriptions-item label="DNS 指纹">
+              {{ timerMetadataText("dns_hash") }}
+            </a-descriptions-item>
+            <a-descriptions-item label="最近协调时间" :span="2">
+              {{ timerDateTimeText() }}
+            </a-descriptions-item>
+          </template>
           <a-descriptions-item label="地区">
             {{ getRegionName(selectedNodeDetail.region) }}
           </a-descriptions-item>
@@ -565,33 +525,6 @@
           </a-descriptions-item>
           <a-descriptions-item label="代码包版本">
             {{ selectedNodeDetail.package_version || "-" }}
-          </a-descriptions-item>
-          <a-descriptions-item label="容量">
-            {{ selectedNodeDetail.capacity || "-" }}
-          </a-descriptions-item>
-          <a-descriptions-item label="当前负载">
-            {{ selectedNodeDetail.current_load || "-" }}
-          </a-descriptions-item>
-          <a-descriptions-item label="状态">
-            <a-tag bordered size="small" :color="getStatusColor(selectedNodeDetail.status)">
-              {{ getStatusText(selectedNodeDetail.status) }}
-            </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="超时阈值">
-            {{ selectedNodeDetail.timeout_threshold || 0 }}秒
-            <span v-if="selectedNodeDetail.timeout_threshold === 0" style="color: #86909c">（使用全局默认值）</span>
-          </a-descriptions-item>
-          <a-descriptions-item label="心跳间隔">
-            {{ selectedNodeDetail.heartbeat_interval || 0 }}秒
-            <span v-if="selectedNodeDetail.heartbeat_interval === 0" style="color: #86909c">（使用全局默认值）</span>
-          </a-descriptions-item>
-          <a-descriptions-item label="启用探测">
-            <a-tag bordered size="small" :color="selectedNodeDetail.probe_enabled ? 'green' : 'red'">
-              {{ selectedNodeDetail.probe_enabled ? "是" : "否" }}
-            </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="CLS 主题 ID">
-            {{ selectedNodeDetail.cls_topic_id || "-" }}
           </a-descriptions-item>
           <a-descriptions-item label="元数据" :span="2">
             <div
@@ -699,66 +632,12 @@
       </div>
     </a-modal>
 
-    <!-- 节点编辑弹窗 -->
-    <a-modal
-      v-model:visible="editNodeVisible"
-      title="编辑云函数节点"
-      :width="600"
-      :mask-closable="false"
-      @cancel="handleEditNodeCancel"
-      @ok="handleEditNodeOk"
-    >
-      <a-form :model="editNodeForm" layout="vertical">
-        <a-form-item label="节点信息">
-          <a-alert type="info" style="margin-bottom: var(--moox-space-2)">
-            <div><strong>节点ID：</strong>{{ editNodeForm.nodeId }}</div>
-            <div><strong>命名空间：</strong>{{ editNodeForm.namespace }}</div>
-            <div><strong>地区：</strong>{{ editNodeForm.region }}</div>
-          </a-alert>
-        </a-form-item>
-
-        <!-- 心跳配置 -->
-        <a-divider orientation="left">心跳配置</a-divider>
-
-        <a-form-item field="timeoutThreshold" label="超时阈值（秒）">
-          <a-input-number
-            v-model="editNodeForm.timeoutThreshold"
-            :min="0"
-            :max="3600"
-            placeholder="0表示使用全局默认值"
-            style="width: 100%"
-          />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为30秒）</div>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="heartbeatInterval" label="心跳间隔（秒）">
-          <a-input-number
-            v-model="editNodeForm.heartbeatInterval"
-            :min="0"
-            :max="300"
-            placeholder="0表示使用全局默认值"
-            style="width: 100%"
-          />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为10秒）</div>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="probeEnabled" label="启用探测">
-          <a-switch v-model="editNodeForm.probeEnabled" />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">是否启用节点健康检查探测</div>
-          </template>
-        </a-form-item>
-      </a-form>
-    </a-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -768,35 +647,41 @@ import {
   type FunctionPackage
 } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
-import { batchDeleteNodes, batchDeployNodes, getNodeList, listCloudRegions, updateNode } from "@/api/cloud-node";
+import {
+  batchDeleteNodes,
+  getNodeBatchChange,
+  getNodeList,
+  listCloudRegions,
+  submitDeployNodes,
+  type BatchDeleteNodesRequest,
+  type GetNodeBatchChangeResponse,
+  type SubmitNodeBatchResponse
+} from "@/api/cloud-node";
 import { useSpaceStore } from "@/store/modules/space";
-import { BatchChangeStatus } from "@/utils/cloud-node-batch-change";
-import type { BatchChangeStatusResponse } from "@/utils/cloud-node-batch-change";
+import { getNodeBatchJobId, setNodeBatchJobId } from "@/utils/cloud-node-batch-change";
 import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
+import SCFSyncDialog from "./scf-sync-dialog.vue";
 import CloudNodeTable from "./components/cloud-node-table.vue";
-import { makeCompletedBatchChangeStatus, submitCloudNodeBatchChange } from "./cloud-node-batch-service";
+import { submitCloudNodeBatchChange } from "./cloud-node-batch-service";
+import { createCloudNodeBatchPoller } from "./cloud-node-batch-poller";
+import { captureDeleteSelection, updateDeleteSelection, type CloudNodeDeleteSnapshotMap } from "./delete-selection";
 import {
-  computeAggregateStatus,
   formatDateTime,
   formatFileSize,
-  formatMetadata,
-  formatTime,
-  getBatchChangeTypeText,
-  getCollectorColor,
-  getCollectorName,
+	formatMetadata,
+	formatTime,
+	getBatchChangeTypeText,
   getNodeTypeColor,
+  getTriggerTypeLabel,
   getNodeTypeLabel,
   getPackageStatusColor,
   getPackageStatusLabel,
   getPackageTypeColor,
   getPackageTypeLabel,
   getProviderName,
-  getStatusColor,
-  getStatusText,
   normalizeCloudNodes,
-  normalizeSupportedWorkloads,
-  type BatchChangeViewStatus,
+  parseMetadata,
   type BatchPlanItem,
   type CloudNode,
   type RegionInfo
@@ -805,24 +690,28 @@ import {
 // 状态管理
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
+const route = useRoute();
+const router = useRouter();
 const loading = ref(false);
 const batchChangeProcessing = ref(false);
-const currentBatchChangeStatus = ref<BatchChangeStatusResponse | null>(null);
-const batchChangeCompleteHandled = ref(false); // 防止重复处理提交完成
+const batchPollingTimedOut = ref(false);
+const currentBatchChangeStatus = ref<GetNodeBatchChangeResponse | null>(null);
+const batchPoller = createCloudNodeBatchPoller(getNodeBatchChange);
 
 const form = reactive({
   cloudAccountId: "",
   nodeId: "",
   region: "",
-  nodeType: "",
-  status: ""
+  nodeType: ""
 });
 
 // 数据列表
 const cloudNodeList = ref<CloudNode[]>([]);
 const selectedKeys = ref<string[]>([]);
+const selectedNodeSnapshots = ref<CloudNodeDeleteSnapshotMap>({});
 const cloudAccountOptions = ref<CloudAccount[]>([]);
 const regionOptions = ref<RegionInfo[]>([]); // 地区选项
+const scfSyncVisible = ref(false);
 const REGION_UNLIMITED = "all";
 const tagOptions = ["国内", "海外"];
 
@@ -831,6 +720,7 @@ const batchAddVisible = ref(false);
 const batchAddForm = reactive({
   cloudAccountId: "",
   nodeType: "scf-event", // 节点类型，默认为事件型云函数
+  triggerType: "timer",
   runtime: "Go1", // 运行时环境，默认Go1
   handler: "main",
   region: "ap-guangzhou",
@@ -838,10 +728,6 @@ const batchAddForm = reactive({
   packageId: "", // 代码包版本ID
   nodeCount: 5,
   namespace: "",
-  // 新增心跳配置字段
-  timeoutThreshold: 0, // 超时阈值（秒），0表示使用全局默认值
-  heartbeatInterval: 0, // 心跳间隔（秒），0表示使用全局默认值
-  probeEnabled: true, // 是否启用探测，默认启用
   config: {} as Record<string, string>,
   environment: {} as Record<string, string>
 });
@@ -852,7 +738,6 @@ const batchPlanItems = ref<BatchPlanItem[]>([]);
 const batchPlanNotice = ref("");
 const batchPlanRequested = ref(0);
 const batchPlanTag = ref("");
-const batchChangeStatuses = ref<BatchChangeViewStatus[]>([]);
 
 // 批量部署相关
 const batchDeployVisible = ref(false);
@@ -927,19 +812,21 @@ const currentPackageType = computed(() => 1);
 
 // 根据路由路径判断默认的节点类型
 const defaultNodeType = computed(() => {
-  return ""; // 搜索框节点类型不设默认值
+  // Collector cloud-node operations create event SCFs by default. The list
+  // filter remains unselected so it can still show every node type.
+  return "scf-event";
 });
 
 // 采集 SCF runtime 默认使用 Go1。
 const defaultRuntime = computed(() => "Go1");
 
-// 当前页面的业务类型固定为数据采集。
-const currentBizType = computed(() => "data_collector");
+// Short-lived market-fetch SCF nodes are registered under this shared type.
+const currentBizType = computed(() => "market_fetcher");
 
 // 生命周期钩子
 onMounted(async () => {
   // 根据路由设置默认的节点类型筛选条件
-  form.nodeType = defaultNodeType.value;
+  form.nodeType = "";
 
   await spaceStore.loadSpaces();
   if (selectedSpaceId.value) {
@@ -949,12 +836,23 @@ onMounted(async () => {
   }
   await loadCloudAccounts();
   await loadRegions(); // 加载地区列表
+  const jobId = getNodeBatchJobId(route.query);
+  if (jobId) {
+    await startBatchPolling(jobId);
+  }
 });
 
 watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   if (spaceId === oldSpaceId) return;
+  batchPoller.stop();
+  currentBatchChangeStatus.value = null;
+  batchChangeProcessing.value = false;
+  batchPollingTimedOut.value = false;
+  if (getNodeBatchJobId(route.query)) {
+    await replaceRouteJobId();
+  }
   pagination.value.current = 1;
-  selectedKeys.value = [];
+  clearDeleteSelection();
   if (!spaceId) {
     cloudNodeList.value = [];
     pagination.value.total = 0;
@@ -963,102 +861,105 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   await loadData();
 });
 
+watch(
+  () => batchAddForm.nodeType,
+  nodeType => {
+    batchAddForm.triggerType = nodeType === "scf-event" ? batchAddForm.triggerType || "timer" : "";
+  }
+);
+
 onBeforeUnmount(() => {
-  batchChangeStatuses.value = [];
+  batchPoller.dispose();
   currentBatchChangeStatus.value = null;
 });
 
-// 批量变更完成处理
-const handleBatchChangeComplete = async (data: BatchChangeStatusResponse) => {
-  batchChangeStatuses.value = [];
+const replaceRouteJobId = (jobId?: string) => router.replace({ query: setNodeBatchJobId(route.query, jobId) });
 
-  // 防止重复处理
-  if (batchChangeCompleteHandled.value) {
+const showBatchResult = (data: GetNodeBatchChangeResponse) => {
+  if (data.job.failed_count === 0) {
+    Message.success(`${getBatchChangeTypeText(data.job.operation)}成功！共处理 ${data.job.total_count} 个节点`);
     return;
   }
-  batchChangeCompleteHandled.value = true;
 
-  // 先更新状态为完成状态，让用户看到100%的进度
-  currentBatchChangeStatus.value = data;
+  const failedItems = data.items.filter(item => item.status === "NODE_BATCH_ITEM_STATUS_FAILED");
+  const content = () =>
+    h("div", { style: { maxHeight: "400px", overflowY: "auto" } }, [
+      h("div", { style: { marginBottom: "var(--moox-space-3)" } }, [
+        h("div", `变更类型：${getBatchChangeTypeText(data.job.operation)}`),
+        h("div", `总数量：${data.job.total_count}`),
+        h("div", `成功数量：${data.job.success_count}`),
+        h("div", { style: { color: "#ff4d4f" } }, `失败数量：${data.job.failed_count}`)
+      ]),
+      ...failedItems.map(item =>
+        h(
+          "div",
+          {
+            key: item.item_id,
+            style: {
+              marginBottom: "var(--moox-space-3)",
+              padding: "var(--moox-space-2)",
+              backgroundColor: "#fff2f0",
+              borderRadius: "4px",
+              border: "1px solid #ffccc7"
+            }
+          },
+          [
+            h("div", { style: { fontWeight: "bold" } }, item.node_id || item.item_id),
+            h("div", { style: { color: "#ff4d4f", fontSize: "12px" } }, item.error_message || "未知错误")
+          ]
+        )
+      )
+    ]);
 
-  // 延迟1秒后再清理
-  setTimeout(async () => {
-    batchChangeProcessing.value = false;
-    currentBatchChangeStatus.value = null;
+  Modal.error({
+    title: data.job.status === "NODE_BATCH_STATUS_PARTIAL" ? "批量变更部分失败" : "批量变更失败",
+    content,
+    width: 700,
+    maskClosable: false
+  });
+};
 
-    // 清空选中项
-    selectedKeys.value = [];
-    // 刷新数据
-    await loadData();
-  }, 1000);
-
-  // 延迟显示结果弹窗，让用户先看到完成的进度
-  setTimeout(() => {
-    // 检查是否有失败项（通过failed_count判断）
-    if (data.failed_count > 0) {
-      // 有失败项，使用 Modal.error 显示失败详情
-      const failedItems = data.failed_items || [];
-
-      // 创建 Vue 渲染函数
-      const content = () =>
-        h("div", { style: { maxHeight: "400px", overflowY: "auto" } }, [
-          h("div", { style: { marginBottom: "var(--moox-space-3)" } }, [
-            h("div", `变更类型：${getBatchChangeTypeText(data.batch_change_type)}`),
-            h("div", `总数量：${data.total_count}`),
-            h("div", `成功数量：${data.success_count}`),
-            h("div", { style: { color: "#ff4d4f" } }, `失败数量：${data.failed_count}`)
-          ]),
-          failedItems.length > 0 &&
-            h("div", { style: { marginTop: "var(--moox-space-4)" } }, [
-              h("strong", "失败详情："),
-              h(
-                "div",
-                { style: { marginTop: "var(--moox-space-2)" } },
-                failedItems.map((item: any, index: number) =>
-                  h(
-                    "div",
-                    {
-                      key: index,
-                      style: {
-                        marginBottom: "var(--moox-space-3)",
-                        padding: "var(--moox-space-2)",
-                        backgroundColor: "#fff2f0",
-                        borderRadius: "4px",
-                        border: "1px solid #ffccc7"
-                      }
-                    },
-                    [
-                      h(
-                        "div",
-                        { style: { fontWeight: "bold", marginBottom: "var(--moox-space-1)" } },
-                        item.item_name || item.item_id
-                      ),
-                      h("div", { style: { color: "#ff4d4f", fontSize: "12px" } }, item.error_message || "未知错误")
-                    ]
-                  )
-                )
-              )
-            ])
-        ]);
-
-      Modal.error({
-        title: "批量变更失败",
-        content,
-        width: 700,
-        maskClosable: false
-      });
-    } else {
-      // 全部成功，显示成功提示
-      Message.success(`${getBatchChangeTypeText(data.batch_change_type)}成功！共处理 ${data.total_count} 个节点`);
+const startBatchPolling = async (jobId: string) => {
+  batchChangeProcessing.value = true;
+  batchPollingTimedOut.value = false;
+  await batchPoller.start(jobId, {
+    onUpdate: data => {
+      currentBatchChangeStatus.value = data;
+    },
+    onTerminal: async data => {
+      currentBatchChangeStatus.value = data;
+      batchChangeProcessing.value = false;
+      batchPollingTimedOut.value = false;
+      clearDeleteSelection();
+      await replaceRouteJobId();
+      await loadData();
+      showBatchResult(data);
+    },
+    onError: error => {
+      console.warn("查询云节点批量变更进度失败，将继续重试:", error);
+    },
+    onPollingTimeout: () => {
+      batchChangeProcessing.value = false;
+      batchPollingTimedOut.value = true;
+      Message.warning("已停止自动查询任务进度，刷新页面可继续查询");
     }
-  }, 1200); // 稍微延迟比进度条消失时间长一点，避免冲突
+  });
+};
+
+const beginBatchPolling = async (response: SubmitNodeBatchResponse) => {
+  if (!response.job_id) throw new Error("cloudnode 未返回 job_id");
+  currentBatchChangeStatus.value = null;
+  await replaceRouteJobId(response.job_id);
+  await startBatchPolling(response.job_id);
 };
 
 // 关闭批量变更提示
 const handleCloseBatchChangeAlert = () => {
-  batchChangeStatuses.value = [];
+  batchPoller.stop();
   currentBatchChangeStatus.value = null;
   batchChangeProcessing.value = false;
+  batchPollingTimedOut.value = false;
+  void replaceRouteJobId();
 };
 
 // 批量新增
@@ -1077,15 +978,13 @@ const onBatchAdd = async () => {
   // 重置表单
   batchAddForm.cloudAccountId = cloudAccountOptions.value[0]?.account_id || "";
   batchAddForm.nodeType = defaultNodeType.value; // 根据路由设置默认节点类型
+  batchAddForm.triggerType = batchAddForm.nodeType === "scf-event" ? "timer" : "";
   batchAddForm.runtime = defaultRuntime.value; // 根据路由设置默认运行时
   batchAddForm.region = "ap-hongkong";
   batchAddForm.tag = getRegionTag(batchAddForm.region) || "海外";
   batchAddForm.packageId = "";
   batchAddForm.nodeCount = 5;
   batchAddForm.namespace = "";
-  batchAddForm.timeoutThreshold = 0;
-  batchAddForm.heartbeatInterval = 0;
-  batchAddForm.probeEnabled = true;
 
   // 加载可用的代码包列表
   await loadAvailablePackagesForCreation();
@@ -1110,6 +1009,10 @@ const handleBatchAddOk = async () => {
     Message.warning("请选择节点类型");
     return;
   }
+  if (batchAddForm.nodeType === "scf-event" && !["timer", "invoke"].includes(batchAddForm.triggerType)) {
+    Message.warning("请选择云函数触发方式");
+    return;
+  }
   if (!batchAddForm.runtime) {
     Message.warning("请选择运行时环境");
     return;
@@ -1128,6 +1031,10 @@ const handleBatchAddOk = async () => {
   }
   if (!batchAddForm.nodeCount || batchAddForm.nodeCount < 1) {
     Message.warning("请输入有效的节点数量");
+    return;
+  }
+  if (batchAddForm.nodeCount > 100) {
+    Message.warning("一次最多创建 100 个云节点");
     return;
   }
 
@@ -1151,6 +1058,7 @@ const buildCreateNodeBatchChange = (region: string, index: number) => ({
     cloud_account_id: batchAddForm.cloudAccountId,
     namespace: batchAddForm.namespace || undefined,
     node_type: batchAddForm.nodeType, // 使用表单中选择的节点类型
+    trigger_type: batchAddForm.nodeType === "scf-event" ? batchAddForm.triggerType : undefined,
     runtime: batchAddForm.runtime, // 运行时环境
     handler: batchAddForm.handler || "main",
     biz_type: currentBizType.value, // 根据路由设置业务类型
@@ -1159,13 +1067,7 @@ const buildCreateNodeBatchChange = (region: string, index: number) => ({
     package_id: batchAddForm.packageId,
     config: optionalRecord(batchAddForm.config),
     environment: optionalRecord(batchAddForm.environment),
-    version: "1.0.0",
-    capacity: "100",
-    metadata: JSON.stringify({ env: "prod", index }),
-    // 新增心跳配置字段
-    timeout_threshold: batchAddForm.timeoutThreshold,
-    heartbeat_interval: batchAddForm.heartbeatInterval,
-    probe_enabled: batchAddForm.probeEnabled
+    metadata: JSON.stringify({ env: "prod", index })
   }
 });
 
@@ -1187,86 +1089,24 @@ const buildBatchChangesFromPlan = (items: BatchPlanItem[]) => {
   return batchChanges;
 };
 
-const chunkTasks = <T,>(items: T[], size: number): T[][] => {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    chunks.push(items.slice(i, i + size));
-  }
-  return chunks;
-};
-
 const executeBatchAddChanges = async (batchChanges: Array<{ batchChangeType: string; requestPayload: any }>) => {
   if (batchChanges.length === 0) {
     Message.warning("没有可执行的批量变更");
     return;
   }
-
-  const chunks = chunkTasks(batchChanges, 100);
-
-  batchChangeProcessing.value = true;
-  batchChangeCompleteHandled.value = false;
-  currentBatchChangeStatus.value = null;
-
-  const initialStatuses: BatchChangeViewStatus[] = chunks.map((chunk, index) => ({
-    batchIndex: index,
-    batch_id: "",
-    batch_change_type: "CREATE_NODE",
-    batch_change_status: BatchChangeStatus.PROCESSING,
-    total_count: chunk.length,
-    success_count: 0,
-    failed_count: 0,
-    progress: 0,
-    created_at: new Date().toISOString()
-  }));
-  batchChangeStatuses.value = initialStatuses;
-
-  const batchIds: string[] = [];
-
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i];
-    try {
-      const batchId = await submitCloudNodeBatchChange(chunk);
-      batchIds.push(batchId);
-      batchChangeStatuses.value = batchChangeStatuses.value.map(item =>
-        item.batchIndex === i ? { ...item, batch_id: batchId } : item
-      );
-    } catch (error: any) {
-      batchChangeStatuses.value = batchChangeStatuses.value.map(item =>
-        item.batchIndex === i
-          ? {
-              ...item,
-              batch_change_status: BatchChangeStatus.FAILED,
-              failed_count: item.total_count,
-              progress: 100,
-              error_message: error?.message || "创建批量变更失败"
-            }
-          : item
-      );
-    }
-  }
-
-  if (batchIds.length === 0) {
-    const finalStatus = computeAggregateStatus(batchChangeStatuses.value);
-    batchChangeStatuses.value = [];
-    handleBatchChangeComplete(finalStatus);
+  if (batchChanges.length > 100) {
+    Message.warning("一次最多创建 100 个云节点");
     return;
   }
 
-  batchChangeStatuses.value = batchChangeStatuses.value.map(item =>
-    item.batch_id
-      ? {
-          ...item,
-          batch_change_status: BatchChangeStatus.SUCCESS,
-          success_count: item.total_count,
-          failed_count: 0,
-          progress: 100,
-          completed_time: new Date().toISOString()
-        }
-      : item
-  );
-  const finalStatus = computeAggregateStatus(batchChangeStatuses.value);
-  batchChangeStatuses.value = [];
-  handleBatchChangeComplete(finalStatus);
+  try {
+    batchChangeProcessing.value = true;
+    const response = await submitCloudNodeBatchChange(batchChanges);
+    await beginBatchPolling(response);
+  } catch (error: any) {
+    batchChangeProcessing.value = false;
+    Message.error(error?.message || "创建批量变更失败");
+  }
 };
 
 const executeBatchAddDirect = async () => {
@@ -1496,30 +1336,40 @@ const batchDelete = () => {
     return;
   }
 
+  const nodeIds = [...selectedKeys.value];
+  let request: BatchDeleteNodesRequest;
+  try {
+    request = {
+      space_id: selectedSpaceId.value ?? "",
+      node_ids: nodeIds,
+      node_snapshots: captureDeleteSelection(nodeIds, selectedNodeSnapshots.value)
+    };
+  } catch (error) {
+    Message.warning(error instanceof Error ? error.message : "节点身份快照不完整，请刷新后重新选择");
+    return;
+  }
+
   Modal.warning({
     title: "批量删除确认",
     content: `确定要删除选中的 ${selectedKeys.value.length} 个节点吗？删除后将无法恢复。`,
     hideCancel: false,
     onOk: async () => {
-      await executeBatchDelete();
+      await executeBatchDelete(request);
     }
   });
 };
 
 // 执行批量删除
-const executeBatchDelete = async () => {
+const executeBatchDelete = async (request: BatchDeleteNodesRequest) => {
   try {
-    const total = selectedKeys.value.length;
-    const rsp = await batchDeleteNodes({ node_ids: selectedKeys.value });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-
-    batchChangeProcessing.value = true;
-    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
-    completeCloudNodeBatchChange(rsp.batch_id, "DELETE_NODE", total);
-  } catch (error) {
-    console.error("创建批量删除变更失败:", error);
+    const total = request.node_ids.length;
+    const rsp = await batchDeleteNodes(request);
+    clearDeleteSelection();
+    await loadData();
+    Message.success(`已删除 ${rsp.processed_count} / ${total} 个节点`);
+  } catch (error: any) {
+    console.error("批量删除失败:", error);
+    Message.error("批量删除失败: " + (error?.message || "未知错误"));
   }
 };
 
@@ -1538,7 +1388,6 @@ const loadData = async (showEmptyTip = false) => {
       region: form.region,
       node_type: form.nodeType,
       biz_type: currentBizType.value, // 根据路由添加业务类型过滤
-      status: form.status,
       page: pagination.value.current,
       page_size: pagination.value.pageSize
     });
@@ -1566,6 +1415,17 @@ const loadCloudAccounts = async () => {
     console.error("加载云账户失败:", error);
     Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署");
   }
+};
+
+const onSCFSyncOpen = async () => {
+  if (cloudAccountOptions.value.length === 0) {
+    await loadCloudAccounts();
+  }
+  if (cloudAccountOptions.value.length === 0) {
+    Message.warning("请先配置云账户");
+    return;
+  }
+  scfSyncVisible.value = true;
 };
 
 // 加载地区列表
@@ -1615,12 +1475,6 @@ watch(
   }
 );
 
-const completeCloudNodeBatchChange = (batchId: string, batchChangeType: string, total: number) => {
-  handleBatchChangeComplete(makeCompletedBatchChangeStatus(batchId, batchChangeType, total));
-};
-
-const getSupportedWorkloads = (value: string[] | string | undefined): string[] => normalizeSupportedWorkloads(value);
-
 // 分页相关（使用后端分页）
 const onPageChange = (page: number) => {
   pagination.value.current = page;
@@ -1644,8 +1498,14 @@ const select = (_rowKeys: string[], rowKey: string) => {
   const index = selectedKeys.value.indexOf(rowKey);
   if (index > -1) {
     selectedKeys.value.splice(index, 1);
+    const row = cloudNodeList.value.find(node => node.node_id === rowKey);
+    if (row) selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, [row], false);
   } else {
-    selectedKeys.value.push(rowKey);
+    const row = cloudNodeList.value.find(node => node.node_id === rowKey);
+    if (row) {
+      selectedKeys.value.push(rowKey);
+      selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, [row], true);
+    }
   }
 };
 
@@ -1657,24 +1517,31 @@ const selectAll = (checked: boolean) => {
         selectedKeys.value.push(key);
       }
     });
+    selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, cloudNodeList.value, true);
   } else {
     const currentPageKeys = cloudNodeList.value.map(item => item.node_id);
     selectedKeys.value = selectedKeys.value.filter(key => !currentPageKeys.includes(key));
+    selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, cloudNodeList.value, false);
   }
+};
+
+const clearDeleteSelection = () => {
+  selectedKeys.value = [];
+  selectedNodeSnapshots.value = {};
 };
 
 // 单个操作（保留原有实现）
 
 const onDelete = async (record: CloudNode) => {
   try {
-    const rsp = await batchDeleteNodes({ node_ids: [record.node_id] });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-
-    batchChangeProcessing.value = true;
-    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
-    completeCloudNodeBatchChange(rsp.batch_id, "DELETE_NODE", 1);
+    const snapshot = updateDeleteSelection({}, [record], true);
+    const rsp = await batchDeleteNodes({
+      space_id: selectedSpaceId.value ?? "",
+      node_ids: [record.node_id],
+      node_snapshots: captureDeleteSelection([record.node_id], snapshot)
+    });
+    await loadData();
+    Message.success(rsp.processed_count > 0 ? "删除成功" : "节点无需删除");
   } catch (error: any) {
     Message.error("删除失败: " + (error?.message || "未知错误"));
   }
@@ -1702,22 +1569,33 @@ const onFunctionPackageManage = () => {
 // 节点详情
 const nodeDetailVisible = ref(false);
 const selectedNodeDetail = ref<CloudNode | null>(null);
+const selectedTimerMetadata = computed(() => parseMetadata(selectedNodeDetail.value?.metadata));
+const timerMetadataText = (key: string) => {
+  const value = selectedTimerMetadata.value[key];
+  if (value === undefined || value === null || value === "") return "-";
+  return String(value);
+};
+const timerEnabledLabel = () => {
+  const value = timerMetadataText("timer_enabled");
+  if (value === "-") return "未知";
+  return value === "true" ? "已开启" : "已关闭";
+};
+const timerDateTimeText = () => {
+  const value = timerMetadataText("runtime_config_reconciled_at");
+  return value === "-" ? "-" : formatDateTime(value);
+};
+const timerAvailableLabel = (value: unknown) => {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "available") return "可用";
+  if (normalized === "") return "未知";
+  return String(value);
+};
+const timerAvailableColor = (value: unknown) => (String(value || "").toLowerCase() === "available" ? "green" : "orange");
 
 // 代码包详情
 const packageDetailVisible = ref(false);
 const packageDetail = ref<FunctionPackage | null>(null);
 const downloadProgress = ref<Record<string, number>>({});
-
-// 节点编辑
-const editNodeVisible = ref(false);
-const editNodeForm = reactive({
-  nodeId: "",
-  namespace: "",
-  region: "",
-  timeoutThreshold: 0,
-  heartbeatInterval: 0,
-  probeEnabled: true
-});
 
 // 显示代码包详情
 const onShowPackageDetail = async (record: CloudNode) => {
@@ -1820,23 +1698,18 @@ const handleBatchDeployOk = async () => {
 // 执行批量部署
 const executeBatchDeploy = async () => {
   try {
-    const total = selectedKeys.value.length;
-    const rsp = await batchDeployNodes({
+    batchChangeProcessing.value = true;
+    const response = await submitDeployNodes({
       node_ids: selectedKeys.value,
       package_id: batchDeployForm.selectedPackageId
     });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-
-    batchChangeProcessing.value = true;
-    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
-    completeCloudNodeBatchChange(rsp.batch_id, "DEPLOY_NODE", total);
+    await beginBatchPolling(response);
 
     // 清理表单
     batchDeployForm.selectedPackageId = "";
     batchDeployForm.deployConfig = {};
   } catch (error: any) {
+    batchChangeProcessing.value = false;
     console.error("创建批量部署变更失败:", error);
     Message.error("创建批量部署变更失败: " + (error?.message || "未知错误"));
   }
@@ -1898,76 +1771,22 @@ const handleSingleDeployOk = async () => {
   singleDeployVisible.value = false;
 
   try {
-    const rsp = await batchDeployNodes({
+    batchChangeProcessing.value = true;
+    const response = await submitDeployNodes({
       node_ids: [singleDeployForm.nodeId],
       package_id: singleDeployForm.selectedPackageId
     });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-
-    batchChangeProcessing.value = true;
-    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
-    completeCloudNodeBatchChange(rsp.batch_id, "DEPLOY_NODE", 1);
+    await beginBatchPolling(response);
 
     // 清理表单
     singleDeployForm.selectedPackageId = "";
   } catch (error: any) {
+    batchChangeProcessing.value = false;
     console.error("创建部署变更失败:", error);
     Message.error("创建部署变更失败: " + (error?.message || "未知错误"));
   }
 };
 
-// 编辑节点
-const onEdit = (record: CloudNode) => {
-  // 填充表单
-  editNodeForm.nodeId = record.node_id;
-  editNodeForm.namespace = record.namespace;
-  editNodeForm.region = getRegionName(record.region);
-  editNodeForm.timeoutThreshold = record.timeout_threshold || 0;
-  editNodeForm.heartbeatInterval = record.heartbeat_interval || 0;
-  editNodeForm.probeEnabled = record.probe_enabled;
-
-  // 打开弹窗
-  editNodeVisible.value = true;
-};
-
-// 取消编辑
-const handleEditNodeCancel = () => {
-  editNodeVisible.value = false;
-  // 重置表单
-  editNodeForm.nodeId = "";
-  editNodeForm.namespace = "";
-  editNodeForm.region = "";
-  editNodeForm.timeoutThreshold = 0;
-  editNodeForm.heartbeatInterval = 0;
-  editNodeForm.probeEnabled = true;
-};
-
-// 确认编辑
-const handleEditNodeOk = async () => {
-  try {
-    await updateNode({
-      node_id: editNodeForm.nodeId,
-      timeout_threshold: editNodeForm.timeoutThreshold,
-      heartbeat_interval: editNodeForm.heartbeatInterval,
-      probe_enabled: editNodeForm.probeEnabled,
-      metadata: {
-        timeout_threshold: editNodeForm.timeoutThreshold,
-        heartbeat_interval: editNodeForm.heartbeatInterval,
-        probe_enabled: editNodeForm.probeEnabled
-      }
-    });
-
-    Message.success("节点配置更新成功");
-    editNodeVisible.value = false;
-    handleEditNodeCancel();
-    await loadData();
-  } catch (error: any) {
-    console.error("更新节点配置失败:", error);
-    Message.error("更新节点配置失败: " + (error?.message || "未知错误"));
-  }
-};
 </script>
 
 <style scoped src="./cloud-node.scss"></style>

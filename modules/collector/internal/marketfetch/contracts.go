@@ -1,0 +1,289 @@
+package marketfetch
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/clsreporter"
+)
+
+const (
+	DefaultConcurrency = 5
+	MaxConcurrency     = 64
+	// MaxRealtimeItems bounds the work accepted by one short-lived SCF. The
+	// assignment planner keeps each non-stock function at or below this limit.
+	MaxRealtimeItems = 40
+	// MaxRealtimeRows is the fixed number of latest K-lines fetched for each
+	// symbol in one realtime SCF request.
+	MaxRealtimeRows = 10
+)
+
+// Request is the JSON payload accepted by a market_fetch SCF invocation.
+// Fetching and persistence are implemented by the common market pipelines;
+// this type only carries the bounded invocation contract.
+type Request struct {
+	BatchID string `json:"batch_id"`
+	// SyncPointID is the stable logical catchup fence identity. Retry batches
+	// get a new BatchID for outbox/write idempotency, but keep the same fence.
+	SyncPointID         string                           `json:"sync_point_id,omitempty"`
+	ScheduleID          string                           `json:"schedule_id,omitempty"`
+	BatchKind           domain.BatchKind                 `json:"batch_kind"`
+	SpaceID             string                           `json:"space_id"`
+	MarketID            string                           `json:"market_id,omitempty"`
+	InstrumentType      string                           `json:"instrument_type,omitempty"`
+	DatasetID           string                           `json:"dataset_id,omitempty"`
+	Frequency           string                           `json:"frequency,omitempty"`
+	Provider            string                           `json:"provider"`
+	RouteProvider       string                           `json:"route_provider,omitempty"`
+	SourceID            string                           `json:"source_id,omitempty"`
+	MarketType          string                           `json:"market_type"`
+	Region              string                           `json:"region"`
+	NodeID              string                           `json:"node_id"`
+	FunctionName        string                           `json:"function_name,omitempty"`
+	RequestID           string                           `json:"request_id,omitempty"`
+	ShardIndex          int                              `json:"shard_index,omitempty"`
+	GroupID             int                              `json:"group_id,omitempty"`
+	GroupCount          int                              `json:"group_count,omitempty"`
+	BindingHash         string                           `json:"binding_hash,omitempty"`
+	RouteVersion        string                           `json:"route_version,omitempty"`
+	RequirePeriodCommit bool                             `json:"require_period_commit,omitempty"`
+	RunID               string                           `json:"-"`
+	Concurrency         int                              `json:"concurrency,omitempty"`
+	DNSRoutes           map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
+	Items               []domain.CollectionItem          `json:"items"`
+	// Targets are the destinations attached to a shared acquisition instance.
+	// When present, one fetched result is fanned out to every target.
+	Targets []domain.WriteTarget `json:"targets,omitempty"`
+}
+
+func bindRequestTargetPeriodIdentity(request *Request) {
+	if request == nil {
+		return
+	}
+	for index := range request.Items {
+		request.Items[index].RequirePeriodCommit = request.RequirePeriodCommit
+	}
+	if !request.RequirePeriodCommit || len(request.Targets) == 0 {
+		return
+	}
+	itemByInstance := make(map[string]domain.CollectionItem, len(request.Items))
+	for _, item := range request.Items {
+		itemByInstance[strings.TrimSpace(item.InstanceID)] = item
+	}
+	for index := range request.Targets {
+		target := &request.Targets[index]
+		item, ok := itemByInstance[strings.TrimSpace(target.InstanceID)]
+		if !ok {
+			continue
+		}
+		if target.SpaceID == "" {
+			target.SpaceID = request.SpaceID
+		}
+		if target.Frequency == "" {
+			target.Frequency = request.Frequency
+		}
+		if target.TargetDataTime == "" {
+			target.TargetDataTime = item.TargetDataTime
+		}
+	}
+}
+
+func (r *Request) validate() error {
+	if r == nil {
+		return fmt.Errorf("request is required")
+	}
+	if strings.TrimSpace(r.BatchID) == "" || strings.TrimSpace(r.SpaceID) == "" {
+		return fmt.Errorf("batch_id and space_id are required")
+	}
+	if len(r.Items) == 0 {
+		return fmt.Errorf("items must not be empty")
+	}
+	for index, item := range r.Items {
+		if item.RequirePeriodCommit != r.RequirePeriodCommit {
+			return fmt.Errorf("items[%d] require_period_commit differs from request", index)
+		}
+	}
+	r.DatasetID = strings.TrimSpace(r.DatasetID)
+	if r.DatasetID == "" && len(r.Targets) == 0 {
+		return fmt.Errorf("dataset_id is required")
+	}
+	if len(r.Targets) > 0 {
+		seen := make(map[string]struct{}, len(r.Targets))
+		for i := range r.Targets {
+			r.Targets[i].DatasetID = strings.TrimSpace(r.Targets[i].DatasetID)
+			if r.Targets[i].DatasetID == "" {
+				return fmt.Errorf("targets[%d].dataset_id is required", i)
+			}
+			identity := r.Targets[i].InstanceID + "\x00" + r.Targets[i].TaskID + "\x00" + r.Targets[i].DatasetID
+			if _, ok := seen[identity]; ok {
+				return fmt.Errorf("targets[%d] target is duplicated", i)
+			}
+			seen[identity] = struct{}{}
+			if r.Targets[i].OutputFields != "" {
+				var fields []string
+				if err := json.Unmarshal([]byte(r.Targets[i].OutputFields), &fields); err != nil {
+					return fmt.Errorf("targets[%d].output_fields_json is invalid: %w", i, err)
+				}
+			}
+		}
+		if r.DatasetID == "" {
+			r.DatasetID = r.Targets[0].DatasetID
+		}
+	}
+	if r.RequirePeriodCommit {
+		if _, err := marketdata.ParseFrequency(r.Frequency); err != nil {
+			return fmt.Errorf("period commit frequency is required and must be valid: %w", err)
+		}
+		if len(r.Targets) == 0 {
+			return fmt.Errorf("period commit requires at least one bound write target")
+		}
+		itemByID := make(map[string]domain.CollectionItem, len(r.Items))
+		periods := make(map[string]time.Time, len(r.Items))
+		for index, item := range r.Items {
+			instanceID := strings.TrimSpace(item.InstanceID)
+			if instanceID == "" {
+				return fmt.Errorf("items[%d] instance_id is required for period commit", index)
+			}
+			target, err := parseRequestTime(item.TargetDataTime)
+			if err != nil || target.IsZero() {
+				return fmt.Errorf("items[%d] target_data_time is required for period commit", index)
+			}
+			if strings.TrimSpace(item.SeriesHash) == "" || item.ExpectedCount == 0 || item.SeriesIndex >= item.ExpectedCount {
+				return fmt.Errorf("items[%d] series index/hash/count are required for period commit", index)
+			}
+			itemByID[instanceID] = item
+			periods[instanceID] = target.UTC()
+		}
+		boundInstances := make(map[string]struct{}, len(r.Items))
+		for index, target := range r.Targets {
+			instanceID := strings.TrimSpace(target.InstanceID)
+			item, ok := itemByID[instanceID]
+			if !ok || strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.TaskID) == "" || strings.TrimSpace(target.DatasetID) == "" {
+				return fmt.Errorf("targets[%d] write target identity is required for period commit", index)
+			}
+			if strings.TrimSpace(target.SpaceID) != strings.TrimSpace(r.SpaceID) {
+				return fmt.Errorf("targets[%d] space_id differs from period request", index)
+			}
+			if strings.TrimSpace(target.SeriesHash) == "" || target.ExpectedCount == 0 || target.SeriesIndex >= target.ExpectedCount ||
+				target.SeriesIndex != item.SeriesIndex || target.SeriesHash != item.SeriesHash || target.ExpectedCount != item.ExpectedCount {
+				return fmt.Errorf("targets[%d] series index/hash/count are required for period commit", index)
+			}
+			if strings.TrimSpace(target.Frequency) != strings.TrimSpace(r.Frequency) {
+				return fmt.Errorf("targets[%d] frequency differs from period request", index)
+			}
+			targetTime, err := parseRequestTime(target.TargetDataTime)
+			if err != nil || targetTime.IsZero() || !targetTime.UTC().Equal(periods[instanceID]) {
+				return fmt.Errorf("targets[%d] target_data_time is required and must match its item", index)
+			}
+			boundInstances[instanceID] = struct{}{}
+		}
+		for instanceID := range itemByID {
+			if _, ok := boundInstances[instanceID]; !ok {
+				return fmt.Errorf("period item %s has no bound write target", instanceID)
+			}
+		}
+	}
+	if r.BatchKind == "" {
+		r.BatchKind = domain.BatchKindRealtime
+	}
+	maxItems := MaxRealtimeItems
+	switch r.BatchKind {
+	case domain.BatchKindRealtime:
+	case domain.BatchKindCatchup, domain.BatchKindBackfill, domain.BatchKindGapRepair:
+		maxItems = 1
+	default:
+		return fmt.Errorf("unsupported batch_kind %q", r.BatchKind)
+	}
+	if len(r.Items) > maxItems && !(r.BatchKind == domain.BatchKindRealtime && strings.EqualFold(r.SpaceID, StockCNSpaceID)) {
+		return fmt.Errorf("items exceed maximum batch size %d for %s", maxItems, r.BatchKind)
+	}
+	seenInstanceIDs := make(map[string]struct{}, len(r.Items))
+	for index, item := range r.Items {
+		if strings.TrimSpace(item.SubjectID) == "" || strings.TrimSpace(item.Symbol) == "" {
+			return fmt.Errorf("items[%d] subject_id and symbol are required", index)
+		}
+		if provider := strings.TrimSpace(r.Provider); provider != "" && strings.TrimSpace(item.Provider) != "" && !strings.EqualFold(provider, strings.TrimSpace(item.Provider)) {
+			return fmt.Errorf("items[%d] source binding provider %q differs from batch provider %q", index, item.Provider, provider)
+		}
+		if sourceID := strings.TrimSpace(r.SourceID); sourceID != "" && strings.TrimSpace(item.SourceID) != "" && !strings.EqualFold(sourceID, strings.TrimSpace(item.SourceID)) {
+			return fmt.Errorf("items[%d] source binding source_id %q differs from batch source_id %q", index, item.SourceID, sourceID)
+		}
+		if len(r.Targets) == 0 && strings.TrimSpace(item.DatasetID) != r.DatasetID {
+			return fmt.Errorf("items[%d] dataset_id differs from batch dataset", index)
+		}
+		if strings.TrimSpace(item.InstanceID) != "" {
+			if _, exists := seenInstanceIDs[item.InstanceID]; exists {
+				return fmt.Errorf("items[%d] instance_id %q is duplicated", index, item.InstanceID)
+			}
+			seenInstanceIDs[item.InstanceID] = struct{}{}
+		}
+		start, startErr := parseRequestTime(item.StartTime)
+		if startErr != nil {
+			return fmt.Errorf("items[%d] start_time is invalid: %w", index, startErr)
+		}
+		end, endErr := parseRequestTime(item.EndTime)
+		if endErr != nil {
+			return fmt.Errorf("items[%d] end_time is invalid: %w", index, endErr)
+		}
+		if !start.IsZero() && !end.IsZero() && !end.After(start) {
+			return fmt.Errorf("items[%d] end_time must be after start_time", index)
+		}
+		if item.CandidateIndex < 0 {
+			return fmt.Errorf("items[%d] candidate_index must not be negative", index)
+		}
+		if math.IsNaN(item.RateBudgetRatio) || math.IsInf(item.RateBudgetRatio, 0) || item.RateBudgetRatio < 0 || item.RateBudgetRatio > 1 {
+			return fmt.Errorf("items[%d] rate_budget_ratio must be between 0 and 1", index)
+		}
+		if isHistoricalBatchKind(r.BatchKind) {
+			if strings.TrimSpace(item.StartTime) == "" || item.BarLimit <= 0 || item.BarLimit > 1000 {
+				return fmt.Errorf("historical item requires start_time and bar_limit 1..1000")
+			}
+		} else if r.BatchKind == domain.BatchKindRealtime && item.BarLimit > MaxRealtimeRows {
+			return fmt.Errorf("realtime bar_limit must be between 1 and %d", MaxRealtimeRows)
+		}
+	}
+	if r.Concurrency < 0 || r.Concurrency > MaxConcurrency {
+		return fmt.Errorf("concurrency must be between 0 and %d", MaxConcurrency)
+	}
+	return nil
+}
+
+func parseRequestTime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("must be RFC3339Nano: %w", err)
+	}
+	return parsed, nil
+}
+
+// Storage is the write boundary shared by the market pipelines.
+type Storage interface {
+	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
+}
+
+type sourceStorage interface {
+	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
+}
+
+type periodStorage interface {
+	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
+	GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
+	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
+	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error)
+}
+
+// ItemReporter receives final per-item outcomes from the common invocation
+// handler. It is deliberately small so CLS remains an optional boundary.
+type ItemReporter interface{ Report(clsreporter.Entry) }

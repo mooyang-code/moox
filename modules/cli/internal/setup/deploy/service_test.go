@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -36,7 +37,7 @@ func TestServicePublishesPackageAndActivatesNamedService(t *testing.T) {
 		PackagePath: archive, ServiceName: "web-host", DeployDir: "~/moox/prod",
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"home", "upload", "digest", "prepare", "activate", "finalize", "cleanup"}, events)
+	require.Equal(t, []string{"home", "upload", "digest", "prepare", "activate", "cleanup"}, events)
 	require.Equal(t, "/home/ubuntu/moox/prod", result.DeployDir)
 	require.Equal(t, digest, result.LocalSHA256)
 	require.Equal(t, digest, result.RemoteSHA256)
@@ -57,6 +58,23 @@ func TestServiceRejectsUnsafeZipEntryBeforeSSH(t *testing.T) {
 		PackagePath: archive, ServiceName: "service", DeployDir: "/home/ubuntu/moox/prod",
 	})
 	require.EqualError(t, err, "service_package_invalid")
+	require.Empty(t, events)
+}
+
+func TestServiceRejectsNonLoopbackTradeConsoleBindBeforeSSH(t *testing.T) {
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":           "#!/bin/sh\n",
+		"stop.sh":            "#!/bin/sh\n",
+		"healthcheck.sh":     "#!/bin/sh\n",
+		"bin/moox-trade":     "trade",
+		"bin/moox-trade-cli": "trade-cli",
+		"config/app.yaml":    "eventbus:\n  enabled: false\n",
+	})
+	events := []string{}
+	_, err := Service(context.Background(), &fakeServiceTransport{events: &events}, ServiceOptions{
+		PackagePath: archive, ServiceName: "trade", DeployDir: "/home/ubuntu/moox/prod", TradeConsoleBindAddress: "0.0.0.0",
+	})
+	require.EqualError(t, err, "service_deploy_invalid")
 	require.Empty(t, events)
 }
 
@@ -99,6 +117,181 @@ func TestPrepareServiceAcceptsZipDirectoryEntries(t *testing.T) {
 	require.NoError(t, err, string(output))
 	require.FileExists(t, filepath.Join(deploy, "bin", "service"))
 	require.FileExists(t, filepath.Join(deploy, "config", "app.yaml"))
+}
+
+func TestPrepareTradeServiceRunsEventBusPreflightBeforeStopping(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "stopped")
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":           "#!/bin/sh\nexit 0\n",
+		"stop.sh":            fmt.Sprintf("#!/bin/sh\necho stopped > %q\n", marker),
+		"healthcheck.sh":     "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":     "trade",
+		"bin/moox-trade-cli": "#!/bin/sh\nexit 1\n",
+		"config/app.yaml":    "eventbus:\n  enabled: true\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	command := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive)
+	output, err := command.CombinedOutput()
+	require.Error(t, err, string(output))
+	_, statErr := os.Stat(marker)
+	require.ErrorIs(t, statErr, os.ErrNotExist, "existing service must not stop before EventBus preflight")
+}
+
+func TestPrepareTradeServiceUsesRemoteEventBusURLForPreflight(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "eventbus-url")
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":           "#!/bin/sh\nexit 0\n",
+		"stop.sh":            "#!/bin/sh\nexit 0\n",
+		"healthcheck.sh":     "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":     "trade",
+		"bin/moox-trade-cli": fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$MOOX_EVENTBUS_NATS_URL\" > %q\nexit 1\n", marker),
+		"config/app.yaml":    "eventbus:\n  enabled: true\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	command := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive, "tls://106.53.107.122:4222")
+	output, err := command.CombinedOutput()
+	require.Error(t, err, string(output))
+	got, readErr := os.ReadFile(marker)
+	require.NoError(t, readErr)
+	require.Equal(t, "tls://106.53.107.122:4222", string(got))
+}
+
+func TestTradeServiceRollbackRestoresSQLiteDatabaseBeforeStartingPreviousBinary(t *testing.T) {
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":           "#!/bin/sh\nexit 0\n",
+		"stop.sh":            "#!/bin/sh\nexit 0\n",
+		"healthcheck.sh":     "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":     "new-trade\n",
+		"bin/moox-trade-cli": "#!/bin/sh\nexit 0\n",
+		"config/app.yaml":    "database:\n  path: ./data/moox_trade.db\neventbus:\n  enabled: false\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "bin", "data"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "config"), 0o700))
+	for name, content := range map[string]string{
+		"start.sh": "#!/bin/sh\nexit 0\n", "stop.sh": "#!/bin/sh\nexit 0\n", "healthcheck.sh": "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade": "old-trade\n", "config/app.yaml": "database:\n  path: ./data/moox_trade.db\n",
+	} {
+		path := filepath.Join(deploy, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o700))
+	}
+	dbPath := filepath.Join(deploy, "data", "moox_trade.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o700))
+	require.NoError(t, os.WriteFile(dbPath, []byte("old-schema"), 0o600))
+
+	prepare := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive)
+	output, err := prepare.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.NoError(t, os.WriteFile(dbPath, []byte("migrated-schema"), 0o600))
+
+	rollback := exec.Command("bash", "-c", rollbackServiceScript, "rollback", deploy, "trade")
+	output, err = rollback.CombinedOutput()
+	require.NoError(t, err, string(output))
+	restored, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	require.Equal(t, "old-schema", string(restored))
+	oldBinary, err := os.ReadFile(filepath.Join(deploy, "bin/moox-trade"))
+	require.NoError(t, err)
+	require.Equal(t, "old-trade\n", string(oldBinary))
+}
+
+func TestTradeServiceRollbackRestoresNestedTradeSQLiteDatabase(t *testing.T) {
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":              "#!/bin/sh\nexit 0\n",
+		"stop.sh":               "#!/bin/sh\nexit 0\n",
+		"healthcheck.sh":        "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":        "new-trade\n",
+		"bin/moox-trade-cli":    "#!/bin/sh\nexit 0\n",
+		"config/":               "",
+		"trade/config/app.yaml": "database:\n  path: ../data/trade/moox_trade.db\neventbus:\n  enabled: false\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	for _, dir := range []string{"bin", "config", "trade/config", "data/trade"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(deploy, dir), 0o700))
+	}
+	for name, content := range map[string]string{
+		"start.sh": "#!/bin/sh\nexit 0\n", "stop.sh": "#!/bin/sh\nexit 0\n", "healthcheck.sh": "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade": "old-trade\n", "trade/config/app.yaml": "database:\n  path: ../data/trade/moox_trade.db\n",
+	} {
+		path := filepath.Join(deploy, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o700))
+	}
+	dbPath := filepath.Join(deploy, "data", "trade", "moox_trade.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("old-schema"), 0o600))
+	require.NoError(t, os.WriteFile(dbPath+"-wal", []byte("old-wal"), 0o600))
+	require.NoError(t, os.WriteFile(dbPath+"-shm", []byte("old-shm"), 0o600))
+
+	prepare := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive)
+	output, err := prepare.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.NoError(t, os.WriteFile(dbPath, []byte("migrated-schema"), 0o600))
+	require.NoError(t, os.WriteFile(dbPath+"-wal", []byte("migrated-wal"), 0o600))
+	require.NoError(t, os.WriteFile(dbPath+"-shm", []byte("migrated-shm"), 0o600))
+
+	rollback := exec.Command("bash", "-c", rollbackServiceScript, "rollback", deploy, "trade")
+	output, err = rollback.CombinedOutput()
+	require.NoError(t, err, string(output))
+	for suffix, want := range map[string]string{"": "old-schema", "-wal": "old-wal", "-shm": "old-shm"} {
+		restored, readErr := os.ReadFile(dbPath + suffix)
+		require.NoError(t, readErr)
+		require.Equal(t, want, string(restored), suffix)
+	}
+}
+
+func TestRollbackRetainsSnapshotWhenRestoredServiceFailsHealth(t *testing.T) {
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":              "#!/bin/sh\nexit 0\n",
+		"stop.sh":               "#!/bin/sh\nexit 0\n",
+		"healthcheck.sh":        "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":        "new-trade\n",
+		"bin/moox-trade-cli":    "#!/bin/sh\nexit 0\n",
+		"config/":               "",
+		"trade/config/app.yaml": "eventbus:\n  enabled: false\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	for _, dir := range []string{"bin", "config", "trade/config"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(deploy, dir), 0o700))
+	}
+	for name, content := range map[string]string{
+		"start.sh": "#!/bin/sh\nexit 42\n", "stop.sh": "#!/bin/sh\nexit 0\n", "healthcheck.sh": "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade": "old-trade\n", "trade/config/app.yaml": "eventbus:\n  enabled: false\n",
+	} {
+		path := filepath.Join(deploy, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o700))
+	}
+	prepare := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive)
+	output, err := prepare.CombinedOutput()
+	require.NoError(t, err, string(output))
+	rollback := exec.Command("bash", "-c", rollbackServiceScript, "rollback", deploy, "trade")
+	output, err = rollback.CombinedOutput()
+	require.Error(t, err, string(output))
+	require.FileExists(t, filepath.Join(deploy, ".moox-service.previous", "manifest"))
+	oldBinary, readErr := os.ReadFile(filepath.Join(deploy, "bin/moox-trade"))
+	require.NoError(t, readErr)
+	require.Equal(t, "old-trade\n", string(oldBinary))
+}
+
+func TestPrepareTradeServiceBindsConsoleToDedicatedNode(t *testing.T) {
+	archive := serviceArchive(t, map[string]string{
+		"start.sh":            "#!/bin/sh\nexit 0\n",
+		"stop.sh":             "#!/bin/sh\nexit 0\n",
+		"healthcheck.sh":      "#!/bin/sh\nexit 0\n",
+		"bin/moox-trade":      "trade",
+		"bin/moox-trade-cli":  "#!/bin/sh\nexit 0\n",
+		"config/app.yaml":     "eventbus:\n  enabled: false\n",
+		"config/trpc_go.yaml": "server:\n  service:\n    - name: trpc.moox.trade.Health\n      ip: 127.0.0.1\n    - name: trpc.moox.trade.TradeConsoleService\n      ip: 127.0.0.1\n      port: 11200\n",
+	})
+	deploy := filepath.Join(t.TempDir(), "prod")
+	command := exec.Command("bash", "-c", prepareServiceScript, "prepare", deploy, "trade", archive, "tls://203.0.113.10:4222", "127.0.0.1")
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	raw, err := os.ReadFile(filepath.Join(deploy, "config", "trpc_go.yaml"))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "      ip: 127.0.0.1")
+	require.Contains(t, string(raw), "      ip: 127.0.0.1")
 }
 
 func serviceArchive(t *testing.T, entries map[string]string) string {
@@ -145,6 +338,12 @@ func (f *fakeServiceTransport) Upload(_ context.Context, src io.Reader, _ int64,
 	f.uploadPath, f.uploadMode = dst, mode
 	_, _ = io.Copy(&f.uploaded, src)
 	return nil
+}
+func (f *fakeServiceTransport) Download(_ context.Context, _ string, dst io.Writer) (int64, error) {
+	if dst == nil {
+		return 0, nil
+	}
+	return 0, nil
 }
 func (f *fakeServiceTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	command := strings.Join(argv, " ")

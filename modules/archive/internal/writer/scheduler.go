@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/report"
 )
 
 // Scheduler exposes bounded run-once Archive maintenance operations.
@@ -13,6 +15,7 @@ type Scheduler struct {
 	PendingRows     int
 	DedupeRetention time.Duration
 	Now             func() time.Time
+	ModuleMetrics   *report.ModuleMetrics
 }
 
 // MaterializeOnce writes dirty partitions and prunes expired message receipts.
@@ -35,9 +38,24 @@ func (s Scheduler) MaterializeOnce(ctx context.Context) error {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
+	inputAt, _ := s.Writer.LatestInputTime(ctx, pendingRows)
+	if s.ModuleMetrics != nil && !inputAt.IsZero() {
+		_ = s.ModuleMetrics.AdvanceInputWatermark("materialize", "archive-materialize", inputAt)
+	}
 	writeErr := s.Writer.WriteDirty(ctx, pendingRows)
 	_, pruneErr := s.Writer.PruneMessageReceipts(ctx, now.Add(-retention))
-	return errors.Join(writeErr, pruneErr)
+	err := errors.Join(writeErr, pruneErr)
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	if s.ModuleMetrics != nil {
+		_ = s.ModuleMetrics.ObserveRun("materialize", result, "archive-materialize", now)
+	}
+	if s.ModuleMetrics != nil && err == nil && !inputAt.IsZero() {
+		_ = s.ModuleMetrics.AdvanceWatermark("materialize", "archive-materialize", inputAt)
+	}
+	return err
 }
 
 // FlushOnShutdown writes remaining dirty partitions without pruning receipts.

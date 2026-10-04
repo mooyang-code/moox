@@ -21,7 +21,7 @@ func newCatalogForAccountTests(t *testing.T) *store.CatalogRepository {
 	return store.NewCatalogRepository(db)
 }
 
-func TestAccountRPC_CRUDAndCOSInfo(t *testing.T) {
+func TestAccountRPC_CRUD(t *testing.T) {
 	catalog := newCatalogForAccountTests(t)
 	svc := &Service{catalog: catalog}
 	ctx := context.Background()
@@ -31,7 +31,7 @@ func TestAccountRPC_CRUDAndCOSInfo(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_SUCCESS, listRsp.GetRetInfo().GetCode())
 
 	createRsp, err := svc.CreateCloudAccount(ctx, &pb.CreateCloudAccountReq{Account: &pb.CloudAccountInput{
-		AccountId: "acct-1", Provider: "tencent", SecretId: "sid", SecretKey: "skey",
+		AccountId: "acct-1", Provider: "tencent", CredentialSecretId: "secret-1",
 		AppId: "app", CosRegion: "ap-shanghai", CosBucket: "bucket",
 	}})
 	require.NoError(t, err)
@@ -39,15 +39,10 @@ func TestAccountRPC_CRUDAndCOSInfo(t *testing.T) {
 	assert.Equal(t, "acct-1", createRsp.GetAccount().GetAccountId())
 
 	updateRsp, err := svc.UpdateCloudAccount(ctx, &pb.UpdateCloudAccountReq{Account: &pb.CloudAccountInput{
-		AccountId: "acct-1", Provider: "tencent", CosRegion: "ap-guangzhou",
+		AccountId: "acct-1", Provider: "tencent", CredentialSecretId: "secret-1", CosRegion: "ap-guangzhou",
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
-
-	cosRsp, err := svc.GetCOSAccountInfo(ctx, &pb.GetCOSAccountInfoReq{AccountId: "acct-1", Reveal: true})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, cosRsp.GetRetInfo().GetCode())
-	assert.Equal(t, "sid", cosRsp.GetSecret().GetSecretId())
 
 	deleteRsp, err := svc.DeleteCloudAccount(ctx, &pb.DeleteCloudAccountReq{AccountId: "acct-1"})
 	require.NoError(t, err)

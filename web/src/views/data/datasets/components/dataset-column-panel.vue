@@ -30,6 +30,9 @@
             {{ optionLabel(datasetColumnOriginOptions, record.origin_type) }}
           </template>
         </a-table-column>
+        <a-table-column title="字段归属" :width="110">
+          <template #cell="{ record }">{{ fieldOwnershipLabel(record) }}</template>
+        </a-table-column>
         <a-table-column title="来源ID" data-index="origin_id" :width="180" />
         <a-table-column title="值类型" :width="110">
           <template #cell="{ record }">
@@ -41,11 +44,6 @@
             <a-tag size="small" :color="record.required ? 'red' : 'gray'">{{ record.required ? "是" : "否" }}</a-tag>
           </template>
         </a-table-column>
-        <a-table-column title="唯一" :width="80" align="center">
-          <template #cell="{ record }">
-            <a-tag size="small" :color="record.is_unique ? 'blue' : 'gray'">{{ record.is_unique ? "是" : "否" }}</a-tag>
-          </template>
-        </a-table-column>
         <a-table-column title="别名" :width="180">
           <template #cell="{ record }">
             {{ joinList(record.aliases) || "-" }}
@@ -53,7 +51,7 @@
         </a-table-column>
         <a-table-column title="状态" :width="90">
           <template #cell="{ record }">
-            <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
           </template>
         </a-table-column>
         <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
@@ -90,10 +88,7 @@
           </a-select>
         </a-form-item>
         <a-form-item label="约束">
-          <a-space>
-            <a-checkbox v-model="form.required">必填</a-checkbox>
-            <a-checkbox v-model="form.is_unique">唯一</a-checkbox>
-          </a-space>
+          <a-checkbox v-model="form.required">必填</a-checkbox>
         </a-form-item>
         <a-form-item field="aliasesText" label="别名">
           <a-input v-model="form.aliasesText" placeholder="多个别名用逗号分隔" />
@@ -122,9 +117,11 @@ import {
   optionLabel,
   splitList,
   statusColor,
+  statusLabel,
   statusOptions,
   validateChineseDisplayName
 } from "@/views/data/shared/metadata-utils";
+import { fieldOwnershipLabel } from "@/views/data/shared/module-attribution";
 
 defineOptions({ name: "DatasetColumnPanel" });
 
@@ -146,7 +143,6 @@ const form = reactive({
   origin_id: "",
   value_type: "FIELD_VALUE_TYPE_STRING" as DatasetColumn["value_type"],
   required: false,
-  is_unique: false,
   aliasesText: "",
   status: "active"
 });
@@ -180,7 +176,6 @@ function resetForm() {
     origin_id: "",
     value_type: "FIELD_VALUE_TYPE_STRING",
     required: false,
-    is_unique: false,
     aliasesText: "",
     status: "active"
   });
@@ -201,7 +196,6 @@ function openEdit(record: DatasetColumn) {
     origin_id: record.origin_id,
     value_type: record.value_type || "FIELD_VALUE_TYPE_STRING",
     required: !!record.required,
-    is_unique: !!record.is_unique,
     aliasesText: joinList(record.aliases),
     status: record.status || "active"
   });
@@ -226,7 +220,6 @@ async function submit() {
     origin_id: form.origin_id,
     value_type: form.value_type,
     required: form.required,
-    is_unique: form.is_unique,
     aliases: splitList(form.aliasesText),
     status: form.status,
     attributes: { display_name: form.display_name }

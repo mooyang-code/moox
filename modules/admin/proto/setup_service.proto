@@ -24,11 +24,23 @@ message SetupHost {
   string password = 5;
 }
 
+message SetupSpace {
+  string space_id = 1;
+  string name = 2;
+  string description = 3;
+  string owner = 4;
+  string market = 5;
+  string timezone = 6;
+  string status = 7;
+  string attributes_json = 8;
+}
+
 message ApplySetupReq {
   SetupAdmin admin = 1;
   SetupTencentCloud tencent_cloud = 2;
   SetupHost control_host = 3;
   repeated SetupHost other_hosts = 4;
+  repeated SetupSpace spaces = 5;
 }
 
 message ApplySetupRsp {
@@ -37,6 +49,9 @@ message ApplySetupRsp {
   int32 users = 3;
   int32 secrets = 4;
   int32 hosts = 5;
+  int32 spaces = 6;
+  int32 spaces_created = 7;
+  int32 spaces_unchanged = 8;
 }
 
 message GetSetupStatusReq {
@@ -44,6 +59,7 @@ message GetSetupStatusReq {
   SetupTencentCloud tencent_cloud = 2;
   SetupHost control_host = 3;
   repeated SetupHost other_hosts = 4;
+  repeated SetupSpace spaces = 5;
 }
 
 message GetSetupStatusRsp {
@@ -54,6 +70,7 @@ message GetSetupStatusRsp {
   int32 hosts = 5;
   int32 missing = 6;
   int32 conflicts = 7;
+  int32 spaces = 8;
 }
 
 service Setup {

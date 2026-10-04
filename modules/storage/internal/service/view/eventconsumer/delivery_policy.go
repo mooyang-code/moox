@@ -1,0 +1,512 @@
+package eventconsumer
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
+)
+
+func (c *Consumer) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int) error {
+	return c.processDeliveryWithApply(ctx, delivery, heartbeat, maxRetryAttempts, func(ctx context.Context, delivery *jetstream.Delivery) error {
+		return c.applyDelivery(ctx, delivery)
+	})
+}
+
+func (c *Consumer) processRowsBatchWithPolicy(ctx context.Context, deliveries []*jetstream.Delivery, heartbeats []*deliveryHeartbeat, maxRetryAttempts int) error {
+	if len(deliveries) < 2 {
+		if len(deliveries) == 1 {
+			var heartbeat *deliveryHeartbeat
+			if len(heartbeats) == 1 {
+				heartbeat = heartbeats[0]
+			}
+			return c.processDeliveryWithPolicy(ctx, deliveries[0], heartbeat, maxRetryAttempts)
+		}
+		return errors.New("storage view rows batch is empty")
+	}
+	batchHandler, ok := c.handler.(DatasetRowsBatchHandler)
+	if !ok {
+		var settled []*jetstream.Delivery
+		for index, delivery := range deliveries {
+			var heartbeat *deliveryHeartbeat
+			if index < len(heartbeats) {
+				heartbeat = heartbeats[index]
+			}
+			if err := c.processDeliveryWithPolicy(ctx, delivery, heartbeat, maxRetryAttempts); err != nil {
+				return withSettledDeliveries(err, settled...)
+			}
+			settled = append(settled, delivery)
+		}
+		return nil
+	}
+	items, err := c.decodeRowsBatch(deliveries)
+	if err != nil {
+		// Fall back to the single-delivery policy so a malformed event cannot
+		// make otherwise valid rows share its permanent-error decision.
+		var settled []*jetstream.Delivery
+		for index, delivery := range deliveries {
+			var heartbeat *deliveryHeartbeat
+			if index < len(heartbeats) {
+				heartbeat = heartbeats[index]
+			}
+			if singleErr := c.processDeliveryWithPolicy(ctx, delivery, heartbeat, maxRetryAttempts); singleErr != nil {
+				return withSettledDeliveries(singleErr, settled...)
+			}
+			settled = append(settled, delivery)
+		}
+		return nil
+	}
+	return c.processDeliveryBatchWithPolicy(ctx, deliveries, heartbeats, maxRetryAttempts, func(ctx context.Context) error {
+		return batchHandler.HandleDatasetRowsBatch(ctx, items)
+	})
+}
+
+func (c *Consumer) decodeRowsBatch(deliveries []*jetstream.Delivery) ([]DatasetRowsBatchItem, error) {
+	items := make([]DatasetRowsBatchItem, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		if delivery == nil {
+			return nil, errors.New("storage view rows delivery is nil")
+		}
+		if delivery.DecodeError != nil {
+			return nil, delivery.DecodeError
+		}
+		message, payload, err := events.DecodeRaw(c.registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+		if err != nil {
+			return nil, err
+		}
+		rows, ok := payload.(*storagepb.DatasetRowsUpserted)
+		if !ok {
+			return nil, fmt.Errorf("storage view rows batch contains %T", payload)
+		}
+		items = append(items, DatasetRowsBatchItem{Message: message, Payload: rows})
+	}
+	return items, nil
+}
+
+func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliveries []*jetstream.Delivery, heartbeats []*deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context) error) (result error) {
+	if c == nil || len(deliveries) == 0 || len(deliveries) != len(heartbeats) || apply == nil {
+		return errors.New("storage view delivery batch policy is incomplete")
+	}
+	if ctx == nil {
+		return errors.New("storage view delivery batch context is required")
+	}
+	settled := false
+	defer func() {
+		if settled {
+			result = withSettledDeliveries(result, deliveries...)
+		}
+	}()
+	started := time.Now()
+	metrics := c.config.Metrics
+	if metrics == nil {
+		metrics = observability.DefaultViewMetrics
+	}
+	defer func() { metrics.ObserveDeliveryDuration(time.Since(started)) }()
+	for _, delivery := range deliveries {
+		if delivery != nil && delivery.DeliveryCount > 1 {
+			metrics.IncRedelivery()
+		}
+	}
+	if maxRetryAttempts < 1 {
+		maxRetryAttempts = defaultMaxRetryAttempts
+	}
+	retryCount := 0
+	for ctx.Err() == nil {
+		if c.config.Lease != nil {
+			if err := c.config.Lease.Acquire(ctx); err != nil {
+				return errors.Join(err, batchHeartbeatError(heartbeats))
+			}
+		}
+		err := apply(ctx)
+		if c.config.Lease != nil {
+			c.config.Lease.Release()
+		}
+		if err == nil {
+			settled = true
+			acked := make([]bool, len(deliveries))
+			for ctx.Err() == nil {
+				allAcked := true
+				for index, delivery := range deliveries {
+					if acked[index] {
+						continue
+					}
+					if ackErr := delivery.Ack(ctx); ackErr == nil {
+						acked[index] = true
+						metrics.ObserveDelivery("ack", "success")
+						continue
+					} else if isStaleDeliveryTransport(ackErr) {
+						metrics.IncAckError()
+						metrics.ObserveDelivery("ack", "error")
+						return ackErr
+					}
+					allAcked = false
+					metrics.IncAckError()
+					metrics.ObserveDelivery("ack", "error")
+				}
+				if allAcked {
+					return batchHeartbeatError(heartbeats)
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
+			}
+			return ctx.Err()
+		}
+		if IsPermanent(err) {
+			if maxRetryAttempts > 0 {
+				return termDeliveryBatch(ctx, deliveries, metrics, err, heartbeats)
+			}
+			if !progressDeliveryBatch(ctx, deliveries, metrics) || !sleepDeliveryRetry(ctx, time.Second) {
+				return ctx.Err()
+			}
+			continue
+		}
+		retryCount++
+		if maxRetryAttempts > 0 && retryCount >= maxRetryAttempts {
+			metrics.IncRetryExhausted()
+			return termDeliveryBatch(ctx, deliveries, metrics, err, heartbeats)
+		}
+		if !progressDeliveryBatch(ctx, deliveries, metrics) || !sleepDeliveryRetry(ctx, time.Second) {
+			return ctx.Err()
+		}
+	}
+	return ctx.Err()
+}
+
+func progressDeliveryBatch(ctx context.Context, deliveries []*jetstream.Delivery, metrics *observability.ViewMetrics) bool {
+	for _, delivery := range deliveries {
+		if err := delivery.InProgress(ctx); err != nil {
+			metrics.IncInProgressError()
+			metrics.ObserveDelivery("in_progress", "error")
+		} else {
+			metrics.ObserveDelivery("in_progress", "success")
+		}
+	}
+	return ctx.Err() == nil
+}
+
+func termDeliveryBatch(ctx context.Context, deliveries []*jetstream.Delivery, metrics *observability.ViewMetrics, applyErr error, heartbeats []*deliveryHeartbeat) error {
+	var settled []*jetstream.Delivery
+	for _, delivery := range deliveries {
+		if err := delivery.Term(ctx); err != nil {
+			metrics.IncAckError()
+			metrics.ObserveDelivery("term", "error")
+			return withSettledDeliveries(errors.Join(applyErr, err, batchHeartbeatError(heartbeats)), settled...)
+		}
+		metrics.ObserveDelivery("term", "success")
+		settled = append(settled, delivery)
+	}
+	return withSettledDeliveries(errors.Join(applyErr, batchHeartbeatError(heartbeats)), settled...)
+}
+
+func batchHeartbeatError(heartbeats []*deliveryHeartbeat) error {
+	var result error
+	for _, heartbeat := range heartbeats {
+		if heartbeat != nil {
+			result = errors.Join(result, heartbeat.err())
+		}
+	}
+	return result
+}
+
+func (c *Consumer) processDeliveryWithApply(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error) error {
+	return c.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, maxRetryAttempts, apply, deliveryActions{
+		ack:      delivery.Ack,
+		progress: delivery.InProgress,
+		term:     delivery.Term,
+	})
+}
+
+type deliveryActions struct {
+	ack      func(context.Context) error
+	progress func(context.Context) error
+	term     func(context.Context) error
+}
+
+func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error, actions deliveryActions) (result error) {
+	if c == nil {
+		return errors.New("storage view event consumer is nil")
+	}
+	if delivery == nil {
+		return errors.New("storage view delivery is nil")
+	}
+	if apply == nil || actions.ack == nil || actions.progress == nil || actions.term == nil {
+		return errors.New("storage view delivery policy is incomplete")
+	}
+	if ctx == nil {
+		return errors.New("storage view delivery context is required")
+	}
+	settled := false
+	defer func() {
+		if settled {
+			result = withSettledDeliveries(result, delivery)
+		}
+	}()
+	started := time.Now()
+	metrics := c.config.Metrics
+	if metrics == nil {
+		metrics = observability.DefaultViewMetrics
+	}
+	defer func() { metrics.ObserveDeliveryDuration(time.Since(started)) }()
+	if delivery != nil && delivery.DeliveryCount > 1 {
+		metrics.IncRedelivery()
+	}
+	if maxRetryAttempts < 1 {
+		maxRetryAttempts = defaultMaxRetryAttempts
+	}
+	if heartbeat == nil {
+		heartbeat = newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(120*time.Second), metrics)
+	}
+	defer func() { heartbeat.stop() }()
+	retryCount := 0
+	for ctx.Err() == nil {
+		if c.config.Lease != nil {
+			if err := c.config.Lease.Acquire(ctx); err != nil {
+				return errors.Join(err, heartbeat.err())
+			}
+		}
+		err := apply(ctx, delivery)
+		if c.config.Lease != nil {
+			c.config.Lease.Release()
+		}
+		if err == nil || IsDeferred(err) {
+			settled = true
+			// Applying an event is deliberately separate from ACK retry:
+			// an ACK transport failure must never repeat an already successful
+			// index write. Deferred apply is already persisted (ViewDataReady
+			// waiting for row positions); ACK so later dataset-queue rows can
+			// satisfy the fence instead of blocking behind this marker.
+			if IsDeferred(err) {
+				log.Printf("storage view delivery deferred ack after %v: consumer=%s event_id=%s subject=%s",
+					err, delivery.Consumer, delivery.RawMessageID, delivery.Subject)
+			}
+			for ctx.Err() == nil {
+				if ackErr := actions.ack(ctx); ackErr == nil {
+					metrics.ObserveDelivery("ack", "success")
+					return heartbeat.err()
+				} else {
+					log.Printf("storage view delivery ack failed: %v", ackErr)
+					metrics.IncAckError()
+					metrics.ObserveDelivery("ack", "error")
+					heartbeat.report(ackErr)
+					if isStaleDeliveryTransport(ackErr) {
+						// A closed NATS connection cannot ACK this delivery.
+						// Retrying here occupies MaxAckPending=1 and blocks the
+						// fetch loop from reconnecting. Return so JetStream can
+						// redeliver after AckWait; View upserts are idempotent.
+						return errors.Join(ackErr, heartbeat.err())
+					}
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
+			}
+			return ctx.Err()
+		}
+		if IsPermanent(err) {
+			// A malformed row/marker cannot be skipped: the Dataset lane is the
+			// rows-before-marker ordering fence. The default unlimited policy
+			// therefore keeps the poison delivery pending for operator repair;
+			// only an explicit positive emergency limit permits TERM.
+			if maxRetryAttempts <= 0 {
+				if progressErr := actions.progress(ctx); progressErr != nil {
+					metrics.IncInProgressError()
+					metrics.ObserveDelivery("in_progress", "error")
+					heartbeat.report(progressErr)
+				} else {
+					metrics.ObserveDelivery("in_progress", "success")
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
+				continue
+			}
+			for ctx.Err() == nil {
+				if termErr := actions.term(ctx); termErr == nil {
+					settled = true
+					metrics.ObserveDelivery("term", "success")
+					return heartbeat.err()
+				} else {
+					log.Printf("storage view delivery term failed after permanent error %v: %v", err, termErr)
+					metrics.IncAckError()
+					metrics.ObserveDelivery("term", "error")
+					heartbeat.report(termErr)
+					if isStaleDeliveryTransport(termErr) {
+						return errors.Join(err, termErr, heartbeat.err())
+					}
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
+			}
+			return ctx.Err()
+		}
+		retryCount++
+		if maxRetryAttempts > 0 && retryCount >= maxRetryAttempts {
+			metrics.IncRetryExhausted()
+			log.Printf("storage view delivery retry exhausted: consumer=%s event_id=%s subject=%s delivery_count=%d decision=TERM reason=%v",
+				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, err)
+			if termErr := actions.term(ctx); termErr != nil {
+				metrics.IncAckError()
+				metrics.ObserveDelivery("term", "error")
+				return errors.Join(err, termErr, heartbeat.err())
+			}
+			metrics.ObserveDelivery("term", "success")
+			settled = true
+			return errors.Join(err, heartbeat.err())
+		}
+		// Keep the delivery pending while retrying. NAK would release
+		// MaxAckPending and allow a later event to overtake it.
+		if progressErr := actions.progress(ctx); progressErr != nil {
+			log.Printf("storage view delivery progress failed after %v: %v", err, progressErr)
+			metrics.IncInProgressError()
+			metrics.ObserveDelivery("in_progress", "error")
+			heartbeat.report(progressErr)
+			if isStaleDeliveryTransport(progressErr) {
+				return errors.Join(err, progressErr, heartbeat.err())
+			}
+		} else {
+			metrics.ObserveDelivery("in_progress", "success")
+		}
+		if !sleepDeliveryRetry(ctx, time.Second) {
+			return ctx.Err()
+		}
+	}
+	return ctx.Err()
+}
+
+// A successful apply (or explicit TERM) settles ordering even if its ACK or
+// heartbeat transport fails. Preserve this per delivery for partial batches.
+type settledDeliveryError struct {
+	error
+	deliveries map[*jetstream.Delivery]struct{}
+}
+
+func (e *settledDeliveryError) Unwrap() error { return e.error }
+
+func withSettledDeliveries(err error, deliveries ...*jetstream.Delivery) error {
+	if err == nil || len(deliveries) == 0 {
+		return err
+	}
+	settled := make(map[*jetstream.Delivery]struct{}, len(deliveries))
+	for _, delivery := range deliveries {
+		settled[delivery] = struct{}{}
+	}
+	return &settledDeliveryError{error: err, deliveries: settled}
+}
+
+func deliverySettled(err error, delivery *jetstream.Delivery) bool {
+	for err != nil {
+		var settled *settledDeliveryError
+		if !errors.As(err, &settled) {
+			return false
+		}
+		if _, ok := settled.deliveries[delivery]; ok {
+			return true
+		}
+		err = settled.Unwrap()
+	}
+	return false
+}
+
+func isStaleDeliveryTransport(err error) bool {
+	return errors.Is(err, nats.ErrConnectionClosed) ||
+		errors.Is(err, nats.ErrDisconnected) ||
+		errors.Is(err, nats.ErrFetchDisconnected) ||
+		errors.Is(err, jetstream.ErrClosed) ||
+		errors.Is(err, jetstream.ErrInvalidDelivery)
+}
+
+func sleepDeliveryRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+type permanentDeliveryError struct{ error }
+
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return permanentDeliveryError{err}
+}
+
+func IsPermanent(err error) bool {
+	var target permanentDeliveryError
+	return errors.As(err, &target)
+}
+
+type deferredDeliveryError struct{ error }
+
+func (d deferredDeliveryError) Unwrap() error { return d.error }
+
+// Deferred marks work that is already persisted and must not occupy the
+// dataset queue. The consumer ACKs so later row deliveries can satisfy the
+// ViewDataReady applied-position fence.
+func Deferred(err error) error {
+	if err == nil {
+		return nil
+	}
+	return deferredDeliveryError{err}
+}
+
+func IsDeferred(err error) bool {
+	var target deferredDeliveryError
+	return errors.As(err, &target)
+}
+
+func (c *Consumer) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+	if delivery == nil {
+		return Permanent(errors.New("storage event delivery is empty"))
+	}
+	if delivery.DecodeError != nil {
+		return Permanent(delivery.DecodeError)
+	}
+	message, payload, err := events.DecodeRaw(
+		c.registry,
+		delivery.RawData,
+		delivery.Subject,
+		delivery.RawMessageID,
+		delivery.ContentType,
+	)
+	if err != nil {
+		return Permanent(err)
+	}
+	switch value := payload.(type) {
+	case *storagepb.DatasetRowsUpserted:
+		return c.handler.HandleDatasetRows(ctx, message, value)
+	case *storagepb.CollectorPeriodCompleted:
+		handler, ok := c.handler.(CollectorPeriodCompletedHandler)
+		if !ok {
+			return Permanent(errors.New("storage view collector-period handler is unavailable"))
+		}
+		return handler.HandleCollectorPeriodCompleted(ctx, message, value)
+	case *storagepb.FactorPeriodComputed:
+		handler, ok := c.handler.(FactorPeriodComputedHandler)
+		if !ok {
+			return Permanent(errors.New("storage view factor-period handler is unavailable"))
+		}
+		return handler.HandleFactorPeriodComputed(ctx, message, value)
+	case *storagepb.DatasetSyncPoint:
+		handler, ok := c.handler.(DatasetSyncPointHandler)
+		if !ok {
+			return Permanent(errors.New("storage view sync-point handler is unavailable"))
+		}
+		return handler.HandleDatasetSyncPoint(ctx, message, value)
+	default:
+		return Permanent(fmt.Errorf("unsupported storage view event payload %T", payload))
+	}
+}

@@ -75,6 +75,18 @@
                     <span v-if="activeFreq" class="inline-freq">/ {{ activeFreq }}</span>
                   </div>
                 </div>
+                <a-space>
+                  <a-checkbox v-model="seriesTagExact" @change="onSeriesTagFilter">精确标签</a-checkbox>
+                  <a-input
+                    v-model="seriesTagFilter"
+                    allow-clear
+                    placeholder="留空表示默认序列"
+                    :disabled="!seriesTagExact"
+                    :style="{ width: '220px' }"
+                    @press-enter="onSeriesTagFilter"
+                    @clear="onSeriesTagFilter"
+                  />
+                </a-space>
                 <a-button :disabled="!activeDataId" :loading="loading" @click="reloadRows">
                   <template #icon><icon-refresh /></template>
                   重新加载
@@ -111,6 +123,7 @@
                       </span>
                     </template>
                   </a-table-column>
+                  <a-table-column data-index="seriesTag" title="序列标签" :width="180" />
                   <a-table-column data-index="version" :width="230">
                     <template #title>
                       <span class="sortable-title">
@@ -313,17 +326,20 @@ import {
   listDatasetColumns,
   listDatasets,
   listDatasetSubjects,
-  listFactors,
   listFields,
-  listSubjects
+  listSubjects,
+  listViews
 } from "@/api/storage/metadata";
 import { readRecordRows, readTimeSeriesRows } from "@/api/storage/access";
-import type { Dataset, DatasetColumn, Factor, Field, PageResult, RecordRow, SortOrder } from "@/api/storage/types";
+import { queryTimeSeriesRows } from "@/api/storage/view";
+import type { Dataset, DatasetColumn, Field, PageResult, RecordRow, SortOrder } from "@/api/storage/types";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { datasetMatchesAttribution, type DatasetRole, type OwnerModule } from "@/views/data/shared/module-attribution";
 import { useSpaceStore } from "@/store/modules/space";
 import {
   adaptiveColumnWidth,
+  buildSubjectDataIdsFromRows,
+  buildTimeSeriesBrowseSelector,
   buildColumnLabels,
   buildSubjectDataIds,
   datasetDisplayName,
@@ -373,11 +389,12 @@ const hasAttributionFilter = computed(() =>
 );
 const datasetColumns = ref<DatasetColumn[]>([]);
 const fields = ref<Field[]>([]);
-const factors = ref<Factor[]>([]);
 const dataIds = ref<BrowseDataId[]>([]);
 const activeDataId = ref("");
 const activeFreq = ref("");
 const dataIdKeyword = ref("");
+const seriesTagFilter = ref("");
+const seriesTagExact = ref(false);
 const tableRows = ref<BrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
 const detailRow = ref<BrowseTableRow>();
@@ -436,7 +453,7 @@ const previewHasMore = computed(() => (mode.value === "record" ? recordPreviewHa
 
 const preferredColumnNames = computed(() => datasetColumns.value.map(item => item.column_name).filter(Boolean));
 
-const columnLabels = computed(() => buildColumnLabels(datasetColumns.value, fields.value, factors.value));
+const columnLabels = computed(() => buildColumnLabels(datasetColumns.value, fields.value));
 
 const detailColumns = computed(() => {
   const row = detailRow.value;
@@ -451,14 +468,12 @@ async function loadMeta() {
   metaLoading.value = true;
   try {
     const page = { page: 1, size: 1000 };
-    const [datasetItems, fieldRsp, factorRsp] = await Promise.all([
+    const [datasetItems, fieldRsp] = await Promise.all([
       hasAttributionFilter.value ? listAllDatasets(space_id) : listDatasets({ space_id, page }).then(rsp => rsp.datasets || []),
-      listFields({ space_id, page }),
-      listFactors({ space_id, page })
+      listFields({ space_id, page })
     ]);
     datasets.value = datasetItems;
     fields.value = fieldRsp.fields || [];
-    factors.value = factorRsp.factors || [];
     ensureSelectedDataset();
     await loadDatasetContext();
   } catch (error) {
@@ -506,6 +521,8 @@ function clearBrowseState() {
   activeDataId.value = "";
   activeFreq.value = "";
   dataIdKeyword.value = "";
+  seriesTagFilter.value = "";
+  seriesTagExact.value = false;
   tableRows.value = [];
   tableColumnNames.value = [];
   pagination.current = 1;
@@ -554,10 +571,38 @@ async function loadTimeSeriesDataIds(space_id: string, dataset_id: string) {
     listSubjects({ space_id, page: { page: 1, size: 1000 } })
   ]);
   dataIds.value = buildSubjectDataIds(bindRsp.dataset_subjects || [], subjectRsp.subjects || []);
+  if (dataIds.value.length > 0) return;
+
+  // Some deployed collectors have real rows and an active View, but their
+  // dataset_subject metadata was reset. Discover IDs from the live View so
+  // the data browser can still select and read actual data.
+  try {
+    const viewRsp = await listViews({ space_id, dataset_id, status: "active", page: { page: 1, size: 100 } });
+    const view = (viewRsp.views || []).find(item => item.dataset_id === dataset_id && item.status === "active");
+    if (!view?.view_id) return;
+    const end = new Date();
+    const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+    const rowRsp = await queryTimeSeriesRows({
+      space_id,
+      view_id: view.view_id,
+      time_range: { start_time: start.toISOString(), end_time: end.toISOString() },
+      sorts: [{ field_name: "data_time", desc: true }],
+      page: { page: 1, size: DATA_BROWSE_PREVIEW_LIMIT },
+      total_mode: "NONE"
+    });
+    dataIds.value = buildSubjectDataIdsFromRows(rowRsp.rows || []);
+  } catch (error) {
+    console.warn("failed to discover dataset subjects from active view", { space_id, dataset_id, error });
+  }
 }
 
 async function selectDataId(dataId: string) {
   activeDataId.value = dataId;
+  pagination.current = 1;
+  await reloadRows();
+}
+
+async function onSeriesTagFilter() {
   pagination.current = 1;
   await reloadRows();
 }
@@ -585,16 +630,18 @@ async function loadTimeSeriesRows() {
 
   loading.value = true;
   try {
+    const selector = buildTimeSeriesBrowseSelector(
+      space_id,
+      dataset_id,
+      activeDataId.value,
+      activeFreq.value,
+      seriesTagFilter.value,
+      seriesTagExact.value
+    );
     const rsp = await readTimeSeriesRows({
-      keys: [
-        {
-          space_id,
-          dataset_id,
-          subject_id: activeDataId.value,
-          freq: activeFreq.value,
-          dimensions: {}
-        }
-      ],
+      space_id,
+      dataset_id,
+      selectors: [selector],
       order: accessSortOrder("data_time"),
       page: { page: pagination.current, size: pagination.pageSize }
     });
@@ -705,9 +752,8 @@ function openDetail(row: BrowseTableRow) {
 function rowToSyntheticRecord(row: BrowseTableRow): RecordRow {
   return {
     key: { space_id: "", dataset_id: "", record_id: row.key, version: row.version },
-    columns: Object.keys(row.values).map(name => ({
-      column_name: name,
-      value_type: "FIELD_VALUE_TYPE_STRING",
+    fields: Object.keys(row.values).map(name => ({
+      field_id: name,
       value: { string_value: row.values[name] }
     }))
   };

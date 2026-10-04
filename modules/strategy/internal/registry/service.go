@@ -5,88 +5,90 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
+	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"gopkg.in/yaml.v3"
-	"io"
-	"strings"
 )
 
-var ErrImmutableVersion = errors.New("strategy: immutable version")
+var ErrImmutableStrategy = errors.New("strategy: immutable artifact")
 
-type Manifest struct {
-	ID                 string `yaml:"id"`
-	Version            string `yaml:"version"`
-	API                string `yaml:"api_version"`
-	Entrypoint         string `yaml:"entrypoint"`
-	StateSchemaVersion int    `yaml:"state_schema_version"`
+type Service struct {
+	Repo *store.Store
+	Now  func() time.Time
 }
-type Service struct{ Repo *store.Store }
 
-func Parse(raw string) (Manifest, error) {
-	var m Manifest
-	dec := yaml.NewDecoder(strings.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&m); err != nil {
-		return m, err
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return m, errors.New("strategy manifest must contain one YAML document")
-		}
-		return m, err
-	}
-	if m.ID == "" || m.Version == "" || m.API == "" || m.Entrypoint == "" {
-		return m, errors.New("strategy manifest requires id, version, api_version and entrypoint")
-	}
-	return m, nil
-}
-func (s *Service) Publish(ctx context.Context, manifest, source string) (domain.StrategyDefinition, error) {
-	d, err := s.Prepare(manifest, source)
+// PrepareDefinition validates the user DSL and returns the minimal persisted
+// definition. Compilation is intentionally deferred to instance enable/start
+// so a shared definition never stores a stale executable artifact.
+func (s *Service) PrepareDefinition(strategyID, dslYAML string, now time.Time) (store.StrategyDefinition, config.DSL, error) {
+	dsl, err := config.Parse([]byte(dslYAML))
 	if err != nil {
-		return domain.StrategyDefinition{}, err
+		return store.StrategyDefinition{}, config.DSL{}, err
 	}
-	if err := s.Save(ctx, d); err != nil {
-		return domain.StrategyDefinition{}, err
+	if strings.TrimSpace(strategyID) == "" {
+		return store.StrategyDefinition{}, config.DSL{}, errors.New("strategy id is required")
 	}
-	return d, nil
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return store.StrategyDefinition{StrategyID: strategyID, StrategyName: dsl.Name, DSLYaml: dslYAML, CreatedAt: now.UTC(), UpdatedAt: now.UTC()}, dsl, nil
 }
 
-// Prepare validates and hashes a package without persisting it. Callers that
-// have a runtime can LOAD the materialized source before Save, preventing the
-// registry from acknowledging code the worker cannot import.
-func (s *Service) Prepare(manifest, source string) (domain.StrategyDefinition, error) {
-	m, err := Parse(manifest)
+// PrepareCompiled creates an immutable StrategyDef from a compiled manifest.
+func (s *Service) PrepareCompiled(strategyID, name, manifestYAML string, compiled compiler.CompiledStrategy) (domain.Strategy, error) {
+	if strings.TrimSpace(strategyID) == "" || strings.TrimSpace(name) == "" {
+		return domain.Strategy{}, errors.New("strategy id and name are required")
+	}
+	if compiled.Kind != config.Kind || compiled.APIVersion != config.APIVersion || len(compiled.CompiledJSON) == 0 {
+		return domain.Strategy{}, errors.New("compiled strategy artifact is invalid")
+	}
+	now := time.Now().UTC()
+	if s.Now != nil {
+		now = s.Now().UTC()
+	}
+	sum := sha256.Sum256([]byte(manifestYAML))
+	return domain.Strategy{ID: strategyID, Name: name, ManifestYAML: manifestYAML,
+		Kind: compiled.Kind, CompiledJSON: append([]byte(nil), compiled.CompiledJSON...), SourceHash: hex.EncodeToString(sum[:]), CreatedAt: now}, nil
+}
+
+// PrepareCoinSelection parses and compiles a v2 manifest before persistence.
+func (s *Service) PrepareCoinSelection(ctx context.Context, strategyID, name, manifestYAML, spaceID string, compiler compiler.Compiler) (domain.Strategy, error) {
+	manifest, err := config.Parse([]byte(manifestYAML))
 	if err != nil {
-		return domain.StrategyDefinition{}, err
+		return domain.Strategy{}, err
 	}
-	sum := sha256.Sum256([]byte(source))
-	d := domain.StrategyDefinition{StrategyID: m.ID, Version: m.Version, API: m.API, ManifestYAML: manifest, SourceCode: source, SourceHash: hex.EncodeToString(sum[:]), StateSchemaVersion: m.StateSchemaVersion, Status: "draft"}
-	return d, nil
+	compiled, err := compiler.Compile(ctx, manifest, spaceID)
+	if err != nil {
+		return domain.Strategy{}, err
+	}
+	return s.PrepareCompiled(strategyID, name, manifestYAML, compiled)
 }
 
-func (s *Service) Save(ctx context.Context, d domain.StrategyDefinition) error {
+func (s *Service) Save(ctx context.Context, strategy domain.Strategy) error {
 	if s.Repo == nil {
 		return nil
 	}
-	if err := s.Repo.SaveDefinition(ctx, d); err != nil {
-		old, getErr := s.Repo.GetDefinition(ctx, d.StrategyID, d.Version)
+	if err := s.Repo.SaveStrategy(ctx, strategy); err != nil {
+		existing, getErr := s.Repo.GetStrategy(ctx, strategy.ID)
 		if getErr != nil {
 			return err
 		}
-		if old.SourceHash != d.SourceHash || old.ManifestYAML != d.ManifestYAML || old.API != d.API || old.StateSchemaVersion != d.StateSchemaVersion {
-			return ErrImmutableVersion
-		}
-		if old.Status != d.Status {
-			// Validation is the only forward lifecycle transition performed by
-			// this service: a successfully loaded draft may become enabled, but
-			// an enabled version can never be downgraded by a retry.
-			if old.Status == "draft" && d.Status == "enabled" {
-				return s.Repo.EnableDefinition(ctx, d.StrategyID, d.Version)
-			}
-			return ErrImmutableVersion
+		if !sameArtifact(existing, strategy) {
+			return ErrImmutableStrategy
 		}
 	}
 	return nil
+}
+
+func sameArtifact(left, right domain.Strategy) bool {
+	return left.ID == right.ID &&
+		left.Name == right.Name &&
+		left.ManifestYAML == right.ManifestYAML &&
+		string(left.CompiledJSON) == string(right.CompiledJSON) &&
+		left.Kind == right.Kind &&
+		left.SourceHash == right.SourceHash
 }

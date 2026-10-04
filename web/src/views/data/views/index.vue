@@ -33,7 +33,7 @@
           <a-table-column title="视图ID" data-index="view_id" :width="170" />
           <a-table-column title="中文名" data-index="name" :width="160" />
           <a-table-column title="引擎" data-index="engine" :width="100" />
-          <a-table-column title="主数据集" data-index="primary_dataset_id" :width="150" />
+          <a-table-column title="数据集" data-index="dataset_id" :width="150" />
           <a-table-column title="频率" :width="90">
             <template #cell="{ record }">{{ viewFreqLabel(record) }}</template>
           </a-table-column>
@@ -51,11 +51,14 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="250" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
                 <a-button size="mini" type="text" @click="openColumns(record)">列</a-button>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+                <a-popconfirm content="删除该索引不会删除所属数据集，确认继续？" @ok="removeView(record)">
+                  <a-button size="mini" type="text" status="danger">删除</a-button>
+                </a-popconfirm>
               </a-space>
             </template>
           </a-table-column>
@@ -66,7 +69,7 @@
     <a-modal v-model:visible="visible" width="820px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
         <a-form-item field="view_id" label="视图ID" required>
-          <a-input v-model="form.view_id" :disabled="editing" placeholder="例如 kline_view" />
+          <a-input v-model="form.view_id" :disabled="editing" placeholder="例如 view_binance_kline_1m" />
         </a-form-item>
         <a-form-item field="name" label="中文名" required>
           <a-input v-model="form.name" :max-length="10" show-word-limit placeholder="例如 K线视图" />
@@ -74,8 +77,8 @@
         <a-form-item field="description" label="描述">
           <a-textarea v-model="form.description" :auto-size="{ minRows: 3, maxRows: 5 }" />
         </a-form-item>
-        <a-form-item field="primary_dataset_id" label="主数据集" required>
-          <a-select v-model="form.primary_dataset_id" allow-search placeholder="选择主数据集">
+        <a-form-item v-if="!lockedDatasetId" field="dataset_id" label="数据集" required>
+          <a-select v-model="form.dataset_id" allow-search placeholder="选择数据集">
             <a-option v-for="item in selectableDatasets" :key="item.dataset_id" :value="item.dataset_id">
               {{ item.name }} ({{ item.dataset_id }})
             </a-option>
@@ -86,14 +89,7 @@
             <a-option v-for="freq in primaryFreqOptions" :key="freq" :value="freq">{{ freq }}</a-option>
           </a-select>
         </a-form-item>
-        <a-form-item field="dataset_ids" label="包含数据集">
-          <a-select v-model="form.dataset_ids" multiple allow-search placeholder="选择视图包含的数据集">
-            <a-option v-for="item in includedDatasetOptions" :key="item.dataset_id" :value="item.dataset_id">
-              {{ item.name }} ({{ item.dataset_id }})
-            </a-option>
-          </a-select>
-        </a-form-item>
-        <a-form-item v-if="!editing && form.primary_dataset_id" label="视图列">
+        <a-form-item v-if="!editing && form.dataset_id" label="视图列">
           <div class="draft-columns">
             <div class="draft-columns-head">
               <span>已根据所选数据集自动生成，可删除不需要的列</span>
@@ -161,7 +157,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createView, listDatasetColumns, listDatasets, listViews, updateView, upsertViewColumn } from "@/api/storage/metadata";
-import type { Dataset, DatasetColumn, View, ViewColumn } from "@/api/storage/types";
+import type { Dataset, View, ViewColumn } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import ViewColumnPanel from "./components/view-column-panel.vue";
 import {
@@ -174,7 +170,7 @@ import {
   optionLabel,
   statusOptions,
   validateChineseDisplayName,
-  validateLowerSnakeId
+  validateViewId
 } from "@/views/data/shared/metadata-utils";
 import {
   mergeViewAttribution,
@@ -189,13 +185,10 @@ import {
 import {
   buildDraftViewColumns,
   buildTimeSeriesViewFilterJSON,
-  buildViewDatasetIds,
-  availableIncludedDatasets,
   defaultViewEngine,
   defaultViewGrainKeys,
   freqFromViewFilterJSON,
-  freqOptionsForPrimaryDataset,
-  removePrimaryFromIncludes
+  freqOptionsForPrimaryDataset
 } from "./view-form-utils";
 
 defineOptions({ name: "DataViews" });
@@ -248,8 +241,8 @@ const datasetById = computed(() => new Map(datasets.value.map(item => [item.data
 const visibleRows = computed(() =>
   rows.value.filter(item => {
     const matchedByDataset =
-      allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.primary_dataset_id);
-    if (!matchedByDataset && excludedPrimaryDatasetIdSet.value.has(item.primary_dataset_id)) {
+      allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.dataset_id);
+    if (!matchedByDataset && excludedPrimaryDatasetIdSet.value.has(item.dataset_id)) {
       return false;
     }
     if (props.excludeLikelyFactorDatasets && !matchedByDataset && viewUsesLikelyFactorDataset(item)) {
@@ -270,6 +263,9 @@ const visibleRows = computed(() =>
   })
 );
 const datasets = ref<Dataset[]>([]);
+const lockedDatasetId = computed(() =>
+  props.allowedPrimaryDatasetIds?.length === 1 ? props.allowedPrimaryDatasetIds[0] : ""
+);
 const selectableDatasets = computed(() =>
   datasets.value.filter(item => {
     const matchedByAllowedId = allowedPrimaryDatasetIdSet.value.size > 0 && allowedPrimaryDatasetIdSet.value.has(item.dataset_id);
@@ -319,8 +315,7 @@ const form = reactive<ViewForm>({
   view_id: "",
   name: "",
   description: "",
-  primary_dataset_id: "",
-  dataset_ids: [],
+  dataset_id: "",
   grain_keys: [],
   filter_json: "{}",
   view_freq: "",
@@ -331,13 +326,9 @@ const form = reactive<ViewForm>({
 });
 
 const modalTitle = computed(() => (editing.value ? "编辑视图" : "新增视图"));
-const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === form.primary_dataset_id));
-const primaryFreqOptions = computed(() => freqOptionsForPrimaryDataset(datasets.value, form.primary_dataset_id));
+const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === form.dataset_id));
+const primaryFreqOptions = computed(() => freqOptionsForPrimaryDataset(datasets.value, form.dataset_id));
 const isTimeSeriesPrimaryDataset = computed(() => isTimeSeriesDataKind(primaryDataset.value?.data_kind));
-const includedDatasetOptions = computed(() =>
-  availableIncludedDatasets(selectableDatasets.value, form.primary_dataset_id, form.view_freq || "")
-);
-
 async function loadDatasets() {
   if (!selectedSpaceId.value) {
     datasets.value = [];
@@ -386,7 +377,11 @@ async function listAllViews(spaceId: string) {
   const views: View[] = [];
   const size = 500;
   for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size } });
+    const rsp = await listViews({
+      space_id: spaceId,
+      dataset_id: lockedDatasetId.value || undefined,
+      page: { page: pageNo, size }
+    });
     views.push(...(rsp.views || []));
     if (!rsp.page_result?.has_more || (rsp.views || []).length === 0) {
       return views;
@@ -394,12 +389,18 @@ async function listAllViews(spaceId: string) {
   }
 }
 
+async function removeView(record: View) {
+  await updateView({ ...record, status: "deleted" });
+  Message.success("视图已删除");
+  await load();
+}
+
 function viewUsesLikelyFactorDataset(view: View) {
-  const dataset = datasetById.value.get(view.primary_dataset_id);
+  const dataset = datasetById.value.get(view.dataset_id);
   if (dataset) {
     return isLikelyFactorResultDataset(dataset);
   }
-  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
+  return isLikelyFactorResultDatasetId(view.dataset_id);
 }
 
 function resetForm() {
@@ -408,8 +409,7 @@ function resetForm() {
     view_id: "",
     name: "",
     description: "",
-    primary_dataset_id: "",
-    dataset_ids: [],
+    dataset_id: "",
     grain_keys: [],
     filter_json: "{}",
     view_freq: "",
@@ -424,6 +424,9 @@ function resetForm() {
 function openCreate() {
   editing.value = false;
   resetForm();
+  if (lockedDatasetId.value) {
+    form.dataset_id = lockedDatasetId.value;
+  }
   visible.value = true;
 }
 
@@ -431,7 +434,6 @@ function openEdit(record: View) {
   editing.value = true;
   Object.assign(form, {
     ...record,
-    dataset_ids: (record.dataset_ids || []).filter(datasetId => datasetId !== record.primary_dataset_id),
     grain_keys: record.grain_keys || [],
     filter_json: jsonText(record.filter_json),
     view_freq: freqFromViewFilterJSON(record.filter_json)
@@ -448,8 +450,8 @@ function openColumns(record: View) {
 
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
-  if (!form.view_id || !form.name || !form.primary_dataset_id) {
-    Message.warning("请补全视图ID、中文名和主数据集");
+  if (!form.view_id || !form.name || !form.dataset_id) {
+    Message.warning("请补全视图ID、中文名和数据集");
     return;
   }
   const nameError = validateChineseDisplayName(form.name);
@@ -457,7 +459,7 @@ async function submit() {
     Message.warning(nameError);
     return;
   }
-  const idError = validateLowerSnakeId(form.view_id, 30);
+  const idError = validateViewId(form.view_id, 30);
   if (idError) {
     Message.warning(`视图${idError}`);
     return;
@@ -475,17 +477,15 @@ async function submit() {
       return;
     }
   }
-  const datasetIds = buildViewDatasetIds(form.primary_dataset_id, form.dataset_ids || []);
   const payload: View = {
     space_id: spaceId,
     view_id: form.view_id,
     name: form.name,
     description: form.description,
-    primary_dataset_id: form.primary_dataset_id,
-    dataset_ids: datasetIds,
-    grain_keys: defaultViewGrainKeys(datasets.value, form.primary_dataset_id),
+    dataset_id: form.dataset_id,
+    grain_keys: defaultViewGrainKeys(datasets.value, form.dataset_id),
     filter_json: filterJSON,
-    engine: defaultViewEngine(datasets.value, form.primary_dataset_id),
+    engine: defaultViewEngine(datasets.value, form.dataset_id),
     retention_window: form.retention_window,
     status: form.status,
     attributes: mergeViewAttribution(form.attributes, {
@@ -518,30 +518,20 @@ async function saveDraftColumns(spaceId: string, viewId: string) {
 
 async function refreshDraftColumns() {
   const spaceId = selectedSpaceId.value;
-  if (editing.value || !spaceId || !form.primary_dataset_id) {
+  if (editing.value || !spaceId || !form.dataset_id) {
     draftColumns.value = [];
     return;
   }
   const seq = ++draftLoadSeq;
   columnsLoading.value = true;
   try {
-    const datasetIds = buildViewDatasetIds(form.primary_dataset_id, form.dataset_ids || []);
-    const entries = await Promise.all(
-      datasetIds.map(async datasetId => {
-        const rsp = await listDatasetColumns({
-          space_id: spaceId,
-          dataset_id: datasetId,
-          page: { page: 1, size: 500 }
-        });
-        return [datasetId, rsp.columns || []] as const;
-      })
-    );
+    const rsp = await listDatasetColumns({
+      space_id: spaceId,
+      dataset_id: form.dataset_id,
+      page: { page: 1, size: 500 }
+    });
     if (seq !== draftLoadSeq) return;
-    const columnsByDataset = entries.reduce<Record<string, DatasetColumn[]>>((acc, [datasetId, columns]) => {
-      acc[datasetId] = columns;
-      return acc;
-    }, {});
-    draftColumns.value = buildDraftViewColumns(form.primary_dataset_id, form.dataset_ids || [], columnsByDataset);
+    draftColumns.value = buildDraftViewColumns(form.dataset_id, { [form.dataset_id]: rsp.columns || [] });
   } finally {
     if (seq === draftLoadSeq) columnsLoading.value = false;
   }
@@ -609,16 +599,6 @@ function onPageSizeChange(pageSize: number) {
   load();
 }
 
-function syncIncludedDatasets() {
-  const next = removePrimaryFromIncludes(form.primary_dataset_id, form.dataset_ids || []);
-  const allowed = new Set(includedDatasetOptions.value.map(item => item.dataset_id));
-  const filtered = next.filter(datasetId => allowed.has(datasetId));
-  if (filtered.join("|") !== (form.dataset_ids || []).join("|")) {
-    form.dataset_ids = filtered;
-    Message.warning("包含数据集已自动调整");
-  }
-}
-
 function syncViewFreq() {
   if (!primaryFreqOptions.value.length) {
     form.view_freq = "";
@@ -630,10 +610,9 @@ function syncViewFreq() {
 }
 
 watch(
-  () => form.primary_dataset_id,
+  () => form.dataset_id,
   () => {
     syncViewFreq();
-    syncIncludedDatasets();
     refreshDraftColumns();
   }
 );
@@ -641,18 +620,8 @@ watch(
 watch(
   () => form.view_freq,
   () => {
-    syncIncludedDatasets();
     refreshDraftColumns();
   }
-);
-
-watch(
-  () => form.dataset_ids,
-  () => {
-    syncIncludedDatasets();
-    refreshDraftColumns();
-  },
-  { deep: true }
 );
 
 watch(selectedSpaceId, () => {

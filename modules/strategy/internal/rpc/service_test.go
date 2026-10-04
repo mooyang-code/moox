@@ -2,61 +2,154 @@ package rpc
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"strings"
+	"encoding/json"
+	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
+	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
-	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
-	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
+	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
-	"gorm.io/gorm"
+	"github.com/stretchr/testify/require"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-func TestRunOnceEvaluatesAndOptionallyCommits(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+type legacyOwnerStub struct {
+	released        []legacyRelease
+	claimed         []legacyRelease
+	claimGeneration int64
+}
+
+type legacyRelease struct {
+	spaceID, logicalAccountID, runnerID string
+}
+
+func (s *legacyOwnerStub) Validate(context.Context, string, string) error { return nil }
+func (s *legacyOwnerStub) Claim(_ context.Context, spaceID, logicalAccountID, runnerID string) error {
+	s.claimed = append(s.claimed, legacyRelease{spaceID: spaceID, logicalAccountID: logicalAccountID, runnerID: runnerID})
+	return nil
+}
+func (s *legacyOwnerStub) ClaimWithGeneration(ctx context.Context, spaceID, logicalAccountID, runnerID string) (int64, error) {
+	if err := s.Claim(ctx, spaceID, logicalAccountID, runnerID); err != nil {
+		return 0, err
+	}
+	if s.claimGeneration <= 0 {
+		return 1, nil
+	}
+	return s.claimGeneration, nil
+}
+func (s *legacyOwnerStub) Release(_ context.Context, spaceID, logicalAccountID, runnerID string) error {
+	s.released = append(s.released, legacyRelease{spaceID: spaceID, logicalAccountID: logicalAccountID, runnerID: runnerID})
+	return nil
+}
+
+func TestValidatePoolUDFRequiresRegisteredFunction(t *testing.T) {
+	dsl, err := config.Parse([]byte(`name: udf
+triggers: {event: {name: ready}}
+data: {bar: 1m, calendar: crypto_24x7}
+rules: {r: {pool: {udf: missing_udf}, weight: 1}}
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(schema.AllSQL()).Error; err != nil {
+	if err := (&Service{PoolRegistry: input.NewUDFRegistry()}).validatePoolUDFs(dsl); err == nil {
+		t.Fatal("unregistered pool UDF should be rejected before enable")
+	}
+}
+
+func TestSetRunnerStatusRejectsModernStrategyInstance(t *testing.T) {
+	repo := openRPCStore(t)
+	definition := store.StrategyDefinition{
+		StrategyID: "modern-strategy", StrategyName: "modern", DSLYaml: `name: modern
+triggers: {event: {name: ViewDataReady}}
+data: {bar: 1m, calendar: crypto_24x7}
+rules: {r: {pool: [BTC], score: close, weight: 1}}
+`, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
+	}
+	if err := repo.SaveStrategyDefinition(context.Background(), definition); err != nil {
 		t.Fatal(err)
 	}
-	source := `def run(context, data, params, state): return {"action":"rebalance","targets":[{"instrument_id":"BTC","target_weight":"0.25"}],"next_state":{"revision":context["data_revision"],"close":data.iloc[0]["close"]}}`
-	h := sha256.Sum256([]byte(source))
-	d := domain.StrategyDefinition{StrategyID: "demo", Version: "1.0.0", API: "moox.strategy/v1", SourceCode: source, SourceHash: hex.EncodeToString(h[:]), Status: "enabled"}
-	r := store.New(db)
-	if err := r.SaveDefinition(context.Background(), d); err != nil {
+	session := "session-modern"
+	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{
+		InstanceID: "modern-instance", StrategyID: definition.StrategyID, SpaceID: "space",
+		InputBindingsJSON: json.RawMessage(`{"source_view_id":"source"}`), Enabled: true, SessionID: &session,
+		CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&domain.Binding{BindingID: "b1", StrategyID: d.StrategyID, StrategyVersion: d.Version, ParamsJSON: "{}", Status: "enabled"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&domain.State{BindingID: "b1", StrategyVersion: d.Version, StateJSON: "{}"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	eng, err := engine.New(context.Background(), "python3", "../../pyworker/worker.py")
+	service := &Service{Repo: repo}
+	ctx := trpc.BackgroundContext()
+	trpc.SetMetaData(ctx, "X-Space-Id", []byte("space"))
+	response, err := service.SetRunnerStatus(ctx, &strategypb.SetRunnerStatusReq{RunnerId: "modern-instance", Status: string(domain.RunnerStatusDisabled)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.Close()
-	svc := &Service{Repo: r, Registry: &registry.Service{Repo: r}, Engine: eng}
-	observed, err := svc.RunOnce(context.Background(), &strategypb.RunOnceReq{BindingId: "b1", TriggerBarTime: "2026-07-11T10:00:00Z", DataJson: `[{"close":42}]`, DataRevision: "rev-1"})
-	if err != nil || observed.GetRetInfo().GetCode() != 0 || observed.GetRun().GetStatus() != "observed" {
-		t.Fatalf("observed=%+v err=%v", observed, err)
+	if response.GetRetInfo().GetCode() == 0 {
+		t.Fatal("legacy runner RPC unexpectedly mutated a modern instance")
 	}
-	if !strings.Contains(observed.GetRun().GetOutputJson(), `"rev-1"`) {
-		t.Fatalf("snapshot revision missing from output: %s", observed.GetRun().GetOutputJson())
+	instance, err := repo.GetInstance(context.Background(), "modern-instance")
+	if err != nil {
+		t.Fatal(err)
 	}
-	committed, err := svc.RunOnce(context.Background(), &strategypb.RunOnceReq{BindingId: "b1", TriggerBarTime: "2026-07-11T10:01:00Z", Commit: true, DataJson: `[{"close":43}]`, DataRevision: "rev-2"})
-	if err != nil || committed.GetRetInfo().GetCode() != 0 || committed.GetRun().GetStatus() != "accepted" {
-		t.Fatalf("committed=%+v err=%v", committed, err)
+	if !instance.Enabled || instance.SessionID == nil || *instance.SessionID != session {
+		t.Fatalf("modern instance lifecycle changed: %+v", instance)
 	}
-	var state domain.State
-	if err := db.First(&state, "c_binding_id=?", "b1").Error; err != nil || state.Revision != 1 {
-		t.Fatalf("state=%+v err=%v", state, err)
+}
+
+func TestStrategyInstanceRPCRequiresMatchingSpaceMetadata(t *testing.T) {
+	repo := openRPCStore(t)
+	definition := store.StrategyDefinition{StrategyID: "scope-strategy", StrategyName: "scope", DSLYaml: "name: scope\n", CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1)}
+	require.NoError(t, repo.SaveStrategyDefinition(context.Background(), definition))
+	require.NoError(t, repo.CreateInstance(context.Background(), store.StrategyInstance{
+		InstanceID: "scope-instance", StrategyID: definition.StrategyID, SpaceID: "space-a",
+		InputBindingsJSON: json.RawMessage(`{}`), CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
+	}))
+	service := &Service{Repo: repo}
+
+	missing, err := service.GetStrategyInstance(trpc.BackgroundContext(), &strategypb.GetStrategyInstanceReq{InstanceId: "scope-instance"})
+	require.NoError(t, err)
+	require.NotEqual(t, int32(0), missing.GetRetInfo().GetCode())
+
+	mismatch := trpc.BackgroundContext()
+	trpc.SetMetaData(mismatch, "X-Space-Id", []byte("space-b"))
+	got, err := service.GetStrategyInstance(mismatch, &strategypb.GetStrategyInstanceReq{InstanceId: "scope-instance"})
+	require.NoError(t, err)
+	require.NotEqual(t, int32(0), got.GetRetInfo().GetCode())
+
+	missingSet, err := service.SetStrategyInstanceEnabled(trpc.BackgroundContext(), &strategypb.SetStrategyInstanceEnabledReq{InstanceId: "scope-instance", Enabled: false})
+	require.NoError(t, err)
+	require.NotEqual(t, int32(0), missingSet.GetRetInfo().GetCode())
+}
+
+type runnerVerifyCatalog struct{}
+
+func (runnerVerifyCatalog) ListFactorSets(context.Context) ([]compiler.FactorSetDescriptor, error) {
+	return nil, nil
+}
+func (runnerVerifyCatalog) ListFactors(context.Context, compiler.FactorSetDescriptor) ([]compiler.FactorDescriptor, error) {
+	return nil, nil
+}
+func (runnerVerifyCatalog) GetView(_ context.Context, id string) (compiler.ViewDescriptor, error) {
+	return compiler.ViewDescriptor{ID: id, Status: "active", Frequency: "1m"}, nil
+}
+func (runnerVerifyCatalog) ListViewColumns(context.Context, string) ([]compiler.ViewColumn, error) {
+	return nil, nil
+}
+
+func openRPCStore(t *testing.T) *store.Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "strategy.db")
+	repo, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	return repo
 }

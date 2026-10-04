@@ -101,7 +101,7 @@ func initSQLiteDSN(dbPath string) string {
 		"_pragma=foreign_keys(1)",
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(OFF)",
-		"_pragma=busy_timeout(5000)",
+		"_pragma=busy_timeout(10000)",
 		"_pragma=temp_store(MEMORY)",
 		"_pragma=cache_size(-64000)",
 		"_pragma=wal_autocheckpoint(1000)",

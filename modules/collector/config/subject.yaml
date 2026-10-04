@@ -1,0 +1,16 @@
+storage:
+  target: ""
+poll_interval: 1m
+fetch_timeout: 2m
+health_addr: 127.0.0.1:11413
+attributes:
+  - space_id: stockcn
+    sources: [eastmoney]
+    instrument_type: equity
+    cron: "0 8 * * *"
+    timezone: Asia/Shanghai
+  - space_id: crypto
+    sources: [binance]
+    instrument_type: spot
+    cron: "0 0 * * *"
+    timezone: UTC

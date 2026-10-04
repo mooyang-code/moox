@@ -5,16 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
-)
-
-// 全局配置实例
-var (
-	globalConfig *AppConfig
-	configMutex  sync.RWMutex
 )
 
 // AppConfig 应用配置（总配置）
@@ -36,8 +29,8 @@ func DefaultConfig() *AppConfig {
 	return &AppConfig{
 		Database: DatabaseConfig{
 			Path:            "./data/admin.db",
-			MaxIdleConns:    10,
-			MaxOpenConns:    100,
+			MaxIdleConns:    4,
+			MaxOpenConns:    8,
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
@@ -98,18 +91,4 @@ func (c *AppConfig) Validate() error {
 	}
 
 	return nil
-}
-
-// SetGlobalConfig 设置全局配置（由 bootstrap 在启动时调用）
-func SetGlobalConfig(cfg *AppConfig) {
-	configMutex.Lock()
-	defer configMutex.Unlock()
-	globalConfig = cfg
-}
-
-// GetGlobalConfig 获取全局配置
-func GetGlobalConfig() *AppConfig {
-	configMutex.RLock()
-	defer configMutex.RUnlock()
-	return globalConfig
 }

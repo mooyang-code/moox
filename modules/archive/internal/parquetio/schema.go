@@ -14,21 +14,24 @@ const (
 	colDataset    = "dataset_id"
 	colSubject    = "subject_id"
 	colFreq       = "freq"
-	colDimensions = "dimensions_json"
+	colSeriesTag  = "series_tag"
 	colAttributes = "attributes_json"
 	colWrittenAt  = "written_at"
 )
 
 func BuildSchema(columns map[string]storagepb.FieldValueType) (*parquet.Schema, error) {
-	group := parquet.Group{colCandleTime: parquet.Timestamp(parquet.Nanosecond), colSpace: parquet.String(), colDataset: parquet.String(), colSubject: parquet.String(), colFreq: parquet.String(), colDimensions: parquet.String(), colAttributes: parquet.String(), colWrittenAt: parquet.Timestamp(parquet.Nanosecond)}
+	group := parquet.Group{colCandleTime: parquet.Timestamp(parquet.Nanosecond), colSpace: parquet.String(), colDataset: parquet.String(), colSubject: parquet.String(), colFreq: parquet.String(), colSeriesTag: parquet.Required(parquet.String()), colAttributes: parquet.String(), colWrittenAt: parquet.Timestamp(parquet.Nanosecond)}
 	for _, name := range domain.SortedColumnNames(columns) {
+		if _, reserved := group[name]; reserved || name == "dimensions_json" {
+			return nil, fmt.Errorf("column %s is reserved", name)
+		}
 		node, err := businessNode(columns[name])
 		if err != nil {
 			return nil, fmt.Errorf("column %s: %w", name, err)
 		}
 		group[name] = parquet.Optional(node)
 	}
-	return parquet.NewSchema("moox_archive_v1", group), nil
+	return parquet.NewSchema("moox_archive_v2", group), nil
 }
 
 func businessNode(kind storagepb.FieldValueType) (parquet.Node, error) {

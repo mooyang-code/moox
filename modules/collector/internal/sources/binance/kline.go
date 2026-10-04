@@ -2,19 +2,13 @@ package binance
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/avast/retry-go"
-	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // 产品类型常量
@@ -23,144 +17,23 @@ const (
 	InstTypeSWAP = "SWAP" // 永续合约
 )
 
-var errKlineNotClosed = errors.New("K线尚未闭合")
-
-// KlineCollector K线数据采集器
+// KlineCollector owns Binance protocol access for the typed MarketProvider.
+// Storage writes are performed by the common KlinePipeline, never here.
 type KlineCollector struct {
 	client         *binanceapi.Client
 	spotAPI        *binanceapi.SpotAPI
 	swapAPI        *binanceapi.SwapAPI
-	storage        klineStorage
 	fetchKlinePage func(context.Context, *sources.CollectParams, *exchange.KlineRequest) ([]*exchange.Kline, error)
-	now            func() time.Time
 }
 
-type klineStorage interface {
-	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error)
-	MergeTimeSeriesRows(context.Context, []*storagepb.TimeSeriesRow) error
-}
-
-// init 自注册到采集器注册中心
-func init() {
-	// 创建采集器实例
+// NewKlineCollector returns a configured Binance K-line collector for bounded
+// short-lived invocations. It intentionally does not attach a Storage writer.
+func NewKlineCollector(clients ...*binanceapi.Client) *KlineCollector {
 	client := newConfiguredClient()
-	c := &KlineCollector{
-		client:  client,
-		spotAPI: binanceapi.NewSpotAPI(client),
-		swapAPI: binanceapi.NewSwapAPI(client),
+	if len(clients) > 0 && clients[0] != nil {
+		client = clients[0]
 	}
-
-	for _, market := range []struct {
-		id string
-		cn string
-	}{
-		{id: "spot", cn: "现货"},
-		{id: "swap", cn: "永续合约"},
-	} {
-		err := sources.NewBuilder().
-			Source("binance", "币安").
-			Market(market.id, market.cn).
-			DataType("kline", "K线").
-			Description("币安K线数据采集器").
-			Collector(c).
-			Register()
-		if err != nil {
-			panic(fmt.Sprintf("注册K线采集器失败: %v", err))
-		}
-	}
-}
-
-// Source 返回数据源标识
-func (c *KlineCollector) Source() string {
-	return "binance"
-}
-
-// DataType 返回数据类型标识
-func (c *KlineCollector) DataType() string {
-	return "kline"
-}
-
-// Collect 执行一次K线采集
-func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectParams) error {
-	if params == nil {
-		return fmt.Errorf("K线采集参数不能为空")
-	}
-	log.InfoContextf(ctx, "K线采集开始: inst_type=%s, symbol=%s, interval=%s",
-		params.InstType, params.Symbol, params.Interval)
-
-	freq, err := normalizeFreq(params.Interval)
-	if err != nil {
-		return err
-	}
-	binding, err := ResolveStorageBinding(params.InstType)
-	if err != nil {
-		return err
-	}
-	storageSubjectID := strings.TrimSpace(params.SubjectID)
-	if storageSubjectID == "" {
-		storageSubjectID = params.Symbol
-	}
-	writer := c.storage
-	if writer == nil {
-		accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
-		if accessTarget == "" {
-			return fmt.Errorf("未配置存储 access tRPC 地址")
-		}
-		writer = newStorageWriter(accessTarget, "", storageAuthInfo(binding))
-	}
-	watermark, found, err := writer.LatestTimeSeriesTime(ctx, &storagepb.TimeSeriesKey{
-		SpaceId: binding.SpaceID, DatasetId: binding.KlineDatasetID, SubjectId: storageSubjectID, Freq: freq,
-	})
-	if err != nil {
-		return fmt.Errorf("读取K线水位线失败: %w", err)
-	}
-	var watermarkPtr *time.Time
-	if found {
-		watermarkPtr = &watermark
-	}
-	cursor := newKlineCursor(watermarkPtr)
-	total := 0
-	for {
-		req, ok := cursor.NextRequest(params.Symbol, params.Interval)
-		if !ok {
-			break
-		}
-		exchangeKlines, err := c.fetchKlines(ctx, params, req)
-		if err != nil {
-			return err
-		}
-		klines := convertExchangeKlines(exchangeKlines, params.Symbol, params.Interval)
-		closed, skipped := filterClosedKlines(klines, c.currentTime())
-		if skipped > 0 {
-			log.InfoContextf(ctx, "跳过未闭合K线: inst_type=%s, symbol=%s, interval=%s, skipped=%d", params.InstType, params.Symbol, params.Interval, skipped)
-		}
-		if len(closed) > 0 {
-			rows, buildErr := buildKlineRows(closed, storageSubjectID, binding, freq)
-			if buildErr != nil {
-				return buildErr
-			}
-			if err := writer.MergeTimeSeriesRows(ctx, rows); err != nil {
-				return fmt.Errorf("K线写入存储失败: %w", err)
-			}
-			total += len(rows)
-		}
-		more, advanceErr := cursor.Advance(exchangeKlines)
-		if advanceErr != nil {
-			return advanceErr
-		}
-		if !more {
-			break
-		}
-	}
-	log.InfoContextf(ctx, "K线采集完成: inst_type=%s, symbol=%s, interval=%s, count=%d", params.InstType, params.Symbol, params.Interval, total)
-	return nil
-}
-
-func (c *KlineCollector) currentTime() time.Time {
-	if c != nil && c.now != nil {
-		return c.now()
-	}
-	return time.Now()
+	return &KlineCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client)}
 }
 
 // fetchKlines 从币安 API 获取一页 K 线数据。
@@ -171,15 +44,66 @@ func (c *KlineCollector) fetchKlines(ctx context.Context, params *sources.Collec
 	return c.fetchExchangeKlines(ctx, params, req)
 }
 
+// fetchKlinesOnce deliberately performs one physical provider request. The
+// common RouterSession owns the two-provider fallback budget and FeedGuard
+// owns the per-IP token/concurrency policy; retrying here would bypass both.
+func (c *KlineCollector) fetchKlinesOnce(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	return c.fetchKlines(binanceapi.SingleAttempt(ctx), params, req)
+}
+
 func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
 	switch params.InstType {
 	case InstTypeSPOT:
-		return c.spotAPI.GetKline(ctx, req)
+		var lastErr error
+		for index, domain := range c.client.SpotDomains() {
+			attemptCtx, cancel := endpointAttemptContext(ctx, len(c.client.SpotDomains())-index)
+			klines, err := c.spotAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, params.DNSIPs(domain))
+			cancel()
+			if err == nil {
+				return klines, nil
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		return nil, lastErr
 	case InstTypeSWAP:
-		return c.swapAPI.GetKline(ctx, req)
+		var lastErr error
+		for index, domain := range c.client.SwapDomains() {
+			attemptCtx, cancel := endpointAttemptContext(ctx, len(c.client.SwapDomains())-index)
+			klines, err := c.swapAPI.GetKlineWithDomainIPs(attemptCtx, req, domain, params.DNSIPs(domain))
+			cancel()
+			if err == nil {
+				return klines, nil
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				break
+			}
+		}
+		return nil, lastErr
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
 	}
+}
+
+func endpointAttemptContext(parent context.Context, remainingEndpoints int) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if remainingEndpoints <= 1 {
+		return context.WithCancel(parent)
+	}
+	deadline, ok := parent.Deadline()
+	if !ok {
+		return context.WithCancel(parent)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithDeadline(parent, deadline)
+	}
+	return context.WithTimeout(parent, remaining/time.Duration(remainingEndpoints))
 }
 
 func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, interval string) []*market.Kline {
@@ -200,117 +124,6 @@ func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, inte
 	return klines
 }
 
-func (c *KlineCollector) reportKlines(ctx context.Context, params *sources.CollectParams, klines []*market.Kline) error {
-	if len(klines) == 0 {
-		log.InfoContextf(ctx, "K线写入存储跳过: 无数据, inst_type=%s, symbol=%s, interval=%s",
-			params.InstType, params.Symbol, params.Interval)
-		return nil
-	}
-
-	accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
-	if accessTarget == "" {
-		return fmt.Errorf("未配置存储 access tRPC 地址")
-	}
-
-	freq, err := normalizeFreq(params.Interval)
-	if err != nil {
-		return err
-	}
-
-	binding, err := ResolveStorageBinding(params.InstType)
-	if err != nil {
-		return err
-	}
-
-	storageSubjectID := strings.TrimSpace(params.SubjectID)
-	if storageSubjectID == "" {
-		storageSubjectID = params.Symbol
-	}
-	rows, err := buildKlineRows(klines, storageSubjectID, binding, freq)
-	if err != nil {
-		return err
-	}
-
-	return c.sendTimeSeriesRowsWithRetry(ctx, accessTarget, binding, rows)
-}
-
-func normalizeFreq(interval string) (string, error) {
-	if interval == "" {
-		return "", fmt.Errorf("interval 不能为空")
-	}
-	unit := interval[len(interval)-1]
-	switch unit {
-	case 'h', 'H':
-		return interval[:len(interval)-1] + "H", nil
-	case 'd', 'D':
-		return interval[:len(interval)-1] + "D", nil
-	case 'w', 'W':
-		return interval[:len(interval)-1] + "W", nil
-	case 'y', 'Y':
-		return interval[:len(interval)-1] + "Y", nil
-	case 'm', 'M':
-		return interval, nil
-	default:
-		return interval, nil
-	}
-}
-
-func buildKlineRows(klines []*market.Kline, symbol string, binding StorageBinding, freq string) ([]*storagepb.TimeSeriesRow, error) {
-	closedKlines, _ := filterClosedKlines(klines, time.Now())
-	if len(klines) > 0 && len(closedKlines) == 0 {
-		return nil, fmt.Errorf("%w: symbol=%s, freq=%s, latest_close_time=%s", errKlineNotClosed, symbol, freq, latestCloseTime(klines))
-	}
-
-	rows := make([]*storagepb.TimeSeriesRow, 0, len(klines))
-	for _, kline := range closedKlines {
-		openTime := formatKlineTime(kline.OpenTime)
-		openValue, err := kline.Open.Float64()
-		if err != nil {
-			return nil, fmt.Errorf("解析开盘价失败: %w", err)
-		}
-		highValue, err := kline.High.Float64()
-		if err != nil {
-			return nil, fmt.Errorf("解析最高价失败: %w", err)
-		}
-		lowValue, err := kline.Low.Float64()
-		if err != nil {
-			return nil, fmt.Errorf("解析最低价失败: %w", err)
-		}
-		closeValue, err := kline.Close.Float64()
-		if err != nil {
-			return nil, fmt.Errorf("解析收盘价失败: %w", err)
-		}
-		volumeValue, err := kline.Volume.Float64()
-		if err != nil {
-			return nil, fmt.Errorf("解析成交量失败: %w", err)
-		}
-		quoteVolumeValue, err := kline.QuoteVolume.Float64()
-		if err != nil {
-			return nil, fmt.Errorf("解析成交额失败: %w", err)
-		}
-
-		rows = append(rows, &storagepb.TimeSeriesRow{
-			Key: &storagepb.TimeSeriesKey{
-				SpaceId:   binding.SpaceID,
-				DatasetId: binding.KlineDatasetID,
-				SubjectId: symbol,
-				Freq:      freq,
-				DataTime:  openTime,
-			},
-			Columns: []*storagepb.ColumnValue{
-				doubleField("open", openValue),
-				doubleField("high", highValue),
-				doubleField("low", lowValue),
-				doubleField("close", closeValue),
-				doubleField("volume", volumeValue),
-				doubleField("quote_volume", quoteVolumeValue),
-				intField("trade_num", kline.TradeCount),
-			},
-		})
-	}
-	return rows, nil
-}
-
 func filterClosedKlines(klines []*market.Kline, now time.Time) ([]*market.Kline, int) {
 	closed := make([]*market.Kline, 0, len(klines))
 	skipped := 0
@@ -329,40 +142,4 @@ func isKlineClosed(kline *market.Kline, now time.Time) bool {
 		return false
 	}
 	return now.After(kline.CloseTime)
-}
-
-func latestCloseTime(klines []*market.Kline) string {
-	var latest time.Time
-	for _, kline := range klines {
-		if kline == nil || kline.CloseTime.IsZero() {
-			continue
-		}
-		if latest.IsZero() || kline.CloseTime.After(latest) {
-			latest = kline.CloseTime
-		}
-	}
-	if latest.IsZero() {
-		return ""
-	}
-	return latest.UTC().Format(time.RFC3339Nano)
-}
-
-func formatKlineTime(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
-}
-
-func (c *KlineCollector) sendTimeSeriesRowsWithRetry(ctx context.Context, accessTarget string, binding StorageBinding, rows []*storagepb.TimeSeriesRow) error {
-	return retry.Do(
-		func() error {
-			writer := newStorageWriter(accessTarget, "", storageAuthInfo(binding))
-			return writer.MergeTimeSeriesRows(ctx, rows)
-		},
-		retry.Attempts(3),
-		retry.Delay(500*time.Millisecond),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "K线写入存储重试第 %d 次: %v", n+1, err)
-		}),
-		retry.Context(ctx),
-	)
 }

@@ -2,282 +2,362 @@ package store
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/position"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"errors"
 	"path/filepath"
 	"testing"
-	"time"
+
+	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/trade/schema"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
-
-func TestTransactionRollbackInboxAndOutbox(t *testing.T) {
-	s, e := Open(filepath.Join(t.TempDir(), "trade.db"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer s.Close()
-	ctx := context.Background()
-	e = s.Transaction(ctx, func(tx *Tx) error {
-		ok, e := tx.InsertInbox("c", "m", "t")
-		if e != nil || !ok {
-			t.Fatalf("insert: %v %v", ok, e)
-		}
-		if e = tx.AddOutbox("m", "t", []byte("x")); e != nil {
-			t.Fatal(e)
-		}
-		return ErrConflict
-	})
-	if e != ErrConflict {
-		t.Fatal(e)
-	}
-	var n int64
-	s.db.Table("t_trade_inbox").Count(&n)
-	if n != 0 {
-		t.Fatalf("inbox rows=%d", n)
-	}
-}
-func TestInboxAndFillIdempotency(t *testing.T) {
-	s, e := Open(filepath.Join(t.TempDir(), "trade.db"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer s.Close()
-	ctx := context.Background()
-	if e = s.Transaction(ctx, func(tx *Tx) error {
-		a, e := tx.InsertInbox("c", "m", "t")
-		if e != nil || !a {
-			return e
-		}
-		b, e := tx.InsertInbox("c", "m", "t")
-		if e != nil || b {
-			t.Fatal("duplicate inbox applied")
-		}
-		a, e = tx.InsertFill("s", "f", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "", 0)
-		if e != nil || !a {
-			return e
-		}
-		b, e = tx.InsertFill("s", "f2", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "", 0)
-		if e != nil || b {
-			t.Fatal("duplicate exchange fill applied")
-		}
-		return nil
-	}); e != nil {
-		t.Fatal(e)
-	}
-}
-
-func TestEpochTimeAcceptsSecondsAndMilliseconds(t *testing.T) {
-	seconds := int64(1_700_000_000)
-	assert.Equal(t, seconds*1000, epochMillis(seconds))
-	assert.Equal(t, seconds*1000, epochMillis(seconds*1000))
-	assert.Equal(t, time.Unix(seconds, 0).UTC(), epochTime(seconds))
-}
-
-func TestListFillsPageUsesExchangeTradeTime(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	tradeTime := int64(1_700_000_000_000)
-	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		_, err := tx.InsertFill("s", "f", "ef", "a", "c", "BTCUSDT", "o", "1", "1", "0", "", tradeTime)
-		return err
-	}))
-
-	rows, total, err := s.ListFillsPage(ctx, "s", FillQuery{StartTimeMS: tradeTime / 1000, EndTimeMS: tradeTime, Limit: 10})
-	require.NoError(t, err)
-	assert.Equal(t, 1, total)
-	require.Len(t, rows, 1)
-	assert.Equal(t, tradeTime, rows[0].TradedAtMS)
-}
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	return s
 }
 
-func TestStore_Health_EmptyDB_ShouldReportZeroOrders(t *testing.T) {
+func TestOpenConfiguresSQLiteAndTransactionRollback(t *testing.T) {
 	s := openTestStore(t)
-	stats, err := s.Health(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), stats.OpenOrders)
-	assert.Equal(t, int64(0), stats.UnknownOrders)
-}
 
-func TestStore_SetControlAndIsPaused_ShouldToggle(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.SetControl(ctx, "space-1", ControlRecord{TargetType: "account", TargetID: "acc-1", Paused: true, Reason: "test"}))
-	paused, err := s.IsPaused(ctx, "space-1", "acc-1", "")
-	require.NoError(t, err)
-	assert.True(t, paused)
-	require.NoError(t, s.SetControl(ctx, "space-1", ControlRecord{TargetType: "account", TargetID: "acc-1", Paused: false}))
-	paused, err = s.IsPaused(ctx, "space-1", "acc-1", "")
-	require.NoError(t, err)
-	assert.False(t, paused)
-}
+	var foreignKeys, busyTimeout int
+	require.NoError(t, s.db.Raw(`PRAGMA foreign_keys`).Scan(&foreignKeys).Error)
+	require.Equal(t, 1, foreignKeys)
+	require.NoError(t, s.db.Raw(`PRAGMA busy_timeout`).Scan(&busyTimeout).Error)
+	require.Equal(t, sqliteBusyTimeoutMS, busyTimeout)
 
-func TestStore_OrderCRUD_ShouldRoundTrip(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	rec := &OrderRecord{
-		SpaceID: "space-1", OrderID: "order-1", ClientOrderID: "client-1",
-		AccountID: "acct-1", ChannelID: "chan-1", Symbol: "BTC-USDT",
-		Side: "BUY", Quantity: "1", Price: "100", State: string(order.Ready), ExchangeOrderID: "ex-1", Version: 1,
-	}
-	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.CreateOrder(rec) }))
-	got, err := s.GetOrder(ctx, "space-1", "order-1")
-	require.NoError(t, err)
-	assert.Equal(t, "client-1", got.ClientOrderID)
+	stop := errors.New("stop")
+	err := s.Transaction(context.Background(), func(tx *Tx) error {
+		require.NoError(t, tx.UpsertInstrument(InstrumentRecord{
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01",
+			ExchangeQuantityStep: "0.0001", Status: "TRADING",
+		}))
+		return stop
+	})
+	require.ErrorIs(t, err, stop)
 
-	byClient, err := s.GetOrderByClientID(ctx, "space-1", "client-1")
-	require.NoError(t, err)
-	assert.Equal(t, "order-1", byClient.OrderID)
-
-	byExchange, err := s.GetOrderByExchangeID(ctx, "space-1", "ex-1")
-	require.NoError(t, err)
-	assert.Equal(t, "order-1", byExchange.OrderID)
-
-	privateFillOrder, err := s.GetOrderForPrivateFill(ctx, "space-1", "chan-1", "BTC-USDT", "ex-1")
-	require.NoError(t, err)
-	assert.Equal(t, "order-1", privateFillOrder.OrderID)
-}
-
-func TestStore_SagaCRUD_ShouldRoundTrip(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	rec := SagaRecord{SpaceID: "space-1", SagaID: "saga-1", Type: "CANCEL_REPLACE", State: "REQUESTED", OrderID: "o1", Version: 1}
-	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.CreateSaga(rec) }))
-	got, err := s.GetSaga(ctx, "space-1", "saga-1")
-	require.NoError(t, err)
-	assert.Equal(t, "REQUESTED", got.State)
-}
-
-func TestStore_ListBalances_AfterLedgerPost_ShouldReturnRows(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.PostLedger("space-1", ledger.Transaction{
-			ID: shared.LedgerTransactionID("seed"), BizType: "seed", RefType: "test", RefID: "1",
-			Entries: []ledger.Entry{
-				{AccountID: "clearing", Asset: "USDT", Bucket: "clearing", Amount: shared.MustDecimal("100").Neg()},
-				{AccountID: "acct-1", Asset: "USDT", Bucket: "available", Amount: shared.MustDecimal("100")},
-			},
-		})
-	}))
-	rows, err := s.ListBalances(ctx, "space-1", "acct-1")
-	require.NoError(t, err)
-	require.NotEmpty(t, rows)
-}
-
-func TestStore_EnqueueOutbox_ShouldPersist(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.EnqueueOutbox(ctx, "msg-1", "topic.test", []byte(`{"k":"v"}`)))
 	var count int64
-	s.DBForTest().Table("t_trade_outbox").Count(&count)
-	assert.Equal(t, int64(1), count)
+	require.NoError(t, s.db.Table("t_trade_instruments").Count(&count).Error)
+	require.Zero(t, count)
 }
 
-func TestStore_ListOpenOrders_ShouldFilterByState(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	for _, st := range []string{string(order.Open), string(order.Canceled)} {
-		rec := OrderRecord{
-			SpaceID: "space-1", OrderID: "order-" + st, ClientOrderID: "client-" + st,
-			AccountID: "acct-1", ChannelID: "chan-1", Symbol: "BTC-USDT",
-			Side: "BUY", Quantity: "1", Price: "100", State: st, Version: 1,
-		}
-		require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.CreateOrder(&rec) }))
+func TestOpenRejectsObsoleteTradeSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE t_trade_channels (c_channel_id TEXT PRIMARY KEY)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+
+	check, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	var count int64
+	require.NoError(t, check.Raw(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+	`).Scan(&count).Error)
+	require.Equal(t, int64(1), count)
+	checkSQL, err := check.DB()
+	require.NoError(t, err)
+	require.NoError(t, checkSQL.Close())
+}
+
+func TestOpenRejectsIncompatibleTargetExecutionColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "incompatible.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE t_target_executions (
+			c_space_id TEXT NOT NULL,
+			c_execution_id TEXT NOT NULL,
+			c_targets_json TEXT NOT NULL
+		)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+}
+
+func TestOpenRejectsSingleAccountTargetAndLedgerSchema(t *testing.T) {
+	for _, schemaSQL := range []string{
+		`CREATE TABLE t_target_executions (
+			c_space_id TEXT NOT NULL,
+			c_execution_binding_id TEXT NOT NULL,
+			c_trading_account_id TEXT NOT NULL
+		)`,
+		`CREATE TABLE t_ledger_transactions (
+			c_space_id TEXT NOT NULL,
+			c_transaction_id TEXT NOT NULL
+		)`,
+	} {
+		t.Run(schemaSQL[:20], func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "retired.db")
+			db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+			require.NoError(t, err)
+			require.NoError(t, db.Exec(schemaSQL).Error)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			require.NoError(t, sqlDB.Close())
+
+			_, err = Open(path)
+			require.ErrorIs(t, err, ErrIncompatibleSchema)
+		})
 	}
-	open, err := s.ListOpenOrders(ctx, 10)
-	require.NoError(t, err)
-	assert.Len(t, open, 1)
-	assert.Equal(t, string(order.Open), open[0].State)
 }
 
-func TestStore_ListRecoverableOrders_ShouldReturnRecoverableStates(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	for _, st := range []string{string(order.Ready), string(order.Submitting), string(order.Filled)} {
-		rec := OrderRecord{
-			SpaceID: "space-1", OrderID: "recover-" + st, ClientOrderID: "client-" + st,
-			AccountID: "acct-1", ChannelID: "chan-1", Symbol: "BTC-USDT",
-			Side: "BUY", Quantity: "1", Price: "100", State: st, Version: 1,
-		}
-		require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.CreateOrder(&rec) }))
+func TestOpenRejectsTradingAccountWithoutCurrentCursorColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-account.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE t_trading_accounts (
+			c_space_id TEXT NOT NULL,
+			c_trading_account_id TEXT NOT NULL,
+			c_name TEXT NOT NULL
+		)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+}
+
+func TestOpenRejectsCurrentTableWithoutRequiredUniqueConstraints(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid-fill.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE t_order_fills (
+			c_space_id TEXT NOT NULL
+		)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+}
+
+func TestOpenRejectsChangedPartialUniqueIndexPredicate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid-index.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(schema.AllSQL()).Error)
+	require.NoError(t, db.Exec(`DROP INDEX uk_trade_orders_exchange_order`).Error)
+	require.NoError(t, db.Exec(`
+		CREATE UNIQUE INDEX uk_trade_orders_exchange_order
+		ON t_trade_orders (
+			c_space_id, c_trading_account_id, c_exchange_symbol, c_exchange_order_id
+		)
+		WHERE c_exchange_order_id = ''
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+}
+
+func TestOpenAcceptsCurrentSchemaOnReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "current.db")
+	first, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+
+	second, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, second.Close())
+}
+
+func TestOpenMigratesLegacyLogicalAccountOwnerGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-owner.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(legacyLogicalAccountTableSQL).Error)
+	require.NoError(t, db.Exec(`
+CREATE UNIQUE INDEX ux_logical_account_owner_runner
+ON t_logical_accounts (c_space_id, c_owner_runner_id)
+WHERE c_owner_runner_id IS NOT NULL
+`).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_accounts
+ (c_space_id, c_logical_account_id, c_name, c_execution_mode, c_market_type, c_settlement_asset, c_automation_state, c_pause_reason)
+VALUES ('space', 'logical', 'legacy', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 'legacy')
+;
+INSERT INTO t_logical_accounts
+ (c_space_id, c_logical_account_id, c_name, c_owner_runner_id, c_execution_mode, c_market_type, c_settlement_asset, c_automation_state, c_pause_reason)
+VALUES ('space', 'owned', 'owned', 'runner', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 'legacy')
+`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	s, err := Open(path)
+	require.NoError(t, err)
+	var columns []string
+	require.NoError(t, s.db.Raw(`SELECT name FROM pragma_table_info('t_logical_accounts') ORDER BY cid`).Scan(&columns).Error)
+	require.Contains(t, columns, "c_owner_claimed_at")
+	// The migration is additive and defaults existing accounts to generation 0.
+	var generations map[string]int64
+	var rows []struct {
+		ID         string `gorm:"column:id"`
+		Generation int64  `gorm:"column:generation"`
 	}
-
-	rows, err := s.ListRecoverableOrders(ctx, 0)
-
+	require.NoError(t, s.db.Raw(`SELECT c_logical_account_id AS id, c_owner_claimed_at AS generation FROM t_logical_accounts`).Scan(&rows).Error)
+	generations = make(map[string]int64, len(rows))
+	for _, row := range rows {
+		generations[row.ID] = row.Generation
+	}
+	require.Equal(t, int64(0), generations["logical"])
+	require.Equal(t, int64(1), generations["owned"])
+	require.NoError(t, s.Close())
+	reopened, err := Open(path)
 	require.NoError(t, err)
-	require.Len(t, rows, 2)
-	assert.NotEqual(t, string(order.Filled), rows[0].State)
+	require.NoError(t, reopened.Close())
 }
 
-func TestStore_ListPositions_AfterApplyPosition_ShouldFilterBySymbol(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	fill := position.Fill{Side: "BUY", Quantity: shared.MustDecimal("2"), Price: shared.MustDecimal("100")}
-	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.ApplyPosition("space-1", "acct-1", "BTC-USDT", fill)
-	}))
-
-	allRows, err := s.ListPositions(ctx, "space-1", "acct-1", "")
+func TestOpenMigratesLegacyLogicalAccountWithoutOwnerIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-no-owner-index.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 	require.NoError(t, err)
-	require.Len(t, allRows, 1)
-	assert.Equal(t, "BTC-USDT", allRows[0].Symbol)
-
-	filtered, err := s.ListPositions(ctx, "space-1", "acct-1", "BTC-USDT")
+	require.NoError(t, db.Exec(legacyLogicalAccountTableSQL).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_accounts
+ (c_space_id, c_logical_account_id, c_name, c_owner_runner_id, c_execution_mode, c_market_type, c_settlement_asset, c_automation_state, c_pause_reason)
+VALUES ('space', 'owned', 'owned', 'runner', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 'legacy')`).Error)
+	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	require.Len(t, filtered, 1)
-}
+	require.NoError(t, sqlDB.Close())
 
-func TestStore_ListRecoverableSagas_ShouldReturnActiveSagaStates(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	recoverable := SagaRecord{SpaceID: "space-1", SagaID: "saga-1", Type: "CANCEL_REPLACE", State: "CANCEL_UNKNOWN", OrderID: "old-1", Version: 1}
-	done := SagaRecord{SpaceID: "space-1", SagaID: "saga-2", Type: "CANCEL_REPLACE", State: "COMPLETED", OrderID: "old-2", Version: 1}
-	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateSaga(recoverable); err != nil {
-			return err
+	s, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	check, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	var indexes []struct {
+		Name string `gorm:"column:name"`
+	}
+	require.NoError(t, check.Raw(`PRAGMA index_list("t_logical_accounts")`).Scan(&indexes).Error)
+	var ownerIndexFound bool
+	for _, index := range indexes {
+		if index.Name == "ux_logical_account_owner_runner" {
+			ownerIndexFound = true
 		}
-		return tx.CreateSaga(done)
-	}))
-
-	rows, err := s.ListRecoverableSagas(ctx, 0)
-
+	}
+	require.True(t, ownerIndexFound)
+	sqlDB, err = check.DB()
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "saga-1", rows[0].SagaID)
+	require.NoError(t, sqlDB.Close())
 }
 
-func TestStore_ClaimReleaseAndMarkOutbox_ShouldUpdateLifecycle(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.EnqueueOutbox(ctx, "msg-1", "topic.test", []byte(`{"k":"v"}`)))
-
-	claimed, err := s.ClaimOutbox(ctx, 0, time.Minute)
+func TestOpenMigratesLegacyStrategyTargetTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-targets.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 	require.NoError(t, err)
-	require.Len(t, claimed, 1)
-	assert.Equal(t, "msg-1", claimed[0].MessageID)
-
-	require.NoError(t, s.ReleaseOutbox(ctx, claimed[0].ID, "retry later"))
-	reclaimed, err := s.ClaimOutbox(ctx, 1, time.Minute)
+	require.NoError(t, db.Exec(legacyLogicalAccountTableSQL).Error)
+	require.NoError(t, db.Exec(`
+CREATE UNIQUE INDEX ux_logical_account_owner_runner
+ON t_logical_accounts (c_space_id, c_owner_runner_id)
+WHERE c_owner_runner_id IS NOT NULL`).Error)
+	require.NoError(t, db.Exec(`
+CREATE TABLE t_logical_account_targets (
+    c_space_id TEXT NOT NULL,
+    c_logical_account_id TEXT NOT NULL,
+    c_target_id TEXT NOT NULL,
+    c_runner_id TEXT NOT NULL,
+    c_command_sequence INTEGER NOT NULL,
+    c_targets_json TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_blocked_targets_json TEXT NOT NULL DEFAULT '[]',
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_accepted_at INTEGER NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_logical_account_id),
+    UNIQUE (c_space_id, c_target_id),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
+        ON DELETE CASCADE,
+    CHECK (c_command_sequence > 0),
+    CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED')),
+    CHECK (json_valid(c_targets_json)),
+    CHECK (json_type(c_targets_json) = 'array'),
+    CHECK (json_valid(c_blocked_targets_json)),
+    CHECK (json_type(c_blocked_targets_json) = 'array')
+)`).Error)
+	require.NoError(t, db.Exec(`
+CREATE TABLE t_logical_account_target_receipts (
+    c_space_id TEXT NOT NULL,
+    c_target_id TEXT NOT NULL,
+    c_runner_id TEXT NOT NULL,
+    c_logical_account_id TEXT NOT NULL,
+    c_command_sequence INTEGER NOT NULL,
+    c_request_hash TEXT NOT NULL,
+    c_signal_time INTEGER NOT NULL,
+    c_weights_json TEXT NOT NULL,
+    c_equity TEXT NOT NULL,
+    c_equity_source_time INTEGER NOT NULL,
+    c_reference_prices_json TEXT NOT NULL,
+    c_quantity_targets_json TEXT NOT NULL,
+    c_accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (c_space_id, c_target_id),
+    UNIQUE (c_space_id, c_logical_account_id, c_runner_id, c_command_sequence),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
+        ON DELETE CASCADE,
+    CHECK (c_command_sequence > 0),
+    CHECK (json_valid(c_weights_json)),
+    CHECK (json_type(c_weights_json) = 'array'),
+    CHECK (json_valid(c_reference_prices_json)),
+    CHECK (json_type(c_reference_prices_json) = 'object'),
+    CHECK (json_valid(c_quantity_targets_json)),
+    CHECK (json_type(c_quantity_targets_json) = 'array')
+)`).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_accounts
+ (c_space_id, c_logical_account_id, c_name, c_execution_mode, c_market_type, c_settlement_asset, c_automation_state, c_pause_reason)
+VALUES ('space', 'logical', 'legacy', 'PAPER', 'SPOT', 'USDT', 'PAUSED', 'legacy')`).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_account_targets
+ (c_space_id, c_logical_account_id, c_target_id, c_runner_id, c_command_sequence,
+  c_targets_json, c_status, c_blocked_targets_json, c_accepted_at)
+VALUES ('space', 'logical', 'target-1', 'runner', 1, '[]', 'PENDING', '[]', 1)`).Error)
+	require.NoError(t, db.Exec(`
+INSERT INTO t_logical_account_target_receipts
+ (c_space_id, c_target_id, c_runner_id, c_logical_account_id, c_command_sequence,
+  c_request_hash, c_signal_time, c_weights_json, c_equity, c_equity_source_time,
+  c_reference_prices_json, c_quantity_targets_json, c_accepted_at)
+VALUES ('space', 'target-1', 'runner', 'logical', 1, 'hash', 1, '[]', '1', 1, '{}', '[]', 1)`).Error)
+	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	require.Len(t, reclaimed, 1)
-	require.NoError(t, s.MarkOutboxPublished(ctx, reclaimed[0].ID))
+	require.NoError(t, sqlDB.Close())
 
-	empty, err := s.ClaimOutbox(ctx, 1, time.Minute)
+	s, err := Open(path)
 	require.NoError(t, err)
-	assert.Empty(t, empty)
-}
-
-func TestSplitSQL_SkipsCommentsAndEmptyLines(t *testing.T) {
-	got := splitSQL("-- comment\nCREATE TABLE t (id INT);\n\nINSERT INTO t VALUES (1);")
-	assert.Len(t, got, 2)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	for _, table := range []string{"t_logical_account_targets", "t_logical_account_target_receipts"} {
+		var count int64
+		require.NoError(t, s.db.Raw(`SELECT COUNT(*) FROM `+table).Scan(&count).Error)
+		require.Equal(t, int64(1), count, table)
+		var columns []string
+		require.NoError(t, s.db.Raw(`SELECT name FROM pragma_table_info(?)`, table).Scan(&columns).Error)
+		require.Contains(t, columns, "c_instance_id")
+	}
 }

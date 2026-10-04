@@ -18,4 +18,4 @@ store:
   path: ./data/gateway
 
 proxy:
-  max_body_bytes: 4194304
+  max_body_bytes: 33554432

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -20,8 +21,10 @@ type Client struct {
 	SpaceID     string
 	// ServiceAuth 后台服务签名鉴权配置。设置后请求走 /api/service/{service}/{method}
 	// 路由并使用 HMAC Auth 头，不再依赖用户登录态 X-Access-Token。
-	ServiceAuth *ServiceAuthConfig
-	HTTPClient  *http.Client
+	ServiceAuth    *ServiceAuthConfig
+	HTTPClient     *http.Client
+	publishLeaseMu sync.RWMutex
+	publishLease   *CollectorPublishLease
 }
 
 // New creates a Control API client. baseURL should point at the Control service root.
@@ -38,6 +41,14 @@ type retInfo struct {
 
 func isRetInfoSuccess(code int) bool {
 	return code == 0 || code == 200
+}
+
+func isRetInfoNotFound(info retInfo) bool {
+	if info.Code == 404 {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(info.Msg))
+	return strings.Contains(message, "not found") || strings.Contains(message, "record not found")
 }
 func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([]byte, error) {
 	if c.BaseURL == "" {
@@ -84,7 +95,11 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 	}
 	client := c.HTTPClient
 	if c.ServiceAuth != nil {
-		client, err = gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: 30 * time.Second, CAFile: c.ServiceAuth.CAFile})
+		timeout := 30 * time.Second
+		if c.HTTPClient != nil && c.HTTPClient.Timeout > 0 {
+			timeout = c.HTTPClient.Timeout
+		}
+		client, err = gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: c.ServiceAuth.CAFile})
 		if err != nil {
 			return nil, err
 		}
@@ -114,6 +129,23 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 		return nil, fmt.Errorf("control returned empty response body")
 	}
 	return raw, nil
+}
+
+// CallJSON invokes one of the service gateway methods and decodes its JSON
+// response.  Setup workflows use this small escape hatch for services whose
+// generated client is owned by another module (for example FactorMgr).
+func (c *Client) CallJSON(ctx context.Context, method, path string, body, response any) error {
+	raw, err := c.postJSON(ctx, method, path, body)
+	if err != nil {
+		return err
+	}
+	if response == nil || len(raw) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, response); err != nil {
+		return fmt.Errorf("decode service response: %w", err)
+	}
+	return nil
 }
 
 // rewriteToServiceRoute 将 /api/admin/{service}/{method} 改写为 /api/service/{service}/{method}。

@@ -141,8 +141,9 @@ func (a *CLSSDKAPI) CreateTopic(ctx context.Context, opts CLSCreateTopicOptions)
 	req.TopicName = common.StringPtr(opts.Name)
 	req.PartitionCount = common.Int64Ptr(opts.Partitions)
 	req.Period = common.Int64Ptr(opts.RetentionDays)
-	req.AutoSplit = common.BoolPtr(true)
-	req.MaxSplitPartitions = common.Int64Ptr(10)
+	// MooX is a single-user system. Keep the topic to the configured partition
+	// count instead of silently adding billable partitions under load.
+	req.AutoSplit = common.BoolPtr(false)
 	req.StorageType = common.StringPtr("hot")
 	req.IsWebTracking = common.BoolPtr(false)
 	rsp, err := a.client.CreateTopicWithContext(ctx, req)

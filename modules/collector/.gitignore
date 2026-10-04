@@ -11,5 +11,4 @@ bin/
 .DS_Store
 .idea/
 .vscode/
-**/*.zip
 configs/trpc_go.yaml

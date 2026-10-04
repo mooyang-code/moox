@@ -4,25 +4,35 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/config"
-	"github.com/mooyang-code/moox/modules/archive/internal/consumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/cosstore"
+	eventconsumer "github.com/mooyang-code/moox/modules/archive/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/health"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
+	"github.com/mooyang-code/moox/modules/archive/internal/partitionlock"
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	nats "github.com/nats-io/nats.go"
+	"github.com/mooyang-code/moox/packages/report"
+	"github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+const archiveConsumerRetryDelay = time.Second
+
+type archiveEventRunner interface {
+	Run(context.Context) error
+}
 
 type App struct {
 	Config    *config.Config
@@ -47,26 +57,42 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.State = state
 	state.CosEnabled = a.Config.Archive.COS.Enabled
+	if err := validateArchivePaths(ctx, a.Config.Archive.RootDir); err != nil {
+		return fmt.Errorf("validate archive root: %w", err)
+	}
 	store, err := journal.Open(a.Config.Archive.StateDir)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-	state.JournalReady.Store(true)
+	partitionLocks := partitionlock.New()
 	w := writer.New(store, a.Config.Archive.RootDir, a.Config.Archive.Materialize.RowGroupRows)
+	w.SetPartitionLocker(partitionLocks)
 	w.SetWorkers(a.Config.Archive.Materialize.Workers)
 	storageCredentials, err := gatewayauth.ResolveCredentials(a.Config.Archive.StorageRPC.KeyID, a.Config.Archive.StorageRPC.HMACKeyFile)
 	if err != nil {
 		return err
 	}
-	metadataRegistry := registry.NewClientWithCredentials(a.Config.Archive.StorageRPC.GatewayTarget, a.Config.Archive.StorageRPC.GatewayNodeID, storageCredentials)
+	metadataRegistry := registry.NewClientWithCredentials(a.Config.Archive.StorageRPC.GatewayTarget, a.Config.Archive.StorageRPC.TargetNodeID(), storageCredentials)
 	w.SetRegistry(registry.PartitionRegistry{Client: metadataRegistry, DeviceID: a.Config.Archive.DeviceID})
 	if err := w.Recover(ctx); err != nil {
 		return err
 	}
+	if err := validateArchiveRoot(ctx, a.Config.Archive.RootDir, store); err != nil {
+		return fmt.Errorf("validate archive root: %w", err)
+	}
+	state.JournalReady.Store(true)
+	var moduleMetrics *report.ModuleMetrics
+	if a.Server != nil {
+		moduleMetrics, err = registerMetricsReporter(a.Server)
+		if err != nil {
+			return err
+		}
+	}
 	materializer := writer.Scheduler{
 		Writer: w, PendingRows: a.Config.Archive.Materialize.PendingRows,
 		DedupeRetention: a.Config.Archive.EventBus.DedupeRetention,
+		ModuleMetrics:   moduleMetrics,
 	}
 	var cosSyncer archiveCOSSyncer
 	if a.Config.Archive.COS.Enabled {
@@ -77,6 +103,8 @@ func (a *App) Run(ctx context.Context) error {
 		cosSyncer = &cosstore.Syncer{
 			Client: cosClient, Root: a.Config.Archive.RootDir, Prefix: a.Config.Archive.COS.Prefix,
 			Workers: a.Config.Archive.COS.Workers, SyncOpenPartitions: a.Config.Archive.COS.SyncOpenPartitions,
+			Journal: store, Registry: registry.PartitionRegistry{Client: metadataRegistry, DeviceID: a.Config.Archive.DeviceID},
+			PartitionLocks: partitionLocks,
 		}
 	}
 	if a.Server != nil {
@@ -84,24 +112,39 @@ func (a *App) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	jsCfg := jetstream.ConfigFromEnv(a.Config.Archive.EventBus.URLs, "moox-archive")
+	jsCfg, err := eventBusConfig(a.Config)
+	if err != nil {
+		return err
+	}
 	natsClient, err := jetstream.Connect(ctx, jsCfg)
 	if err != nil {
 		return err
 	}
 	defer natsClient.Close()
 	state.NATSReady.Store(true)
-	ref := jetstream.ConsumerRef{Stream: a.Config.Archive.EventBus.Stream, Durable: a.Config.Archive.EventBus.Durable, FilterSubject: a.Config.Archive.EventBus.Subject, AckWait: a.Config.Archive.EventBus.AckWait, MaxDeliver: -1, MaxAckPending: a.Config.Archive.EventBus.MaxAckPending, FetchMaxWait: a.Config.Archive.EventBus.FetchMaxWait, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true}
-	pull, err := natsClient.BindPullConsumer(ctx, ref)
+	eventRegistry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
+	pull, err := events.NewConsumer(ctx, natsClient, eventRegistry, events.ConsumerConfig{
+		Name: a.Config.Archive.EventBus.Consumer, Event: events.DatasetRowsUpserted,
+		AckWait: 5 * time.Minute, MaxDeliver: -1, MaxAckPending: 256,
+		FetchMaxWait: a.Config.Archive.EventBus.FetchMaxWait, DeliverPolicy: nats.DeliverAllPolicy,
+		DeliverDecodeErrors: true,
+	})
 	if err != nil {
 		return err
 	}
 	defer pull.Close()
-	decoder := consumer.NewDecoder(sourceLists(a.Config))
-	handler := consumer.NewHandler(decoder, store, nil)
-	runner := consumer.NewRunner(pull, handler, a.Config.Archive.EventBus.FetchBatch)
+	decoder := eventconsumer.NewDecoder(sourceLists(a.Config))
+	handler := eventconsumer.NewHandler(decoder, store, nil)
+	runner := eventconsumer.NewRunner(pull, handler, a.Config.Archive.EventBus.FetchBatch)
 	runnerErr := make(chan error, 1)
-	go func() { runnerErr <- runner.Run(ctx) }()
+	go func() {
+		runnerErr <- runArchiveEventConsumer(ctx, runner, archiveConsumerRetryDelay, func(err error) {
+			log.Errorf("archive event consumer stopped; retrying: %v", err)
+		})
+	}()
 	var serveErr <-chan error
 	if a.Server != nil {
 		ch := make(chan error, 1)
@@ -162,6 +205,65 @@ func (a *App) Run(ctx context.Context) error {
 	return errors.Join(firstErr, drainErr, flushErr)
 }
 
+func runArchiveEventConsumer(
+	ctx context.Context,
+	runner archiveEventRunner,
+	retryDelay time.Duration,
+	onFailure func(error),
+) error {
+	if runner == nil {
+		return errors.New("archive event runner is required")
+	}
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
+	}
+	if retryDelay <= 0 {
+		retryDelay = archiveConsumerRetryDelay
+	}
+	for {
+		err := runner.Run(ctx)
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return nil
+		}
+		if err == nil {
+			return nil
+		}
+		if !retryableArchiveConsumerError(err) {
+			return err
+		}
+		if onFailure != nil {
+			onFailure(err)
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+func retryableArchiveConsumerError(err error) bool {
+	return errors.Is(err, nats.ErrReconnectBufExceeded) ||
+		errors.Is(err, nats.ErrFetchDisconnected)
+}
+
+func eventBusConfig(cfg *config.Config) (jetstream.Config, error) {
+	if cfg == nil {
+		return jetstream.Config{}, errors.New("archive config is required")
+	}
+	jsCfg := jetstream.ConfigFromEnv(cfg.Archive.EventBus.URLs, "moox-archive")
+	if path := strings.TrimSpace(cfg.Archive.EventBus.CredentialFile); path != "" {
+		if err := jsCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(path)); err != nil {
+			return jetstream.Config{}, fmt.Errorf("archive eventbus credential: %w", err)
+		}
+	}
+	return jsCfg, nil
+}
+
 // RegisterHealth registers the monitor-facing endpoints on the tRPC server.
 func (a *App) RegisterHealth(s *server.Server) error {
 	if a == nil || a.Config == nil {
@@ -194,9 +296,4 @@ func RunFromConfig(ctx context.Context, path, version, commit string) error {
 		return err
 	}
 	return app.Run(ctx)
-}
-
-func mainContext() context.Context {
-	ctx, _ := signal.NotifyContext(trpc.BackgroundContext(), os.Interrupt)
-	return ctx
 }

@@ -38,6 +38,7 @@
         </div>
       </div>
 
+      <a-alert class="field-policy-alert" type="info" show-icon> 字段注册后不可删除；不再使用时可将字段停用。 </a-alert>
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
       <template v-else>
         <section class="field-workbench">
@@ -150,7 +151,13 @@ import FieldEditorDrawer from "./components/FieldEditorDrawer.vue";
 import FieldGroupDialog from "./components/FieldGroupDialog.vue";
 import FieldGroupTree from "./components/FieldGroupTree.vue";
 import FieldTable from "./components/FieldTable.vue";
-import { fieldQueryFromRoute, fieldQueryToRoute, RequestGate } from "./field-workbench";
+import {
+  buildFieldGroupDeleteRequest,
+  fieldQueryFromRoute,
+  fieldQueryToRoute,
+  isSpaceRequestCurrent,
+  RequestGate
+} from "./field-workbench";
 
 defineOptions({ name: "DataFields" });
 const route = useRoute();
@@ -375,14 +382,24 @@ async function saveGroup(group: FieldGroup) {
 
 function confirmDeleteGroup(group: FieldGroup) {
   mobileGroupVisible.value = false;
+  const request = buildFieldGroupDeleteRequest(group);
+  if (!isSpaceRequestCurrent(request, selectedSpaceId.value)) {
+    Message.warning("空间已切换，删除操作已取消");
+    return;
+  }
   Modal.confirm({
     title: `删除字段组“${group.name}”？`,
     content: "只有不包含子组和字段的空字段组可以删除。",
     okText: "删除",
     okButtonProps: { status: "danger" },
     onOk: async () => {
-      await deleteFieldGroup({ space_id: selectedSpaceId.value, group_id: group.group_id });
+      if (!isSpaceRequestCurrent(request, selectedSpaceId.value)) {
+        Message.warning("空间已切换，删除操作已取消");
+        return;
+      }
+      await deleteFieldGroup(request);
       Message.success("字段组已删除");
+      if (!isSpaceRequestCurrent(request, selectedSpaceId.value)) return;
       if (state.group === group.group_id) {
         state.group = "";
         state.page = 1;
@@ -493,6 +510,9 @@ onMounted(async () => {
 }
 .mobile-group-trigger {
   display: none;
+}
+.field-policy-alert {
+  margin-bottom: var(--moox-space-2);
 }
 .field-workbench {
   display: grid;

@@ -7,12 +7,13 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 import "moox_common.proto";
 import "common.proto";
 
-// TimeSeriesRowKey identifies one time-series row. Dimensions are ordinary
-// fields and never participate in row identity.
+// TimeSeriesRowKey identifies one time-series row. An empty series_tag is the
+// default series for the subject, frequency, and timestamp.
 message TimeSeriesRowKey {
   string subject_id = 1;
   string freq = 2;
   string data_time = 3;
+  string series_tag = 4;
 }
 
 // RecordRowKey identifies one immutable record version.
@@ -45,9 +46,20 @@ message RowFieldUpsert {
 }
 
 message RowFieldValues {
-  RowKey key = 1;
-  repeated FieldValue fields = 2;
-  map<string, TypedValue> attributes = 3;
+	RowKey key = 1;
+	repeated FieldValue fields = 2;
+	map<string, TypedValue> attributes = 3;
+}
+
+// RowsUpserted is the Storage module's local write result model. The public
+// EventBus contract is packages/storagepb.DatasetRowsUpserted.
+message RowsUpserted {
+  string space_id = 1;
+  string dataset_id = 2;
+  repeated RowFieldUpsert rows = 3;
+  string write_source = 4;
+  // Write category assigned by Storage from the authorized RPC.
+  string write_kind = 5;
 }
 
 // Query key views are retained as read-only query contracts. DataNode writes
@@ -58,6 +70,15 @@ message TimeSeriesKey {
   string subject_id = 3;
   string freq = 4;
   string data_time = 5;
+  string series_tag = 6;
+}
+
+message TimeSeriesSelector {
+  string space_id = 1;
+  string dataset_id = 2;
+  string subject_id = 3;
+  string freq = 4;
+  optional string series_tag = 5;
 }
 
 message RecordKey {
@@ -70,9 +91,55 @@ message RecordKey {
 message TimeSeriesRow {
   TimeSeriesKey key = 1;
   repeated FieldValue fields = 2;
+  map<string, string> attributes = 3;
 }
 
 message RecordRow {
   RecordKey key = 1;
   repeated FieldValue fields = 2;
+  map<string, string> attributes = 3;
+}
+
+// Time-series range reads use selectors and exact reads use keys; exact reads
+// delegate to PrimaryStore.ReadFields. All writes use RowFieldUpsert.
+message ReadTimeSeriesRowsReq {
+  common.AuthInfo auth_info = 1;
+  repeated TimeSeriesSelector selectors = 2;
+  TimeRange time_range = 3;
+  SortOrder order = 4;
+  repeated string column_names = 5;
+  common.Page page = 6;
+  string space_id = 7;
+  string dataset_id = 8;
+  // keys are exact PrimaryStore point reads. Range reads use selectors.
+  repeated TimeSeriesKey keys = 9;
+  // after_key is an opaque RowKey cursor used by internal history backfills.
+  // It keeps paging streaming and avoids rescanning all earlier rows.
+  bytes after_key = 10;
+}
+
+message ReadTimeSeriesRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated TimeSeriesRow rows = 2;
+  common.PageResult page_result = 3;
+  string served_indexed_from = 4;
+  string served_indexed_to = 5;
+  bool complete = 6;
+}
+
+message ReadRecordRowsReq {
+  common.AuthInfo auth_info = 1;
+  repeated RecordKey keys = 2;
+  VersionRange version_range = 3;
+  SortOrder order = 4;
+  repeated string column_names = 5;
+  common.Page page = 6;
+  string space_id = 7;
+  string dataset_id = 8;
+}
+
+message ReadRecordRowsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecordRow rows = 2;
+  common.PageResult page_result = 3;
 }

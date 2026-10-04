@@ -12,14 +12,6 @@ import (
 	"testing"
 )
 
-func TestGetVersionInfoDefaultsToDev(t *testing.T) {
-	old := Version
-	Version = ""
-	t.Cleanup(func() { Version = old })
-	assert.Equal(t, "moox CLI dev", GetVersionInfo())
-	assert.Equal(t, "moox CLI dev", GetFullVersionInfo())
-}
-
 func TestGetFullVersionInfoDefaultsToDev(t *testing.T) {
 	old := Version
 	Version = ""
@@ -46,7 +38,7 @@ func TestBuildMetadataImportCallsFromSeed(t *testing.T) {
 		}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "spot_kline", DataSourceID: "binance",
-			Name: "Spot Kline", DataKind: "TIME_SERIES", Freqs: []string{"1m"},
+			Name: "Spot Kline", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"},
 		}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
@@ -228,13 +220,10 @@ func (f fakeStorageImportMeta) ListDatasetColumns(context.Context, string, strin
 func (f fakeStorageImportMeta) ListDatasetSubjects(context.Context, string, string, string) ([]*pb.DatasetSubject, error) {
 	return nil, nil
 }
-func (f fakeStorageImportMeta) BindDatasetSubject(context.Context, *pb.DatasetSubject) error {
-	return nil
-}
 
 type fakeStorageWriter struct{}
 
-func (fakeStorageWriter) MergeTimeSeriesRows(context.Context, *pb.MergeTimeSeriesRowsReq) error {
+func (fakeStorageWriter) UpsertFields(context.Context, *pb.PrimaryUpsertFieldsReq) error {
 	return nil
 }
 

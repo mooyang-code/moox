@@ -1,141 +1,101 @@
 package domain
 
-import "time"
-
-const (
-	ActionHold      = "hold"
-	ActionRebalance = "rebalance"
+import (
+	"encoding/json"
+	"time"
 )
 
-type StrategyDefinition struct {
-	StrategyID         string    `gorm:"column:c_strategy_id;primaryKey"`
-	Version            string    `gorm:"column:c_version;primaryKey"`
-	API                string    `gorm:"column:c_api_version"`
-	ManifestYAML       string    `gorm:"column:c_manifest_yaml"`
-	SourceCode         string    `gorm:"column:c_source_code"`
-	SourceHash         string    `gorm:"column:c_source_hash"`
-	StateSchemaVersion int       `gorm:"column:c_state_schema_version"`
-	Status             string    `gorm:"column:c_status"`
-	CreateTime         time.Time `gorm:"column:c_ctime"`
-	ModifyTime         time.Time `gorm:"column:c_mtime"`
+type RunnerStatus string
+
+const (
+	RunnerStatusDisabled RunnerStatus = "DISABLED"
+	RunnerStatusEnabled  RunnerStatus = "ENABLED"
+)
+
+type Action string
+
+const (
+	ActionHold      Action = "hold"
+	ActionRebalance Action = "rebalance"
+)
+
+type Strategy struct {
+	ID           string
+	Name         string
+	Kind         string
+	ManifestYAML string
+	CompiledJSON []byte
+	SourceHash   string
+	CreatedAt    time.Time
 }
 
-func (StrategyDefinition) TableName() string { return "t_strategy_defs" }
+func (Strategy) TableName() string { return "t_strategies" }
 
-type Binding struct {
-	BindingID       string `gorm:"column:c_binding_id;primaryKey"`
-	StrategyID      string `gorm:"column:c_strategy_id"`
-	StrategyVersion string `gorm:"column:c_strategy_version"`
-	SpaceID         string `gorm:"column:c_space_id"`
-	ViewID          string `gorm:"column:c_view_id"`
-	Freq            string `gorm:"column:c_freq"`
-	ParamsJSON      string `gorm:"column:c_params_json"`
-	GroupID         string `gorm:"column:c_group_id"`
-	CapitalWeight   string `gorm:"column:c_capital_weight"`
-	Status          string `gorm:"column:c_status"`
+type StrategyRunner struct {
+	ID                 string
+	StrategyID         string
+	SpaceID            string
+	SourceViewID       string
+	Frequency          string
+	LogicalAccountID   *string
+	Status             RunnerStatus
+	CurrentTargetsJSON json.RawMessage
+	CommandSequence    int64
+	LastResultID       *string
+	LastSuccessAt      *time.Time
+	LastError          *string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
-func (Binding) TableName() string { return "t_strategy_bindings" }
+func (StrategyRunner) TableName() string { return "t_strategy_runners" }
 
-type State struct {
-	BindingID       string `gorm:"column:c_binding_id;primaryKey"`
-	StrategyVersion string `gorm:"column:c_strategy_version"`
-	Revision        int64  `gorm:"column:c_state_revision"`
-	StateJSON       string `gorm:"column:c_state_json"`
-	LastRunID       string `gorm:"column:c_last_run_id"`
+type StrategyResult struct {
+	ID              string
+	RunnerID        string
+	StrategyID      string
+	PeriodTime      time.Time
+	TargetsJSON     json.RawMessage
+	DebugInfoJSON   json.RawMessage
+	InputHash       string
+	Action          Action
+	CommandSequence *int64
+	CreatedAt       time.Time
 }
 
-func (State) TableName() string { return "t_strategy_states" }
+func (StrategyResult) TableName() string { return "t_strategy_results" }
 
-type StrategyRun struct {
-	RunID                 string    `gorm:"column:c_run_id;primaryKey" json:"run_id"`
-	BindingID             string    `gorm:"column:c_binding_id" json:"binding_id"`
-	StrategyVersion       string    `gorm:"column:c_strategy_version" json:"strategy_version"`
-	Namespace             string    `gorm:"column:c_namespace" json:"namespace"`
-	TriggerBarTime        string    `gorm:"column:c_trigger_bar_time" json:"trigger_bar_time"`
-	DataRevision          string    `gorm:"column:c_data_revision" json:"data_revision"`
-	InputHash             string    `gorm:"column:c_input_hash" json:"input_hash"`
-	PreviousStateRevision int64     `gorm:"column:c_previous_state_revision" json:"previous_state_revision"`
-	Status                string    `gorm:"column:c_status" json:"status"`
-	Action                string    `gorm:"column:c_action" json:"action"`
-	OutputJSON            string    `gorm:"column:c_output_json" json:"output_json"`
-	CreateTime            time.Time `gorm:"column:c_ctime" json:"create_time"`
+type InstrumentTarget struct {
+	InstrumentID string `json:"instrument_id"`
+	TargetWeight string `json:"target_weight"`
 }
 
-func (StrategyRun) TableName() string { return "t_strategy_runs" }
-
-type TargetWeight struct {
-	InstrumentID    string `json:"instrument_id"`
-	Symbol          string `json:"symbol,omitempty"`
-	MarketType      string `json:"market_type,omitempty"`
-	Score           any    `json:"score,omitempty"`
-	Reason          string `json:"reason,omitempty"`
-	TargetWeight    string `json:"target_weight"`
-	PortfolioTarget string `json:"portfolio_target,omitempty"`
-	ActualPosition  string `json:"actual_position,omitempty"`
-	Deviation       string `json:"deviation,omitempty"`
-	SourceTime      string `json:"source_time,omitempty"`
-	DataRevision    string `json:"data_revision,omitempty"`
+// RuleState is the small amount of theoretical state that a stateful rule
+// needs for its next evaluation. It deliberately contains no broker, order,
+// fill, or actual-position data.
+type RuleState struct {
+	Signals []SignalState       `json:"signals,omitempty"`
+	Batches []HoldingBatchState `json:"batches,omitempty"`
 }
 
-type TargetComparison struct {
-	RunID           string    `gorm:"column:c_run_id;primaryKey"`
-	InstrumentID    string    `gorm:"column:c_instrument_id;primaryKey"`
-	PortfolioTarget string    `gorm:"column:c_portfolio_target"`
-	ActualPosition  string    `gorm:"column:c_actual_position"`
-	Deviation       string    `gorm:"column:c_deviation"`
-	SourceTime      time.Time `gorm:"column:c_source_time"`
-	DataRevision    string    `gorm:"column:c_data_revision"`
+type SignalState struct {
+	InstrumentID string `json:"instrument_id"`
+	EnteredAt    int64  `json:"entered_at,omitempty"`
 }
 
-func (TargetComparison) TableName() string { return "t_strategy_target_comparisons" }
-
-type Output struct {
-	Action    string         `json:"action"`
-	Targets   []TargetWeight `json:"targets"`
-	NextState map[string]any `json:"next_state"`
-	DebugInfo map[string]any `json:"debug_info,omitempty"`
-}
-type Task struct {
-	RunID, BindingID, StrategyID, Version, Namespace, Freq, SourceHash, TriggerBarTime, DataRevision, InputHash string
-	PreviousState                                                                                               State
-	PreviousTargets                                                                                             []TargetWeight
-	Params                                                                                                      map[string]any
-	Data                                                                                                        []map[string]any
+type HoldingBatchState struct {
+	Offset        int               `json:"offset"`
+	EstablishedAt int64             `json:"established_at"`
+	ExpiresAt     int64             `json:"expires_at"`
+	BaseWeights   map[string]string `json:"base_weights"`
 }
 
-type Group struct {
-	GroupID        string `gorm:"column:c_group_id;primaryKey"`
-	SpaceID        string `gorm:"column:c_space_id"`
-	Name           string `gorm:"column:c_name"`
-	RiskPolicyJSON string `gorm:"column:c_risk_policy_json"`
-	Status         string `gorm:"column:c_status"`
+func (s RuleState) Empty() bool { return len(s.Signals) == 0 && len(s.Batches) == 0 }
+
+// Evaluation is the result of one pure evaluator invocation.
+type Evaluation struct {
+	Action     Action
+	Targets    []InstrumentTarget
+	DebugInfo  map[string]any
+	RuleStates map[string]RuleState
 }
-
-func (Group) TableName() string { return "t_strategy_groups" }
-
-type ExecutionRequest struct {
-	ExecutionID         string `gorm:"column:c_execution_id;primaryKey"`
-	ExecutionBindingID  string `gorm:"column:c_execution_binding_id"`
-	GroupTargetRevision int64  `gorm:"column:c_group_target_revision"`
-	IdempotencyKey      string `gorm:"column:c_idempotency_key"`
-	Status              string `gorm:"column:c_status"`
-	RequestJSON         string `gorm:"column:c_request_json"`
-	ResultJSON          string `gorm:"column:c_result_json"`
-}
-
-func (ExecutionRequest) TableName() string { return "t_strategy_execution_requests" }
-
-type BacktestJob struct {
-	BacktestID      string `gorm:"column:c_backtest_id;primaryKey"`
-	StrategyID      string `gorm:"column:c_strategy_id"`
-	StrategyVersion string `gorm:"column:c_strategy_version"`
-	ConfigHash      string `gorm:"column:c_config_hash"`
-	Namespace       string `gorm:"column:c_namespace"`
-	Status          string `gorm:"column:c_status"`
-	SummaryJSON     string `gorm:"column:c_summary_json"`
-	ArtifactPath    string `gorm:"column:c_artifact_path"`
-	ArtifactHash    string `gorm:"column:c_artifact_hash"`
-}
-
-func (BacktestJob) TableName() string { return "t_strategy_backtest_jobs" }

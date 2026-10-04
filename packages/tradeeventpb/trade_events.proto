@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package trpc.moox.trade.event;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeventpb";
+
+message InstrumentWeightTarget {
+  string instrument_id = 1;
+  string target_weight = 2;
+}
+
+message LogicalAccountTargetWeightRequested {
+  string target_id = 1;
+  string instance_id = 2;
+  string logical_account_id = 3;
+  repeated InstrumentWeightTarget targets = 5;
+  string session_id = 8;
+  string strategy_id = 9;
+  google.protobuf.Timestamp bar_end_time = 10;
+  google.protobuf.Timestamp effective_at = 11;
+  google.protobuf.Timestamp valid_until = 12;
+}

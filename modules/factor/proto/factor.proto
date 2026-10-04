@@ -6,49 +6,120 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/factor/proto/factorgen;factorpb";
 
+message FactorSet {
+  string set_id = 1;
+  string space_id = 2;
+  string source_dataset_id = 3;
+  string freq = 4;
+  string subject_mode = 5;
+  repeated string subjects = 6;
+  string result_dataset_id = 7;
+  string status = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+
 message FactorDef {
   string factor_id = 1;
-  string name = 2;
-  string kind = 3;
-  string source_code = 4;
-  string source_hash = 5;
-  string params_json = 6;
-  int32 lookback_bars = 7;
-  int32 writeback_bars = 8;
-  string depends_json = 9;
-  string status = 10;
+  string set_id = 2;
+  string name = 3;
+  string factor_type = 4;
+  string source_code = 5;
+  string source_hash = 6;
+  repeated string input_columns = 7;
+  repeated string outputs = 8;
+  string params_json = 9;
+  int32 lookback_periods = 10;
+  bool allow_partial_universe = 11;
+  string status = 12;
+  string created_at = 13;
+  string updated_at = 14;
+}
+
+message FactorPeriodState {
+  string factor_id = 1;
+  string status = 2;
+  repeated string failed_subjects = 3;
+  string source_hash = 4;
+}
+
+message SetRunSummary {
+  string set_id = 1;
+  int64 last_period_time = 2;
+  string last_status = 3;
+  int64 lag_seconds = 4;
+  repeated FactorPeriodState factors = 5;
+  repeated string failed_subjects = 6;
+}
+
+message FactorSetInfo {
+  FactorSet factor_set = 1;
+  repeated FactorDef factors = 2;
+  SetRunSummary last_run = 3;
+}
+
+message RecalcJob {
+  string job_id = 1;
+  string request_id = 2;
+  string set_id = 3;
+  repeated string factor_ids = 4;
+  repeated string subjects = 5;
+  string start_time = 6;
+  string end_time = 7;
+  string status = 8;
+  string progress_time = 9;
+  string error = 10;
   string created_at = 11;
   string updated_at = 12;
 }
 
-message FactorBinding {
-  string binding_id = 1;
-  string factor_id = 2;
-  string space_id = 3;
-  string source_dataset = 4;
-  string freq = 5;
-  string subject_mode = 6;
-  string subjects_json = 7;
-  string target_dataset = 8;
-  string status = 9;
-  string created_at = 10;
-  string updated_at = 11;
+message CreateFactorSetReq { FactorSet factor_set = 1; }
+message CreateFactorSetRsp {
+  common.RetInfo ret_info = 1;
+  FactorSet factor_set = 2;
 }
 
-message FactorRun {
-  string run_id = 1;
-  string trigger_type = 2;
-  string space_id = 3;
-  string source_dataset = 4;
-  string target_dataset = 5;
-  string subject_id = 6;
-  string freq = 7;
-  string bar_time = 8;
-  int32 factor_count = 9;
-  string status = 10;
-  string error = 11;
-  int64 elapsed_ms = 12;
-  string created_at = 13;
+message UpdateFactorSetReq {
+  string set_id = 1;
+  string subject_mode = 2;
+  repeated string subjects = 3;
+}
+message UpdateFactorSetRsp {
+  common.RetInfo ret_info = 1;
+  FactorSet factor_set = 2;
+}
+
+message SetFactorSetStatusReq {
+  string set_id = 1;
+  string status = 2;
+}
+message SetFactorSetStatusRsp {
+  common.RetInfo ret_info = 1;
+  FactorSet factor_set = 2;
+}
+
+message DeleteFactorSetReq {
+  string set_id = 1;
+  bool purge = 2;
+}
+message DeleteFactorSetRsp { common.RetInfo ret_info = 1; }
+
+message GetFactorSetReq { string set_id = 1; }
+message GetFactorSetRsp {
+  common.RetInfo ret_info = 1;
+  FactorSet factor_set = 2;
+  repeated FactorDef factors = 3;
+  SetRunSummary last_run = 4;
+}
+
+message ListFactorSetsReq {
+  string status = 1;
+  common.Page page = 2;
+}
+message ListFactorSetsRsp {
+  common.RetInfo ret_info = 1;
+  repeated FactorSetInfo factor_sets = 2;
+  common.PageResult page_result = 3;
 }
 
 message CreateFactorReq { FactorDef factor = 1; }
@@ -57,30 +128,10 @@ message CreateFactorRsp {
   FactorDef factor = 2;
 }
 
-message UpdateFactorReq {
-  string factor_id = 1;
-  FactorDef factor = 2;
-}
+message UpdateFactorReq { FactorDef factor = 1; }
 message UpdateFactorRsp {
   common.RetInfo ret_info = 1;
   FactorDef factor = 2;
-}
-
-message GetFactorReq { string factor_id = 1; }
-message GetFactorRsp {
-  common.RetInfo ret_info = 1;
-  FactorDef factor = 2;
-}
-
-message ListFactorsReq {
-  string kind = 1;
-  string status = 2;
-  common.Page page = 3;
-}
-message ListFactorsRsp {
-  common.RetInfo ret_info = 1;
-  repeated FactorDef factors = 2;
-  common.PageResult page_result = 3;
 }
 
 message SetFactorStatusReq {
@@ -90,94 +141,97 @@ message SetFactorStatusReq {
 message SetFactorStatusRsp {
   common.RetInfo ret_info = 1;
   FactorDef factor = 2;
+  RecalcJob backfill_job = 3;
 }
 
-message UpsertBindingReq { FactorBinding binding = 1; }
-message UpsertBindingRsp {
+message DeleteFactorReq { string factor_id = 1; }
+message DeleteFactorRsp { common.RetInfo ret_info = 1; }
+
+message GetFactorReq { string factor_id = 1; }
+message GetFactorRsp {
   common.RetInfo ret_info = 1;
-  FactorBinding binding = 2;
+  FactorDef factor = 2;
 }
 
-message ListBindingsReq {
-  string space_id = 1;
-  string source_dataset = 2;
-  string freq = 3;
-  string status = 4;
-  common.Page page = 5;
+message ListFactorsReq {
+  string set_id = 1;
+  string status = 2;
+  common.Page page = 3;
 }
-message ListBindingsRsp {
+message ListFactorsRsp {
   common.RetInfo ret_info = 1;
-  repeated FactorBinding bindings = 2;
+  repeated FactorDef factors = 2;
   common.PageResult page_result = 3;
 }
 
-message DeleteBindingReq { string binding_id = 1; }
-message DeleteBindingRsp { common.RetInfo ret_info = 1; }
-
-message RecalcFactorReq {
-  string factor_id = 1;
-  string space_id = 2;
-  string source_dataset = 3;
-  string subject_id = 4;
-  string freq = 5;
-  string start_time = 6;
-  string end_time = 7;
+message RecalcFactorsReq {
+  string set_id = 1;
+  repeated string factor_ids = 2;
+  repeated string subjects = 3;
+  string start_time = 4;
+  string end_time = 5;
+  string request_id = 6;
 }
-message RecalcFactorRsp {
+message RecalcFactorsRsp {
   common.RetInfo ret_info = 1;
-  string recalc_id = 2;
+  RecalcJob job = 2;
 }
 
-message GetRecalcProgressReq { string recalc_id = 1; }
-message GetRecalcProgressRsp {
-  common.RetInfo ret_info = 1;
-  string recalc_id = 2;
-  string status = 3;
-  int32 total = 4;
-  int32 finished = 5;
+message ListRecalcJobsReq {
+  string set_id = 1;
+  repeated string statuses = 2;
+  common.Page page = 3;
 }
-
-message ListFactorRunsReq {
-  string space_id = 1;
-  string source_dataset = 2;
-  string subject_id = 3;
-  string freq = 4;
-  string status = 5;
-  common.Page page = 6;
-}
-message ListFactorRunsRsp {
+message ListRecalcJobsRsp {
   common.RetInfo ret_info = 1;
-  repeated FactorRun runs = 2;
+  repeated RecalcJob jobs = 2;
   common.PageResult page_result = 3;
 }
 
-message WorkerStatus {
-  string worker_id = 1;
-  string state = 2;
-  string current_task_id = 3;
-  int64 restart_count = 4;
+message GetRecalcJobReq { string job_id = 1; }
+message GetRecalcJobRsp {
+  common.RetInfo ret_info = 1;
+  RecalcJob job = 2;
 }
 
-message GetEngineStatusReq {}
-message GetEngineStatusRsp {
+message CancelRecalcJobReq { string job_id = 1; }
+message CancelRecalcJobRsp {
   common.RetInfo ret_info = 1;
-  int32 queue_depth = 2;
-  int64 supersede_count = 3;
-  int64 writeback_failures = 4;
-  repeated WorkerStatus workers = 5;
+  RecalcJob job = 2;
+}
+
+message FactorLaneStatus {
+  string set_id = 1;
+  int32 queued = 2;
+  bool active = 3;
+}
+
+message GetStatusReq {}
+message GetStatusRsp {
+  common.RetInfo ret_info = 1;
+  bool consumer_running = 2;
+  int32 python_workers = 3;
+  int32 python_busy = 4;
+  repeated FactorLaneStatus lanes = 5;
+  repeated SetRunSummary recent_runs = 6;
 }
 
 service FactorMgr {
+  rpc CreateFactorSet(CreateFactorSetReq) returns (CreateFactorSetRsp);
+  rpc UpdateFactorSet(UpdateFactorSetReq) returns (UpdateFactorSetRsp);
+  rpc SetFactorSetStatus(SetFactorSetStatusReq) returns (SetFactorSetStatusRsp);
+  rpc DeleteFactorSet(DeleteFactorSetReq) returns (DeleteFactorSetRsp);
+  rpc GetFactorSet(GetFactorSetReq) returns (GetFactorSetRsp);
+  rpc ListFactorSets(ListFactorSetsReq) returns (ListFactorSetsRsp);
   rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);
   rpc UpdateFactor(UpdateFactorReq) returns (UpdateFactorRsp);
+  rpc SetFactorStatus(SetFactorStatusReq) returns (SetFactorStatusRsp);
+  rpc DeleteFactor(DeleteFactorReq) returns (DeleteFactorRsp);
   rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
   rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
-  rpc SetFactorStatus(SetFactorStatusReq) returns (SetFactorStatusRsp);
-  rpc UpsertBinding(UpsertBindingReq) returns (UpsertBindingRsp);
-  rpc ListBindings(ListBindingsReq) returns (ListBindingsRsp);
-  rpc DeleteBinding(DeleteBindingReq) returns (DeleteBindingRsp);
-  rpc RecalcFactor(RecalcFactorReq) returns (RecalcFactorRsp);
-  rpc GetRecalcProgress(GetRecalcProgressReq) returns (GetRecalcProgressRsp);
-  rpc ListFactorRuns(ListFactorRunsReq) returns (ListFactorRunsRsp);
-  rpc GetEngineStatus(GetEngineStatusReq) returns (GetEngineStatusRsp);
+  rpc RecalcFactors(RecalcFactorsReq) returns (RecalcFactorsRsp);
+  rpc ListRecalcJobs(ListRecalcJobsReq) returns (ListRecalcJobsRsp);
+  rpc GetRecalcJob(GetRecalcJobReq) returns (GetRecalcJobRsp);
+  rpc CancelRecalcJob(CancelRecalcJobReq) returns (CancelRecalcJobRsp);
+  rpc GetStatus(GetStatusReq) returns (GetStatusRsp);
 }

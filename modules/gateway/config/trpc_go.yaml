@@ -9,3 +9,9 @@ server:
       network: "*/15 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.gateway.metrics.timer
+      ip: 127.0.0.1
+      port: 11014
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000

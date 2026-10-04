@@ -17,14 +17,12 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import ArchiveFiles from "./archive.vue";
-import PrimaryStoreNodes from "./nodes.vue";
-import PrimaryStoreRoutes from "./routes.vue";
+import DataNodes from "./nodes.vue";
 
-type StorageConfigTab = "nodes" | "routes" | "archive";
+type StorageConfigTab = "nodes" | "archive";
 
 const tabs = [
-  { key: "nodes", label: "主存节点" },
-  { key: "routes", label: "主存路由" },
+  { key: "nodes", label: "数据节点" },
   { key: "archive", label: "归档文件" }
 ] as const;
 
@@ -35,14 +33,13 @@ const activeTab = ref<StorageConfigTab>(normalizeTab(route.query.tab));
 const activeComponent = computed(
   () =>
     ({
-      nodes: PrimaryStoreNodes,
-      routes: PrimaryStoreRoutes,
+      nodes: DataNodes,
       archive: ArchiveFiles
     })[activeTab.value]
 );
 
 function normalizeTab(value: unknown): StorageConfigTab {
-  return value === "routes" || value === "archive" ? value : "nodes";
+  return value === "archive" ? value : "nodes";
 }
 
 function onTabChange(value: string | number) {

@@ -5,124 +5,307 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// HTTPClient 通用 HTTP 客户端（支持 DNS 优选 + TLS SNI）
+// HTTPClient issues HTTPS requests using the platform DNS resolver and TLS SNI.
 type HTTPClient struct {
 	httpClient *http.Client
+	ipMu       sync.Mutex
+	ipClients  map[string]*http.Client
+	ipOrder    []string
 }
 
-const defaultRequestTimeout = 8 * time.Second
+const maxIPClients = 32
 
-// NewHTTPClient 创建通用 HTTP 客户端
-func NewHTTPClient() *HTTPClient {
-	return &HTTPClient{
-		httpClient: &http.Client{
-			Timeout: defaultRequestTimeout,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					// 跳过证书验证，提升性能
-					InsecureSkipVerify: true,
-				},
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		},
+const defaultRequestTimeout = 5 * time.Second
+
+// Keep a small portion of a bounded invocation for the hostname fallback. A
+// stale SCF address must not consume the entire K-line request deadline before
+// the platform resolver gets a chance to try the original domain.
+const hostnameFallbackReserve = time.Second
+
+// StatusError reports a non-success HTTP response.
+type StatusError struct{ StatusCode int }
+
+func (e *StatusError) Error() string { return fmt.Sprintf("HTTP status %d", e.StatusCode) }
+
+func NewHTTPClient(base ...*http.Client) *HTTPClient {
+	if len(base) > 0 && base[0] != nil {
+		return &HTTPClient{httpClient: base[0]}
 	}
+	return &HTTPClient{httpClient: &http.Client{
+		Timeout: defaultRequestTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}}
 }
 
-// Get 发送 GET 请求（自动获取最优 IP）
+// NewHTTPClientWithTimeout keeps the standard transport and route-probing
+// behavior while applying a caller-owned per-request timeout.
+func NewHTTPClientWithTimeout(timeout time.Duration) *HTTPClient {
+	client := NewHTTPClient()
+	if timeout > 0 {
+		client.httpClient.Timeout = timeout
+	}
+	return client
+}
+
 func (c *HTTPClient) Get(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
-	// 尝试获取最优 IP
-	bestIP := GetBestIP(domain)
-	return c.GetWithIP(ctx, domain, path, query, result, bestIP)
+	return c.getWithClient(ctx, c.httpClient, domain, path, query, func(reader io.Reader) error {
+		if result == nil {
+			return nil
+		}
+		return json.NewDecoder(reader).Decode(result)
+	})
 }
 
-// GetWithIP 发送 GET 请求（使用指定的 IP）
-// specifiedIP: 指定使用的 IP 地址，如果为空则使用域名直接访问
-func (c *HTTPClient) GetWithIP(ctx context.Context, domain, path string, query url.Values, result interface{}, specifiedIP string) error {
-	// 构建完整 URL（使用域名，保证 TLS SNI 正确）
+// GetStream lets a caller decode a bounded response without an intermediate copy.
+func (c *HTTPClient) GetStream(ctx context.Context, domain, path string, query url.Values, consume func(io.Reader) error) error {
+	if consume == nil {
+		return fmt.Errorf("response consumer is required")
+	}
+	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
+}
+
+// GetWithIPs first dials the supplied addresses while keeping domain in the
+// URL. This preserves the Host header and TLS SNI. Only after every supplied
+// address fails does it make one normal hostname request.
+func (c *HTTPClient) GetWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, result interface{}) error {
+	return c.getWithIPs(ctx, domain, ips, path, query, func(reader io.Reader) error {
+		if result == nil {
+			return nil
+		}
+		return json.NewDecoder(reader).Decode(result)
+	})
+}
+
+// GetStreamWithIPs is the streaming counterpart of GetWithIPs.
+func (c *HTTPClient) GetStreamWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, consume func(io.Reader) error) error {
+	if consume == nil {
+		return fmt.Errorf("response consumer is required")
+	}
+	return c.getWithIPs(ctx, domain, ips, path, query, consume)
+}
+
+func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, consume func(io.Reader) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	candidates := uniqueIPs(ips)
+	if skipControlPlaneIPs(domain) {
+		candidates = nil
+	}
+	ipDeadline, hasIPDeadline := ipAttemptDeadline(ctx)
+	source := dnsSource(len(candidates) > 0)
+	for index, ip := range candidates {
+		client := c.clientForIP(ip)
+		if client == nil {
+			// A custom RoundTripper may not be cloneable. Skip that address and
+			// continue with the remaining snapshot entries before falling back to
+			// the platform resolver.
+			continue
+		}
+		ipCtx, cancel := ipCandidateContext(ctx, ipDeadline, hasIPDeadline, len(candidates)-index)
+		log.InfoContextf(ctx, "collector_http_resolved_ip_attempted domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s", domain, ip, source, dnsHash(), dnsRouteAge())
+		err := c.getWithClient(ipCtx, client, domain, path, query, consume)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s error=%v", domain, ip, source, dnsHash(), dnsRouteAge(), err)
+	}
+	log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d dns_source=system dns_snapshot_candidates=%d dns_hash=%s dns_route_age_seconds=%s", domain, len(candidates), len(candidates), dnsHash(), dnsRouteAge())
+	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
+}
+
+func ipAttemptDeadline(ctx context.Context) (time.Time, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return time.Time{}, false
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return deadline, true
+	}
+	reserve := hostnameFallbackReserve
+	if half := remaining / 2; half < reserve {
+		reserve = half
+	}
+	if reserve <= 0 {
+		return deadline, true
+	}
+	return deadline.Add(-reserve), true
+}
+
+func ipCandidateContext(parent context.Context, deadline time.Time, hasDeadline bool, remainingCandidates int) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if !hasDeadline {
+		return parent, func() {}
+	}
+	if remainingCandidates <= 0 {
+		remainingCandidates = 1
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithDeadline(parent, deadline)
+	}
+	budget := remaining / time.Duration(remainingCandidates)
+	if budget <= 0 {
+		budget = remaining
+	}
+	return context.WithTimeout(parent, budget)
+}
+
+func skipControlPlaneIPs(domain string) bool {
+	host := strings.ToLower(strings.TrimSpace(domain))
+	if host == "" || !strings.Contains(host, "binance.com") {
+		return false
+	}
+	return strings.HasPrefix(host, "fapi")
+}
+
+func dnsSource(hasSnapshot bool) string {
+	if hasSnapshot {
+		return "scf_snapshot"
+	}
+	return "system"
+}
+
+func dnsHash() string { return strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_HASH")) }
+
+func dnsRouteAge() string {
+	value := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_UPDATED_AT"))
+	if value == "" {
+		return "unknown"
+	}
+	updated, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return "unknown"
+	}
+	age := time.Since(updated.UTC()).Seconds()
+	if age < 0 {
+		age = 0
+	}
+	return fmt.Sprintf("%.0f", age)
+}
+
+func (c *HTTPClient) clientForIP(ip string) *http.Client {
+	if c == nil || c.httpClient == nil {
+		return nil
+	}
+	base, ok := c.httpClient.Transport.(*http.Transport)
+	if !ok || base == nil {
+		return nil
+	}
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return nil
+	}
+	ip = parsed.String()
+	c.ipMu.Lock()
+	defer c.ipMu.Unlock()
+	if client := c.ipClients[ip]; client != nil {
+		return client
+	}
+	transport := base.Clone()
+	originalDial := transport.DialContext
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(address)
+		if err != nil || port == "" {
+			port = "443"
+		}
+		target := net.JoinHostPort(parsed.String(), port)
+		if originalDial != nil {
+			return originalDial(ctx, network, target)
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, target)
+	}
+	client := *c.httpClient
+	client.Transport = transport
+	if c.ipClients == nil {
+		c.ipClients = make(map[string]*http.Client)
+	}
+	// Bound rotated DNS snapshots and release idle sockets on FIFO eviction.
+	// Active requests remain valid while their transport finishes naturally.
+	if len(c.ipOrder) >= maxIPClients {
+		oldest := c.ipOrder[0]
+		c.ipClients[oldest].CloseIdleConnections()
+		delete(c.ipClients, oldest)
+		c.ipOrder = c.ipOrder[1:]
+	}
+	c.ipClients[ip] = &client
+	c.ipOrder = append(c.ipOrder, ip)
+	return &client
+}
+
+func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, domain, path string, query url.Values, consume func(io.Reader) error) error {
+	if client == nil {
+		return fmt.Errorf("HTTP client is not initialized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	fullURL := fmt.Sprintf("https://%s%s", domain, path)
 	if len(query) > 0 {
 		fullURL += "?" + query.Encode()
 	}
-
-	// 创建自定义 Dialer（将域名解析到指定 IP）
-	var dialer *net.Dialer
-	if specifiedIP != "" {
-		log.DebugContextf(ctx, "使用指定 IP 访问 %s: %s", domain, specifiedIP)
-		dialer = &net.Dialer{
-			Timeout: 10 * time.Second,
-		}
-
-		// 设置自定义 Transport，将域名解析到指定 IP
-		transport := c.httpClient.Transport.(*http.Transport).Clone()
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			// 提取端口号
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				port = "443" // 默认 HTTPS 端口
-			}
-
-			// 使用指定 IP 进行连接
-			targetAddr := net.JoinHostPort(specifiedIP, port)
-			log.DebugContextf(ctx, "DialContext: 将 %s 解析到 %s", addr, targetAddr)
-			return dialer.DialContext(ctx, network, targetAddr)
-		}
-
-		// 为这次请求创建临时客户端
-		tempClient := &http.Client{
-			Timeout:   c.httpClient.Timeout,
-			Transport: transport,
-		}
-		return c.doRequest(ctx, tempClient, fullURL, domain, result)
-	}
-
-	// 降级：直接使用域名（标准 DNS 解析）
-	log.DebugContextf(ctx, "未找到指定 IP，直接使用域名: %s", domain)
-	return c.doRequest(ctx, c.httpClient, fullURL, domain, result)
-}
-
-// doRequest 执行 HTTP 请求并解析 JSON 响应
-func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, fullURL, domain string, result interface{}) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
 	}
-
-	// 设置必要的请求头
 	req.Header.Set("User-Agent", "moox-collector/1.0")
-
-	// 发送请求
-	start := time.Now()
-	log.DebugContextf(ctx, "[collector-http] GET start domain=%s url=%s timeout=%s", domain, fullURL, httpClient.Timeout)
-	resp, err := httpClient.Do(req)
+	started := time.Now()
+	resp, err := client.Do(req)
 	if err != nil {
-		log.WarnContextf(ctx, "[collector-http] GET error domain=%s duration=%s error=%v", domain, time.Since(start), err)
+		log.WarnContextf(ctx, "collector_http_failed domain=%s duration_ms=%d error=%q", domain, time.Since(started).Milliseconds(), err)
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
 	}
 	defer resp.Body.Close()
-	log.DebugContextf(ctx, "[collector-http] GET response domain=%s status=%d duration=%s", domain, resp.StatusCode, time.Since(start))
-
-	// 检查状态码
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP 错误 %d", resp.StatusCode)
+		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
+		return &StatusError{StatusCode: resp.StatusCode}
 	}
-
-	// 解析 JSON
-	if result != nil {
-		decoder := json.NewDecoder(resp.Body)
-		if err := decoder.Decode(result); err != nil {
-			return fmt.Errorf("JSON 解析失败: %w", err)
-		}
+	if err := consume(resp.Body); err != nil {
+		return fmt.Errorf("JSON 解析失败: %w", err)
 	}
-
+	log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
 	return nil
+}
+
+func uniqueIPs(ips []string) []string {
+	seen := make(map[string]struct{}, len(ips))
+	result := make([]string, 0, len(ips))
+	for _, value := range ips {
+		ip := net.ParseIP(strings.TrimSpace(value))
+		if ip == nil {
+			continue
+		}
+		value = ip.String()
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

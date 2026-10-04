@@ -9,19 +9,24 @@ server:
     - masking
     - opentelemetry
     - prometheus
-  timeout: 5000
+  # CloudNode SCF inventory scans may inspect many functions across regions.
+  # Keep the Admin BFF envelope aligned with the 900s SCF budget plus transport
+  # headroom used by the CloudNode route.
+  timeout: 960000
   admin:
     ip: 127.0.0.1
     port: 11900
     read_timeout: 3000
-    write_timeout: 60000
+    write_timeout: 960000
   service:
     - name: trpc.moox.gateway.control
       ip: 127.0.0.1
       port: 11000
       network: tcp
       protocol: http_no_protocol
-      timeout: 30000
+      # The control gateway also carries long-running CloudNode previews.
+      # Keep its request deadline above the deployment route timeout.
+      timeout: 960000
     - name: trpc.moox.admin.Health
       ip: 127.0.0.1
       port: 11010
@@ -70,6 +75,12 @@ server:
       network: tcp
       protocol: http
       timeout: 30000
+    - name: trpc.moox.admin.CollectorPublishLease
+      ip: 127.0.0.1
+      port: 11111
+      network: tcp
+      protocol: http
+      timeout: 10000
     - name: trpc.dnsproxy.timer
       port: 11301
       network: "0 */5 * * * *?scheduler=dnsproxySchedule"
@@ -90,6 +101,11 @@ server:
       network: "0 */5 * * * *"
       protocol: timer
       timeout: 60000
+    - name: trpc.moox.admin.certificates.timer
+      port: 11307
+      network: "0 0 0 * * *"
+      protocol: timer
+      timeout: 10000
 
 client:
   filter:

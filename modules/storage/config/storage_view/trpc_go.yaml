@@ -8,7 +8,9 @@ server:
     - validation
     - opentelemetry
     - prometheus
-  timeout: 5000
+  # History backfills may temporarily contend with PrimaryStore reads. Keep
+  # the request alive long enough for a bounded Pebble batch to complete.
+  timeout: 60000
   admin:
     ip: 127.0.0.1
     port: 20001
@@ -20,7 +22,7 @@ server:
       port: 20211
       network: tcp
       protocol: http_no_protocol
-      timeout: 3000
+      timeout: 30000
     - name: trpc.moox.storage.DataView.trpc
       ip: 127.0.0.1
       port: 20103
@@ -39,16 +41,18 @@ server:
       network: tcp
       protocol: trpc
       timeout: 30000
-    - name: trpc.moox.storage.view.timer
-      port: 20300
-      network: "*/30 * * * * *?scheduler=viewBuilderSchedule&startAtOnce=1"
-      protocol: timer
-      timeout: 900000
     - name: trpc.moox.storage.view.metrics.timer
       port: 20307
       network: "*/30 * * * * *"
       protocol: timer
-      timeout: 10000
+      # Gathering bounded View metrics can read tens of thousands of series;
+      # keep the 30-second cadence while allowing one report to complete.
+      timeout: 60000
+    - name: trpc.moox.storage.view.cleanup.timer
+      port: 20308
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 20000
 
 client:
   filter:
@@ -59,12 +63,7 @@ client:
       target: ip://127.0.0.1:20201
       network: tcp
       protocol: http
-      timeout: 3000
-    - name: trpc.moox.storage.PrimaryStoreScan
-      target: ip://127.0.0.1:20105
-      network: tcp
-      protocol: trpc
-      timeout: 120000
+      timeout: 30000
     - name: trpc.moox.storage.Metadata
       target: ip://127.0.0.1:20200
       network: tcp
@@ -106,23 +105,12 @@ storage:
     pebble_path: ./var/storage/pebble
     view_index_root: ./var/storage/view-indexes
   primary:
-    service_name: trpc.moox.storage.DataShard
+    service_name: trpc.moox.storage.DataNode
   eventbus:
-    type: jetstream
-    urls:
-      - nats://127.0.0.1:4222
-    nats_url: nats://127.0.0.1:4222
-    credential_file: ~/.config/moox/storage/eventbus.yaml
-    stream_name: MOOX_STORAGE
-    subject_prefix: moox.storage
-    consumer_name: storage_view
-    max_age_hours: 24
-    max_msgs: 500000
-    max_bytes: 268435456
-    max_in_flight: 1
-    max_ack_pending: 128
-    ack_wait_ms: 120000
-    max_deliver: -1
+    credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
+    # Partition-specific ACK budgets live under view.consumer_partitions.
+    # This field is retained for the primary/legacy config loader only.
+    max_ack_pending: 256
   view:
     storage_rpc:
       gateway_target: ip://127.0.0.1:11003
@@ -131,32 +119,106 @@ storage:
       hmac_key_file: ""
     metadata_service_name: trpc.moox.storage.Metadata
     primary_store_service_name: trpc.moox.storage.PrimaryStore
-    primary_store_scan_service_name: trpc.moox.storage.PrimaryStoreScan
     index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
-    max_workers: 2
-    maintenance:
-      enabled: true
-      owner_id: ""
-      lease_ttl: 90s
-      run_budget: 20s
-      page_size: 500
-      max_entries: 200000
-      target_entries: 150000
-      max_physical_bytes: 536870912
-      min_free_disk_bytes: 1073741824
-      min_ready_entries: 1000
-      overlap_window: 30m
-      allowed_lag: 2m
-      remove_grace: 60s
-      time_series:
-        default_retention_window: 7d
-        retention_by_freq:
-          1m: 24h
-          1h: 90d
-          1d: 730d
-      record:
-        retention_window: 30d
+    fetch_batch: 256
+    max_workers: 8
+    ordering: dataset
+    consumer_partitions:
+      - id: kline
+        durable: storage_view_kline
+        routes:
+          - space_id: crypto
+            dataset_ids:
+              - dataset_binance_kline_1m
+              - dataset_spot_kline_1h
+              - dataset_perpetual_kline_1h
+        # Full-market 1m streams need more than one worker per Dataset so
+        # live upserts do not sit behind a 64-message ack window.
+        fetch_batch: 32
+        max_workers: 8
+        max_ack_pending: 256
+        ack_wait_ms: 120000
+        ordering: dataset
+        deliver_policy: new
+        max_retry_attempts: -1
+      - id: system_metrics
+        durable: storage_view_metrics
+        routes:
+          - space_id: mooxsys
+            dataset_ids: [dataset_mooxsys_service_metrics]
+        # System metrics are emitted every 30 seconds and can accumulate a
+        # sizeable durable backlog after a Storage View restart. Keep the
+        # dataset/subject ordering guarantee while allowing independent
+        # service subjects to drain in parallel.
+        fetch_batch: 16
+        max_workers: 4
+        max_ack_pending: 64
+        ack_wait_ms: 120000
+        ordering: dataset
+        deliver_policy: new
+        max_retry_attempts: -1
+      - id: factor
+        durable: storage_view_factor
+        routes:
+          - space_id: crypto
+            dataset_ids: [dataset_factor_binance_kline_1m]
+        # Keep delivery serialized across process restarts so an unacked row
+        # cannot be overtaken by its FactorPeriodComputed marker.
+        fetch_batch: 1
+        max_workers: 1
+        max_ack_pending: 1
+        ack_wait_ms: 120000
+        ordering: dataset
+        deliver_policy: new
+        max_retry_attempts: -1
+      - id: misc
+        durable: storage_view_misc
+        routes:
+          - space_id: crypto
+            dataset_ids: ["*"]
+          # Keep legacy crypto_market Views on isolated dynamic durables while
+          # the canonical crypto datasets remain on the static partitions.
+          - space_id: crypto_market
+            dataset_ids: ["*"]
+          - space_id: mooxsys
+            dataset_ids: [dataset_mooxsys_host_disk, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_network, dataset_mooxsys_host_resource]
+          # Older installations used moox_system for the same host datasets.
+          - space_id: moox_system
+            dataset_ids: ["*"]
+          - space_id: stockcn
+            dataset_ids: ["*"]
+          - space_id: stockcn
+            dataset_ids: [dataset_stockcn_financial_statement_metric, dataset_stockcn_financial_summary, dataset_stockcn_bond_kline, dataset_stockcn_index_kline, dataset_stockcn_equity_kline]
+          - space_id: stockhk
+            dataset_ids: ["*"]
+          - space_id: stockhk
+            dataset_ids: [dataset_stockhk_equity_kline]
+          - space_id: stockus
+            dataset_ids: ["*"]
+          - space_id: stockus
+            dataset_ids: [dataset_stockus_equity_kline]
+        fetch_batch: 4
+        max_workers: 2
+        max_ack_pending: 16
+        ack_wait_ms: 120000
+        ordering: dataset
+        deliver_policy: new
+        max_retry_attempts: -1
+    maintenance_check_interval: 1m
+    # Serialize Primary requests during large View rebuilds.
+    backfill_page_size: 2000
+    backfill_request_interval: 100ms
+    maintenance_policy_file: config/maintenance.json
+    rebuild_lookback: 24h
+    rebuild_lookback_periods:
+      1m: 5000
+      1h: 5000
+      1d: 5000
+      default: 5000
+    max_view_file_bytes: 1073741824
+    rebuild_max_pending: 32
+    rebuild_idle_checks: 3
   health:
     addr: ":20211"

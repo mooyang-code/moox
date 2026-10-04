@@ -1,30 +1,15 @@
 # Python 因子示例
 
-本目录按计算范围区分两类因子：
+当前公开示例统一实现 `compute(df, params, context)`，返回包含
+`data_time`、`series_tag` 与全部输出列的 `pandas.DataFrame`：
 
-- `timeseries/`：对单个标的、按时间升序的数据计算时序因子。
-- `sections/`：对同一时刻的多标的数据计算截面因子。
+- `timeseries/bias.py`：输入 `close`，按 `params.windows` 输出多个 Bias 列。
+- `timeseries/cci.py`：输入 `high,low,close`，按 `params.window` 输出 `cci`。
+- `timeseries/ma.py`：输入 `close`，按 `params.windows` 输出算术移动平均线。
+- `timeseries/sma.py`：输入 `close`，按 `params.windows` 和 `params.m` 输出递推平滑移动平均线；默认配置读取 600 期，为 `SMA20` 提供 30 倍预热区间。
 
-因子文件遵循 MooX Python 因子协议。时序因子提供
-`signal(df, n, factor_name)`，截面因子还通过 `get_factor_list(n)` 声明前置
-时序因子。
+框架会额外提供只读保留列 `data_time`。每个输出必须是与输入 DataFrame
+长度和 index 完全一致的 `pandas.Series`。
 
-## 输入字段
-
-常规时序因子使用以下字段的子集：
-
-- `candle_begin_time`
-- `open`、`high`、`low`、`close`
-- `volume`、`quote_volume`
-- `symbol`、`symbol_spot`、`symbol_swap`
-
-额外数据依赖由文件内的 `extra_data_dict` 声明：
-
-- `CorrBTC` 需要 `btc_close`。
-- `CirculatingMcap` 需要 `circulating_supply`。
-
-`SelectCoin` 将参数作为标的名称使用，不适用于当前仅接受整数参数的 MooX
-因子定义；它保留为协议和策略迁移示例。
-
-截面因子要求输入包含 `candle_begin_time`、`symbol`、`is_spot`，以及对应参数的
-`QuoteVolumeMean_<n>` 前置因子列。
+初始化时，`outputs` 中的技术列名会原样写入结果 Dataset 和 Result View
+列的 `display_name`，例如 `bias_20`、`ma_20`，前端据此展示因子结果表头。

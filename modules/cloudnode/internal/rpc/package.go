@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -114,15 +116,19 @@ func (s *Service) InitPackageUpload(ctx context.Context, req *pb.InitPackageUplo
 	if account.COSRegion == "" || account.COSBucket == "" {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "cloud account cos_region/cos_bucket is required")}, nil
 	}
-	if account.SecretID == "" || account.SecretKey == "" {
-		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "cloud account secret_id/secret_key is required")}, nil
+	credential, err := s.resolveCloudCredential(ctx, *account)
+	if err != nil {
+		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if err := ensureCOSBucket(ctx, *account, credential); err != nil {
+		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "ensure COS bucket failed: "+err.Error())}, nil
 	}
 	packageType := packageTypeToDB(req.GetPackageType())
 	filename := sanitizePackageFileName(firstString(req.GetOriginalFilename(), req.GetPackageName()+"-"+req.GetVersion()+".zip"))
-	packageID := buildPackageID(req.GetPackageName(), req.GetVersion())
-	cosPath := buildPackageCOSPath(packageType, req.GetPackageName(), req.GetVersion(), filename)
+	packageID := buildPackageID(req.GetPackageName(), req.GetVersion(), uuid.NewString())
+	cosPath := buildPackageCOSPath(packageType, req.GetPackageName(), req.GetVersion(), packageID, filename)
 	expires := time.Now().UTC().Add(time.Hour)
-	uploadURL, err := presignCOSPut(ctx, *account, cosPath, expires)
+	uploadURL, err := presignCOSPut(ctx, *account, credential, cosPath, expires)
 	if err != nil {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "presign upload url failed: "+err.Error())}, nil
 	}
@@ -186,7 +192,11 @@ func (s *Service) CompletePackageUpload(ctx context.Context, req *pb.CompletePac
 	if account == nil {
 		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "cloud account not found")}, nil
 	}
-	if err := verifyCOSObject(ctx, *account, pkg.COSPath, req.GetFileSize(), req.GetFileMd5()); err != nil {
+	credential, err := s.resolveCloudCredential(ctx, *account)
+	if err != nil {
+		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if err := verifyCOSObject(ctx, *account, credential, pkg.COSPath, req.GetFileSize(), req.GetFileMd5()); err != nil {
 		return &pb.CompletePackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	pkg.FileSize = req.GetFileSize()
@@ -249,36 +259,64 @@ func cosURL(pkg store.FunctionPackage) string {
 	return fmt.Sprintf("https://%s.cos.%s.myqcloud.com/%s", pkg.COSBucket, pkg.COSRegion, strings.TrimPrefix(pkg.COSPath, "/"))
 }
 
-func presignCOSPut(ctx context.Context, account store.CloudAccount, objectPath string, expires time.Time) (string, error) {
+func presignCOSPut(ctx context.Context, account store.CloudAccount, credential cloudcredential.TencentCredential, objectPath string, expires time.Time) (string, error) {
 	bucketURL, err := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", account.COSBucket, account.COSRegion))
 	if err != nil {
 		return "", err
 	}
 	client := cos.NewClient(&cos.BaseURL{BucketURL: bucketURL}, &http.Client{
 		Transport: &cos.AuthorizationTransport{
-			SecretID:  account.SecretID,
-			SecretKey: account.SecretKey,
+			SecretID:  credential.SecretID,
+			SecretKey: credential.SecretKey,
 		},
 	})
-	u, err := client.Object.GetPresignedURL(ctx, http.MethodPut, objectPath, account.SecretID, account.SecretKey, time.Until(expires), nil)
+	u, err := client.Object.GetPresignedURL(ctx, http.MethodPut, objectPath, credential.SecretID, credential.SecretKey, time.Until(expires), nil)
 	if err != nil {
 		return "", err
 	}
 	return u.String(), nil
 }
 
-func newCOSClient(account store.CloudAccount) *cos.Client {
+func newCOSClient(account store.CloudAccount, credential cloudcredential.TencentCredential) *cos.Client {
 	bucketURL, _ := url.Parse(fmt.Sprintf("https://%s.cos.%s.myqcloud.com", account.COSBucket, account.COSRegion))
 	return cos.NewClient(&cos.BaseURL{BucketURL: bucketURL}, &http.Client{
 		Transport: &cos.AuthorizationTransport{
-			SecretID:  account.SecretID,
-			SecretKey: account.SecretKey,
+			SecretID:  credential.SecretID,
+			SecretKey: credential.SecretKey,
 		},
 	})
 }
 
-func verifyCOSObject(ctx context.Context, account store.CloudAccount, objectPath string, expectedSize int64, expectedMD5 string) error {
-	client := newCOSClient(account)
+// ensureCOSBucket makes package publishing self-contained. moox-cli starts an
+// upload through InitPackageUpload, so a configured-but-not-yet-created bucket
+// is created on demand instead of requiring a separate console operation.
+func ensureCOSBucket(ctx context.Context, account store.CloudAccount, credential cloudcredential.TencentCredential) error {
+	client := newCOSClient(account, credential)
+	if client == nil {
+		return fmt.Errorf("create COS client")
+	}
+	_, err := client.Bucket.Head(ctx)
+	if err == nil {
+		return nil
+	}
+	if !cos.IsNotFoundError(err) {
+		return fmt.Errorf("check bucket %s: %w", account.COSBucket, err)
+	}
+	if _, err := client.Bucket.Put(ctx, &cos.BucketPutOptions{XCosACL: "private"}); err != nil {
+		// A concurrent CLI invocation may have created it after our HEAD.
+		if _, verifyErr := client.Bucket.Head(ctx); verifyErr != nil {
+			return fmt.Errorf("create bucket %s: %w", account.COSBucket, err)
+		}
+		return nil
+	}
+	if _, err := client.Bucket.Head(ctx); err != nil {
+		return fmt.Errorf("verify bucket %s: %w", account.COSBucket, err)
+	}
+	return nil
+}
+
+func verifyCOSObject(ctx context.Context, account store.CloudAccount, credential cloudcredential.TencentCredential, objectPath string, expectedSize int64, expectedMD5 string) error {
+	client := newCOSClient(account, credential)
 	key := strings.TrimPrefix(objectPath, "/")
 	resp, err := client.Object.Head(ctx, key, nil)
 	if err != nil {
@@ -309,12 +347,27 @@ func verifyCOSObject(ctx context.Context, account store.CloudAccount, objectPath
 	return nil
 }
 
-func buildPackageID(packageName string, version string) string {
-	return sanitizePackagePathSegment(packageName) + "_" + sanitizePackagePathSegment(version)
+func buildPackageID(packageName string, version string, uploadID string) string {
+	return sanitizePackagePathSegment(packageName) + "_" +
+		sanitizePackagePathSegment(version) + "_" +
+		sanitizePackagePathSegment(uploadID)
 }
 
-func buildPackageCOSPath(packageType string, packageName string, version string, filename string) string {
-	return path.Join("moox", "cloud-packages", sanitizePackagePathSegment(packageType), sanitizePackagePathSegment(packageName), sanitizePackagePathSegment(version), filename)
+func buildPackageCOSPath(packageType string, packageName string, version string, packageID string, filename string) string {
+	return buildPackageCOSPathAt(time.Now().UTC(), packageType, packageName, version, packageID, filename)
+}
+
+func buildPackageCOSPathAt(now time.Time, packageType string, packageName string, version string, packageID string, filename string) string {
+	return path.Join(
+		"moox",
+		"cloud-packages",
+		now.UTC().Format("2006-01-02"),
+		sanitizePackagePathSegment(packageType),
+		sanitizePackagePathSegment(packageName),
+		sanitizePackagePathSegment(version),
+		sanitizePackagePathSegment(packageID),
+		filename,
+	)
 }
 
 func sanitizePackageFileName(value string) string {

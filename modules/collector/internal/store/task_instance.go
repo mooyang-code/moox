@@ -2,40 +2,40 @@ package store
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 const (
-	defaultPageSize = 50
-	maxPageSize     = 1000
+	defaultPageSize             = 50
+	maxPageSize                 = 1000
+	taskInstanceLookupBatchSize = 500
+	taskInstanceUpsertBatchSize = 50
 )
-
-// ErrTaskInstanceNotFound indicates that a task instance does not exist.
-var ErrTaskInstanceNotFound = errors.New("task instance not found")
 
 // TaskInstanceFilter describes task instance list filters.
 type TaskInstanceFilter struct {
-	SpaceID        string
-	TaskID         string
-	RuleID         string
-	Exchange       string
-	Market         string
-	DataType       string
-	DatasetID      string
-	SubjectID      string
-	Interval       string
-	LastExecNode   string
-	LastExecStatus *int
-	Symbol         string
-	IncludeDeleted bool
-	Page           int
-	PageSize       int
+	SpaceID          string
+	InstanceID       string
+	CollectionTaskID string
+	Provider         string
+	SourceID         string
+	MarketType       string
+	DataType         string
+	DatasetID        string
+	SubjectID        string
+	Frequency        string
+	FunctionName     string
+	LastExecStatus   *int
+	IncludeDeleted   bool
+	Page             int
+	PageSize         int
 }
 
 // TaskInstanceRepository persists executable task instances.
@@ -43,9 +43,46 @@ type TaskInstanceRepository struct {
 	db *gorm.DB
 }
 
+// StorageWriteObservation is a successful time-series write observed from a
+// Storage change event. FunctionName is the current SCF assignment, while At
+// is the event envelope time rather than the market bar's data time.
+type StorageWriteObservation struct {
+	SpaceID      string
+	DatasetID    string
+	SubjectID    string
+	Frequency    string
+	SeriesTag    string
+	FunctionName string
+	At           time.Time
+}
+
+// MarketFetchAssignment is one atomic SCF-to-subject binding update.
+type MarketFetchAssignment struct {
+	Provider     string
+	SourceID     string
+	MarketType   string
+	DatasetID    string
+	Frequency    string
+	FunctionName string
+	Subjects     []string
+}
+
 // NewTaskInstanceRepository creates a repository.
 func NewTaskInstanceRepository(db *gorm.DB) *TaskInstanceRepository {
 	return &TaskInstanceRepository{db: db}
+}
+
+// Get returns the current task instance by its stable identity.
+func (r *TaskInstanceRepository) Get(ctx context.Context, spaceID, instanceID string) (domain.TaskInstance, error) {
+	var instance domain.TaskInstance
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_instance_id = ?", spaceID, instanceID).
+		First(&instance).Error
+	return instance, err
+}
+
+func (r *TaskInstanceRepository) DeleteByTaskID(ctx context.Context, spaceID, taskID string) error {
+	return r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.WriteTarget{}).Error
 }
 
 // List returns task instances matching filters.
@@ -61,124 +98,498 @@ func (r *TaskInstanceRepository) List(ctx context.Context, filter TaskInstanceFi
 	return instances, total, err
 }
 
-// UpsertMany creates or updates task instances by stable task id.
+// ListPage returns one newest-first page and probes one extra row to determine
+// whether another page exists, avoiding a full-table COUNT on execution history.
+func (r *TaskInstanceRepository) ListPage(ctx context.Context, filter TaskInstanceFilter) ([]domain.TaskInstance, bool, error) {
+	page, size := normalizePage(filter.Page, filter.PageSize)
+	var instances []domain.TaskInstance
+	err := r.applyFilter(r.db.WithContext(ctx).Model(&domain.TaskInstance{}), filter).
+		Order("c_id DESC").Limit(size + 1).Offset((page - 1) * size).Find(&instances).Error
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(instances) > size
+	if hasMore {
+		instances = instances[:size]
+	}
+	return instances, hasMore, nil
+}
+
+// UpsertMany creates or updates one Provider request execution. Repeated writes
+// for the same run-scoped identity never reset its freshness state.
 func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []domain.TaskInstance) error {
 	if len(instances) == 0 {
 		return nil
 	}
-	now := time.Now().UTC()
-	for i := range instances {
-		if instances[i].CreateTime.IsZero() {
-			instances[i].CreateTime = now
-		}
-		instances[i].ModifyTime = now
-	}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "c_space_id"},
-			{Name: "c_task_id"},
-		},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"c_rule_id",
-			"c_exchange",
-			"c_market",
-			"c_data_type",
-			"c_dataset_id",
-			"c_subject_id",
-			"c_symbol",
-			"c_interval",
-			"c_task_params",
-			"c_is_deleted",
-			"c_mtime",
-		}),
-	}).Create(&instances).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return r.upsertManyTx(ctx, tx, instances)
+	})
 }
 
-// UpdateCloudJobItemIDs stores CloudNode JobItem IDs returned by SubmitJobItems.
-func (r *TaskInstanceRepository) UpdateCloudJobItemIDs(ctx context.Context, spaceID string, idsByTaskID map[string]string) error {
-	if len(idsByTaskID) == 0 {
+func (r *TaskInstanceRepository) upsertManyTx(ctx context.Context, db *gorm.DB, instances []domain.TaskInstance) error {
+	spaceID := instances[0].SpaceID
+	for _, instance := range instances {
+		if instance.SpaceID != spaceID {
+			return fmt.Errorf("task instances must belong to one space")
+		}
+	}
+	instanceIDs := make([]string, 0, len(instances))
+	for _, instance := range instances {
+		instanceIDs = append(instanceIDs, instance.InstanceID)
+	}
+	var existingRows []domain.TaskInstance
+	// SQLite's variable limit is commonly 999. Keep both the lookup IN list
+	// and the multi-row INSERT below bounded because a full stock catalogue is
+	// several thousand task instances.
+	for start := 0; start < len(instanceIDs); start += taskInstanceLookupBatchSize {
+		end := start + taskInstanceLookupBatchSize
+		if end > len(instanceIDs) {
+			end = len(instanceIDs)
+		}
+		var rows []domain.TaskInstance
+		if err := db.WithContext(ctx).
+			Where("c_space_id = ? AND c_instance_id IN ?", spaceID, instanceIDs[start:end]).
+			Find(&rows).Error; err != nil {
+			return err
+		}
+		existingRows = append(existingRows, rows...)
+	}
+	existing := make(map[string]domain.TaskInstance, len(existingRows))
+	for _, instance := range existingRows {
+		existing[instance.InstanceID] = instance
+	}
+	changed := make([]domain.TaskInstance, 0, len(instances))
+	for _, instance := range instances {
+		current, found := existing[instance.InstanceID]
+		if found && strings.TrimSpace(instance.SourceID) == "" {
+			instance.SourceID = current.SourceID
+		}
+		if found && strings.TrimSpace(instance.SeriesTag) == "" {
+			instance.SeriesTag = current.SeriesTag
+		}
+		if !found || taskInstanceDefinitionChanged(current, instance) {
+			changed = append(changed, instance)
+		}
+	}
+	if len(changed) == 0 {
 		return nil
 	}
 	now := time.Now().UTC()
+	for i := range changed {
+		if changed[i].CreateTime.IsZero() {
+			changed[i].CreateTime = now
+		}
+		if changed[i].LastExecStatus == 0 {
+			changed[i].LastExecStatus = domain.InstanceStatusPending
+		}
+		if strings.EqualFold(changed[i].DataType, "kline_resample") && (strings.TrimSpace(changed[i].Result) == "" || strings.TrimSpace(changed[i].Result) == "{}") {
+			initial := domain.NewResampleTaskResult(time.Time{})
+			encoded, err := initial.Marshal()
+			if err != nil {
+				return err
+			}
+			changed[i].Result = encoded
+		}
+		changed[i].ModifyTime = now
+	}
+	upsert := db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_instance_id"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"c_provider":         clause.Expr{SQL: "excluded.c_provider"},
+			"c_provider_symbol":  clause.Expr{SQL: "excluded.c_provider_symbol"},
+			"c_market_type":      clause.Expr{SQL: "excluded.c_market_type"},
+			"c_data_type":        clause.Expr{SQL: "excluded.c_data_type"},
+			"c_subject_id":       clause.Expr{SQL: "excluded.c_subject_id"},
+			"c_frequency":        clause.Expr{SQL: "excluded.c_frequency"},
+			"c_target_data_time": clause.Expr{SQL: "excluded.c_target_data_time"},
+			"c_source_id":        clause.Expr{SQL: "excluded.c_source_id"},
+			"c_series_tag":       clause.Expr{SQL: "excluded.c_series_tag"},
+			"c_task_params":      clause.Expr{SQL: "excluded.c_task_params"},
+			"c_is_deleted":       clause.Expr{SQL: "excluded.c_is_deleted"},
+			// A resample subject that was deactivated and later reactivated is
+			// a new participant for future backfills. Reset its persisted cursor
+			// from the planner seed, while preserving progress for stable active
+			// subjects on ordinary upserts.
+			"c_result": clause.Expr{SQL: "CASE WHEN c_is_deleted = 1 AND excluded.c_data_type = 'kline_resample' THEN excluded.c_result ELSE c_result END"},
+			"c_mtime":  clause.Expr{SQL: "excluded.c_mtime"},
+		}),
+	})
+	for start := 0; start < len(changed); start += taskInstanceUpsertBatchSize {
+		end := start + taskInstanceUpsertBatchSize
+		if end > len(changed) {
+			end = len(changed)
+		}
+		if err := upsert.Create(changed[start:end]).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func currentScheduledRunScope(q *gorm.DB, spaceID string) *gorm.DB {
+	spaceID = strings.TrimSpace(spaceID)
+	return q.Where(`(
+		t_collector_task_instances.c_run_id = (
+			SELECT runs.c_run_id FROM t_collector_runs runs
+			WHERE runs.c_space_id = ? AND runs.c_run_type = 'scheduled'
+			ORDER BY runs.c_target_time DESC, runs.c_id DESC LIMIT 1
+		)
+		OR (
+			t_collector_task_instances.c_run_id = ''
+			AND NOT EXISTS (SELECT 1 FROM t_collector_runs runs WHERE runs.c_space_id = ? AND runs.c_run_type = 'scheduled')
+		)
+	)`, spaceID, spaceID)
+}
+
+// ListReadinessInstances returns the current scheduled market-fetch run plus
+// durable local resample instances. Historical market-fetch runs are execution
+// history and must not inflate the expected subject set for a new period.
+func (r *TaskInstanceRepository) ListReadinessInstances(ctx context.Context, spaceID string, afterID, limit int) ([]domain.TaskInstance, error) {
+	if limit <= 0 || limit > maxPageSize {
+		limit = maxPageSize
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	query := r.db.WithContext(ctx).Where("c_space_id = ? AND c_is_deleted = ?", spaceID, false)
+	query = query.Where(`(
+		c_data_type = 'kline_resample' OR
+		t_collector_task_instances.c_run_id = (
+			SELECT runs.c_run_id FROM t_collector_runs runs
+			WHERE runs.c_space_id = ? AND runs.c_run_type = 'scheduled'
+			ORDER BY runs.c_target_time DESC, runs.c_id DESC LIMIT 1
+		) OR (
+			t_collector_task_instances.c_run_id = ''
+			AND NOT EXISTS (SELECT 1 FROM t_collector_runs runs WHERE runs.c_space_id = ? AND runs.c_run_type = 'scheduled')
+		)
+	)`, spaceID, spaceID)
+	if afterID > 0 {
+		query = query.Where("c_id > ?", afterID)
+	}
+	var instances []domain.TaskInstance
+	err := query.Order("c_id ASC").Limit(limit).Find(&instances).Error
+	return instances, err
+}
+
+// ClearMarketFetchAssignments removes the current SCF assignment before a
+// fresh deterministic assignment is persisted. Execution history is kept.
+func (r *TaskInstanceRepository) ClearMarketFetchAssignments(ctx context.Context, spaceID string, functionNames []string) error {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return fmt.Errorf("space_id is required")
+	}
+	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
+		Where("c_space_id = ? AND c_is_deleted = ? AND c_function_name <> ''", spaceID, false)
+	query = currentScheduledRunScope(query, spaceID)
+	if len(functionNames) > 0 {
+		query = query.Where("c_function_name IN ?", functionNames)
+	}
+	return query.Updates(map[string]any{"c_function_name": "", "c_source_id": "", "c_mtime": time.Now().UTC()}).Error
+}
+
+// ReplaceMarketFetchAssignments atomically replaces the bindings owned by the
+// listed functions. The completion consumer never observes the transient empty
+// state between clearing old bindings and assigning the new snapshot.
+func (r *TaskInstanceRepository) ReplaceMarketFetchAssignments(ctx context.Context, spaceID string, functionNames []string, assignments []MarketFetchAssignment) error {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return fmt.Errorf("space_id is required")
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for taskID, jobItemID := range idsByTaskID {
-			taskID = strings.TrimSpace(taskID)
-			jobItemID = strings.TrimSpace(jobItemID)
-			if taskID == "" || jobItemID == "" {
+		query := tx.Model(&domain.TaskInstance{}).
+			Where("c_space_id = ? AND c_is_deleted = ? AND c_function_name <> ''", spaceID, false)
+		query = currentScheduledRunScope(query, spaceID)
+		if len(functionNames) > 0 {
+			query = query.Where("c_function_name IN ?", functionNames)
+		}
+		if err := query.Updates(map[string]any{"c_function_name": "", "c_source_id": "", "c_mtime": time.Now().UTC()}).Error; err != nil {
+			return err
+		}
+		for _, assignment := range assignments {
+			functionName := strings.TrimSpace(assignment.FunctionName)
+			if strings.TrimSpace(assignment.DatasetID) == "" || strings.TrimSpace(assignment.Frequency) == "" || functionName == "" {
+				return fmt.Errorf("dataset_id, frequency and function_name are required")
+			}
+			if len(assignment.Subjects) == 0 {
 				continue
 			}
-			if err := tx.Model(&domain.TaskInstance{}).
-				Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).
-				Updates(map[string]any{
-					"c_cloud_job_item_id": jobItemID,
-					"c_mtime":             now,
-				}).Error; err != nil {
+			subjects := uniqueNonEmptyStrings(assignment.Subjects)
+			if len(subjects) == 0 {
+				return fmt.Errorf("market fetch assignment %s has no valid subjects", functionName)
+			}
+			matching := func(db *gorm.DB) *gorm.DB {
+				query := db.Model(&domain.TaskInstance{}).
+					Where("t_collector_task_instances.c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(assignment.Provider), strings.TrimSpace(assignment.MarketType), "kline", frequencyVariants(assignment.Frequency), subjects, false).
+					Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_dataset_id = ?)`, strings.TrimSpace(assignment.DatasetID)).
+					Where("c_function_name <> ?", functionName)
+				return currentScheduledRunScope(query, spaceID)
+			}
+			var matchedSubjects []string
+			if err := matching(tx).Distinct().Pluck("c_subject_id", &matchedSubjects).Error; err != nil {
 				return err
+			}
+			if len(matchedSubjects) != len(subjects) {
+				return fmt.Errorf("market fetch assignment %s covered %d of %d subjects", functionName, len(matchedSubjects), len(subjects))
+			}
+			var expectedRows int64
+			if err := matching(tx).Count(&expectedRows).Error; err != nil {
+				return err
+			}
+			result := matching(tx).
+				Updates(map[string]any{"c_function_name": functionName, "c_source_id": strings.TrimSpace(assignment.SourceID), "c_mtime": time.Now().UTC()})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != expectedRows {
+				return fmt.Errorf("market fetch assignment %s updated %d of %d matched task instances", functionName, result.RowsAffected, expectedRows)
 			}
 		}
 		return nil
 	})
 }
 
-// UpdateStatus updates a task instance by Collector task id.
-func (r *TaskInstanceRepository) UpdateStatus(ctx context.Context, spaceID string, taskID string, nodeID string, status int, result string) error {
-	now := time.Now().UTC()
-	updates := map[string]any{
-		"c_last_exec_node":   nodeID,
-		"c_last_exec_status": status,
-		"c_last_exec_time":   now,
-		"c_result":           normalizeJSON(result),
-		"c_mtime":            now,
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
-	tx := r.db.WithContext(ctx).
-		Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).
-		Updates(updates)
-	if tx.Error != nil {
-		return tx.Error
+	return result
+}
+
+// AssignMarketFetchFunction binds all subjects in one timer assignment to the
+// current SCF function. The stable business task identity is unchanged when a
+// subject moves to another function.
+func (r *TaskInstanceRepository) AssignMarketFetchFunction(ctx context.Context, spaceID, provider, marketType, datasetID, frequency, functionName string, subjects []string) error {
+	spaceID = strings.TrimSpace(spaceID)
+	functionName = strings.TrimSpace(functionName)
+	if spaceID == "" || strings.TrimSpace(datasetID) == "" || strings.TrimSpace(frequency) == "" || functionName == "" {
+		return fmt.Errorf("space_id, dataset_id, frequency and function_name are required")
 	}
-	if tx.RowsAffected == 0 {
-		return ErrTaskInstanceNotFound
+	if len(subjects) == 0 {
+		return nil
 	}
-	return nil
+	frequencyValues := frequencyVariants(frequency)
+	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
+		Where("t_collector_task_instances.c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(provider), strings.TrimSpace(marketType), "kline", frequencyValues, subjects, false).
+		Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_dataset_id = ?)`, strings.TrimSpace(datasetID)).
+		Where("c_function_name <> ?", functionName)
+	query = currentScheduledRunScope(query, spaceID)
+	return query.Updates(map[string]any{"c_function_name": functionName, "c_source_id": "", "c_mtime": time.Now().UTC()}).Error
+}
+
+// MarkStorageWrites updates task freshness after Storage has committed the
+// corresponding rows. The function match prevents a late old SCF write from
+// updating a task already reassigned to another function.
+func (r *TaskInstanceRepository) MarkStorageWrites(ctx context.Context, observations []StorageWriteObservation) (int64, error) {
+	if len(observations) == 0 {
+		return 0, nil
+	}
+	updated := int64(0)
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		seen := make(map[string]struct{}, len(observations))
+		for _, observation := range observations {
+			if strings.TrimSpace(observation.SpaceID) == "" || strings.TrimSpace(observation.DatasetID) == "" || strings.TrimSpace(observation.SubjectID) == "" || strings.TrimSpace(observation.Frequency) == "" || strings.TrimSpace(observation.FunctionName) == "" || observation.At.IsZero() {
+				continue
+			}
+			key := strings.Join([]string{observation.SpaceID, observation.DatasetID, observation.SubjectID, observation.Frequency, observation.SeriesTag, observation.FunctionName}, "\x00")
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			frequencyValues := frequencyVariants(observation.Frequency)
+			query := tx.Model(&domain.TaskInstance{}).
+				Where("t_collector_task_instances.c_space_id = ? AND c_subject_id = ? AND c_frequency IN ? AND c_series_tag = ? AND c_function_name = ? AND c_is_deleted = ?", observation.SpaceID, observation.SubjectID, frequencyValues, strings.TrimSpace(observation.SeriesTag), observation.FunctionName, false).
+				Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_dataset_id = ?)`, observation.DatasetID).
+				Where("c_last_exec_time IS NULL OR c_last_exec_time < ?", observation.At.UTC())
+			query = currentScheduledRunScope(query, observation.SpaceID)
+			result := query.Updates(map[string]any{"c_last_exec_status": domain.InstanceStatusSuccess, "c_last_exec_time": observation.At.UTC(), "c_mtime": time.Now().UTC()})
+			if result.Error != nil {
+				return result.Error
+			}
+			updated += result.RowsAffected
+		}
+		return nil
+	})
+	return updated, err
+}
+
+func frequencyVariants(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	values := []string{value}
+	seen := map[string]struct{}{value: {}}
+	add := func(candidate string) {
+		if candidate == "" {
+			return
+		}
+		if _, exists := seen[candidate]; exists {
+			return
+		}
+		seen[candidate] = struct{}{}
+		values = append(values, candidate)
+	}
+	canonical, err := report.NormalizeDatasetFrequency(value)
+	if err != nil {
+		return values
+	}
+	add(canonical)
+	// Older task rows may retain lowercase hour/day spellings while Storage
+	// events use its canonical uppercase identity. Minutes and months are
+	// intentionally not case-folded because M and m have different meanings.
+	if len(canonical) > 1 {
+		switch canonical[len(canonical)-1] {
+		case 'H', 'D', 'W', 'Y':
+			add(strings.ToLower(canonical))
+		}
+	}
+	return values
+}
+
+func sameOptionalTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.UTC().Equal(right.UTC())
+}
+
+func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
+	return current.InstanceID != desired.InstanceID ||
+		current.Provider != desired.Provider ||
+		current.ProviderSymbol != desired.ProviderSymbol ||
+		current.SourceID != desired.SourceID ||
+		current.SeriesTag != desired.SeriesTag ||
+		current.MarketType != desired.MarketType ||
+		current.DataType != desired.DataType ||
+		current.SubjectID != desired.SubjectID ||
+		current.Frequency != desired.Frequency ||
+		!sameOptionalTime(current.TargetDataTime, desired.TargetDataTime) ||
+		current.TaskParams != desired.TaskParams ||
+		current.IsDeleted != desired.IsDeleted
+}
+
+// DeactivateMissingResampleTaskInstances keeps resample reconciliation from
+// touching market-fetch instances that happen to share a collection task ID.
+func (r *TaskInstanceRepository) DeactivateMissingResampleTaskInstances(ctx context.Context, spaceID, collectionTaskID string, activeInstanceIDs []string) error {
+	if len(activeInstanceIDs) == 0 {
+		return nil
+	}
+	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
+		Where("t_collector_task_instances.c_space_id = ? AND c_data_type = ? AND c_is_deleted = ?", spaceID, "kline_resample", false).
+		Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_task_id = ?)`, collectionTaskID)
+	query = query.Where("c_instance_id NOT IN ?", activeInstanceIDs)
+	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
+}
+
+func (r *TaskInstanceRepository) ListStale(ctx context.Context, spaceID string, before time.Time, limit int) ([]domain.TaskInstance, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var instances []domain.TaskInstance
+	query := r.db.WithContext(ctx).Where("c_is_deleted = ? AND (c_last_exec_time IS NULL OR c_last_exec_time < ?)", false, before.UTC())
+	if strings.TrimSpace(spaceID) != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	err := query.Order("c_last_exec_time ASC").Limit(limit).Find(&instances).Error
+	return instances, err
+}
+
+// ListAll returns the enabled stable instances in a bounded deterministic
+// order without applying an execution-time cutoff.
+func (r *TaskInstanceRepository) ListAll(ctx context.Context, spaceID string, limit int) ([]domain.TaskInstance, error) {
+	if limit <= 0 || limit > maxPageSize {
+		limit = maxPageSize
+	}
+	query := r.db.WithContext(ctx).Where("c_is_deleted = ?", false)
+	if strings.TrimSpace(spaceID) != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	var instances []domain.TaskInstance
+	err := query.Order("c_id ASC").Limit(limit).Find(&instances).Error
+	return instances, err
+}
+
+// ListActiveKline returns the persisted realtime K-line inventory used as a
+// last-good planner snapshot when Storage metadata is temporarily unavailable.
+func (r *TaskInstanceRepository) ListActiveKline(ctx context.Context, spaceID string) ([]domain.TaskInstance, error) {
+	var all []domain.TaskInstance
+	for page := 1; ; page++ {
+		rows, total, err := r.List(ctx, TaskInstanceFilter{
+			SpaceID: spaceID, DataType: "kline", IncludeDeleted: false,
+			Page: page, PageSize: maxPageSize,
+		})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, rows...)
+		if int64(len(all)) >= total || len(rows) == 0 {
+			return all, nil
+		}
+	}
+}
+
+// ListAfterID returns a bounded page after the supplied ID for deterministic
+// scans over a growing task table.
+func (r *TaskInstanceRepository) ListAfterID(ctx context.Context, spaceID string, afterID, limit int) ([]domain.TaskInstance, error) {
+	if limit <= 0 || limit > maxPageSize {
+		limit = maxPageSize
+	}
+	query := r.db.WithContext(ctx).Where("c_is_deleted = ?", false)
+	if strings.TrimSpace(spaceID) != "" {
+		query = query.Where("c_space_id = ?", spaceID)
+	}
+	if afterID > 0 {
+		query = query.Where("c_id > ?", afterID)
+	}
+	var instances []domain.TaskInstance
+	err := query.Order("c_id ASC").Limit(limit).Find(&instances).Error
+	return instances, err
 }
 
 func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilter) *gorm.DB {
 	if filter.SpaceID != "" {
 		q = q.Where("c_space_id = ?", filter.SpaceID)
 	}
-	if filter.TaskID != "" {
-		q = q.Where("c_task_id LIKE ?", "%"+filter.TaskID+"%")
+	if filter.InstanceID != "" {
+		q = q.Where("c_instance_id LIKE ?", "%"+filter.InstanceID+"%")
 	}
-	if filter.RuleID != "" {
-		q = q.Where("c_rule_id LIKE ?", "%"+filter.RuleID+"%")
+	if filter.CollectionTaskID != "" {
+		q = q.Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_task_id = ?)`, filter.CollectionTaskID)
 	}
-	if filter.Exchange != "" {
-		q = q.Where("c_exchange = ?", filter.Exchange)
+	if filter.Provider != "" {
+		q = q.Where("c_provider = ?", filter.Provider)
 	}
-	if filter.Market != "" {
-		q = q.Where("c_market = ?", filter.Market)
+	if filter.SourceID != "" {
+		q = q.Where("c_source_id = ?", filter.SourceID)
+	}
+	if filter.MarketType != "" {
+		q = q.Where("c_market_type = ?", filter.MarketType)
 	}
 	if filter.DataType != "" {
 		q = q.Where("c_data_type = ?", filter.DataType)
 	}
 	if filter.DatasetID != "" {
-		q = q.Where("c_dataset_id = ?", filter.DatasetID)
+		q = q.Where(`EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id AND targets.c_dataset_id = ?)`, filter.DatasetID)
 	}
 	if filter.SubjectID != "" {
 		q = q.Where("c_subject_id = ?", filter.SubjectID)
 	}
-	if filter.Interval != "" {
-		q = q.Where("c_interval = ?", filter.Interval)
+	if filter.Frequency != "" {
+		q = q.Where("c_frequency = ?", filter.Frequency)
 	}
-	if filter.LastExecNode != "" {
-		q = q.Where("c_last_exec_node = ?", filter.LastExecNode)
+	if filter.FunctionName != "" {
+		q = q.Where("c_function_name LIKE ?", "%"+filter.FunctionName+"%")
 	}
 	if filter.LastExecStatus != nil {
 		q = q.Where("c_last_exec_status = ?", *filter.LastExecStatus)
-	}
-	if filter.Symbol != "" {
-		q = q.Where("c_symbol LIKE ?", "%"+filter.Symbol+"%")
 	}
 	if !filter.IncludeDeleted {
 		q = q.Where("c_is_deleted = ?", false)

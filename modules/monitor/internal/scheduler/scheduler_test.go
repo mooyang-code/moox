@@ -10,7 +10,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestSchedulerRunDueOnce(t *testing.T) {
@@ -22,6 +24,7 @@ func TestSchedulerRunDueOnce(t *testing.T) {
 
 	createCheck(t, checkRepo, domain.Check{CheckID: "enabled", Enabled: true, NextCheckAt: &dueAt})
 	createCheck(t, checkRepo, domain.Check{CheckID: "disabled", Enabled: false, NextCheckAt: &dueAt})
+	createCheck(t, checkRepo, domain.Check{CheckID: "external", Kind: domain.CheckKindExternal, Enabled: true, NextCheckAt: &dueAt})
 
 	s := New(mgr.Repositories(), Options{
 		InstanceID:     "monitor-a",
@@ -89,37 +92,37 @@ func TestSchedulerConcurrencyCap(t *testing.T) {
 	}
 }
 
-func TestRunCheckOncePersistsWithoutChangingSchedule(t *testing.T) {
+func TestSchedulerUpdatesWatchdogMetricsAfterPersist(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSchedulerDB(t)
-	next := time.Now().Add(time.Hour)
-	check := domain.Check{SpaceID: "space-a", CheckID: "manual", Kind: domain.CheckKindHTTP, Enabled: true, IntervalSeconds: 60, TimeoutMS: 1000, NextCheckAt: &next}
-	checkRepo := mgr.Repositories().Checks
-	createCheck(t, checkRepo, check)
-
+	dueAt := time.Now().Add(-time.Second)
+	createCheck(t, mgr.Repositories().Checks, domain.Check{CheckID: "ready", Kind: domain.CheckKindHTTP, Enabled: true, NextCheckAt: &dueAt})
+	registry := prometheus.NewRegistry()
+	metrics, err := watchdog.NewMetrics(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := New(mgr.Repositories(), Options{
-		InstanceID: "monitor-a",
-		Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
-			return okResult(check)
+		Runner: runnerFunc(func(context.Context, domain.Check) domain.CheckResult {
+			return domain.CheckResult{Success: true, LatencyMS: 25}
 		}),
+		Watchdog: metrics,
 	})
-	result, err := s.RunCheckOnce(ctx, check)
+	if _, err := s.RunDueOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	families, err := registry.Gather()
 	if err != nil {
-		t.Fatalf("RunCheckOnce: %v", err)
+		t.Fatal(err)
 	}
-	if !result.Success || result.InstanceID != "monitor-a" {
-		t.Fatalf("result = %+v", result)
+	var found bool
+	for _, family := range families {
+		if family.GetName() == "moox_monitor_watchdog_checks_total" && len(family.GetMetric()) == 1 && family.GetMetric()[0].GetCounter().GetValue() == 1 {
+			found = true
+		}
 	}
-	results, _ := mgr.Repositories().Results.Recent(ctx, "space-a", "manual", 10)
-	if len(results) != 1 {
-		t.Fatalf("results len = %d", len(results))
-	}
-	got, err := checkRepo.Get(ctx, "space-a", "manual")
-	if err != nil {
-		t.Fatalf("get check: %v", err)
-	}
-	if got.NextCheckAt == nil || !got.NextCheckAt.Equal(next) {
-		t.Fatalf("next schedule changed: got=%v want=%v", got.NextCheckAt, next)
+	if !found {
+		t.Fatal("watchdog success counter was not observed")
 	}
 }
 
@@ -166,7 +169,7 @@ func createCheck(t *testing.T, repo *store.CheckRepository, check domain.Check) 
 		check.Labels = "{}"
 	}
 	if check.Source == "" {
-		check.Source = domain.CheckSourceManual
+		check.Source = domain.CheckSourceObservability
 	}
 	if err := repo.Create(context.Background(), &check); err != nil {
 		t.Fatalf("create check %s: %v", check.CheckID, err)

@@ -1,57 +1,148 @@
 # moox-trade
 
-MooX 的事件驱动交易内核，提供账户与通道管理、订单执行、成交结算、账本余额、仓位查询、撤单换单和目标仓位调仓。
+Trade 是 MooX 的交易执行与交易事实源，负责执行账户、组合账户、订单、成交、
+持仓和目标收敛。V1 面向个人量化，采用单进程、SQLite 和 JetStream，不引入分布式
+事务编排、分布式锁、通用任务引擎或多策略账户拆分。
 
-## 目录
+完整设计见 [DESIGN.md](DESIGN.md)。
 
-```text
-internal/domain/          订单、执行、账本、仓位、调仓领域模型
-internal/algorithm/       可替换且版本化的拆单、定价、执行算法
-internal/application/     命令、消费者、对账与调仓编排
-internal/infra/store/     交易存储和事务边界
-internal/infra/bus/       Inbox/Outbox 与公共 JetStream 客户端
-internal/infra/exchangebridge/ 交易所适配桥
-internal/bootstrap/       生产装配与后台 worker
-test/                     跨组件端到端测试
-```
+## 核心对象
 
-架构细节见 [DESIGN.md](./DESIGN.md)。
+- `TradingAccount`（执行账户）：一个通过 `LiveConfig` 或 `PaperConfig` 配置的实际交易账户。
+- `LogicalAccount`（组合账户）：由一个或多个同质 `TradingAccount` 组成的策略聚合账户，
+  由一个 `StrategyInstance` 的当前 `(instance_id, session_id)` 生命周期控制。
+- `LogicalAccountTarget`：组合账户当前唯一、可替换的完整目标，不是执行历史。
+- `InstrumentTarget`：Trade 内部由目标权重换算出的规范化标的及其绝对目标持仓量
+  `quantity`，不是策略事件的输入字段。
+- `Order`、`Fill`、`Position`：订单意图、交易所成交事实和已确认持仓。
+- `OperatorAction`：人工下单、撤单或逐账户清仓的幂等操作记录。
+
+一个执行账户最多加入一个启用的组合账户。一个组合账户最多由一个
+`StrategyInstance` 控制；实例每次启用都会建立新的 `session_id`，而一个组合账户可以包含
+多个执行账户。成员必须具有相同的 paper/live 模式、SPOT/SWAP 市场和
+`settlement_asset`，但可以来自不同交易所。
+
+`owner_instance_id` + `owner_session_id` 是自动交易的唯一归属身份。旧的 `runner_id`、
+`owner_runner_id`、`owner_generation` 和 `command_sequence` 只为历史审计或读取旧数据保留，
+不是新的目标执行入口。仅携带旧 Runner 身份的 Rebind 请求必须拒绝；现代 Rebind 使用
+实例/会话身份和 `auth_fence` 做 CAS，只有获胜的会话切换才会清理旧目标。
 
 ## 服务
 
-账户、余额、资金、API 凭证、通道、交易操作、订单、成交、仓位服务使用端口 `11200-11208`；目标仓位调仓服务使用 `11211`，运维控制服务使用 `11212`。Admin 网关通过 `trade_*` deployment 转发。
+| 服务 | 默认端口 | 职责 |
+| --- | --- | --- |
+| `TradeConsoleService` | `11200` | 执行账户、模拟盘、组合账户、人工订单、查询和执行能力 |
+| Health | `11210` | `/healthz`、`/readyz`、`/metrics` |
 
-生产启动器会为存在活动订单的通道维护 Binance/OKX 鉴权私有 WebSocket。私有流负责实时成交，REST `ListFills` 只负责断线缺口修复。两条路径使用相同的交易所成交号和 `FillHandler`，因此重复回报不会重复结算。
+### DNS Resolver
 
-成交缺口修复由 `trpc.moox.trade.fill_reconcile.timer` 每 5 秒执行，订单/Saga/调仓恢复由 `trpc.moox.trade.order_recovery.timer` 每 15 秒执行；两者启动时立即运行，并分别设置 5 秒、15 秒超时。Handler 同步返回汇总错误并跳过同进程重入。低延迟 Outbox 投递、退避状态机和私有流 supervisor 仍是进程内生命周期循环，不属于调度 Timer。
+启用后，Trade 通过鉴权 Gateway 暴露独立的 `TradeDNSResolverService.ResolveDomains`，供
+Collector 批量解析行情域名。Resolver 只读取部署时由 `moox-cli` 从 `moox.toml` 提取的
+`dns_resolver` YAML 子树，不读取完整 TOML，也不接触 SSH、云账号或交易凭据。每个候选 IPv4
+会在 Trade 节点执行有界 TCP 探测并返回延迟排序；单域失败通过响应级未解析列表表达，不阻断同批
+其他域名。Resolver 是辅助能力，暂时不可用不会让 Trade `/readyz` 失败。
 
-## 配置
+策略目标经 `moox.event.trade.target.weight_requested.v1` 事件异步进入 Trade；人工和实时
+控制则通过 `TradeConsoleService` 的下单、撤单、暂停、恢复和清仓接口进入。策略事件不通过
+公开 RPC 伪造订单 owner。订单归属由服务端写入：
 
-- `database.path`：Trade 数据库路径，底层实现不暴露给应用层。
-- `eventbus.urls` / `eventbus.stream`：JetStream 地址与 `MOOX_TRADE` stream。
-- `eventbus.execution_durable`：订单执行 consumer。
-- `eventbus.rebalance_durable`：调仓请求 consumer。
-- `eventbus.progress_durable`：成交后推进调仓依赖 legs 的 consumer。
-- `eventbus.reconciliation_durable`：立即对账命令 consumer。
+- `TARGET`：属于当前 `LogicalAccountTarget`。
+- `OPERATOR`：属于一个明确的 `OperatorAction`。
+- `EXTERNAL`：由账户同步发现、并非 MooX 创建。
 
-## 运维控制
+## FULL 目标
 
-`TradeOpsSvc` 提供：
+Strategy 发布 `LogicalAccountTargetWeightRequested`（subject
+`moox.event.trade.target.weight_requested.v1`）：
 
-- `SetPause`：按 Space 暂停或恢复账户、通道；暂停后新单安全拒绝。
-- `ReconcileNow`：通过 Outbox/EventBus 发起有界订单与成交对账。
-- `InspectSaga`：读取撤单换单 Saga 的状态、版本和最后错误。
-
-健康检查验证 Store 可写、EventBus 连接、Outbox 延迟、未知订单数量和活动订单的私有流监督状态。Prometheus 指标以 `moox_trade_` 为前缀，标签仅使用有限枚举，不包含订单号、通道号或 Symbol。
-- `security.encryption_key`：交易所凭证 AES-GCM 密钥。
-
-## 构建与验证
-
-```bash
-make -C proto all
-go build -o bin/moox-trade ./cmd/server
-go test -count=1 ./...
-go test -count=1 ./test -v
+```text
+target_id
+instance_id
+session_id
+strategy_id
+logical_account_id
+bar_end_time
+effective_at
+valid_until
+targets[] InstrumentWeightTarget
+  instrument_id
+  target_weight
 ```
 
-`test/eventbus_e2e_test.go` 会启动进程内 NATS Server，验证真实 JetStream 发布、NAK 重投、Inbox 幂等和单次交易所提交；`test/trade_e2e_test.go` 验证重启恢复、未知提交、成交结算、资金保护、撤单与调仓。
+每条命令都是组合账户的 FULL 快照：
+
+- `target_weight` 是相对 LogicalAccount 权益的带符号目标权重，不是下单量或增量。
+- `instance_id`、`session_id`、`strategy_id` 和三个时间字段是现代 FULL 合同的必填身份与
+  时效字段；`effective_at` 必须等于 `bar_end_time`，`valid_until` 必须晚于它。
+- 遗漏的旧标的目标为 `0`。
+- 空 `targets` 表示组合账户全部目标归零。
+- `hold` 不发布命令，保留上一次目标。
+- 只有当前 LogicalAccount 所持有的 `(instance_id, session_id)` 才能被接受；过期、尚未生效、
+  旧会话和旧 `bar_end_time` 的事件在估值和下单前拒绝。相同 `target_id` 和请求内容重投幂等，
+  同一会话按 `bar_end_time` 保留最新 FULL 快照。
+- `command_sequence` 和事件中的 `runner_id` 仅作为历史审计/解码字段，不参与现代目标排序、
+  授权或成交。
+
+Trade 首次接受目标时按启用且 Ready 成员的合计权益和参考价格换算 raw quantity，
+并将权益、报价、实际成员和 quantity 保存到不可变 `TargetReceipt`。同一 target 重投
+只复用回执，不重新估值；步长、合约乘数、最小量和容量仍由 TargetExecutor 负责。
+- 在有效窗口内，PAUSED 时仍保存最新目标，但不创建订单；只有人工 Resume 才恢复收敛。
+
+SPOT 目标不能为负数；SWAP 使用正负号表示方向。Strategy 只发送规范化
+`instrument_id`，Trade 负责解析交易所原生 symbol、精度、最小量和合约张数。
+
+## 动态择优
+
+TargetExecutor 每次只提交一个子订单，等待账户事实更新后再计算：
+
+1. 先撤销与当前目标冲突的自有 TARGET 订单。
+2. 先关闭反向持仓。
+3. 减仓优先选择可减持仓绝对值最大的账户。
+4. 加仓按成员 `priority`、可用资金和交易所限制择优。
+5. 当前账户无法承接剩余数量时再选择下一个合格成员。
+
+不同执行账户上的相反方向持仓不会用净额抵消成“已完成”。无法达到交易所最小量的
+剩余目标写入 `blocked_targets`，避免无限重试。
+
+## 人工干预
+
+`PauseLogicalAccount` 停止新的自动下单；`ResumeLogicalAccount` 使用已保存的最新 FULL
+目标恢复执行。人工下单会先暂停整个组合账户并撤销活动 TARGET 订单，完成后仍保持
+PAUSED。
+
+`FlattenLogicalAccount` 是逐账户清仓：
+
+- 同步所有成员账户。
+- 撤销同步发现的全部活动订单。
+- 在每个持仓所在的原执行账户提交平仓单，不按组合账户净额猜测。
+- 独立记录每个账户的剩余持仓或错误。
+- 最终保持 PAUSED，且不删除最新 Strategy 目标；以后 Resume 可能重新开仓。
+
+人工下单、撤单和逐账户清仓必须提供幂等 `action_id` 和操作原因；Pause 要求原因，
+Resume 会返回重新执行最新目标的提示。
+
+## 订单与交易所
+
+- 公共数量统一使用基础资产数量；适配器负责交易所合约换算。
+- `FillPolicy` 表示限价单存续策略，支持 `GTC`、`IOC` 和 `FOK`。
+- `ReducePositionOnly` 是服务端根据已确认持仓和可信执行阶段推导的内部保护字段，
+  不由公共 RPC 调用者设置。
+- `SUBMITTING`/`SUBMIT_UNKNOWN` 先按相同 client order ID 查询交易所，禁止盲目重发。
+- 成功但非 OPEN 的下单响应立即触发账户同步；没有 Fill ID 的聚合响应不会伪造成交。
+- OKX client order ID 使用 `xid` 生成，并在适配器边界校验长度和字母数字格式。
+- Paper V1 使用公共行情做简化撮合：MARKET 使用最坏可成交价；LIMIT 可立即成交时按
+  taker 成交，未成交的 GTC 保持 OPEN 并在行情穿价后按 maker 成交，IOC/FOK 无法全量
+  立即成交时整单取消。不模拟盘口深度、排队优先级或部分成交。
+
+Live 交易默认关闭。启用 PRODUCTION 账户和提交 live 订单需要显式
+`live_trading_enabled=true`。Trade 通过服务认证的 `GetSecretValue(secret_id)` 单条读取
+`SecretMaterial`，不会列出或加载无关 Secret。TESTNET 与 PRODUCTION 使用固定交易所
+端点。
+
+## 验证
+
+```bash
+go test -count=1 ./...
+go test -race -count=1 ./...
+go vet ./...
+```

@@ -4,25 +4,78 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/prometheus/client_golang/prometheus"
+	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakePublisher struct {
-	messages []*messagepb.MooxMessage
+	events     []events.Event
+	payloads   []proto.Message
+	options    []events.PublishOptions
+	publishErr error
+	closed     bool
+	onPublish  func()
 }
 
-func (f *fakePublisher) Publish(_ context.Context, message *messagepb.MooxMessage, _ ...jetstream.PublishOption) (*jetstream.PublishAck, error) {
-	f.messages = append(f.messages, message)
-	return &jetstream.PublishAck{Stream: "MOOX_METRICS", Sequence: uint64(len(f.messages))}, nil
+type blockingGatherer struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *blockingGatherer) Gather() ([]*io_prometheus_client.MetricFamily, error) {
+	g.once.Do(func() { close(g.started) })
+	<-g.release
+	return nil, nil
+}
+
+func validConfig(serviceName string) Config {
+	return Config{Module: "monitor", ServiceName: serviceName, InstanceID: serviceName + "@node-a", NodeID: "node-a", BootID: "boot-a"}
+}
+
+func NewHandlerWithPublisher(cfg Config, p Publisher, gatherer prometheus.Gatherer) (*Handler, error) {
+	h, err := NewHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if p != nil {
+		h.client = p
+	}
+	if gatherer != nil {
+		h.gatherer = gatherer
+	}
+	return h, nil
+}
+
+func (f *fakePublisher) Publish(_ context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+	f.events = append(f.events, event)
+	f.payloads = append(f.payloads, payload)
+	f.options = append(f.options, opts)
+	if f.onPublish != nil {
+		f.onPublish()
+	}
+	if f.publishErr != nil {
+		return nil, f.publishErr
+	}
+	return &jetstream.PublishAck{Stream: "MOOX_OBSERVABILITY", Sequence: uint64(len(f.events))}, nil
+}
+
+func (f *fakePublisher) Close() error {
+	f.closed = true
+	return nil
 }
 
 func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
@@ -32,7 +85,9 @@ func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	gauge.WithLabelValues("unit").Set(42)
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", InstanceID: "i", GzipLevel: 1}, nil, registry)
+	cfg := validConfig("monitor")
+	cfg.GzipLevel = 1
+	h, err := NewHandlerWithPublisher(cfg, nil, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,14 +116,16 @@ func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
 
 func TestBuildSnapshotFiltersAndRejectsOversize(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	for _, name := range []string{"included_metric", "excluded_metric"} {
+	for _, name := range []string{"moox_included_metric", "go_excluded_metric"} {
 		g := prometheus.NewGauge(prometheus.GaugeOpts{Name: name, Help: name})
 		if err := registry.Register(g); err != nil {
 			t.Fatal(err)
 		}
 		g.Set(1)
 	}
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", IncludeRegex: "^included_", MaxUncompressedBytes: 8}, nil, registry)
+	cfg := validConfig("monitor")
+	cfg.MaxUncompressedBytes = 8
+	h, err := NewHandlerWithPublisher(cfg, nil, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +141,7 @@ func TestBuildSnapshotCountsFlattenedHistogramSamples(t *testing.T) {
 		t.Fatal(err)
 	}
 	hist.Observe(1.5)
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", InstanceID: "i"}, nil, registry)
+	h, err := NewHandlerWithPublisher(validConfig("monitor"), nil, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,61 +149,99 @@ func TestBuildSnapshotCountsFlattenedHistogramSamples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.GetSampleCount() != 4 { // sum, count, and two buckets
-		t.Fatalf("sample count = %d, want 4", snapshot.GetSampleCount())
+	if snapshot.GetSampleCount() != 5 { // sum, count, two finite buckets, and +Inf
+		t.Fatalf("sample count = %d, want 5", snapshot.GetSampleCount())
 	}
 }
 
 func TestDefaultConfigUsesCentralEventBus(t *testing.T) {
-	cfg := DefaultConfig("monitor")
-	if cfg.EventBusURL != DefaultBusURL || cfg.Topic != DefaultTopic || cfg.SpaceID != DefaultSpace {
+	cfg := DefaultConfig("monitor", "moox_monitor")
+	if cfg.EventBusURL != DefaultBusURL || cfg.SpaceID != DefaultSpace {
 		t.Fatalf("defaults: %+v", cfg)
+	}
+	if cfg.MaxSamples < 100000 || cfg.MaxUncompressedBytes < 16*1024*1024 || cfg.MaxCompressedBytes < 4*1024*1024 {
+		t.Fatalf("metric snapshot limits are too small: %+v", cfg)
 	}
 }
 
-func TestHandlePublishesMooxMessage(t *testing.T) {
+func TestNewHandlerWithRegistrySupportsDedicatedSCFMetrics(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	h, err := NewHandlerWithRegistry(validConfig("moox-collector-scf"), registry)
+	require.NoError(t, err)
+	require.Same(t, registry, h.gatherer)
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	requireMetricFamily(t, families, "moox_monitor_report_errors_total")
+	requireMetricFamily(t, families, "moox_monitor_report_last_error_timestamp_seconds")
+	requireNoLabels(t, families, "service", "module", "subject_id", "job_id", "error")
+}
+
+func TestHandlePublishesEventMessage(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_reporter_publish_test", Help: "publish"})
 	if err := registry.Register(gauge); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &fakePublisher{}
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "moox-monitor", InstanceID: "instance-a"}, publisher, registry)
+	cfg := validConfig("moox-monitor")
+	cfg.InstanceID = "instance-a"
+	h, err := NewHandlerWithPublisher(cfg, publisher, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Handle(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(publisher.messages) != 1 {
-		t.Fatalf("published messages = %d", len(publisher.messages))
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d", len(publisher.events))
 	}
-	message := publisher.messages[0]
-	if message.GetTopic() != DefaultTopic || message.GetContentType() != SnapshotContentType || message.GetKind() != messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT {
-		t.Fatalf("unexpected message metadata: %+v", message)
+	if publisher.events[0].Name() != events.ObservabilityMetricsSnapshotReported.Name() ||
+		publisher.events[0].Version() != events.ObservabilityMetricsSnapshotReported.Version() {
+		t.Fatalf("event = %+v", publisher.events[0])
 	}
-	if message.GetProducer().GetServiceName() != "moox-monitor" || message.GetProducer().GetInstanceId() != "instance-a" || message.GetSequence() != 1 {
-		t.Fatalf("unexpected producer metadata: %+v", message.GetProducer())
+	report, ok := publisher.payloads[0].(*metricspb.MetricReport)
+	if !ok || report.GetServiceName() != "moox-monitor" || report.GetInstanceId() != "instance-a" || report.GetSequence() != 1 {
+		t.Fatalf("unexpected report: %T %+v", publisher.payloads[0], publisher.payloads[0])
 	}
 }
 
-func TestReportErrorIncrementsErrorCount(t *testing.T) {
-	h := &Handler{cfg: Config{ServiceName: "monitor"}}
+func TestHandleSkipsOverlappingInvocations(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	publisher := &fakePublisher{}
+	h, err := NewHandlerWithPublisher(validConfig("moox-monitor"), publisher, registry)
+	require.NoError(t, err)
 
-	err := h.reportError(context.Background(), errors.New("publish failed"))
-	require.Error(t, err)
-	assert.Equal(t, uint64(1), h.ErrorCount())
+	gatherer := &blockingGatherer{started: make(chan struct{}), release: make(chan struct{})}
+	h.gatherer = gatherer
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- h.Handle(context.Background()) }()
 
-	require.NoError(t, h.reportError(context.Background(), nil))
-	assert.Equal(t, uint64(1), h.ErrorCount())
+	select {
+	case <-gatherer.started:
+	case <-time.After(time.Second):
+		t.Fatal("first report did not start gathering")
+	}
 
-	var nilHandler *Handler
-	assert.Equal(t, uint64(0), nilHandler.ErrorCount())
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- h.Handle(context.Background()) }()
+	select {
+	case err := <-secondDone:
+		require.ErrorIs(t, err, ErrInFlight)
+	case <-time.After(time.Second):
+		t.Fatal("overlapping report was queued behind the slow report")
+	}
+	require.Empty(t, publisher.events)
+
+	close(gatherer.release)
+	require.NoError(t, <-firstDone)
+	require.Len(t, publisher.events, 1)
+	require.NoError(t, h.Handle(context.Background()))
+	require.Len(t, publisher.events, 2)
 }
 
 func TestHandleReportsPublisherError(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	h, err := NewHandlerWithPublisher(Config{ServiceName: "monitor", BootID: "boot"}, nil, registry)
+	h, err := NewHandlerWithPublisher(validConfig("monitor"), nil, registry)
 	require.NoError(t, err)
 	h.connector = func(context.Context, Config) (Publisher, error) {
 		return nil, errors.New("eventbus down")
@@ -156,5 +251,73 @@ func TestHandleReportsPublisherError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "eventbus down")
-	assert.Equal(t, uint64(1), h.ErrorCount())
+}
+
+func TestHandleReconnectsAndRetriesTransientPublisherError(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	first := &fakePublisher{publishErr: fmt.Errorf("%w: outbound buffer limit exceeded", jetstream.ErrConnection)}
+	second := &fakePublisher{}
+	h, err := NewHandlerWithPublisher(validConfig("storage-view"), first, registry)
+	require.NoError(t, err)
+	connectCalls := 0
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		connectCalls++
+		return second, nil
+	}
+
+	require.NoError(t, h.Handle(context.Background()))
+	require.True(t, first.closed)
+	require.Equal(t, 1, connectCalls)
+	require.Len(t, first.options, 1)
+	require.Len(t, second.options, 1)
+	require.Equal(t, first.options[0].EventID, second.options[0].EventID)
+	require.Equal(t, uint64(1), second.payloads[0].(*metricspb.MetricReport).GetSequence())
+}
+
+func TestHandleDoesNotReconnectPermanentPublisherError(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	first := &fakePublisher{publishErr: jetstream.ErrInvalidMessage}
+	h, err := NewHandlerWithPublisher(validConfig("storage-view"), first, registry)
+	require.NoError(t, err)
+	connectCalls := 0
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		connectCalls++
+		return &fakePublisher{}, nil
+	}
+
+	require.Error(t, h.Handle(context.Background()))
+	require.False(t, first.closed)
+	require.Zero(t, connectCalls)
+}
+
+func TestHandleDoesNotReconnectAfterCallerCancellation(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	first := &fakePublisher{publishErr: fmt.Errorf("%w: %w", jetstream.ErrConnection, context.Canceled)}
+	h, err := NewHandlerWithPublisher(validConfig("storage-view"), first, registry)
+	require.NoError(t, err)
+	connectCalls := 0
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		connectCalls++
+		return &fakePublisher{}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.Error(t, h.Handle(ctx))
+	require.False(t, first.closed)
+	require.Zero(t, connectCalls)
+}
+
+func TestHandleKeepsReconnectedPublisherWhenRetryContextExpires(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	first := &fakePublisher{publishErr: jetstream.ErrConnection}
+	ctx, cancel := context.WithCancel(context.Background())
+	second := &fakePublisher{publishErr: jetstream.ErrPublishTimeout, onPublish: cancel}
+	h, err := NewHandlerWithPublisher(validConfig("storage-view"), first, registry)
+	require.NoError(t, err)
+	h.connector = func(context.Context, Config) (Publisher, error) { return second, nil }
+
+	require.Error(t, h.Handle(ctx))
+	require.True(t, first.closed)
+	require.False(t, second.closed)
 }

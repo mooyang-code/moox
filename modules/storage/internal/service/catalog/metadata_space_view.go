@@ -1,0 +1,401 @@
+package catalog
+
+import (
+	"context"
+	"crypto/hmac"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+)
+
+// 本文件聚合 Space 与 View（含 ViewColumn）相关的元数据 CRUD 入口。
+
+func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.CreateSpaceRsp, error) {
+	space := req.GetSpace()
+	if space == nil || (space.GetSpaceId() == "" && space.GetName() == "") {
+		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id or name is required"))}, nil
+	}
+	if space.SpaceId == "" {
+		space.SpaceId = defaultID(space.GetName(), "space")
+	}
+	if space.Name == "" {
+		space.Name = space.GetSpaceId()
+	}
+	var created *pb.Space
+	var err error
+	if creator, ok := s.metadata.(interface {
+		CreateSpace(context.Context, *pb.Space) (*pb.Space, error)
+	}); ok {
+		created, err = creator.CreateSpace(ctx, space)
+	} else {
+		// Non-SQLite test/compatibility stores may only expose the historical
+		// Writer contract. Production SQLite always takes the atomic path above.
+		created, err = s.metadata.UpsertSpace(ctx, space)
+	}
+	if err != nil {
+		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	// The SQLite INSERT is already committed before this point. Cache
+	// publication is best-effort so a response retry cannot turn a successful
+	// create into a duplicate-key failure or leak an orphaned Space.
+	s.refreshMetadataCacheAfterCommit(ctx, "CreateSpace")
+	return &pb.CreateSpaceRsp{RetInfo: retinfo.Success("success"), Space: created}, nil
+}
+
+func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.UpdateSpaceRsp, error) {
+	space := req.GetSpace()
+	if space == nil || space.GetSpaceId() == "" {
+		return &pb.UpdateSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id is required"))}, nil
+	}
+	if space.Name == "" {
+		space.Name = space.GetSpaceId()
+	}
+	updated, err := s.metadata.UpsertSpace(ctx, space)
+	if err != nil {
+		return &pb.UpdateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.UpdateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.UpdateSpaceRsp{RetInfo: retinfo.Success("success"), Space: updated}, nil
+}
+
+func (s *Service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.DeleteSpaceRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" {
+		return &pb.DeleteSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id is required"))}, nil
+	}
+	if err := s.metadata.DeleteSpace(ctx, req.GetSpaceId()); err != nil {
+		return &pb.DeleteSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "DeleteSpace")
+	return &pb.DeleteSpaceRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
+func (s *Service) GetSpace(ctx context.Context, req *pb.GetSpaceReq) (*pb.GetSpaceRsp, error) {
+	space, err := s.metadata.GetSpace(ctx, req.GetSpaceId())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &pb.GetSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_SPACE_NOT_FOUND, err)}, nil
+		}
+		return &pb.GetSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.GetSpaceRsp{RetInfo: retinfo.Success("success"), Space: space}, nil
+}
+
+func (s *Service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.ListSpacesRsp, error) {
+	items, page, err := s.metadata.ListSpaces(ctx, req.GetOwner(), req.GetPage())
+	if err != nil {
+		return &pb.ListSpacesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.ListSpacesRsp{RetInfo: retinfo.Success("success"), Spaces: items, PageResult: page}, nil
+}
+
+func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.CreateViewRsp, error) {
+	view := req.GetView()
+	if view == nil || view.GetSpaceId() == "" || (view.GetViewId() == "" && view.GetName() == "") {
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id or name are required"))}, nil
+	}
+	if view.ViewId == "" {
+		view.ViewId = "view_" + defaultID(view.GetName(), "view")
+	}
+	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := validateViewID(view.GetViewId()); err != nil {
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := validateViewColumns(view.GetColumns()); err != nil {
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	clearViewIndexRuntimeState(view)
+	var created *pb.View
+	var err error
+	if req.GetCreateOnly() {
+		created, err = s.metadata.CreateView(ctx, view)
+		if errors.Is(err, metadatastore.ErrViewExists) {
+			return &pb.CreateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_CONFLICT, err)}, nil
+		}
+	} else {
+		created, err = s.metadata.UpsertView(ctx, view)
+	}
+	if err != nil {
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.CreateViewRsp{RetInfo: retinfo.Success("success"), View: created}, nil
+}
+
+func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.UpdateViewRsp, error) {
+	view := req.GetView()
+	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	if view.Name == "" {
+		view.Name = view.GetViewId()
+	}
+	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := validateViewID(view.GetViewId()); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := validateViewColumns(view.GetColumns()); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	clearViewIndexRuntimeState(view)
+	var updated *pb.View
+	var err error
+	if req.GetReplaceColumns() {
+		updated, err = s.metadata.ReplaceViewColumns(ctx, view)
+	} else {
+		updated, err = s.metadata.UpsertView(ctx, view)
+	}
+	if err != nil {
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.UpdateViewRsp{RetInfo: retinfo.Success("success"), View: updated}, nil
+}
+
+func (s *Service) DeleteView(ctx context.Context, req *pb.DeleteViewReq) (*pb.DeleteViewRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.DeleteViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	if err := s.metadata.DeleteView(ctx, req.GetSpaceId(), req.GetViewId()); err != nil {
+		return &pb.DeleteViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	s.refreshMetadataCacheAfterCommit(ctx, "DeleteView")
+	return &pb.DeleteViewRsp{RetInfo: retinfo.Success("success")}, nil
+}
+
+// RequestViewRebuild records a revision-scoped manual rebuild request and
+// returns immediately. The View Maintainer performs the A/B work in the
+// background while the current active index remains readable.
+func (s *Service) RequestViewRebuild(ctx context.Context, req *pb.RequestViewRebuildReq) (*pb.RequestViewRebuildRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	if err := s.validateManualRebuildAuth(req.GetAuthInfo()); err != nil {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	current, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+	}
+	if current == nil || !strings.EqualFold(strings.TrimSpace(current.GetStatus()), "active") {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("only active views can be rebuilt"))}, nil
+	}
+	view, err := s.metadata.RequestViewRebuild(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	// Metadata is already committed and the View Maintainer can safely read it from
+	// SQLite. Cache publication is best-effort here; a transient cache failure
+	// must not make the browser retry and advance the revision again.
+	s.refreshMetadataCacheAfterCommit(ctx, "RequestViewRebuild")
+	return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Success("rebuild requested"), View: view}, nil
+}
+
+// validateManualRebuildAuth keeps this expensive operator action restricted at
+// the Storage boundary as well as at the browser gateway. The gateway route
+// allow-list is defense in depth, not an authentication mechanism: a service
+// credential must not be able to forge admin-gateway by only changing AppId.
+func (s *Service) validateManualRebuildAuth(auth *pb.AuthInfo) error {
+	if strings.TrimSpace(s.operatorSecret) == "" {
+		return errors.New("storage auth secret is not configured")
+	}
+	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
+		return errors.New("administrator service auth is required")
+	}
+	appID := strings.TrimSpace(auth.GetAppId())
+	if appID != "admin-gateway" && appID != "moox-cli" {
+		return errors.New("administrator identity required")
+	}
+	expected := serviceAuthKey(s.operatorSecret, appID)
+	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
+		return errors.New("invalid administrator service HMAC")
+	}
+	return nil
+}
+
+func clearViewIndexRuntimeState(view *pb.View) {
+	if view == nil {
+		return
+	}
+	view.ActiveIndexId = ""
+	view.ActiveViewRevision = 0
+	view.ActiveColumns = nil
+	view.ActiveViewSchemaHash = ""
+	view.ActiveSlot = "slot-a"
+	view.IndexedFrom = ""
+	view.IndexedTo = ""
+	view.IndexBuild = nil
+}
+
+func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb.View) error {
+	if view == nil {
+		return errors.New("view is required")
+	}
+	spaceID := strings.TrimSpace(view.GetSpaceId())
+	datasetID := viewDatasetID(view)
+	if spaceID == "" || datasetID == "" {
+		return errors.New("space_id and dataset_id are required")
+	}
+	if err := validateViewReferencesSingleDataset(view); err != nil {
+		return err
+	}
+	dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
+	}
+	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES {
+		freq, normalizedFilterJSON, err := normalizeTimeSeriesViewFilterJSON(view.GetFilterJson())
+		if err != nil {
+			return err
+		}
+		if !datasetSupportsFreq(dataset, freq) {
+			return fmt.Errorf("view dataset %s does not support freq %q", dataset.GetDatasetId(), freq)
+		}
+		view.FilterJson = normalizedFilterJSON
+	}
+	view.DatasetId = datasetID
+	view.GrainKeys = defaultViewGrainKeys(dataset.GetDataKind())
+	view.Engine = defaultViewEngine(dataset.GetDataKind())
+	return nil
+}
+
+func normalizeTimeSeriesViewFilterJSON(raw string) (string, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", errors.New("time series view filter_json.freq is required")
+	}
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return "", "", fmt.Errorf("invalid time series view filter_json: %w", err)
+	}
+	var freq string
+	if rawFreq, ok := fields["freq"]; ok {
+		if err := json.Unmarshal(rawFreq, &freq); err != nil {
+			return "", "", errors.New("time series view filter_json.freq must be a string")
+		}
+	}
+	freq = strings.TrimSpace(freq)
+	if freq == "" {
+		return "", "", errors.New("time series view filter_json.freq is required")
+	}
+	encodedFreq, err := json.Marshal(freq)
+	if err != nil {
+		return "", "", err
+	}
+	fields["freq"] = encodedFreq
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return "", "", err
+	}
+	return freq, string(normalized), nil
+}
+
+func (s *Service) GetView(ctx context.Context, req *pb.GetViewReq) (*pb.GetViewRsp, error) {
+	view, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return &pb.GetViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+	}
+	return &pb.GetViewRsp{RetInfo: retinfo.Success("success"), View: view}, nil
+}
+
+func (s *Service) ListViews(ctx context.Context, req *pb.ListViewsReq) (*pb.ListViewsRsp, error) {
+	items, page, err := s.metadata.ListViews(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetStatus(), req.GetPage())
+	if err != nil {
+		return &pb.ListViewsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.ListViewsRsp{RetInfo: retinfo.Success("success"), Views: items, PageResult: page}, nil
+}
+
+func (s *Service) ListViewRebuildLogs(ctx context.Context, req *pb.ListViewRebuildLogsReq) (*pb.ListViewRebuildLogsRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	items, page, err := s.metadata.ListViewRebuildLogs(ctx, req.GetSpaceId(), req.GetViewId(), req.GetResult(), req.GetPage())
+	if err != nil {
+		return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Success("success"), Logs: items, PageResult: page}, nil
+}
+
+func (s *Service) CreateViewRebuildLog(ctx context.Context, req *pb.CreateViewRebuildLogReq) (*pb.CreateViewRebuildLogRsp, error) {
+	if req == nil || req.GetLog() == nil {
+		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
+	}
+	item, err := s.metadata.CreateViewRebuildLog(ctx, req.GetLog())
+	if err != nil {
+		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
+}
+
+func (s *Service) UpdateViewRebuildLog(ctx context.Context, req *pb.UpdateViewRebuildLogReq) (*pb.UpdateViewRebuildLogRsp, error) {
+	if req == nil || req.GetLog() == nil {
+		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
+	}
+	item, err := s.metadata.UpdateViewRebuildLog(ctx, req.GetLog())
+	if err != nil {
+		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
+}
+
+func (s *Service) UpsertSkippedViewRebuildLog(ctx context.Context, req *pb.UpsertSkippedViewRebuildLogReq) (*pb.UpsertSkippedViewRebuildLogRsp, error) {
+	if req == nil || req.GetLog() == nil {
+		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
+	}
+	item, err := s.metadata.UpsertSkippedViewRebuildLog(ctx, req.GetLog())
+	if err != nil {
+		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
+}
+
+func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumnReq) (*pb.UpsertViewColumnRsp, error) {
+	column := req.GetColumn()
+	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
+	}
+	if err := validateColumnDisplayName("view column display_name", column.GetSpaceId(), column.GetAttributes(), isFactorViewColumn(column)); err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := validateViewColumnName(column); err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	created, err := s.metadata.UpsertViewColumn(ctx, column)
+	if err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.refreshMetadataCache(ctx); err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Success("success"), Column: created}, nil
+}
+
+func (s *Service) ListViewColumns(ctx context.Context, req *pb.ListViewColumnsReq) (*pb.ListViewColumnsRsp, error) {
+	items, page, err := s.metadata.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), req.GetPage())
+	if err != nil {
+		return &pb.ListViewColumnsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.ListViewColumnsRsp{RetInfo: retinfo.Success("success"), Columns: items, PageResult: page}, nil
+}

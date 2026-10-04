@@ -2,13 +2,13 @@ package httpclient
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,6 +16,34 @@ import (
 func TestClient_New_ShouldTrimTrailingSlash(t *testing.T) {
 	c := New("https://api.example.com/")
 	assert.Equal(t, "https://api.example.com", c.BaseURL)
+}
+
+func TestClient_Do_ClassifiesHTTPAndTransportErrors(t *testing.T) {
+	tests := []struct {
+		status int
+		kind   exchange.ErrorKind
+	}{
+		{http.StatusUnauthorized, exchange.ErrorAuthentication},
+		{http.StatusNotFound, exchange.ErrorOrderNotFound},
+		{http.StatusTooManyRequests, exchange.ErrorRateLimited},
+		{http.StatusBadRequest, exchange.ErrorRejected},
+		{http.StatusServiceUnavailable, exchange.ErrorTransportUnknown},
+	}
+	for _, test := range tests {
+		t.Run(http.StatusText(test.status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+			}))
+			defer server.Close()
+			_, err := New(server.URL).Do(context.Background(), &Request{Path: "/"})
+			require.True(t, exchange.IsKind(err, test.kind), "error = %v", err)
+		})
+	}
+
+	client := New("http://127.0.0.1:1")
+	client.HTTP.Timeout = 50 * time.Millisecond
+	_, err := client.Do(context.Background(), &Request{Path: "/", Timeout: 50 * time.Millisecond})
+	require.True(t, exchange.IsKind(err, exchange.ErrorTransportUnknown), "error = %v", err)
 }
 
 func TestClient_Do_SuccessResponse_ShouldReturnBody(t *testing.T) {
@@ -62,16 +90,6 @@ func TestClient_Do_DefaultMethodAndTimeout_ShouldUseGetAndDefaultTimeout(t *test
 	require.NoError(t, err)
 }
 
-func TestDecodeJSON_ValidAndEmptyPayload_ShouldDecode(t *testing.T) {
-	var got map[string]any
-	err := DecodeJSON([]byte(`{"name":"btc"}`), &got)
-	require.NoError(t, err)
-	assert.Equal(t, "btc", got["name"])
-
-	err = DecodeJSON(nil, &got)
-	assert.NoError(t, err)
-}
-
 func TestTruncate_LongBody_ShouldAppendEllipsis(t *testing.T) {
 	assert.Equal(t, "abcd...", truncate([]byte("abcdef"), 4))
 	assert.Equal(t, "abc", truncate([]byte("abc"), 4))
@@ -89,28 +107,4 @@ func TestClient_Do_WithQuery_ShouldEncodeQueryString(t *testing.T) {
 	q.Set("symbol", "BTCUSDT")
 	_, err := c.Do(context.Background(), &Request{Path: "/klines", Query: q})
 	require.NoError(t, err)
-}
-
-func TestDecodeJSON_InvalidJSON_ShouldReturnError(t *testing.T) {
-	var v map[string]any
-	err := DecodeJSON([]byte("{"), &v)
-	assert.Error(t, err)
-}
-
-func TestClient_Do_ResponseBody_ShouldRoundTripThroughJSON(t *testing.T) {
-	type payload struct {
-		Code int `json:"code"`
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(payload{Code: 0})
-	}))
-	defer server.Close()
-
-	c := New(server.URL)
-	raw, err := c.Do(context.Background(), &Request{Path: "/ok"})
-	require.NoError(t, err)
-
-	var got payload
-	require.NoError(t, DecodeJSON(raw, &got))
-	assert.Equal(t, 0, got.Code)
 }

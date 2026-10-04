@@ -11,6 +11,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -29,9 +30,17 @@ func Open(dbCfg *config.DatabaseConfig) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	db, err := gorm.Open(sqlite.Open(buildSQLiteDSN(dbPath)), &gorm.Config{})
+	// Batch Item request_json contains deployment credentials. Do not let
+	// GORM's error/slow-query logger render SQL values into service logs.
+	db, err := gorm.Open(sqlite.Open(buildSQLiteDSN(dbPath)), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+	if err := os.Chmod(dbPath, 0o600); err != nil {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		return nil, fmt.Errorf("restrict cloudnode database permissions: %w", err)
 	}
 	s := &Store{db: db, catalog: NewCatalogRepository(db)}
 	applySQLitePoolConfig(db, dbCfg)
@@ -56,6 +65,62 @@ func (s *Store) ApplySchema(sql string) error {
 		return fmt.Errorf("cloudnode schema sql is empty")
 	}
 	return s.db.Exec(sql).Error
+}
+
+// MigrateLegacySchema removes catalog fields that are no longer part of the
+// CloudNode contract. CloudNode is a new control-plane database, so this is a
+// one-time destructive cleanup rather than a compatibility layer.
+func (s *Store) MigrateLegacySchema() error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("cloudnode database is not open")
+	}
+	if s.db.Migrator().HasTable("t_cloud_node_batch_items") &&
+		!s.db.Migrator().HasColumn("t_cloud_node_batch_items", "c_publish_lease_recovery_owned") {
+		if err := s.db.Exec("ALTER TABLE t_cloud_node_batch_items ADD COLUMN c_publish_lease_recovery_owned INTEGER NOT NULL DEFAULT 0").Error; err != nil {
+			return fmt.Errorf("add CloudNode publish lease recovery ownership column: %w", err)
+		}
+	}
+	if !s.db.Migrator().HasTable("t_cloud_nodes") {
+		return nil
+	}
+	for _, column := range []struct {
+		name    string
+		typeSQL string
+	}{
+		{name: "c_lifecycle_id", typeSQL: "TEXT NOT NULL DEFAULT ''"},
+		{name: "c_lifecycle_operation_id", typeSQL: "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if s.db.Migrator().HasColumn("t_cloud_nodes", column.name) {
+			continue
+		}
+		if err := s.db.Exec(fmt.Sprintf("ALTER TABLE t_cloud_nodes ADD COLUMN %s %s", column.name, column.typeSQL)).Error; err != nil {
+			return fmt.Errorf("add CloudNode lifecycle column %s: %w", column.name, err)
+		}
+	}
+	if s.db.Migrator().HasColumn("t_cloud_nodes", "c_status") {
+		if err := s.db.Exec("DROP INDEX IF EXISTS idx_cloud_nodes_status").Error; err != nil {
+			return fmt.Errorf("drop legacy cloud node status index: %w", err)
+		}
+		if err := s.db.Exec("ALTER TABLE t_cloud_nodes DROP COLUMN c_status").Error; err != nil {
+			return fmt.Errorf("drop legacy cloud node status column: %w", err)
+		}
+	}
+	return s.db.Exec(`
+UPDATE t_cloud_nodes
+SET c_metadata = json_remove(
+    c_metadata,
+    '$.cls_topic_id', '$.cls_logset_id',
+    '$.timeout_threshold', '$.probe_enabled', '$.probe_url'
+)
+WHERE json_valid(c_metadata)
+  AND (
+       json_type(c_metadata, '$.cls_topic_id') IS NOT NULL
+       OR json_type(c_metadata, '$.cls_logset_id') IS NOT NULL
+       OR json_type(c_metadata, '$.timeout_threshold') IS NOT NULL
+       OR json_type(c_metadata, '$.probe_enabled') IS NOT NULL
+       OR json_type(c_metadata, '$.probe_url') IS NOT NULL
+  )
+`).Error
 }
 
 // Ping verifies that the database is available.

@@ -113,9 +113,9 @@ Implement runtime wiring before packaging. Then add build, release, deploy, SysD
 ```bash
 env GOCACHE=/tmp/moox-gocache go test -count=1 ./modules/strategy/...
 env GOCACHE=/tmp/moox-gocache go test -count=1 ./modules/eventbus/... ./modules/admin/...
-bash -n scripts/build.sh scripts/release.sh scripts/deploy-moox.sh scripts/test-release-contract.sh
-bash scripts/test-release-contract.sh
-bash scripts/test-deploy-moox-strategy.sh
+bash -n scripts/build/build.sh scripts/release/release.sh scripts/deploy/deploy-moox.sh scripts/test/contract/test-release-contract.sh
+bash scripts/test/contract/test-release-contract.sh
+bash scripts/test/contract/test-deploy-moox-strategy.sh
 ```
 
 Expected: PASS; default artifacts include Strategy, while `--no-strategy` produces no binary, process, or active route.
@@ -123,7 +123,7 @@ Expected: PASS; default artifacts include Strategy, while `--no-strategy` produc
 - [ ] **Step 3: Build Strategy artifacts**
 
 ```bash
-./scripts/build.sh strategy
+./scripts/build/build.sh strategy
 test -x bin/moox-strategy
 test -x bin/moox-strategy-cli
 ```
@@ -158,12 +158,12 @@ Each checker test must first create a temporary invalid fixture and prove a non-
 - [ ] **Step 3: Run all quality gates**
 
 ```bash
-./scripts/check-module-boundaries.sh
-./scripts/check-package-boundaries.sh
-./scripts/check-go-format.sh
-./scripts/check-web-format.sh
-./scripts/check-web-lint.sh
-./scripts/check-doc-consistency.sh
+./scripts/check/check-module-boundaries.sh
+./scripts/check/check-package-boundaries.sh
+./scripts/check/check-go-format.sh
+./scripts/check/check-web-format.sh
+./scripts/check/check-web-lint.sh
+./scripts/check/check-doc-consistency.sh
 pnpm docs:build
 ```
 
@@ -260,7 +260,7 @@ Use one fix task for the complete findings list. Re-run the covering tests and a
 **Files:**
 - Create or modify: `modules/storage/test/view_delivery_e2e_test.go`
 - Create or modify: `modules/strategy/test/deployment_e2e_test.go`
-- Create: `scripts/test-deploy-moox-strategy.sh`
+- Create: `scripts/test/contract/test-deploy-moox-strategy.sh`
 - Modify: Playwright specifications under `web/e2e/` or the repository's existing browser test location.
 
 - [ ] **Step 1: Run the complete local gate**
@@ -275,8 +275,8 @@ Expected: `make verify` exits 0 and status contains no generated or formatter ch
 - [ ] **Step 2: Build the complete release**
 
 ```bash
-./scripts/build.sh all
-VERSION=review-remediation ./scripts/release.sh
+./scripts/build/build.sh all
+VERSION=review-remediation ./scripts/release/release.sh
 ```
 
 Expected: all binaries compile; the release contains Strategy runtime assets and no Python/cache/database artifacts.

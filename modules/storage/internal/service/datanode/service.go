@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble"
+
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -35,7 +37,10 @@ func ServiceAuthKey(secret, appID string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-var _ pb.DataNodeService = (*Service)(nil)
+var _ pb.DataNodeRuntimeService = (*Service)(nil)
+var _ pb.DataNodePeriodRuntimeService = (*Service)(nil)
+var _ pb.DataNodeDatasetAdminRuntimeService = (*Service)(nil)
+var _ pb.DataNodeHistoryRuntimeService = (*Service)(nil)
 
 func NewService(opts Options) (*Service, error) {
 	store := opts.Store
@@ -63,7 +68,8 @@ func NewService(opts Options) (*Service, error) {
 	}
 	secret := opts.AuthSecret
 	if secret == "" {
-		secret = nodeID
+		_ = store.Close()
+		return nil, errors.New("auth secret is required")
 	}
 	return &Service{nodeID: nodeID, store: store, requireAuth: true, authSecret: secret}, nil
 }
@@ -75,28 +81,59 @@ func (s *Service) Close() error {
 	return s.store.Close()
 }
 
-func (s *Service) WriteFields(ctx context.Context, req *pb.WriteFieldsReq) (*pb.WriteFieldsRsp, error) {
+func (s *Service) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	if req == nil || len(req.GetRows()) == 0 {
-		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
+		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	entries, err := s.store.WriteFieldsEvent(ctx, req.GetRows(), func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetFieldsChangedMessage(s.nodeID, spaceID, datasetID, rows)
-	})
+	writeEvent := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		if req.GetSourceEventId() == "" {
+			return pebble.BuildDatasetRowsUpsertedMessageWithSource(s.nodeID, req.GetWriteSource(), spaceID, datasetID, rows)
+		}
+		return pebble.BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(s.nodeID, req.GetSourceEventId(), req.GetWriteSource(), spaceID, datasetID, rows)
+	}
+	var entries []*pebble.OutboxEntry
+	var err error
+	if req.GetSourceEventId() == "" {
+		entries, err = s.store.UpsertFieldsEvent(ctx, req.GetRows(), writeEvent)
+	} else {
+		entries, err = s.store.UpsertFieldsEventWithSource(ctx, req.GetRows(), req.GetSourceEventId(), writeEvent)
+	}
 	if err != nil {
-		return &pb.WriteFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
 	for _, row := range req.GetRows() {
-		keys = append(keys, row.GetKey())
+		key, err := pebble.NormalizeRowKey(row.GetKey())
+		if err != nil {
+			return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+		keys = append(keys, key)
 	}
 	_ = entries // entries are durable and relayed asynchronously by the node.
-	return &pb.WriteFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+	return &pb.UpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+}
+
+func (s *Service) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
+	if req == nil {
+		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+	}
+	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
+		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rowsWritten, err := s.store.WriteFactorRows(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetCommitId(), req.GetRows())
+	if err != nil {
+		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Success("success"), RowsWritten: rowsWritten}, nil
 }
 
 func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
@@ -116,11 +153,29 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.Re
 			}
 		}
 	}
-	rows, err := s.store.ReadFields(ctx, req.GetKeys(), req.GetFieldIds(), req.GetAttributeKeys())
+	rows, existing, err := s.store.ReadFieldsWithPresence(ctx, req.GetKeys(), req.GetFieldIds(), req.GetAttributeKeys())
 	if err != nil {
 		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
-	return &pb.ReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
+	return &pb.ReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
+}
+
+// ReadTimeSeriesRows is intentionally exposed on the narrow history runtime
+// service, not on DataNodeRuntime. Primary uses it only for View backfill;
+// normal callers continue to use point reads through PrimaryStore.
+func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	if req == nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rows, err := s.store.ReadTimeSeriesRows(ctx, req)
+	if err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	rows.RetInfo = retinfo.Success("success")
+	return rows, nil
 }
 
 func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
@@ -133,12 +188,15 @@ func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*p
 	if req.GetNodeId() != s.nodeID {
 		return &pb.GetNodeStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
 	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.GetNodeStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	return &pb.GetNodeStateRsp{RetInfo: retinfo.Success("success"), NodeId: s.nodeID, Status: "READY"}, nil
 }
 
 func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
-	if req == nil || req.GetDatasetId() == "" || req.GetBeforeBucketStart() == "" {
-		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id and before_bucket_start are required"))}, nil
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetBeforeBucketStart() == "" {
+		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and before_bucket_start are required"))}, nil
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
@@ -150,11 +208,44 @@ func (s *Service) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpi
 	if err != nil {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	deleted, err := s.store.CleanupExpiredBuckets(ctx, req.GetDatasetId(), before)
+	deleted, err := s.store.CleanupExpiredBuckets(ctx, req.GetSpaceId(), req.GetDatasetId(), before)
 	if err != nil {
 		return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: retinfo.Success("success"), DeletedBuckets: deleted}, nil
+}
+
+func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.DeleteDatasetRowsReq) (*pb.DeleteDatasetRowsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
+		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	deleted, err := s.store.DeleteDatasetRows(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Success("success"), DeletedRanges: deleted}, nil
+}
+
+func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.RestoreDatasetRowsReq) (*pb.RestoreDatasetRowsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
+		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	if err := s.store.RestoreDatasetRows(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
 func (s *Service) validateAuth(auth *pb.AuthInfo) error {
@@ -175,9 +266,24 @@ func errorCode(err error) pb.ErrorCode {
 	if err == nil {
 		return pb.ErrorCode_SUCCESS
 	}
-	text := strings.ToLower(err.Error())
-	if strings.Contains(text, "required") || strings.Contains(text, "invalid") || strings.Contains(text, "limit") || strings.Contains(text, "duplicate") {
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return pb.ErrorCode_NOT_FOUND
+	}
+	var validation pebble.ValidationError
+	if errors.As(err, &validation) {
 		return pb.ErrorCode_INVALID_PARAM
+	}
+	var conflict pebble.ConflictError
+	if errors.As(err, &conflict) {
+		return pb.ErrorCode_CONFLICT
+	}
+	var commitConflict pebble.CommitConflictError
+	if errors.As(err, &commitConflict) {
+		return pb.ErrorCode_CONFLICT
+	}
+	var periodConflict pebble.PeriodConflictError
+	if errors.As(err, &periodConflict) {
+		return pb.ErrorCode_CONFLICT
 	}
 	return pb.ErrorCode_INNER_ERR
 }

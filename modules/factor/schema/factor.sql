@@ -1,58 +1,90 @@
 PRAGMA foreign_keys = ON;
 
-DROP TABLE IF EXISTS t_factor_runs;
+CREATE TABLE IF NOT EXISTS t_factor_sets (
+    c_set_id TEXT NOT NULL PRIMARY KEY,
+    c_space_id TEXT NOT NULL,
+    c_source_dataset_id TEXT NOT NULL,
+    c_freq TEXT NOT NULL,
+    c_subject_mode TEXT NOT NULL DEFAULT 'all',
+    c_subjects_json TEXT NOT NULL DEFAULT '[]',
+    c_result_dataset_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_subject_mode IN ('all', 'include')),
+    CHECK (c_status IN ('pending', 'enabled', 'disabled', 'deleting')),
+    UNIQUE (c_space_id, c_source_dataset_id, c_freq),
+    UNIQUE (c_result_dataset_id)
+);
 
 CREATE TABLE IF NOT EXISTS t_factor_defs (
-    c_factor_id TEXT PRIMARY KEY,
+    c_factor_id TEXT NOT NULL PRIMARY KEY,
+    c_set_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
-    c_kind TEXT NOT NULL DEFAULT 'timeseries' CHECK (c_kind IN ('timeseries', 'cross_section')),
+    c_factor_type TEXT NOT NULL,
     c_source_code TEXT NOT NULL,
     c_source_hash TEXT NOT NULL,
-    c_source_path TEXT NOT NULL DEFAULT '',
-    c_params_json TEXT NOT NULL DEFAULT '[]',
-    c_lookback_bars INTEGER NOT NULL,
-    c_writeback_bars INTEGER NOT NULL DEFAULT 5,
-    c_avg_runtime_ms REAL NOT NULL DEFAULT 0,
-    c_depends_json TEXT NOT NULL DEFAULT '[]',
-    c_status TEXT NOT NULL DEFAULT 'disabled' CHECK (c_status IN ('enabled', 'disabled')),
+    c_input_columns_json TEXT NOT NULL,
+    c_outputs_json TEXT NOT NULL,
+    c_params_json TEXT NOT NULL DEFAULT '{}',
+    c_lookback_periods INTEGER NOT NULL,
+    c_allow_partial_universe INTEGER NOT NULL DEFAULT 0,
+    c_status TEXT NOT NULL DEFAULT 'disabled',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_factor_type IN ('timeseries', 'cross_section')),
+    CHECK (c_lookback_periods >= 1),
+    CHECK (c_allow_partial_universe IN (0, 1)),
+    CHECK (c_status IN ('enabled', 'disabled')),
+    FOREIGN KEY (c_set_id) REFERENCES t_factor_sets (c_set_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_factor_defs_kind_status
-ON t_factor_defs(c_kind, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_factor_defs_set
+ON t_factor_defs (c_set_id, c_status);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_factor_defs_name_unique
-ON t_factor_defs(c_name);
-
-CREATE TABLE IF NOT EXISTS t_factor_bindings (
-    c_binding_id TEXT PRIMARY KEY,
-    c_factor_id TEXT NOT NULL REFERENCES t_factor_defs(c_factor_id),
-    c_space_id TEXT NOT NULL,
-    c_source_dataset TEXT NOT NULL,
-    c_freq TEXT NOT NULL,
-    c_subject_mode TEXT NOT NULL DEFAULT 'all' CHECK (c_subject_mode IN ('all', 'include')),
+CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
+    c_job_id TEXT NOT NULL PRIMARY KEY,
+    c_request_id TEXT NOT NULL,
+    c_set_id TEXT NOT NULL,
+    c_factor_ids_json TEXT NOT NULL DEFAULT '[]',
     c_subjects_json TEXT NOT NULL DEFAULT '[]',
-    c_target_dataset TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'enabled' CHECK (c_status IN ('enabled', 'disabled')),
+    c_factors_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_factors_omitted IN (0, 1)),
+    c_subjects_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_subjects_omitted IN (0, 1)),
+    c_start_time INTEGER NOT NULL,
+    c_end_time INTEGER NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'accepted',
+    c_progress_time INTEGER NOT NULL DEFAULT 0,
+    c_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('accepted', 'running', 'succeeded', 'failed', 'cancelled')),
+    CHECK (c_end_time > c_start_time),
+    UNIQUE (c_request_id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_factor_bindings_unique
-ON t_factor_bindings(c_factor_id, c_space_id, c_source_dataset, c_freq);
+CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_status
+ON t_factor_recalc_jobs (c_status, c_mtime);
 
-CREATE INDEX IF NOT EXISTS idx_factor_bindings_source
-ON t_factor_bindings(c_space_id, c_source_dataset, c_freq, c_status);
-
-CREATE TRIGGER IF NOT EXISTS update_factor_defs_mtime AFTER UPDATE ON t_factor_defs
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_sets_mtime
+AFTER UPDATE ON t_factor_sets
+FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+    UPDATE t_factor_sets SET c_mtime = CURRENT_TIMESTAMP WHERE c_set_id = OLD.c_set_id;
 END;
 
-CREATE TRIGGER IF NOT EXISTS update_factor_bindings_mtime AFTER UPDATE ON t_factor_bindings
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_defs_mtime
+AFTER UPDATE ON t_factor_defs
+FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_factor_bindings SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
+    UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE c_factor_id = OLD.c_factor_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_recalc_jobs_mtime
+AFTER UPDATE ON t_factor_recalc_jobs
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_recalc_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_job_id = OLD.c_job_id;
 END;

@@ -18,16 +18,20 @@ database or proxies to another machine. See the canonical
 ## Runtime
 
 - Service endpoint: `127.0.0.1:11002` (HTTP `/api/service/*`)
-- Native tRPC endpoint: `127.0.0.1:11003` (signed service-to-service calls)
+- Native tRPC endpoint: `127.0.0.1:11003` by default; control deployments bind
+  `0.0.0.0:11003` for signed SCF-to-Storage calls.
 - Local diagnostics: `127.0.0.1:11012`
 - Control-plane refresh: every 15 seconds through `trpc.moox.gateway.route_refresh.timer`
 - Route cache: `<store.path>/routes.json`
 - Persistent replay store: `<store.path>/nonces`
 
 Startup loads the last valid route cache before pulling the current snapshot
-from Admin. A node without a valid cache must complete its initial pull. Once a
-valid snapshot has been applied, later control-plane failures keep the Gateway
-ready and leave the last route table active.
+from Admin. A node without a valid cache must complete its initial pull. A
+cached route table may continue serving requests during a control-plane outage,
+but `/readyz` becomes unavailable when either the last successful route sync or
+the heartbeat acknowledgement is older than 90 seconds (configurable with
+`MOOX_GATEWAY_ROUTE_SYNC_STALE_AFTER_SECONDS`). This separates process liveness
+from control-plane health and prevents a stale Gateway from appearing online.
 
 The periodic `trpc.moox.gateway.route_refresh.timer` has a 10-second execution timeout, waits for `Refresh` to finish, and skips an overlapping local invocation. It deliberately omits `startAtOnce`: the cache-aware synchronous initialization above is the only startup pull. The 15-second frequency is static deployment configuration and does not hot reload. `DefaultScheduler` provides no cross-process exclusion, so each Gateway process refreshes only its own in-memory route table.
 
@@ -57,15 +61,18 @@ go run ./cmd/server -config=config/app.yaml -conf=config/trpc_go.yaml
 Only these local diagnostic routes are served:
 
 - `GET /healthz`: process liveness
-- `GET /readyz`: a valid route table has been applied
+- `GET /readyz`: a valid route table has been applied and both route sync and
+  control-plane heartbeat are fresh
 - `GET /metrics`: Prometheus text metrics, including
-  `gateway_route_sync_errors_total`
+  `gateway_route_sync_errors_total`, `gateway_route_report_errors_total`, and
+  `gateway_route_sync_stale`
 
 ## Diagnostics CLI
 
 ```bash
 go run ./cmd/cli check-config --config config/app.yaml
 go run ./cmd/cli routes --config config/app.yaml
+set -a; source ../../secrets/health-auth.env; set +a
 go run ./cmd/cli health --url http://127.0.0.1:11012/readyz
 ```
 

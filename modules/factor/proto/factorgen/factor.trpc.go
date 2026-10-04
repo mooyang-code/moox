@@ -19,29 +19,147 @@ import (
 
 // FactorMgrService defines service.
 type FactorMgrService interface {
+	CreateFactorSet(ctx context.Context, req *CreateFactorSetReq) (*CreateFactorSetRsp, error)
+
+	UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq) (*UpdateFactorSetRsp, error)
+
+	SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq) (*SetFactorSetStatusRsp, error)
+
+	DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq) (*DeleteFactorSetRsp, error)
+
+	GetFactorSet(ctx context.Context, req *GetFactorSetReq) (*GetFactorSetRsp, error)
+
+	ListFactorSets(ctx context.Context, req *ListFactorSetsReq) (*ListFactorSetsRsp, error)
+
 	CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error)
 
 	UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error)
+
+	SetFactorStatus(ctx context.Context, req *SetFactorStatusReq) (*SetFactorStatusRsp, error)
+
+	DeleteFactor(ctx context.Context, req *DeleteFactorReq) (*DeleteFactorRsp, error)
 
 	GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error)
 
 	ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error)
 
-	SetFactorStatus(ctx context.Context, req *SetFactorStatusReq) (*SetFactorStatusRsp, error)
+	RecalcFactors(ctx context.Context, req *RecalcFactorsReq) (*RecalcFactorsRsp, error)
 
-	UpsertBinding(ctx context.Context, req *UpsertBindingReq) (*UpsertBindingRsp, error)
+	ListRecalcJobs(ctx context.Context, req *ListRecalcJobsReq) (*ListRecalcJobsRsp, error)
 
-	ListBindings(ctx context.Context, req *ListBindingsReq) (*ListBindingsRsp, error)
+	GetRecalcJob(ctx context.Context, req *GetRecalcJobReq) (*GetRecalcJobRsp, error)
 
-	DeleteBinding(ctx context.Context, req *DeleteBindingReq) (*DeleteBindingRsp, error)
+	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq) (*CancelRecalcJobRsp, error)
 
-	RecalcFactor(ctx context.Context, req *RecalcFactorReq) (*RecalcFactorRsp, error)
+	GetStatus(ctx context.Context, req *GetStatusReq) (*GetStatusRsp, error)
+}
 
-	GetRecalcProgress(ctx context.Context, req *GetRecalcProgressReq) (*GetRecalcProgressRsp, error)
+func FactorMgrService_CreateFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateFactorSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).CreateFactorSet(ctx, reqbody.(*CreateFactorSetReq))
+	}
 
-	ListFactorRuns(ctx context.Context, req *ListFactorRunsReq) (*ListFactorRunsRsp, error)
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
 
-	GetEngineStatus(ctx context.Context, req *GetEngineStatusReq) (*GetEngineStatusRsp, error)
+func FactorMgrService_UpdateFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateFactorSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).UpdateFactorSet(ctx, reqbody.(*UpdateFactorSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_SetFactorSetStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetFactorSetStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).SetFactorSetStatus(ctx, reqbody.(*SetFactorSetStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_DeleteFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteFactorSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).DeleteFactorSet(ctx, reqbody.(*DeleteFactorSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_GetFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetFactorSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).GetFactorSet(ctx, reqbody.(*GetFactorSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_ListFactorSets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFactorSetsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ListFactorSets(ctx, reqbody.(*ListFactorSetsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
 }
 
 func FactorMgrService_CreateFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -70,6 +188,42 @@ func FactorMgrService_UpdateFactor_Handler(svr interface{}, ctx context.Context,
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(FactorMgrService).UpdateFactor(ctx, reqbody.(*UpdateFactorReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_SetFactorStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetFactorStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).SetFactorStatus(ctx, reqbody.(*SetFactorStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_DeleteFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteFactorReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).DeleteFactor(ctx, reqbody.(*DeleteFactorReq))
 	}
 
 	var rsp interface{}
@@ -116,14 +270,14 @@ func FactorMgrService_ListFactors_Handler(svr interface{}, ctx context.Context, 
 	return rsp, nil
 }
 
-func FactorMgrService_SetFactorStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SetFactorStatusReq{}
+func FactorMgrService_RecalcFactors_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RecalcFactorsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).SetFactorStatus(ctx, reqbody.(*SetFactorStatusReq))
+		return svr.(FactorMgrService).RecalcFactors(ctx, reqbody.(*RecalcFactorsReq))
 	}
 
 	var rsp interface{}
@@ -134,14 +288,14 @@ func FactorMgrService_SetFactorStatus_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func FactorMgrService_UpsertBinding_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpsertBindingReq{}
+func FactorMgrService_ListRecalcJobs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListRecalcJobsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).UpsertBinding(ctx, reqbody.(*UpsertBindingReq))
+		return svr.(FactorMgrService).ListRecalcJobs(ctx, reqbody.(*ListRecalcJobsReq))
 	}
 
 	var rsp interface{}
@@ -152,14 +306,14 @@ func FactorMgrService_UpsertBinding_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
-func FactorMgrService_ListBindings_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListBindingsReq{}
+func FactorMgrService_GetRecalcJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetRecalcJobReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).ListBindings(ctx, reqbody.(*ListBindingsReq))
+		return svr.(FactorMgrService).GetRecalcJob(ctx, reqbody.(*GetRecalcJobReq))
 	}
 
 	var rsp interface{}
@@ -170,14 +324,14 @@ func FactorMgrService_ListBindings_Handler(svr interface{}, ctx context.Context,
 	return rsp, nil
 }
 
-func FactorMgrService_DeleteBinding_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DeleteBindingReq{}
+func FactorMgrService_CancelRecalcJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CancelRecalcJobReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).DeleteBinding(ctx, reqbody.(*DeleteBindingReq))
+		return svr.(FactorMgrService).CancelRecalcJob(ctx, reqbody.(*CancelRecalcJobReq))
 	}
 
 	var rsp interface{}
@@ -188,68 +342,14 @@ func FactorMgrService_DeleteBinding_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
-func FactorMgrService_RecalcFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RecalcFactorReq{}
+func FactorMgrService_GetStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetStatusReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).RecalcFactor(ctx, reqbody.(*RecalcFactorReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_GetRecalcProgress_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetRecalcProgressReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).GetRecalcProgress(ctx, reqbody.(*GetRecalcProgressReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_ListFactorRuns_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListFactorRunsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).ListFactorRuns(ctx, reqbody.(*ListFactorRunsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_GetEngineStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetEngineStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).GetEngineStatus(ctx, reqbody.(*GetEngineStatusReq))
+		return svr.(FactorMgrService).GetStatus(ctx, reqbody.(*GetStatusReq))
 	}
 
 	var rsp interface{}
@@ -266,12 +366,44 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*FactorMgrService)(nil)),
 	Methods: []server.Method{
 		{
+			Name: "/trpc.moox.factor.FactorMgr/CreateFactorSet",
+			Func: FactorMgrService_CreateFactorSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/UpdateFactorSet",
+			Func: FactorMgrService_UpdateFactorSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/SetFactorSetStatus",
+			Func: FactorMgrService_SetFactorSetStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/DeleteFactorSet",
+			Func: FactorMgrService_DeleteFactorSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/GetFactorSet",
+			Func: FactorMgrService_GetFactorSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ListFactorSets",
+			Func: FactorMgrService_ListFactorSets_Handler,
+		},
+		{
 			Name: "/trpc.moox.factor.FactorMgr/CreateFactor",
 			Func: FactorMgrService_CreateFactor_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/UpdateFactor",
 			Func: FactorMgrService_UpdateFactor_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/SetFactorStatus",
+			Func: FactorMgrService_SetFactorStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/DeleteFactor",
+			Func: FactorMgrService_DeleteFactor_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/GetFactor",
@@ -282,36 +414,24 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_ListFactors_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/SetFactorStatus",
-			Func: FactorMgrService_SetFactorStatus_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/RecalcFactors",
+			Func: FactorMgrService_RecalcFactors_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/UpsertBinding",
-			Func: FactorMgrService_UpsertBinding_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/ListRecalcJobs",
+			Func: FactorMgrService_ListRecalcJobs_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/ListBindings",
-			Func: FactorMgrService_ListBindings_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/GetRecalcJob",
+			Func: FactorMgrService_GetRecalcJob_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/DeleteBinding",
-			Func: FactorMgrService_DeleteBinding_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/CancelRecalcJob",
+			Func: FactorMgrService_CancelRecalcJob_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/RecalcFactor",
-			Func: FactorMgrService_RecalcFactor_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/GetRecalcProgress",
-			Func: FactorMgrService_GetRecalcProgress_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/ListFactorRuns",
-			Func: FactorMgrService_ListFactorRuns_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/GetEngineStatus",
-			Func: FactorMgrService_GetEngineStatus_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/GetStatus",
+			Func: FactorMgrService_GetStatus_Handler,
 		},
 	},
 }
@@ -327,11 +447,35 @@ func RegisterFactorMgrService(s server.Service, svr FactorMgrService) {
 
 type UnimplementedFactorMgr struct{}
 
+func (s *UnimplementedFactorMgr) CreateFactorSet(ctx context.Context, req *CreateFactorSetReq) (*CreateFactorSetRsp, error) {
+	return nil, errors.New("rpc CreateFactorSet of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq) (*UpdateFactorSetRsp, error) {
+	return nil, errors.New("rpc UpdateFactorSet of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq) (*SetFactorSetStatusRsp, error) {
+	return nil, errors.New("rpc SetFactorSetStatus of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq) (*DeleteFactorSetRsp, error) {
+	return nil, errors.New("rpc DeleteFactorSet of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) GetFactorSet(ctx context.Context, req *GetFactorSetReq) (*GetFactorSetRsp, error) {
+	return nil, errors.New("rpc GetFactorSet of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) ListFactorSets(ctx context.Context, req *ListFactorSetsReq) (*ListFactorSetsRsp, error) {
+	return nil, errors.New("rpc ListFactorSets of service FactorMgr is not implemented")
+}
 func (s *UnimplementedFactorMgr) CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error) {
 	return nil, errors.New("rpc CreateFactor of service FactorMgr is not implemented")
 }
 func (s *UnimplementedFactorMgr) UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error) {
 	return nil, errors.New("rpc UpdateFactor of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) SetFactorStatus(ctx context.Context, req *SetFactorStatusReq) (*SetFactorStatusRsp, error) {
+	return nil, errors.New("rpc SetFactorStatus of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) DeleteFactor(ctx context.Context, req *DeleteFactorReq) (*DeleteFactorRsp, error) {
+	return nil, errors.New("rpc DeleteFactor of service FactorMgr is not implemented")
 }
 func (s *UnimplementedFactorMgr) GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error) {
 	return nil, errors.New("rpc GetFactor of service FactorMgr is not implemented")
@@ -339,29 +483,20 @@ func (s *UnimplementedFactorMgr) GetFactor(ctx context.Context, req *GetFactorRe
 func (s *UnimplementedFactorMgr) ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error) {
 	return nil, errors.New("rpc ListFactors of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) SetFactorStatus(ctx context.Context, req *SetFactorStatusReq) (*SetFactorStatusRsp, error) {
-	return nil, errors.New("rpc SetFactorStatus of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) RecalcFactors(ctx context.Context, req *RecalcFactorsReq) (*RecalcFactorsRsp, error) {
+	return nil, errors.New("rpc RecalcFactors of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) UpsertBinding(ctx context.Context, req *UpsertBindingReq) (*UpsertBindingRsp, error) {
-	return nil, errors.New("rpc UpsertBinding of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) ListRecalcJobs(ctx context.Context, req *ListRecalcJobsReq) (*ListRecalcJobsRsp, error) {
+	return nil, errors.New("rpc ListRecalcJobs of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) ListBindings(ctx context.Context, req *ListBindingsReq) (*ListBindingsRsp, error) {
-	return nil, errors.New("rpc ListBindings of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) GetRecalcJob(ctx context.Context, req *GetRecalcJobReq) (*GetRecalcJobRsp, error) {
+	return nil, errors.New("rpc GetRecalcJob of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) DeleteBinding(ctx context.Context, req *DeleteBindingReq) (*DeleteBindingRsp, error) {
-	return nil, errors.New("rpc DeleteBinding of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq) (*CancelRecalcJobRsp, error) {
+	return nil, errors.New("rpc CancelRecalcJob of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) RecalcFactor(ctx context.Context, req *RecalcFactorReq) (*RecalcFactorRsp, error) {
-	return nil, errors.New("rpc RecalcFactor of service FactorMgr is not implemented")
-}
-func (s *UnimplementedFactorMgr) GetRecalcProgress(ctx context.Context, req *GetRecalcProgressReq) (*GetRecalcProgressRsp, error) {
-	return nil, errors.New("rpc GetRecalcProgress of service FactorMgr is not implemented")
-}
-func (s *UnimplementedFactorMgr) ListFactorRuns(ctx context.Context, req *ListFactorRunsReq) (*ListFactorRunsRsp, error) {
-	return nil, errors.New("rpc ListFactorRuns of service FactorMgr is not implemented")
-}
-func (s *UnimplementedFactorMgr) GetEngineStatus(ctx context.Context, req *GetEngineStatusReq) (*GetEngineStatusRsp, error) {
-	return nil, errors.New("rpc GetEngineStatus of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) GetStatus(ctx context.Context, req *GetStatusReq) (*GetStatusRsp, error) {
+	return nil, errors.New("rpc GetStatus of service FactorMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -372,29 +507,39 @@ func (s *UnimplementedFactorMgr) GetEngineStatus(ctx context.Context, req *GetEn
 
 // FactorMgrClientProxy defines service client proxy
 type FactorMgrClientProxy interface {
+	CreateFactorSet(ctx context.Context, req *CreateFactorSetReq, opts ...client.Option) (rsp *CreateFactorSetRsp, err error)
+
+	UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq, opts ...client.Option) (rsp *UpdateFactorSetRsp, err error)
+
+	SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq, opts ...client.Option) (rsp *SetFactorSetStatusRsp, err error)
+
+	DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq, opts ...client.Option) (rsp *DeleteFactorSetRsp, err error)
+
+	GetFactorSet(ctx context.Context, req *GetFactorSetReq, opts ...client.Option) (rsp *GetFactorSetRsp, err error)
+
+	ListFactorSets(ctx context.Context, req *ListFactorSetsReq, opts ...client.Option) (rsp *ListFactorSetsRsp, err error)
+
 	CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (rsp *CreateFactorRsp, err error)
 
 	UpdateFactor(ctx context.Context, req *UpdateFactorReq, opts ...client.Option) (rsp *UpdateFactorRsp, err error)
+
+	SetFactorStatus(ctx context.Context, req *SetFactorStatusReq, opts ...client.Option) (rsp *SetFactorStatusRsp, err error)
+
+	DeleteFactor(ctx context.Context, req *DeleteFactorReq, opts ...client.Option) (rsp *DeleteFactorRsp, err error)
 
 	GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (rsp *GetFactorRsp, err error)
 
 	ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (rsp *ListFactorsRsp, err error)
 
-	SetFactorStatus(ctx context.Context, req *SetFactorStatusReq, opts ...client.Option) (rsp *SetFactorStatusRsp, err error)
+	RecalcFactors(ctx context.Context, req *RecalcFactorsReq, opts ...client.Option) (rsp *RecalcFactorsRsp, err error)
 
-	UpsertBinding(ctx context.Context, req *UpsertBindingReq, opts ...client.Option) (rsp *UpsertBindingRsp, err error)
+	ListRecalcJobs(ctx context.Context, req *ListRecalcJobsReq, opts ...client.Option) (rsp *ListRecalcJobsRsp, err error)
 
-	ListBindings(ctx context.Context, req *ListBindingsReq, opts ...client.Option) (rsp *ListBindingsRsp, err error)
+	GetRecalcJob(ctx context.Context, req *GetRecalcJobReq, opts ...client.Option) (rsp *GetRecalcJobRsp, err error)
 
-	DeleteBinding(ctx context.Context, req *DeleteBindingReq, opts ...client.Option) (rsp *DeleteBindingRsp, err error)
+	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq, opts ...client.Option) (rsp *CancelRecalcJobRsp, err error)
 
-	RecalcFactor(ctx context.Context, req *RecalcFactorReq, opts ...client.Option) (rsp *RecalcFactorRsp, err error)
-
-	GetRecalcProgress(ctx context.Context, req *GetRecalcProgressReq, opts ...client.Option) (rsp *GetRecalcProgressRsp, err error)
-
-	ListFactorRuns(ctx context.Context, req *ListFactorRunsReq, opts ...client.Option) (rsp *ListFactorRunsRsp, err error)
-
-	GetEngineStatus(ctx context.Context, req *GetEngineStatusReq, opts ...client.Option) (rsp *GetEngineStatusRsp, err error)
+	GetStatus(ctx context.Context, req *GetStatusReq, opts ...client.Option) (rsp *GetStatusRsp, err error)
 }
 
 type FactorMgrClientProxyImpl struct {
@@ -404,6 +549,126 @@ type FactorMgrClientProxyImpl struct {
 
 var NewFactorMgrClientProxy = func(opts ...client.Option) FactorMgrClientProxy {
 	return &FactorMgrClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *FactorMgrClientProxyImpl) CreateFactorSet(ctx context.Context, req *CreateFactorSetReq, opts ...client.Option) (*CreateFactorSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/CreateFactorSet")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("CreateFactorSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateFactorSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq, opts ...client.Option) (*UpdateFactorSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/UpdateFactorSet")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("UpdateFactorSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateFactorSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq, opts ...client.Option) (*SetFactorSetStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorSetStatus")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("SetFactorSetStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetFactorSetStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq, opts ...client.Option) (*DeleteFactorSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/DeleteFactorSet")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("DeleteFactorSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteFactorSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) GetFactorSet(ctx context.Context, req *GetFactorSetReq, opts ...client.Option) (*GetFactorSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetFactorSet")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("GetFactorSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetFactorSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ListFactorSets(ctx context.Context, req *ListFactorSetsReq, opts ...client.Option) (*ListFactorSetsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListFactorSets")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ListFactorSets")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListFactorSetsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
 }
 
 func (c *FactorMgrClientProxyImpl) CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (*CreateFactorRsp, error) {
@@ -440,6 +705,46 @@ func (c *FactorMgrClientProxyImpl) UpdateFactor(ctx context.Context, req *Update
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateFactorRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) SetFactorStatus(ctx context.Context, req *SetFactorStatusReq, opts ...client.Option) (*SetFactorStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorStatus")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("SetFactorStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetFactorStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) DeleteFactor(ctx context.Context, req *DeleteFactorReq, opts ...client.Option) (*DeleteFactorRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/DeleteFactor")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("DeleteFactor")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteFactorRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -486,160 +791,100 @@ func (c *FactorMgrClientProxyImpl) ListFactors(ctx context.Context, req *ListFac
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) SetFactorStatus(ctx context.Context, req *SetFactorStatusReq, opts ...client.Option) (*SetFactorStatusRsp, error) {
+func (c *FactorMgrClientProxyImpl) RecalcFactors(ctx context.Context, req *RecalcFactorsReq, opts ...client.Option) (*RecalcFactorsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorStatus")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/RecalcFactors")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("SetFactorStatus")
+	msg.WithCalleeMethod("RecalcFactors")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &SetFactorStatusRsp{}
+	rsp := &RecalcFactorsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) UpsertBinding(ctx context.Context, req *UpsertBindingReq, opts ...client.Option) (*UpsertBindingRsp, error) {
+func (c *FactorMgrClientProxyImpl) ListRecalcJobs(ctx context.Context, req *ListRecalcJobsReq, opts ...client.Option) (*ListRecalcJobsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/UpsertBinding")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListRecalcJobs")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("UpsertBinding")
+	msg.WithCalleeMethod("ListRecalcJobs")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpsertBindingRsp{}
+	rsp := &ListRecalcJobsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) ListBindings(ctx context.Context, req *ListBindingsReq, opts ...client.Option) (*ListBindingsRsp, error) {
+func (c *FactorMgrClientProxyImpl) GetRecalcJob(ctx context.Context, req *GetRecalcJobReq, opts ...client.Option) (*GetRecalcJobRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListBindings")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetRecalcJob")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("ListBindings")
+	msg.WithCalleeMethod("GetRecalcJob")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListBindingsRsp{}
+	rsp := &GetRecalcJobRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) DeleteBinding(ctx context.Context, req *DeleteBindingReq, opts ...client.Option) (*DeleteBindingRsp, error) {
+func (c *FactorMgrClientProxyImpl) CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq, opts ...client.Option) (*CancelRecalcJobRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/DeleteBinding")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/CancelRecalcJob")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("DeleteBinding")
+	msg.WithCalleeMethod("CancelRecalcJob")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &DeleteBindingRsp{}
+	rsp := &CancelRecalcJobRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) RecalcFactor(ctx context.Context, req *RecalcFactorReq, opts ...client.Option) (*RecalcFactorRsp, error) {
+func (c *FactorMgrClientProxyImpl) GetStatus(ctx context.Context, req *GetStatusReq, opts ...client.Option) (*GetStatusRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/RecalcFactor")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetStatus")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("RecalcFactor")
+	msg.WithCalleeMethod("GetStatus")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &RecalcFactorRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) GetRecalcProgress(ctx context.Context, req *GetRecalcProgressReq, opts ...client.Option) (*GetRecalcProgressRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetRecalcProgress")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("GetRecalcProgress")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetRecalcProgressRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) ListFactorRuns(ctx context.Context, req *ListFactorRunsReq, opts ...client.Option) (*ListFactorRunsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListFactorRuns")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("ListFactorRuns")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListFactorRunsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) GetEngineStatus(ctx context.Context, req *GetEngineStatusReq, opts ...client.Option) (*GetEngineStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetEngineStatus")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("GetEngineStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetEngineStatusRsp{}
+	rsp := &GetStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

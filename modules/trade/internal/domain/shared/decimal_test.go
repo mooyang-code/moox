@@ -25,3 +25,12 @@ func TestDecimalRejectsUnsafeForms(t *testing.T) {
 		t.Fatal("accepted excessive scale")
 	}
 }
+
+func TestDecimalIsInteger(t *testing.T) {
+	if !MustDecimal("2.00").IsInteger() {
+		t.Fatal("expected integer")
+	}
+	if MustDecimal("1").Div(MustDecimal("3")).IsInteger() {
+		t.Fatal("accepted fractional rational")
+	}
+}

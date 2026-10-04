@@ -74,11 +74,11 @@ export interface TypedValue {
   json_value?: string;
   bytes_value?: string;
   list_value?: TypedValueList;
+  null_value?: "NULL_VALUE_UNSPECIFIED" | "NULL_VALUE_NULL" | number;
 }
 
-export interface ColumnValue {
-  column_name: string;
-  value_type: FieldValueType;
+export interface FieldValue {
+  field_id: string;
   value: TypedValue;
 }
 
@@ -87,9 +87,35 @@ export interface SortSpec {
   desc?: boolean;
 }
 
-export interface FilterExpr {
-  expr: string;
-  args?: Record<string, TypedValue>;
+export type FilterOp =
+  | "FILTER_OP_UNSPECIFIED"
+  | "FILTER_OP_EQ"
+  | "FILTER_OP_NE"
+  | "FILTER_OP_GT"
+  | "FILTER_OP_GTE"
+  | "FILTER_OP_LT"
+  | "FILTER_OP_LTE"
+  | "FILTER_OP_IN"
+  | "FILTER_OP_NOT_IN"
+  | "FILTER_OP_LIKE"
+  | "FILTER_OP_BETWEEN"
+  | "FILTER_OP_NOT_LIKE"
+  | number;
+
+export interface FilterCond {
+  column: string;
+  op: FilterOp;
+  values: TypedValue[];
+}
+
+export interface FilterGroup {
+  conds: FilterCond[];
+  logical?: "FILTER_LOGICAL_AND" | "FILTER_LOGICAL_OR" | number;
+}
+
+export interface FilterSpec {
+  groups: FilterGroup[];
+  group_logical?: "FILTER_LOGICAL_AND" | "FILTER_LOGICAL_OR" | number;
 }
 
 export interface DataSource {
@@ -120,15 +146,42 @@ export interface Subject {
   attributes?: Record<string, string>;
 }
 
-export interface SubjectSymbol {
+export type TagMode = "auto" | "manual";
+export type TagMemberStatus = "active" | "inactive";
+
+export interface Tag {
   space_id: string;
-  subject_id: string;
-  data_source_id: string;
-  external_symbol: string;
-  status: string;
+  tag_id: string;
+  tag_name: string;
+  description?: string;
+  mode: TagMode;
+  builtin?: boolean;
+  source: string;
+  market_type: string;
+  cron?: string;
+  timezone?: string;
+  last_run_at?: string;
+  last_status?: "" | "success" | "failed";
+  last_error?: string;
+  active_count?: number;
+  inactive_count?: number;
   created_at?: string;
   updated_at?: string;
-  attributes?: Record<string, string>;
+}
+
+export interface TagMember {
+  space_id: string;
+  tag_id?: string;
+  status?: TagMemberStatus;
+  inactive_at?: string;
+  subject: Subject;
+  tag_ids?: string[];
+}
+
+export interface TagReference {
+  dataset_id: string;
+  dataset_name?: string;
+  collector_task_id?: string;
 }
 
 export interface Dataset {
@@ -140,22 +193,23 @@ export interface Dataset {
   data_kind: DataKind;
   freqs?: string[];
   status: string;
+  data_node_id?: string;
+  keep_duration: string;
+  binding_locked?: boolean;
+  revision?: number | string;
+  subject_tags?: string[];
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
 }
 
+export type DatasetMutation = Omit<Dataset, "status" | "data_node_id" | "binding_locked" | "revision"> & { status?: string };
+
 export interface DatasetSubject {
   space_id: string;
   dataset_id: string;
   subject_id: string;
-  subject_role: string;
-  effective_start_time?: string;
-  effective_end_time?: string;
   status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
 }
 
 export interface Field {
@@ -188,20 +242,6 @@ export interface FieldGroup {
   attributes?: Record<string, string>;
 }
 
-export interface Factor {
-  space_id: string;
-  factor_id: string;
-  name: string;
-  description?: string;
-  algorithm: string;
-  params_json?: string;
-  value_type: FieldValueType;
-  status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
-}
-
 export interface DatasetColumn {
   space_id: string;
   dataset_id: string;
@@ -210,7 +250,6 @@ export interface DatasetColumn {
   origin_id: string;
   value_type: FieldValueType;
   required?: boolean;
-  is_unique?: boolean;
   aliases?: string[];
   status: string;
   created_at?: string;
@@ -223,8 +262,7 @@ export interface View {
   view_id: string;
   name: string;
   description?: string;
-  primary_dataset_id: string;
-  dataset_ids?: string[];
+  dataset_id: string;
   grain_keys?: string[];
   filter_json?: string;
   engine?: string;
@@ -235,6 +273,8 @@ export interface View {
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
+  desired_view_revision?: number | string;
+  active_view_revision?: number | string;
   view_version?: number | string;
   active_view_version?: number | string;
   active_columns?: ViewColumn[];
@@ -264,6 +304,32 @@ export interface ViewIndexBuild {
   error?: string;
 }
 
+export interface ViewRebuildLog {
+  log_id: number | string;
+  space_id: string;
+  view_id: string;
+  build_id?: string;
+  index_id?: string;
+  trigger_reason: number | string;
+  result: number | string;
+  block_reason?: string;
+  target_view_revision?: number | string;
+  active_view_revision?: number | string;
+  physical_bytes?: number | string;
+  num_pending?: number | string;
+  num_ack_pending?: number | string;
+  entries_written?: number | string;
+  started_at?: string;
+  finished_at?: string;
+  first_checked_at?: string;
+  last_checked_at?: string;
+  skip_count?: number | string;
+  error_summary?: string;
+  details_json?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ViewColumn {
   space_id: string;
   view_id: string;
@@ -286,31 +352,33 @@ export interface ResultColumn {
   origin_id?: string;
 }
 
-export interface PrimaryStoreNode {
+export interface DataNode {
   node_id: string;
   name: string;
-  endpoint: string;
-  weight?: number;
+  service_target: string;
   status: string;
-  config_json?: string;
   created_at?: string;
   updated_at?: string;
-  attributes?: Record<string, string>;
 }
 
-export interface PrimaryStoreRoute {
+export interface DatasetSummary {
   space_id: string;
-  route_id: string;
   dataset_id: string;
-  subject_id?: string;
-  subject_pattern?: string;
-  hash_rule?: string;
-  node_id: string;
-  priority?: number;
+  name: string;
+  data_kind: DataKind;
+  keep_duration: string;
   status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
+}
+
+export interface DataNodeListItem {
+  node: DataNode;
+  datasets: DatasetSummary[];
+}
+
+export interface DatasetActivationCheck {
+  check_id: string;
+  ready: boolean;
+  summary: string;
 }
 
 export interface ArchiveFile {
@@ -337,13 +405,21 @@ export interface TimeSeriesKey {
   dataset_id: string;
   subject_id: string;
   freq: string;
-  dimensions?: Record<string, string>;
+  series_tag?: string;
   data_time?: string;
+}
+
+export interface TimeSeriesSelector {
+  space_id: string;
+  dataset_id: string;
+  subject_id: string;
+  freq: string;
+  series_tag?: string;
 }
 
 export interface TimeSeriesRow {
   key: TimeSeriesKey;
-  columns?: ColumnValue[];
+  fields?: FieldValue[];
   attributes?: Record<string, string>;
 }
 
@@ -356,6 +432,31 @@ export interface RecordKey {
 
 export interface RecordRow {
   key: RecordKey;
-  columns?: ColumnValue[];
+  fields?: FieldValue[];
   attributes?: Record<string, string>;
+}
+
+export interface TimeSeriesRowKey {
+  subject_id: string;
+  freq: string;
+  data_time: string;
+  series_tag?: string;
+}
+
+export interface RecordRowKey {
+  record_id: string;
+  version: string;
+}
+
+export interface RowKey {
+  space_id: string;
+  dataset_id: string;
+  time_series?: TimeSeriesRowKey;
+  record?: RecordRowKey;
+}
+
+export interface RowFieldUpsert {
+  key: RowKey;
+  fields: FieldValue[];
+  attributes?: Record<string, TypedValue>;
 }

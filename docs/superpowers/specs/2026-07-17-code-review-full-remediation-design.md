@@ -166,7 +166,7 @@ Strategy RPC 提供一个统一的严格时间范围解析函数。规则如下�
 
 根 `go.work` 加入 `modules/strategy/proto/strategygen`，与其他 proto module 保持一致。根 `Makefile proto` 增加 Strategy proto target。
 
-`scripts/build.sh` 增加：
+`scripts/build/build.sh` 增加：
 
 ```text
 all      -> moox-strategy + moox-strategy-cli
@@ -201,7 +201,7 @@ Strategy SQLite schema 已嵌入 Go 二进制并由启动过程应用，不重�
 
 ### 3.4 Deploy 编排
 
-`scripts/deploy-moox.sh` 增加 `WITH_STRATEGY=1` 和 `--no-strategy`。Strategy 必须进入以下全部阶段：
+`scripts/deploy/deploy-moox.sh` 增加 `WITH_STRATEGY=1` 和 `--no-strategy`。Strategy 必须进入以下全部阶段：
 
 - 参数解析和 profile 处理；
 - build target 选择；
@@ -284,11 +284,11 @@ Strategy 在部署和 readiness 验收成功后保持 `active`、`gateway_enable
 根脚本新增清晰、可单独运行的检查入口：
 
 ```text
-scripts/check-go-format.sh
-scripts/check-web-format.sh
-scripts/check-web-lint.sh
-scripts/check-package-boundaries.sh
-scripts/check-doc-consistency.sh
+scripts/check/check-go-format.sh
+scripts/check/check-web-format.sh
+scripts/check/check-web-lint.sh
+scripts/check/check-package-boundaries.sh
+scripts/check/check-doc-consistency.sh
 ```
 
 Go format check 输出全部不合规文件并返回非零。Prettier 使用 `--check`。ESLint 不带 `--fix`，并使用 `--max-warnings=0`。
@@ -458,7 +458,7 @@ composables/use-view-columns.ts
 
 ### 7.3 远端验收
 
-在真实部署目标使用标准 `scripts/deploy-moox.sh`，不手工复制缺失文件。验收证据包括：
+在真实部署目标使用标准 `scripts/deploy/deploy-moox.sh`，不手工复制缺失文件。验收证据包括：
 
 - 所有服务 signed readiness 成功；
 - Strategy 路由存在且 RPC 成功；

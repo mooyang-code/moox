@@ -6,6 +6,7 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 
 import "moox_common.proto";
 import "common.proto";
+import "dataset_markers.proto";
 
 // Space 是业务命名空间，也是用户可见 View 的集合。
 message Space {
@@ -65,16 +66,14 @@ message ViewIndexBuild {
 message View {
   // space_id 是 View 所属 Space。
   string space_id = 1;
-  // view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 30 字符。
+  // view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 128 字符。
   string view_id = 2;
   // name 是视图中文展示名，创建和更新时必须包含中文且不超过 10 个字符。
   string name = 3;
   // description 是说明文本。
   string description = 4;
-  // primary_dataset_id 是视图的主数据集，用于默认读路径和主时间轴。
-  string primary_dataset_id = 5;
-  // dataset_ids 是该视图组合的事实数据集 ID 列表。
-  repeated string dataset_ids = 6;
+  // dataset_id 是视图所属的唯一数据集；一个 View 只索引一个 Dataset。
+  string dataset_id = 5;
   // grain_keys 表示视图行粒度键，例如 subject_id、data_time 或 freq。
   repeated string grain_keys = 7;
   // filter_json 是构建视图物化结果时使用的固定过滤条件。
@@ -135,7 +134,7 @@ message ViewColumn {
   string created_at = 9;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 10;
-  // attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
+  // attributes 是扩展属性；factor_result 输出列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 11;
 }
 
@@ -165,6 +164,60 @@ message DataSource {
   map<string, string> attributes = 11;
 }
 
+// Tag 是 Subject 的分组；auto 标签成员由 moox-collector-subject 同步。
+message Tag {
+  string space_id = 1;
+  string tag_id = 2;
+  string tag_name = 3;
+  string description = 4;
+  string mode = 5;
+  bool builtin = 6;
+  // source 是标签唯一且创建后不可修改的数据来源。
+  string source = 7;
+  // market_type 是标签唯一且创建后不可修改的市场/产品类型。
+  string market_type = 8;
+  string cron = 9;
+  string timezone = 10;
+  string last_run_at = 11;
+  string last_status = 12;
+  string last_error = 13;
+  uint32 active_count = 14;
+  uint32 inactive_count = 15;
+  string created_at = 16;
+  string updated_at = 17;
+}
+
+// TagMember 是标签成员；tag_id 为空时 tag_ids 列出所属标签。
+message TagMember {
+  string space_id = 1;
+  string tag_id = 2;
+  string status = 3;
+  string inactive_at = 4;
+  Subject subject = 5;
+  repeated string tag_ids = 6;
+}
+
+message TagSnapshotItem {
+  string subject_id = 1;
+  string subject_type = 2;
+  string name = 3;
+  string market = 4;
+  string currency = 5;
+  string timezone = 6;
+}
+
+message SubjectAttributes {
+  string subject_id = 1;
+  string name = 2;
+  map<string, string> attributes = 3;
+}
+
+message TagReference {
+  string dataset_id = 1;
+  string dataset_name = 2;
+  string collector_task_id = 3;
+}
+
 // Subject 表示 Space 内的数据对象，交易标的只是其中一种。
 message Subject {
   // space_id 是 Subject 所属 Space。
@@ -181,7 +234,7 @@ message Subject {
   string currency = 6;
   // timezone 是该对象默认时区。
   string timezone = 7;
-  // status 表示启用、停用、构建中、归档或删除等状态。
+  // status 取值 active 或 disabled；disabled 仅表示人工停用。
   string status = 8;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 9;
@@ -191,31 +244,11 @@ message Subject {
   map<string, string> attributes = 11;
 }
 
-// SubjectSymbol 表示 Subject 在某个 DataSource 下的外部代码映射。
-message SubjectSymbol {
-  // space_id 是 SubjectSymbol 所属 Space。
-  string space_id = 1;
-  // subject_id 是 Space 内的数据对象 ID。
-  string subject_id = 2;
-  // data_source_id 是外部代码所属的数据来源 ID。
-  string data_source_id = 3;
-  // external_symbol 是数据来源使用的原始对象代码。
-  string external_symbol = 4;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 5;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 6;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 7;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 8;
-}
-
 // Dataset 是 Space 内可写的事实数据集，定义一类数据及其列契约。
 message Dataset {
   // space_id 是 Dataset 所属 Space。
   string space_id = 1;
-  // dataset_id 是 Space 内唯一的数据集 ID；必须为 lower_snake_case，最长 30 字符。
+  // dataset_id 是 Space 内唯一的数据集 ID；必须为 lower_snake_case，最长 50 字符。
   string dataset_id = 2;
   // data_source_id 是该 Dataset 绑定的数据来源 ID；一个 Dataset 只绑定一个 DataSource。
   string data_source_id = 3;
@@ -239,6 +272,12 @@ message Dataset {
   string data_node_id = 17;
   // keep_duration 是 TimeSeries Pebble 数据的保留时长；0 表示永久保存。
   string keep_duration = 18;
+  // binding_locked 表示 Dataset 首次激活后是否永久锁定 DataNode 绑定。
+  bool binding_locked = 19;
+  // revision 是 Dataset 元数据的单调递增修订号，用于并发控制。
+  uint64 revision = 20;
+  // subject_tags 是数据集标的范围，取值为 tag_id。
+  repeated string subject_tags = 21;
 }
 
 // DatasetSubject 表示 Dataset 覆盖的 Subject 集合。
@@ -249,20 +288,7 @@ message DatasetSubject {
   string dataset_id = 2;
   // subject_id 是业务对象 ID。
   string subject_id = 3;
-  // subject_role 是 Subject 在数据集中的角色，例如 normal、benchmark、index、universe_member 或 record。
-  string subject_role = 4;
-  // effective_start_time 是 Subject 在数据集中的生效开始时间。
-  string effective_start_time = 5;
-  // effective_end_time 是 Subject 在数据集中的生效结束时间；为空表示仍然生效。
-  string effective_end_time = 6;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 7;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 8;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 9;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 10;
+  string status = 4;
 }
 
 // FieldGroup 是 Space 内普通字段的两级分类目录。
@@ -321,32 +347,6 @@ message Field {
   uint32 sort_order = 14;
 }
 
-// Factor 是 Space 内、已参数化的因子结果定义。
-message Factor {
-  // space_id 是 Factor 所属 Space。
-  string space_id = 1;
-  // factor_id 是 Space 内唯一因子英文名，例如 ma20_close。
-  string factor_id = 2;
-  // name 是因子中文名或展示名。
-  string name = 3;
-  // description 是说明文本。
-  string description = 4;
-  // algorithm 是因子算法或计算族标识，例如 MA 或 RSI。
-  string algorithm = 5;
-  // params_json 是已参数化后的因子参数，例如 {"window":20,"price":"close"}。
-  string params_json = 6;
-  // value_type 是因子值的逻辑类型。
-  FieldValueType value_type = 7;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 8;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 9;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 10;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 11;
-}
-
 // DatasetColumn 表示 Dataset 下允许写入和读取的一列。
 message DatasetColumn {
   // space_id 是 DatasetColumn 所属 Space。
@@ -361,94 +361,79 @@ message DatasetColumn {
   string origin_id = 5;
   // value_type 是列值的逻辑类型。
   FieldValueType value_type = 6;
-  // required is retained in the wire contract but ignored by field-level upserts.
-  bool required = 7 [deprecated = true];
-  // is_unique is retained for metadata clients and is not used for row identity.
-  bool is_unique = 8 [deprecated = true];
-  // aliases are retained for metadata clients.
-  repeated string aliases = 9 [deprecated = true];
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 10;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 11;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 12;
-  // attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
-  map<string, string> attributes = 13;
-}
-
-// PrimaryStoreNode 表示在线主存节点，即一个 PrimaryStore 服务实例或服务组入口。
-message PrimaryStoreNode {
-  // node_id 是存储节点 ID。
-  string node_id = 1;
-  // name 是节点名称，通常用于管理台展示。
-  string name = 2;
-  // endpoint 是 PrimaryStore 服务地址。
-  string endpoint = 3;
-  // weight 是路由权重。
-  uint32 weight = 4;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 5;
-  // config_json 是节点专用配置。
-  string config_json = 6;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 7;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 8;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 9;
-}
-
-// Device 是底层具体存储组件，例如 Pebble、DuckDB、Bleve 或 Parquet 归档。
-message Device {
-  // device_id 是设备 ID。
-  string device_id = 1;
-  // node_id 是所属存储节点 ID。
-  string node_id = 2;
-  // name 是设备名称，通常用于管理台展示。
-  string name = 3;
-  // engine 是存储引擎，例如 pebble、duckdb 或 bleve。
-  string engine = 4;
-  // endpoint 是连接地址、文件路径或 URI。
-  string endpoint = 5;
-  // config_json 是设备专用配置。
-  string config_json = 6;
-  // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 7;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 8;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 9;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 10;
-}
-
-// PrimaryStoreRoute 表示在线事实主存的水平切分路由。
-message PrimaryStoreRoute {
-  // space_id 是路由所属 Space。
-  string space_id = 1;
-  // route_id 是路由规则 ID。
-  string route_id = 2;
-  // dataset_id 是数据集 ID。
-  string dataset_id = 3;
-  // subject_id 是精确匹配的数据对象 ID；为空表示不按对象精确匹配。
-  string subject_id = 4;
-  // subject_pattern 是对象匹配模式；为空表示不使用模式匹配。
-  string subject_pattern = 5;
-  // hash_rule 是水平切分哈希规则；为空表示不使用哈希切分。
-  string hash_rule = 6;
-  // node_id 是目标 PrimaryStore 节点 ID。
-  string node_id = 7;
-  // priority 是路由优先级，数值越小优先级越高。
-  uint32 priority = 8;
+  // required 表示导入数据时该列是否必须存在。
+  bool required = 7;
+  // aliases 是导入数据时可识别的列名别名。
+  repeated string aliases = 8;
   // status 表示启用、停用、构建中、归档或删除等状态。
   string status = 9;
   // created_at 是创建时间，使用项目统一时间字符串格式。
   string created_at = 10;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 11;
-  // attributes 是扩展属性，默认不作为索引字段使用。
+  // attributes 是扩展属性；factor_result 输出列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 12;
+}
+
+// DataNode 表示一个可被 storage-primary 直接调用的数据存储节点。
+message DataNode {
+  // node_id 是部署生成的稳定节点标识。
+  string node_id = 1;
+  // name 是管理台展示名称。
+  string name = 2;
+  // service_target 是 DataNode 内部 tRPC 地址。
+  string service_target = 3;
+  // status 表示 active 或 disabled。
+  string status = 4;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 5;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 6;
+}
+
+// DatasetSummary 是 DataNode 列表中携带的数据集摘要。
+message DatasetSummary {
+  string space_id = 1;
+  string dataset_id = 2;
+  string name = 3;
+  DataKind data_kind = 4;
+  string keep_duration = 5;
+  string status = 6;
+}
+
+// DataNodeListItem 是 DataNode 及其全部 Dataset 摘要的组合视图。
+message DataNodeListItem {
+  DataNode node = 1;
+  repeated DatasetSummary datasets = 2;
+}
+
+// DatasetActivationCheck 是一次 Dataset 激活自检的单项结果。
+message DatasetActivationCheck {
+  string check_id = 1;
+  bool ready = 2;
+  string summary = 3;
+}
+
+// Device 是底层具体存储组件，例如 Pebble、DuckDB、Bleve 或 Parquet 归档。
+message Device {
+  // device_id 是设备 ID。
+  string device_id = 1;
+  // name 是设备名称，通常用于管理台展示。
+  string name = 2;
+  // engine 是存储引擎，例如 pebble、duckdb、bleve 或 parquet。
+  string engine = 3;
+  // endpoint 是连接地址、文件路径或 URI。
+  string endpoint = 4;
+  // config_json 是设备专用配置。
+  string config_json = 5;
+  // status 表示启用、停用、构建中、归档或删除等状态。
+  string status = 6;
+  // created_at 是创建时间，使用项目统一时间字符串格式。
+  string created_at = 7;
+  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
+  string updated_at = 8;
+  // attributes 是扩展属性，默认不作为索引字段使用。
+  map<string, string> attributes = 9;
 }
 
 // ArchiveFile 表示从 Pebble 主存归档出来的 Parquet 事实文件。
@@ -517,6 +502,17 @@ message UpdateSpaceRsp {
   Space space = 2;
 }
 
+// DeleteSpaceReq 表示删除一个使用空间及其级联元数据。
+message DeleteSpaceReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+}
+
+// DeleteSpaceRsp 表示删除使用空间的结果。
+message DeleteSpaceRsp {
+  common.RetInfo ret_info = 1;
+}
+
 // GetSpaceReq 表示获取使用空间的请求。
 message GetSpaceReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -559,6 +555,8 @@ message CreateViewReq {
   common.AuthInfo auth_info = 1;
   // view 是待创建的查询视图元数据。
   View view = 2;
+  // create_only 为 true 时要求 View ID 不存在，且由存储层原子保证。
+  bool create_only = 3;
 }
 
 // CreateViewRsp 表示创建查询视图的响应。
@@ -569,12 +567,27 @@ message CreateViewRsp {
   View view = 2;
 }
 
+// DeleteViewReq 表示物理删除一个查询视图及其依赖行。
+message DeleteViewReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+}
+
+// DeleteViewRsp 表示删除查询视图的结果。
+message DeleteViewRsp {
+  common.RetInfo ret_info = 1;
+}
+
 // UpdateViewReq 表示更新查询视图的请求。
 message UpdateViewReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
   // view 是更新后的查询视图元数据。
   View view = 2;
+  // replace_columns 为 true 时，columns 表示完整期望列集合（可为空）；
+  // 为 false 时仅执行普通视图元数据更新。
+  bool replace_columns = 3;
 }
 
 // UpdateViewRsp 表示更新查询视图的响应。
@@ -582,6 +595,20 @@ message UpdateViewRsp {
   // ret_info 是接口返回状态。
   common.RetInfo ret_info = 1;
   // view 是更新后的查询视图元数据。
+  View view = 2;
+}
+
+// RequestViewRebuildReq 表示请求对现有查询视图执行一次手动 A/B 重建。
+// 请求只推进待构建修订号，不影响当前 active 索引；实际构建由 View
+// View Maintainer 异步执行，并通过 ViewRebuildLog 暴露进度和结果。
+message RequestViewRebuildReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+}
+
+message RequestViewRebuildRsp {
+  common.RetInfo ret_info = 1;
   View view = 2;
 }
 
@@ -697,6 +724,18 @@ message UpdateDataSourceRsp {
   DataSource data_source = 2;
 }
 
+// DeleteDataSourceReq 表示删除一个没有数据集引用的数据来源。
+message DeleteDataSourceReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string data_source_id = 3;
+}
+
+// DeleteDataSourceRsp 表示删除数据来源的结果。
+message DeleteDataSourceRsp {
+  common.RetInfo ret_info = 1;
+}
+
 // GetDataSourceReq 表示获取数据来源的请求。
 message GetDataSourceReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -757,32 +796,6 @@ message UpsertSubjectRsp {
   Subject subject = 2;
 }
 
-// RegisterDataSubjectReq 表示采集侧注册数据对象、外部代码映射和数据集绑定的请求。
-message RegisterDataSubjectReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是数据对象所属 Space。
-  string space_id = 2;
-  // data_source_id 是外部代码所属的数据来源 ID。
-  string data_source_id = 3;
-  // external_symbol 是数据来源使用的原始对象代码。
-  string external_symbol = 4;
-  // subject 是待注册的数据对象元数据；服务端会强制使用 space_id。
-  Subject subject = 5;
-  // dataset_bindings 是该对象要绑定的数据集关系；服务端会补齐 space_id 和 subject_id。
-  repeated DatasetSubject dataset_bindings = 6;
-}
-
-// RegisterDataSubjectRsp 表示采集侧注册数据对象后的响应。
-message RegisterDataSubjectRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // subject 是写入后的数据对象元数据。
-  Subject subject = 2;
-  // dataset_bindings 是最终写入的数据集绑定关系。
-  repeated DatasetSubject dataset_bindings = 3;
-}
-
 // GetSubjectReq 表示获取数据对象的请求。
 message GetSubjectReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -829,47 +842,34 @@ message ListSubjectsRsp {
   common.PageResult page_result = 3;
 }
 
-// UpsertSubjectSymbolReq 表示创建或更新数据对象外部代码映射的请求。
-message UpsertSubjectSymbolReq {
-  // auth_info 是调用方身份和链路追踪信息。
+message UpsertTagReq { common.AuthInfo auth_info = 1; Tag tag = 2; bool create_only = 3; }
+message UpsertTagRsp { common.RetInfo ret_info = 1; Tag tag = 2; }
+message GetTagReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; }
+message GetTagRsp { common.RetInfo ret_info = 1; Tag tag = 2; }
+message ListTagsReq { common.AuthInfo auth_info = 1; string space_id = 2; common.Page page = 3; }
+message ListTagsRsp { common.RetInfo ret_info = 1; repeated Tag tags = 2; common.PageResult page_result = 3; }
+message DeleteTagReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; }
+message DeleteTagRsp { common.RetInfo ret_info = 1; repeated TagReference references = 2; }
+message ListTagMembersReq {
   common.AuthInfo auth_info = 1;
-  // subject_symbol 是待写入的外部代码映射。
-  SubjectSymbol subject_symbol = 2;
-}
-
-// UpsertSubjectSymbolRsp 表示创建或更新数据对象外部代码映射的响应。
-message UpsertSubjectSymbolRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // subject_symbol 是写入后的外部代码映射。
-  SubjectSymbol subject_symbol = 2;
-}
-
-// ListSubjectSymbolsReq 表示列出数据对象外部代码映射的请求。
-message ListSubjectSymbolsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
-  // subject_id 是可选数据对象 ID 过滤条件。
-  string subject_id = 3;
-  // data_source_id 是可选数据来源 ID 过滤条件。
-  string data_source_id = 4;
-  // external_symbol 是可选外部对象代码过滤条件。
-  string external_symbol = 5;
-  // page 是分页参数。
+  string tag_id = 3;
+  string status = 4;
+  string keyword = 5;
   common.Page page = 6;
 }
-
-// ListSubjectSymbolsRsp 表示列出数据对象外部代码映射的响应。
-message ListSubjectSymbolsRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // subject_symbols 是外部代码映射列表。
-  repeated SubjectSymbol subject_symbols = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
+message ListTagMembersRsp { common.RetInfo ret_info = 1; repeated TagMember members = 2; common.PageResult page_result = 3; }
+message TagMembersReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; }
+message TagMembersRsp { common.RetInfo ret_info = 1; uint32 affected = 2; }
+message SetTagMemberStatusReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; string status = 5; }
+message ApplyTagSnapshotReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; string run_at = 4; repeated TagSnapshotItem items = 5; }
+message ApplyTagSnapshotRsp { common.RetInfo ret_info = 1; uint32 added = 2; uint32 activated = 3; uint32 inactivated = 4; }
+message ReportTagRunFailureReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; string run_at = 4; string error = 5; }
+message ReportTagRunFailureRsp { common.RetInfo ret_info = 1; }
+message UpdateSubjectAttributesReq { common.AuthInfo auth_info = 1; string space_id = 2; repeated SubjectAttributes items = 3; }
+message UpdateSubjectAttributesRsp { common.RetInfo ret_info = 1; uint32 updated = 2; uint32 skipped = 3; }
+message ResolveSubjectsReq { common.AuthInfo auth_info = 1; string space_id = 2; repeated string tag_ids = 3; }
+message ResolveSubjectsRsp { common.RetInfo ret_info = 1; repeated Subject subjects = 2; }
 
 // CreateDatasetReq 表示创建数据集的请求。
 message CreateDatasetReq {
@@ -901,6 +901,18 @@ message UpdateDatasetRsp {
   common.RetInfo ret_info = 1;
   // dataset 是更新后的数据集元数据。
   Dataset dataset = 2;
+}
+
+// DeleteDatasetReq 表示删除一个临时数据集及其依赖行。
+message DeleteDatasetReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+}
+
+// DeleteDatasetRsp 表示删除数据集的结果。
+message DeleteDatasetRsp {
+  common.RetInfo ret_info = 1;
 }
 
 // GetDatasetReq 表示获取数据集的请求。
@@ -935,6 +947,8 @@ message ListDatasetsReq {
   string freq = 5;
   // page 是分页参数。
   common.Page page = 6;
+  // data_node_id 是可选 DataNode 过滤条件。
+  string data_node_id = 7;
 }
 
 // ListDatasetsRsp 表示列出数据集的响应。
@@ -945,22 +959,6 @@ message ListDatasetsRsp {
   repeated Dataset datasets = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
-}
-
-// BindDatasetSubjectReq 表示为 Dataset 绑定 Subject 的请求。
-message BindDatasetSubjectReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // dataset_subject 是数据集与对象的绑定关系。
-  DatasetSubject dataset_subject = 2;
-}
-
-// BindDatasetSubjectRsp 表示为 Dataset 绑定 Subject 的响应。
-message BindDatasetSubjectRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // dataset_subject 是绑定后的关系。
-  DatasetSubject dataset_subject = 2;
 }
 
 // ListDatasetSubjectsReq 表示列出 Dataset 覆盖对象的请求。
@@ -1149,78 +1147,6 @@ message DeleteFieldGroupRsp {
   common.RetInfo ret_info = 1;
 }
 
-// CreateFactorReq 表示创建因子的请求。
-message CreateFactorReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // factor 是待创建的因子元数据。
-  Factor factor = 2;
-}
-
-// CreateFactorRsp 表示创建因子的响应。
-message CreateFactorRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // factor 是创建后的因子元数据。
-  Factor factor = 2;
-}
-
-// UpdateFactorReq 表示更新因子的请求。
-message UpdateFactorReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // factor 是更新后的因子元数据。
-  Factor factor = 2;
-}
-
-// UpdateFactorRsp 表示更新因子的响应。
-message UpdateFactorRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // factor 是更新后的因子元数据。
-  Factor factor = 2;
-}
-
-// GetFactorReq 表示获取因子的请求。
-message GetFactorReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是使用空间 ID。
-  string space_id = 2;
-  // factor_id 是因子 ID。
-  string factor_id = 3;
-}
-
-// GetFactorRsp 表示获取因子的响应。
-message GetFactorRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // factor 是因子元数据。
-  Factor factor = 2;
-}
-
-// ListFactorsReq 表示列出因子的请求。
-message ListFactorsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是可选使用空间 ID 过滤条件。
-  string space_id = 2;
-  // algorithm 是可选算法过滤条件。
-  string algorithm = 3;
-  // page 是分页参数。
-  common.Page page = 4;
-}
-
-// ListFactorsRsp 表示列出因子的响应。
-message ListFactorsRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // factors 是因子列表。
-  repeated Factor factors = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
 // UpsertDatasetColumnReq 表示创建或更新数据集列的请求。
 message UpsertDatasetColumnReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -1259,70 +1185,101 @@ message ListDatasetColumnsRsp {
   common.PageResult page_result = 3;
 }
 
-// CreatePrimaryStoreNodeReq 表示创建存储节点的请求。
-message CreatePrimaryStoreNodeReq {
-  // auth_info 是调用方身份和链路追踪信息。
+// RegisterDataNodeReq 表示部署流程注册或刷新 DataNode。
+message RegisterDataNodeReq {
   common.AuthInfo auth_info = 1;
-  // node 是待创建的存储节点元数据。
-  PrimaryStoreNode node = 2;
+  string node_id = 2;
+  string service_target = 3;
+  string initial_name = 4;
 }
 
-// CreatePrimaryStoreNodeRsp 表示创建存储节点的响应。
-message CreatePrimaryStoreNodeRsp {
-  // ret_info 是接口返回状态。
+message RegisterDataNodeRsp {
   common.RetInfo ret_info = 1;
-  // node 是创建后的存储节点元数据。
-  PrimaryStoreNode node = 2;
+  DataNode node = 2;
 }
 
-// UpdatePrimaryStoreNodeReq 表示更新存储节点的请求。
-message UpdatePrimaryStoreNodeReq {
-  // auth_info 是调用方身份和链路追踪信息。
+// UpdateDataNodeReq 表示管理员更新 DataNode 的可编辑字段。
+message UpdateDataNodeReq {
   common.AuthInfo auth_info = 1;
-  // node 是更新后的存储节点元数据。
-  PrimaryStoreNode node = 2;
+  string node_id = 2;
+  string name = 3;
+  string status = 4;
 }
 
-// UpdatePrimaryStoreNodeRsp 表示更新存储节点的响应。
-message UpdatePrimaryStoreNodeRsp {
-  // ret_info 是接口返回状态。
+message UpdateDataNodeRsp {
   common.RetInfo ret_info = 1;
-  // node 是更新后的存储节点元数据。
-  PrimaryStoreNode node = 2;
+  DataNode node = 2;
 }
 
-// GetPrimaryStoreNodeReq 表示获取存储节点的请求。
-message GetPrimaryStoreNodeReq {
-  // auth_info 是调用方身份和链路追踪信息。
+message GetDataNodeReq {
   common.AuthInfo auth_info = 1;
-  // node_id 是存储节点 ID。
   string node_id = 2;
 }
 
-// GetPrimaryStoreNodeRsp 表示获取存储节点的响应。
-message GetPrimaryStoreNodeRsp {
-  // ret_info 是接口返回状态。
+message GetDataNodeRsp {
   common.RetInfo ret_info = 1;
-  // node 是存储节点元数据。
-  PrimaryStoreNode node = 2;
+  DataNode node = 2;
 }
 
-// ListPrimaryStoreNodesReq 表示列出存储节点的请求。
-message ListPrimaryStoreNodesReq {
-  // auth_info 是调用方身份和链路追踪信息。
+message ListDataNodesReq {
   common.AuthInfo auth_info = 1;
-  // page 是分页参数。
-  common.Page page = 2;
+  string status = 2;
+  common.Page page = 3;
 }
 
-// ListPrimaryStoreNodesRsp 表示列出存储节点的响应。
-message ListPrimaryStoreNodesRsp {
-  // ret_info 是接口返回状态。
+message ListDataNodesRsp {
   common.RetInfo ret_info = 1;
-  // nodes 是存储节点列表。
-  repeated PrimaryStoreNode nodes = 2;
-  // page_result 是分页结果。
+  repeated DataNodeListItem items = 2;
   common.PageResult page_result = 3;
+}
+
+message DeleteDataNodeReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+}
+
+message DeleteDataNodeRsp {
+  common.RetInfo ret_info = 1;
+  DataNode node = 2;
+}
+
+message RebindDatasetDataNodeReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string data_node_id = 4;
+  uint64 expected_revision = 5;
+}
+
+message RebindDatasetDataNodeRsp {
+  common.RetInfo ret_info = 1;
+  Dataset dataset = 2;
+}
+
+message CheckDatasetActivationReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+}
+
+message CheckDatasetActivationRsp {
+  common.RetInfo ret_info = 1;
+  uint64 dataset_revision = 2;
+  repeated DatasetActivationCheck checks = 3;
+  bool ready = 4;
+}
+
+message ActivateDatasetReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  uint64 expected_revision = 4;
+}
+
+message ActivateDatasetRsp {
+  common.RetInfo ret_info = 1;
+  Dataset dataset = 2;
+  repeated DatasetActivationCheck checks = 3;
 }
 
 // CreateDeviceReq 表示创建设备的请求。
@@ -1377,12 +1334,10 @@ message GetDeviceRsp {
 message ListDevicesReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
-  // node_id 是可选存储节点 ID 过滤条件。
-  string node_id = 2;
   // engine 是可选存储引擎过滤条件。
-  string engine = 3;
+  string engine = 2;
   // page 是分页参数。
-  common.Page page = 4;
+  common.Page page = 3;
 }
 
 // ListDevicesRsp 表示列出设备的响应。
@@ -1391,82 +1346,6 @@ message ListDevicesRsp {
   common.RetInfo ret_info = 1;
   // devices 是设备列表。
   repeated Device devices = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
-// CreatePrimaryStoreRouteReq 表示创建存储路由的请求。
-message CreatePrimaryStoreRouteReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // primary_store_route 是待创建的存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// CreatePrimaryStoreRouteRsp 表示创建存储路由的响应。
-message CreatePrimaryStoreRouteRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // primary_store_route 是创建后的存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// UpdatePrimaryStoreRouteReq 表示更新存储路由的请求。
-message UpdatePrimaryStoreRouteReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // primary_store_route 是更新后的存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// UpdatePrimaryStoreRouteRsp 表示更新存储路由的响应。
-message UpdatePrimaryStoreRouteRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // primary_store_route 是更新后的存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// GetPrimaryStoreRouteReq 表示获取存储路由的请求。
-message GetPrimaryStoreRouteReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是使用空间 ID。
-  string space_id = 2;
-  // route_id 是路由规则 ID。
-  string route_id = 3;
-}
-
-// GetPrimaryStoreRouteRsp 表示获取存储路由的响应。
-message GetPrimaryStoreRouteRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // primary_store_route 是存储路由元数据。
-  PrimaryStoreRoute primary_store_route = 2;
-}
-
-// ListPrimaryStoreRoutesReq 表示列出存储路由的请求。
-message ListPrimaryStoreRoutesReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是可选使用空间 ID 过滤条件。
-  string space_id = 2;
-  // dataset_id 是可选数据集 ID 过滤条件。
-  string dataset_id = 3;
-  // subject_id 是可选数据对象 ID 过滤条件。
-  string subject_id = 4;
-  // node_id 是可选存储节点 ID 过滤条件。
-  string node_id = 5;
-  // page 是分页参数。
-  common.Page page = 6;
-}
-
-// ListPrimaryStoreRoutesRsp 表示列出存储路由的响应。
-message ListPrimaryStoreRoutesRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // primary_store_routes 是存储路由列表。
-  repeated PrimaryStoreRoute primary_store_routes = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
 }
@@ -1503,6 +1382,10 @@ message ListArchiveFilesReq {
   TimeRange time_range = 6;
   // page 是分页参数。
   common.Page page = 7;
+  // sort_by 是排序字段：min_time、max_time、created_at 或 updated_at。
+  string sort_by = 8;
+  // sort_order 是排序方向：asc 或 desc。
+  string sort_order = 9;
 }
 
 // ListArchiveFilesRsp 表示列出归档文件的响应。
@@ -1591,12 +1474,157 @@ message FailViewIndexBuildRsp {
   ViewIndexBuild build = 2;
 }
 
+message UpsertViewPeriodDatasetStateReq {
+  common.AuthInfo auth_info = 1;
+  ViewPeriodDatasetState state = 2;
+}
+
+message UpsertViewPeriodDatasetStateRsp {
+  common.RetInfo ret_info = 1;
+  ViewPeriodDatasetState state = 2;
+}
+
+message ListViewPeriodDatasetStatesReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string frequency = 4;
+  int64 period_time = 5;
+}
+
+message ListViewPeriodDatasetStatesRsp {
+  common.RetInfo ret_info = 1;
+  repeated ViewPeriodDatasetState states = 2;
+}
+
+message RecordViewSyncPointReq {
+  common.AuthInfo auth_info = 1;
+  ViewSyncPoint sync_point = 2;
+}
+
+message RecordViewSyncPointRsp {
+  common.RetInfo ret_info = 1;
+  ViewSyncPoint sync_point = 2;
+}
+
+enum ViewRebuildTriggerReason {
+  VIEW_REBUILD_TRIGGER_UNSPECIFIED = 0;
+  VIEW_REBUILD_TRIGGER_INITIAL_BUILD = 1;
+  VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE = 2;
+  VIEW_REBUILD_TRIGGER_ACTIVE_MISSING = 3;
+  VIEW_REBUILD_TRIGGER_ACTIVE_INVALID = 4;
+  VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR = 5;
+  VIEW_REBUILD_TRIGGER_SIZE_LIMIT = 6;
+  VIEW_REBUILD_TRIGGER_MANUAL_REPAIR = 7;
+  VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY = 8;
+  VIEW_REBUILD_TRIGGER_SERIES_CAPACITY = 9;
+}
+
+enum ViewRebuildResult {
+  VIEW_REBUILD_RESULT_UNSPECIFIED = 0;
+  VIEW_REBUILD_RESULT_RUNNING = 1;
+  VIEW_REBUILD_RESULT_SUCCEEDED = 2;
+  VIEW_REBUILD_RESULT_FAILED = 3;
+  VIEW_REBUILD_RESULT_SKIPPED = 4;
+}
+
+message ViewRebuildLog {
+  int64 log_id = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string build_id = 4;
+  string index_id = 5;
+  ViewRebuildTriggerReason trigger_reason = 6;
+  ViewRebuildResult result = 7;
+  string block_reason = 8;
+  uint64 target_view_revision = 9;
+  uint64 active_view_revision = 10;
+  uint64 physical_bytes = 11;
+  uint64 num_pending = 12;
+  uint64 num_ack_pending = 13;
+  uint64 entries_written = 14;
+  string started_at = 15;
+  string finished_at = 16;
+  string first_checked_at = 17;
+  string last_checked_at = 18;
+  uint64 skip_count = 19;
+  string error_summary = 20;
+  string details_json = 21;
+  string created_at = 22;
+  string updated_at = 23;
+}
+
+message ListViewRebuildLogsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  ViewRebuildResult result = 4;
+  common.Page page = 5;
+}
+
+message CreateViewRebuildLogReq {
+  common.AuthInfo auth_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message CreateViewRebuildLogRsp {
+  common.RetInfo ret_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message UpdateViewRebuildLogReq {
+  common.AuthInfo auth_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message UpdateViewRebuildLogRsp {
+  common.RetInfo ret_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message UpsertSkippedViewRebuildLogReq {
+  common.AuthInfo auth_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message UpsertSkippedViewRebuildLogRsp {
+  common.RetInfo ret_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message ListViewRebuildLogsRsp {
+  common.RetInfo ret_info = 1;
+  repeated ViewRebuildLog logs = 2;
+  common.PageResult page_result = 3;
+}
+
+// CommitViewSchemaExtension advances the schema contract of the same active
+// index after its engine has applied an append-only column extension.
+message CommitViewSchemaExtensionReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string active_index_id = 4;
+  uint64 expected_active_revision = 5;
+  uint64 expected_desired_revision = 6;
+  string expected_active_schema_hash = 7;
+  repeated ViewColumn columns = 8;
+  string view_schema_hash = 9;
+}
+
+message CommitViewSchemaExtensionRsp {
+  common.RetInfo ret_info = 1;
+  View view = 2;
+}
+
 // Metadata 管理量化存储系统的核心元数据。
 service Metadata {
   // 创建使用空间。
   rpc CreateSpace(CreateSpaceReq) returns (CreateSpaceRsp);
   // 更新使用空间。
   rpc UpdateSpace(UpdateSpaceReq) returns (UpdateSpaceRsp);
+  // 删除使用空间及其级联元数据。
+  rpc DeleteSpace(DeleteSpaceReq) returns (DeleteSpaceRsp);
   // 按 ID 获取使用空间。
   rpc GetSpace(GetSpaceReq) returns (GetSpaceRsp);
   // 列出使用空间。
@@ -1606,6 +1634,10 @@ service Metadata {
   rpc CreateView(CreateViewReq) returns (CreateViewRsp);
   // 更新查询视图。
   rpc UpdateView(UpdateViewReq) returns (UpdateViewRsp);
+  // 物理删除查询视图及其依赖行。
+  rpc DeleteView(DeleteViewReq) returns (DeleteViewRsp);
+  // 请求异步手动重建查询视图；当前 active 索引保持可读。
+  rpc RequestViewRebuild(RequestViewRebuildReq) returns (RequestViewRebuildRsp);
   // 按 ID 获取查询视图。
   rpc GetView(GetViewReq) returns (GetViewRsp);
   // 列出查询视图。
@@ -1620,13 +1652,26 @@ service Metadata {
   rpc UpdateViewIndexBuild(UpdateViewIndexBuildReq) returns (UpdateViewIndexBuildRsp);
   // 原子激活已就绪的 View 索引。
   rpc ActivateViewIndex(ActivateViewIndexReq) returns (ActivateViewIndexRsp);
+  // CAS 提交同一 active index 上已完成的追加列 schema 扩展。
+  rpc CommitViewSchemaExtension(CommitViewSchemaExtensionReq) returns (CommitViewSchemaExtensionRsp);
   // 记录 View 索引构建失败。
   rpc FailViewIndexBuild(FailViewIndexBuildReq) returns (FailViewIndexBuildRsp);
+  // 查询 View 索引构建历史。
+  rpc ListViewRebuildLogs(ListViewRebuildLogsReq) returns (ListViewRebuildLogsRsp);
+  // 写入 View 索引构建历史。
+  rpc CreateViewRebuildLog(CreateViewRebuildLogReq) returns (CreateViewRebuildLogRsp);
+  rpc UpdateViewRebuildLog(UpdateViewRebuildLogReq) returns (UpdateViewRebuildLogRsp);
+  rpc UpsertSkippedViewRebuildLog(UpsertSkippedViewRebuildLogReq) returns (UpsertSkippedViewRebuildLogRsp);
+  rpc UpsertViewPeriodDatasetState(UpsertViewPeriodDatasetStateReq) returns (UpsertViewPeriodDatasetStateRsp);
+  rpc ListViewPeriodDatasetStates(ListViewPeriodDatasetStatesReq) returns (ListViewPeriodDatasetStatesRsp);
+  rpc RecordViewSyncPoint(RecordViewSyncPointReq) returns (RecordViewSyncPointRsp);
 
   // 创建数据来源。
   rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);
   // 更新数据来源。
   rpc UpdateDataSource(UpdateDataSourceReq) returns (UpdateDataSourceRsp);
+  // 删除数据来源。
+  rpc DeleteDataSource(DeleteDataSourceReq) returns (DeleteDataSourceRsp);
   // 按 ID 获取数据来源。
   rpc GetDataSource(GetDataSourceReq) returns (GetDataSourceRsp);
   // 列出数据来源。
@@ -1634,27 +1679,39 @@ service Metadata {
 
   // 创建或更新数据对象。
   rpc UpsertSubject(UpsertSubjectReq) returns (UpsertSubjectRsp);
-  // 创建或更新数据对象的来源侧代码映射。
-  rpc UpsertSubjectSymbol(UpsertSubjectSymbolReq) returns (UpsertSubjectSymbolRsp);
-  // 注册数据对象、来源侧代码映射和数据集绑定。
-  rpc RegisterDataSubject(RegisterDataSubjectReq) returns (RegisterDataSubjectRsp);
   // 按 ID 获取数据对象。
   rpc GetSubject(GetSubjectReq) returns (GetSubjectRsp);
   // 列出数据对象。
   rpc ListSubjects(ListSubjectsReq) returns (ListSubjectsRsp);
-  // 列出数据对象的来源侧代码映射。
-  rpc ListSubjectSymbols(ListSubjectSymbolsReq) returns (ListSubjectSymbolsRsp);
+  rpc UpsertTag(UpsertTagReq) returns (UpsertTagRsp);
+  rpc GetTag(GetTagReq) returns (GetTagRsp);
+  rpc ListTags(ListTagsReq) returns (ListTagsRsp);
+  rpc DeleteTag(DeleteTagReq) returns (DeleteTagRsp);
+  rpc ListTagMembers(ListTagMembersReq) returns (ListTagMembersRsp);
+  rpc AddTagMembers(TagMembersReq) returns (TagMembersRsp);
+  rpc RemoveTagMembers(TagMembersReq) returns (TagMembersRsp);
+  rpc SetTagMemberStatus(SetTagMemberStatusReq) returns (TagMembersRsp);
+  rpc ApplyTagSnapshot(ApplyTagSnapshotReq) returns (ApplyTagSnapshotRsp);
+  rpc ReportTagRunFailure(ReportTagRunFailureReq) returns (ReportTagRunFailureRsp);
+  rpc UpdateSubjectAttributes(UpdateSubjectAttributesReq) returns (UpdateSubjectAttributesRsp);
+  rpc ResolveSubjects(ResolveSubjectsReq) returns (ResolveSubjectsRsp);
 
   // 创建数据集。
   rpc CreateDataset(CreateDatasetReq) returns (CreateDatasetRsp);
   // 更新数据集。
   rpc UpdateDataset(UpdateDatasetReq) returns (UpdateDatasetRsp);
+  // 删除数据集。
+  rpc DeleteDataset(DeleteDatasetReq) returns (DeleteDatasetRsp);
   // 按 ID 获取数据集。
   rpc GetDataset(GetDatasetReq) returns (GetDatasetRsp);
   // 列出数据集。
   rpc ListDatasets(ListDatasetsReq) returns (ListDatasetsRsp);
-  // 为 Dataset 绑定 Subject。
-  rpc BindDatasetSubject(BindDatasetSubjectReq) returns (BindDatasetSubjectRsp);
+  // 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
+  rpc RebindDatasetDataNode(RebindDatasetDataNodeReq) returns (RebindDatasetDataNodeRsp);
+  // 只读检查 Dataset 是否满足激活条件。
+  rpc CheckDatasetActivation(CheckDatasetActivationReq) returns (CheckDatasetActivationRsp);
+  // 使用 revision CAS 激活 Dataset。
+  rpc ActivateDataset(ActivateDatasetReq) returns (ActivateDatasetRsp);
   // 列出 Dataset 覆盖的 Subject。
   rpc ListDatasetSubjects(ListDatasetSubjectsReq) returns (ListDatasetSubjectsRsp);
 
@@ -1680,28 +1737,21 @@ service Metadata {
   // 删除没有子组和字段引用的空字段组。
   rpc DeleteFieldGroup(DeleteFieldGroupReq) returns (DeleteFieldGroupRsp);
 
-  // 创建因子。
-  rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);
-  // 更新因子。
-  rpc UpdateFactor(UpdateFactorReq) returns (UpdateFactorRsp);
-  // 按 ID 获取因子。
-  rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
-  // 列出因子。
-  rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
-
   // 创建或更新数据集列。
   rpc UpsertDatasetColumn(UpsertDatasetColumnReq) returns (UpsertDatasetColumnRsp);
   // 列出数据集列。
   rpc ListDatasetColumns(ListDatasetColumnsReq) returns (ListDatasetColumnsRsp);
 
-  // 创建存储节点。
-  rpc CreatePrimaryStoreNode(CreatePrimaryStoreNodeReq) returns (CreatePrimaryStoreNodeRsp);
-  // 更新存储节点。
-  rpc UpdatePrimaryStoreNode(UpdatePrimaryStoreNodeReq) returns (UpdatePrimaryStoreNodeRsp);
-  // 按 ID 获取存储节点。
-  rpc GetPrimaryStoreNode(GetPrimaryStoreNodeReq) returns (GetPrimaryStoreNodeRsp);
-  // 列出存储节点。
-  rpc ListPrimaryStoreNodes(ListPrimaryStoreNodesReq) returns (ListPrimaryStoreNodesRsp);
+  // 注册或刷新 DataNode。
+  rpc RegisterDataNode(RegisterDataNodeReq) returns (RegisterDataNodeRsp);
+  // 更新 DataNode 名称和状态。
+  rpc UpdateDataNode(UpdateDataNodeReq) returns (UpdateDataNodeRsp);
+  // 按 ID 获取 DataNode。
+  rpc GetDataNode(GetDataNodeReq) returns (GetDataNodeRsp);
+  // 分页列出 DataNode 及其 Dataset 摘要。
+  rpc ListDataNodes(ListDataNodesReq) returns (ListDataNodesRsp);
+  // 删除满足约束的 DataNode。
+  rpc DeleteDataNode(DeleteDataNodeReq) returns (DeleteDataNodeRsp);
 
   // 创建设备。
   rpc CreateDevice(CreateDeviceReq) returns (CreateDeviceRsp);
@@ -1711,15 +1761,6 @@ service Metadata {
   rpc GetDevice(GetDeviceReq) returns (GetDeviceRsp);
   // 列出设备。
   rpc ListDevices(ListDevicesReq) returns (ListDevicesRsp);
-
-  // 创建在线主存路由。
-  rpc CreatePrimaryStoreRoute(CreatePrimaryStoreRouteReq) returns (CreatePrimaryStoreRouteRsp);
-  // 更新在线主存路由。
-  rpc UpdatePrimaryStoreRoute(UpdatePrimaryStoreRouteReq) returns (UpdatePrimaryStoreRouteRsp);
-  // 按 ID 获取在线主存路由。
-  rpc GetPrimaryStoreRoute(GetPrimaryStoreRouteReq) returns (GetPrimaryStoreRouteRsp);
-  // 列出在线主存路由。
-  rpc ListPrimaryStoreRoutes(ListPrimaryStoreRoutesReq) returns (ListPrimaryStoreRoutesRsp);
 
   // 登记 Parquet 归档文件。
   rpc RegisterArchiveFile(RegisterArchiveFileReq) returns (RegisterArchiveFileRsp);

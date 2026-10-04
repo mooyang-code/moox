@@ -11,6 +11,7 @@ import (
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -19,29 +20,48 @@ import (
 )
 
 type AccessClient interface {
-	MergeTimeSeriesRows(context.Context, *storagepb.MergeTimeSeriesRowsReq, ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error)
+	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 type MetadataClient interface {
 	GetSpace(context.Context, *storagepb.GetSpaceReq, ...client.Option) (*storagepb.GetSpaceRsp, error)
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
+	GetDataNode(context.Context, *storagepb.GetDataNodeReq, ...client.Option) (*storagepb.GetDataNodeRsp, error)
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
-	ListPrimaryStoreRoutes(context.Context, *storagepb.ListPrimaryStoreRoutesReq, ...client.Option) (*storagepb.ListPrimaryStoreRoutesRsp, error)
+	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
+	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 }
 
 type StorageAdapter struct {
-	access   AccessClient
-	metadata MetadataClient
-	cfg      monconfig.MetricsStorageConfig
-	mu       sync.RWMutex
-	schema   SchemaStatus
+	access           AccessClient
+	metadata         MetadataClient
+	auth             *commonpb.AuthInfo
+	cfg              monconfig.MetricsStorageConfig
+	mu               sync.RWMutex
+	schema           SchemaStatus
+	subjectMu        sync.Mutex
+	subjectRefreshMu sync.Mutex
+	subjects         map[string]cachedSubjectCatalog
+}
+
+const (
+	datasetSubjectPageSize = 1000
+	maxDatasetSubjects     = 100000
+	subjectCatalogTTL      = time.Minute
+)
+
+type cachedSubjectCatalog struct {
+	loadedAt time.Time
+	ids      map[string]struct{}
 }
 
 func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return &StorageAdapter{access: access, metadata: metadata, cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}}
+	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog)}
 }
 func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	target := gatewayauth.ServiceGatewayTarget(cfg.GatewayTarget)
+	// Monitor's Storage target is a dedicated dependency setting. Do not let the
+	// process-local gateway default redirect it back to the control node.
+	target := cfg.GatewayTarget
 	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
 	if err != nil {
 		return NewStorageAdapter(nil, nil, cfg)
@@ -142,6 +162,19 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	if dataset == nil || !isActive(dataset.GetStatus()) {
 		return fmt.Errorf("metrics dataset %q is missing or inactive", a.cfg.DatasetID)
 	}
+	if !dataset.GetBindingLocked() || strings.TrimSpace(dataset.GetDataNodeId()) == "" {
+		return fmt.Errorf("metrics dataset %q must be active, binding_locked, and bound to a data node", a.cfg.DatasetID)
+	}
+	nodeRsp, err := a.metadata.GetDataNode(ctx, &storagepb.GetDataNodeReq{NodeId: dataset.GetDataNodeId()})
+	if err != nil {
+		return fmt.Errorf("get metrics data node %q: %w", dataset.GetDataNodeId(), err)
+	}
+	if err := storageOK("get metrics data node", nodeRsp.GetRetInfo()); err != nil {
+		return err
+	}
+	if nodeRsp.GetNode() == nil || !isActive(nodeRsp.GetNode().GetStatus()) {
+		return fmt.Errorf("metrics data node %q is missing or inactive", dataset.GetDataNodeId())
+	}
 	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return fmt.Errorf("metrics dataset kind is %s, want TIME_SERIES", dataset.GetDataKind())
 	}
@@ -166,23 +199,6 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	}
 	if len(required) > 0 {
 		return fmt.Errorf("metrics dataset missing columns: %v", sortedKeys(required))
-	}
-	routesRsp, err := a.metadata.ListPrimaryStoreRoutes(ctx, &storagepb.ListPrimaryStoreRoutesReq{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, Page: &commonpb.Page{Page: 1, Size: 500}})
-	if err != nil {
-		return fmt.Errorf("list metrics routes: %w", err)
-	}
-	if err := storageOK("list metrics routes", routesRsp.GetRetInfo()); err != nil {
-		return err
-	}
-	routeOK := false
-	for _, route := range routesRsp.GetPrimaryStoreRoutes() {
-		if route.GetStatus() == "active" && route.GetDatasetId() == a.cfg.DatasetID && route.GetSubjectPattern() == "*" && route.GetHashRule() == "subject_id" {
-			routeOK = true
-			break
-		}
-	}
-	if !routeOK {
-		return errors.New("metrics dataset has no active wildcard PrimaryStore route")
 	}
 	return nil
 }
@@ -221,37 +237,12 @@ type HistoryPoint struct {
 	MessageID  string
 }
 
-// HistorySelector carries the complete time-series identity needed by Storage
-// to resolve a fact key. Dimensions are part of the primary key, so callers
-// that have resolved a series from the catalog should pass them here rather
-// than relying on the subject hash alone.
 type HistorySelector struct {
-	SeriesID   string
-	Dimensions map[string]string
+	SeriesID string
 }
 
-func cloneStringMap(values map[string]string) map[string]string {
-	if len(values) == 0 {
-		return nil
-	}
-	cloned := make(map[string]string, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
-	return cloned
-}
-
-// HistorySelectorForSeries converts a catalog row into an exact Storage key.
 func HistorySelectorForSeries(series MetricSeries) HistorySelector {
-	return HistorySelector{
-		SeriesID: series.SeriesID,
-		Dimensions: map[string]string{
-			"service_name": series.ServiceName,
-			"instance_id":  series.InstanceID,
-			"metric_name":  series.MetricName,
-			"metric_type":  series.MetricType,
-		},
-	}
+	return HistorySelector{SeriesID: series.SeriesID}
 }
 
 func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) error {
@@ -267,14 +258,14 @@ func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) err
 		if end > len(samples) {
 			end = len(samples)
 		}
-		rows := make([]*storagepb.TimeSeriesRow, 0, end-start)
+		rows := make([]*storagepb.RowFieldUpsert, 0, end-start)
 		for _, sample := range samples[start:end] {
 			if sample.ObservedAt.IsZero() {
 				return errors.New("metric sample observed_at is required")
 			}
 			rows = append(rows, sampleRow(a.cfg, sample))
 		}
-		rsp, err := a.access.MergeTimeSeriesRows(ctx, &storagepb.MergeTimeSeriesRowsReq{Rows: rows})
+		rsp, err := a.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: a.auth, Rows: rows})
 		if err != nil {
 			return fmt.Errorf("write metrics history: %w", err)
 		}
@@ -284,31 +275,23 @@ func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) err
 	}
 	return nil
 }
-func sampleRow(cfg monconfig.MetricsStorageConfig, s Sample) *storagepb.TimeSeriesRow {
-	return &storagepb.TimeSeriesRow{
-		Key: &storagepb.TimeSeriesKey{SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID, SubjectId: s.SeriesID, Freq: cfg.Frequency, DataTime: s.ObservedAt.UTC().Format(time.RFC3339Nano), Dimensions: map[string]string{"service_name": s.ServiceName, "instance_id": s.InstanceID, "metric_name": s.MetricName, "metric_type": s.MetricType}},
-		Columns: []*storagepb.ColumnValue{
-			{ColumnName: "value", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: s.Value}}},
-			{ColumnName: "labels_json", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: s.LabelsJSON}}},
-			{ColumnName: "producer_node_id", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: s.ProducerNodeID}}},
-			{ColumnName: "producer_version", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: s.ProducerVersion}}},
-			{ColumnName: "message_id", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: s.MessageID}}},
+func sampleRow(cfg monconfig.MetricsStorageConfig, s Sample) *storagepb.RowFieldUpsert {
+	return &storagepb.RowFieldUpsert{
+		Key: &storagepb.RowKey{
+			SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID,
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: s.SeriesID, Freq: cfg.Frequency, DataTime: s.ObservedAt.UTC().Format(time.RFC3339Nano)}},
+		},
+		Attributes: map[string]*storagepb.TypedValue{"service_name": metricStringValue(s.ServiceName), "instance_id": metricStringValue(s.InstanceID), "metric_name": metricStringValue(s.MetricName), "metric_type": metricStringValue(s.MetricType)},
+		Fields: []*storagepb.FieldValue{
+			{FieldId: "value", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: s.Value}}},
+			{FieldId: "labels_json", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: s.LabelsJSON}}},
+			{FieldId: "producer_node_id", Value: metricStringValue(s.ProducerNodeID)},
+			{FieldId: "producer_version", Value: metricStringValue(s.ProducerVersion)},
+			{FieldId: "message_id", Value: metricStringValue(s.MessageID)},
 		},
 	}
 }
 
-func (a *StorageAdapter) QueryHistory(ctx context.Context, seriesIDs []string, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
-	selectors := make([]HistorySelector, 0, len(seriesIDs))
-	for _, id := range seriesIDs {
-		selectors = append(selectors, HistorySelector{SeriesID: id})
-	}
-	return a.QueryHistorySelectors(ctx, selectors, start, end, desc, limit)
-}
-
-// QueryHistorySelectors reads exact keys including dimensions. The legacy
-// QueryHistory method remains for callers that use subject-only datasets; new
-// metric dashboard/rule code should resolve MetricSeries first and use this
-// method.
 func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []HistorySelector, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
 	if a == nil || a.access == nil {
 		return nil, errors.New("metrics storage-primary client is not initialized")
@@ -319,13 +302,10 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 	if limit > 500 {
 		limit = 500
 	}
-	keys := make([]*storagepb.TimeSeriesKey, 0, len(selectors))
+	keys := make([]*storagepb.TimeSeriesSelector, 0, len(selectors))
 	for _, selector := range selectors {
 		if selector.SeriesID != "" {
-			key := &storagepb.TimeSeriesKey{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: selector.SeriesID, Freq: a.cfg.Frequency}
-			if len(selector.Dimensions) > 0 {
-				key.Dimensions = cloneStringMap(selector.Dimensions)
-			}
+			key := &storagepb.TimeSeriesSelector{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: selector.SeriesID, Freq: a.cfg.Frequency}
 			keys = append(keys, key)
 		}
 	}
@@ -343,7 +323,13 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 	if !end.IsZero() {
 		tr.EndTime = end.UTC().Format(time.RFC3339Nano)
 	}
-	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: keys, TimeRange: tr, Order: order, ColumnNames: []string{"value", "labels_json", "message_id"}, Page: &commonpb.Page{Page: 1, Size: uint32(limit)}}, client.WithFilter(trpcretry.ReadOnly()))
+	columnPrefix := a.cfg.DatasetID + "."
+	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+		AuthInfo: a.auth, SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID,
+		Selectors: keys, TimeRange: tr, Order: order,
+		ColumnNames: []string{columnPrefix + "value", columnPrefix + "labels_json", columnPrefix + "message_id"},
+		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
+	}, client.WithFilter(trpcretry.ReadOnly()))
 	if err != nil {
 		return nil, fmt.Errorf("read metrics history: %w", err)
 	}
@@ -359,14 +345,14 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 		if t, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime()); err == nil {
 			p.ObservedAt = t
 		}
-		for _, col := range row.GetColumns() {
-			switch col.GetColumnName() {
+		for _, field := range row.GetFields() {
+			switch strings.TrimPrefix(field.GetFieldId(), columnPrefix) {
 			case "value":
-				p.Value = col.GetValue().GetDoubleValue()
+				p.Value = field.GetValue().GetDoubleValue()
 			case "labels_json":
-				p.LabelsJSON = col.GetValue().GetJsonValue()
+				p.LabelsJSON = field.GetValue().GetJsonValue()
 			case "message_id":
-				p.MessageID = col.GetValue().GetStringValue()
+				p.MessageID = field.GetValue().GetStringValue()
 			}
 		}
 		out = append(out, p)
@@ -378,4 +364,111 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 		return out[i].ObservedAt.Before(out[j].ObservedAt)
 	})
 	return out, nil
+}
+
+// ListActiveDatasetSubjects returns the authoritative active subject set for a
+// monitored dataset. Monitor uses this to ignore metric series left behind by
+// retired instruments instead of treating their old watermarks as failures.
+// Successful catalogs are cached briefly so a 30-second monitor evaluation does
+// not turn metadata into another high-frequency dependency.
+func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID, datasetID string) (map[string]struct{}, error) {
+	if a == nil || a.metadata == nil {
+		return nil, errors.New("metrics storage metadata client is not initialized")
+	}
+	key := strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(datasetID)
+	now := time.Now().UTC()
+	a.subjectRefreshMu.Lock()
+	defer a.subjectRefreshMu.Unlock()
+	a.subjectMu.Lock()
+	if cached, ok := a.subjects[key]; ok && now.Sub(cached.loadedAt) < subjectCatalogTTL {
+		ids := cloneSubjectSet(cached.ids)
+		a.subjectMu.Unlock()
+		return ids, nil
+	}
+	a.subjectMu.Unlock()
+
+	ids := make(map[string]struct{})
+	rowCount := 0
+	for page := uint32(1); ; page++ {
+		rsp, err := a.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
+			AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID,
+			Page: &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
+		}, client.WithFilter(trpcretry.ReadOnly()))
+		if err != nil {
+			return nil, fmt.Errorf("list monitored dataset subjects: %w", err)
+		}
+		if err := storageOK("list monitored dataset subjects", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		pageSubjects := rsp.GetDatasetSubjects()
+		rowCount += len(pageSubjects)
+		if rowCount > maxDatasetSubjects*2 {
+			return nil, fmt.Errorf("monitored dataset subject catalog exceeds %d rows", maxDatasetSubjects*2)
+		}
+		for _, subject := range pageSubjects {
+			if subject == nil || !isActive(subject.GetStatus()) || strings.TrimSpace(subject.GetSubjectId()) == "" {
+				continue
+			}
+			if len(ids) >= maxDatasetSubjects {
+				return nil, fmt.Errorf("monitored dataset subject catalog exceeds %d subjects", maxDatasetSubjects)
+			}
+			ids[strings.TrimSpace(subject.GetSubjectId())] = struct{}{}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			break
+		}
+		if len(pageSubjects) == 0 {
+			return nil, errors.New("monitored dataset subject catalog pagination did not advance")
+		}
+	}
+	a.subjectMu.Lock()
+	a.subjects[key] = cachedSubjectCatalog{loadedAt: now, ids: cloneSubjectSet(ids)}
+	a.subjectMu.Unlock()
+	return ids, nil
+}
+
+// ListTags returns the tag definitions and live member counters used by the
+// market canary. Tags are deliberately read through Metadata rather than
+// inferred from collector configuration so Monitor observes the same state as
+// the collector and the management UI.
+func (a *StorageAdapter) ListTags(ctx context.Context, spaceID string) ([]*storagepb.Tag, error) {
+	if a == nil || a.metadata == nil {
+		return nil, errors.New("metrics storage metadata client is not initialized")
+	}
+	items := make([]*storagepb.Tag, 0)
+	for page := uint32(1); ; page++ {
+		rsp, err := a.metadata.ListTags(ctx, &storagepb.ListTagsReq{
+			AuthInfo: a.auth,
+			SpaceId:  strings.TrimSpace(spaceID),
+			Page:     &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
+		}, client.WithFilter(trpcretry.ReadOnly()))
+		if err != nil {
+			return nil, fmt.Errorf("list monitored tags: %w", err)
+		}
+		if err := storageOK("list monitored tags", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		items = append(items, rsp.GetTags()...)
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			return items, nil
+		}
+		if len(rsp.GetTags()) == 0 {
+			return nil, errors.New("monitored tag pagination did not advance")
+		}
+	}
+}
+
+func cloneSubjectSet(input map[string]struct{}) map[string]struct{} {
+	if input == nil {
+		return nil
+	}
+	output := make(map[string]struct{}, len(input))
+	for id := range input {
+		output[id] = struct{}{}
+	}
+	return output
+}
+
+func metricStringValue(value string) *storagepb.TypedValue {
+	return &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: value}}
 }

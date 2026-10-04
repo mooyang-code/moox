@@ -32,13 +32,13 @@ schema/admin.sql          admin 本地 SQLite 表
 
 ```bash
 # 模块目录
-make build          # → ../../scripts/build.sh admin
+make build          # → ../../scripts/build/build.sh admin
 make build-linux
 make release        # 仓库级发布包
 
 # 仓库根目录
-./scripts/build.sh admin
-make deploy ARGS="--target localhost --dir ~/moox/dev"
+./scripts/build/build.sh admin
+make deploy ARGS="--target localhost --dir /data/moox/dev"
 ```
 
 admin 单独部署时可排除其他服务：
@@ -61,7 +61,9 @@ make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-
 | 11401 | moox-cloudnode（转发） | `/api/admin/cloudnode/*` |
 | 11402 | moox-collector（转发） | `/api/admin/collectmgr/*` |
 | 20200-20202 | moox-storage（转发） | `/api/admin/storage_*/*` |
-| 11200-11208、11211-11212 | moox-trade（转发） | `/api/admin/trade_*/*` |
+| 11200 | moox-trade ExchangeAccountService（内部） | 默认不暴露 Admin Gateway |
+| 11201 | moox-trade TradeExecutionService（内部） | 默认不暴露 Admin Gateway |
+| 11202 | moox-trade LogicalAccountService（内部） | 默认不暴露 Admin Gateway |
 | 11001 | `trpc.moox.api.stdhttp` | 保留 HTTP service，当前不作为主网关入口 |
 | 11301 / 11302 / 11305 / 11306 | 定时器 | dnsproxy / dnsprobe / Admin metrics / Auth cache cleanup |
 
@@ -77,7 +79,7 @@ SysDeploy 是面向 MooX 单机部署的静态服务目录，不是类似 Polari
 - `active` 表示配置已启用，不等价于服务健康；实际可用性由 Monitor 独立探测。
 - 服务不会自行注册或续约，地址变化由部署脚本或管理员显式更新。
 - 当前不支持同一服务多实例、实例心跳、自动摘除和负载均衡。
-- Admin 网关和 SCF keepalive 都读取同一份 active 部署记录，避免在多个配置文件中重复维护地址。
+- Admin 网关和后台服务发现都读取同一份 active 部署记录，避免在多个配置文件中重复维护地址。
 
 如果未来需要同服务多实例，应单独引入服务实例模型和明确的负载均衡策略，不在当前表中用重复 `service_name` 模拟。
 
@@ -116,8 +118,10 @@ go run ./cmd/server -conf=config/trpc_go.yaml
 
 **扩展新服务**：优先作为独立模块部署，并在 `t_service_deployments` 中登记 serviceID、地址和 tRPC 服务名；只有 admin 本地基础能力才放入 `internal/service/`、`bootstrap/services.go`、`bootstrap/trpc.go` 和 `trpc_go.yaml`。
 
-初始化阶段也可以使用 `moox-admin-cli service-deployments import --file <seed.yaml>` 导入
-`examples/service-deployments.seed.yaml`。该清单按节点和服务名幂等更新部署地址、网关
+初始化阶段也可以使用
+`moox-admin-cli service-deployments import --file <seed.yaml> --node-id <node> --public-host <host> --eventbus-nats-url tls://<host>:4222`
+导入
+`config/setup/service-deployments.yaml`。该清单按节点和服务名幂等更新部署地址、网关
 路由及健康检查元数据；Admin 启动时的默认 seed 与其保持一致。
 
 ## 相关文档

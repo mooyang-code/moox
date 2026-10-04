@@ -13,26 +13,26 @@ help:
 	@echo "  make build        - build moox-web-host with current embedded statik assets"
 	@echo "  make build-linux  - build moox-web-host for linux/amd64"
 	@echo "  make release      - create repository release package"
-	@echo "  make deploy SERVER=user@host - deploy web-host through scripts/deploy-moox.sh"
+	@echo "  make deploy SERVER=user@host - deploy web-host through scripts/deploy/deploy-moox.sh"
 
 statik:
 	@if [ ! -d "$(ROOT)/web/dist" ]; then \
-		echo "../web/dist not found; run frontend build first, or use scripts/deploy-moox.sh --build-web-assets"; \
+		echo "../web/dist not found; run frontend build first, or use scripts/deploy/deploy-moox.sh --build-web-assets"; \
 		exit 1; \
 	fi
 	@go run github.com/rakyll/statik@$(STATIK_VERSION) -src=$(ROOT)/web/dist -dest=./internal
 
 build:
-	@cd $(ROOT) && ./scripts/build.sh web-host
+	@cd $(ROOT) && ./scripts/build/build.sh web-host
 
 build-linux:
-	@cd $(ROOT) && TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+	@cd $(ROOT) && TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 
 build-darwin:
-	@cd $(ROOT) && TARGET_GOOS=darwin TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+	@cd $(ROOT) && TARGET_GOOS=darwin TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 
 build-windows:
-	@cd $(ROOT) && TARGET_GOOS=windows TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+	@cd $(ROOT) && TARGET_GOOS=windows TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 
 build-all: build-linux build-darwin build-windows
 
@@ -51,14 +51,14 @@ install: build
 	@cp bin/$(APP_NAME) $(ROOT)/bin/$(APP_NAME) 2>/dev/null || true
 
 release:
-	@cd $(ROOT) && ./scripts/release.sh
+	@cd $(ROOT) && ./scripts/release/release.sh
 
 deploy:
 	@if [ -z "$(SERVER)" ]; then \
 		echo "请指定 SERVER=user@host，或设置 MOOX_DEV_SSH_TARGET"; \
 		exit 1; \
 	fi
-	@cd $(ROOT) && ./scripts/deploy-moox.sh --target "$(SERVER)" --no-storage --no-cloudnode --no-collector --build-web-assets
+	@cd $(ROOT) && ./scripts/deploy/deploy-moox.sh --target "$(SERVER)" --no-storage --no-cloudnode --no-collector --build-web-assets
 
 linux: build-linux
 darwin: build-darwin

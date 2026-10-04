@@ -4,6 +4,7 @@ package health
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,18 +41,49 @@ type State struct {
 	storage            atomic.Pointer[storageCheck]
 	syncErrors         atomic.Uint64
 	validationFailures atomic.Uint64
+	reportErrors       atomic.Uint64
 	authFailures       atomic.Uint64
 	replayFailures     atomic.Uint64
 	connectionFailures atomic.Uint64
 	timeoutFailures    atomic.Uint64
 	lastSyncUnix       atomic.Int64
+	lastReportUnix     atomic.Int64
+	staleAfterSeconds  atomic.Int64
+	clockMu            sync.RWMutex
+	clock              func() time.Time
 	mu                 sync.Mutex
 	requests           map[requestKey]uint64
 	durations          map[durationKey]durationValue
 }
 
 func NewState() *State {
-	return &State{requests: make(map[requestKey]uint64), durations: make(map[durationKey]durationValue)}
+	staleAfter := int64(90)
+	if value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("MOOX_GATEWAY_ROUTE_SYNC_STALE_AFTER_SECONDS")), 10, 64); err == nil && value > 0 {
+		staleAfter = value
+	}
+	state := &State{requests: make(map[requestKey]uint64), durations: make(map[durationKey]durationValue), clock: time.Now}
+	state.staleAfterSeconds.Store(staleAfter)
+	return state
+}
+
+// SetClock is intended for deterministic runtime tests. It must be called
+// before the State is shared with the health HTTP handler.
+func (state *State) SetClock(now func() time.Time) {
+	if now == nil {
+		now = time.Now
+	}
+	state.clockMu.Lock()
+	state.clock = now
+	state.clockMu.Unlock()
+}
+
+// SetRouteSyncStaleAfter overrides the maximum age of a successful control
+// plane sync and heartbeat before readiness is degraded.
+func (state *State) SetRouteSyncStaleAfter(after time.Duration) {
+	if after <= 0 {
+		after = 90 * time.Second
+	}
+	state.staleAfterSeconds.Store(int64(after / time.Second))
 }
 
 func (state *State) ApplyRoutes(hash string, count int, disabled bool) {
@@ -73,7 +105,27 @@ func (state *State) Disabled() bool {
 
 func (state *State) Ready() bool {
 	current := state.routes.Load()
-	return current != nil && current.ready
+	if current == nil || !current.ready {
+		return false
+	}
+	now := state.now().Unix()
+	staleAfter := state.staleAfterSeconds.Load()
+	if staleAfter <= 0 {
+		staleAfter = 90
+	}
+	lastSync := state.lastSyncUnix.Load()
+	lastReport := state.lastReportUnix.Load()
+	return lastSync > 0 && lastReport > 0 && now >= lastSync && now-lastSync <= staleAfter && now >= lastReport && now-lastReport <= staleAfter
+}
+
+func (state *State) now() time.Time {
+	state.clockMu.RLock()
+	now := state.clock
+	state.clockMu.RUnlock()
+	if now == nil {
+		return time.Now()
+	}
+	return now()
 }
 
 func (state *State) Current() (string, int) {
@@ -86,11 +138,18 @@ func (state *State) Current() (string, int) {
 
 func (state *State) RouteSyncFailed()       { state.syncErrors.Add(1) }
 func (state *State) RouteValidationFailed() { state.validationFailures.Add(1) }
-func (state *State) AuthFailed()            { state.authFailures.Add(1) }
-func (state *State) ReplayFailed()          { state.replayFailures.Add(1) }
+func (state *State) RouteReportFailed() {
+	state.reportErrors.Add(1)
+}
+func (state *State) AuthFailed()   { state.authFailures.Add(1) }
+func (state *State) ReplayFailed() { state.replayFailures.Add(1) }
 
 func (state *State) RouteSyncSucceeded(at time.Time) {
 	state.lastSyncUnix.Store(at.Unix())
+}
+
+func (state *State) RouteReportSucceeded(at time.Time) {
+	state.lastReportUnix.Store(at.Unix())
 }
 
 func (state *State) UpstreamFailed(kind string) {
@@ -126,7 +185,7 @@ func (state *State) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", func(response http.ResponseWriter, _ *http.Request) {
 		if !state.Ready() {
-			http.Error(response, "not ready", http.StatusServiceUnavailable)
+			http.Error(response, "control plane sync or heartbeat is stale", http.StatusServiceUnavailable)
 			return
 		}
 		response.WriteHeader(http.StatusOK)
@@ -143,6 +202,7 @@ func (state *State) Handler() http.Handler {
 func (state *State) writeMetrics(response http.ResponseWriter) {
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_sync_errors_total counter\ngateway_route_sync_errors_total %d\n", state.syncErrors.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_validation_failures_total counter\ngateway_route_validation_failures_total %d\n", state.validationFailures.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_report_errors_total counter\ngateway_route_report_errors_total %d\n", state.reportErrors.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_auth_failures_total counter\ngateway_auth_failures_total %d\n", state.authFailures.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_replay_failures_total counter\ngateway_replay_failures_total %d\n", state.replayFailures.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_upstream_failures_total counter\ngateway_upstream_failures_total{type=\"connection\"} %d\ngateway_upstream_failures_total{type=\"timeout\"} %d\n", state.connectionFailures.Load(), state.timeoutFailures.Load())
@@ -150,6 +210,12 @@ func (state *State) writeMetrics(response http.ResponseWriter) {
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_routes_current gauge\ngateway_routes_current %d\n", count)
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_info gauge\ngateway_route_info{route_hash=\"%s\"} 1\n", escapeLabel(hash))
 	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_last_sync_timestamp_seconds gauge\ngateway_route_last_sync_timestamp_seconds %d\n", state.lastSyncUnix.Load())
+	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_last_report_timestamp_seconds gauge\ngateway_route_last_report_timestamp_seconds %d\n", state.lastReportUnix.Load())
+	stale := 1
+	if state.Ready() {
+		stale = 0
+	}
+	_, _ = fmt.Fprintf(response, "# TYPE gateway_route_sync_stale gauge\ngateway_route_sync_stale %d\n", stale)
 
 	state.mu.Lock()
 	requestKeys := make([]requestKey, 0, len(state.requests))

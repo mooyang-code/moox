@@ -3,8 +3,7 @@ package order
 type State string
 
 const (
-	Draft             State = "DRAFT"
-	Ready             State = "READY"
+	Pending           State = "PENDING"
 	Submitting        State = "SUBMITTING"
 	SubmitUnknown     State = "SUBMIT_UNKNOWN"
 	Open              State = "OPEN"
@@ -19,5 +18,9 @@ const (
 )
 
 func (s State) Terminal() bool {
-	return s == Filled || s == Canceled || s == PartiallyCanceled || s == Rejected || s == Expired
+	return s == Filled ||
+		s == Canceled ||
+		s == PartiallyCanceled ||
+		s == Rejected ||
+		s == Expired
 }

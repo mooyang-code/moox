@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 建成四个内置 Market Module 的统一契约，在相应 gate 通过的 capability 上激活 `stock_cn`、`crypto_binance` 和 `crypto_okx` 采集闭环，并将 `stock_us` 安全注册为受 US-1 授权门禁约束的 `not_ready` 模块；用户只表达市场与 K 线需求，Collector 在内部完成 Provider 路由、来源写入、质量裁决、统一数据生成、完整性修复和 SCF 有界执行。
+**Goal:** 建成四个内置 Market Module 的统一契约，在相应 gate 通过的 capability 上激活 `stockcn`、`crypto_binance` 和 `crypto_okx` 采集闭环，并将 `stockus` 安全注册为受 US-1 授权门禁约束的 `not_ready` 模块；用户只表达市场与 K 线需求，Collector 在内部完成 Provider 路由、来源写入、质量裁决、统一数据生成、完整性修复和 SCF 有界执行。
 
 **Architecture:** Collector 控制面持有 Market Registry、任务规划、Provider 配额、覆盖率巡检和统一裁决租约；SCF 只执行一个有时间与数据量上限的 JobItem。Provider 返回强类型来源事实，`KlinePipeline` 先写 `provider_data` 来源数据集，再由 `QualityResolver` 选择整根 K 线写入 `unified_data` 统一数据集；K 线和 coverage 状态都落 Storage，Market API 不依赖外部 Provider 或 Collector SQLite 完成读取。
 
@@ -20,7 +20,7 @@
 2. `provider_data`、`unified_data`、`quality_event` 和 coverage 状态的 Storage 契约。
 3. 内置 Market manifest 与 `moox-cli init --markets`。
 4. Market-oriented TaskRule、TaskInstance、Attempt、Provider runtime 和裁决租约。
-5. `crypto_binance` 现有能力迁移、`stock_cn` 多 Provider、`crypto_okx` 激活，以及 `stock_us` 逻辑注册、资格门禁与具体 addendum。
+5. `crypto_binance` 现有能力迁移、`stockcn` 多 Provider、`crypto_okx` 激活，以及 `stockus` 逻辑注册、资格门禁与具体 addendum。
 6. 同一代码包、每个 Space 一个 SCF 函数的部署模式。
 7. Market 查询与 refresh API、Collector 管理台和端到端验收。
 
@@ -46,7 +46,7 @@
 10. **一个 JobItem 拥有一个 logical shard、一个 Provider 配额租约和一组按 Subject/固定时间片的裁决租约。** Provider 失败后的 fallback、质量抽样和重复验证由后续 JobItem 完成；Quality Resolver 从已落盘来源行读取其他候选。Provider 不进入 TaskInstance 稳定 ID。
 11. **SCF 每轮默认领取一个 JobItem。** 目标执行 20 到 30 秒，至少预留 10 秒写 Storage 和上报；超限返回 continuation cursor，不在本地保存续跑状态。
 12. **同一 SCF zip 可复用到四个函数。** 每个 runtime-enabled 函数通过 `MOOX_SPACE_ID` 固定 Space；未通过门禁的 Space 不部署函数，运行时也不再从 Binance binding 推断 Space。
-13. **Metadata 注册与 Runtime 激活是两个字段。** 四个 manifest 都设置 `register_metadata=true`；只有 readiness gate 通过的 capability 才允许 `runtime_enabled=true`。`stock_us` 未通过 US-1 时保持 `not_ready`，但 `moox-cli init` 仍注册其内置 Space 与逻辑契约。
+13. **Metadata 注册与 Runtime 激活是两个字段。** 四个 manifest 都设置 `register_metadata=true`；只有 readiness gate 通过的 capability 才允许 `runtime_enabled=true`。`stockus` 未通过 US-1 时保持 `not_ready`，但 `moox-cli init` 仍注册其内置 Space 与逻辑契约。
 14. **所有 Record Dataset 使用业务确定性的 `(record_id, version)`。** Instrument/Calendar 的 source 与 unified 记录统一使用控制面分配的 `universe_generation`/`calendar_generation` RFC3339 时间，Provider effective time 只作为列；quality/coverage 使用各自确定性业务版本。重试不得使用新的 `time.Now()`，current-state 读取显式取最新版本。
 15. **首版 Collector 控制面单活。** SQLite lease、token bucket、planner 和 outbox 只允许一个 active control-plane 实例；第二实例只能健康检查和待命，不得发 permit 或发布 JobItem。多主部署必须先迁移到共享协调存储。
 16. **单位和时间桶属于 capability 契约。** 每个 `(Market, product_type, instrument_type, frequency)` 显式声明 canonical `volume_unit`、`amount_unit`、timezone 和 `bucket_alignment`；Provider 在写来源前完成换算，Quality Resolver 不比较单位未知或桶锚点不同的候选。
@@ -57,10 +57,10 @@
 
 | Gate | 必须取得的证据 | 未通过时的行为 |
 | --- | --- | --- |
-| CN-1 | 对每个拟启用的 `(equity/ETF/index, 日/分钟频率)` 单元验证主/备 K-line Provider，并验证至少一个可维护完整上市标的的 Instrument Provider；记录分页、历史深度、超时、限频、`adjustment=none` 和除权日前后样例 | 只启用证据完整且能证明不复权口径的 capability 单元；无完整 Instrument universe 时 `stock_cn` 不标记 production-ready |
+| CN-1 | 对每个拟启用的 `(equity/ETF/index, 日/分钟频率)` 单元验证主/备 K-line Provider，并验证至少一个可维护完整上市标的的 Instrument Provider；记录分页、历史深度、超时、限频、`adjustment=none` 和除权日前后样例 | 只启用证据完整且能证明不复权口径的 capability 单元；无完整 Instrument universe 时 `stockcn` 不标记 production-ready |
 | CN-2 | 目标腾讯云 SCF VPC/公网可以连接候选 TDX `7709` 节点，并在 5 秒内完成握手与一页 K 线 | 本计划将 TDX capability 保持禁用；常驻 Worker 另写设计与执行计划，不在本计划中暗含实现 |
-| US-1 | 选定至少一个主 Provider 和一个 fallback，确认 equity/ETF/index、日 K、分钟 K、历史深度、授权和配额 | `stock_us` 只初始化 metadata，不发布采集 JobItem |
-| SCF-1 | 所有已启用 Market 函数可使用同一 zip、不同 `MOOX_SPACE_ID` 和不同节点标签完成 Poll/Report | 不扩大到多 Space，只保留本地/测试执行；`stock_us` 未通过 US-1 时不计入已启用函数 |
+| US-1 | 选定至少一个主 Provider 和一个 fallback，确认 equity/ETF/index、日 K、分钟 K、历史深度、授权和配额 | `stockus` 只初始化 metadata，不发布采集 JobItem |
+| SCF-1 | 所有已启用 Market 函数可使用同一 zip、不同 `MOOX_SPACE_ID` 和不同节点标签完成 Poll/Report | 不扩大到多 Space，只保留本地/测试执行；`stockus` 未通过 US-1 时不计入已启用函数 |
 
 Gate 输出统一保存到 `modules/collector/config/markets/<market_id>/provider-validation.yaml`。文件必须记录探测时间、`valid_until`、目标环境、Provider/endpoint fingerprint、通过的 capability、批量/点数限制、配额 scope/window/weight/reset timezone、调整口径、证据摘要和 `capability_enabled`；不得保存 token、cookie 或 Secret。
 
@@ -72,7 +72,7 @@ Gate 输出统一保存到 `modules/collector/config/markets/<market_id>/provide
 | M1 Metadata And Storage | 4-8 | 四个内置 Space 可 create-or-verify，批量标的注册和完整行替换通过测试。 |
 | M2 Pipeline | 9-11 | 来源写入、质量裁决、统一写入和 bounded pipeline 形成闭环。 |
 | M3 Control Plane | 12-15 | Market-oriented schema、路由、Attempt、租约、cursor 续跑和 Binance vertical slice 完成。 |
-| M4 Completeness | 16-19 | `stock_cn` 标的、日历、多源 K 线和补洞通过验收。 |
+| M4 Completeness | 16-19 | `stockcn` 标的、日历、多源 K 线和补洞通过验收。 |
 | M5 Expansion | 20-22 | OKX 激活、US 资格与具体 addendum 完成、Market API 和管理台使用逻辑市场语义。 |
 | M6 Production | 23 | 全量测试、按已启用 Space 部署的 SCF、远程数据和缺口修复完成验证。 |
 
@@ -81,8 +81,8 @@ Gate 输出统一保存到 `modules/collector/config/markets/<market_id>/provide
 ```text
 modules/collector/
   config/markets/
-    stock_cn/{market.yaml,metadata.seed.yaml,calendar.yaml,provider-validation.yaml}
-    stock_us/{market.yaml,metadata.seed.yaml,provider-validation.yaml}
+    stockcn/{market.yaml,metadata.seed.yaml,calendar.yaml,provider-validation.yaml}
+    stockus/{market.yaml,metadata.seed.yaml,provider-validation.yaml}
     crypto_binance/{market.yaml,metadata.seed.yaml,provider-validation.yaml}
     crypto_okx/{market.yaml,metadata.seed.yaml,provider-validation.yaml}
   internal/marketdata/          # 精确 Decimal、Kline、Frequency、Subject 等值对象
@@ -216,12 +216,12 @@ git commit -m "feat(collector): define exact market data contracts"
 - Create: `modules/collector/internal/markets/contract.go`
 - Create: `modules/collector/internal/markets/registry.go`
 - Create: `modules/collector/internal/markets/registry_test.go`
-- Create: `modules/collector/config/markets/stock_cn/market.yaml`
-- Create: `modules/collector/config/markets/stock_us/market.yaml`
+- Create: `modules/collector/config/markets/stockcn/market.yaml`
+- Create: `modules/collector/config/markets/stockus/market.yaml`
 - Create: `modules/collector/config/markets/crypto_binance/market.yaml`
 - Create: `modules/collector/config/markets/crypto_okx/market.yaml`
-- Create: `modules/collector/config/markets/stock_cn/provider-validation.yaml`
-- Create: `modules/collector/config/markets/stock_us/provider-validation.yaml`
+- Create: `modules/collector/config/markets/stockcn/provider-validation.yaml`
+- Create: `modules/collector/config/markets/stockus/provider-validation.yaml`
 - Create: `modules/collector/config/markets/crypto_binance/provider-validation.yaml`
 - Create: `modules/collector/config/markets/crypto_okx/provider-validation.yaml`
 
@@ -242,8 +242,8 @@ type Module interface {
 }
 ```
 
-Registry lookup is exact by Market ID. No code may infer semantics by splitting `stock_cn` or `crypto_binance`.
-- [ ] **Step 5: Add the four production `market.yaml` files in a fail-closed state.** Set `register_metadata=true` and `runtime_enabled=false` for all four initially. Tasks 15、19 and 20 may activate Binance、validated stock_cn capability cells and OKX only after their live gates pass; stock_us stays false until its provider-specific addendum is implemented and US-1 passes. Set SCF timeout to 60 seconds、job budget to 30000 ms、report reserve to 10000 ms and explicit function names from the design.
+Registry lookup is exact by Market ID. No code may infer semantics by splitting `stockcn` or `crypto_binance`.
+- [ ] **Step 5: Add the four production `market.yaml` files in a fail-closed state.** Set `register_metadata=true` and `runtime_enabled=false` for all four initially. Tasks 15、19 and 20 may activate Binance、validated stockcn capability cells and OKX only after their live gates pass; stockus stays false until its provider-specific addendum is implemented and US-1 passes. Set SCF timeout to 60 seconds、job budget to 30000 ms、report reserve to 10000 ms and explicit function names from the design.
 - [ ] **Step 6: Add and validate four evidence templates.** `provider-validation.yaml` uses a strict schema with `probed_at`、`valid_until`、environment、Provider/endpoint fingerprint、endpoint class、frequencies、batch/point limits、quota scopes/windows/weights/reset timezone、network result、adjustment semantics、evidence summary、gate IDs and `capability_enabled`; unknown fields and secret-like keys fail tests.
 - [ ] **Step 7: Verify all manifests load and no TuShare Pro ID appears.**
 
@@ -399,7 +399,7 @@ type RequestPermit struct {
 
 ```bash
 go test -count=1 ./modules/collector/internal/providers/... -v
-./scripts/check-module-boundaries.sh
+./scripts/check/check-module-boundaries.sh
 ```
 
 - [ ] **Step 7: Commit.**
@@ -446,17 +446,17 @@ git commit -m "feat(metadata): verify complete seed contracts"
 ### Task 5: Add Built-in Market Metadata Seeds
 
 **Files:**
-- Create: `modules/collector/config/markets/stock_cn/metadata.seed.yaml`
-- Create: `modules/collector/config/markets/stock_us/metadata.seed.yaml`
+- Create: `modules/collector/config/markets/stockcn/metadata.seed.yaml`
+- Create: `modules/collector/config/markets/stockus/metadata.seed.yaml`
 - Create: `modules/collector/config/markets/crypto_binance/metadata.seed.yaml`
 - Create: `modules/collector/config/markets/crypto_okx/metadata.seed.yaml`
 - Create: `modules/cli/cmd/market_seed_test.go`
 - Create: `examples/metadata-market-local-routes.seed.yaml`
-- Modify: `scripts/release.sh`
+- Modify: `scripts/release/release.sh`
 
 - [ ] **Step 1: Write a test that loads all four real seeds with the strict loader.** Assert all IDs are unique within a Space, every Dataset references a DataSource, every column references a Field and all Dataset IDs fit Storage limits.
 - [ ] **Step 2: Define shared field contracts.** Register business OHLC、volume and amount as finite `DOUBLE` and parallel `open_exact/high_exact/low_exact/close_exact/volume_exact/amount_exact` as `STRING`; register `trade_date`、`feed_scope`、`volume_unit` and `amount_unit` as `STRING`; register `revision` as `INT`、`close_time`、`provider_timestamp`、`fetched_at`、`source_fetched_at` and `resolved_at` as `TIME`、`is_closed` as `BOOL` and quality reasons as `JSON`. DatasetColumn `required` is capability-specific, so index volume/amount may be optional while equity OHLCV remains required. Add instrument identity/listing fields and coverage range/status/retry fields.
-- [ ] **Step 3: Define the `stock_cn` datasets.** Include Provider-specific equity/ETF/index K-line datasets、Provider-specific instrument Record datasets、unified `equity_kline`、`etf_kline`、`index_kline`、`instruments`、`calendar`、`market_coverage` and `kline_quality_event`. Instrument source datasets use `provider_data`; `instruments` uses `unified_data`; `market_coverage` uses `coverage_state`.
+- [ ] **Step 3: Define the `stockcn` datasets.** Include Provider-specific equity/ETF/index K-line datasets、Provider-specific instrument Record datasets、unified `equity_kline`、`etf_kline`、`index_kline`、`instruments`、`calendar`、`market_coverage` and `kline_quality_event`. Instrument source datasets use `provider_data`; `instruments` uses `unified_data`; `market_coverage` uses `coverage_state`.
 - [ ] **Step 4: Define the crypto datasets with both layers.** For example:
 
 ```text
@@ -468,7 +468,7 @@ crypto_binance/swap_kline          dataset_role=unified_data
 
 Use the corresponding OKX IDs in `crypto_okx`. Do not collapse source and unified data even when only one Provider is enabled.
 - [ ] **Step 5: Add instrument and control datasets to both crypto Spaces.** Create `binance_instruments`/`okx_instruments` as Provider records, plus unified `instruments`、`calendar`、`market_coverage` and `kline_quality_event` bound to the internal DataSource.
-- [ ] **Step 6: Define `stock_us` logical metadata without claiming a live Provider.** Create its Space、internal DataSource、unified K-line/instrument/calendar datasets、`market_coverage` and quality dataset; Provider datasets are added only for Provider IDs accepted by US-1.
+- [ ] **Step 6: Define `stockus` logical metadata without claiming a live Provider.** Create its Space、internal DataSource、unified K-line/instrument/calendar datasets、`market_coverage` and quality dataset; Provider datasets are added only for Provider IDs accepted by US-1.
 - [ ] **Step 7: Add a deployment-only wildcard route seed.** Keep PrimaryStore topology out of Market metadata manifests; cover all four Spaces through the existing local PrimaryStore node.
 - [ ] **Step 8: Add release dry-run checks.**
 
@@ -482,7 +482,7 @@ done
 - [ ] **Step 9: Commit.**
 
 ```bash
-git add modules/collector/config/markets/*/metadata.seed.yaml modules/cli/cmd/market_seed_test.go examples/metadata-market-local-routes.seed.yaml scripts/release.sh
+git add modules/collector/config/markets/*/metadata.seed.yaml modules/cli/cmd/market_seed_test.go examples/metadata-market-local-routes.seed.yaml scripts/release/release.sh
 git commit -m "feat(collector): seed built-in market metadata"
 ```
 
@@ -492,8 +492,8 @@ git commit -m "feat(collector): seed built-in market metadata"
 - Create: `modules/cli/cmd/init.go`
 - Create: `modules/cli/cmd/init_test.go`
 - Modify: `modules/cli/cmd/root.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/release/release.sh`
 
 - [ ] **Step 1: Write httptest-backed command tests.** Cover dry-run without writes、first run applied、second run unchanged、one-market selection、global duplicate preflight and contract conflict without mutation.
 - [ ] **Step 2: Add the exact command surface.**
@@ -501,7 +501,7 @@ git commit -m "feat(collector): seed built-in market metadata"
 ```text
 moox-cli init \
   --manifest-dir <deploy-root>/collector/config/markets \
-  --markets all|stock_cn,stock_us,crypto_binance,crypto_okx \
+  --markets all|stockcn,stockus,crypto_binance,crypto_okx \
   --metadata-url http://127.0.0.1:20200 \
   [--dry-run]
 ```
@@ -521,7 +521,7 @@ Expected: JSON with `failed: 0`; no Storage service is required in dry-run mode.
 - [ ] **Step 7: Commit.**
 
 ```bash
-git add modules/cli/cmd/init.go modules/cli/cmd/init_test.go modules/cli/cmd/root.go scripts/deploy-moox.sh scripts/release.sh
+git add modules/cli/cmd/init.go modules/cli/cmd/init_test.go modules/cli/cmd/root.go scripts/deploy/deploy-moox.sh scripts/release/release.sh
 git commit -m "feat(cli): initialize built-in markets"
 ```
 
@@ -923,7 +923,7 @@ git commit -m "feat(collector): route market data jobs"
 
 - [ ] **Step 1: Define strict phase-aware JobItem params.** Params include `phase=fetch|resolve|reconcile_omissions|materialize_policy`、Market/Space/Exchange、stable generation/window、limits、sub-budgets and cursor. Fetch carries Provider/source Dataset/quota lease; resolve carries durable keys/unified Dataset/resolution leases; `materialize_policy` carries CalendarPolicy ID、unified calendar Dataset and per-date leases but no Provider/source/quota lease. K-line additionally carries Product/Instrument/Frequency/Subject/time window.
 - [ ] **Step 2: Add finalized-receipt preflight, then wire handlers to pipelines.** Before any Provider/Storage work, call `GetMarketAttemptReceipt(job_item_id, attempt_no)`. If finalized, skip Pipeline and return the persisted summary solely for CloudNode terminal-report replay. Otherwise `jobs/kline.Handler` calls KlinePipeline directly; do not convert through `TaskExecuteEvent` or `executor.ExecuteTaskImmediately`.
-- [ ] **Step 3: Replace the symbol job with bounded Instrument and Calendar jobs.** Instrument/external-Calendar fetch writes Provider source with planner generation, then Finalize creates resolve-only groups. Resolve handlers acquire subject/date leases and write same-generation unified records. When no CalendarProvider is configured, `materialize_policy` pages the checked-in or 24x7 CalendarPolicy directly into logical calendar records using `calendar_generation` and date leases. Tests cover Binance/OKX 24x7、stock_cn YAML、optional Provider and out-of-order Provider timestamps.
+- [ ] **Step 3: Replace the symbol job with bounded Instrument and Calendar jobs.** Instrument/external-Calendar fetch writes Provider source with planner generation, then Finalize creates resolve-only groups. Resolve handlers acquire subject/date leases and write same-generation unified records. When no CalendarProvider is configured, `materialize_policy` pages the checked-in or 24x7 CalendarPolicy directly into logical calendar records using `calendar_generation` and date leases. Tests cover Binance/OKX 24x7、stockcn YAML、optional Provider and out-of-order Provider timestamps.
 - [ ] **Step 4: Register feed handlers and one explicit built-in factory catalog.** Registry keys are `collect.instrument`、`collect.calendar` and `collect.kline` with `runtime_class=scf`. `internal/builtin` explicitly imports concrete Market/Provider packages and maps IDs to constructors without `init()` side effects; both control-plane bootstrap and SCF runtimeboot consume this same catalog. Startup validates every runtime-enabled capability has both factories, and tests assert control/SCF factory ID sets are identical.
 - [ ] **Step 5: Set Collector polling limit to one.** Delete the Binance Space fallback; missing or unregistered `MOOX_SPACE_ID` fails runtime initialization. Reject a polled item whose Space differs from runtime config.
 - [ ] **Step 6: Make CollectMgr the only business-retry authority.** Handler calls `FinalizeMarketAttempt` first. That one transaction stores results, updates every attempt-subject's linked TaskInstance, settles old leases and writes zero to many grouped continuation/fallback/resolve/sample outbox rows; the publisher submits them afterward. Provider/Storage/quality outcomes are then reported as terminal success to CloudNode with the structured summary, so CloudNode never races a business fallback.
@@ -1057,7 +1057,7 @@ git add modules/collector/internal/coverage modules/collector/internal/domain/co
 git commit -m "feat(collector): reconcile market coverage"
 ```
 
-### Task 17: Implement The `stock_cn` Market Module And Calendar
+### Task 17: Implement The `stockcn` Market Module And Calendar
 
 **Files:**
 - Create: `modules/collector/internal/markets/stockcn/module.go`
@@ -1072,7 +1072,7 @@ git commit -m "feat(collector): reconcile market coverage"
 - Create: `modules/collector/internal/markets/stockcn/coverage.go`
 - Modify: `modules/collector/internal/builtin/catalog.go`
 - Modify: `modules/collector/internal/builtin/catalog_test.go`
-- Create: `modules/collector/config/markets/stock_cn/calendar.yaml`
+- Create: `modules/collector/config/markets/stockcn/calendar.yaml`
 - Create: `docs/collector/calendar-maintenance.md`
 
 - [ ] **Step 1: Define the calendar file contract.** Include source/provenance、license note、retrieved/version time、coverage start/end、timezone、regular sessions、closed dates and exceptional open dates. Fail closed outside the declared range so missing holiday data is never treated as a market gap.
@@ -1091,7 +1091,7 @@ go test -count=1 ./modules/collector/internal/markets/stockcn ./modules/collecto
 - [ ] **Step 9: Commit.**
 
 ```bash
-git add modules/collector/internal/markets/stockcn modules/collector/internal/builtin modules/collector/config/markets/stock_cn/calendar.yaml docs/collector/calendar-maintenance.md
+git add modules/collector/internal/markets/stockcn modules/collector/internal/builtin modules/collector/config/markets/stockcn/calendar.yaml docs/collector/calendar-maintenance.md
 git commit -m "feat(collector): add China stock market policies"
 ```
 
@@ -1111,8 +1111,8 @@ git commit -m "feat(collector): add China stock market policies"
 - Modify: `modules/collector/internal/builtin/catalog_test.go`
 - Modify: `modules/collector/go.mod`
 - Modify: `modules/collector/go.sum`
-- Modify: `modules/collector/config/markets/stock_cn/market.yaml`
-- Modify: `modules/collector/config/markets/stock_cn/provider-validation.yaml`
+- Modify: `modules/collector/config/markets/stockcn/market.yaml`
+- Modify: `modules/collector/config/markets/stockcn/provider-validation.yaml`
 
 - [ ] **Step 1: Add captured packet/response fixtures and parser tests first.** Cover server handshake、security-list page、bar page、market code、category mapping、GBK names、empty page and malformed packet.
 - [ ] **Step 2: Implement only the required TDX subset.** Support security list and K-line bars; do not implement snapshot、Tick、quotes or extended instruments.
@@ -1125,7 +1125,7 @@ git commit -m "feat(collector): add China stock market policies"
 MOOX_LIVE_PROVIDER_TEST=1 go test -count=1 ./modules/collector/internal/providers/tdx -run TestLive -v
 ```
 
-Record CN-1/CN-2 evidence in `provider-validation.yaml`; never commit endpoint credentials. Enable TDX only when CN-2 passes. If it fails, commit the tested Provider as disabled and keep `stock_cn` not ready unless another qualified Instrument Provider satisfies the capability matrix; the Worker alternative requires a separate approved plan.
+Record CN-1/CN-2 evidence in `provider-validation.yaml`; never commit endpoint credentials. Enable TDX only when CN-2 passes. If it fails, commit the tested Provider as disabled and keep `stockcn` not ready unless another qualified Instrument Provider satisfies the capability matrix; the Worker alternative requires a separate approved plan.
 - [ ] **Step 7: Register the TDX factory, tidy dependencies and run offline tests/contract suite.** The shared catalog must resolve it even when its capability remains disabled by CN-2.
 
 ```bash
@@ -1136,7 +1136,7 @@ go test -count=1 ./modules/collector/internal/providers/tdx ./modules/collector/
 - [ ] **Step 8: Commit with the validated enabled/disabled state.**
 
 ```bash
-git add modules/collector/internal/providers/tdx modules/collector/internal/builtin modules/collector/config/markets/stock_cn modules/collector/go.mod modules/collector/go.sum
+git add modules/collector/internal/providers/tdx modules/collector/internal/builtin modules/collector/config/markets/stockcn modules/collector/go.mod modules/collector/go.sum
 git commit -m "feat(collector): add TDX market provider"
 ```
 
@@ -1156,16 +1156,16 @@ git commit -m "feat(collector): add TDX market provider"
 - Create: `modules/collector/internal/pipeline/stockcn_integration_test.go`
 - Modify: `modules/collector/internal/builtin/catalog.go`
 - Modify: `modules/collector/internal/builtin/catalog_test.go`
-- Modify: `modules/collector/config/markets/stock_cn/market.yaml`
-- Modify: `modules/collector/config/markets/stock_cn/provider-validation.yaml`
+- Modify: `modules/collector/config/markets/stockcn/market.yaml`
+- Modify: `modules/collector/config/markets/stockcn/provider-validation.yaml`
 
 - [ ] **Step 1: Capture response fixtures from the endpoints analyzed in the legacy TuShare repository.** Record URL form、encoding、frequency、pagination、field order、empty/error response、adjustment parameter/default and observed limits. Include a split/dividend boundary sample proving `adjustment=none`; tests use fixtures and never require the internet.
-- [ ] **Step 2: Implement Tencent daily/weekly/monthly and supported minute K-line parsing.** Convert symbols through stock_cn SymbolPolicy and classify HTTP/parse/rate errors.
+- [ ] **Step 2: Implement Tencent daily/weekly/monthly and supported minute K-line parsing.** Convert symbols through stockcn SymbolPolicy and classify HTTP/parse/rate errors.
 - [ ] **Step 3: Implement iFeng daily and supported minute K-line parsing.** Do not claim a frequency until its live test and fixture both pass.
-- [ ] **Step 4: Update the readiness matrix from evidence, not old documentation alone.** Each `(instrument_type, frequency)` cell records its usable primary/fallback and Instrument-universe source; cells without validated coverage remain disabled. Set `stock_cn.runtime_enabled=true` only when CN-1 is green for at least one cell and an enabled complete Universe source exists; readiness remains per cell, never because two Providers passed an unrelated daily-equity probe.
+- [ ] **Step 4: Update the readiness matrix from evidence, not old documentation alone.** Each `(instrument_type, frequency)` cell records its usable primary/fallback and Instrument-universe source; cells without validated coverage remain disabled. Set `stockcn.runtime_enabled=true` only when CN-1 is green for at least one cell and an enabled complete Universe source exists; readiness remains per cell, never because two Providers passed an unrelated daily-equity probe.
 - [ ] **Step 5: Add multi-Provider integration tests for production planners.** Split a Subject set across Providers, fill a primary gap from the persisted next candidate, verify Task 13 creates and later runs a sample JobItem, produce `confirmed` agreement and one deterministic conflict event when tolerance is exceeded.
 - [ ] **Step 6: Prove all rows still follow source-first ordering and whole-row selection.** Simulate source write failure、unified failure and retry after a fallback result. An empty Provider response stays `unavailable` until Calendar/Universe evidence proves `no_trade`.
-- [ ] **Step 7: Register Tencent/iFeng factories and run offline/optional live tests.** The shared catalog test must construct each enabled candidate from the stock_cn manifest.
+- [ ] **Step 7: Register Tencent/iFeng factories and run offline/optional live tests.** The shared catalog test must construct each enabled candidate from the stockcn manifest.
 
 ```bash
 go test -count=1 ./modules/collector/internal/providers/tencent ./modules/collector/internal/providers/ifeng ./modules/collector/internal/pipeline ./modules/collector/internal/builtin -run 'Tencent|IFeng|StockCN|MultiProvider|Catalog' -v
@@ -1175,7 +1175,7 @@ MOOX_LIVE_PROVIDER_TEST=1 go test -count=1 ./modules/collector/internal/provider
 - [ ] **Step 8: Commit.**
 
 ```bash
-git add modules/collector/internal/providers/tencent modules/collector/internal/providers/ifeng modules/collector/internal/pipeline/stockcn_integration_test.go modules/collector/internal/builtin modules/collector/config/markets/stock_cn
+git add modules/collector/internal/providers/tencent modules/collector/internal/providers/ifeng modules/collector/internal/pipeline/stockcn_integration_test.go modules/collector/internal/builtin modules/collector/config/markets/stockcn
 git commit -m "feat(collector): aggregate China stock providers"
 ```
 
@@ -1213,26 +1213,26 @@ git add modules/collector/internal/providers/okx modules/collector/internal/mark
 git commit -m "feat(collector): add OKX market module"
 ```
 
-### Task 21: Complete US-1 Before Activating `stock_us`
+### Task 21: Complete US-1 Before Activating `stockus`
 
 **Files:**
 - Create: `docs/collector/stock-us-provider-qualification.md`
-- Modify: `modules/collector/config/markets/stock_us/provider-validation.yaml`
+- Modify: `modules/collector/config/markets/stockus/provider-validation.yaml`
 - Create: `docs/superpowers/plans/2026-07-11-stock-us-provider-addendum.md`
 
 - [ ] **Step 1: Run a written Provider qualification instead of choosing an unofficial API silently.** Evaluate at least two candidates for equity/ETF/index、daily/minute frequencies、historical depth、adjustment semantics、consolidated vs single-venue scope、license、credential storage、RPS/daily quota and SCF network access.
 - [ ] **Step 2: Record exact sample evidence and a go/no-go result.** The decision document must name the primary and fallback Provider IDs, official documentation, required credentials, data scope and unsupported cases. Tokens and response bodies containing account data stay out of Git.
 - [ ] **Step 3: Update validation evidence after a Provider passes US-1.** Record the chosen Provider capabilities、quotas、`feed_scope` and gate status in `provider-validation.yaml`; do not enable the runtime manifest in this task.
-- [ ] **Step 4: Write the provider-specific addendum at the exact path above.** The addendum must name every `market.yaml`、metadata seed、`internal/markets/stockus` and `internal/providers/<provider>` file to create or modify, plus exact API endpoints、fixtures、credential names、feed scope、volume/amount units、US/Eastern daily/minute anchors、DST cases、live probes、tests and activation commit. No `stock_us` Provider code may be written before that addendum is reviewed.
+- [ ] **Step 4: Write the provider-specific addendum at the exact path above.** The addendum must name every `market.yaml`、metadata seed、`internal/markets/stockus` and `internal/providers/<provider>` file to create or modify, plus exact API endpoints、fixtures、credential names、feed scope、volume/amount units、US/Eastern daily/minute anchors、DST cases、live probes、tests and activation commit. No `stockus` Provider code may be written before that addendum is reviewed.
 - [ ] **Step 5: Keep the module disabled.** Until the approved addendum has been executed, registry status is `not_ready`, Task planner publishes no US JobItems and `moox-cli init` remains safe to run.
 - [ ] **Step 6: Commit the qualification separately.**
 
 ```bash
-git add docs/collector/stock-us-provider-qualification.md docs/superpowers/plans/2026-07-11-stock-us-provider-addendum.md modules/collector/config/markets/stock_us/provider-validation.yaml
+git add docs/collector/stock-us-provider-qualification.md docs/superpowers/plans/2026-07-11-stock-us-provider-addendum.md modules/collector/config/markets/stockus/provider-validation.yaml
 git commit -m "docs(collector): qualify US market providers"
 ```
 
-This is an intentional hard gate, not an optional follow-up. The overall feature is not production-complete while `stock_us` remains `not_ready`.
+This is an intentional hard gate, not an optional follow-up. The overall feature is not production-complete while `stockus` remains `not_ready`.
 
 ## Phase Five: Product API, UI And Production Rollout
 
@@ -1312,13 +1312,13 @@ git commit -m "feat(collector): expose logical market workflows"
 - Modify: `modules/collector/cmd/cli/main.go`
 - Create: `modules/collector/cmd/cli/readiness_lock.go`
 - Create: `modules/collector/cmd/cli/readiness_lock_test.go`
-- Modify: `scripts/build-collector-scf-package.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/deploy-moox.sh`
+- Modify: `scripts/build/build-collector-scf-package.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
 - Modify: `modules/collector/internal/deploy/deploy_moox_test.go`
-- Create: `scripts/test-market-manifest-release.sh`
+- Create: `scripts/test/contract/test-market-manifest-release.sh`
 - Create: `scripts/verify-market-remote.sh`
-- Create: `scripts/test-verify-market-remote.sh`
+- Create: `scripts/test/contract/test-verify-market-remote.sh`
 - Modify: `modules/collector/README.md`
 - Modify: `docs/采集任务管理.md`
 - Modify: `docs/内置市场行情采集架构.md`
@@ -1327,13 +1327,13 @@ git commit -m "feat(collector): expose logical market workflows"
 - [ ] **Step 2: Use exact function identities and environments.**
 
 ```text
-moox-collector-stock-cn-scf        MOOX_SPACE_ID=stock_cn
-moox-collector-stock-us-scf        MOOX_SPACE_ID=stock_us
+moox-collector-stock-cn-scf        MOOX_SPACE_ID=stockcn
+moox-collector-stock-us-scf        MOOX_SPACE_ID=stockus
 moox-collector-crypto-binance-scf  MOOX_SPACE_ID=crypto_binance
 moox-collector-crypto-okx-scf      MOOX_SPACE_ID=crypto_okx
 ```
 
-Skip `stock_us` deployment while `runtime_enabled=false`; deploy its fourth function only after the reviewed US addendum has been executed and US-1 is green.
+Skip `stockus` deployment while `runtime_enabled=false`; deploy its fourth function only after the reviewed US addendum has been executed and US-1 is green.
 - [ ] **Step 3: Reconcile runtime configuration, not only code.** Existing functions must receive updated timeout、memory、environment and reserved concurrency when manifest settings change. Provider quota max concurrency cannot exceed SCF max concurrency.
 - [ ] **Step 4: Package only runtime inputs and a generated readiness lock.** Add `moox-collector-cli readiness-lock` so the build invokes the same compiled built-in catalog and writes `readiness.lock.json` with environment plus manifest/evidence/factory IDs and hashes. Put that file in both service release config and SCF zip; exclude raw seeds/evidence/secrets from SCF. Remote publish revalidates evidence, while active Collector and SCF reject lock/manifest/factory mismatches before planning or polling.
 - [ ] **Step 5: Add release/stage and V2 cutover assertions.** Release archives contain all logical manifests for `moox-cli init`; SCF zip contains runtime manifests plus generated readiness lock only. Deployment order is legacy preflight/drain -> backup `moox_collector.db` -> initialize fresh `moox_collector_market_v2.db` -> Storage ready -> Market init -> V2 CloudNode/Collector -> runtime-enabled functions. A failed step restores the old config/function state and never resets Storage.
@@ -1350,22 +1350,22 @@ set -euo pipefail
 (cd modules/collector && go test -count=1 ./...)
 (cd modules/factor && go test -count=1 ./...)
 (cd modules/trade && go test -count=1 ./...)
-./scripts/check-module-boundaries.sh
-bash scripts/test-market-manifest-release.sh
-bash scripts/test-verify-market-remote.sh
-for script in scripts/build-collector-scf-package.sh scripts/release.sh scripts/deploy-moox.sh scripts/test-market-manifest-release.sh scripts/verify-market-remote.sh scripts/test-verify-market-remote.sh; do bash -n "$script"; done
+./scripts/check/check-module-boundaries.sh
+bash scripts/test/contract/test-market-manifest-release.sh
+bash scripts/test/contract/test-verify-market-remote.sh
+for script in scripts/build/build-collector-scf-package.sh scripts/release/release.sh scripts/deploy/deploy-moox.sh scripts/test/contract/test-market-manifest-release.sh scripts/verify-market-remote.sh scripts/test/contract/test-verify-market-remote.sh; do bash -n "$script"; done
 pnpm --dir web build:prod
-./scripts/build.sh collector
-./scripts/build.sh collector-scf
-./scripts/build.sh cli
+./scripts/build/build.sh collector
+./scripts/build/build.sh collector-scf
+./scripts/build/build.sh cli
 ```
 
 - [ ] **Step 8: Set executable bits and inspect the SCF package.**
 
 ```bash
 set -euo pipefail
-chmod +x scripts/test-market-manifest-release.sh scripts/verify-market-remote.sh scripts/test-verify-market-remote.sh
-MOOX_MARKET_ENVIRONMENT=development OUT_PATH=/tmp/moox-collector-market.zip VERSION=plan ./scripts/build-collector-scf-package.sh
+chmod +x scripts/test/contract/test-market-manifest-release.sh scripts/verify-market-remote.sh scripts/test/contract/test-verify-market-remote.sh
+MOOX_MARKET_ENVIRONMENT=development OUT_PATH=/tmp/moox-collector-market.zip VERSION=plan ./scripts/build/build-collector-scf-package.sh
 unzip -Z1 /tmp/moox-collector-market.zip | sort
 test "$(unzip -Z1 /tmp/moox-collector-market.zip | grep -c '^main$')" -eq 1
 test "$(unzip -Z1 /tmp/moox-collector-market.zip | grep -c 'readiness\.lock\.json$')" -eq 1
@@ -1378,7 +1378,7 @@ test "$(unzip -Z1 /tmp/moox-collector-market.zip | grep -c 'readiness\.lock\.jso
 set -euo pipefail
 : "${MOOX_DEV_SSH_TARGET:?set user@host or an SSH config alias}"
 export MOOX_DEPLOY_DIR="${MOOX_DEPLOY_DIR:-/home/ubuntu/moox/prod}"
-MOOX_COLLECTOR_MARKET_V2_CUTOVER=1 ./scripts/deploy-moox.sh --target "${MOOX_DEV_SSH_TARGET}" --dir "${MOOX_DEPLOY_DIR}" --goos linux --goarch amd64
+MOOX_COLLECTOR_MARKET_V2_CUTOVER=1 ./scripts/deploy/deploy-moox.sh --target "${MOOX_DEV_SSH_TARGET}" --dir "${MOOX_DEPLOY_DIR}" --goos linux --goarch amd64
 scp /tmp/moox-collector-market.zip "${MOOX_DEV_SSH_TARGET}:${MOOX_DEPLOY_DIR}/collector/moox-collector-market.zip"
 ```
 
@@ -1442,7 +1442,7 @@ git commit -m "feat(collector): deploy built-in market functions"
 - [x] Every first-stage requirement in the design maps to at least one task.
 - [x] No Task asks a Provider to import Storage or control-plane packages.
 - [x] All Provider/API-dependent claims have an explicit live-validation gate and offline fixture test.
-- [x] `stock_us` is not presented as ready before US-1 and its provider-specific addendum.
+- [x] `stockus` is not presented as ready before US-1 and its provider-specific addendum.
 - [x] Storage REPLACE and batch Subject registration land before Instrument Feed and multi-Provider writes.
 - [x] Universe/Calendar fetch、policy materialization and resolve phases have stable generations and monotonic fencing.
 - [x] Rule-to-task binding aggregates multiple schedules/history windows without overwriting one logical TaskInstance.
@@ -1456,6 +1456,6 @@ git commit -m "feat(collector): deploy built-in market functions"
 
 ## Execution Order
 
-Execute Tasks 1-15 in order to establish the generic framework and `crypto_binance` vertical slice. Tasks 16-20 may proceed only after their preceding generic contracts pass; real Provider commits require their validation gate. Task 21 is a hard stop for `stock_us`, not permission to invent an API. Complete Tasks 22-23 only after at least `crypto_binance` and `stock_cn` pass end-to-end tests.
+Execute Tasks 1-15 in order to establish the generic framework and `crypto_binance` vertical slice. Tasks 16-20 may proceed only after their preceding generic contracts pass; real Provider commits require their validation gate. Task 21 is a hard stop for `stockus`, not permission to invent an API. Complete Tasks 22-23 only after at least `crypto_binance` and `stockcn` pass end-to-end tests.
 
-Do not combine all tasks into one commit. After every milestone, run `git diff --check`, the milestone's fresh tests and `./scripts/check-module-boundaries.sh`, then request code review before starting the next milestone.
+Do not combine all tasks into one commit. After every milestone, run `git diff --check`, the milestone's fresh tests and `./scripts/check/check-module-boundaries.sh`, then request code review before starting the next milestone.

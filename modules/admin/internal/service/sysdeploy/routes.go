@@ -7,14 +7,19 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type routeExtraConfig struct {
 	TimeoutMS      *int64   `json:"timeout_ms"`
 	MaxBodyBytes   *int64   `json:"max_body_bytes"`
+	GatewayURL     string   `json:"gateway_url"`
+	GatewayNode    string   `json:"gateway_node"`
 	GatewayMethods []string `json:"gateway_methods"`
 	GatewayCallers []string `json:"gateway_callers"`
 	GatewayRoutes  []struct {
@@ -50,6 +55,17 @@ func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return gatewayproxy.Snapshot{}, fmt.Errorf("%w: %w", gatewayproxy.ErrGatewayNodeNotFound, err)
 	}
+	if err == nil {
+		// Keep operator-facing route bookkeeping outside the read transaction.
+		// A concurrent writer can otherwise turn an otherwise valid snapshot
+		// into SQLITE_BUSY_SNAPSHOT while the Gateway is pulling routes.
+		bookkeepingCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		updateErr := updateGatewayNodeRouteBookkeeping(bookkeepingCtx, d.db, nodeID, snapshot)
+		cancel()
+		if updateErr != nil {
+			log.WarnContextf(ctx, "record gateway route snapshot status failed node_id=%s: %v", nodeID, updateErr)
+		}
+	}
 	return snapshot, err
 }
 
@@ -80,10 +96,35 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 	if err != nil {
 		return gatewayproxy.Snapshot{}, &RouteConfigError{Err: err}
 	}
-	if err := d.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Updates(map[string]interface{}{"c_route_hash": snapshot.RouteHash, "c_route_count": len(snapshot.Routes)}).Error; err != nil {
-		return gatewayproxy.Snapshot{}, err
-	}
 	return snapshot, nil
+}
+
+func updateGatewayNodeRouteBookkeeping(ctx context.Context, db *gorm.DB, nodeID string, snapshot gatewayproxy.Snapshot) error {
+	values := map[string]interface{}{"c_route_hash": snapshot.RouteHash, "c_route_count": len(snapshot.Routes)}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		lastErr = db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Updates(values).Error
+		if lastErr == nil || !isSQLiteLockError(lastErr) || attempt == 2 {
+			return lastErr
+		}
+		wait := time.Duration(50*(1<<attempt)) * time.Millisecond
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
+func isSQLiteLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") || strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database table is locked")
 }
 
 func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayproxy.Route, error) {
@@ -93,6 +134,17 @@ func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayp
 		basePort = 20100
 	case "storage-view":
 		basePort = 20103
+	case "factormgr":
+		basePort = 11403
+	case "strategymgr":
+		// Strategy keeps its browser-facing HTTP listener on 11433, while the
+		// native service gateway must speak tRPC to the dedicated 11430 listener.
+		// Deployment.Port remains the HTTP endpoint used by the Admin BFF.
+		basePort = 11430
+	case "collector-market-runtime":
+		// The deployment HTTP endpoint is reachable only by local clients. The
+		// native service gateway must speak tRPC to the dedicated loopback port.
+		basePort = 11422
 	}
 	base := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
 	if extra.TimeoutMS != nil {
@@ -146,6 +198,16 @@ func parseRouteExtraConfig(raw string) (routeExtraConfig, error) {
 	if value, ok := object["gateway_methods"]; ok {
 		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayMethods) != nil {
 			return extra, fmt.Errorf("gateway_methods must be an array of strings")
+		}
+	}
+	if value, ok := object["gateway_url"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayURL) != nil {
+			return extra, fmt.Errorf("gateway_url must be a string")
+		}
+	}
+	if value, ok := object["gateway_node"]; ok {
+		if string(value) == "null" || json.Unmarshal(value, &extra.GatewayNode) != nil {
+			return extra, fmt.Errorf("gateway_node must be a string")
 		}
 	}
 	if value, ok := object["gateway_callers"]; ok {

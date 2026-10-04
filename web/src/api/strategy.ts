@@ -1,21 +1,54 @@
 import { callControl } from "@/api/admin/http";
 import type {
+  InstrumentTarget,
   PageRequest,
   PageResponse,
-  PerformanceSource,
-  RunningStrategySummary,
-  StrategyHealth,
-  StrategyOverview,
-  StrategyPerformance,
-  StrategyRun,
-  TargetWeight
+  Strategy,
+  StrategyInstance,
+  StrategyResult,
+  StrategyTargetSnapshot
 } from "./strategy-types";
 
-export interface RunningStrategyFilter extends PageRequest {
-  space_id?: string;
-  status?: string;
-  mode?: string;
-  strategy_id?: string;
+function normalizeStrategy(value: any): Strategy {
+  return {
+    strategy_id: value?.strategy_id ?? "",
+    name: value?.strategy_name ?? value?.name ?? "",
+    dsl_yaml: value?.dsl_yaml ?? "",
+    created_at: value?.created_at ?? ""
+  };
+}
+
+function normalizeInstance(value: any): StrategyInstance {
+  return {
+    instance_id: value?.instance_id ?? "",
+    strategy_id: value?.strategy_id ?? "",
+    space_id: value?.space_id ?? "",
+    input_bindings_json: value?.input_bindings_json ?? "{}",
+    logical_account_id: value?.logical_account_id ?? "",
+    enabled: Boolean(value?.enabled),
+    session_id: value?.session_id ?? "",
+    created_at: value?.created_at ?? "",
+    updated_at: value?.updated_at ?? ""
+  };
+}
+
+function normalizeTarget(value: any): InstrumentTarget {
+  return { instrument_id: value?.instrument_id ?? "", target_weight: value?.target_weight ?? "0" };
+}
+
+function normalizeResult(value: any): StrategyResult {
+  return {
+    result_id: value?.result_id ?? "",
+    instance_id: value?.instance_id ?? "",
+    session_id: value?.session_id ?? "",
+    bar_end_time: value?.period_time ?? value?.bar_end_time ?? "",
+    period_time: value?.period_time ?? value?.bar_end_time ?? "",
+    valid_until: value?.valid_until ?? "",
+    targets: (value?.targets ?? []).map(normalizeTarget),
+    rule_states_json: value?.rule_states_json ?? "",
+    publish_status: value?.publish_status ?? "",
+    created_at: value?.created_at ?? ""
+  };
 }
 
 export interface PageResult<T> {
@@ -23,94 +56,136 @@ export interface PageResult<T> {
   page: PageResponse;
 }
 
-export interface StrategyCapabilities {
-  live_execution_enabled: boolean;
+function pageRequest(params: PageRequest): Required<PageRequest> {
+  return { page: params.page ?? 1, page_size: params.page_size ?? 20 };
 }
 
-export async function getStrategyCapabilities(): Promise<StrategyCapabilities> {
-  const rsp = await callControl<Record<string, never>, { live_execution_enabled?: boolean }>("strategy", "GetEngineStatus", {});
-  return { live_execution_enabled: rsp.live_execution_enabled === true };
+function ensureResponse<T extends Record<string, any>>(response: T): T {
+  const code = response?.ret_info?.code;
+  if (code !== undefined && code !== 0 && code !== "0" && code !== "SUCCESS") {
+    throw new Error(response.ret_info?.msg || `策略服务返回错误: ${String(code)}`);
+  }
+  return response;
 }
 
-export function normalizePerformance(input: { groups?: StrategyPerformance[] } | StrategyPerformance): {
-  groups: StrategyPerformance[];
-} {
-  return "groups" in input && Array.isArray(input.groups) ? { groups: input.groups } : { groups: [input as StrategyPerformance] };
-}
-
-export async function listRunningStrategies(params: RunningStrategyFilter = {}): Promise<PageResult<RunningStrategySummary>> {
-  const rsp = await callControl<
-    { page: PageRequest; space_id?: string; status?: string; mode?: string; strategy_id?: string },
-    { items?: RunningStrategySummary[]; total?: number; page?: number; page_size?: number }
-  >("strategy", "ListRunningStrategies", {
-    page: { page: params.page ?? 1, page_size: params.page_size ?? 20 },
-    space_id: params.space_id,
-    status: params.status,
-    mode: params.mode,
-    strategy_id: params.strategy_id
+export function createStrategy(strategy: Pick<Strategy, "strategy_id" | "dsl_yaml">) {
+  return callControl<{ strategy: Pick<Strategy, "strategy_id" | "dsl_yaml"> }, { strategy: Strategy }>("strategy", "CreateStrategy", {
+    strategy
+  }).then((response) => {
+    ensureResponse(response);
+    return { ...response, strategy: normalizeStrategy(response.strategy) };
   });
-  return { items: rsp.items ?? [], page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size } };
 }
 
-export async function getStrategyOverview(binding_id: string): Promise<StrategyOverview> {
-  return callControl("strategy", "GetStrategyOverview", { binding_id });
-}
-
-export async function listStrategyRuns(
-  binding_id: string,
-  params: PageRequest & { from?: string; to?: string } = {}
-): Promise<PageResult<StrategyRun>> {
-  const rsp = await callControl<
-    { binding_id: string; page: PageRequest; range: { from: string; to: string } },
-    { items?: StrategyRun[]; total?: number; page?: number; page_size?: number }
-  >("strategy", "ListStrategyRuns", {
-    binding_id,
-    page: { page: params.page ?? 1, page_size: params.page_size ?? 20 },
-    range: { from: params.from ?? "", to: params.to ?? "" }
+export function updateStrategy(strategy_id: string, dsl_yaml: string) {
+  return callControl<{ strategy_id: string; dsl_yaml: string }, { strategy: Strategy }>("strategy", "UpdateStrategy", {
+    strategy_id,
+    dsl_yaml
+  }).then((response) => {
+    ensureResponse(response);
+    return { ...response, strategy: normalizeStrategy(response.strategy) };
   });
-  return { items: rsp.items ?? [], page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size } };
 }
 
-export async function listStrategyTargets(run_id: string, params: PageRequest = {}): Promise<PageResult<TargetWeight>> {
-  const rsp = await callControl<
-    { run_id: string; page: PageRequest },
-    { targets?: TargetWeight[]; total?: number; page?: number; page_size?: number }
-  >("strategy", "ListStrategyTargets", { run_id, page: { page: params.page ?? 1, page_size: params.page_size ?? 100 } });
-  return { items: rsp.targets ?? [], page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size } };
-}
-
-export async function getStrategyHealth(binding_id: string): Promise<StrategyHealth> {
-  const rsp = await callControl<{ binding_id: string }, { health?: StrategyHealth }>("strategy", "GetStrategyHealth", {
-    binding_id
+export function getStrategy(strategy_id: string) {
+  return callControl<{ strategy_id: string }, { strategy: Strategy }>("strategy", "GetStrategy", { strategy_id }).then((response) => {
+    ensureResponse(response);
+    return { ...response, strategy: normalizeStrategy(response.strategy) };
   });
-  return rsp.health ?? { status: "unknown", mode: "observe" };
 }
 
-export async function getStrategyPerformance(
-  binding_id: string,
-  source: PerformanceSource,
-  params: { from?: string; to?: string; interval?: string } = {}
-): Promise<StrategyPerformance> {
-  const rsp = await callControl<
-    { binding_id: string; performance_source: PerformanceSource; interval: string; range: { from: string; to: string } },
-    StrategyPerformance
-  >("strategy", "GetStrategyPerformance", {
-    binding_id,
-    performance_source: source,
-    interval: params.interval ?? "auto",
-    range: { from: params.from ?? "", to: params.to ?? "" }
+export async function listStrategies(params: PageRequest = {}): Promise<PageResult<Strategy>> {
+  const response = await callControl<
+    { page: Required<PageRequest> },
+    { strategies?: Strategy[]; total?: number; page?: number; page_size?: number }
+  >("strategy", "ListStrategies", { page: pageRequest(params) });
+  ensureResponse(response);
+  return {
+    items: (response.strategies ?? []).map(normalizeStrategy),
+    page: { total: response.total ?? 0, page: response.page, page_size: response.page_size }
+  };
+}
+
+export function createInstance(instance: Pick<StrategyInstance, "instance_id" | "strategy_id" | "space_id" | "input_bindings_json" | "logical_account_id">) {
+  return callControl<{ instance: Pick<StrategyInstance, "instance_id" | "strategy_id" | "space_id" | "input_bindings_json" | "logical_account_id"> & { enabled: false } }, { instance: StrategyInstance }>(
+    "strategy",
+    "CreateStrategyInstance",
+    { instance: { ...instance, enabled: false } }
+  ).then((response) => {
+    ensureResponse(response);
+    return { ...response, instance: normalizeInstance(response.instance) };
   });
-  return { ...rsp, performance_source: rsp.performance_source || source, points: rsp.points || [] };
 }
 
-export async function pauseBinding(binding_id: string, reason: string, operation_id: string) {
-  return callControl("strategy", "PauseBinding", { binding_id, reason, operation_id });
+export function getInstance(instance_id: string) {
+  return callControl<{ instance_id: string }, { instance: StrategyInstance }>("strategy", "GetStrategyInstance", { instance_id }).then((response) => {
+    ensureResponse(response);
+    return { ...response, instance: normalizeInstance(response.instance) };
+  });
 }
 
-export async function resumeBinding(binding_id: string, reason: string, operation_id: string) {
-  return callControl("strategy", "ResumeBinding", { binding_id, reason, operation_id });
+export async function listInstances(params: PageRequest & { strategy_id?: string; space_id?: string; enabled?: boolean } = {}): Promise<PageResult<StrategyInstance>> {
+  const response = await callControl<
+    { page: Required<PageRequest>; strategy_id?: string; space_id?: string; enabled?: boolean },
+    { instances?: StrategyInstance[]; total?: number; page?: number; page_size?: number }
+  >("strategy", "ListStrategyInstances", {
+    page: pageRequest(params),
+    strategy_id: params.strategy_id || undefined,
+    space_id: params.space_id || undefined,
+    enabled: params.enabled
+  });
+  ensureResponse(response);
+  return {
+    items: (response.instances ?? []).map(normalizeInstance),
+    page: { total: response.total ?? 0, page: response.page, page_size: response.page_size }
+  };
 }
 
-export async function setExecutionMode(binding_id: string, mode: string, reason: string, operation_id: string) {
-  return callControl("strategy", "SetExecutionMode", { binding_id, mode, reason, operation_id });
+export function setInstanceEnabled(instance_id: string, enabled: boolean) {
+  return callControl<{ instance_id: string; enabled: boolean }, { instance: StrategyInstance }>("strategy", "SetStrategyInstanceEnabled", {
+    instance_id,
+    enabled
+  }).then((response) => {
+    ensureResponse(response);
+    return { ...response, instance: normalizeInstance(response.instance) };
+  });
+}
+
+export async function listStrategyResults(instance_id: string, params: PageRequest & { session_id?: string } = {}): Promise<PageResult<StrategyResult>> {
+  const response = await callControl<
+    { instance_id: string; session_id?: string; page: Required<PageRequest> },
+    { results?: StrategyResult[]; total?: number; page?: number; page_size?: number }
+  >("strategy", "ListStrategyResults", {
+    instance_id,
+    session_id: params.session_id || undefined,
+    page: pageRequest(params)
+  });
+  ensureResponse(response);
+  return {
+    items: (response.results ?? []).map(normalizeResult),
+    page: { total: response.total ?? 0, page: response.page, page_size: response.page_size }
+  };
+}
+
+export function getStrategyResult(result_id: string) {
+  return callControl<{ result_id: string }, { result: StrategyResult }>("strategy", "GetStrategyResult", { result_id }).then((response) => {
+    ensureResponse(response);
+    return { ...response, result: normalizeResult(response.result) };
+  });
+}
+
+export function listStrategyTargets(instance_id: string): Promise<StrategyTargetSnapshot> {
+  return callControl<{ instance_id: string }, { targets?: InstrumentTarget[]; session_id?: string; bar_end_time?: string; valid_until?: string }>(
+    "strategy",
+    "ListStrategyTargets",
+    { instance_id }
+  ).then((response) => {
+    ensureResponse(response);
+    return {
+      targets: (response.targets ?? []).map(normalizeTarget),
+      session_id: response.session_id ?? "",
+      bar_end_time: response.bar_end_time ?? "",
+      valid_until: response.valid_until ?? ""
+    };
+  });
 }

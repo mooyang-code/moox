@@ -41,3 +41,30 @@ func TestAdminAuthCacheCleanupTimerConfig(t *testing.T) {
 	}
 	t.Fatalf("timer service %q not found", authCacheCleanupTimerService)
 }
+
+func TestAdminCertificateWatchTimerConfig(t *testing.T) {
+	raw, err := os.ReadFile("../../config/trpc_go.yaml")
+	require.NoError(t, err)
+	var cfg struct {
+		Server struct {
+			Service []struct {
+				Name     string `yaml:"name"`
+				Port     int    `yaml:"port"`
+				Network  string `yaml:"network"`
+				Protocol string `yaml:"protocol"`
+				Timeout  int    `yaml:"timeout"`
+			} `yaml:"service"`
+		} `yaml:"server"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &cfg))
+	for _, service := range cfg.Server.Service {
+		if service.Name == certificateWatchTimerService {
+			assert.Equal(t, 11307, service.Port)
+			assert.Equal(t, "0 0 0 * * *", service.Network)
+			assert.Equal(t, "timer", service.Protocol)
+			assert.Equal(t, 10000, service.Timeout)
+			return
+		}
+	}
+	t.Fatalf("timer service %q not found", certificateWatchTimerService)
+}

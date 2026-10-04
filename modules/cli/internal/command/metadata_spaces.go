@@ -1,8 +1,12 @@
 package command
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+
+	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 )
 
 type metadataSpaceChoice struct {
@@ -14,17 +18,49 @@ type metadataSpaceChoice struct {
 func metadataSpaceCatalog(seed metadataSeed) []metadataSpaceChoice {
 	choices := make([]metadataSpaceChoice, 0, len(seed.Spaces))
 	for _, item := range seed.Spaces {
+		if item.Attributes["scope"] == "internal" {
+			continue
+		}
 		choices = append(choices, metadataSpaceChoice{SpaceID: item.SpaceID, Name: item.Name, Description: item.Description})
 	}
 	return choices
 }
 
-func metadataSeedSpaceIDs(seed metadataSeed) []string {
-	ids := make([]string, 0, len(seed.Spaces))
+func businessSetupSpaces(seed metadataSeed) ([]setupclient.Space, error) {
+	spaces := make([]setupclient.Space, 0, len(seed.Spaces))
+	seen := make(map[string]struct{}, len(seed.Spaces))
 	for _, item := range seed.Spaces {
-		ids = append(ids, item.SpaceID)
+		spaceID := strings.TrimSpace(item.SpaceID)
+		if spaceID == "" {
+			return nil, fmt.Errorf("metadata space_id is required")
+		}
+		if _, ok := seen[spaceID]; ok {
+			return nil, fmt.Errorf("duplicate metadata space %q", spaceID)
+		}
+		seen[spaceID] = struct{}{}
+		if item.Attributes["scope"] == "internal" {
+			continue
+		}
+		if strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.Market) == "" || strings.TrimSpace(item.Timezone) == "" {
+			return nil, fmt.Errorf("metadata space %q requires name, market, and timezone", spaceID)
+		}
+		attributes := item.Attributes
+		if attributes == nil {
+			attributes = map[string]string{}
+		}
+		attributesJSON, err := json.Marshal(attributes)
+		if err != nil {
+			return nil, fmt.Errorf("encode metadata space %q attributes: %w", spaceID, err)
+		}
+		spaces = append(spaces, setupclient.Space{
+			SpaceID: spaceID, Name: strings.TrimSpace(item.Name),
+			Description: strings.TrimSpace(item.Description), Owner: strings.TrimSpace(item.Owner),
+			Market: strings.TrimSpace(item.Market), Timezone: strings.TrimSpace(item.Timezone),
+			Status: item.status(), AttributesJSON: string(attributesJSON),
+		})
 	}
-	return ids
+	sort.Slice(spaces, func(i, j int) bool { return spaces[i].SpaceID < spaces[j].SpaceID })
+	return spaces, nil
 }
 
 func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, error) {
@@ -51,7 +87,7 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 		selected[spaceID] = struct{}{}
 	}
 	keep := func(spaceID string) bool { _, ok := selected[spaceID]; return ok }
-	out := metadataSeed{PrimaryStoreNodes: seed.PrimaryStoreNodes, Devices: seed.Devices}
+	out := metadataSeed{Devices: seed.Devices}
 	for _, item := range seed.Spaces {
 		if keep(item.SpaceID) {
 			out.Spaces = append(out.Spaces, item)
@@ -67,19 +103,14 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 			out.Subjects = append(out.Subjects, item)
 		}
 	}
-	for _, item := range seed.SubjectSymbols {
+	for _, item := range seed.Tags {
 		if keep(item.SpaceID) {
-			out.SubjectSymbols = append(out.SubjectSymbols, item)
+			out.Tags = append(out.Tags, item)
 		}
 	}
 	for _, item := range seed.Datasets {
 		if keep(item.SpaceID) {
 			out.Datasets = append(out.Datasets, item)
-		}
-	}
-	for _, item := range seed.DatasetSubjects {
-		if keep(item.SpaceID) {
-			out.DatasetSubjects = append(out.DatasetSubjects, item)
 		}
 	}
 	for _, item := range seed.FieldGroups {
@@ -90,11 +121,6 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 	for _, item := range seed.Fields {
 		if keep(item.SpaceID) {
 			out.Fields = append(out.Fields, item)
-		}
-	}
-	for _, item := range seed.Factors {
-		if keep(item.SpaceID) {
-			out.Factors = append(out.Factors, item)
 		}
 	}
 	for _, item := range seed.DatasetColumns {
@@ -110,11 +136,6 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 	for _, item := range seed.ViewColumns {
 		if keep(item.SpaceID) {
 			out.ViewColumns = append(out.ViewColumns, item)
-		}
-	}
-	for _, item := range seed.PrimaryStoreRoutes {
-		if keep(item.SpaceID) {
-			out.PrimaryStoreRoutes = append(out.PrimaryStoreRoutes, item)
 		}
 	}
 	return out, nil

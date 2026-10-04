@@ -11,6 +11,7 @@
 * [节点服务网关架构](节点服务网关架构.md)
 * [大仓架构](大仓架构.md)
 * [协议设计](协议设计.md)
+* [元数据命名规范](元数据命名规范.md)
 
 ## 第二部分：存储引擎
 
@@ -23,6 +24,7 @@
 
 ## 第三部分：管理服务
 
+* [系统初始化](setup.md)
 * [认证鉴权](认证鉴权.md)
 * [数据库管理](数据库管理.md)
 * [云节点管理](云节点管理.md)
@@ -33,10 +35,13 @@
 * [行情数据归档模块设计](行情数据归档模块设计.md)
 * [主机监控架构设计](主机监控架构设计.md)
 * [监控配置](监控配置.md)
+* [SCF 短时行情采集架构](architecture/scf-short-lived-market-fetch.md)
+* [SCF 定时触发行情采集执行计划](superpowers/plans/2026-08-04-scf-timer-market-fetch.md)
 
 ## 运维
 
 * [管理台 HTTPS 与证书](运维/管理台HTTPS与证书.md)
+* [SCF 与 Storage 分地域网络部署](运维/SCF与Storage分地域网络部署.md)
 * [Node Gateway 运维手册](ops/node-gateway.md)
 * [MooX EventBus 运维](运维/MooX-EventBus运维.md)
 * [MooX 指标监控](运维/MooX指标监控.md)
@@ -49,9 +54,12 @@
 * [Python 计算运行时架构设计](Python计算运行时架构设计.md)
 * [Python 运行时详细执行计划](superpowers/plans/2026-07-11-python-runtime.md)
 * [因子计算模块设计](因子计算模块设计.md)
-* [因子计算模块修改执行计划](superpowers/plans/2026-07-11-factor-runtime-refactor.md)
-* [Strategy 交易策略模块架构设计](策略模块架构设计.md)
-* [Strategy Python 策略接入手册](策略模块Python策略接入手册.md)
+* [因子数据集周期流水线设计](superpowers/specs/2026-10-04-factor-dataset-period-pipeline-design.md)
+* [因子数据集周期流水线执行计划](superpowers/plans/2026-10-04-factor-dataset-period-pipeline.md)
+* [Strategy 策略模块架构设计](策略模块架构设计.md)
+* [MooX 策略执行框架设计](策略执行框架设计.md)
+* [Strategy Python 策略接入手册（V1 历史参考）](策略模块Python策略接入手册.md)
+* [MooX 策略执行框架实施计划](superpowers/plans/2026-08-29-moox-coin-selection-strategy.md)
 * [策略前端管理台设计](策略前端管理台设计.md)
 * [策略前端管理台执行计划](superpowers/plans/2026-07-11-strategy-frontend-console.md)
 * [Strategy 交易策略模块执行计划](superpowers/plans/2026-07-11-strategy-module.md)

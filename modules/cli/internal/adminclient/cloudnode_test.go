@@ -3,6 +3,7 @@ package adminclient
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,83 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
+	var pages []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudnode/GetNodeList", r.URL.Path)
+		var body struct {
+			CloudAccountID string `json:"cloud_account_id"`
+			Region         string `json:"region"`
+			NodeType       string `json:"node_type"`
+			Page           struct {
+				Page int `json:"page"`
+				Size int `json:"size"`
+			} `json:"page"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "account-a", body.CloudAccountID)
+		assert.Equal(t, "ap-guangzhou", body.Region)
+		assert.Equal(t, "scf-event", body.NodeType)
+		pages = append(pages, body.Page.Page)
+		index := body.Page.Page - 1
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"items": []map[string]any{{
+				"node_id":    fmt.Sprintf("fleet-%d", index),
+				"package_id": "pkg-old",
+				"metadata":   map[string]any{"function_name_prefix": "fleet", "index": index},
+			}},
+			"page": map[string]any{
+				"page":     body.Page.Page,
+				"size":     1,
+				"total":    2,
+				"has_more": body.Page.Page == 1,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := New(server.URL)
+	nodes, err := client.ListCloudNodes(context.Background(), CloudNodeListFilter{
+		CloudAccountID: "account-a",
+		Region:         "ap-guangzhou",
+		NodeType:       "scf-event",
+	})
+	require.NoError(t, err)
+	require.Len(t, nodes, 2)
+	assert.Equal(t, []int{1, 2}, pages)
+	assert.Equal(t, "fleet-1", nodes[1].NodeID)
+	assert.Equal(t, float64(1), nodes[1].Metadata["index"])
+}
+
+func TestListCloudNodesPassesScopedTimerReadbackFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "account-a", body["cloud_account_id"])
+		assert.Equal(t, "ap-singapore", body["region"])
+		assert.Equal(t, "default", body["namespace"])
+		assert.Equal(t, "timer-1", body["node_id"])
+		assert.Equal(t, "scf-event", body["node_type"])
+		assert.Equal(t, "timer", body["trigger_type"])
+		assert.Empty(t, body["biz_type"])
+		assert.Equal(t, float64(4), body["page"].(map[string]any)["size"])
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL).ListCloudNodes(context.Background(), CloudNodeListFilter{
+		CloudAccountID: "account-a",
+		Namespace:      "default",
+		Region:         "ap-singapore",
+		NodeID:         "timer-1",
+		NodeType:       "scf-event",
+		TriggerType:    "timer",
+		PageSize:       4,
+	})
+	require.NoError(t, err)
+}
 
 func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -25,39 +103,136 @@ func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 	assert.Equal(t, "a1", accounts[0].AccountID)
 }
 
+func TestCreateCloudAccount_RegistersRegionLocalBucket(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudnode/CreateCloudAccount", r.URL.Path)
+		var body struct {
+			Account CloudAccountInput `json:"account"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "tencent-scf-singapore", body.Account.AccountID)
+		assert.Equal(t, "ap-singapore", body.Account.COSRegion)
+		assert.Equal(t, "moox-scf-singapore-1255382561", body.Account.COSBucket)
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"account":{"account_id":"tencent-scf-singapore","cos_region":"ap-singapore","cos_bucket":"moox-scf-singapore-1255382561"}}`))
+	}))
+	defer server.Close()
+
+	account, err := New(server.URL).CreateCloudAccount(context.Background(), CloudAccountInput{
+		AccountID: "tencent-scf-singapore", AccountName: "Tencent SCF Singapore", Provider: "tencent",
+		CredentialSecretID: "tencent-default", AppID: "1255382561", COSRegion: "ap-singapore", COSBucket: "moox-scf-singapore-1255382561",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tencent-scf-singapore", account.AccountID)
+}
+
+func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		switch r.URL.Path {
+		case "/api/admin/collectmgr/GetTaskDetail":
+			assert.Equal(t, "stockcn", body["space_id"])
+			assert.Equal(t, "d5v5n3p8r7c9m2k4j6h1", body["task_id"])
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task":{"space_id":"stockcn","task_id":"d5v5n3p8r7c9m2k4j6h1","task_name":"A 股 K 线 1m","data_type":"kline","tag_ids":["cn_a_share"],"enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"dataset_d5v5n3p8r7c9m2k4j6h1"}}}`))
+		case "/api/admin/collectmgr/UpdateTask":
+			task, ok := body["task"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, true, task["enabled"])
+			assert.Equal(t, "dataset_d5v5n3p8r7c9m2k4j6h1", task["collect_params"].(map[string]any)["target_dataset_id"])
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	require.NoError(t, New(server.URL).EnableCollectionTask(context.Background(), "stockcn", "d5v5n3p8r7c9m2k4j6h1"))
+}
+
+func TestCreateTaskStartsDisabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/collectmgr/CreateTask", r.URL.Path)
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		task, ok := body["task"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "stockcn", task["space_id"])
+		assert.NotContains(t, task, "task_id")
+		assert.Equal(t, "A 股 K 线 1m", task["task_name"])
+		assert.Equal(t, false, task["enabled"])
+		assert.Equal(t, []any{"cn_a_share"}, task["tag_ids"])
+		assert.Equal(t, "1m", task["collect_params"].(map[string]any)["frequency"])
+		assert.NotContains(t, task["collect_params"], "target_dataset_id")
+		resultConfig, ok := body["result_config"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "node-1", resultConfig["data_node_id"])
+		assert.Equal(t, "30d", resultConfig["keep_duration"])
+		assert.Equal(t, "A 股 K 线结果", resultConfig["description"])
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"task_id":"d5v5n3p8r7c9m2k4j6h1"}`))
+	}))
+	defer server.Close()
+
+	taskID, err := New(server.URL).CreateTask(context.Background(), "stockcn", "A 股 K 线 1m", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+		"frequency": "1m",
+	}, &ResultConfig{DataNodeID: "node-1", KeepDuration: "30d", Description: "A 股 K 线结果"})
+	require.NoError(t, err)
+	assert.Equal(t, "d5v5n3p8r7c9m2k4j6h1", taskID)
+}
+
+func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
+	_, err := New("http://127.0.0.1").CreateTask(context.Background(), "stockcn", "任务一", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+		"target_dataset_id": "dataset-user-selected",
+		"frequency":         "1m",
+	}, nil)
+	require.ErrorContains(t, err, "target_dataset_id")
+}
+
+func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/collectmgr/GetTaskList", r.URL.Path)
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, true, body["enabled"])
+		assert.NotContains(t, body, "market_type")
+		_, _ = w.Write([]byte(`{
+			"ret_info":{"code":0,"msg":"ok"},
+			"tasks":[{
+				"space_id":"stockcn",
+				"task_id":"builtin-stockcn-kline-1m",
+				"task_name":"A 股 K 线 1m",
+				"data_type":"kline",
+				"tag_ids":["cn_a_share"],
+				"enabled":true,
+				"result":{
+					"result_name":"采集结果",
+					"view_id":"view-1",
+					"status":"ready",
+					"last_data_time":"2026-09-20T12:00:00Z",
+					"data_kind":"time_series"
+				}
+			}],
+			"page":{"has_more":false}
+		}`))
+	}))
+	defer server.Close()
+
+	tasks, err := New(server.URL).ListEnabledTasks(context.Background(), "stockcn")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "A 股 K 线 1m", tasks[0].TaskName)
+	assert.Equal(t, "view-1", tasks[0].Result.ViewID)
+	assert.Equal(t, "ready", tasks[0].Result.Status)
+	assert.Equal(t, "2026-09-20T12:00:00Z", tasks[0].Result.LastDataTime)
+	assert.Equal(t, "time_series", tasks[0].Result.DataKind)
+}
+
+func TestPackageUploadClientHasBoundedTimeout(t *testing.T) {
+	assert.Equal(t, packageUploadTimeout, newPackageUploadHTTPClient().Timeout)
+}
+
 func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 	assert.Equal(t, 1, ResolvePackageType("collector"))
 	assert.Equal(t, 2, ResolvePackageType("factor"))
 	assert.Equal(t, 3, ResolvePackageType("custom"))
 	assert.Equal(t, 1, ResolvePackageType("unknown"))
-}
-
-func TestGetCOSAccountInfoUsesSignedServiceRouteAndReveal(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/service/cloudnode/GetCOSAccountInfo", r.URL.Path)
-		require.NotEmpty(t, r.Header.Get("X-Moox-Signature"))
-		require.Equal(t, "gateway-gz-122", r.Header.Get("X-Moox-Target-Node"))
-		var body struct {
-			AccountID string `json:"account_id"`
-			Reveal    bool   `json:"reveal"`
-		}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		require.Equal(t, "acct-1", body.AccountID)
-		require.True(t, body.Reveal)
-		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"account_id":"acct-1","provider":"tencent","secret_id":"sid","secret_key":"skey"}}`))
-	}))
-	defer server.Close()
-
-	client := New(server.URL)
-	client.HTTPClient = server.Client()
-	client.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122", ExpireSecs: 60}
-	secret, err := client.GetCOSAccountInfo(context.Background(), "acct-1")
-	require.NoError(t, err)
-	require.Equal(t, "sid", secret.SecretID)
-}
-
-func TestGetCOSAccountInfoRejectsUnsignedReveal(t *testing.T) {
-	client := New("http://127.0.0.1:1")
-	_, err := client.GetCOSAccountInfo(context.Background(), "acct-1")
-	require.ErrorContains(t, err, "service authentication is required")
 }

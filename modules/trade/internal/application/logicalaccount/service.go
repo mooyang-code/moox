@@ -1,0 +1,762 @@
+package logicalaccount
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
+)
+
+var (
+	ErrServiceConfig            = errors.New("trade logical account: service is not configured")
+	ErrAdoptionRequired         = errors.New("trade logical account: adoption is required")
+	ErrMemberHasExposure        = errors.New("trade logical account: member has active exposure")
+	ErrOwnerConflict            = errors.New("trade logical account: runner ownership conflict")
+	ErrNotReady                 = errors.New("trade logical account: not ready")
+	ErrPaperMembershipImmutable = errors.New("trade logical account: paper membership is immutable")
+)
+
+type AddMemberCommand struct {
+	SpaceID               string
+	LogicalAccountID      string
+	TradingAccountID      string
+	Enabled               bool
+	Priority              int
+	AdoptExistingExposure bool
+}
+
+type Readiness struct {
+	Ready   bool
+	Reasons []string
+}
+
+type Service struct {
+	Store          *store.Store
+	Syncer         AccountSyncer
+	Now            func() time.Time
+	MaxSnapshotAge time.Duration
+}
+
+type AccountSyncer interface {
+	SyncAccount(context.Context, string) error
+}
+
+func (s *Service) Create(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	name string,
+	mode exchange.ExecutionMode,
+	market exchange.MarketType,
+	settlementAsset string,
+	controlMode string,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	value, err := logicaldomain.New(
+		spaceID,
+		logicalAccountID,
+		strings.TrimSpace(name),
+		mode,
+		market,
+		strings.ToUpper(strings.TrimSpace(settlementAsset)),
+		logicaldomain.ControlMode(controlMode),
+	)
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			ControlMode: string(value.ControlMode),
+			SpaceID:     value.SpaceID, LogicalAccountID: value.ID, Name: value.Name,
+			ExecutionMode:   string(value.ExecutionMode),
+			MarketType:      string(value.MarketType),
+			SettlementAsset: value.SettlementAsset,
+			AutomationState: string(value.AutomationState),
+			PauseReason:     value.PauseReason,
+		})
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+}
+
+func (s *Service) UpdateName(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	name string,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil || strings.TrimSpace(name) == "" {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountName(
+			spaceID,
+			logicalAccountID,
+			strings.TrimSpace(name),
+		)
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+}
+
+func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error {
+	if s == nil || s.Store == nil {
+		return ErrServiceConfig
+	}
+	if s.Syncer == nil {
+		return ErrServiceConfig
+	}
+	account, err := s.Store.GetTradingAccountByID(ctx, command.TradingAccountID)
+	if err != nil {
+		return err
+	}
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		return ErrPaperMembershipImmutable
+	}
+	if err := s.Syncer.SyncAccount(ctx, command.TradingAccountID); err != nil {
+		return err
+	}
+	unlock := s.Store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
+	defer unlock()
+	unlockMembership := s.Store.LockLogicalAccountMembership()
+	defer unlockMembership()
+	unlockExecution := s.Store.LockLogicalAccountExecution(
+		command.SpaceID,
+		command.LogicalAccountID,
+	)
+	defer unlockExecution()
+	unlockAccount := s.Store.LockTradingAccount(command.TradingAccountID)
+	defer unlockAccount()
+	exposed, err := s.memberHasExposure(
+		ctx, command.SpaceID, command.TradingAccountID,
+	)
+	if err != nil {
+		return err
+	}
+	if exposed {
+		if !command.Enabled {
+			return ErrMemberHasExposure
+		}
+		if !command.AdoptExistingExposure {
+			return ErrAdoptionRequired
+		}
+	}
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: command.SpaceID, LogicalAccountID: command.LogicalAccountID,
+			TradingAccountID: command.TradingAccountID,
+			Enabled:          command.Enabled, Priority: command.Priority,
+		})
+	})
+}
+
+func (s *Service) RemoveMember(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	tradingAccountID string,
+) error {
+	if s == nil || s.Store == nil {
+		return ErrServiceConfig
+	}
+	if s.Syncer == nil {
+		return ErrServiceConfig
+	}
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return err
+	}
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		return ErrPaperMembershipImmutable
+	}
+	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
+		return err
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	unlockMembership := s.Store.LockLogicalAccountMembership()
+	defer unlockMembership()
+	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
+	defer unlockExecution()
+	unlockAccount := s.Store.LockTradingAccount(tradingAccountID)
+	defer unlockAccount()
+	exposed, err := s.memberHasExposure(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return err
+	}
+	if exposed {
+		return ErrMemberHasExposure
+	}
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.DeleteLogicalAccountMember(
+			spaceID, logicalAccountID, tradingAccountID,
+		)
+	})
+}
+
+func (s *Service) ClaimOwner(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	runnerID string,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil ||
+		strings.TrimSpace(runnerID) == "" {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	if current.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, ErrOwnerConflict
+	}
+	if current.OwnerRunnerID == runnerID {
+		return current, nil
+	}
+	if current.OwnerRunnerID != "" {
+		return store.LogicalAccountRecord{}, ErrOwnerConflict
+	}
+	accounts, err := s.Store.ListLogicalAccounts(ctx, spaceID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	for _, account := range accounts {
+		if account.OwnerRunnerID == runnerID &&
+			account.LogicalAccountID != logicalAccountID {
+			return store.LogicalAccountRecord{}, ErrOwnerConflict
+		}
+	}
+	orders, totalOpenOrders, err := s.Store.ListOrders(ctx, spaceID, store.OrderQuery{
+		LogicalAccountID: logicalAccountID,
+		OnlyOpen:         true,
+		Limit:            1000,
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	if totalOpenOrders > int64(len(orders)) {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: open target orders exceed safety limit", ErrNotReady)
+	}
+	for _, current := range orders {
+		if current.OwnerType == string(orderdomain.OwnerTarget) {
+			return store.LogicalAccountRecord{}, fmt.Errorf(
+				"%w: previous runner order %s is still active",
+				ErrNotReady,
+				current.OrderID,
+			)
+		}
+	}
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.TryClaimLogicalAccountOwner(spaceID, logicalAccountID, runnerID); err != nil {
+			return err
+		}
+		// Claiming after a release starts a new Strategy binding lifecycle. Do
+		// not resume a target accepted by the previous lifecycle, even when the
+		// same runner ID is reused after its strategy/account configuration has
+		// changed. The next Strategy result must establish a fresh target.
+		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+	}); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return store.LogicalAccountRecord{}, ErrOwnerConflict
+		}
+		return store.LogicalAccountRecord{}, err
+	}
+	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+}
+
+// RebindOwner starts a new owner lifecycle while retaining the current
+// runner/automation binding. It fences delayed targets and removes the live
+// target left by an archived Strategy V1 runner with the same runner ID.
+func (s *Service) RebindOwner(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	runnerID string,
+	rebindKey string,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil || strings.TrimSpace(runnerID) == "" || strings.TrimSpace(rebindKey) == "" {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	if current.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, ErrOwnerConflict
+	}
+	if current.OwnerRunnerID != "" && current.OwnerRunnerID != runnerID {
+		return store.LogicalAccountRecord{}, ErrOwnerConflict
+	}
+	already, err := s.Store.HasLogicalAccountOwnerRebind(ctx, spaceID, logicalAccountID, rebindKey)
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	if already {
+		return current, nil
+	}
+	orders, totalOpenOrders, err := s.Store.ListOrders(ctx, spaceID, store.OrderQuery{
+		LogicalAccountID: logicalAccountID,
+		OnlyOpen:         true,
+		Limit:            1000,
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	if totalOpenOrders > int64(len(orders)) {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: open target orders exceed safety limit", ErrNotReady)
+	}
+	for _, openOrder := range orders {
+		if openOrder.OwnerType == string(orderdomain.OwnerTarget) {
+			return store.LogicalAccountRecord{}, fmt.Errorf(
+				"%w: previous runner order %s is still active",
+				ErrNotReady,
+				openOrder.OrderID,
+			)
+		}
+	}
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		applied, err := tx.RebindLogicalAccountOwner(spaceID, logicalAccountID, runnerID, rebindKey)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return nil
+		}
+		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+	}); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return store.LogicalAccountRecord{}, ErrOwnerConflict
+		}
+		return store.LogicalAccountRecord{}, err
+	}
+	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+}
+
+func (s *Service) ReleaseOwner(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	runnerID string,
+) error {
+	if s == nil || s.Store == nil {
+		return ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return err
+	}
+	if current.OwnerRunnerID == "" {
+		return nil
+	}
+	if current.OwnerRunnerID != runnerID {
+		return ErrOwnerConflict
+	}
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if current.AutomationState == "ACTIVE" {
+			if err := tx.SetLogicalAccountAutomation(
+				spaceID,
+				logicalAccountID,
+				"PAUSED",
+				"runner ownership released",
+			); err != nil {
+				return err
+			}
+		}
+		// Keep advancing the lifecycle generation even while no runner owns the
+		// account. Any delayed target from the previous transition is rejected
+		// by the receipt accept path without comparing service clocks.
+		return tx.ReleaseLogicalAccountOwner(spaceID, logicalAccountID, runnerID)
+	})
+	if errors.Is(err, store.ErrConflict) {
+		return ErrOwnerConflict
+	}
+	return err
+}
+
+// ClaimSession assigns the explicit Strategy instance/session identity used by
+// new target events. It deliberately keeps the old ClaimOwner API intact for
+// console clients while ensuring the new path uses auth_fence CAS semantics.
+func (s *Service) ClaimSession(
+	ctx context.Context,
+	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
+) (store.LogicalAccountRecord, string, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, "", ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	var fence string
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		var err error
+		var changed bool
+		fence, changed, err = tx.ClaimLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence)
+		if err != nil || !changed {
+			return err
+		}
+		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	value, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	return value, fence, err
+}
+
+// RebindSession atomically switches an existing Strategy session. The old
+// target is cleared only when this CAS wins, so a delayed rebind cannot erase
+// a target accepted by a newer session.
+func (s *Service) RebindSession(
+	ctx context.Context,
+	spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence,
+	newInstanceID, newSessionID string,
+) (store.LogicalAccountRecord, string, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, "", ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	var fence string
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		var err error
+		var changed bool
+		fence, changed, err = tx.RebindLogicalAccountSession(spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID)
+		if err != nil || !changed {
+			return err
+		}
+		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	value, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	return value, fence, err
+}
+
+// ReleaseSession is a compare-and-set release. A stale session cannot clear
+// a replacement session's authorization or target.
+func (s *Service) ReleaseSession(
+	ctx context.Context,
+	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
+) error {
+	if s == nil || s.Store == nil {
+		return ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.ReleaseLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence); err != nil {
+			return err
+		}
+		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+	})
+}
+
+func (s *Service) Pause(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	reason string,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil || strings.TrimSpace(reason) == "" {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation(
+			spaceID, logicalAccountID, "PAUSED", strings.TrimSpace(reason),
+		)
+	}); err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+}
+
+func (s *Service) Resume(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+) (store.LogicalAccountRecord, string, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, "", ErrServiceConfig
+	}
+	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	defer unlock()
+	before, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	if before.ControlMode != "STRATEGY" {
+		return store.LogicalAccountRecord{}, "", ErrNotReady
+	}
+	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
+	defer unlockExecution()
+	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	if current.AutomationState != before.AutomationState ||
+		current.PauseReason != before.PauseReason {
+		return store.LogicalAccountRecord{}, "", fmt.Errorf(
+			"%w: account facts changed while resuming",
+			ErrNotReady,
+		)
+	}
+	readiness, err := s.readiness(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	if !readiness.Ready {
+		return store.LogicalAccountRecord{}, "", fmt.Errorf(
+			"%w: %s", ErrNotReady, strings.Join(readiness.Reasons, "; "),
+		)
+	}
+	running, err := s.Store.ListRunningOperatorActions(
+		ctx, spaceID, logicalAccountID,
+	)
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	if len(running) > 0 {
+		return store.LogicalAccountRecord{}, "",
+			fmt.Errorf("%w: operator action is still running", ErrNotReady)
+	}
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation(
+			spaceID, logicalAccountID, "ACTIVE", "",
+		)
+	}); err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	current, err = s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	return current, "恢复后会按最新目标重新收敛，人工清仓后的仓位可能重新开仓", err
+}
+
+func (s *Service) Readiness(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+) (Readiness, error) {
+	if s == nil || s.Store == nil {
+		return Readiness{}, ErrServiceConfig
+	}
+	return s.readiness(ctx, spaceID, logicalAccountID)
+}
+
+func (s *Service) readiness(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+) (Readiness, error) {
+	logicalAccount, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return Readiness{}, err
+	}
+	members, err := s.Store.ListLogicalAccountMembers(
+		ctx, spaceID, logicalAccountID, false,
+	)
+	if err != nil {
+		return Readiness{}, err
+	}
+	reasons := make([]string, 0)
+	if len(members) == 0 {
+		reasons = append(reasons, "no enabled members")
+	}
+	now := s.now()
+	supported := make(map[string]struct{})
+	for _, member := range members {
+		account, getErr := s.Store.GetTradingAccountByID(
+			ctx, member.TradingAccountID,
+		)
+		if getErr != nil {
+			return Readiness{}, getErr
+		}
+		switch {
+		case account.Status != "ENABLED":
+			reasons = append(reasons, account.TradingAccountID+" is disabled")
+		case !account.Ready:
+			reasons = append(reasons, account.TradingAccountID+" is not ready")
+		case account.LastSyncAt <= 0:
+			reasons = append(reasons, account.TradingAccountID+" has no initial sync")
+		case s.snapshotStale(now, account.LastSyncAt):
+			reasons = append(reasons, account.TradingAccountID+" snapshot is stale")
+		}
+		instruments, listErr := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+		if listErr != nil {
+			return Readiness{}, listErr
+		}
+		for _, instrument := range instruments {
+			if instrument.Status != "TRADING" && instrument.Status != "live" {
+				continue
+			}
+			if instrument.SettlementAsset != "" &&
+				instrument.SettlementAsset != account.SettlementAsset {
+				continue
+			}
+			supported[instrument.InstrumentID] = struct{}{}
+		}
+		orders, listErr := s.Store.ListOrdersForAccount(
+			ctx, spaceID, account.TradingAccountID, 1,
+		)
+		if listErr != nil {
+			return Readiness{}, listErr
+		}
+		for _, current := range orders {
+			if current.State == "SUBMITTING" || current.State == "SUBMIT_UNKNOWN" {
+				reasons = append(
+					reasons,
+					account.TradingAccountID+" has unresolved submit "+current.OrderID,
+				)
+			}
+			if current.OwnerType == "EXTERNAL" && !terminalOrderState(current.State) {
+				reasons = append(
+					reasons,
+					account.TradingAccountID+" has EXTERNAL order "+current.OrderID,
+				)
+			}
+		}
+	}
+	if logicalAccount.ControlMode == "MANUAL" {
+		sort.Strings(reasons)
+		return Readiness{Ready: len(reasons) == 0, Reasons: reasons}, nil
+	}
+	target, targetErr := s.Store.GetLogicalAccountTarget(
+		ctx, spaceID, logicalAccountID,
+	)
+	switch {
+	case targetErr == nil:
+		modern := target.InstanceID != "" || target.SessionID != "" || target.BarEndTime != 0 || target.ValidUntil != 0
+		if modern {
+			if target.InstanceID == "" || target.SessionID == "" ||
+				target.InstanceID != logicalAccount.OwnerInstanceID || target.SessionID != logicalAccount.OwnerSessionID {
+				reasons = append(reasons, "target session does not own logical account")
+			}
+			// Resume enables automation, not an expired target. Execution waits
+			// for the next valid target and checks its validity window itself.
+			if now.UnixMilli() >= target.ValidUntil {
+				break
+			}
+		} else if target.RunnerID != logicalAccount.OwnerRunnerID {
+			reasons = append(reasons, "target runner does not own logical account")
+		}
+		for _, desired := range target.Targets {
+			if _, ok := supported[desired.InstrumentID]; !ok {
+				reasons = append(
+					reasons,
+					"target instrument "+desired.InstrumentID+" is unavailable",
+				)
+			}
+		}
+	case errors.Is(targetErr, gorm.ErrRecordNotFound):
+		if logicalAccount.OwnerRunnerID != "" &&
+			(logicalAccount.OwnerInstanceID == "" || logicalAccount.OwnerSessionID == "") {
+			reasons = append(reasons, "owner runner has no current target")
+		}
+	default:
+		return Readiness{}, targetErr
+	}
+	sort.Strings(reasons)
+	return Readiness{Ready: len(reasons) == 0, Reasons: reasons}, nil
+}
+
+func (s *Service) memberHasExposure(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+) (bool, error) {
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	if !account.Ready || account.LastSyncAt <= 0 ||
+		s.snapshotStale(s.now(), account.LastSyncAt) {
+		return false, ErrNotReady
+	}
+	orders, err := s.Store.ListOrdersForAccount(
+		ctx, spaceID, tradingAccountID, 1,
+	)
+	if err != nil {
+		return false, err
+	}
+	for _, current := range orders {
+		if !terminalOrderState(current.State) {
+			return true, nil
+		}
+	}
+	positions, err := s.Store.ListPositions(ctx, spaceID, tradingAccountID, "")
+	if err != nil {
+		return false, err
+	}
+	for _, position := range positions {
+		quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		if !quantity.IsZero() {
+			return true, nil
+		}
+	}
+	if account.MarketType == string(exchange.MarketTypeSpot) {
+		for _, balance := range account.Snapshot.Balances {
+			if balance.Asset == account.SettlementAsset {
+				continue
+			}
+			total, parseErr := shared.ParseDecimal(balance.Total)
+			if parseErr != nil {
+				return false, parseErr
+			}
+			if !total.IsZero() {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (s *Service) snapshotStale(now time.Time, lastSyncAt int64) bool {
+	maxAge := s.MaxSnapshotAge
+	if maxAge <= 0 {
+		maxAge = time.Minute
+	}
+	return now.Sub(time.UnixMilli(lastSyncAt)) > maxAge
+}
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func terminalOrderState(state string) bool {
+	switch state {
+	case "FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED":
+		return true
+	default:
+		return false
+	}
+}

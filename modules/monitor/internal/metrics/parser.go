@@ -17,15 +17,15 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
-	DefaultMaxUncompressedBytes int64 = 4 << 20
-	DefaultMaxCompressedBytes   int64 = 1 << 20
+	// Keep metric snapshots bounded while retaining enough headroom for the
+	// A-share universe. Kline freshness is scoped later to enabled View output.
+	DefaultMaxUncompressedBytes int64 = 16 << 20
+	DefaultMaxCompressedBytes   int64 = 4 << 20
 	DefaultMaxMetricFamilies          = 2000
-	DefaultMaxSamples                 = 20000
+	DefaultMaxSamples                 = 100000
 	DefaultMaxLabelsPerSample         = 20
 	DefaultMaxLabelNameBytes          = 128
 	DefaultMaxLabelValueBytes         = 512
@@ -304,65 +304,4 @@ func appendMetricSamples(out *[]Sample, family *dto.MetricFamily, metric *dto.Me
 	default:
 		return fmt.Errorf("unsupported metric type %s", family.GetType().String())
 	}
-}
-
-func EncodeSnapshot(raw []byte, interval time.Duration, gzipLevel int, limits Limits) (*metricspb.MetricSnapshot, error) {
-	limits = limits.normalized()
-	if int64(len(raw)) > limits.MaxUncompressedBytes {
-		return nil, fmt.Errorf("snapshot exceeds %d bytes", limits.MaxUncompressedBytes)
-	}
-	p := expfmt.NewTextParser(model.UTF8Validation)
-	fams, err := p.TextToMetricFamilies(bytes.NewReader(raw))
-	if err != nil {
-		return nil, err
-	}
-	if len(fams) > limits.MaxMetricFamilies {
-		return nil, fmt.Errorf("metric family limit exceeded")
-	}
-	count := 0
-	for _, f := range fams {
-		for _, m := range f.GetMetric() {
-			if m == nil {
-				continue
-			}
-			switch f.GetType() {
-			case dto.MetricType_HISTOGRAM:
-				count += 2 + len(m.GetHistogram().GetBucket())
-			case dto.MetricType_SUMMARY:
-				count += 2 + len(m.GetSummary().GetQuantile())
-			default:
-				count++
-			}
-		}
-	}
-	var compressed bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&compressed, gzipLevel)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = zw.Write(raw); err != nil {
-		return nil, err
-	}
-	if err = zw.Close(); err != nil {
-		return nil, err
-	}
-	if int64(compressed.Len()) > limits.MaxCompressedBytes {
-		return nil, fmt.Errorf("compressed snapshot exceeds %d bytes", limits.MaxCompressedBytes)
-	}
-	sum := sha256.Sum256(raw)
-	return &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: uint32(interval / time.Second), Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_GZIP, Data: compressed.Bytes(), MetricFamilyCount: uint32(len(fams)), SampleCount: uint32(count), UncompressedSha256: sum[:]}, nil
-}
-
-func MarshalSnapshot(snapshot *metricspb.MetricSnapshot) ([]byte, error) {
-	if snapshot == nil {
-		return nil, errors.New("nil snapshot")
-	}
-	return proto.MarshalOptions{Deterministic: true}.Marshal(snapshot)
-}
-
-func snapshotTime(ts *timestamppb.Timestamp) time.Time {
-	if ts == nil {
-		return time.Time{}
-	}
-	return ts.AsTime()
 }

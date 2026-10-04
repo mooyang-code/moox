@@ -1,0 +1,9 @@
+{
+  "calendar_id": "cn_stock",
+  "source": "AkShare file_fold/calendar.json",
+  "version": 1,
+  "data_version": "2026-09-01",
+  "valid_from": "1990-12-19",
+  "valid_through": "2026-12-31",
+  "sha256": "sha256:8986acbda60f6d7d50e12907c89b70b8c0cd38bab759c64ab4fc4ddfbb93c2aa"
+}

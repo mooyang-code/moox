@@ -23,7 +23,8 @@ new_stage() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"${MOOX_TEST_CALLS}"
-[[ "${MOOX_GATEWAY_NODE_ID:-}" == "gateway-test" ]]
+[[ "${MOOX_GATEWAY_TARGET_NODE:-}" == "gateway-test" ]]
+[[ "${MOOX_GATEWAY_CALLER:-}" == "moox-cli" ]]
 [[ "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" == "svc""-ak" ]]
 [[ "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" == "svc""-sk" ]]
 [[ "${MOOX_GATEWAY_CA_FILE:-}" == */certs/gateway/peers.pem ]]
@@ -50,7 +51,7 @@ printf "MOOX_CLS_SECRET_ID='%s-id'\nMOOX_CLS_SECRET_KEY='%s-key'\nMOOX_CLS_REGIO
 chmod 0600 "${output}"
 case "$(cat "${MOOX_TEST_MODE}")" in
   success)
-    printf '{"status":"configured","resources":{"account_id":"acct-first","topic_id":"%s"}}\n' "${topic}"
+    printf '{"status":"configured","resources":{"account_id":"acct-first","region":"ap-guangzhou","logset_id":"logset-fixed","topic_id":"%s"}}\n' "${topic}"
     ;;
   missing-topic)
     printf '{"status":"configured","resources":{"account_id":"acct-first"}}\n'
@@ -75,12 +76,12 @@ CLI
 new_deploy() {
   local deploy=$1
   mkdir -p "${deploy}/secrets" "${deploy}/certs/gateway"
-  printf 'MOOX_GATEWAY_NODE_ID=gateway-test\nMOOX_GATEWAY_SERVICE_KEY_ID=svc-ak\nMOOX_GATEWAY_SERVICE_SECRET_KEY=svc-sk\n' \
-    >"${deploy}/secrets/gateway-service.env"
+  printf 'MOOX_GATEWAY_TARGET_NODE=gateway-test\nMOOX_GATEWAY_CALLER=moox-cli\nMOOX_GATEWAY_SERVICE_KEY_ID=svc-ak\nMOOX_GATEWAY_SERVICE_SECRET_KEY=svc-sk\nMOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID=collector\nMOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=collector-sk\nMOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003\nMOOX_GATEWAY_CA_FILE=/data/moox/certs/gateway/peers.pem\n' \
+    >"${deploy}/secrets/gateway-moox-cli.env"
   printf '%s\n' '-----BEGIN CERTIFICATE-----' 'Y2VydA==' '-----END CERTIFICATE-----' \
     >"${deploy}/certs/gateway/peers.pem"
   printf 'old-cls-env\n' >"${deploy}/secrets/cls.env"
-  chmod 0600 "${deploy}/secrets/gateway-service.env" "${deploy}/secrets/cls.env"
+  chmod 0600 "${deploy}/secrets/gateway-moox-cli.env" "${deploy}/secrets/cls.env"
 }
 
 file_mode() {
@@ -102,6 +103,7 @@ assert_no_transaction_artifacts() {
   local stage=$1 deploy=$2
   [[ -z "$(find "${stage}" -type f -name '*.cls.*' -print -quit)" ]]
   [[ -z "$(find "${deploy}/secrets" -type f \( -name '.cls.env.*.next' -o -name '.cls.env.*.backup' \) -print -quit)" ]]
+  [[ -z "$(find "${deploy}/config" -type f -name '.resources.env.*' -print -quit 2>/dev/null)" ]]
 }
 
 assert_no_secrets() {
@@ -111,14 +113,17 @@ assert_no_secrets() {
 }
 
 assert_cls_log_writer() {
-  awk '
+  local config=$1 expected_level=${2:-warn}
+  MOOX_EXPECT_CLS_LEVEL="${expected_level}" awk '
+    BEGIN { expected = ENVIRON["MOOX_EXPECT_CLS_LEVEL"] }
     /^plugins:[[:space:]]*$/ { plugins=1; next }
     plugins && /^[^[:space:]#]/ { plugins=0; in_log=0 }
     plugins && /^  log:[[:space:]]*$/ { in_log=1; next }
     in_log && /^  [^[:space:]#][^:]*:/ { in_log=0 }
-    in_log && /^      - writer: cls[[:space:]]*$/ { found++ }
-    END { exit(found == 1 ? 0 : 1) }
-  ' "$1"
+    in_log && /^      - writer: cls[[:space:]]*$/ { found++; waiting_level=1; next }
+    waiting_level && /^        level: / { level=$2; waiting_level=0 }
+    END { exit(found == 1 && level == expected ? 0 : 1) }
+  ' "${config}"
 }
 
 write_lock_owner() {
@@ -133,6 +138,93 @@ DEPLOY="${TMP}/deploy"
 new_stage "${STAGE}"
 new_deploy "${DEPLOY}"
 
+UNSAFE_STAGE="${TMP}/unsafe-stage"
+UNSAFE_DEPLOY="${TMP}/unsafe-deploy"
+new_stage "${UNSAFE_STAGE}"
+new_deploy "${UNSAFE_DEPLOY}"
+printf 'touch %q\n' "${TMP}/unsafe-env-executed" >"${TMP}/unsafe-env-payload"
+rm -f "${UNSAFE_DEPLOY}/secrets/gateway-moox-cli.env"
+ln -s "${TMP}/unsafe-env-payload" "${UNSAFE_DEPLOY}/secrets/gateway-moox-cli.env"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${UNSAFE_DEPLOY}" --stage-dir "${UNSAFE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/unsafe-env.out" 2>&1; then
+  echo 'symlink Gateway CLI env unexpectedly accepted' >&2
+  exit 1
+fi
+[[ ! -e "${TMP}/unsafe-env-executed" ]]
+
+rm -f "${UNSAFE_DEPLOY}/secrets/gateway-moox-cli.env"
+new_deploy "${UNSAFE_DEPLOY}"
+printf 'PWN=touch-marker\n' >>"${UNSAFE_DEPLOY}/secrets/gateway-moox-cli.env"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${UNSAFE_DEPLOY}" --stage-dir "${UNSAFE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/malicious-env.out" 2>&1; then
+  echo 'Gateway CLI env with an extra variable unexpectedly accepted' >&2
+  exit 1
+fi
+
+LEGACY_STAGE="${TMP}/legacy-stage"
+LEGACY_DEPLOY="${TMP}/legacy-deploy"
+new_stage "${LEGACY_STAGE}"
+new_deploy "${LEGACY_DEPLOY}"
+sed -i.bak '/^MOOX_COLLECTOR_GATEWAY_SERVICE_/d' "${LEGACY_DEPLOY}/secrets/gateway-moox-cli.env"
+rm -f "${LEGACY_DEPLOY}/secrets/gateway-moox-cli.env.bak"
+if ! MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${LEGACY_DEPLOY}" --stage-dir "${LEGACY_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/legacy-env.out" 2>&1; then
+  echo 'historical six-variable Gateway CLI env was rejected' >&2
+  exit 1
+fi
+
+PAIR_STAGE="${TMP}/pair-stage"
+PAIR_DEPLOY="${TMP}/pair-deploy"
+new_stage "${PAIR_STAGE}"
+new_deploy "${PAIR_DEPLOY}"
+sed -i.bak '/^MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY=/d' "${PAIR_DEPLOY}/secrets/gateway-moox-cli.env"
+rm -f "${PAIR_DEPLOY}/secrets/gateway-moox-cli.env.bak"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${PAIR_DEPLOY}" --stage-dir "${PAIR_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/partial-collector-env.out" 2>&1; then
+  echo 'partial Collector Gateway CLI env unexpectedly accepted' >&2
+  exit 1
+fi
+
+DUPLICATE_STAGE="${TMP}/duplicate-env-stage"
+DUPLICATE_DEPLOY="${TMP}/duplicate-env-deploy"
+new_stage "${DUPLICATE_STAGE}"
+new_deploy "${DUPLICATE_DEPLOY}"
+printf 'MOOX_GATEWAY_CALLER=moox-cli\n' >>"${DUPLICATE_DEPLOY}/secrets/gateway-moox-cli.env"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${DUPLICATE_DEPLOY}" --stage-dir "${DUPLICATE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/duplicate-gateway-env.out" 2>&1; then
+  echo 'duplicate Gateway CLI env variable unexpectedly accepted' >&2
+  exit 1
+fi
+
+DANGEROUS_STAGE="${TMP}/dangerous-env-stage"
+DANGEROUS_DEPLOY="${TMP}/dangerous-env-deploy"
+DANGEROUS_MARKER="${TMP}/dangerous-env-executed"
+new_stage "${DANGEROUS_STAGE}"
+new_deploy "${DANGEROUS_DEPLOY}"
+sed "s#^MOOX_GATEWAY_CALLER=.*#MOOX_GATEWAY_CALLER=\$(touch ${DANGEROUS_MARKER})#" \
+  "${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env" >"${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env.next"
+mv "${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env.next" "${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env"
+chmod 0600 "${DANGEROUS_DEPLOY}/secrets/gateway-moox-cli.env"
+if MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
+  --deploy-dir "${DANGEROUS_DEPLOY}" --stage-dir "${DANGEROUS_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/dangerous-gateway-env.out" 2>&1; then
+  echo 'dangerous Gateway CLI env value unexpectedly accepted' >&2
+  exit 1
+fi
+[[ ! -e "${DANGEROUS_MARKER}" ]]
+
+: >"${calls}"
 output="${TMP}/local-output"
 MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
   MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
@@ -146,9 +238,14 @@ if grep -q -- '--cloud-account-id' "${calls}"; then
   exit 1
 fi
 grep -q 'writer: cls' "${STAGE}/factor/config/trpc_go.yaml"
-grep -q 'topic_id: topic-fixed' "${STAGE}/factor/config/trpc_go.yaml"
-grep -q 'topic_id: topic-fixed' "${STAGE}/storage/config/trpc_go-prod.yaml"
-assert_cls_log_writer "${STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${STAGE}/storage/config/trpc_go-prod.yaml"
+grep -q "^MOOX_CLS_LOGSET_ID='logset-fixed'$" "${STAGE}/config/resources.env"
+grep -q "^MOOX_CLS_TOPIC_ID='topic-fixed'$" "${STAGE}/config/resources.env"
+grep -q "^MOOX_CLS_ACCOUNT_ID='acct-first'$" "${STAGE}/config/resources.env"
+[[ $(file_mode "${STAGE}/config/resources.env") == 644 ]]
+! grep -q 'MOOX_CLS_SECRET_' "${STAGE}/config/resources.env"
+assert_cls_log_writer "${STAGE}/factor/config/trpc_go.yaml" info
 assert_cls_log_writer "${STAGE}/storage/config/trpc_go-prod.yaml"
 assert_cls_log_writer "${STAGE}/nolog/config/trpc_go.yaml"
 assert_cls_log_writer "${STAGE}/bare/config/trpc_go-test.yaml"
@@ -285,7 +382,7 @@ MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
   --deploy-dir "${DEAD_DEPLOY}" --stage-dir "${DEAD_STAGE}" \
   --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1
-grep -q 'topic_id: topic-fixed' "${DEAD_STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${DEAD_STAGE}/factor/config/trpc_go.yaml"
 [[ ! -e "${DEAD_STAGE}/.cls-bootstrap.lock" ]]
 
 # A failure during either stage or credential commit restores the whole release.
@@ -505,13 +602,13 @@ else
   [[ ${status_b} -eq 0 ]]
 fi
 concurrent_env=$(cat "${CONCURRENT_DEPLOY}/secrets/cls.env")
-if grep -q 'topic_id: topic-a' "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"; then
+if grep -q "^MOOX_CLS_TOPIC_ID='topic-a'$" "${CONCURRENT_STAGE}/config/resources.env"; then
   [[ "${concurrent_env}" == *concurrent-a-id* && "${concurrent_env}" == *concurrent-a-key* ]]
 else
-  grep -q 'topic_id: topic-b' "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"
+  grep -q "^MOOX_CLS_TOPIC_ID='topic-b'$" "${CONCURRENT_STAGE}/config/resources.env"
   [[ "${concurrent_env}" == *concurrent-b-id* && "${concurrent_env}" == *concurrent-b-key* ]]
 fi
-assert_cls_log_writer "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"
+assert_cls_log_writer "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml" info
 assert_no_transaction_artifacts "${CONCURRENT_STAGE}" "${CONCURRENT_DEPLOY}"
 [[ ! -e "${CONCURRENT_STAGE}/.cls-bootstrap.lock" ]]
 [[ ! -e "${CONCURRENT_DEPLOY}/secrets/.cls-bootstrap.lock" ]]
@@ -628,6 +725,33 @@ if PATH="${MAL_BIN}:${FAKE_BIN}:${PATH}" MOOX_TEST_MAL_MARKER="${MAL_MARKER}" \
 fi
 [[ ! -e "${MAL_MARKER}" ]]
 
+printf 'touch %q\n' "${TMP}/unsafe-remote-env-executed" >"${TMP}/unsafe-remote-env-payload"
+rm -f "${REMOTE_HOME}/moox/secrets/gateway-moox-cli.env"
+ln -s "${TMP}/unsafe-remote-env-payload" "${REMOTE_HOME}/moox/secrets/gateway-moox-cli.env"
+if PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+  MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" \
+  MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target deploy@example.test \
+  --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/unsafe-remote-env.out" 2>&1; then
+  echo 'remote symlink Gateway CLI env unexpectedly accepted' >&2
+  exit 1
+fi
+[[ ! -e "${TMP}/unsafe-remote-env-executed" ]]
+rm -f "${REMOTE_HOME}/moox/secrets/gateway-moox-cli.env"
+new_deploy "${REMOTE_HOME}/moox"
+printf 'PWN=touch-marker\n' >>"${REMOTE_HOME}/moox/secrets/gateway-moox-cli.env"
+if PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
+  MOOX_TEST_REMOTE_HOME="${REMOTE_HOME}" MOOX_TEST_REMOTE_PATHS="${REMOTE_PATHS}" \
+  MOOX_TEST_EXPECT_ACCOUNT=__not_set__ \
+  "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target deploy@example.test \
+  --deploy-dir '~/moox' --stage-dir "${REMOTE_STAGE}" \
+  --admin-url http://127.0.0.1:11002 >"${TMP}/malicious-remote-env.out" 2>&1; then
+  echo 'remote Gateway CLI env with an extra variable unexpectedly accepted' >&2
+  exit 1
+fi
+new_deploy "${REMOTE_HOME}/moox"
+
 printf 'success\n' >"${mode_file}"
 remote_output="${TMP}/remote-output"
 PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
@@ -640,7 +764,11 @@ PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
   --admin-url http://127.0.0.1:11002 --cloud-account-id 'explicit-account' \
   >"${remote_output}" 2>&1
 grep -q -- '--cloud-account-id explicit-account' "${calls}"
-grep -q 'topic_id: topic-fixed' "${REMOTE_STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${REMOTE_STAGE}/factor/config/trpc_go.yaml"
+grep -q "^MOOX_CLS_TOPIC_ID='topic-fixed'$" "${REMOTE_HOME}/moox/config/resources.env"
+grep -q "^MOOX_CLS_ACCOUNT_ID='acct-first'$" "${REMOTE_HOME}/moox/config/resources.env"
+[[ $(file_mode "${REMOTE_HOME}/moox/config/resources.env") == 644 ]]
+! grep -q 'MOOX_CLS_SECRET_' "${REMOTE_HOME}/moox/config/resources.env"
 [[ $(file_mode "${REMOTE_HOME}/moox/secrets/cls.env") == 600 ]]
 [[ ! -e "${REMOTE_HOME}/moox/secrets/cls.env.next" ]]
 while IFS= read -r remote_path; do [[ ! -e "${remote_path}" ]]; done <"${REMOTE_PATHS}"

@@ -12,15 +12,18 @@ import (
 )
 
 type Config struct {
-	Database   DatabaseConfig   `yaml:"database"`
-	Health     HealthConfig     `yaml:"health"`
-	HealthAuth HealthAuthConfig `yaml:"health_auth"`
-	Instance   InstanceConfig   `yaml:"instance"`
-	Scheduler  SchedulerConfig  `yaml:"scheduler"`
-	SysDeploy  SysDeployConfig  `yaml:"sysdeploy"`
-	Peer       PeerConfig       `yaml:"peer"`
-	Alert      AlertConfig      `yaml:"alert"`
-	Metrics    MetricsConfig    `yaml:"metrics"`
+	Database       DatabaseConfig       `yaml:"database"`
+	Health         HealthConfig         `yaml:"health"`
+	HealthAuth     HealthAuthConfig     `yaml:"health_auth"`
+	Instance       InstanceConfig       `yaml:"instance"`
+	Scheduler      SchedulerConfig      `yaml:"scheduler"`
+	SysDeploy      SysDeployConfig      `yaml:"sysdeploy"`
+	Alert          AlertConfig          `yaml:"alert"`
+	Observability  ObservabilityConfig  `yaml:"observability"`
+	Metrics        MetricsConfig        `yaml:"metrics"`
+	MarketCanary   MarketCanaryConfig   `yaml:"market_canary"`
+	MarketHealth   MarketHealthConfig   `yaml:"market_health"`
+	KlineFreshness KlineFreshnessConfig `yaml:"kline_freshness"`
 }
 
 type DatabaseConfig struct {
@@ -44,7 +47,6 @@ type HealthAuthConfig struct {
 
 type InstanceConfig struct {
 	InstanceID string `yaml:"instance_id"`
-	BaseURL    string `yaml:"base_url"`
 }
 
 type SchedulerConfig struct {
@@ -65,38 +67,73 @@ type ServiceAuthConfig struct {
 	CAFile     string `yaml:"ca_file"`
 }
 
-type PeerConfig struct {
-	Enabled        bool              `yaml:"enabled"`
-	TimeoutSeconds int               `yaml:"timeout_seconds"`
-	ServiceAuth    ServiceAuthConfig `yaml:"service_auth"`
-	Peers          []PeerEntry       `yaml:"peers"`
-}
-
-type PeerEntry struct {
-	InstanceID string `yaml:"instance_id"`
-	GatewayURL string `yaml:"gateway_url"`
-	NodeID     string `yaml:"node_id"`
-}
-
 type AlertConfig struct {
 	SendTimeoutSeconds int `yaml:"send_timeout_seconds"`
 }
 
 type MetricsConfig struct {
-	Enabled                bool                 `yaml:"enabled"`
-	EventBusURL            string               `yaml:"eventbus_url"`
-	EventBusCredentialFile string               `yaml:"eventbus_credential_file"`
-	Stream                 string               `yaml:"stream"`
-	Topic                  string               `yaml:"topic"`
-	Consumer               string               `yaml:"consumer"`
-	FetchBatchSize         int                  `yaml:"fetch_batch_size"`
-	FetchMaxWait           time.Duration        `yaml:"fetch_max_wait"`
-	AckWait                time.Duration        `yaml:"ack_wait"`
-	MaxAckPending          int                  `yaml:"max_ack_pending"`
-	NoDataIntervals        int                  `yaml:"no_data_intervals"`
-	Storage                MetricsStorageConfig `yaml:"storage"`
-	HostStorage            HostStorageConfig    `yaml:"host_storage"`
+	Enabled                 bool                 `yaml:"enabled"`
+	DatasetHealthPolicyPath string               `yaml:"dataset_health_policy_path"`
+	NoDataIntervals         int                  `yaml:"no_data_intervals"`
+	Storage                 MetricsStorageConfig `yaml:"storage"`
+	HostStorage             HostStorageConfig    `yaml:"host_storage"`
 }
+
+type ObservabilityConfig struct {
+	Enabled                    bool     `yaml:"enabled"`
+	DeliverPolicy              string   `yaml:"deliver_policy"`
+	EventBusURLs               []string `yaml:"eventbus_urls"`
+	CredentialFile             string   `yaml:"credential_file"`
+	BalanceDifferenceThreshold float64  `yaml:"balance_difference_threshold"`
+}
+
+type MarketCanaryConfig struct {
+	Enabled              bool                  `yaml:"enabled"`
+	Freshness            time.Duration         `yaml:"freshness"`
+	ReturnThreshold      float64               `yaml:"return_threshold"`
+	SettleDelay          time.Duration         `yaml:"settle_delay"`
+	PostCloseDelay       time.Duration         `yaml:"post_close_delay"`
+	CalendarWarningLead  time.Duration         `yaml:"calendar_warning_lead"`
+	ClosedBarCount       int                   `yaml:"closed_bar_count"`
+	ClosedBarMinCoverage float64               `yaml:"closed_bar_min_coverage"`
+	Subjects             []MarketCanarySubject `yaml:"subjects"`
+}
+
+type MarketHealthConfig struct {
+	TimerCoordinationStaleAfter   time.Duration `yaml:"timer_coordination_stale_after"`
+	TimerCoordinationPendingGrace time.Duration `yaml:"timer_coordination_pending_grace"`
+	LowCapacityHeadroom           int           `yaml:"low_capacity_headroom"`
+	FeedFailureRateWindow         time.Duration `yaml:"feed_failure_rate_window"`
+	FeedFailureRateThreshold      float64       `yaml:"feed_failure_rate_threshold"`
+	InstrumentSnapshotMaxAge      time.Duration `yaml:"instrument_snapshot_max_age"`
+	InstrumentMinimumCount        int           `yaml:"instrument_minimum_count"`
+	InstrumentRequiredExchanges   []string      `yaml:"instrument_required_exchanges"`
+}
+
+type KlineFreshnessConfig struct {
+	Enabled                  bool          `yaml:"enabled"`
+	SpaceIDs                 []string      `yaml:"space_ids"`
+	CollectorGatewayTarget   string        `yaml:"collector_gateway_target"`
+	CollectorGatewayNodeID   string        `yaml:"collector_gateway_node_id"`
+	EvaluationInterval       time.Duration `yaml:"evaluation_interval"`
+	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval"`
+	InventoryPageSize        int           `yaml:"inventory_page_size"`
+	InventoryMaxEntries      int           `yaml:"inventory_max_entries"`
+	StaleAfter               time.Duration `yaml:"stale_after"`
+	MaxSubjectsPerAlert      int           `yaml:"max_subjects_per_alert"`
+}
+
+type MarketCanarySubject struct {
+	SpaceID                string   `yaml:"space_id"`
+	DatasetID              string   `yaml:"dataset_id"`
+	Symbol                 string   `yaml:"symbol"`
+	Frequency              string   `yaml:"frequency"`
+	SeriesTag              *string  `yaml:"series_tag"`
+	MarketID               string   `yaml:"market_id"`
+	CalendarPath           string   `yaml:"calendar_path"`
+	EligibleKlineProviders []string `yaml:"eligible_kline_providers"`
+}
+
 type MetricsStorageConfig struct {
 	GatewayTarget              string        `yaml:"gateway_target"`
 	GatewayNodeID              string        `yaml:"gateway_node_id"`
@@ -163,7 +200,6 @@ func Default() *Config {
 		HealthAuth: HealthAuthConfig{Version: "moox-health-v1"},
 		Instance: InstanceConfig{
 			InstanceID: defaultInstanceID(),
-			BaseURL:    "http://127.0.0.1:11409",
 		},
 		Scheduler: SchedulerConfig{
 			ResultRetentionDays: 14,
@@ -174,14 +210,17 @@ func Default() *Config {
 			Target:      "ip://127.0.0.1:11109",
 			ServiceAuth: ServiceAuthConfig{},
 		},
-		Peer: PeerConfig{
-			Enabled:        true,
-			TimeoutSeconds: 5,
-		},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", Stream: "MOOX_METRICS", Topic: "moox.metrics.snapshot.reported.v1", Consumer: "monitor_metrics_ingest_v1", FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
+		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
+		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance|market:spot|source:spot_http")}}},
+		MarketHealth:  MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
+		KlineFreshness: KlineFreshnessConfig{
+			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, CollectorGatewayTarget: "ip://127.0.0.1:11003", EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
+			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
+		},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -214,9 +253,6 @@ func (c *Config) applyDefaults() {
 	if c.Instance.InstanceID == "" {
 		c.Instance.InstanceID = defaults.Instance.InstanceID
 	}
-	if c.Instance.BaseURL == "" {
-		c.Instance.BaseURL = defaults.Instance.BaseURL
-	}
 	if c.Scheduler.ResultRetentionDays == 0 {
 		c.Scheduler.ResultRetentionDays = defaults.Scheduler.ResultRetentionDays
 	}
@@ -226,36 +262,89 @@ func (c *Config) applyDefaults() {
 	if c.SysDeploy.Target == "" {
 		c.SysDeploy.Target = defaults.SysDeploy.Target
 	}
-	if c.Peer.TimeoutSeconds == 0 {
-		c.Peer.TimeoutSeconds = defaults.Peer.TimeoutSeconds
-	}
 	if c.Alert.SendTimeoutSeconds == 0 {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
 	}
 	metricsDefaults := Default().Metrics
-	if c.Metrics.EventBusURL == "" {
-		c.Metrics.EventBusURL = metricsDefaults.EventBusURL
+	observabilityDefaults := Default().Observability
+	c.Observability.DeliverPolicy = strings.ToLower(strings.TrimSpace(c.Observability.DeliverPolicy))
+	if c.Observability.DeliverPolicy == "" {
+		c.Observability.DeliverPolicy = observabilityDefaults.DeliverPolicy
 	}
-	if c.Metrics.Stream == "" {
-		c.Metrics.Stream = metricsDefaults.Stream
+	if len(c.Observability.EventBusURLs) == 0 {
+		c.Observability.EventBusURLs = observabilityDefaults.EventBusURLs
 	}
-	if c.Metrics.Topic == "" {
-		c.Metrics.Topic = metricsDefaults.Topic
+	if c.Observability.BalanceDifferenceThreshold == 0 {
+		c.Observability.BalanceDifferenceThreshold = observabilityDefaults.BalanceDifferenceThreshold
 	}
-	if c.Metrics.Consumer == "" {
-		c.Metrics.Consumer = metricsDefaults.Consumer
+	canaryDefaults := Default().MarketCanary
+	if c.MarketCanary.Freshness == 0 {
+		c.MarketCanary.Freshness = canaryDefaults.Freshness
 	}
-	if c.Metrics.FetchBatchSize == 0 {
-		c.Metrics.FetchBatchSize = metricsDefaults.FetchBatchSize
+	if c.MarketCanary.ReturnThreshold == 0 {
+		c.MarketCanary.ReturnThreshold = canaryDefaults.ReturnThreshold
 	}
-	if c.Metrics.FetchMaxWait == 0 {
-		c.Metrics.FetchMaxWait = metricsDefaults.FetchMaxWait
+	if c.MarketCanary.PostCloseDelay == 0 {
+		c.MarketCanary.PostCloseDelay = canaryDefaults.PostCloseDelay
 	}
-	if c.Metrics.AckWait == 0 {
-		c.Metrics.AckWait = metricsDefaults.AckWait
+	if len(c.MarketCanary.Subjects) == 0 {
+		c.MarketCanary.Subjects = canaryDefaults.Subjects
 	}
-	if c.Metrics.MaxAckPending == 0 {
-		c.Metrics.MaxAckPending = metricsDefaults.MaxAckPending
+	if c.MarketCanary.ClosedBarMinCoverage == 0 {
+		c.MarketCanary.ClosedBarMinCoverage = canaryDefaults.ClosedBarMinCoverage
+	}
+	marketHealthDefaults := Default().MarketHealth
+	if c.MarketHealth.TimerCoordinationStaleAfter == 0 {
+		c.MarketHealth.TimerCoordinationStaleAfter = marketHealthDefaults.TimerCoordinationStaleAfter
+	}
+	if c.MarketHealth.TimerCoordinationPendingGrace == 0 {
+		c.MarketHealth.TimerCoordinationPendingGrace = marketHealthDefaults.TimerCoordinationPendingGrace
+	}
+	if c.MarketHealth.LowCapacityHeadroom == 0 {
+		c.MarketHealth.LowCapacityHeadroom = marketHealthDefaults.LowCapacityHeadroom
+	}
+	if c.MarketHealth.FeedFailureRateWindow == 0 {
+		c.MarketHealth.FeedFailureRateWindow = marketHealthDefaults.FeedFailureRateWindow
+	}
+	if c.MarketHealth.FeedFailureRateThreshold == 0 {
+		c.MarketHealth.FeedFailureRateThreshold = marketHealthDefaults.FeedFailureRateThreshold
+	}
+	if c.MarketHealth.InstrumentSnapshotMaxAge == 0 {
+		c.MarketHealth.InstrumentSnapshotMaxAge = marketHealthDefaults.InstrumentSnapshotMaxAge
+	}
+	if c.MarketHealth.InstrumentMinimumCount == 0 {
+		c.MarketHealth.InstrumentMinimumCount = marketHealthDefaults.InstrumentMinimumCount
+	}
+	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
+		c.MarketHealth.InstrumentRequiredExchanges = append([]string(nil), marketHealthDefaults.InstrumentRequiredExchanges...)
+	}
+	klineDefaults := Default().KlineFreshness
+	if c.KlineFreshness.EvaluationInterval == 0 {
+		c.KlineFreshness.EvaluationInterval = klineDefaults.EvaluationInterval
+	}
+	if c.KlineFreshness.CollectorGatewayTarget == "" {
+		c.KlineFreshness.CollectorGatewayTarget = klineDefaults.CollectorGatewayTarget
+	}
+	if len(c.KlineFreshness.SpaceIDs) == 0 {
+		c.KlineFreshness.SpaceIDs = append([]string(nil), klineDefaults.SpaceIDs...)
+	}
+	if c.KlineFreshness.InventoryRefreshInterval == 0 {
+		c.KlineFreshness.InventoryRefreshInterval = klineDefaults.InventoryRefreshInterval
+	}
+	if c.KlineFreshness.InventoryPageSize == 0 {
+		c.KlineFreshness.InventoryPageSize = klineDefaults.InventoryPageSize
+	}
+	if c.KlineFreshness.InventoryMaxEntries == 0 {
+		c.KlineFreshness.InventoryMaxEntries = klineDefaults.InventoryMaxEntries
+	}
+	if c.KlineFreshness.StaleAfter == 0 {
+		c.KlineFreshness.StaleAfter = klineDefaults.StaleAfter
+	}
+	if c.KlineFreshness.MaxSubjectsPerAlert == 0 {
+		c.KlineFreshness.MaxSubjectsPerAlert = klineDefaults.MaxSubjectsPerAlert
+	}
+	if c.Metrics.DatasetHealthPolicyPath == "" {
+		c.Metrics.DatasetHealthPolicyPath = metricsDefaults.DatasetHealthPolicyPath
 	}
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
@@ -338,46 +427,127 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_INSTANCE_ID"); v != "" {
 		c.Instance.InstanceID = v
 	}
-	if v := os.Getenv("MOOX_MONITOR_BASE_URL"); v != "" {
-		c.Instance.BaseURL = v
-	}
 	if v := os.Getenv("MOOX_MONITOR_SYSDEPLOY_TARGET"); v != "" {
 		c.SysDeploy.Target = v
 	}
-	if v := firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
-		c.Metrics.EventBusURL = v
+	if v := firstEnv("MOOX_OBSERVABILITY_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
+		c.Observability.EventBusURLs = strings.Split(v, ",")
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_CREDENTIAL_FILE")); v != "" {
+		c.Observability.CredentialFile = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_DELIVER_POLICY")); v != "" {
+		c.Observability.DeliverPolicy = strings.ToLower(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")); v != "" {
+		c.Metrics.DatasetHealthPolicyPath = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.TargetNode = v
+		c.Metrics.Storage.GatewayNodeID = v
+		c.Metrics.HostStorage.GatewayNodeID = v
+	}
+	// SysDeploy authenticates through the local control gateway, while Storage
+	// may live behind a different gateway node. Keep these overrides separate.
+	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET")); v != "" {
+		c.Metrics.Storage.GatewayTarget = v
+		c.Metrics.HostStorage.GatewayTarget = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID")); v != "" {
+		c.Metrics.Storage.GatewayNodeID = v
+		c.Metrics.HostStorage.GatewayNodeID = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET")); v != "" {
+		c.KlineFreshness.CollectorGatewayTarget = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE")); v != "" {
+		c.KlineFreshness.CollectorGatewayNodeID = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.KeyID = v
-		c.Peer.ServiceAuth.KeyID = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
 		c.SysDeploy.ServiceAuth.SecretKey = v
-		c.Peer.ServiceAuth.SecretKey = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
 		c.SysDeploy.ServiceAuth.CAFile = v
-		c.Peer.ServiceAuth.CAFile = v
 	}
 }
 
 func (c *Config) Validate() error {
+	if c.Observability.DeliverPolicy != "all" && c.Observability.DeliverPolicy != "new" {
+		return fmt.Errorf("observability.deliver_policy must be all or new")
+	}
 	if c.Instance.InstanceID == "" {
 		return fmt.Errorf("instance.instance_id must not be empty")
 	}
-	if c.Instance.BaseURL == "" {
-		return fmt.Errorf("instance.base_url must not be empty")
+	if c.Alert.SendTimeoutSeconds <= 0 || c.Alert.SendTimeoutSeconds > 300 {
+		return fmt.Errorf("alert.send_timeout_seconds must be between 1 and 300")
+	}
+	if c.Observability.Enabled {
+		if len(c.Observability.EventBusURLs) == 0 {
+			return fmt.Errorf("observability.eventbus_urls must not be empty")
+		}
+		for _, url := range c.Observability.EventBusURLs {
+			if strings.TrimSpace(url) == "" {
+				return fmt.Errorf("observability.eventbus_urls must not contain empty values")
+			}
+		}
+		if c.Observability.BalanceDifferenceThreshold <= 0 || c.Observability.BalanceDifferenceThreshold > 1 {
+			return fmt.Errorf("observability.balance_difference_threshold must be in (0, 1]")
+		}
+	}
+	if err := c.validateKlineFreshness(); err != nil {
+		return err
+	}
+	if c.MarketCanary.Enabled {
+		if c.MarketCanary.Freshness <= 0 || c.MarketCanary.ReturnThreshold <= 0 || c.MarketCanary.SettleDelay < 0 || c.MarketCanary.PostCloseDelay < 0 || c.MarketCanary.CalendarWarningLead <= 0 || c.MarketCanary.ClosedBarCount <= 0 {
+			return fmt.Errorf("market_canary price threshold and freshness must be positive")
+		}
+		if c.MarketCanary.ClosedBarMinCoverage <= 0 || c.MarketCanary.ClosedBarMinCoverage > 1 {
+			return fmt.Errorf("market_canary.closed_bar_min_coverage must be in (0, 1]")
+		}
+		if len(c.MarketCanary.Subjects) == 0 || len(c.MarketCanary.Subjects) > 8 {
+			return fmt.Errorf("market_canary subjects must contain between 1 and 8 entries")
+		}
+		for _, subject := range c.MarketCanary.Subjects {
+			if strings.TrimSpace(subject.SpaceID) == "" || strings.TrimSpace(subject.DatasetID) == "" ||
+				strings.TrimSpace(subject.Symbol) == "" || strings.TrimSpace(subject.Frequency) == "" {
+				return fmt.Errorf("market_canary subject requires space_id, dataset_id, symbol, and frequency")
+			}
+			if subject.SeriesTag == nil {
+				return fmt.Errorf("market_canary subject requires series_tag (use an explicit empty value for the default series)")
+			}
+			if strings.EqualFold(subject.MarketID, "stockcn") && (strings.TrimSpace(subject.CalendarPath) == "" || len(subject.EligibleKlineProviders) == 0) {
+				return fmt.Errorf("stockcn market_canary subject requires calendar_path and eligible_kline_providers")
+			}
+		}
+	}
+	if c.MarketHealth.TimerCoordinationStaleAfter <= 0 {
+		return fmt.Errorf("market_health.timer_coordination_stale_after must be positive")
+	}
+	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
+		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
+	}
+	if c.MarketHealth.LowCapacityHeadroom < 0 {
+		return fmt.Errorf("market_health.low_capacity_headroom must not be negative")
+	}
+	if c.MarketHealth.FeedFailureRateWindow <= 0 || c.MarketHealth.FeedFailureRateThreshold <= 0 || c.MarketHealth.FeedFailureRateThreshold > 1 {
+		return fmt.Errorf("market_health feed failure window and threshold are invalid")
+	}
+	if c.MarketHealth.InstrumentSnapshotMaxAge <= 0 || c.MarketHealth.InstrumentMinimumCount <= 0 {
+		return fmt.Errorf("market_health instrument snapshot age and minimum count must be positive")
+	}
+	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
+		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
 	}
 	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
 		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")
 	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage
-		if h.SpaceID != "moox_system" {
-			return fmt.Errorf("metrics.host_storage.space_id must be moox_system")
+		if h.SpaceID != "mooxsys" {
+			return fmt.Errorf("metrics.host_storage.space_id must be mooxsys")
 		}
 		if h.Frequency != "1m" {
 			return fmt.Errorf("metrics.host_storage.frequency must be 1m")
@@ -391,11 +561,6 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	for i, peer := range c.Peer.Peers {
-		if peer.InstanceID == "" || peer.GatewayURL == "" || peer.NodeID == "" {
-			return fmt.Errorf("peer.peers[%d] requires instance_id, gateway_url, and node_id", i)
-		}
-	}
 	for name, values := range map[string][2]string{
 		"metrics.storage":      {c.Metrics.Storage.KeyID, c.Metrics.Storage.HMACKeyFile},
 		"metrics.host_storage": {c.Metrics.HostStorage.KeyID, c.Metrics.HostStorage.HMACKeyFile},
@@ -406,13 +571,48 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && (strings.TrimSpace(c.Peer.ServiceAuth.KeyID) == "" || strings.TrimSpace(c.Peer.ServiceAuth.SecretKey) == "") {
-		return fmt.Errorf("peer.service_auth key_id and secret_key must not be empty when peers are configured")
+	return nil
+}
+
+func (c *Config) validateKlineFreshness() error {
+	kline := c.KlineFreshness
+	if len(kline.SpaceIDs) < 1 || len(kline.SpaceIDs) > 16 {
+		return fmt.Errorf("kline_freshness.space_ids must contain between 1 and 16 Space IDs")
 	}
-	if c.Peer.Enabled && len(c.Peer.Peers) > 0 && c.Peer.TimeoutSeconds <= 0 {
-		return fmt.Errorf("peer timeout_seconds must be positive when peers are configured")
+	seenSpaces := make(map[string]struct{}, len(kline.SpaceIDs))
+	for _, spaceID := range kline.SpaceIDs {
+		spaceID = strings.TrimSpace(spaceID)
+		if spaceID == "" {
+			return fmt.Errorf("kline_freshness.space_ids must not contain an empty Space ID")
+		}
+		if _, exists := seenSpaces[spaceID]; exists {
+			return fmt.Errorf("kline_freshness.space_ids contains duplicate Space %q", spaceID)
+		}
+		seenSpaces[spaceID] = struct{}{}
+	}
+	if kline.EvaluationInterval < 30*time.Second {
+		return fmt.Errorf("kline_freshness.evaluation_interval must be at least 30s")
+	}
+	if kline.InventoryRefreshInterval < 30*time.Second || kline.InventoryRefreshInterval > 10*time.Minute {
+		return fmt.Errorf("kline_freshness.inventory_refresh_interval must be between 30s and 10m")
+	}
+	if kline.InventoryPageSize < 1 || kline.InventoryPageSize > 100 {
+		return fmt.Errorf("kline_freshness.inventory_page_size must be between 1 and 100")
+	}
+	if kline.InventoryMaxEntries < 1 || kline.InventoryMaxEntries > 1000 {
+		return fmt.Errorf("kline_freshness.inventory_max_entries must be between 1 and 1000")
+	}
+	if kline.StaleAfter < 2*kline.EvaluationInterval {
+		return fmt.Errorf("kline_freshness.stale_after must be at least twice evaluation_interval")
+	}
+	if kline.MaxSubjectsPerAlert < 1 || kline.MaxSubjectsPerAlert > 100 {
+		return fmt.Errorf("kline_freshness.max_subjects_per_alert must be between 1 and 100")
 	}
 	return nil
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func defaultInstanceID() string {

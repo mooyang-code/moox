@@ -2,551 +2,234 @@ package rpc
 
 import (
 	"context"
-	"fmt"
-	"github.com/mooyang-code/moox/modules/factor/internal/engine"
-	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
-	"github.com/mooyang-code/moox/modules/factor/internal/store"
-	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
-	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"os"
-	"path/filepath"
-	"sync"
+	"errors"
 	"testing"
 	"time"
-	"trpc.group/trpc-go/trpc-go/codec"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/stretchr/testify/require"
 )
 
-func TestCreateFactorValidationReturnsInvalidParam(t *testing.T) {
-	svc := newRPCTestService(t)
+func TestCreateFactorRequiresSetID(t *testing.T) {
+	catalog := &catalogFake{}
+	svc := NewService(catalog, &recalcFake{})
 
-	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{})
-	if err != nil {
-		t.Fatalf("CreateFactor() error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_INVALID_PARAM {
-		t.Fatalf("ret = %+v", rsp.GetRetInfo())
-	}
-}
-
-func TestCreateFactorSuccess(t *testing.T) {
-	svc := newRPCTestService(t)
-
-	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId:      "bias",
-		Name:          "Bias",
-		SourceCode:    "def signal(*args): return args[0]",
-		ParamsJson:    "[20]",
-		LookbackBars:  200,
-		WritebackBars: 5,
-		Status:        "enabled",
-	}})
-	if err != nil {
-		t.Fatalf("CreateFactor() error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %+v", rsp.GetRetInfo())
-	}
-	if rsp.GetFactor().GetFactorId() != "bias" || rsp.GetFactor().GetSourceHash() == "" {
-		t.Fatalf("factor = %+v", rsp.GetFactor())
-	}
-}
-
-func TestCreateFactorWritesSourceAndDepends(t *testing.T) {
-	dir := t.TempDir()
-	svc := NewWithRuntime(openRPCTestDB(t), nil, nil, WithFactorsDir(dir))
-	source := "extra_data_dict = {'coin-cap': ['circulating_supply']}\n\ndef signal(df, n, column):\n    return df\n"
-
-	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId:     "circulating_mcap",
-		Name:         "CirculatingMcap",
-		SourceCode:   source,
-		ParamsJson:   "[20]",
-		LookbackBars: 200,
-		Status:       "enabled",
-	}})
-	if err != nil {
-		t.Fatalf("CreateFactor() error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %+v", rsp.GetRetInfo())
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, "CirculatingMcap.py"))
-	if err != nil {
-		t.Fatalf("read source: %v", err)
-	}
-	if string(raw) != source {
-		t.Fatalf("written source = %q", string(raw))
-	}
-	if got := rsp.GetFactor().GetDependsJson(); got != `{"extra_columns":["circulating_supply"]}` {
-		t.Fatalf("depends_json = %s", got)
-	}
-}
-
-func TestUpsertBindingSuccess(t *testing.T) {
-	svc := newRPCTestService(t)
-	_, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId:     "bias",
-		Name:         "Bias",
-		SourceCode:   "x",
-		ParamsJson:   "[20]",
-		LookbackBars: 200,
-		Status:       "enabled",
-	}})
-	if err != nil {
-		t.Fatalf("CreateFactor() error = %v", err)
-	}
-
-	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
-		FactorId:      "bias",
-		SpaceId:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		Freq:          "1m",
-		SubjectMode:   "all",
-		TargetDataset: "binance_spot_factor",
-		Status:        "enabled",
-	}})
-	if err != nil {
-		t.Fatalf("UpsertBinding() error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %+v", rsp.GetRetInfo())
-	}
-	if rsp.GetBinding().GetBindingId() == "" {
-		t.Fatalf("binding id was not generated: %+v", rsp.GetBinding())
-	}
-}
-
-func TestListFactorRunsReturnsEmptyPageWithoutPersistentRunStore(t *testing.T) {
-	ctx := context.Background()
-	svc := New(openEmptyRPCTestDB(t))
-
-	rsp, err := svc.ListFactorRuns(ctx, &factorpb.ListFactorRunsReq{
-		SpaceId:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		Page:          &commonpb.Page{Page: 1, Size: 1},
+	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{
+		Factor: &factorpb.FactorDef{FactorId: "rolling_mean", Name: "Rolling mean"},
 	})
-	if err != nil {
-		t.Fatalf("ListFactorRuns() error = %v", err)
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "set_id")
+	require.Zero(t, catalog.createFactorCalls)
+}
+
+func TestRecalcFactorsValidatesTimeRange(t *testing.T) {
+	start := "2026-10-04T10:00:00Z"
+	end := "2026-10-04T10:02:00Z"
+	unaligned := "2026-10-04T10:02:01Z"
+
+	tests := []struct {
+		name    string
+		start   string
+		end     string
+		message string
+	}{
+		{name: "end before start", start: end, end: start, message: "end_time"},
+		{name: "end equals start", start: start, end: start, message: "end_time"},
+		{name: "unaligned end", start: start, end: unaligned, message: "aligned"},
+		{name: "unaligned start", start: "2026-10-04T10:00:01Z", end: end, message: "aligned"},
 	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %+v", rsp.GetRetInfo())
-	}
-	if len(rsp.GetRuns()) != 0 || rsp.GetPageResult().GetTotal() != 0 || rsp.GetPageResult().GetHasMore() {
-		t.Fatalf("runs/page = %d/%+v", len(rsp.GetRuns()), rsp.GetPageResult())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			catalog := &catalogFake{set: domain.FactorSet{
+				SetID:           "fset_binance_kline_1m",
+				SpaceID:         "crypto",
+				SourceDatasetID: "dataset_binance_kline_1m",
+				Freq:            "1m",
+				SubjectMode:     domain.SubjectModeAll,
+				ResultDatasetID: "dataset_factor_binance_kline_1m",
+				Status:          domain.SetStatusEnabled,
+			}}
+			recalc := &recalcFake{}
+			svc := NewService(catalog, recalc)
+
+			rsp, err := svc.RecalcFactors(context.Background(), &factorpb.RecalcFactorsReq{
+				SetId:     catalog.set.SetID,
+				StartTime: tt.start,
+				EndTime:   tt.end,
+				RequestId: "request-1",
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+			require.Contains(t, rsp.GetRetInfo().GetMsg(), tt.message)
+			require.Zero(t, recalc.submitCalls)
+		})
 	}
 }
 
-func openEmptyRPCTestDB(t *testing.T) *store.Store {
-	t.Helper()
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	if err != nil {
-		t.Fatalf("open empty store: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
+func TestRecalcFactorsSubmitsAlignedRange(t *testing.T) {
+	catalog := &catalogFake{set: domain.FactorSet{
+		SetID:           "fset_binance_kline_1m",
+		SpaceID:         "crypto",
+		SourceDatasetID: "dataset_binance_kline_1m",
+		Freq:            "1m",
+		SubjectMode:     domain.SubjectModeAll,
+		ResultDatasetID: "dataset_factor_binance_kline_1m",
+		Status:          domain.SetStatusEnabled,
+	}}
+	recalc := &recalcFake{}
+	svc := NewService(catalog, recalc)
 
-func TestRecalcFactorEnqueuesSchedulerTask(t *testing.T) {
-	ctx := context.Background()
-	sched := newFakeRPCScheduler()
-	svc := NewWithRuntime(openRPCTestDB(t), sched, nil, WithFactorsDir(t.TempDir()))
-	_, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId:      "circulating_mcap",
-		Name:          "CirculatingMcap",
-		SourceCode:    "extra_data_dict = {'coin-cap': ['circulating_supply']}\n\ndef signal(df, n, column):\n    return df\n",
-		ParamsJson:    "[20]",
-		LookbackBars:  200,
-		WritebackBars: 5,
-		Status:        "enabled",
-	}})
-	if err != nil {
-		t.Fatalf("CreateFactor() error = %v", err)
-	}
-	_, err = svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
-		FactorId:      "circulating_mcap",
-		SpaceId:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		Freq:          "1m",
-		TargetDataset: "binance_spot_factor",
-		Status:        "enabled",
-	}})
-	if err != nil {
-		t.Fatalf("UpsertBinding() error = %v", err)
-	}
-
-	requestCtx, requestMsg := codec.WithNewMessage(ctx)
-	requestMsg.WithCalleeMethod("factor.RecalcFactor")
-	requestCtx, cancelRequest := context.WithCancel(requestCtx)
-	rsp, err := svc.RecalcFactor(requestCtx, &factorpb.RecalcFactorReq{
-		SpaceId:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		SubjectId:     "BTC-USDT",
-		Freq:          "1m",
-		EndTime:       "2026-07-06T09:15:00Z",
+	rsp, err := svc.RecalcFactors(context.Background(), &factorpb.RecalcFactorsReq{
+		SetId:     catalog.set.SetID,
+		FactorIds: []string{"rolling_mean"},
+		Subjects:  []string{"BTCUSDT"},
+		StartTime: "2026-10-04T10:00:00+00:00",
+		EndTime:   "2026-10-04T10:05:00Z",
+		RequestId: "request-1",
 	})
-	if err != nil {
-		t.Fatalf("RecalcFactor() error = %v", err)
-	}
-	cancelRequest()
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %+v", rsp.GetRetInfo())
-	}
-	select {
-	case <-sched.done:
-	case <-time.After(time.Second):
-		t.Fatal("scheduler drain was not called")
-	}
-	if err := sched.drainContextErr(); err != nil {
-		t.Fatalf("asynchronous drain inherited request cancellation: %v", err)
-	}
-	if got := sched.drainCalleeMethod(); got != "factor.RecalcFactor" {
-		t.Fatalf("asynchronous drain callee method = %q", got)
-	}
-	if len(sched.tasks) != 1 {
-		t.Fatalf("tasks = %+v", sched.tasks)
-	}
-	task := sched.tasks[0]
-	if task.TriggerType != "recalc" || task.TargetDataset != "binance_spot_factor" || len(task.Factors) != 1 {
-		t.Fatalf("task = %+v", task)
-	}
-	if got := task.Factors[0].ExtraColumns; len(got) != 1 || got[0] != "circulating_supply" {
-		t.Fatalf("extra columns = %#v", got)
-	}
-	progress := waitRecalcProgress(t, ctx, svc, rsp.GetRecalcId())
-	if progress.GetStatus() != "succeeded" || progress.GetTotal() != 1 || progress.GetFinished() != 1 {
-		t.Fatalf("progress = %+v", progress)
-	}
-}
 
-func TestRecalcProgressUsesOwnTaskResultsWhenAnotherDrainRuns(t *testing.T) {
-	ctx := context.Background()
-	sched := newExternallyDrainedScheduler(fmt.Errorf("external task failed"))
-	externalDone := make(chan error, 1)
-	go func() {
-		externalDone <- sched.Drain(ctx)
-	}()
-	select {
-	case <-sched.externalStarted:
-	case <-time.After(time.Second):
-		t.Fatal("external drain did not start")
-	}
-
-	svc := NewWithRuntime(openRPCTestDB(t), sched, nil, WithFactorsDir(t.TempDir()))
-	_, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId:      "bias",
-		Name:          "Bias",
-		SourceCode:    "def signal(df, n, column): return df\n",
-		ParamsJson:    "[20]",
-		LookbackBars:  200,
-		WritebackBars: 5,
-		Status:        "enabled",
-	}})
-	if err != nil {
-		t.Fatalf("CreateFactor() error = %v", err)
-	}
-	_, err = svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
-		FactorId:      "bias",
-		SpaceId:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		Freq:          "1m",
-		TargetDataset: "binance_spot_factor",
-		Status:        "enabled",
-	}})
-	if err != nil {
-		t.Fatalf("UpsertBinding() error = %v", err)
-	}
-
-	rsp, err := svc.RecalcFactor(ctx, &factorpb.RecalcFactorReq{
-		SpaceId:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		SubjectId:     "BTC-USDT",
-		Freq:          "1m",
-		EndTime:       "2026-07-06T09:15:00Z",
-	})
-	if err != nil {
-		t.Fatalf("RecalcFactor() error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %+v", rsp.GetRetInfo())
-	}
-	close(sched.releaseExternal)
-	if err := <-externalDone; err == nil {
-		t.Fatal("external Drain() error = nil, want failure")
-	}
-	progress := waitRecalcProgress(t, ctx, svc, rsp.GetRecalcId())
-	if progress.GetStatus() != "failed: external task failed" || progress.GetFinished() != 1 {
-		t.Fatalf("progress = %+v", progress)
-	}
-}
-
-func TestRecalcFactorRejectsStartTimeRange(t *testing.T) {
-	svc := NewWithRuntime(openRPCTestDB(t), newFakeRPCScheduler(), nil, WithFactorsDir(t.TempDir()))
-
-	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
-		SpaceId:       "crypto",
-		SourceDataset: "binance_spot_kline",
-		SubjectId:     "BTC-USDT",
-		Freq:          "1m",
-		StartTime:     "2026-07-06T09:00:00Z",
-		EndTime:       "2026-07-06T09:15:00Z",
-	})
-	if err != nil {
-		t.Fatalf("RecalcFactor() error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_INVALID_PARAM {
-		t.Fatalf("ret = %+v, want invalid param", rsp.GetRetInfo())
-	}
-}
-
-func newRPCTestService(t *testing.T) *Service {
-	t.Helper()
-	return NewWithRuntime(openRPCTestDB(t), nil, nil, WithFactorsDir(t.TempDir()))
-}
-
-type fakeRPCScheduler struct {
-	mu    sync.Mutex
-	once  sync.Once
-	done  chan struct{}
-	tasks []scheduler.Task
-	ctx   context.Context
-}
-
-func newFakeRPCScheduler() *fakeRPCScheduler {
-	return &fakeRPCScheduler{done: make(chan struct{})}
-}
-
-func (f *fakeRPCScheduler) Status() scheduler.Status {
-	return scheduler.Status{QueueDepth: len(f.tasks)}
-}
-
-func (f *fakeRPCScheduler) Enqueue(_ context.Context, task scheduler.Task) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.tasks = append(f.tasks, task)
-}
-
-func (f *fakeRPCScheduler) Drain(ctx context.Context) error {
-	f.mu.Lock()
-	f.ctx = ctx
-	tasks := append([]scheduler.Task(nil), f.tasks...)
-	f.mu.Unlock()
-	for _, task := range tasks {
-		if task.Completion != nil {
-			task.Completion <- scheduler.TaskResult{TaskID: task.TaskID, Status: "succeeded"}
-		}
-	}
-	f.once.Do(func() {
-		close(f.done)
-	})
-	return nil
-}
-
-func (f *fakeRPCScheduler) drainContextErr() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.ctx.Err()
-}
-
-func (f *fakeRPCScheduler) drainCalleeMethod() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return codec.Message(f.ctx).CalleeMethod()
-}
-
-type externallyDrainedScheduler struct {
-	mu              sync.Mutex
-	drainMu         sync.Mutex
-	externalStarted chan struct{}
-	releaseExternal chan struct{}
-	failErr         error
-	tasks           []scheduler.Task
-	drains          int
-}
-
-func newExternallyDrainedScheduler(failErr error) *externallyDrainedScheduler {
-	return &externallyDrainedScheduler{
-		externalStarted: make(chan struct{}),
-		releaseExternal: make(chan struct{}),
-		failErr:         failErr,
-	}
-}
-
-func (s *externallyDrainedScheduler) Status() scheduler.Status {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return scheduler.Status{QueueDepth: len(s.tasks)}
-}
-
-func (s *externallyDrainedScheduler) Enqueue(_ context.Context, task scheduler.Task) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.tasks = append(s.tasks, task)
-}
-
-func (s *externallyDrainedScheduler) Drain(context.Context) error {
-	s.drainMu.Lock()
-	defer s.drainMu.Unlock()
-	s.drains++
-	if s.drains == 1 {
-		close(s.externalStarted)
-		<-s.releaseExternal
-		s.mu.Lock()
-		tasks := append([]scheduler.Task(nil), s.tasks...)
-		s.tasks = nil
-		s.mu.Unlock()
-		for _, task := range tasks {
-			if task.Completion != nil {
-				task.Completion <- scheduler.TaskResult{TaskID: task.TaskID, Status: "failed", Error: s.failErr}
-			}
-		}
-		return s.failErr
-	}
-	return nil
-}
-
-func waitRecalcProgress(t *testing.T, ctx context.Context, svc *Service, recalcID string) *factorpb.GetRecalcProgressRsp {
-	t.Helper()
-	deadline := time.After(time.Second)
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		progress, err := svc.GetRecalcProgress(ctx, &factorpb.GetRecalcProgressReq{RecalcId: recalcID})
-		if err != nil {
-			t.Fatalf("GetRecalcProgress() error = %v", err)
-		}
-		if progress.GetStatus() != "running" && progress.GetStatus() != "queued" {
-			return progress
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("recalc progress did not finish: %+v", progress)
-		case <-tick.C:
-		}
-	}
-}
-
-func openRPCTestDB(t *testing.T) *store.Store {
-	t.Helper()
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	if err := db.ApplySchema(factorschema.AllSQL()); err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
-
-func TestFactorCRUD_AndBindingsLifecycle(t *testing.T) {
-	svc := newRPCTestService(t)
-	ctx := context.Background()
-
-	create, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId: "bias", Name: "Bias", SourceCode: "def signal(df): return df", ParamsJson: "[20]", Status: "enabled",
-	}})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, create.GetRetInfo().GetCode())
-
-	got, err := svc.GetFactor(ctx, &factorpb.GetFactorReq{FactorId: "bias"})
-	require.NoError(t, err)
-	assert.Equal(t, "bias", got.GetFactor().GetFactorId())
-
-	_, err = svc.GetFactor(ctx, &factorpb.GetFactorReq{})
-	require.NoError(t, err)
-
-	update, err := svc.UpdateFactor(ctx, &factorpb.UpdateFactorReq{FactorId: "bias", Factor: &factorpb.FactorDef{
-		Name: "Bias", SourceCode: "def signal(df, n): return df", ParamsJson: "[10]", Status: "enabled",
-	}})
-	require.NoError(t, err)
-	assert.Equal(t, commonpb.ErrorCode_SUCCESS, update.GetRetInfo().GetCode())
-
-	listed, err := svc.ListFactors(ctx, &factorpb.ListFactorsReq{Page: &commonpb.Page{Page: 1, Size: 10}})
-	require.NoError(t, err)
-	assert.NotEmpty(t, listed.GetFactors())
-
-	status, err := svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{FactorId: "bias", Status: "disabled"})
-	require.NoError(t, err)
-	assert.Equal(t, "disabled", status.GetFactor().GetStatus())
-
-	_, err = svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{})
-	require.NoError(t, err)
-
-	_, err = svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId: "bias2", Name: "Bias", SourceCode: "x", Status: "enabled",
-	}})
-	require.NoError(t, err)
-
-	bind, err := svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
-		FactorId: "bias", SpaceId: "crypto", SourceDataset: "kline", Freq: "1m", Status: "enabled",
-	}})
-	require.NoError(t, err)
-	bindingID := bind.GetBinding().GetBindingId()
-	require.NotEmpty(t, bindingID)
-
-	bindings, err := svc.ListBindings(ctx, &factorpb.ListBindingsReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10}})
-	require.NoError(t, err)
-	assert.NotEmpty(t, bindings.GetBindings())
-
-	del, err := svc.DeleteBinding(ctx, &factorpb.DeleteBindingReq{BindingId: bindingID})
-	require.NoError(t, err)
-	assert.Equal(t, commonpb.ErrorCode_SUCCESS, del.GetRetInfo().GetCode())
-
-	_, err = svc.DeleteBinding(ctx, &factorpb.DeleteBindingReq{})
-	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, 1, recalc.submitCalls)
+	require.Equal(t, "fset_binance_kline_1m", recalc.setID)
+	require.Equal(t, []string{"rolling_mean"}, recalc.factorIDs)
+	require.Equal(t, []string{"BTCUSDT"}, recalc.subjects)
+	require.Equal(t, "request-1", recalc.requestID)
+	require.Equal(t, time.Date(2026, 10, 4, 10, 0, 0, 0, time.UTC), recalc.start)
+	require.Equal(t, time.Date(2026, 10, 4, 10, 5, 0, 0, time.UTC), recalc.end)
+	require.Equal(t, "request-1", rsp.GetJob().GetJobId())
 }
 
-func TestGetEngineStatus_WithRuntimeProviders(t *testing.T) {
-	db := openRPCTestDB(t)
-	sched := newFakeRPCScheduler()
-	eng := &fakeEngineStatus{workers: 2}
-	svc := NewWithRuntime(db, sched, eng, WithFactorsDir(t.TempDir()))
+func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
+	service := factorpb.File_factor_proto.Services().ByName("FactorMgr")
+	require.NotNil(t, service)
 
-	rsp, err := svc.GetEngineStatus(context.Background(), &factorpb.GetEngineStatusReq{})
-	require.NoError(t, err)
-	assert.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.Len(t, rsp.GetWorkers(), 2)
-	assert.Equal(t, int32(sched.Status().QueueDepth), rsp.GetQueueDepth())
+	want := []string{
+		"CreateFactorSet", "UpdateFactorSet", "SetFactorSetStatus", "DeleteFactorSet", "GetFactorSet", "ListFactorSets",
+		"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor", "GetFactor", "ListFactors",
+		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
+	}
+	got := make([]string, 0, service.Methods().Len())
+	for i := 0; i < service.Methods().Len(); i++ {
+		got = append(got, string(service.Methods().Get(i).Name()))
+	}
+	require.ElementsMatch(t, want, got)
 }
 
-func TestGetRecalcProgress_Validation(t *testing.T) {
-	svc := newRPCTestService(t)
-	rsp, err := svc.GetRecalcProgress(context.Background(), &factorpb.GetRecalcProgressReq{})
-	require.NoError(t, err)
-	assert.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-
-	rsp, err = svc.GetRecalcProgress(context.Background(), &factorpb.GetRecalcProgressReq{RecalcId: "missing"})
-	require.NoError(t, err)
-	assert.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+type catalogFake struct {
+	set               domain.FactorSet
+	factors           []domain.FactorDef
+	createFactorCalls int
 }
 
-func TestRecalcFactor_ValidationBranches(t *testing.T) {
-	svc := New(openRPCTestDB(t))
-	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
-		SpaceId: "s", SourceDataset: "d", Freq: "1m", SubjectId: "BTC",
+func (f *catalogFake) CreateSet(_ context.Context, in domain.FactorSet) (domain.FactorSet, error) {
+	f.set = in
+	return in, nil
+}
+func (f *catalogFake) UpdateSetSubjects(_ context.Context, _, mode string, subjects []string) (domain.FactorSet, error) {
+	f.set.SubjectMode, f.set.Subjects = mode, subjects
+	return f.set, nil
+}
+func (f *catalogFake) SetSetStatus(_ context.Context, _, status string) (domain.FactorSet, error) {
+	f.set.Status = status
+	return f.set, nil
+}
+func (f *catalogFake) DeleteSet(context.Context, string, bool) error { return nil }
+func (f *catalogFake) GetSet(context.Context, string) (domain.FactorSet, []domain.FactorDef, error) {
+	if f.set.SetID == "" {
+		return domain.FactorSet{}, nil, errors.New("set not found")
+	}
+	return f.set, f.factors, nil
+}
+func (f *catalogFake) ListSets(context.Context) ([]domain.FactorSet, error) { return nil, nil }
+func (f *catalogFake) CreateFactor(_ context.Context, in domain.FactorDef) (domain.FactorDef, error) {
+	f.createFactorCalls++
+	return in, nil
+}
+func (f *catalogFake) UpdateFactor(_ context.Context, in domain.FactorDef) (domain.FactorDef, error) {
+	return in, nil
+}
+func (f *catalogFake) SetFactorStatus(_ context.Context, factorID, status string) (domain.FactorDef, string, error) {
+	if status == domain.FactorStatusEnabled {
+		return domain.FactorDef{FactorID: factorID, Status: status}, "factor-enable-" + factorID, nil
+	}
+	return domain.FactorDef{FactorID: factorID, Status: status}, "", nil
+}
+func (f *catalogFake) DeleteFactor(context.Context, string) error { return nil }
+func (f *catalogFake) GetFactor(context.Context, string) (domain.FactorDef, error) {
+	return domain.FactorDef{}, errors.New("factor not found")
+}
+func (f *catalogFake) ListFactors(context.Context, string, string) ([]domain.FactorDef, error) {
+	return f.factors, nil
+}
+
+type recalcFake struct {
+	submitCalls int
+	jobs        []RecalcJob
+	listSetID   string
+	listStatus  []string
+	job         RecalcJob
+	setID       string
+	factorIDs   []string
+	subjects    []string
+	requestID   string
+	start       time.Time
+	end         time.Time
+}
+
+func (f *recalcFake) Submit(_ context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (RecalcJob, error) {
+	f.submitCalls++
+	f.setID, f.factorIDs, f.subjects, f.requestID, f.start, f.end = setID, factorIDs, subjects, requestID, start, end
+	f.job = RecalcJob{JobID: requestID, RequestID: requestID, SetID: setID, FactorIDs: factorIDs, Subjects: subjects, StartTime: start, EndTime: end}
+	return f.job, nil
+}
+func (f *recalcFake) List(_ context.Context, setID string, statuses []string) ([]RecalcJob, error) {
+	f.listSetID, f.listStatus = setID, statuses
+	return f.jobs, nil
+}
+func (f *recalcFake) Get(_ context.Context, jobID string) (RecalcJob, error) {
+	if f.job.JobID == "" {
+		return RecalcJob{JobID: jobID}, nil
+	}
+	return f.job, nil
+}
+func (f *recalcFake) Cancel(context.Context, string) (RecalcJob, error) {
+	return f.job, nil
+}
+
+func TestSetFactorStatusReturnsBackfillJobOnEnable(t *testing.T) {
+	svc := NewService(&catalogFake{}, &recalcFake{})
+
+	enabled, err := svc.SetFactorStatus(context.Background(), &factorpb.SetFactorStatusReq{FactorId: "momentum", Status: domain.FactorStatusEnabled})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, enabled.GetRetInfo().GetCode())
+	require.Equal(t, "factor-enable-momentum", enabled.GetBackfillJob().GetJobId())
+
+	disabled, err := svc.SetFactorStatus(context.Background(), &factorpb.SetFactorStatusReq{FactorId: "momentum", Status: domain.FactorStatusDisabled})
+	require.NoError(t, err)
+	require.Nil(t, disabled.GetBackfillJob())
+}
+
+func TestListRecalcJobsFiltersBySetAndPaginates(t *testing.T) {
+	recalc := &recalcFake{jobs: []RecalcJob{{JobID: "job-3"}, {JobID: "job-2"}, {JobID: "job-1"}}}
+	svc := NewService(&catalogFake{}, recalc)
+
+	missing, err := svc.ListRecalcJobs(context.Background(), &factorpb.ListRecalcJobsReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
+
+	rsp, err := svc.ListRecalcJobs(context.Background(), &factorpb.ListRecalcJobsReq{
+		SetId: "fset_a", Statuses: []string{"running"}, Page: &commonpb.Page{Page: 1, Size: 2},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-
-	svc = newRPCTestService(t)
-	rsp, err = svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{})
-	require.NoError(t, err)
-	assert.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-
-	rsp, err = svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
-		SpaceId: "s", SourceDataset: "d", Freq: "1m",
-	})
-	require.NoError(t, err)
-	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "subject_id")
-}
-
-type fakeEngineStatus struct {
-	workers int
-}
-
-func (f *fakeEngineStatus) Status() engine.WorkerPoolStatus {
-	return engine.WorkerPoolStatus{Workers: f.workers}
+	require.Equal(t, "fset_a", recalc.listSetID)
+	require.Equal(t, []string{"running"}, recalc.listStatus)
+	require.Len(t, rsp.GetJobs(), 2)
+	require.EqualValues(t, 3, rsp.GetPageResult().GetTotal())
+	require.True(t, rsp.GetPageResult().GetHasMore())
 }

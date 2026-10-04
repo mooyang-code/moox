@@ -93,6 +93,9 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 		result.Success = false
 		result.Status = domain.CheckStatusDown
 		result.ErrorMessage = fmt.Sprintf("unexpected HTTP status %d", resp.StatusCode)
+		if reason := healthFailureReason(req.URL, excerpt); reason != "" {
+			result.ErrorMessage = reason
+		}
 		return result
 	}
 	if check.MaxResponseMS > 0 && latency.Milliseconds() > int64(check.MaxResponseMS) {
@@ -110,6 +113,24 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	result.Success = true
 	result.Status = domain.CheckStatusOK
 	return result
+}
+
+func healthFailureReason(u *url.URL, body string) string {
+	if u == nil || !isHealthPath(u) || strings.TrimSpace(body) == "" {
+		return ""
+	}
+	var payload struct {
+		Details map[string]any `json:"details"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return ""
+	}
+	for _, key := range []string{"storage_write_error", "database_checks_error", "observability_storage_write_error"} {
+		if value, ok := payload.Details[key].(string); ok && strings.TrimSpace(value) != "" {
+			return "健康检查失败：" + strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func isHealthPath(u *url.URL) bool {

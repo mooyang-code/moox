@@ -19,10 +19,6 @@ type sampleHandler struct {
 	run      func(context.Context) (*hostagentpb.RunOnceRsp, error)
 }
 
-func newSampleHandler(timeout time.Duration, run func(context.Context) (*hostagentpb.RunOnceRsp, error)) (*sampleHandler, error) {
-	return newSampleHandlerWithShutdown(timeout, trpc.BackgroundContext(), run)
-}
-
 func newSampleHandlerWithShutdown(timeout time.Duration, shutdown context.Context, run func(context.Context) (*hostagentpb.RunOnceRsp, error)) (*sampleHandler, error) {
 	if timeout <= 0 {
 		return nil, fmt.Errorf("hostagent sample timeout must be positive")

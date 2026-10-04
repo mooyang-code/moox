@@ -1449,7 +1449,7 @@ Expected: PASS.
 Run:
 
 ```bash
-TARGET_GOOS=linux TARGET_GOARCH=amd64 scripts/build.sh trade
+TARGET_GOOS=linux TARGET_GOARCH=amd64 scripts/build/build.sh trade
 ```
 
 Expected:

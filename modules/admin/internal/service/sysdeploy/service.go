@@ -19,11 +19,10 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Service 管理系统服务部署信息，并向 cloudnode keepalive 提供 SCF runtime payload。
+// Service 管理系统服务部署信息，并提供网关路由与健康检查所需的部署目录。
 type Service interface {
 	pb.SysDeployService
 	SeedDefaults(ctx context.Context) error
-	GetServiceDeployments(ctx context.Context) (map[string]interface{}, error)
 	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool)
 	CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error)
 	ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error
@@ -79,7 +78,16 @@ func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
 			}
 		}
 	}
-	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID))
+	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID), nodeID, obsoleteDefaultDeploymentNames)
+}
+
+// obsoleteDefaultDeploymentNames is intentionally destructive for the
+// unified Trade cutover: the old split endpoints must not remain as active
+// browser targets after Admin restarts.
+var obsoleteDefaultDeploymentNames = []string{
+	"trade_exchange_account",
+	"trade_execution",
+	"trade_logical_account",
 }
 
 func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {
@@ -100,7 +108,6 @@ func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListSe
 		RetInfo:     retOK(),
 		Deployments: modelsToPB(rows),
 		PageResult:  makePageResult(pageNo, limit, total),
-		Warnings:    storageTopologyWarnings(""),
 	}, nil
 }
 
@@ -116,7 +123,7 @@ func (s *ServiceImpl) GetServiceDeployment(ctx context.Context, req *pb.GetServi
 		log.ErrorContextf(ctx, "[SysDeploy] GetServiceDeployment failed: %v", err)
 		return &pb.GetServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询服务部署信息失败")}, nil
 	}
-	return &pb.GetServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row), Warnings: storageTopologyWarnings(row.ServiceName)}, nil
+	return &pb.GetServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row)}, nil
 }
 
 func (s *ServiceImpl) CreateServiceDeployment(ctx context.Context, req *pb.CreateServiceDeploymentReq) (*pb.CreateServiceDeploymentRsp, error) {
@@ -138,7 +145,7 @@ func (s *ServiceImpl) CreateServiceDeployment(ctx context.Context, req *pb.Creat
 		}
 		return &pb.CreateServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
-	return &pb.CreateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(item), Warnings: storageTopologyWarnings(item.ServiceName)}, nil
+	return &pb.CreateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(item)}, nil
 }
 
 func (s *ServiceImpl) UpdateServiceDeployment(ctx context.Context, req *pb.UpdateServiceDeploymentReq) (*pb.UpdateServiceDeploymentRsp, error) {
@@ -169,7 +176,7 @@ func (s *ServiceImpl) UpdateServiceDeployment(ctx context.Context, req *pb.Updat
 	if err != nil {
 		return &pb.UpdateServiceDeploymentRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "保存后读取失败")}, nil
 	}
-	return &pb.UpdateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row), Warnings: storageTopologyWarnings(serviceName)}, nil
+	return &pb.UpdateServiceDeploymentRsp{RetInfo: retOK(), Deployment: modelToPB(row)}, nil
 }
 
 func (s *ServiceImpl) DeleteServiceDeployment(ctx context.Context, req *pb.DeleteServiceDeploymentReq) (*pb.DeleteServiceDeploymentRsp, error) {
@@ -189,7 +196,7 @@ func (s *ServiceImpl) DeleteServiceDeployment(ctx context.Context, req *pb.Delet
 		}
 		return &pb.DeleteServiceDeploymentRsp{RetInfo: retErr(code, err.Error())}, nil
 	}
-	return &pb.DeleteServiceDeploymentRsp{RetInfo: retOK(), Warnings: storageTopologyWarnings(serviceName)}, nil
+	return &pb.DeleteServiceDeploymentRsp{RetInfo: retOK()}, nil
 }
 
 func (s *ServiceImpl) ListActiveServiceDeployments(ctx context.Context, req *pb.ListActiveServiceDeploymentsReq) (*pb.ListActiveServiceDeploymentsRsp, error) {
@@ -199,34 +206,6 @@ func (s *ServiceImpl) ListActiveServiceDeployments(ctx context.Context, req *pb.
 		return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询 active 服务部署信息失败")}, nil
 	}
 	return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retOK(), Deployments: modelsToPB(rows), DeploymentMap: endpointMap(rows, req.GetNodeId() == "")}, nil
-}
-
-// GetServiceDeployments 返回可直接序列化到 SCF keepalive event 的 active 部署信息。
-func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]interface{}, error) {
-	if s.adminNodeID == "" {
-		return nil, fmt.Errorf("admin node id is required")
-	}
-	rows, err := s.dao.ListActive(ctx, s.adminNodeID)
-	if err != nil {
-		return nil, err
-	}
-	payload := make(map[string]interface{}, len(rows))
-	for i := range rows {
-		row := rows[i]
-		payload[row.ServiceName] = map[string]interface{}{
-			"service_name": row.ServiceName,
-			"service_kind": row.ServiceKind,
-			"protocol":     row.Protocol,
-			"host":         row.Host,
-			"port":         row.Port,
-			"base_url":     deploymentBaseURL(&row),
-			"rpc_address":  deploymentRPCAddress(&row),
-			"gateway_path": row.GatewayPath,
-			"scope":        row.Scope,
-			"status":       row.Status,
-		}
-	}
-	return payload, nil
 }
 
 // ResolveAdminServiceDetail resolves browser control-plane forwarding only from
@@ -245,7 +224,20 @@ func (s *ServiceImpl) ResolveAdminServiceDetail(ctx context.Context, adminNodeID
 	if address == "" || path == "" || strings.HasPrefix(path, "/") {
 		return gateway.ServiceDetail{}, false
 	}
-	return gateway.ServiceDetail{Address: address, Path: path}, true
+	extra, err := parseRouteExtraConfig(row.ExtraConfig)
+	if err != nil {
+		return gateway.ServiceDetail{}, false
+	}
+	timeout := 30 * time.Second
+	if extra.TimeoutMS != nil && *extra.TimeoutMS > 0 {
+		timeout = time.Duration(*extra.TimeoutMS) * time.Millisecond
+	}
+	detail := gateway.ServiceDetail{Address: address, Path: path, Timeout: timeout}
+	if gatewayDeploymentName(serviceID) == "trade_console" && extra.GatewayURL != "" && extra.GatewayNode != "" {
+		detail.GatewayURL = strings.TrimRight(strings.TrimSpace(extra.GatewayURL), "/")
+		detail.GatewayNode = strings.TrimSpace(extra.GatewayNode)
+	}
+	return detail, true
 }
 
 func gatewayDeploymentName(serviceID string) string {
@@ -287,12 +279,12 @@ func validateDeployment(item *Deployment) error {
 	if item.Host == "" {
 		return fmt.Errorf("host is required")
 	}
-	ip := net.ParseIP(item.Host)
-	if ip == nil {
-		return fmt.Errorf("host must be an IP address")
-	}
-	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return fmt.Errorf("host must be a routable unicast IP address")
+	if ip := net.ParseIP(item.Host); ip != nil {
+		if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("host must be a routable unicast IP address")
+		}
+	} else if !validDeploymentDNSName(item.Host) {
+		return fmt.Errorf("host must be a routable IP address or DNS name")
 	}
 	if item.Port <= 0 || item.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
@@ -346,6 +338,31 @@ func validateDeployment(item *Deployment) error {
 		}
 	}
 	return nil
+}
+
+// validDeploymentHost accepts the same DNS-capable host values used by setup
+// manifests. Route targets are still constrained to a single syntactic host
+// (no URL, port, wildcard, or whitespace), while IP multicast/unspecified and
+// link-local addresses remain forbidden.
+func validDeploymentDNSName(raw string) bool {
+	host := strings.TrimSpace(raw)
+	if host == "" || host != raw || len(host) > 253 || strings.Contains(host, "..") {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func normalizePage(page *pb.Page) (int, int, int) {

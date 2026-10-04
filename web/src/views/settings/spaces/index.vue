@@ -32,7 +32,7 @@
           <a-table-column title="时区" data-index="timezone" :width="150" />
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
@@ -41,7 +41,14 @@
           <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
-                <a-button size="mini" type="text" @click="spaceStore.setSelectedSpace(record.space_id)">设为当前</a-button>
+                <a-button
+                  size="mini"
+                  type="text"
+                  :disabled="record.status !== 'active'"
+                  @click="spaceStore.setSelectedSpace(record.space_id)"
+                >
+                  设为当前
+                </a-button>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
               </a-space>
             </template>
@@ -86,7 +93,14 @@ import { Message } from "@arco-design/web-vue";
 import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
 import type { Space } from "@/api/admin/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusOptions } from "@/views/data/shared/metadata-utils";
+import {
+  applyPageResult,
+  defaultPagination,
+  formatTime,
+  statusColor,
+  statusLabel,
+  statusOptions
+} from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "SettingsSpaces" });
 
@@ -166,7 +180,9 @@ async function submit() {
   Message.success("空间已保存");
   visible.value = false;
   await load();
-  spaceStore.setSelectedSpace(form.space_id);
+  if (form.status === "active") {
+    spaceStore.setSelectedSpace(form.space_id);
+  }
 }
 
 function onPageChange(page: number) {

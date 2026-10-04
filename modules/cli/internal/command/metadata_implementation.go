@@ -1,14 +1,17 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
@@ -16,13 +19,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	maxMetadataSeedBytes  = 8 << 20
+	metadataApplyPageSize = 500
+	metadataApplyMaxPages = 1000
+)
+
 func validateReservedInternalSpaces(seed metadataSeed) error {
-	// Route seeds are intentionally applied after the logical internal-space
-	// seed. They reference an already-verified reserved Space rather than
-	// redefining it, so keep this deployment-topology-only form valid.
-	allowExistingReserved := isReservedReferenceSeed(seed)
 	for _, item := range seed.Spaces {
-		if !strings.HasPrefix(item.SpaceID, "moox_") {
+		if item.SpaceID != "mooxsys" {
 			continue
 		}
 		if item.Attributes["scope"] != "internal" || item.Attributes["owner_module"] == "" || item.Attributes["managed_by"] == "" {
@@ -31,7 +36,7 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 	}
 	check := func(resource, spaceID string) error {
 		spaceID = strings.TrimSpace(spaceID)
-		if strings.HasPrefix(spaceID, "moox_") && !hasInternalSpace(seed, spaceID) && !allowExistingReserved {
+		if spaceID == "mooxsys" && !hasInternalSpace(seed, spaceID) {
 			return fmt.Errorf("seed %s cannot claim reserved space %q", resource, spaceID)
 		}
 		return nil
@@ -46,18 +51,13 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 			return err
 		}
 	}
-	for _, item := range seed.SubjectSymbols {
-		if err := check("subject_symbols", item.SpaceID); err != nil {
+	for _, item := range seed.Tags {
+		if err := check("tags", item.SpaceID); err != nil {
 			return err
 		}
 	}
 	for _, item := range seed.Datasets {
 		if err := check("datasets", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.DatasetSubjects {
-		if err := check("dataset_subjects", item.SpaceID); err != nil {
 			return err
 		}
 	}
@@ -68,11 +68,6 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 	}
 	for _, item := range seed.Fields {
 		if err := check("fields", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.Factors {
-		if err := check("factors", item.SpaceID); err != nil {
 			return err
 		}
 	}
@@ -91,21 +86,7 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 			return err
 		}
 	}
-	for _, item := range seed.PrimaryStoreRoutes {
-		if err := check("primary_store_routes", item.SpaceID); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-func isReservedReferenceSeed(seed metadataSeed) bool {
-	return len(seed.Spaces) == 0 &&
-		len(seed.DataSources) == 0 && len(seed.Subjects) == 0 && len(seed.SubjectSymbols) == 0 &&
-		len(seed.Datasets) == 0 && len(seed.DatasetSubjects) == 0 && len(seed.FieldGroups) == 0 && len(seed.Fields) == 0 &&
-		len(seed.Factors) == 0 && len(seed.DatasetColumns) == 0 && len(seed.Views) == 0 &&
-		len(seed.ViewColumns) == 0 && len(seed.PrimaryStoreNodes) == 0 && len(seed.Devices) == 0 &&
-		len(seed.PrimaryStoreRoutes) > 0
 }
 
 func hasInternalSpace(seed metadataSeed, id string) bool {
@@ -118,19 +99,39 @@ func hasInternalSpace(seed metadataSeed, id string) bool {
 }
 
 func loadMetadataSeed(path string) (metadataSeed, error) {
-	raw, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return metadataSeed{}, fmt.Errorf("读取 metadata seed 失败 %s: %w", path, err)
 	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maxMetadataSeedBytes+1))
+	if err != nil {
+		return metadataSeed{}, fmt.Errorf("读取 metadata seed 失败 %s: %w", path, err)
+	}
+	if len(raw) > maxMetadataSeedBytes {
+		return metadataSeed{}, fmt.Errorf("metadata seed exceeds %d bytes", maxMetadataSeedBytes)
+	}
 	var seed metadataSeed
-	if err := yaml.Unmarshal(raw, &seed); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&seed); err != nil {
 		return metadataSeed{}, fmt.Errorf("解析 metadata seed 失败 %s: %w", path, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return metadataSeed{}, fmt.Errorf("metadata seed must contain exactly one YAML document")
 	}
 	return seed, nil
 }
 
 func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
+	if err := validateSeedDatasets(seed.Datasets); err != nil {
+		return nil, err
+	}
 	var err error
+	seed, err = normalizeMetadataSeedViews(seed)
+	if err != nil {
+		return nil, err
+	}
 	seed, err = normalizeFieldGroups(seed)
 	if err != nil {
 		return nil, err
@@ -167,8 +168,12 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	for _, item := range seed.Subjects {
 		calls = append(calls, metadataImportCall{Resource: "subjects", Method: "UpsertSubject", Request: &pb.UpsertSubjectReq{Subject: item.toPB()}, Response: &pb.UpsertSubjectRsp{}})
 	}
-	for _, item := range seed.SubjectSymbols {
-		calls = append(calls, metadataImportCall{Resource: "subject_symbols", Method: "UpsertSubjectSymbol", Request: &pb.UpsertSubjectSymbolReq{SubjectSymbol: item.toPB()}, Response: &pb.UpsertSubjectSymbolRsp{}})
+	for _, item := range seed.Tags {
+		tag := item.toPB()
+		calls = append(calls, metadataImportCall{
+			Resource: "tags", Method: "UpsertTag", Request: &pb.UpsertTagReq{Tag: tag}, Response: &pb.UpsertTagRsp{},
+			Exists: &metadataExistsProbe{Method: "GetTag", Request: &pb.GetTagReq{SpaceId: tag.GetSpaceId(), TagId: tag.GetTagId()}, Response: &pb.GetTagRsp{}},
+		})
 	}
 	for _, item := range seed.Datasets {
 		dataset, err := item.toPB()
@@ -186,9 +191,6 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 				Response: &pb.GetDatasetRsp{},
 			},
 		})
-	}
-	for _, item := range seed.DatasetSubjects {
-		calls = append(calls, metadataImportCall{Resource: "dataset_subjects", Method: "BindDatasetSubject", Request: &pb.BindDatasetSubjectReq{DatasetSubject: item.toPB()}, Response: &pb.BindDatasetSubjectRsp{}})
 	}
 	for _, item := range seed.FieldGroups {
 		group := item.toPB()
@@ -215,33 +217,14 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
-	for _, item := range seed.Factors {
-		factor, err := item.toPB()
-		if err != nil {
-			return nil, err
-		}
-		calls = append(calls, metadataImportCall{
-			Resource: "factors",
-			Method:   "CreateFactor",
-			Request:  &pb.CreateFactorReq{Factor: factor},
-			Response: &pb.CreateFactorRsp{},
-			Exists: &metadataExistsProbe{
-				Method:   "GetFactor",
-				Request:  &pb.GetFactorReq{SpaceId: factor.GetSpaceId(), FactorId: factor.GetFactorId()},
-				Response: &pb.GetFactorRsp{},
-			},
-		})
-	}
-	displayNames := make(map[string]string, len(seed.Fields)+len(seed.Factors))
+	displayNames := make(map[string]string, len(seed.Fields))
 	for _, item := range seed.Fields {
-		displayNames[item.FieldID] = item.Name
-	}
-	for _, item := range seed.Factors {
-		displayNames[item.FactorID] = item.Name
+		displayNames[metadataDisplayNameKey(item.SpaceID, "FIELD", item.FieldID)] = item.Name
 	}
 	for _, item := range seed.DatasetColumns {
 		if strings.TrimSpace(item.Attributes["display_name"]) == "" {
-			if displayName := strings.TrimSpace(displayNames[item.OriginID]); displayName != "" {
+			key := metadataDisplayNameKey(item.SpaceID, item.OriginType, item.OriginID)
+			if displayName := strings.TrimSpace(displayNames[key]); displayName != "" {
 				item.Attributes = cloneStringMap(item.Attributes)
 				item.Attributes["display_name"] = displayName
 			}
@@ -251,20 +234,6 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			return nil, err
 		}
 		calls = append(calls, metadataImportCall{Resource: "dataset_columns", Method: "UpsertDatasetColumn", Request: &pb.UpsertDatasetColumnReq{Column: column}, Response: &pb.UpsertDatasetColumnRsp{}})
-	}
-	for _, item := range seed.PrimaryStoreNodes {
-		node := item.toPB()
-		calls = append(calls, metadataImportCall{
-			Resource: "primary_store_nodes",
-			Method:   "CreatePrimaryStoreNode",
-			Request:  &pb.CreatePrimaryStoreNodeReq{Node: node},
-			Response: &pb.CreatePrimaryStoreNodeRsp{},
-			Exists: &metadataExistsProbe{
-				Method:   "GetPrimaryStoreNode",
-				Request:  &pb.GetPrimaryStoreNodeReq{NodeId: node.GetNodeId()},
-				Response: &pb.GetPrimaryStoreNodeRsp{},
-			},
-		})
 	}
 	for _, item := range seed.Devices {
 		device := item.toPB()
@@ -280,22 +249,12 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
-	for _, item := range seed.PrimaryStoreRoutes {
-		route := item.toPB()
-		calls = append(calls, metadataImportCall{
-			Resource: "primary_store_routes",
-			Method:   "CreatePrimaryStoreRoute",
-			Request:  &pb.CreatePrimaryStoreRouteReq{PrimaryStoreRoute: route},
-			Response: &pb.CreatePrimaryStoreRouteRsp{},
-			Exists: &metadataExistsProbe{
-				Method:   "GetPrimaryStoreRoute",
-				Request:  &pb.GetPrimaryStoreRouteReq{SpaceId: route.GetSpaceId(), RouteId: route.GetRouteId()},
-				Response: &pb.GetPrimaryStoreRouteRsp{},
-			},
-		})
-	}
 	for _, item := range seed.Views {
 		view := item.toPB()
+		view.KeepDuration, err = canonicalMetadataKeepDuration(view.GetKeepDuration())
+		if err != nil {
+			return nil, fmt.Errorf("view %q: %w", item.ViewID, err)
+		}
 		calls = append(calls, metadataImportCall{
 			Resource: "views",
 			Method:   "CreateView",
@@ -316,6 +275,45 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 		calls = append(calls, metadataImportCall{Resource: "view_columns", Method: "UpsertViewColumn", Request: &pb.UpsertViewColumnReq{Column: column}, Response: &pb.UpsertViewColumnRsp{}})
 	}
 	return calls, nil
+}
+
+func normalizeMetadataSeedViews(seed metadataSeed) (metadataSeed, error) {
+	if len(seed.Views) == 0 {
+		return seed, nil
+	}
+	datasets := make(map[string]seedDataset, len(seed.Datasets))
+	for _, dataset := range seed.Datasets {
+		datasets[setupMetadataKey(dataset.SpaceID, dataset.DatasetID)] = dataset
+	}
+	seed.Views = append([]seedView(nil), seed.Views...)
+	for index := range seed.Views {
+		normalized, err := canonicalMetadataView(seed.Views[index], datasets)
+		if err != nil {
+			return metadataSeed{}, err
+		}
+		seed.Views[index] = normalized
+	}
+	return seed, nil
+}
+
+func metadataDisplayNameKey(spaceID, originType, originID string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(spaceID),
+		normalizeEnum(originType),
+		strings.TrimSpace(originID),
+	}, "\x00")
+}
+
+func validateSeedDatasets(datasets []seedDataset) error {
+	for _, item := range datasets {
+		if strings.TrimSpace(item.DataNodeID) == "" {
+			return fmt.Errorf("dataset %q data_node_id is required", item.DatasetID)
+		}
+		if strings.TrimSpace(item.KeepDuration) == "" {
+			return fmt.Errorf("dataset %q keep_duration is required", item.DatasetID)
+		}
+	}
+	return nil
 }
 
 func normalizeFieldGroups(seed metadataSeed) (metadataSeed, error) {
@@ -390,30 +388,37 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 	summary := metadataImportSummary{Status: "ok", MetadataURL: metadataURL, Planned: len(calls), Resources: countMetadataCalls(calls)}
 	for _, call := range calls {
 		probe := call.Exists
-		if call.Resource == "dataset_columns" {
+		switch call.Resource {
+		case "dataset_columns":
 			column, ok := call.Request.(*pb.UpsertDatasetColumnReq)
 			if !ok || column.GetColumn() == nil {
 				return summary, fmt.Errorf("invalid dataset column apply call")
 			}
-			probe = &metadataExistsProbe{Method: "ListDatasetColumns", Request: &pb.ListDatasetColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), DatasetId: column.GetColumn().GetDatasetId(), Page: &commonpb.Page{Page: 1, Size: 500}}, Response: &pb.ListDatasetColumnsRsp{}}
+			probe = &metadataExistsProbe{Method: "ListDatasetColumns", Request: &pb.ListDatasetColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), DatasetId: column.GetColumn().GetDatasetId(), Page: &commonpb.Page{Page: 1, Size: metadataApplyPageSize}}, Response: &pb.ListDatasetColumnsRsp{}}
+		case "view_columns":
+			column, ok := call.Request.(*pb.UpsertViewColumnReq)
+			if !ok || column.GetColumn() == nil {
+				return summary, fmt.Errorf("invalid view column apply call")
+			}
+			probe = &metadataExistsProbe{Method: "ListViewColumns", Request: &pb.ListViewColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), ViewId: column.GetColumn().GetViewId(), Page: &commonpb.Page{Page: 1, Size: metadataApplyPageSize}}, Response: &pb.ListViewColumnsRsp{}}
 		}
 		if probe == nil {
 			return summary, fmt.Errorf("apply does not support resource %s without read probe", call.Resource)
 		}
-		if err := postStorageRaw(ctx, metadataURL, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
+		found, actual, err := findMetadataApplyResource(ctx, metadataURL, call.Resource, probe, call.Request)
+		if err != nil {
 			return summary, err
 		}
-		if ret, ok := responseRetInfo(probe.Response); !ok || ret == nil {
-			return summary, fmt.Errorf("%s/%s failed: missing ret_info", metadataServiceName, probe.Method)
-		} else if ret.GetCode() != pb.ErrorCode_SUCCESS && !metadataNotFound(ret) {
-			return summary, fmt.Errorf("%s/%s failed: %s", metadataServiceName, probe.Method, ret.GetMsg())
-		}
-		found, actual := applyProbeResult(call.Resource, probe, call.Request)
 		if !found {
 			if err := postStorage(ctx, metadataURL, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
 				return summary, err
 			}
 			summary.Applied++
+			continue
+		}
+		if call.Resource == "tags" {
+			summary.Skipped++
+			summary.Unchanged++
 			continue
 		}
 		if err := verifyMetadataResource(call.Resource, call.Request, actual); err != nil {
@@ -425,8 +430,87 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 	return summary, nil
 }
 
+func findMetadataApplyResource(
+	ctx context.Context,
+	metadataURL string,
+	resource string,
+	probe *metadataExistsProbe,
+	expectedRequest proto.Message,
+) (bool, proto.Message, error) {
+	switch resource {
+	case "dataset_columns":
+		base := probe.Request.(*pb.ListDatasetColumnsReq)
+		for page := uint32(1); page <= metadataApplyMaxPages; page++ {
+			current := &metadataExistsProbe{
+				Method: probe.Method,
+				Request: &pb.ListDatasetColumnsReq{
+					SpaceId: base.GetSpaceId(), DatasetId: base.GetDatasetId(),
+					Page: &commonpb.Page{Page: page, Size: metadataApplyPageSize},
+				},
+				Response: &pb.ListDatasetColumnsRsp{},
+			}
+			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, metadataURL, resource, current, expectedRequest)
+			if err != nil || found || !hasMore {
+				return found, actual, err
+			}
+		}
+	case "view_columns":
+		base := probe.Request.(*pb.ListViewColumnsReq)
+		for page := uint32(1); page <= metadataApplyMaxPages; page++ {
+			current := &metadataExistsProbe{
+				Method: probe.Method,
+				Request: &pb.ListViewColumnsReq{
+					SpaceId: base.GetSpaceId(), ViewId: base.GetViewId(),
+					Page: &commonpb.Page{Page: page, Size: metadataApplyPageSize},
+				},
+				Response: &pb.ListViewColumnsRsp{},
+			}
+			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, metadataURL, resource, current, expectedRequest)
+			if err != nil || found || !hasMore {
+				return found, actual, err
+			}
+		}
+	default:
+		found, actual, _, err := inspectMetadataApplyPage(ctx, metadataURL, resource, probe, expectedRequest)
+		return found, actual, err
+	}
+	return false, nil, fmt.Errorf("metadata %s probe exceeds %d pages", resource, metadataApplyMaxPages)
+}
+
+func inspectMetadataApplyPage(
+	ctx context.Context,
+	metadataURL string,
+	resource string,
+	probe *metadataExistsProbe,
+	expectedRequest proto.Message,
+) (bool, proto.Message, bool, error) {
+	if err := postStorageRaw(ctx, metadataURL, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
+		return false, nil, false, err
+	}
+	ret, ok := responseRetInfo(probe.Response)
+	if !ok || ret == nil {
+		return false, nil, false, fmt.Errorf("%s/%s failed: missing ret_info", metadataServiceName, probe.Method)
+	}
+	if ret.GetCode() != pb.ErrorCode_SUCCESS {
+		if metadataNotFound(ret) {
+			return false, nil, false, nil
+		}
+		return false, nil, false, fmt.Errorf("%s/%s failed: %s", metadataServiceName, probe.Method, ret.GetMsg())
+	}
+	found, actual := applyProbeResult(resource, probe, expectedRequest)
+	switch response := probe.Response.(type) {
+	case *pb.ListDatasetColumnsRsp:
+		return found, actual, response.GetPageResult().GetHasMore(), nil
+	case *pb.ListViewColumnsRsp:
+		return found, actual, response.GetPageResult().GetHasMore(), nil
+	default:
+		return found, actual, false, nil
+	}
+}
+
 func applyProbeResult(resource string, probe *metadataExistsProbe, expectedRequest proto.Message) (bool, proto.Message) {
-	if resource == "dataset_columns" {
+	switch resource {
+	case "dataset_columns":
 		rsp, _ := probe.Response.(*pb.ListDatasetColumnsRsp)
 		if rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			return false, nil
@@ -436,6 +520,21 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		for _, c := range rsp.GetColumns() {
 			if c.GetColumnName() == expected.GetColumnName() && c.GetSpaceId() == req.GetSpaceId() && c.GetDatasetId() == req.GetDatasetId() {
 				return true, c
+			}
+		}
+		return false, nil
+	case "view_columns":
+		rsp, _ := probe.Response.(*pb.ListViewColumnsRsp)
+		if rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return false, nil
+		}
+		req := probe.Request.(*pb.ListViewColumnsReq)
+		expected := expectedRequest.(*pb.UpsertViewColumnReq).GetColumn()
+		for _, column := range rsp.GetColumns() {
+			if column.GetColumnName() == expected.GetColumnName() &&
+				column.GetSpaceId() == req.GetSpaceId() &&
+				column.GetViewId() == req.GetViewId() {
+				return true, column
 			}
 		}
 		return false, nil
@@ -455,16 +554,12 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		return true, rsp.GetFieldGroup()
 	case *pb.GetFieldRsp:
 		return true, rsp.GetField()
-	case *pb.GetPrimaryStoreRouteRsp:
-		return true, rsp.GetPrimaryStoreRoute()
-	case *pb.GetFactorRsp:
-		return true, rsp.GetFactor()
-	case *pb.GetPrimaryStoreNodeRsp:
-		return true, rsp.GetNode()
 	case *pb.GetDeviceRsp:
 		return true, rsp.GetDevice()
 	case *pb.GetViewRsp:
 		return true, rsp.GetView()
+	case *pb.GetTagRsp:
+		return rsp.GetTag() != nil, rsp.GetTag()
 	}
 	return true, nil
 }
@@ -487,20 +582,24 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		expected = req.GetField()
 	case *pb.UpsertDatasetColumnReq:
 		expected = req.GetColumn()
-	case *pb.CreatePrimaryStoreRouteReq:
-		expected = req.GetPrimaryStoreRoute()
-	case *pb.CreateFactorReq:
-		expected = req.GetFactor()
-	case *pb.CreatePrimaryStoreNodeReq:
-		expected = req.GetNode()
 	case *pb.CreateDeviceReq:
 		expected = req.GetDevice()
 	case *pb.CreateViewReq:
 		expected = req.GetView()
+	case *pb.UpsertViewColumnReq:
+		expected = req.GetColumn()
 	default:
 		return fmt.Errorf("unsupported apply resource request %T", request)
 	}
 	if !metadataContractsEqual(resource, expected, actual) {
+		if resource == "views" {
+			view := expected.(*pb.View)
+			return fmt.Errorf("metadata views %s/%s exists but contract differs", view.GetSpaceId(), view.GetViewId())
+		}
+		if resource == "view_columns" {
+			column := expected.(*pb.ViewColumn)
+			return fmt.Errorf("metadata view_columns %s/%s/%s exists but contract differs", column.GetSpaceId(), column.GetViewId(), column.GetColumnName())
+		}
 		return fmt.Errorf("metadata %s exists but contract differs", resource)
 	}
 	return nil
@@ -513,29 +612,120 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	}
 	if resource == "data_sources" {
 		x, y := a.(*pb.DataSource), b.(*pb.DataSource)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetName() == y.GetName() && x.GetKind() == y.GetKind() && x.GetTimezone() == y.GetTimezone() && x.GetStatus() == y.GetStatus() && maps.Equal(x.GetAttributes(), y.GetAttributes())
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetDataSourceId() == y.GetDataSourceId() &&
+			x.GetName() == y.GetName() &&
+			x.GetKind() == y.GetKind() &&
+			x.GetMarket() == y.GetMarket() &&
+			x.GetTimezone() == y.GetTimezone() &&
+			x.GetConfigJson() == y.GetConfigJson() &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "datasets" {
 		x, y := a.(*pb.Dataset), b.(*pb.Dataset)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDatasetId() == y.GetDatasetId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetDataKind() == y.GetDataKind() && slices.Equal(x.GetFreqs(), y.GetFreqs()) && x.GetStatus() == y.GetStatus()
+		statusMatches := x.GetStatus() == y.GetStatus() ||
+			(x.GetStatus() == "disabled" && y.GetStatus() == "active" && y.GetBindingLocked())
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetDatasetId() == y.GetDatasetId() &&
+			x.GetDataSourceId() == y.GetDataSourceId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetDataKind() == y.GetDataKind() &&
+			slices.Equal(x.GetFreqs(), y.GetFreqs()) &&
+			statusMatches &&
+			x.GetDataNodeId() == y.GetDataNodeId() &&
+			x.GetKeepDuration() == y.GetKeepDuration() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "fields" {
 		x, y := a.(*pb.Field), b.(*pb.Field)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetFieldId() == y.GetFieldId() && x.GetGroupId() == y.GetGroupId() && x.GetValueType() == y.GetValueType() && x.GetSortOrder() == y.GetSortOrder() && x.GetStatus() == y.GetStatus()
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetFieldId() == y.GetFieldId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetValueType() == y.GetValueType() &&
+			x.GetUnit() == y.GetUnit() &&
+			x.GetValidationRuleJson() == y.GetValidationRuleJson() &&
+			x.GetWriteExample() == y.GetWriteExample() &&
+			x.GetStatus() == y.GetStatus() &&
+			x.GetGroupId() == y.GetGroupId() &&
+			x.GetSortOrder() == y.GetSortOrder() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "field_groups" {
 		x, y := a.(*pb.FieldGroup), b.(*pb.FieldGroup)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetGroupId() == y.GetGroupId() && x.GetParentGroupId() == y.GetParentGroupId() && x.GetSortOrder() == y.GetSortOrder() && x.GetStatus() == y.GetStatus()
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetGroupId() == y.GetGroupId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetParentGroupId() == y.GetParentGroupId() &&
+			x.GetSortOrder() == y.GetSortOrder() &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "dataset_columns" {
 		x, y := a.(*pb.DatasetColumn), b.(*pb.DatasetColumn)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDatasetId() == y.GetDatasetId() && x.GetColumnName() == y.GetColumnName() && x.GetOriginType() == y.GetOriginType() && x.GetOriginId() == y.GetOriginId() && x.GetValueType() == y.GetValueType() && x.GetRequired() == y.GetRequired() && x.GetStatus() == y.GetStatus()
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetDatasetId() == y.GetDatasetId() &&
+			x.GetColumnName() == y.GetColumnName() &&
+			x.GetOriginType() == y.GetOriginType() &&
+			x.GetOriginId() == y.GetOriginId() &&
+			x.GetValueType() == y.GetValueType() &&
+			x.GetRequired() == y.GetRequired() &&
+			slices.Equal(x.GetAliases(), y.GetAliases()) &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
-	if resource == "primary_store_routes" {
-		x, y := a.(*pb.PrimaryStoreRoute), b.(*pb.PrimaryStoreRoute)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetRouteId() == y.GetRouteId() && x.GetDatasetId() == y.GetDatasetId() && x.GetSubjectPattern() == y.GetSubjectPattern() && x.GetHashRule() == y.GetHashRule() && x.GetNodeId() == y.GetNodeId() && x.GetPriority() == y.GetPriority() && x.GetStatus() == y.GetStatus()
+	if resource == "devices" {
+		x, y := a.(*pb.Device), b.(*pb.Device)
+		return x.GetDeviceId() == y.GetDeviceId() &&
+			x.GetName() == y.GetName() &&
+			x.GetEngine() == y.GetEngine() &&
+			x.GetEndpoint() == y.GetEndpoint() &&
+			x.GetConfigJson() == y.GetConfigJson() &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
+	}
+	if resource == "views" {
+		x, y := a.(*pb.View), b.(*pb.View)
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetViewId() == y.GetViewId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetDatasetId() == y.GetDatasetId() &&
+			slices.Equal(x.GetGrainKeys(), y.GetGrainKeys()) &&
+			x.GetFilterJson() == y.GetFilterJson() &&
+			x.GetEngine() == y.GetEngine() &&
+			x.GetKeepDuration() == y.GetKeepDuration() &&
+			x.GetStatus() == y.GetStatus() &&
+			metadataViewAttributesEqual(x.GetAttributes(), y.GetAttributes())
+	}
+	if resource == "view_columns" {
+		x, y := a.(*pb.ViewColumn), b.(*pb.ViewColumn)
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetViewId() == y.GetViewId() &&
+			x.GetColumnName() == y.GetColumnName() &&
+			x.GetOriginType() == y.GetOriginType() &&
+			x.GetOriginId() == y.GetOriginId() &&
+			x.GetValueType() == y.GetValueType() &&
+			x.GetOnlineTime() == y.GetOnlineTime() &&
+			x.GetSortOrder() == y.GetSortOrder() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	return proto.Equal(a, b)
+}
+
+func metadataViewAttributesEqual(expected, actual map[string]string) bool {
+	// Storage records the active index contract under moox.* attributes after a
+	// View is activated. Those values are operational state, not setup contract.
+	actualContract := make(map[string]string, len(actual))
+	for key, value := range actual {
+		if !strings.HasPrefix(key, "moox.") {
+			actualContract[key] = value
+		}
+	}
+	return maps.Equal(expected, actualContract)
 }
 
 func metadataResourceExists(ctx context.Context, metadataURL string, probe *metadataExistsProbe) (bool, error) {
@@ -591,8 +781,7 @@ func metadataNotFound(retInfo *pb.RetInfo) bool {
 		pb.ErrorCode_FIELD_NOT_FOUND,
 		pb.ErrorCode_FACTOR_NOT_FOUND,
 		pb.ErrorCode_VIEW_NOT_FOUND,
-		pb.ErrorCode_VIEW_COLUMN_NOT_FOUND,
-		pb.ErrorCode_ROUTE_NOT_FOUND:
+		pb.ErrorCode_VIEW_COLUMN_NOT_FOUND:
 		return true
 	default:
 		msg := strings.ToLower(retInfo.GetMsg())
@@ -620,8 +809,8 @@ func (s seedSubject) toPB() *pb.Subject {
 	return &pb.Subject{SpaceId: s.SpaceID, SubjectId: s.SubjectID, SubjectType: s.SubjectType, Name: s.Name, Market: s.Market, Currency: s.Currency, Timezone: s.Timezone, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
-func (s seedSubjectSymbol) toPB() *pb.SubjectSymbol {
-	return &pb.SubjectSymbol{SpaceId: s.SpaceID, SubjectId: s.SubjectID, DataSourceId: s.DataSourceID, ExternalSymbol: s.ExternalSymbol, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+func (s seedTag) toPB() *pb.Tag {
+	return &pb.Tag{SpaceId: s.SpaceID, TagId: s.TagID, TagName: s.TagName, Description: s.Description, Mode: s.Mode, Builtin: s.Builtin, Source: s.Source, MarketType: s.MarketType, Cron: s.Cron, Timezone: s.Timezone}
 }
 
 func (s seedDataset) toPB() (*pb.Dataset, error) {
@@ -629,11 +818,26 @@ func (s seedDataset) toPB() (*pb.Dataset, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Freqs: s.Freqs, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	keepDuration, err := canonicalMetadataKeepDuration(s.KeepDuration)
+	if err != nil {
+		return nil, fmt.Errorf("dataset %q: %w", s.DatasetID, err)
+	}
+	if dataKind == pb.DataKind_DATA_KIND_RECORD && keepDuration != "0" {
+		return nil, fmt.Errorf("dataset %q: record keep_duration must be 0", s.DatasetID)
+	}
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), KeepDuration: keepDuration, Freqs: s.Freqs, SubjectTags: s.SubjectTags, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
-func (s seedDatasetSubject) toPB() *pb.DatasetSubject {
-	return &pb.DatasetSubject{SpaceId: s.SpaceID, DatasetId: s.DatasetID, SubjectId: s.SubjectID, SubjectRole: s.SubjectRole, EffectiveStartTime: s.EffectiveStartTime, EffectiveEndTime: s.EffectiveEndTime, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+func canonicalMetadataKeepDuration(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0" {
+		return "0", nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", value)
+	}
+	return duration.String(), nil
 }
 
 func (s seedField) toPB() (*pb.Field, error) {
@@ -646,14 +850,6 @@ func (s seedField) toPB() (*pb.Field, error) {
 
 func (s seedFieldGroup) toPB() *pb.FieldGroup {
 	return &pb.FieldGroup{SpaceId: s.SpaceID, GroupId: s.GroupID, Name: s.Name, Description: s.Description, ParentGroupId: s.ParentGroupID, SortOrder: s.SortOrder, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
-}
-
-func (s seedFactor) toPB() (*pb.Factor, error) {
-	valueType, err := parseFieldValueType(s.ValueType)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.Factor{SpaceId: s.SpaceID, FactorId: s.FactorID, Name: s.Name, Description: s.Description, Algorithm: s.Algorithm, ParamsJson: s.ParamsJSON, ValueType: valueType, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func cloneStringMap(src map[string]string) map[string]string {
@@ -669,11 +865,11 @@ func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.DatasetColumn{SpaceId: s.SpaceID, DatasetId: s.DatasetID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, Required: s.Required, IsUnique: s.IsUnique, Aliases: s.Aliases, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.DatasetColumn{SpaceId: s.SpaceID, DatasetId: s.DatasetID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, Required: s.Required, Aliases: s.Aliases, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func (s seedView) toPB() *pb.View {
-	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, PrimaryDatasetId: s.PrimaryDatasetID, DatasetIds: s.DatasetIDs, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, RetentionWindow: s.RetentionWindow, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, FilterJson: s.FilterJSON, Engine: s.Engine, KeepDuration: s.KeepDuration, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {
@@ -681,19 +877,15 @@ func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.ViewColumn{SpaceId: s.SpaceID, ViewId: s.ViewID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, OnlineTime: s.OnlineTime, SortOrder: s.SortOrder, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
-}
-
-func (s seedPrimaryStoreNode) toPB() *pb.PrimaryStoreNode {
-	return &pb.PrimaryStoreNode{NodeId: s.NodeID, Name: s.Name, Endpoint: s.Endpoint, Weight: s.Weight, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	attributes := cloneStringMap(s.Attributes)
+	if s.SpaceID == "mooxsys" && strings.TrimSpace(attributes["display_name"]) == "" {
+		attributes["display_name"] = s.ColumnName
+	}
+	return &pb.ViewColumn{SpaceId: s.SpaceID, ViewId: s.ViewID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, OnlineTime: s.OnlineTime, SortOrder: s.SortOrder, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: attributes}, nil
 }
 
 func (s seedDevice) toPB() *pb.Device {
-	return &pb.Device{DeviceId: s.DeviceID, NodeId: s.NodeID, Name: s.Name, Engine: s.Engine, Endpoint: s.Endpoint, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
-}
-
-func (s seedPrimaryStoreRoute) toPB() *pb.PrimaryStoreRoute {
-	return &pb.PrimaryStoreRoute{SpaceId: s.SpaceID, RouteId: s.RouteID, DatasetId: s.DatasetID, SubjectId: s.SubjectID, SubjectPattern: s.SubjectPattern, HashRule: s.HashRule, NodeId: s.NodeID, Priority: s.Priority, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.Device{DeviceId: s.DeviceID, Name: s.Name, Engine: s.Engine, Endpoint: s.Endpoint, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func parseDataKind(value string) (pb.DataKind, error) {

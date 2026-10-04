@@ -1,0 +1,705 @@
+package marketfetch
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	stocksource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
+	"github.com/stretchr/testify/require"
+)
+
+const stockCNTestMeasuredSafeGroupSize = 30
+
+func TestBuildStockCNAssignmentsUsesEveryTimerNodeAndKeepsExistingSubjectsStable(t *testing.T) {
+	subjects := []string{"600000.XSHG", "000001.XSHE", "601318.XSHG", "300750.XSHE", "000858.XSHE"}
+	externals := stockCNExternalSymbols(subjects)
+	nodes := []scfinvoker.Node{
+		{NodeID: "node-c", FunctionName: "moox-stockcn-ap-shanghai-000", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-a", FunctionName: "moox-stockcn-ap-guangzhou-000", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-b", FunctionName: "moox-stockcn-ap-beijing-000", Region: "ap-beijing", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "worker", FunctionName: "not-a-timer", NodeType: "scf-resident", TriggerType: "http"},
+	}
+	group := TaskGroup{Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects, ExternalSymbols: externals}
+
+	assignments, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 3)
+	require.NoError(t, err)
+	require.Len(t, assignments, 3)
+	seen := make(map[string]int, len(subjects))
+	before := make(map[string]string, len(subjects))
+	for index, assignment := range assignments {
+		require.True(t, assignment.Enabled)
+		require.Equal(t, index, assignment.GroupID)
+		require.Equal(t, StockCNRouteID, assignment.RouteVersion)
+		require.Equal(t, "stockcn_multi", assignment.RouteProvider)
+		require.NotEmpty(t, assignment.SourceID)
+		require.Len(t, assignment.ProviderChain, 1)
+		require.Equal(t, assignment.ProviderChain[0], assignment.Provider)
+		for _, subject := range assignment.Subjects {
+			seen[subject]++
+			before[subject] = assignment.NodeID
+		}
+	}
+	for _, subject := range subjects {
+		require.Equal(t, 1, seen[subject])
+	}
+
+	group.Subjects = append(group.Subjects, "688981.XSHG")
+	group.ExternalSymbols["688981.XSHG"] = "sh688981"
+	after, err := BuildStockCNAssignments(group, append([]scfinvoker.Node(nil), nodes...), stockCNTestMeasuredSafeGroupSize, "2026-08-29", 3)
+	require.NoError(t, err)
+	for _, assignment := range after {
+		for _, subject := range assignment.Subjects {
+			if nodeID, exists := before[subject]; exists {
+				require.Equal(t, nodeID, assignment.NodeID, "adding one subject must not move %s", subject)
+			}
+		}
+	}
+}
+
+func TestEligibleTimerNodesIncludesAllMarketTimerNodes(t *testing.T) {
+	nodes := eligibleTimerNodes([]scfinvoker.Node{
+		{NodeID: "kline", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"function_mode": "kline"}},
+		{NodeID: "instrument", NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"function_mode": "instrument_snapshot"}},
+		{NodeID: "invoke", NodeType: "scf-event", TriggerType: "invoke", Metadata: map[string]any{"function_mode": "kline"}},
+	})
+
+	require.Len(t, nodes, 2)
+	require.Equal(t, "kline", nodes[0].NodeID)
+	require.Equal(t, "instrument", nodes[1].NodeID)
+}
+
+func TestBuildStockCNAssignmentsRequiresConfiguredNodeCount(t *testing.T) {
+	subjects := []string{"600000.XSHG"}
+	nodes := []scfinvoker.Node{
+		{NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-1", FunctionName: "moox-stockcn-001", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	_, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 3)
+	require.ErrorContains(t, err, "has 2 nodes; expected 3")
+}
+
+func TestBuildStockCNAssignmentsRequiresExplicitPositiveN(t *testing.T) {
+	nodes := []scfinvoker.Node{{NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer"}}
+	_, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: []string{"600000.XSHG"}, ExternalSymbols: stockCNExternalSymbols([]string{"600000.XSHG"}),
+	}, nodes, 50, "2026-08-29")
+	require.ErrorContains(t, err, "explicit positive timer function count")
+}
+
+func TestBuildStockCNAssignmentsAllowsStrictlyConvertibleSubjectsWithoutOverrides(t *testing.T) {
+	nodes := []scfinvoker.Node{{NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer"}}
+	assignments, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: []string{"600000.XSHG"},
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 1)
+	require.NoError(t, err)
+	require.Len(t, assignments, 1)
+	require.Empty(t, assignments[0].ExternalSymbols)
+}
+
+func TestStockCNStaggeredCronUsesConfiguredFiveToThirtyNineSecondWindow(t *testing.T) {
+	require.Equal(t, "5 * * * * * *", stockCNStaggeredCron(0))
+	require.Equal(t, "39 * * * * * *", stockCNStaggeredCron(34))
+	require.Equal(t, "5 * * * * * *", stockCNStaggeredCron(35))
+}
+
+func TestBuildStockCNAssignmentsRejectsMissingPublishedSlot(t *testing.T) {
+	subjects := []string{"600000.XSHG"}
+	nodes := []scfinvoker.Node{
+		{NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "node-2", FunctionName: "moox-stockcn-002", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	_, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 2)
+	require.ErrorContains(t, err, "slot")
+}
+
+func TestBuildStockCNAssignmentsRejectsSlotMetadataMismatch(t *testing.T) {
+	subjects := []string{"600000.XSHG"}
+	nodes := []scfinvoker.Node{{
+		NodeID: "node-0", FunctionName: "moox-stockcn-000", NodeType: "scf-event", TriggerType: "timer",
+		Metadata: map[string]any{"index": "invalid"},
+	}}
+	_, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 1)
+	require.ErrorContains(t, err, "metadata index")
+}
+
+func TestBuildStockCNAssignmentsFitsApproximateFullMarketIntoTwoHundredGroups(t *testing.T) {
+	subjects := make([]string, 0, 5550)
+	for index := 0; index < 5550; index++ {
+		subjects = append(subjects, fmt.Sprintf("%06d.XSHG", 600000+index))
+	}
+	nodes := make([]scfinvoker.Node, 0, 200)
+	for index := 0; index < 200; index++ {
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("node-%03d", index), FunctionName: fmt.Sprintf("moox-stockcn-%03d", index), NodeType: "scf-event", TriggerType: "timer"})
+	}
+	group := TaskGroup{Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects)}
+
+	assignments, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 200)
+	require.NoError(t, err)
+	require.Len(t, assignments, 200)
+	assigned := 0
+	before := make(map[string]int, len(subjects))
+	for _, assignment := range assignments {
+		require.LessOrEqual(t, len(assignment.Subjects), stockCNTestMeasuredSafeGroupSize)
+		_, err := buildManagedEnvironment(assignment, nil, stockCNMaxManagedEnvironmentSize)
+		require.NoError(t, err)
+		for _, subject := range assignment.Subjects {
+			before[subject] = assignment.GroupID
+		}
+		assigned += len(assignment.Subjects)
+	}
+	require.Equal(t, len(subjects), assigned)
+
+	group.Subjects = append(group.Subjects, "605550.XSHG")
+	group.ExternalSymbols["605550.XSHG"] = "sh605550"
+	after, err := BuildStockCNAssignments(group, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 200)
+	require.NoError(t, err)
+	moved := 0
+	for _, assignment := range after {
+		for _, subject := range assignment.Subjects {
+			if previous, exists := before[subject]; exists && previous != assignment.GroupID {
+				moved++
+			}
+		}
+	}
+	require.LessOrEqual(t, moved, 1, "one-symbol active subject set growth should move at most one existing subject")
+}
+
+func TestBuildStockCNAssignmentsFitsConfigured170GroupsAt40Subjects(t *testing.T) {
+	const (
+		shanghai = 2314
+		shenzhen = 2897
+		beijing  = 339
+		groups   = 170
+		maxSize  = 40
+	)
+	subjects := make([]string, 0, shanghai+shenzhen+beijing)
+	for index := 0; index < shanghai; index++ {
+		subjects = append(subjects, fmt.Sprintf("%06d.XSHG", 600000+index))
+	}
+	for index := 0; index < shenzhen; index++ {
+		subjects = append(subjects, fmt.Sprintf("%06d.XSHE", 1+index))
+	}
+	for index := 0; index < beijing; index++ {
+		subjects = append(subjects, fmt.Sprintf("%06d.XBSE", 920000+index))
+	}
+
+	regionCounts := map[string]int{
+		"ap-beijing":   32,
+		"ap-chengdu":   32,
+		"ap-guangzhou": 11,
+		"ap-shanghai":  32,
+		"ap-singapore": 31,
+		"ap-tokyo":     32,
+	}
+	nodes := make([]scfinvoker.Node, 0, groups)
+	for region, count := range regionCounts {
+		for index := 0; index < count; index++ {
+			nodes = append(nodes, scfinvoker.Node{
+				NodeID: fmt.Sprintf("%s-%03d", region, index), FunctionName: fmt.Sprintf("moox-stockcn-%s-%03d", region, index),
+				Region: region, NodeType: "scf-event", TriggerType: "timer", Metadata: map[string]any{"index": index},
+			})
+		}
+	}
+
+	assignments, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m", Subjects: subjects,
+	}, nodes, maxSize, "2026-08-31", groups)
+	require.NoError(t, err)
+	require.Len(t, assignments, groups)
+
+	seen := make(map[string]int, len(subjects))
+	sourceGroups := make(map[string]int)
+	sourceSubjects := make(map[string]int)
+	for _, assignment := range assignments {
+		require.LessOrEqual(t, len(assignment.Subjects), maxSize)
+		require.NotEmpty(t, assignment.SourceID)
+		require.Len(t, assignment.ProviderChain, 1)
+		require.Equal(t, assignment.Provider, assignment.ProviderChain[0])
+		environment, envErr := buildManagedEnvironment(assignment, nil, stockCNMaxManagedEnvironmentSize)
+		require.NoError(t, envErr)
+		require.LessOrEqual(t, environmentBytes(environment), stockCNMaxManagedEnvironmentSize)
+		sourceKey := assignment.Provider + "/" + assignment.SourceID
+		sourceGroups[sourceKey]++
+		sourceSubjects[sourceKey] += len(assignment.Subjects)
+		for _, subject := range assignment.Subjects {
+			seen[subject]++
+		}
+	}
+	require.Len(t, seen, len(subjects))
+	for _, subject := range subjects {
+		require.Equal(t, 1, seen[subject])
+	}
+	require.GreaterOrEqual(t, len(sourceGroups), 2)
+	require.Equal(t, len(sourceGroups), len(sourceSubjects))
+	require.LessOrEqual(t, maxMapValue(sourceSubjects)-minMapValue(sourceSubjects), 3*maxSize)
+}
+
+func maxMapValue(values map[string]int) int {
+	max := 0
+	for _, value := range values {
+		if value > max {
+			max = value
+		}
+	}
+	return max
+}
+
+func minMapValue(values map[string]int) int {
+	min := int(^uint(0) >> 1)
+	for _, value := range values {
+		if value < min {
+			min = value
+		}
+	}
+	return min
+}
+
+func TestBuildStockCNAssignmentsKeepsPublishedFleetWhenActiveInstrumentSetIsSmall(t *testing.T) {
+	subjects := []string{"600000.XSHG", "000001.XSHE"}
+	nodes := make([]scfinvoker.Node, 0, 5)
+	for index := 0; index < 5; index++ {
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("node-%d", index), FunctionName: fmt.Sprintf("moox-stockcn-%03d", index), NodeType: "scf-event", TriggerType: "timer"})
+	}
+	assignments, err := BuildStockCNAssignments(TaskGroup{
+		Provider: "stockcn_multi", MarketType: "equity", DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
+	}, nodes, stockCNTestMeasuredSafeGroupSize, "2026-08-29", 5)
+	require.NoError(t, err)
+	require.Len(t, assignments, len(nodes))
+	assigned := 0
+	for groupID, assignment := range assignments {
+		require.Equal(t, groupID, assignment.GroupID)
+		require.Equal(t, len(assignment.Subjects) > 0, assignment.Enabled)
+		assigned += len(assignment.Subjects)
+	}
+	require.Equal(t, len(subjects), assigned)
+}
+
+func TestBuildAssignmentsPinsPriorityCryptoSubjectsFirst(t *testing.T) {
+	subjects := []string{"AAA-USDT", "BTC-USDT", "ETH-USDT", "ZZZ-USDT"}
+	externals := map[string]string{"AAA-USDT": "AAAUSDT", "BTC-USDT": "BTCUSDT", "ETH-USDT": "ETHUSDT", "ZZZ-USDT": "ZZZUSDT"}
+	nodes := []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments([]TaskGroup{{
+		Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "bars", Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: externals,
+	}}, nodes, 2)
+	require.NoError(t, err)
+	byGroup := map[int][]string{}
+	for _, assignment := range assignments {
+		if assignment.Enabled {
+			byGroup[assignment.GroupID] = assignment.Subjects
+		}
+	}
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, byGroup[0])
+	require.Equal(t, []string{"AAA-USDT", "ZZZ-USDT"}, byGroup[1])
+}
+
+func TestBuildAssignmentsGivesPriorityCryptoADedicatedTimerWhenSpare(t *testing.T) {
+	subjects := make([]string, 0, 41)
+	externals := make(map[string]string, 41)
+	subjects = append(subjects, "AAA-USDT", "BTC-USDT", "ETH-USDT")
+	externals["AAA-USDT"] = "AAAUSDT"
+	externals["BTC-USDT"] = "BTCUSDT"
+	externals["ETH-USDT"] = "ETHUSDT"
+	for i := 0; i < 38; i++ {
+		subject := fmt.Sprintf("T%02d-USDT", i)
+		subjects = append(subjects, subject)
+		externals[subject] = strings.ReplaceAll(subject, "-", "")
+	}
+	nodes := make([]scfinvoker.Node, 0, 4)
+	for i := 0; i < 4; i++ {
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("n%d", i), NodeType: "scf-event", TriggerType: "timer"})
+	}
+	assignments, err := BuildAssignments([]TaskGroup{{
+		Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "bars", Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: externals,
+	}}, nodes, 30)
+	require.NoError(t, err)
+	byGroup := map[int][]string{}
+	enabled := 0
+	for _, assignment := range assignments {
+		if !assignment.Enabled {
+			continue
+		}
+		enabled++
+		byGroup[assignment.GroupID] = assignment.Subjects
+	}
+	require.Equal(t, 4, enabled)
+	require.Equal(t, []string{"BTC-USDT"}, byGroup[0])
+	require.Equal(t, []string{"ETH-USDT"}, byGroup[1])
+	require.NotContains(t, byGroup[2], "BTC-USDT")
+	require.NotContains(t, byGroup[2], "ETH-USDT")
+	require.Contains(t, byGroup[2], "AAA-USDT")
+	require.NotContains(t, byGroup[3], "BTC-USDT")
+	require.NotContains(t, byGroup[3], "ETH-USDT")
+}
+
+func TestBuildAssignmentsPrefersMinuteDedicatedTimersOverHourly(t *testing.T) {
+	subjects := make([]string, 0, 41)
+	externals := make(map[string]string, 41)
+	subjects = append(subjects, "AAA-USDT", "BTC-USDT", "ETH-USDT")
+	externals["AAA-USDT"] = "AAAUSDT"
+	externals["BTC-USDT"] = "BTCUSDT"
+	externals["ETH-USDT"] = "ETHUSDT"
+	for i := 0; i < 38; i++ {
+		subject := fmt.Sprintf("T%02d-USDT", i)
+		subjects = append(subjects, subject)
+		externals[subject] = strings.ReplaceAll(subject, "-", "")
+	}
+	nodes := make([]scfinvoker.Node, 0, 5)
+	for i := 0; i < 5; i++ {
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("n%d", i), NodeType: "scf-event", TriggerType: "timer"})
+	}
+	assignments, err := BuildAssignments([]TaskGroup{
+		{Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "bars_1h", Frequency: "1h", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "bars_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+	}, nodes, 30)
+	require.NoError(t, err)
+	minuteSolos := 0
+	hourSolos := 0
+	for _, assignment := range assignments {
+		if !assignment.Enabled || len(assignment.Subjects) != 1 {
+			continue
+		}
+		switch assignment.Frequency {
+		case "1m":
+			minuteSolos++
+			require.Equal(t, "BTC-USDT", assignment.Subjects[0])
+		case "1h":
+			hourSolos++
+		}
+	}
+	require.Equal(t, 1, minuteSolos, "the single spare timer must isolate 1m BTC, not 1h")
+	require.Zero(t, hourSolos)
+}
+
+func TestBuildAssignmentsKeepsCryptoSpareTimersDisabled(t *testing.T) {
+	nodes := []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n3", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments([]TaskGroup{{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"BTC-USDT", "ETH-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": "BTCUSDT", "ETH-USDT": "ETHUSDT"}}}, nodes, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 3)
+	sort.Slice(assignments, func(i, j int) bool { return assignments[i].Enabled && !assignments[j].Enabled })
+	require.True(t, assignments[0].Enabled)
+	require.False(t, assignments[1].Enabled)
+	require.False(t, assignments[2].Enabled)
+}
+
+func TestRequiredStockCNGroupSizeUsesCeilingForConfiguredN(t *testing.T) {
+	tests := []struct {
+		name   string
+		active int
+		n      int
+		want   int
+	}{
+		{name: "N200 exact", active: 200, n: 200, want: 1},
+		{name: "N200 remainder", active: 201, n: 200, want: 2},
+		{name: "other N", active: 15, n: 7, want: 3},
+		{name: "empty", active: 0, n: 200, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := requiredStockCNGroupSize(tt.active, tt.n)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+	_, err := requiredStockCNGroupSize(1, 0)
+	require.ErrorContains(t, err, "positive")
+}
+
+func stockCNExternalSymbols(subjects []string) map[string]string {
+	result := make(map[string]string, len(subjects))
+	for _, subject := range subjects {
+		result[subject], _ = stocksource.ProviderSymbol(subject)
+	}
+	return result
+}
+
+func TestBuildAssignmentsStableAndBounded(t *testing.T) {
+	subjects := make([]string, 0, 61)
+	for i := 0; i < 61; i++ {
+		subjects = append(subjects, fmt.Sprintf("S%02d-USDT", i))
+	}
+	externalSymbols := make(map[string]string, len(subjects))
+	for _, subject := range subjects {
+		externalSymbols[subject] = fmt.Sprintf("S%02dUSDT", len(externalSymbols))
+	}
+	nodes := []scfinvoker.Node{{NodeID: "n2", Region: "ap-shanghai", NodeType: "scf-event", TriggerType: "timer"}, {NodeID: "n1", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}, {NodeID: "n3", Region: "ap-guangzhou", NodeType: "scf-event", TriggerType: "timer"}}
+	group := TaskGroup{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: subjects, ExternalSymbols: externalSymbols}
+	assignments, err := BuildAssignments([]TaskGroup{group}, nodes, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 3)
+	for _, assignment := range assignments {
+		require.LessOrEqual(t, len(assignment.Subjects), 30)
+		require.True(t, assignment.Enabled)
+	}
+	group.Subjects = append([]string(nil), subjects...)
+	assignments2, err := BuildAssignments([]TaskGroup{group}, nodes, 30)
+	require.NoError(t, err)
+	require.Equal(t, assignments, assignments2)
+}
+
+func TestBuildAssignmentsRejectsCapacity(t *testing.T) {
+	_, err := BuildAssignments([]TaskGroup{{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"BTC-USDT", "ETH-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": "BTCUSDT", "ETH-USDT": "ETHUSDT"}}}, []scfinvoker.Node{{NodeID: "n", NodeType: "scf-event", TriggerType: "timer"}}, 1)
+	require.ErrorContains(t, err, "capacity")
+}
+
+func TestSelectCryptoGroupsForCapacityKeepsMinuteBars(t *testing.T) {
+	subjects := make([]string, 0, 80)
+	externals := make(map[string]string, 80)
+	for i := 0; i < 80; i++ {
+		subject := fmt.Sprintf("S%02d-USDT", i)
+		subjects = append(subjects, subject)
+		externals[subject] = fmt.Sprintf("S%02dUSDT", i)
+	}
+	groups := []TaskGroup{
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+	}
+	nodes := make([]scfinvoker.Node, 0, 4)
+	for i := 0; i < 4; i++ {
+		nodes = append(nodes, scfinvoker.Node{NodeID: fmt.Sprintf("n%d", i), Region: "ap-nanjing", NodeType: "scf-event", TriggerType: "timer"})
+	}
+	selected, deferred, err := selectCryptoGroupsForCapacity(groups, nodes, 40)
+	require.NoError(t, err)
+	require.Len(t, selected, 2)
+	require.Len(t, deferred, 2)
+	for _, group := range selected {
+		require.Equal(t, "1m", group.Frequency)
+	}
+	for _, group := range deferred {
+		require.Equal(t, "1H", group.Frequency)
+	}
+}
+
+func TestSelectCryptoGroupsForCapacityKeepsBinanceCryptoInOverseasRegion(t *testing.T) {
+	subjects := make([]string, 0, 80)
+	externals := make(map[string]string, 80)
+	for i := 0; i < 80; i++ {
+		subject := fmt.Sprintf("S%02d-USDT", i)
+		subjects = append(subjects, subject)
+		externals[subject] = fmt.Sprintf("S%02dUSDT", i)
+	}
+	groups := []TaskGroup{
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_spot_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "spot", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", DatasetID: "dataset_binance_swap_kline_1h", Frequency: "1H", Subjects: subjects, ExternalSymbols: externals},
+	}
+	nodes := []scfinvoker.Node{
+		{NodeID: "hk-0", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-1", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-2", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-3", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	selected, deferred, err := selectCryptoGroupsForCapacity(groups, nodes, 40)
+	require.NoError(t, err)
+	require.Len(t, selected, 2)
+	require.Len(t, deferred, 2)
+	selectedKeys := make([]string, 0, len(selected))
+	for _, group := range selected {
+		selectedKeys = append(selectedKeys, group.MarketType+"/"+group.Frequency)
+	}
+	require.ElementsMatch(t, []string{"swap/1m", "spot/1m"}, selectedKeys)
+	for _, group := range deferred {
+		require.Equal(t, "1H", group.Frequency)
+	}
+}
+
+func TestBuildAssignmentsPinsBinanceCryptoToOverseasRegions(t *testing.T) {
+	subjects := []string{"AAA-USDT", "BTC-USDT"}
+	externals := map[string]string{"AAA-USDT": "AAAUSDT", "BTC-USDT": "BTCUSDT"}
+	nodes := []scfinvoker.Node{
+		{NodeID: "nj-0", FunctionName: "fn-nj-0", Region: "ap-nanjing", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-0", FunctionName: "fn-hk-0", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-1", FunctionName: "fn-hk-1", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments([]TaskGroup{
+		{Provider: "binance", MarketType: "spot", MarketID: "crypto", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+		{Provider: "binance", MarketType: "swap", MarketID: "crypto", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+	}, nodes, 30)
+	require.NoError(t, err)
+	byMarket := map[string]NodeAssignment{}
+	for _, assignment := range assignments {
+		if !assignment.Enabled {
+			continue
+		}
+		byMarket[assignment.MarketType] = assignment
+	}
+	require.Equal(t, "ap-hongkong", byMarket["swap"].Region)
+	require.Equal(t, "ap-hongkong", byMarket["spot"].Region)
+	require.NotEqual(t, "nj-0", byMarket["swap"].NodeID)
+	require.NotEqual(t, "nj-0", byMarket["spot"].NodeID)
+}
+
+func TestRequiresOverseasEgressPinsBinanceCryptoSpotAndSwap(t *testing.T) {
+	for _, marketType := range []string{"spot", "swap"} {
+		require.True(t, requiresOverseasEgress(TaskGroup{
+			Provider: "binance", MarketID: "crypto", MarketType: marketType,
+			DatasetID: "dataset_binance_kline_1m",
+		}), marketType)
+	}
+	require.False(t, requiresOverseasEgress(TaskGroup{Provider: "eastmoney", MarketID: "stockcn", MarketType: "equity"}))
+}
+
+func TestBuildAssignmentsRejectsOverseasCapacity(t *testing.T) {
+	subjects := []string{"AAA-USDT", "BTC-USDT"}
+	externals := map[string]string{"AAA-USDT": "AAAUSDT", "BTC-USDT": "BTCUSDT"}
+	_, err := BuildAssignments([]TaskGroup{
+		{Provider: "binance", MarketType: "swap", MarketID: "crypto", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Subjects: subjects, ExternalSymbols: externals},
+	}, []scfinvoker.Node{
+		{NodeID: "nj-0", Region: "ap-nanjing", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "hk-0", Region: "ap-hongkong", NodeType: "scf-event", TriggerType: "timer"},
+	}, 1)
+	require.ErrorContains(t, err, "overseas")
+}
+
+func TestBuildAssignmentsRejectsMissingExternalSymbolMapping(t *testing.T) {
+	_, err := BuildAssignments([]TaskGroup{{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", Subjects: []string{"BTC-USDT"}}}, []scfinvoker.Node{{NodeID: "n", NodeType: "scf-event", TriggerType: "timer"}}, 30)
+	require.ErrorContains(t, err, "external symbol mapping")
+}
+
+func TestBuildAssignmentsKeepsDistinctMarketSourcesSeparate(t *testing.T) {
+	groups := []TaskGroup{
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "tdx", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "normal_7709", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+	}
+	nodes := []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments(groups, nodes, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 2)
+	require.NotEqual(t, assignments[0].AssignmentHash, assignments[1].AssignmentHash)
+	require.NotEqual(t, assignments[0].SourceID, assignments[1].SourceID)
+}
+
+func TestBuildAssignmentsKeepsSeriesTagsSeparate(t *testing.T) {
+	groups := []TaskGroup{
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "raw", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+		{Provider: "eastmoney", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity", SourceID: "stockcn_http", SeriesTag: "adjusted", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1d", Subjects: []string{"600000.XSHG"}, ExternalSymbols: map[string]string{"600000.XSHG": "sh600000"}},
+	}
+	nodes := []scfinvoker.Node{
+		{NodeID: "n1", NodeType: "scf-event", TriggerType: "timer"},
+		{NodeID: "n2", NodeType: "scf-event", TriggerType: "timer"},
+	}
+	assignments, err := BuildAssignments(groups, nodes, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 2)
+	require.NotEqual(t, assignments[0].AssignmentHash, assignments[1].AssignmentHash)
+	require.NotEqual(t, assignments[0].SeriesTag, assignments[1].SeriesTag)
+}
+
+func TestBuildStockCNAssignmentsBindsSubjectsToStableSourceKeys(t *testing.T) {
+	subjects := []string{
+		"600000.XSHG", "600036.XSHG", "601318.XSHG",
+		"000001.XSHE", "000333.XSHE", "300750.XSHE",
+		"920000.XBSE", "920055.XBSE", "920116.XBSE",
+	}
+	nodes := make([]scfinvoker.Node, 0, 9)
+	for index := 0; index < 9; index++ {
+		nodes = append(nodes, scfinvoker.Node{
+			NodeID:       fmt.Sprintf("source-node-%d", index),
+			FunctionName: fmt.Sprintf("moox-stockcn-source-%03d", index),
+			Region:       "ap-guangzhou",
+			NodeType:     "scf-event",
+			TriggerType:  "timer",
+			Metadata:     map[string]any{"index": index},
+		})
+	}
+	group := TaskGroup{
+		Provider: "stockcn_multi", MarketType: "equity",
+		MarketID: "stockcn", InstrumentType: "equity",
+		DatasetID: StockCNDatasetID, Frequency: "1m",
+		Subjects: subjects, ExternalSymbols: stockCNExternalSymbols(subjects),
+	}
+
+	first, err := BuildStockCNAssignments(group, nodes, 4, "2026-09-01", 9)
+	require.NoError(t, err)
+	second, err := BuildStockCNAssignments(group, nodes, 4, "2026-09-01", 9)
+	require.NoError(t, err)
+
+	firstSourceBySubject := make(map[string]string, len(subjects))
+	secondSourceBySubject := make(map[string]string, len(subjects))
+	sources := make(map[string]struct{})
+	for _, assignment := range first {
+		require.NotEmpty(t, assignment.Provider)
+		require.NotEmpty(t, assignment.SourceID)
+		require.Len(t, assignment.ProviderChain, 1)
+		require.Equal(t, assignment.Provider, assignment.ProviderChain[0])
+		sourceKey := assignment.Provider + "/" + assignment.SourceID
+		sources[sourceKey] = struct{}{}
+		for _, subject := range assignment.Subjects {
+			firstSourceBySubject[subject] = sourceKey
+		}
+	}
+	for _, assignment := range second {
+		sourceKey := assignment.Provider + "/" + assignment.SourceID
+		for _, subject := range assignment.Subjects {
+			secondSourceBySubject[subject] = sourceKey
+		}
+	}
+	require.GreaterOrEqual(t, len(sources), 2)
+	require.Equal(t, firstSourceBySubject, secondSourceBySubject)
+	require.Len(t, firstSourceBySubject, len(subjects))
+}
+
+func TestBuildAssignmentsAllowsUnicodeSubjectNames(t *testing.T) {
+	assignments, err := BuildAssignments([]TaskGroup{{
+		Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m",
+		Subjects: []string{"币安人生-USDT"}, ExternalSymbols: map[string]string{"币安人生-USDT": "BINANCELIFEUSDT"},
+	}}, []scfinvoker.Node{{NodeID: "n", NodeType: "scf-event", TriggerType: "timer"}}, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 1)
+	if len(assignments) == 1 {
+		require.Equal(t, []string{"币安人生-USDT"}, assignments[0].Subjects)
+		require.Equal(t, "BINANCELIFEUSDT", assignments[0].ExternalSymbols["币安人生-USDT"])
+	}
+}
+
+func TestCronForFrequency(t *testing.T) {
+	cron, err := CronForFrequency("1m")
+	require.NoError(t, err)
+	require.Equal(t, "0 * * * * * *", cron)
+	cron, err = CronForFrequency("1M")
+	require.NoError(t, err)
+	require.Equal(t, "0 0 0 1 * * *", cron)
+	_, err = CronForFrequency("2m")
+	require.Error(t, err)
+}
+
+func TestAssignmentCronStaggersCryptoHourlyShards(t *testing.T) {
+	group := TaskGroup{MarketID: "crypto", Frequency: "1h"}
+	for id, want := range map[int]string{0: "0 0 * * * * *", 1: "0 1 * * * * *", 9: "0 9 * * * * *", 10: "0 0 * * * * *"} {
+		if got := assignmentCron(group, id); got != want {
+			t.Fatalf("group %d cron=%q, want %q", id, got, want)
+		}
+	}
+	if got := assignmentCron(TaskGroup{MarketID: "crypto", Frequency: "1m"}, 3); got != "0 * * * * * *" {
+		t.Fatalf("minute cron=%q", got)
+	}
+}

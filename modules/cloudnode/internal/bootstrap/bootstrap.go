@@ -9,18 +9,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/publishlease"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/cloudnode/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -32,8 +35,8 @@ type Runtime struct {
 	StartedAt       time.Time
 	Store           *store.Store
 	JetStream       *jobqueue.Runtime
-	HeartbeatBuffer *projection.HeartbeatBuffer
 	DebugServer     *http.Server
+	NodeBatchCancel context.CancelFunc
 }
 
 func (r *Runtime) Close(ctx context.Context) error {
@@ -43,12 +46,10 @@ func (r *Runtime) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	var firstErr error
-	if r.HeartbeatBuffer != nil {
-		if err := r.HeartbeatBuffer.Close(ctx); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	if r.NodeBatchCancel != nil {
+		r.NodeBatchCancel()
 	}
+	var firstErr error
 	if r.JetStream != nil {
 		if err := r.JetStream.Close(); err != nil && firstErr == nil {
 			firstErr = err
@@ -96,6 +97,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			_ = runtime.Close(closeCtx)
 		}
 	}()
+	if err := dbm.MigrateLegacySchema(); err != nil {
+		log.ErrorContextf(ctx, "清理 cloudnode 已废弃 schema 失败: %v", err)
+		return nil, err
+	}
 	if err := dbm.ApplySchema(schema.AllSQL()); err != nil {
 		log.ErrorContextf(ctx, "初始化 cloudnode schema 失败: %v", err)
 		return nil, err
@@ -106,9 +111,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	})
 	cloudnoderpc.SetDefaultJobHistoryMaintainer(historyStore)
 	registerJobHistorySchedule(s)
-	registerMetricsReporter(s)
+	moduleMetrics, err := registerMetricsReporter(s)
+	if err != nil {
+		return nil, err
+	}
 
-	opts := []cloudnoderpc.Option{}
+	opts := []cloudnoderpc.Option{
+		cloudnoderpc.WithModuleMetrics(moduleMetrics),
+		cloudnoderpc.WithCollectorPublishLeaseValidator(publishlease.NewFromEnv()),
+	}
 	if cfg.Queue.Backend == "jetstream" && cfg.JetStream.Enabled {
 		rt, err := jobqueue.Connect(ctx, cfg.JetStream)
 		if err != nil {
@@ -121,40 +132,37 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			return nil, err
 		}
 		runtime.JetStream = rt
-		kv, err := rt.KeyValue(cfg.JobItem.ActiveKVBucket)
+		kv, err := rt.BindKV(ctx, cfg.JobItem.ActiveKVBucket)
 		if err != nil {
 			log.ErrorContextf(ctx, "打开 cloudnode JobItem active KV 失败: %v", err)
 			return nil, err
 		}
-		stateStore := jobstate.NewKVStore(kv, jobstate.Options{
-			RecoverAfterMillis: cfg.JobItem.RecoverAfterMillis,
-			DefaultMaxAttempts: cfg.JobItem.DefaultMaxAttempts,
-		})
+		stateStore := jobstate.NewKVStore(kv, jobstate.Options{})
 		execQueue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
-			Naming:          jobqueue.NamingConfig{SubjectPrefix: cfg.JetStream.SubjectPrefix},
-			ExecStream:      cfg.JetStream.ExecStream,
-			AckWait:         time.Duration(cfg.JetStream.AckWaitMillis) * time.Millisecond,
-			MaxDeliver:      cfg.JetStream.MaxDeliver,
-			FetchMaxWait:    time.Duration(cfg.JetStream.FetchMaxWaitMs) * time.Millisecond,
-			DefaultMaxBatch: cfg.JobItem.MaxLimit,
+			AckWait:       jobqueue.DefaultAckWait,
+			MaxDeliver:    cfg.JetStream.MaxDeliver,
+			MaxAckPending: cfg.JetStream.MaxAckPending,
 		})
-		catalog := dbm.Catalog()
-		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
-			MaxKeys:       2048,
-			FlushInterval: time.Second,
-		})
-		runtime.HeartbeatBuffer = heartbeatSink
 		opts = append(opts,
 			cloudnoderpc.WithExecutionQueue(execQueue),
 			cloudnoderpc.WithJobStateStore(stateStore),
 			cloudnoderpc.WithJobHistoryStore(historyStore),
-			cloudnoderpc.WithHeartbeatSink(heartbeatSink),
 		)
-		log.InfoContextf(ctx, "cloudnode JetStream 已启用: exec_stream=%s active_kv=%s nats_url=%s",
-			cfg.JetStream.ExecStream, cfg.JobItem.ActiveKVBucket, cfg.JetStream.NATSURL)
+		log.InfoContextf(ctx, "cloudnode JetStream 已启用: event=%s active_kv=%s eventbus_urls=%s",
+			events.CloudJobExecutionRequested.Name(), cfg.JobItem.ActiveKVBucket, strings.Join(cfg.JetStream.URLs, ","))
 	}
 
+	credentialResolver, err := cloudcredential.NewFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, cloudnoderpc.WithCredentialResolver(credentialResolver))
 	svc := cloudnoderpc.New(dbm, opts...)
+	nodeBatchCtx, nodeBatchCancel := context.WithCancel(ctx)
+	runtime.NodeBatchCancel = nodeBatchCancel
+	if err := startNodeBatchRunner(nodeBatchCtx, svc, cfg); err != nil {
+		return nil, err
+	}
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
 	if err := registerHealth(s, cfg, dbm); err != nil {
 		return nil, err
@@ -173,21 +181,34 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func registerMetricsReporter(s *server.Server) {
-	if s == nil {
-		return
+func startNodeBatchRunner(ctx context.Context, svc *cloudnoderpc.Service, cfg *config.Config) error {
+	if svc == nil {
+		return fmt.Errorf("cloudnode node batch service is required")
 	}
-	h, err := report.NewHandler(report.DefaultConfig("moox_cloudnode"))
+	if cfg == nil {
+		return fmt.Errorf("cloudnode config is required")
+	}
+	return svc.StartNodeBatchRunner(ctx, cfg.NodeBatch.BatchSize, cfg.NodeBatch.PollInterval)
+}
+
+func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
+	if s == nil {
+		return nil, fmt.Errorf("cloudnode metrics reporter requires a tRPC server")
+	}
+	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "cloudnode", report.HealthCheckIDsForModule("cloudnode"))
 	if err != nil {
-		log.Warnf("cloudnode metrics reporter disabled: %v", err)
-		return
+		return nil, err
+	}
+	h, err := report.NewHandler(report.DefaultConfig("cloudnode", "moox_cloudnode"))
+	if err != nil {
+		return nil, err
 	}
 	service := s.Service("trpc.moox.cloudnode.metrics.timer")
 	if service == nil {
-		log.Warn("cloudnode metrics timer service is not configured, skip register")
-		return
+		return nil, fmt.Errorf("cloudnode metrics timer service is not configured")
 	}
 	timer.RegisterHandlerService(service, h.Handle)
+	return moduleMetrics, nil
 }
 
 func registerHealth(s *server.Server, cfg *config.Config, dbm *store.Store) error {

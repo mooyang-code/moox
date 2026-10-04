@@ -1,65 +1,47 @@
 package binance
 
 import (
-	exchange "github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
-	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
+	"github.com/stretchr/testify/require"
 )
 
-func TestSymbolReportConcurrencyIsSerialForMetadataRefresh(t *testing.T) {
-	if maxConcurrency != 1 {
-		t.Fatalf("maxConcurrency = %d, want 1 to avoid concurrent metadata snapshot refresh conflicts", maxConcurrency)
-	}
-}
+func TestFetchSymbolsFallsBackToNextSpotEndpoint(t *testing.T) {
+	var hosts []string
+	client := binanceapi.NewClient()
+	require.NoError(t, client.SetSpotBaseURLs([]string{"https://first.invalid", "https://second.invalid"}))
+	client.HTTPClient = httpclient.NewHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			hosts = append(hosts, req.URL.Host)
+			if req.URL.Host == "first.invalid" {
+				return nil, errors.New("first endpoint unavailable")
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"timezone":"UTC","serverTime":1,"symbols":[{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","filters":[]}]}`)),
+			}, nil
+		}),
+	})
+	collector := &SymbolCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client)}
 
-func TestNormalizedSubjectID(t *testing.T) {
-	assert.Equal(t, "BTC-USDT", normalizedSubjectID(&exchange.SymbolInfo{
-		Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT",
-	}))
-	assert.Equal(t, "ETH-USDT", normalizedSubjectID(&exchange.SymbolInfo{
-		Symbol: "ETHUSDT", BaseAsset: "ETH", QuoteAsset: "USDT",
-	}))
-}
-
-func TestContainsHyphen(t *testing.T) {
-	assert.True(t, containsHyphen("BTC-USDT"))
-	assert.False(t, containsHyphen("BTCUSDT"))
-}
-
-func TestAppendOptionalDoubleField(t *testing.T) {
-	cols, err := appendOptionalDoubleField(nil, "x", "")
+	symbols, err := collector.fetchSymbols(context.Background(), &sources.CollectParams{InstType: InstTypeSPOT})
 	require.NoError(t, err)
-	assert.Nil(t, cols)
-
-	cols, err = appendOptionalDoubleField(nil, "x", "1.25")
-	require.NoError(t, err)
-	require.Len(t, cols, 1)
-	assert.Equal(t, 1.25, cols[0].GetValue().GetDoubleValue())
-
-	_, err = appendOptionalDoubleField(nil, "x", "bad")
-	assert.Error(t, err)
+	require.Len(t, symbols, 1)
+	require.Equal(t, "BTC-USDT", symbols[0].Symbol)
+	require.Equal(t, []string{"first.invalid", "second.invalid"}, hosts)
 }
 
-func TestBuildSymbolRegisterRequest(t *testing.T) {
-	req := buildSymbolRegisterRequest(&exchange.SymbolInfo{
-		Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active",
-	}, StorageBinding{SpaceID: "crypto", RecordDatasetID: "ds-1", DataSourceID: "binance"})
-	assert.Equal(t, "crypto", req.GetSpaceId())
-	assert.Equal(t, "BTC-USDT", req.GetSubject().GetSubjectId())
-	assert.Equal(t, "binance", req.GetDataSourceId())
-}
+type roundTripFunc func(*http.Request) (*http.Response, error)
 
-func TestBuildSymbolRecordRows(t *testing.T) {
-	rows, err := buildSymbolRecordRows([]*exchange.SymbolInfo{{
-		Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active",
-	}}, StorageBinding{SpaceID: "crypto", RecordDatasetID: "ds-1"})
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "crypto", rows[0].GetKey().GetSpaceId())
-	assert.Equal(t, "ds-1", rows[0].GetKey().GetDatasetId())
-	assert.Equal(t, "BTC-USDT", rows[0].GetKey().GetRecordId())
-	_, err = time.Parse(time.RFC3339Nano, rows[0].GetKey().GetVersion())
-	assert.NoError(t, err)
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

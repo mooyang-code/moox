@@ -8,7 +8,6 @@ package spacecontext
 
 import (
 	"context"
-	"fmt"
 )
 
 // SpaceIDHeader HTTP 头名，用于在网关层注入当前空间
@@ -23,25 +22,6 @@ func WithSpaceID(ctx context.Context, spaceID string) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, ctxKey{}, spaceID)
-}
-
-// FromContext 从 context 读取 spaceID，未设置返回 ("", false)
-func FromContext(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(ctxKey{}).(string)
-	if !ok {
-		return "", false
-	}
-	return v, v != ""
-}
-
-// MustFromContext 从 context 读取 spaceID，未设置返回错误
-// 用于 service 层强制要求 space_id 的场景
-func MustFromContext(ctx context.Context) (string, error) {
-	spaceID, ok := FromContext(ctx)
-	if !ok || spaceID == "" {
-		return "", fmt.Errorf("space_id is required but not set in context")
-	}
-	return spaceID, nil
 }
 
 // InjectFromHeaders 从网关提取的 headers map（key 为 "space_id"）注入到 ctx。

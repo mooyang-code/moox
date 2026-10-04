@@ -1,43 +1,60 @@
-# Strategy 前端管理台验收记录
+# Strategy 前端工作台验收记录
 
-## 页面边界
+本文记录现代 Strategy 前端工作台的验证边界和本次执行证据。页面只使用
+`Strategy`、`StrategyInstance`、`StrategyResult` 和 `ListStrategyTargets`，不把旧
+Runner、成交回报或本地推导状态当成策略事实。
 
-- 管理台不提供 Python 源码输入、在线编辑、Git/CI 或版本回滚。
-- 管理台只展示版本、源码 hash、运行状态、决策、目标/持仓偏差和分来源绩效。
-- 前端只能通过 Admin Gateway 调用 StrategyMgr，不能直接访问 SQLite、Trade 或 Storage。
+## 验收边界
 
-## 自动化验证
+- 策略定义页只保存 `strategy_id + dsl_yaml`，编辑器的 YAML 检查不等同于运行校验。
+- 实例创建只从当前 Space 的 View、Factor 因子集、结果列和逻辑账户元数据生成绑定，提交时固定 `enabled=false`。
+- 实例详情分别展示当前目标和历史结果；目标权重不等于成交数量，`sent` 不等于成交。
+- 停用不执行清仓；停用后残留 `session_id` 只表示后台控制尚未完成，不能推导为清仓成功。
+- 当前目标按 `enabled/session_id/bar_end_time/valid_until` 判定为无结果、零仓位、有效、过期或未知；接口失败保留独立错误态。
+- 远端验收只做页面和读取链路，不创建、编辑策略或启停真实交易实例。
+
+## 本地验证
+
+在 `web` 目录执行：
 
 ```bash
-cd modules/strategy && GOWORK=off go test ./... -count=1
-cd modules/strategy && GOWORK=off go test -race ./... -count=1
-cd web && pnpm exec vue-tsc --noEmit
-cd web && pnpm test:unit
-cd web && pnpm check:menu
-cd web && pnpm exec playwright test tests/strategy-console.spec.ts tests/strategy-console-performance.spec.ts
-cd web && pnpm build:prod
-pnpm docs:build
+pnpm vitest run src/api/strategy.test.ts src/store/modules/strategy.test.ts src/views/strategy
+pnpm test
+pnpm exec vue-tsc --noEmit
+pnpm exec playwright test tests/strategy-console.spec.ts --config=playwright.strategy.config.ts
+pnpm build:prod
+make -C ../web-host statik
+make -C ../web-host build-linux
+pnpm check:menu
+git -C .. diff --check
 ```
 
-E2E mock 场景覆盖：
+本次执行结果：
 
-1. 登录后进入策略运行概览。
-2. 展示运行策略、版本和 Paper 健康状态。
-3. 页面不出现源码编辑和版本回滚入口。
-4. API 错误、空列表、stale 和 partial 状态使用独立文案。
+- Vitest：64 个测试文件、223 个测试通过；策略聚焦测试 9 个文件、26 个测试通过。
+- Playwright：策略工作台 3/3 通过，使用独立本地 19527 mock 配置。
+- `vue-tsc`、生产构建、静态资源嵌入和 `web-host` Linux 构建通过。
+- `check:menu` 通过。
+- `check:detail-pages` 未通过：仓库既有脚本引用不存在的
+  `web/src/views/ops/storage/routes.vue`，与本次策略前端改动无关；未修改该无关脚本。
 
-## 数据验收
+## 代码与制品
 
-- 绩效必须带 `performance_source`，Backtest/Observe/Paper/Live 不合并。
-- 没有数据返回 `insufficient_data`，不能用数值 0 代替。
-- 查询响应带 `data_revision`、`as_of` 和数据新鲜度。
-- 绩效点、日汇总、运行指标和操作审计使用唯一键幂等写入。
-- Space 过滤在服务端完成；前端筛选不能替代权限校验。
+- 前端提交：`e45679ee`（包含 `6aaefffb` 的工作台重构）。
+- 分支：`feature/mooyang`，已推送到 `origin/feature/mooyang`。
+- 新起 codeCR Agent 已复审现代 API、DSL 绑定、空间/会话隔离、控制未知态和请求竞态；
+  复审未发现 P0/P1。其提出的历史范围、目标/结果独立提交和控制状态问题已修复并重新验证。
 
-## 性能门槛
+## 正式环境验证
 
-正式压测数据集应包含至少 10,000 条运行记录和 365 天 daily performance。目标是列表第一页接口 p95 小于 500ms、详情首屏接口 p95 小于 800ms；前端不得一次加载全部历史曲线。
-
-## 当前限制
-
-Strategy 首版的真实 Storage PIT、Trade live 对账、完整 Performance 聚合和组合持仓快照仍需要基础设施联调。没有真实账本或持仓快照时，页面必须显示 `insufficient_data`、`stale` 或“暂无组合快照”，不能推测实盘表现。
+- 目标主机来自 `moox.toml` 的 `[strategy_host]`，仅替换并重启 `web-host`，没有重启
+  Strategy、Trade 或其他服务。
+- 远端 `/data/moox/prod/bin/moox-web-host` SHA256：
+  `a85cab79926bdd9d041adbe27afa8139b66143b3f368a3e9d09485fa9f15261a`，与本地构建制品一致。
+- HTTPS 登录页、登录会话、策略菜单、运行实例路由和错误态均已在
+  `https://106.53.107.122:9527/` 验证。
+- 远端 `readyz` 返回 HTTP 401，说明接口受健康认证保护且进程可响应。
+- 运行实例读取 `ListStrategies` 时，远端 Strategy 服务当前返回
+  `http client transport ... 127.0.0.1:11430 ... EOF`。因此正式环境能证明静态前端已发布，
+  但不能证明当前远端策略数据链路可读；该运行时故障属于 Strategy 服务，需要单独排查，
+  本次前端交付不修改后台业务或配置。

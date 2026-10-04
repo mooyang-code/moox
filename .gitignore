@@ -37,7 +37,15 @@ go.work.sum
 skills/dev-helper/.env.local
 
 # User-owned initialization manifest. Keep the checked-in example only.
-/custom.toml
+/moox.toml
+
+# Local Cursor MCP config contains the remote bearer token.
+.cursor/mcp.json
+
+# Local skill credentials and production live probes. Never commit.
+skills/moox/config/data-access.yaml
+modules/cli/internal/command/live_collector_read_test.go
+modules/cli/internal/command/live_factor_read_test.go
 
 # infra 真实部署值覆盖文件（唯一存放真实 IP/凭证处），不入库
 
@@ -57,6 +65,7 @@ server/.claude/
 /coverage/
 /modules/*/bin/
 /modules/*/data/
+/modules/*/factors/.versions/
 /modules/*/log/
 /modules/*/logs/
 /modules/*/var/
@@ -65,7 +74,6 @@ server/.claude/
 /modules/*/coverage/
 /modules/*/.cache/
 /modules/*/scf-build/
-/modules/collector/collector-scf-*.zip
 /modules/storage/.deps/
 /scripts/node_exporter/build/
 cover.out
@@ -80,6 +88,11 @@ cover.out.tmp
 *.sqlite3
 
 *.log
+*.zip
+*.tmp
+
+# trpc-open temporary generation workspaces
+/modules/*/proto/*/tmp-*/
 
 # Editor/IDE
 # .idea/

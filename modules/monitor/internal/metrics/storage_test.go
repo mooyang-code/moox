@@ -13,10 +13,14 @@ import (
 )
 
 type fakeMetadata struct {
-	columns []*storagepb.DatasetColumn
-	routes  []*storagepb.PrimaryStoreRoute
-	dataset *storagepb.Dataset
-	space   *storagepb.Space
+	columns      []*storagepb.DatasetColumn
+	subjects     []*storagepb.DatasetSubject
+	dataset      *storagepb.Dataset
+	node         *storagepb.DataNode
+	space        *storagepb.Space
+	nodeErr      error
+	nodeCalls    int
+	subjectCalls int
 }
 
 func (f *fakeMetadata) GetSpace(context.Context, *storagepb.GetSpaceReq, ...client.Option) (*storagepb.GetSpaceRsp, error) {
@@ -25,21 +29,32 @@ func (f *fakeMetadata) GetSpace(context.Context, *storagepb.GetSpaceReq, ...clie
 func (f *fakeMetadata) GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error) {
 	return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Dataset: f.dataset}, nil
 }
+func (f *fakeMetadata) GetDataNode(context.Context, *storagepb.GetDataNodeReq, ...client.Option) (*storagepb.GetDataNodeRsp, error) {
+	f.nodeCalls++
+	if f.nodeErr != nil {
+		return nil, f.nodeErr
+	}
+	return &storagepb.GetDataNodeRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Node: f.node}, nil
+}
 func (f *fakeMetadata) ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
 	return &storagepb.ListDatasetColumnsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Columns: f.columns}, nil
 }
-func (f *fakeMetadata) ListPrimaryStoreRoutes(context.Context, *storagepb.ListPrimaryStoreRoutesReq, ...client.Option) (*storagepb.ListPrimaryStoreRoutesRsp, error) {
-	return &storagepb.ListPrimaryStoreRoutesRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, PrimaryStoreRoutes: f.routes}, nil
+func (f *fakeMetadata) ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
+	f.subjectCalls++
+	return &storagepb.ListDatasetSubjectsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, DatasetSubjects: f.subjects}, nil
+}
+func (f *fakeMetadata) ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error) {
+	return &storagepb.ListTagsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
 type fakeAccess struct {
-	writes  []*storagepb.TimeSeriesRow
+	writes  []*storagepb.RowFieldUpsert
 	readReq *storagepb.ReadTimeSeriesRowsReq
 }
 
-func (f *fakeAccess) MergeTimeSeriesRows(_ context.Context, req *storagepb.MergeTimeSeriesRowsReq, _ ...client.Option) (*storagepb.MergeTimeSeriesRowsRsp, error) {
+func (f *fakeAccess) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.writes = append(f.writes, req.GetRows()...)
-	return &storagepb.MergeTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 func (f *fakeAccess) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	f.readReq = req
@@ -47,10 +62,10 @@ func (f *fakeAccess) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTi
 }
 
 func metricsStorageConfig() monconfig.MetricsStorageConfig {
-	return monconfig.MetricsStorageConfig{SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", WriteBatchSize: 1}
+	return monconfig.MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", WriteBatchSize: 1}
 }
 func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "moox_system", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "moox_system", DatasetId: "moox_service_metrics", Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, routes: []*storagepb.PrimaryStoreRoute{{SpaceId: "moox_system", DatasetId: "moox_service_metrics", SubjectPattern: "*", HashRule: "subject_id", Status: "active"}}}
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
 	for _, c := range []struct {
 		name     string
 		typ      storagepb.FieldValueType
@@ -71,37 +86,79 @@ func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T)
 	if len(a.writes) != 2 {
 		t.Fatalf("writes=%d, want 2", len(a.writes))
 	}
-	if a.writes[0].GetKey().GetSubjectId() != "s1" {
-		t.Fatalf("subject id=%q", a.writes[0].GetKey().GetSubjectId())
+	if a.writes[0].GetKey().GetTimeSeries().GetSubjectId() != "s1" {
+		t.Fatalf("subject id=%q", a.writes[0].GetKey().GetTimeSeries().GetSubjectId())
 	}
-	if len(a.writes[0].GetKey().GetDimensions()) != 4 {
-		t.Fatalf("write dimensions=%v, want complete metric identity", a.writes[0].GetKey().GetDimensions())
+	if len(a.writes[0].GetAttributes()) != 4 {
+		t.Fatalf("write attributes=%v, want complete metric identity", a.writes[0].GetAttributes())
 	}
 }
 
-func TestStorageAdapterQueryHistorySelectorsIncludeDimensions(t *testing.T) {
+func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
 	a := &fakeAccess{}
 	adapter := NewStorageAdapter(a, &fakeMetadata{}, metricsStorageConfig())
-	_, err := adapter.QueryHistorySelectors(context.Background(), []HistorySelector{{SeriesID: "series-1", Dimensions: map[string]string{
-		"service_name": "svc", "instance_id": "instance", "metric_name": "requests_total", "metric_type": "counter",
-	}}}, time.Time{}, time.Time{}, true, 10)
+	_, err := adapter.QueryHistorySelectors(
+		context.Background(),
+		[]HistorySelector{{SeriesID: "series-1"}},
+		time.Time{},
+		time.Time{},
+		true,
+		10,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a.readReq.GetKeys()) != 1 {
-		t.Fatalf("keys=%d, want 1", len(a.readReq.GetKeys()))
+	if len(a.readReq.GetSelectors()) != 1 {
+		t.Fatalf("selectors=%d, want 1", len(a.readReq.GetSelectors()))
 	}
-	key := a.readReq.GetKeys()[0]
-	if key.GetSubjectId() != "series-1" || key.GetDimensions()["metric_name"] != "requests_total" {
-		t.Fatalf("query key=%+v, want subject and dimensions", key)
+	if a.readReq.GetSpaceId() != "mooxsys" || a.readReq.GetDatasetId() != "dataset_mooxsys_service_metrics" {
+		t.Fatalf("request scope=%s/%s", a.readReq.GetSpaceId(), a.readReq.GetDatasetId())
+	}
+	key := a.readReq.GetSelectors()[0]
+	if key.GetSubjectId() != "series-1" {
+		t.Fatalf("query key=%+v, want series subject", key)
+	}
+	if key.SeriesTag != nil {
+		t.Fatal("metrics history selector must omit series_tag")
 	}
 }
-func TestStorageAdapterRejectsMissingRoute(t *testing.T) {
+
+func TestStorageAdapterListsAndCachesActiveDatasetSubjects(t *testing.T) {
+	f := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
+		{SubjectId: "BTC", Status: "active"},
+		{SubjectId: "OLD", Status: "archived"},
+		{SubjectId: "", Status: "active"},
+	}}
+	adapter := NewStorageAdapter(nil, f, metricsStorageConfig())
+	first, err := adapter.ListActiveDatasetSubjects(context.Background(), "crypto", "dataset")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]struct{}{"BTC": {}}, first)
+	second, err := adapter.ListActiveDatasetSubjects(context.Background(), "crypto", "dataset")
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+	assert.Equal(t, 1, f.subjectCalls)
+}
+func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {
 	f := &fakeMetadata{space: &storagepb.Space{Status: "active"}, dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}}
 	adapter := NewStorageAdapter(&fakeAccess{}, f, metricsStorageConfig())
 	if err := adapter.ValidateSchema(context.Background()); err == nil {
-		t.Fatal("expected missing columns/route error")
+		t.Fatal("expected missing binding error")
 	}
+}
+
+func TestStorageAdapterResolvesDataNodeWithoutRouteRPC(t *testing.T) {
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
+	for _, c := range []struct {
+		name     string
+		typ      storagepb.FieldValueType
+		originID string
+		required bool
+	}{{"value", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "monitor_metric_value", true}, {"labels_json", storagepb.FieldValueType_FIELD_VALUE_TYPE_JSON, "monitor_metric_labels", true}, {"producer_node_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "monitor_metric_producer_node_id", false}, {"producer_version", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "monitor_metric_producer_version", false}, {"message_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "monitor_metric_message_id", true}} {
+		f.columns = append(f.columns, &storagepb.DatasetColumn{ColumnName: c.name, ValueType: c.typ, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: c.originID, Required: c.required, Status: "active"})
+	}
+	adapter := NewStorageAdapter(&fakeAccess{}, f, metricsStorageConfig())
+	require.NoError(t, adapter.ValidateSchema(context.Background()))
+	assert.Equal(t, 1, f.nodeCalls)
 }
 
 func TestNormalizeTarget(t *testing.T) {
@@ -119,16 +176,11 @@ func TestStorageHelpers(t *testing.T) {
 	require.Error(t, storageOK("action", &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "fail"}))
 }
 
-func TestCloneStringMapAndHistorySelector(t *testing.T) {
-	assert.Nil(t, cloneStringMap(nil))
-	cloned := cloneStringMap(map[string]string{"a": "1"})
-	cloned["a"] = "2"
-	assert.Equal(t, "1", cloneStringMap(map[string]string{"a": "1"})["a"])
+func TestHistorySelectorForSeries(t *testing.T) {
 	selector := HistorySelectorForSeries(MetricSeries{
 		SeriesID: "s1", ServiceName: "svc", InstanceID: "i", MetricName: "cpu", MetricType: "gauge",
 	})
 	assert.Equal(t, "s1", selector.SeriesID)
-	assert.Equal(t, "svc", selector.Dimensions["service_name"])
 }
 
 func TestSchemaStatusNilAdapter(t *testing.T) {
@@ -153,5 +205,5 @@ func TestSampleRowUsesConfig(t *testing.T) {
 	}
 	row := sampleRow(cfg, sample)
 	assert.Equal(t, cfg.SpaceID, row.GetKey().GetSpaceId())
-	assert.Equal(t, "s1", row.GetKey().GetSubjectId())
+	assert.Equal(t, "s1", row.GetKey().GetTimeSeries().GetSubjectId())
 }

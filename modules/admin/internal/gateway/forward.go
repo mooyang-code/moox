@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -26,6 +28,7 @@ import (
 
 const minGzipForwardResponseBytes = 1024
 const nodeGatewayServiceKeyID = "moox-gateway-service"
+const maxForwardResponseBytes = 16 << 20
 
 // setForwardCommonHeaders 设置透传响应的公共头（CORS + 暴露 trpc 错误头供前端读取）。
 func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
@@ -38,23 +41,23 @@ func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
 // The direct deployment detail path remains available only for local tests and
 // non-storage admin APIs.
 func forwardStorageToNodeGateway(ctx context.Context, serviceID, method string, body []byte, headers map[string]string) (*http.Response, bool, error) {
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_URL")), "/")
+	native := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NATIVE_URL"))
 	secret := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
 	nodeID := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NODE_ID"))
 	keyID := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
 	if keyID == "" {
 		keyID = nodeGatewayServiceKeyID
 	}
-	if base == "" || secret == "" || nodeID == "" {
-		return nil, true, fmt.Errorf("storage BFF requires Node Service Gateway configuration")
+	if native == "" || secret == "" || nodeID == "" {
+		return nil, true, fmt.Errorf("storage BFF requires Node Service Gateway configuration (native target, credentials, and node id)")
 	}
 	if keyID != nodeGatewayServiceKeyID {
 		return nil, true, fmt.Errorf("storage BFF key id %q does not match Node Service Gateway key id %q", keyID, nodeGatewayServiceKeyID)
 	}
-	if native := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NATIVE_URL")); native != "" {
-		base = native
+	target, err := normalizeNodeGatewayTarget(native)
+	if err != nil {
+		return nil, true, err
 	}
-	target := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
 	servicePath := storageBFFServicePath(serviceID, method)
 	path := "/" + servicePath + "/" + method
 	signed, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: keyID, Secret: secret}, gatewayauth.Request{
@@ -76,15 +79,119 @@ func forwardStorageToNodeGateway(ctx context.Context, serviceID, method string, 
 	}
 	response := &codec.Body{}
 	codec.Message(ctx).WithClientRPCName(path)
-	invokeOptions := []client.Option{client.WithTarget("ip://" + target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithServiceName(servicePath), client.WithCalleeMethod(method), client.WithSerializationType(codec.SerializationTypeNoop), client.WithCurrentSerializationType(codec.SerializationTypeNoop), client.WithTimeout(30 * time.Second)}
+	invokeOptions := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithServiceName(servicePath), client.WithCalleeMethod(method), client.WithSerializationType(codec.SerializationTypeNoop), client.WithCurrentSerializationType(codec.SerializationTypeNoop), client.WithTimeout(30 * time.Second)}
 	for name, value := range metadata {
 		invokeOptions = append(invokeOptions, client.WithMetaData(name, value))
 	}
 	invokeOptions = append(invokeOptions, client.WithSerializationType(codec.SerializationTypeJSON))
 	if err := client.New().Invoke(ctx, &codec.Body{Data: body}, response, invokeOptions...); err != nil {
-		return nil, true, err
+		return nil, true, fmt.Errorf("Node Service Gateway %s unavailable: %w", target, err)
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(response.Data))}, true, nil
+}
+
+// forwardTradeConsoleToGateway keeps a dedicated TradeConsole listener
+// loopback-only while allowing the Admin browser BFF to reach it through the
+// authenticated HTTPS Node Gateway. The gateway ACL, not the browser-facing
+// Admin route, remains the authority for permitted TradeConsole methods.
+func forwardTradeConsoleToGateway(ctx context.Context, method string, detail ServiceDetail, body []byte, headers map[string]string) ([]byte, error) {
+	if method == "" || strings.IndexFunc(method, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-')
+	}) >= 0 {
+		return nil, fmt.Errorf("Trade method is invalid")
+	}
+	base := strings.TrimRight(strings.TrimSpace(detail.GatewayURL), "/")
+	if base == "" || strings.TrimSpace(detail.GatewayNode) == "" {
+		return nil, fmt.Errorf("Trade Gateway placement is incomplete")
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Host == "" || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return nil, fmt.Errorf("Trade Gateway URL is invalid")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" && scheme != "http" {
+		return nil, fmt.Errorf("Trade Gateway URL is invalid")
+	}
+	if scheme == "http" {
+		hostname := strings.TrimSpace(parsed.Hostname())
+		if hostname != "localhost" {
+			ip := net.ParseIP(hostname)
+			if ip == nil || !ip.IsLoopback() {
+				return nil, fmt.Errorf("Trade Gateway URL must use HTTPS")
+			}
+		}
+	}
+	path := "/api/service/trade_console/" + method
+	secret := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
+	keyID := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
+	if secret == "" || keyID == "" {
+		return nil, fmt.Errorf("Trade Gateway credentials are not configured")
+	}
+	signed, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: keyID, Caller: "admin-gateway", Secret: secret}, gatewayauth.Request{
+		Method: http.MethodPost, Path: path, TargetNode: detail.GatewayNode, Body: body,
+	}, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	for name, values := range signed {
+		for _, value := range values {
+			request.Header.Add(name, value)
+		}
+	}
+	for key, name := range map[string]string{"space_id": "X-Space-Id", "trace_id": "X-Trace-Id", "user_id": "X-User-Id", "user_role": "X-User-Role"} {
+		if value := headers[key]; value != "" {
+			request.Header.Set(name, value)
+		}
+	}
+	caFile := strings.TrimSpace(os.Getenv("MOOX_TRADE_GATEWAY_CA_FILE"))
+	if caFile == "" {
+		caFile = strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_FILE"))
+	}
+	httpClient, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: 30 * time.Second, CAFile: caFile})
+	if err != nil {
+		return nil, err
+	}
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("Trade Gateway unavailable: %w", err)
+	}
+	defer response.Body.Close()
+	encoded, err := io.ReadAll(io.LimitReader(response.Body, maxForwardResponseBytes+1))
+	if err != nil || len(encoded) > maxForwardResponseBytes {
+		return nil, fmt.Errorf("Trade Gateway response is invalid")
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Trade Gateway returned HTTP %d", response.StatusCode)
+	}
+	return encoded, nil
+}
+
+// normalizeNodeGatewayTarget accepts the deployment formats used by the
+// other native tRPC clients. In particular, do not prepend ip:// twice when
+// the environment already contains a native tRPC target.
+func normalizeNodeGatewayTarget(raw string) (string, error) {
+	target := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if target == "" {
+		return "", fmt.Errorf("Node Service Gateway target is empty")
+	}
+	if strings.HasPrefix(target, "ip://") {
+		return target, nil
+	}
+	if strings.HasPrefix(target, "http://") {
+		return "ip://" + strings.TrimPrefix(target, "http://"), nil
+	}
+	if strings.HasPrefix(target, "https://") {
+		return "ip://" + strings.TrimPrefix(target, "https://"), nil
+	}
+	if strings.Contains(target, "://") {
+		return "", fmt.Errorf("unsupported Node Service Gateway target %q", raw)
+	}
+	return "ip://" + target, nil
 }
 
 func writeNodeGatewayResponse(w http.ResponseWriter, response *http.Response, headers map[string]string) {
@@ -102,24 +209,6 @@ func writeNodeGatewayResponse(w http.ResponseWriter, response *http.Response, he
 	_, _ = io.Copy(w, response.Body)
 }
 
-// forwardHTTP 把统一网关请求纯透传到目标服务的有协议 http 端口。
-// 目标服务由 t_service_deployments 中的 active 部署记录决定：
-//   - address: 目标 host:port（本进程 127.0.0.1:port，远端 storage host:port）
-//   - path:    trpc 服务全名（如 trpc.moox.infra.Auth）
-//
-// 请求 URL = /{path}/{method}，框架服务端自动 JSON↔PB，网关不做序列化/加工，
-// 原样返回 http body；错误由 trpc 框架以 errs 错误返回，网关转写 trpc-ret/trpc-func-ret header。
-func forwardHTTP(ctx context.Context, provider AdminServiceDetailProvider, adminNodeID, serviceID, method string, body []byte, headers map[string]string) ([]byte, error) {
-	if GetConfig() == nil {
-		return nil, fmt.Errorf("网关配置未初始化")
-	}
-	detail, err := resolveAdminServiceDetail(ctx, provider, adminNodeID, serviceID)
-	if err != nil {
-		return nil, err
-	}
-	return forwardHTTPToDetail(ctx, serviceID, method, detail, body, headers)
-}
-
 func forwardHTTPToDetail(ctx context.Context, serviceID, method string, detail ServiceDetail, body []byte, headers map[string]string) ([]byte, error) {
 	cfg := GetConfig()
 	if cfg == nil {
@@ -131,16 +220,23 @@ func forwardHTTPToDetail(ctx context.Context, serviceID, method string, detail S
 	target := fmt.Sprintf("ip://%s", detail.Address)
 	targetURL := fmt.Sprintf("/%s/%s", detail.Path, method)
 	log.InfoContextf(ctx, "forwardHTTP: %s/%s -> %s", serviceID, method, targetURL)
+	timeout := detail.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 
 	opts := []client.Option{
 		client.WithTarget(target),
 		client.WithCurrentSerializationType(codec.SerializationTypeNoop),
 		client.WithDisableServiceRouter(),
 		client.WithReqHead(buildForwardHeaders(headers)),
+		client.WithTimeout(timeout),
 	}
 	proxy := thttp.NewClientProxy(serviceID, opts...)
 	codecRsp := &codec.Body{}
-	if err := proxy.Post(ctx, targetURL, &codec.Body{Data: body}, codecRsp); err != nil {
+	forwardCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := proxy.Post(forwardCtx, targetURL, &codec.Body{Data: body}, codecRsp); err != nil {
 		return nil, err
 	}
 	return codecRsp.Data, nil

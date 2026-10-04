@@ -1,10 +1,5 @@
 database:
-  type: sqlite
   path: ./data/factor/factor.db
-  max_idle_conns: 10
-  max_open_conns: 30
-  conn_max_lifetime: 1h
-  conn_max_idle_time: 10m
 
 storage:
   gateway_target: "ip://127.0.0.1:11003"
@@ -12,40 +7,26 @@ storage:
   key_id: "factor"
   hmac_key_file: ""
 
-nats:
+eventbus:
   urls:
     - nats://127.0.0.1:4222
-  url: nats://127.0.0.1:4222
-  credential_file: ~/.config/moox/factor/eventbus.yaml
-  stream: MOOX_STORAGE
-  consumer: factor_calc
-  subject: moox.storage.rows_committed.time_series.v1.>
+  credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml
+  fetch_max_wait: 10s
 
-engine:
-  python_bin: python3
-  factors_dir: ./factors
-  sections_dir: ./sections
+python:
+  bin: python3
+  worker_path: ./pyworker/worker.py
+  factors_dir: ./data/factor/factors
   workers: 8
-  task_timeout_ms: 30000
-  encoding: auto
-  arrow_row_threshold: 50000
-  max_batch_parallelism: 8
-  batch_min_estimated_ms: 50
-  snapshot_ttl_seconds: 300
-  shm_dir: ""
+  task_timeout: 30s
 
-scheduler:
-  event_batch_window_ms: 2000
-  max_retry: 3
-  reconcile_interval_min: 10
+pipeline:
+  read_batch_subjects: 100
+  read_workers: 4
+  read_timeout: 20s
+  write_batch_rows: 1000
+  period_budget_min: 60s
+  period_budget_max: 15m
 
-instance:
-  instance_id: factor-01
-  role: primary
-  primary_target: ""
-  heartbeat_interval_ms: 5000
-
-sysdeploy:
-  admin_gateway_url: http://127.0.0.1:11002
-health:
-  addr: ":11414"
+recalc:
+  chunk_periods: 2000

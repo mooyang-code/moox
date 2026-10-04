@@ -7,19 +7,21 @@ server:
     - recovery
     - validation
     - prometheus
-  timeout: 5000
+  # SCF request-response invocations may use the full 900s function timeout.
+  # Keep the CloudNode RPC envelope longer than the provider request timeout.
+  timeout: 960000
   admin:
     ip: 127.0.0.1
     port: 11941
     read_timeout: 3000
-    write_timeout: 60000
+    write_timeout: 960000
   service:
     - name: trpc.moox.cloudnode.CloudNodeMgr
       ip: 127.0.0.1
       port: 11401
       network: tcp
       protocol: http
-      timeout: 30000
+      timeout: 960000
     - name: trpc.moox.cloudnode.Health
       ip: 127.0.0.1
       port: 11411

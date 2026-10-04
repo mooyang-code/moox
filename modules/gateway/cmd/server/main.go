@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/gateway/internal/config"
 	trpc "trpc.group/trpc-go/trpc-go"
+	_ "trpc.group/trpc-go/trpc-log-cls"
 )
 
 func main() {

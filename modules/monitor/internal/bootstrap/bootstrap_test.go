@@ -5,11 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -17,9 +17,11 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
@@ -28,6 +30,17 @@ func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
 	runner := buildProbeRunner(cfg)
 	require.NotNil(t, runner.HTTP.HealthSigner)
 	assert.Equal(t, "monitor", runner.HTTP.HealthSigner.AccessKey)
+}
+
+func TestLoadMonitorDatasetHealthPolicyFallsBackToAppConfigPath(t *testing.T) {
+	t.Setenv("MOOX_DATASET_HEALTH_POLICY", "")
+	t.Setenv("MOOX_DATASET_HEALTH_POLICY_HASH", "")
+	cfg := config.Default()
+	cfg.Metrics.DatasetHealthPolicyPath = filepath.Join("..", "..", "..", "..", "config", "setup", "dataset-health-policy.yaml")
+	policy, err := loadMonitorDatasetHealthPolicy(cfg)
+	require.NoError(t, err)
+	require.Equal(t, 2, policy.Version)
+	require.Greater(t, policy.RealtimeTimeSeries.Defaults.RunMissedIntervals, 0)
 }
 
 func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
@@ -47,64 +60,9 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-test"
 	cfg.Metrics.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, runtime, nil)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, runtime, nil, nil)(context.Background())
 	if rsp.Ready {
 		t.Fatalf("health response = %+v, want not ready", rsp)
-	}
-}
-
-func TestActiveMonitorInstanceIDsIncludesLocalAndActivePeers(t *testing.T) {
-	ctx := context.Background()
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	t.Cleanup(func() { _ = mgr.Close() })
-	if err := mgr.ApplySchema(schema.SQL()); err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
-	repo := mgr.Repositories().Peers
-	now := time.Now()
-	for _, instance := range []*domain.MonitorInstance{
-		{InstanceID: "monitor-b", Status: domain.InstanceStatusActive, LastSeenAt: &now},
-		{InstanceID: "monitor-c", Status: domain.InstanceStatusDown, LastSeenAt: &now},
-		{InstanceID: "monitor-a", Status: domain.InstanceStatusActive, LastSeenAt: &now},
-	} {
-		if err := repo.UpsertInstance(ctx, instance); err != nil {
-			t.Fatalf("upsert instance: %v", err)
-		}
-	}
-	got := activeMonitorInstanceIDs(ctx, "monitor-a", repo, time.Hour)
-	want := []string{"monitor-a", "monitor-b"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("active ids = %v, want %v", got, want)
-	}
-}
-
-func TestActiveMonitorInstanceIDsSkipsStaleAndDisabledPeers(t *testing.T) {
-	ctx := context.Background()
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	t.Cleanup(func() { _ = mgr.Close() })
-	if err := mgr.ApplySchema(schema.SQL()); err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
-	repo := mgr.Repositories().Peers
-	stale := time.Now().Add(-time.Hour)
-	if err := repo.UpsertInstance(ctx, &domain.MonitorInstance{
-		InstanceID: "monitor-stale",
-		Status:     domain.InstanceStatusActive,
-		LastSeenAt: &stale,
-	}); err != nil {
-		t.Fatalf("upsert stale instance: %v", err)
-	}
-	if got := activeMonitorInstanceIDs(ctx, "monitor-a", repo, 3*time.Second); !reflect.DeepEqual(got, []string{"monitor-a"}) {
-		t.Fatalf("active ids with stale peer = %v", got)
-	}
-	if got := activeMonitorInstanceIDs(ctx, "monitor-a", repo, 0); !reflect.DeepEqual(got, []string{"monitor-a"}) {
-		t.Fatalf("active ids with peers disabled = %v", got)
 	}
 }
 
@@ -118,6 +76,97 @@ func TestNormalizeHostStorageTarget(t *testing.T) {
 	if got := normalizeHostStorageTarget("http://storage:20102"); got != "http://storage:20102" {
 		t.Fatalf("scheme target = %q", got)
 	}
+}
+
+func TestBuildKlineFreshnessInventoryUsesTypedCollectorClientConfig(t *testing.T) {
+	oldFactory := collectorpb.NewCollectMgrClientProxy
+	var capturedTarget string
+	collectorpb.NewCollectMgrClientProxy = func(opts ...client.Option) collectorpb.CollectMgrClientProxy {
+		clientOptions := &client.Options{}
+		for _, option := range opts {
+			option(clientOptions)
+		}
+		capturedTarget = clientOptions.Target
+		return collectorInventoryClientStub{}
+	}
+	t.Cleanup(func() { collectorpb.NewCollectMgrClientProxy = oldFactory })
+
+	cfg := config.Default()
+	cfg.KlineFreshness.Enabled = true
+	cfg.KlineFreshness.CollectorGatewayTarget = "ip://collector-gateway:19091"
+	cfg.Metrics.Storage.GatewayTarget = "ip://storage-gateway:19091"
+	cfg.Metrics.Storage.GatewayNodeID = "gateway-test-node"
+	cfg.Metrics.Storage.KeyID = "monitor"
+	cfg.Metrics.Storage.HMACKeyFile = filepath.Join(t.TempDir(), "gateway.key")
+	require.NoError(t, os.WriteFile(cfg.Metrics.Storage.HMACKeyFile, []byte("test-gateway-secret\n"), 0o600))
+	if _, err := gatewayauth.ResolveCredentials(cfg.Metrics.Storage.KeyID, cfg.Metrics.Storage.HMACKeyFile); err != nil {
+		t.Fatalf("test credentials invalid: %v", err)
+	}
+
+	cache, err := buildKlineFreshnessInventory(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, cache)
+	require.Equal(t, "ip://collector-gateway:19091", capturedTarget)
+
+	disabled := *cfg
+	disabled.KlineFreshness.Enabled = false
+	cache, err = buildKlineFreshnessInventory(&disabled)
+	require.NoError(t, err)
+	require.Nil(t, cache)
+
+	invalid := *cfg
+	invalid.KlineFreshness.InventoryPageSize = 101
+	_, err = buildKlineFreshnessInventory(&invalid)
+	require.ErrorContains(t, err, "page size")
+}
+
+type collectorInventoryClientStub struct {
+	collectorpb.CollectMgrClientProxy
+}
+
+func TestKlineFreshnessCollectorRouteDoesNotReuseMetricsStorageRoute(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "gateway-default")
+	cfg := config.Default()
+	cfg.KlineFreshness.CollectorGatewayTarget = "ip://collector-gateway:11003"
+	cfg.KlineFreshness.CollectorGatewayNodeID = "collector-node"
+	cfg.Metrics.Storage.GatewayTarget = "ip://storage-gateway:11003"
+	cfg.Metrics.Storage.GatewayNodeID = "storage-node"
+
+	target, nodeID := klineFreshnessCollectorRoute(cfg)
+	require.Equal(t, "ip://collector-gateway:11003", target)
+	require.Equal(t, "collector-node", nodeID)
+
+	cfg.KlineFreshness.CollectorGatewayNodeID = ""
+	_, nodeID = klineFreshnessCollectorRoute(cfg)
+	require.Equal(t, "gateway-default", nodeID)
+}
+
+type bootstrapInventoryProvider struct {
+	snapshot monmetrics.TaskResultInventorySnapshot
+}
+
+func (p bootstrapInventoryProvider) FetchTaskResultInventory(context.Context) (monmetrics.TaskResultInventorySnapshot, error) {
+	return p.snapshot, nil
+}
+
+func TestKlineViewMetricScopesFollowFreshOwnedInventoryOnly(t *testing.T) {
+	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	cache, err := monmetrics.NewTaskResultInventoryCache(bootstrapInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
+		ID: "snapshot-1", ObservedAt: now,
+		Entries: []monmetrics.TaskResultInventoryEntry{
+			{SpaceID: "crypto", TaskID: "active", DatasetID: "dataset-a", ViewID: "view-a", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "disabled", DatasetID: "dataset-b", ViewID: "view-b", Frequency: "1m", Enabled: false, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "unowned", DatasetID: "dataset-c", ViewID: "view-c", Frequency: "1m", Enabled: true, OwnershipVerified: false, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "pending", DatasetID: "dataset-d", ViewID: "view-d", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "pending", ObservedAt: now},
+		},
+	}}, time.Minute, 10)
+	require.NoError(t, err)
+	_, err = cache.Get(t.Context(), now)
+	require.NoError(t, err)
+
+	scopes := klineViewMetricScopes(cache, now)
+	require.Equal(t, []monmetrics.ViewMetricScope{{SpaceID: "crypto", ViewID: "view-a", DatasetID: "dataset-a", Frequency: "1m"}}, scopes)
+	require.Nil(t, klineViewMetricScopes(cache, now.Add(time.Minute)))
 }
 
 func TestMaxInt(t *testing.T) {
@@ -157,26 +206,19 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	disabled.Metrics.HostStorage.Enabled = false
 	startHostStorageGate(ctx, &disabled, rt, &hostmetrics.StorageGate{})
 
-	startHostMetricsConsumer(ctx, nil, rt, nil)
-	startHostMetricsConsumer(ctx, &disabled, rt, hostmetrics.NewStore(nil))
-	cfg.Metrics.Enabled = false
-	startHostMetricsConsumer(ctx, cfg, rt, hostmetrics.NewStore(nil))
-	cfg.Metrics.Enabled = true
-
-	startMetricsConsumer(ctx, nil, rt, nil)
-	startMetricsConsumer(ctx, cfg, nil, nil)
-	startMetricsConsumer(ctx, cfg, &Runtime{}, nil)
+	startObservabilityConsumer(ctx, nil, rt, nil, nil, nil)
+	startObservabilityConsumer(ctx, &disabled, rt, nil, hostmetrics.NewStore(nil, nil), nil)
+	cfg.Observability.Enabled = false
+	startObservabilityConsumer(ctx, cfg, rt, nil, hostmetrics.NewStore(nil, nil), nil)
+	cfg.Observability.Enabled = true
+	startObservabilityConsumer(ctx, cfg, nil, nil, nil, nil)
+	startObservabilityConsumer(ctx, cfg, &Runtime{}, nil, hostmetrics.NewStore(nil, nil), nil)
 
 	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
-	cfg.Peer.Enabled = false
-	puller, err := buildPeerPuller(cfg, rt)
-	assert.NoError(t, err)
-	assert.Nil(t, puller)
-
-	registerMetricsReporter(nil)
-	assert.NoError(t, registerHealth(nil, nil, rt, nil))
+	registerMetricsReporter(nil, nil)
+	assert.NoError(t, registerHealth(nil, nil, rt, nil, nil))
 }
 
 func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
@@ -240,32 +282,15 @@ func TestMonitorTRPCConfigDeclaresSysDeployTimer(t *testing.T) {
 	t.Fatal("missing trpc.moox.monitor.sysdeploy.timer service")
 }
 
-func TestStartPeerPullerReturnsClientConstructionError(t *testing.T) {
-	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.Close() })
-	require.NoError(t, mgr.ApplySchema(schema.SQL()))
-	cfg := config.Default()
-	cfg.Peer.Peers = []config.PeerEntry{{InstanceID: "monitor-peer", GatewayURL: "https://peer.example", NodeID: "gateway-peer"}}
-	cfg.Peer.ServiceAuth = config.ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret", CAFile: filepath.Join(t.TempDir(), "missing.pem")}
-	_, err = buildPeerPuller(cfg, &Runtime{Repositories: mgr.Repositories()})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "peer gateway client")
-}
-
-func TestWaitHostMetricsRespectsCancel(t *testing.T) {
+func TestWaitObservabilityRespectsCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	waitHostMetrics(ctx)
+	waitObservabilityRetry(ctx)
 	assert.Less(t, time.Since(start), 2*time.Second)
 }
 
 func TestMonitorResultHook(t *testing.T) {
-	cfg := config.Default()
-	cfg.Instance.InstanceID = "monitor-a"
-	cfg.Instance.BaseURL = "http://localhost"
-
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
@@ -281,7 +306,7 @@ func TestMonitorResultHook(t *testing.T) {
 	require.NoError(t, rt.Repositories.Alerts.CreateEvent(context.Background(), &domain.AlertEvent{
 		EventID: "event-1", EventType: domain.AlertEventTriggered, CreatedAt: now,
 	}))
-	hook := monitorResultHook(cfg, rt)
+	hook := monitorResultHook(rt)
 	require.NotNil(t, hook)
 	hook(context.Background(), domain.Check{SpaceID: "default", CheckID: "c1", Enabled: true}, domain.CheckResult{
 		SpaceID: "default", CheckID: "c1", Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),
@@ -299,18 +324,74 @@ func TestMonitorHealthSnapshotMetricsBranches(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-ready"
 	cfg.Metrics.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, rt, nil)(context.Background())
+	cfg.Metrics.HostStorage.Enabled = false
+	cfg.Observability.Enabled = false
+	rsp := monitorHealthSnapshot(cfg, rt, nil, nil)(context.Background())
 	assert.True(t, rsp.Ready)
 
 	cfg.Metrics.Enabled = true
-	rsp = monitorHealthSnapshot(cfg, rt, nil)(context.Background())
+	cfg.Observability.Enabled = true
+	rsp = monitorHealthSnapshot(cfg, rt, nil, nil)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Equal(t, "degraded", rsp.Status)
 
 	adapter := monmetrics.NewStorageAdapter(nil, nil, cfg.Metrics.Storage)
-	rsp = monitorHealthSnapshot(cfg, rt, adapter)(context.Background())
+	rsp = monitorHealthSnapshot(cfg, rt, adapter, nil)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Contains(t, rsp.Details["metrics_schema_reason"], "checked")
+}
+
+func TestObservabilityWriteFailureRequiresSubsequentSuccess(t *testing.T) {
+	rt := &Runtime{}
+	rt.recordObservabilityWriteFailure(errors.New("storage unavailable"))
+
+	ready, _ := rt.observabilityWriteReady(time.Now().Add(24 * time.Hour))
+	assert.False(t, ready)
+
+	rt.recordObservabilityWriteSuccess()
+	ready, reason := rt.observabilityWriteReady(time.Now())
+	assert.True(t, ready, "failure=%d success=%d", rt.observabilityWriteFailed.Load(), rt.observabilityWriteOK.Load())
+	assert.Empty(t, reason, "failure=%d success=%d", rt.observabilityWriteFailed.Load(), rt.observabilityWriteOK.Load())
+}
+
+func TestHostWriteFailureIsNotClearedByMetricsSuccess(t *testing.T) {
+	rt := &Runtime{}
+	rt.recordHostWriteFailure(errors.New("host storage unavailable"))
+	rt.recordObservabilityWriteSuccess()
+
+	ready, _ := rt.observabilityWriteReady(time.Now())
+	assert.False(t, ready)
+
+	rt.recordHostWriteSuccess()
+	ready, reason := rt.observabilityWriteReady(time.Now())
+	assert.True(t, ready, "failure=%d success=%d", rt.hostWriteFailed.Load(), rt.hostWriteOK.Load())
+	assert.Empty(t, reason, "failure=%d success=%d", rt.hostWriteFailed.Load(), rt.hostWriteOK.Load())
+}
+
+func TestStoreWriteStateSequenceDoesNotRegress(t *testing.T) {
+	var sequence atomic.Int64
+	storeWriteStateSequence(&sequence, 2)
+	storeWriteStateSequence(&sequence, 1)
+	assert.EqualValues(t, 2, sequence.Load())
+}
+
+func TestMonitorHealthSnapshotRequiresHostStorageSchema(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+
+	cfg := config.Default()
+	cfg.Metrics.Enabled = false
+	cfg.Observability.Enabled = false
+	cfg.Metrics.HostStorage.Enabled = true
+	rt := &Runtime{StartedAt: time.Now().UTC(), Store: mgr, Repositories: mgr.Repositories(), Scheduler: scheduler.New(mgr.Repositories(), scheduler.Options{})}
+	hostStore := hostmetrics.NewStore(nil, nil)
+	hostStore.SetStorageReady(func() bool { return false })
+
+	rsp := monitorHealthSnapshot(cfg, rt, nil, hostStore)(context.Background())
+	assert.False(t, rsp.Ready)
+	assert.Equal(t, false, rsp.Details["host_storage_schema_ready"])
 }
 
 func TestRegisterMonitorServiceSkipsMissingService(t *testing.T) {

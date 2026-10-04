@@ -1,6 +1,5 @@
-// Package trpcotel registers body-free OpenTelemetry filters for tRPC-Go.
-// It is a compatibility adapter because the latest official oteltrpc plugin is
-// pinned to OpenTelemetry 1.16, while MooX storage requires 1.35 or newer.
+// Package trpcotel registers body-free OpenTelemetry filters for tRPC-Go while
+// keeping the repository on its current OpenTelemetry dependency.
 package trpcotel
 
 import (

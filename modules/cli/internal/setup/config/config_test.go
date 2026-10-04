@@ -1,14 +1,688 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/BurntSushi/toml"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTencentSCFLimitsNormalizeDefaults(t *testing.T) {
+	limits := TencentSCFLimits{}
+	limits.normalize()
+
+	assert.Equal(t, DefaultSCFMaxNamespacesPerRegion, limits.MaxNamespacesPerRegion)
+	assert.Equal(t, DefaultSCFMaxFunctionsPerNamespace, limits.MaxFunctionsPerNamespace)
+	assert.Equal(t, DefaultSCFMaxBurstConcurrencyPerMinute, limits.MaxBurstConcurrencyPerMinute)
+	assert.Equal(t, 128000, limits.TotalConcurrencyMemoryMBByRegion["ap-guangzhou"])
+	assert.Equal(t, 64000, limits.TotalConcurrencyMemoryMBByRegion["ap-singapore"])
+	assert.Equal(t, "https://cloud.tencent.com/document/product/583/11637", limits.ReferenceURL)
+	for _, region := range tencent.SCFRegions() {
+		item, ok := limits.RegionLimits[region.Code]
+		require.True(t, ok, region.Code)
+		assert.Equal(t, DefaultSCFMaxNamespacesPerRegion, item.MaxNamespacesPerRegion, region.Code)
+		assert.Equal(t, DefaultSCFMaxFunctionsPerNamespace, item.MaxFunctionsPerNamespace, region.Code)
+		assert.Positive(t, item.TotalConcurrencyMemoryMB)
+	}
+}
+
+func TestTencentSCFLimitsNormalizeMergesRegionOverrides(t *testing.T) {
+	limits := TencentSCFLimits{TotalConcurrencyMemoryMBByRegion: map[string]int{
+		" AP-NANJING ": 96000,
+		"ap-guangzhou": 256000,
+	}}
+	limits.normalize()
+
+	assert.Equal(t, 96000, limits.TotalConcurrencyMemoryMBByRegion["ap-nanjing"])
+	assert.Equal(t, 256000, limits.TotalConcurrencyMemoryMBByRegion["ap-guangzhou"])
+	assert.Equal(t, 64000, limits.TotalConcurrencyMemoryMBByRegion["ap-tokyo"])
+}
+
+func TestTencentSCFRegionLimitOverrideIsUsedForFunctionCapacity(t *testing.T) {
+	limits := TencentSCFLimits{RegionLimits: map[string]TencentSCFRegionLimit{
+		"ap-nanjing": {MaxNamespacesPerRegion: 3, MaxFunctionsPerNamespace: 8, TotalConcurrencyMemoryMB: 32000},
+	}}
+	limits.normalize()
+	assert.Equal(t, 8, limits.ForRegion("ap-nanjing").MaxFunctionsPerNamespace)
+	assert.Equal(t, 24, limits.ForRegion("ap-nanjing").MaxFunctionsPerRegion())
+	assert.Equal(t, 23, limits.ForRegion("ap-nanjing").TimerCapacity(0))
+
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "moox-crypto",
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 8}},
+	}}}
+	limits.MaxFunctionsPerNamespace = DefaultSCFMaxFunctionsPerNamespace
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+
+	cfg.Spaces[0].Regions[0].FunctionCount = 25
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region 3")
+}
+
+func TestValidateSCFCapacitiesUsesRegionalNamespaceLimit(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	limits.RegionLimits["ap-nanjing"] = TencentSCFRegionLimit{
+		MaxNamespacesPerRegion: 1, MaxFunctionsPerNamespace: 50, TotalConcurrencyMemoryMB: 64000,
+	}
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{
+		{SpaceID: "crypto", Namespace: "moox-crypto", Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 1}}},
+		{SpaceID: "stockcn", Namespace: "moox-stockcn", Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 1}}},
+	}}
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region 1")
+}
+
+func TestValidateSCFNamespaceUsesSpaceIdentity(t *testing.T) {
+	space := SCFFetcherSpace{SpaceID: "stockcn", Namespace: "default"}
+	err := validateSCFNamespace(&space, "scf_fetcher.spaces[0]")
+	require.ErrorContains(t, err, "must be")
+
+	space.Namespace = ""
+	require.NoError(t, validateSCFNamespace(&space, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, "moox-stockcn", space.Namespace)
+
+	space.Namespace = "moox-crypto"
+	require.ErrorContains(t, validateSCFNamespace(&space, "scf_fetcher.spaces[0]"), "moox-stockcn")
+}
+
+func TestRebalanceSCFTimerFunctionCountsFillsStorageRegionFirst(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	cfg := SCFFetcherSpace{
+		SpaceID: "crypto", TimerFunctionCount: 60,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-nanjing", Enabled: true, AutoFunctionCount: true},
+			{Region: "ap-singapore", Enabled: true, AutoFunctionCount: true},
+		},
+	}
+	require.NoError(t, RebalanceSCFTimerFunctionCounts(&cfg, "ap-nanjing", limits))
+	assert.Equal(t, 59, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 1, cfg.Regions[1].FunctionCount)
+}
+
+func TestTencentSCFLimitsRejectInvalidRegionMemory(t *testing.T) {
+	limits := TencentSCFLimits{
+		MaxNamespacesPerRegion:       5,
+		MaxFunctionsPerNamespace:     50,
+		MaxBurstConcurrencyPerMinute: 500,
+		TotalConcurrencyMemoryMBByRegion: map[string]int{
+			"ap-unknown": 64000,
+		},
+	}
+	require.ErrorContains(t, limits.validate("scf_fetcher.tencent_limits"), "unsupported region")
+}
+
+func TestResolveSCFTimerFunctionCountsUsesConfiguredFunctionLimit(t *testing.T) {
+	cfg := SCFFetcherSpace{
+		SpaceID: "crypto", TimerFunctionCount: 3,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true},
+			{Region: "ap-singapore", Enabled: true},
+		},
+	}
+	require.NoError(t, resolveSCFTimerFunctionCountsWithLimit(&cfg, "scf", 2))
+	assert.Equal(t, 1, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 2, cfg.Regions[1].FunctionCount)
+
+	cfg.TimerFunctionCount = 7
+	cfg.Regions[0].FunctionCount = 0
+	cfg.Regions[1].FunctionCount = 0
+	require.ErrorContains(t, resolveSCFTimerFunctionCountsWithLimit(&cfg, "scf", 2), "available Timer capacity")
+}
+
+func TestResolveSCFFunctionCountsReserveCryptoReleaseCanaryCapacity(t *testing.T) {
+	cfg := SCFFetcherSpace{
+		SpaceID: "crypto", TimerFunctionCount: 60,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true},
+			{Region: "ap-singapore", Enabled: true},
+		},
+	}
+	require.NoError(t, resolveSCFTimerFunctionCountsWithCapacities(&cfg, "scf", 50, nil))
+	assert.Equal(t, 11, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 49, cfg.Regions[1].FunctionCount)
+}
+
+func TestValidateSCFCapacitiesReservesPublisherAuxiliaries(t *testing.T) {
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "default",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 50}},
+	}}}
+	limits := defaultTencentSCFLimits()
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+
+	cfg.Spaces[0].Regions[0].FunctionCount = 49
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+
+	cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
+		SpaceID: "other", Namespace: "default",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+	})
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_functions_per_namespace")
+}
+
+func TestValidateSCFCapacitiesAllowsOverflowNamespacesInOneRegion(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "moox-crypto",
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 54}},
+	}}}
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+
+	shards := SpaceRegionNamespaceShards(cfg.Spaces[0], cfg.Spaces[0].Regions[0], limits)
+	require.Len(t, shards, 2)
+	assert.Equal(t, "moox-crypto", shards[0].Namespace)
+	assert.Equal(t, 0, shards[0].Timers)
+	assert.Equal(t, 50, shards[0].Invokes)
+	assert.Equal(t, "moox-crypto-ns2", shards[1].Namespace)
+	assert.Equal(t, 0, shards[1].Timers)
+	assert.Equal(t, 4, shards[1].Invokes)
+}
+
+func TestSpaceRegionReleaseCanaryNamespaceUsesReservedCapacity(t *testing.T) {
+	limits := TencentSCFLimits{RegionLimits: map[string]TencentSCFRegionLimit{
+		"ap-nanjing": {MaxNamespacesPerRegion: 3, MaxFunctionsPerNamespace: 2},
+	}}
+	space := SCFFetcherSpace{SpaceID: "crypto", Namespace: "moox-crypto"}
+	region := SCFFetcherRegion{Region: "ap-nanjing", Enabled: true, FunctionCount: 1}
+	namespace, err := SpaceRegionReleaseCanaryNamespace(space, region, limits)
+	require.NoError(t, err)
+	assert.Equal(t, "moox-crypto", namespace, "use an existing namespace with spare per-namespace quota")
+
+	region.FunctionCount = 2
+	namespace, err = SpaceRegionReleaseCanaryNamespace(space, region, limits)
+	require.NoError(t, err)
+	assert.Equal(t, "moox-crypto-ns2", namespace, "overflow into a new namespace only when every production namespace is full")
+
+	limits.RegionLimits["ap-nanjing"] = TencentSCFRegionLimit{MaxNamespacesPerRegion: 1, MaxFunctionsPerNamespace: 2}
+	_, err = SpaceRegionReleaseCanaryNamespace(space, region, limits)
+	require.ErrorContains(t, err, "no namespace capacity")
+}
+
+func TestValidateSCFCapacitiesIncludesCryptoReleaseCanary(t *testing.T) {
+	limits := TencentSCFLimits{RegionLimits: map[string]TencentSCFRegionLimit{
+		"ap-nanjing": {MaxNamespacesPerRegion: 2, MaxFunctionsPerNamespace: 2},
+	}}
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "moox-crypto",
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 3}},
+	}}}
+	require.NoError(t, ValidateSCFCapacities(cfg, limits), "the release canary occupies one slot in the second namespace")
+
+	cfg.Spaces[0].Regions[0].FunctionCount = 4
+	// Four production functions fill both namespaces and leave no namespace for
+	// the extra release canary; the validator must fail before publication.
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "release canary")
+}
+
+func TestValidateSCFCapacitiesIncludesStockCNReleaseCanary(t *testing.T) {
+	limits := TencentSCFLimits{RegionLimits: map[string]TencentSCFRegionLimit{
+		"ap-guangzhou": {MaxNamespacesPerRegion: 1, MaxFunctionsPerNamespace: 2},
+	}}
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "stockcn", Namespace: "moox-stockcn",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+	}}}
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "release canary")
+
+	limits.RegionLimits["ap-guangzhou"] = TencentSCFRegionLimit{MaxNamespacesPerRegion: 1, MaxFunctionsPerNamespace: 3}
+	require.NoError(t, ValidateSCFCapacities(cfg, limits), "Timer, production Invoke, and isolated release canary fit exactly")
+}
+
+func TestValidateSCFCapacitiesRejectsOverflowBeyondRegionalNamespaces(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	cfg := &SCFFetcher{Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Namespace: "moox-crypto",
+		Regions: []SCFFetcherRegion{{Region: "ap-nanjing", Enabled: true, FunctionCount: 251}},
+	}}}
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region")
+}
+
+func TestValidateSCFCapacitiesCountsUsedNamespaces(t *testing.T) {
+	limits := defaultTencentSCFLimits()
+	cfg := &SCFFetcher{}
+	for index := 0; index < 5; index++ {
+		cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
+			SpaceID: fmt.Sprintf("space-%d", index), Namespace: fmt.Sprintf("custom-%d", index),
+			Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+		})
+	}
+	require.NoError(t, ValidateSCFCapacities(cfg, limits))
+	cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
+		SpaceID: "space-5", Namespace: "custom-5",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+	})
+	require.ErrorContains(t, ValidateSCFCapacities(cfg, limits), "above max_namespaces_per_region")
+}
+
+func TestPlanSCFNamespaceShardsKeepsCanaryInPrimaryNamespace(t *testing.T) {
+	shards := PlanSCFNamespaceShards("moox-crypto", 54, 1, 50)
+	require.Len(t, shards, 2)
+	assert.Equal(t, SCFNamespaceShard{Namespace: "moox-crypto", Timers: 49, Invokes: 1}, shards[0])
+	assert.Equal(t, SCFNamespaceShard{Namespace: "moox-crypto-ns2", Timers: 5}, shards[1])
+	assert.Equal(t, "moox-crypto-ns3", OverflowSCFNamespace("moox-crypto", 2))
+}
+
+func TestValidateSCFRejectsSharedNamespaceAutoAllocation(t *testing.T) {
+	cfg := &SCFFetcher{
+		Enabled:      true,
+		CloudAccount: SCFFetcherCloudAccount{AccountID: "a", AccountName: "a", CredentialSecretID: "s", AppID: "app", COSRegion: "ap-guangzhou", COSBucket: "bucket"},
+		Spaces: []SCFFetcherSpace{
+			{SpaceID: "crypto", Namespace: "shared", Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 0}}},
+			{SpaceID: "stockcn", Namespace: "shared", Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1}}},
+		},
+	}
+	require.ErrorContains(t, validateSCFSharedNamespaceAutoAllocation(cfg), "shared by multiple Spaces")
+}
+
+func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T) {
+	base := func() SCFFetcher {
+		return SCFFetcher{
+			Enabled: true,
+			CloudAccount: SCFFetcherCloudAccount{
+				AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+				AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+			},
+			Spaces: []SCFFetcherSpace{{
+				SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
+				StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+				MaxInflightRequests:     32, RequestTimeoutMS: 1500,
+				HTTPMaxAttempts: 4, StorageMaxAttempts: 3,
+				Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+			}},
+		}
+	}
+
+	t.Run("requires an enabled region", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].Regions[0].Enabled = false
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at least one enabled region")
+	})
+
+	t.Run("rejects shared namespace before per-space auto allocation", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].Regions[0].FunctionCount = 0
+		cfg.Spaces = append(cfg.Spaces, SCFFetcherSpace{
+			SpaceID: "stockcn", Namespace: cfg.Spaces[0].Namespace,
+			Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1}},
+		})
+		require.ErrorContains(t, validateSCFFetcher(&cfg), "shared by multiple Spaces")
+	})
+
+	t.Run("caps invocation concurrency at the executor bound", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].MaxInflightRequests = 65
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "between 1 and 64")
+	})
+
+	t.Run("caps aggregate Storage retries at three attempts", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].StorageMaxAttempts = 4
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "request/storage attempts")
+	})
+
+	t.Run("allows a 30-item realtime batch for fleet fanout", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].RealtimeBatchSize = 30
+		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		require.NoError(t, validateSCFFetcher(&cfg))
+	})
+
+	t.Run("accepts the standard 10-item timer and invoke budget", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].RealtimeBatchSize = 10
+		cfg.Spaces[0].MaxInflightRequests = 10
+		cfg.Spaces[0].RequestTimeoutMS = 2000
+		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		require.NoError(t, validateSCFFetcher(&cfg))
+	})
+
+	t.Run("rejects a realtime batch above the SCF request bound", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].RealtimeBatchSize = 31
+		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "between 1 and 30")
+	})
+
+	t.Run("rejects a batch that cannot finish before the SCF deadline", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].RealtimeBatchSize = 30
+		cfg.Spaces[0].MaxInflightRequests = 1
+		cfg.Spaces[0].RequestTimeoutMS = 7000
+		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "request waves")
+	})
+
+	t.Run("reserves the CLS flush window", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].RealtimeBatchSize = 30
+		cfg.Spaces[0].MaxInflightRequests = 32
+		cfg.Spaces[0].RequestTimeoutMS = 11000
+		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "reserves")
+	})
+}
+
+func TestValidateSCFFetcherRequiresMarketDataSourceIdentity(t *testing.T) {
+	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
+		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+	}, Spaces: []SCFFetcherSpace{{
+		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
+	}}}
+	err := validateSCFFetcher(&cfg)
+	require.Error(t, err)
+	cfg.Spaces[0].MarketID = "stockcn"
+	cfg.Spaces[0].InstrumentType = "equity"
+	cfg.Spaces[0].ProviderID = "eastmoney"
+	cfg.Spaces[0].SourceID = "stockcn_http"
+	require.NoError(t, validateSCFFetcher(&cfg))
+}
+
+func TestValidateSCFFetcherRequiresOneGlobalCollectorRoute(t *testing.T) {
+	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
+		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+	}, Spaces: []SCFFetcherSpace{{
+		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		MarketID: "stockcn", InstrumentType: "equity", ProviderID: "eastmoney", SourceID: "stockcn_http",
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		CollectorRPCGatewayTarget: "ip://collector.example:11003", CollectorGatewayTargetNode: "collector",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+	}}}
+	second := cfg.Spaces[0]
+	second.SpaceID = "other"
+	second.MeasuredSafeGroupSize = 0
+	second.CollectorRPCGatewayTarget = "ip://other.example:11003"
+	cfg.Spaces = append(cfg.Spaces, second)
+	require.ErrorContains(t, validateSCFFetcher(&cfg), "Collector gateway")
+	cfg.Spaces[1].CollectorRPCGatewayTarget = ""
+	cfg.Spaces[1].CollectorGatewayTargetNode = ""
+	require.NoError(t, validateSCFFetcher(&cfg))
+	require.Equal(t, cfg.Spaces[0].CollectorRPCGatewayTarget, cfg.Spaces[1].CollectorRPCGatewayTarget)
+	require.Equal(t, cfg.Spaces[0].CollectorGatewayTargetNode, cfg.Spaces[1].CollectorGatewayTargetNode)
+}
+
+func TestValidateSCFFetcherNormalizesMarketPublicNetworkStatus(t *testing.T) {
+	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
+		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+	}, Spaces: []SCFFetcherSpace{{
+		SpaceID: "crypto", Entrypoint: "market_data", MarketID: "crypto", InstrumentType: "spot",
+		ProviderID: "binance", SourceID: "spot_http", PublicNetStatus: "enable",
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003", MemorySize: 64, TimeoutSeconds: 15,
+		RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf"}},
+	}}}
+
+	require.NoError(t, validateSCFFetcher(&cfg))
+	assert.Equal(t, "ENABLE", cfg.Spaces[0].PublicNetStatus)
+	assert.Equal(t, DefaultCryptoInvokeTimeoutSeconds, cfg.Spaces[0].InvokeTimeoutSeconds)
+
+	cfg.Spaces[0].PublicNetStatus = "unknown"
+	require.ErrorContains(t, validateSCFFetcher(&cfg), "public_net_status must be ENABLE or DISABLE")
+}
+
+func TestValidateSCFFetcherRequiresTDXEndpointConfiguration(t *testing.T) {
+	cfg := SCFFetcher{Enabled: true, CloudAccount: SCFFetcherCloudAccount{
+		AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+		AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+	}, Spaces: []SCFFetcherSpace{{
+		SpaceID: "stockcn", Entrypoint: "market_data", TimerFunctionCount: 1, MeasuredSafeGroupSize: 40, MarketID: "stockcn", InstrumentType: "equity",
+		ProviderID: "tdx", SourceID: "normal_7709", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 10, RequestTimeoutMS: 1000, HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1, CloudAccountID: "tencent-scf-guangzhou"}},
+	}}}
+	err := validateSCFFetcher(&cfg)
+	require.ErrorContains(t, err, "tdx_host")
+	cfg.Spaces[0].TDXHost = "quotes.example"
+	require.NoError(t, validateSCFFetcher(&cfg))
+	assert.Equal(t, 7709, cfg.Spaces[0].TDXPort)
+}
+
+func TestValidateSCFFetcherCopiesOneCloudAccountToEveryRegion(t *testing.T) {
+	cfg := SCFFetcher{
+		Enabled: true,
+		CloudAccount: SCFFetcherCloudAccount{
+			AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "tencent-default",
+			AppID: "1255382561", COSRegion: "ap-guangzhou", COSBucket: "moox-scf-guangzhou-1255382561",
+		},
+		Spaces: []SCFFetcherSpace{{
+			SpaceID: "crypto", StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+			MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 1, MaxInflightRequests: 1, RequestTimeoutMS: 1000,
+			HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+			Regions: []SCFFetcherRegion{
+				{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1},
+				{Region: "ap-shanghai", Enabled: true, FunctionCount: 1},
+			},
+		}},
+	}
+	require.NoError(t, validateSCFFetcher(&cfg))
+	for _, region := range cfg.Spaces[0].Regions {
+		assert.Equal(t, "tencent-scf", region.CloudAccountID)
+		assert.Equal(t, "ap-guangzhou", region.COSRegion)
+		assert.Equal(t, "moox-scf-guangzhou-1255382561", region.COSBucket)
+	}
+}
+
+func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
+	crypto := SCFFetcherSpace{
+		SpaceID: "crypto",
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 0, CloudAccountID: "gz"},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 0, CloudAccountID: "sh"},
+		},
+	}
+	require.NoError(t, resolveSCFTimerFunctionCounts(&crypto, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, DefaultCryptoMarketTimerFunctionCount, crypto.TimerFunctionCount)
+	assert.Equal(t, 30, crypto.Regions[0].FunctionCount)
+	assert.Equal(t, 30, crypto.Regions[1].FunctionCount)
+
+	stock := SCFFetcherSpace{
+		SpaceID: "stockcn", TimerFunctionCount: 170, MeasuredSafeGroupSize: 40,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, CloudAccountID: "gz"},
+			{Region: "ap-shanghai", Enabled: true, CloudAccountID: "sh"},
+			{Region: "ap-beijing", Enabled: true, CloudAccountID: "bj"},
+			{Region: "ap-chengdu", Enabled: true, CloudAccountID: "cd"},
+		},
+	}
+	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[1]"))
+	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, stock.TimerFunctionCount)
+	assert.Equal(t, DefaultStockCNStaggerStartSecond, stock.StaggerStartSecond)
+	assert.Equal(t, DefaultStockCNStaggerWindowSeconds, stock.StaggerWindowSeconds)
+	assert.Equal(t, DefaultStockCNStaggerMaxStartsPerSecond, stock.StaggerMaxStartsPerSecond)
+	total := 0
+	for _, region := range stock.Regions {
+		assert.Contains(t, []int{42, 43}, region.FunctionCount)
+		total += region.FunctionCount
+	}
+	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, total)
+}
+
+func TestResolveSCFTimerFunctionCountsPrioritizesOverseasCryptoRegions(t *testing.T) {
+	cfg := SCFFetcherSpace{
+		SpaceID: "crypto",
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 0, CloudAccountID: "gz"},
+			{Region: "ap-singapore", Enabled: true, FunctionCount: 0, CloudAccountID: "sg"},
+		},
+	}
+
+	require.NoError(t, resolveSCFTimerFunctionCounts(&cfg, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, 10, cfg.Regions[0].FunctionCount)
+	assert.Equal(t, 50, cfg.Regions[1].FunctionCount)
+}
+
+func TestResolveSCFTimerFunctionCountsRequiresExplicitStockN(t *testing.T) {
+	stock := SCFFetcherSpace{
+		SpaceID: "stockcn",
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 7, CloudAccountID: "gz"}},
+	}
+	err := resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[0]")
+	require.ErrorContains(t, err, "timer_function_count must be an explicit positive value")
+
+	stock.TimerFunctionCount = 7
+	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, 7, stock.TimerFunctionCount)
+}
+
+func TestValidateSCFFetcherRequiresMeasuredSafeGroupSizeForStock(t *testing.T) {
+	base := SCFFetcherSpace{
+		SpaceID: "stockcn", TimerFunctionCount: 192, MemorySize: 64, TimeoutSeconds: 15,
+		MeasuredSafeGroupSize: 30, StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		RealtimeBatchSize: 10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"}, {Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"}, {Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"}, {Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "cd"}},
+	}
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+
+	base.MeasuredSafeGroupSize = 0
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be between 1 and 40")
+	base.MeasuredSafeGroupSize = -1
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be between 1 and 40")
+	base.MeasuredSafeGroupSize = StockCNMaxRealtimeItems + 1
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "measured_safe_group_size must be between 1 and 40")
+}
+
+func TestValidateSCFFetcherRejectsUnsafeStockStaggerRate(t *testing.T) {
+	base := SCFFetcherSpace{SpaceID: "stockcn", TimerFunctionCount: 200, MemorySize: 64, TimeoutSeconds: 15,
+		MeasuredSafeGroupSize: 30, StaggerStartSecond: 5, StaggerWindowSeconds: 35, StaggerMaxStartsPerSecond: 5,
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003", RealtimeBatchSize: 10, RealtimeBarLimit: 10,
+		CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3,
+		Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 200, CloudAccountID: "gz"}}}
+	err := validateSCFFetcherSpace(&base, "stockcn")
+	require.ErrorContains(t, err, "requires up to 6 starts per second")
+}
+
+func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
+	cfg := SCFFetcherSpace{
+		SpaceID:            "crypto",
+		TimerFunctionCount: 60,
+		Regions:            []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 20, CloudAccountID: "gz"}},
+	}
+	err := resolveSCFTimerFunctionCounts(&cfg, "scf_fetcher.spaces[0]")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "regional function_count total")
+}
+
+func TestCustomExampleDefinesValidStockCN170FunctionFleet(t *testing.T) {
+	var manifest Manifest
+	_, err := toml.DecodeFile(filepath.Join("..", "..", "..", "..", "..", "moox.toml.example"), &manifest)
+	require.NoError(t, err)
+	assert.Equal(t, "1m", manifest.StorageView.MaintenanceCheckInterval)
+	assert.Equal(t, "1h", manifest.StorageView.CapacityCheckInterval)
+	assert.Equal(t, "1h", manifest.StorageView.CapacityCheckJitter)
+	assert.Equal(t, uint64(5000), manifest.StorageView.RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), manifest.StorageView.MaxPeriodsPerSeries)
+	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_kline_1m").RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("crypto", "view_binance_kline_1m").MaxPeriodsPerSeries)
+	assert.Equal(t, uint64(5000), manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), manifest.StorageView.ResolvePolicy("mooxsys", "view_mooxsys_host_disk").MaxPeriodsPerSeries)
+	manifest.SCFFetcher.Enabled = true
+	for index := range manifest.SCFFetcher.Spaces {
+		space := &manifest.SCFFetcher.Spaces[index]
+		_, address, ok := findHostDefinition(manifest.HostCatalog, space.StorageGatewayHost)
+		require.True(t, ok)
+		space.StorageRPCGatewayTarget = "ip://" + address + ":11003"
+	}
+	require.NoError(t, validateSCFFetcher(&manifest.SCFFetcher))
+
+	for _, space := range manifest.SCFFetcher.Spaces {
+		if space.SpaceID != "stockcn" {
+			continue
+		}
+		assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, space.TimerFunctionCount)
+		assert.Equal(t, DefaultStockCNInvokeTimeoutSeconds, space.InvokeTimeoutSeconds)
+		require.Len(t, space.Regions, 4)
+		for _, region := range space.Regions {
+			assert.True(t, region.Enabled)
+			assert.Contains(t, []int{42, 43}, region.FunctionCount)
+		}
+		return
+	}
+	t.Fatal("stockcn scf_fetcher config is missing")
+}
+
+func TestSCFFetcherSpaceParsesCanaryTaskID(t *testing.T) {
+	var manifest Manifest
+	_, err := toml.Decode(`[scf_fetcher]
+enabled = true
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+canary_task_id = "task-canary-1"
+`, &manifest)
+	require.NoError(t, err)
+	require.Len(t, manifest.SCFFetcher.Spaces, 1)
+	assert.Equal(t, "task-canary-1", manifest.SCFFetcher.Spaces[0].CanaryTaskID)
+}
+
+func TestValidateSCFFetcherDefaultsAndBoundsStockCNInvokeTimeout(t *testing.T) {
+	base := SCFFetcherSpace{
+		SpaceID: "stockcn", MemorySize: 64, TimeoutSeconds: 15,
+		TimerFunctionCount:      192,
+		MeasuredSafeGroupSize:   30,
+		StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+		RealtimeBatchSize:       10, MaxInflightRequests: 10, RequestTimeoutMS: 2000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 48, CloudAccountID: "gz"},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 48, CloudAccountID: "sh"},
+			{Region: "ap-beijing", Enabled: true, FunctionCount: 48, CloudAccountID: "bj"},
+			{Region: "ap-chengdu", Enabled: true, FunctionCount: 48, CloudAccountID: "cd"},
+		},
+	}
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, DefaultSCFTimerTimeoutSeconds, base.TimeoutSeconds)
+	assert.Equal(t, DefaultStockCNInvokeTimeoutSeconds, base.InvokeTimeoutSeconds)
+
+	base.InvokeTimeoutSeconds = 59
+	err := validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]")
+	require.ErrorContains(t, err, "invoke_timeout_seconds")
+}
+
+func TestValidateSCFTimerClaimCompletionBudget(t *testing.T) {
+	base := SCFFetcherSpace{SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 60,
+		StorageRPCGatewayTarget: "ip://storage.example:11003", RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 3, StorageTimeoutMS: 5000,
+		Regions: []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"))
+	base.RequestTimeoutMS = 4000
+	// 3 waves * 4 attempts * 4 seconds + Claim + Storage + Completion +
+	// CLS/metrics/final reserves exceeds 60 seconds.
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf_fetcher.spaces[0]"), "reserves")
+}
+
+func TestValidateSCFCollectorClaimEndpointPair(t *testing.T) {
+	base := SCFFetcherSpace{SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 60,
+		StorageRPCGatewayTarget: "ip://storage.example:11003", RealtimeBatchSize: 30, MaxInflightRequests: 10, RequestTimeoutMS: 1000,
+		HTTPMaxAttempts: 4, StorageMaxAttempts: 3, StorageTimeoutMS: 5000,
+		CollectorRPCGatewayTarget: "ip://collector.example:11003",
+		Regions:                   []SCFFetcherRegion{{Region: "ap-singapore", Enabled: true, FunctionCount: 1, CloudAccountID: "sg"}}}
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf"), "collector_gateway_target_node")
+	base.CollectorGatewayTargetNode = "collector-node"
+	require.NoError(t, validateSCFFetcherSpace(&base, "scf"))
+	base.CollectorRPCGatewayTarget = "https://collector.example"
+	require.ErrorContains(t, validateSCFFetcherSpace(&base, "scf"), "collector_rpc_gateway_target")
+}
 
 const validManifest = `[admin]
 username = "admin"
@@ -18,17 +692,28 @@ password = "admin-password"
 secret_id = "secret-id"
 secret_key = "secret-key"
 
-[control_host]
-name = "control"
-address = "192.0.2.10"
+[eventbus]
+host = "192.0.2.10"
+port = 4222
+tls_enabled = true
+
+[hosts."192.0.2.10"]
 port = 22
 username = "ubuntu"
 password = "control-password"
+
+[notification]
+channel_type = "wecom"
+webhook_url = ""
+
+[control_host]
+name = "control"
+host = "192.0.2.10"
 `
 
 func writeManifest(t *testing.T, root, body string, mode os.FileMode) string {
 	t.Helper()
-	path := filepath.Join(root, "custom.toml")
+	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), mode))
 	require.NoError(t, os.Chmod(path, mode))
 	return path
@@ -41,24 +726,569 @@ func TestLoadValidManifest(t *testing.T) {
 	snapshot, err := Load(path, root)
 	require.NoError(t, err)
 	assert.Equal(t, "admin", snapshot.Manifest.Admin.Username)
+	assert.Equal(t, "192.0.2.10", snapshot.Manifest.EventBus.PublicAddress)
+	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
+	assert.True(t, snapshot.Manifest.EventBus.TLSEnabled)
+	assert.Equal(t, "ap-guangzhou", snapshot.Manifest.TencentCloud.Region)
+	assert.Equal(t, DefaultDeployRoot, snapshot.Manifest.Paths.DeployRoot)
+	assert.Equal(t, DefaultControlRoot, snapshot.Manifest.Paths.ControlRoot)
+	assert.Equal(t, DefaultStorageRoot, snapshot.Manifest.Paths.StorageRoot)
+	assert.Equal(t, "1m", snapshot.Manifest.StorageView.MaintenanceCheckInterval)
+	assert.Equal(t, "1h", snapshot.Manifest.StorageView.CapacityCheckInterval)
+	assert.Equal(t, "1h0m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
+	assert.Equal(t, uint64(5000), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
+	assert.Equal(t, uint64(6000), snapshot.Manifest.StorageView.MaxPeriodsPerSeries)
+	assert.Equal(t, int64(1<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
+	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
+	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
+	assert.Empty(t, snapshot.Manifest.Notification.WebhookURL)
 	assert.Empty(t, snapshot.Manifest.OtherHosts)
 	require.NoError(t, snapshot.VerifyUnchanged())
 }
 
+func TestLoadRoleSpecificStorageAndViewHosts(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+
+[storage_host]
+name = "storage"
+host = "192.0.2.20"
+
+[view_host]
+name = "view"
+host = "192.0.2.20"
+`
+	body = strings.Replace(body, "\n[storage_host]", `
+
+[hosts."192.0.2.20"]
+port = 22
+username = "ubuntu"
+password = "storage-password"
+provider = "Tencent"
+
+[storage_host]`, 1)
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Equal(t, "storage", snapshot.Manifest.StorageHost.Name)
+	require.Equal(t, "view", snapshot.Manifest.ViewHost.Name)
+	require.Equal(t, snapshot.Manifest.StorageHost.Address, snapshot.Manifest.ViewHost.Address)
+	assert.Equal(t, "ubuntu", snapshot.Manifest.StorageHost.Username)
+	assert.Equal(t, "storage-password", snapshot.Manifest.ViewHost.Password)
+	assert.Equal(t, "tencent", snapshot.Manifest.StorageHost.Provider)
+}
+
+func TestLoadResolvesStorageGatewayHostFromSharedCatalog(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+storage_gateway_host = "192.0.2.10"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Manifest.SCFFetcher.Spaces, 1)
+	assert.Equal(t, "192.0.2.10", snapshot.Manifest.SCFFetcher.Spaces[0].StorageGatewayHost)
+	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StorageRPCGatewayTarget)
+	assert.Empty(t, snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+}
+
+func TestLoadNormalizesRegionalStorageAccessTargets(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+storage_gateway_host = "192.0.2.10"
+storage_access_targets = { AP-NANJING = "ip://192.0.2.20:11004", ap-hongkong = "ip://192.0.2.21:12004" }
+storage_access_target_nodes = { AP-NANJING = "storage-access-nanjing", ap-hongkong = "storage-access-hongkong" }
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	space := snapshot.Manifest.SCFFetcher.Spaces[0]
+	assert.Equal(t, "ip://192.0.2.20:11004", space.StorageAccessTarget("ap-nanjing"))
+	assert.Equal(t, "ip://192.0.2.21:12004", space.StorageAccessTarget("ap-hongkong"))
+	assert.Equal(t, "storage-access-nanjing", space.StorageAccessTargetNode("ap-nanjing"))
+	assert.Equal(t, "storage-access-hongkong", space.StorageAccessTargetNode("ap-hongkong"))
+}
+
+func TestLoadResolvesStoragePrivateGatewayHost(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+storage_gateway_host = "192.0.2.10"
+storage_private_gateway_host = "10.206.0.5"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StorageRPCGatewayTarget)
+	assert.Equal(t, "ip://10.206.0.5:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+}
+
+func TestLoadAcceptsPublicStoragePrivateGatewayHostAsConfiguredValue(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+storage_gateway_host = "192.0.2.10"
+storage_private_gateway_host = "192.0.2.10"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "ip://192.0.2.10:11003", snapshot.Manifest.SCFFetcher.Spaces[0].StoragePrivateRPCGatewayTarget)
+}
+
+func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
+	paths := &Paths{
+		DeployRoot:  "/data/moox",
+		ControlRoot: "/data/moox/prod",
+		StorageRoot: "/data/moox/prod/storage",
+	}
+	require.ErrorContains(t, validatePaths(paths), "must not overlap")
+	paths.StorageRoot = "/data/moox"
+	require.ErrorContains(t, validatePaths(paths), "must not overlap")
+	paths.StorageRoot = "/data/moox/storage"
+	require.NoError(t, validatePaths(paths))
+}
+
+func TestLoadLocalLogRotationFromManifest(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[local_logs]
+max_size_mb = 128
+backup_count = 7
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, 128, snapshot.Manifest.LocalLogs.MaxSizeMB)
+	assert.Equal(t, 7, snapshot.Manifest.LocalLogs.BackupCount)
+}
+
+func TestLoadRejectsInvalidLocalLogRotation(t *testing.T) {
+	for name, body := range map[string]string{
+		"max size":     "[local_logs]\nmax_size_mb = 0\nbackup_count = 5\n",
+		"backup count": "[local_logs]\nmax_size_mb = 50\nbackup_count = 0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, validManifest+"\n"+body, 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "local_logs")
+		})
+	}
+}
+
+func TestLoadPathsFromManifest(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/custom"
+control_root = "/data/custom/control"
+storage_root = "/data/custom/storage"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage"}, snapshot.Manifest.Paths)
+}
+
+func TestLoadAllowsStorageRootOnSeparateHostMount(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/moox"
+control_root = "/data/moox/prod"
+storage_root = "/home/ubuntu/moox/storage"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "/home/ubuntu/moox/storage", snapshot.Manifest.Paths.StorageRoot)
+}
+
+func TestLoadRejectsPathsOutsideDeployRoot(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/moox"
+control_root = "/var/lib/moox"
+storage_root = "/data/moox/storage"
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "paths.control_root")
+}
+
+func TestLoadStorageViewRebuildLookbackPeriodsFromManifest(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[storage_view]
+rebuild_lookback_periods = 777
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(777), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
+}
+
+func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "1m", snapshot.Manifest.CollectorRetention.MaintenanceInterval)
+	assert.Equal(t, "45s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
+	assert.Equal(t, 50000, snapshot.Manifest.CollectorRetention.MaxRowsPerPass)
+	assert.Equal(t, "24h", snapshot.Manifest.CollectorRetention.ExecutionDetailRetention)
+	assert.Equal(t, "720h", snapshot.Manifest.CollectorRetention.ScheduledRunSummaryRetention)
+	assert.Equal(t, "168h", snapshot.Manifest.CollectorRetention.TerminalRetryRetention)
+	assert.Equal(t, "720h", snapshot.Manifest.CollectorRetention.PeriodSnapshotRetention)
+
+	root = t.TempDir()
+	body := validManifest + `
+[collector_retention]
+maintenance_interval = "2m"
+maintenance_timeout = "30s"
+max_rows_per_pass = 25000
+terminal_retry_retention = "336h"
+`
+	snapshot, err = Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "2m", snapshot.Manifest.CollectorRetention.MaintenanceInterval)
+	assert.Equal(t, "30s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
+	assert.Equal(t, 25000, snapshot.Manifest.CollectorRetention.MaxRowsPerPass)
+	assert.Equal(t, "336h", snapshot.Manifest.CollectorRetention.TerminalRetryRetention)
+}
+
+func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "zero row budget", body: "max_rows_per_pass = 0", want: "max_rows_per_pass"},
+		{name: "row budget below category minimum", body: "max_rows_per_pass = 8", want: "max_rows_per_pass"},
+		{name: "excessive row budget", body: "max_rows_per_pass = 50001", want: "max_rows_per_pass"},
+		{name: "timeout exceeds interval", body: `maintenance_interval = "1m"
+maintenance_timeout = "2m"`, want: "maintenance_timeout"},
+		{name: "retention over one year", body: `execution_detail_retention = "9000h"`, want: "execution_detail_retention"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, validManifest+"\n[collector_retention]\n"+tt.body+"\n", 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestLoadAcceptsMinimumCollectorRetentionBudget(t *testing.T) {
+	root := t.TempDir()
+	_, err := Load(writeManifest(t, root, validManifest+"\n[collector_retention]\nmax_rows_per_pass = 9\n", 0o600), root)
+	require.NoError(t, err)
+}
+
+func TestLoadRejectsSystemMonitorIdentityOverride(t *testing.T) {
+	body := validManifest + `
+[storage_view.system_monitor]
+space_id = "mooxsys"
+view_id = "view_mooxsys_host_disk"
+`
+	root := t.TempDir()
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	if err == nil || !strings.Contains(err.Error(), "system_monitor must not set space_id or view_id") {
+		t.Fatalf("expected system monitor identity validation error, got %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidStorageViewRebuildLookbackPeriods(t *testing.T) {
+	for _, value := range []string{"0", "1000001"} {
+		t.Run(value, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + fmt.Sprintf("\n[storage_view]\nrebuild_lookback_periods = %s\n", value)
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "storage_view.rebuild_lookback_periods")
+		})
+	}
+}
+
+func TestLoadRejectsInvalidStorageViewCapacitySchedule(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "nonpositive interval", body: "capacity_check_interval = \"0s\"", want: "capacity_check_interval"},
+		{name: "interval over one day", body: "capacity_check_interval = \"25h\"", want: "capacity_check_interval"},
+		{name: "zero jitter", body: "capacity_check_jitter = \"0s\"", want: "capacity_check_jitter"},
+		{name: "nonpositive jitter", body: "capacity_check_jitter = \"-1s\"", want: "capacity_check_jitter"},
+		{name: "jitter exceeds interval", body: "capacity_check_interval = \"30m\"\ncapacity_check_jitter = \"1h\"", want: "capacity_check_jitter"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + "\n[storage_view]\n" + tt.body + "\n"
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestLoadRejectsStorageViewCapacityNotAboveLookback(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "equal global limits", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 5000", want: "max_periods_per_series"},
+		{name: "invalid View override", body: "rebuild_lookback_periods = 5000\nmax_periods_per_series = 6000\n\n[[storage_view.views]]\nspace_id = \"crypto\"\nview_id = \"view_binance_kline_1m\"\nrebuild_lookback_periods = 6000\nmax_periods_per_series = 6000", want: "invalid limits"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + "\n[storage_view]\n" + tt.body + "\n"
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestLoadStorageViewDefaultsJitterToShorterConfiguredInterval(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[storage_view]
+capacity_check_interval = "30m"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Equal(t, "30m", snapshot.Manifest.StorageView.CapacityCheckInterval)
+	require.Equal(t, "30m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
+}
+
+func TestLoadFactorSetupDefaultsAndItems(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "./examples/factors"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+
+[[factors.items]]
+factor_id = "bias"
+factor_type = "timeseries"
+file = "timeseries/bias.py"
+input_columns = ["close"]
+outputs = ["bias_5"]
+params_json = '{"windows":[5]}'
+lookback_periods = 5
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.Factors.Enabled)
+	assert.Equal(t, "examples/factors", snapshot.Manifest.Factors.SourceDir)
+	require.Len(t, snapshot.Manifest.Factors.Items, 1)
+	require.Len(t, snapshot.Manifest.Factors.Sets, 1)
+	assert.Equal(t, "bias", snapshot.Manifest.Factors.Items[0].FactorID)
+	assert.Equal(t, "all", snapshot.Manifest.Factors.Sets[0].SubjectMode)
+	assert.Equal(t, "enabled", snapshot.Manifest.Factors.Items[0].Status)
+}
+
+func TestLoadDefaultsDisableFactors(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
+	require.NoError(t, err)
+	assert.False(t, snapshot.Manifest.Factors.Enabled)
+}
+
+func TestLoadRejectsInvalidFactorTypeBeforeSetup(t *testing.T) {
+	for _, declaration := range []string{"", "factor_type = \"unknown\""} {
+		root := t.TempDir()
+		body := validManifest + `
+[factors]
+enabled = true
+source_dir = "examples/factors"
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_prices"
+freq = "1m"
+[[factors.items]]
+factor_id = "Bias"
+file = "Bias.py"
+source_dataset_id = "dataset_prices"
+freq = "1m"
+lookback_periods = 20
+` + declaration + "\n"
+		_, err := Load(writeManifest(t, root, body, 0o600), root)
+		require.ErrorContains(t, err, "factor_type")
+	}
+}
+
+func TestLoadRejectsFactorWithoutMatchingSet(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "examples/factors"
+[[factors.items]]
+factor_id = "Bias"
+factor_type = "timeseries"
+file = "Bias.py"
+source_dataset_id = "dataset_prices"
+freq = "1m"
+lookback_periods = 20
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "no matching factor set")
+}
+
+func TestLoadNotificationWebhook(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"`, 1)
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", snapshot.Manifest.Notification.WebhookURL)
+}
+
+func TestLoadDefaultsEventBusPort(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, "port = 4222\n", "", 1)
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
+}
+
+func TestLoadTencentCloudRegion(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \"ap-shanghai\"", 1)
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "ap-shanghai", snapshot.Manifest.TencentCloud.Region)
+}
+
 func TestLoadDefaultsHostPorts(t *testing.T) {
 	root := t.TempDir()
-	body := strings.Replace(validManifest, "port = 22\n", "", 1) + `
-[[other_hosts]]
-name = "compute"
-address = "192.0.2.11"
+	body := validManifest + `
+[hosts."192.0.2.11"]
 username = "ubuntu"
 password = "compute-password"
+
+[[other_hosts]]
+name = "compute"
+host = "192.0.2.11"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
 	assert.Equal(t, 22, snapshot.Manifest.OtherHosts[0].Port)
+}
+
+func TestLoadDNSResolverConfiguration(t *testing.T) {
+	valid := validManifest + `
+[hosts."43.132.204.177"]
+username = "ubuntu"
+password = "compute-password"
+
+[[other_hosts]]
+name = "compute-1"
+host = "43.132.204.177"
+
+[dns_resolver]
+enabled = true
+trade_node = "compute-1"
+refresh_interval_seconds = 300
+request_timeout_ms = 3000
+lookup_timeout_ms = 1500
+probe_timeout_ms = 500
+probe_port = 443
+cache_ttl_seconds = 300
+max_ips_per_domain = 4
+domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
+`
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, valid, 0o600), root)
+	require.NoError(t, err)
+	require.True(t, snapshot.Manifest.DNSResolver.Enabled)
+	require.Equal(t, "compute-1", snapshot.Manifest.DNSResolver.TradeNode)
+	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, snapshot.Manifest.DNSResolver.Domains)
+
+	for name, mutate := range map[string]func(*DNSResolver){
+		"missing trade node": func(cfg *DNSResolver) { cfg.TradeNode = "missing" },
+		"duplicate domain":   func(cfg *DNSResolver) { cfg.Domains = []string{"api.binance.com", "API.BINANCE.COM."} },
+		"invalid interval":   func(cfg *DNSResolver) { cfg.RequestTimeoutMS = 0 },
+		"invalid port":       func(cfg *DNSResolver) { cfg.ProbePort = 70000 },
+		"invalid cap":        func(cfg *DNSResolver) { cfg.MaxIPsPerDomain = 5 },
+		"too many domains":   func(cfg *DNSResolver) { cfg.Domains = make([]string, 17) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			manifest := snapshot.Manifest
+			mutate(&manifest.DNSResolver)
+			err := validateDNSResolver(&manifest.DNSResolver, &manifest)
+			require.Error(t, err)
+		})
+	}
+	unsafe := snapshot.Manifest
+	unsafe.OtherHosts[0].Address = "127.0.0.1"
+	require.ErrorContains(t, validateDNSResolver(&unsafe.DNSResolver, &unsafe), "public address")
+
+	disabled := snapshot.Manifest
+	disabled.DNSResolver = DNSResolver{Enabled: false, TradeNode: "missing"}
+	require.Error(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
+	disabled.DNSResolver.TradeNode = ""
+	require.NoError(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
+}
+
+func TestLoadOptionalCompileHost(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[hosts."192.0.2.20"]
+username = "builder"
+password = "compile-password"
+
+[compile_host]
+name = "compile"
+host = "192.0.2.20"
+`
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.HasCompileHost())
+	assert.Equal(t, "compile", snapshot.Manifest.CompileHost.Name)
+	assert.Equal(t, 22, snapshot.Manifest.CompileHost.Port)
+	assert.Len(t, snapshot.Manifest.Hosts(), 1)
+}
+
+func TestLoadOptionalStrategyHost(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[hosts."192.0.2.21"]
+username = "ubuntu"
+password = "strategy-password"
+
+[strategy_host]
+name = "strategy"
+host = "192.0.2.21"
+`
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.HasStrategyHost())
+	assert.Equal(t, "strategy", snapshot.Manifest.StrategyHost.Name)
+	assert.Equal(t, 22, snapshot.Manifest.StrategyHost.Port)
+	require.Len(t, snapshot.Manifest.Hosts(), 2)
+	assert.Equal(t, "strategy", snapshot.Manifest.Hosts()[1].Name)
 }
 
 func TestLoadRejectsInvalidManifest(t *testing.T) {
@@ -71,17 +1301,38 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{name: "bcrypt password too long", body: strings.Replace(validManifest, "admin-password", strings.Repeat("x", 73), 1), want: "72 bytes"},
 		{name: "missing secret id", body: strings.Replace(validManifest, `secret_id = "secret-id"`, `secret_id = ""`, 1), want: "tencent_cloud.secret_id"},
 		{name: "missing secret key", body: strings.Replace(validManifest, `secret_key = "secret-key"`, `secret_key = ""`, 1), want: "tencent_cloud.secret_key"},
-		{name: "missing host address", body: strings.Replace(validManifest, `address = "192.0.2.10"`, `address = ""`, 1), want: "control_host.address"},
+		{name: "empty region", body: strings.Replace(validManifest, `secret_key = "secret-key"`, "secret_key = \"secret-key\"\nregion = \" \"", 1), want: "tencent_cloud.region"},
+		{name: "missing eventbus host", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = ""`, 1), want: "eventbus.host"},
+		{name: "eventbus host with scheme", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "tls://192.0.2.10"`, 1), want: "hosts"},
+		{name: "eventbus host with path", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "192.0.2.10/nats"`, 1), want: "hosts"},
+		{name: "eventbus host with port", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "192.0.2.10:4222"`, 1), want: "hosts"},
+		{name: "eventbus ipv6 host", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = "2001:db8::1"`, 1), want: "hosts"},
+		{name: "eventbus explicit zero port", body: strings.Replace(validManifest, "port = 4222", "port = 0", 1), want: "eventbus.port"},
+		{name: "eventbus invalid port", body: strings.Replace(validManifest, "port = 4222", "port = 70000", 1), want: "eventbus.port"},
+		{name: "eventbus tls disabled", body: strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), want: "eventbus.tls_enabled"},
+		{name: "notification webhook must use HTTPS", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "http://example.test/hook"`, 1), want: "notification.webhook_url"},
+		{name: "notification webhook must be a URL", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "not-a-url"`, 1), want: "notification.webhook_url"},
+		{name: "notification webhook must match channel host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://open.feishu.cn/hook"`, 1), want: "notification.webhook_url"},
+		{name: "notification webhook must use approved platform host", body: strings.Replace(validManifest, `webhook_url = ""`, `webhook_url = "https://example.invalid/hook"`, 1), want: "notification.webhook_url"},
+		{name: "missing host reference", body: strings.Replace(validManifest, `host = "192.0.2.10"`, `host = ""`, 1), want: "eventbus.host"},
+		{name: "invalid host name", body: strings.Replace(validManifest, `name = "control"`, `name = "Storage A"`, 1), want: "control_host.name"},
+		{name: "missing compile host address", body: validManifest + `
+[compile_host]
+name = "compile"
+host = "192.0.2.99"
+`, want: "compile_host.host"},
 		{name: "unknown field", body: validManifest + "unexpected = true\n", want: "unknown field"},
-		{name: "invalid port", body: strings.Replace(validManifest, "port = 22", "port = 70000", 1), want: "control_host.port"},
+		{name: "invalid port", body: strings.Replace(validManifest, "port = 22", "port = 70000", 1), want: "hosts"},
 		{
 			name: "duplicate host name",
 			body: validManifest + `
-[[other_hosts]]
-name = "control"
-address = "192.0.2.11"
+[hosts."192.0.2.11"]
 username = "ubuntu"
 password = "password"
+
+[[other_hosts]]
+name = "control"
+host = "192.0.2.11"
 `,
 			want: "duplicate host name",
 		},
@@ -90,9 +1341,7 @@ password = "password"
 			body: validManifest + `
 [[other_hosts]]
 name = "compute"
-address = "192.0.2.10"
-username = "ubuntu"
-password = "password"
+host = "192.0.2.10"
 `,
 			want: "duplicate host address",
 		},
@@ -121,7 +1370,7 @@ func TestLoadRejectsInsecureFile(t *testing.T) {
 		root := t.TempDir()
 		target := filepath.Join(root, "target")
 		require.NoError(t, os.WriteFile(target, []byte(validManifest), 0o600))
-		path := filepath.Join(root, "custom.toml")
+		path := filepath.Join(root, "moox.toml")
 		require.NoError(t, os.Symlink(target, path))
 		_, err := Load(path, root)
 		require.Error(t, err)
@@ -134,7 +1383,7 @@ func TestLoadRejectsInsecureFile(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(validManifest), 0o600))
 		_, err := Load(path, root)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "custom.toml")
+		assert.Contains(t, err.Error(), "moox.toml")
 	})
 
 	t.Run("outside repository root", func(t *testing.T) {

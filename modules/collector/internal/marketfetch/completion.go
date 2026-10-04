@@ -1,0 +1,948 @@
+package marketfetch
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
+	"github.com/nats-io/nats.go"
+	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
+)
+
+var errUnknownCompletionBatch = errors.New("unknown market fetch completion batch")
+var errCompletionIdentityMismatch = errors.New("market fetch completion identity mismatch")
+
+// StartCompletionConsumer binds the governed batch-completion family and
+// returns immediately. The loop is best effort: if EventBus is unavailable,
+// the timer's deadline recovery remains the source of truth.
+func StartCompletionConsumer(ctx context.Context, spaceID string, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, wake ...func()) error {
+	_, err := StartCompletionConsumerWithDone(ctx, spaceID, batches, retries, instances, metrics, wake...)
+	return err
+}
+
+// StartCompletionConsumerWithDone starts the best-effort completion loop and
+// returns a channel that closes after the loop and its resources have stopped.
+func StartCompletionConsumerWithDone(ctx context.Context, spaceID string, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, wake ...func()) (<-chan struct{}, error) {
+	if batches == nil || retries == nil || instances == nil {
+		return nil, fmt.Errorf("completion repositories are required")
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return nil, fmt.Errorf("completion consumer space_id is required")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		backoff := time.Second
+		for ctx.Err() == nil {
+			client, err := completionEventBusClient(ctx)
+			if err != nil {
+				log.WarnContextf(ctx, "market fetch completion EventBus unavailable; retrying: %v", err)
+				if !sleepContext(ctx, backoff) {
+					return
+				}
+				if backoff < 30*time.Second {
+					backoff *= 2
+				}
+				continue
+			}
+			registry, err := events.DefaultRegistry()
+			if err != nil {
+				client.Close()
+				log.WarnContextf(ctx, "market fetch completion registry unavailable; retrying: %v", err)
+				if !sleepContext(ctx, backoff) {
+					return
+				}
+				continue
+			}
+			consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{ConsumerConfig: events.ConsumerConfig{Name: completionConsumerName(spaceID), Event: events.MarketFetchBatchCompleted, AckWait: 30 * time.Second, MaxDeliver: 5, MaxAckPending: 128, FetchMaxWait: 500 * time.Millisecond, DeliverDecodeErrors: true}, SpaceID: spaceID})
+			if err != nil {
+				client.Close()
+				log.WarnContextf(ctx, "market fetch completion consumer unavailable; retrying: %v", err)
+				if !sleepContext(ctx, backoff) {
+					return
+				}
+				continue
+			}
+			backoff = time.Second
+			runCompletionConsumer(ctx, consumer, batches, retries, instances, metrics, wake...)
+			consumer.Close()
+			client.Close()
+			if ctx.Err() == nil {
+				_ = sleepContext(ctx, backoff)
+			}
+		}
+	}()
+	return done, nil
+}
+
+func completionConsumerName(spaceID string) string {
+	var name strings.Builder
+	name.WriteString("collector-market-fetch-completion-v1-")
+	for _, value := range spaceID {
+		if (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9') || value == '-' || value == '_' {
+			name.WriteRune(value)
+			continue
+		}
+		name.WriteByte('-')
+	}
+	return name.String()
+}
+
+func runCompletionConsumer(ctx context.Context, consumer *events.Consumer, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, wake ...func()) {
+	for ctx.Err() == nil {
+		deliveries, fetchErr := consumer.FetchEvents(ctx, 16)
+		if fetchErr != nil && len(deliveries) == 0 {
+			if ctx.Err() != nil {
+				return
+			}
+			if errors.Is(fetchErr, nats.ErrTimeout) {
+				continue
+			}
+			log.WarnContextf(ctx, "market fetch completion fetch failed: %v", fetchErr)
+			return
+		}
+		for _, delivery := range deliveries {
+			if delivery == nil || delivery.Delivery == nil {
+				continue
+			}
+			if err := handleCompletion(ctx, batches, retries, instances, metrics, delivery, wake...); err != nil {
+				if delivery.Err != nil || errors.Is(err, errUnknownCompletionBatch) {
+					_ = delivery.Delivery.Term(ctx)
+					continue
+				}
+				if errors.Is(err, errCompletionIdentityMismatch) {
+					_ = delivery.Delivery.Term(ctx)
+					log.ErrorContextf(ctx, "market fetch completion rejected: %v", err)
+					continue
+				}
+				_ = delivery.Delivery.Nak(ctx, 5*time.Second)
+				log.WarnContextf(ctx, "market fetch completion handling failed: %v", err)
+				continue
+			}
+			_ = delivery.Delivery.Ack(ctx)
+		}
+	}
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, retries *store.FetchRetryRepository, instances *store.TaskInstanceRepository, metrics *Metrics, delivery *events.EventDelivery, wake ...func()) error {
+	if delivery.Err != nil {
+		return fmt.Errorf("decode market fetch completion: %w", delivery.Err)
+	}
+	payload, ok := delivery.Payload.(*marketfetchpb.MarketFetchBatchCompleted)
+	if !ok || payload == nil {
+		return fmt.Errorf("market fetch completion payload type is %T", delivery.Payload)
+	}
+	spaceID := delivery.Message.GetSpaceId()
+	batch, err := batches.Get(ctx, spaceID, payload.GetBatchId())
+	if err != nil {
+		// Unknown completion is a poison message for this deployment, not a
+		// reason to keep redelivering it forever.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: %s: %v", errUnknownCompletionBatch, payload.GetBatchId(), err)
+		}
+		return fmt.Errorf("load completion batch %s: %w", payload.GetBatchId(), err)
+	}
+	if mismatch := completionIdentityMismatch(batch, payload); mismatch != "" {
+		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
+	}
+	if mismatch, err := timerPeriodClaimIdentityMismatch(ctx, batches, batch, payload); err != nil {
+		return fmt.Errorf("validate Timer period completion claim: %w", err)
+	} else if mismatch != "" {
+		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
+	}
+	var original Request
+	if err := json.Unmarshal([]byte(batch.RequestJSON), &original); err != nil {
+		return fmt.Errorf("%w: stored request is invalid: %v", errCompletionIdentityMismatch, err)
+	}
+	if mismatch := completionItemIdentityMismatch(original, payload); mismatch != "" {
+		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
+	}
+	if mismatch := completionPayloadContractMismatch(original, payload); mismatch != "" {
+		return fmt.Errorf("%w: %s", errCompletionIdentityMismatch, mismatch)
+	}
+	completedAt := time.Now().UTC()
+	if payload.GetCompletedAt() != nil && payload.GetCompletedAt().CheckValid() == nil {
+		completedAt = payload.GetCompletedAt().AsTime().UTC()
+	}
+	wasTimedOut := batch.Status == domain.BatchStatusTimedOut
+	wasLateCompletion := batch.LateCompletion
+	status := domain.BatchStatus(payload.GetStatus())
+	if status == "" {
+		status = domain.BatchStatusFailed
+	}
+	batch.Status = status
+	if wasTimedOut {
+		batch.Status = domain.BatchStatusTimedOut
+		batch.LateCompletion = true
+	}
+	batch.SuccessCount = int(payload.GetSuccessCount())
+	batch.RetryCount = int(payload.GetRetryCount())
+	batch.PermanentFailedCount = int(payload.GetPermanentFailedCount())
+	batch.ErrorSummary = payload.GetErrorSummary()
+	batch.CompletedAt = &completedAt
+	if batch.DeadlineAt != nil && completedAt.After(*batch.DeadlineAt) {
+		batch.LateCompletion = true
+	}
+	effects := store.FetchCompletionEffects{}
+	logicalSyncPointID := strings.TrimSpace(original.SyncPointID)
+	if logicalSyncPointID == "" {
+		logicalSyncPointID = payload.GetBatchId()
+	}
+	lateCompletion := wasTimedOut || wasLateCompletion
+	for _, item := range payload.GetItems() {
+		if item == nil {
+			continue
+		}
+		sourceRetryKey := strings.TrimSpace(item.GetSourceEventId())
+		if sourceRetryKey == "" {
+			sourceRetryKey = retryKey(payload.GetBatchId(), item.GetSubjectId(), item.GetTargetDataTime())
+		}
+		previous, getErr := retries.Get(ctx, spaceID, sourceRetryKey)
+		if getErr != nil && !errors.Is(getErr, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("load retry item %s: %w", sourceRetryKey, getErr)
+		}
+		if previous != nil && terminalRetryStatus(previous.Status) {
+			// A terminal retry result owns this logical fetch. A late receipt from
+			// an older batch must not overwrite it or create further retry effects.
+			continue
+		}
+		for _, target := range item.GetTargets() {
+			if target == nil {
+				continue
+			}
+			status := strings.TrimSpace(target.GetStatus())
+			effects.WriteTargetUpdates = append(effects.WriteTargetUpdates, store.WriteTargetStatusEffect{
+				SpaceID: spaceID, RetrySourceKey: sourceRetryKey, InstanceID: item.GetInstanceId(), WriteTargetID: target.GetWriteTargetId(), DatasetID: target.GetDatasetId(),
+				Status: status, LastError: target.GetErrorSummary(),
+			})
+		}
+		hasFailedTarget := hasFailedWriteTarget(item)
+		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) && !hasFailedTarget && batch.BatchKind == domain.BatchKindRealtime {
+			target, targetErr := time.Parse(time.RFC3339Nano, item.GetTargetDataTime())
+			if targetErr == nil {
+				supersede := store.MarketFetchRetrySupersede{SpaceID: spaceID, RetrySourceKey: sourceRetryKey, InstanceID: item.GetInstanceId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: target}
+				if batch.RetryScope == "write_target" {
+					supersede.WriteTargetID = batch.WriteTargetID
+				}
+				effects.SupersedePendingRetries = append(effects.SupersedePendingRetries, supersede)
+			}
+		}
+		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) && !hasFailedTarget && (item.GetSourceEventId() != "" || lateCompletion) {
+			key := item.GetSourceEventId()
+			if key == "" {
+				key = retryKey(payload.GetBatchId(), item.GetSubjectId(), item.GetTargetDataTime())
+			}
+			if lateCompletion {
+				effects.CancelPendingRetryKeys = append(effects.CancelPendingRetryKeys, key)
+			} else {
+				effects.SucceededRetryKeys = append(effects.SucceededRetryKeys, key)
+			}
+			guardRetryEffect(&effects, key, sourceRetryKey)
+			appendCompletionInstanceUpdate(&effects, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusSuccess), sourceRetryKey)
+			continue
+		}
+		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) {
+			// Provider fetch succeeded, but individual destinations may still
+			// fail. Schedule only those targets for a write-scope retry, keeping
+			// the retry attempt and provider candidate stable.
+			if key := strings.TrimSpace(item.GetSourceEventId()); key != "" && batch.RetryScope != "write_target" {
+				if lateCompletion {
+					effects.CancelPendingRetryKeys = append(effects.CancelPendingRetryKeys, key)
+				} else {
+					effects.SucceededRetryKeys = append(effects.SucceededRetryKeys, key)
+				}
+				guardRetryEffect(&effects, key, sourceRetryKey)
+			}
+			for _, targetResult := range item.GetTargets() {
+				if targetResult == nil || !strings.EqualFold(strings.TrimSpace(targetResult.GetStatus()), "failed") {
+					continue
+				}
+				retryKey := writeTargetRetryKey(item.GetInstanceId(), targetResult.GetWriteTargetId(), item.GetTargetDataTime())
+				if batch.RetryScope == "write_target" && strings.TrimSpace(item.GetSourceEventId()) != "" {
+					retryKey = strings.TrimSpace(item.GetSourceEventId())
+				}
+				if lateCompletion {
+					continue
+				}
+				previous, getErr := retries.Get(ctx, spaceID, retryKey)
+				if getErr != nil && !errors.Is(getErr, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("load write-target retry item %s: %w", retryKey, getErr)
+				}
+				attempt := 1
+				sourceBatchID := logicalSyncPointID
+				if previous != nil {
+					switch previous.Status {
+					case "succeeded", "permanent_failed", "superseded":
+						continue
+					}
+					attempt = previous.Attempt + 1
+					if previous.SourceBatchID != "" {
+						sourceBatchID = previous.SourceBatchID
+					}
+				}
+				collectionItem := writeTargetRetryCollectionItem(original, item, retryKey, targetResult.GetDatasetId())
+				if attempt > maxRetryAttempts() {
+					failureAttempt := min(attempt-1, maxRetryAttempts())
+					terminal := permanentRetryItem(original, batch, payload, item, spaceID, retryKey, failureAttempt, "storage", targetResult.GetErrorSummary(), completedAt)
+					terminal.RetryScope = "write_target"
+					terminal.WriteTargetID = targetResult.GetWriteTargetId()
+					terminal.TaskJSON = marshalRetryCollectionItem(collectionItem)
+					terminal.FailureTargetsJSON = retryFailureTargetsJSON(original, item.GetInstanceId(), targetResult.GetWriteTargetId())
+					addPermanentRetryEffect(&effects, terminal)
+					guardRetryEffect(&effects, terminal.RetryKey, sourceRetryKey)
+					appendPermanentTargetUpdates(&effects, original, item, batch, failureAttempt, targetResult.GetErrorSummary(), sourceRetryKey)
+					continue
+				}
+				when := completedAt.Add(retryDelay(attempt))
+				targetDataTime := completedAt
+				if parsed, parseErr := time.Parse(time.RFC3339Nano, item.GetTargetDataTime()); parseErr == nil {
+					targetDataTime = parsed.UTC()
+				}
+				periodTime, periodDeadlineAt := retryPeriodMetadata(batch, targetDataTime)
+				effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: retryKey, SourceBatchID: sourceBatchID, BatchKind: batch.BatchKind, InstanceID: item.GetInstanceId(), WriteTargetID: targetResult.GetWriteTargetId(), RetryScope: "write_target", SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime, PeriodTime: periodTime, PeriodDeadlineAt: periodDeadlineAt, TaskJSON: marshalRetryCollectionItem(collectionItem), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), targetResult.GetWriteTargetId()), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: "storage", LastErrorSummary: targetResult.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
+				guardRetryEffect(&effects, retryKey, sourceRetryKey)
+			}
+			appendCompletionInstanceUpdate(&effects, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusSuccess), sourceRetryKey)
+			continue
+		}
+		if !isRetryOutcome(item.GetOutcome()) {
+			// A retry child which receives a permanent result must be terminally
+			// resolved. Otherwise it remains dispatched forever and disappears
+			// from both the retry scheduler and the failure metrics.
+			key := sourceRetryKey
+			addPermanentRetryEffect(&effects, permanentRetryItem(original, batch, payload, item, spaceID, key, batch.Attempt, item.GetErrorType(), item.GetErrorSummary(), completedAt))
+			guardRetryEffect(&effects, key, sourceRetryKey)
+			appendPermanentTargetUpdates(&effects, original, item, batch, batch.Attempt, item.GetErrorSummary(), sourceRetryKey)
+			if !lateCompletion {
+				appendCompletionInstanceUpdate(&effects, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusFailed), sourceRetryKey)
+			}
+			continue
+		}
+		key := sourceRetryKey
+		attempt := 1
+		if previous, getErr := retries.Get(ctx, spaceID, key); getErr == nil && previous != nil {
+			if lateCompletion {
+				// The timeout recovery already owns this retry key. A late
+				// retryable result from the original batch must not create a
+				// second retry or move an in-flight child back to pending.
+				continue
+			}
+			if previous.Status == "succeeded" || previous.Status == "permanent_failed" {
+				// A late completion from an older batch must not resurrect a retry
+				// item already resolved by a newer retry batch.
+				continue
+			}
+			attempt = previous.Attempt + 1
+			if previous.SourceBatchID != "" {
+				// Keep the logical fence identity stable across every retry
+				// generation. BatchID is intentionally new for each attempt.
+				logicalSyncPointID = previous.SourceBatchID
+			}
+		} else if getErr != nil && !errors.Is(getErr, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("load retry item %s: %w", key, getErr)
+		}
+		if attempt > maxRetryAttempts() {
+			failureAttempt := attempt - 1
+			if failureAttempt > maxRetryAttempts() {
+				failureAttempt = maxRetryAttempts()
+			}
+			addPermanentRetryEffect(&effects, permanentRetryItem(original, batch, payload, item, spaceID, key, failureAttempt, item.GetErrorType(), item.GetErrorSummary(), completedAt))
+			guardRetryEffect(&effects, key, sourceRetryKey)
+			appendPermanentTargetUpdates(&effects, original, item, batch, failureAttempt, item.GetErrorSummary(), sourceRetryKey)
+			if !lateCompletion {
+				appendCompletionInstanceUpdate(&effects, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusFailed), sourceRetryKey)
+			}
+			continue
+		}
+		when := completedAt.Add(retryDelay(attempt))
+		target, _ := time.Parse(time.RFC3339Nano, item.GetTargetDataTime())
+		if target.IsZero() {
+			target = completedAt
+		}
+		collectionItem := retryCollectionItem(original, item, key)
+		raw, _ := json.Marshal(collectionItem)
+		retryScope, writeTargetID := "fetch", ""
+		if batch.RetryScope == "write_target" {
+			retryScope, writeTargetID = batch.RetryScope, batch.WriteTargetID
+		}
+		periodTime, periodDeadlineAt := retryPeriodMetadata(batch, target)
+		effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, InstanceID: collectionItem.InstanceID, WriteTargetID: writeTargetID, RetryScope: retryScope, SubjectID: collectionItem.SubjectID, Frequency: collectionItem.Frequency, TargetDataTime: target, PeriodTime: periodTime, PeriodDeadlineAt: periodDeadlineAt, TaskJSON: string(raw), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), writeTargetID), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: item.GetErrorType(), LastErrorSummary: item.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
+		guardRetryEffect(&effects, key, sourceRetryKey)
+	}
+	updated, err := batches.CompleteWithEffects(ctx, batch, effects)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		// Deadline recovery can win the CAS after the initial read above. Re-read
+		// and apply the receipt as the one permitted late completion, preserving
+		// its success/freshness while not recreating timeout-owned retries.
+		current, getErr := batches.Get(ctx, spaceID, payload.GetBatchId())
+		if getErr != nil || current.Status != domain.BatchStatusTimedOut || current.LateCompletion {
+			return getErr
+		}
+		batch = current
+		batch.Status = domain.BatchStatusTimedOut
+		batch.LateCompletion = true
+		batch.SuccessCount = int(payload.GetSuccessCount())
+		batch.RetryCount = int(payload.GetRetryCount())
+		batch.PermanentFailedCount = int(payload.GetPermanentFailedCount())
+		batch.ErrorSummary = payload.GetErrorSummary()
+		batch.CompletedAt = &completedAt
+		effects.CancelPendingRetryKeys = append(effects.CancelPendingRetryKeys, effects.SucceededRetryKeys...)
+		effects.SucceededRetryKeys = nil
+		effects.Retries = nil
+		effects.PermanentRetryKeys = nil
+		effects.PermanentRetryErrors = nil
+		updated, err = batches.CompleteWithEffects(ctx, batch, effects)
+		if err != nil || !updated {
+			return err
+		}
+	}
+	if updated && len(effects.PermanentRetryKeys) > 0 {
+		for _, notify := range wake {
+			if notify != nil {
+				notify()
+			}
+		}
+	}
+	if metrics != nil {
+		metrics.Observe(spaceID, payload)
+	}
+	return nil
+}
+
+func timerPeriodClaimIdentityMismatch(ctx context.Context, batches *store.FetchBatchRepository, batch *domain.BatchInvocation, payload *marketfetchpb.MarketFetchBatchCompleted) (string, error) {
+	manifest, err := batches.GetTimerPeriodManifest(ctx, batch.SpaceID, batch.BatchID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if manifest == nil {
+		return "Timer period manifest is empty", nil
+	}
+	if manifest.ClaimRequestID == "" || manifest.ClaimedAt == nil || manifest.ClaimedAt.IsZero() {
+		return "Timer period batch completion has no durable claim", nil
+	}
+	if batch.RequestID != manifest.ClaimRequestID || batch.FunctionName != manifest.FunctionName || batch.NodeID != manifest.NodeID || batch.Region != manifest.Region {
+		return "persisted Timer batch identity differs from its claimed manifest", nil
+	}
+	var request Request
+	if err := json.Unmarshal([]byte(batch.RequestJSON), &request); err != nil {
+		return "", fmt.Errorf("decode claimed request_json: %w", err)
+	}
+	if request.BatchID != manifest.BatchID || request.FunctionName != manifest.FunctionName || request.NodeID != manifest.NodeID ||
+		request.Region != manifest.Region || request.RequestID != manifest.ClaimRequestID ||
+		payload.GetRequestId() != manifest.ClaimRequestID || payload.GetNodeId() != manifest.NodeID || payload.GetRegion() != manifest.Region {
+		return "completion request, node, function, or region differs from the durable Timer claim", nil
+	}
+	return "", nil
+}
+
+func addPermanentRetryEffect(effects *store.FetchCompletionEffects, retry *domain.RetryItem) {
+	if effects == nil || retry == nil || strings.TrimSpace(retry.RetryKey) == "" {
+		return
+	}
+	effects.PermanentRetryKeys = append(effects.PermanentRetryKeys, retry.RetryKey)
+	if effects.PermanentRetryErrors == nil {
+		effects.PermanentRetryErrors = make(map[string]store.RetryTerminalError)
+	}
+	effects.PermanentRetryErrors[retry.RetryKey] = store.RetryTerminalError{ErrorType: retry.LastErrorType, ErrorSummary: retry.LastErrorSummary}
+	effects.Retries = append(effects.Retries, retry)
+}
+
+func terminalRetryStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "succeeded", "permanent_failed", "superseded":
+		return true
+	default:
+		return false
+	}
+}
+
+func guardRetryEffect(effects *store.FetchCompletionEffects, effectKey, sourceRetryKey string) {
+	if effects == nil {
+		return
+	}
+	effectKey, sourceRetryKey = strings.TrimSpace(effectKey), strings.TrimSpace(sourceRetryKey)
+	if effectKey == "" || sourceRetryKey == "" {
+		return
+	}
+	if effects.RetrySourceGuards == nil {
+		effects.RetrySourceGuards = make(map[string]string)
+	}
+	effects.RetrySourceGuards[effectKey] = sourceRetryKey
+}
+
+func appendCompletionInstanceUpdate(effects *store.FetchCompletionEffects, update store.MarketFetchInstanceUpdate, sourceRetryKey string) {
+	update.RetrySourceKey = strings.TrimSpace(sourceRetryKey)
+	effects.InstanceUpdates = append(effects.InstanceUpdates, update)
+}
+
+func hasFailedWriteTarget(item *marketfetchpb.MarketFetchItemResult) bool {
+	if item == nil {
+		return false
+	}
+	for _, target := range item.GetTargets() {
+		if target != nil && strings.EqualFold(strings.TrimSpace(target.GetStatus()), "failed") {
+			return true
+		}
+	}
+	return false
+}
+
+func writeTargetRetryCollectionItem(original Request, result *marketfetchpb.MarketFetchItemResult, key, datasetID string) domain.CollectionItem {
+	for _, item := range original.Items {
+		if item.InstanceID != result.GetInstanceId() {
+			continue
+		}
+		item.SourceEventID = key
+		item.DatasetID = datasetID
+		return item
+	}
+	item := retryCollectionItem(original, result, key)
+	item.DatasetID = datasetID
+	return item
+}
+
+func marshalRetryCollectionItem(item domain.CollectionItem) string {
+	raw, _ := json.Marshal(item)
+	return string(raw)
+}
+
+func permanentRetryItem(original Request, batch *domain.BatchInvocation, payload *marketfetchpb.MarketFetchBatchCompleted, item *marketfetchpb.MarketFetchItemResult, spaceID, key string, attempt int, errorType, errorSummary string, at time.Time) *domain.RetryItem {
+	collectionItem := retryCollectionItem(original, item, key)
+	raw, _ := json.Marshal(collectionItem)
+	targetTime, err := time.Parse(time.RFC3339Nano, item.GetTargetDataTime())
+	if err != nil || targetTime.IsZero() {
+		targetTime = at.UTC()
+	}
+	if attempt <= 0 {
+		attempt = 1
+	}
+	logicalSyncPointID := strings.TrimSpace(original.SyncPointID)
+	if logicalSyncPointID == "" && batch != nil {
+		logicalSyncPointID = batch.BatchID
+	}
+	batchKind := domain.BatchKindRealtime
+	if batch != nil && batch.BatchKind != "" {
+		batchKind = batch.BatchKind
+	}
+	retryScope, writeTargetID := "fetch", ""
+	if batch != nil && batch.RetryScope == "write_target" {
+		retryScope, writeTargetID = batch.RetryScope, batch.WriteTargetID
+	}
+	periodTime, periodDeadlineAt := retryPeriodMetadata(batch, targetTime)
+	return &domain.RetryItem{
+		SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batchKind,
+		InstanceID: collectionItem.InstanceID, WriteTargetID: writeTargetID, RetryScope: retryScope,
+		SubjectID: collectionItem.SubjectID, Frequency: firstNonEmpty(collectionItem.Frequency, payload.GetFrequency()),
+		TargetDataTime: targetTime.UTC(), PeriodTime: periodTime, PeriodDeadlineAt: periodDeadlineAt, TaskJSON: string(raw), FailureTargetsJSON: retryFailureTargetsJSON(original, item.GetInstanceId(), writeTargetID),
+		Attempt: attempt, Status: "permanent_failed", LastErrorType: strings.TrimSpace(errorType), LastErrorSummary: strings.TrimSpace(errorSummary),
+		CreateTime: at.UTC(), ModifyTime: at.UTC(),
+	}
+}
+
+func retryPeriodMetadata(batch *domain.BatchInvocation, target time.Time) (*time.Time, *time.Time) {
+	var periodTime, periodDeadlineAt *time.Time
+	if batch != nil && batch.PeriodTime != nil && !batch.PeriodTime.IsZero() {
+		value := batch.PeriodTime.UTC()
+		periodTime = &value
+	} else if !target.IsZero() {
+		value := target.UTC()
+		periodTime = &value
+	}
+	if batch != nil && batch.PeriodDeadlineAt != nil && !batch.PeriodDeadlineAt.IsZero() {
+		value := batch.PeriodDeadlineAt.UTC()
+		periodDeadlineAt = &value
+	}
+	return periodTime, periodDeadlineAt
+}
+
+func appendPermanentTargetUpdates(effects *store.FetchCompletionEffects, original Request, item *marketfetchpb.MarketFetchItemResult, batch *domain.BatchInvocation, attempt int, summary, sourceRetryKey string) {
+	if effects == nil || item == nil {
+		return
+	}
+	writeTargetID := ""
+	if batch != nil && batch.RetryScope == "write_target" {
+		writeTargetID = batch.WriteTargetID
+	}
+	for _, target := range original.Targets {
+		if target.InstanceID != item.GetInstanceId() || (writeTargetID != "" && target.ID != writeTargetID) {
+			continue
+		}
+		duplicate := false
+		for index, existing := range effects.WriteTargetUpdates {
+			if existing.SpaceID == target.SpaceID && existing.WriteTargetID == target.ID && existing.InstanceID == target.InstanceID && existing.DatasetID == target.DatasetID {
+				if attempt <= 0 {
+					attempt = 1
+				}
+				effects.WriteTargetUpdates[index].Status = "failed"
+				effects.WriteTargetUpdates[index].RetrySourceKey = strings.TrimSpace(sourceRetryKey)
+				effects.WriteTargetUpdates[index].LastError = strings.TrimSpace(summary)
+				effects.WriteTargetUpdates[index].Attempt = attempt
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		if attempt <= 0 {
+			attempt = 1
+		}
+		effects.WriteTargetUpdates = append(effects.WriteTargetUpdates, store.WriteTargetStatusEffect{
+			SpaceID: target.SpaceID, RetrySourceKey: strings.TrimSpace(sourceRetryKey), InstanceID: target.InstanceID, WriteTargetID: target.ID, DatasetID: target.DatasetID,
+			Status: "failed", LastError: strings.TrimSpace(summary), Attempt: attempt,
+		})
+	}
+}
+
+func retryFailureTargetsJSON(request Request, instanceID, writeTargetID string) string {
+	instanceID, writeTargetID = strings.TrimSpace(instanceID), strings.TrimSpace(writeTargetID)
+	targets := make([]domain.WriteTarget, 0, len(request.Targets))
+	for _, target := range request.Targets {
+		if instanceID != "" && strings.TrimSpace(target.InstanceID) != instanceID {
+			continue
+		}
+		if writeTargetID != "" && strings.TrimSpace(target.ID) != writeTargetID {
+			continue
+		}
+		if strings.TrimSpace(target.DatasetID) == "" || strings.TrimSpace(target.SeriesHash) == "" || target.ExpectedCount == 0 {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	raw, err := json.Marshal(targets)
+	if err != nil || len(targets) == 0 {
+		return "[]"
+	}
+	return string(raw)
+}
+
+func taskInstanceUpdate(spaceID string, payload *marketfetchpb.MarketFetchBatchCompleted, item *marketfetchpb.MarketFetchItemResult, at time.Time, status int) store.MarketFetchInstanceUpdate {
+	resultData := map[string]any{"outcome": item.GetOutcome()}
+	targetDataTime, err := time.Parse(time.RFC3339Nano, item.GetTargetDataTime())
+	if err == nil {
+		targetDataTime = targetDataTime.UTC()
+		resultData["target_data_time"] = targetDataTime.Format(time.RFC3339Nano)
+		resultData["target_data_unix"] = targetDataTime.Unix()
+	}
+	if item.GetErrorType() != "" {
+		resultData["error_type"] = item.GetErrorType()
+	}
+	if item.GetErrorSummary() != "" {
+		resultData["error_summary"] = item.GetErrorSummary()
+	}
+	result, _ := json.Marshal(resultData)
+	return store.MarketFetchInstanceUpdate{
+		SpaceID: spaceID, InstanceID: item.GetInstanceId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime,
+		At: at, Status: status, Result: string(result),
+	}
+}
+
+func completionIdentityMismatch(batch *domain.BatchInvocation, payload *marketfetchpb.MarketFetchBatchCompleted) string {
+	if batch == nil || payload == nil {
+		return "batch or payload is nil"
+	}
+	checks := []struct{ name, expected, actual string }{
+		{"schedule_id", batch.ScheduleID, payload.GetScheduleId()},
+		{"batch_kind", string(batch.BatchKind), payload.GetBatchKind()},
+		{"frequency", batch.Frequency, payload.GetFrequency()},
+	}
+	// NodeID is intentionally not part of the completion identity. An invoke
+	// timeout can trigger the same batch on a failover node, and its completion
+	// is still valid for this batch. The batch ID and schedule scope prevent a
+	// completion from being applied to a different planned batch.
+	for _, check := range checks {
+		if strings.TrimSpace(check.expected) != strings.TrimSpace(check.actual) {
+			return fmt.Sprintf("%s expected=%q actual=%q", check.name, check.expected, check.actual)
+		}
+	}
+	if int(payload.GetPlannedCount()) != batch.PlannedCount {
+		return fmt.Sprintf("planned_count expected=%d actual=%d", batch.PlannedCount, payload.GetPlannedCount())
+	}
+	return ""
+}
+
+func completionItemIdentityMismatch(original Request, payload *marketfetchpb.MarketFetchBatchCompleted) string {
+	if payload == nil {
+		return "payload is nil"
+	}
+	if len(original.Items) != int(payload.GetPlannedCount()) {
+		return fmt.Sprintf("request item count expected=%d actual=%d", len(original.Items), payload.GetPlannedCount())
+	}
+	if len(payload.GetItems()) != len(original.Items) {
+		return fmt.Sprintf("completion item count expected=%d actual=%d", len(original.Items), len(payload.GetItems()))
+	}
+	allowed := make(map[string]domain.CollectionItem, len(original.Items))
+	allowedTargets := make(map[string]map[string]string)
+	for _, item := range original.Items {
+		if strings.TrimSpace(item.InstanceID) == "" {
+			return "request item instance_id is empty"
+		}
+		if _, exists := allowed[item.InstanceID]; exists {
+			return fmt.Sprintf("request item instance_id %q is duplicated", item.InstanceID)
+		}
+		allowed[item.InstanceID] = item
+	}
+	for _, target := range original.Targets {
+		if strings.TrimSpace(target.InstanceID) == "" || strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.DatasetID) == "" {
+			return "request target identity is incomplete"
+		}
+		if _, exists := allowed[target.InstanceID]; !exists {
+			return fmt.Sprintf("request target %q is not attached to an original request item", target.ID)
+		}
+		byID := allowedTargets[target.InstanceID]
+		if byID == nil {
+			byID = make(map[string]string)
+			allowedTargets[target.InstanceID] = byID
+		}
+		if _, exists := byID[target.ID]; exists {
+			return fmt.Sprintf("request target %q is duplicated for instance %q", target.ID, target.InstanceID)
+		}
+		byID[target.ID] = target.DatasetID
+	}
+	seen := make(map[string]struct{}, len(payload.GetItems()))
+	for index, item := range payload.GetItems() {
+		if item == nil || strings.TrimSpace(item.GetInstanceId()) == "" {
+			return fmt.Sprintf("completion item %d instance_id is empty", index)
+		}
+		instanceID := item.GetInstanceId()
+		expected, exists := allowed[instanceID]
+		if !exists {
+			return fmt.Sprintf("completion item %d instance_id %q is not in the original request", index, instanceID)
+		}
+		if _, exists := seen[instanceID]; exists {
+			return fmt.Sprintf("completion item %d instance_id %q is duplicated", index, instanceID)
+		}
+		seen[instanceID] = struct{}{}
+		if item.GetSubjectId() != expected.SubjectID {
+			return fmt.Sprintf("completion item %d subject_id does not match instance %q", index, instanceID)
+		}
+		if item.GetTargetDataTime() != expected.TargetDataTime {
+			return fmt.Sprintf("completion item %d target_data_time does not match instance %q", index, instanceID)
+		}
+		if item.GetSourceEventId() != expected.SourceEventID {
+			return fmt.Sprintf("completion item %d source_event_id does not match instance %q", index, instanceID)
+		}
+		seenTargets := make(map[string]struct{}, len(item.GetTargets()))
+		for targetIndex, target := range item.GetTargets() {
+			if target == nil || strings.TrimSpace(target.GetWriteTargetId()) == "" {
+				return fmt.Sprintf("completion item %d target %d has no write_target_id", index, targetIndex)
+			}
+			targetID := target.GetWriteTargetId()
+			datasetID, exists := allowedTargets[instanceID][targetID]
+			if !exists || target.GetDatasetId() != datasetID {
+				return fmt.Sprintf("completion item %d target %q is not in the original request", index, targetID)
+			}
+			if _, exists := seenTargets[targetID]; exists {
+				return fmt.Sprintf("completion item %d target %q is duplicated", index, targetID)
+			}
+			seenTargets[targetID] = struct{}{}
+		}
+	}
+	return ""
+}
+
+func completionPayloadContractMismatch(original Request, payload *marketfetchpb.MarketFetchBatchCompleted) string {
+	if payload == nil {
+		return "payload is nil"
+	}
+	planned := int(payload.GetPlannedCount())
+	successCount, retryCount, permanentFailedCount := 0, 0, 0
+	targetsByInstance := make(map[string]map[string]struct{}, len(original.Items))
+	for _, target := range original.Targets {
+		if targetsByInstance[target.InstanceID] == nil {
+			targetsByInstance[target.InstanceID] = make(map[string]struct{})
+		}
+		targetsByInstance[target.InstanceID][target.ID] = struct{}{}
+	}
+	for index, item := range payload.GetItems() {
+		if item == nil {
+			return fmt.Sprintf("completion item %d is nil", index)
+		}
+		switch domain.ItemOutcome(item.GetOutcome()) {
+		case domain.ItemOutcomeSuccess:
+			successCount++
+			expectedTargets := targetsByInstance[item.GetInstanceId()]
+			seenTargets := make(map[string]struct{}, len(item.GetTargets()))
+			for targetIndex, target := range item.GetTargets() {
+				if target == nil {
+					return fmt.Sprintf("completion item %d target %d is nil", index, targetIndex)
+				}
+				switch strings.TrimSpace(target.GetStatus()) {
+				case "succeeded", "failed":
+				default:
+					return fmt.Sprintf("completion item %d target %q has invalid status %q", index, target.GetWriteTargetId(), target.GetStatus())
+				}
+				seenTargets[target.GetWriteTargetId()] = struct{}{}
+			}
+			if len(seenTargets) != len(expectedTargets) {
+				return fmt.Sprintf("completion item %d target receipt count expected=%d actual=%d", index, len(expectedTargets), len(seenTargets))
+			}
+		case domain.ItemOutcomeHTTP429, domain.ItemOutcomeHTTP5xx, domain.ItemOutcomeNetworkError,
+			domain.ItemOutcomeStorageError, domain.ItemOutcomeProviderError:
+			retryCount++
+		case domain.ItemOutcomeInvalid:
+			permanentFailedCount++
+		default:
+			return fmt.Sprintf("completion item %d has invalid outcome %q", index, item.GetOutcome())
+		}
+		for targetIndex, target := range item.GetTargets() {
+			if target == nil {
+				continue
+			}
+			switch strings.TrimSpace(target.GetStatus()) {
+			case "succeeded", "failed":
+			default:
+				return fmt.Sprintf("completion item %d target %d has invalid status %q", index, targetIndex, target.GetStatus())
+			}
+		}
+	}
+	if payload.GetSuccessCount() < 0 || payload.GetRetryCount() < 0 || payload.GetPermanentFailedCount() < 0 {
+		return "completion counts cannot be negative"
+	}
+	if int(payload.GetSuccessCount()) != successCount || int(payload.GetRetryCount()) != retryCount || int(payload.GetPermanentFailedCount()) != permanentFailedCount || successCount+retryCount+permanentFailedCount != planned {
+		return fmt.Sprintf("completion counts do not match item outcomes planned=%d success=%d retry=%d permanent_failed=%d", planned, payload.GetSuccessCount(), payload.GetRetryCount(), payload.GetPermanentFailedCount())
+	}
+	expectedStatus := domain.BatchStatusFailed
+	if successCount == planned {
+		expectedStatus = domain.BatchStatusSucceeded
+	} else if successCount > 0 {
+		expectedStatus = domain.BatchStatusPartialFailed
+	}
+	if domain.BatchStatus(payload.GetStatus()) != expectedStatus || !expectedStatus.Terminal() {
+		return fmt.Sprintf("completion status expected=%q actual=%q", expectedStatus, payload.GetStatus())
+	}
+	return ""
+}
+
+func maxRetryAttempts() int {
+	configured := envInt("MOOX_FETCH_MAX_RETRY_ATTEMPTS", 3)
+	if configured > 3 {
+		return 3
+	}
+	return configured
+}
+
+func completionEventBusClient(ctx context.Context) (*jetstream.Client, error) {
+	cfg, err := completionEventBusConfig()
+	if err != nil {
+		return nil, err
+	}
+	return jetstream.Connect(ctx, cfg)
+}
+
+func completionEventBusConfig() (jetstream.Config, error) {
+	cfg := marketFetchEventBusConfig("moox-collector-market-fetch-completion")
+	if credentialFile := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CREDENTIAL_FILE")); credentialFile != "" {
+		if err := cfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(credentialFile)); err != nil {
+			return jetstream.Config{}, err
+		}
+	}
+	if cfg.TLSCAFile != "" {
+		cfg.TLSCAPEMBase64 = ""
+	}
+	return cfg, nil
+}
+
+func marketFetchEventBusConfig(name string) jetstream.Config {
+	cfg := jetstream.ConfigFromEnv(nil, name)
+	// The SCF package carries the validated EventBus CA as a file. Prefer it
+	// over an inline CA left in a function environment by an older deployment.
+	if cfg.TLSCAFile != "" {
+		cfg.TLSCAPEMBase64 = ""
+	}
+	return cfg
+}
+
+func isRetryOutcome(outcome string) bool {
+	switch domain.ItemOutcome(outcome) {
+	case domain.ItemOutcomeHTTP429, domain.ItemOutcomeHTTP5xx, domain.ItemOutcomeNetworkError, domain.ItemOutcomeStorageError, domain.ItemOutcomeProviderError:
+		return true
+	default:
+		return false
+	}
+}
+
+func retryDelay(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return 5 * time.Second
+	case 2:
+		return 30 * time.Second
+	default:
+		return 2 * time.Minute
+	}
+}
+
+func retryKey(batchID, subjectID, target string) string {
+	return strings.Join([]string{batchID, subjectID, target}, "|")
+}
+
+func writeTargetRetryKey(instanceID, writeTargetID, targetDataTime string) string {
+	period := strings.TrimSpace(targetDataTime)
+	if parsed, err := time.Parse(time.RFC3339Nano, period); err == nil {
+		period = parsed.UTC().Format(time.RFC3339Nano)
+	}
+	return stableID("write-target-retry", strings.TrimSpace(instanceID), strings.TrimSpace(writeTargetID), period)
+}
+
+func retryCollectionItem(request Request, result *marketfetchpb.MarketFetchItemResult, key string) domain.CollectionItem {
+	if result.GetInstanceId() != "" {
+		for _, item := range request.Items {
+			if item.InstanceID != result.GetInstanceId() {
+				continue
+			}
+			item.SourceEventID = key
+			if item.SourceID == "" && request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+				item.CandidateIndex += RuntimeKlineProviderAttemptBudget()
+			}
+			return item
+		}
+	}
+	for _, item := range request.Items {
+		if item.SubjectID == result.GetSubjectId() && item.DatasetID == request.DatasetID {
+			item.SourceEventID = key
+			// A provider failure exhausted the current two-candidate window and
+			// should resume at the next window. A Storage failure happens after
+			// a valid source row was selected, so retry the same chain position
+			// instead of skipping a healthy provider merely because the write
+			// acknowledgment was lost.
+			if item.SourceID == "" && request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+				item.CandidateIndex += RuntimeKlineProviderAttemptBudget()
+			}
+			return item
+		}
+	}
+	candidateIndex := 0
+	if request.SourceID == "" && result.GetOutcome() != string(domain.ItemOutcomeStorageError) {
+		candidateIndex = RuntimeKlineProviderAttemptBudget()
+	}
+	return domain.CollectionItem{InstanceID: result.GetInstanceId(), SubjectID: result.GetSubjectId(), Symbol: result.GetSymbol(), TargetDataTime: result.GetTargetDataTime(), SourceEventID: key, DatasetID: request.DatasetID, Frequency: request.Frequency, Provider: request.Provider, SourceID: request.SourceID, MarketType: request.MarketType, DataType: "kline", CandidateIndex: candidateIndex}
+}

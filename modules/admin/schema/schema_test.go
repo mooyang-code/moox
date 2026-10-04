@@ -42,15 +42,15 @@ func TestServiceDeploymentsStoresOnlyCurrentRows(t *testing.T) {
 		"c_gateway_service_id TEXT NOT NULL DEFAULT ''",
 		"c_gateway_enabled INTEGER NOT NULL DEFAULT 0",
 		"CHECK (c_gateway_enabled = 0 OR length(trim(c_gateway_service_id)) > 0)",
-		"FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes(c_node_id)",
-		"ON t_service_deployments(c_node_id, c_service_name)",
+		"FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes (c_node_id)",
+		"ON t_service_deployments (c_node_id, c_service_name)",
 		"WHERE c_gateway_enabled = 1 AND c_gateway_service_id <> ''",
 	} {
 		if !strings.Contains(block, required) {
 			t.Fatalf("service deployment schema missing %q", required)
 		}
 	}
-	if strings.Contains(block, "ON t_service_deployments(c_service_name);") {
+	if strings.Contains(block, "ON t_service_deployments (c_service_name);") {
 		t.Fatal("service deployment name must be unique only within a gateway node")
 	}
 }
@@ -78,7 +78,7 @@ func TestAdminSchemaDefinesGatewayNodes(t *testing.T) {
 		"c_route_count INTEGER NOT NULL DEFAULT 0",
 		"c_last_seen_at DATETIME",
 		"c_last_error TEXT NOT NULL DEFAULT ''",
-		"FOREIGN KEY (c_host_id) REFERENCES t_ssh_host(c_id)",
+		"FOREIGN KEY (c_host_id) REFERENCES t_ssh_host (c_id)",
 		"update_gateway_nodes_mtime",
 	} {
 		if !strings.Contains(block, required) {
@@ -87,13 +87,15 @@ func TestAdminSchemaDefinesGatewayNodes(t *testing.T) {
 	}
 }
 
-func TestAdminSchemaDropsLegacyUserActionsTable(t *testing.T) {
+func TestAdminSchemaContainsNoUserActionsUpgradePath(t *testing.T) {
 	sql := AdminSQL()
-	if strings.Contains(sql, "CREATE TABLE IF NOT EXISTS t_user_actions") {
-		t.Fatal("admin schema must not recreate t_user_actions")
-	}
-	if !strings.Contains(sql, "DROP TABLE IF EXISTS t_user_actions") {
-		t.Fatal("admin schema must drop legacy t_user_actions")
+	for _, statement := range []string{
+		"CREATE TABLE IF NOT EXISTS t_user_actions",
+		"DROP TABLE IF EXISTS t_user_actions",
+	} {
+		if strings.Contains(sql, statement) {
+			t.Fatalf("admin schema must not contain retired user-actions statement %q", statement)
+		}
 	}
 }
 

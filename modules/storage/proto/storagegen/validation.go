@@ -19,7 +19,7 @@ func (r *SearchRecordRowsReq) Validate() error {
 	return nil
 }
 
-func (r *WriteFieldsReq) Validate() error {
+func (r *UpsertFieldsReq) Validate() error {
 	if r == nil || len(r.Rows) == 0 {
 		return fmt.Errorf("rows must not be empty")
 	}

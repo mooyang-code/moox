@@ -55,7 +55,9 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if service == nil {
 		return fmt.Errorf("monitor data cleanup timer service %q is not configured", monitorDataCleanupTimerService)
 	}
-	ops := monitorDataCleanupOps{now: func() time.Time { return time.Now().UTC() }}
+	ops := monitorDataCleanupOps{
+		now: func() time.Time { return time.Now().UTC() },
+	}
 	if cfg != nil {
 		ops.retention = time.Duration(cfg.Scheduler.ResultRetentionDays) * 24 * time.Hour
 	}

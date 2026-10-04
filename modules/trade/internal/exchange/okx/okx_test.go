@@ -2,243 +2,595 @@ package okx
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
+	"github.com/rs/xid"
 )
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
+func TestNewUsesFixedEnvironmentEndpoints(t *testing.T) {
+	production := New(exchange.AccountConfig{
+		Environment: exchange.AccountEnvironmentProduction,
+	}, exchange.Credential{})
+	testnet := New(exchange.AccountConfig{
+		Environment: exchange.AccountEnvironmentTestnet,
+	}, exchange.Credential{})
+	if production.client.BaseURL != defaultBaseURL ||
+		testnet.client.BaseURL != defaultBaseURL {
+		t.Fatalf(
+			"REST endpoints = %q, %q; want %q",
+			production.client.BaseURL, testnet.client.BaseURL, defaultBaseURL,
+		)
+	}
+	if got := privateStreamEndpoint(
+		exchange.AccountEnvironmentProduction,
+	); got != "wss://ws.okx.com:8443/ws/v5/private" {
+		t.Fatalf("production private stream = %q", got)
+	}
+	if got := privateStreamEndpoint(
+		exchange.AccountEnvironmentTestnet,
+	); got != "wss://wspap.okx.com:8443/ws/v5/private" {
+		t.Fatalf("testnet private stream = %q", got)
+	}
 }
 
-func installOKXHTTPStub(t *testing.T, handler func(*http.Request) string) {
-	t.Helper()
-	orig := http.DefaultTransport
-	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body := handler(req)
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(body)),
-			Request:    req,
-		}, nil
-	})
-	t.Cleanup(func() { http.DefaultTransport = orig })
-}
-
-func okxData(data string) string {
-	return `{"code":"0","msg":"","data":` + data + `}`
-}
-
-func TestAdapter_HTTPBackedMetadataAndAccountMethods_ShouldMapResponses(t *testing.T) {
-	installOKXHTTPStub(t, func(req *http.Request) string {
-		switch req.URL.Path {
-		case "/api/v5/public/instruments":
-			return okxData(`[{"instId":"BTC-USDT","instType":"SPOT","baseCcy":"BTC","quoteCcy":"USDT","tickSz":"0.01","lotSz":"0.001","minSz":"0.001","state":"live"}]`)
-		case "/api/v5/market/tickers":
-			return okxData(`[{"instId":"BTC-USDT","last":"100"}]`)
-		case "/api/v5/account/balance":
-			return okxData(`[{"totalEq":"12","data":[{"ccy":"USDT","availBal":"10","frozenBal":"2","eq":"12"},{"ccy":"BTC","availBal":"","frozenBal":"1","eq":""}]}]`)
-		case "/api/v5/account/trade-fee":
-			return okxData(`[{"maker":"0.001","taker":"0.002"}]`)
-		default:
-			t.Fatalf("unexpected request %s %s", req.Method, req.URL.String())
-			return okxData(`[]`)
+func TestTestnetRequestAddsSimulationHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		if request.Header.Get("x-simulated-trading") != "1" {
+			t.Fatalf("x-simulated-trading = %q", request.Header.Get("x-simulated-trading"))
 		}
-	})
-	a := &Adapter{}
-	cred := exchange.Credential{APIKey: "ak", APISecret: "sk", Passphrase: "pass"}
+		ok(writer, `[]`)
+	}))
+	defer server.Close()
 
-	latency, err := a.Ping(context.Background(), cred)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, latency, int64(0))
-
-	instruments, err := a.GetInstruments(context.Background(), exchange.MarketSpot)
-	require.NoError(t, err)
-	require.Len(t, instruments, 1)
-	assert.Equal(t, "100", instruments[0].LastPrice)
-
-	balances, err := a.GetBalances(context.Background(), cred, exchange.MarketSpot, []string{"usdt"})
-	require.NoError(t, err)
-	require.Len(t, balances, 1)
-	assert.Equal(t, "12", balances[0].Total)
-
-	info, err := a.GetAccountInfo(context.Background(), cred, exchange.MarketSpot)
-	require.NoError(t, err)
-	assert.Equal(t, "12", info.TotalEq)
-
-	fee, err := a.GetTradeFee(context.Background(), cred, exchange.MarketSpot, "BTC-USDT")
-	require.NoError(t, err)
-	assert.Equal(t, "0.001", fee.Maker)
+	adapter := newWithClient(exchange.AccountConfig{
+		Environment: exchange.AccountEnvironmentTestnet,
+	}, exchange.Credential{}, httpclient.New(server.URL))
+	if _, err := adapter.request(
+		context.Background(), http.MethodGet, "/api/v5/public/instruments",
+		nil, nil, false,
+	); err != nil {
+		t.Fatalf("request() error = %v", err)
+	}
 }
 
-func TestAdapter_HTTPBackedOrderAndFundsMethods_ShouldMapResponses(t *testing.T) {
-	installOKXHTTPStub(t, func(req *http.Request) string {
-		switch req.URL.Path {
-		case "/api/v5/trade/order":
-			if req.Method == http.MethodPost {
-				return okxData(`[{"ordId":"ex-1","clOrdId":"client-1","sCode":"0","state":"filled"}]`)
+func TestAdapterRequestValidationContract(t *testing.T) {
+	adapter := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
+	base := exchange.OrderRequest{
+		ClientOrderID:  "contract-client",
+		ExchangeSymbol: "BTC-USDT",
+		OrderType:      exchange.OrderTypeMarket,
+		Side:           exchange.SideBuy,
+		Quantity:       shared.MustDecimal("1"),
+	}
+	price := shared.MustDecimal("100")
+	tests := []struct {
+		name   string
+		mutate func(*exchange.OrderRequest)
+	}{
+		{"MARKET rejects price", func(request *exchange.OrderRequest) {
+			request.LimitPrice = &price
+		}},
+		{"MARKET rejects time in force", func(request *exchange.OrderRequest) {
+			request.FillPolicy = exchange.FillPolicyGTC
+		}},
+		{"LIMIT requires price", func(request *exchange.OrderRequest) {
+			request.OrderType = exchange.OrderTypeLimit
+			request.FillPolicy = exchange.FillPolicyGTC
+		}},
+		{"SPOT rejects reduce only", func(request *exchange.OrderRequest) {
+			request.ReduceOnly = true
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := base
+			test.mutate(&request)
+			_, err := adapter.PlaceOrder(context.Background(), request)
+			if !exchange.IsKind(err, exchange.ErrorRejected) {
+				t.Fatalf("PlaceOrder() error = %v, want REJECTED", err)
 			}
-			return okxData(`[{"ordId":"ex-1","clOrdId":"client-1","instId":"BTC-USDT","side":"buy","ordType":"limit","px":"100","sz":"1","fillSz":"1","fillPx":"100","avgPx":"100","state":"filled","fee":"0.1","feeCcy":"USDT","cTime":"1","uTime":"2"}]`)
-		case "/api/v5/trade/cancel-order":
-			return okxData(`[{"ordId":"ex-1","clOrdId":"client-1","sCode":"0","state":"canceled"}]`)
-		case "/api/v5/trade/amend-order":
-			return okxData(`[{"ordId":"ex-1","clOrdId":"client-1","sCode":"0","state":"live"}]`)
-		case "/api/v5/account/set-leverage", "/api/v5/trade/close-position":
-			return okxData(`[]`)
-		case "/api/v5/trade/orders-pending", "/api/v5/trade/orders-history":
-			return okxData(`[{"ordId":"ex-1","clOrdId":"client-1","instId":"BTC-USDT","side":"buy","ordType":"limit","px":"100","sz":"1","fillSz":"0","state":"live"}]`)
-		case "/api/v5/trade/fills":
-			return okxData(`[{"tradeId":"t1","ordId":"ex-1","instId":"BTC-USDT","side":"buy","fillPx":"100","fillSz":"1","fee":"0.1","feeCcy":"USDT","ts":"123"}]`)
-		case "/api/v5/account/positions":
-			return okxData(`[{"instId":"BTC-USDT-SWAP","posSide":"long","pos":"2","avgPx":"100","lever":"5","margin":"20","liqPx":"50","upl":"3"},{"instId":"ETH-USDT-SWAP","pos":"0"}]`)
-		case "/api/v5/asset/bills":
-			return okxData(`[{"billId":"b1","ccy":"USDT","type":"transfer","amt":"1","balChg":"-1","ts":"456"}]`)
-		case "/api/v5/asset/transfer":
-			return okxData(`[{"transId":"tr-1"}]`)
+		})
+	}
+}
+
+func TestOKXRejectsClientOrderIDWithDash(t *testing.T) {
+	err := validateRequest(exchange.OrderRequest{
+		ClientOrderID: "contains-dash", ExchangeSymbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("1"),
+	}, exchange.MarketTypeSpot)
+	if !exchange.IsKind(err, exchange.ErrorRejected) {
+		t.Fatalf("validateRequest() error = %v, want REJECTED", err)
+	}
+}
+
+func TestOKXRejectsClientOrderIDLongerThan32(t *testing.T) {
+	err := validateRequest(exchange.OrderRequest{
+		ClientOrderID: strings.Repeat("a", 33), ExchangeSymbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("1"),
+	}, exchange.MarketTypeSpot)
+	if !exchange.IsKind(err, exchange.ErrorRejected) {
+		t.Fatalf("validateRequest() error = %v, want REJECTED", err)
+	}
+}
+
+func TestOKXAcceptsGeneratedClientOrderID(t *testing.T) {
+	clientOrderID := xid.New().String()
+	err := validateRequest(exchange.OrderRequest{
+		ClientOrderID: clientOrderID, ExchangeSymbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("1"),
+	}, exchange.MarketTypeSpot)
+	if err != nil {
+		t.Fatalf("validateRequest() error = %v", err)
+	}
+	if len(clientOrderID) != 20 {
+		t.Fatalf("generated client order ID length = %d, want 20", len(clientOrderID))
+	}
+}
+
+func TestExchangeAdaptersMapFillPolicy(t *testing.T) {
+	tests := []struct {
+		policy exchange.FillPolicy
+		want   string
+	}{
+		{exchange.FillPolicyGTC, "limit"},
+		{exchange.FillPolicyIOC, "ioc"},
+		{exchange.FillPolicyFOK, "fok"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.policy), func(t *testing.T) {
+			if got := mapOKXLimitType(test.policy); got != test.want {
+				t.Fatalf("mapOKXLimitType(%q) = %q, want %q", test.policy, got, test.want)
+			}
+		})
+	}
+}
+
+func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(
+			w,
+			`{"code":"1","msg":"operation failed","data":[{"sCode":"51008","sMsg":"insufficient balance"}]}`,
+		)
+	}))
+	defer server.Close()
+	adapter := newWithClient(exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
+		httpclient.New(server.URL))
+	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("0.01"),
+	})
+	if !exchange.IsKind(err, exchange.ErrorInsufficientBalance) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v5/market/ticker" ||
+			request.URL.Query().Get("instId") != "BTC-USDT" {
+			t.Fatalf("request = %s?%s", request.URL.Path, request.URL.RawQuery)
+		}
+		ok(w, `[{"instId":"BTC-USDT","last":"100.25","ts":"2000"}]`)
+	}))
+	defer server.Close()
+	adapter := newWithClient(
+		exchange.AccountConfig{MarketType: exchange.MarketTypeSpot},
+		exchange.Credential{},
+		httpclient.New(server.URL),
+	)
+
+	quote, err := adapter.GetReferencePrice(context.Background(), "BTC-USDT")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quote.Price.String() != "100.25" || quote.UpdatedAt.UnixMilli() != 2000 {
+		t.Fatalf("quote = %+v", quote)
+	}
+}
+
+func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
+	var orderBody map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v5/public/instruments":
+			ok(w, `[{"instId":"BTC-USDT-SWAP","instType":"SWAP","settleCcy":"USDT","tickSz":"0.1","lotSz":"1","minSz":"1","ctVal":"0.01","ctValCcy":"BTC","ctType":"linear","state":"live"}]`)
+		case "/api/v5/trade/order":
+			if request.Method == http.MethodPost {
+				if err := json.NewDecoder(request.Body).Decode(&orderBody); err != nil {
+					t.Fatal(err)
+				}
+				ok(w, `[{"ordId":"42","clOrdId":"cid","sCode":"0"}]`)
+			} else {
+				ok(w, `[{"ordId":"42","clOrdId":"cid","instId":"BTC-USDT-SWAP","ordType":"market","side":"buy","posSide":"net","sz":"5","accFillSz":"5","avgPx":"100","state":"filled","reduceOnly":"true"}]`)
+			}
 		default:
-			t.Fatalf("unexpected request %s %s", req.Method, req.URL.String())
-			return okxData(`[]`)
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	adapter := swapAdapter(server.URL)
+	instruments, err := adapter.LoadInstruments(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instruments) != 1 || instruments[0].ExchangeSymbol != "BTC-USDT-SWAP" || instruments[0].BaseAsset != "BTC" ||
+		instruments[0].QuoteAsset != "USDT" ||
+		instruments[0].InstrumentID != "BTC-USDT-SWAP" {
+		t.Fatalf("instruments = %+v", instruments)
+	}
+	order, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT-SWAP",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		PositionSide: exchange.PositionSideNet,
+		Quantity:     shared.MustDecimal("0.05"), ReduceOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orderBody["sz"] != "5" || orderBody["ordType"] != "market" ||
+		orderBody["tdMode"] != "cross" || orderBody["posSide"] != "net" ||
+		orderBody["reduceOnly"] != "true" {
+		t.Fatalf("body = %+v", orderBody)
+	}
+	if order.ClientOrderID != "cid" || !order.ReduceOnly {
+		t.Fatalf("order = %+v", order)
+	}
+	terminal, err := adapter.GetOrder(context.Background(), "BTC-USDT-SWAP", "cid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal.Quantity.String() != "0.05" || terminal.FilledQuantity.String() != "0.05" ||
+		terminal.Status != exchange.OrderStatusFilled {
+		t.Fatalf("terminal = %+v", terminal)
+	}
+}
+
+func TestSpotMarketBuyUsesBaseQuantity(t *testing.T) {
+	var body map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v5/trade/order" {
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		ok(w, `[{"ordId":"42","clOrdId":"cid","sCode":"0"}]`)
+	}))
+	defer server.Close()
+	adapter := newWithClient(exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
+		httpclient.New(server.URL))
+	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("0.01"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["sz"] != "0.01" || body["tgtCcy"] != "base_ccy" {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestSwapLimitAndLotValidation(t *testing.T) {
+	var body map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v5/public/instruments":
+			ok(w, `[{"instId":"BTC-USDT-SWAP","instType":"SWAP","baseCcy":"BTC","quoteCcy":"USDT","settleCcy":"USDT","tickSz":"0.1","lotSz":"2","minSz":"2","ctVal":"0.01","ctValCcy":"BTC","ctType":"linear","state":"live"}]`)
+		case "/api/v5/trade/order":
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			ok(w, `[{"ordId":"42","sCode":"0"}]`)
+		}
+	}))
+	defer server.Close()
+	adapter := swapAdapter(server.URL)
+	if _, err := adapter.LoadInstruments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	price := shared.MustDecimal("100")
+	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT-SWAP",
+		OrderType: exchange.OrderTypeLimit, FillPolicy: exchange.FillPolicyFOK,
+		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.04"), LimitPrice: &price,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["sz"] != "4" || body["ordType"] != "fok" || body["px"] != "100" {
+		t.Fatalf("body = %+v", body)
+	}
+	_, err = adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "bad", ExchangeSymbol: "BTC-USDT-SWAP",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.03"),
+	})
+	if !exchange.IsKind(err, exchange.ErrorRejected) {
+		t.Fatalf("lot error = %v", err)
+	}
+}
+
+func TestRecentFillsAndPositionsConvertContracts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v5/public/instruments":
+			ok(w, `[{"instId":"BTC-USDT-SWAP","instType":"SWAP","baseCcy":"BTC","quoteCcy":"USDT","settleCcy":"USDT","tickSz":"0.1","lotSz":"1","minSz":"1","ctVal":"0.01","ctValCcy":"BTC","ctType":"linear","state":"live"}]`)
+		case "/api/v5/trade/fills-history":
+			if request.URL.Query().Get("instId") != "BTC-USDT-SWAP" ||
+				request.URL.Query().Get("before") != "99" ||
+				request.URL.Query().Has("after") {
+				t.Fatalf("query = %v", request.URL.Query())
+			}
+			ok(w, `[{"billId":"101","instId":"BTC-USDT-SWAP","tradeId":"7","ordId":"42","clOrdId":"cid","side":"sell","posSide":"net","fillSz":"3","fillPx":"100","fee":"-0.01","feeCcy":"USDT","fillPnl":"2","execType":"T","ts":"1700000000001","fillTime":"1700000000000"}]`)
+		case "/api/v5/account/positions":
+			ok(w, `[{"instId":"BTC-USDT-SWAP","posSide":"net","pos":"-4","avgPx":"100","markPx":"101","lever":"5","mgnMode":"cross","margin":"10","liqPx":"50","upl":"2","realizedPnl":"1","uTime":"1700000000000"}]`)
+		}
+	}))
+	defer server.Close()
+	adapter := swapAdapter(server.URL)
+	if _, err := adapter.LoadInstruments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fills, cursor, err := adapter.ListRecentFills(
+		context.Background(), "BTC-USDT-SWAP", "99",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fills) != 1 || fills[0].Quantity.String() != "0.03" ||
+		fills[0].Fee.String() != "0.01" || fills[0].RealizedPnL.String() != "2" ||
+		fills[0].LiquidityRole != "TAKER" || cursor != "101" {
+		t.Fatalf("fills=%+v cursor=%s", fills, cursor)
+	}
+	positions, err := adapter.ListPositionSnapshots(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 1 || positions[0].SignedQuantity.String() != "-0.04" {
+		t.Fatalf("positions = %+v", positions)
+	}
+}
+
+func TestRecentFillsPaginatesWithoutSkippingGap(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		var high, low int
+		switch {
+		case request.URL.Query().Get("before") == "99":
+			high, low = 300, 201
+		case request.URL.Query().Get("after") == "201":
+			high, low = 200, 101
+		case request.URL.Query().Get("after") == "101":
+			high, low = 100, 100
+		default:
+			t.Fatalf("query = %v", request.URL.Query())
+		}
+		rows := make([]fillPayload, 0, high-low+1)
+		for billID := high; billID >= low; billID-- {
+			id := strconv.Itoa(billID)
+			rows = append(rows, fillPayload{
+				BillID: id, InstID: "BTC-USDT", TradeID: id,
+				OrdID: "42", ClOrdID: "cid", Side: "buy",
+				FillSz: "1", FillPx: "100", Fee: "0", FeeCcy: "USDT", FillTime: "1700000000000",
+			})
+		}
+		data, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok(w, string(data))
+	}))
+	defer server.Close()
+	adapter := newWithClient(exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
+		httpclient.New(server.URL))
+	fills, cursor, err := adapter.ListRecentFills(
+		context.Background(), "BTC-USDT", "99",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 3 || len(fills) != 201 || cursor != "300" ||
+		fills[0].ExchangeTradeID != "100" ||
+		fills[len(fills)-1].ExchangeTradeID != "300" {
+		t.Fatalf(
+			"requests=%d fills=%d first=%s last=%s cursor=%s",
+			requests,
+			len(fills),
+			fills[0].ExchangeTradeID,
+			fills[len(fills)-1].ExchangeTradeID,
+			cursor,
+		)
+	}
+}
+
+func TestRecentFillsOrdersByExecutionTimeWithBillIDTieBreak(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		ok(w, `[
+		{"billId":"12","instId":"BTC-USDT","tradeId":"t12","ordId":"42","side":"buy","fillSz":"1","fillPx":"100","fee":"0","feeCcy":"USDT","fillTime":"1700000000000"},
+		{"billId":"11","instId":"BTC-USDT","tradeId":"t11","ordId":"42","side":"buy","fillSz":"1","fillPx":"100","fee":"0","feeCcy":"USDT","fillTime":"1700000000002"},
+		{"billId":"10","instId":"BTC-USDT","tradeId":"t10","ordId":"42","side":"buy","fillSz":"1","fillPx":"100","fee":"0","feeCcy":"USDT","fillTime":"1700000000000"},
+		{"billId":"9","instId":"BTC-USDT","tradeId":"t9","ordId":"42","side":"buy","fillSz":"1","fillPx":"100","fee":"0","feeCcy":"USDT","fillTime":"1700000000000"}
+		]`)
+	}))
+	defer server.Close()
+	adapter := newWithClient(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{}, httpclient.New(server.URL))
+	fills, cursor, err := adapter.ListRecentFills(context.Background(), "BTC-USDT", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "12" {
+		t.Fatalf("cursor=%s, want highest bill ID 12", cursor)
+	}
+	want := []string{"t9", "t10", "t12", "t11"}
+	if len(fills) != len(want) {
+		t.Fatalf("fills=%+v", fills)
+	}
+	for i, fill := range fills {
+		if fill.ExchangeTradeID != want[i] {
+			t.Fatalf("fill[%d]=%s, want %s ordered by fillTime then numeric billId", i, fill.ExchangeTradeID, want[i])
+		}
+	}
+}
+
+func TestRecentFillsEmptyCursorConsumesAllAvailablePages(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		var high, low int
+		switch {
+		case !request.URL.Query().Has("before") && !request.URL.Query().Has("after"):
+			high, low = 150, 51
+		case request.URL.Query().Get("after") == "51":
+			high, low = 50, 1
+		default:
+			t.Fatalf("query = %v", request.URL.Query())
+		}
+		rows := make([]fillPayload, 0, high-low+1)
+		for billID := high; billID >= low; billID-- {
+			id := strconv.Itoa(billID)
+			rows = append(rows, fillPayload{
+				BillID: id, InstID: "BTC-USDT", TradeID: id,
+				OrdID: "42", ClOrdID: "cid", Side: "buy",
+				FillSz: "1", FillPx: "100", Fee: "0", FeeCcy: "USDT", FillTime: "1700000000000",
+			})
+		}
+		data, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok(w, string(data))
+	}))
+	defer server.Close()
+	adapter := newWithClient(exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
+		httpclient.New(server.URL))
+	fills, cursor, err := adapter.ListRecentFills(context.Background(), "BTC-USDT", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || len(fills) != 150 || cursor != "150" ||
+		fills[0].ExchangeTradeID != "1" ||
+		fills[len(fills)-1].ExchangeTradeID != "150" {
+		t.Fatalf(
+			"requests=%d fills=%d first=%s last=%s cursor=%s",
+			requests,
+			len(fills),
+			fills[0].ExchangeTradeID,
+			fills[len(fills)-1].ExchangeTradeID,
+			cursor,
+		)
+	}
+}
+
+func TestMutationWithMalformedSuccessResponseIsTransportUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"code":`)
+	}))
+	defer server.Close()
+	adapter := swapAdapter(server.URL)
+	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT-SWAP",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.01"),
+	})
+	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRejectsUnsupportedAndClassifiesErrors(t *testing.T) {
+	t.Run("inverse contract", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			ok(w, `[{"instId":"BTC-USD-SWAP","instType":"SWAP","baseCcy":"BTC","quoteCcy":"USD","settleCcy":"BTC","tickSz":"0.1","lotSz":"1","minSz":"1","ctVal":"100","ctValCcy":"USD","ctType":"inverse","state":"live"}]`)
+		}))
+		defer server.Close()
+		instruments, err := swapAdapter(server.URL).LoadInstruments(context.Background())
+		if err != nil || len(instruments) != 0 {
+			t.Fatalf("instruments=%+v err=%v", instruments, err)
 		}
 	})
-	a := &Adapter{}
-	cred := exchange.Credential{APIKey: "ak", APISecret: "sk", Passphrase: "pass"}
-
-	placed, err := a.PlaceOrder(context.Background(), cred, &exchange.PlaceOrderReq{Market: exchange.MarketSpot, Symbol: "BTC-USDT", Side: exchange.SideBuy, Type: exchange.TypeLimit, Quantity: "1", Price: "100", ClientOrderID: "client-1"})
-	require.NoError(t, err)
-	assert.Equal(t, exchange.StatusSubmitted, placed.Status)
-
-	canceled, err := a.CancelOrder(context.Background(), cred, &exchange.CancelOrderReq{Market: exchange.MarketSpot, Symbol: "BTC-USDT", ClientOrderID: "client-1"})
-	require.NoError(t, err)
-	assert.Equal(t, exchange.StatusCanceled, canceled.Status)
-
-	amended, err := a.AmendOrder(context.Background(), cred, &exchange.AmendOrderReq{Market: exchange.MarketSpot, Symbol: "BTC-USDT", ClientOrderID: "client-1", NewPrice: "101"})
-	require.NoError(t, err)
-	assert.Equal(t, exchange.StatusSubmitted, amended.Status)
-
-	require.NoError(t, a.SetLeverage(context.Background(), cred, exchange.MarketSwap, "BTC-USDT-SWAP", "5"))
-	require.NoError(t, a.ClosePosition(context.Background(), cred, exchange.MarketSwap, "BTC-USDT-SWAP", "long"))
-
-	got, err := a.GetOrder(context.Background(), cred, &exchange.GetOrderReq{Market: exchange.MarketSpot, Symbol: "BTC-USDT", ClientOrderID: "client-1"})
-	require.NoError(t, err)
-	assert.Equal(t, exchange.StatusSubmitted, got.Status)
-
-	openOrders, err := a.ListOpenOrders(context.Background(), cred, &exchange.ListOrdersReq{Market: exchange.MarketSpot, Symbol: "BTC-USDT", Limit: 1})
-	require.NoError(t, err)
-	assert.Len(t, openOrders, 1)
-
-	orders, err := a.ListOrders(context.Background(), cred, &exchange.ListOrdersReq{Market: exchange.MarketSpot, Symbol: "BTC-USDT", Limit: 1})
-	require.NoError(t, err)
-	assert.Len(t, orders, 1)
-
-	trades, err := a.ListTrades(context.Background(), cred, &exchange.ListTradesReq{Market: exchange.MarketSpot, Symbol: "BTC-USDT", OrderID: "ex-1", Limit: 1})
-	require.NoError(t, err)
-	require.Len(t, trades, 1)
-	assert.Equal(t, int64(123), trades[0].TradedAt)
-
-	positions, err := a.ListPositions(context.Background(), cred, exchange.MarketSwap, "BTC-USDT-SWAP")
-	require.NoError(t, err)
-	require.Len(t, positions, 1)
-	assert.Equal(t, "long", positions[0].PosSide)
-
-	flows, err := a.ListFundFlows(context.Background(), cred, &exchange.FundFlowQuery{Currency: "usdt", Limit: 1})
-	require.NoError(t, err)
-	require.Len(t, flows, 1)
-	assert.Equal(t, -1, flows[0].Direction)
-
-	transfer, err := a.Transfer(context.Background(), cred, &exchange.TransferReq{Currency: "usdt", Amount: "1", From: exchange.MarketSpot, To: exchange.MarketSwap})
-	require.NoError(t, err)
-	assert.Equal(t, "tr-1", transfer.TransferID)
+	t.Run("rate limit", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"code":"50011","msg":"slow down"}`)
+		}))
+		defer server.Close()
+		_, err := swapAdapter(server.URL).GetAccountSnapshot(context.Background())
+		if !exchange.IsKind(err, exchange.ErrorRateLimited) {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("hedge mode", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/api/v5/account/config" {
+				ok(w, `[{"posMode":"long_short_mode"}]`)
+				return
+			}
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}))
+		defer server.Close()
+		_, err := swapAdapter(server.URL).GetAccountSnapshot(context.Background())
+		if !exchange.IsKind(err, exchange.ErrorRejected) {
+			t.Fatalf("error = %v", err)
+		}
+	})
 }
 
-func TestJsonMarshal_SkipsEmptyValues(t *testing.T) {
-	got := jsonMarshal(map[string]string{"a": "1", "b": "", "c": "2"})
-	assert.Contains(t, got, `"a":"1"`)
-	assert.NotContains(t, got, `"b"`)
-	assert.Contains(t, got, `"c":"2"`)
+func swapAdapter(baseURL string) *Adapter {
+	return newWithClient(exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSwap, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT", MarginMode: exchange.MarginModeCross,
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"}, httpclient.New(baseURL))
 }
 
-func TestDecAdd_EmptyOperand_ShouldTreatAsZero(t *testing.T) {
-	assert.Equal(t, "2", decAdd("", "2"))
+func newWithClient(
+	config exchange.AccountConfig,
+	credential exchange.Credential,
+	client *httpclient.Client,
+) *Adapter {
+	adapter := New(config, credential)
+	if client != nil {
+		adapter.client = client
+	}
+	return adapter
 }
 
-func TestInstType_MapsMarketTypes(t *testing.T) {
-	assert.Equal(t, "SPOT", instType(exchange.MarketSpot))
-	assert.Equal(t, "SWAP", instType(exchange.MarketSwap))
-	assert.Equal(t, "FUTURES", instType(exchange.MarketFutures))
-	assert.Equal(t, "MARGIN", instType(exchange.MarketMargin))
-}
-
-func TestOkxOrderType_KnownTypes_ShouldMap(t *testing.T) {
-	assert.Equal(t, "market", okxOrderType(exchange.TypeMarket))
-	assert.Equal(t, "limit", okxOrderType(exchange.TypeLimit))
-	assert.Equal(t, "fok", okxOrderType(exchange.TypeFOK))
-}
-
-func TestOkxTdMode_MapsMarketTypes(t *testing.T) {
-	assert.Equal(t, "cash", okxTdMode(exchange.MarketSpot))
-	assert.Equal(t, "cross", okxTdMode(exchange.MarketSwap))
-}
-
-func TestMapStatus_CurrentBehavior_ShouldReturnSubmitted(t *testing.T) {
-	assert.Equal(t, exchange.StatusSubmitted, mapStatus("filled"))
-	assert.Equal(t, exchange.StatusSubmitted, mapStatus("canceled"))
-	assert.Equal(t, exchange.StatusSubmitted, mapStatus("partially_filled"))
-}
-
-func TestOkxAccountType_MapsMarketTypes(t *testing.T) {
-	assert.Equal(t, "6", okxAccountType(exchange.MarketSpot))
-	assert.Equal(t, "1", okxAccountType(exchange.MarketSwap))
-}
-
-func TestSign_ProducesBase64Digest(t *testing.T) {
-	got := sign("secret", "ts", "GET", "/api/v5/account/balance", "")
-	assert.NotEmpty(t, got)
-}
-
-func TestAuthHeaders_ContainsAccessFields(t *testing.T) {
-	h := authHeaders(exchange.Credential{APIKey: "k", APISecret: "s", Passphrase: "p"}, "GET", "/path", "")
-	assert.Equal(t, "k", h["OK-ACCESS-KEY"])
-	assert.Equal(t, "p", h["OK-ACCESS-PASSPHRASE"])
-	assert.NotEmpty(t, h["OK-ACCESS-SIGN"])
-	assert.NotEmpty(t, h["OK-ACCESS-TIMESTAMP"])
-}
-
-func TestAdapter_PlaceOrder_InvalidRequest_ShouldReject(t *testing.T) {
-	a := &Adapter{}
-	_, err := a.PlaceOrder(context.Background(), exchange.Credential{}, nil)
-	assert.ErrorIs(t, err, errInvalidParam)
-	_, err = a.PlaceOrder(context.Background(), exchange.Credential{}, &exchange.PlaceOrderReq{})
-	assert.ErrorIs(t, err, errInvalidParam)
-}
-
-func TestAdapter_CancelOrder_InvalidRequest_ShouldReject(t *testing.T) {
-	a := &Adapter{}
-	_, err := a.CancelOrder(context.Background(), exchange.Credential{}, nil)
-	assert.ErrorIs(t, err, errInvalidParam)
-}
-
-func TestAdapter_CancelAllOrders_NotImplemented_ShouldReturnError(t *testing.T) {
-	a := &Adapter{}
-	_, err := a.CancelAllOrders(context.Background(), exchange.Credential{}, exchange.MarketSpot, "")
-	assert.ErrorIs(t, err, errNotImplemented)
-}
-
-func TestAdapter_DustAndPrivateStreamValidation_ShouldReturnErrors(t *testing.T) {
-	a := &Adapter{}
-	_, err := a.ListConvertibleDustAssets(context.Background(), exchange.Credential{}, nil)
-	assert.ErrorIs(t, err, errNotImplemented)
-
-	_, err = a.ConvertDust(context.Background(), exchange.Credential{}, nil)
-	assert.ErrorIs(t, err, errNotImplemented)
-
-	err = a.SubscribePrivate(context.Background(), exchange.Credential{}, exchange.MarketSpot, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "handler is required")
+func ok(w http.ResponseWriter, data string) {
+	_, _ = io.WriteString(w, `{"code":"0","msg":"","data":`+data+`}`)
 }

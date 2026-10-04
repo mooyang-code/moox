@@ -75,8 +75,8 @@ go test -race ./test -run 'Test.*(Outbox|JetStream)' -count=1
 **Files:**
 - Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
 - Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
-- Modify: `scripts/deploy-moox.sh`
-- Modify: `scripts/test-deploy-moox-eventbus.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-eventbus.sh`
 
 - [ ] Add failing tests for a ninth secret, exported `strategy-eventbus.yaml` mode `0600`, publish allow-list for the three registered Strategy topics, `_INBOX.>` subscription, forbidden unrelated topics, and rotation.
 - [ ] Add the `strategy-eventbus` role/key/user/export wiring. Do not grant `$JS.API.>`.
@@ -87,7 +87,7 @@ go test -race ./test -run 'Test.*(Outbox|JetStream)' -count=1
 cd modules/admin
 go test -gcflags=all=-l -ldflags=-s=false ./cmd/cli -run EventBus -count=1
 cd ../..
-bash scripts/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
 ```
 
 ### Task 5: Add workspace, proto, build, and release contracts
@@ -95,30 +95,30 @@ bash scripts/test-deploy-moox-eventbus.sh
 **Files:**
 - Modify: `go.work`, `go.work.sum`
 - Modify: `Makefile`
-- Modify: `scripts/build.sh`
-- Modify: `scripts/release.sh`
-- Modify: `scripts/test-release-contract.sh`
+- Modify: `scripts/build/build.sh`
+- Modify: `scripts/release/release.sh`
+- Modify: `scripts/test/contract/test-release-contract.sh`
 - Delete tracked Python/cache/database artifacts under `modules/strategy` if present
 
-- [ ] First extend `scripts/test-release-contract.sh` so it fails unless the archive contains both Strategy executables, config, worker, requirements, Python SDK, and example, with executable modes where required; it must also reject `__pycache__`, `.pytest_cache`, `*.pyc`, `*.sqlite`, and `*.db`.
+- [ ] First extend `scripts/test/contract/test-release-contract.sh` so it fails unless the archive contains both Strategy executables, config, worker, requirements, Python SDK, and example, with executable modes where required; it must also reject `__pycache__`, `.pytest_cache`, `*.pyc`, `*.sqlite`, and `*.db`.
 - [ ] Add `modules/strategy/proto/strategygen` to `go.work` and Strategy generation to `make proto`.
 - [ ] Add `strategy` and `strategy-cli` targets plus both to `all`. Package only runtime-owned assets and clean generated caches from the archive.
 - [ ] Run:
 
 ```bash
 make proto
-./scripts/build.sh strategy
-./scripts/build.sh strategy-cli
-bash scripts/test-release-contract.sh
-bash -n scripts/build.sh scripts/release.sh scripts/deploy-moox.sh
+./scripts/build/build.sh strategy
+./scripts/build/build.sh strategy-cli
+bash scripts/test/contract/test-release-contract.sh
+bash -n scripts/build/build.sh scripts/release/release.sh scripts/deploy/deploy-moox.sh
 ```
 
 ### Task 6: Deploy, monitor, and route Strategy safely
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Create: `scripts/test-deploy-moox-strategy.sh`
-- Modify: `scripts/test-deploy-moox-preserve-disabled.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Create: `scripts/test/contract/test-deploy-moox-strategy.sh`
+- Modify: `scripts/test/contract/test-deploy-moox-preserve-disabled.sh`
 - Modify applicable deploy profile tests under `scripts/test-deploy-moox-*.sh`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
@@ -132,9 +132,9 @@ bash -n scripts/build.sh scripts/release.sh scripts/deploy-moox.sh
 - [ ] Run all deploy contract tests, not only the new one:
 
 ```bash
-bash scripts/test-deploy-moox-strategy.sh
-bash scripts/test-deploy-moox-eventbus.sh
-bash scripts/test-deploy-moox-preserve-disabled.sh
+bash scripts/test/contract/test-deploy-moox-strategy.sh
+bash scripts/test/contract/test-deploy-moox-eventbus.sh
+bash scripts/test/contract/test-deploy-moox-preserve-disabled.sh
 for test_script in scripts/test-deploy-moox-*.sh; do bash "$test_script"; done
 cd modules/admin
 go test -gcflags=all=-l -ldflags=-s=false ./internal/service/sysdeploy ./cmd/cli -count=1
@@ -150,8 +150,8 @@ go test ./internal/sysdeploy -count=1
 
 ```bash
 go test ./modules/strategy/... ./modules/admin/... ./modules/monitor/...
-./scripts/build.sh all
-VERSION=strategy-plan-check ./scripts/release.sh
+./scripts/build/build.sh all
+VERSION=strategy-plan-check ./scripts/release/release.sh
 tar -tf dist/moox-strategy-plan-check.tar.gz
 ```
 

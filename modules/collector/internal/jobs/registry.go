@@ -9,49 +9,51 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/kline"
-	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
+	resamplejob "github.com/mooyang-code/moox/modules/collector/internal/jobs/resample"
 )
 
-const (
-	JobTypeCollectKline  = "collect.kline"
-	JobTypeCollectSymbol = "collect.symbol"
-)
-
-// Definition describes one collector data type.
-type Definition = jobdef.Definition
+// JobDefinition describes one collector job type.
+type JobDefinition = jobdef.JobDefinition
 
 // FieldDefinition describes one rule form field for a collector data type.
 type FieldDefinition = jobdef.FieldDefinition
 
-var definitions = []Definition{
-	kline.Definition(JobTypeCollectKline),
-	symbol.Definition(JobTypeCollectSymbol),
+type ExecutionMode = jobdef.ExecutionMode
+
+const (
+	ExecutionModeCloudInvoke    = jobdef.ExecutionModeCloudInvoke
+	ExecutionModeCollectorLocal = jobdef.ExecutionModeCollectorLocal
+)
+
+var jobDefinitions = []JobDefinition{
+	kline.NewJobDefinition(),
+	resamplejob.NewJobDefinition(),
 }
 
-// ListDefinitions returns collector data type definitions in UI sort order.
-func ListDefinitions() []Definition {
-	out := make([]Definition, len(definitions))
-	copy(out, definitions)
+// ListJobDefinitions returns collector job definitions in UI sort order.
+func ListJobDefinitions() []JobDefinition {
+	out := make([]JobDefinition, len(jobDefinitions))
+	copy(out, jobDefinitions)
 	return out
 }
 
-// DefinitionByDataType returns one collector data type definition.
-func DefinitionByDataType(dataType string) (Definition, bool) {
+// JobDefinitionByDataType returns one collector job definition.
+func JobDefinitionByDataType(dataType string) (JobDefinition, bool) {
 	dataType = strings.ToLower(strings.TrimSpace(dataType))
-	for _, definition := range definitions {
+	for _, definition := range jobDefinitions {
 		if definition.DataType == dataType {
 			return definition, true
 		}
 	}
-	return Definition{}, false
+	return JobDefinition{}, false
 }
 
 // BuildTaskSpecs dispatches atomic task planning to the matching job definition.
-func BuildTaskSpecs(ctx context.Context, rule *domain.TaskRule, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
+func BuildTaskSpecs(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
 	if params == nil {
 		return nil, fmt.Errorf("collect params are required")
 	}
-	for _, definition := range definitions {
+	for _, definition := range jobDefinitions {
 		if definition.Matches(params) {
 			return definition.Planner(ctx, rule, params, subjects)
 		}

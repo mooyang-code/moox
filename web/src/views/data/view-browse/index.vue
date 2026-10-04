@@ -12,28 +12,46 @@
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
       <a-spin v-else :loading="metaLoading">
+        <a-alert v-if="metaError" type="error" show-icon class="query-alert">
+          {{ metaError }}
+          <a-button type="text" size="mini" :loading="metaLoading" @click="loadMeta">重试</a-button>
+        </a-alert>
         <a-empty v-if="visibleViews.length === 0" :description="props.emptyDescription" />
 
         <template v-else>
-          <section class="view-tabs-row">
-            <a-tabs v-model:active-key="activeViewId" type="rounded" size="medium" class="view-tabs" @change="onViewChange">
+          <section v-if="visibleViews.length > 1" class="view-tabs-row">
+            <a-tabs v-model:active-key="activeViewKey" type="rounded" size="medium" class="view-tabs" @change="onViewChange">
               <a-tab-pane v-for="view in visibleViews" :key="view.view_id" :title="viewDisplayName(view)" />
             </a-tabs>
           </section>
 
-          <section class="view-status-line">
-            <span>{{ currentDatasetName }}</span>
+          <section v-if="!props.hideTechnicalIdentity" class="view-status-line">
+            <span>View: {{ activeView?.view_id || "-" }}</span>
+            <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
             </a-tag>
-            <span>{{ buildTimeText }}</span>
-            <span v-if="activeView?.active_view_version">活跃版本 {{ activeView.active_view_version }}</span>
+            <a-button type="text" size="mini" :loading="rebuildLogsLoading" @click="openRebuildLogs">日志</a-button>
+            <a-button
+              type="text"
+              size="mini"
+              :loading="rebuildRequestLoading"
+              :disabled="!activeView || rebuildPollActive"
+              @click="requestViewRebuild"
+            >
+              <template #icon><icon-refresh /></template>
+              重建视图
+            </a-button>
+            <slot name="status-extra" />
           </section>
 
-          <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
+          <a-alert v-if="queryError" class="query-alert" :type="viewIndexPreparing ? 'warning' : 'error'" show-icon>
+            {{ queryError }}
+            <span v-if="rowsStale">；数据状态待刷新，保留上次查询数据（{{ lastRowsReadAt }}）</span>
+          </a-alert>
           <a-alert v-else-if="hasQueried && !loading && tableRows.length === 0" class="query-alert" type="info" show-icon>
-            当前视图查询成功，但结果为空。
+            {{ props.emptyRowsDescription }}
           </a-alert>
 
           <QueryControls :loading="loading" :mode="mode">
@@ -110,14 +128,14 @@
                 :bordered="{ cell: true }"
                 :loading="loading || contextLoading"
                 :data="tableRows"
-                :pagination="timeSeriesTablePagination"
+                :pagination="false"
                 :scroll="{ x: 'max-content', y: 500 }"
-                @page-change="onPageChange"
-                @page-size-change="onPageSizeChange"
               >
                 <template #columns>
                   <a-table-column title="序号" :width="72" align="center" fixed="left">
-                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
+                    <template #cell="{ rowIndex }">{{
+                      (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1
+                    }}</template>
                   </a-table-column>
                   <a-table-column data-index="key" :width="180" fixed="left">
                     <template #title
@@ -138,6 +156,19 @@
                         >频率<span class="sort-arrows"
                           ><button :class="sortArrowClass('freq', 'asc')" @click.stop="setSort('freq', 'asc')">▲</button
                           ><button :class="sortArrowClass('freq', 'desc')" @click.stop="setSort('freq', 'desc')">▼</button></span
+                        ></span
+                      ></template
+                    >
+                  </a-table-column>
+                  <a-table-column data-index="seriesTag" :width="180">
+                    <template #title
+                      ><span class="sortable-title"
+                        >序列标签<span class="sort-arrows"
+                          ><button :class="sortArrowClass('series_tag', 'asc')" @click.stop="setSort('series_tag', 'asc')">
+                            ▲</button
+                          ><button :class="sortArrowClass('series_tag', 'desc')" @click.stop="setSort('series_tag', 'desc')">
+                            ▼
+                          </button></span
                         ></span
                       ></template
                     >
@@ -179,8 +210,7 @@
                   </a-table-column>
                 </template>
               </a-table>
-              <div v-if="timeSeriesUsesPreviewPager" class="preview-pager">
-                <span class="preview-pager__hint">{{ previewPagerText(VIEW_BROWSE_PREVIEW_LIMIT) }}</span>
+              <div v-if="hasQueried" class="preview-pager">
                 <div class="preview-pager__actions">
                   <a-tooltip content="上一页">
                     <a-button
@@ -193,7 +223,6 @@
                       <template #icon><icon-left /></template>
                     </a-button>
                   </a-tooltip>
-                  <span class="preview-pager__page">第 {{ pagination.current }} 页</span>
                   <a-tooltip content="下一页">
                     <a-button
                       size="small"
@@ -216,14 +245,14 @@
                 :bordered="{ cell: true }"
                 :loading="loading || contextLoading"
                 :data="tableRows"
-                :pagination="tablePagination"
+                :pagination="false"
                 :scroll="{ x: 'max-content', y: 460 }"
-                @page-change="onPageChange"
-                @page-size-change="onPageSizeChange"
               >
                 <template #columns>
                   <a-table-column title="序号" :width="72" align="center" fixed="left">
-                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
+                    <template #cell="{ rowIndex }">{{
+                      (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1
+                    }}</template>
                   </a-table-column>
                   <a-table-column data-index="key" :width="200" fixed="left">
                     <template #title
@@ -274,6 +303,32 @@
                   </a-table-column>
                 </template>
               </a-table>
+              <div v-if="hasQueried" class="preview-pager">
+                <div class="preview-pager__actions">
+                  <a-tooltip content="上一页">
+                    <a-button
+                      size="small"
+                      shape="circle"
+                      :disabled="pagination.current <= 1 || loading || contextLoading"
+                      aria-label="上一页"
+                      @click="onPreviewPrevPage"
+                    >
+                      <template #icon><icon-left /></template>
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip content="下一页">
+                    <a-button
+                      size="small"
+                      shape="circle"
+                      :disabled="!previewHasMore || loading || contextLoading"
+                      aria-label="下一页"
+                      @click="onPreviewNextPage"
+                    >
+                      <template #icon><icon-right /></template>
+                    </a-button>
+                  </a-tooltip>
+                </div>
+              </div>
             </section>
           </ResultTable>
 
@@ -297,6 +352,39 @@
       </div>
     </a-modal>
 
+    <a-modal v-model:visible="rebuildLogsVisible" title="视图构建日志" width="960px" :footer="false">
+      <a-spin :loading="rebuildLogsLoading">
+        <a-empty v-if="rebuildLogs.length === 0" description="暂无构建日志" />
+        <a-table v-else :data="rebuildLogs" :pagination="false" :bordered="{ cell: true }" size="small">
+          <template #columns>
+            <a-table-column title="时间" :width="180">
+              <template #cell="{ record }">{{
+                formatRebuildLogTime(record.finished_at || record.created_at || record.started_at)
+              }}</template>
+            </a-table-column>
+            <a-table-column title="原因" :width="130">
+              <template #cell="{ record }">{{ rebuildReasonLabel(record.trigger_reason) }}</template>
+            </a-table-column>
+            <a-table-column title="结果" :width="100">
+              <template #cell="{ record }">{{ rebuildResultLabel(record.result) }}</template>
+            </a-table-column>
+            <a-table-column title="耗时" :width="90">
+              <template #cell="{ record }">{{ rebuildLogDuration(record) }}</template>
+            </a-table-column>
+            <a-table-column title="写入行数" :width="100">
+              <template #cell="{ record }">{{ record.entries_written || 0 }}</template>
+            </a-table-column>
+            <a-table-column title="详情" :ellipsis="true" :tooltip="true">
+              <template #cell="{ record }">{{ rebuildLogDetail(record) }}</template>
+            </a-table-column>
+          </template>
+        </a-table>
+        <div v-if="rebuildLogsPage.has_more" class="rebuild-logs-more">
+          <a-button size="small" :loading="rebuildLogsLoading" @click="loadMoreRebuildLogs">加载更多</a-button>
+        </div>
+      </a-spin>
+    </a-modal>
+
     <KlineModal
       v-model:visible="klineVisible"
       v-model:limit="klineLimit"
@@ -310,21 +398,28 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
-import { listDatasetColumns, listDatasets, listFactors, listFields, listViewColumns, listViews } from "@/api/storage/metadata";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { Message, Modal } from "@arco-design/web-vue";
+import {
+  listDatasetColumns,
+  listDatasets,
+  listFields,
+  listViewColumns,
+  listViewRebuildLogs,
+  listViews,
+  requestViewRebuild as requestViewRebuildTask
+} from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
 import type {
   Dataset,
   DatasetColumn,
-  Factor,
   Field,
   FieldValueType,
-  PageResult,
   RecordRow,
   TimeSeriesRow,
   View,
-  ViewColumn
+  ViewColumn,
+  ViewRebuildLog
 } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import {
@@ -338,15 +433,16 @@ import {
   buildKlineChartRecords,
   buildKlineQuerySorts,
   buildViewColumnLabels,
+  buildViewFilterFieldOptions,
   buildViewFilterExprs,
   buildViewSorts,
+  type ViewFilterFieldOption,
   DEFAULT_KLINE_LIMIT,
+  exactSeriesTagFromFilters,
   klineRowsHaveFreq,
   klineSubjectIdFromFilters,
   normalizeKlineLimit,
-  previewPagerText,
   type KlineChartRecord,
-  usesPreviewPager,
   viewDisplayName,
   viewModeFromPrimaryDataset,
   type ViewFilterOperator,
@@ -360,10 +456,10 @@ import {
   type OwnerModule,
   type ViewRole
 } from "@/views/data/shared/module-attribution";
-import { viewBuildTimeLabel } from "./view-build-time";
 import KlineModal from "./kline-modal.vue";
 import QueryControls from "./components/query-controls.vue";
 import ResultTable from "./components/result-table.vue";
+import { loadTargetedViewCatalog } from "./composables/view-browse-catalog";
 
 defineOptions({ name: "DataViewBrowse" });
 
@@ -372,42 +468,56 @@ const props = withDefaults(
     embedded?: boolean;
     pageTitle?: string;
     emptyDescription?: string;
+    emptyRowsDescription?: string;
     allowedPrimaryDatasetIds?: string[];
     excludedPrimaryDatasetIds?: string[];
     viewOwnerModules?: OwnerModule[];
     viewRoles?: ViewRole[];
     includeUnowned?: boolean;
     excludeLikelyFactorDatasets?: boolean;
+    autoRefreshIntervalMs?: number;
+    viewIds?: string[];
+    activeViewId?: string;
+    refreshKey?: number;
+    hideTechnicalIdentity?: boolean;
   }>(),
   {
     embedded: false,
     pageTitle: "视图数据浏览",
     emptyDescription: "暂无查询视图",
+    emptyRowsDescription: "当前视图查询成功，但结果为空。",
     allowedPrimaryDatasetIds: undefined,
     excludedPrimaryDatasetIds: undefined,
     viewOwnerModules: undefined,
     viewRoles: undefined,
     includeUnowned: false,
-    excludeLikelyFactorDatasets: false
+    excludeLikelyFactorDatasets: false,
+    autoRefreshIntervalMs: 0,
+    viewIds: undefined,
+    activeViewId: "",
+    refreshKey: 0,
+    hideTechnicalIdentity: false
   }
 );
 
 type ViewBrowseTableRow = BrowseTableRow & { freq?: string };
-type FilterFieldOption = { label: string; value: string; valueType: FieldValueType };
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 
 const views = ref<View[]>([]);
 const datasets = ref<Dataset[]>([]);
+const targetedViewIds = computed(() => [...new Set((props.viewIds || []).map(viewId => viewId.trim()).filter(Boolean))]);
 const datasetById = computed(() => new Map(datasets.value.map(item => [item.dataset_id, item])));
 const visibleViews = computed(() => {
+  const allowedViewIds = new Set(targetedViewIds.value);
   const allowedPrimaryDatasetIds = props.allowedPrimaryDatasetIds || [];
   const allowedPrimary = new Set(allowedPrimaryDatasetIds.filter(Boolean));
   const excludedPrimary = new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean));
   return views.value.filter(view => {
-    const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(view.primary_dataset_id);
-    if (!matchedByDataset && excludedPrimary.has(view.primary_dataset_id)) {
+    if (allowedViewIds.size > 0) return allowedViewIds.has(view.view_id);
+    const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(view.dataset_id);
+    if (!matchedByDataset && excludedPrimary.has(view.dataset_id)) {
       return false;
     }
     if (props.excludeLikelyFactorDatasets && !matchedByDataset && viewUsesLikelyFactorDataset(view)) {
@@ -429,38 +539,71 @@ const visibleViews = computed(() => {
 });
 const viewColumns = ref<ViewColumn[]>([]);
 const datasetColumns = ref<DatasetColumn[]>([]);
+let metaLoadSequence = 0;
+let viewContextSequence = 0;
+let viewRowsRequestSequence = 0;
 const fields = ref<Field[]>([]);
-const factors = ref<Factor[]>([]);
-const activeViewId = ref("");
+const activeViewKey = ref("");
 const tableRows = ref<ViewBrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
 const detailRow = ref<ViewBrowseTableRow>();
 const detailVisible = ref(false);
+const rebuildLogsVisible = ref(false);
+const rebuildLogsLoading = ref(false);
+const rebuildLogs = ref<ViewRebuildLog[]>([]);
+const rebuildLogsPage = ref<{ page?: number; has_more: boolean }>({ has_more: false });
+const rebuildLogsRequestId = ref(0);
+const rebuildRequestLoading = ref(false);
+// Keep the action disabled for the whole asynchronous build, not just the
+// short HTTP request. A second request would advance desired_view_revision
+// and make the first A/B build stale.
+const rebuildPollActive = ref(false);
+const rebuildPollRevision = ref(0);
+let rebuildPollTimer: ReturnType<typeof setTimeout> | undefined;
+let rebuildPollDeadline = 0;
+let rebuildPollToken = 0;
 const recordKeyword = ref("");
 const filters = ref<ViewFilterState[]>([]);
-const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "", direction: "" });
+// Time-series previews should answer the operational question first: what is
+// the newest bar?  Without an explicit sort DuckDB returns index order, which
+// can leave the first page showing an old bar even while ingestion is healthy.
+const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "data_time", direction: "desc" });
 const metaLoading = ref(false);
+const metaError = ref("");
 const contextLoading = ref(false);
 const loading = ref(false);
+const pendingRowsRefresh = ref(false);
+const rowsStale = ref(false);
+const lastRowsReadAt = ref("");
 const queryError = ref("");
+const queryErrorIsPreparing = ref(false);
+const viewIndexPreparing = computed(() => queryErrorIsPreparing.value);
+function isViewIndexNotReadyError(value: string) {
+  return /view index .* is not prepared: view index not ready/i.test(value);
+}
+
+function viewQueryErrorMessage(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : fallback;
+  queryErrorIsPreparing.value = isViewIndexNotReadyError(message);
+  return queryErrorIsPreparing.value ? "视图创建中，索引就绪后请刷新查看。" : message;
+}
+
 const hasQueried = ref(false);
 const previewHasMore = ref(false);
-const timeSeriesPageResult = ref<PageResult>();
 const klineVisible = ref(false);
 const klineSubjectId = ref("");
 const klineFreq = ref("");
 const klineRecords = ref<KlineChartRecord[]>([]);
 const klineLoading = ref(false);
 const klineLimit = ref(DEFAULT_KLINE_LIMIT);
-const VIEW_BROWSE_PREVIEW_LIMIT = 1000;
-const VIEW_BROWSE_PREVIEW_WINDOW_DAYS = 7;
+let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
+const VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS = 24;
+const VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS = 7;
 const DEFAULT_VIEW_PAGE_SIZE = 25;
 const KLINE_COLUMN_BASENAMES = ["open_time", "open", "high", "low", "close", "volume"];
 
 const pagination = reactive({
-  current: 1,
-  pageSize: DEFAULT_VIEW_PAGE_SIZE,
-  total: 0
+  current: 1
 });
 
 const filterOperatorOptions: Array<{ label: string; value: ViewFilterOperator }> = [
@@ -488,37 +631,27 @@ const filterOperatorSymbols: Record<ViewFilterOperator, string> = {
   not_empty: "Ø"
 };
 
-const activeView = computed(() => visibleViews.value.find(item => item.view_id === activeViewId.value));
-const buildTimeText = computed(() => viewBuildTimeLabel(activeView.value));
-const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === activeView.value?.primary_dataset_id));
+const activeView = computed(() => visibleViews.value.find(item => item.view_id === activeViewKey.value));
+const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === activeView.value?.dataset_id));
 const currentDatasetName = computed(() => {
   const dataset = primaryDataset.value;
-  if (!dataset) return activeView.value?.primary_dataset_id || "-";
-  return dataset.name ? `${dataset.name} (${dataset.dataset_id})` : dataset.dataset_id;
+  if (!dataset) return "-";
+  return dataset.name || dataset.dataset_id;
 });
+const currentDatasetId = computed(() => activeView.value?.dataset_id || "-");
 
-const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.primary_dataset_id));
+const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.dataset_id));
 const modeText = computed(() => {
   if (mode.value === "time_series") return "时序视图 / DuckDB";
   if (mode.value === "record") return "记录视图 / Bleve";
   return "未知类型";
 });
 
-const tablePagination = computed(() => ({
-  current: pagination.current,
-  pageSize: pagination.pageSize,
-  total: pagination.total,
-  showTotal: true,
-  showPageSize: true,
-  showJumper: true,
-  hideOnSinglePage: false,
-  pageSizeOptions: [25, 50, 100, 200]
-}));
-
-const timeSeriesUsesPreviewPager = computed(() => usesPreviewPager(timeSeriesPageResult.value));
-const timeSeriesTablePagination = computed(() => (timeSeriesUsesPreviewPager.value ? false : tablePagination.value));
-
-const preferredColumnNames = computed(() => viewColumns.value.map(item => item.column_name).filter(Boolean));
+const explicitViewColumnNames = computed(() => viewColumns.value.map(item => item.column_name).filter(Boolean));
+const datasetColumnNames = computed(() => datasetColumns.value.map(item => item.column_name).filter(Boolean));
+const preferredColumnNames = computed(() =>
+  explicitViewColumnNames.value.length > 0 ? explicitViewColumnNames.value : datasetColumnNames.value
+);
 const klineColumnNames = computed(() => {
   const names = preferredColumnNames.value;
   const out: string[] = [];
@@ -528,30 +661,23 @@ const klineColumnNames = computed(() => {
   }
   return out;
 });
-const columnLabels = computed(() =>
-  buildViewColumnLabels(viewColumns.value, datasetColumns.value, fields.value, factors.value, datasets.value, activeView.value)
-);
-const filterFieldOptions = computed(() => {
-  const options: FilterFieldOption[] = [];
-  const seen = new Set<string>();
-  const push = (value: string, label: string, valueType: FieldValueType) => {
-    if (!value || seen.has(value)) return;
-    seen.add(value);
-    options.push({ value, label, valueType });
-  };
-  if (mode.value === "time_series") {
-    push("subject_id", "数据ID", "FIELD_VALUE_TYPE_STRING");
-    push("freq", "频率", "FIELD_VALUE_TYPE_STRING");
-    push("data_time", "时间", "FIELD_VALUE_TYPE_TIME");
-  } else if (mode.value === "record") {
-    push("record_id", "记录ID", "FIELD_VALUE_TYPE_STRING");
-    push("version", "版本", "FIELD_VALUE_TYPE_STRING");
+const columnLabels = computed(() => {
+  const labels = buildViewColumnLabels(
+    viewColumns.value,
+    datasetColumns.value,
+    fields.value,
+    datasets.value,
+    activeView.value
+  );
+  for (const column of datasetColumns.value) {
+    if (!column.column_name || labels[column.column_name]) continue;
+    labels[column.column_name] = column.attributes?.display_name?.trim() || column.column_name;
   }
-  for (const column of viewColumns.value) {
-    push(column.column_name, columnTitle(column.column_name), column.value_type || "FIELD_VALUE_TYPE_STRING");
-  }
-  return options;
+  return labels;
 });
+const filterFieldOptions = computed(() =>
+  buildViewFilterFieldOptions(mode.value, viewColumns.value, datasetColumns.value, columnLabels.value)
+);
 const detailColumns = computed(() => {
   const row = detailRow.value;
   if (!row) return [];
@@ -560,28 +686,275 @@ const detailColumns = computed(() => {
 });
 const normalizedKlineLimit = computed(() => normalizeKlineLimit(klineLimit.value));
 
-async function loadMeta() {
+const rebuildReasonLabels: Record<string, string> = {
+  "1": "首次构建",
+  "2": "定义变更",
+  "3": "活跃索引缺失",
+  "4": "活跃索引异常",
+  "5": "覆盖修复",
+  "6": "容量限制",
+  "7": "手动修复",
+  "8": "中断重试",
+  "9": "序列容量维护",
+  VIEW_REBUILD_TRIGGER_INITIAL_BUILD: "首次构建",
+  VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE: "定义变更",
+  VIEW_REBUILD_TRIGGER_ACTIVE_MISSING: "活跃索引缺失",
+  VIEW_REBUILD_TRIGGER_ACTIVE_INVALID: "活跃索引异常",
+  VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR: "覆盖修复",
+  VIEW_REBUILD_TRIGGER_SIZE_LIMIT: "容量限制",
+  VIEW_REBUILD_TRIGGER_SERIES_CAPACITY: "序列容量维护",
+  VIEW_REBUILD_TRIGGER_MANUAL_REPAIR: "手动修复",
+  VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY: "中断重试"
+};
+const rebuildResultLabels: Record<string, string> = {
+  "1": "进行中",
+  "2": "成功",
+  "3": "失败",
+  "4": "已跳过",
+  VIEW_REBUILD_RESULT_RUNNING: "进行中",
+  VIEW_REBUILD_RESULT_SUCCEEDED: "成功",
+  VIEW_REBUILD_RESULT_FAILED: "失败",
+  VIEW_REBUILD_RESULT_SKIPPED: "已跳过"
+};
+function isRunningRebuildLog(log: ViewRebuildLog) {
+  return Number(log.result) === 1 || log.result === "VIEW_REBUILD_RESULT_RUNNING";
+}
+
+function rebuildReasonLabel(value: number | string) {
+  return rebuildReasonLabels[String(value)] || "未知原因";
+}
+function rebuildResultLabel(value: number | string) {
+  return rebuildResultLabels[String(value)] || "未知";
+}
+const rebuildPhaseLabels: Record<string, string> = {
+  maintenance: "视图维护",
+  prepare: "准备索引",
+  backfill: "回溯写入",
+  catch_up: "追平实时数据",
+  activate: "切换索引",
+  completed: "已完成",
+  interrupted: "中断清理",
+  preflight: "前置检查"
+};
+function rebuildLogPhase(log: ViewRebuildLog) {
+  if (!log.details_json) return "";
+  try {
+    const details = JSON.parse(log.details_json) as { phase?: string };
+    return details.phase ? rebuildPhaseLabels[details.phase] || details.phase : "";
+  } catch {
+    return "";
+  }
+}
+function formatRebuildLogTime(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN");
+}
+function rebuildLogDetail(log: ViewRebuildLog) {
+  if (log.result === 4 || String(log.result) === "4" || log.result === "VIEW_REBUILD_RESULT_SKIPPED") {
+    return `${log.block_reason || "等待前置条件"}${Number(log.skip_count || 0) > 1 ? `（${log.skip_count} 次）` : ""}`;
+  }
+  if (String(log.trigger_reason) === "9" || log.trigger_reason === "VIEW_REBUILD_TRIGGER_SERIES_CAPACITY") {
+    try {
+      const details = JSON.parse(log.details_json || "{}") as {
+        subject_id?: string;
+        frequency?: string;
+        series_tag?: string;
+        observed_periods?: number;
+        max_periods_per_series?: number;
+        rebuild_lookback_periods?: number;
+      };
+      if (details.subject_id) {
+        const series = [details.subject_id, details.frequency, details.series_tag || "-"].filter(Boolean).join(" · ");
+        const observed = details.observed_periods || 0;
+        const max = details.max_periods_per_series || 0;
+        const lookback = details.rebuild_lookback_periods || max;
+        return `${series}：${observed} / ${max} 根，重建后保留 ${lookback} 根`;
+      }
+    } catch {
+      // Keep the generic phase/error text for legacy or malformed details.
+    }
+  }
+  if (log.error_summary) return log.error_summary;
+  const phase = rebuildLogPhase(log);
+  if (phase) return phase;
+  return log.finished_at && log.started_at ? `写入 ${log.entries_written || 0} 条` : "构建中";
+}
+function rebuildLogDuration(log: ViewRebuildLog) {
+  if (!log.started_at || !log.finished_at) return "-";
+  const durationMs = new Date(log.finished_at).valueOf() - new Date(log.started_at).valueOf();
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "-";
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+async function openRebuildLogs(reset = true, showModal = true) {
+  const view = activeView.value;
   const space_id = selectedSpaceId.value;
-  if (!space_id) return;
+  if (!view || !space_id) return;
+  const requestId = ++rebuildLogsRequestId.value;
+  if (showModal) rebuildLogsVisible.value = true;
+  rebuildLogsLoading.value = true;
+  if (reset) {
+    rebuildLogs.value = [];
+    rebuildLogsPage.value = { has_more: false };
+  }
+  try {
+    const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: 1, size: 100 } });
+    if (
+      requestId !== rebuildLogsRequestId.value ||
+      activeView.value?.view_id !== view.view_id ||
+      selectedSpaceId.value !== space_id
+    )
+      return;
+    rebuildLogs.value = rsp.logs || [];
+    rebuildLogsPage.value = rsp.page_result || { has_more: false };
+  } catch (error) {
+    if (requestId !== rebuildLogsRequestId.value) return;
+    rebuildLogs.value = [];
+    Message.error(error instanceof Error ? error.message : "加载构建日志失败");
+  } finally {
+    if (requestId === rebuildLogsRequestId.value) rebuildLogsLoading.value = false;
+  }
+}
+
+function stopRebuildPolling() {
+  if (rebuildPollTimer) {
+    clearTimeout(rebuildPollTimer);
+    rebuildPollTimer = undefined;
+  }
+  rebuildPollToken += 1;
+}
+
+function scheduleRebuildLogPolling() {
+  if (rebuildPollTimer || Date.now() >= rebuildPollDeadline) return;
+  const token = rebuildPollToken;
+  rebuildPollTimer = setTimeout(async () => {
+    rebuildPollTimer = undefined;
+    if (token !== rebuildPollToken) return;
+    await openRebuildLogs(false, false);
+    if (token !== rebuildPollToken) return;
+    const revision = rebuildPollRevision.value;
+    const current =
+      rebuildLogs.value.find(log => Number(log.target_view_revision || 0) === revision) ||
+      rebuildLogs.value.find(log => Number(log.target_view_revision || 0) > revision);
+    if (current && !isRunningRebuildLog(current)) {
+      if (current.result === 2 || current.result === "2" || current.result === "VIEW_REBUILD_RESULT_SUCCEEDED") {
+        await loadMeta();
+      }
+      rebuildPollActive.value = false;
+      return;
+    }
+    if (Date.now() >= rebuildPollDeadline) {
+      rebuildPollActive.value = false;
+      Message.warning("重建任务仍在后台运行，可在日志中查看最新进度");
+      return;
+    }
+    scheduleRebuildLogPolling();
+  }, 2000);
+}
+
+async function requestViewRebuild() {
+  const view = activeView.value;
+  const space_id = selectedSpaceId.value;
+  if (!view || !space_id || rebuildRequestLoading.value) return;
+  Modal.confirm({
+    title: "确认重建视图",
+    content: "将异步创建新的 A/B 索引。当前视图仍保持可读，完成后新索引会自动切换生效。是否继续？",
+    okText: "开始重建",
+    cancelText: "取消",
+    onOk: async () => {
+      rebuildRequestLoading.value = true;
+      try {
+        const rsp = await requestViewRebuildTask({ space_id, view_id: view.view_id });
+        rebuildPollRevision.value = Number(rsp.view?.desired_view_revision || 0);
+        stopRebuildPolling();
+        rebuildPollDeadline = Date.now() + 15 * 60 * 1000;
+        rebuildPollActive.value = true;
+        Message.success("已提交重建任务");
+        await openRebuildLogs();
+        scheduleRebuildLogPolling();
+      } catch (error) {
+        Message.error(error instanceof Error ? error.message : "提交视图重建失败");
+        throw error;
+      } finally {
+        rebuildRequestLoading.value = false;
+      }
+    }
+  });
+}
+
+async function loadMoreRebuildLogs() {
+  const view = activeView.value;
+  const space_id = selectedSpaceId.value;
+  if (!view || !space_id || !rebuildLogsPage.value.has_more || rebuildLogsLoading.value) return;
+  const requestId = rebuildLogsRequestId.value;
+  const nextPage = (rebuildLogsPage.value.page || 1) + 1;
+  rebuildLogsLoading.value = true;
+  try {
+    const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: nextPage, size: 100 } });
+    if (
+      requestId !== rebuildLogsRequestId.value ||
+      activeView.value?.view_id !== view.view_id ||
+      selectedSpaceId.value !== space_id
+    )
+      return;
+    rebuildLogs.value = rebuildLogs.value.concat(rsp.logs || []);
+    rebuildLogsPage.value = rsp.page_result || { has_more: false };
+  } catch (error) {
+    if (requestId === rebuildLogsRequestId.value) Message.error(error instanceof Error ? error.message : "加载构建日志失败");
+  } finally {
+    if (requestId === rebuildLogsRequestId.value) rebuildLogsLoading.value = false;
+  }
+}
+
+async function loadMeta() {
+  const sequence = ++metaLoadSequence;
+  const space_id = selectedSpaceId.value;
+  if (!space_id) {
+    metaLoading.value = false;
+    metaError.value = "";
+    return;
+  }
   metaLoading.value = true;
+  metaError.value = "";
   try {
     const page = { page: 1, size: 1000 };
-    const [viewItems, datasetItems, fieldRsp, factorRsp] = await Promise.all([
-      listAllViews(space_id),
-      listAllDatasets(space_id),
-      listFields({ space_id, page }),
-      listFactors({ space_id, page })
-    ]);
-    views.value = viewItems;
-    datasets.value = datasetItems;
-    fields.value = fieldRsp.fields || [];
-    factors.value = factorRsp.factors || [];
+    // Views and Datasets are required to render the first result page. Fields
+    // only decorate labels and can arrive afterwards; keeping them out of this
+    // critical path avoids making a slow metadata read delay the actual query.
+    if (targetedViewIds.value.length > 0) {
+      const catalog = await loadTargetedViewCatalog(space_id, targetedViewIds.value);
+      if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
+      views.value = catalog.views;
+      datasets.value = catalog.datasets;
+    } else {
+      const [viewItems, datasetItems] = await Promise.all([listAllViews(space_id), listAllDatasets(space_id)]);
+      if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
+      views.value = viewItems;
+      datasets.value = datasetItems;
+    }
     ensureSelectedView();
     await loadViewContext();
+
+    // These requests are intentionally best-effort. A label catalogue outage
+    // must not hide already loaded rows or turn a usable data browser into a
+    // blocking spinner.
+    void listFields({ space_id, page })
+      .then(fieldRsp => {
+        if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
+        fields.value = fieldRsp.fields || [];
+      })
+      .catch(error => {
+        console.warn("加载字段标签失败", error);
+      });
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "加载视图失败");
+    if (sequence === metaLoadSequence) {
+      metaError.value = error instanceof Error ? error.message : "加载视图失败";
+      Message.error(metaError.value);
+    }
   } finally {
-    metaLoading.value = false;
+    if (sequence === metaLoadSequence) metaLoading.value = false;
   }
 }
 
@@ -610,32 +983,74 @@ async function listAllDatasets(spaceId: string) {
 }
 
 function viewUsesLikelyFactorDataset(view: View) {
-  const dataset = datasetById.value.get(view.primary_dataset_id);
+  const dataset = datasetById.value.get(view.dataset_id);
   if (dataset) {
     return isLikelyFactorResultDataset(dataset);
   }
-  return isLikelyFactorResultDatasetId(view.primary_dataset_id);
+  return isLikelyFactorResultDatasetId(view.dataset_id);
 }
 
 function ensureSelectedView() {
   if (!visibleViews.value.length) {
-    activeViewId.value = "";
+    activeViewKey.value = "";
     return;
   }
-  if (!activeViewId.value || !visibleViews.value.some(item => item.view_id === activeViewId.value)) {
-    activeViewId.value = visibleViews.value[0].view_id;
+  const requestedViewId = props.activeViewId || activeViewKey.value;
+  if (requestedViewId && visibleViews.value.some(item => item.view_id === requestedViewId)) {
+    activeViewKey.value = requestedViewId;
+  } else if (!activeViewKey.value || !visibleViews.value.some(item => item.view_id === activeViewKey.value)) {
+    activeViewKey.value = visibleViews.value[0].view_id;
   }
 }
 
 watch(
   () => visibleViews.value.map(item => item.view_id).join("|"),
   async () => {
-    const current = activeViewId.value;
+    const current = activeViewKey.value;
     ensureSelectedView();
-    if (activeViewId.value !== current) {
+    if (activeViewKey.value !== current) {
       clearViewState();
       await loadViewContext();
     }
+  }
+);
+
+watch(
+  () => props.activeViewId,
+  () => {
+    const current = activeViewKey.value;
+    ensureSelectedView();
+    if (activeViewKey.value !== current) {
+      clearViewState();
+      void loadViewContext();
+    }
+  }
+);
+
+watch(
+  () => targetedViewIds.value.join("\u0000"),
+  (next, previous) => {
+    if (next === previous) return;
+    views.value = [];
+    datasets.value = [];
+    activeViewKey.value = "";
+    clearViewState();
+    void loadMeta();
+  }
+);
+
+watch(() => props.refreshKey, () => {
+  void refreshRowsInBackground();
+});
+
+// Coalesce requests during a query/context load into a follow-up read instead
+// of silently dropping the user's refresh while the browser is busy.
+watch(
+  [pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeView.value?.view_id],
+  () => {
+    if (!pendingRowsRefresh.value || !activeView.value || loading.value || contextLoading.value || metaLoading.value) return;
+    pendingRowsRefresh.value = false;
+    void reloadRows(true);
   }
 );
 
@@ -645,6 +1060,10 @@ async function onViewChange() {
 }
 
 function clearViewState() {
+  viewContextSequence += 1;
+  viewRowsRequestSequence += 1;
+  contextLoading.value = false;
+  loading.value = false;
   viewColumns.value = [];
   datasetColumns.value = [];
   tableRows.value = [];
@@ -654,57 +1073,86 @@ function clearViewState() {
   detailRow.value = undefined;
   closeKlineModal();
   queryError.value = "";
+  rowsStale.value = false;
+  lastRowsReadAt.value = "";
   hasQueried.value = false;
   previewHasMore.value = false;
-  timeSeriesPageResult.value = undefined;
   pagination.current = 1;
-  pagination.total = 0;
+  rebuildLogsVisible.value = false;
+  rebuildLogs.value = [];
+  rebuildLogsRequestId.value += 1;
+  stopRebuildPolling();
+  rebuildPollActive.value = false;
 }
 
 async function loadViewContext() {
+  const requestSequence = ++viewContextSequence;
   const space_id = selectedSpaceId.value;
   const view = activeView.value;
-  if (!space_id || !view) return;
+  if (!space_id || !view) {
+    contextLoading.value = false;
+    return;
+  }
 
   contextLoading.value = true;
   try {
-    const columnsRsp = await listViewColumns({ space_id, view_id: view.view_id, page: { page: 1, size: 1000 } });
+    const contextViewId = view.view_id;
+    const isCurrent = () =>
+      requestSequence === viewContextSequence &&
+      selectedSpaceId.value === space_id &&
+      activeView.value?.view_id === contextViewId;
+    const datasetColumnsPromise = loadDatasetColumns(space_id, view).catch(error => {
+      console.warn("加载数据集列失败", error);
+      return [] as DatasetColumn[];
+    });
+    const columnsRsp = await listViewColumns({ space_id, view_id: contextViewId, page: { page: 1, size: 1000 } });
+    if (!isCurrent()) return;
     viewColumns.value = columnsRsp.columns || [];
-    await loadDatasetColumns(space_id, view);
+    const loadedDatasetColumns = await datasetColumnsPromise;
+    if (!isCurrent()) return;
+    datasetColumns.value = loadedDatasetColumns;
     resetFilterRows();
     resetSortState();
     await reloadRows();
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "加载视图上下文失败");
+    if (requestSequence === viewContextSequence) {
+      Message.error(error instanceof Error ? error.message : "加载视图上下文失败");
+    }
   } finally {
-    contextLoading.value = false;
+    if (requestSequence === viewContextSequence) contextLoading.value = false;
   }
 }
 
 async function loadDatasetColumns(space_id: string, view: View) {
-  const datasetIds = new Set([view.primary_dataset_id, ...(view.dataset_ids || [])].filter(Boolean));
+  const datasetIds = new Set([view.dataset_id].filter(Boolean));
   const results = await Promise.all(
     Array.from(datasetIds).map(dataset_id => listDatasetColumns({ space_id, dataset_id, page: { page: 1, size: 1000 } }))
   );
-  datasetColumns.value = results.flatMap(rsp => rsp.columns || []);
+  return results.flatMap(rsp => rsp.columns || []);
 }
 
-async function reloadRows() {
-  tableColumnNames.value = preferredColumnNames.value;
+async function reloadRows(retainRowsOnError = false) {
+  if (!retainRowsOnError || !lastRowsReadAt.value) tableColumnNames.value = preferredColumnNames.value;
   if (!activeView.value) return;
   if (mode.value === "time_series") {
-    await loadTimeSeriesViewRows();
+    await loadTimeSeriesViewRows(retainRowsOnError);
     return;
   }
   if (mode.value === "record") {
-    await loadRecordViewRows();
+    await loadRecordViewRows(retainRowsOnError);
   }
 }
 
-async function loadTimeSeriesViewRows() {
+async function refreshRowsInBackground() {
+  pendingRowsRefresh.value = true;
+  if (!activeView.value && !metaLoading.value) await loadMeta();
+}
+
+async function loadTimeSeriesViewRows(retainRowsOnError = false) {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
   if (!view) return;
+  const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
   queryError.value = "";
   try {
@@ -713,40 +1161,57 @@ async function loadTimeSeriesViewRows() {
       space_id,
       view_id: view.view_id,
       ...(timeRange ? { time_range: timeRange } : {}),
-      ...(preferredColumnNames.value.length > 0 ? { column_names: preferredColumnNames.value } : {}),
-      filters: activeFilterExprs(),
+      ...(explicitViewColumnNames.value.length > 0 ? { column_names: explicitViewColumnNames.value } : {}),
+      filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
-      limit: VIEW_BROWSE_PREVIEW_LIMIT,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
       total_mode: "NONE"
     });
+    if (
+      requestSequence !== viewRowsRequestSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeView.value?.view_id !== view.view_id
+    ) {
+      return;
+    }
     const rows = rsp.rows || [];
     tableRows.value = timeSeriesRowsToTableRows(rows).map((row, index) => ({
       ...row,
-      freq: rows[index]?.key?.freq || "-"
+      freq: rows[index]?.key?.freq || "-",
+      seriesTag: rows[index]?.key?.series_tag || ""
     }));
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
-    timeSeriesPageResult.value = rsp.page_result;
     previewHasMore.value = !!rsp.page_result?.has_more;
-    pagination.total = usesPreviewPager(rsp.page_result) ? 0 : (rsp.page_result?.total ?? rows.length);
     hasQueried.value = true;
+    rowsStale.value = false;
+    lastRowsReadAt.value = new Date().toLocaleTimeString();
   } catch (error) {
-    queryError.value = error instanceof Error ? error.message : "查询时序视图失败";
-    tableRows.value = [];
-    pagination.total = 0;
-    previewHasMore.value = false;
-    timeSeriesPageResult.value = undefined;
+    if (
+      requestSequence !== viewRowsRequestSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeView.value?.view_id !== view.view_id
+    ) {
+      return;
+    }
+    queryError.value = viewQueryErrorMessage(error, "查询时序视图失败");
+    rowsStale.value = retainRowsOnError && !!lastRowsReadAt.value;
+    if (!rowsStale.value) {
+      tableRows.value = [];
+      previewHasMore.value = false;
+      lastRowsReadAt.value = "";
+    }
     hasQueried.value = true;
-    Message.error(queryError.value);
+    if (!viewIndexPreparing.value) Message.error(queryError.value);
   } finally {
-    loading.value = false;
+    if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
 }
 
-async function loadRecordViewRows() {
+async function loadRecordViewRows(retainRowsOnError = false) {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
   if (!view) return;
+  const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
   queryError.value = "";
   try {
@@ -754,27 +1219,43 @@ async function loadRecordViewRows() {
       space_id,
       view_id: view.view_id,
       text_query: recordKeyword.value.trim(),
-      filters: activeFilterExprs(),
+      filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
-      page: { page: pagination.current, size: pagination.pageSize }
+      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
     });
+    if (
+      requestSequence !== viewRowsRequestSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeView.value?.view_id !== view.view_id
+    ) {
+      return;
+    }
     const rows = rsp.rows || [];
     tableRows.value = recordRowsToTableRows(rows);
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
-    pagination.total = rsp.page_result?.total ?? rows.length;
-    previewHasMore.value = false;
-    timeSeriesPageResult.value = undefined;
+    previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
+    rowsStale.value = false;
+    lastRowsReadAt.value = new Date().toLocaleTimeString();
   } catch (error) {
-    queryError.value = error instanceof Error ? error.message : "查询记录视图失败";
-    tableRows.value = [];
-    pagination.total = 0;
-    previewHasMore.value = false;
-    timeSeriesPageResult.value = undefined;
+    if (
+      requestSequence !== viewRowsRequestSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeView.value?.view_id !== view.view_id
+    ) {
+      return;
+    }
+    queryError.value = viewQueryErrorMessage(error, "查询记录视图失败");
+    rowsStale.value = retainRowsOnError && !!lastRowsReadAt.value;
+    if (!rowsStale.value) {
+      tableRows.value = [];
+      previewHasMore.value = false;
+      lastRowsReadAt.value = "";
+    }
     hasQueried.value = true;
-    Message.error(queryError.value);
+    if (!viewIndexPreparing.value) Message.error(queryError.value);
   } finally {
-    loading.value = false;
+    if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
 }
 
@@ -797,6 +1278,13 @@ async function resetQueryControls() {
 }
 
 function resetSortState() {
+  // Results are time-series data. Show the newest calculated period first so
+  // an old first page cannot make a live factor view look stalled.
+  if (mode.value === "time_series") {
+    sortState.fieldName = "data_time";
+    sortState.direction = "desc";
+    return;
+  }
   sortState.fieldName = "";
   sortState.direction = "";
 }
@@ -805,12 +1293,13 @@ function resetFilterRows() {
   filters.value = filterFieldOptions.value.map(option => createFilterState(option));
 }
 
-function createFilterState(option?: FilterFieldOption): ViewFilterState {
+function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
+  const isStockCNKline = activeView.value?.dataset_id === "dataset_stockcn_equity_kline";
   return {
     fieldName: option?.value || "",
-    operator: "contains",
+    operator: option?.value === "series_tag" ? "eq" : "contains",
     valueType: option?.valueType || "FIELD_VALUE_TYPE_STRING",
-    value: "",
+    value: option?.value === "series_tag" && isStockCNKline ? "default" : "",
     startValue: "",
     endValue: ""
   };
@@ -860,11 +1349,20 @@ function activeFilterExprs() {
 function defaultTimeSeriesPreviewRange() {
   if (hasActiveDataTimeFilter()) return undefined;
   const end = new Date(Date.now() + 5 * 60 * 1000);
-  const start = new Date(end.getTime() - VIEW_BROWSE_PREVIEW_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const windowHours = hasExactSubjectIDFilter()
+    ? VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS * 24
+    : VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS;
+  const start = new Date(end.getTime() - windowHours * 60 * 60 * 1000);
   return {
     start_time: start.toISOString(),
     end_time: end.toISOString()
   };
+}
+
+function hasExactSubjectIDFilter() {
+  return filters.value.some(
+    filter => filter.fieldName.trim() === "subject_id" && filter.operator === "eq" && !!(filter.value || "").trim()
+  );
 }
 
 function hasActiveDataTimeFilter() {
@@ -883,17 +1381,6 @@ function hasFilterInput(filter: ViewFilterState) {
 
 function filterValueType(fieldName: string): FieldValueType {
   return filterFieldOptions.value.find(item => item.value === fieldName)?.valueType || "FIELD_VALUE_TYPE_STRING";
-}
-
-async function onPageChange(page: number) {
-  pagination.current = page;
-  await reloadRows();
-}
-
-async function onPageSizeChange(pageSize: number) {
-  pagination.pageSize = pageSize;
-  pagination.current = 1;
-  await reloadRows();
 }
 
 async function onPreviewPrevPage() {
@@ -946,9 +1433,14 @@ async function openKlineModal() {
     Message.warning("请先在数据ID检索框输入要查看的标的");
     return;
   }
+  const seriesTag = exactSeriesTagFromFilters(filters.value);
+  if (seriesTag === undefined) {
+    Message.warning("请先精确选择序列标签；默认序列请输入 default");
+    return;
+  }
 
   klineSubjectId.value = subjectId;
-  const ok = await loadKlineRecords(subjectId);
+  const ok = await loadKlineRecords(subjectId, seriesTag);
   if (!ok) return;
   klineVisible.value = true;
 }
@@ -959,11 +1451,16 @@ async function reloadKlineRecords() {
     Message.warning("请先在数据ID检索框输入要查看的标的");
     return;
   }
+  const seriesTag = exactSeriesTagFromFilters(filters.value);
+  if (seriesTag === undefined) {
+    Message.warning("请先精确选择序列标签；默认序列请输入 default");
+    return;
+  }
   klineSubjectId.value = subjectId;
-  await loadKlineRecords(subjectId);
+  await loadKlineRecords(subjectId, seriesTag);
 }
 
-async function loadKlineRecords(subjectId: string) {
+async function loadKlineRecords(subjectId: string, seriesTag: string) {
   const view = activeView.value;
   if (!view) return false;
   klineLoading.value = true;
@@ -974,7 +1471,7 @@ async function loadKlineRecords(subjectId: string) {
       return false;
     }
 
-    const records = buildKlineChartRecords(rows, subjectId);
+    const records = buildKlineChartRecords(rows, subjectId, seriesTag);
     if (records.length === 0) {
       Message.warning("当前结果缺少 open/high/low/close 字段，无法生成K线图");
       return false;
@@ -1003,7 +1500,7 @@ async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]
       view_id: viewId,
       ...(timeRange ? { time_range: timeRange } : {}),
       ...(klineColumnNames.value.length > 0 ? { column_names: klineColumnNames.value } : {}),
-      filters: activeFilterExprs(),
+      filter: activeFilterExprs(),
       sorts: buildKlineQuerySorts(),
       limit,
       page: { page: pageNo, size: DEFAULT_VIEW_PAGE_SIZE },
@@ -1015,7 +1512,8 @@ async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]
   }
   return timeSeriesRowsToTableRows(rows).map((row, index) => ({
     ...row,
-    freq: rows[index]?.key?.freq || "-"
+    freq: rows[index]?.key?.freq || "-",
+    seriesTag: rows[index]?.key?.series_tag || ""
   }));
 }
 
@@ -1036,17 +1534,31 @@ function closeKlineModal() {
 function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
   return {
     key: { space_id: "", dataset_id: "", record_id: row.key, version: row.version },
-    columns: Object.keys(row.values).map(name => ({
-      column_name: name,
-      value_type: "FIELD_VALUE_TYPE_STRING",
+    fields: Object.keys(row.values).map(name => ({
+      field_id: name,
       value: { string_value: row.values[name] }
     }))
   };
 }
 
-onMounted(loadMeta);
+onMounted(() => {
+  loadMeta();
+  const interval = props.autoRefreshIntervalMs || 0;
+  if (interval > 0) {
+    autoRefreshTimer = setInterval(() => {
+      void refreshRowsInBackground();
+    }, interval);
+  }
+});
+onBeforeUnmount(() => {
+  stopRebuildPolling();
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = undefined;
+  }
+});
 watch(selectedSpaceId, () => {
-  activeViewId.value = "";
+  activeViewKey.value = "";
   clearViewState();
   loadMeta();
 });
@@ -1055,13 +1567,17 @@ watch(selectedSpaceId, () => {
 <style scoped>
 .view-browse-page {
   width: 100%;
+  max-width: 100%;
   height: 100%;
   min-width: 0;
+  overflow-x: hidden;
 }
 
-.view-browse-page :deep(.arco-spin) {
+.view-browse-page :deep(.arco-spin),
+.view-browse-page :deep(.arco-spin-children) {
   display: block;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -1111,6 +1627,10 @@ watch(selectedSpaceId, () => {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px 18px;
   align-items: start;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   margin-bottom: var(--moox-space-3);
   padding: 18px var(--moox-space-5);
   border: 1px solid var(--color-border-2);
@@ -1120,8 +1640,9 @@ watch(selectedSpaceId, () => {
 
 .filter-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 14px 28px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -1215,9 +1736,15 @@ watch(selectedSpaceId, () => {
   max-width: 100%;
   box-sizing: border-box;
   padding: var(--moox-space-3);
+  overflow: hidden;
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
   background: var(--color-bg-2);
+}
+
+.result-pane :deep(.arco-table),
+.result-pane :deep(.arco-table-container) {
+  width: 100%;
 }
 
 .result-pane :deep(.arco-pagination) {
@@ -1243,13 +1770,6 @@ watch(selectedSpaceId, () => {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-
-.preview-pager__page {
-  min-width: 58px;
-  text-align: center;
-  color: var(--color-text-1);
-  font-weight: 600;
 }
 
 .record-search-bar {

@@ -5,7 +5,6 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 )
@@ -37,24 +36,139 @@ func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset
 		return nil, 0, ErrMetricsStoreUnavailable
 	}
 	offset, limit = boundedPage(offset, limit)
-	var rows []MetricService
-	q := c.messageStore.db.WithContext(ctx).Model(&MetricService{})
+	where := ""
 	if strings.TrimSpace(spaceID) != "" {
-		q = q.Where("c_service_name <> ''")
+		where = " WHERE c_service_name <> ''"
 	}
+	rankedSQL := `WITH ranked_services AS (
+		SELECT *,
+			ROW_NUMBER() OVER (
+				PARTITION BY c_node_id, c_service_name, c_instance_id
+				ORDER BY c_last_seen_at DESC, c_id DESC
+			) AS logical_rank
+		FROM t_monitor_metric_services` + where + `
+	)`
 	var total int64
-	if err := q.Count(&total).Error; err != nil {
+	countSQL := rankedSQL + ` SELECT COUNT(*) FROM ranked_services WHERE logical_rank = 1`
+	if err := c.messageStore.db.WithContext(ctx).Raw(countSQL).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := q.Order("c_service_name ASC, c_instance_id ASC, c_boot_id ASC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
+	var rows []MetricService
+	listSQL := rankedSQL + `
+		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
+			c_last_seen_at, c_is_stale, c_ctime, c_mtime
+		FROM ranked_services
+		WHERE logical_rank = 1
+		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
+		LIMIT ? OFFSET ?`
+	if err := c.messageStore.db.WithContext(ctx).Raw(listSQL, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	c.markServicesStale(rows)
 	return rows, total, nil
 }
 
+// ListServicesFor resolves only the finite Doctor selection. It must not page
+// through unrelated catalog rows and silently turn truncation into "missing".
+func (c *MetricCatalog) ListServicesFor(ctx context.Context, serviceNames []string, nodeID string, limit int) ([]MetricService, error) {
+	return c.ListServicesForAt(ctx, serviceNames, nodeID, limit, time.Now().UTC())
+}
+
+func (c *MetricCatalog) ListServicesForAt(ctx context.Context, serviceNames []string, nodeID string, limit int, now time.Time) ([]MetricService, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if len(serviceNames) == 0 {
+		return []MetricService{}, nil
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("service limit must be positive")
+	}
+	nodeFilter := ""
+	countArgs := []any{serviceNames}
+	listArgs := []any{serviceNames}
+	if nodeID != "" {
+		nodeFilter = " AND c_node_id = ?"
+		countArgs = append(countArgs, nodeID)
+		listArgs = append(listArgs, nodeID)
+	}
+	rankedSQL := `WITH ranked_services AS (
+		SELECT *,
+			ROW_NUMBER() OVER (
+				PARTITION BY c_node_id, c_service_name, c_instance_id
+				ORDER BY c_last_seen_at DESC, c_id DESC
+			) AS logical_rank
+		FROM t_monitor_metric_services
+		WHERE c_service_name IN ?` + nodeFilter + `
+	)`
+	var total int64
+	countSQL := rankedSQL + ` SELECT COUNT(*) FROM ranked_services WHERE logical_rank = 1`
+	if err := c.messageStore.db.WithContext(ctx).Raw(countSQL, countArgs...).Scan(&total).Error; err != nil {
+		return nil, err
+	}
+	if total > int64(limit) {
+		return nil, fmt.Errorf("selected metric services exceed limit %d", limit)
+	}
+	var rows []MetricService
+	listSQL := rankedSQL + `
+		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
+			c_last_seen_at, c_is_stale, c_ctime, c_mtime
+		FROM ranked_services
+		WHERE logical_rank = 1
+		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
+		LIMIT ?`
+	listArgs = append(listArgs, limit)
+	if err := c.messageStore.db.WithContext(ctx).Raw(listSQL, listArgs...).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	c.markServicesStaleAt(rows, now)
+	return rows, nil
+}
+
+// ReporterInstanceKey identifies one logical reporter process across boots.
+func ReporterInstanceKey(serviceName, instanceID string) string {
+	return strings.TrimSpace(serviceName) + "\x00" + strings.TrimSpace(instanceID)
+}
+
+// CurrentBootIDs returns the newest-ctime boot that is still reporting for each
+// logical reporter instance. Older FactorMgr copies can keep publishing for days
+// after a restart; dataset inventory must follow the current boot, not last_seen.
+func (c *MetricCatalog) CurrentBootIDs(ctx context.Context, now time.Time) (map[string]string, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	cutoff := now.UTC().Add(-c.NoDataAfter())
+	var rows []MetricService
+	if err := c.messageStore.db.WithContext(ctx).
+		Where("c_last_seen_at >= ?", cutoff).
+		Order("c_ctime DESC, c_id DESC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		bootID := strings.TrimSpace(row.BootID)
+		if bootID == "" {
+			continue
+		}
+		key := ReporterInstanceKey(row.ServiceName, row.InstanceID)
+		if _, exists := out[key]; exists {
+			continue
+		}
+		out[key] = bootID
+	}
+	return out, nil
+}
+
 func (c *MetricCatalog) markServicesStale(rows []MetricService) {
-	cutoff := time.Now().UTC().Add(-c.noDataAfter)
+	c.markServicesStaleAt(rows, time.Now().UTC())
+}
+
+func (c *MetricCatalog) markServicesStaleAt(rows []MetricService, now time.Time) {
+	cutoff := now.UTC().Add(-c.noDataAfter)
 	for i := range rows {
 		if !rows[i].LastSeenAt.IsZero() && rows[i].LastSeenAt.Before(cutoff) {
 			rows[i].IsStale = true
@@ -182,8 +296,44 @@ func (c *MetricCatalog) ListSeries(ctx context.Context, serviceName, metricName,
 	return rows, total, nil
 }
 
+// ListFreshSeriesForInstanceAt returns only series still emitted by one
+// logical instance, so historical label identities cannot consume the limit.
+func (c *MetricCatalog) ListFreshSeriesForInstanceAt(
+	ctx context.Context,
+	instanceID string,
+	metricName string,
+	at time.Time,
+	limit int,
+) ([]MetricSeries, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	cutoff := at.UTC().Add(-c.noDataAfter)
+	var rows []MetricSeries
+	err := c.messageStore.db.WithContext(ctx).
+		Where("c_instance_id = ? AND c_metric_name = ? AND c_last_seen_at >= ?",
+			instanceID, metricName, cutoff).
+		Order("c_series_id ASC").
+		Limit(limit + 1).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > limit {
+		return nil, fmt.Errorf("fresh metric series exceed limit %d", limit)
+	}
+	return rows, nil
+}
+
 func (c *MetricCatalog) markSeriesStale(rows []MetricSeries) {
-	cutoff := time.Now().UTC().Add(-c.noDataAfter)
+	c.markSeriesStaleAt(rows, time.Now().UTC())
+}
+
+func (c *MetricCatalog) markSeriesStaleAt(rows []MetricSeries, now time.Time) {
+	cutoff := now.UTC().Add(-c.noDataAfter)
 	for i := range rows {
 		if !rows[i].LastSeenAt.IsZero() && rows[i].LastSeenAt.Before(cutoff) {
 			rows[i].IsStale = true
@@ -192,6 +342,10 @@ func (c *MetricCatalog) markSeriesStale(rows []MetricSeries) {
 }
 
 func (c *MetricCatalog) FindSeries(ctx context.Context, seriesID, serviceName, metricName, labelsJSON string, limit int) ([]MetricSeries, error) {
+	return c.FindSeriesAt(ctx, seriesID, serviceName, metricName, labelsJSON, limit, time.Now().UTC())
+}
+
+func (c *MetricCatalog) FindSeriesAt(ctx context.Context, seriesID, serviceName, metricName, labelsJSON string, limit int, now time.Time) ([]MetricSeries, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
@@ -212,7 +366,46 @@ func (c *MetricCatalog) FindSeries(ctx context.Context, seriesID, serviceName, m
 	if err := q.Order("c_series_id ASC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	c.markSeriesStale(rows)
+	c.markSeriesStaleAt(rows, now)
+	return rows, nil
+}
+
+// FindSeriesByMetricNamesAt applies the finite metric-family filter before the
+// result limit. Doctor uses this to avoid dynamic Dataset series crowding out
+// the small module-level contract.
+func (c *MetricCatalog) FindSeriesByMetricNamesAt(
+	ctx context.Context,
+	serviceName string,
+	instanceID string,
+	metricNames []string,
+	limit int,
+	now time.Time,
+) ([]MetricSeries, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if len(metricNames) == 0 {
+		return []MetricSeries{}, nil
+	}
+	if len(metricNames) > 16 {
+		return nil, fmt.Errorf("metric name selection exceeds limit 16")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	q := c.messageStore.db.WithContext(ctx).Model(&MetricSeries{}).
+		Where("c_metric_name IN ?", metricNames)
+	if serviceName != "" {
+		q = q.Where("c_service_name = ?", serviceName)
+	}
+	if instanceID != "" {
+		q = q.Where("c_instance_id = ?", instanceID)
+	}
+	var rows []MetricSeries
+	if err := q.Order("c_series_id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	c.markSeriesStaleAt(rows, now)
 	return rows, nil
 }
 
@@ -239,8 +432,4 @@ func canonicalJSON(raw string) string {
 		return raw
 	}
 	return string(b)
-}
-
-func sortedSeries(rows []MetricSeries) {
-	sort.Slice(rows, func(i, j int) bool { return rows[i].SeriesID < rows[j].SeriesID })
 }

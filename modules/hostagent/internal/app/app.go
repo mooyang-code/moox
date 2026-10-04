@@ -13,23 +13,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/collector"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
+	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/messagepb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-const hostTopic = "moox.metrics.host.reported.v1"
 
 type Agent struct {
 	cfg                                    *config.Config
 	id                                     identity.File
 	collector                              snapshotCollector
-	clientMu                               sync.Mutex
-	client                                 *jetstream.Client
+	publisherMu                            sync.Mutex
+	publisher                              eventpublisher.Publisher
+	newPublisher                           func(context.Context) (eventpublisher.Publisher, error)
 	hostname, bootID, version              string
 	latestMu                               sync.RWMutex
 	latest                                 *hostmetricpb.HostSnapshot
@@ -83,7 +80,6 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 	if a == nil {
 		return nil, fmt.Errorf("agent is nil")
 	}
-	now := time.Now().UTC()
 	snapshot, _, err := a.collector.Collect(ctx)
 	a.collected.Add(1)
 	if err != nil {
@@ -91,58 +87,59 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		a.dropped.Add(1)
 		return &hostagentpb.RunOnceRsp{PublishError: err.Error()}, err
 	}
+	occurredAt := time.Now().UTC()
 	a.latestMu.Lock()
 	a.latest = proto.Clone(snapshot).(*hostmetricpb.HostSnapshot)
-	a.lastCollect = now
+	a.lastCollect = occurredAt
 	a.latestMu.Unlock()
 	msgID, err := uuid.NewV7()
 	if err != nil {
 		a.dropped.Add(1)
 		return nil, err
 	}
-	payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(&hostmetricpb.HostMetric{Snapshot: snapshot})
+	publisher, err := a.eventPublisher(ctx)
 	if err != nil {
 		a.dropped.Add(1)
-		return nil, err
+		a.recordError(err)
+		return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), PublishError: err.Error(), Snapshot: snapshot}, err
+	}
+	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{AgentId: a.id.AgentID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, occurredAt)
+	if err != nil {
+		a.dropped.Add(1)
+		a.recordError(err)
+		return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), PublishError: err.Error(), Snapshot: snapshot}, err
 	}
 	publishedAt := time.Now().UTC()
-	msg := &messagepb.MooxMessage{ProtocolVersion: 1, MessageId: msgID.String(), Topic: hostTopic, Kind: messagepb.MessageKind_MESSAGE_KIND_SNAPSHOT, Producer: &messagepb.Producer{ServiceName: "moox-host-agent", InstanceId: a.id.AgentID, NodeId: a.hostname, BootId: a.bootID, Version: a.version}, SpaceId: "moox_system", Sequence: 0, OccurredAt: timestamppb.New(now), PublishedAt: timestamppb.New(publishedAt), ContentType: "application/x-protobuf; message=trpc.moox.hostagent.HostMetric", MessageType: "moox.hostagent.host_metric.v1", Payload: payload}
-	client, err := a.eventbus(ctx)
-	if err != nil {
-		a.dropped.Add(1)
-		a.recordError(err)
-		return &hostagentpb.RunOnceRsp{MessageId: msg.GetMessageId(), PublishError: err.Error(), Snapshot: snapshot}, err
-	}
-	_, err = client.Publish(ctx, msg)
-	if err != nil {
-		a.dropped.Add(1)
-		a.recordError(err)
-		return &hostagentpb.RunOnceRsp{MessageId: msg.GetMessageId(), PublishError: err.Error(), Snapshot: snapshot}, err
-	}
 	a.published.Add(1)
 	a.latestMu.Lock()
 	a.lastPublish = publishedAt
 	a.lastErr = ""
 	a.latestMu.Unlock()
-	return &hostagentpb.RunOnceRsp{MessageId: msg.GetMessageId(), Published: true, Snapshot: snapshot}, nil
+	return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), Published: true, Snapshot: snapshot}, nil
 }
 
-func (a *Agent) eventbus(ctx context.Context) (*jetstream.Client, error) {
-	a.clientMu.Lock()
-	defer a.clientMu.Unlock()
-	if a.client != nil {
-		return a.client, nil
+func (a *Agent) eventPublisher(ctx context.Context) (eventpublisher.Publisher, error) {
+	a.publisherMu.Lock()
+	defer a.publisherMu.Unlock()
+	if a.publisher != nil && a.publisher.Ready() {
+		return a.publisher, nil
 	}
-	ecfg, err := config.LoadEventBus(a.cfg.EventBusConfig)
+	if a.publisher != nil {
+		_ = a.publisher.Close()
+		a.publisher = nil
+	}
+	factory := a.newPublisher
+	if factory == nil {
+		factory = func(ctx context.Context) (eventpublisher.Publisher, error) {
+			return eventpublisher.New(ctx, a.cfg.EventBusConfig, a.id.AgentID)
+		}
+	}
+	publisher, err := factory(ctx)
 	if err != nil {
 		return nil, err
 	}
-	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: ecfg.URLs, Name: "moox-host-agent-" + a.id.AgentID, Username: ecfg.Username, Password: ecfg.EventBusToken, TLSCAFile: ecfg.CAFile, ReconnectBufferBytes: 0, ConnectTimeout: 5 * time.Second, MaxReconnects: -1})
-	if err != nil {
-		return nil, err
-	}
-	a.client = client
-	return client, nil
+	a.publisher = publisher
+	return publisher, nil
 }
 
 func (a *Agent) recordError(err error) {
@@ -157,20 +154,26 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 func (a *Agent) Close() error {
-	a.clientMu.Lock()
-	defer a.clientMu.Unlock()
-	if a.client == nil {
+	a.publisherMu.Lock()
+	defer a.publisherMu.Unlock()
+	if a.publisher == nil {
 		return nil
 	}
-	err := a.client.Close()
-	a.client = nil
+	err := a.publisher.Close()
+	a.publisher = nil
 	return err
+}
+
+func (a *Agent) publisherReady() bool {
+	a.publisherMu.Lock()
+	defer a.publisherMu.Unlock()
+	return a.publisher != nil && a.publisher.Ready()
 }
 
 func (a *Agent) GetStatus(context.Context, *hostagentpb.GetStatusReq) (*hostagentpb.GetStatusRsp, error) {
 	a.latestMu.RLock()
 	defer a.latestMu.RUnlock()
-	rsp := &hostagentpb.GetStatusRsp{AgentId: a.id.AgentID, Version: a.version, Hostname: a.hostname, BootId: a.bootID, LastError: a.lastErr, Collected: a.collected.Load(), Published: a.published.Load(), Dropped: a.dropped.Load(), Skipped: a.skipped.Load(), EventbusConnected: a.client != nil}
+	rsp := &hostagentpb.GetStatusRsp{AgentId: a.id.AgentID, Version: a.version, Hostname: a.hostname, BootId: a.bootID, LastError: a.lastErr, Collected: a.collected.Load(), Published: a.published.Load(), Dropped: a.dropped.Load(), Skipped: a.skipped.Load(), EventbusConnected: a.publisherReady()}
 	if !a.lastCollect.IsZero() {
 		rsp.LastCollectAt = a.lastCollect.Format(time.RFC3339Nano)
 	}

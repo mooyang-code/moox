@@ -2,38 +2,52 @@
 package store
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"strings"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"gorm.io/gorm"
 )
 
-var ErrStateConflict = errors.New("strategy: state conflict")
-var ErrIdempotencyConflict = errors.New("strategy: idempotency conflict")
-
-// Store is the persistence boundary for the strategy module. Callers must use
-// domain methods instead of reaching into the underlying database.
 type Store struct {
-	db       *gorm.DB
-	commitMu sync.Mutex
+	db           *gorm.DB
+	processed    sync.Map
+	processedMu  sync.Mutex
+	processedOps uint64
 }
 
 func New(db *gorm.DB) *Store { return &Store{db: db} }
 
-func (s *Store) CreateInitialState(ctx context.Context, state domain.State) error {
-	return s.db.WithContext(ctx).Create(&state).Error
+type strategyRow struct {
+	ID           string `gorm:"column:strategy_id"`
+	StrategyName string `gorm:"column:strategy_name"`
+	DSLYaml      string `gorm:"column:dsl_yaml"`
+	CreatedAt    int64  `gorm:"column:created_at"`
+	UpdatedAt    int64  `gorm:"column:updated_at"`
 }
 
-func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
-
-func isRetryableLock(err error) bool {
-	if err == nil {
-		return false
+func (r strategyRow) domain() domain.Strategy {
+	sum := sha256.Sum256([]byte(r.DSLYaml))
+	return domain.Strategy{
+		ID: r.ID, Name: r.StrategyName, ManifestYAML: r.DSLYaml,
+		Kind: "coin_selection", SourceHash: hex.EncodeToString(sum[:]),
+		CreatedAt: time.UnixMilli(r.CreatedAt).UTC(),
 	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked") || strings.Contains(message, "deadlocked")
+}
+
+func nullableString(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
+}
+
+func stringValue(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }

@@ -20,10 +20,10 @@ For remote targets, the Skill may upload one temporary `moox-cli` helper to `/tm
 - Create `modules/cli/internal/command/tencent_ops_cls_prepare_test.go`: verify required flags, fixed settings, signed service-route use, and sanitized JSON.
 - Modify `modules/cli/internal/adminclient/cloudnode_test.go`: prove credential reveal uses the signed service route and sends `reveal=true`.
 - Create `skills/moox/scripts/cls-bootstrap.sh`: run prepare locally or through SSH, install `cls.env`, and patch staged tRPC configs.
-- Create `skills/moox/scripts/test-cls-bootstrap.sh`: test local orchestration, first-account selection propagation, literal Topic ID insertion, permissions, idempotence, and failure behavior.
-- Modify `scripts/deploy-moox.sh`: add `--cloud-account-id`, invoke Skill preparation before sync/stop, and remove startup-time CLS provisioning.
-- Create `scripts/test-deploy-moox-cls.sh`: enforce deployment ordering and verify a failed preflight cannot stop existing services.
-- Modify `scripts/test-trpc-plugin-config.sh`: update the CLS configuration contract.
+- Create `skills/moox/scripts/test/contract/test-cls-bootstrap.sh`: test local orchestration, first-account selection propagation, literal Topic ID insertion, permissions, idempotence, and failure behavior.
+- Modify `scripts/deploy/deploy-moox.sh`: add `--cloud-account-id`, invoke Skill preparation before sync/stop, and remove startup-time CLS provisioning.
+- Create `scripts/test/contract/test-deploy-moox-cls.sh`: enforce deployment ordering and verify a failed preflight cannot stop existing services.
+- Modify `scripts/test/contract/test-trpc-plugin-config.sh`: update the CLS configuration contract.
 - Modify `skills/moox/SKILL.md`: document mandatory predeploy CLS initialization.
 - Modify `docs/运维/tRPC插件运行基线.md`: describe account selection, fixed names, and failure behavior.
 
@@ -564,7 +564,7 @@ git commit -m "feat(cli): add CLS predeploy prepare command"
 
 **Files:**
 - Create: `skills/moox/scripts/cls-bootstrap.sh`
-- Create: `skills/moox/scripts/test-cls-bootstrap.sh`
+- Create: `skills/moox/scripts/test/contract/test-cls-bootstrap.sh`
 
 - [ ] **Step 1: Write the failing local orchestration test**
 
@@ -632,7 +632,7 @@ echo 'CLS Skill bootstrap contract passed'
 Run:
 
 ```bash
-bash skills/moox/scripts/test-cls-bootstrap.sh
+bash skills/moox/scripts/test/contract/test-cls-bootstrap.sh
 ```
 
 Expected: FAIL with `skills/moox/scripts/cls-bootstrap.sh: No such file or directory`.
@@ -776,8 +776,8 @@ During implementation, keep the heredoc delimiters quoted exactly as shown so th
 Run:
 
 ```bash
-bash -n skills/moox/scripts/cls-bootstrap.sh skills/moox/scripts/test-cls-bootstrap.sh
-bash skills/moox/scripts/test-cls-bootstrap.sh
+bash -n skills/moox/scripts/cls-bootstrap.sh skills/moox/scripts/test/contract/test-cls-bootstrap.sh
+bash skills/moox/scripts/test/contract/test-cls-bootstrap.sh
 ```
 
 Expected: both commands PASS; test output ends with `CLS Skill bootstrap contract passed`.
@@ -785,15 +785,15 @@ Expected: both commands PASS; test output ends with `CLS Skill bootstrap contrac
 - [ ] **Step 5: Commit the Skill script**
 
 ```bash
-git add skills/moox/scripts/cls-bootstrap.sh skills/moox/scripts/test-cls-bootstrap.sh
+git add skills/moox/scripts/cls-bootstrap.sh skills/moox/scripts/test/contract/test-cls-bootstrap.sh
 git commit -m "feat(skill): prepare CLS before MooX deployment"
 ```
 
 ### Task 4: Integrate CLS Preflight Into Deployment
 
 **Files:**
-- Modify: `scripts/deploy-moox.sh`
-- Create: `scripts/test-deploy-moox-cls.sh`
+- Modify: `scripts/deploy/deploy-moox.sh`
+- Create: `scripts/test/contract/test-deploy-moox-cls.sh`
 
 - [ ] **Step 1: Write a failing deployment ordering contract**
 
@@ -804,7 +804,7 @@ Create `test-deploy-moox-cls.sh`:
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT="${ROOT}/scripts/deploy-moox.sh"
+SCRIPT="${ROOT}/scripts/deploy/deploy-moox.sh"
 
 grep -q -- '--cloud-account-id' "${SCRIPT}"
 grep -q 'skills/moox/scripts/cls-bootstrap.sh' "${SCRIPT}"
@@ -827,7 +827,7 @@ echo 'CLS deployment ordering contract passed'
 Run:
 
 ```bash
-bash scripts/test-deploy-moox-cls.sh
+bash scripts/test/contract/test-deploy-moox-cls.sh
 ```
 
 Expected: FAIL because `--cloud-account-id` and `prepare_cls_preflight` are absent.
@@ -904,10 +904,10 @@ This ordering allows build and stage creation, but a failed Admin, account, or C
 Run:
 
 ```bash
-bash -n scripts/deploy-moox.sh
-bash scripts/test-deploy-moox-cls.sh
-bash scripts/test-deploy-moox-preserve-disabled.sh
-bash scripts/test-deploy-moox-admin-bootstrap.sh
+bash -n scripts/deploy/deploy-moox.sh
+bash scripts/test/contract/test-deploy-moox-cls.sh
+bash scripts/test/contract/test-deploy-moox-preserve-disabled.sh
+bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
 ```
 
 Expected: PASS for all four commands.
@@ -915,26 +915,26 @@ Expected: PASS for all four commands.
 - [ ] **Step 5: Commit deployment integration**
 
 ```bash
-git add scripts/deploy-moox.sh scripts/test-deploy-moox-cls.sh
+git add scripts/deploy/deploy-moox.sh scripts/test/contract/test-deploy-moox-cls.sh
 git commit -m "feat(deploy): verify CLS before service shutdown"
 ```
 
 ### Task 5: Update Contracts and Operations Documentation
 
 **Files:**
-- Modify: `scripts/test-trpc-plugin-config.sh`
+- Modify: `scripts/test/contract/test-trpc-plugin-config.sh`
 - Modify: `skills/moox/SKILL.md`
 - Modify: `docs/运维/tRPC插件运行基线.md`
 - Modify: `docs/superpowers/specs/2026-07-13-cls-predeploy-bootstrap-design.md`
 
 - [ ] **Step 1: Update the static plugin contract**
 
-Replace the old runtime-bootstrap checks in `scripts/test-trpc-plugin-config.sh`:
+Replace the old runtime-bootstrap checks in `scripts/test/contract/test-trpc-plugin-config.sh`:
 
 ```bash
-require_text scripts/deploy-moox.sh '--enable-cls' 'deployment must expose explicit CLS activation'
-require_text scripts/deploy-moox.sh '--cloud-account-id' 'deployment must allow explicit CLS cloud account selection'
-require_text scripts/deploy-moox.sh 'prepare_cls_preflight' 'deployment must prepare CLS before sync'
+require_text scripts/deploy/deploy-moox.sh '--enable-cls' 'deployment must expose explicit CLS activation'
+require_text scripts/deploy/deploy-moox.sh '--cloud-account-id' 'deployment must allow explicit CLS cloud account selection'
+require_text scripts/deploy/deploy-moox.sh 'prepare_cls_preflight' 'deployment must prepare CLS before sync'
 require_text skills/moox/scripts/cls-bootstrap.sh 'ops tencent cls prepare' 'MooX Skill must prepare CLS through moox-cli'
 require_text skills/moox/scripts/cls-bootstrap.sh 'topic_id: ${topic_id}' 'staged CLS writer must contain the verified Topic ID'
 require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET_ID}' 'staged CLS writer must retain credential placeholders'
@@ -962,7 +962,7 @@ skills/moox/scripts/cls-bootstrap.sh \
 The script selects the first Tencent cloud account unless `--cloud-account-id` is set. It always queries the `ap-guangzhou` CLS API for Logset `moox` and Topic `moox-application`, then writes the returned Topic ID only into stage configs. It stores writer credentials only in the target's `secrets/cls.env` with mode `0600`.
 ````
 
-Also update the System Initialization Deployment Flow so `scripts/deploy-moox.sh --enable-cls` requires an already-running Admin/CloudNode control plane and at least one Tencent cloud account.
+Also update the System Initialization Deployment Flow so `scripts/deploy/deploy-moox.sh --enable-cls` requires an already-running Admin/CloudNode control plane and at least one Tencent cloud account.
 
 - [ ] **Step 3: Update the operations baseline and design status**
 
@@ -979,9 +979,9 @@ Add an implementation-status note to the design spec pointing to the new CLI com
 Run:
 
 ```bash
-bash scripts/test-trpc-plugin-config.sh
-bash skills/moox/scripts/test-cls-bootstrap.sh
-./scripts/package-skill.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
+bash skills/moox/scripts/test/contract/test-cls-bootstrap.sh
+./scripts/build/package-skill.sh
 tar -tzf dist/moox-skill.tar.gz | grep -E 'moox/scripts/cls-bootstrap.sh|moox/SKILL.md'
 ```
 
@@ -990,7 +990,7 @@ Expected: all commands PASS and the archive lists both required Skill files.
 - [ ] **Step 5: Commit contracts and documentation**
 
 ```bash
-git add scripts/test-trpc-plugin-config.sh skills/moox/SKILL.md \
+git add scripts/test/contract/test-trpc-plugin-config.sh skills/moox/SKILL.md \
   docs/运维/tRPC插件运行基线.md \
   docs/superpowers/specs/2026-07-13-cls-predeploy-bootstrap-design.md
 git commit -m "docs: require CLS preparation in MooX releases"
@@ -1015,12 +1015,12 @@ Expected: PASS with no credential values in test output.
 From the repository root:
 
 ```bash
-bash skills/moox/scripts/test-cls-bootstrap.sh
-bash scripts/test-deploy-moox-cls.sh
-bash scripts/test-trpc-plugin-config.sh
-bash scripts/test-deploy-moox-preserve-disabled.sh
-bash scripts/test-deploy-moox-admin-bootstrap.sh
-bash -n scripts/deploy-moox.sh skills/moox/scripts/cls-bootstrap.sh
+bash skills/moox/scripts/test/contract/test-cls-bootstrap.sh
+bash scripts/test/contract/test-deploy-moox-cls.sh
+bash scripts/test/contract/test-trpc-plugin-config.sh
+bash scripts/test/contract/test-deploy-moox-preserve-disabled.sh
+bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
+bash -n scripts/deploy/deploy-moox.sh skills/moox/scripts/cls-bootstrap.sh
 ```
 
 Expected: PASS for every command.
@@ -1062,7 +1062,7 @@ Expected: one CLS writer, a non-empty literal Topic ID, and environment placehol
 - [ ] **Step 6: Deploy and verify one Factor warning in CLS**
 
 ```bash
-scripts/deploy-moox.sh \
+scripts/deploy/deploy-moox.sh \
   --target user@host \
   --dir /home/user/moox \
   --public-host host.example \

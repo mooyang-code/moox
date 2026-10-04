@@ -22,9 +22,25 @@ import (
 // query: session_id, w, h
 func WebSocketConnectHandler(svc ssh.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		query := r.URL.Query()
+		log.Infof("[SSH WebSocket] 收到握手请求: path=%s upgrade=%s session=%s w=%s h=%s origin=%s",
+			r.URL.Path, r.Header.Get("Upgrade"), query.Get("session_id"), query.Get("w"), query.Get("h"), r.Header.Get("Origin"))
+		if _, ok := w.(http.Hijacker); !ok {
+			log.ErrorContextf(ctx, "[SSH WebSocket] 当前网关响应写入器不支持 WebSocket hijack: %T", w)
+			http.Error(w, "websocket upgrade is not supported by the gateway transport", http.StatusInternalServerError)
+			return
+		}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.ErrorContextf(ctx, "[SSH WebSocket] 握手处理异常: %v", recovered)
+			}
+		}()
+
 		wsServer := websocket.Server{
 			// 跳过 Origin 检查，允许跨端口/跨源连接
 			Handshake: func(config *websocket.Config, req *http.Request) error {
+				log.Infof("[SSH WebSocket] 握手协议已通过: session=%s", req.URL.Query().Get("session_id"))
 				return nil
 			},
 			Handler: func(ws *websocket.Conn) {
@@ -33,17 +49,20 @@ func WebSocketConnectHandler(svc ssh.Service) http.HandlerFunc {
 
 				wv, err := strconv.Atoi(ws.Request().URL.Query().Get("w"))
 				if err != nil || wv < 40 || wv > 8192 {
+					log.WarnContextf(ctx, "[SSH WebSocket] 拒绝无效终端宽度: session=%s width=%s", sessionID, ws.Request().URL.Query().Get("w"))
 					_ = websocket.Message.Send(ws, "invalid window width")
 					return
 				}
 				hv, err := strconv.Atoi(ws.Request().URL.Query().Get("h"))
 				if err != nil || hv < 2 || hv > 4096 {
+					log.WarnContextf(ctx, "[SSH WebSocket] 拒绝无效终端高度: session=%s height=%s", sessionID, ws.Request().URL.Query().Get("h"))
 					_ = websocket.Message.Send(ws, "invalid window height")
 					return
 				}
 
 				sshConn, ok := svc.GetSessionConn(sessionID)
 				if !ok || sshConn == nil {
+					log.WarnContextf(ctx, "[SSH WebSocket] SSH 会话不存在: session=%s", sessionID)
 					_ = websocket.Message.Send(ws, "session not found")
 					return
 				}

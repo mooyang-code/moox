@@ -1,0 +1,689 @@
+package events
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"math/big"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/mooyang-code/moox/packages/cloudjobpb"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
+	"github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/mooyang-code/moox/packages/observabilitypb"
+	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+type EventValidator func(*eventpb.EventMessage, proto.Message) error
+
+func validateCloudJobExecutionRequested(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*cloudjobpb.JobExecutionRequested)
+	if !ok {
+		return fmt.Errorf("cloud job payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetJobItemId()) == "" ||
+		strings.TrimSpace(payload.GetJobType()) == "" {
+		return fmt.Errorf("cloud job identity is incomplete")
+	}
+	if payload.GetJobItemId() != message.GetEventId() {
+		return fmt.Errorf("cloud job item_id does not match event_id")
+	}
+	if message.GetSubjectId() != payload.GetJobType() {
+		return fmt.Errorf("cloud job route does not match subject_id")
+	}
+	return nil
+}
+
+func validateObservabilityHostSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*hostmetricpb.HostMetric)
+	if !ok {
+		return fmt.Errorf("host metric payload has type %T", value)
+	}
+	if !hostmetricpb.IsCompatibleAgentID(payload.GetAgentId()) ||
+		strings.TrimSpace(payload.GetHostname()) == "" ||
+		payload.GetSnapshot() == nil {
+		return fmt.Errorf("host metric identity or snapshot is incomplete")
+	}
+	if payload.GetAgentId() != message.GetSubjectId() {
+		return fmt.Errorf("host metric agent_id does not match subject_id")
+	}
+	return nil
+}
+
+func validateObservabilityMetricsSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*metricspb.MetricReport)
+	if !ok {
+		return fmt.Errorf("metric report payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetServiceName()) == "" ||
+		strings.TrimSpace(payload.GetInstanceId()) == "" ||
+		payload.GetSnapshot() == nil {
+		return fmt.Errorf("metric report producer identity or snapshot is incomplete")
+	}
+	if message.GetSubjectId() != payload.GetServiceName()+"/"+payload.GetInstanceId() {
+		return fmt.Errorf("metric report producer does not match subject_id")
+	}
+	return nil
+}
+
+func validateObservabilityHealthCheckReported(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*observabilitypb.HealthCheckReport)
+	if !ok {
+		return fmt.Errorf("health check payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetObserverId()) == "" ||
+		strings.TrimSpace(payload.GetCheckId()) == "" ||
+		strings.TrimSpace(payload.GetKind()) == "" {
+		return fmt.Errorf("health check observer_id, check_id, and kind are required")
+	}
+	if len(payload.GetNodeId()) > 256 {
+		return fmt.Errorf("health check node_id exceeds 256 bytes")
+	}
+	if len(payload.GetTarget()) > 512 {
+		return fmt.Errorf("health check target exceeds 512 bytes")
+	}
+	if len(payload.GetErrorCode()) > 64 {
+		return fmt.Errorf("health check error_code exceeds 64 bytes")
+	}
+	if len(payload.GetErrorSummary()) > 256 {
+		return fmt.Errorf("health check error_summary exceeds 256 bytes")
+	}
+	if payload.GetLatencyMs() < 0 {
+		return fmt.Errorf("health check latency_ms must be non-negative")
+	}
+	checkedAt := payload.GetCheckedAt()
+	if checkedAt == nil {
+		return fmt.Errorf("health check checked_at is required")
+	}
+	if err := checkedAt.CheckValid(); err != nil {
+		return fmt.Errorf("health check checked_at: %w", err)
+	}
+	if message == nil || message.GetOccurredAt() == nil {
+		return fmt.Errorf("health check envelope occurred_at is required")
+	}
+	delta := checkedAt.AsTime().Sub(message.GetOccurredAt().AsTime())
+	if delta < -5*time.Minute || delta > 5*time.Minute {
+		return fmt.Errorf("health check checked_at differs from occurred_at by more than 5 minutes")
+	}
+	return nil
+}
+
+func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.DatasetRowsUpserted)
+	if !ok {
+		return fmt.Errorf("storage event payload has type %T", value)
+	}
+	if payload.GetSpaceId() == "" ||
+		payload.GetSpaceId() != message.GetSpaceId() ||
+		payload.GetDatasetId() == "" ||
+		payload.GetDatasetId() != message.GetSubjectId() {
+		return fmt.Errorf("storage event payload identity mismatch")
+	}
+	if len(payload.GetRows()) == 0 {
+		return fmt.Errorf("storage event rows payload is empty")
+	}
+	if !validRequiredToken(payload.GetSourceNodeId()) || !validRequiredToken(payload.GetSourceStoreId()) || payload.GetSourceSequence() == 0 {
+		return fmt.Errorf("storage event source position is required")
+	}
+	if len(payload.GetWriteSource()) > 256 || strings.TrimSpace(payload.GetWriteSource()) != payload.GetWriteSource() {
+		return fmt.Errorf("storage event write_source is invalid")
+	}
+	if err := validateStorageWriteKind(payload.GetWriteKind()); err != nil {
+		return err
+	}
+	for i, row := range payload.GetRows() {
+		if row == nil || row.GetKey() == nil {
+			return fmt.Errorf("storage event row %d key is required", i)
+		}
+		if row.GetKey().GetSpaceId() != payload.GetSpaceId() ||
+			row.GetKey().GetDatasetId() != payload.GetDatasetId() {
+			return fmt.Errorf("storage event row %d identity mismatch", i)
+		}
+		if err := validateStorageRow(row); err != nil {
+			return fmt.Errorf("storage event row %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func validateCollectorPeriodCompleted(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.CollectorPeriodCompleted)
+	if !ok {
+		return fmt.Errorf("collector period completed payload has type %T", value)
+	}
+	return validatePeriodCompletion(message, periodCompletion{
+		label:              "collector period completed",
+		datasetID:          payload.GetDatasetId(),
+		frequency:          payload.GetFrequency(),
+		periodTime:         payload.GetPeriodTime(),
+		status:             payload.GetStatus(),
+		batchID:            payload.GetBatchId(),
+		configSnapshotID:   payload.GetConfigSnapshotId(),
+		expectedScopeRef:   payload.GetExpectedScopeRef(),
+		universeSubjectIDs: payload.GetUniverseSubjectIds(),
+		failedSubjects:     payload.GetFailedSubjects(),
+		committedPositions: payload.GetCommittedPositions(),
+		timestamp:          payload.GetCollectedAt(),
+	})
+}
+
+func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.FactorPeriodComputed)
+	if !ok {
+		return fmt.Errorf("factor period computed payload has type %T", value)
+	}
+	if !validRequiredToken(payload.GetTriggerEventId()) {
+		return fmt.Errorf("factor period computed trigger_event_id is required")
+	}
+	if !validRequiredToken(payload.GetSourceDatasetId()) {
+		return fmt.Errorf("factor period computed source_dataset_id is required")
+	}
+	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetComputedAt(), "factor period computed"); err != nil {
+		return err
+	}
+	subjects, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "factor period computed universe_subject_ids")
+	if err != nil {
+		return err
+	}
+	failed, err := validateUniqueTokens(payload.GetFailedSubjects(), false, "factor period computed failed_subjects")
+	if err != nil {
+		return err
+	}
+	for subject := range failed {
+		if _, ok := subjects[subject]; !ok {
+			return fmt.Errorf("factor period computed failed_subject %q is not in universe_subject_ids", subject)
+		}
+	}
+	if payload.GetStatus() == "complete" && len(failed) != 0 {
+		return fmt.Errorf("factor period computed complete status has failed_subjects")
+	}
+	if err := validateFactorStates(payload.GetFactors(), subjects, payload.GetStatus(), "factor period computed"); err != nil {
+		return err
+	}
+	hasDegraded := len(failed) != 0
+	for _, factor := range payload.GetFactors() {
+		hasDegraded = hasDegraded || factor.GetStatus() != "complete"
+	}
+	if (payload.GetStatus() == "degraded") != hasDegraded {
+		return fmt.Errorf("factor period computed status does not match factors and failed_subjects")
+	}
+	return nil
+}
+
+func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.ViewDataReady)
+	if !ok {
+		return fmt.Errorf("view data ready payload has type %T", value)
+	}
+	if err := validateStoragePeriod(message, payload.GetViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view data ready"); err != nil {
+		return err
+	}
+	if !validRequiredToken(payload.GetCompletionEventId()) {
+		return fmt.Errorf("view data ready completion_event_id is required")
+	}
+	if !validRequiredToken(payload.GetViewConfigId()) {
+		return fmt.Errorf("view data ready view_config_id is required")
+	}
+	if !validRequiredToken(payload.GetDatasetId()) {
+		return fmt.Errorf("view data ready dataset_id is required")
+	}
+	if !validRequiredToken(payload.GetVisibleScope()) {
+		return fmt.Errorf("view data ready visible_scope is required")
+	}
+	if err := validateViewCompletionKind(payload.GetCompletionKind()); err != nil {
+		return err
+	}
+	if err := validateCommittedPositions(payload.GetCommittedPositions(), "view data ready"); err != nil {
+		return err
+	}
+	if payload.GetStatus() == "complete" && validRequiredToken(payload.GetFailedScopeRef()) {
+		return fmt.Errorf("view data ready complete status has failed_scope_ref")
+	}
+	if payload.GetStatus() == "degraded" && !validRequiredToken(payload.GetFailedScopeRef()) {
+		return fmt.Errorf("view data ready degraded status requires failed_scope_ref")
+	}
+	if payload.GetCompletionKind() == FactorPeriodComputed.Name() {
+		subjects, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "view data ready universe_subject_ids")
+		if err != nil {
+			return err
+		}
+		return validateFactorStates(payload.GetFactors(), subjects, payload.GetStatus(), "view data ready")
+	}
+	return nil
+}
+
+type periodCompletion struct {
+	label              string
+	datasetID          string
+	frequency          string
+	periodTime         int64
+	status             string
+	batchID            string
+	configSnapshotID   string
+	expectedScopeRef   string
+	universeSubjectIDs []string
+	failedSubjects     []string
+	committedPositions []*storagepb.CommittedPosition
+	timestamp          *timestamppb.Timestamp
+}
+
+func validatePeriodCompletion(message *eventpb.EventMessage, completion periodCompletion) error {
+	if err := validateStoragePeriod(message, completion.datasetID, completion.frequency, completion.periodTime, completion.status, completion.timestamp, completion.label); err != nil {
+		return err
+	}
+	if !validRequiredToken(completion.batchID) {
+		return fmt.Errorf("%s batch_id is required", completion.label)
+	}
+	if !validRequiredToken(completion.configSnapshotID) {
+		return fmt.Errorf("%s config_snapshot_id is required", completion.label)
+	}
+	if !validRequiredToken(completion.expectedScopeRef) {
+		return fmt.Errorf("%s expected_scope_ref is required", completion.label)
+	}
+	subjects, err := validateUniqueTokens(completion.universeSubjectIDs, false, completion.label+" universe_subject_ids")
+	if err != nil {
+		return err
+	}
+	failed, err := validateUniqueTokens(completion.failedSubjects, false, completion.label+" failed_subjects")
+	if err != nil {
+		return err
+	}
+	for subject := range failed {
+		if _, ok := subjects[subject]; !ok {
+			return fmt.Errorf("%s failed_subject %q is not in universe_subject_ids", completion.label, subject)
+		}
+	}
+	if completion.status == "complete" && len(failed) != 0 {
+		return fmt.Errorf("%s complete status has failed_subjects", completion.label)
+	}
+	return validateCommittedPositions(completion.committedPositions, completion.label)
+}
+
+func validateCommittedPositions(positions []*storagepb.CommittedPosition, label string) error {
+	if len(positions) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(positions))
+	for i, position := range positions {
+		if position == nil || !validRequiredToken(position.GetNodeId()) || !validRequiredToken(position.GetStoreId()) || position.GetSequence() == 0 {
+			return fmt.Errorf("%s committed_position %d is incomplete", label, i)
+		}
+		key := position.GetNodeId() + "\x00" + position.GetStoreId()
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%s committed_position %q/%q is duplicated", label, position.GetNodeId(), position.GetStoreId())
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateDatasetSyncPoint(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.DatasetSyncPoint)
+	if !ok {
+		return fmt.Errorf("dataset sync point payload has type %T", value)
+	}
+	if !validRequiredToken(payload.GetSyncPointId()) || !validRequiredToken(payload.GetRequestId()) || !validRequiredToken(payload.GetDatasetId()) {
+		return fmt.Errorf("dataset sync point identity is incomplete")
+	}
+	if message == nil || payload.GetDatasetId() != message.GetSubjectId() {
+		return fmt.Errorf("dataset sync point dataset_id does not match subject_id")
+	}
+	switch payload.GetSource() {
+	case "import", "catchup":
+		return nil
+	default:
+		return fmt.Errorf("dataset sync point source %q is invalid", payload.GetSource())
+	}
+}
+
+func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency string, periodTime int64, status string, timestamp *timestamppb.Timestamp, label string) error {
+	if !validRequiredToken(routeID) || message == nil || routeID != message.GetSubjectId() {
+		return fmt.Errorf("%s route identity does not match subject_id", label)
+	}
+	if !validRequiredToken(frequency) || periodTime <= 0 {
+		return fmt.Errorf("%s frequency and period_time are required", label)
+	}
+	if !validCompletionStatus(status) {
+		return fmt.Errorf("%s status %q is invalid", label, status)
+	}
+	if timestamp == nil || timestamp.CheckValid() != nil {
+		return fmt.Errorf("%s timestamp is invalid", label)
+	}
+	return nil
+}
+
+func validateFactorStates(states []*storagepb.FactorPeriodState, subjects map[string]struct{}, status, label string) error {
+	seen := make(map[string]struct{}, len(states))
+	for i, state := range states {
+		if state == nil || !validRequiredToken(state.GetFactorId()) {
+			return fmt.Errorf("%s factor %d identity is invalid", label, i)
+		}
+		if _, ok := seen[state.GetFactorId()]; ok {
+			return fmt.Errorf("%s factor_id %q is duplicated", label, state.GetFactorId())
+		}
+		seen[state.GetFactorId()] = struct{}{}
+		if !validCompletionStatus(state.GetStatus()) && state.GetStatus() != "skipped" {
+			return fmt.Errorf("%s factor %q status %q is invalid", label, state.GetFactorId(), state.GetStatus())
+		}
+		if !validRequiredToken(state.GetSourceHash()) {
+			return fmt.Errorf("%s factor %q source_hash is required", label, state.GetFactorId())
+		}
+		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("%s factor %q failed_subjects", label, state.GetFactorId()))
+		if err != nil {
+			return err
+		}
+		for subject := range failed {
+			if _, ok := subjects[subject]; !ok {
+				return fmt.Errorf("%s factor %q failed_subject %q is not in universe_subject_ids", label, state.GetFactorId(), subject)
+			}
+		}
+		if state.GetStatus() == "complete" && len(failed) != 0 {
+			return fmt.Errorf("%s complete factor %q has failed subjects", label, state.GetFactorId())
+		}
+		if status == "complete" && state.GetStatus() != "complete" {
+			return fmt.Errorf("%s complete status has non-complete factor %q", label, state.GetFactorId())
+		}
+	}
+	return nil
+}
+
+func validateUniqueTokens(values []string, requireNonEmpty bool, label string) (map[string]struct{}, error) {
+	if requireNonEmpty && len(values) == 0 {
+		return nil, fmt.Errorf("%s are required", label)
+	}
+	seen := make(map[string]struct{}, len(values))
+	for i, value := range values {
+		if !validRequiredToken(value) {
+			return nil, fmt.Errorf("%s item %d is invalid", label, i)
+		}
+		if _, ok := seen[value]; ok {
+			return nil, fmt.Errorf("%s item %q is duplicated", label, value)
+		}
+		seen[value] = struct{}{}
+	}
+	return seen, nil
+}
+
+func validRequiredToken(value string) bool {
+	return strings.TrimSpace(value) != "" && strings.TrimSpace(value) == value
+}
+
+func validateStorageWriteKind(kind string) error {
+	if len(kind) > 64 || strings.TrimSpace(kind) != kind {
+		return fmt.Errorf("storage event write_kind is invalid")
+	}
+	switch kind {
+	case "", "factor_result":
+		return nil
+	default:
+		return fmt.Errorf("storage event write_kind is invalid")
+	}
+}
+
+func validCompletionStatus(status string) bool {
+	return status == "complete" || status == "degraded"
+}
+
+func validateViewCompletionKind(kind string) error {
+	switch kind {
+	case CollectorPeriodCompleted.Name(), FactorPeriodComputed.Name():
+		return nil
+	default:
+		return fmt.Errorf("view data ready completion_kind is invalid")
+	}
+}
+
+func validateMarketFetchBatchCompleted(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*marketfetchpb.MarketFetchBatchCompleted)
+	if !ok {
+		return fmt.Errorf("market fetch payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetBatchId()) == "" ||
+		strings.TrimSpace(payload.GetScheduleId()) == "" ||
+		strings.TrimSpace(payload.GetDatasetId()) == "" ||
+		strings.TrimSpace(payload.GetFrequency()) == "" ||
+		strings.TrimSpace(payload.GetBatchKind()) == "" {
+		return fmt.Errorf("market fetch batch identity is incomplete")
+	}
+	if payload.GetBatchId() != message.GetEventId() {
+		return fmt.Errorf("market fetch batch_id does not match event_id")
+	}
+	switch payload.GetBatchKind() {
+	case "realtime", "instrument_snapshot", "catchup", "backfill", "gap_repair":
+	default:
+		return fmt.Errorf("market fetch batch_kind %q is invalid", payload.GetBatchKind())
+	}
+	switch payload.GetStatus() {
+	case "succeeded", "partial_failed", "failed", "timed_out":
+	default:
+		return fmt.Errorf("market fetch status %q is invalid", payload.GetStatus())
+	}
+	if message.GetSpaceId() != "" && payload.GetNodeId() == "" {
+		return fmt.Errorf("market fetch node_id is required")
+	}
+	if message.GetSubjectId() != payload.GetDatasetId() {
+		return fmt.Errorf("market fetch dataset does not match subject_id")
+	}
+	if payload.GetPlannedCount() < 0 || payload.GetSuccessCount() < 0 ||
+		payload.GetRetryCount() < 0 || payload.GetPermanentFailedCount() < 0 {
+		return fmt.Errorf("market fetch counts must be non-negative")
+	}
+	if payload.GetPlannedCount() != int32(len(payload.GetItems())) {
+		return fmt.Errorf("market fetch planned_count does not match items")
+	}
+	var success, retryable, permanent int32
+	if payload.GetCompletedAt() == nil || payload.GetCompletedAt().CheckValid() != nil {
+		return fmt.Errorf("market fetch completed_at is invalid")
+	}
+	if len(payload.GetErrorSummary()) > 256 {
+		return fmt.Errorf("market fetch error_summary exceeds 256 bytes")
+	}
+	for i, item := range payload.GetItems() {
+		if item == nil || strings.TrimSpace(item.GetSubjectId()) == "" || strings.TrimSpace(item.GetOutcome()) == "" {
+			return fmt.Errorf("market fetch item %d identity is incomplete", i)
+		}
+		if len(item.GetErrorSummary()) > 256 {
+			return fmt.Errorf("market fetch item %d error_summary exceeds 256 bytes", i)
+		}
+		switch item.GetOutcome() {
+		case "success":
+			success++
+		case "http_429", "http_5xx", "network_error", "storage_error", "provider_error":
+			retryable++
+		case "invalid_request":
+			permanent++
+		default:
+			return fmt.Errorf("market fetch item %d outcome %q is invalid", i, item.GetOutcome())
+		}
+	}
+	if payload.GetSuccessCount() != success || payload.GetRetryCount() != retryable || payload.GetPermanentFailedCount() != permanent {
+		return fmt.Errorf("market fetch outcome counts do not match items")
+	}
+	if payload.GetSuccessCount()+payload.GetRetryCount()+payload.GetPermanentFailedCount() != payload.GetPlannedCount() {
+		return fmt.Errorf("market fetch outcome counts do not sum to planned_count")
+	}
+	return nil
+}
+
+const maxTargetWeightLength = 256
+const maxSingleTargetWeight = 10
+const maxGrossTargetWeight = 20
+
+var decimalTargetWeightPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
+
+func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	if !ok {
+		return fmt.Errorf("trade target weight payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetTargetId()) == "" || strings.TrimSpace(payload.GetLogicalAccountId()) == "" {
+		return fmt.Errorf("trade target weight identity is incomplete")
+	}
+	if strings.TrimSpace(payload.GetInstanceId()) == "" || strings.TrimSpace(payload.GetSessionId()) == "" || strings.TrimSpace(payload.GetStrategyId()) == "" {
+		return fmt.Errorf("trade target weight session identity is incomplete")
+	}
+	if payload.GetBarEndTime() == nil || payload.GetEffectiveAt() == nil || payload.GetValidUntil() == nil {
+		return fmt.Errorf("trade target weight timestamps are required")
+	}
+	for name, timestamp := range map[string]*timestamppb.Timestamp{
+		"bar_end_time": payload.GetBarEndTime(), "effective_at": payload.GetEffectiveAt(), "valid_until": payload.GetValidUntil(),
+	} {
+		if err := timestamp.CheckValid(); err != nil {
+			return fmt.Errorf("trade target weight %s: %w", name, err)
+		}
+	}
+	if !payload.GetEffectiveAt().AsTime().Equal(payload.GetBarEndTime().AsTime()) {
+		return fmt.Errorf("trade target weight effective_at must equal bar_end_time")
+	}
+	if !payload.GetValidUntil().AsTime().After(payload.GetEffectiveAt().AsTime()) {
+		return fmt.Errorf("trade target weight valid_until must be after effective_at")
+	}
+	seenInstruments := make(map[string]struct{}, len(payload.GetTargets()))
+	gross := new(big.Rat)
+	for i, target := range payload.GetTargets() {
+		if target == nil {
+			return fmt.Errorf("trade target weight %d is nil", i)
+		}
+		instrumentID := target.GetInstrumentId()
+		if strings.TrimSpace(instrumentID) == "" || strings.TrimSpace(instrumentID) != instrumentID {
+			return fmt.Errorf("trade target weight %d instrument_id is empty", i)
+		}
+		if _, exists := seenInstruments[instrumentID]; exists {
+			return fmt.Errorf("trade target weight instrument_id %q is duplicated", instrumentID)
+		}
+		seenInstruments[instrumentID] = struct{}{}
+		targetWeight := target.GetTargetWeight()
+		if len(targetWeight) > maxTargetWeightLength || !decimalTargetWeightPattern.MatchString(targetWeight) {
+			return fmt.Errorf("trade target weight %d target_weight is not decimal", i)
+		}
+		if _, ok := new(big.Rat).SetString(targetWeight); !ok {
+			return fmt.Errorf("trade target weight %d target_weight is not decimal", i)
+		}
+		value, _ := new(big.Rat).SetString(targetWeight)
+		if new(big.Rat).Abs(value).Cmp(new(big.Rat).SetInt64(maxSingleTargetWeight)) > 0 {
+			return fmt.Errorf("trade target weight %d exceeds maximum single exposure", i)
+		}
+		gross.Add(gross, new(big.Rat).Abs(value))
+	}
+	if gross.Cmp(new(big.Rat).SetInt64(maxGrossTargetWeight)) > 0 {
+		return fmt.Errorf("trade target gross exposure exceeds maximum")
+	}
+	if payload.GetTargetId() != message.GetEventId() {
+		return fmt.Errorf("trade target weight target_id does not match event_id")
+	}
+	if payload.GetLogicalAccountId() != message.GetSubjectId() {
+		return fmt.Errorf("trade target weight logical_account_id does not match subject_id")
+	}
+	return nil
+}
+
+func validateStorageRow(row *storagepb.RowUpsert) error {
+	key := row.GetKey()
+	switch kind := key.GetKind().(type) {
+	case *storagepb.RowKey_TimeSeries:
+		series := kind.TimeSeries
+		if series == nil || strings.TrimSpace(series.GetSubjectId()) == "" || strings.TrimSpace(series.GetFreq()) == "" || strings.TrimSpace(series.GetDataTime()) == "" {
+			return fmt.Errorf("time-series key requires subject_id, freq, and data_time")
+		}
+		if err := validateStorageTime(series.GetDataTime()); err != nil {
+			return fmt.Errorf("time-series data_time: %w", err)
+		}
+		if err := validateSeriesTag(series.GetSeriesTag()); err != nil {
+			return fmt.Errorf("time-series series_tag: %w", err)
+		}
+	case *storagepb.RowKey_Record:
+		record := kind.Record
+		if record == nil || strings.TrimSpace(record.GetRecordId()) == "" || strings.TrimSpace(record.GetVersion()) == "" {
+			return fmt.Errorf("record key requires record_id and version")
+		}
+	default:
+		return fmt.Errorf("row key kind is required")
+	}
+	for i, field := range row.GetFields() {
+		if field == nil || strings.TrimSpace(field.GetFieldId()) == "" {
+			return fmt.Errorf("field %d requires field_id", i)
+		}
+		if err := validateStorageValue(field.GetValue()); err != nil {
+			return fmt.Errorf("field %d: %w", i, err)
+		}
+	}
+	for name, value := range row.GetAttributes() {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("attribute name is required")
+		}
+		if err := validateStorageValue(value); err != nil {
+			return fmt.Errorf("attribute %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateSeriesTag(value string) error {
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("must be valid UTF-8")
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("exceeds 128 bytes")
+	}
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("must not contain leading or trailing whitespace")
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("must not contain ASCII control characters")
+		}
+	}
+	return nil
+}
+
+func validateStorageValue(value *storagepb.TypedValue) error {
+	if value == nil || value.GetValue() == nil {
+		return fmt.Errorf("typed value is required")
+	}
+	switch typed := value.GetValue().(type) {
+	case *storagepb.TypedValue_DoubleValue:
+		if math.IsNaN(typed.DoubleValue) || math.IsInf(typed.DoubleValue, 0) {
+			return fmt.Errorf("double value must be finite")
+		}
+	case *storagepb.TypedValue_TimeValue:
+		if err := validateStorageTime(typed.TimeValue); err != nil {
+			return fmt.Errorf("time value: %w", err)
+		}
+	case *storagepb.TypedValue_JsonValue:
+		if !json.Valid([]byte(typed.JsonValue)) {
+			return fmt.Errorf("json value is invalid")
+		}
+	case *storagepb.TypedValue_ListValue:
+		if typed.ListValue == nil {
+			return fmt.Errorf("list value is nil")
+		}
+		for i, item := range typed.ListValue.GetValues() {
+			if err := validateStorageValue(item); err != nil {
+				return fmt.Errorf("list item %d: %w", i, err)
+			}
+		}
+	case *storagepb.TypedValue_NullValue:
+		if typed.NullValue != storagepb.NullValue_NULL_VALUE_NULL {
+			return fmt.Errorf("null value must be explicitly NULL")
+		}
+	}
+	return nil
+}
+
+func validateStorageTime(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("time is required")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, raw); err != nil {
+		return err
+	}
+	return nil
+}

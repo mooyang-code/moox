@@ -1,12 +1,10 @@
-// Package bootstrap loads configuration and wires the moox-factor service process.
+// Package bootstrap loads configuration and wires the moox-factor process.
 package bootstrap
 
 import (
 	"bytes"
 	"fmt"
 	"os"
-	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,29 +12,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the root factor service configuration.
 type Config struct {
-	Database  DatabaseConfig  `yaml:"database"`
-	Storage   StorageConfig   `yaml:"storage"`
-	NATS      NATSConfig      `yaml:"nats"`
-	Engine    EngineConfig    `yaml:"engine"`
-	Scheduler SchedulerConfig `yaml:"scheduler"`
-	Instance  InstanceConfig  `yaml:"instance"`
-	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
-	Health    HealthConfig    `yaml:"health"`
+	Database DatabaseConfig `yaml:"database"`
+	Storage  StorageConfig  `yaml:"storage"`
+	EventBus EventBusConfig `yaml:"eventbus"`
+	Python   PythonConfig   `yaml:"python"`
+	Pipeline PipelineConfig `yaml:"pipeline"`
+	Recalc   RecalcConfig   `yaml:"recalc"`
 }
 
-// DatabaseConfig describes local SQLite settings.
 type DatabaseConfig struct {
-	Type            string        `yaml:"type"`
-	Path            string        `yaml:"path"`
-	MaxIdleConns    int           `yaml:"max_idle_conns"`
-	MaxOpenConns    int           `yaml:"max_open_conns"`
-	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
-	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
+	Path string `yaml:"path"`
 }
 
-// StorageConfig describes storage service tRPC targets.
 type StorageConfig struct {
 	GatewayTarget string `yaml:"gateway_target"`
 	GatewayNodeID string `yaml:"gateway_node_id"`
@@ -44,290 +32,221 @@ type StorageConfig struct {
 	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
-// NATSConfig describes the Storage event stream subscription.
-type NATSConfig struct {
-	URLs           []string `yaml:"urls"`
-	URL            string   `yaml:"url"`
-	Stream         string   `yaml:"stream"`
-	Consumer       string   `yaml:"consumer"`
-	Subject        string   `yaml:"subject"`
-	CredentialFile string   `yaml:"credential_file"`
+type EventBusConfig struct {
+	URLs           []string      `yaml:"urls"`
+	CredentialFile string        `yaml:"credential_file"`
+	FetchMaxWait   time.Duration `yaml:"fetch_max_wait"`
 }
 
-// EngineConfig describes the local Python factor engine.
-type EngineConfig struct {
-	PythonBin           string `yaml:"python_bin"`
-	FactorsDir          string `yaml:"factors_dir"`
-	SectionsDir         string `yaml:"sections_dir"`
-	Workers             int    `yaml:"workers"`
-	TaskTimeoutMS       int    `yaml:"task_timeout_ms"`
-	Encoding            string `yaml:"encoding"`
-	ArrowRowThreshold   int    `yaml:"arrow_row_threshold"`
-	ShmDir              string `yaml:"shm_dir"`
-	MaxBatchParallelism int    `yaml:"max_batch_parallelism"`
-	BatchMinEstimatedMS int64  `yaml:"batch_min_estimated_ms"`
-	SnapshotTTLSeconds  int    `yaml:"snapshot_ttl_seconds"`
+type PythonConfig struct {
+	Bin         string        `yaml:"bin"`
+	WorkerPath  string        `yaml:"worker_path"`
+	FactorsDir  string        `yaml:"factors_dir"`
+	Workers     int           `yaml:"workers"`
+	TaskTimeout time.Duration `yaml:"task_timeout"`
 }
 
-// SchedulerConfig describes runtime scheduling behavior.
-type SchedulerConfig struct {
-	EventBatchWindowMS   int `yaml:"event_batch_window_ms"`
-	MaxRetry             int `yaml:"max_retry"`
-	ReconcileIntervalMin int `yaml:"reconcile_interval_min"`
+type PipelineConfig struct {
+	ReadBatchSubjects int           `yaml:"read_batch_subjects"`
+	ReadWorkers       int           `yaml:"read_workers"`
+	ReadTimeout       time.Duration `yaml:"read_timeout"`
+	WriteBatchRows    int           `yaml:"write_batch_rows"`
+	PeriodBudgetMin   time.Duration `yaml:"period_budget_min"`
+	PeriodBudgetMax   time.Duration `yaml:"period_budget_max"`
 }
 
-// InstanceConfig identifies a factor process in multi-instance deployments.
-type InstanceConfig struct {
-	InstanceID          string `yaml:"instance_id"`
-	Role                string `yaml:"role"`
-	PrimaryTarget       string `yaml:"primary_target"`
-	HeartbeatIntervalMS int    `yaml:"heartbeat_interval_ms"`
+type RecalcConfig struct {
+	ChunkPeriods int `yaml:"chunk_periods"`
 }
 
-// SysDeployConfig describes optional dependency discovery through admin.
-type SysDeployConfig struct {
-	AdminGatewayURL string `yaml:"admin_gateway_url"`
-}
-
-// HealthConfig controls the lightweight HTTP health endpoint.
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
-}
-
-// Load reads YAML config from path and applies factor-specific env overrides.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config %s: %w", path, err)
+		return nil, fmt.Errorf("read factor config %s: %w", path, err)
 	}
 	cfg := Default()
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, fmt.Errorf("parse factor config %s: %w", path, err)
 	}
 	cfg.applyDefaults()
-	cfg.applyEnv()
-	if err := cfg.validateStorageTargets(); err != nil {
+	if err := cfg.applyEnv(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-// Default returns safe local development defaults.
 func Default() *Config {
-	workers := defaultWorkerCount()
 	return &Config{
-		Database: DatabaseConfig{
-			Type:            "sqlite",
-			Path:            "./data/factor/factor.db",
-			MaxIdleConns:    10,
-			MaxOpenConns:    30,
-			ConnMaxLifetime: time.Hour,
-			ConnMaxIdleTime: 10 * time.Minute,
+		Database: DatabaseConfig{Path: "./data/factor/factor.db"},
+		Storage:  StorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "factor"},
+		EventBus: EventBusConfig{
+			URLs:           []string{"nats://127.0.0.1:4222"},
+			CredentialFile: "~/.config/moox/eventbus/factor-eventbus.yaml",
+			FetchMaxWait:   10 * time.Second,
 		},
-		Storage: StorageConfig{
-			GatewayTarget: "ip://127.0.0.1:11003",
+		Python: PythonConfig{
+			Bin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./data/factor/factors",
+			Workers: 8, TaskTimeout: 30 * time.Second,
 		},
-		NATS: NATSConfig{
-			URLs:     []string{"nats://127.0.0.1:4222"},
-			URL:      "nats://127.0.0.1:4222",
-			Stream:   "MOOX_STORAGE",
-			Consumer: "factor_calc",
-			Subject:  "moox.storage.rows_committed.time_series.v1.>",
+		Pipeline: PipelineConfig{
+			ReadBatchSubjects: 100, ReadWorkers: 4, ReadTimeout: 20 * time.Second,
+			WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute,
 		},
-		Engine: EngineConfig{
-			PythonBin:           "python3",
-			FactorsDir:          "./factors",
-			SectionsDir:         "./sections",
-			Workers:             workers,
-			TaskTimeoutMS:       30000,
-			Encoding:            "auto",
-			ArrowRowThreshold:   50000,
-			MaxBatchParallelism: workers,
-			BatchMinEstimatedMS: 50,
-			SnapshotTTLSeconds:  300,
-		},
-		Scheduler: SchedulerConfig{
-			EventBatchWindowMS:   2000,
-			MaxRetry:             3,
-			ReconcileIntervalMin: 10,
-		},
-		Instance: InstanceConfig{
-			InstanceID:          "factor-01",
-			Role:                "primary",
-			HeartbeatIntervalMS: 5000,
-		},
-		SysDeploy: SysDeployConfig{
-			AdminGatewayURL: "http://127.0.0.1:11002",
-		},
-		Health: HealthConfig{
-			Addr: ":11414",
-		},
+		Recalc: RecalcConfig{ChunkPeriods: 2000},
 	}
 }
 
 func (c *Config) applyDefaults() {
-	if c.Database.Type == "" {
-		c.Database.Type = "sqlite"
-	}
+	defaults := Default()
 	if c.Database.Path == "" {
-		c.Database.Path = "./data/factor/factor.db"
-	}
-	if c.Database.MaxIdleConns == 0 {
-		c.Database.MaxIdleConns = 10
-	}
-	if c.Database.MaxOpenConns == 0 {
-		c.Database.MaxOpenConns = 30
-	}
-	if c.Database.ConnMaxLifetime == 0 {
-		c.Database.ConnMaxLifetime = time.Hour
-	}
-	if c.Database.ConnMaxIdleTime == 0 {
-		c.Database.ConnMaxIdleTime = 10 * time.Minute
+		c.Database.Path = defaults.Database.Path
 	}
 	if c.Storage.GatewayTarget == "" {
-		c.Storage.GatewayTarget = "ip://127.0.0.1:11003"
+		c.Storage.GatewayTarget = defaults.Storage.GatewayTarget
 	}
-	if c.NATS.URL == "" {
-		c.NATS.URL = "nats://127.0.0.1:4222"
+	if c.Storage.KeyID == "" {
+		c.Storage.KeyID = defaults.Storage.KeyID
 	}
-	if len(c.NATS.URLs) == 0 {
-		c.NATS.URLs = []string{c.NATS.URL}
+	if len(c.EventBus.URLs) == 0 {
+		c.EventBus.URLs = defaults.EventBus.URLs
 	}
-	if c.NATS.Stream == "" {
-		c.NATS.Stream = "MOOX_STORAGE"
+	if c.EventBus.CredentialFile == "" {
+		c.EventBus.CredentialFile = defaults.EventBus.CredentialFile
 	}
-	if c.NATS.Consumer == "" {
-		c.NATS.Consumer = "factor_calc"
+	if c.EventBus.FetchMaxWait == 0 {
+		c.EventBus.FetchMaxWait = defaults.EventBus.FetchMaxWait
 	}
-	if c.NATS.Subject == "" {
-		c.NATS.Subject = "moox.storage.rows_committed.time_series.v1.>"
+	if c.Python.Bin == "" {
+		c.Python.Bin = defaults.Python.Bin
 	}
-	if c.Engine.PythonBin == "" {
-		c.Engine.PythonBin = "python3"
+	if c.Python.WorkerPath == "" {
+		c.Python.WorkerPath = defaults.Python.WorkerPath
 	}
-	if c.Engine.FactorsDir == "" {
-		c.Engine.FactorsDir = "./factors"
+	if c.Python.FactorsDir == "" {
+		c.Python.FactorsDir = defaults.Python.FactorsDir
 	}
-	if c.Engine.SectionsDir == "" {
-		c.Engine.SectionsDir = "./sections"
+	if c.Python.Workers == 0 {
+		c.Python.Workers = defaults.Python.Workers
 	}
-	if c.Engine.Workers <= 0 {
-		c.Engine.Workers = defaultWorkerCount()
+	if c.Python.TaskTimeout == 0 {
+		c.Python.TaskTimeout = defaults.Python.TaskTimeout
 	}
-	if c.Engine.TaskTimeoutMS == 0 {
-		c.Engine.TaskTimeoutMS = 30000
+	if c.Pipeline.ReadBatchSubjects == 0 {
+		c.Pipeline.ReadBatchSubjects = defaults.Pipeline.ReadBatchSubjects
 	}
-	if c.Engine.Encoding == "" {
-		c.Engine.Encoding = "auto"
+	if c.Pipeline.ReadWorkers == 0 {
+		c.Pipeline.ReadWorkers = defaults.Pipeline.ReadWorkers
 	}
-	if c.Engine.ArrowRowThreshold == 0 {
-		c.Engine.ArrowRowThreshold = 50000
+	if c.Pipeline.ReadTimeout == 0 {
+		c.Pipeline.ReadTimeout = defaults.Pipeline.ReadTimeout
 	}
-	if c.Engine.MaxBatchParallelism <= 0 {
-		c.Engine.MaxBatchParallelism = c.Engine.Workers
+	if c.Pipeline.WriteBatchRows == 0 {
+		c.Pipeline.WriteBatchRows = defaults.Pipeline.WriteBatchRows
 	}
-	if c.Engine.BatchMinEstimatedMS <= 0 {
-		c.Engine.BatchMinEstimatedMS = 50
+	if c.Pipeline.PeriodBudgetMin == 0 {
+		c.Pipeline.PeriodBudgetMin = defaults.Pipeline.PeriodBudgetMin
 	}
-	if c.Engine.SnapshotTTLSeconds <= 0 {
-		c.Engine.SnapshotTTLSeconds = 300
+	if c.Pipeline.PeriodBudgetMax == 0 {
+		c.Pipeline.PeriodBudgetMax = defaults.Pipeline.PeriodBudgetMax
 	}
-	if c.Scheduler.EventBatchWindowMS == 0 {
-		c.Scheduler.EventBatchWindowMS = 2000
-	}
-	if c.Scheduler.MaxRetry == 0 {
-		c.Scheduler.MaxRetry = 3
-	}
-	if c.Scheduler.ReconcileIntervalMin == 0 {
-		c.Scheduler.ReconcileIntervalMin = 10
-	}
-	if c.Instance.InstanceID == "" {
-		c.Instance.InstanceID = "factor-01"
-	}
-	if c.Instance.Role == "" {
-		c.Instance.Role = "primary"
-	}
-	if c.Instance.HeartbeatIntervalMS == 0 {
-		c.Instance.HeartbeatIntervalMS = 5000
-	}
-	if c.SysDeploy.AdminGatewayURL == "" {
-		c.SysDeploy.AdminGatewayURL = "http://127.0.0.1:11002"
-	}
-	if c.Health.Addr == "" {
-		c.Health.Addr = ":11414"
+	if c.Recalc.ChunkPeriods == 0 {
+		c.Recalc.ChunkPeriods = defaults.Recalc.ChunkPeriods
 	}
 }
 
-func (c *Config) applyEnv() {
-	if v := os.Getenv("MOOX_FACTOR_DB_PATH"); v != "" {
-		c.Database.Path = v
+func (c *Config) applyEnv() error {
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_DB_PATH")); value != "" {
+		c.Database.Path = value
 	}
-	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET"); v != "" {
-		c.Storage.GatewayTarget = v
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET")); value != "" {
+		c.Storage.GatewayTarget = value
 	}
-	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID"); v != "" {
-		c.Storage.GatewayNodeID = v
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID")); value != "" {
+		c.Storage.GatewayNodeID = value
 	}
-	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_KEY_ID"); v != "" {
-		c.Storage.KeyID = v
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_KEY_ID")); value != "" {
+		c.Storage.KeyID = value
 	}
-	if v := os.Getenv("MOOX_FACTOR_STORAGE_RPC_HMAC_KEY_FILE"); v != "" {
-		c.Storage.HMACKeyFile = v
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_HMAC_KEY_FILE")); value != "" {
+		c.Storage.HMACKeyFile = value
 	}
-	if v, ok := os.LookupEnv("MOOX_FACTOR_NATS_URL"); ok {
-		c.NATS.URL = v
+	if value := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_NATS_URL")); value != "" {
+		c.EventBus.URLs = splitURLs(value)
 	}
-	if v := os.Getenv("MOOX_FACTOR_ENGINE_PYTHON_BIN"); v != "" {
-		c.Engine.PythonBin = v
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE")); value != "" {
+		c.EventBus.CredentialFile = value
 	}
-	if v := os.Getenv("MOOX_FACTOR_ENGINE_FACTORS_DIR"); v != "" {
-		c.Engine.FactorsDir = v
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_BIN")); value != "" {
+		c.Python.Bin = value
 	}
-	if v := os.Getenv("MOOX_FACTOR_ENGINE_SECTIONS_DIR"); v != "" {
-		c.Engine.SectionsDir = v
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_WORKER_PATH")); value != "" {
+		c.Python.WorkerPath = value
 	}
-	if v := os.Getenv("MOOX_FACTOR_ENGINE_WORKERS"); v != "" {
-		if workers, err := strconv.Atoi(v); err == nil && workers > 0 {
-			c.Engine.Workers = workers
-		}
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_FACTORS_DIR")); value != "" {
+		c.Python.FactorsDir = value
 	}
-	if v := os.Getenv("MOOX_FACTOR_ADMIN_GATEWAY_URL"); v != "" {
-		c.SysDeploy.AdminGatewayURL = v
-	}
-	if v := os.Getenv("MOOX_FACTOR_HEALTH_ADDR"); v != "" {
-		c.Health.Addr = v
-	}
+	return nil
 }
 
-func (c *Config) validateStorageTargets() error {
-	if c.Engine.MaxBatchParallelism > c.Engine.Workers {
-		return fmt.Errorf("engine.max_batch_parallelism=%d exceeds workers=%d", c.Engine.MaxBatchParallelism, c.Engine.Workers)
+func (c *Config) Validate() error {
+	if c == nil {
+		return fmt.Errorf("factor config is required")
 	}
-	if !isTRPCTarget(c.Storage.GatewayTarget) {
-		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)
+	if strings.TrimSpace(c.Database.Path) == "" {
+		return fmt.Errorf("database.path is required")
+	}
+	if !validTRPCTarget(c.Storage.GatewayTarget) {
+		return fmt.Errorf("storage.gateway_target must be a tRPC target")
 	}
 	if strings.TrimSpace(c.Storage.HMACKeyFile) != "" {
 		if _, err := gatewayauth.CredentialsFromKeyFile(c.Storage.KeyID, c.Storage.HMACKeyFile); err != nil {
 			return fmt.Errorf("storage hmac credentials: %w", err)
 		}
 	}
+	if len(c.EventBus.URLs) == 0 {
+		return fmt.Errorf("eventbus.urls must not be empty")
+	}
+	if c.EventBus.FetchMaxWait <= 0 {
+		return fmt.Errorf("eventbus.fetch_max_wait must be positive")
+	}
+	if strings.TrimSpace(c.Python.Bin) == "" || strings.TrimSpace(c.Python.WorkerPath) == "" || strings.TrimSpace(c.Python.FactorsDir) == "" {
+		return fmt.Errorf("python.bin, python.worker_path and python.factors_dir are required")
+	}
+	if c.Python.Workers <= 0 || c.Python.TaskTimeout <= 0 {
+		return fmt.Errorf("python.workers and python.task_timeout must be positive")
+	}
+	if c.Pipeline.ReadBatchSubjects <= 0 || c.Pipeline.ReadWorkers <= 0 || c.Pipeline.ReadTimeout <= 0 || c.Pipeline.WriteBatchRows <= 0 {
+		return fmt.Errorf("pipeline batch sizes, workers and read_timeout must be positive")
+	}
+	if c.Pipeline.PeriodBudgetMin <= 0 || c.Pipeline.PeriodBudgetMax <= 0 {
+		return fmt.Errorf("pipeline period budgets must be positive")
+	}
+	if c.Pipeline.PeriodBudgetMin > c.Pipeline.PeriodBudgetMax {
+		return fmt.Errorf("pipeline.period_budget_min must not exceed pipeline.period_budget_max")
+	}
+	if c.Recalc.ChunkPeriods <= 0 {
+		return fmt.Errorf("recalc.chunk_periods must be positive")
+	}
 	return nil
 }
 
-func isTRPCTarget(raw string) bool {
-	raw = strings.TrimSpace(strings.ToLower(raw))
-	return raw != "" && !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://")
+func validTRPCTarget(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	return value != "" && !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://")
 }
 
-func defaultWorkerCount() int {
-	n := runtime.NumCPU()
-	if n <= 0 {
-		return 1
+func splitURLs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	urls := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			urls = append(urls, value)
+		}
 	}
-	if n > 8 {
-		return 8
-	}
-	return n
+	return urls
 }

@@ -16,11 +16,6 @@ func NewDecimal(value string) Decimal {
 	return Decimal{value: value}
 }
 
-// NewDecimalFromFloat 从浮点数创建Decimal
-func NewDecimalFromFloat(value float64) Decimal {
-	return Decimal{value: fmt.Sprintf("%.8f", value)}
-}
-
 // String 返回字符串表示
 func (d Decimal) String() string {
 	return d.value
@@ -49,9 +44,4 @@ func (d *Decimal) UnmarshalJSON(data []byte) error {
 	}
 	d.value = value
 	return nil
-}
-
-// Zero 零值
-func Zero() Decimal {
-	return Decimal{value: "0"}
 }

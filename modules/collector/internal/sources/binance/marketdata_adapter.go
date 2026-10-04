@@ -1,0 +1,465 @@
+package binance
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
+	"trpc.group/trpc-go/trpc-go/log"
+)
+
+var (
+	_ marketdata.MarketProvider    = (*MarketDataAdapter)(nil)
+	_ marketdata.KlineFetcher      = (*MarketDataAdapter)(nil)
+	_ marketdata.InstrumentFetcher = (*MarketDataAdapter)(nil)
+)
+
+type AdapterConfig struct {
+	InstrumentType  marketdata.InstrumentType
+	KlineCollector  *KlineCollector
+	SymbolCollector *SymbolCollector
+	Now             func() time.Time
+}
+
+// MarketDataAdapter exposes the existing Binance collectors through the common
+// typed marketdata contracts. Protocol parsing, retry behavior, symbol
+// filtering, and subject normalization stay owned by the existing collectors.
+type MarketDataAdapter struct {
+	defaultInstrumentType marketdata.InstrumentType
+	klineCollector        *KlineCollector
+	symbolCollector       *SymbolCollector
+	now                   func() time.Time
+}
+
+func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
+	if cfg.InstrumentType == "" {
+		cfg.InstrumentType = marketdata.InstrumentSpot
+	}
+	if cfg.KlineCollector == nil {
+		cfg.KlineCollector = NewKlineCollector()
+	}
+	if cfg.SymbolCollector == nil {
+		cfg.SymbolCollector = NewSymbolCollector()
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	return &MarketDataAdapter{
+		defaultInstrumentType: cfg.InstrumentType,
+		klineCollector:        cfg.KlineCollector,
+		symbolCollector:       cfg.SymbolCollector,
+		now:                   cfg.Now,
+	}
+}
+
+func (a *MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
+	sourceID := "spot_http"
+	if a.defaultInstrumentType == marketdata.InstrumentSwap {
+		sourceID = "swap_http"
+	}
+	return marketdata.ProviderDescriptor{
+		ID:              "binance",
+		SourceID:        sourceID,
+		DisplayName:     "Binance",
+		Hosts:           []string{"data-api.binance.vision", "api-gcp.binance.com", "api.binance.com", "fapi.binance.com"},
+		ProtocolVariant: "http",
+		Transport:       "https",
+		Port:            443,
+		Status:          marketdata.SourceEnabled,
+	}
+}
+
+func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
+	instrument := marketdata.InstrumentSpot
+	if a != nil && a.defaultInstrumentType == marketdata.InstrumentSwap {
+		instrument = marketdata.InstrumentSwap
+	}
+	return marketdata.KlineSpec{
+		Markets:     []string{"crypto"},
+		Exchanges:   []string{"binance"},
+		Instruments: []marketdata.InstrumentType{instrument},
+		Frequencies: []string{
+			string(marketdata.FrequencyMinute), string(marketdata.Frequency5Min),
+			string(marketdata.Frequency15Min), string(marketdata.Frequency30Min),
+			string(marketdata.FrequencyHour), string(marketdata.FrequencyDay),
+			string(marketdata.FrequencyWeek),
+		},
+		CompleteOHLCV:     true,
+		HasAmount:         true,
+		MaxBarsPerRequest: 1000,
+		SupportsBatch:     false,
+		TimestampMode:     marketdata.TimestampModeOpen,
+		History:           marketdata.KlineHistoryCapability{SupportsArbitraryRange: true},
+		RateLimit: marketdata.RateLimitPolicy{
+			RequestsPerSecond: 5,
+			Burst:             5,
+			MaxConcurrent:     1,
+			Cooldown:          time.Second,
+			RequestTimeout:    configuredKlineRequestTimeout(),
+		},
+	}
+}
+
+func configuredKlineRequestTimeout() time.Duration {
+	const defaultTimeout = 5 * time.Second
+	raw := strings.TrimSpace(os.Getenv("MOOX_FETCH_REQUEST_TIMEOUT_MS"))
+	if raw == "" {
+		return defaultTimeout
+	}
+	milliseconds, err := strconv.Atoi(raw)
+	if err != nil || milliseconds <= 0 {
+		return defaultTimeout
+	}
+	return time.Duration(milliseconds) * time.Millisecond
+}
+
+func (*MarketDataAdapter) InstrumentSpec() marketdata.InstrumentSpec {
+	return marketdata.InstrumentSpec{
+		Markets:      []string{"crypto"},
+		Exchanges:    []string{"binance"},
+		FullSnapshot: true,
+		PageSize:     1,
+		RateLimit: marketdata.RateLimitPolicy{
+			RequestsPerSecond: 1,
+			Burst:             1,
+			MaxConcurrent:     1,
+			Cooldown:          time.Second,
+			RequestTimeout:    10 * time.Second,
+		},
+	}
+}
+
+func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validateBinanceRoute(req.MarketID, req.ExchangeID); err != nil {
+		return nil, err
+	}
+	productType := req.InstrumentType
+	if productType == "" {
+		productType = a.defaultInstrumentType
+	}
+	if productType != a.defaultInstrumentType {
+		return nil, fmt.Errorf("%w: product %s does not match source %s", marketdata.ErrInvalidRequest, productType, a.Descriptor().SourceID)
+	}
+	sourceID := a.Descriptor().SourceID
+	if req.SourceID != "" && req.SourceID != sourceID {
+		return nil, fmt.Errorf("%w: source %s does not match %s", marketdata.ErrInvalidRequest, req.SourceID, sourceID)
+	}
+	req.SourceID = sourceID
+	req.InstrumentType = productType
+	instType, err := InstTypeForMarket(string(productType))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", marketdata.ErrInvalidRequest, err)
+	}
+	if err := validateInstrumentType(productType, req.InstrumentType); err != nil {
+		return nil, err
+	}
+	// Binance interval tokens are case-sensitive. The catalog keeps the
+	// historical 1H spelling for the hourly Spot dataset, while Binance
+	// expects 1h on the wire. Keep the catalog frequency on the persisted row
+	// and normalize only the provider request.
+	providerInterval := normalizeBinanceInterval(req.Frequency)
+
+	params := &sources.CollectParams{
+		InstType:  instType,
+		Symbol:    strings.TrimSpace(req.ProviderSymbol),
+		SubjectID: strings.TrimSpace(req.SubjectID),
+		Interval:  providerInterval,
+		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
+	}
+	exchangeKlines, err := a.klineCollector.fetchKlinesOnce(ctx, params, &exchange.KlineRequest{
+		Symbol:    params.Symbol,
+		Interval:  providerInterval,
+		Limit:     req.Limit,
+		StartTime: req.StartTime,
+		EndTime:   req.EndTime,
+	})
+	if err != nil {
+		return nil, classifyProviderError(err)
+	}
+
+	now := a.now().UTC()
+	closed, _ := filterClosedKlines(convertExchangeKlines(exchangeKlines, params.Symbol, req.Frequency), now)
+	if len(closed) == 0 {
+		return nil, marketdata.ErrNoClosedBar
+	}
+	rows := make([]marketdata.NormalizedKline, 0, len(closed))
+	for _, kline := range closed {
+		row, err := normalizeMarketDataKline(req, kline, now)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func normalizeBinanceInterval(frequency string) string {
+	raw := strings.TrimSpace(frequency)
+	parsed, err := marketdata.ParseFrequency(raw)
+	if err != nil {
+		return raw
+	}
+	return string(parsed)
+}
+
+func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
+	if err := validateBinanceRoute(req.MarketID, req.ExchangeID); err != nil {
+		return marketdata.InstrumentSnapshot{}, err
+	}
+	instType, err := InstTypeForMarket(string(a.defaultInstrumentType))
+	if err != nil {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrInvalidRequest, err)
+	}
+	marketID := strings.TrimSpace(string(req.MarketID))
+	if marketID == "" {
+		marketID = "crypto"
+	}
+	fetchedAt := req.SnapshotAt.UTC()
+	if req.SnapshotAt.IsZero() {
+		fetchedAt = a.now().UTC()
+	}
+	var symbols []*exchange.SymbolInfo
+	fetched, fetchErr := a.symbolCollector.fetchSymbols(ctx, &sources.CollectParams{
+		SpaceID:   marketID,
+		DatasetID: "instruments",
+		InstType:  instType,
+		DNSRoutes: marketDataDNSRoutes(req.DNSRoutes),
+	})
+	symbols = a.symbolCollector.filterSymbols(fetched)
+	if len(symbols) == 0 && fetchErr == nil {
+		fetchErr = fmt.Errorf("Binance active USDT symbol snapshot is empty")
+	}
+	err = fetchErr
+	if err != nil {
+		return marketdata.InstrumentSnapshot{}, classifyProviderError(err)
+	}
+
+	instruments := make([]marketdata.Instrument, 0, len(symbols))
+	index := make(map[string]int, len(symbols))
+	duplicated := make(map[string]bool)
+	skipped := 0
+	for _, symbol := range symbols {
+		if symbol == nil {
+			continue
+		}
+		subjectID, subjectErr := ToSubjectID(symbol)
+		if subjectErr != nil {
+			skipped++
+			log.WarnContextf(ctx, "binance symbol skipped symbol=%s base=%s quote=%s err=%v", symbol.Symbol, symbol.BaseAsset, symbol.QuoteAsset, subjectErr)
+			continue
+		}
+		if _, ok := index[subjectID]; ok {
+			duplicated[subjectID] = true
+			continue
+		}
+		index[subjectID] = len(instruments)
+		instruments = append(instruments, marketdata.Instrument{
+			SubjectID:      subjectID,
+			ProviderSymbol: externalSymbol(symbol),
+			Exchange:       "binance",
+			Name:           strings.TrimSpace(symbol.BaseAsset) + "/" + strings.TrimSpace(symbol.QuoteAsset),
+			Status:         symbol.Status,
+			BaseAsset:      symbol.BaseAsset,
+			QuoteAsset:     symbol.QuoteAsset,
+		})
+	}
+	if len(duplicated) > 0 {
+		kept := instruments[:0]
+		for _, instrument := range instruments {
+			if !duplicated[instrument.SubjectID] {
+				kept = append(kept, instrument)
+			}
+		}
+		instruments = kept
+	}
+	if skipped > 0 || len(duplicated) > 0 {
+		log.WarnContextf(ctx, "binance symbol list skipped=%d duplicated=%d", skipped, len(duplicated))
+	}
+	if len(instruments) == 0 {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: binance subject list is empty", marketdata.ErrProtocol)
+	}
+	snapshot := marketdata.InstrumentSnapshot{
+		SnapshotID:     fetchedAt.Format(time.RFC3339Nano),
+		SourceProvider: "binance",
+		MarketID:       marketID,
+		FetchedAt:      fetchedAt,
+		Complete:       true,
+		PageCount:      1,
+		ExchangeCounts: map[string]int{"binance": len(instruments)},
+		Instruments:    instruments,
+	}
+	if err := marketdata.ValidateInstrumentSnapshot(snapshot); err != nil {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+	}
+	if skipped > 0 {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: skipped %d binance symbols; snapshot is not authoritative for tag removals", marketdata.ErrProtocol, skipped)
+	}
+	return snapshot, nil
+}
+
+func validateBinanceRoute(marketID marketdata.MarketID, exchangeID marketdata.ExchangeID) error {
+	if value := strings.TrimSpace(string(marketID)); value != "" && value != "crypto" {
+		return fmt.Errorf("%w: market_id %q is unsupported", marketdata.ErrInvalidRequest, marketID)
+	}
+	if value := strings.TrimSpace(string(exchangeID)); value != "" && value != "binance" {
+		return fmt.Errorf("%w: exchange_id %q is unsupported", marketdata.ErrInvalidRequest, exchangeID)
+	}
+	return nil
+}
+
+func validateInstrumentType(productType marketdata.InstrumentType, instrumentType marketdata.InstrumentType) error {
+	if instrumentType == "" {
+		return nil
+	}
+	want := marketdata.InstrumentSpot
+	if productType == marketdata.InstrumentSwap {
+		want = marketdata.InstrumentSwap
+	}
+	if instrumentType != want {
+		return fmt.Errorf("%w: instrument_type %q does not match product_type %q", marketdata.ErrInvalidRequest, instrumentType, productType)
+	}
+	return nil
+}
+
+func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, fetchedAt time.Time) (marketdata.NormalizedKline, error) {
+	if kline == nil {
+		return marketdata.NormalizedKline{}, fmt.Errorf("%w: nil Binance kline", marketdata.ErrProtocol)
+	}
+	openValue, err := decimalToFloat64(kline.Open)
+	if err != nil {
+		return marketdata.NormalizedKline{}, err
+	}
+	highValue, err := decimalToFloat64(kline.High)
+	if err != nil {
+		return marketdata.NormalizedKline{}, err
+	}
+	lowValue, err := decimalToFloat64(kline.Low)
+	if err != nil {
+		return marketdata.NormalizedKline{}, err
+	}
+	closeValue, err := decimalToFloat64(kline.Close)
+	if err != nil {
+		return marketdata.NormalizedKline{}, err
+	}
+	volumeValue, err := decimalToFloat64(kline.Volume)
+	if err != nil {
+		return marketdata.NormalizedKline{}, err
+	}
+	amountValue, err := decimalToFloat64(kline.QuoteVolume)
+	if err != nil {
+		return marketdata.NormalizedKline{}, err
+	}
+	frequency, err := req.FrequencyValue()
+	if err != nil {
+		return marketdata.NormalizedKline{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+	}
+	barDuration := frequency.Duration()
+	barStart := normalizeBarStart(kline.OpenTime.UTC(), frequency)
+	if barDuration <= 0 {
+		if frequency == marketdata.FrequencyMonth {
+			barDuration = 0
+		} else {
+			return marketdata.NormalizedKline{}, fmt.Errorf("%w: frequency %q has no duration", marketdata.ErrUnsupportedFrequency, frequency)
+		}
+	}
+	sourceID := strings.TrimSpace(req.SourceID)
+	if sourceID == "" {
+		sourceID = "spot_http"
+		if req.InstrumentType == marketdata.InstrumentSwap {
+			sourceID = "swap_http"
+		}
+	}
+	row := marketdata.NormalizedKline{
+		SubjectID:         req.SubjectID,
+		ProviderID:        "binance",
+		SourceID:          sourceID,
+		ProviderSymbol:    req.ProviderSymbol,
+		Frequency:         req.Frequency,
+		BarStart:          barStart,
+		BarEnd:            frequency.BarEnd(barStart),
+		Open:              openValue,
+		High:              highValue,
+		Low:               lowValue,
+		Close:             closeValue,
+		VolumeShares:      volumeValue,
+		AmountCNY:         amountValue,
+		TradeCount:        kline.TradeCount,
+		ProviderTimestamp: kline.CloseTime.UTC(),
+		FetchedAt:         fetchedAt,
+		RequestID:         req.RequestID,
+	}
+	if err := marketdata.ValidateNormalizedKline(row); err != nil {
+		return marketdata.NormalizedKline{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+	}
+	return row, nil
+}
+
+func normalizeBarStart(openTime time.Time, frequency marketdata.Frequency) time.Time {
+	openTime = openTime.UTC()
+	if frequency == marketdata.FrequencyMonth {
+		return time.Date(openTime.Year(), openTime.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+	if frequency != marketdata.FrequencyWeek {
+		return openTime.Truncate(frequency.Duration())
+	}
+	// Unix-duration truncation anchors weeks on Thursday. Binance's 1w
+	// interval is conventionally a Monday 00:00 UTC bucket, so align it by
+	// calendar date rather than by elapsed seconds.
+	day := time.Date(openTime.Year(), openTime.Month(), openTime.Day(), 0, 0, 0, 0, time.UTC)
+	daysSinceMonday := (int(day.Weekday()) + 6) % 7
+	return day.AddDate(0, 0, -daysSinceMonday)
+}
+
+func marketDataDNSRoutes(routes map[string][]string) map[string]sources.DNSResolution {
+	if len(routes) == 0 {
+		return nil
+	}
+	result := make(map[string]sources.DNSResolution, len(routes))
+	for host, ips := range routes {
+		result[host] = sources.DNSResolution{IPs: append([]string(nil), ips...)}
+	}
+	return result
+}
+
+func decimalToFloat64(value interface{ Float64() (float64, error) }) (float64, error) {
+	floatValue, err := value.Float64()
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+	}
+	return floatValue, nil
+}
+
+func classifyProviderError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var statusErr *httpclient.StatusError
+	if errors.As(err, &statusErr) {
+		if statusErr.StatusCode == http.StatusTooManyRequests {
+			return fmt.Errorf("%w: %v", marketdata.ErrRateLimited, err)
+		}
+		return fmt.Errorf("%w: %v", marketdata.ErrHTTPStatus, err)
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
+	}
+	return err
+}

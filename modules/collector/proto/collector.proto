@@ -7,7 +7,7 @@ import "google/protobuf/struct.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/collector/proto/collectorgen;collectorpb";
 
-// CollectMgr 管理采集规则、任务实例和任务规划。
+// CollectMgr 管理采集任务、任务实例和任务结果。
 // 纯 RPC 服务，由统一 HTTP 转发层调度：
 //   - /api/admin/collectmgr/{method}（JWT，面向前端）
 //
@@ -19,128 +19,219 @@ option go_package = "github.com/mooyang-code/moox/modules/collector/proto/collec
 enum TaskInstanceStatus {
   TASK_INSTANCE_STATUS_UNSPECIFIED = 0;
   TASK_INSTANCE_STATUS_PENDING = 1;
-  TASK_INSTANCE_STATUS_RUNNING = 2;
-  TASK_INSTANCE_STATUS_SUCCESS = 3;
-  TASK_INSTANCE_STATUS_PART_FAILED = 4;
-  TASK_INSTANCE_STATUS_FAILED = 5;
+  TASK_INSTANCE_STATUS_SUCCESS = 2;
+  TASK_INSTANCE_STATUS_FAILED = 3;
 }
 
-// TaskRule 任务规则。
-message TaskRule {
+// CollectionTask 是用户可见的采集任务。
+message CollectionTask {
   string space_id = 1;
-  string rule_id = 2;
-  string data_type = 3;
-  string exchange = 4;
-  google.protobuf.Struct collect_params = 5;
-  string assignment_type = 6;
-  repeated string assigned_nodes = 7;
-  string node_pattern = 8;
-  repeated string node_tags = 9;
-  optional bool enabled = 10;
-  string creator = 11;
-  string create_time = 12;     // RFC3339
-  string modify_time = 13;     // RFC3339
+  string task_id = 2;
+  string task_name = 3;
+  string description = 4;
+  string data_type = 5;
+  repeated string tag_ids = 6;
+  google.protobuf.Struct collect_params = 7;
+  optional bool enabled = 8;
+  string creator = 9;
+  string create_time = 10;    // RFC3339
+  string modify_time = 11;    // RFC3339
+  string definition_hash = 12;
+  string prepare_state = 13;  // pending/waiting_view/ready/error
+  string last_error = 14;
+  TaskResult result = 15;
 }
 
-message GetTaskRuleListReq {
+// TaskResult 是采集任务唯一结果的用户可读摘要。
+message TaskResult {
+  string result_name = 1;
+  string view_id = 2;
+  string status = 3;
+  string last_data_time = 4;
+  string data_kind = 5;
+  string coverage_start = 6;
+  string coverage_end = 7;
+}
+
+// ResultConfig 是结果存储的高级配置，不允许指定既有结果。
+message ResultConfig {
+  string data_node_id = 1;
+  string keep_duration = 2;
+  string description = 3;
+}
+
+message GetTaskListReq {
   string space_id = 1;
   string data_type = 2;
-  string exchange = 3;
   optional bool enabled = 4;
-  string rule_id = 5;
+  string task_id = 5;
   common.Page page = 6;
 }
 
-message GetTaskRuleListRsp {
+message GetTaskListRsp {
   common.RetInfo ret_info = 1;
-  repeated TaskRule rules = 2;
+  repeated CollectionTask tasks = 2;
   common.PageResult page = 3;
 }
 
-message GetTaskRuleDetailReq {
+message GetTaskDetailReq {
   string space_id = 1;
-  string rule_id = 2;
+  string task_id = 2;
 }
 
-message GetTaskRuleDetailRsp {
+message GetTaskDetailRsp {
   common.RetInfo ret_info = 1;
-  TaskRule rule = 2;
+  CollectionTask task = 2;
 }
 
-message CreateTaskRuleReq {
-  TaskRule rule = 1;
-}
-
-message CreateTaskRuleRsp {
-  common.RetInfo ret_info = 1;
-  string rule_id = 2;
-}
-
-message UpdateTaskRuleReq {
+// TaskResultInventoryEntry is one task-owned K-line result in an authoritative
+// inventory snapshot. Deleted tasks are represented by their absence from a
+// newer complete snapshot; disabled tasks remain present with enabled=false.
+message TaskResultInventoryEntry {
   string space_id = 1;
-  string rule_id = 2;
-  TaskRule rule = 3;
+  string task_id = 2;
+  string dataset_id = 3;
+  string view_id = 4;
+  string frequency = 5;
+  string market_id = 6;
+  string calendar_id = 7;
+  string timezone = 8;
+  repeated string sessions = 9;
+  string latest_completed_period = 10; // RFC3339; complete or degraded
+  string latest_completed_status = 11;
+  string view_last_data_time = 12; // RFC3339 when Storage provides one
+  string observed_at = 13; // RFC3339 metadata observation time
+  bool enabled = 14;
+  bool ownership_verified = 15;
+  string result_status = 16; // ready/pending/error
+  // Canary candidate fields are populated only when the current task series
+  // set is proven to contain exactly one row and both result identities are
+  // owned by this task. Otherwise availability stays false and these fields
+  // remain empty/default.
+  bool canary_candidate_available = 17;
+  string subject_id = 18;
+  string provider_symbol = 19;
+  string provider = 20;
+  string source_id = 21;
+  string market_type = 22;
+  string series_tag = 23;
+  uint32 series_index = 24;
+  string series_hash = 25;
+  uint32 expected_count = 26;
+  repeated string output_fields = 27;
 }
 
-message UpdateTaskRuleRsp {
+message GetTaskResultInventoryReq {
+  common.Page page = 1;
+  // Empty on page one creates a snapshot. Subsequent pages must echo the
+  // returned ID so a concurrent task change cannot silently mix snapshots.
+  string snapshot_id = 2;
+  // Inventory snapshots and page tokens are scoped to this Space. Admin
+  // Gateway also checks this field against the authenticated X-Space-Id.
+  string space_id = 3;
+}
+
+message GetTaskResultInventoryRsp {
   common.RetInfo ret_info = 1;
-  TaskRule rule = 2;
+  repeated TaskResultInventoryEntry entries = 2;
+  common.PageResult page = 3;
+  string snapshot_id = 4;
+  string observed_at = 5;
 }
 
-message DisableTaskRuleReq {
+message CreateTaskReq {
+  CollectionTask task = 1;
+  ResultConfig result_config = 2;
+}
+
+message CreateTaskRsp {
+  common.RetInfo ret_info = 1;
+  string task_id = 2;
+}
+
+message UpdateTaskReq {
   string space_id = 1;
-  string rule_id = 2;
+  string task_id = 2;
+  CollectionTask task = 3;
+  ResultConfig result_config = 4;
 }
 
-message DisableTaskRuleRsp {
+message UpdateTaskRsp {
+  common.RetInfo ret_info = 1;
+  CollectionTask task = 2;
+}
+
+message DisableTaskReq {
+  string space_id = 1;
+  string task_id = 2;
+}
+
+message DisableTaskRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message DeleteTaskReq {
+  string space_id = 1;
+  string task_id = 2;
+  bool delete_result_data = 3;
+}
+
+message DeleteTaskRsp {
   common.RetInfo ret_info = 1;
 }
 
 // TaskInstance 任务实例。
 message TaskInstance {
-  reserved 12;
-  reserved "planned_exec_node";
-
   string space_id = 1;
-  string task_id = 2;
-  string rule_id = 3;
-  string exchange = 4;
-  string market = 5;
+  string run_id = 2;
+  string instance_id = 3;
+  string provider = 4;
+  string market_type = 5;
   string data_type = 6;
-  string dataset_id = 7;
+  string request_key = 7;
   string subject_id = 8;
-  string symbol = 9;
-  string interval = 10;
+  string frequency = 9;
   google.protobuf.Struct task_params = 11;
-  string last_exec_node = 13;
-  TaskInstanceStatus last_exec_status = 14;
-  string last_exec_time = 15;  // RFC3339，可为空
-  google.protobuf.Struct result = 16;
-  bool is_deleted = 17;
-  string create_time = 18;     // RFC3339
-  string modify_time = 19;     // RFC3339
-  string cloud_job_item_id = 20;
+  TaskInstanceStatus last_exec_status = 13;
+  string last_exec_time = 14;  // RFC3339，可为空
+  google.protobuf.Struct result = 15;
+  bool is_deleted = 16;
+  string create_time = 17;     // RFC3339
+  string modify_time = 18;     // RFC3339
+  string function_name = 19;   // 当前绑定的 SCF 函数名
+  string source_id = 20;       // 当前绑定的 Provider 来源
+  repeated TaskWriteTarget targets = 21;
+  string provider_symbol = 22; // Provider 实际请求 symbol
+  string target_data_time = 23; // RFC3339，当前原子请求目标数据时间
+  string series_tag = 24;      // Storage/readiness 共享的 series identity
+}
+
+message TaskWriteTarget {
+  string write_target_id = 1;
+  string task_id = 2;
+  string dataset_id = 3;
+  string view_id = 4;
+  repeated string output_fields = 5;
+  string status = 6;
+  string last_error = 7;
 }
 
 // TaskInstanceFilter 任务实例筛选条件。
 message TaskInstanceFilter {
-  reserved 12;
-  reserved "planned_exec_node";
-
   string space_id = 1;
-  string rule_id = 2;
-  string task_id = 3;
-  string exchange = 4;
-  string market = 5;
+  string task_id = 2;
+  string instance_id = 3;
+  string provider = 4;
+  string market_type = 5;
   string data_type = 6;
   string dataset_id = 7;
   string subject_id = 8;
-  string symbol = 9;
-  string interval = 10;
+  string frequency = 9;
   TaskInstanceStatus last_exec_status = 11;
-  string last_exec_node = 13;
-  bool include_deleted = 14;
-  common.Page page = 15;
+  bool include_deleted = 13;
+  common.Page page = 14;
+  string function_name = 15; // 当前绑定的 SCF 函数名
+  string source_id = 16;     // 当前绑定的 Provider 来源
 }
 
 message GetTaskInstanceListReq {
@@ -154,20 +245,6 @@ message GetTaskInstanceListRsp {
 }
 
 // ReportInstanceStatusReq 上报任务状态请求。
-message ReportInstanceStatusReq {
-  string space_id = 1;
-  string task_id = 2;
-  string node_id = 3;
-  TaskInstanceStatus status = 4;
-  google.protobuf.Struct result = 5;
-  string error_message = 6;
-  int64 duration_ms = 7;
-}
-
-message ReportInstanceStatusRsp {
-  common.RetInfo ret_info = 1;
-}
-
 // DataTypeConfig 数据类型配置。
 message DataTypeConfig {
   int32 id = 1;
@@ -219,30 +296,92 @@ message GetDataTypeConfigWithFieldsRsp {
   DataTypeConfigDetail detail = 2;
 }
 
-message RecalculateAllTaskInstancesReq {
+message StartKlineResampleBackfillReq {
   string space_id = 1;
+  string task_id = 2;
+  string request_id = 3;
+  string start = 4;
+  string end = 5;
 }
 
-message RecalculateAllTaskInstancesRsp {
+message StartKlineResampleBackfillRsp {
   common.RetInfo ret_info = 1;
 }
 
+message CancelKlineResampleBackfillReq {
+  string space_id = 1;
+  string task_id = 2;
+  string request_id = 3;
+}
+
+message CancelKlineResampleBackfillRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message GetKlineResampleBackfillReq {
+  string space_id = 1;
+  string task_id = 2;
+  string request_id = 3;
+}
+
+message GetKlineResampleBackfillRsp {
+  common.RetInfo ret_info = 1;
+  string request_id = 2;
+  string start = 3;
+  string end = 4;
+  string next_bucket = 5;
+  string state = 6;
+  uint64 participants = 7;
+  uint64 running = 8;
+  uint64 waiting_source = 9;
+  uint64 syncing = 10;
+  uint64 complete = 11;
+  uint64 failed = 12;
+  repeated string errors = 13;
+  uint64 canceled = 14;
+}
+
+// ClaimTimerBatchReq binds one Timer invocation to its durable period batch.
+// Work membership is derived from Collector's persisted manifest, never from
+// client-submitted items or tag names.
+message ClaimTimerBatchReq {
+  string space_id = 1;
+  string function_name = 2;
+  string request_id = 3;
+  uint32 group_id = 4;
+  uint32 group_count = 5;
+  string binding_hash = 6;
+  int64 tick_time = 7;
+}
+
+message ClaimTimerBatchRsp {
+  common.RetInfo ret_info = 1;
+  bool claimed = 2;
+  bytes request_json = 3;
+  int64 period_deadline_at = 4;
+}
+
 service CollectMgr {
-  // ----- 任务规则 -----
-  rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
-  rpc GetTaskRuleDetail(GetTaskRuleDetailReq) returns (GetTaskRuleDetailRsp);
-  rpc CreateTaskRule(CreateTaskRuleReq) returns (CreateTaskRuleRsp);
-  rpc UpdateTaskRule(UpdateTaskRuleReq) returns (UpdateTaskRuleRsp);
-  rpc DisableTaskRule(DisableTaskRuleReq) returns (DisableTaskRuleRsp);
+  // ----- 采集任务 -----
+  rpc GetTaskList(GetTaskListReq) returns (GetTaskListRsp);
+  rpc GetTaskDetail(GetTaskDetailReq) returns (GetTaskDetailRsp);
+  rpc GetTaskResultInventory(GetTaskResultInventoryReq) returns (GetTaskResultInventoryRsp);
+  rpc CreateTask(CreateTaskReq) returns (CreateTaskRsp);
+  rpc UpdateTask(UpdateTaskReq) returns (UpdateTaskRsp);
+  rpc DisableTask(DisableTaskReq) returns (DisableTaskRsp);
+  rpc DeleteTask(DeleteTaskReq) returns (DeleteTaskRsp);
 
   // ----- 任务实例 -----
   rpc GetTaskInstanceList(GetTaskInstanceListReq) returns (GetTaskInstanceListRsp);
-  rpc ReportTaskStatus(ReportInstanceStatusReq) returns (ReportInstanceStatusRsp);
 
   // ----- 数据类型配置 -----
   rpc GetDataTypeConfigs(GetDataTypeConfigsReq) returns (GetDataTypeConfigsRsp);
   rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
+  rpc StartKlineResampleBackfill(StartKlineResampleBackfillReq) returns (StartKlineResampleBackfillRsp);
+  rpc CancelKlineResampleBackfill(CancelKlineResampleBackfillReq) returns (CancelKlineResampleBackfillRsp);
+  rpc GetKlineResampleBackfill(GetKlineResampleBackfillReq) returns (GetKlineResampleBackfillRsp);
+}
 
-  // ----- 任务规划器 -----
-  rpc RecalculateAllTaskInstances(RecalculateAllTaskInstancesReq) returns (RecalculateAllTaskInstancesRsp);
+service MarketFetchRuntime {
+  rpc ClaimTimerBatch(ClaimTimerBatchReq) returns (ClaimTimerBatchRsp);
 }

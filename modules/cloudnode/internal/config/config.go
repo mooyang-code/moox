@@ -2,8 +2,10 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -15,6 +17,7 @@ type Config struct {
 	Queue      QueueConfig      `yaml:"queue"`
 	JetStream  JetStreamConfig  `yaml:"jetstream"`
 	JobItem    JobItemConfig    `yaml:"job_item"`
+	NodeBatch  NodeBatchConfig  `yaml:"node_batch"`
 	TencentSCF TencentSCFConfig `yaml:"tencent_scf"`
 	Debug      DebugConfig      `yaml:"debug"`
 	Health     HealthConfig     `yaml:"health"`
@@ -32,14 +35,16 @@ type DatabaseConfig struct {
 
 // JobItemConfig controls the async JobItem queue.
 type JobItemConfig struct {
-	DefaultLimit         int    `yaml:"default_limit"`
-	MaxLimit             int    `yaml:"max_limit"`
-	RecoverAfterMillis   int64  `yaml:"recover_after_millis"`
-	DefaultMaxAttempts   int    `yaml:"default_max_attempts"`
 	ActiveKVBucket       string `yaml:"active_kv_bucket"`
 	ActiveTTLHours       int    `yaml:"active_ttl_hours"`
 	HistoryDir           string `yaml:"history_dir"`
 	HistoryRetentionDays int    `yaml:"history_retention_days"`
+}
+
+// NodeBatchConfig controls asynchronous SCF node batch execution.
+type NodeBatchConfig struct {
+	BatchSize    int           `yaml:"batch_size"`
+	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
 // QueueConfig selects the CloudNode JobItem execution queue backend.
@@ -49,25 +54,11 @@ type QueueConfig struct {
 
 // JetStreamConfig controls the CloudNode JetStream execution queue.
 type JetStreamConfig struct {
-	Enabled        bool                    `yaml:"enabled"`
-	URLs           []string                `yaml:"urls"`
-	NATSURL        string                  `yaml:"nats_url"`
-	CredentialFile string                  `yaml:"credential_file"`
-	SubjectPrefix  string                  `yaml:"subject_prefix"`
-	ExecStream     string                  `yaml:"exec_stream"`
-	Embedded       EmbeddedJetStreamConfig `yaml:"embedded"`
-	AckWaitMillis  int64                   `yaml:"ack_wait_millis"`
-	MaxDeliver     int                     `yaml:"max_deliver"`
-	FetchMaxWaitMs int64                   `yaml:"fetch_max_wait_ms"`
-}
-
-// EmbeddedJetStreamConfig starts a local private NATS JetStream for CloudNode.
-type EmbeddedJetStreamConfig struct {
-	Enabled          bool   `yaml:"enabled"`
-	Host             string `yaml:"host"`
-	Port             int    `yaml:"port"`
-	StoreDir         string `yaml:"store_dir"`
-	StartupTimeoutMS int64  `yaml:"startup_timeout_ms"`
+	Enabled        bool     `yaml:"enabled"`
+	URLs           []string `yaml:"urls"`
+	CredentialFile string   `yaml:"credential_file"`
+	MaxDeliver     int      `yaml:"max_deliver"`
+	MaxAckPending  int      `yaml:"max_ack_pending"`
 }
 
 // TencentSCFConfig stores defaults for the Tencent SCF provider.
@@ -94,7 +85,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.applyEnv()
@@ -104,20 +97,21 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Validate rejects configurations where JetStream can redeliver a job while
-// CloudNode still considers the previous attempt recoverable.
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is required")
 	}
-	if c.Queue.Backend != "jetstream" || !c.JetStream.Enabled {
-		return nil
+	if c.Queue.Backend == "jetstream" && c.JetStream.Enabled && c.JetStream.MaxDeliver <= 0 {
+		return fmt.Errorf("jetstream.max_deliver must be positive")
 	}
-	const recoveryGrace = 2 * time.Minute
-	ackWait := time.Duration(c.JetStream.AckWaitMillis) * time.Millisecond
-	recoverAfter := time.Duration(c.JobItem.RecoverAfterMillis) * time.Millisecond
-	if ackWait < recoverAfter+recoveryGrace {
-		return fmt.Errorf("jetstream.ack_wait_millis must be at least job_item.recover_after_millis plus %s", recoveryGrace)
+	if c.Queue.Backend == "jetstream" && c.JetStream.Enabled && c.JetStream.MaxAckPending <= 0 {
+		return fmt.Errorf("jetstream.max_ack_pending must be positive")
+	}
+	if c.NodeBatch.BatchSize < 1 || c.NodeBatch.BatchSize > 10 {
+		return fmt.Errorf("node_batch.batch_size must be between 1 and 10")
+	}
+	if c.NodeBatch.PollInterval < 100*time.Millisecond || c.NodeBatch.PollInterval > 10*time.Second {
+		return fmt.Errorf("node_batch.poll_interval must be between 100ms and 10s")
 	}
 	return nil
 }
@@ -132,6 +126,20 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_CLOUDNODE_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
+	if v := os.Getenv("MOOX_EVENTBUS_NATS_URL"); v != "" {
+		c.JetStream.URLs = splitEventBusURLs(v)
+	}
+}
+
+func splitEventBusURLs(value string) []string {
+	parts := strings.Split(value, ",")
+	urls := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	return urls
 }
 
 // Default returns safe local defaults.
@@ -151,23 +159,19 @@ func Default() *Config {
 		JetStream: JetStreamConfig{
 			Enabled:        true,
 			URLs:           []string{"nats://127.0.0.1:4222"},
-			NATSURL:        "nats://127.0.0.1:4222",
-			SubjectPrefix:  "moox.cloudnode",
-			ExecStream:     "MOOX_CLOUDNODE_EXEC",
-			AckWaitMillis:  int64(12 * time.Minute / time.Millisecond),
-			MaxDeliver:     3,
-			FetchMaxWaitMs: 500,
-			Embedded:       EmbeddedJetStreamConfig{},
+			CredentialFile: "~/.config/moox/eventbus/cloudnode-eventbus.yaml",
+			MaxDeliver:     4,
+			MaxAckPending:  32,
 		},
 		JobItem: JobItemConfig{
-			DefaultLimit:         10,
-			MaxLimit:             100,
-			RecoverAfterMillis:   int64(10 * time.Minute / time.Millisecond),
-			DefaultMaxAttempts:   3,
 			ActiveKVBucket:       "MOOX_CLOUDNODE_JOB_ACTIVE",
 			ActiveTTLHours:       48,
 			HistoryDir:           "../data/cloudnode/jobs",
 			HistoryRetentionDays: 2,
+		},
+		NodeBatch: NodeBatchConfig{
+			BatchSize:    3,
+			PollInterval: 500 * time.Millisecond,
 		},
 		TencentSCF: TencentSCFConfig{
 			DefaultRegion:    "ap-guangzhou",

@@ -1,0 +1,229 @@
+package domain
+
+import (
+	"strings"
+	"time"
+)
+
+type BatchKind string
+
+const (
+	BatchKindRealtime  BatchKind = "realtime"
+	BatchKindCatchup   BatchKind = "catchup"
+	BatchKindBackfill  BatchKind = "backfill"
+	BatchKindGapRepair BatchKind = "gap_repair"
+)
+
+type BatchStatus string
+
+const (
+	BatchStatusPlanned       BatchStatus = "planned"
+	BatchStatusDispatched    BatchStatus = "dispatched"
+	BatchStatusSucceeded     BatchStatus = "succeeded"
+	BatchStatusPartialFailed BatchStatus = "partial_failed"
+	BatchStatusFailed        BatchStatus = "failed"
+	BatchStatusTimedOut      BatchStatus = "timed_out"
+)
+
+func (s BatchStatus) Terminal() bool {
+	return s == BatchStatusSucceeded || s == BatchStatusPartialFailed || s == BatchStatusFailed || s == BatchStatusTimedOut
+}
+
+type ItemOutcome string
+
+const (
+	ItemOutcomeSuccess      ItemOutcome = "success"
+	ItemOutcomeHTTP429      ItemOutcome = "http_429"
+	ItemOutcomeHTTP5xx      ItemOutcome = "http_5xx"
+	ItemOutcomeNetworkError ItemOutcome = "network_error"
+	ItemOutcomeStorageError ItemOutcome = "storage_error"
+	// ItemOutcomeProviderError means the selected upstream returned a malformed,
+	// incomplete, or otherwise unusable response. It is retryable so a later
+	// retry window can advance to the next configured provider candidate.
+	ItemOutcomeProviderError ItemOutcome = "provider_error"
+	ItemOutcomeInvalid       ItemOutcome = "invalid_request"
+)
+
+type CollectionItem struct {
+	// InstanceID is the stable TaskInstance identity.
+	InstanceID     string `json:"instance_id,omitempty"`
+	SubjectID      string `json:"subject_id"`
+	Symbol         string `json:"symbol"`
+	TargetDataTime string `json:"target_data_time,omitempty"`
+	StartTime      string `json:"start_time,omitempty"`
+	EndTime        string `json:"end_time,omitempty"`
+	SnapshotAt     string `json:"snapshot_at,omitempty"`
+	BarLimit       int    `json:"bar_limit,omitempty"`
+	// Canary marks an operator/deployment probe. Stock canaries use the
+	// bundled trading calendar to resolve the latest closed session rather
+	// than treating a weekend or holiday as a missing-data failure.
+	Canary bool `json:"canary,omitempty"`
+	// RequirePeriodCommit is carried into durable retry records so retries keep
+	// the same Storage commit contract as their source batch.
+	RequirePeriodCommit bool `json:"require_period_commit,omitempty"`
+	// CandidateIndex is advanced when a retry has already exhausted the
+	// current provider window. Keeping it on the item makes retries resume at
+	// the next candidate instead of repeatedly starting at the same bad feed.
+	CandidateIndex  int     `json:"candidate_index,omitempty"`
+	RateBudgetRatio float64 `json:"rate_budget_ratio,omitempty"`
+	SourceEventID   string  `json:"source_event_id,omitempty"`
+	Provider        string  `json:"provider"`
+	SourceID        string  `json:"source_id,omitempty"`
+	MarketID        string  `json:"market_id,omitempty"`
+	InstrumentType  string  `json:"instrument_type,omitempty"`
+	MarketType      string  `json:"market_type"`
+	DataType        string  `json:"data_type"`
+	DatasetID       string  `json:"dataset_id"`
+	Frequency       string  `json:"frequency,omitempty"`
+	// OutputFields limits the fields persisted for each fetched row. An empty
+	// list preserves the legacy behavior and writes every normalized field.
+	OutputFields       []string `json:"output_fields,omitempty"`
+	SnapshotShardIndex int      `json:"snapshot_shard_index,omitempty"`
+	SnapshotShardCount int      `json:"snapshot_shard_count,omitempty"`
+	// Series identity belongs to the Dataset/WriteTarget side. These fields are
+	// populated while materializing one task's Tag union and are deliberately
+	// excluded from Provider request_key calculation.
+	SeriesIndex   uint32 `json:"series_index,omitempty"`
+	SeriesHash    string `json:"series_hash,omitempty"`
+	ExpectedCount uint32 `json:"expected_count,omitempty"`
+	// PeriodReservationID fences deployment canary writes from other publishers
+	// while the target Storage period is waiting.
+	PeriodReservationID string `json:"period_reservation_id,omitempty"`
+}
+
+type ItemResult struct {
+	CollectionItem
+	Outcome       ItemOutcome    `json:"outcome"`
+	ErrorType     string         `json:"error_type,omitempty"`
+	ErrorSummary  string         `json:"error_summary,omitempty"`
+	TargetResults []TargetResult `json:"target_results,omitempty"`
+}
+
+type TargetResult struct{ WriteTargetID, DatasetID, Status, ErrorSummary string }
+
+type BatchInvocation struct {
+	ID            int       `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID       string    `gorm:"column:c_space_id"`
+	BatchID       string    `gorm:"column:c_batch_id"`
+	ParentBatchID string    `gorm:"column:c_parent_batch_id"`
+	ScheduleID    string    `gorm:"column:c_schedule_id"`
+	BatchKind     BatchKind `gorm:"column:c_batch_kind"`
+	ShardIndex    int       `gorm:"column:c_shard_index"`
+	// TaskID/DatasetID are deprecated compatibility projections. Batch ownership
+	// is represented by batch_items -> TaskInstance -> WriteTarget.
+	TaskID    string `gorm:"-"`
+	DatasetID string `gorm:"-"`
+	// InstanceID and WriteTargetID are retained for retry-batch diagnostics.
+	InstanceID           string      `gorm:"column:c_instance_id"`
+	WriteTargetID        string      `gorm:"column:c_write_target_id"`
+	RetryScope           string      `gorm:"column:c_retry_scope"`
+	Frequency            string      `gorm:"column:c_frequency"`
+	PeriodTime           *time.Time  `gorm:"column:c_period_time"`
+	PeriodDeadlineAt     *time.Time  `gorm:"column:c_period_deadline_at"`
+	Region               string      `gorm:"column:c_region"`
+	NodeID               string      `gorm:"column:c_node_id"`
+	FunctionName         string      `gorm:"column:c_function_name"`
+	Status               BatchStatus `gorm:"column:c_status"`
+	Attempt              int         `gorm:"column:c_attempt"`
+	RequestID            string      `gorm:"column:c_request_id"`
+	RequestJSON          string      `gorm:"column:c_request_json"`
+	PlannedCount         int         `gorm:"column:c_planned_count"`
+	SuccessCount         int         `gorm:"column:c_success_count"`
+	RetryCount           int         `gorm:"column:c_retry_count"`
+	PermanentFailedCount int         `gorm:"column:c_permanent_failed_count"`
+	ErrorSummary         string      `gorm:"column:c_error_summary"`
+	LateCompletion       bool        `gorm:"column:c_late_completion"`
+	PlannedAt            *time.Time  `gorm:"column:c_planned_at"`
+	DispatchedAt         *time.Time  `gorm:"column:c_dispatched_at"`
+	DeadlineAt           *time.Time  `gorm:"column:c_deadline_at"`
+	CompletedAt          *time.Time  `gorm:"column:c_completed_at"`
+	CreateTime           time.Time   `gorm:"column:c_ctime"`
+	ModifyTime           time.Time   `gorm:"column:c_mtime"`
+}
+
+func (b *BatchInvocation) TableName() string { return "t_collector_fetch_batches" }
+
+type RetryItem struct {
+	ID                              int                      `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID                         string                   `gorm:"column:c_space_id"`
+	RetryKey                        string                   `gorm:"column:c_retry_key"`
+	SourceBatchID                   string                   `gorm:"column:c_source_batch_id"`
+	BatchKind                       BatchKind                `gorm:"column:c_batch_kind"`
+	InstanceID                      string                   `gorm:"column:c_instance_id"`
+	WriteTargetID                   string                   `gorm:"column:c_write_target_id"`
+	RetryScope                      string                   `gorm:"column:c_retry_scope"`
+	SubjectID                       string                   `gorm:"column:c_subject_id"`
+	Frequency                       string                   `gorm:"column:c_frequency"`
+	TargetDataTime                  time.Time                `gorm:"column:c_target_data_time"`
+	PeriodTime                      *time.Time               `gorm:"column:c_period_time"`
+	PeriodDeadlineAt                *time.Time               `gorm:"column:c_period_deadline_at"`
+	TaskJSON                        string                   `gorm:"column:c_task_json"`
+	FailureTargetsJSON              string                   `gorm:"column:c_failure_targets_json"`
+	Attempt                         int                      `gorm:"column:c_attempt"`
+	Status                          string                   `gorm:"column:c_status"`
+	PeriodFailureReportState        PeriodFailureReportState `gorm:"column:c_period_failure_report_state"`
+	PeriodFailureResultsJSON        string                   `gorm:"column:c_period_failure_results_json"`
+	PeriodFailureLastError          string                   `gorm:"column:c_period_failure_last_error"`
+	PeriodFailureDeadlineExceededAt *time.Time               `gorm:"column:c_period_failure_deadline_exceeded_at"`
+	NextRetryAt                     *time.Time               `gorm:"column:c_next_retry_at"`
+	LastErrorType                   string                   `gorm:"column:c_last_error_type"`
+	LastErrorSummary                string                   `gorm:"column:c_last_error_summary"`
+	CreateTime                      time.Time                `gorm:"column:c_ctime"`
+	ModifyTime                      time.Time                `gorm:"column:c_mtime"`
+}
+
+func (r *RetryItem) TableName() string { return "t_collector_fetch_retry_items" }
+
+type PeriodFailureReportState string
+
+const (
+	PeriodFailureReportPending        PeriodFailureReportState = "pending"
+	PeriodFailureReportAcknowledged   PeriodFailureReportState = "acknowledged"
+	PeriodFailureReportMissedDeadline PeriodFailureReportState = "missed_deadline"
+)
+
+type PeriodFailureTargetResult struct {
+	WriteTargetID string    `json:"write_target_id"`
+	SpaceID       string    `json:"space_id"`
+	DatasetID     string    `json:"dataset_id"`
+	Frequency     string    `json:"frequency"`
+	PeriodTime    time.Time `json:"period_time"`
+	SeriesHash    string    `json:"series_hash"`
+	ExpectedCount uint32    `json:"expected_count"`
+	SeriesIndex   uint32    `json:"series_index"`
+	Disposition   string    `json:"disposition"`
+	ObservedAt    time.Time `json:"observed_at"`
+}
+
+// AggregatePeriodFailureReportState derives the receipt state from durable
+// targets. Missing and unknown outcomes stay pending; a transport error can
+// never be interpreted as an acknowledgement.
+func AggregatePeriodFailureReportState(targets []WriteTarget, results []PeriodFailureTargetResult) PeriodFailureReportState {
+	if len(targets) == 0 {
+		return PeriodFailureReportPending
+	}
+	byTarget := make(map[string]PeriodFailureTargetResult, len(results))
+	for _, result := range results {
+		if strings.TrimSpace(result.WriteTargetID) != "" {
+			byTarget[result.WriteTargetID] = result
+		}
+	}
+	missed := false
+	for _, target := range targets {
+		result, ok := byTarget[target.ID]
+		if !ok {
+			return PeriodFailureReportPending
+		}
+		switch result.Disposition {
+		case "recorded", "already_succeeded":
+		case "missed_deadline":
+			missed = true
+		default:
+			return PeriodFailureReportPending
+		}
+	}
+	if missed {
+		return PeriodFailureReportMissedDeadline
+	}
+	return PeriodFailureReportAcknowledged
+}

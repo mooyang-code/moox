@@ -17,12 +17,6 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;a
 
 // ========== 认证（Auth）==========
 
-// AppInfo 应用信息。
-message AppInfo {
-  string app_id = 1;
-  string app_key = 2;
-}
-
 // UserStatus 用户状态。
 enum UserStatus {
   USER_STATUS_INACTIVE = 0;
@@ -57,8 +51,7 @@ message UserInfo {
 // ========== 登录盐值 ==========
 
 message GetLoginSaltReq {
-  AppInfo app_info = 1;
-  string username = 2;  // 用户名/邮箱/手机号
+  string username = 1;  // 用户名/邮箱/手机号
 }
 
 message GetLoginSaltRsp {
@@ -71,14 +64,13 @@ message GetLoginSaltRsp {
 // ========== 登录 ==========
 
 message LoginReq {
-  AppInfo app_info = 1;
-  string username = 2;
-  string password_hash = 3;  // 密码哈希值
-  string salt = 4;           // 从 GetLoginSalt 获取的盐值
-  int64 timestamp = 5;       // 从 GetLoginSalt 获取的时间戳
-  string device_id = 6;
-  string user_agent = 7;
-  string client_ip = 8;
+  string username = 1;
+  string password_hash = 2;  // 密码哈希值
+  string salt = 3;           // 从 GetLoginSalt 获取的盐值
+  int64 timestamp = 4;       // 从 GetLoginSalt 获取的时间戳
+  string device_id = 5;
+  string user_agent = 6;
+  string client_ip = 7;
 }
 
 message LoginRsp {
@@ -109,9 +101,7 @@ message IssueRawSessionTicketRsp {
 // ========== 用户信息 ==========
 
 message GetUserInfoReq {
-  AppInfo app_info = 1;
-  string access_token = 2;
-  string user_id = 3;
+  string user_id = 1;
 }
 
 message GetUserInfoRsp {
@@ -120,11 +110,9 @@ message GetUserInfoRsp {
 }
 
 message UpdateUserInfoReq {
-  AppInfo app_info = 1;
-  string access_token = 2;
-  string nick = 3;    // 昵称
-  string email = 4;
-  string avatar = 5;  // 头像URL
+  string nick = 1;    // 昵称
+  string email = 2;
+  string avatar = 3;  // 头像URL
 }
 
 message UpdateUserInfoRsp {

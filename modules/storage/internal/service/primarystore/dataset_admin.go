@@ -1,0 +1,123 @@
+package primarystore
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+)
+
+type datasetAdminDataNodeClient interface {
+	DeleteDatasetRows(context.Context, *pb.DeleteDatasetRowsReq) (*pb.DeleteDatasetRowsRsp, error)
+	RestoreDatasetRows(context.Context, *pb.RestoreDatasetRowsReq) (*pb.RestoreDatasetRowsRsp, error)
+}
+
+// DeleteDatasetRows removes physical rows before Metadata deletes the Dataset.
+// Collector task results and Factor result datasets use separate credentials.
+func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.PrimaryDeleteDatasetRowsReq) (*pb.PrimaryDeleteDatasetRowsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	ctx = s.requestContext(ctx)
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata snapshot is unavailable for dataset deletion"))}, nil
+	}
+	dataset, found := snapshot.GetDataset(req.GetSpaceId(), req.GetDatasetId())
+	if !found || dataset == nil {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("dataset not found"))}, nil
+	}
+	owner := datasetRowsOwner(dataset, req.GetAuthInfo())
+	if owner == "" {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not owned by the authorized destructive caller"))}, nil
+	}
+	ownerNodeID := strings.TrimSpace(dataset.GetDataNodeId())
+	if ownerNodeID == "" {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("dataset has no owner DataNode"))}, nil
+	}
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), owner); err != nil {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: markerError(err)}, nil
+	}
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: markerError(err)}, nil
+	}
+	adminNode, ok := node.(datasetAdminDataNodeClient)
+	if !ok {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode dataset admin runtime is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	response, err := adminNode.DeleteDatasetRows(ctx, &pb.DeleteDatasetRowsReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId()})
+	if err != nil {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: response.GetRetInfo(), DeletedRanges: response.GetDeletedRanges()}, nil
+}
+
+// RestoreDatasetRows clears a DataNode deletion tombstone only after the
+// Collector has recreated the owned Dataset metadata. It is separate from
+// normal writes so a delayed pre-delete write cannot reopen a deleted result.
+func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.PrimaryRestoreDatasetRowsReq) (*pb.PrimaryRestoreDatasetRowsRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	ctx = s.requestContext(ctx)
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("metadata snapshot is unavailable for dataset restore"))}, nil
+	}
+	dataset, found := snapshot.GetDataset(req.GetSpaceId(), req.GetDatasetId())
+	if !found || dataset == nil {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("dataset not found"))}, nil
+	}
+	owner := datasetRowsOwner(dataset, req.GetAuthInfo())
+	if owner == "" {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not owned by the authorized destructive caller"))}, nil
+	}
+	ownerNodeID := strings.TrimSpace(dataset.GetDataNodeId())
+	if ownerNodeID == "" {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("dataset has no owner DataNode"))}, nil
+	}
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), owner); err != nil {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: markerError(err)}, nil
+	}
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: markerError(err)}, nil
+	}
+	adminNode, ok := node.(datasetAdminDataNodeClient)
+	if !ok {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode dataset admin runtime is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	response, err := adminNode.RestoreDatasetRows(ctx, &pb.RestoreDatasetRowsReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId()})
+	if err != nil {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: response.GetRetInfo()}, nil
+}
+
+func datasetRowsOwner(dataset *pb.Dataset, auth *pb.AuthInfo) string {
+	if dataset == nil || auth == nil {
+		return ""
+	}
+	appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
+	attrs := dataset.GetAttributes()
+	if isFactorAppID(appID) && attrs["dataset_role"] == "factor_result" && attrs["write_owner"] == "factor" {
+		return "factor"
+	}
+	if isOwnedAppID(appID, "collector") && strings.TrimSpace(attrs["owner_module"]) == "collector" &&
+		(strings.TrimSpace(attrs["collector_task_id"]) != "" || strings.TrimSpace(attrs["resample_task_id"]) != "") {
+		return "collector"
+	}
+	return ""
+}

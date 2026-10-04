@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -58,6 +59,34 @@ func TestCompileGatewaySnapshot_DefaultsInvalidExtraAndDisabledNode(t *testing.T
 	assert.True(t, disabled.Disabled)
 	assert.Empty(t, disabled.Routes)
 	assert.NotEmpty(t, disabled.RouteHash)
+}
+
+func TestFactorGatewayRouteUsesNativeTRPCListener(t *testing.T) {
+	row := Deployment{
+		Host: "127.0.0.1", Port: 11404,
+		GatewayPath: "trpc.moox.factor.FactorMgr", GatewayServiceID: "factormgr",
+	}
+	routes, err := deploymentGatewayRoutes(row, routeExtraConfig{
+		GatewayMethods: []string{"*"},
+		GatewayCallers: []string{"*"},
+	})
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	assert.Equal(t, "127.0.0.1:11403", routes[0].Address)
+}
+
+func TestStrategyGatewayRouteUsesNativeTRPCListener(t *testing.T) {
+	row := Deployment{
+		Host: "127.0.0.1", Port: 11433,
+		GatewayPath: "trpc.moox.strategy.StrategyMgr", GatewayServiceID: "strategymgr",
+	}
+	routes, err := deploymentGatewayRoutes(row, routeExtraConfig{
+		GatewayMethods: []string{"GetStrategy", "CreateStrategyInstance"},
+		GatewayCallers: []string{"admin-gateway", "moox-cli"},
+	})
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	assert.Equal(t, "127.0.0.1:11430", routes[0].Address)
 }
 
 func TestReportGatewayStatus_UpdatesHeartbeat(t *testing.T) {
@@ -142,4 +171,14 @@ func TestEndpointMap_UsesCompositeKeysWithoutNodeFilter(t *testing.T) {
 	items := endpointMap(rows, true)
 	assert.Contains(t, items, "a/monitor")
 	assert.Contains(t, items, "b/monitor")
+}
+
+func TestIsSQLiteLockError(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("database is locked"),
+		fmt.Errorf("SQLITE_BUSY: database table is locked"),
+	} {
+		assert.True(t, isSQLiteLockError(err))
+	}
+	assert.False(t, isSQLiteLockError(fmt.Errorf("constraint failed")))
 }

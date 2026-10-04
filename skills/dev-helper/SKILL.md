@@ -69,7 +69,7 @@ description: >-
 | `moox-storage` | **是** | **dev-helper 远端编译** |
 | `moox-cli` / `collector` | 否 | 本地交叉编译 |
 
-admin / web-host 整体部署见 `scripts/deploy-moox.sh`；storage 二进制先用本 skill 产出再部署或 `--deploy`。
+admin / web-host 整体部署见 `scripts/deploy/deploy-moox.sh`；storage 二进制先用本 skill 产出再部署或 `--deploy`。
 
 ## 相关
 

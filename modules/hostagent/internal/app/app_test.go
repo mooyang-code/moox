@@ -13,13 +13,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/collector"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
+	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	mocker "github.com/tencent/goom"
 )
 
 func writeEventBusConfig(t *testing.T, dir string) string {
@@ -58,6 +57,23 @@ type fakeSnapshotCollector struct {
 	err      error
 }
 
+type fakeEventPublisher struct {
+	err    error
+	ready  bool
+	closed bool
+	at     time.Time
+}
+
+func (f *fakeEventPublisher) PublishHostMetric(_ context.Context, _ string, _ *hostmetricpb.HostMetric, at time.Time) error {
+	f.at = at
+	return f.err
+}
+func (f *fakeEventPublisher) Ready() bool { return f.ready }
+func (f *fakeEventPublisher) Close() error {
+	f.closed = true
+	return f.err
+}
+
 func (f fakeSnapshotCollector) Collect(context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
 	return f.snapshot, nil, f.err
 }
@@ -93,7 +109,7 @@ func TestAgent_GetStatus_ShouldExposeCountersAndLatest(t *testing.T) {
 	a.published.Store(2)
 	a.dropped.Store(1)
 	a.skipped.Store(4)
-	a.client = &jetstream.Client{}
+	a.publisher = &fakeEventPublisher{ready: true}
 
 	rsp, err := a.GetStatus(context.Background(), &hostagentpb.GetStatusReq{})
 	require.NoError(t, err)
@@ -136,22 +152,18 @@ func TestAgent_RecordError_ShouldPersistTruncatedMessage(t *testing.T) {
 	assert.Len(t, a.lastErr, 512)
 }
 
-func TestAgent_Close_NilClient_ShouldNoop(t *testing.T) {
+func TestAgent_Close_NilPublisher_ShouldNoop(t *testing.T) {
 	a := testAgent(t)
 	require.NoError(t, a.Close())
 }
 
-func TestAgent_Close_WithClient_ShouldCloseAndClear(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
-	client := &jetstream.Client{}
-	mock.Struct(client).Method("Close").Return(nil)
-
+func TestAgent_Close_WithPublisher_ShouldCloseAndClear(t *testing.T) {
+	publisher := &fakeEventPublisher{}
 	a := testAgent(t)
-	a.client = client
+	a.publisher = publisher
 	require.NoError(t, a.Close())
-	assert.Nil(t, a.client)
+	assert.True(t, publisher.closed)
+	assert.Nil(t, a.publisher)
 }
 
 func TestAgent_RunOnce_CollectError_ShouldIncrementDropped(t *testing.T) {
@@ -174,17 +186,11 @@ func TestAgent_RunOnceGuarded_ConcurrentCall_ShouldSkip(t *testing.T) {
 }
 
 func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
 	snapshot := testSnapshot()
-
-	client := &jetstream.Client{}
-	mock.Struct(client).Method("Publish").Return(&jetstream.PublishAck{Stream: "MOOX", Sequence: 1}, nil)
 
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: snapshot}
-	a.client = client
+	a.publisher = &fakeEventPublisher{ready: true}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	require.NoError(t, err)
@@ -195,16 +201,23 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 	assert.Empty(t, a.lastErr)
 }
 
+func TestAgent_RunOnce_UsesCollectionCompletionAsOccurredAt(t *testing.T) {
+	a := testAgent(t)
+	var completedAt time.Time
+	a.collector = completionSnapshotCollector{snapshot: testSnapshot(), completedAt: &completedAt}
+	publisher := &fakeEventPublisher{ready: true}
+	a.publisher = publisher
+
+	_, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
+	require.NoError(t, err)
+	assert.False(t, publisher.at.Before(completedAt), "occurred_at=%s completion=%s", publisher.at, completedAt)
+	assert.Equal(t, publisher.at, a.lastCollect)
+}
+
 func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
-	client := &jetstream.Client{}
-	mock.Struct(client).Method("Publish").Return(nil, errors.New("publish failed"))
-
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	a.client = client
+	a.publisher = &fakeEventPublisher{ready: true, err: errors.New("publish failed")}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, err)
@@ -213,10 +226,10 @@ func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
 	assert.Contains(t, a.lastErr, "publish failed")
 }
 
-func TestAgent_Eventbus_InvalidConfig_ShouldReturnError(t *testing.T) {
+func TestAgent_EventPublisher_InvalidConfig_ShouldReturnError(t *testing.T) {
 	a := testAgent(t)
 	a.cfg.EventBusConfig = filepath.Join(t.TempDir(), "missing.yaml")
-	_, err := a.eventbus(context.Background())
+	_, err := a.eventPublisher(context.Background())
 	assert.Error(t, err)
 }
 
@@ -227,9 +240,6 @@ func TestAgent_RunOnce_NilAgent_ShouldReturnError(t *testing.T) {
 }
 
 func TestAgent_RunOnce_EventBusLoadError_ShouldDrop(t *testing.T) {
-	mock := mocker.Create()
-	defer mock.Reset()
-
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
 	a.cfg.EventBusConfig = filepath.Join(t.TempDir(), "missing.yaml")
@@ -240,14 +250,30 @@ func TestAgent_RunOnce_EventBusLoadError_ShouldDrop(t *testing.T) {
 	assert.Equal(t, uint64(1), a.dropped.Load())
 }
 
-func TestAgent_Eventbus_ReusesExistingClient(t *testing.T) {
+func TestAgent_EventPublisher_ReusesExistingPublisher(t *testing.T) {
 	a := testAgent(t)
-	client := &jetstream.Client{}
-	a.client = client
+	publisher := &fakeEventPublisher{ready: true}
+	a.publisher = publisher
 
-	got, err := a.eventbus(context.Background())
+	got, err := a.eventPublisher(context.Background())
 	require.NoError(t, err)
-	assert.Same(t, client, got)
+	assert.Same(t, publisher, got)
+}
+
+func TestAgent_EventPublisher_ReplacesDisconnectedPublisher(t *testing.T) {
+	a := testAgent(t)
+	stale := &fakeEventPublisher{ready: false}
+	replacement := &fakeEventPublisher{ready: true}
+	a.publisher = stale
+	a.newPublisher = func(context.Context) (eventpublisher.Publisher, error) {
+		return replacement, nil
+	}
+
+	got, err := a.eventPublisher(context.Background())
+	require.NoError(t, err)
+	assert.True(t, stale.closed)
+	assert.Same(t, replacement, got)
+	assert.Same(t, replacement, a.publisher)
 }
 
 func TestAgent_RunOnceGuarded_ReleasesRunningFlag(t *testing.T) {
@@ -260,4 +286,15 @@ func TestAgent_RunOnceGuarded_ReleasesRunningFlag(t *testing.T) {
 	}()
 	wg.Wait()
 	assert.False(t, a.running.Load())
+}
+
+type completionSnapshotCollector struct {
+	snapshot    *hostmetricpb.HostSnapshot
+	completedAt *time.Time
+}
+
+func (c completionSnapshotCollector) Collect(context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
+	time.Sleep(time.Millisecond)
+	*c.completedAt = time.Now().UTC()
+	return c.snapshot, nil, nil
 }

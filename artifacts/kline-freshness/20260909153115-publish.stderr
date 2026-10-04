@@ -1,0 +1,37 @@
+Error: SCF canary for region ap-tokyo: market_fetch canary returned unsuccessful response: {"errorCode":-1,"errorMessage":"user code exception caught","requestId":"0424c1f9-5f83-4dac-9e73-00c1f6451a4c","stackTrace":"invoke function failed with err: {\"Message\":\"publish market fetch completion: context deadline exceeded\",\"Type\":\"wrapError\",\"StackTrace\":null,\"ShouldExit\":false}","statusCode":430}
+Usage:
+  moox-cli collector function publish submit [flags]
+
+Flags:
+      --access-token string                 Control access token; defaults to MOOX_ACCESS_TOKEN (登录态, 不推荐)
+      --biz-type string                     business type (default "market_fetcher")
+      --cloud-account-id string             cloud account id
+      --cls-topic-id string                 central CLS topic id used by SCF warning/error logs
+      --collector-root string               collector module root
+      --config string                       collector config directory
+      --control-url string                  Control service base URL
+      --enable-stockcn                      通过全部 stockcn 发布门禁后启用正式 Kline Timer 和规则
+      --env stringArray                     SCF environment variable as KEY=VALUE
+      --eventbus-credential-file string     0600 market-fetch-publisher EventBus credential YAML (default "~/.config/moox/eventbus/market-fetch-publisher.yaml")
+      --file string                         moox.toml; when scf_fetcher is enabled, regions and function counts are read from it
+      --function-config stringArray         cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml
+      --function-name-prefix string         stable function name prefix used to identify the fleet
+      --handler string                      SCF handler (default "main")
+  -h, --help                                help for submit
+      --namespace string                    SCF namespace (defaults to default)
+      --node-count int                      number of SCF nodes in the collector fleet (default 50)
+      --node-type string                    cloud node type (default "scf-event")
+      --out string                          output zip path
+      --package-name string                 function package name (default "moox-collector")
+      --package-type string                 function package type (default "data_collector")
+      --region string                       cloud region
+      --runtime string                      SCF runtime (defaults to Go1)
+      --service-access-key string           后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID
+      --service-secret-key string           后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY
+      --space-id string                     space id; 默认取 MOOX_SPACE_ID
+      --storage-rpc-gateway-target string   SCF 固定访问的 Storage tRPC 地址
+      --trigger-type string                 SCF trigger type: timer or invoke (default "timer")
+      --version string                      collector package version (default "dev")
+      --zip string                          existing SCF zip path
+
+SCF canary for region ap-tokyo: market_fetch canary returned unsuccessful response: {"errorCode":-1,"errorMessage":"user code exception caught","requestId":"0424c1f9-5f83-4dac-9e73-00c1f6451a4c","stackTrace":"invoke function failed with err: {\"Message\":\"publish market fetch completion: context deadline exceeded\",\"Type\":\"wrapError\",\"StackTrace\":null,\"ShouldExit\":false}","statusCode":430}

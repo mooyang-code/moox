@@ -46,7 +46,7 @@ web-host/
 - `make clean` - 清理构建产物
 - `make deps` - 下载和整理依赖
 - `make lint` - `go vet ./...`
-- `make deploy SERVER=user@host` - 通过 `scripts/deploy-moox.sh` 发布 web-host
+- `make deploy SERVER=user@host` - 通过 `scripts/deploy/deploy-moox.sh` 发布 web-host
 
 ## 开发流程
 
@@ -59,7 +59,7 @@ web-host/
 
 ```bash
 cd ..
-./scripts/deploy-moox.sh --target user@host --build-web-assets
+./scripts/deploy/deploy-moox.sh --target user@host --build-web-assets
 ```
 
 ## API 访问方式

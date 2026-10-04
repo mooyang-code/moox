@@ -1,0 +1,1558 @@
+package marketfetch
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"trpc.group/trpc-go/trpc-go/log"
+)
+
+const (
+	timerTriggerType       = "timer"
+	timerTriggerQualifier  = "$LATEST"
+	timerTriggerMessage    = "market_fetch_timer_v1"
+	runtimeConfigBatchSize = 100
+)
+
+type taskSource interface {
+	ListEnabled(context.Context, string) ([]domain.CollectionTask, error)
+}
+
+type datasetSource interface {
+	GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error)
+	ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error)
+}
+
+type tagRouteSource interface {
+	GetTag(context.Context, string, string) (*storagepb.Tag, error)
+}
+
+type runtimeConfigClient interface {
+	ListTimerMarketFetchers(context.Context, string) ([]scfinvoker.Node, error)
+	SubmitRuntimeConfigs(context.Context, string, []*cloudnodepb.NodeRuntimeConfigPatch) (string, error)
+	GetRuntimeConfigBatchStatus(context.Context, string, string) (*cloudnodepb.NodeBatchSummary, error)
+	AcquireCollectorPublishLease(context.Context, string, string) (*scfinvoker.CollectorPublishLease, error)
+	RenewCollectorPublishLease(context.Context, *scfinvoker.CollectorPublishLease) (*scfinvoker.CollectorPublishLease, error)
+	ReleaseCollectorPublishLease(context.Context, *scfinvoker.CollectorPublishLease) error
+}
+
+type dnsSnapshotter interface {
+	Snapshot() map[string]sources.DNSResolution
+}
+
+// Reconciler is the Collector control-plane loop for static Timer-triggered
+// functions. It never invokes a function; it only submits desired config.
+type Reconciler struct {
+	SCFRegionBlacklists           map[string][]string
+	ResolveSourceID               func(string, string) string
+	ResolveSymbol                 SymbolResolver
+	CollectorRuntimeGatewayTarget string
+	CollectorRuntimeGatewayNodeID string
+	Tasks                         taskSource
+	Symbols                       datasetSource
+	Nodes                         runtimeConfigClient
+	Instances                     *store.TaskInstanceRepository
+	DNS                           dnsSnapshotter
+	Metrics                       *Metrics
+	MaxSubjects                   int
+	MeasuredSafeGroupSize         int
+	ExpectedStockCNTimerFunctions int
+	StockCNStagger                StockCNStaggerConfig
+	// DisableTimerTriggers keeps the published timer-node fleet available for
+	// explicit Scheduler Invoke while preventing a second, static acquisition
+	// path from bypassing Run/TaskInstance/WriteTarget dedupe.
+	DisableTimerTriggers        bool
+	Now                         func() time.Time
+	mu                          sync.Mutex
+	reconcileMu                 sync.Mutex
+	pending                     map[string]string
+	pendingAt                   map[string]time.Time
+	pendingJob                  string
+	pendingJobs                 []string
+	pendingSince                time.Time
+	pendingSubmissionIncomplete bool
+	pendingUnknownSubmit        bool
+	publishLease                *scfinvoker.CollectorPublishLease
+	lastGroups                  map[string][]TaskGroup
+	lastAssignments             []NodeAssignment
+}
+
+func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
+	if r == nil || r.Tasks == nil || r.Symbols == nil || r.Nodes == nil {
+		return fmt.Errorf("SCF timer reconciler is not initialized")
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return fmt.Errorf("space_id is required")
+	}
+	// The timer callback starts a goroutine on every tick. Do not wait behind a
+	// slow CloudNode/Storage call: the next tick must remain available for
+	// another market space, while this Reconciler's own mutex still prevents
+	// overlapping snapshots from being published.
+	if !r.reconcileMu.TryLock() {
+		return fmt.Errorf("SCF timer reconciliation already running")
+	}
+	defer r.reconcileMu.Unlock()
+	if pendingJobs, pendingSince := r.pendingRuntimeJobsState(); len(pendingJobs) > 0 {
+		unknownSubmit := r.pendingRuntimeSubmitUnknown()
+		if !unknownSubmit {
+			if err := r.renewPublishLease(ctx, spaceID); err != nil {
+				return r.fail(spaceID, "publish_lease", fmt.Errorf("renew timer reconciliation publish lease: %w", err))
+			}
+		}
+		var statusErrors, terminalFailures []error
+		stillPending := false
+		for _, pendingJob := range pendingJobs {
+			status, statusErr := r.Nodes.GetRuntimeConfigBatchStatus(ctx, spaceID, pendingJob)
+			if statusErr != nil {
+				statusErrors = append(statusErrors, fmt.Errorf("get timer runtime config job %s: %w", pendingJob, statusErr))
+				continue
+			}
+			switch status.GetStatus() {
+			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING, cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING:
+				stillPending = true
+				log.InfoContextf(ctx, "collector_scf_timer_reconciliation_pending space=%s job=%s jobs=%d status=%s", spaceID, pendingJob, len(pendingJobs), status.GetStatus().String())
+			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED:
+				terminalFailures = append(terminalFailures, fmt.Errorf("timer runtime config job %s failed", pendingJob))
+			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL:
+				terminalFailures = append(terminalFailures, fmt.Errorf("timer runtime config job %s partially failed", pendingJob))
+			case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS:
+				continue
+			default:
+				statusErrors = append(statusErrors, fmt.Errorf("timer runtime config job %s returned unknown status %s", pendingJob, status.GetStatus().String()))
+			}
+		}
+		// Keep the entire publication fenced until every accepted job is known
+		// to be terminal, even if another job has already failed.
+		if len(statusErrors) > 0 || stillPending {
+			r.observeAssignmentPending(spaceID, true, pendingSince)
+			if len(statusErrors) > 0 {
+				return r.fail(spaceID, "cloudnode", errors.Join(statusErrors...))
+			}
+			return nil
+		}
+		fullySubmitted := r.clearPendingRuntimeJobs()
+		if unknownSubmit {
+			resolved, settleErr := r.settleUnknownRuntimeSubmit(ctx, spaceID)
+			if settleErr != nil {
+				return r.fail(spaceID, "publish_lease", fmt.Errorf("fence ambiguous timer runtime config submission: %w", settleErr))
+			}
+			if !resolved {
+				r.observeAssignmentPending(spaceID, true, pendingSince)
+				if len(terminalFailures) > 0 {
+					return r.fail(spaceID, "cloudnode", errors.Join(terminalFailures...))
+				}
+				return nil
+			}
+		} else {
+			r.observeAssignmentPending(spaceID, false, time.Time{})
+			if err := r.releasePublishLease(ctx, spaceID); err != nil {
+				return r.fail(spaceID, "publish_lease", err)
+			}
+		}
+		if len(terminalFailures) > 0 {
+			return r.fail(spaceID, "cloudnode", errors.Join(terminalFailures...))
+		}
+		// A completed batch is successful coordination even if a newer DNS
+		// snapshot immediately requires another batch. Do not wait for a no-op
+		// tick to record progress, or continuously rotating routes starve it.
+		if fullySubmitted && !unknownSubmit && r.Metrics != nil {
+			r.Metrics.ObserveAssignmentSuccess(spaceID, time.Now().UTC().Unix())
+		}
+	}
+	if lenUnknownJobs, pendingSince := r.pendingRuntimeJobsState(); len(lenUnknownJobs) == 0 && r.pendingRuntimeSubmitUnknown() {
+		resolved, err := r.settleUnknownRuntimeSubmit(ctx, spaceID)
+		if err != nil {
+			return r.fail(spaceID, "publish_lease", fmt.Errorf("fence ambiguous timer runtime config submission: %w", err))
+		}
+		if !resolved {
+			r.observeAssignmentPending(spaceID, true, pendingSince)
+			return nil
+		}
+	}
+	if pendingJobs, _ := r.pendingRuntimeJobsState(); len(pendingJobs) == 0 && r.publishLease != nil && !r.pendingRuntimeSubmitUnknown() {
+		if err := r.renewPublishLease(ctx, spaceID); err != nil {
+			return r.fail(spaceID, "publish_lease", fmt.Errorf("renew timer reconciliation publish lease: %w", err))
+		}
+	}
+	nodes, err := r.Nodes.ListTimerMarketFetchers(ctx, spaceID)
+	if err != nil {
+		return r.fail(spaceID, "cloudnode", fmt.Errorf("list timer market fetchers: %w", err))
+	}
+	r.observeTimerStates(spaceID, nodes)
+	eligibleNodes, blockedNodes := filterSCFRegions(nodes, spaceID, r.SCFRegionBlacklists)
+	if submitted, disableErr := r.disableBlacklistedTimers(ctx, spaceID, blockedNodes); submitted || disableErr != nil {
+		return disableErr
+	}
+	groups, err := r.groups(ctx, spaceID)
+	if err != nil {
+		return r.fail(spaceID, "rules", err)
+	}
+	stockCN := strings.EqualFold(spaceID, StockCNSpaceID)
+	if stockCN && len(groups) == 0 {
+		// Keep the published Timer fleet explicitly disabled when no active
+		// task/subject remains. This also clears stale FunctionName bindings
+		// without inventing a fake market subject.
+		groups = []TaskGroup{{
+			Provider: "stockcn_multi", MarketType: "equity", MarketID: StockCNSpaceID,
+			InstrumentType: "equity", DatasetID: "dataset_stockcn_equity_kline", Frequency: "1m",
+		}}
+	}
+	if !stockCN && len(groups) == 0 {
+		activeTasks, listErr := r.Tasks.ListEnabled(ctx, spaceID)
+		if listErr != nil {
+			return r.fail(spaceID, "rules", fmt.Errorf("list enabled tasks before disabling timers: %w", listErr))
+		}
+		if len(activeTasks) > 0 {
+			// An enabled task with an empty/unavailable subject catalog is a
+			// transient data condition. Keep the last known-good Timer fleet so a
+			// catalog blip does not stop collection.
+			log.WarnContextf(ctx, "collector SCF timer reconciliation kept existing assignments space=%s: enabled tasks have no usable kline groups", spaceID)
+			return nil
+		}
+		// There is no longer a valid task-owned universe. Disable the existing
+		// Timer assignments so a deleted task cannot continue collecting while
+		// the next reconciliation waits for a fresh catalog.
+		if submitted, disableErr := r.disableBlacklistedTimers(ctx, spaceID, nodes); submitted || disableErr != nil {
+			return disableErr
+		}
+		if r.Instances != nil {
+			_ = r.Instances.ReplaceMarketFetchAssignments(ctx, spaceID, nil, nil)
+		}
+		log.InfoContextf(ctx, "collector SCF timer reconciliation disabled assignments space=%s: no usable kline groups", spaceID)
+		return nil
+	}
+	dns := map[string]sources.DNSResolution(nil)
+	if r.DNS != nil && !stockCN {
+		dns = r.DNS.Snapshot()
+	}
+	// The configured DNS snapshot currently contains Binance hosts only. Stock
+	// providers use their own hostname-based HTTP clients, so copying that
+	// unrelated snapshot into every stock assignment would make a Binance IP
+	// rotation rewrite all 170 Timer functions without changing stock runtime
+	// state.
+	// Publish the unsplit requirement before any local environment/capacity
+	// validation. A malformed budget or an individual symbol that cannot fit
+	// must still become a visible Monitor coordination failure.
+	r.observeAssignmentRequirements(spaceID, groups)
+	if !stockCN && len(groups) > 0 {
+		selected, deferred, selectErr := selectCryptoGroupsForCapacity(groups, eligibleNodes, r.maxSubjects())
+		if selectErr != nil {
+			r.observeTimerCapacity(spaceID, eligibleNodes, groups, nil)
+			return r.fail(spaceID, "capacity", selectErr)
+		}
+		if len(deferred) > 0 {
+			names := make([]string, 0, len(deferred))
+			for _, group := range deferred {
+				names = append(names, strings.TrimSpace(group.DatasetID)+"/"+strings.TrimSpace(group.Frequency))
+			}
+			log.WarnContextf(ctx, "collector SCF timer deferred lower-priority groups space=%s nodes=%d groups=%s", spaceID, len(eligibleNodes), strings.Join(names, ","))
+		}
+		groups = selected
+		r.observeAssignmentRequirements(spaceID, groups)
+	}
+	managedBudget, budgetErr := managedEnvironmentBudget(eligibleNodes, managedEnvironmentLimit(stockCN))
+	if budgetErr != nil {
+		return r.fail(spaceID, "environment", budgetErr)
+	}
+	// The 30-subject limit is a business ceiling, not a promise that every
+	// legal symbol fits in Tencent's 4KB Environment. Long symbols and DNS
+	// routes can consume the remaining bytes, so split a group further before
+	// checking node capacity instead of retrying the same oversized patch.
+	if !stockCN {
+		groups, err = splitGroupsForEnvironment(groups, dns, r.maxSubjects(), r.ResolveSymbol, managedBudget)
+		if err != nil {
+			return r.fail(spaceID, "environment", err)
+		}
+	}
+	r.observeAssignmentRequirements(spaceID, groups)
+	// Publish the fleet-level demand before building assignments. If the
+	// required shard count exceeds the visible Timer fleet, BuildAssignments
+	// will fail below, but Monitor can still report the exact shortfall instead
+	// of waiting for a generic coordination error.
+	r.observeTimerCapacity(spaceID, eligibleNodes, groups, nil)
+	var assignments []NodeAssignment
+	if stockCN {
+		if len(groups) != 1 {
+			return r.fail(spaceID, "rules", fmt.Errorf("stockcn requires exactly one merged kline assignment group, got %d", len(groups)))
+		}
+		if r.ExpectedStockCNTimerFunctions <= 0 {
+			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn timer function count must be an explicit positive value"))
+		}
+		if r.MeasuredSafeGroupSize < 1 || r.MeasuredSafeGroupSize > MaxRealtimeItems {
+			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn measured_safe_group_size must be between 1 and %d", MaxRealtimeItems))
+		}
+		requiredGroupSize, sizeErr := requiredStockCNGroupSize(len(groups[0].Subjects), r.ExpectedStockCNTimerFunctions)
+		if sizeErr != nil {
+			return r.fail(spaceID, "capacity", sizeErr)
+		}
+		if requiredGroupSize > r.MeasuredSafeGroupSize {
+			return r.fail(spaceID, "capacity", fmt.Errorf("stockcn required_group_size %d exceeds measured_safe_group_size %d", requiredGroupSize, r.MeasuredSafeGroupSize))
+		}
+		assignments, err = BuildStockCNAssignmentsWithStagger(groups[0], eligibleNodes, r.MeasuredSafeGroupSize, r.stockCNTradingDate(), r.StockCNStagger, r.ExpectedStockCNTimerFunctions)
+	} else {
+		assignments, err = BuildAssignments(groups, eligibleNodes, r.maxSubjects())
+	}
+	if err != nil {
+		return r.fail(spaceID, "capacity", err)
+	}
+	r.observeTimerCapacity(spaceID, eligibleNodes, groups, assignments)
+	// Publish the complete desired plan before the remote submission. A client
+	// timeout is ambiguous: CloudNode may still have accepted the request, so
+	// Monitor must not reinterpret a temporary HTTP failure as zero capacity.
+	r.observeAssignmentDesiredMetrics(spaceID, groups, assignments)
+	dnsAvailable := len(dns) > 0
+	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(assignments))
+	pendingFingerprints := make(map[string]string, len(assignments))
+	for _, assignment := range assignments {
+		environment, envErr := buildManagedEnvironment(assignment, dns, managedBudget, r.ResolveSymbol)
+		if envErr != nil {
+			return r.fail(spaceID, "environment", envErr)
+		}
+		if assignment.Enabled && !r.DisableTimerTriggers && (strings.TrimSpace(r.CollectorRuntimeGatewayTarget) == "" || strings.TrimSpace(r.CollectorRuntimeGatewayNodeID) == "") {
+			return r.fail(spaceID, "environment", fmt.Errorf("collector runtime gateway target and node are required before enabling Timer"))
+		}
+		if r.CollectorRuntimeGatewayTarget != "" || r.CollectorRuntimeGatewayNodeID != "" {
+			if strings.TrimSpace(r.CollectorRuntimeGatewayTarget) == "" || strings.TrimSpace(r.CollectorRuntimeGatewayNodeID) == "" {
+				return r.fail(spaceID, "environment", fmt.Errorf("collector runtime gateway target and node must be configured together"))
+			}
+			environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = strings.TrimSpace(r.CollectorRuntimeGatewayTarget)
+			environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"] = strings.TrimSpace(r.CollectorRuntimeGatewayNodeID)
+			if environmentBytes(environment) > managedBudget {
+				return r.fail(spaceID, "environment", fmt.Errorf("timer assignment environment is %d bytes after Collector runtime routing before provider variables (managed budget %d)", environmentBytes(environment), managedBudget))
+			}
+		}
+		if !dnsAvailable {
+			// A Collector restart can reach this tick before its first DNS
+			// refresh succeeds. Omit DNS-owned keys rather than sending an empty
+			// snapshot that would erase the last known-good SCF routes; the
+			// CloudNode merge keeps the remote values intact.
+			delete(environment, "MOOX_MARKET_FETCH_DNS_ROUTES_JSON")
+			delete(environment, "MOOX_MARKET_FETCH_DNS_HASH")
+			delete(environment, "MOOX_MARKET_FETCH_DNS_UPDATED_AT")
+		}
+		cron := assignment.Cron
+		if cron == "" {
+			cron = "0 * * * * * *"
+		}
+		desiredTimerEnabled := assignment.Enabled && !r.DisableTimerTriggers
+		dnsHash := environment["MOOX_MARKET_FETCH_DNS_HASH"]
+		if dnsHash == "" && !dnsAvailable {
+			// A failed refresh must not erase the last-known-good SCF route. Keep
+			// the stored identity in the fingerprint so the same stale snapshot
+			// is not submitted on every market-fetch tick. The SCF runtime still
+			// falls back to the hostname whenever its stored route is unusable.
+			dnsHash = currentDNSHash(assignment.NodeID, nodes)
+		}
+		// Disabled nodes do not execute Timer work, so rotating DNS routes do
+		// not require an environment update for them. Keep their existing DNS
+		// values until the node is enabled again; the next enabled assignment
+		// always carries the current snapshot.
+		if !assignment.Enabled {
+			dnsHash = ""
+		}
+		environment["MOOX_FETCH_TIMEOUT_SECONDS"] = strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)
+		fingerprint := assignment.AssignmentHash + "\x00" + dnsHash + "\x00" + fmt.Sprint(desiredTimerEnabled) + "\x00" + cron
+		fingerprint += "\x00" + environment["MOOX_MARKET_FETCH_BINDING_HASH"] + "\x00" + environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] + "\x00" + environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"] + "\x00" + environment["MOOX_FETCH_TIMEOUT_SECONDS"] + "\x00" + environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"]
+		if !r.shouldPatch(assignment, nodes, fingerprint, desiredTimerEnabled) {
+			continue
+		}
+		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: assignment.NodeID, ManagedEnvironment: environment, TimerEnabled: desiredTimerEnabled, TimerCron: cron})
+		pendingFingerprints[assignment.NodeID] = fingerprint
+	}
+	if len(patches) == 0 {
+		r.clearSubmitRetryPending()
+		if err := r.releasePublishLease(ctx, spaceID); err != nil {
+			return r.fail(spaceID, "publish_lease", err)
+		}
+		r.observeAssignmentPending(spaceID, false, time.Time{})
+		if err := r.persistAssignments(ctx, spaceID, nodes, assignments); err != nil {
+			return r.fail(spaceID, "task_instances", err)
+		}
+		r.observeAssignmentMetrics(spaceID, groups, assignments, time.Now().UTC().Unix())
+		return nil
+	}
+	lease, leaseErr := r.ensurePublishLease(ctx, spaceID)
+	if leaseErr != nil {
+		return r.fail(spaceID, "publish_lease", leaseErr)
+	}
+	for _, patch := range patches {
+		patch.CollectorPublishLeaseId = lease.LeaseID
+		patch.CollectorPublishFencingToken = lease.FencingToken
+	}
+	jobIDs := make([]string, 0, (len(patches)+runtimeConfigBatchSize-1)/runtimeConfigBatchSize)
+	acceptedFingerprints := make(map[string]string, len(pendingFingerprints))
+	for _, batch := range runtimeConfigPatchBatches(patches, runtimeConfigBatchSize) {
+		jobID, submitErr := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, batch)
+		if submitErr == nil && strings.TrimSpace(jobID) == "" {
+			submitErr = fmt.Errorf("%w: CloudNode accepted no queryable job identity", scfinvoker.ErrRuntimeConfigSubmissionUnknown)
+		}
+		if submitErr != nil {
+			// A timeout is ambiguous: CloudNode may have accepted earlier
+			// chunks. Track those jobs so the next tick observes them before
+			// retrying the remaining desired state.
+			if len(jobIDs) > 0 {
+				r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints, false)
+			}
+			if isAmbiguousRuntimeConfigSubmitError(submitErr) {
+				pendingSince := r.markRuntimeSubmitUnknown()
+				r.observeAssignmentPending(spaceID, true, pendingSince)
+				return r.fail(spaceID, "submit_timeout", fmt.Errorf("submit timer runtime configs: %w", submitErr))
+			}
+			if len(jobIDs) == 0 {
+				r.clearSubmitRetryPending()
+				if releaseErr := r.releasePublishLease(ctx, spaceID); releaseErr != nil {
+					return r.fail(spaceID, "publish_lease", errors.Join(submitErr, releaseErr))
+				}
+			}
+			r.observeAssignmentPending(spaceID, false, time.Time{})
+			return r.fail(spaceID, "cloudnode", fmt.Errorf("submit timer runtime configs: %w", submitErr))
+		}
+		jobIDs = append(jobIDs, jobID)
+		for _, patch := range batch {
+			if fingerprint, ok := pendingFingerprints[patch.GetNodeId()]; ok {
+				acceptedFingerprints[patch.GetNodeId()] = fingerprint
+			}
+		}
+	}
+	r.setPendingRuntimeJobs(jobIDs, acceptedFingerprints, true)
+	pendingSince := r.pendingRuntimeSince()
+	if r.Metrics != nil {
+		r.Metrics.ClearAssignmentFailure(spaceID)
+	}
+	log.InfoContextf(ctx, "collector_scf_timer_reconciled space=%s nodes=%d patches=%d jobs=%d", spaceID, len(nodes), len(patches), len(jobIDs))
+	r.observeAssignmentPending(spaceID, true, pendingSince)
+	return nil
+}
+
+func runtimeConfigPatchBatches(patches []*cloudnodepb.NodeRuntimeConfigPatch, batchSize int) [][]*cloudnodepb.NodeRuntimeConfigPatch {
+	if batchSize <= 0 {
+		return nil
+	}
+	batches := make([][]*cloudnodepb.NodeRuntimeConfigPatch, 0, (len(patches)+batchSize-1)/batchSize)
+	for start := 0; start < len(patches); start += batchSize {
+		end := minInt(start+batchSize, len(patches))
+		batches = append(batches, patches[start:end])
+	}
+	return batches
+}
+
+func (r *Reconciler) disableBlacklistedTimers(ctx context.Context, spaceID string, nodes []scfinvoker.Node) (bool, error) {
+	var patches []*cloudnodepb.NodeRuntimeConfigPatch
+	for _, node := range nodes {
+		actualEnabled, actualKnown := node.Metadata["timer_actual_enabled"].(bool)
+		desiredEnabled, desiredKnown := node.Metadata["timer_enabled"].(bool)
+		if desiredKnown && !desiredEnabled && (!actualKnown || !actualEnabled) {
+			continue
+		}
+		cron, _ := node.Metadata["timer_actual_cron"].(string)
+		if strings.TrimSpace(cron) == "" {
+			cron, _ = node.Metadata["timer_cron"].(string)
+		}
+		if strings.TrimSpace(cron) == "" {
+			cron = "0 * * * * * *"
+		}
+		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: node.NodeID, TimerEnabled: false, TimerCron: cron})
+	}
+	if len(patches) == 0 {
+		return false, nil
+	}
+	lease, err := r.ensurePublishLease(ctx, spaceID)
+	if err != nil {
+		return false, r.fail(spaceID, "publish_lease", fmt.Errorf("acquire timer reconciliation publish lease: %w", err))
+	}
+	for _, patch := range patches {
+		patch.CollectorPublishLeaseId = lease.LeaseID
+		patch.CollectorPublishFencingToken = lease.FencingToken
+	}
+	var jobs []string
+	for _, batch := range runtimeConfigPatchBatches(patches, runtimeConfigBatchSize) {
+		job, submitErr := r.Nodes.SubmitRuntimeConfigs(ctx, spaceID, batch)
+		if submitErr == nil && strings.TrimSpace(job) == "" {
+			submitErr = fmt.Errorf("%w: CloudNode accepted no queryable job identity", scfinvoker.ErrRuntimeConfigSubmissionUnknown)
+		}
+		if submitErr != nil {
+			if len(jobs) > 0 {
+				r.setPendingRuntimeJobs(jobs, nil, false)
+			}
+			if isAmbiguousRuntimeConfigSubmitError(submitErr) {
+				pendingSince := r.markRuntimeSubmitUnknown()
+				r.observeAssignmentPending(spaceID, true, pendingSince)
+			} else {
+				if len(jobs) == 0 {
+					if releaseErr := r.releasePublishLease(ctx, spaceID); releaseErr != nil {
+						submitErr = errors.Join(submitErr, releaseErr)
+					}
+				}
+				r.observeAssignmentPending(spaceID, false, time.Time{})
+			}
+			return false, r.fail(spaceID, "cloudnode", fmt.Errorf("disable blacklisted timers: %w", submitErr))
+		}
+		jobs = append(jobs, job)
+	}
+	if len(jobs) > 0 {
+		// Disabling prohibited execution is independent from available capacity.
+		// Observe completion before planning any replacement assignments.
+		r.setPendingRuntimeJobs(jobs, nil, false)
+		r.observeAssignmentPending(spaceID, true, time.Now().UTC())
+	}
+	return len(jobs) > 0, nil
+}
+
+func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nodes []scfinvoker.Node, assignments []NodeAssignment) error {
+	if r == nil {
+		return nil
+	}
+	functionNames := make([]string, 0, len(nodes))
+	seen := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		name := strings.TrimSpace(node.FunctionName)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		functionNames = append(functionNames, name)
+	}
+	replacements := make([]store.MarketFetchAssignment, 0, len(assignments))
+	for _, assignment := range assignments {
+		if !assignment.Enabled {
+			continue
+		}
+		if strings.TrimSpace(assignment.FunctionName) == "" {
+			return fmt.Errorf("enabled assignment %s has no function_name", assignment.NodeID)
+		}
+		provider := firstNonEmpty(assignment.RouteProvider, assignment.Provider)
+		replacements = append(replacements, store.MarketFetchAssignment{Provider: provider, SourceID: assignment.SourceID, MarketType: assignment.MarketType, DatasetID: assignment.DatasetID, Frequency: assignment.Frequency, FunctionName: assignment.FunctionName, Subjects: assignment.Subjects})
+	}
+	if r.Instances != nil {
+		if err := r.Instances.ReplaceMarketFetchAssignments(ctx, spaceID, functionNames, replacements); err != nil {
+			return fmt.Errorf("replace SCF task assignments: %w", err)
+		}
+	}
+	r.mu.Lock()
+	r.lastAssignments = cloneNodeAssignments(assignments)
+	r.mu.Unlock()
+	return nil
+}
+
+// TimerAssignments returns only assignments whose Timer runtime state was
+// observed and persisted by Reconcile. The returned nested slices and maps do
+// not alias reconciler state.
+func (r *Reconciler) TimerAssignments() []NodeAssignment {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return cloneNodeAssignments(r.lastAssignments)
+}
+
+func cloneNodeAssignments(input []NodeAssignment) []NodeAssignment {
+	result := make([]NodeAssignment, len(input))
+	for index, assignment := range input {
+		result[index] = assignment
+		result[index].OutputFields = append([]string(nil), assignment.OutputFields...)
+		result[index].Subjects = append([]string(nil), assignment.Subjects...)
+		result[index].ProviderChain = append([]string(nil), assignment.ProviderChain...)
+		if assignment.ExternalSymbols != nil {
+			result[index].ExternalSymbols = make(map[string]string, len(assignment.ExternalSymbols))
+			for subject, symbol := range assignment.ExternalSymbols {
+				result[index].ExternalSymbols[subject] = symbol
+			}
+		}
+	}
+	return result
+}
+
+func splitGroupsForEnvironment(groups []TaskGroup, snapshot map[string]sources.DNSResolution, maxSubjects int, resolver SymbolResolver, budgets ...int) ([]TaskGroup, error) {
+	if maxSubjects <= 0 {
+		return nil, fmt.Errorf("max subjects must be positive")
+	}
+	managedBudget := maxManagedEnvironmentSize
+	if len(budgets) > 0 && budgets[0] > 0 && budgets[0] < managedBudget {
+		managedBudget = budgets[0]
+	}
+	result := make([]TaskGroup, 0, len(groups))
+	// The final assignment also carries GroupID and GroupCount. Include a
+	// deliberately wide numeric representation while finding the largest safe
+	// subject chunk; otherwise the preflight can accept a chunk that fails only
+	// after BuildAssignments adds the group metadata.
+	const environmentGroupCountProbe = 999999
+	for _, group := range groups {
+		subjects := normalizeSubjects(group.Subjects)
+		if isCryptoKlineGroup(group) {
+			subjects = pinPriorityCryptoSubjects(subjects)
+		}
+		if len(subjects) == 0 {
+			result = append(result, group)
+			continue
+		}
+		for start := 0; start < len(subjects); {
+			size := minInt(maxSubjects, len(subjects)-start)
+			for size > 0 {
+				chunk := append([]string(nil), subjects[start:start+size]...)
+				externals := make(map[string]string, len(chunk))
+				for _, subject := range chunk {
+					externals[subject] = group.ExternalSymbols[subject]
+				}
+				_, err := buildManagedEnvironment(NodeAssignment{
+					Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID,
+					Frequency: group.Frequency, Subjects: chunk, ExternalSymbols: externals, GroupID: environmentGroupCountProbe, GroupCount: environmentGroupCountProbe, Enabled: true,
+				}, snapshot, managedBudget, resolver)
+				if err == nil {
+					result = append(result, TaskGroup{Provider: group.Provider, MarketType: group.MarketType, MarketID: group.MarketID, InstrumentType: group.InstrumentType, SourceID: group.SourceID, SeriesTag: group.SeriesTag, DatasetID: group.DatasetID, Frequency: group.Frequency, OutputFields: append([]string(nil), group.OutputFields...), Subjects: chunk, ExternalSymbols: externals})
+					start += size
+					break
+				}
+				if size == 1 {
+					return nil, fmt.Errorf("subject %s cannot fit in timer environment: %w", chunk[0], err)
+				}
+				size--
+			}
+		}
+	}
+	return result, nil
+}
+
+func managedEnvironmentBudget(nodes []scfinvoker.Node, limits ...int) (int, error) {
+	budget := maxManagedEnvironmentSize
+	if len(limits) > 0 && limits[0] > 0 {
+		budget = limits[0]
+	}
+	for _, node := range nodes {
+		_, exists := node.Metadata["managed_environment_budget_bytes"]
+		if !exists {
+			continue
+		}
+		value := metadataInt(node.Metadata, "managed_environment_budget_bytes")
+		if value <= 0 {
+			return 0, fmt.Errorf("node %s reports no available timer environment budget", node.NodeID)
+		}
+		if value < budget {
+			budget = value
+		}
+	}
+	return budget, nil
+}
+
+func managedEnvironmentLimit(stockCN bool) int {
+	if stockCN {
+		return stockCNMaxManagedEnvironmentSize
+	}
+	return maxManagedEnvironmentSize
+}
+
+func (r *Reconciler) stockCNTradingDate() string {
+	now := time.Now()
+	if r != nil && r.Now != nil {
+		now = r.Now()
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("CST", 8*60*60)
+	}
+	return now.In(location).Format("2006-01-02")
+}
+
+func metadataInt(metadata map[string]any, key string) int {
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return 0
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(typed))
+		return parsed
+	default:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(fmt.Sprint(typed)))
+		return parsed
+	}
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func (r *Reconciler) observeAssignmentDesiredMetrics(spaceID string, groups []TaskGroup, assignments []NodeAssignment) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	r.Metrics.ResetAssignmentScope(spaceID)
+	scopes := assignmentMetricScopes(groups, assignments)
+	for _, scope := range aggregateAssignmentMetricScopesByFrequency(scopes) {
+		r.Metrics.ObserveAssignmentDesired(spaceID, scope.Frequency, scope.Required, scope.Active)
+	}
+	for _, scope := range scopes {
+		expected, actual := scope.Required, scope.Active
+		if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+			expected, actual = r.ExpectedStockCNTimerFunctions, len(assignments)
+			routeID := marketRouteID(spaceID, scope.Provider, scope.MarketType, scope.Frequency)
+			r.Metrics.ResetConfiguredGroupIDs(marketMetricID(spaceID), routeID)
+			for _, assignment := range assignments {
+				r.Metrics.ObserveConfiguredGroupID(marketMetricID(spaceID), routeID, assignment.GroupID)
+			}
+		}
+		r.Metrics.ObserveConfiguredGroups(marketMetricID(spaceID), marketRouteID(spaceID, scope.Provider, scope.MarketType, scope.Frequency), expected, actual)
+	}
+}
+
+func (r *Reconciler) observeAssignmentRequirements(spaceID string, groups []TaskGroup) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	r.Metrics.ResetAssignmentRequirements(spaceID)
+	for _, scope := range aggregateAssignmentMetricScopesByFrequency(assignmentMetricScopes(groups, nil)) {
+		r.Metrics.ObserveAssignmentRequired(spaceID, scope.Frequency, scope.Required)
+	}
+}
+
+func (r *Reconciler) observeTimerCapacity(spaceID string, nodes []scfinvoker.Node, groups []TaskGroup, assignments []NodeAssignment) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	required := 0
+	for _, scope := range assignmentMetricScopes(groups, nil) {
+		required += scope.Required
+	}
+	active := 0
+	for _, assignment := range assignments {
+		if assignment.Enabled && len(assignment.Subjects) > 0 {
+			active++
+		}
+	}
+	r.Metrics.ObserveTimerCapacity(spaceID, len(nodes), required, active)
+}
+
+func (r *Reconciler) observeTimerStates(spaceID string, nodes []scfinvoker.Node) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	r.Metrics.ResetTimerScope(spaceID)
+	for _, node := range nodes {
+		enabled := metadataBool(node.Metadata, "timer_enabled")
+		status, hasStatus := node.Metadata["timer_available_status"]
+		available := strings.TrimSpace(fmt.Sprint(status))
+		value := -1.0
+		// CloudNode reports Unknown when the provider readback is unavailable
+		// (for example, a transient Tencent API limit). Unknown is not proof
+		// that the trigger is down; keep the documented -1 value so Monitor
+		// ignores this observation until the next bounded readback.
+		if hasStatus && available != "" && !strings.EqualFold(available, "unknown") {
+			actualEnabled, hasActualEnabled := metadataBoolValue(node.Metadata, "timer_actual_enabled")
+			actualType := strings.TrimSpace(fmt.Sprint(node.Metadata["timer_actual_type"]))
+			actualCron := strings.TrimSpace(fmt.Sprint(node.Metadata["timer_actual_cron"]))
+			actualQualifier := strings.TrimSpace(fmt.Sprint(node.Metadata["timer_actual_qualifier"]))
+			actualMessage := strings.TrimSpace(fmt.Sprint(node.Metadata["timer_actual_message"]))
+			desiredCron := strings.TrimSpace(fmt.Sprint(node.Metadata["timer_cron"]))
+			healthy := strings.EqualFold(available, "available")
+			if hasActualEnabled && actualEnabled != enabled {
+				healthy = false
+			}
+			if actualType != "" && !strings.EqualFold(actualType, timerTriggerType) || actualQualifier != "" && actualQualifier != timerTriggerQualifier || actualMessage != "" && actualMessage != timerTriggerMessage {
+				healthy = false
+			}
+			if actualType == "" || actualQualifier == "" || actualMessage == "" {
+				// A fresh CloudNode readback always includes the protocol fields;
+				// missing fields are an unknown/unsafe trigger, not healthy.
+				healthy = false
+			}
+			if enabled && actualCron != "" && desiredCron != "" && actualCron != desiredCron {
+				healthy = false
+			}
+			if healthy {
+				value = 1
+			} else {
+				value = 0
+			}
+		}
+		r.Metrics.ObserveTimerState(spaceID, node.NodeID, strconv.FormatBool(enabled), value)
+	}
+}
+
+func metadataBool(metadata map[string]any, key string) bool {
+	value, ok := metadataBoolValue(metadata, key)
+	return ok && value
+}
+
+func metadataBoolValue(metadata map[string]any, key string) (bool, bool) {
+	value, ok := metadata[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true"), true
+	default:
+		return fmt.Sprint(typed) == "1", true
+	}
+}
+
+func currentDNSHash(nodeID string, nodes []scfinvoker.Node) string {
+	for _, node := range nodes {
+		if node.NodeID == nodeID {
+			return fmt.Sprint(node.Metadata["dns_hash"])
+		}
+	}
+	return ""
+}
+
+func (r *Reconciler) pendingRuntimeJobState() (string, time.Time) {
+	jobs, since := r.pendingRuntimeJobsState()
+	if len(jobs) == 0 {
+		return "", since
+	}
+	return jobs[0], since
+}
+
+func (r *Reconciler) pendingRuntimeJobsState() ([]string, time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	jobs := append([]string(nil), r.pendingJobs...)
+	if len(jobs) == 0 && r.pendingJob != "" {
+		jobs = []string{r.pendingJob}
+	}
+	return jobs, r.pendingSince
+}
+
+func (r *Reconciler) pendingRuntimeSince() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pendingSince
+}
+
+func (r *Reconciler) markSubmitRetryPending() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pendingSince.IsZero() {
+		r.pendingSince = time.Now().UTC()
+	}
+	return r.pendingSince
+}
+
+func (r *Reconciler) clearSubmitRetryPending() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pendingJob == "" && len(r.pendingJobs) == 0 && !r.pendingUnknownSubmit {
+		r.pendingSince = time.Time{}
+	}
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var timeout net.Error
+	return errors.As(err, &timeout) && timeout.Timeout()
+}
+
+func isAmbiguousRuntimeConfigSubmitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, scfinvoker.ErrRuntimeConfigSubmissionUnknown) || isTimeoutError(err) || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"connection reset", "connection refused", "broken pipe", "unexpected eof", "server closed idle connection"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Reconciler) ensurePublishLease(ctx context.Context, spaceID string) (*scfinvoker.CollectorPublishLease, error) {
+	if r.publishLease != nil {
+		if !strings.EqualFold(r.publishLease.SpaceID, spaceID) {
+			return nil, fmt.Errorf("timer reconciliation lease belongs to another space")
+		}
+		if err := r.renewPublishLease(ctx, spaceID); err != nil {
+			return nil, err
+		}
+		if r.publishLease != nil {
+			return r.publishLease, nil
+		}
+	}
+	var holder [16]byte
+	if _, err := rand.Read(holder[:]); err != nil {
+		return nil, fmt.Errorf("generate timer reconciliation lease holder: %w", err)
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	lease, err := r.Nodes.AcquireCollectorPublishLease(leaseCtx, spaceID, "timer-reconciler-"+hex.EncodeToString(holder[:]))
+	if err != nil {
+		return nil, err
+	}
+	if lease == nil || lease.LeaseID == "" || lease.FencingToken < 1 || !strings.EqualFold(lease.SpaceID, spaceID) {
+		return nil, fmt.Errorf("timer reconciliation lease response is incomplete")
+	}
+	r.publishLease = lease
+	return lease, nil
+}
+
+func (r *Reconciler) renewPublishLease(ctx context.Context, spaceID string) error {
+	if r.publishLease == nil {
+		return nil
+	}
+	if !strings.EqualFold(r.publishLease.SpaceID, spaceID) {
+		return fmt.Errorf("timer reconciliation lease belongs to another space")
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	renewed, err := r.Nodes.RenewCollectorPublishLease(leaseCtx, r.publishLease)
+	if err != nil {
+		if errors.Is(err, scfinvoker.ErrCollectorPublishLeaseStale) {
+			r.publishLease = nil
+			return nil
+		}
+		return err
+	}
+	if renewed == nil || renewed.LeaseID != r.publishLease.LeaseID || renewed.FencingToken != r.publishLease.FencingToken {
+		return fmt.Errorf("timer reconciliation lease renewal changed identity")
+	}
+	r.publishLease = renewed
+	return nil
+}
+
+func (r *Reconciler) settleUnknownRuntimeSubmit(ctx context.Context, spaceID string) (bool, error) {
+	if !r.pendingRuntimeSubmitUnknown() {
+		return true, nil
+	}
+	if jobs, _ := r.pendingRuntimeJobsState(); len(jobs) > 0 {
+		return false, nil
+	}
+	previous := r.publishLease
+	if previous != nil && time.Now().Before(previous.ExpiresAt) {
+		return false, nil
+	}
+	var holder [16]byte
+	if _, err := rand.Read(holder[:]); err != nil {
+		return false, fmt.Errorf("generate replacement timer reconciliation lease holder: %w", err)
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	lease, err := r.Nodes.AcquireCollectorPublishLease(leaseCtx, spaceID, "timer-reconciler-"+hex.EncodeToString(holder[:]))
+	if err != nil {
+		// A held lease or ambiguous acquire response is not proof that the old
+		// submission was fenced. Keep the unknown marker and retry on a later tick.
+		return false, err
+	}
+	if lease == nil || lease.LeaseID == "" || lease.FencingToken < 1 || !strings.EqualFold(lease.SpaceID, spaceID) {
+		return false, fmt.Errorf("replacement timer reconciliation lease response is incomplete")
+	}
+	r.publishLease = lease
+	if previous != nil && lease.FencingToken <= previous.FencingToken {
+		return false, fmt.Errorf("replacement timer reconciliation lease did not advance the fencing token")
+	}
+	r.clearUnknownRuntimeSubmit()
+	return true, nil
+}
+
+func (r *Reconciler) pendingRuntimeSubmitUnknown() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pendingUnknownSubmit
+}
+
+func (r *Reconciler) markRuntimeSubmitUnknown() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingUnknownSubmit = true
+	if r.pendingSince.IsZero() {
+		r.pendingSince = time.Now().UTC()
+	}
+	return r.pendingSince
+}
+
+func (r *Reconciler) clearUnknownRuntimeSubmit() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingUnknownSubmit = false
+	if len(r.pendingJobs) == 0 && r.pendingJob == "" {
+		r.pendingSince = time.Time{}
+	}
+}
+
+func (r *Reconciler) releasePublishLease(ctx context.Context, spaceID string) error {
+	if r.publishLease == nil {
+		return nil
+	}
+	if !strings.EqualFold(r.publishLease.SpaceID, spaceID) {
+		return fmt.Errorf("timer reconciliation lease belongs to another space")
+	}
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := r.Nodes.ReleaseCollectorPublishLease(leaseCtx, r.publishLease); err != nil {
+		return fmt.Errorf("release timer reconciliation publish lease: %w", err)
+	}
+	r.publishLease = nil
+	return nil
+}
+
+func (r *Reconciler) fail(spaceID, reason string, err error) error {
+	if r != nil && r.Metrics != nil {
+		r.Metrics.ObserveAssignmentFailure(spaceID, reason)
+	}
+	return err
+}
+
+func (r *Reconciler) setPendingRuntimeJobs(jobIDs []string, fingerprints map[string]string, fullySubmitted bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingJobs = append([]string(nil), jobIDs...)
+	r.pendingSubmissionIncomplete = !fullySubmitted
+	r.pendingJob = ""
+	if len(r.pendingJobs) > 0 {
+		r.pendingJob = r.pendingJobs[0]
+	}
+	r.pending = make(map[string]string, len(fingerprints))
+	r.pendingAt = make(map[string]time.Time, len(fingerprints))
+	now := time.Now().UTC()
+	for nodeID, fingerprint := range fingerprints {
+		r.pending[nodeID] = fingerprint
+		r.pendingAt[nodeID] = now
+	}
+	if len(r.pendingJobs) > 0 && r.pendingSince.IsZero() {
+		r.pendingSince = now
+	}
+}
+
+func (r *Reconciler) clearPendingRuntimeJobs() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fullySubmitted := !r.pendingSubmissionIncomplete
+	r.pendingSubmissionIncomplete = false
+	r.pendingJobs = nil
+	r.pendingJob = ""
+	r.pendingSince = time.Time{}
+	r.pending = make(map[string]string)
+	r.pendingAt = make(map[string]time.Time)
+	return fullySubmitted
+}
+
+func (r *Reconciler) clearPendingRuntimeJob(jobID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pendingJob != jobID && !containsString(r.pendingJobs, jobID) {
+		return
+	}
+	remaining := r.pendingJobs[:0]
+	for _, pendingJob := range r.pendingJobs {
+		if pendingJob != jobID {
+			remaining = append(remaining, pendingJob)
+		}
+	}
+	r.pendingJobs = remaining
+	if len(r.pendingJobs) > 0 {
+		r.pendingJob = r.pendingJobs[0]
+		return
+	}
+	r.pendingJob = ""
+	r.pendingSince = time.Time{}
+	r.pending = make(map[string]string)
+	r.pendingAt = make(map[string]time.Time)
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Reconciler) observeAssignmentPending(spaceID string, pending bool, since time.Time) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	r.Metrics.ObserveAssignmentPending(spaceID, pending, since)
+}
+
+func (r *Reconciler) observeAssignmentMetrics(spaceID string, groups []TaskGroup, assignments []NodeAssignment, reconciledAt int64) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	r.Metrics.ResetAssignmentScope(spaceID)
+	scopes := assignmentMetricScopes(groups, assignments)
+	for _, scope := range aggregateAssignmentMetricScopesByFrequency(scopes) {
+		r.Metrics.ObserveAssignmentDesired(spaceID, scope.Frequency, scope.Required, scope.Active)
+	}
+	for _, scope := range scopes {
+		expected, actual := scope.Required, scope.Active
+		if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+			expected, actual = r.ExpectedStockCNTimerFunctions, len(assignments)
+			routeID := marketRouteID(spaceID, scope.Provider, scope.MarketType, scope.Frequency)
+			r.Metrics.ResetConfiguredGroupIDs(marketMetricID(spaceID), routeID)
+			for _, assignment := range assignments {
+				r.Metrics.ObserveConfiguredGroupID(marketMetricID(spaceID), routeID, assignment.GroupID)
+			}
+		}
+		r.Metrics.ObserveConfiguredGroups(marketMetricID(spaceID), marketRouteID(spaceID, scope.Provider, scope.MarketType, scope.Frequency), expected, actual)
+	}
+	// A valid reconciliation with zero enabled groups is still a success. Set
+	// the space-level health outside the scope loop so a previous failure can
+	// recover after tasks are disabled or removed.
+	r.Metrics.ObserveAssignmentSuccess(spaceID, reconciledAt)
+}
+
+func marketMetricID(spaceID string) string {
+	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+		return StockCNSpaceID
+	}
+	return "crypto"
+}
+
+func marketRouteID(spaceID, provider, marketType, frequency string) string {
+	if strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID) {
+		return StockCNRouteID
+	}
+	if strings.EqualFold(strings.TrimSpace(provider), "binance") {
+		product := "spot"
+		if strings.EqualFold(strings.TrimSpace(marketType), "swap") {
+			product = "swap"
+		}
+		parsed, err := marketdata.ParseFrequency(frequency)
+		if err != nil {
+			return "unknown"
+		}
+		return "binance_" + product + "_kline_" + string(parsed)
+	}
+	return "unknown"
+}
+
+type assignmentMetricScope struct {
+	Provider, MarketType, DatasetID, Frequency string
+	Required, Active                           int
+}
+
+func aggregateAssignmentMetricScopesByFrequency(scopes []assignmentMetricScope) []assignmentMetricScope {
+	byFrequency := make(map[string]assignmentMetricScope)
+	for _, scope := range scopes {
+		frequency := boundedPeriodFrequency(scope.Frequency)
+		aggregated := byFrequency[frequency]
+		aggregated.Frequency = frequency
+		aggregated.Required += scope.Required
+		aggregated.Active += scope.Active
+		byFrequency[frequency] = aggregated
+	}
+	frequencies := make([]string, 0, len(byFrequency))
+	for frequency := range byFrequency {
+		frequencies = append(frequencies, frequency)
+	}
+	sort.Strings(frequencies)
+	aggregated := make([]assignmentMetricScope, 0, len(frequencies))
+	for _, frequency := range frequencies {
+		aggregated = append(aggregated, byFrequency[frequency])
+	}
+	return aggregated
+}
+
+func assignmentMetricScopes(groups []TaskGroup, assignments []NodeAssignment) []assignmentMetricScope {
+	byKey := make(map[string]assignmentMetricScope)
+	for _, group := range groups {
+		key := assignmentMetricKey(group.DatasetID, group.Frequency)
+		scope := byKey[key]
+		scope.Provider, scope.MarketType, scope.DatasetID, scope.Frequency = group.Provider, group.MarketType, group.DatasetID, group.Frequency
+		scope.Required++
+		byKey[key] = scope
+	}
+	for _, assignment := range assignments {
+		if len(assignment.Subjects) == 0 {
+			continue
+		}
+		key := assignmentMetricKey(assignment.DatasetID, assignment.Frequency)
+		scope, ok := byKey[key]
+		if !ok {
+			continue
+		}
+		scope.Active++
+		byKey[key] = scope
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]assignmentMetricScope, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, byKey[key])
+	}
+	return result
+}
+
+func assignmentMetricKey(datasetID, frequency string) string {
+	return strings.TrimSpace(datasetID) + "\x00" + strings.TrimSpace(frequency)
+}
+
+func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, error) {
+	tasks, err := r.Tasks.ListEnabled(ctx, spaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list enabled collection tasks: %w", err)
+	}
+	groups := make([]TaskGroup, 0)
+	if r.lastGroups == nil {
+		r.lastGroups = make(map[string][]TaskGroup)
+	}
+	for _, task := range tasks {
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		if parseErr != nil {
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: parse task: %v", task.TaskID, parseErr)
+			continue
+		}
+		if params.Collector.DataType != "kline" {
+			continue
+		}
+		if _, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID); datasetErr != nil {
+			log.WarnContextf(ctx, "skip collection task=%s during timer reconciliation: get target dataset %s: %v", task.TaskID, params.Target.DatasetID, datasetErr)
+			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+				groups = append(groups, previous...)
+			}
+			continue
+		}
+
+		// New tasks use task_tags as the authoritative acquisition scope. Each
+		// Tag owns immutable source/market routing, so a single CollectionTask can
+		// fan out to several Provider routes without task-level overrides.
+		if tagIDs := normalizedTaskTagIDs(task.TagIDs); len(tagIDs) > 0 {
+			tagSource, ok := r.Symbols.(tagRouteSource)
+			if !ok {
+				log.WarnContextf(ctx, "skip collection task=%s: metadata source does not expose tag routes", task.TaskID)
+				if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+					groups = append(groups, previous...)
+				}
+				continue
+			}
+			taskGroups := make([]TaskGroup, 0)
+			valid := true
+			for _, tagID := range tagIDs {
+				tag, tagErr := tagSource.GetTag(ctx, spaceID, tagID)
+				if tagErr != nil || tag == nil {
+					log.WarnContextf(ctx, "skip collection task=%s: load tag=%s: %v", task.TaskID, tagID, tagErr)
+					valid = false
+					break
+				}
+				provider := strings.ToLower(strings.TrimSpace(tag.GetSource()))
+				marketType := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+				if provider == "" || marketType == "" {
+					log.WarnContextf(ctx, "skip collection task=%s: tag=%s missing immutable source/market_type", task.TaskID, tagID)
+					valid = false
+					break
+				}
+				subjects, subjectErr := r.Symbols.ResolveSubjects(ctx, spaceID, []string{tagID})
+				if subjectErr != nil || len(subjects) == 0 {
+					log.WarnContextf(ctx, "skip collection task=%s: resolve tag=%s subjects: %v", task.TaskID, tagID, subjectErr)
+					valid = false
+					break
+				}
+				routeGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, "", subjects)
+				if routeErr != nil {
+					log.WarnContextf(ctx, "skip collection task=%s tag=%s route: %v", task.TaskID, tagID, routeErr)
+					valid = false
+					break
+				}
+				taskGroups = append(taskGroups, routeGroups...)
+			}
+			if !valid || len(taskGroups) == 0 {
+				if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+					groups = append(groups, previous...)
+				}
+				continue
+			}
+			r.lastGroups[task.TaskID] = append([]TaskGroup(nil), taskGroups...)
+			groups = append(groups, taskGroups...)
+			continue
+		}
+
+		// Compatibility path for built-in/legacy task fixtures that do not yet
+		// carry task_tags. New user-created kline tasks never depend on this path.
+		dataset, datasetErr := r.Symbols.GetDataset(ctx, spaceID, params.Target.DatasetID)
+		if datasetErr != nil {
+			continue
+		}
+		subjects, subjectErr := r.Symbols.ResolveSubjects(ctx, spaceID, dataset.SubjectTags)
+		if subjectErr != nil {
+			log.WarnContextf(ctx, "resolve subjects for collection task=%s tags=%v: %v", task.TaskID, dataset.SubjectTags, subjectErr)
+		}
+		if len(subjects) == 0 {
+			if previous := r.lastGroups[task.TaskID]; len(previous) > 0 {
+				groups = append(groups, previous...)
+			}
+			continue
+		}
+		provider := strings.ToLower(strings.TrimSpace(params.Provider))
+		marketType := strings.ToLower(strings.TrimSpace(params.MarketType))
+		sourceID := strings.TrimSpace(params.SourceID)
+		taskGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, sourceID, subjects)
+		if routeErr != nil {
+			return nil, routeErr
+		}
+		r.lastGroups[task.TaskID] = append([]TaskGroup(nil), taskGroups...)
+		groups = append(groups, taskGroups...)
+	}
+	return mergeGroups(groups), nil
+}
+
+func normalizedTaskTagIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func (r *Reconciler) taskGroupsForRoute(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, provider, marketType, sourceID string, subjects []domain.Subject) ([]TaskGroup, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	marketType = strings.ToLower(strings.TrimSpace(marketType))
+	if provider == "" || marketType == "" {
+		return nil, fmt.Errorf("provider and market_type are required")
+	}
+	marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, params.Target.DatasetID)
+	if instrumentType == "" {
+		instrumentType = defaultInstrumentTypeForMarket(marketID, marketType)
+	}
+	if sourceID = strings.TrimSpace(sourceID); sourceID == "" && r.ResolveSourceID != nil {
+		sourceID = r.ResolveSourceID(provider, instrumentType)
+	}
+	if sourceID == "" {
+		sourceID = provider
+	}
+	symbolIDs := make([]string, 0, len(subjects))
+	externalSymbols := make(map[string]string, len(subjects))
+	activeSubjectCount := 0
+	invalidSubjects := make([]string, 0)
+	for _, subject := range subjects {
+		activeSubjectCount++
+		subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
+		if subjectID == "" {
+			continue
+		}
+		external, symbolErr := resolveProviderSymbol(r.ResolveSymbol, provider, marketID, marketType, subjectID)
+		if symbolErr != nil {
+			invalidSubjects = append(invalidSubjects, subjectID)
+			continue
+		}
+		symbolIDs = append(symbolIDs, subjectID)
+		externalSymbols[subjectID] = external
+	}
+	if activeSubjectCount > 0 && len(symbolIDs) == 0 {
+		return nil, fmt.Errorf("all active %s subjects are invalid: %s", marketType, strings.Join(invalidSubjects, ","))
+	}
+	if len(invalidSubjects) > 0 {
+		log.WarnContextf(ctx, "skip market subjects without valid external symbols space=%s task=%s skipped=%d subjects=%s", task.SpaceID, task.TaskID, len(invalidSubjects), strings.Join(invalidSubjects, ","))
+	}
+	result := make([]TaskGroup, 0, len(params.Collector.Intervals))
+	for _, frequency := range params.Collector.Intervals {
+		result = append(result, TaskGroup{
+			Provider: provider, MarketType: marketType, MarketID: marketID, InstrumentType: instrumentType,
+			SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID,
+			Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
+			Subjects: symbolIDs, ExternalSymbols: externalSymbols,
+		})
+	}
+	return result, nil
+}
+
+func marketIdentity(marketID, instrumentType, datasetID string) (string, string) {
+	marketID = strings.ToLower(strings.TrimSpace(marketID))
+	instrumentType = strings.ToLower(strings.TrimSpace(instrumentType))
+	if marketID != "" && instrumentType != "" {
+		return marketID, instrumentType
+	}
+	datasetID = strings.ToLower(strings.TrimSpace(datasetID))
+	switch {
+	case strings.HasPrefix(datasetID, "dataset_stockcn_index"):
+		return "stockcn", "index"
+	case strings.HasPrefix(datasetID, "dataset_stockcn_bond"):
+		return "stockcn", "convertible_bond"
+	case strings.HasPrefix(datasetID, "dataset_stockhk"):
+		return "stockhk", "equity"
+	case strings.HasPrefix(datasetID, "dataset_stockus"):
+		return "stockus", "equity"
+	case strings.HasPrefix(datasetID, "dataset_stockcn"):
+		return "stockcn", "equity"
+	default:
+		return marketID, instrumentType
+	}
+}
+
+func mergeGroups(groups []TaskGroup) []TaskGroup {
+	byKey := make(map[string]TaskGroup)
+	for _, group := range groups {
+		key := groupKey(group)
+		current := byKey[key]
+		current.Provider, current.MarketType = group.Provider, group.MarketType
+		current.MarketID, current.InstrumentType = group.MarketID, group.InstrumentType
+		current.SourceID, current.SeriesTag = group.SourceID, group.SeriesTag
+		current.DatasetID, current.Frequency = group.DatasetID, group.Frequency
+		current.OutputFields = append([]string(nil), group.OutputFields...)
+		current.Subjects = append(current.Subjects, group.Subjects...)
+		if group.ExternalSymbols != nil {
+			if current.ExternalSymbols == nil {
+				current.ExternalSymbols = make(map[string]string)
+			}
+			for subject, external := range group.ExternalSymbols {
+				if previous, exists := current.ExternalSymbols[subject]; exists {
+					if previous != external {
+						current.ExternalSymbols[subject] = ""
+					}
+					continue
+				}
+				current.ExternalSymbols[subject] = external
+			}
+		}
+		byKey[key] = current
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]TaskGroup, 0, len(keys))
+	for _, key := range keys {
+		group := byKey[key]
+		group.Subjects = normalizeSubjects(group.Subjects)
+		if len(group.Subjects) > 0 {
+			result = append(result, group)
+		}
+	}
+	return result
+}
+
+func (r *Reconciler) maxSubjects() int {
+	if r.MaxSubjects > 0 && r.MaxSubjects <= 40 {
+		return r.MaxSubjects
+	}
+	return 40
+}
+
+// DefaultMaxSubjects keeps overseas-provider requests below the SCF timeout
+// budget while preserving the wider shard size used by domestic collectors.
+func DefaultMaxSubjects(spaceID string) int {
+	if strings.EqualFold(strings.TrimSpace(spaceID), "crypto") {
+		return 30
+	}
+	return 40
+}
+
+func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.Node, fingerprint string, desiredTimerEnabled ...bool) bool {
+	wantTimerEnabled := assignment.Enabled
+	if len(desiredTimerEnabled) > 0 {
+		wantTimerEnabled = desiredTimerEnabled[0]
+	}
+	for _, node := range nodes {
+		if node.NodeID != assignment.NodeID {
+			continue
+		}
+		metadata := node.Metadata
+		storedDNSHash := fmt.Sprint(metadata["dns_hash"])
+		if !assignment.Enabled {
+			// DNS is intentionally ignored for disabled assignments; otherwise
+			// every five-minute resolver refresh would rewrite all spare nodes.
+			storedDNSHash = ""
+		}
+		stored := fmt.Sprintf("%v\x00%v\x00%v\x00%v", metadata["assignment_hash"], storedDNSHash, metadata["timer_enabled"], metadata["timer_cron"])
+		if strings.Count(fingerprint, "\x00") > 3 {
+			stored += "\x00" + metadataStringValue(metadata, "binding_hash") + "\x00" + metadataStringValue(metadata, "collector_rpc_gateway_target") + "\x00" + metadataStringValue(metadata, "collector_gateway_target_node") + "\x00" + metadataStringValue(metadata, "fetch_timeout_seconds") + "\x00" + fmt.Sprint(metadata["assignment_count"])
+		}
+		if stored == fingerprint {
+			if timerTriggerNeedsRepair(assignment, metadata, wantTimerEnabled) {
+				return true
+			}
+			return false
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pending[assignment.NodeID] == fingerprint && time.Since(r.pendingAt[assignment.NodeID]) < 2*time.Minute {
+		return false
+	}
+	return true
+}
+
+func metadataStringValue(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
+}
+
+func timerTriggerNeedsRepair(assignment NodeAssignment, metadata map[string]any, desiredTimerEnabled ...bool) bool {
+	wantTimerEnabled := assignment.Enabled
+	if len(desiredTimerEnabled) > 0 {
+		wantTimerEnabled = desiredTimerEnabled[0]
+	}
+	// A Tencent readback can be temporarily Unknown when the account-level API
+	// rate limit is hit. Do not immediately enqueue another full environment
+	// update for that node; the next bounded readback will recover the state.
+	status, _ := metadata["timer_available_status"].(string)
+	statusError, _ := metadata["timer_status_error"].(string)
+	if strings.EqualFold(strings.TrimSpace(status), "unknown") && strings.TrimSpace(statusError) != "" {
+		return false
+	}
+	actualEnabled, hasActualEnabled := metadataBoolValue(metadata, "timer_actual_enabled")
+	if !hasActualEnabled || actualEnabled != wantTimerEnabled {
+		return true
+	}
+	status = strings.TrimSpace(status)
+	if wantTimerEnabled && !strings.EqualFold(status, "available") {
+		return true
+	}
+	if actualType := strings.TrimSpace(fmt.Sprint(metadata["timer_actual_type"])); !strings.EqualFold(actualType, timerTriggerType) {
+		return true
+	}
+	if actualQualifier := strings.TrimSpace(fmt.Sprint(metadata["timer_actual_qualifier"])); actualQualifier != timerTriggerQualifier {
+		return true
+	}
+	if actualMessage := strings.TrimSpace(fmt.Sprint(metadata["timer_actual_message"])); actualMessage != timerTriggerMessage {
+		return true
+	}
+	desiredCron := assignment.Cron
+	if desiredCron == "" {
+		desiredCron = "0 * * * * * *"
+	}
+	return strings.TrimSpace(fmt.Sprint(metadata["timer_actual_cron"])) != desiredCron
+}

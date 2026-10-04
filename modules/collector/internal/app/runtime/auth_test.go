@@ -21,6 +21,7 @@ func TestGenerateAuthHeader_IsDeterministic(t *testing.T) {
 	cfg := AuthConfig{
 		AccessKey:  "ak",
 		SecretKey:  "sk",
+		Caller:     "collector",
 		TargetNode: "gateway-gz-122",
 		NowUnix:    1700000000,
 		ExpireSec:  1800,
@@ -28,16 +29,18 @@ func TestGenerateAuthHeader_IsDeterministic(t *testing.T) {
 	got, err := GenerateAuthHeader(cfg, "POST", "/api/service/x/Do", []byte(`{"k":"v"}`))
 	require.NoError(t, err)
 	assert.Equal(t, "gateway-gz-122", got.Get("X-Moox-Target-Node"))
+	assert.Equal(t, "collector", got.Get("X-Moox-Caller"))
 }
 
 func TestNewSignedRequestWithContext_SetsAuthHeader(t *testing.T) {
 	req, err := NewSignedRequestWithContext(context.Background(), "POST", "http://127.0.0.1:8080/api", []byte(`{}`), AuthConfig{
-		AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122", NowUnix: time.Now().Unix(), ExpireSec: 60,
+		AccessKey: "ak", SecretKey: "sk", Caller: "collector", TargetNode: "gateway-gz-122", NowUnix: time.Now().Unix(), ExpireSec: 60,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
 	assert.NotEmpty(t, req.Header.Get("X-Moox-Signature"))
 	assert.Equal(t, "gateway-gz-122", req.Header.Get("X-Moox-Target-Node"))
+	assert.Equal(t, "collector", req.Header.Get("X-Moox-Caller"))
 }
 
 func TestNewSignedRequestWithContext_RequiresCredentials(t *testing.T) {
@@ -68,4 +71,15 @@ func TestDefaultAuthConfig_UsesGlobalConfig(t *testing.T) {
 	assert.Equal(t, "env-ak", cfg.AccessKey)
 	assert.Equal(t, "env-sk", cfg.SecretKey)
 	assert.Equal(t, "gateway-gz-122", cfg.TargetNode)
+}
+
+func TestDefaultAuthConfig_PrefersServiceGatewayCA(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "/gateway/peers.pem")
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "gateway-ca")
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "service-ca")
+
+	cfg := DefaultAuthConfig()
+
+	assert.Empty(t, cfg.CAFile)
+	assert.Equal(t, "service-ca", cfg.CAPEMBase64)
 }

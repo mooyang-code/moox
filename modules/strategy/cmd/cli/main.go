@@ -1,18 +1,12 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
-	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
-	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
-	trpc "trpc.group/trpc-go/trpc-go"
+	strategyconfig "github.com/mooyang-code/moox/modules/strategy/internal/config"
 )
 
 func main() {
@@ -23,89 +17,30 @@ func main() {
 }
 
 func runCLI(args []string, out, errOut *os.File) error {
-	if len(args) == 0 {
-		return errors.New("usage: strategy validate <manifest.yaml> <source.py> | run-once <manifest.yaml> <source.py>")
+	if len(args) == 0 || args[0] != "validate" {
+		return errors.New("usage: strategy validate [--space-id <id>] <dsl.yaml>")
 	}
-	switch args[0] {
-	case "validate":
-		if len(args) != 3 {
-			return errors.New("usage: strategy validate <manifest.yaml> <source.py>")
-		}
-		manifest, source, err := readPackage(args[1], args[2])
-		if err != nil {
-			return err
-		}
-		m, err := registry.Parse(manifest)
-		if err != nil {
-			return err
-		}
-		sum := sha256.Sum256([]byte(source))
-		fmt.Fprintf(out, "valid strategy %s@%s source_hash=%s\n", m.ID, m.Version, hex.EncodeToString(sum[:]))
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	spaceID := fs.String("space-id", "", "strategy space id")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: strategy validate [--space-id <id>] <dsl.yaml>")
+	}
+	raw, err := os.ReadFile(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	dsl, err := strategyconfig.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if *spaceID == "" {
+		_, _ = fmt.Fprintf(out, "valid strategy name=%s\n", dsl.Name)
 		return nil
-	case "run-once":
-		fs := flag.NewFlagSet("run-once", flag.ContinueOnError)
-		fs.SetOutput(errOut)
-		python := fs.String("python", "python3", "Python executable")
-		worker := fs.String("worker", "pyworker/worker.py", "strategy worker path")
-		trigger := fs.String("trigger", "cli", "trigger bar time")
-		stateJSON := fs.String("state", "{}", "previous state JSON")
-		if len(args) < 3 {
-			return errors.New("usage: strategy run-once [flags] <manifest.yaml> <source.py>")
-		}
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		pos := fs.Args()
-		if len(pos) != 2 {
-			return errors.New("usage: strategy run-once [flags] <manifest.yaml> <source.py>")
-		}
-		manifest, source, err := readPackage(pos[0], pos[1])
-		if err != nil {
-			return err
-		}
-		m, err := registry.Parse(manifest)
-		if err != nil {
-			return err
-		}
-		var state map[string]any
-		if err := json.Unmarshal([]byte(*stateJSON), &state); err != nil {
-			return fmt.Errorf("state: %w", err)
-		}
-		sum := sha256.Sum256([]byte(source))
-		definition := domain.StrategyDefinition{StrategyID: m.ID, Version: m.Version, API: m.API, ManifestYAML: manifest, SourceCode: source, SourceHash: hex.EncodeToString(sum[:])}
-		e, err := engine.New(trpc.BackgroundContext(), *python, *worker)
-		if err != nil {
-			return err
-		}
-		defer e.Close()
-		if err := e.Load(trpc.BackgroundContext(), definition); err != nil {
-			return err
-		}
-		outValue, _, err := e.Run(trpc.BackgroundContext(), domain.Task{RunID: "cli-run", BindingID: "cli", StrategyID: m.ID, Version: m.Version, TriggerBarTime: *trigger, PreviousState: domain.State{StateJSON: mustJSON(state)}}, definition)
-		if err != nil {
-			return err
-		}
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(outValue)
-	default:
-		return fmt.Errorf("unknown command %q", args[0])
 	}
-}
-
-func readPackage(manifestPath, sourcePath string) (string, string, error) {
-	manifest, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return "", "", err
-	}
-	source, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return "", "", err
-	}
-	return string(manifest), string(source), nil
-}
-
-func mustJSON(value any) string {
-	b, _ := json.Marshal(value)
-	return string(b)
+	_, _ = fmt.Fprintf(out, "valid strategy name=%s space_id=%s\n", dsl.Name, *spaceID)
+	return nil
 }

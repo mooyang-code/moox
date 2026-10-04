@@ -28,7 +28,7 @@ import (
 
 func TestSetupWorkflowLeavesManifestAndArtifactsSecretFree(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "custom.toml")
+	path := filepath.Join(root, "moox.toml")
 	secrets := []string{"admin-e2e-password", "control-e2e-password", "compute-e2e-password", "AKID-e2e", "cloud-e2e-secret"}
 	raw := []byte(`[admin]
 username = "admin"
@@ -36,18 +36,24 @@ password = "admin-e2e-password"
 [tencent_cloud]
 secret_id = "AKID-e2e"
 secret_key = "cloud-e2e-secret"
-[control_host]
-name = "control"
-address = "192.0.2.10"
+[eventbus]
+host = "192.0.2.10"
+port = 4222
+tls_enabled = true
+[hosts."192.0.2.10"]
 port = 22
 username = "ubuntu"
 password = "control-e2e-password"
-[[other_hosts]]
-name = "compute-1"
-address = "192.0.2.11"
+[hosts."192.0.2.11"]
 port = 22
 username = "ubuntu"
 password = "compute-e2e-password"
+[control_host]
+name = "control"
+host = "192.0.2.10"
+[[other_hosts]]
+name = "compute-1"
+host = "192.0.2.11"
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))
 	before, err := os.ReadFile(path)
@@ -77,6 +83,9 @@ password = "compute-e2e-password"
 	err = setupdeploy.Control(context.Background(), transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: snapshot.Manifest.ControlHost.Address, BrowserPort: 9527,
 		TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:          snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
 	}, setupdeploy.Dependencies{
 		Packager: staticPackager{path: archive},
 		Probe:    captureProbe{events: &events},
@@ -85,7 +94,8 @@ password = "compute-e2e-password"
 	require.NoError(t, err)
 	require.Equal(t, []setupdeploy.ReadinessStage{
 		setupdeploy.AdminReady, setupdeploy.SetupReady, setupdeploy.GatewayReady,
-		setupdeploy.WebReady, setupdeploy.BrowserHTTPSReady,
+		setupdeploy.EventBusReady, setupdeploy.CloudNodeReady, setupdeploy.CollectorReady,
+		setupdeploy.MonitorReady, setupdeploy.WebReady, setupdeploy.BrowserHTTPSReady,
 	}, events)
 
 	after, err := os.ReadFile(path)
@@ -191,6 +201,9 @@ func (c *captureTransport) Upload(_ context.Context, reader io.Reader, _ int64, 
 	}
 	_, err := io.Copy(&c.uploaded, reader)
 	return err
+}
+func (c *captureTransport) Download(_ context.Context, _ string, _ io.Writer) (int64, error) {
+	return 0, nil
 }
 func (c *captureTransport) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	c.commands = append(c.commands, strings.Join(argv, " "))

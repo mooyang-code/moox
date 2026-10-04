@@ -15,6 +15,25 @@ type KlineRequest struct {
 	EndTime   time.Time // 结束时间（可选）
 }
 
+// TradeRequest requests the latest exchange transactions for one symbol.
+// FromID is exclusive at the collector boundary: the exchange request uses
+// it as the first candidate and the collector still performs its own strict
+// de-duplication before publishing.
+type TradeRequest struct {
+	Symbol string
+	Limit  int
+	FromID int64
+}
+
+// Trade is a raw exchange transaction used to build event-time K-lines.
+type Trade struct {
+	ID         int64
+	Price      common.Decimal
+	Quantity   common.Decimal
+	TradeTime  time.Time
+	BuyerMaker bool
+}
+
 // Kline K线数据
 type Kline struct {
 	OpenTime    time.Time      // 开盘时间

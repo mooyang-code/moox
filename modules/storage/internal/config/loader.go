@@ -2,12 +2,15 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"gopkg.in/yaml.v2"
 )
 
@@ -47,45 +50,432 @@ type StorageDevices struct {
 
 // StorageEventBus 保存事件总线传输配置。
 type StorageEventBus struct {
-	Type           string   `yaml:"type"`
-	URLs           []string `yaml:"urls"`
-	NATSURL        string   `yaml:"nats_url"`
-	CredentialFile string   `yaml:"credential_file"`
-	StreamName     string   `yaml:"stream_name"`
-	SubjectPrefix  string   `yaml:"subject_prefix"`
-	ConsumerName   string   `yaml:"consumer_name"`
-	MaxAgeHours    int      `yaml:"max_age_hours"`
-	MaxMsgs        int64    `yaml:"max_msgs"`
-	MaxBytes       int64    `yaml:"max_bytes"`
-	MaxInFlight    int      `yaml:"max_in_flight"`
-	MaxAckPending  int      `yaml:"max_ack_pending"`
-	AckWaitMS      int      `yaml:"ack_wait_ms"`
-	MaxDeliver     int      `yaml:"max_deliver"`
-	// Embedded is retained for decoding old single-process test configurations.
-	// Production Storage never starts a broker; moox-eventbus owns JetStream.
-	Embedded StorageEmbeddedEventBus `yaml:"embedded"`
+	CredentialFile string `yaml:"credential_file"`
+	Consumer       string `yaml:"-"`
+	// MaxAckPending bounds the number of View events that may be in flight.
+	// The subject dispatcher still serializes events for the same dataset/view,
+	// so different dataset subjects can make progress concurrently.
+	MaxAckPending int `yaml:"max_ack_pending"`
+	AckWaitMS     int `yaml:"-"`
 }
 
-// StorageEmbeddedEventBus 保存本地内嵌事件总线服务配置。
-type StorageEmbeddedEventBus struct {
-	Enabled          bool   `yaml:"enabled"`
-	Host             string `yaml:"host"`
-	Port             int    `yaml:"port"`
-	StoreDir         string `yaml:"store_dir"`
-	StartupTimeoutMS int    `yaml:"startup_timeout_ms"`
-}
+const (
+	StorageViewConsumer         = events.StorageViewKlineConsumer
+	StorageDefaultMaxAckPending = 8
+	StorageViewMaxAckPending    = 256
+	StorageViewAckWaitMS        = 120000
+)
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName         string                 `yaml:"metadata_service_name"`
-	PrimaryStoreServiceName     string                 `yaml:"primary_store_service_name"`
-	PrimaryStoreScanServiceName string                 `yaml:"primary_store_scan_service_name"`
-	IndexServiceName            string                 `yaml:"index_service_name"`
-	BatchSize                   int                    `yaml:"batch_size"`
-	BatchWaitMS                 int                    `yaml:"batch_wait_ms"`
-	MaxWorkers                  int                    `yaml:"max_workers"`
-	Maintenance                 StorageViewMaintenance `yaml:"maintenance"`
-	StorageRPC                  StorageRPCConfig       `yaml:"storage_rpc"`
+	MetadataServiceName      string `yaml:"metadata_service_name"`
+	PrimaryStoreServiceName  string `yaml:"primary_store_service_name"`
+	IndexServiceName         string `yaml:"index_service_name"`
+	BatchSize                int    `yaml:"batch_size"`
+	BatchWaitMS              int    `yaml:"batch_wait_ms"`
+	FetchBatch               int    `yaml:"fetch_batch"`
+	MaxWorkers               int    `yaml:"max_workers"`
+	Ordering                 string `yaml:"ordering"`
+	MaintenanceCheckInterval string `yaml:"maintenance_check_interval"`
+	// BackfillPageSize bounds each Primary history page during a View rebuild.
+	// Smaller pages reduce the instantaneous point-read and index-write burst.
+	BackfillPageSize        uint32 `yaml:"backfill_page_size"`
+	BackfillRequestInterval string `yaml:"backfill_request_interval"`
+	// RebuildLookback is the wall-clock fallback for legacy Views without a
+	// frequency-specific completed-bar target.
+	RebuildLookback        string                         `yaml:"rebuild_lookback"`
+	RebuildLookbackPeriods map[string]uint64              `yaml:"rebuild_lookback_periods"`
+	MaxViewFileBytes       int64                          `yaml:"max_view_file_bytes"`
+	RebuildMaxPending      uint64                         `yaml:"rebuild_max_pending"`
+	RebuildIdleChecks      uint32                         `yaml:"rebuild_idle_checks"`
+	ConsumerPartitions     []StorageViewConsumerPartition `yaml:"consumer_partitions"`
+	StorageRPC             StorageRPCConfig               `yaml:"storage_rpc"`
+	MaintenancePolicyFile  string                         `yaml:"maintenance_policy_file"`
+	maxViewFileBytesSet    bool
+	rebuildMaxPendingSet   bool
+	rebuildIdleChecksSet   bool
+}
+
+type ViewMaintenancePolicyOverride struct {
+	SpaceID                string `json:"space_id"`
+	ViewID                 string `json:"view_id"`
+	RebuildLookbackPeriods uint64 `json:"rebuild_lookback_periods"`
+	MaxPeriodsPerSeries    uint64 `json:"max_periods_per_series"`
+	MaxViewFileBytes       int64  `json:"max_view_file_bytes"`
+}
+
+type ViewMaintenancePolicy struct {
+	MaintenanceCheckInterval string                          `json:"maintenance_check_interval"`
+	CapacityCheckInterval    string                          `json:"capacity_check_interval"`
+	CapacityCheckJitter      string                          `json:"capacity_check_jitter"`
+	RebuildLookbackPeriods   uint64                          `json:"rebuild_lookback_periods"`
+	MaxPeriodsPerSeries      uint64                          `json:"max_periods_per_series"`
+	MaxViewFileBytes         int64                           `json:"max_view_file_bytes"`
+	SystemMonitor            ViewMaintenancePolicyOverride   `json:"system_monitor"`
+	Views                    []ViewMaintenancePolicyOverride `json:"views"`
+}
+
+func (p ViewMaintenancePolicy) ResolvePolicy(spaceID, viewID string) ViewMaintenancePolicy {
+	resolved := p
+	apply := func(override ViewMaintenancePolicyOverride) {
+		if override.RebuildLookbackPeriods > 0 {
+			resolved.RebuildLookbackPeriods = override.RebuildLookbackPeriods
+		}
+		if override.MaxPeriodsPerSeries > 0 {
+			resolved.MaxPeriodsPerSeries = override.MaxPeriodsPerSeries
+		}
+		if override.MaxViewFileBytes > 0 {
+			resolved.MaxViewFileBytes = override.MaxViewFileBytes
+		}
+	}
+	if strings.TrimSpace(spaceID) == "mooxsys" {
+		apply(p.SystemMonitor)
+	}
+	for _, override := range p.Views {
+		if strings.TrimSpace(override.SpaceID) == strings.TrimSpace(spaceID) && strings.TrimSpace(override.ViewID) == strings.TrimSpace(viewID) {
+			apply(override)
+		}
+	}
+	return resolved
+}
+
+func (p ViewMaintenancePolicy) Validate() error {
+	interval, err := time.ParseDuration(strings.TrimSpace(p.MaintenanceCheckInterval))
+	if err != nil || interval < 30*time.Second {
+		return errors.New("maintenance_check_interval must be at least 30s")
+	}
+	capacityInterval, err := time.ParseDuration(strings.TrimSpace(p.CapacityCheckInterval))
+	if err != nil || capacityInterval <= 0 || capacityInterval > 24*time.Hour {
+		return errors.New("capacity_check_interval must be greater than 0 and at most 24h")
+	}
+	capacityJitter, err := time.ParseDuration(strings.TrimSpace(p.CapacityCheckJitter))
+	if err != nil || capacityJitter <= 0 || capacityJitter > capacityInterval {
+		return errors.New("capacity_check_jitter must be greater than 0 and at most capacity_check_interval")
+	}
+	if p.RebuildLookbackPeriods == 0 || p.RebuildLookbackPeriods > 1_000_000 || p.MaxPeriodsPerSeries == 0 || p.MaxPeriodsPerSeries > 1_000_000 || p.MaxPeriodsPerSeries <= p.RebuildLookbackPeriods || p.MaxViewFileBytes <= 0 {
+		return errors.New("view maintenance limits are invalid")
+	}
+	seen := make(map[string]struct{}, len(p.Views))
+	if p.SystemMonitor.SpaceID != "" || p.SystemMonitor.ViewID != "" {
+		return errors.New("system_monitor override must not set space_id or view_id")
+	}
+	systemResolved := p.ResolvePolicy("mooxsys", "")
+	if systemResolved.MaxPeriodsPerSeries <= systemResolved.RebuildLookbackPeriods || systemResolved.MaxViewFileBytes <= 0 {
+		return errors.New("system_monitor override has invalid limits")
+	}
+	for _, override := range p.Views {
+		if strings.TrimSpace(override.SpaceID) == "" || strings.TrimSpace(override.ViewID) == "" {
+			return errors.New("view maintenance override requires space_id and view_id")
+		}
+		key := strings.TrimSpace(override.SpaceID) + "/" + strings.TrimSpace(override.ViewID)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate view maintenance override %s", key)
+		}
+		seen[key] = struct{}{}
+		if override.RebuildLookbackPeriods > 1_000_000 || override.MaxPeriodsPerSeries > 1_000_000 || override.MaxViewFileBytes < 0 {
+			return fmt.Errorf("view maintenance override %s is out of range", key)
+		}
+		resolved := p.ResolvePolicy(override.SpaceID, override.ViewID)
+		if resolved.MaxPeriodsPerSeries <= resolved.RebuildLookbackPeriods || resolved.MaxViewFileBytes <= 0 {
+			return fmt.Errorf("view maintenance override %s has invalid limits", key)
+		}
+	}
+	return nil
+}
+
+func LoadViewMaintenancePolicy(path string) (ViewMaintenancePolicy, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ViewMaintenancePolicy{}, fmt.Errorf("read view maintenance policy: %w", err)
+	}
+	var policy ViewMaintenancePolicy
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil {
+		return ViewMaintenancePolicy{}, fmt.Errorf("decode view maintenance policy: %w", err)
+	}
+	if strings.TrimSpace(policy.MaintenanceCheckInterval) == "" {
+		policy.MaintenanceCheckInterval = "1m"
+	}
+	if policy.RebuildLookbackPeriods == 0 {
+		policy.RebuildLookbackPeriods = 5000
+	}
+	if policy.MaxPeriodsPerSeries == 0 {
+		policy.MaxPeriodsPerSeries = 6000
+	}
+	if strings.TrimSpace(policy.CapacityCheckInterval) == "" {
+		policy.CapacityCheckInterval = "1h"
+	}
+	if strings.TrimSpace(policy.CapacityCheckJitter) == "" {
+		jitter := time.Hour
+		if interval, err := time.ParseDuration(strings.TrimSpace(policy.CapacityCheckInterval)); err == nil && interval > 0 && interval < jitter {
+			jitter = interval
+		}
+		policy.CapacityCheckJitter = jitter.String()
+	}
+	if policy.MaxViewFileBytes == 0 {
+		policy.MaxViewFileBytes = 1 << 30
+	}
+	if err := policy.Validate(); err != nil {
+		return ViewMaintenancePolicy{}, err
+	}
+	return policy, nil
+}
+
+// StorageViewConsumerRoute identifies the Dataset subjects owned by a
+// consumer partition. A route may use dataset_ids: ["*"] as a metadata
+// inventory expansion point; runtime rendering expands it to concrete
+// datasets and always gives explicit routes precedence.
+type StorageViewConsumerRoute struct {
+	SpaceID    string   `yaml:"space_id"`
+	DatasetIDs []string `yaml:"dataset_ids"`
+}
+
+// StorageViewConsumerPartition owns one independent JetStream durable and
+// its delivery budget. A partition may contain several explicit routes, but a
+// Dataset route must occur in exactly one partition.
+type StorageViewConsumerPartition struct {
+	ID               string                     `yaml:"id"`
+	Durable          string                     `yaml:"durable"`
+	SpaceID          string                     `yaml:"space_id"` // shorthand for one route
+	DatasetIDs       []string                   `yaml:"dataset_ids"`
+	Routes           []StorageViewConsumerRoute `yaml:"routes"`
+	AckWaitMS        int                        `yaml:"ack_wait_ms"`
+	FetchBatch       int                        `yaml:"fetch_batch"`
+	MaxWorkers       int                        `yaml:"max_workers"`
+	MaxAckPending    int                        `yaml:"max_ack_pending"`
+	Ordering         string                     `yaml:"ordering"`
+	DeliverPolicy    string                     `yaml:"deliver_policy"`
+	MaxRetryAttempts int                        `yaml:"max_retry_attempts"`
+}
+
+type StorageViewConsumerDataset struct {
+	SpaceID   string
+	DatasetID string
+}
+
+func (p StorageViewConsumerPartition) normalizedRoutes() []StorageViewConsumerRoute {
+	routes := make([]StorageViewConsumerRoute, 0, len(p.Routes)+1)
+	if strings.TrimSpace(p.SpaceID) != "" || len(p.DatasetIDs) != 0 {
+		routes = append(routes, StorageViewConsumerRoute{SpaceID: p.SpaceID, DatasetIDs: p.DatasetIDs})
+	}
+	routes = append(routes, p.Routes...)
+	return routes
+}
+
+func (p StorageViewConsumerPartition) Datasets() []StorageViewConsumerDataset {
+	var out []StorageViewConsumerDataset
+	for _, route := range p.normalizedRoutes() {
+		spaceID := strings.TrimSpace(route.SpaceID)
+		for _, datasetID := range route.DatasetIDs {
+			out = append(out, StorageViewConsumerDataset{SpaceID: spaceID, DatasetID: strings.TrimSpace(datasetID)})
+		}
+	}
+	return out
+}
+
+func (v *StorageView) applyConsumerPartitionDefaults() {
+	if len(v.ConsumerPartitions) == 0 {
+		v.ConsumerPartitions = []StorageViewConsumerPartition{
+			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{
+				"dataset_binance_kline_1m",
+				"dataset_spot_kline_1h",
+				"dataset_perpetual_kline_1h",
+			}}}, FetchBatch: 32, MaxWorkers: 8, MaxAckPending: 256},
+			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_factor_binance_kline_1m"}}}, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1},
+			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
+			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
+				{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_disk", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_network", "dataset_mooxsys_host_resource"}},
+				{SpaceID: "stockcn", DatasetIDs: []string{"dataset_stockcn_financial_statement_metric", "dataset_stockcn_financial_summary", "dataset_stockcn_bond_kline", "dataset_stockcn_index_kline", "dataset_stockcn_equity_kline"}},
+				{SpaceID: "stockhk", DatasetIDs: []string{"dataset_stockhk_equity_kline"}},
+				{SpaceID: "stockus", DatasetIDs: []string{"dataset_stockus_equity_kline"}},
+			}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
+		}
+	}
+	for i := range v.ConsumerPartitions {
+		p := &v.ConsumerPartitions[i]
+		p.ID = strings.TrimSpace(p.ID)
+		p.Durable = strings.TrimSpace(p.Durable)
+		if p.AckWaitMS <= 0 {
+			p.AckWaitMS = StorageViewAckWaitMS
+		}
+		if p.FetchBatch <= 0 {
+			p.FetchBatch = 1
+		}
+		if p.MaxWorkers <= 0 {
+			p.MaxWorkers = 1
+		}
+		if p.MaxAckPending <= 0 {
+			p.MaxAckPending = p.FetchBatch
+		}
+		if strings.TrimSpace(p.Ordering) == "" {
+			p.Ordering = "dataset"
+		}
+		p.Ordering = strings.ToLower(strings.TrimSpace(p.Ordering))
+		if strings.TrimSpace(p.DeliverPolicy) == "" {
+			p.DeliverPolicy = "new"
+		}
+		p.DeliverPolicy = strings.ToLower(strings.TrimSpace(p.DeliverPolicy))
+		if p.MaxRetryAttempts == 0 {
+			p.MaxRetryAttempts = -1
+		}
+	}
+}
+
+// ValidateConsumerPartitions validates partition topology. When managed is
+// non-nil it additionally requires an exact one-to-one assignment with the
+// View source Dataset inventory.
+func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDataset) error {
+	if len(v.ConsumerPartitions) == 0 {
+		return errors.New("storage view consumer_partitions must not be empty")
+	}
+	partitionIDs := make(map[string]struct{}, len(v.ConsumerPartitions))
+	durables := make(map[string]struct{}, len(v.ConsumerPartitions))
+	routes := make(map[string]string)
+	for _, partition := range v.ConsumerPartitions {
+		id := strings.TrimSpace(partition.ID)
+		durable := strings.TrimSpace(partition.Durable)
+		if id == "" || durable == "" {
+			return errors.New("storage view consumer partition id and durable are required")
+		}
+		if !validConsumerName(id) || !validConsumerName(durable) {
+			return fmt.Errorf("storage view consumer partition %q has an invalid id or durable name", id)
+		}
+		if durable != events.StorageViewKlineConsumer && durable != events.StorageViewFactorConsumer && durable != events.StorageViewMetricsConsumer && durable != events.StorageViewMiscConsumer {
+			return fmt.Errorf("storage view durable %q is not one of the managed partition durables", durable)
+		}
+		if _, exists := partitionIDs[id]; exists {
+			return fmt.Errorf("storage view consumer partition %q is duplicated", id)
+		}
+		if _, exists := durables[durable]; exists {
+			return fmt.Errorf("storage view durable %q is duplicated", durable)
+		}
+		partitionIDs[id] = struct{}{}
+		durables[durable] = struct{}{}
+		if partition.FetchBatch < 1 || partition.MaxWorkers < 1 || partition.MaxAckPending < 1 || partition.AckWaitMS < 1 {
+			return fmt.Errorf("storage view consumer partition %q has non-positive delivery settings", id)
+		}
+		if durable == events.StorageViewFactorConsumer && (partition.FetchBatch != 1 || partition.MaxWorkers != 1 || partition.MaxAckPending != 1) {
+			return fmt.Errorf("storage view factor durable %q must keep fetch_batch/max_workers/max_ack_pending at 1/1/1", durable)
+		}
+		if partition.FetchBatch > partition.MaxAckPending {
+			return fmt.Errorf("storage view consumer partition %q fetch_batch %d exceeds max_ack_pending %d", id, partition.FetchBatch, partition.MaxAckPending)
+		}
+		if partition.Ordering != "" && strings.ToLower(strings.TrimSpace(partition.Ordering)) != "dataset" {
+			return fmt.Errorf("storage view consumer partition %q ordering must be dataset", id)
+		}
+		policy := strings.ToLower(strings.TrimSpace(partition.DeliverPolicy))
+		if policy != "" && policy != "all" && policy != "new" {
+			return fmt.Errorf("storage view consumer partition %q deliver_policy %q is unsupported", id, partition.DeliverPolicy)
+		}
+		if partition.MaxRetryAttempts < -1 {
+			return fmt.Errorf("storage view consumer partition %q max_retry_attempts must be -1 or positive", id)
+		}
+		datasets := partition.Datasets()
+		if len(datasets) == 0 {
+			return fmt.Errorf("storage view consumer partition %q has no Dataset routes", id)
+		}
+		for _, dataset := range datasets {
+			if dataset.SpaceID == "" || dataset.DatasetID == "" {
+				return fmt.Errorf("storage view consumer partition %q contains an incomplete Dataset route", id)
+			}
+			if dataset.DatasetID == "*" {
+				continue
+			}
+			key := dataset.SpaceID + "\x00" + dataset.DatasetID
+			if previous, exists := routes[key]; exists {
+				return fmt.Errorf("Dataset %s/%s is assigned to partitions %q and %q", dataset.SpaceID, dataset.DatasetID, previous, id)
+			}
+			routes[key] = id
+		}
+	}
+	if managed != nil {
+		for _, dataset := range managed {
+			key := strings.TrimSpace(dataset.SpaceID) + "\x00" + strings.TrimSpace(dataset.DatasetID)
+			if _, exists := routes[key]; !exists {
+				if _, wildcard := routes[strings.TrimSpace(dataset.SpaceID)+"\x00*"]; wildcard {
+					continue
+				}
+				return fmt.Errorf("managed Dataset %s/%s is not assigned to a consumer partition", dataset.SpaceID, dataset.DatasetID)
+			}
+		}
+		// Configuration is intentionally an allow-list for Views that may be
+		// created later (for example a Factor result Dataset). Only the active
+		// metadata inventory must be covered; rejecting configured-but-not-yet
+		// created routes would make a fresh deployment unable to start before
+		// those optional Views exist.
+	}
+	// The four durable consumers are an intentional topology contract, not
+	// optional tuning knobs. A partial or overlapping config would silently put
+	// Kline back behind system metrics, defeating the partitioning guarantee.
+	if len(durables) != 4 {
+		return fmt.Errorf("storage view consumer topology must define exactly four durables (kline, factor, metrics, misc); got %d", len(durables))
+	}
+	requiredRoutes := []struct {
+		name    string
+		durable string
+		space   string
+		dataset string
+	}{
+		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_kline_1m"},
+		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_spot_kline_1h"},
+		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_perpetual_kline_1h"},
+		{name: "factor", durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "dataset_factor_binance_kline_1m"},
+		{name: "metrics", durable: events.StorageViewMetricsConsumer, space: "mooxsys", dataset: "dataset_mooxsys_service_metrics"},
+	}
+	for _, required := range requiredRoutes {
+		partitionID, ok := routes[required.space+"\x00"+required.dataset]
+		if !ok {
+			return fmt.Errorf("storage view %s route %s/%s is missing", required.name, required.space, required.dataset)
+		}
+		partitionIndex := -1
+		for i := range v.ConsumerPartitions {
+			if v.ConsumerPartitions[i].ID == partitionID {
+				partitionIndex = i
+				break
+			}
+		}
+		if partitionIndex < 0 || v.ConsumerPartitions[partitionIndex].Durable != required.durable {
+			return fmt.Errorf("storage view %s route %s/%s must use durable %s", required.name, required.space, required.dataset, required.durable)
+		}
+	}
+	return nil
+}
+
+func validConsumerName(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func (v StorageView) HasRebuildMaxPendingSetting() bool { return v.rebuildMaxPendingSet }
+func (v StorageView) HasRebuildIdleChecksSetting() bool { return v.rebuildIdleChecksSet }
+
+// UnmarshalYAML remembers whether max_view_file_bytes was explicitly present.
+// This lets defaults preserve omitted legacy configuration while allowing the
+// server to reject an explicit zero/negative value instead of silently
+// replacing it with the default watermark.
+func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	type plain StorageView
+	var decoded plain
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	var raw map[interface{}]interface{}
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	*v = StorageView(decoded)
+	_, v.maxViewFileBytesSet = raw["max_view_file_bytes"]
+	_, v.rebuildMaxPendingSet = raw["rebuild_max_pending"]
+	_, v.rebuildIdleChecksSet = raw["rebuild_idle_checks"]
+	return nil
 }
 
 type StorageRPCConfig struct {
@@ -93,24 +483,6 @@ type StorageRPCConfig struct {
 	GatewayNodeID string `yaml:"gateway_node_id"`
 	KeyID         string `yaml:"key_id"`
 	HMACKeyFile   string `yaml:"hmac_key_file"`
-}
-
-type StorageViewMaintenance struct {
-	Enabled          *bool                        `yaml:"enabled"`
-	OwnerID          string                       `yaml:"owner_id"`
-	LeaseTTL         string                       `yaml:"lease_ttl"`
-	RunBudget        string                       `yaml:"run_budget"`
-	PageSize         int                          `yaml:"page_size"`
-	MaxEntries       int                          `yaml:"max_entries"`
-	TargetEntries    int                          `yaml:"target_entries"`
-	MaxPhysicalBytes int64                        `yaml:"max_physical_bytes"`
-	MinFreeDiskBytes int64                        `yaml:"min_free_disk_bytes"`
-	MinReadyEntries  int                          `yaml:"min_ready_entries"`
-	AllowedLag       string                       `yaml:"allowed_lag"`
-	OverlapWindow    string                       `yaml:"overlap_window"`
-	RemoveGrace      string                       `yaml:"remove_grace"`
-	TimeSeries       StorageTimeSeriesMaintenance `yaml:"time_series"`
-	Record           StorageRecordMaintenance     `yaml:"record"`
 }
 
 // StorageMaintenance owns maintenance that applies to authoritative Storage facts.
@@ -158,19 +530,6 @@ func (c HostMetricsCleanupConfig) Validate() error {
 		seen[datasetID] = struct{}{}
 	}
 	return nil
-}
-
-type StorageTimeSeriesMaintenance struct {
-	DefaultRetentionWindow string            `yaml:"default_retention_window"`
-	RetentionByFreq        map[string]string `yaml:"retention_by_freq"`
-}
-
-type StorageRecordMaintenance struct {
-	RetentionWindow string `yaml:"retention_window"`
-}
-
-func (m StorageViewMaintenance) IsEnabled() bool {
-	return m.Enabled == nil || *m.Enabled
 }
 
 // StoragePrimary 保存主存服务访问配置。
@@ -231,7 +590,7 @@ func (c *StorageConfig) ApplyDefaults() {
 		cleanup.Enabled = &enabled
 	}
 	if len(cleanup.DatasetIDs) == 0 {
-		cleanup.DatasetIDs = []string{"host_resource_v1", "host_fs_v1", "host_disk_v1", "host_net_v1"}
+		cleanup.DatasetIDs = []string{"dataset_mooxsys_host_resource", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_disk", "dataset_mooxsys_host_network"}
 	}
 	if cleanup.MaxAge == "" {
 		cleanup.MaxAge = "48h"
@@ -242,60 +601,17 @@ func (c *StorageConfig) ApplyDefaults() {
 	if cleanup.MaxBatchesPerRun == 0 {
 		cleanup.MaxBatchesPerRun = 10
 	}
-	if c.EventBus.Type == "" {
-		c.EventBus.Type = "jetstream"
-	}
-	if c.EventBus.NATSURL == "" {
-		c.EventBus.NATSURL = "nats://127.0.0.1:4222"
-	}
-	if len(c.EventBus.URLs) == 0 {
-		c.EventBus.URLs = []string{c.EventBus.NATSURL}
-	}
-	if c.EventBus.SubjectPrefix == "" {
-		c.EventBus.SubjectPrefix = "moox.storage"
-	}
-	if c.EventBus.StreamName == "" {
-		c.EventBus.StreamName = "MOOX_STORAGE"
-	}
-	if c.EventBus.ConsumerName == "" {
-		c.EventBus.ConsumerName = "storage_view"
-	}
-	if c.EventBus.MaxAgeHours <= 0 {
-		c.EventBus.MaxAgeHours = 24
-	}
-	if c.EventBus.MaxMsgs <= 0 {
-		c.EventBus.MaxMsgs = 500000
-	}
-	if c.EventBus.MaxBytes <= 0 {
-		c.EventBus.MaxBytes = 256 * 1024 * 1024
-	}
-	if c.EventBus.MaxInFlight == 0 {
-		c.EventBus.MaxInFlight = 128
+	if c.EventBus.Consumer == "" {
+		c.EventBus.Consumer = StorageViewConsumer
 	}
 	if c.EventBus.MaxAckPending == 0 {
-		c.EventBus.MaxAckPending = 128
+		c.EventBus.MaxAckPending = StorageDefaultMaxAckPending
+		if c.HasRole("view") {
+			c.EventBus.MaxAckPending = StorageViewMaxAckPending
+		}
 	}
 	if c.EventBus.AckWaitMS == 0 {
-		c.EventBus.AckWaitMS = 120000
-	}
-	if c.EventBus.MaxDeliver == 0 {
-		// -1 means unlimited redelivery in JetStream. Projection events are
-		// idempotent and must not be dropped after transient owner failures.
-		c.EventBus.MaxDeliver = -1
-	}
-	if c.EventBus.Embedded.Enabled {
-		if c.EventBus.Embedded.Host == "" {
-			c.EventBus.Embedded.Host = "127.0.0.1"
-		}
-		if c.EventBus.Embedded.Port == 0 {
-			c.EventBus.Embedded.Port = 4222
-		}
-		if c.EventBus.Embedded.StoreDir == "" {
-			c.EventBus.Embedded.StoreDir = filepath.Join(c.Root, "nats")
-		}
-		if c.EventBus.Embedded.StartupTimeoutMS <= 0 {
-			c.EventBus.Embedded.StartupTimeoutMS = 10000
-		}
+		c.EventBus.AckWaitMS = StorageViewAckWaitMS
 	}
 	if c.Primary.Outbox.FlushBatchSize <= 0 {
 		c.Primary.Outbox.FlushBatchSize = 100
@@ -327,9 +643,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.PrimaryStoreServiceName == "" {
 		c.View.PrimaryStoreServiceName = "trpc.moox.storage.PrimaryStore"
 	}
-	if c.View.PrimaryStoreScanServiceName == "" {
-		c.View.PrimaryStoreScanServiceName = "trpc.moox.storage.PrimaryStoreScan"
-	}
 	if c.View.IndexServiceName == "" {
 		c.View.IndexServiceName = "trpc.moox.storage.ViewIndex"
 	}
@@ -339,92 +652,60 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.BatchWaitMS <= 0 {
 		c.View.BatchWaitMS = 200
 	}
+	if c.View.FetchBatch <= 0 {
+		c.View.FetchBatch = 1
+	}
 	if c.View.MaxWorkers <= 0 {
 		c.View.MaxWorkers = 1
-	} else if c.View.MaxWorkers > 1 {
-		c.View.MaxWorkers = 1
 	}
-	if c.View.Maintenance.Enabled == nil {
-		enabled := true
-		c.View.Maintenance.Enabled = &enabled
+	if c.View.Ordering == "" {
+		c.View.Ordering = "dataset"
 	}
-	if c.View.Maintenance.LeaseTTL == "" {
-		c.View.Maintenance.LeaseTTL = "90s"
+	if strings.TrimSpace(c.View.MaintenanceCheckInterval) == "" {
+		c.View.MaintenanceCheckInterval = "1m"
 	}
-	if c.View.Maintenance.RunBudget == "" {
-		c.View.Maintenance.RunBudget = "20s"
+	if c.View.BackfillPageSize == 0 {
+		c.View.BackfillPageSize = 2000
 	}
-	if c.View.Maintenance.PageSize <= 0 {
-		c.View.Maintenance.PageSize = 500
+	if strings.TrimSpace(c.View.BackfillRequestInterval) == "" {
+		c.View.BackfillRequestInterval = "100ms"
 	}
-	if c.View.Maintenance.MaxEntries <= 0 {
-		c.View.Maintenance.MaxEntries = 200000
+	if c.View.MaxViewFileBytes <= 0 && !c.View.maxViewFileBytesSet {
+		c.View.MaxViewFileBytes = 1 << 30
 	}
-	if c.View.Maintenance.TargetEntries <= 0 || c.View.Maintenance.TargetEntries >= c.View.Maintenance.MaxEntries {
-		c.View.Maintenance.TargetEntries = c.View.Maintenance.MaxEntries * 3 / 4
-		if c.View.Maintenance.TargetEntries <= 0 {
-			c.View.Maintenance.TargetEntries = 1
+	if strings.TrimSpace(c.View.RebuildLookback) == "" {
+		c.View.RebuildLookback = "24h"
+	}
+	if len(c.View.RebuildLookbackPeriods) == 0 {
+		c.View.RebuildLookbackPeriods = map[string]uint64{
+			"1m":      5000,
+			"1h":      5000,
+			"1d":      5000,
+			"default": 5000,
 		}
+	} else {
+		normalized := make(map[string]uint64, len(c.View.RebuildLookbackPeriods)+1)
+		for frequency, periods := range c.View.RebuildLookbackPeriods {
+			frequency = strings.ToLower(strings.TrimSpace(frequency))
+			if frequency != "" {
+				normalized[frequency] = periods
+			}
+		}
+		if normalized["default"] == 0 {
+			normalized["default"] = 5000
+		}
+		c.View.RebuildLookbackPeriods = normalized
 	}
-	if c.View.Maintenance.MaxPhysicalBytes <= 0 {
-		c.View.Maintenance.MaxPhysicalBytes = 512 * 1024 * 1024
+	if c.View.RebuildMaxPending == 0 && !c.View.rebuildMaxPendingSet {
+		c.View.RebuildMaxPending = 32
 	}
-	if c.View.Maintenance.MinFreeDiskBytes <= 0 {
-		c.View.Maintenance.MinFreeDiskBytes = 1024 * 1024 * 1024
+	if c.View.RebuildIdleChecks == 0 && !c.View.rebuildIdleChecksSet {
+		c.View.RebuildIdleChecks = 3
 	}
-	if c.View.Maintenance.MinReadyEntries <= 0 {
-		c.View.Maintenance.MinReadyEntries = 1000
-	}
-	if c.View.Maintenance.AllowedLag == "" {
-		c.View.Maintenance.AllowedLag = "2m"
-	}
-	if c.View.Maintenance.OverlapWindow == "" {
-		c.View.Maintenance.OverlapWindow = "30m"
-	}
-	if c.View.Maintenance.RemoveGrace == "" {
-		c.View.Maintenance.RemoveGrace = "60s"
-	}
-	if c.View.Maintenance.TimeSeries.DefaultRetentionWindow == "" {
-		c.View.Maintenance.TimeSeries.DefaultRetentionWindow = "7d"
-	}
-	if c.View.Maintenance.TimeSeries.RetentionByFreq == nil {
-		c.View.Maintenance.TimeSeries.RetentionByFreq = map[string]string{}
-	}
-	if c.View.Maintenance.TimeSeries.RetentionByFreq["1m"] == "" {
-		c.View.Maintenance.TimeSeries.RetentionByFreq["1m"] = "24h"
-	}
-	if c.View.Maintenance.TimeSeries.RetentionByFreq["1h"] == "" {
-		c.View.Maintenance.TimeSeries.RetentionByFreq["1h"] = "90d"
-	}
-	if c.View.Maintenance.TimeSeries.RetentionByFreq["1d"] == "" {
-		c.View.Maintenance.TimeSeries.RetentionByFreq["1d"] = "730d"
-	}
-	if c.View.Maintenance.Record.RetentionWindow == "" {
-		c.View.Maintenance.Record.RetentionWindow = "30d"
-	}
+	c.View.applyConsumerPartitionDefaults()
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"
 	}
-}
-
-// Validate checks the delivery contract shared with the predeclared durable consumers.
-func (c StorageEventBus) Validate() error {
-	if c.AckWaitMS < 3000 {
-		return fmt.Errorf("storage eventbus ack_wait_ms must be at least 3000")
-	}
-	if c.MaxInFlight < 1 {
-		return fmt.Errorf("storage eventbus max_in_flight must be at least 1")
-	}
-	if c.MaxAckPending < 1 {
-		return fmt.Errorf("storage eventbus max_ack_pending must be at least 1")
-	}
-	if c.MaxInFlight > c.MaxAckPending {
-		return fmt.Errorf("storage eventbus max_in_flight must not exceed max_ack_pending")
-	}
-	if c.MaxDeliver != -1 && c.MaxDeliver < 1 {
-		return fmt.Errorf("storage eventbus max_deliver must be -1 or at least 1")
-	}
-	return nil
 }
 
 // ApplyHomeRoot rebases standard local storage paths when deployment overrides
@@ -442,9 +723,6 @@ func (c *StorageConfig) ApplyHomeRoot(root string) {
 	c.Metadata.Path = rebaseStoragePath(c.Metadata.Path, oldRoot, root, filepath.Join("metadata", "storage_metadata.db"))
 	c.Devices.PebblePath = rebaseStoragePath(c.Devices.PebblePath, oldRoot, root, "pebble")
 	c.Devices.ViewIndexRoot = rebaseStoragePath(c.Devices.ViewIndexRoot, oldRoot, root, "view-indexes")
-	if c.EventBus.Embedded.StoreDir != "" {
-		c.EventBus.Embedded.StoreDir = rebaseStoragePath(c.EventBus.Embedded.StoreDir, oldRoot, root, "nats")
-	}
 }
 
 func rebaseStoragePath(path string, oldRoot string, newRoot string, defaultRel string) string {
@@ -514,6 +792,9 @@ func (c *ConfigLoader) LoadConfig(filename string, config interface{}) error {
 		return fmt.Errorf("读取配置文件失败 %s: %w", configPath, err)
 	}
 
+	if err := validateStorageSubtreeStrict(yamlFile, config); err != nil {
+		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
+	}
 	// 解析YAML到Config结构
 	if err := yaml.Unmarshal(yamlFile, config); err != nil {
 		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
@@ -522,17 +803,20 @@ func (c *ConfigLoader) LoadConfig(filename string, config interface{}) error {
 	return nil
 }
 
-// LoadConfigStrict rejects unknown keys for business configuration files.
-func (c *ConfigLoader) LoadConfigStrict(filename string, config interface{}) error {
-	configPath := filepath.Join(c.baseDir, filename)
-	yamlFile, err := os.ReadFile(configPath)
+func validateStorageSubtreeStrict(raw []byte, config interface{}) error {
+	var document map[interface{}]interface{}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return err
+	}
+	storage, exists := document["storage"]
+	if !exists {
+		return nil
+	}
+	subtree, err := yaml.Marshal(map[interface{}]interface{}{"storage": storage})
 	if err != nil {
-		return fmt.Errorf("读取配置文件失败 %s: %w", configPath, err)
+		return err
 	}
-	if err := yaml.UnmarshalStrict(yamlFile, config); err != nil {
-		return fmt.Errorf("解析YAML失败 %s: %w", configPath, err)
-	}
-	return nil
+	return yaml.UnmarshalStrict(subtree, config)
 }
 
 // LoadConfigWithDefaults 加载配置并应用默认值

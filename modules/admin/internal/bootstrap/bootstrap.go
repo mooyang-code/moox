@@ -46,6 +46,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerAuthCacheCleanupTimer(s, cache); err != nil {
 		return nil, err
 	}
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment()); err != nil {
+		return nil, err
+	}
 
 	// 4. 注册定时器
 	// DNS探测定时器（本地DNS解析）
@@ -94,7 +97,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("admin_gateway"))
+	h, err := report.NewHandler(report.DefaultConfig("admin", "admin_gateway"))
 	if err != nil {
 		log.Warnf("admin metrics reporter disabled: %v", err)
 		return
@@ -105,4 +108,19 @@ func registerMetricsReporter(s *server.Server) {
 		return
 	}
 	timer.RegisterHandlerService(service, h.Handle)
+}
+
+func registerCertificateWatchTimer(ctx context.Context, s *server.Server, watch certificateWatch) error {
+	if s == nil {
+		return fmt.Errorf("certificate watch timer requires server")
+	}
+	service := s.Service(certificateWatchTimerService)
+	if service == nil {
+		return fmt.Errorf("certificate watch timer service %q is not configured", certificateWatchTimerService)
+	}
+	if err := watch.Validate(ctx); err != nil {
+		return err
+	}
+	timer.RegisterHandlerService(service, watch.Validate)
+	return nil
 }

@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
 )
@@ -40,22 +44,37 @@ func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 	}
 }
 
-func TestRunInitCommandDropsLegacyExecutionLogTable(t *testing.T) {
+func TestRunInitCommandSeedsBuiltInTasks(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
+	seedPath := filepath.Join(t.TempDir(), "tasks.yaml")
+	if err := os.WriteFile(seedPath, []byte("tasks:\n- space_id: crypto\n  task_id: builtin-task\n  task_name: Binance 行情任务\n  data_type: kline\n  tag_ids: [binance_spot]\n  enabled: true\n  collect_params:\n    frequency: 1h\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if err := db.Exec("CREATE TABLE t_collector_execution_logs (c_id INTEGER PRIMARY KEY)").Error; err != nil {
-		t.Fatalf("create legacy table: %v", err)
-	}
-
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &stdout, &stderr); err != nil {
+	if err := runInitCommand([]string{"init", "--db-path", dbPath, "--seed-file", seedPath}, &stdout, &stderr); err != nil {
 		t.Fatalf("runInitCommand() error = %v, stderr = %s", err, stderr.String())
 	}
-	assertTableNotExists(t, dbPath, "t_collector_execution_logs")
+	var result initResult
+	assert.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+	assert.Equal(t, 1, result.TasksCreated)
+	assert.Equal(t, 0, result.TasksUnchanged)
+	assert.Contains(t, stdout.String(), `"tasks_created":1`)
+	assert.Contains(t, stdout.String(), `"tasks_unchanged":0`)
+	assert.NotContains(t, stdout.String(), `"created"`)
+	stdout.Reset()
+	if err := runInitCommand([]string{"init", "--db-path", dbPath, "--seed-file", seedPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("second runInitCommand() error = %v", err)
+	}
+	assert.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+	assert.Equal(t, 0, result.TasksCreated)
+	assert.Equal(t, 1, result.TasksUnchanged)
+	mgr, err := store.Open(&store.Options{Path: dbPath})
+	assert.NoError(t, err)
+	defer mgr.Close()
+	task, err := mgr.Tasks().GetByTaskID(context.Background(), "crypto", "builtin-task")
+	assert.NoError(t, err)
+	assert.True(t, task.Enabled)
 }
 
 func assertTableExists(t *testing.T, dbPath string, tableName string) {

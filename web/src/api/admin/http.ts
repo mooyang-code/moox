@@ -4,7 +4,7 @@ import { Message } from "@arco-design/web-vue";
 import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
 import type { ControlResponse } from "./types";
-import { installSpaceAwareSignedClient } from "./signed-client";
+import { expireBrowserSession, installSpaceAwareSignedClient } from "./signed-client";
 
 const adminClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -12,6 +12,13 @@ const adminClient = axios.create({
   headers: { "Content-Type": "application/json" }
 });
 const reportedErrors = new WeakSet<object>();
+
+export class ControlRequestError<T = unknown> extends Error {
+  constructor(message: string, public readonly response?: ControlResponse<T>) {
+    super(message);
+    this.name = "ControlRequestError";
+  }
+}
 
 export function reportControlError(error: unknown) {
   if (typeof error === "object" && error !== null && reportedErrors.has(error)) return;
@@ -31,7 +38,7 @@ function assertControlSuccess<T>(rsp: ControlResponse<T>): T {
   }
   const retCode = rsp.ret_info.code;
   if (!isRetInfoSuccess(retCode)) {
-    throw new Error(rsp.ret_info.msg || `control request failed: ${retCode}`);
+    throw new ControlRequestError(rsp.ret_info.msg || `control request failed: ${retCode}`, rsp);
   }
   return rsp as T;
 }
@@ -43,7 +50,7 @@ export async function callControl<TReq extends object, TRsp>(
   config?: AxiosRequestConfig
 ): Promise<TRsp> {
   if (!localStorage.getItem("user-info") && !readAccessTokenFromConfig(config)) {
-    throw new Error("未登录或登录态已失效，请重新登录后再访问管理接口");
+    throw await expireBrowserSession("未登录或登录态已失效，请重新登录后再访问管理接口");
   }
   const rsp = await adminClient.post<ControlResponse<TRsp>>(`/api/admin/${service}/${method}`, req, config);
   return assertControlSuccess<TRsp>(rsp.data);
@@ -64,7 +71,7 @@ adminClient.interceptors.response.use(
   error => {
     const data = error?.response?.data as ControlResponse<unknown> | undefined;
     const message = data?.ret_info?.msg || error?.message || "Control 请求失败";
-    const reportedError = new Error(message);
+    const reportedError = new ControlRequestError(message, data);
     reportControlError(reportedError);
     return Promise.reject(reportedError);
   }

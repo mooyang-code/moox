@@ -9,9 +9,13 @@ import (
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/healthz"
 )
 
 func TestCLICommandsAndFailureModes(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "health-secret")
 	configPath, storePath := cliConfig(t)
 	if code := run([]string{"check-config", "--config", configPath}, os.Stdout); code != 0 {
 		t.Fatalf("check-config exit = %d", code)
@@ -25,14 +29,20 @@ func TestCLICommandsAndFailureModes(t *testing.T) {
 		t.Fatalf("routes exit = %d", code)
 	}
 
-	ready := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	authenticator, err := healthz.NewAuthenticator(healthz.AuthConfig{
+		Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "health-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := httptest.NewServer(authenticator.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })))
 	defer ready.Close()
-	if code := run([]string{"health", "--url", ready.URL}, os.Stdout); code != 0 {
+	if code := run([]string{"health", "--url", ready.URL + "/readyz"}, os.Stdout); code != 0 {
 		t.Fatalf("health exit = %d", code)
 	}
 	notReady := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "no", http.StatusServiceUnavailable) }))
 	defer notReady.Close()
-	if code := run([]string{"health", "--url", notReady.URL}, os.Stdout); code == 0 {
+	if code := run([]string{"health", "--url", notReady.URL + "/readyz"}, os.Stdout); code == 0 {
 		t.Fatal("non-ready health succeeded")
 	}
 

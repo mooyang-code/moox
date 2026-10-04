@@ -20,23 +20,44 @@ server:
       network: tcp
       protocol: http
       timeout: 30000
+    - name: trpc.moox.collector.MarketFetchRuntime.http
+      ip: 127.0.0.1
+      port: 11418
+      network: tcp
+      protocol: http
+      timeout: 30000
+    - name: trpc.moox.collector.MarketFetchRuntime.native
+      ip: 127.0.0.1
+      port: 11422
+      network: tcp
+      protocol: trpc
+      timeout: 30000
     - name: trpc.moox.collector.Health
       ip: 127.0.0.1
       port: 11412
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.collector.schedule.timer
-      port: 11403
-      network: "0 */1 * * * *?scheduler=collectorSchedule"
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.collector.metrics.timer
       port: 11412
       network: "*/30 * * * * *"
       protocol: timer
+      timeout: 25000
+    - name: trpc.moox.collector.schedule.timer
+      port: 11413
+      network: "0 * * * * *"
+      protocol: timer
       timeout: 10000
-
+    - name: trpc.moox.collector.kline_resample.timer
+      port: 11415
+      network: "0 * * * * *"
+      protocol: timer
+      timeout: 10000
+    - name: trpc.moox.collector.dns.timer
+      port: 11414
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000
 plugins:
   metrics:
     prometheus:

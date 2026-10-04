@@ -237,8 +237,6 @@ func newStaticHandler(statikFS http.FileSystem) http.Handler {
 	return mux
 }
 
-func newHTTPHandler(statikFS http.FileSystem) http.Handler { return newStaticHandler(statikFS) }
-
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,

@@ -151,16 +151,27 @@ func (d *DAO) ListActive(ctx context.Context, nodeID string) ([]Deployment, erro
 	return rows, err
 }
 
-func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
-	if err := d.retireLegacyAdminMonitor(ctx); err != nil {
-		return err
-	}
-	if err := d.retireSplitViewDeployments(ctx); err != nil {
-		return err
-	}
-	if err := d.db.WithContext(ctx).Where("c_service_name IN ?", []string{"service_gateway", "service_gateway_internal"}).Delete(&Deployment{}).Error; err != nil {
-		return err
-	}
+func (d *DAO) SeedDefaults(
+	ctx context.Context,
+	rows []Deployment,
+	retireNodeID string,
+	retireServiceNames []string,
+) error {
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if retireNodeID != "" && len(retireServiceNames) > 0 {
+			if err := tx.Where(
+				"c_node_id = ? AND c_service_name IN ?",
+				retireNodeID,
+				retireServiceNames,
+			).Delete(&Deployment{}).Error; err != nil {
+				return err
+			}
+		}
+		return (&DAO{db: tx}).seedDefaultRows(ctx, rows)
+	})
+}
+
+func (d *DAO) seedDefaultRows(ctx context.Context, rows []Deployment) error {
 	for i := range rows {
 		item := rows[i]
 		normalizeDeployment(&item)
@@ -184,27 +195,21 @@ func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
 	return nil
 }
 
-func (d *DAO) retireSplitViewDeployments(ctx context.Context) error {
-	return d.db.WithContext(ctx).
-		Where("c_service_name IN ?", []string{"storage_view_builder", "storage_view_query", "storage_view_index"}).
-		Delete(&Deployment{}).Error
-}
-
-func (d *DAO) retireLegacyAdminMonitor(ctx context.Context) error {
-	const where = "c_service_name = ? AND c_service_kind = ? AND c_gateway_path = ? AND c_port = ?"
-	return d.db.WithContext(ctx).
-		Where(where, "monitor", "admin_rpc", "trpc.moox.ops.Monitor", 11103).
-		Delete(&Deployment{}).Error
-}
-
 func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) error {
 	row, err := d.Get(ctx, item.NodeID, item.ServiceName)
 	if err != nil {
 		return err
 	}
-	existingExtra, migrated := migrateUnifiedStorageViewHealth(item.ServiceName, row.ExtraConfig, item.ExtraConfig)
-	next, changed := mergeDefaultExtraConfig(existingExtra, item.ExtraConfig)
-	changed = changed || migrated
+	next, changed := mergeDefaultExtraConfig(row.ExtraConfig, item.ExtraConfig)
+	// Strategy is a privileged control surface. Older nodes were seeded with
+	// wildcard methods/callers; do not preserve those wildcards merely because
+	// the generic merge keeps operator additions. Tighten only this route to
+	// the versioned explicit ACL on the next Admin seed.
+	if row.GatewayServiceID == "strategymgr" || row.ServiceName == "moox_strategy" {
+		var aclChanged bool
+		next, aclChanged = tightenStrategyGatewayACL(next, item.ExtraConfig)
+		changed = changed || aclChanged
+	}
 	updates := map[string]interface{}{}
 	if changed {
 		updates["c_extra_config"] = next
@@ -224,25 +229,6 @@ func (d *DAO) backfillDefaultExtraConfig(ctx context.Context, item *Deployment) 
 		Updates(updates).Error
 }
 
-func migrateUnifiedStorageViewHealth(serviceName, existingRaw, defaultRaw string) (string, bool) {
-	if serviceName != "storage-view" {
-		return existingRaw, false
-	}
-	existing, defaults := map[string]interface{}{}, map[string]interface{}{}
-	if json.Unmarshal([]byte(existingRaw), &existing) != nil || json.Unmarshal([]byte(defaultRaw), &defaults) != nil {
-		return existingRaw, false
-	}
-	if existing["health_url"] != "http://127.0.0.1:20212/readyz" || defaults["health_url"] == nil {
-		return existingRaw, false
-	}
-	existing["health_url"] = defaults["health_url"]
-	raw, err := json.Marshal(existing)
-	if err != nil {
-		return existingRaw, false
-	}
-	return string(raw), true
-}
-
 func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 	defaultRaw = strings.TrimSpace(defaultRaw)
 	if defaultRaw == "" || defaultRaw == "{}" {
@@ -257,20 +243,477 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 	if existingRaw != "" {
 		_ = json.Unmarshal([]byte(existingRaw), &existing)
 	}
-	_, originalKindConfigured := existing["health_kind"]
 	changed := false
 	for key, value := range defaults {
-		if _, ok := existing[key]; ok {
+		if existingValue, ok := existing[key]; ok {
+			// Gateway method ACLs are versioned defaults. Preserve any
+			// operator-added methods, but append methods introduced by a newer
+			// release so an existing deployment does not keep a stale route
+			// snapshot (for example, ListViews after the View API was added).
+			if key == "gateway_methods" {
+				merged, listChanged := mergeDefaultGatewayMethods(existingValue, value)
+				if listChanged {
+					existing[key] = merged
+					changed = true
+				}
+			}
+			if key == "gateway_routes" {
+				merged, listChanged := mergeDefaultGatewayRoutes(existingValue, value)
+				if listChanged {
+					existing[key] = merged
+					changed = true
+				}
+			}
 			continue
 		}
 		existing[key] = value
 		changed = true
 	}
-	if existingURL, ok := existing["health_url"].(string); ok {
-		defaultURL, defaultOK := defaults["health_url"].(string)
-		if defaultOK && !originalKindConfigured && strings.HasSuffix(strings.TrimRight(existingURL, "/"), "/healthz") && strings.HasSuffix(strings.TrimRight(defaultURL, "/"), "/readyz") {
-			existing["health_url"] = defaultURL
-			existing["health_kind"] = "readiness"
+	if !changed {
+		return existingRaw, false
+	}
+	raw, err := json.Marshal(existing)
+	if err != nil {
+		return existingRaw, false
+	}
+	return string(raw), true
+}
+
+func mergeDefaultGatewayRoutes(existingValue, defaultValue any) ([]map[string]any, bool) {
+	existing, ok := gatewayRouteObjects(existingValue)
+	if !ok {
+		return nil, false
+	}
+	defaults, ok := gatewayRouteObjects(defaultValue)
+	if !ok {
+		return nil, false
+	}
+	if len(existing) == 0 {
+		seeded := make([]map[string]any, 0, len(defaults))
+		for _, defaultRoute := range defaults {
+			seeded = append(seeded, cloneGatewayRoute(defaultRoute))
+		}
+		return seeded, len(seeded) > 0
+	}
+	// A non-empty route list is operator-owned. Never restore deleted default
+	// routes or broaden their callers; only migrate the legacy mixed time-series
+	// route and ensure the new skill read endpoint exists.
+	return migrateReadTimeSeriesGatewayRoutes(existing, defaults)
+}
+
+func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]map[string]any, bool) {
+	changed := false
+	for _, route := range existing {
+		methods, ok := gatewayRouteStrings(route, "gateway_methods")
+		if !ok {
+			continue
+		}
+		rewritten, rewriteChanged := normalizeStorageGatewayMethods(methods)
+		if rewriteChanged {
+			route["gateway_methods"] = rewritten
+			changed = true
+		}
+	}
+	var defaultRoute map[string]any
+	var defaultMethods []string
+	for _, candidate := range defaults {
+		methods, ok := gatewayRouteStrings(candidate, "gateway_methods")
+		if ok && sameStringSet(methods, []string{"ReadTimeSeriesRows"}) {
+			defaultRoute = candidate
+			defaultMethods = methods
+			break
+		}
+	}
+	if defaultRoute == nil {
+		return existing, changed
+	}
+	defaultServicePath := fmt.Sprint(defaultRoute["service_path"])
+	for _, route := range existing {
+		if fmt.Sprint(route["service_path"]) != defaultServicePath {
+			continue
+		}
+		methods, ok := gatewayRouteStrings(route, "gateway_methods")
+		if !ok || !containsStringSet(methods, []string{"*"}) {
+			continue
+		}
+		readRoute, migrated := migrateStorageWildcardRoute(route, defaults, defaultRoute, defaultMethods)
+		if migrated {
+			existing = append(existing, readRoute)
+			changed = true
+		}
+	}
+
+	removedRoutes := make(map[int]struct{})
+	var readRoute map[string]any
+	readRouteFromMixed := false
+	for index, route := range existing {
+		methods, methodsOK := gatewayRouteStrings(route, "gateway_methods")
+		callers, callersOK := gatewayRouteStrings(route, "gateway_callers")
+		if fmt.Sprint(route["service_path"]) != defaultServicePath || !methodsOK || !callersOK || !sameStringValueSet(methods, defaultMethods) {
+			continue
+		}
+		if readRoute == nil {
+			readRoute = route
+			continue
+		}
+		mergedCallers, callersChanged := appendMissingStrings(mustGatewayRouteStrings(readRoute, "gateway_callers"), callers)
+		if callersChanged {
+			readRoute["gateway_callers"] = mergedCallers
+			changed = true
+		}
+		if mergeMissingGatewayRouteMetadata(readRoute, route) {
+			changed = true
+		}
+		removedRoutes[index] = struct{}{}
+		changed = true
+	}
+
+	for index, route := range existing {
+		if _, removed := removedRoutes[index]; removed {
+			continue
+		}
+		methods, methodsOK := gatewayRouteStrings(route, "gateway_methods")
+		callers, callersOK := gatewayRouteStrings(route, "gateway_callers")
+		if fmt.Sprint(route["service_path"]) != defaultServicePath || !methodsOK || !callersOK || sameStringValueSet(methods, defaultMethods) || !containsStringSet(methods, defaultMethods) {
+			continue
+		}
+		readCallers, _ := appendMissingStrings(callers, []string{"moox-skill"})
+		if readRoute == nil {
+			readRoute = cloneGatewayRoute(route)
+			readRoute["gateway_methods"] = defaultMethods
+			readRoute["gateway_callers"] = readCallers
+			existing = append(existing, readRoute)
+			readRouteFromMixed = true
+		} else if readRouteFromMixed {
+			mergedCallers, callersChanged := appendMissingStrings(mustGatewayRouteStrings(readRoute, "gateway_callers"), readCallers)
+			if callersChanged {
+				readRoute["gateway_callers"] = mergedCallers
+			}
+			mergeMissingGatewayRouteMetadata(readRoute, route)
+		}
+
+		remainingMethods := subtractStringSet(methods, defaultMethods)
+		filteredCallers := subtractStringSet(callers, []string{"moox-skill"})
+		if len(filteredCallers) != len(callers) {
+			route["gateway_callers"] = filteredCallers
+		}
+		if len(filteredCallers) == 0 {
+			removedRoutes[index] = struct{}{}
+		} else if generalMethods := defaultGatewayMethodSubset(defaults, defaultRoute, remainingMethods); len(generalMethods) > 0 && !sameStringValueSet(generalMethods, remainingMethods) {
+			customRoute := cloneGatewayRoute(route)
+			customRoute["gateway_methods"] = subtractStringSet(remainingMethods, generalMethods)
+			customRoute["gateway_callers"] = filteredCallers
+			existing = append(existing, customRoute)
+			remainingMethods = generalMethods
+		}
+		route["gateway_methods"] = remainingMethods
+		changed = true
+	}
+	if readRoute == nil {
+		readRoute = cloneGatewayRoute(defaultRoute)
+		readRoute["gateway_callers"] = []string{"moox-skill"}
+		existing = append(existing, readRoute)
+		changed = true
+	}
+	if normalizeGatewayRouteEndpoint(readRoute, defaultRoute) {
+		changed = true
+	}
+	if len(removedRoutes) > 0 {
+		retained := make([]map[string]any, 0, len(existing)-len(removedRoutes))
+		for index, route := range existing {
+			if _, remove := removedRoutes[index]; !remove {
+				retained = append(retained, route)
+			}
+		}
+		existing = retained
+	}
+	return existing, changed
+}
+
+func migrateStorageWildcardRoute(route map[string]any, defaults []map[string]any, defaultReadRoute map[string]any, defaultReadMethods []string) (map[string]any, bool) {
+	defaultGeneralRoute := findDefaultStorageGeneralRoute(defaults, defaultReadRoute)
+	generalMethods := defaultReadMethods
+	generalCallers := mustGatewayRouteStrings(defaultReadRoute, "gateway_callers")
+	if defaultGeneralRoute != nil {
+		if methods, ok := gatewayRouteStrings(defaultGeneralRoute, "gateway_methods"); ok {
+			generalMethods = methods
+		}
+		if callers, ok := gatewayRouteStrings(defaultGeneralRoute, "gateway_callers"); ok {
+			generalCallers = callers
+		}
+	}
+
+	callers, _ := gatewayRouteStrings(route, "gateway_callers")
+	wildcardCallers := containsStringSet(callers, []string{"*"})
+	if wildcardCallers {
+		callers = append([]string(nil), generalCallers...)
+	} else {
+		callers = append([]string(nil), callers...)
+	}
+	route["gateway_methods"] = append([]string(nil), generalMethods...)
+	route["gateway_callers"] = callers
+	normalizeGatewayRouteEndpoint(route, defaultReadRoute)
+
+	readRoute := cloneGatewayRoute(route)
+	readRoute["gateway_methods"] = append([]string(nil), defaultReadMethods...)
+	readCallers := append([]string(nil), callers...)
+	if wildcardCallers {
+		readCallers = mustGatewayRouteStrings(defaultReadRoute, "gateway_callers")
+	} else {
+		readCallers, _ = appendMissingStrings(readCallers, []string{"moox-skill"})
+	}
+	readRoute["gateway_callers"] = readCallers
+	normalizeGatewayRouteEndpoint(readRoute, defaultReadRoute)
+	return readRoute, true
+}
+
+func findDefaultStorageGeneralRoute(defaults []map[string]any, readRoute map[string]any) map[string]any {
+	for _, candidate := range defaults {
+		if !sameGatewayRouteEndpoint(candidate, readRoute) {
+			continue
+		}
+		methods, ok := gatewayRouteStrings(candidate, "gateway_methods")
+		if !ok || sameStringSet(methods, []string{"ReadTimeSeriesRows"}) || containsStringSet(methods, []string{"*"}) {
+			continue
+		}
+		return candidate
+	}
+	return nil
+}
+
+func normalizeGatewayRouteEndpoint(route, defaultRoute map[string]any) bool {
+	changed := false
+	for _, key := range []string{"service_path", "port"} {
+		if fmt.Sprint(route[key]) == fmt.Sprint(defaultRoute[key]) {
+			continue
+		}
+		route[key] = defaultRoute[key]
+		changed = true
+	}
+	return changed
+}
+
+func mustGatewayRouteStrings(route map[string]any, key string) []string {
+	values, _ := gatewayRouteStrings(route, key)
+	return values
+}
+
+func mergeMissingGatewayRouteMetadata(target, source map[string]any) bool {
+	changed := false
+	for key, value := range source {
+		switch key {
+		case "service_path", "port", "gateway_methods", "gateway_callers":
+			continue
+		}
+		if _, exists := target[key]; !exists {
+			target[key] = value
+			changed = true
+		}
+	}
+	return changed
+}
+
+func cloneGatewayRoute(route map[string]any) map[string]any {
+	cloned := make(map[string]any, len(route))
+	for key, value := range route {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func defaultGatewayMethodSubset(defaults []map[string]any, readRoute map[string]any, methods []string) []string {
+	for _, candidate := range defaults {
+		if !sameGatewayRouteEndpoint(candidate, readRoute) {
+			continue
+		}
+		candidateMethods, ok := gatewayRouteStrings(candidate, "gateway_methods")
+		if !ok || sameStringSet(candidateMethods, []string{"ReadTimeSeriesRows"}) {
+			continue
+		}
+		if containsStringSet(methods, candidateMethods) {
+			return candidateMethods
+		}
+		if intersectsStringSet(methods, candidateMethods) && len(subtractStringSet(methods, candidateMethods)) > 0 {
+			return candidateMethods
+		}
+	}
+	return nil
+}
+
+func appendMissingStrings(existing, defaults []string) ([]string, bool) {
+	seen := make(map[string]struct{}, len(existing)+len(defaults))
+	for _, value := range existing {
+		seen[value] = struct{}{}
+	}
+	merged := append([]string(nil), existing...)
+	changed := false
+	for _, value := range defaults {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		merged = append(merged, value)
+		changed = true
+	}
+	return merged, changed
+}
+
+func gatewayRouteObjects(value any) ([]map[string]any, bool) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var routes []map[string]any
+	if json.Unmarshal(raw, &routes) != nil {
+		return nil, false
+	}
+	return routes, true
+}
+
+func gatewayRouteStrings(route map[string]any, key string) ([]string, bool) {
+	raw, err := json.Marshal(route[key])
+	if err != nil {
+		return nil, false
+	}
+	var values []string
+	if json.Unmarshal(raw, &values) != nil || len(values) == 0 {
+		return nil, false
+	}
+	return values, true
+}
+
+func sameGatewayRouteEndpoint(left, right map[string]any) bool {
+	return fmt.Sprint(left["service_path"]) == fmt.Sprint(right["service_path"]) &&
+		fmt.Sprint(left["port"]) == fmt.Sprint(right["port"])
+}
+
+func sameStringSet(left, right []string) bool {
+	return len(left) == len(right) && containsStringSet(left, right)
+}
+
+func sameStringValueSet(left, right []string) bool {
+	return containsStringSet(left, right) && containsStringSet(right, left)
+}
+
+func intersectsStringSet(left, right []string) bool {
+	seen := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		seen[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, ok := seen[value]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeStorageGatewayMethods(methods []string) ([]string, bool) {
+	out := make([]string, 0, len(methods))
+	seen := make(map[string]struct{}, len(methods))
+	changed := false
+	for _, method := range methods {
+		method = strings.TrimSpace(method)
+		if method == "" {
+			continue
+		}
+		if _, dup := seen[method]; dup {
+			changed = true
+			continue
+		}
+		seen[method] = struct{}{}
+		out = append(out, method)
+	}
+	return out, changed
+}
+
+func containsStringSet(haystack, needles []string) bool {
+	seen := make(map[string]struct{}, len(haystack))
+	for _, value := range haystack {
+		seen[value] = struct{}{}
+	}
+	for _, value := range needles {
+		if _, ok := seen[value]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func subtractStringSet(values, removed []string) []string {
+	removedSet := make(map[string]struct{}, len(removed))
+	for _, value := range removed {
+		removedSet[value] = struct{}{}
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := removedSet[value]; !ok {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func mergeDefaultGatewayMethods(existingValue, defaultValue any) ([]string, bool) {
+	existingRaw, err := json.Marshal(existingValue)
+	if err != nil {
+		return nil, false
+	}
+	defaultRaw, err := json.Marshal(defaultValue)
+	if err != nil {
+		return nil, false
+	}
+	var existing, defaults []string
+	if json.Unmarshal(existingRaw, &existing) != nil || json.Unmarshal(defaultRaw, &defaults) != nil {
+		return nil, false
+	}
+	existing, changed := normalizeStorageGatewayMethods(existing)
+	seen := make(map[string]struct{}, len(existing)+len(defaults))
+	for _, method := range existing {
+		method = strings.TrimSpace(method)
+		if method != "" {
+			seen[method] = struct{}{}
+		}
+	}
+	if _, wildcard := seen["*"]; wildcard {
+		return existing, changed
+	}
+	merged := append([]string(nil), existing...)
+	for _, method := range defaults {
+		method = strings.TrimSpace(method)
+		if method == "" {
+			continue
+		}
+		if _, ok := seen[method]; ok {
+			continue
+		}
+		seen[method] = struct{}{}
+		merged = append(merged, method)
+		changed = true
+	}
+	return merged, changed
+}
+
+func tightenStrategyGatewayACL(existingRaw, defaultRaw string) (string, bool) {
+	var existing, defaults map[string]any
+	if json.Unmarshal([]byte(existingRaw), &existing) != nil || json.Unmarshal([]byte(defaultRaw), &defaults) != nil {
+		return existingRaw, false
+	}
+	changed := false
+	for _, key := range []string{"gateway_methods", "gateway_callers"} {
+		values, ok := existing[key].([]any)
+		if !ok {
+			continue
+		}
+		wildcard := false
+		for _, value := range values {
+			if strings.TrimSpace(fmt.Sprint(value)) == "*" {
+				wildcard = true
+				break
+			}
+		}
+		if wildcard {
+			existing[key] = defaults[key]
 			changed = true
 		}
 	}

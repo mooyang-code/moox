@@ -1,0 +1,46 @@
+package kline
+
+import (
+	"testing"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestKlinePlannerUsesSourceDatasetSubjectsAndTargetDatasetID(t *testing.T) {
+	params := &domain.CollectParams{}
+	params.Normalize("binance", "spot", "kline")
+	params.Source.Kind = "dataset"
+	params.Source.DatasetID = "symbols"
+	params.Target.DatasetID = "kline_1m"
+	params.Collector.Intervals = []string{"1m"}
+	subjects := []domain.DatasetSubject{
+		{SubjectID: "BTC-USDT", Status: "active"},
+		{SubjectID: "ETH-USDT", Status: "active"},
+	}
+
+	specs := BuildTaskSpecs(params, subjects)
+
+	require.Len(t, specs, len(subjects))
+	for i, spec := range specs {
+		assert.Equal(t, "kline_1m", spec.DatasetID)
+		assert.Equal(t, "kline_1m", spec.Params["dataset_id"])
+		assert.Equal(t, subjects[i].SubjectID, spec.SubjectID)
+		assert.Equal(t, subjects[i].SubjectID, spec.Symbol)
+		assert.Equal(t, "1m", spec.Interval)
+	}
+}
+
+func TestKlinePlannerSkipsSubjectWithoutSubjectID(t *testing.T) {
+	params := &domain.CollectParams{}
+	params.Normalize("binance", "spot", "kline")
+	params.Target.DatasetID = "kline_1m"
+	params.Collector.Intervals = []string{"1m"}
+
+	specs := BuildTaskSpecs(params, []domain.DatasetSubject{{
+		Status: "active",
+	}})
+
+	assert.Empty(t, specs)
+}

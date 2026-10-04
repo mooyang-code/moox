@@ -2,20 +2,65 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
+	"sort"
 	"strings"
+	"time"
 )
 
 // CollectParams describes how a rule generates concrete task instances.
 type CollectParams struct {
-	Source    CollectSource   `json:"source"`
-	Collector CollectorSpec   `json:"collector"`
-	Target    CollectTarget   `json:"target"`
-	Schedule  CollectSchedule `json:"schedule"`
+	// The persisted rule contract is flat and greenfield-only. The nested
+	// fields below are derived for the collector's internal planners and are
+	// deliberately excluded from JSON so old exchange/market aliases fail
+	// validation rather than becoming a second public contract.
+	Source          CollectSource   `json:"-"`
+	Collector       CollectorSpec   `json:"-"`
+	Target          CollectTarget   `json:"-"`
+	Schedule        CollectSchedule `json:"-"`
+	Provider        string          `json:"provider,omitempty"`
+	MarketType      string          `json:"market_type,omitempty"`
+	MarketID        string          `json:"market_id,omitempty"`
+	InstrumentType  string          `json:"instrument_type,omitempty"`
+	SourceID        string          `json:"source_id,omitempty"`
+	SeriesTag       string          `json:"series_tag,omitempty"`
+	SubjectTags     []string        `json:"subject_tags,omitempty"`
+	OutputFields    []string        `json:"output_fields,omitempty"`
+	TargetDatasetID string          `json:"target_dataset_id,omitempty"`
+	Frequency       string          `json:"frequency,omitempty"`
+	SourceDatasetID string          `json:"source_dataset_id,omitempty"`
+	SourceFrequency string          `json:"source_frequency,omitempty"`
+	SourceSeriesTag string          `json:"source_series_tag,omitempty"`
+	TargetFrequency string          `json:"target_frequency,omitempty"`
+	Alignment       string          `json:"alignment,omitempty"`
+	SettleDelayMS   *int64          `json:"settle_delay_ms,omitempty"`
+	HistoryPolicy   *HistoryPolicy  `json:"history_policy,omitempty"`
 }
 
-const DefaultCollectorCodePackageID = "moox-collector_dev"
+type HistoryPolicy struct {
+	Mode              string  `json:"mode"`
+	Lookback          int     `json:"lookback,omitempty"`
+	Since             string  `json:"since,omitempty"`
+	BatchBarLimit     int     `json:"batch_bar_limit,omitempty"`
+	MaxConcurrency    int     `json:"max_concurrency,omitempty"`
+	GapRepairLookback string  `json:"gap_repair_lookback,omitempty"`
+	RateBudgetRatio   float64 `json:"rate_budget_ratio,omitempty"`
+}
+
+const (
+	HistoryModeLiveOnly = "live_only"
+	HistoryModeLookback = "lookback"
+	HistoryModeSince    = "since"
+
+	DefaultHistoryBatchBarLimit     = 1000
+	DefaultHistoryMaxConcurrency    = 1
+	DefaultHistoryGapRepairLookback = "0m"
+	DefaultHistoryRateBudgetRatio   = 1.0
+)
 
 // CollectSource describes where target objects come from.
 type CollectSource struct {
@@ -29,97 +74,328 @@ type CollectorSpec struct {
 	Market    string   `json:"market"`
 	DataType  string   `json:"data_type"`
 	Intervals []string `json:"intervals"`
+	Live      bool     `json:"live,omitempty"`
 }
 
 // CollectTarget describes where collected rows should be written.
 type CollectTarget struct {
-	DatasetID     string `json:"dataset_id"`
-	JobType       string `json:"job_type"`
-	CodePackageID string `json:"code_package_id"`
+	DatasetID string `json:"dataset_id"`
 }
 
 // CollectSchedule describes task frequency dimensions.
 type CollectSchedule struct {
-	Interval  string   `json:"interval"`
-	Timezone  string   `json:"timezone"`
-	Intervals []string `json:"intervals"`
+	Interval string `json:"interval"`
 }
 
 // ParseCollectParams parses rule JSON and normalizes the standard shape.
-func ParseCollectParams(raw string, fallbackExchange string, fallbackDataType string) (*CollectParams, error) {
+func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType string, fallbackDataType string) (*CollectParams, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		raw = "{}"
 	}
 	var params CollectParams
-	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+	decoder := json.NewDecoder(bytes.NewBufferString(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&params); err != nil {
 		return nil, fmt.Errorf("parse collect params: %w", err)
 	}
-	params.Normalize(fallbackExchange, fallbackDataType)
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("parse collect params: trailing JSON value")
+	}
+	if err := validateCollectParamsShape(raw, fallbackDataType); err != nil {
+		return nil, err
+	}
+	params.Normalize(fallbackProvider, fallbackMarketType, fallbackDataType)
 	return &params, nil
 }
 
-// Normalize fills defaults for the standard collect params shape.
-func (p *CollectParams) Normalize(fallbackExchange string, fallbackDataType string) {
-	dataType := p.Collector.DataType
-	if dataType == "" {
-		dataType = fallbackDataType
-	}
-	if p.Source.Kind == "" {
-		if strings.EqualFold(dataType, "symbol") {
-			p.Source.Kind = "none"
-		} else {
-			p.Source.Kind = "dataset_subjects"
+// Normalize canonicalizes the standard collect params shape.
+func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType string, fallbackDataType string) {
+	p.Provider = strings.ToLower(firstNonEmpty(p.Provider, fallbackProvider))
+	p.MarketType = strings.ToLower(firstNonEmpty(p.MarketType, fallbackMarketType))
+	p.MarketID = strings.ToLower(strings.TrimSpace(p.MarketID))
+	p.InstrumentType = strings.ToLower(strings.TrimSpace(p.InstrumentType))
+	p.SourceID = strings.ToLower(strings.TrimSpace(p.SourceID))
+	p.SeriesTag = strings.TrimSpace(p.SeriesTag)
+	p.SubjectTags = normalizeTags(p.SubjectTags)
+	p.OutputFields = normalizeOutputFields(p.OutputFields)
+	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
+	p.Frequency = strings.TrimSpace(p.Frequency)
+	p.SourceDatasetID = strings.TrimSpace(p.SourceDatasetID)
+	p.SourceSeriesTag = strings.TrimSpace(p.SourceSeriesTag)
+	p.Alignment = strings.ToLower(strings.TrimSpace(p.Alignment))
+	dataType := strings.ToLower(strings.TrimSpace(fallbackDataType))
+	if dataType == "kline_resample" {
+		p.SourceFrequency = normalizeFixedFrequency(p.SourceFrequency)
+		p.TargetFrequency = normalizeFixedFrequency(p.TargetFrequency)
+		if p.Alignment == "" {
+			p.Alignment = ResampleAlignmentEpochUTC
 		}
 	}
-	if p.Collector.Exchange == "" {
-		p.Collector.Exchange = fallbackExchange
+	if dataType == "kline" {
+		p.Frequency = normalizeFixedFrequency(p.Frequency)
+		p.HistoryPolicy = normalizeHistoryPolicy(p.HistoryPolicy)
 	}
-	if p.Collector.Market == "" {
-		p.Collector.Market = "spot"
+
+	// The source is the target Dataset's subject range. It is no longer a
+	// separate symbol Dataset or a persisted subject-set relation.
+	p.Source = CollectSource{Kind: "dataset"}
+	if dataType == "kline_resample" {
+		p.Source.DatasetID = p.SourceDatasetID
 	}
-	if p.Collector.DataType == "" {
-		p.Collector.DataType = fallbackDataType
+	intervals := []string(nil)
+	if dataType == "kline_resample" && p.TargetFrequency != "" {
+		intervals = []string{p.TargetFrequency}
+	} else if p.Frequency != "" {
+		intervals = []string{p.Frequency}
 	}
-	p.Source.Kind = strings.ToLower(strings.TrimSpace(p.Source.Kind))
-	p.Collector.Exchange = strings.ToLower(strings.TrimSpace(p.Collector.Exchange))
-	p.Collector.Market = strings.ToLower(strings.TrimSpace(p.Collector.Market))
-	p.Collector.DataType = strings.ToLower(strings.TrimSpace(p.Collector.DataType))
-	if len(p.Collector.Intervals) == 0 && !strings.EqualFold(p.Collector.DataType, "symbol") {
-		p.Collector.Intervals = append([]string(nil), p.Schedule.Intervals...)
+	p.Collector = CollectorSpec{
+		Exchange:  p.Provider,
+		Market:    p.MarketType,
+		DataType:  dataType,
+		Intervals: intervals,
 	}
-	if len(p.Collector.Intervals) == 0 && !strings.EqualFold(p.Collector.DataType, "symbol") {
-		p.Collector.Intervals = []string{"1m"}
-	}
-	if p.Source.DatasetID == "" {
-		p.Source.DatasetID = inferDatasetID(p.Collector.Exchange, p.Collector.Market, p.Collector.DataType)
-	}
-	if p.Target.DatasetID == "" {
-		p.Target.DatasetID = p.Source.DatasetID
-	}
-	if p.Target.JobType == "" {
-		p.Target.JobType = "collect." + p.Collector.DataType
-	}
-	if p.Target.CodePackageID == "" {
-		p.Target.CodePackageID = DefaultCollectorCodePackageID
-	}
-	if p.Schedule.Interval == "" {
-		p.Schedule.Interval = "30m"
-	}
-	if p.Schedule.Timezone == "" {
-		p.Schedule.Timezone = "Asia/Shanghai"
+	p.Target = CollectTarget{DatasetID: p.TargetDatasetID}
+	if dataType == "kline_resample" {
+		p.Schedule = CollectSchedule{Interval: "1m"}
+	} else {
+		p.Schedule = CollectSchedule{Interval: p.Frequency}
 	}
 }
 
-func inferDatasetID(exchange string, market string, dataType string) string {
-	if exchange == "" {
-		exchange = "binance"
+func validateCollectParamsShape(raw string, fallbackDataType string) error {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil // the strict struct decoder reports the useful JSON error first
 	}
-	if market == "" {
-		market = "spot"
+	resample := strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline_resample")
+	standardOnly := []string{"frequency", "history_policy"}
+	resampleOnly := []string{"source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment", "settle_delay_ms"}
+	for _, key := range standardOnly {
+		if _, exists := values[key]; exists && resample {
+			return fmt.Errorf("parse collect params: field %q is not valid for kline_resample", key)
+		}
 	}
-	if dataType == "" {
-		dataType = "kline"
+	for _, key := range resampleOnly {
+		if _, exists := values[key]; exists && !resample {
+			return fmt.Errorf("parse collect params: field %q is only valid for kline_resample", key)
+		}
 	}
-	return strings.ToLower(exchange + "_" + market + "_" + dataType)
+	if _, exists := values["history_policy"]; exists && !strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline") {
+		return fmt.Errorf("parse collect params: field %q is only valid for kline", "history_policy")
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// ValidateTaskDefinition validates task-level parameters that are independent
+// from a concrete Provider route. Direct collection tasks derive Provider and
+// market from each selected Tag, so those fields are intentionally not required
+// here.
+func (p *CollectParams) ValidateTaskDefinition() error {
+	if p == nil {
+		return fmt.Errorf("collect params are required")
+	}
+	if p.Collector.DataType == "" {
+		return fmt.Errorf("collector data_type is required")
+	}
+	if p.Target.DatasetID == "" {
+		return fmt.Errorf("target.dataset_id is required")
+	}
+	if _, err := ParseScheduleInterval(p.Schedule.Interval); err != nil {
+		return fmt.Errorf("schedule.interval: %w", err)
+	}
+	switch p.Collector.DataType {
+	case "kline":
+		if len(p.Collector.Intervals) == 0 {
+			return fmt.Errorf("collector.intervals is required for kline")
+		}
+		for _, value := range p.Collector.Intervals {
+			if value == "" {
+				return fmt.Errorf("collector.intervals must not contain empty values")
+			}
+		}
+		if err := p.ValidateHistoryPolicy(); err != nil {
+			return err
+		}
+	case "kline_resample":
+		return p.ValidateKlineResample()
+	default:
+		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)
+	}
+	return nil
+}
+
+// Validate checks the single supported rule JSON contract.
+func (p *CollectParams) Validate() error {
+	if p == nil {
+		return fmt.Errorf("collect params are required")
+	}
+	if p.Collector.Exchange == "" || p.Collector.Market == "" {
+		return fmt.Errorf("collector exchange and market are required")
+	}
+	return p.ValidateTaskDefinition()
+}
+
+// SplitSubjectTags extracts the transient task input. Tags are persisted on
+// the result Dataset rather than duplicated in the task's collect_params.
+func SplitSubjectTags(raw string) (string, []string, error) {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return "", nil, fmt.Errorf("parse collect params: %w", err)
+	}
+	var tags []string
+	if value, ok := values["subject_tags"]; ok {
+		if err := json.Unmarshal(value, &tags); err != nil {
+			return "", nil, fmt.Errorf("parse subject_tags: %w", err)
+		}
+		delete(values, "subject_tags")
+	}
+	clean, err := json.Marshal(values)
+	if err != nil {
+		return "", nil, err
+	}
+	return string(clean), normalizeTags(tags), nil
+}
+
+func normalizeTags(tags []string) []string {
+	seen := make(map[string]struct{}, len(tags))
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func normalizeOutputFields(fields []string) []string {
+	for i := range fields {
+		fields[i] = strings.ToLower(strings.TrimSpace(fields[i]))
+	}
+	return normalizeTags(fields)
+}
+
+func normalizeHistoryPolicy(policy *HistoryPolicy) *HistoryPolicy {
+	if policy == nil {
+		policy = &HistoryPolicy{}
+	}
+	policy.Mode = strings.ToLower(strings.TrimSpace(policy.Mode))
+	if policy.Mode == "" {
+		policy.Mode = HistoryModeLiveOnly
+	}
+	policy.Since = canonicalRFC3339(policy.Since)
+	if policy.BatchBarLimit == 0 {
+		policy.BatchBarLimit = DefaultHistoryBatchBarLimit
+	}
+	if policy.MaxConcurrency == 0 {
+		policy.MaxConcurrency = DefaultHistoryMaxConcurrency
+	}
+	if strings.TrimSpace(policy.GapRepairLookback) == "" {
+		policy.GapRepairLookback = DefaultHistoryGapRepairLookback
+	}
+	policy.GapRepairLookback = canonicalNonNegativeDuration(policy.GapRepairLookback)
+	if policy.RateBudgetRatio == 0 {
+		policy.RateBudgetRatio = DefaultHistoryRateBudgetRatio
+	}
+	return policy
+}
+
+func (p *CollectParams) ValidateHistoryPolicy() error {
+	if p == nil {
+		return fmt.Errorf("history_policy is required")
+	}
+	p.HistoryPolicy = normalizeHistoryPolicy(p.HistoryPolicy)
+	policy := p.HistoryPolicy
+	switch policy.Mode {
+	case HistoryModeLiveOnly:
+	case HistoryModeLookback:
+		if policy.Lookback <= 0 {
+			return fmt.Errorf("history_policy.lookback must be greater than 0")
+		}
+	case HistoryModeSince:
+		if strings.TrimSpace(policy.Since) == "" {
+			return fmt.Errorf("history_policy.since is required")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, policy.Since); err != nil {
+			return fmt.Errorf("history_policy.since must be RFC3339: %w", err)
+		}
+	default:
+		return fmt.Errorf("history_policy.mode %q is invalid", policy.Mode)
+	}
+	if policy.BatchBarLimit < 1 || policy.BatchBarLimit > 1000 {
+		return fmt.Errorf("history_policy.batch_bar_limit must be between 1 and 1000")
+	}
+	if policy.MaxConcurrency < 1 || policy.MaxConcurrency > 64 {
+		return fmt.Errorf("history_policy.max_concurrency must be between 1 and 64")
+	}
+	if _, err := parseNonNegativeDuration(policy.GapRepairLookback); err != nil {
+		return fmt.Errorf("history_policy.gap_repair_lookback: %w", err)
+	}
+	if policy.RateBudgetRatio <= 0 || policy.RateBudgetRatio > 1 || math.IsNaN(policy.RateBudgetRatio) || math.IsInf(policy.RateBudgetRatio, 0) {
+		return fmt.Errorf("history_policy.rate_budget_ratio must be within (0,1]")
+	}
+	return nil
+}
+
+func canonicalRFC3339(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return raw
+	}
+	return at.UTC().Format(time.RFC3339Nano)
+}
+
+func canonicalNonNegativeDuration(raw string) string {
+	value, err := parseNonNegativeDuration(raw)
+	if err != nil {
+		return strings.TrimSpace(raw)
+	}
+	return formatDurationCanonical(value)
+}
+
+func parseNonNegativeDuration(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("duration is required")
+	}
+	if raw == "0" || raw == "0m" || raw == "0h" || raw == "0d" || raw == "0w" {
+		return 0, nil
+	}
+	return ParseScheduleInterval(raw)
+}
+
+func formatDurationCanonical(value time.Duration) string {
+	if value == 0 {
+		return "0m"
+	}
+	if value%(7*24*time.Hour) == 0 {
+		return fmt.Sprintf("%dw", int(value/(7*24*time.Hour)))
+	}
+	if value%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", int(value/(24*time.Hour)))
+	}
+	if value%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(value/time.Hour))
+	}
+	return fmt.Sprintf("%dm", int(value/time.Minute))
 }

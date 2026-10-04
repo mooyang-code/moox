@@ -3,44 +3,42 @@ package store
 import "time"
 
 type CloudNode struct {
-	ID                 int        `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID            string     `gorm:"column:c_space_id"`
-	NodeID             string     `gorm:"column:c_node_id"`
-	Provider           string     `gorm:"column:c_provider"`
-	CloudAccountID     string     `gorm:"column:c_cloud_account_id"`
-	PackageID          string     `gorm:"column:c_package_id"`
-	PackageVersion     string     `gorm:"column:c_package_version"`
-	DeploymentID       string     `gorm:"column:c_deployment_id"`
-	NodeType           string     `gorm:"column:c_node_type"`
-	Region             string     `gorm:"column:c_region"`
-	Namespace          string     `gorm:"column:c_namespace"`
-	FunctionName       string     `gorm:"column:c_function_name"`
-	RunningVersion     string     `gorm:"column:c_running_version"`
-	SupportedWorkloads string     `gorm:"column:c_supported_workloads"`
-	Metadata           string     `gorm:"column:c_metadata"`
-	Status             string     `gorm:"column:c_status"`
-	LastHeartbeatAt    *time.Time `gorm:"column:c_last_heartbeat_at"`
-	IsDeleted          bool       `gorm:"column:c_is_deleted"`
-	CreateTime         time.Time  `gorm:"column:c_ctime"`
-	ModifyTime         time.Time  `gorm:"column:c_mtime"`
+	ID                   int       `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID              string    `gorm:"column:c_space_id"`
+	NodeID               string    `gorm:"column:c_node_id"`
+	LifecycleID          string    `gorm:"column:c_lifecycle_id"`
+	LifecycleOperationID string    `gorm:"column:c_lifecycle_operation_id"`
+	Provider             string    `gorm:"column:c_provider"`
+	CloudAccountID       string    `gorm:"column:c_cloud_account_id"`
+	PackageID            string    `gorm:"column:c_package_id"`
+	PackageVersion       string    `gorm:"column:c_package_version"`
+	DeploymentID         string    `gorm:"column:c_deployment_id"`
+	NodeType             string    `gorm:"column:c_node_type"`
+	TriggerType          string    `gorm:"column:c_trigger_type"`
+	Region               string    `gorm:"column:c_region"`
+	Namespace            string    `gorm:"column:c_namespace"`
+	FunctionName         string    `gorm:"column:c_function_name"`
+	Metadata             string    `gorm:"column:c_metadata"`
+	IsDeleted            bool      `gorm:"column:c_is_deleted"`
+	CreateTime           time.Time `gorm:"column:c_ctime"`
+	ModifyTime           time.Time `gorm:"column:c_mtime"`
 }
 
 func (*CloudNode) TableName() string { return "t_cloud_nodes" }
 
 type CloudAccount struct {
-	ID          int       `gorm:"column:c_id;primaryKey;autoIncrement"`
-	AccountID   string    `gorm:"column:c_account_id"`
-	AccountName string    `gorm:"column:c_account_name"`
-	Provider    string    `gorm:"column:c_provider"`
-	SecretID    string    `gorm:"column:c_secret_id"`
-	SecretKey   string    `gorm:"column:c_secret_key"`
-	AppID       string    `gorm:"column:c_app_id"`
-	COSRegion   string    `gorm:"column:c_cos_region"`
-	COSBucket   string    `gorm:"column:c_cos_bucket"`
-	ExtraConfig string    `gorm:"column:c_extra_config"`
-	IsDeleted   bool      `gorm:"column:c_is_deleted"`
-	CreateTime  time.Time `gorm:"column:c_ctime"`
-	ModifyTime  time.Time `gorm:"column:c_mtime"`
+	ID                 int       `gorm:"column:c_id;primaryKey;autoIncrement"`
+	AccountID          string    `gorm:"column:c_account_id"`
+	AccountName        string    `gorm:"column:c_account_name"`
+	Provider           string    `gorm:"column:c_provider"`
+	CredentialSecretID string    `gorm:"column:c_credential_secret_id"`
+	AppID              string    `gorm:"column:c_app_id"`
+	COSRegion          string    `gorm:"column:c_cos_region"`
+	COSBucket          string    `gorm:"column:c_cos_bucket"`
+	ExtraConfig        string    `gorm:"column:c_extra_config"`
+	IsDeleted          bool      `gorm:"column:c_is_deleted"`
+	CreateTime         time.Time `gorm:"column:c_ctime"`
+	ModifyTime         time.Time `gorm:"column:c_mtime"`
 }
 
 func (*CloudAccount) TableName() string { return "t_cloud_accounts" }
@@ -70,3 +68,38 @@ type FunctionPackage struct {
 }
 
 func (*FunctionPackage) TableName() string { return "t_cloud_function_packages" }
+
+type NodeBatch struct {
+	ID          int        `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID     string     `gorm:"column:c_space_id"`
+	JobID       string     `gorm:"column:c_job_id"`
+	Operation   string     `gorm:"column:c_operation"`
+	Status      string     `gorm:"column:c_status"`
+	TotalCount  int        `gorm:"column:c_total_count"`
+	CompletedAt *time.Time `gorm:"column:c_completed_at"`
+	CreateTime  time.Time  `gorm:"column:c_ctime"`
+	ModifyTime  time.Time  `gorm:"column:c_mtime"`
+}
+
+func (*NodeBatch) TableName() string { return "t_cloud_node_batches" }
+
+type NodeBatchItem struct {
+	ID                        int        `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID                   string     `gorm:"column:c_space_id"`
+	JobID                     string     `gorm:"column:c_job_id"`
+	ItemID                    string     `gorm:"column:c_item_id"`
+	ItemIndex                 int        `gorm:"column:c_item_index"`
+	NodeID                    string     `gorm:"column:c_node_id"`
+	Status                    string     `gorm:"column:c_status"`
+	RequestJSON               string     `gorm:"column:c_request_json"`
+	PublishLeaseRecoveryOwned bool       `gorm:"column:c_publish_lease_recovery_owned;not null;default:false"`
+	ResultSummary             string     `gorm:"column:c_result_summary"`
+	ErrorMessage              string     `gorm:"column:c_error_message"`
+	StartedAt                 *time.Time `gorm:"column:c_started_at"`
+	CompletedAt               *time.Time `gorm:"column:c_completed_at"`
+	CreateTime                time.Time  `gorm:"column:c_ctime"`
+	ModifyTime                time.Time  `gorm:"column:c_mtime"`
+	ResumeClaim               bool       `gorm:"-"`
+}
+
+func (*NodeBatchItem) TableName() string { return "t_cloud_node_batch_items" }

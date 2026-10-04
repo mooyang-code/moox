@@ -3,90 +3,50 @@ package registry
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
+	"github.com/mooyang-code/moox/modules/strategy/internal/config"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"gorm.io/gorm"
 )
 
-func TestParseManifest(t *testing.T) {
-	m, err := Parse("id: demo\nversion: 1.0.0\napi_version: moox.strategy/v1\nentrypoint: strategy.py:run\n")
-	if err != nil || m.ID != "demo" {
-		t.Fatalf("%+v %v", m, err)
-	}
-}
-
-func TestParseRejectsUnknownManifestField(t *testing.T) {
-	if _, err := Parse("id: demo\nversion: 1.0.0\napi_version: moox.strategy/v1\nentrypoint: strategy.py:run\nunknown: true\n"); err == nil {
-		t.Fatal("expected unknown manifest field to be rejected")
-	}
-}
-
-func TestPublishKeepsVersionImmutable(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+func TestPrepareCompiledAndSaveAreImmutable(t *testing.T) {
+	repo := openRegistryStore(t)
+	service := &Service{Repo: repo, Now: func() time.Time { return time.UnixMilli(1000) }}
+	compiled := compiler.CompiledStrategy{APIVersion: config.APIVersion, Kind: config.Kind, SpaceID: "space-1", CompiledJSON: []byte(`{"api_version":"moox.strategy/v2","kind":"coin_selection","space_id":"space-1"}`)}
+	first, err := service.PrepareCompiled("strategy-1", "trend", "manifest-a", compiled)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(schema.AllSQL()).Error; err != nil {
+	if err := service.Save(context.Background(), first); err != nil {
 		t.Fatal(err)
 	}
-	r := &Service{Repo: store.New(db)}
-	manifest := "id: demo\nversion: 1.0.0\napi_version: moox.strategy/v1\nentrypoint: strategy.py:run\n"
-	if _, err := r.Publish(context.Background(), manifest, "def run(a,b,c,d): return {'action':'hold','targets':[],'next_state':{}}\n"); err != nil {
-		t.Fatal(err)
+	if got, err := repo.GetStrategy(context.Background(), first.ID); err != nil || got.SourceHash != first.SourceHash {
+		t.Fatalf("stored strategy = %+v, err=%v", got, err)
 	}
-	_, err = r.Publish(context.Background(), manifest, "def run(a,b,c,d): return {'action':'rebalance','targets':[],'next_state':{}}\n")
-	if !errors.Is(err, ErrImmutableVersion) {
-		t.Fatalf("err=%v", err)
+	changed := first
+	changed.ManifestYAML = "manifest-b"
+	changed.SourceHash = "different"
+	if err := service.Save(context.Background(), changed); !errors.Is(err, ErrImmutableStrategy) {
+		t.Fatalf("Save changed artifact error = %v", err)
 	}
 }
 
-func TestPublishRejectsManifestChangeWithSameSource(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+func openRegistryStore(t *testing.T) *store.Store {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "strategy.db")), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(schema.AllSQL()).Error; err != nil {
+	repo := store.New(db)
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	r := &Service{Repo: store.New(db)}
-	manifest := "id: demo\nversion: 1.0.0\napi_version: moox.strategy/v1\nentrypoint: strategy.py:run\n"
-	source := "def run(a,b,c,d): return {'action':'hold','targets':[],'next_state':{}}\n"
-	if _, err := r.Publish(context.Background(), manifest, source); err != nil {
-		t.Fatal(err)
-	}
-	changed := manifest + "state_schema_version: 2\n"
-	if _, err := r.Publish(context.Background(), changed, source); !errors.Is(err, ErrImmutableVersion) {
-		t.Fatalf("err=%v", err)
-	}
-}
-
-func TestSavePromotesLoadedDraft(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec(schema.AllSQL()).Error; err != nil {
-		t.Fatal(err)
-	}
-	r := &Service{Repo: store.New(db)}
-	manifest := "id: demo\nversion: 1.0.0\napi_version: moox.strategy/v1\nentrypoint: strategy.py:run\n"
-	source := "def run(a,b,c,d): return {'action':'hold','targets':[],'next_state':{}}\n"
-	if _, err := r.Publish(context.Background(), manifest, source); err != nil {
-		t.Fatal(err)
-	}
-	d, err := r.Prepare(manifest, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.Status = "enabled"
-	if err := r.Save(context.Background(), d); err != nil {
-		t.Fatal(err)
-	}
-	got, err := r.Repo.GetDefinition(context.Background(), d.StrategyID, d.Version)
-	if err != nil || got.Status != "enabled" {
-		t.Fatalf("got=%+v err=%v", got, err)
-	}
+	return repo
 }

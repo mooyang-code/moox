@@ -27,7 +27,7 @@ func TestValidateHelloRejectsProtocolMismatch(t *testing.T) {
 
 func TestValidateHelloRejectsUnsupportedEncoding(t *testing.T) {
 	err := ValidateHello(
-		HelloExpectation{ProtocolVersion: VersionV1, RequiredEncoding: EncodingArrowStream},
+		HelloExpectation{ProtocolVersion: VersionV1, RequiredEncoding: Encoding("unsupported")},
 		Hello{ProtocolVersion: VersionV1, Encodings: []Encoding{EncodingJSON}},
 	)
 	require.Error(t, err)
@@ -37,7 +37,7 @@ func TestValidateHelloRejectsUnsupportedEncoding(t *testing.T) {
 func TestValidateHelloAcceptsRequiredEncoding(t *testing.T) {
 	err := ValidateHello(
 		HelloExpectation{ProtocolVersion: VersionV1, RequiredEncoding: EncodingJSON},
-		Hello{ProtocolVersion: VersionV1, Encodings: []Encoding{EncodingJSON, EncodingArrowStream}},
+		Hello{ProtocolVersion: VersionV1, Encodings: []Encoding{EncodingJSON}},
 	)
 	require.NoError(t, err)
 }

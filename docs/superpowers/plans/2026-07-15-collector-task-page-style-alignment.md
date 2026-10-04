@@ -278,7 +278,7 @@ Expected: `web-host` tests pass and only `web-host/internal/statik/statik.go` ch
 - [ ] **Step 4: Build the Linux web-host binary**
 
 ```bash
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh web-host
+TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh web-host
 sha256sum bin/moox-web-host
 ```
 

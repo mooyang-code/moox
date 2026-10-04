@@ -3,8 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,8 +23,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
 	}
-	if cfg.Instance.BaseURL != "http://127.0.0.1:11409" {
-		t.Fatalf("base url = %q", cfg.Instance.BaseURL)
+	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://127.0.0.1:11003" {
+		t.Fatalf("collector gateway target default = %q", cfg.KlineFreshness.CollectorGatewayTarget)
 	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
@@ -33,14 +35,28 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if !cfg.SysDeploy.Enabled || cfg.SysDeploy.Target != "ip://127.0.0.1:11109" {
 		t.Fatalf("sysdeploy = %+v", cfg.SysDeploy)
 	}
-	if !cfg.Peer.Enabled || cfg.Peer.TimeoutSeconds != 5 {
-		t.Fatalf("peer = %+v", cfg.Peer)
-	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
 	}
-	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "moox_system" || cfg.Metrics.HostStorage.Frequency != "1m" {
+	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "mooxsys" || cfg.Metrics.HostStorage.Frequency != "1m" {
 		t.Fatalf("host storage defaults = %+v", cfg.Metrics.HostStorage)
+	}
+	if !cfg.Observability.Enabled || len(cfg.Observability.EventBusURLs) == 0 {
+		t.Fatalf("observability defaults = %+v", cfg.Observability)
+	}
+	if cfg.Observability.BalanceDifferenceThreshold != 0.05 {
+		t.Fatalf("balance difference threshold = %v", cfg.Observability.BalanceDifferenceThreshold)
+	}
+	if cfg.MarketCanary.ClosedBarMinCoverage != 0.99 {
+		t.Fatalf("closed bar minimum coverage = %v", cfg.MarketCanary.ClosedBarMinCoverage)
+	}
+	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].SeriesTag == nil || *cfg.MarketCanary.Subjects[0].SeriesTag != "venue:binance|market:spot|source:spot_http" {
+		t.Fatalf("market canary default series tag = %+v", cfg.MarketCanary.Subjects)
+	}
+	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
+		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute ||
+		cfg.MarketHealth.LowCapacityHeadroom != 2 {
+		t.Fatalf("market health defaults = %+v", cfg.MarketHealth)
 	}
 }
 
@@ -60,7 +76,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("parse trpc config: %v", err)
 	}
-	if len(cfg.Server.Service) != 8 {
+	if len(cfg.Server.Service) != 7 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
 	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 {
@@ -85,14 +101,24 @@ func TestMonitorConfigEnvOverride(t *testing.T) {
 	cfg, err := Load(writeConfig(t, `
 instance:
   instance_id: monitor-test
-peer:
-  enabled: false
 `))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if cfg.Database.Path != "/tmp/moox-monitor.db" {
 		t.Fatalf("database path = %q", cfg.Database.Path)
+	}
+}
+
+func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	cfg, err := Load(writeConfig(t, "observability:\n  credential_file: \"\"\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Observability.CredentialFile != "" {
+		t.Fatalf("explicit empty observability credential was replaced: %q", cfg.Observability.CredentialFile)
 	}
 }
 
@@ -106,8 +132,43 @@ func TestMonitorGatewayAuthEnvironment(t *testing.T) {
 	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-hk-177" || cfg.SysDeploy.ServiceAuth.KeyID != "monitor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "monitor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
 		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
 	}
-	if cfg.Peer.ServiceAuth.KeyID != "monitor-key" || cfg.Peer.ServiceAuth.SecretKey != "monitor-secret" || cfg.Peer.ServiceAuth.CAFile != "/tmp/peers.pem" {
-		t.Fatalf("peer gateway auth = %#v", cfg.Peer.ServiceAuth)
+	if cfg.Metrics.Storage.GatewayNodeID != "gateway-hk-177" || cfg.Metrics.HostStorage.GatewayNodeID != "gateway-hk-177" {
+		t.Fatalf("metrics gateway nodes = storage %q host %q", cfg.Metrics.Storage.GatewayNodeID, cfg.Metrics.HostStorage.GatewayNodeID)
+	}
+}
+
+func TestMonitorStorageGatewayEnvironmentOverridesMetricsOnly(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "control")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://10.0.0.8:11003")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "compute-1")
+	cfg := Default()
+	cfg.applyEnv()
+
+	if cfg.SysDeploy.ServiceAuth.TargetNode != "control" {
+		t.Fatalf("sysdeploy target = %q, want control", cfg.SysDeploy.ServiceAuth.TargetNode)
+	}
+	if cfg.Metrics.Storage.GatewayTarget != "ip://10.0.0.8:11003" || cfg.Metrics.HostStorage.GatewayTarget != "ip://10.0.0.8:11003" {
+		t.Fatalf("storage targets = %q, %q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.HostStorage.GatewayTarget)
+	}
+	if cfg.Metrics.Storage.GatewayNodeID != "compute-1" || cfg.Metrics.HostStorage.GatewayNodeID != "compute-1" {
+		t.Fatalf("storage nodes = %q, %q", cfg.Metrics.Storage.GatewayNodeID, cfg.Metrics.HostStorage.GatewayNodeID)
+	}
+}
+
+func TestMonitorCollectorGatewayEnvironmentIsIndependentFromStorageRoute(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
+	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector-gateway:11003")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://storage-gateway:11003")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "storage-node")
+	cfg := Default()
+	cfg.applyEnv()
+
+	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://collector-gateway:11003" || cfg.KlineFreshness.CollectorGatewayNodeID != "collector-node" {
+		t.Fatalf("collector route = %q/%q", cfg.KlineFreshness.CollectorGatewayTarget, cfg.KlineFreshness.CollectorGatewayNodeID)
+	}
+	if cfg.Metrics.Storage.GatewayTarget != "ip://storage-gateway:11003" || cfg.Metrics.Storage.GatewayNodeID != "storage-node" {
+		t.Fatalf("storage route = %q/%q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.Storage.GatewayNodeID)
 	}
 }
 
@@ -115,7 +176,7 @@ func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
 	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
-	cfg, err := Load(writeConfig(t, "peer:\n  enabled: false\n"))
+	cfg, err := Load(writeConfig(t, "{}\n"))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -126,7 +187,6 @@ func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 
 func TestMonitorConfigRequiresHealthCredentialsWhenSysDeployEnabled(t *testing.T) {
 	cfg := Default()
-	cfg.Peer.Enabled = false
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want health credential error")
 	}
@@ -144,81 +204,118 @@ func TestMonitorConfigValidatesInstanceID(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigValidatesPeerEntries(t *testing.T) {
-	path := writeConfig(t, `
-instance:
-  instance_id: monitor-test
-peer:
-  peers:
-    - instance_id: peer-a
-      gateway_url: http://127.0.0.1:11419
-`)
-	if _, err := Load(path); err == nil {
-		t.Fatal("Load() error = nil, want invalid peer entry")
-	}
-}
-
-func TestMonitorConfigRequiresPeerGatewayCredentialsWhenConfigured(t *testing.T) {
-	cfg := Default()
-	cfg.Instance.InstanceID = "monitor-test"
-	cfg.Peer.Enabled = true
-	cfg.SysDeploy.Enabled = false
-	cfg.Peer.Peers = []PeerEntry{{InstanceID: "peer-a", GatewayURL: "https://peer.example", NodeID: "gateway-peer-a"}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want peer gateway credentials error")
-	}
-	cfg.Peer.ServiceAuth = ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret"}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() = %v", err)
-	}
-}
-
-func TestMonitorConfigRejectsNonPositivePeerTimeout(t *testing.T) {
-	cfg := Default()
-	cfg.SysDeploy.Enabled = false
-	cfg.Peer.Peers = []PeerEntry{{InstanceID: "peer-a", GatewayURL: "https://peer.example", NodeID: "gateway-peer-a"}}
-	cfg.Peer.ServiceAuth = ServiceAuthConfig{KeyID: "monitor", SecretKey: "secret"}
-	cfg.Peer.TimeoutSeconds = -1
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want non-positive peer timeout rejection")
-	}
-}
-
-func TestMonitorConfigDefaultsZeroPeerTimeoutBeforeValidation(t *testing.T) {
-	path := writeConfig(t, `
-instance:
-  instance_id: monitor-test
-sysdeploy:
-  enabled: false
-peer:
-  enabled: true
-  timeout_seconds: 0
-  service_auth:
-    key_id: monitor
-    secret_key: secret
-  peers:
-    - instance_id: peer-a
-      gateway_url: https://peer.example
-      node_id: gateway-peer-a
-`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() = %v", err)
-	}
-	if cfg.Peer.TimeoutSeconds != 5 {
-		t.Fatalf("peer timeout = %d, want default 5", cfg.Peer.TimeoutSeconds)
-	}
-}
-
 func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 	raw, err := os.ReadFile("../../config/app.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(raw)
+	if !strings.Contains(text, "credential_file: ~/.config/moox/eventbus/monitor-observability.yaml") {
+		t.Fatal("monitor app config must declare the observability credential")
+	}
+	for _, retired := range []string{
+		"eventbus_credential_file", "host_eventbus_credential_file",
+		"monitor_metrics_ingest_v1", "monitor_hostmetrics_ingest_v1",
+		"stream:", "consumer:", "filter_subject:",
+	} {
+		if strings.Contains(text, retired) {
+			t.Fatalf("monitor app config contains retired field %q", retired)
+		}
+	}
 	for _, oldKey := range []string{"reload_interval_seconds", "pull_interval_seconds"} {
 		if strings.Contains(text, oldKey) {
 			t.Fatalf("app config still contains %q", oldKey)
+		}
+	}
+}
+
+func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "app.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var app map[string]any
+	if err := yaml.Unmarshal(raw, &app); err != nil {
+		t.Fatal(err)
+	}
+	metrics, ok := app["metrics"].(map[string]any)
+	if !ok {
+		t.Fatal("metrics config is missing")
+	}
+	keyPath := filepath.Join(t.TempDir(), "gateway-monitor.key")
+	if err := os.WriteFile(keyPath, []byte("test-gateway-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"storage", "host_storage"} {
+		storage, ok := metrics[name].(map[string]any)
+		if !ok {
+			t.Fatalf("metrics.%s config is missing", name)
+		}
+		storage["hmac_key_file"] = keyPath
+	}
+	fixture, err := yaml.Marshal(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "app.yaml")
+	if err := os.WriteFile(configPath, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load(app.yaml) error = %v", err)
+	}
+	if !cfg.KlineFreshness.Enabled {
+		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
+	}
+	freshness, ok := app["kline_freshness"].(map[string]any)
+	if !ok || freshness["collector_gateway_target"] != "ip://127.0.0.1:11003" {
+		t.Fatalf("kline freshness Collector gateway target = %v", freshness["collector_gateway_target"])
+	}
+	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://127.0.0.1:11003" {
+		t.Fatalf("loaded collector gateway target = %q", cfg.KlineFreshness.CollectorGatewayTarget)
+	}
+	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
+		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute {
+		t.Fatalf("dynamic kline freshness inventory = %+v", cfg.KlineFreshness)
+	}
+	if !reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
+		t.Fatalf("loaded kline freshness Space IDs = %v", cfg.KlineFreshness.SpaceIDs)
+	}
+	if strings.Contains(string(raw), "view_binance_kline_1m") || strings.Contains(string(raw), "  rules:") {
+		t.Fatal("Monitor app config still pins a static K-line View")
+	}
+	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].Symbol != "BTC-USDT" {
+		t.Fatalf("market canary subjects = %+v", cfg.MarketCanary.Subjects)
+	}
+	if cfg.MarketCanary.Subjects[0].SeriesTag == nil || *cfg.MarketCanary.Subjects[0].SeriesTag != "venue:binance|market:spot|source:spot_http" {
+		t.Fatalf("loaded market canary series tag = %+v", cfg.MarketCanary.Subjects[0].SeriesTag)
+	}
+}
+
+func TestMonitorDefaultDatasetHealthPolicyPathExistsFromModuleWorkingDirectory(t *testing.T) {
+	moduleRoot := filepath.Join("..", "..")
+	cfg := Default()
+	if _, err := os.Stat(filepath.Join(moduleRoot, cfg.Metrics.DatasetHealthPolicyPath)); err != nil {
+		t.Fatalf("dataset_health_policy_path %q is not usable from modules/monitor: %v", cfg.Metrics.DatasetHealthPolicyPath, err)
+	}
+}
+
+func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	for _, content := range []string{
+		"metrics:\n  eventbus_credential_file: old.yaml\n",
+		"metrics:\n  host_eventbus_credential_file: old.yaml\n",
+		"metrics:\n  eventbus_url: nats://old:4222\n",
+		"observability:\n  stream: MOOX_OBSERVABILITY\n",
+		"observability:\n  consumer: another-consumer\n",
+		"observability:\n  filter_subject: moox.event.observability.>\n",
+	} {
+		if _, err := Load(writeConfig(t, content)); err == nil {
+			t.Fatalf("Load() accepted retired config: %s", content)
 		}
 	}
 }
@@ -231,10 +328,104 @@ func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 	}
 }
 
+func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
+	cfg := Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.MarketCanary.Subjects[0].SeriesTag = nil
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires series_tag") {
+		t.Fatalf("Validate() error = %v, want missing series_tag error", err)
+	}
+
+	empty := ""
+	cfg.MarketCanary.Subjects[0].SeriesTag = &empty
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("explicit default series tag must be valid: %v", err)
+	}
+}
+
+func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
+	cfg := Default()
+	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 ||
+		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
+		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute ||
+		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
+		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
+	}
+	cfg.SysDeploy.Enabled = false
+	cfg.KlineFreshness.Enabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid kline freshness config rejected: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{"refresh interval too short", func(c *Config) { c.KlineFreshness.InventoryRefreshInterval = 0 }},
+		{"empty Space ID", func(c *Config) { c.KlineFreshness.SpaceIDs = []string{""} }},
+		{"duplicate Space ID", func(c *Config) { c.KlineFreshness.SpaceIDs = []string{"crypto", " crypto "} }},
+		{"refresh interval unbounded", func(c *Config) { c.KlineFreshness.InventoryRefreshInterval = 11 * time.Minute }},
+		{"page size out of range", func(c *Config) { c.KlineFreshness.InventoryPageSize = 101 }},
+		{"inventory cap out of range", func(c *Config) { c.KlineFreshness.InventoryMaxEntries = 1001 }},
+		{"stale after too short", func(c *Config) { c.KlineFreshness.StaleAfter = 30 * time.Second }},
+		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			copy := *cfg
+			test.edit(&copy)
+			if err := copy.Validate(); err == nil {
+				t.Fatal("Validate() error = nil")
+			}
+		})
+	}
+}
+
+func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	_, err := Load(writeConfig(t, "kline_freshness:\n  enabled: true\n  typo_interval: 30s\n"))
+	if err == nil {
+		t.Fatal("Load() accepted unknown kline freshness field")
+	}
+}
+
+func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
+	cfg := Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.MarketCanary.ClosedBarMinCoverage = 1.01
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "closed_bar_min_coverage") {
+		t.Fatalf("Validate() error = %v, want closed_bar_min_coverage error", err)
+	}
+
+	cfg = Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
+		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
+	}
+
+	cfg = Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.MarketHealth.LowCapacityHeadroom = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "low_capacity_headroom") {
+		t.Fatalf("Validate() error = %v, want low capacity headroom error", err)
+	}
+}
+
 func TestMonitorConfigRejectsLegacyHostRetention(t *testing.T) {
 	_, err := Load(writeConfig(t, "metrics:\n  host_storage:\n    retention: 72h\n"))
 	if err == nil {
 		t.Fatal("Load() error = nil, want unknown host retention field")
+	}
+}
+
+func TestMonitorConfigRejectsRemovedPeerConfiguration(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	_, err := Load(writeConfig(t, "peer:\n  enabled: false\n"))
+	if err == nil || !strings.Contains(err.Error(), "field peer not found") {
+		t.Fatalf("Load() error = %v, want removed peer field rejection", err)
 	}
 }
 

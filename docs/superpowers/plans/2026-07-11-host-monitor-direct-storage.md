@@ -19,7 +19,7 @@
 - Host Agent 不使用 SQLite、outbox、磁盘重试队列或旧样本补发。
 - Monitor 不保存 HostMetric 原始 payload、inbox、history、latest 样本表；旧表不再读写。
 - Monitor SQLite 仅保留普通检查、告警规则、告警状态和告警事件等控制面数据。
-- Storage Dataset 固定为 `host_resource_v1`、`host_fs_v1`、`host_disk_v1`、`host_net_v1`，统一 `space_id=moox_system`、`freq=1m`、`subject_id=agent_id`。
+- Storage Dataset 固定为 `dataset_mooxsys_host_resource`、`dataset_mooxsys_host_filesystem`、`dataset_mooxsys_host_disk`、`dataset_mooxsys_host_network`，统一 `space_id=mooxsys`、`freq=1m`、`subject_id=agent_id`。
 - Storage 主机历史最多保留 3 天，过期数据由 Storage maintenance 分批删除，允许历史缺口。
 - Storage 写入成功后 ACK；失败按 `1s/5s/15s` NAK，最多交付 3 次后允许丢弃。
 - 同一 `dataset + subject_id + freq + dimensions + data_time` 重写必须幂等。
@@ -58,7 +58,7 @@
 
 ### Metadata、发布和前端
 
-- Modify: `examples/metadata-monitor-host.seed.yaml`、`scripts/release.sh`、`scripts/deploy-moox.sh`、`scripts/test-deploy-moox-eventbus.sh`。
+- Modify: `examples/metadata-monitor-host.seed.yaml`、`scripts/release/release.sh`、`scripts/deploy/deploy-moox.sh`、`scripts/test/contract/test-deploy-moox-eventbus.sh`。
 - Modify: `web/src/api/modules/host-monitor.ts`、`web/src/views/container/resource-monitor/resource-monitor.vue`。
 - Modify: `docs/监控配置.md`、`skills/moox/references/host-agent.md`。
 
@@ -68,7 +68,7 @@
 
 **Files:** Monitor config、Storage config、Host metadata seed、EventBus config。
 
-- [x] 写失败测试：默认值为 `moox_system`、`1m`、72h、四个 Dataset；缺失 target/Dataset ID 失败；Host retention 不覆盖普通 Dataset。
+- [x] 写失败测试：默认值为 `mooxsys`、`1m`、72h、四个 Dataset；缺失 target/Dataset ID 失败；Host retention 不覆盖普通 Dataset。
 - [x] 增加 Host Storage 配置并校验 1h 到 72h retention。
 - [x] 四个 Dataset、columns 已固化到逻辑 metadata seed；active wildcard routes 单独放在 local-route seed，避免集群部署误写 `node_id=local`。
 - [x] EventBus durable `MaxDeliver=3` 与 Monitor consumer 一致；配置和单元测试通过。
@@ -116,7 +116,7 @@
 
 **Files:** `modules/monitor/internal/hostmetrics/alerts.go`、`alerts_test.go`、`rule_cache.go`、`rule_cache_test.go`、existing alert repository、Host RPC/proto、`modules/monitor/go.mod`、`modules/monitor/go.sum`；复用外部模块 `github.com/mooyang-code/snapshotcache`。
 
-- [x] Host rule 固定 `moox_system`，key 为 `host:<agent_id>:<metric>`；支持 CPU、memory、filesystem、disk、network，rate unavailable 不触发。
+- [x] Host rule 固定 `mooxsys`，key 为 `host:<agent_id>:<metric>`；支持 CPU、memory、filesystem、disk、network，rate unavailable 不触发。
 - [x] 已完成旧 dbcache 评估，运行时使用 snapshotcache，不增加旧兼容 API。
 - [x] 复用已有 `github.com/mooyang-code/snapshotcache`，提供泛型快照、索引、原子发布、Start/Stop 和刷新失败保留旧快照。
 - [x] `RuleCache` 在 Bootstrap 启动并仅由周期 source 刷新；消费路径只读缓存，规则 CRUD 不主动失效。
@@ -124,7 +124,7 @@
 - [x] 首次无快照时只跳过告警，不阻塞 Storage/ACK；去重缓存有上限。
 - [x] RuleCache、告警聚合、rate unavailable、消息去重和刷新失败测试已覆盖。
 - [x] Storage 成功后从缓存读取规则执行 Host evaluator，firing/resolved 写现有 Monitor SQLite alert state/event；告警错误不回滚 Storage/ACK。
-- [x] Host rule create/list/update 对 host key 固定 `moox_system`，普通业务规则保持 space 隔离。
+- [x] Host rule create/list/update 对 host key 固定 `mooxsys`，普通业务规则保持 space 隔离。
 - [x] Hostmetrics/repository/rpc race tests 已通过。
 
 ### Task 7: Storage raw time-series 3 天 retention
@@ -148,7 +148,7 @@
 
 ### Task 9: 端到端验收
 
-**Files:** `modules/monitor/internal/hostmetrics/direct_storage_e2e_test.go`、`scripts/test-deploy-moox-eventbus.sh`。
+**Files:** `modules/monitor/internal/hostmetrics/direct_storage_e2e_test.go`、`scripts/test/contract/test-deploy-moox-eventbus.sh`。
 
 - [x] 模块根 `modules/monitor/test` 增加 direct-storage contract E2E：发送 snapshot，断言四 Dataset 行、历史合并和 72h retention；Storage Access/Primary service tests 覆盖真实删除边界。
 - [x] E2E 验证重复同一分钟写入幂等，不同分钟产生新历史点。

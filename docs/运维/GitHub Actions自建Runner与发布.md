@@ -86,7 +86,7 @@ git tag -a v0.1.0 -m 'release v0.1.0'
 git push origin v0.1.0
 ```
 
-发布流水线会调用现有的 `make verify`、`make release` 和 `scripts/deploy-moox.sh`。部署目标固定为本机的 `/home/ubuntu/moox/prod`，不会执行 `--reset-data`，并会使用现有运行数据和密钥。
+发布流水线会调用现有的 `make verify`、`make release` 和 `scripts/deploy/deploy-moox.sh`。部署目标固定为本机的 `/home/ubuntu/moox/prod`，不会执行 `--reset-data`，并会使用现有运行数据和密钥。
 
 ## 运行机器维护
 

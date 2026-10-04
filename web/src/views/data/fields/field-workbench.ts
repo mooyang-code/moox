@@ -74,15 +74,15 @@ export function groupPath(groups: FieldGroup[], groupID: string) {
   return parent ? `${parent.name} / ${group.name}` : group.name;
 }
 
-export class RequestGate {
-  private token = 0;
-
-  next() {
-    this.token += 1;
-    return this.token;
-  }
-
-  isCurrent(token: number) {
-    return token === this.token;
-  }
+export function buildFieldGroupDeleteRequest(group: FieldGroup) {
+  return {
+    space_id: group.space_id.trim(),
+    group_id: group.group_id.trim()
+  };
 }
+
+export function isSpaceRequestCurrent(request: { space_id: string }, currentSpaceID: string) {
+  return request.space_id !== "" && request.space_id === currentSpaceID.trim();
+}
+
+export { RequestGate } from "@/utils/request-gate";

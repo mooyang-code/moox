@@ -1,23 +1,44 @@
-CREATE TABLE IF NOT EXISTS t_strategy_defs (c_strategy_id TEXT NOT NULL,c_version TEXT NOT NULL,c_api_version TEXT NOT NULL,c_manifest_yaml TEXT NOT NULL,c_source_code TEXT NOT NULL,c_source_hash TEXT NOT NULL,c_state_schema_version INTEGER NOT NULL DEFAULT 1,c_status TEXT NOT NULL DEFAULT 'draft',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(c_strategy_id,c_version));
-CREATE TABLE IF NOT EXISTS t_strategy_bindings (c_binding_id TEXT PRIMARY KEY,c_strategy_id TEXT NOT NULL,c_strategy_version TEXT NOT NULL,c_space_id TEXT NOT NULL,c_view_id TEXT NOT NULL,c_freq TEXT NOT NULL,c_params_json TEXT NOT NULL DEFAULT '{}',c_group_id TEXT NOT NULL DEFAULT '',c_capital_weight TEXT NOT NULL DEFAULT '1',c_status TEXT NOT NULL DEFAULT 'disabled');
-CREATE TABLE IF NOT EXISTS t_strategy_states (c_binding_id TEXT PRIMARY KEY,c_strategy_version TEXT NOT NULL,c_state_revision INTEGER NOT NULL DEFAULT 0,c_state_json TEXT NOT NULL DEFAULT '{}',c_last_run_id TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS t_strategy_runs (c_run_id TEXT PRIMARY KEY,c_binding_id TEXT NOT NULL,c_strategy_version TEXT NOT NULL,c_namespace TEXT NOT NULL DEFAULT 'default',c_trigger_bar_time TEXT NOT NULL,c_data_revision TEXT NOT NULL,c_input_hash TEXT NOT NULL,c_previous_state_revision INTEGER NOT NULL,c_status TEXT NOT NULL,c_action TEXT NOT NULL,c_output_json TEXT NOT NULL,c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE(c_binding_id,c_strategy_version,c_trigger_bar_time,c_namespace));
-CREATE TABLE IF NOT EXISTS t_strategy_outbox (c_message_id TEXT PRIMARY KEY,c_topic TEXT NOT NULL,c_payload BLOB NOT NULL,c_published INTEGER NOT NULL DEFAULT 0,c_claimed_until DATETIME,c_claim_token TEXT NOT NULL DEFAULT '',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS t_strategy_inbox (c_consumer TEXT NOT NULL,c_message_id TEXT NOT NULL,c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(c_consumer,c_message_id));
-CREATE TABLE IF NOT EXISTS t_strategy_groups (c_group_id TEXT PRIMARY KEY,c_space_id TEXT NOT NULL,c_name TEXT NOT NULL,c_risk_policy_json TEXT NOT NULL DEFAULT '{}',c_status TEXT NOT NULL DEFAULT 'enabled',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS t_strategy_group_members (c_group_id TEXT NOT NULL,c_binding_id TEXT NOT NULL,c_capital_weight TEXT NOT NULL,c_status TEXT NOT NULL DEFAULT 'enabled',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(c_group_id,c_binding_id));
-CREATE TABLE IF NOT EXISTS t_strategy_group_targets (c_group_id TEXT NOT NULL,c_target_revision INTEGER NOT NULL,c_target_hash TEXT NOT NULL,c_status TEXT NOT NULL,c_targets_json TEXT NOT NULL,c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(c_group_id,c_target_revision),UNIQUE(c_group_id,c_target_hash));
-CREATE TABLE IF NOT EXISTS t_strategy_execution_bindings (c_execution_binding_id TEXT PRIMARY KEY,c_group_id TEXT NOT NULL,c_account_id TEXT NOT NULL,c_mode TEXT NOT NULL,c_status TEXT NOT NULL DEFAULT 'enabled',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS t_strategy_execution_requests (c_execution_id TEXT PRIMARY KEY,c_execution_binding_id TEXT NOT NULL,c_group_target_revision INTEGER NOT NULL,c_idempotency_key TEXT NOT NULL UNIQUE,c_status TEXT NOT NULL,c_request_json TEXT NOT NULL,c_result_json TEXT NOT NULL DEFAULT '{}',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS t_strategy_execution_states (c_execution_binding_id TEXT PRIMARY KEY,c_last_execution_id TEXT NOT NULL,c_status TEXT NOT NULL,c_observed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,c_detail_json TEXT NOT NULL DEFAULT '{}');
-CREATE TABLE IF NOT EXISTS t_strategy_run_targets (c_run_id TEXT NOT NULL,c_instrument_id TEXT NOT NULL,c_target_weight TEXT NOT NULL,c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(c_run_id,c_instrument_id));
-CREATE TABLE IF NOT EXISTS t_strategy_target_comparisons (c_run_id TEXT NOT NULL,c_instrument_id TEXT NOT NULL,c_portfolio_target TEXT NOT NULL DEFAULT '',c_actual_position TEXT NOT NULL DEFAULT '',c_deviation TEXT NOT NULL DEFAULT '',c_source_time DATETIME,c_data_revision TEXT NOT NULL DEFAULT '',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(c_run_id,c_instrument_id));
-CREATE TABLE IF NOT EXISTS t_strategy_backtest_jobs (c_backtest_id TEXT PRIMARY KEY,c_strategy_id TEXT NOT NULL,c_strategy_version TEXT NOT NULL,c_config_hash TEXT NOT NULL,c_namespace TEXT NOT NULL,c_status TEXT NOT NULL,c_summary_json TEXT NOT NULL DEFAULT '{}',c_artifact_path TEXT NOT NULL DEFAULT '',c_artifact_hash TEXT NOT NULL DEFAULT '',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS t_strategy_run_metrics (c_run_id TEXT PRIMARY KEY,c_queue_delay_ms INTEGER NOT NULL DEFAULT 0,c_snapshot_duration_ms INTEGER NOT NULL DEFAULT 0,c_compute_duration_ms INTEGER NOT NULL DEFAULT 0,c_validate_duration_ms INTEGER NOT NULL DEFAULT 0,c_total_duration_ms INTEGER NOT NULL DEFAULT 0,c_input_rows INTEGER NOT NULL DEFAULT 0,c_output_targets INTEGER NOT NULL DEFAULT 0,c_worker_id TEXT NOT NULL DEFAULT '',c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS t_strategy_binding_health (c_binding_id TEXT PRIMARY KEY,c_status TEXT NOT NULL,c_mode TEXT NOT NULL,c_last_run_id TEXT NOT NULL DEFAULT '',c_last_success_at DATETIME,c_last_error_type TEXT NOT NULL DEFAULT '',c_last_error_message TEXT NOT NULL DEFAULT '',c_last_data_revision TEXT NOT NULL DEFAULT '',c_data_cutoff DATETIME,c_worker_status TEXT NOT NULL DEFAULT '',c_outbox_lag_seconds INTEGER NOT NULL DEFAULT 0,c_observed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS t_strategy_performance_points (c_binding_id TEXT NOT NULL,c_performance_source TEXT NOT NULL,c_point_time DATETIME NOT NULL,c_nav TEXT NOT NULL,c_cumulative_return TEXT NOT NULL,c_drawdown TEXT NOT NULL,c_gross_exposure TEXT NOT NULL,c_net_exposure TEXT NOT NULL,c_turnover TEXT NOT NULL,c_fees TEXT NOT NULL,c_data_revision TEXT NOT NULL,c_calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(c_binding_id,c_performance_source,c_point_time));
-CREATE INDEX IF NOT EXISTS idx_strategy_performance_points_time ON t_strategy_performance_points(c_binding_id,c_performance_source,c_point_time);
-CREATE TABLE IF NOT EXISTS t_strategy_performance_daily (c_binding_id TEXT NOT NULL,c_performance_source TEXT NOT NULL,c_trade_date TEXT NOT NULL,c_start_nav TEXT NOT NULL,c_end_nav TEXT NOT NULL,c_return TEXT NOT NULL,c_max_drawdown TEXT NOT NULL,c_turnover TEXT NOT NULL,c_fees TEXT NOT NULL,c_win_count INTEGER NOT NULL DEFAULT 0,c_loss_count INTEGER NOT NULL DEFAULT 0,c_sample_count INTEGER NOT NULL DEFAULT 0,c_data_revision TEXT NOT NULL,c_calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(c_binding_id,c_performance_source,c_trade_date));
-CREATE INDEX IF NOT EXISTS idx_strategy_performance_daily_date ON t_strategy_performance_daily(c_binding_id,c_performance_source,c_trade_date);
-CREATE TABLE IF NOT EXISTS t_strategy_operation_audits (c_operation_id TEXT PRIMARY KEY,c_operator TEXT NOT NULL,c_action TEXT NOT NULL,c_binding_id TEXT NOT NULL,c_old_value TEXT NOT NULL DEFAULT '',c_new_value TEXT NOT NULL DEFAULT '',c_reason TEXT NOT NULL,c_request_id TEXT NOT NULL,c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE INDEX IF NOT EXISTS idx_strategy_operation_audits_binding ON t_strategy_operation_audits(c_binding_id,c_ctime);
+CREATE TABLE IF NOT EXISTS t_strategies (
+    strategy_id TEXT PRIMARY KEY,
+    strategy_name TEXT NOT NULL,
+    dsl_yaml TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS t_strategy_instances (
+    instance_id TEXT PRIMARY KEY,
+    strategy_id TEXT NOT NULL,
+    space_id TEXT NOT NULL,
+    input_bindings_json TEXT NOT NULL,
+    logical_account_id TEXT,
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    session_id TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_instances_enabled_account
+ON t_strategy_instances (space_id, logical_account_id)
+WHERE enabled = 1 AND logical_account_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS t_strategy_results (
+    result_id TEXT PRIMARY KEY,
+    instance_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    bar_end_time INTEGER NOT NULL,
+    valid_until INTEGER NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    targets_json TEXT NOT NULL,
+    rule_states_json TEXT NOT NULL,
+    event_data BLOB,
+    publish_status TEXT NOT NULL CHECK (publish_status IN ('none', 'pending', 'sent', 'cancelled')),
+    created_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_results_session_bar
+ON t_strategy_results (instance_id, session_id, bar_end_time);
+
+CREATE INDEX IF NOT EXISTS ix_strategy_results_pending
+ON t_strategy_results (created_at, result_id)
+WHERE publish_status = 'pending';

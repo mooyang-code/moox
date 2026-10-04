@@ -66,7 +66,7 @@ jobs:
       - name: Verify before packaging
         run: make verify
       - name: Build release package
-        run: VERSION="$RELEASE_TAG" RELEASE_PLATFORMS="$RELEASE_PLATFORMS" ./scripts/release-matrix.sh
+        run: VERSION="$RELEASE_TAG" RELEASE_PLATFORMS="$RELEASE_PLATFORMS" ./scripts/release/release-matrix.sh
       - name: Create or update GitHub Release
         if: github.event_name == 'push' || inputs.publish_release
         env:
@@ -100,7 +100,7 @@ jobs:
       - name: Deploy to 106.53.107.122
         if: github.event_name == 'push' || inputs.deploy_production
         run: |
-          ./scripts/deploy-moox.sh \
+          ./scripts/deploy/deploy-moox.sh \
             --target localhost \
             --dir /home/ubuntu/moox/prod \
             --goos linux \

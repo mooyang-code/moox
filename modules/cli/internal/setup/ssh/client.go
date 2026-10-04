@@ -55,6 +55,7 @@ type Client interface {
 	Check(ctx context.Context) error
 	ForwardLocal(ctx context.Context, remote string) (net.Listener, error)
 	Upload(ctx context.Context, src io.Reader, size int64, dst string, mode fs.FileMode) error
+	Download(ctx context.Context, src string, dst io.Writer) (int64, error)
 	Run(ctx context.Context, argv []string, stdin io.Reader) (Result, error)
 	Close() error
 }
@@ -188,9 +189,13 @@ func secureKnownHostsPath(path string, create bool) (string, error) {
 }
 
 func dialContext(ctx context.Context, address string, config *xssh.ClientConfig, timeout time.Duration) (*xssh.Client, error) {
-	raw, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", address)
+	raw, err := (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, err
+	}
+	if tcp, ok := raw.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
 	}
 	deadline := time.Now().Add(timeout)
 	_ = raw.SetDeadline(deadline)
@@ -262,15 +267,29 @@ func (t *transport) forwardConnection(local net.Conn, remote string) {
 	_ = upstream.Close()
 }
 
+func (t *transport) Download(ctx context.Context, src string, dst io.Writer) (int64, error) {
+	client, err := sftp.NewClient(t.client)
+	if err != nil {
+		return 0, fmt.Errorf("ssh_download_failed: %w", err)
+	}
+	defer closeSFTPClient(client)
+	file, err := client.Open(src)
+	if err != nil {
+		return 0, fmt.Errorf("ssh_download_failed: %w", err)
+	}
+	defer file.Close()
+	return io.Copy(dst, &contextReader{ctx: ctx, reader: file})
+}
+
 func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst string, mode fs.FileMode) error {
 	if size < 0 || !mode.IsRegular() {
 		return fmt.Errorf("ssh_upload_invalid")
 	}
 	client, err := sftp.NewClient(t.client)
 	if err != nil {
-		return fmt.Errorf("ssh_upload_failed")
+		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}
-	defer client.Close()
+	defer closeSFTPClient(client)
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {
 		return fmt.Errorf("ssh_upload_failed")
@@ -278,17 +297,23 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 	temporary := dst + ".next-" + hex.EncodeToString(suffix)
 	file, err := client.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	if err != nil {
-		return fmt.Errorf("ssh_upload_failed")
+		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}
+	fileOpen := true
 	removeTemporary := true
 	defer func() {
-		_ = file.Close()
+		if fileOpen {
+			_ = file.Close()
+		}
 		if removeTemporary {
 			_ = client.Remove(temporary)
 		}
 	}()
 	written, err := io.Copy(file, &contextReader{ctx: ctx, reader: io.LimitReader(src, size+1)})
-	if err != nil || written != size {
+	if err != nil {
+		return fmt.Errorf("ssh_upload_failed: %w", err)
+	}
+	if written != size {
 		return fmt.Errorf("ssh_upload_failed")
 	}
 	if err := file.Chmod(mode.Perm()); err != nil {
@@ -297,14 +322,36 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 	if err := file.Sync(); err != nil && !strings.Contains(err.Error(), "fsync not supported") {
 		return fmt.Errorf("ssh_upload_failed")
 	}
+	fileOpen = false
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("ssh_upload_failed")
+		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}
-	if err := client.Rename(temporary, dst); err != nil {
-		return fmt.Errorf("ssh_upload_failed")
+	// OpenSSH SFTP rename refuses to replace an existing file. `mv -f` replaces
+	// in place so a failed install cannot delete the previous secret first.
+	result, err := t.Run(ctx, []string{"mv", "-f", temporary, dst}, nil)
+	if err != nil {
+		if result.ExitCode != 0 {
+			return fmt.Errorf("ssh_upload_failed")
+		}
+		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}
 	removeTemporary = false
 	return nil
+}
+
+func closeSFTPClient(client *sftp.Client) {
+	done := make(chan struct{})
+	go func() {
+		_ = client.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		// Some OpenSSH servers acknowledge the final rename but never finish
+		// the SFTP subsystem close handshake. The parent SSH connection owns
+		// the channel and will release it when the setup command completes.
+	}
 }
 
 type contextReader struct {
@@ -327,7 +374,7 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 	}
 	session, err := t.client.NewSession()
 	if err != nil {
-		return Result{}, fmt.Errorf("ssh_command_failed")
+		return Result{}, fmt.Errorf("ssh_command_failed: %w", err)
 	}
 	defer session.Close()
 	var stdout, stderr bytes.Buffer
@@ -353,7 +400,7 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 		if errors.As(err, &exitErr) {
 			result.ExitCode = exitErr.ExitStatus()
 		}
-		return result, fmt.Errorf("ssh_command_failed")
+		return result, fmt.Errorf("ssh_command_failed: %w", err)
 	}
 }
 

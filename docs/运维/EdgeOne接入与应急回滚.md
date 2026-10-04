@@ -31,8 +31,8 @@ WAF 使用托管规则、CC/Bot 防护与速率规则；认证和请求签名仍
 上线前后执行：
 
 ```bash
-bash scripts/test-edgeone-origin-contract.sh
-bash scripts/test-caddy-config.sh
+bash scripts/test/contract/test-edgeone-origin-contract.sh
+bash scripts/test/contract/test-caddy-config.sh
 curl -fsS "https://$MOOX_PUBLIC_HOST:${MOOX_BROWSER_HTTPS_PORT:-9527}/" -o /dev/null
 curl -fsS http://$MOOX_PUBLIC_HOST:9528/ && exit 1 || true
 curl -fsS http://$MOOX_PUBLIC_HOST:11000/healthz && exit 1 || true

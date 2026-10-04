@@ -7,19 +7,20 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/health"
+	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter) error {
+func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter, hostStore *hostmetrics.Store) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
 	state.SetReady(true)
-	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime, metricsStorage)
+	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime, metricsStorage, hostStore)
 	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
 		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,
 		ClockSkew: time.Minute, NonceTTL: 2 * time.Minute,
@@ -40,15 +41,14 @@ func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metr
 	return nil
 }
 
-func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter) healthz.SnapshotFunc {
+func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter, hostStore *hostmetrics.Store) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		var activeChecks, activePeers int64
-		var checksErr, peersErr error
+		var activeChecks int64
+		var checksErr error
 		if runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil {
 			activeChecks, checksErr = runtime.Repositories.Checks.CountEnabled(ctx)
-			activePeers, peersErr = runtime.Repositories.Peers.CountActive(ctx)
 		}
-		databaseReady := runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil && checksErr == nil && peersErr == nil
+		databaseReady := runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil && checksErr == nil
 		schedulerReady := runtime != nil && runtime.Scheduler != nil
 		ready := databaseReady && schedulerReady
 		startedAt := time.Time{}
@@ -60,9 +60,6 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 			"database":          map[bool]string{true: "ok", false: "error"}[databaseReady],
 			"scheduler_ok":      schedulerReady,
 			"active_checks":     activeChecks,
-			"peer_count":        len(cfg.Peer.Peers),
-			"active_peer_count": activePeers,
-			"peer_enabled":      cfg.Peer.Enabled,
 			"sysdeploy_enabled": cfg.SysDeploy.Enabled,
 		}
 		metricsReady := !cfg.Metrics.Enabled
@@ -79,7 +76,28 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 		}
 		rsp.Details["metrics_schema_ready"] = metricsReady
 		rsp.Details["metrics_schema_reason"] = metricsReason
-		ready = databaseReady && schedulerReady && metricsReady
+		hostStorageReady := !cfg.Metrics.HostStorage.Enabled || (hostStore != nil && hostStore.StorageReady())
+		rsp.Details["host_storage_schema_ready"] = hostStorageReady
+		reporterReady := !cfg.Metrics.Enabled || (runtime != nil && runtime.MetricsReporterReady.Load())
+		rsp.Details["metrics_reporter_ready"] = reporterReady
+		if runtime != nil && runtime.metricsReporterErrorMessage() != "" {
+			rsp.Details["metrics_reporter_error"] = runtime.metricsReporterErrorMessage()
+		}
+		ingestReady := !cfg.Observability.Enabled || (runtime != nil && runtime.ObservabilityIngestReady.Load())
+		writeReady, writeReason := true, ""
+		if cfg.Observability.Enabled {
+			writeReady, writeReason = runtime.observabilityWriteReady(time.Now().UTC())
+		}
+		ingestReady = ingestReady && writeReady
+		rsp.Details["observability_ingest_ready"] = ingestReady
+		rsp.Details["observability_storage_write_ready"] = writeReady
+		if writeReason != "" {
+			rsp.Details["observability_storage_write_error"] = writeReason
+		}
+		if runtime != nil && runtime.observabilityIngestErrorMessage() != "" {
+			rsp.Details["observability_ingest_error"] = runtime.observabilityIngestErrorMessage()
+		}
+		ready = databaseReady && schedulerReady && metricsReady && hostStorageReady && ingestReady && reporterReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"
@@ -89,9 +107,6 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 		rsp.Details["database_ready"] = databaseReady
 		if checksErr != nil {
 			rsp.Details["database_checks_error"] = checksErr.Error()
-		}
-		if peersErr != nil {
-			rsp.Details["database_peers_error"] = peersErr.Error()
 		}
 		rsp.Details["scheduler_ready"] = schedulerReady
 		return rsp

@@ -202,8 +202,8 @@ func escapedPath(req Request) (string, error) {
 	if strings.TrimSpace(req.Method) == "" {
 		return "", errors.New("gateway request method is required")
 	}
-	if !validIdentifier(req.TargetNode) {
-		return "", errors.New("gateway target node is invalid")
+	if err := ValidateTargetNode(req.TargetNode); err != nil {
+		return "", err
 	}
 	if req.Path == "" || !strings.HasPrefix(req.Path, "/") {
 		return "", errors.New("gateway request path must be absolute")
@@ -222,6 +222,15 @@ func escapedPath(req Request) (string, error) {
 func validIdentifier(value string) bool {
 	return value != "" && value == strings.TrimSpace(value) && utf8.ValidString(value) &&
 		!strings.ContainsFunc(value, unicode.IsControl)
+}
+
+// ValidateTargetNode applies the same target validation used by signing, so
+// services can reject unusable gateway configuration before opening resources.
+func ValidateTargetNode(value string) error {
+	if !validIdentifier(value) {
+		return errors.New("gateway target node is invalid")
+	}
+	return nil
 }
 
 func effectiveCaller(c Credentials) string {

@@ -3,7 +3,6 @@ syntax = "proto3";
 package trpc.moox.eventbus;
 
 import "moox_common.proto";
-import "moox_message.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/eventbus/proto/eventbusgen;eventbuspb";
 
@@ -13,10 +12,10 @@ message GetOverviewRsp {
   Overview overview = 2;
 }
 
-message ListTopicsReq { common.Page page = 1; }
-message ListTopicsRsp {
+message ListEventsReq { common.Page page = 1; }
+message ListEventsRsp {
   common.RetInfo ret_info = 1;
-  repeated TopicInfo topics = 2;
+  repeated EventInfo events = 2;
   common.PageResult page_result = 3;
 }
 
@@ -46,13 +45,14 @@ message GetConsumerRsp {
   ConsumerInfo consumer = 2;
 }
 
-message TopicInfo {
-  string topic = 1;
+message EventInfo {
+  string subject_pattern = 1;
   string stream = 2;
-  trpc.moox.message.MessageKind kind = 3;
-  string payload_content_type = 4;
-  uint32 payload_version = 5;
+  string event_name = 3;
+  uint32 event_version = 4;
+  string payload_type = 5;
   bool enabled = 6;
+  string owner = 7;
 }
 
 message StreamInfo {
@@ -88,7 +88,7 @@ message Overview {
 
 service EventBusMgr {
   rpc GetOverview(GetOverviewReq) returns (GetOverviewRsp);
-  rpc ListTopics(ListTopicsReq) returns (ListTopicsRsp);
+  rpc ListEvents(ListEventsReq) returns (ListEventsRsp);
   rpc ListStreams(ListStreamsReq) returns (ListStreamsRsp);
   rpc ListConsumers(ListConsumersReq) returns (ListConsumersRsp);
   rpc GetConsumer(GetConsumerReq) returns (GetConsumerRsp);

@@ -7,28 +7,35 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"time"
-
-	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type cliConfig struct {
-	Command       string
-	DBPath        string
-	FactorsDir    string
-	DefaultParams []int
-	SpaceID       string
-	DatasetID     string
-	SubjectID     string
-	Freq          string
-	BarTime       time.Time
-	FactorIDs     []string
+	Command         string
+	ConfigPath      string
+	DBPath          string
+	FactorsDir      string
+	SetID           string
+	File            string
+	CatalogDir      string
+	FactorID        string
+	FactorType      string
+	InputColumns    []string
+	Outputs         []string
+	ParamsJSON      string
+	LookbackPeriods int
+	StartTime       time.Time
+	EndTime         time.Time
+	Period          time.Time
+	FactorIDs       []string
+	Subjects        []string
+	RequestID       string
+	RPCTarget       string
 }
 
 func main() {
-	if err := run(trpc.BackgroundContext(), os.Args[1:], os.Stdout); err != nil {
+	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "{\"ok\":false,\"error\":%q}\n", err.Error())
 		os.Exit(1)
 	}
@@ -41,11 +48,17 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	switch cfg.Command {
 	case "init":
-		return runInit(ctx, cfg, out)
+		return runInit(cfg, out)
 	case "import":
 		return runImport(ctx, cfg, out)
+	case "import-catalog":
+		return runImportCatalog(ctx, cfg, out)
+	case "recalc":
+		return runRecalc(ctx, cfg, out)
 	case "run-once":
 		return runOnce(ctx, cfg, out)
+	case "status":
+		return runStatus(ctx, cfg, out)
 	default:
 		return fmt.Errorf("unknown command %q", cfg.Command)
 	}
@@ -55,53 +68,105 @@ func parseArgs(args []string) (cliConfig, error) {
 	if len(args) == 0 {
 		return cliConfig{}, errors.New("command is required")
 	}
-	cfg := cliConfig{Command: args[0], DBPath: "./data/factor/factor.db", FactorsDir: "./factors", DefaultParams: []int{20}}
-	switch args[0] {
+	cfg := cliConfig{
+		Command: args[0], DBPath: "./data/factor/factor.db",
+		FactorsDir: "./factors", ConfigPath: "./config/app.yaml",
+		FactorType: "timeseries", ParamsJSON: "{}",
+	}
+	fs := newFlagSet(cfg.Command)
+	var inputs, outputs string
+	var start, end, period string
+	switch cfg.Command {
 	case "init":
-		fs := newFlagSet("init")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
-		if err := fs.Parse(args[1:]); err != nil {
-			return cliConfig{}, err
-		}
+		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "Factor SQLite database")
 	case "import":
-		var params string
-		fs := newFlagSet("import")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
-		fs.StringVar(&params, "default-params", "20", "comma-separated default params")
-		if err := fs.Parse(args[1:]); err != nil {
-			return cliConfig{}, err
-		}
-		parsed, err := parseIntCSV(params)
+		cfg.DBPath, cfg.FactorsDir = "", ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "immutable factor artifact directory (overrides config)")
+		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&cfg.File, "file", "", "Python factor source file")
+		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
+		fs.StringVar(&cfg.FactorType, "factor-type", cfg.FactorType, "timeseries or cross_section")
+		fs.StringVar(&inputs, "inputs", "", "comma-separated input columns")
+		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
+		fs.IntVar(&cfg.LookbackPeriods, "lookback", 0, "input lookback periods")
+		fs.StringVar(&cfg.ParamsJSON, "params", cfg.ParamsJSON, "factor parameter JSON object")
+	case "import-catalog":
+		cfg.DBPath, cfg.FactorsDir = "", ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.CatalogDir, "dir", "", "directory containing catalog.json and Python sources (defaults to the factors directory)")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "immutable factor artifact directory (overrides config)")
+		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+	case "recalc":
+		cfg.DBPath = ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&cfg.RequestID, "request-id", "", "idempotent request id (generated when omitted)")
+		fs.StringVar(&start, "start", "", "inclusive start timestamp RFC3339")
+		fs.StringVar(&end, "end", "", "exclusive end timestamp RFC3339")
+		fs.Var((*listFlag)(&cfg.FactorIDs), "factor", "factor id (repeatable)")
+		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
+	case "run-once":
+		cfg.DBPath = ""
+		cfg.FactorsDir = ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "factor artifact directory (overrides config)")
+		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&period, "period", "", "period start timestamp RFC3339")
+		fs.Var((*listFlag)(&cfg.FactorIDs), "factor", "factor id (repeatable)")
+		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
+	case "status":
+		fs.StringVar(&cfg.RPCTarget, "target", os.Getenv("MOOX_FACTOR_RPC_TARGET"), "FactorMgr tRPC target")
+	default:
+		return cliConfig{}, fmt.Errorf("unknown command %q", cfg.Command)
+	}
+	if err := fs.Parse(args[1:]); err != nil {
+		return cliConfig{}, err
+	}
+	if fs.NArg() > 0 {
+		return cliConfig{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if cfg.Command == "import" {
+		var err error
+		cfg.InputColumns, err = parseCSV("--inputs", inputs)
 		if err != nil {
 			return cliConfig{}, err
 		}
-		cfg.DefaultParams = parsed
-	case "run-once":
-		var barTime string
-		var factors string
-		fs := newFlagSet("run-once")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
-		fs.StringVar(&cfg.SpaceID, "space", "", "space id")
-		fs.StringVar(&cfg.DatasetID, "dataset", "", "source dataset id")
-		fs.StringVar(&cfg.SubjectID, "subject", "", "subject id")
-		fs.StringVar(&cfg.Freq, "freq", "", "frequency")
-		fs.StringVar(&barTime, "bar-time", "", "bar time RFC3339")
-		fs.StringVar(&factors, "factors", "", "comma-separated factor ids")
-		if err := fs.Parse(args[1:]); err != nil {
+		cfg.Outputs, err = parseCSV("--outputs", outputs)
+		if err != nil {
 			return cliConfig{}, err
 		}
-		if barTime != "" {
-			parsed, err := time.Parse(time.RFC3339, barTime)
-			if err != nil {
-				return cliConfig{}, fmt.Errorf("parse --bar-time: %w", err)
-			}
-			cfg.BarTime = parsed
+	}
+	if cfg.Command == "recalc" {
+		if strings.TrimSpace(cfg.SetID) == "" {
+			return cliConfig{}, errors.New("--set is required")
 		}
-		cfg.FactorIDs = parseStringCSV(factors)
-	default:
-		return cliConfig{}, fmt.Errorf("unknown command %q", args[0])
+		var err error
+		cfg.StartTime, err = parseTimeFlag("--start", start)
+		if err != nil {
+			return cliConfig{}, err
+		}
+		cfg.EndTime, err = parseTimeFlag("--end", end)
+		if err != nil {
+			return cliConfig{}, err
+		}
+		if !cfg.StartTime.Before(cfg.EndTime) {
+			return cliConfig{}, errors.New("--start must be before --end")
+		}
+	}
+	if cfg.Command == "run-once" {
+		if strings.TrimSpace(cfg.SetID) == "" {
+			return cliConfig{}, errors.New("--set is required")
+		}
+		var err error
+		cfg.Period, err = parseTimeFlag("--period", period)
+		if err != nil {
+			return cliConfig{}, err
+		}
 	}
 	return cfg, nil
 }
@@ -112,29 +177,33 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-func parseIntCSV(raw string) ([]int, error) {
-	parts := parseStringCSV(raw)
-	out := make([]int, 0, len(parts))
-	for _, part := range parts {
-		v, err := strconv.Atoi(part)
-		if err != nil {
-			return nil, fmt.Errorf("parse int %q: %w", part, err)
-		}
-		out = append(out, v)
+func parseCSV(name, raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
 	}
-	return out, nil
+	return normalizeCLIList(name, strings.Split(raw, ","))
 }
 
-func parseStringCSV(raw string) []string {
+func parseTimeFlag(name, raw string) (time.Time, error) {
 	if strings.TrimSpace(raw) == "" {
-		return nil
+		return time.Time{}, fmt.Errorf("%s is required", name)
 	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if v := strings.TrimSpace(part); v != "" {
-			out = append(out, v)
-		}
+	timeValue, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse %s as RFC3339: %w", name, err)
 	}
-	return out
+	return timeValue.UTC(), nil
 }
+
+type listFlag []string
+
+func (v *listFlag) Set(raw string) error {
+	values, err := normalizeCLIList("list", strings.Split(raw, ","))
+	if err != nil {
+		return err
+	}
+	*v = append(*v, values...)
+	return nil
+}
+
+func (v *listFlag) String() string { return strings.Join(*v, ",") }

@@ -75,6 +75,15 @@ export function datasetMatchesAttribution(dataset: Dataset, filter: AttributionF
   return includes(filter.ownerModules, owner) && includes(filter.datasetRoles, role);
 }
 
+export function fieldOwnershipLabel(column: { origin_type?: string | number; attributes?: Record<string, string> }) {
+  const kind = clean(column.attributes?.field_kind);
+  const origin = String(column.origin_type || "").toLowerCase();
+  if (kind === "factor_output" || origin.includes("factor")) {
+    return "因子输出";
+  }
+  return "基础字段";
+}
+
 export function isLikelyFactorResultDataset(dataset: Dataset) {
   const attrs = dataset.attributes || {};
   return (

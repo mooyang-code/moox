@@ -179,10 +179,24 @@ func (s *Service) invokeNode(ctx context.Context, node *store.CloudNode, eventDa
 	if account == nil {
 		return nil, fmt.Errorf("cloud account not found: %s", node.CloudAccountID)
 	}
-	if strings.ToLower(account.Provider) != "tencent" && strings.ToLower(account.Provider) != "tencent-scf" {
+	if account.Provider != "tencent" {
 		return nil, fmt.Errorf("unsupported cloud provider: %s", account.Provider)
 	}
-	resp, err := tencentscf.New(account.SecretID, account.SecretKey).InvokeFunction(ctx, tencentscf.InvokeFunctionRequest{
+	if s.credentialResolver == nil {
+		return nil, fmt.Errorf("cloud credential resolver is not configured")
+	}
+	credential, err := s.credentialResolver.Resolve(ctx, *account)
+	if err != nil {
+		return nil, err
+	}
+	if s.scfClientFactory == nil {
+		return nil, fmt.Errorf("scf client factory is not configured")
+	}
+	client := s.scfClientFactory(credential)
+	if client == nil {
+		return nil, fmt.Errorf("scf client is not configured")
+	}
+	resp, err := client.InvokeFunction(ctx, tencentscf.InvokeFunctionRequest{
 		Region:       node.Region,
 		FunctionName: firstString(node.FunctionName, node.NodeID),
 		Namespace:    firstString(node.Namespace, "default"),

@@ -12,15 +12,11 @@ import (
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 )
-
-func TestParseDimensions(t *testing.T) {
-	got := parseDimensions([]string{" env=prod ", "bad", "zone=a"})
-	assert.Equal(t, map[string]string{"env": "prod", "zone": "a"}, got)
-}
 
 func TestDefaultAndRequiredFlagValue(t *testing.T) {
 	assert.Equal(t, "default", defaultFlag("", "default"))
@@ -30,6 +26,37 @@ func TestDefaultAndRequiredFlagValue(t *testing.T) {
 	value, err := requiredFlagValue(" dataset-a ", "--dataset")
 	require.NoError(t, err)
 	assert.Equal(t, "dataset-a", value)
+}
+
+func TestTimeSeriesSelectorSeriesTagPresence(t *testing.T) {
+	oldSpaceID, oldSubjectID, oldFreq, oldSeriesTag := dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag
+	t.Cleanup(func() {
+		dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag = oldSpaceID, oldSubjectID, oldFreq, oldSeriesTag
+	})
+	dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag = "crypto", "BTC-USDT", "1h", ""
+	all := timeSeriesSelectorForExport("dataset_spot_kline_1h", false)
+	require.Nil(t, all.SeriesTag)
+
+	defaultSeries := timeSeriesSelectorForExport("dataset_spot_kline_1h", true)
+	require.NotNil(t, defaultSeries.SeriesTag)
+	assert.Equal(t, "", defaultSeries.GetSeriesTag())
+
+	dataSeriesTag = "venue:binance"
+	exact := timeSeriesSelectorForExport("dataset_spot_kline_1h", true)
+	require.NotNil(t, exact.SeriesTag)
+	assert.Equal(t, "venue:binance", exact.GetSeriesTag())
+}
+
+func TestDataPrimaryAuthUsesSecretFile(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
+	path := filepath.Join(t.TempDir(), "storage-auth.env")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-secret\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n",
+	), 0o600))
+	auth, err := dataPrimaryAuth(path)
+	require.NoError(t, err)
+	assert.Equal(t, "moox-cli-data-export", auth.GetAppId())
+	assert.Equal(t, security.HMACSHA256Hex("primary-secret", []byte("moox-cli-data-export")), auth.GetAppKey())
 }
 
 func TestWriteRowsExport(t *testing.T) {

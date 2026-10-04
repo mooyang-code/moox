@@ -17,7 +17,7 @@ export const useSpaceStore = defineStore(
       if (loading.value) return;
       loading.value = true;
       try {
-        const rsp = await listSpaces({ page: { page: 1, size: 200 } });
+        const rsp = await listSpaces({ status: "active", page: { page: 1, size: 200 } });
         spaces.value = rsp.spaces || [];
         if (!selectedSpaceId.value && spaces.value.length > 0) {
           selectedSpaceId.value = spaces.value[0].space_id;
@@ -32,8 +32,13 @@ export const useSpaceStore = defineStore(
     }
 
     function setSelectedSpace(spaceId: string) {
+      if (!hasSpace(spaceId)) return;
       selectedSpaceId.value = spaceId;
       setSelectedSpaceIdCache(spaceId);
+    }
+
+    function hasSpace(spaceId: string) {
+      return Boolean(spaceId) && spaces.value.some(item => item.space_id === spaceId);
     }
 
     function requireSpaceId() {
@@ -41,7 +46,7 @@ export const useSpaceStore = defineStore(
       return selectedSpaceId.value;
     }
 
-    return { spaces, selectedSpaceId, selectedSpace, loading, loadSpaces, setSelectedSpace, requireSpaceId };
+    return { spaces, selectedSpaceId, selectedSpace, loading, loadSpaces, setSelectedSpace, hasSpace, requireSpaceId };
   },
   { persist: true }
 );

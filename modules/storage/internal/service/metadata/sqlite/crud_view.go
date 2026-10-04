@@ -1,38 +1,91 @@
-//go:build legacy_metadata_view
-
 package sqlite
 
 import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
+	sqlite "modernc.org/sqlite"
 )
+
+const viewWithTimestampsSQL = `json_set(c_attrs_json, '$.created_at', c_ctime, '$.updated_at', c_mtime)`
 
 // rowScanner 抽象 sql.Row 和 sql.Rows 的扫描能力。
 
 func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error) {
-	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetPrimaryDatasetId() == "" {
-		return nil, errors.New("space_id, view_id, name and primary_dataset_id are required")
+	// UpsertView is the ordinary metadata update path. A protobuf repeated
+	// field has no portable presence bit, so a non-empty partial columns list
+	// must never be interpreted as a complete replacement. Callers that own the
+	// full desired schema use ReplaceViewColumns explicitly.
+	return s.upsertView(ctx, item, false, false)
+}
+
+// CreateView inserts a View only if its identity is unused. The INSERT's
+// unique constraint is the atomic boundary shared by all Metadata clients.
+func (s *Store) CreateView(ctx context.Context, item *pb.View) (*pb.View, error) {
+	return s.upsertView(ctx, item, false, true)
+}
+
+// ReplaceViewColumns applies a complete desired column set, including an
+// intentionally empty set. It is used by lifecycle cleanup because proto3
+// repeated fields cannot preserve the distinction between omitted and empty
+// across an RPC boundary.
+func (s *Store) ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error) {
+	return s.upsertView(ctx, item, true, false)
+}
+
+// DeleteView physically removes a View and all dependent metadata rows via
+// the schema's foreign-key cascades. This is reserved for explicit lifecycle
+// deletion; ordinary updates use status instead.
+func (s *Store) DeleteView(ctx context.Context, spaceID, viewID string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, strings.TrimSpace(spaceID), strings.TrimSpace(viewID))
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, createOnly bool) (*pb.View, error) {
+	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetDatasetId() == "" {
+		return nil, errors.New("space_id, view_id, name and dataset_id are required")
 	}
 	columns := item.GetColumns()
 	next := proto.Clone(item).(*pb.View)
+	if replaceColumns {
+		// proto3 repeated fields do not carry presence. Persist the explicit
+		// replacement intent so an intentionally empty projection is not later
+		// expanded to the primary dataset's default columns by the View Maintainer.
+		if next.Attributes == nil {
+			next.Attributes = make(map[string]string)
+		}
+		next.Attributes["moox.columns_explicit"] = "true"
+	}
 	next.Columns = nil
 	next.IndexBuild = nil
 	next.Status = defaultStatus(next.GetStatus())
+	keepDuration, err := normalizeKeepDuration(next.GetKeepDuration(), s.viewDataKind(ctx, next.GetSpaceId(), next.GetDatasetId()))
+	if err != nil {
+		return nil, err
+	}
+	next.KeepDuration = keepDuration
 	if strings.TrimSpace(next.Engine) == "" {
-		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetPrimaryDatasetId())
+		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetDatasetId())
 	} else {
 		next.Engine = strings.ToLower(strings.TrimSpace(next.Engine))
 	}
-	if len(next.DatasetIds) == 0 {
-		next.DatasetIds = []string{next.GetPrimaryDatasetId()}
-	}
-	datasetIDs, err := marshalJSON(next.GetDatasetIds())
-	if err != nil {
+	if err := validateSingleViewDataset(next.GetDatasetId()); err != nil {
 		return nil, err
 	}
 	grainKeys, err := marshalJSON(next.GetGrainKeys())
@@ -48,9 +101,30 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	existing, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := validateViewKeepDuration(
+		ctx,
+		tx,
+		next.GetSpaceId(),
+		next.GetViewId(),
+		next.GetKeepDuration(),
+		next.GetDatasetId(),
+	); err != nil {
 		return nil, err
+	}
+	var existing *pb.View
+	if !createOnly {
+		existing, err = getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
+	if existing != nil && existing.GetActiveIndexId() != "" {
+		if existing.GetEngine() != "" && existing.GetEngine() != next.GetEngine() {
+			return nil, errors.New("active view engine change is unsupported; create a new view")
+		}
+		if existing.GetDatasetId() != "" && existing.GetDatasetId() != next.GetDatasetId() {
+			return nil, errors.New("active view dataset change is unsupported; create a new view")
+		}
 	}
 	shapeChanged := existing != nil && viewIndexShapeChanged(existing, next)
 	mergeViewIndexState(existing, next, shapeChanged)
@@ -58,29 +132,36 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_primary_dataset_id, c_dataset_ids_json, c_grain_keys_json, c_filter_json, c_engine, c_retention_window, c_active_index_id, c_view_version, c_active_view_version, c_active_columns_json, c_active_view_schema_hash, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	insertSQL := `
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_filter_json, c_engine, c_keep_duration, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	if !createOnly {
+		insertSQL += `
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
 			c_name = excluded.c_name,
 			c_description = excluded.c_description,
-			c_primary_dataset_id = excluded.c_primary_dataset_id,
-			c_dataset_ids_json = excluded.c_dataset_ids_json,
+			c_dataset_id = excluded.c_dataset_id,
 			c_grain_keys_json = excluded.c_grain_keys_json,
 			c_filter_json = excluded.c_filter_json,
 			c_engine = excluded.c_engine,
-			c_retention_window = excluded.c_retention_window,
+			c_keep_duration = excluded.c_keep_duration,
 			c_active_index_id = excluded.c_active_index_id,
-			c_view_version = excluded.c_view_version,
-			c_active_view_version = excluded.c_active_view_version,
+			c_desired_view_revision = excluded.c_desired_view_revision,
+			c_active_view_revision = excluded.c_active_view_revision,
 			c_active_columns_json = excluded.c_active_columns_json,
 			c_active_view_schema_hash = excluded.c_active_view_schema_hash,
+			c_active_slot = excluded.c_active_slot,
 			c_indexed_from = excluded.c_indexed_from,
 			c_indexed_to = excluded.c_indexed_to,
 			c_status = excluded.c_status,
-			c_attrs_json = excluded.c_attrs_json
-	`, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetPrimaryDatasetId(), datasetIDs, grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetRetentionWindow(), next.GetActiveIndexId(), next.GetViewVersion(), next.GetActiveViewVersion(), activeColumns, next.GetActiveViewSchemaHash(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
+			c_attrs_json = excluded.c_attrs_json`
+	}
+	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
 	if err != nil {
+		var sqliteErr *sqlite.Error
+		if createOnly && errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555) {
+			return nil, fmt.Errorf("%w: %s/%s", metadatastore.ErrViewExists, item.GetSpaceId(), item.GetViewId())
+		}
 		return nil, err
 	}
 	if shapeChanged {
@@ -89,6 +170,37 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 		}
 	}
 	columnsChanged := false
+	if replaceColumns {
+		keep := make(map[string]struct{}, len(columns))
+		for _, column := range columns {
+			if column != nil && column.GetColumnName() != "" {
+				keep[column.GetColumnName()] = struct{}{}
+			}
+		}
+		if len(keep) == 0 {
+			result, err := tx.ExecContext(ctx, `DELETE FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, next.GetSpaceId(), next.GetViewId())
+			if err != nil {
+				return nil, err
+			}
+			if affected, affectedErr := result.RowsAffected(); affectedErr == nil {
+				columnsChanged = affected > 0
+			}
+		} else {
+			placeholders := strings.TrimRight(strings.Repeat("?,", len(keep)), ",")
+			args := make([]any, 0, 2+len(keep))
+			args = append(args, next.GetSpaceId(), next.GetViewId())
+			for name := range keep {
+				args = append(args, name)
+			}
+			result, err := tx.ExecContext(ctx, `DELETE FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name NOT IN (`+placeholders+`)`, args...)
+			if err != nil {
+				return nil, err
+			}
+			if affected, affectedErr := result.RowsAffected(); affectedErr == nil {
+				columnsChanged = affected > 0
+			}
+		}
+	}
 	for _, column := range columns {
 		if column.GetSpaceId() == "" {
 			column.SpaceId = next.GetSpaceId()
@@ -123,8 +235,16 @@ func (s *Store) defaultViewEngine(ctx context.Context, spaceID string, datasetID
 	return "duckdb"
 }
 
+func (s *Store) viewDataKind(ctx context.Context, spaceID, datasetID string) pb.DataKind {
+	dataset, err := s.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return pb.DataKind_DATA_KIND_UNSPECIFIED
+	}
+	return dataset.GetDataKind()
+}
+
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
-	view, err := getMessage(ctx, s.db, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
+	view, err := getMessage(ctx, s.queryDB(ctx), `SELECT `+viewWithTimestampsSQL+` FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
 	if err != nil {
 		return nil, err
 	}
@@ -146,12 +266,10 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 		FROM t_views
 		WHERE (? = '' OR c_space_id = ?)
 		  AND (? = '' OR c_status = ?)
-		  AND (? = '' OR c_primary_dataset_id = ? OR EXISTS (
-			  SELECT 1 FROM json_each(c_dataset_ids_json) AS dataset_ref WHERE dataset_ref.value = ?
-		  ))`
-	args := []any{spaceID, spaceID, status, status, datasetID, datasetID, datasetID}
-	items, pageResult, err := queryPagedMessages(ctx, s.db,
-		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_view_id`,
+		  AND (? = '' OR c_dataset_id = ?)`
+	args := []any{spaceID, spaceID, status, status, datasetID, datasetID}
+	items, pageResult, err := queryPagedMessages(ctx, s.queryDB(ctx),
+		`SELECT `+viewWithTimestampsSQL+` `+where+` ORDER BY c_space_id, c_view_id`,
 		`SELECT COUNT(1) `+where,
 		args,
 		page,
@@ -255,16 +373,16 @@ func viewColumnShapeChanged(existing *pb.ViewColumn, next *pb.ViewColumn) bool {
 }
 
 func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-	items, err := queryMessages(ctx, s.db, `
-		SELECT c_attrs_json FROM t_view_columns
+	const where = `
+		FROM t_view_columns
 		WHERE (? = '' OR c_space_id = ?)
-		  AND (? = '' OR c_view_id = ?)
-		ORDER BY c_sort_order, c_column_name
-	`, []any{spaceID, spaceID, viewID, viewID}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
+		  AND (? = '' OR c_view_id = ?)`
+	args := []any{spaceID, spaceID, viewID, viewID}
+	return queryPagedMessages(ctx, s.queryDB(ctx),
+		`SELECT c_attrs_json `+where+` ORDER BY c_sort_order, c_column_name`,
+		`SELECT COUNT(1) `+where,
+		args, page, func() *pb.ViewColumn { return &pb.ViewColumn{} },
+	)
 }
 
 func viewOriginSQL(origin pb.ColumnOriginType) string {
@@ -276,4 +394,11 @@ func viewOriginSQL(origin pb.ColumnOriginType) string {
 	default:
 		return "dataset_column"
 	}
+}
+
+func validateSingleViewDataset(datasetID string) error {
+	if strings.TrimSpace(datasetID) == "" {
+		return errors.New("dataset_id is required")
+	}
+	return nil
 }

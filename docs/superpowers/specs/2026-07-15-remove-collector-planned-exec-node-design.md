@@ -75,6 +75,5 @@ Set the task-instance list default page size to 20 and remove the unused planned
 ## Non-Goals
 
 - No change to scheduling or CloudNode assignment behavior.
-- No change to `last_exec_node` or execution status semantics.
 - No fixed page size; 20 is the default while the selector remains available.
 - No reuse of protobuf field number 12.

@@ -10,66 +10,119 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func toPBRule(rule domain.TaskRule) *pb.TaskRule {
-	enabled := rule.Enabled
-	return &pb.TaskRule{
-		SpaceId:        rule.SpaceID,
-		RuleId:         rule.RuleID,
-		DataType:       rule.DataType,
-		Exchange:       rule.Exchange,
-		CollectParams:  structFromJSONString(rule.CollectParams),
-		AssignmentType: rule.AssignmentType,
-		AssignedNodes:  stringsFromJSONString(rule.AssignedNodes),
-		NodePattern:    rule.NodePattern,
-		NodeTags:       stringsFromJSONString(rule.NodeTags),
+func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
+	enabled := task.Enabled
+	resultStatus := "active"
+	switch task.PrepareState {
+	case domain.PrepareStatePending, domain.PrepareStateWaitingView:
+		resultStatus = "pending"
+	case domain.PrepareStateError:
+		resultStatus = "error"
+	}
+	return &pb.CollectionTask{
+		SpaceId:        task.SpaceID,
+		TaskId:         task.TaskID,
+		TaskName:       task.TaskName,
+		Description:    task.Description,
+		DataType:       task.DataType,
+		TagIds:         append([]string(nil), task.TagIDs...),
+		DefinitionHash: task.DefinitionHash,
+		CollectParams:  structFromJSONString(redactTaskResultDatasetID(task.CollectParams)),
 		Enabled:        &enabled,
-		Creator:        rule.Creator,
-		CreateTime:     formatTime(rule.CreateTime),
-		ModifyTime:     formatTime(rule.ModifyTime),
+		Creator:        task.Creator,
+		CreateTime:     formatTime(task.CreateTime),
+		ModifyTime:     formatTime(task.ModifyTime),
+		PrepareState:   string(task.PrepareState),
+		LastError:      task.LastError,
+		Result:         &pb.TaskResult{ResultName: resultName(task.TaskName), ViewId: task.ResultViewID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
 	}
 }
 
-func fromPBRule(rule *pb.TaskRule) domain.TaskRule {
-	if rule == nil {
-		return domain.TaskRule{}
+func parseStringSlice(raw string) []string {
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
 	}
-	return domain.TaskRule{
-		SpaceID:        rule.GetSpaceId(),
-		RuleID:         rule.GetRuleId(),
-		DataType:       rule.GetDataType(),
-		Exchange:       rule.GetExchange(),
-		CollectParams:  jsonStringFromStruct(rule.GetCollectParams()),
-		AssignmentType: rule.GetAssignmentType(),
-		AssignedNodes:  jsonStringFromStrings(rule.GetAssignedNodes()),
-		NodePattern:    rule.GetNodePattern(),
-		NodeTags:       jsonStringFromStrings(rule.GetNodeTags()),
-		Enabled:        taskRuleEnabled(rule),
-		Creator:        rule.GetCreator(),
+	return values
+}
+
+func redactTaskResultDatasetID(raw string) string {
+	values := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return raw
+	}
+	for _, key := range []string{"target_dataset_id", "result_dataset_id", "source_dataset_id", "subject_tags"} {
+		delete(values, key)
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
+}
+
+func fromPBTask(task *pb.CollectionTask) domain.CollectionTask {
+	if task == nil {
+		return domain.CollectionTask{}
+	}
+	return domain.CollectionTask{
+		SpaceID:        task.GetSpaceId(),
+		TaskID:         task.GetTaskId(),
+		TaskName:       task.GetTaskName(),
+		Description:    task.GetDescription(),
+		DataType:       task.GetDataType(),
+		TagIDs:         append([]string(nil), task.GetTagIds()...),
+		DefinitionHash: task.GetDefinitionHash(),
+		CollectParams:  jsonStringFromStruct(task.GetCollectParams()),
+		Enabled:        taskEnabled(task),
+		Creator:        task.GetCreator(),
+		PrepareState:   domain.CollectionTaskPrepareState(task.GetPrepareState()),
+		LastError:      task.GetLastError(),
 	}
 }
 
-func taskRuleEnabled(rule *pb.TaskRule) bool {
-	if rule.Enabled == nil {
+func stringSliceJSON(values []string) string {
+	b, _ := json.Marshal(values)
+	return string(b)
+}
+
+func taskEnabled(task *pb.CollectionTask) bool {
+	if task == nil || task.Enabled == nil {
 		return true
 	}
-	return rule.GetEnabled()
+	return task.GetEnabled()
+}
+
+func resultName(taskName string) string {
+	name := strings.TrimSpace(taskName)
+	if name == "" {
+		return "采集结果"
+	}
+	return name + " 结果"
+}
+
+func taskResultDataKind(dataType string) string {
+	_ = dataType
+	return "time_series"
 }
 
 func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 	return &pb.TaskInstance{
 		SpaceId:        instance.SpaceID,
-		TaskId:         instance.TaskID,
-		CloudJobItemId: instance.CloudJobItemID,
-		RuleId:         instance.RuleID,
-		Exchange:       instance.Exchange,
-		Market:         instance.Market,
+		RunId:          instance.RunID,
+		InstanceId:     instance.InstanceID,
+		Provider:       instance.Provider,
+		ProviderSymbol: instance.ProviderSymbol,
+		MarketType:     instance.MarketType,
 		DataType:       instance.DataType,
-		DatasetId:      instance.DatasetID,
+		RequestKey:     instance.RequestKey,
 		SubjectId:      instance.SubjectID,
-		Symbol:         instance.Symbol,
-		Interval:       instance.Interval,
+		Frequency:      instance.Frequency,
+		TargetDataTime: formatPtrTime(instance.TargetDataTime),
+		SourceId:       instance.SourceID,
+		SeriesTag:      instance.SeriesTag,
+		FunctionName:   instance.FunctionName,
 		TaskParams:     structFromJSONString(instance.TaskParams),
-		LastExecNode:   instance.LastExecNode,
 		LastExecStatus: toPBStatus(instance.LastExecStatus),
 		LastExecTime:   formatPtrTime(instance.LastExecTime),
 		Result:         structFromJSONString(instance.Result),
@@ -79,16 +132,16 @@ func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
 	}
 }
 
+func toPBWriteTarget(target domain.WriteTarget) *pb.TaskWriteTarget {
+	return &pb.TaskWriteTarget{WriteTargetId: target.ID, TaskId: target.TaskID, DatasetId: target.DatasetID, ViewId: target.ViewID, OutputFields: parseStringSlice(target.OutputFields), Status: target.Status, LastError: target.LastError}
+}
+
 func toPBStatus(status int) pb.TaskInstanceStatus {
 	switch status {
 	case domain.InstanceStatusPending:
 		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING
-	case domain.InstanceStatusRunning:
-		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_RUNNING
 	case domain.InstanceStatusSuccess:
 		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS
-	case domain.InstanceStatusPartFailed:
-		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PART_FAILED
 	case domain.InstanceStatusFailed:
 		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED
 	default:
@@ -100,12 +153,8 @@ func fromPBStatus(status pb.TaskInstanceStatus) int {
 	switch status {
 	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING:
 		return domain.InstanceStatusPending
-	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_RUNNING:
-		return domain.InstanceStatusRunning
 	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS:
 		return domain.InstanceStatusSuccess
-	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PART_FAILED:
-		return domain.InstanceStatusPartFailed
 	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED:
 		return domain.InstanceStatusFailed
 	default:
@@ -154,29 +203,6 @@ func jsonStringFromStruct(value *structpb.Struct) string {
 	raw, err := json.Marshal(value.AsMap())
 	if err != nil {
 		return "{}"
-	}
-	return string(raw)
-}
-
-func stringsFromJSONString(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	var values []string
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return nil
-	}
-	return values
-}
-
-func jsonStringFromStrings(values []string) string {
-	if len(values) == 0 {
-		return "[]"
-	}
-	raw, err := json.Marshal(values)
-	if err != nil {
-		return "[]"
 	}
 	return string(raw)
 }

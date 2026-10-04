@@ -1,9 +1,38 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices } from "@playwright/test";
+
+const remote = process.env.MOOX_REMOTE_PLAYWRIGHT === "1";
+
+export function remoteBrowserLaunchArgs(host: string | undefined): string[] {
+  const normalized = host?.trim() || "";
+  if (!/^[A-Za-z0-9.-]+$/.test(normalized)) {
+    throw new Error("remote_playwright_forward_host_invalid");
+  }
+  return [`--host-resolver-rules=MAP ${normalized} 127.0.0.1`];
+}
 
 export default defineConfig({
-  testDir: './tests',
+  testDir: "./tests",
   timeout: 30_000,
-  use: { baseURL: 'http://127.0.0.1:9527', trace: 'retain-on-failure' },
-  webServer: { command: 'pnpm dev --host 127.0.0.1', url: 'http://127.0.0.1:9527', reuseExistingServer: true },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  globalSetup: remote ? "./tests/remote-auth-global-setup.ts" : undefined,
+  use: {
+    baseURL: process.env.MOOX_REMOTE_BASE_URL || "http://127.0.0.1:9527",
+    ignoreHTTPSErrors: remote,
+    trace: remote ? "off" : "retain-on-failure",
+    video: remote ? "off" : "on-first-retry",
+    storageState: undefined
+  },
+  webServer: remote
+    ? undefined
+    : { command: "pnpm dev --host 127.0.0.1", url: "http://127.0.0.1:9527", reuseExistingServer: true },
+  projects: [
+    {
+      name: "chromium",
+      testMatch: remote ? /remote\.e2e\.spec\.ts$/ : /\.spec\.ts$/,
+      testIgnore: /\.test\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: remote ? { args: remoteBrowserLaunchArgs(process.env.MOOX_REMOTE_FORWARD_HOST) } : undefined
+      }
+    }
+  ]
 });

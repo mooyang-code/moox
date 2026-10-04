@@ -36,9 +36,8 @@ var metadataImportCmd = &cobra.Command{
 	Long: `通过 moox-storage MetadataService 导入存储元数据 seed。
 
 示例:
-  moox-cli metadata import --file ../../examples/platform-local.seed.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
-  moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
-  moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml --spaces crypto --dry-run`,
+  moox-cli metadata import --file ../../config/setup/metadata.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
+  moox-cli metadata import --file ../../config/setup/metadata.yaml --spaces crypto --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(metadataImportFile) == "" {
 			return fmt.Errorf("必须指定 --file")
@@ -119,21 +118,17 @@ var metadataApplyCmd = &cobra.Command{
 }
 
 type metadataSeed struct {
-	Spaces             []seedSpace             `yaml:"spaces"`
-	DataSources        []seedDataSource        `yaml:"data_sources"`
-	Subjects           []seedSubject           `yaml:"subjects"`
-	SubjectSymbols     []seedSubjectSymbol     `yaml:"subject_symbols"`
-	Datasets           []seedDataset           `yaml:"datasets"`
-	DatasetSubjects    []seedDatasetSubject    `yaml:"dataset_subjects"`
-	FieldGroups        []seedFieldGroup        `yaml:"field_groups"`
-	Fields             []seedField             `yaml:"fields"`
-	Factors            []seedFactor            `yaml:"factors"`
-	DatasetColumns     []seedDatasetColumn     `yaml:"dataset_columns"`
-	Views              []seedView              `yaml:"views"`
-	ViewColumns        []seedViewColumn        `yaml:"view_columns"`
-	PrimaryStoreNodes  []seedPrimaryStoreNode  `yaml:"primary_store_nodes"`
-	Devices            []seedDevice            `yaml:"devices"`
-	PrimaryStoreRoutes []seedPrimaryStoreRoute `yaml:"primary_store_routes"`
+	Spaces         []seedSpace         `yaml:"spaces"`
+	DataSources    []seedDataSource    `yaml:"data_sources"`
+	Subjects       []seedSubject       `yaml:"subjects"`
+	Tags           []seedTag           `yaml:"tags"`
+	Datasets       []seedDataset       `yaml:"datasets"`
+	FieldGroups    []seedFieldGroup    `yaml:"field_groups"`
+	Fields         []seedField         `yaml:"fields"`
+	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
+	Views          []seedView          `yaml:"views"`
+	ViewColumns    []seedViewColumn    `yaml:"view_columns"`
+	Devices        []seedDevice        `yaml:"devices"`
 }
 
 type seedCommon struct {
@@ -148,6 +143,8 @@ type seedSpace struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 	Owner       string `yaml:"owner"`
+	Market      string `yaml:"market"`
+	Timezone    string `yaml:"timezone"`
 	seedCommon  `yaml:",inline"`
 }
 
@@ -173,12 +170,17 @@ type seedSubject struct {
 	seedCommon  `yaml:",inline"`
 }
 
-type seedSubjectSymbol struct {
-	SpaceID        string `yaml:"space_id"`
-	SubjectID      string `yaml:"subject_id"`
-	DataSourceID   string `yaml:"data_source_id"`
-	ExternalSymbol string `yaml:"external_symbol"`
-	seedCommon     `yaml:",inline"`
+type seedTag struct {
+	SpaceID     string `yaml:"space_id"`
+	TagID       string `yaml:"tag_id"`
+	TagName     string `yaml:"tag_name"`
+	Description string `yaml:"description"`
+	Mode        string `yaml:"mode"`
+	Builtin     bool   `yaml:"builtin"`
+	Source      string `yaml:"source"`
+	MarketType  string `yaml:"market_type"`
+	Cron        string `yaml:"cron"`
+	Timezone    string `yaml:"timezone"`
 }
 
 type seedDataset struct {
@@ -188,18 +190,11 @@ type seedDataset struct {
 	Name         string   `yaml:"name"`
 	Description  string   `yaml:"description"`
 	DataKind     string   `yaml:"data_kind"`
+	DataNodeID   string   `yaml:"data_node_id"`
+	KeepDuration string   `yaml:"keep_duration"`
 	Freqs        []string `yaml:"freqs"`
+	SubjectTags  []string `yaml:"subject_tags"`
 	seedCommon   `yaml:",inline"`
-}
-
-type seedDatasetSubject struct {
-	SpaceID            string `yaml:"space_id"`
-	DatasetID          string `yaml:"dataset_id"`
-	SubjectID          string `yaml:"subject_id"`
-	SubjectRole        string `yaml:"subject_role"`
-	EffectiveStartTime string `yaml:"effective_start_time"`
-	EffectiveEndTime   string `yaml:"effective_end_time"`
-	seedCommon         `yaml:",inline"`
 }
 
 type seedField struct {
@@ -226,17 +221,6 @@ type seedFieldGroup struct {
 	seedCommon    `yaml:",inline"`
 }
 
-type seedFactor struct {
-	SpaceID     string `yaml:"space_id"`
-	FactorID    string `yaml:"factor_id"`
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Algorithm   string `yaml:"algorithm"`
-	ParamsJSON  string `yaml:"params_json"`
-	ValueType   string `yaml:"value_type"`
-	seedCommon  `yaml:",inline"`
-}
-
 type seedDatasetColumn struct {
 	SpaceID    string   `yaml:"space_id"`
 	DatasetID  string   `yaml:"dataset_id"`
@@ -245,7 +229,6 @@ type seedDatasetColumn struct {
 	OriginID   string   `yaml:"origin_id"`
 	ValueType  string   `yaml:"value_type"`
 	Required   bool     `yaml:"required"`
-	IsUnique   bool     `yaml:"is_unique"`
 	Aliases    []string `yaml:"aliases"`
 	seedCommon `yaml:",inline"`
 }
@@ -255,12 +238,11 @@ type seedView struct {
 	ViewID           string   `yaml:"view_id"`
 	Name             string   `yaml:"name"`
 	Description      string   `yaml:"description"`
-	PrimaryDatasetID string   `yaml:"primary_dataset_id"`
-	DatasetIDs       []string `yaml:"dataset_ids"`
+	PrimaryDatasetID string   `yaml:"dataset_id"`
 	GrainKeys        []string `yaml:"grain_keys"`
 	FilterJSON       string   `yaml:"filter_json"`
 	Engine           string   `yaml:"engine"`
-	RetentionWindow  string   `yaml:"retention_window"`
+	KeepDuration     string   `yaml:"keep_duration"`
 	seedCommon       `yaml:",inline"`
 }
 
@@ -276,35 +258,13 @@ type seedViewColumn struct {
 	seedCommon `yaml:",inline"`
 }
 
-type seedPrimaryStoreNode struct {
-	NodeID     string `yaml:"node_id"`
-	Name       string `yaml:"name"`
-	Endpoint   string `yaml:"endpoint"`
-	Weight     uint32 `yaml:"weight"`
-	ConfigJSON string `yaml:"config_json"`
-	seedCommon `yaml:",inline"`
-}
-
 type seedDevice struct {
 	DeviceID   string `yaml:"device_id"`
-	NodeID     string `yaml:"node_id"`
 	Name       string `yaml:"name"`
 	Engine     string `yaml:"engine"`
 	Endpoint   string `yaml:"endpoint"`
 	ConfigJSON string `yaml:"config_json"`
 	seedCommon `yaml:",inline"`
-}
-
-type seedPrimaryStoreRoute struct {
-	SpaceID        string `yaml:"space_id"`
-	RouteID        string `yaml:"route_id"`
-	DatasetID      string `yaml:"dataset_id"`
-	SubjectID      string `yaml:"subject_id"`
-	SubjectPattern string `yaml:"subject_pattern"`
-	HashRule       string `yaml:"hash_rule"`
-	NodeID         string `yaml:"node_id"`
-	Priority       uint32 `yaml:"priority"`
-	seedCommon     `yaml:",inline"`
 }
 
 type metadataImportCall struct {

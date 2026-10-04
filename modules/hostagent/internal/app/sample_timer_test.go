@@ -22,7 +22,7 @@ type sampleContextKey struct{}
 func TestSampleHandlerWaitsAndPreservesInvocationValues(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan error, 1)
-	handler, err := newSampleHandler(time.Second, func(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
+	handler, err := newSampleHandlerWithShutdown(time.Second, trpc.BackgroundContext(), func(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		assert.Equal(t, "sample-value", ctx.Value(sampleContextKey{}))
 		<-release
 		return &hostagentpb.RunOnceRsp{}, nil
@@ -43,7 +43,7 @@ func TestSampleHandlerWaitsAndPreservesInvocationValues(t *testing.T) {
 
 func TestSampleHandlerReturnsExecutionError(t *testing.T) {
 	want := errors.New("publish failed")
-	handler, err := newSampleHandler(time.Second, func(context.Context) (*hostagentpb.RunOnceRsp, error) {
+	handler, err := newSampleHandlerWithShutdown(time.Second, trpc.BackgroundContext(), func(context.Context) (*hostagentpb.RunOnceRsp, error) {
 		return nil, want
 	})
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestSampleHandlerReturnsExecutionError(t *testing.T) {
 }
 
 func TestSampleHandlerReturnsTimeout(t *testing.T) {
-	handler, err := newSampleHandler(time.Millisecond, func(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
+	handler, err := newSampleHandlerWithShutdown(time.Millisecond, trpc.BackgroundContext(), func(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
@@ -60,7 +60,7 @@ func TestSampleHandlerReturnsTimeout(t *testing.T) {
 }
 
 func TestSampleHandlerDetachesInvocationDeadline(t *testing.T) {
-	handler, err := newSampleHandler(time.Second, func(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
+	handler, err := newSampleHandlerWithShutdown(time.Second, trpc.BackgroundContext(), func(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		assert.NoError(t, ctx.Err())
 		return &hostagentpb.RunOnceRsp{}, nil
 	})
@@ -91,7 +91,7 @@ func TestScheduledAndManualRunsShareAgentGuard(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	a.collector = blockingSnapshotCollector{started: started, release: release}
-	handler, err := newSampleHandler(time.Second, func(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
+	handler, err := newSampleHandlerWithShutdown(time.Second, trpc.BackgroundContext(), func(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		return a.runOnceGuarded(ctx)
 	})
 	require.NoError(t, err)

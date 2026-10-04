@@ -3,20 +3,14 @@ package viewindex
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 type Slot string
@@ -34,10 +28,12 @@ const (
 )
 
 func (m WriteMode) String() string {
-	if m == Backfill {
+	switch m {
+	case Backfill:
 		return "BACKFILL"
+	default:
+		return "LIVE_WRITE"
 	}
-	return "LIVE_WRITE"
 }
 
 type RowKey struct{ Key *pb.RowKey }
@@ -48,7 +44,7 @@ type RowWrite struct {
 	Attributes map[string]*pb.TypedValue
 }
 
-type ViewIndexApplyBatch struct {
+type ViewIndexWriteBatch struct {
 	RowWrites      []RowWrite
 	ViewRevision   uint64
 	ViewSchemaHash string
@@ -77,12 +73,17 @@ func (w RowWrite) Validate() error {
 			return errors.New("field upsert requires field_id")
 		}
 	}
+	for name, value := range w.Attributes {
+		if name == "" || value == nil {
+			return errors.New("attribute upsert requires name and value")
+		}
+	}
 	return nil
 }
 
-func (b ViewIndexApplyBatch) Validate() error {
+func (b ViewIndexWriteBatch) Validate() error {
 	if len(b.RowWrites) == 0 {
-		return errors.New("view index apply batch is empty")
+		return errors.New("view index write batch is empty")
 	}
 	if b.ViewRevision == 0 || strings.TrimSpace(b.ViewSchemaHash) == "" {
 		return errors.New("view_revision and view_schema_hash are required")
@@ -90,356 +91,192 @@ func (b ViewIndexApplyBatch) Validate() error {
 	if b.WriteMode == 0 {
 		return errors.New("write_mode is required")
 	}
-	seen := make(map[string]struct{}, len(b.RowWrites))
 	for i, w := range b.RowWrites {
 		if err := w.Validate(); err != nil {
 			return fmt.Errorf("row write %d: %w", i, err)
 		}
-		id := rowKeyID(w.Key.Key)
-		if _, ok := seen[id]; ok {
-			return fmt.Errorf("row write %d duplicates row key", i)
-		}
-		seen[id] = struct{}{}
 	}
 	return nil
 }
 
 type ViewIndexSchema struct {
-	SpaceID     string
-	ViewID      string
-	ViewVersion uint64
-	Engine      string
-	Columns     []*pb.ViewColumn
-	SchemaHash  string
-}
-
-type BatchWrite struct {
-	TimeSeriesRows []*pb.TimeSeriesRow
-	RecordRows     []*pb.RecordRow
-	Columns        []*pb.ViewColumn
-	ViewVersion    uint64
-	SchemaHash     string
+	SpaceID          string
+	ViewID           string
+	PrimaryDatasetID string
+	ViewVersion      uint64
+	Engine           string
+	Columns          []*pb.ViewColumn
+	SchemaHash       string
 }
 
 type ViewIndexStats struct {
 	Exists        bool
 	ViewVersion   uint64
 	EntryCount    int64
+	PhysicalBytes uint64
 	MinVersion    string
 	MaxVersion    string
 	SchemaHash    string
-	PhysicalBytes uint64
 	UpdatedAt     string
 	FreeDiskBytes uint64
 	IndexedFrom   string
 	IndexedTo     string
 }
 
-type ViewIndexEngine interface {
+type Filter struct {
+	Column string
+	Op     pb.FilterOp
+	Values []*pb.TypedValue
+}
+
+type FilterGroup struct {
+	Conds   []Filter
+	Logical pb.FilterLogical
+}
+
+// TimeSeriesSelector is a range predicate, not an exact row identity.
+// A nil SeriesTag matches all tags; a non-nil empty value matches only the
+// default series.
+type TimeSeriesSelector struct {
+	SpaceID   string
+	DatasetID string
+	SubjectID string
+	Freq      string
+	SeriesTag *string
+}
+
+type QuerySpec struct {
+	RowsPerSeries int
+	Keys          []*pb.RowKey
+	Selectors     []TimeSeriesSelector
+	TimeRange     *pb.TimeRange
+	VersionRange  *pb.VersionRange
+	TextQuery     string
+	Groups        []FilterGroup
+	GroupLogical  pb.FilterLogical
+	Sorts         []*pb.SortSpec
+	Order         pb.SortOrder
+	Includes      []string
+	AfterKey      *pb.RowKey
+	Offset        int
+	Limit         int
+	TotalMode     pb.TotalMode
+}
+
+// Engine is the single physical View index contract. Index existence is owned
+// by metadata catalog state; an engine only prepares, writes, queries, stats,
+// and removes an explicitly named index.
+type Engine interface {
 	Engine() string
 	Prepare(context.Context, string, ViewIndexSchema) error
+	Write(context.Context, string, ViewIndexWriteBatch) error
+	Query(context.Context, string, QuerySpec) ([]*pb.RowFieldValues, int64, error)
 	Stat(context.Context, string) (ViewIndexStats, error)
 	Remove(context.Context, string) error
 }
 
-type ViewIndexApplier interface {
-	Apply(context.Context, string, ViewIndexApplyBatch) error
+// SchemaExtender applies an append-only schema revision to an existing active
+// physical index without replacing the index or rebuilding its rows.
+type SchemaExtender interface {
+	ExtendColumns(context.Context, string, ViewIndexSchema, ViewIndexSchema) error
 }
 
-type ManagedEngine interface {
-	ViewIndexEngine
-	ViewIndexApplier
-	List(context.Context) ([]string, error)
-}
+// ErrSchemaExtensionConflict means the physical index cannot satisfy the requested append-only contract.
+var ErrSchemaExtensionConflict = errors.New("view schema extension conflicts with physical index")
 
-// MemoryEngine is a small engine core shared by DuckDB and Bleve owners. The
-// owner packages provide the physical path; this core enforces A/B and merge
-// semantics without progress tables or source checkpoints.
-type MemoryEngine struct {
-	name    string
-	root    string
-	mu      sync.RWMutex
-	indexes map[string]*memoryIndex
-}
-
-type memoryIndex struct {
-	schema ViewIndexSchema
-	rows   map[string]*pb.RowFieldValues
-}
-
-type persistedIndex struct {
-	Schema ViewIndexSchema   `json:"schema"`
-	Rows   map[string]string `json:"rows"`
-}
-
-func NewMemoryEngine(name, root string) *MemoryEngine {
-	e := &MemoryEngine{name: name, root: root, indexes: make(map[string]*memoryIndex)}
-	e.load()
-	return e
-}
-func (e *MemoryEngine) Engine() string { return e.name }
-func (e *MemoryEngine) Prepare(_ context.Context, id string, schema ViewIndexSchema) error {
-	if strings.TrimSpace(id) == "" {
-		return errors.New("index_id is required")
+// IsAppendOnlyViewColumns reports whether desired preserves every physical
+// column in active and appends at least one new column after its sort order.
+func IsAppendOnlyViewColumns(active, desired []*pb.ViewColumn) bool {
+	if len(active) == 0 || len(desired) <= len(active) {
+		return false
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.indexes[id] = &memoryIndex{schema: schema, rows: make(map[string]*pb.RowFieldValues)}
-	if e.root != "" {
-		path := filepath.Join(e.root, id)
-		if e.name == "duckdb" {
-			path += ".duckdb"
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				return err
+	activeByName := make(map[string]*pb.ViewColumn, len(active))
+	usedOrder := make(map[uint32]struct{}, len(desired))
+	var maxOrder uint32
+	for index, column := range active {
+		if column == nil || column.GetColumnName() == "" {
+			return false
+		}
+		if _, exists := activeByName[column.GetColumnName()]; exists {
+			return false
+		}
+		activeByName[column.GetColumnName()] = column
+		if index == 0 || column.GetSortOrder() > maxOrder {
+			maxOrder = column.GetSortOrder()
+		}
+	}
+	seen := make(map[string]struct{}, len(desired))
+	appended := 0
+	for _, column := range desired {
+		if column == nil || column.GetColumnName() == "" {
+			return false
+		}
+		if _, exists := seen[column.GetColumnName()]; exists {
+			return false
+		}
+		seen[column.GetColumnName()] = struct{}{}
+		if _, exists := usedOrder[column.GetSortOrder()]; exists {
+			return false
+		}
+		usedOrder[column.GetSortOrder()] = struct{}{}
+		previous := activeByName[column.GetColumnName()]
+		if previous == nil {
+			if column.GetSortOrder() <= maxOrder {
+				return false
 			}
-			if file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644); err != nil {
-				return err
-			} else {
-				_ = file.Close()
-			}
-		} else if err := os.MkdirAll(path, 0o755); err != nil {
-			return err
-		}
-	}
-	return e.persistLocked(id)
-}
-func (e *MemoryEngine) Apply(_ context.Context, id string, batch ViewIndexApplyBatch) error {
-	if err := batch.Validate(); err != nil {
-		return err
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	idx := e.indexes[id]
-	if idx == nil {
-		return fmt.Errorf("index %q is not prepared", id)
-	}
-	if idx.schema.ViewVersion != 0 && idx.schema.ViewVersion != batch.ViewRevision {
-		return fmt.Errorf("view revision conflict: current=%d requested=%d", idx.schema.ViewVersion, batch.ViewRevision)
-	}
-	if idx.schema.SchemaHash != "" && idx.schema.SchemaHash != batch.ViewSchemaHash {
-		return fmt.Errorf("view schema hash conflict")
-	}
-	for _, w := range batch.RowWrites {
-		key := rowKeyID(w.Key.Key)
-		row := idx.rows[key]
-		if row == nil {
-			row = &pb.RowFieldValues{Key: w.Key.Key}
-			idx.rows[key] = row
-		}
-		mergeFields(row, w.Fields, w.Attributes, batch.WriteMode == Backfill)
-	}
-	idx.schema.ViewVersion = batch.ViewRevision
-	idx.schema.SchemaHash = batch.ViewSchemaHash
-	return e.persistLocked(id)
-}
-func (e *MemoryEngine) Stat(_ context.Context, id string) (ViewIndexStats, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	idx := e.indexes[id]
-	if idx == nil {
-		return ViewIndexStats{}, nil
-	}
-	return ViewIndexStats{Exists: true, ViewVersion: idx.schema.ViewVersion, EntryCount: int64(len(idx.rows)), SchemaHash: idx.schema.SchemaHash}, nil
-}
-func (e *MemoryEngine) Remove(_ context.Context, id string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	delete(e.indexes, id)
-	if e.root != "" {
-		path := filepath.Join(e.root, id)
-		if e.name == "duckdb" {
-			path += ".duckdb"
-			_ = os.Remove(path)
-		} else {
-			_ = os.RemoveAll(path)
-		}
-		_ = os.Remove(e.statePath(id))
-	}
-	return nil
-}
-
-func (e *MemoryEngine) statePath(id string) string {
-	return filepath.Join(e.root, id+".state.json")
-}
-
-// persistLocked stores a compact protobuf snapshot beside the physical index.
-// The engine remains deliberately small, but a View restart must not turn a
-// successful build into an empty index. The snapshot is replaced atomically;
-// DuckDB/Bleve owners can later swap this file-backed core for their native
-// storage without changing the RPC contract.
-func (e *MemoryEngine) persistLocked(id string) error {
-	if e.root == "" {
-		return nil
-	}
-	idx := e.indexes[id]
-	if idx == nil {
-		return nil
-	}
-	rows := make(map[string]string, len(idx.rows))
-	for key, row := range idx.rows {
-		data, err := proto.Marshal(row)
-		if err != nil {
-			return err
-		}
-		rows[key] = base64.RawStdEncoding.EncodeToString(data)
-	}
-	data, err := json.Marshal(persistedIndex{Schema: idx.schema, Rows: rows})
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(e.root, 0o755); err != nil {
-		return err
-	}
-	tmp := e.statePath(id) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, e.statePath(id))
-}
-
-func (e *MemoryEngine) load() {
-	if e.root == "" {
-		return
-	}
-	entries, err := os.ReadDir(e.root)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".state.json") {
+			appended++
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(e.root, entry.Name()))
-		if err != nil {
-			continue
-		}
-		var saved persistedIndex
-		if json.Unmarshal(data, &saved) != nil {
-			continue
-		}
-		rows := make(map[string]*pb.RowFieldValues, len(saved.Rows))
-		for key, encoded := range saved.Rows {
-			rowData, err := base64.RawStdEncoding.DecodeString(encoded)
-			if err != nil {
-				continue
-			}
-			row := &pb.RowFieldValues{}
-			if proto.Unmarshal(rowData, row) == nil {
-				rows[key] = row
-			}
-		}
-		id := strings.TrimSuffix(entry.Name(), ".state.json")
-		e.indexes[id] = &memoryIndex{schema: saved.Schema, rows: rows}
-	}
-}
-func (e *MemoryEngine) List(_ context.Context) ([]string, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	out := make([]string, 0, len(e.indexes))
-	for id := range e.indexes {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-func (e *MemoryEngine) Query(_ context.Context, id string, keys []*pb.RowKey, fields []string) ([]*pb.RowFieldValues, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	idx := e.indexes[id]
-	if idx == nil {
-		return nil, fmt.Errorf("index %q is not prepared", id)
-	}
-	out := make([]*pb.RowFieldValues, 0, len(keys))
-	for _, k := range keys {
-		if row := idx.rows[rowKeyID(k)]; row != nil {
-			out = append(out, projectRow(row, fields))
+		if previous.GetOriginId() != column.GetOriginId() || previous.GetOriginType() != column.GetOriginType() ||
+			previous.GetValueType() != column.GetValueType() || previous.GetSortOrder() != column.GetSortOrder() {
+			return false
 		}
 	}
-	return out, nil
-}
-func (e *MemoryEngine) Write(ctx context.Context, id string, batch BatchWrite) error {
-	writes := make([]RowWrite, 0, len(batch.TimeSeriesRows)+len(batch.RecordRows))
-	for _, r := range batch.TimeSeriesRows {
-		if r != nil {
-			writes = append(writes, RowWrite{Key: RowKey{Key: queryTSKey(r.GetKey())}, Fields: r.GetFields()})
-		}
-	}
-	for _, r := range batch.RecordRows {
-		if r != nil {
-			writes = append(writes, RowWrite{Key: RowKey{Key: queryRecordKey(r.GetKey())}, Fields: r.GetFields()})
-		}
-	}
-	return e.Apply(ctx, id, ViewIndexApplyBatch{RowWrites: writes, ViewRevision: batch.ViewVersion, ViewSchemaHash: batch.SchemaHash, WriteMode: LiveWrite})
+	return appended == len(desired)-len(active)
 }
 
-func queryTSKey(k *pb.TimeSeriesKey) *pb.RowKey {
-	if k == nil {
-		return nil
-	}
-	return &pb.RowKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: k.GetSubjectId(), Freq: k.GetFreq(), DataTime: k.GetDataTime()}}}
+// ManagedIndexLister returns only official physical index IDs owned by this
+// engine. Callers may remove returned IDs through Engine.Remove; filesystem
+// paths never cross this boundary.
+type ManagedIndexLister interface {
+	ListManagedIndexes(context.Context) ([]string, error)
 }
-func queryRecordKey(k *pb.RecordKey) *pb.RowKey {
-	if k == nil {
-		return nil
-	}
-	return &pb.RowKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: k.GetRecordId(), Version: k.GetVersion()}}}
+
+// ExistenceChecker is the lightweight physical-index probe used by the live
+// event path. Stat may scan the whole index to calculate coverage and counts,
+// which is far too expensive to run before every row write.
+type ExistenceChecker interface {
+	Exists(context.Context, string) (bool, error)
 }
-func rowKeyID(k *pb.RowKey) string {
+
+// MetadataStatReader returns the persisted schema contract without scanning
+// all rows. Startup and restore only need to verify that an active index is
+// present and matches Metadata; the full Stat operation may execute COUNT/MIN
+// and MAX over a large DuckDB file and must remain on the periodic View Maintainer
+// path.
+type MetadataStatReader interface {
+	StatMetadata(context.Context, string) (ViewIndexStats, error)
+}
+
+type SeriesCapacityResult struct {
+	Exceeded  bool
+	SubjectID string
+	Freq      string
+	SeriesTag string
+	Rows      uint64
+}
+
+// SeriesCapacityReader reports the first sequence whose physical row count
+// exceeds the configured limit. It is intentionally optional so record
+// indexes do not need to invent a time-series capacity model.
+type SeriesCapacityReader interface {
+	SeriesCapacity(context.Context, string, uint64) (SeriesCapacityResult, error)
+}
+
+func RowKeyID(k *pb.RowKey) string {
 	raw, _ := protojson.Marshal(k)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
-}
-func mergeFields(row *pb.RowFieldValues, fields []*pb.FieldValue, attrs map[string]*pb.TypedValue, onlyMissing bool) {
-	pos := map[string]int{}
-	for i, f := range row.Fields {
-		if f != nil {
-			pos[f.GetFieldId()] = i
-		}
-	}
-	for _, f := range fields {
-		if f == nil {
-			continue
-		}
-		if i, ok := pos[f.GetFieldId()]; ok {
-			if !onlyMissing {
-				row.Fields[i] = f
-			}
-		} else {
-			row.Fields = append(row.Fields, f)
-			pos[f.GetFieldId()] = len(row.Fields) - 1
-		}
-	}
-	if row.Attributes == nil {
-		row.Attributes = map[string]*pb.TypedValue{}
-	}
-	for k, v := range attrs {
-		if _, ok := row.Attributes[k]; !ok || !onlyMissing {
-			row.Attributes[k] = v
-		}
-	}
-}
-func projectRow(row *pb.RowFieldValues, fields []string) *pb.RowFieldValues {
-	if len(fields) == 0 {
-		return row
-	}
-	want := map[string]struct{}{}
-	for _, f := range fields {
-		want[f] = struct{}{}
-	}
-	out := &pb.RowFieldValues{Key: row.Key, Attributes: map[string]*pb.TypedValue{}}
-	for _, f := range row.Fields {
-		if f != nil {
-			if _, ok := want[f.GetFieldId()]; ok {
-				out.Fields = append(out.Fields, f)
-			}
-		}
-	}
-	for k, v := range row.Attributes {
-		if _, ok := want[k]; ok {
-			out.Attributes[k] = v
-		}
-	}
-	return out
 }
 
 func HashViewIndexSchema(schema ViewIndexSchema) string {
@@ -449,9 +286,9 @@ func HashViewIndexSchema(schema ViewIndexSchema) string {
 		SortOrder             uint32
 	}
 	shape := struct {
-		SpaceID, ViewID, Engine string
-		Columns                 []col
-	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, Engine: schema.Engine}
+		SpaceID, ViewID, PrimaryDatasetID, Engine string
+		Columns                                   []col
+	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, PrimaryDatasetID: schema.PrimaryDatasetID, Engine: schema.Engine}
 	for _, c := range schema.Columns {
 		if c != nil {
 			shape.Columns = append(shape.Columns, col{c.GetColumnName(), c.GetOriginId(), int32(c.GetOriginType()), int32(c.GetValueType()), c.GetSortOrder()})

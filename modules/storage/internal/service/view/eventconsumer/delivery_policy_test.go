@@ -1,0 +1,214 @@
+package eventconsumer
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
+)
+
+func TestProcessRowsBatchAckFailureSettlesOnlyAppliedDelivery(t *testing.T) {
+	var applies int
+	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
+		applies++
+		return nil
+	}))
+	encoded, raw := validDatasetDelivery(t)
+	first := &jetstream.Delivery{Subject: encoded.Subject, RawData: raw, RawMessageID: encoded.Message.GetEventId(), ContentType: events.ContentType, StreamSeq: 40}
+	second := *first
+	second.StreamSeq = 41
+	err := consumer.processRowsBatchWithPolicy(context.Background(), []*jetstream.Delivery{first, &second}, []*deliveryHeartbeat{nil, nil}, -1)
+	if !errors.Is(err, jetstream.ErrInvalidDelivery) {
+		t.Fatalf("missing stale ACK error: %v", err)
+	}
+	if applies != 1 || !deliverySettled(err, first) || deliverySettled(err, &second) {
+		t.Fatalf("partial batch settlement: applies=%d first=%v second=%v", applies, deliverySettled(err, first), deliverySettled(err, &second))
+	}
+}
+
+func TestProcessRowsBatchSuccessfulApplySettlesAllDespiteAckFailure(t *testing.T) {
+	consumer := &Consumer{}
+	deliveries := []*jetstream.Delivery{{StreamSeq: 50}, {StreamSeq: 51}}
+	err := consumer.processDeliveryBatchWithPolicy(context.Background(), deliveries, []*deliveryHeartbeat{nil, nil}, -1, func(context.Context) error { return nil })
+	if !errors.Is(err, jetstream.ErrInvalidDelivery) {
+		t.Fatalf("missing stale ACK error: %v", err)
+	}
+	for _, delivery := range deliveries {
+		if !deliverySettled(err, delivery) {
+			t.Fatalf("applied batch delivery %d incorrectly fenced on uncertain ACK", delivery.StreamSeq)
+		}
+	}
+}
+
+func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var applies, progress, terms int
+	delivery := &jetstream.Delivery{
+		Subject:       "same",
+		DeliveryCount: 1,
+	}
+	deliveryProgress := func(context.Context) error { progress++; return nil }
+	deliveryTerm := func(context.Context) error { terms++; cancel(); return nil }
+	// Keep the callbacks on the delivery rather than changing DeliveryCount;
+	// this models client-side InProgress calls renewing one broker delivery.
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, 3, func(context.Context, *jetstream.Delivery) error {
+		applies++
+		return errors.New("temporary event apply failure")
+	}, deliveryActions{
+		ack:      func(context.Context) error { return errors.New("unexpected ack") },
+		progress: deliveryProgress,
+		term:     deliveryTerm,
+	})
+	if err == nil {
+		t.Fatal("processDeliveryWithApply() error = nil, want retry exhaustion")
+	}
+	if applies != 3 || terms != 1 || progress != 2 {
+		t.Fatalf("applies=%d terms=%d progress=%d, want applies=3 terms=1 progress=2", applies, terms, progress)
+	}
+}
+
+func TestProcessDeliveryTermsAfterRetryExhaustion(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	var applies, terms int
+	delivery := &jetstream.Delivery{Subject: "same", DeliveryCount: 1}
+	err := consumer.processDeliveryWithApplyAndActions(context.Background(), delivery, nil, 1, func(context.Context, *jetstream.Delivery) error {
+		applies++
+		return errors.New("temporary event apply failure")
+	}, deliveryActions{
+		ack:      func(context.Context) error { return errors.New("unexpected ack") },
+		progress: func(context.Context) error { return nil },
+		term:     func(context.Context) error { terms++; return nil },
+	})
+	if err == nil {
+		t.Fatal("processDeliveryWithApplyAndActions() error = nil, want retry exhaustion")
+	}
+	if applies != 1 || terms != 1 {
+		t.Fatalf("applies=%d terms=%d, want 1/1", applies, terms)
+	}
+}
+
+func TestProcessDeliveryStopsAckRetryWhenConnectionClosed(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	var acks int
+	delivery := &jetstream.Delivery{Subject: "crypto.kline", DeliveryCount: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, -1, func(context.Context, *jetstream.Delivery) error {
+		return nil
+	}, deliveryActions{
+		ack: func(context.Context) error {
+			acks++
+			return nats.ErrConnectionClosed
+		},
+		progress: func(context.Context) error { return errors.New("unexpected progress") },
+		term:     func(context.Context) error { return errors.New("unexpected term") },
+	})
+	if err == nil {
+		t.Fatal("closed-connection ack returned nil")
+	}
+	if !errors.Is(err, nats.ErrConnectionClosed) {
+		t.Fatalf("error = %v, want nats.ErrConnectionClosed", err)
+	}
+	if acks != 1 {
+		t.Fatalf("acks = %d, want 1", acks)
+	}
+	if time.Since(started) >= time.Second {
+		t.Fatalf("closed-connection ack retried for %s, want immediate return", time.Since(started))
+	}
+}
+
+func TestProcessDeliveryStopsTermRetryWhenConnectionClosed(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	var terms int
+	delivery := &jetstream.Delivery{Subject: "crypto.kline", DeliveryCount: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, 1, func(context.Context, *jetstream.Delivery) error {
+		return Permanent(errors.New("invalid event"))
+	}, deliveryActions{
+		ack:      func(context.Context) error { return errors.New("unexpected ack") },
+		progress: func(context.Context) error { return errors.New("unexpected progress") },
+		term: func(context.Context) error {
+			terms++
+			return nats.ErrConnectionClosed
+		},
+	})
+	if err == nil {
+		t.Fatal("closed-connection term returned nil")
+	}
+	if !errors.Is(err, nats.ErrConnectionClosed) {
+		t.Fatalf("error = %v, want nats.ErrConnectionClosed", err)
+	}
+	if terms != 1 {
+		t.Fatalf("terms = %d, want 1", terms)
+	}
+	if time.Since(started) >= time.Second {
+		t.Fatalf("closed-connection term retried for %s, want immediate return", time.Since(started))
+	}
+}
+
+func TestProcessDeliveryAcksDeferredApplyWithoutRetry(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	var applies, acks, progress, terms int
+	delivery := &jetstream.Delivery{Subject: "crypto.mdataset", DeliveryCount: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, -1, func(context.Context, *jetstream.Delivery) error {
+		applies++
+		return Deferred(errors.New("view data ready waiting for applied positions"))
+	}, deliveryActions{
+		ack: func(context.Context) error {
+			acks++
+			return nil
+		},
+		progress: func(context.Context) error {
+			progress++
+			return nil
+		},
+		term: func(context.Context) error {
+			terms++
+			return errors.New("unexpected term")
+		},
+	})
+	if err != nil {
+		t.Fatalf("deferred apply should ACK and return nil, got %v", err)
+	}
+	if applies != 1 || acks != 1 || progress != 0 || terms != 0 {
+		t.Fatalf("applies=%d acks=%d progress=%d terms=%d, want 1/1/0/0", applies, acks, progress, terms)
+	}
+	if time.Since(started) >= time.Second {
+		t.Fatalf("deferred apply retried for %s, want immediate ACK", time.Since(started))
+	}
+}
+
+func TestProcessDeliveryKeepsPermanentEventPendingByDefault(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var terms, progress int
+	delivery := &jetstream.Delivery{Subject: "poison", DeliveryCount: 1}
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, -1, func(context.Context, *jetstream.Delivery) error {
+		return Permanent(errors.New("invalid event"))
+	}, deliveryActions{
+		ack:      func(context.Context) error { return errors.New("unexpected ack") },
+		progress: func(context.Context) error { progress++; cancel(); return nil },
+		term:     func(context.Context) error { terms++; return nil },
+	})
+	if err == nil {
+		t.Fatal("poison delivery returned nil")
+	}
+	if terms != 0 || progress != 1 {
+		t.Fatalf("terms=%d progress=%d, want 0/1", terms, progress)
+	}
+}

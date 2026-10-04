@@ -38,6 +38,20 @@ func (q *QueryService) Latest(ctx context.Context, seriesID string) (*MetricLate
 	return q.messageStore.GetLatest(ctx, seriesID)
 }
 
+func (q *QueryService) ListLatestByMetricNames(ctx context.Context, names []string, limit int) ([]MetricLatest, error) {
+	if q == nil || q.messageStore == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	return q.messageStore.ListLatestByMetricNames(ctx, names, limit)
+}
+
+func (q *QueryService) ListLatestByViewScopes(ctx context.Context, metricName string, scopes []ViewMetricScope, limit int) ([]MetricLatest, error) {
+	if q == nil || q.messageStore == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	return q.messageStore.ListLatestByViewScopes(ctx, metricName, scopes, limit)
+}
+
 func (q *QueryService) History(ctx context.Context, seriesID, serviceName, metricName, labelsJSON string, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
 	if q == nil || q.catalog == nil || q.storage == nil {
 		return nil, ErrMetricsStoreUnavailable
@@ -54,6 +68,16 @@ func (q *QueryService) History(ctx context.Context, seriesID, serviceName, metri
 		selectors = append(selectors, HistorySelectorForSeries(s))
 	}
 	return q.storage.QueryHistorySelectors(ctx, selectors, start, end, desc, limit)
+}
+
+func (q *QueryService) ActiveDatasetSubjects(ctx context.Context, spaceID, datasetID string) (map[string]struct{}, error) {
+	if q == nil || q.storage == nil {
+		// Unit-level metric evaluation can operate on its explicit observations;
+		// the production monitor wires the Storage metadata adapter here and gets
+		// authoritative lifecycle filtering.
+		return nil, nil
+	}
+	return q.storage.ListActiveDatasetSubjects(ctx, spaceID, datasetID)
 }
 
 func parseTimeValue(raw string) (time.Time, error) {

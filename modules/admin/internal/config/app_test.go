@@ -13,8 +13,8 @@ func TestAppConfig_DefaultConfig_ShouldReturnValidDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 	require.NotNil(t, cfg)
 	assert.Equal(t, "./data/admin.db", cfg.Database.Path)
-	assert.Equal(t, 10, cfg.Database.MaxIdleConns)
-	assert.Equal(t, 100, cfg.Database.MaxOpenConns)
+	assert.Equal(t, 4, cfg.Database.MaxIdleConns)
+	assert.Equal(t, 8, cfg.Database.MaxOpenConns)
 }
 
 func TestAppConfig_Validate_EmptyPath_ShouldReturnError(t *testing.T) {
@@ -71,11 +71,4 @@ func TestAppConfig_applyEnv_DBPath_ShouldOverridePath(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.applyEnv()
 	assert.Equal(t, filepath.Join(dir, "env.db"), cfg.Database.Path)
-}
-
-func TestAppConfig_GlobalConfig_ShouldRoundTrip(t *testing.T) {
-	cfg := DefaultConfig()
-	SetGlobalConfig(cfg)
-	got := GetGlobalConfig()
-	assert.Equal(t, cfg, got)
 }

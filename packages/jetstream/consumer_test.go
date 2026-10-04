@@ -3,164 +3,467 @@ package jetstream
 import (
 	"context"
 	"errors"
-	"sync"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
-func TestNewPullConsumerRequiresDurableAndStream(t *testing.T) {
-	client := &Client{}
-	_, err := client.NewPullConsumer(context.Background(), ConsumerConfig{})
-	if !errors.Is(err, ErrInvalidConsumer) {
-		t.Fatalf("NewPullConsumer() error = %v, want ErrInvalidConsumer", err)
+func testConsumerConfig(name string) ConsumerConfig {
+	return ConsumerConfig{
+		Stream: "TEST", Durable: name, FilterSubject: "moox.test.>",
+		AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		FetchMaxWait: 100 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy,
 	}
 }
 
-func TestNewPullConsumerHonorsCanceledContext(t *testing.T) {
+func TestNewConsumerCreatesWhenMissing(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()
 	client := connectTestClient(t, url)
 	defer client.Close()
 	ensureTestStream(t, client, "TEST", "moox.test.>")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	started := time.Now()
-	_, err := client.NewPullConsumer(ctx, ConsumerConfig{Stream: "TEST", Durable: "cancelled", FilterSubject: "moox.test.>"})
-	if !errors.Is(err, ErrConnection) || !errors.Is(err, context.Canceled) || time.Since(started) > time.Second {
-		t.Fatalf("NewPullConsumer() error = %v, elapsed = %s", err, time.Since(started))
-	}
-}
-
-func TestPullConsumerSequentialRestartPreservesDurableConfiguration(t *testing.T) {
-	srv, url := startTestServer(t)
-	defer srv.Shutdown()
-	client := connectTestClient(t, url)
-	defer client.Close()
-	ensureTestStream(t, client, "TEST", "moox.test.>")
-	cfg := ConsumerConfig{Stream: "TEST", Durable: "restart-worker", FilterSubject: "moox.test.>", AckWait: 250 * time.Millisecond, MaxDeliver: 4, MaxAckPending: 17}
-	first, err := client.NewPullConsumer(context.Background(), cfg)
+	consumer, err := client.NewConsumer(context.Background(), testConsumerConfig("created"))
 	if err != nil {
-		t.Fatalf("first NewPullConsumer() error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("first Close() error = %v", err)
-	}
-	second, err := client.NewPullConsumer(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("second NewPullConsumer() error = %v", err)
-	}
-	defer second.Close()
-	info, err := client.js.ConsumerInfo("TEST", "restart-worker")
-	if err != nil {
-		t.Fatalf("ConsumerInfo() error = %v", err)
-	}
-	if info.Config.FilterSubject != cfg.FilterSubject || info.Config.AckWait != cfg.AckWait || info.Config.MaxDeliver != cfg.MaxDeliver || info.Config.MaxAckPending != cfg.MaxAckPending {
-		t.Fatalf("durable config = %+v, want filter=%q ack_wait=%s max_deliver=%d max_ack_pending=%d", info.Config, cfg.FilterSubject, cfg.AckWait, cfg.MaxDeliver, cfg.MaxAckPending)
-	}
-}
-
-func TestPullConsumerConcurrentCreationIsIdempotent(t *testing.T) {
-	srv, url := startTestServer(t)
-	defer srv.Shutdown()
-	client := connectTestClient(t, url)
-	defer client.Close()
-	ensureTestStream(t, client, "TEST", "moox.test.>")
-	cfg := ConsumerConfig{Stream: "TEST", Durable: "race-worker", FilterSubject: "moox.test.>", AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8}
-	results := make(chan error, 2)
-	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			consumer, err := client.NewPullConsumer(context.Background(), cfg)
-			if err == nil {
-				err = consumer.Close()
-			}
-			results <- err
-		}()
-	}
-	wg.Wait()
-	close(results)
-	for err := range results {
-		if err != nil {
-			t.Fatalf("concurrent NewPullConsumer() error = %v", err)
-		}
-	}
-}
-
-func TestPullConsumerRejectsDurableConfigurationDrift(t *testing.T) {
-	srv, url := startTestServer(t)
-	defer srv.Shutdown()
-	client := connectTestClient(t, url)
-	defer client.Close()
-	ensureTestStream(t, client, "TEST", "moox.test.>")
-	base := ConsumerConfig{Stream: "TEST", Durable: "drift-worker", FilterSubject: "moox.test.>", AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8}
-	consumer, err := client.NewPullConsumer(context.Background(), base)
-	if err != nil {
-		t.Fatalf("base NewPullConsumer() error = %v", err)
+		t.Fatal(err)
 	}
 	defer consumer.Close()
-	for name, changed := range map[string]ConsumerConfig{
-		"filter":      func() ConsumerConfig { c := base; c.FilterSubject = "moox.test.events.>"; return c }(),
-		"ack wait":    func() ConsumerConfig { c := base; c.AckWait = 2 * time.Second; return c }(),
-		"max deliver": func() ConsumerConfig { c := base; c.MaxDeliver = 4; return c }(),
-		"ack pending": func() ConsumerConfig { c := base; c.MaxAckPending = 9; return c }(),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := client.NewPullConsumer(context.Background(), changed); !errors.Is(err, ErrInvalidConsumer) {
-				t.Fatalf("NewPullConsumer() error = %v, want ErrInvalidConsumer", err)
-			}
-		})
+	if _, err := client.js.ConsumerInfo("TEST", "created"); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestNewPullConsumerRequiresFilterSubject(t *testing.T) {
+func TestReconnectReplacesUnderlyingConnection(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	old := client.nc
+	if err := client.Reconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if client.nc == old {
+		t.Fatal("Reconnect did not replace the NATS connection")
+	}
+	if !old.IsClosed() {
+		t.Fatal("Reconnect left the old NATS connection open")
+	}
+	if !client.Ready() {
+		t.Fatal("client is not ready after Reconnect")
+	}
+}
+
+func TestReconnectKeepsDurableConsumerBindable(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()
 	client := connectTestClient(t, url)
 	defer client.Close()
 	ensureTestStream(t, client, "TEST", "moox.test.>")
-	_, err := client.NewPullConsumer(context.Background(), ConsumerConfig{Stream: "TEST", Durable: "missing-filter"})
-	if !errors.Is(err, ErrInvalidConsumer) {
-		t.Fatalf("NewPullConsumer() error = %v, want ErrInvalidConsumer", err)
+	cfg := testConsumerConfig("reconnect-durable")
+	oldConsumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldConsumer.Close()
+	if _, err := client.PublishRaw(context.Background(), "moox.test.reconnect", "reconnect-1", []byte("payload"), "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Reconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	newConsumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newConsumer.Close()
+	deliveries, err := newConsumer.Fetch(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 || string(deliveries[0].RawData) != "payload" {
+		t.Fatalf("deliveries after reconnect = %+v", deliveries)
 	}
 }
 
-func TestBindPullConsumerNeverCreates(t *testing.T) {
+func TestDeleteConsumerRemovesDurable(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()
 	client := connectTestClient(t, url)
 	defer client.Close()
 	ensureTestStream(t, client, "TEST", "moox.test.>")
-	_, err := client.BindPullConsumer(context.Background(), ConsumerRef{Stream: "TEST", Durable: "missing", FilterSubject: "moox.test.>"})
-	if !errors.Is(err, ErrConsumerNotFound) {
-		t.Fatalf("BindPullConsumer() error=%v, want not found", err)
-	}
-	if _, err := client.js.ConsumerInfo("TEST", "missing"); !errors.Is(err, nats.ErrConsumerNotFound) {
-		t.Fatalf("missing consumer was created: %v", err)
-	}
-	created, err := client.EnsurePullConsumer(context.Background(), ConsumerConfig{Stream: "TEST", Durable: "existing", FilterSubject: "moox.test.>", AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8})
+	consumer, err := client.NewConsumer(context.Background(), testConsumerConfig("delete-me"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = created.Close()
-	bound, err := client.BindPullConsumer(context.Background(), ConsumerRef{Stream: "TEST", Durable: "existing", FilterSubject: "moox.test.>", AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8})
+	_ = consumer.Close()
+	if err := client.DeleteConsumer(context.Background(), "TEST", "delete-me"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.js.ConsumerInfo("TEST", "delete-me"); !errors.Is(err, nats.ErrConsumerNotFound) {
+		t.Fatalf("ConsumerInfo() error = %v, want consumer not found", err)
+	}
+}
+
+func TestNewConsumerBindsMatchingConsumer(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	cfg := testConsumerConfig("matching")
+	first, err := client.NewConsumer(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = bound.Close()
+	_ = first.Close()
+	second, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Close()
+}
+
+func TestConsumerRemainsUsableAfterSetupContextIsCanceled(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+
+	setupCtx, cancelSetup := context.WithCancel(context.Background())
+	consumer, err := client.NewConsumer(setupCtx, testConsumerConfig("setup-context"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	cancelSetup()
+
+	if _, err := client.PublishRaw(context.Background(), "moox.test.context", "context-1", []byte("payload"), "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := consumer.Fetch(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Fetch() after setup context cancellation: %v", err)
+	}
+	if len(deliveries) != 1 || string(deliveries[0].RawData) != "payload" {
+		t.Fatalf("deliveries after setup context cancellation = %+v", deliveries)
+	}
+}
+
+func TestNewConsumerSupportsMultipleFilterSubjects(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	cfg := testConsumerConfig("multiple-filters")
+	cfg.FilterSubject = ""
+	cfg.FilterSubjects = []string{" moox.test.beta.> ", "moox.test.alpha.>"}
+	consumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	info, err := client.js.ConsumerInfo("TEST", cfg.Durable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFilters := []string{"moox.test.alpha.>", "moox.test.beta.>"}
+	if !reflect.DeepEqual(info.Config.FilterSubjects, wantFilters) {
+		t.Fatalf("filter subjects = %v, want %v", info.Config.FilterSubjects, wantFilters)
+	}
+	for i, subject := range []string{"moox.test.alpha.one", "moox.test.ignored.one", "moox.test.beta.one"} {
+		if _, err := client.PublishRaw(context.Background(), subject, fmt.Sprintf("message-%d", i), []byte(subject), "application/octet-stream"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliveries, err := consumer.Fetch(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{deliveries[0].Subject, deliveries[1].Subject}
+	if !reflect.DeepEqual(got, []string{"moox.test.alpha.one", "moox.test.beta.one"}) {
+		t.Fatalf("subjects = %v", got)
+	}
+}
+
+func TestNewConsumerAcceptsExistingFiltersInDifferentOrder(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+
+	// Simulate a durable created before filter normalization was introduced.
+	_, err := client.js.AddConsumer("TEST", &nats.ConsumerConfig{
+		Name:           "legacy-filter-order",
+		Durable:        "legacy-filter-order",
+		FilterSubjects: []string{"moox.test.beta.>", "moox.test.alpha.>"},
+		AckPolicy:      nats.AckExplicitPolicy,
+		AckWait:        time.Second,
+		MaxDeliver:     3,
+		MaxAckPending:  8,
+		DeliverPolicy:  nats.DeliverAllPolicy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testConsumerConfig("legacy-filter-order")
+	cfg.FilterSubject = ""
+	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}
+	consumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+}
+
+func TestNewConsumerAcceptsSupersetFilterSubjects(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	_, err := client.js.AddConsumer("TEST", &nats.ConsumerConfig{
+		Name: "superset-filters", Durable: "superset-filters",
+		FilterSubjects: []string{"moox.test.alpha.>", "moox.test.beta.>", "moox.test.gamma.>"},
+		AckPolicy:      nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConsumerConfig("superset-filters")
+	cfg.FilterSubject = ""
+	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}
+	consumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	info, err := client.js.ConsumerInfo("TEST", "superset-filters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Config.FilterSubjects) != 3 {
+		t.Fatalf("durable filters = %v, want the existing superset kept", info.Config.FilterSubjects)
+	}
+}
+
+func TestNewConsumerRejectsMissingFilterSubjects(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	_, err := client.js.AddConsumer("TEST", &nats.ConsumerConfig{
+		Name: "subset-filters", Durable: "subset-filters",
+		FilterSubjects: []string{"moox.test.alpha.>"},
+		AckPolicy:      nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConsumerConfig("subset-filters")
+	cfg.FilterSubject = ""
+	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}
+	if _, err := client.NewConsumer(context.Background(), cfg); !errors.Is(err, ErrConsumerConfigConflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+}
+
+func TestNewConsumerRejectsAmbiguousFilterConfiguration(t *testing.T) {
+	cfg := testConsumerConfig("ambiguous-filters")
+	cfg.FilterSubjects = []string{"moox.test.alpha.>", "moox.test.beta.>"}
+	if _, err := (&Client{}).NewConsumer(context.Background(), cfg); !errors.Is(err, ErrInvalidConsumer) {
+		t.Fatalf("error = %v, want invalid consumer", err)
+	}
+}
+
+func TestConsumerStateReportsPendingAndAckPending(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	consumer, err := client.NewConsumer(context.Background(), testConsumerConfig("consumer-state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	for i := 0; i < 2; i++ {
+		if _, err := client.PublishRaw(context.Background(), "moox.test.state", fmt.Sprintf("state-%d", i), []byte("payload"), "application/octet-stream"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliveries, err := consumer.Fetch(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 {
+		t.Fatalf("deliveries = %d", len(deliveries))
+	}
+	state, err := client.ConsumerState(context.Background(), "TEST", "consumer-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NumPending != 1 || state.NumAckPending != 1 {
+		t.Fatalf("state = %+v, want one pending and one ack pending", state)
+	}
+}
+
+func TestConsumerStateRejectsMissingConsumer(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	if _, err := client.ConsumerState(context.Background(), "TEST", "missing"); !errors.Is(err, ErrConsumerNotFound) {
+		t.Fatalf("error = %v, want consumer not found", err)
+	}
+}
+
+func TestNewConsumerUpdatesMutableFields(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	cfg := testConsumerConfig("mutable")
+	first, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	cfg.AckWait = 2 * time.Second
+	cfg.MaxDeliver = 5
+	cfg.MaxAckPending = 16
+	second, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Close()
+	info, _ := client.js.ConsumerInfo("TEST", "mutable")
+	if info.Config.AckWait != cfg.AckWait || info.Config.MaxDeliver != 5 || info.Config.MaxAckPending != 16 {
+		t.Fatalf("updated config = %+v", info.Config)
+	}
+}
+
+func TestNewConsumerRejectsImmutableConflict(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	cfg := testConsumerConfig("conflict")
+	first, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	cfg.FilterSubject = "moox.test.other.>"
+	if _, err := client.NewConsumer(context.Background(), cfg); !errors.Is(err, ErrConsumerConfigConflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+}
+
+func TestNewConsumerRejectsDurableOwnedByAnotherStream(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	ensureTestStream(t, client, "OTHER", "moox.other.>")
+	cfg := testConsumerConfig("shared-name")
+	first, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	cfg.Stream = "OTHER"
+	cfg.FilterSubject = "moox.other.>"
+	if _, err := client.NewConsumer(context.Background(), cfg); !errors.Is(err, ErrConsumerConfigConflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+	if _, err := client.js.ConsumerInfo("OTHER", cfg.Durable); !errors.Is(err, nats.ErrConsumerNotFound) {
+		t.Fatalf("consumer unexpectedly created in OTHER: %v", err)
+	}
+}
+
+func TestConsumerOwnershipCheckIsBestEffortWithScopedStreamPermissions(t *testing.T) {
+	port := reserveTestPort(t)
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: port, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+		Users: []*natsserver.User{{
+			Username: "scoped", Password: "secret",
+			Permissions: &natsserver.Permissions{
+				Publish:   &natsserver.SubjectPermission{Allow: []string{"$JS.API.CONSUMER.INFO.TEST.*"}, Deny: []string{"$JS.API.STREAM.NAMES"}},
+				Subscribe: &natsserver.SubjectPermission{Allow: []string{"_INBOX.>"}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Start()
+	if !srv.ReadyForConnections(5 * time.Second) {
+		srv.Shutdown()
+		t.Fatal("nats server not ready")
+	}
+	defer srv.Shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := Connect(ctx, Config{URLs: []string{fmt.Sprintf("nats://127.0.0.1:%d", port)}, Username: "scoped", Password: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	if err := client.rejectConsumerOwnedByAnotherStream(ctx, "TEST", "durable"); err != nil {
+		t.Fatalf("cross-stream ownership discovery should not block a scoped client: %v", err)
+	}
+}
+
+func TestNewConsumerDoesNotDeleteConflictingConsumer(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	cfg := testConsumerConfig("preserved")
+	first, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	conflict := cfg
+	conflict.DeliverPolicy = nats.DeliverNewPolicy
+	if _, err := client.NewConsumer(context.Background(), conflict); !errors.Is(err, ErrConsumerConfigConflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+	info, err := client.js.ConsumerInfo("TEST", "preserved")
+	if err != nil || info.Config.DeliverPolicy != nats.DeliverAllPolicy {
+		t.Fatalf("consumer was replaced: info=%v err=%v", info, err)
+	}
+}
+
+func TestNewConsumerRequiresExplicitSettings(t *testing.T) {
+	if _, err := (&Client{}).NewConsumer(context.Background(), ConsumerConfig{}); !errors.Is(err, ErrInvalidConsumer) {
+		t.Fatalf("error = %v, want invalid consumer", err)
+	}
 }
 
 func TestDeliveryOperationsRequireContext(t *testing.T) {
 	var d *Delivery
 	for name, fn := range map[string]func(context.Context) error{
-		"ack":         d.Ack,
-		"nak":         func(ctx context.Context) error { return d.Nak(ctx, time.Second) },
-		"in progress": d.InProgress,
-		"term":        d.Term,
+		"ack": d.Ack, "nak": func(ctx context.Context) error { return d.Nak(ctx, time.Second) },
+		"in progress": d.InProgress, "term": d.Term,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := fn(context.Background()); !errors.Is(err, ErrInvalidDelivery) {

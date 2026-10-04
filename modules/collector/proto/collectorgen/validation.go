@@ -2,9 +2,9 @@ package collectorpb
 
 import "fmt"
 
-func (r *CreateTaskRuleReq) Validate() error {
-	if r == nil || r.Rule == nil {
-		return fmt.Errorf("rule is required")
+func (r *CreateTaskReq) Validate() error {
+	if r == nil || r.Task == nil {
+		return fmt.Errorf("task is required")
 	}
 	return nil
 }

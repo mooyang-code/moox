@@ -1,22 +1,27 @@
 import { callStorage as callMetadata } from "./http";
 import type {
   ArchiveFile,
+  DataNode,
+  DataNodeListItem,
   DataSource,
   Dataset,
+  DatasetActivationCheck,
   DatasetColumn,
   DatasetSubject,
-  Factor,
+  DatasetMutation,
   Field,
   FieldGroup,
   Page,
   PageResult,
-  PrimaryStoreNode,
-  PrimaryStoreRoute,
   RetInfo,
   Subject,
-  SubjectSymbol,
+  Tag,
+  TagMember,
+  TagMemberStatus,
+  TagReference,
   View,
-  ViewColumn
+  ViewColumn,
+  ViewRebuildLog
 } from "./types";
 
 type RetRsp = { ret_info: RetInfo };
@@ -63,19 +68,45 @@ export function listSubjects(params: {
   return callMetadata<typeof params, RetRsp & { subjects: Subject[]; page_result: PageResult }>("ListSubjects", params);
 }
 
-export async function upsertSubjectSymbol(subject_symbol: SubjectSymbol) {
-  const rsp = await callMetadata<{ subject_symbol: SubjectSymbol }, RetRsp & { subject_symbol: SubjectSymbol }>(
-    "UpsertSubjectSymbol",
-    { subject_symbol }
-  );
-  return rsp.subject_symbol;
+export async function upsertTag(tag: Tag, createOnly = false) {
+  const rsp = await callMetadata<{ tag: Tag; create_only?: boolean }, RetRsp & { tag: Tag }>("UpsertTag", { tag, ...(createOnly ? { create_only: true } : {}) });
+  return rsp.tag;
 }
 
-export function listSubjectSymbols(params: { space_id: string; subject_id?: string; data_source_id?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { subject_symbols: SubjectSymbol[]; page_result: PageResult }>(
-    "ListSubjectSymbols",
-    params
-  );
+export function listTags(spaceId: string, page: Page = { page: 1, size: 200 }) {
+  return callMetadata<{ space_id: string; page: Page }, RetRsp & { tags: Tag[]; page_result: PageResult }>("ListTags", {
+    space_id: spaceId,
+    page
+  });
+}
+
+export function deleteTag(spaceId: string, tagId: string) {
+  return callMetadata<{ space_id: string; tag_id: string }, RetRsp & { references?: TagReference[] }>("DeleteTag", {
+    space_id: spaceId,
+    tag_id: tagId
+  });
+}
+
+export function listTagMembers(params: {
+  space_id: string;
+  tag_id?: string;
+  status?: string;
+  keyword?: string;
+  page: Page;
+}) {
+  return callMetadata<typeof params, RetRsp & { members: TagMember[]; page_result: PageResult }>("ListTagMembers", params);
+}
+
+export function addTagMembers(spaceId: string, tagId: string, subjectIds: string[]) {
+  return callMetadata("AddTagMembers", { space_id: spaceId, tag_id: tagId, subject_ids: subjectIds });
+}
+
+export function removeTagMembers(spaceId: string, tagId: string, subjectIds: string[]) {
+  return callMetadata("RemoveTagMembers", { space_id: spaceId, tag_id: tagId, subject_ids: subjectIds });
+}
+
+export function setTagMemberStatus(spaceId: string, tagId: string, subjectIds: string[], status: TagMemberStatus) {
+  return callMetadata("SetTagMemberStatus", { space_id: spaceId, tag_id: tagId, subject_ids: subjectIds, status });
 }
 
 export async function createDataset(dataset: Dataset) {
@@ -83,8 +114,8 @@ export async function createDataset(dataset: Dataset) {
   return rsp.dataset;
 }
 
-export async function updateDataset(dataset: Dataset) {
-  const rsp = await callMetadata<{ dataset: Dataset }, RetRsp & { dataset: Dataset }>("UpdateDataset", { dataset });
+export async function updateDataset(dataset: DatasetMutation) {
+  const rsp = await callMetadata<{ dataset: DatasetMutation }, RetRsp & { dataset: Dataset }>("UpdateDataset", { dataset });
   return rsp.dataset;
 }
 
@@ -92,16 +123,14 @@ export function getDataset(params: { space_id: string; dataset_id: string }) {
   return callMetadata<typeof params, RetRsp & { dataset: Dataset }>("GetDataset", params);
 }
 
-export function listDatasets(params: { space_id: string; data_kind?: string; status?: string; page?: Page }) {
+export function listDatasets(params: {
+  space_id: string;
+  data_source_id?: string;
+  data_kind?: string;
+  data_node_id?: string;
+  page?: Page;
+}) {
   return callMetadata<typeof params, RetRsp & { datasets: Dataset[]; page_result: PageResult }>("ListDatasets", params);
-}
-
-export async function bindDatasetSubject(dataset_subject: DatasetSubject) {
-  const rsp = await callMetadata<{ dataset_subject: DatasetSubject }, RetRsp & { dataset_subject: DatasetSubject }>(
-    "BindDatasetSubject",
-    { dataset_subject }
-  );
-  return rsp.dataset_subject;
 }
 
 export function listDatasetSubjects(params: { space_id: string; dataset_id?: string; subject_id?: string; page?: Page }) {
@@ -180,24 +209,6 @@ export function deleteFieldGroup(params: { space_id: string; group_id: string })
   return callMetadata<typeof params, RetRsp>("DeleteFieldGroup", params);
 }
 
-export async function createFactor(factor: Factor) {
-  const rsp = await callMetadata<{ factor: Factor }, RetRsp & { factor: Factor }>("CreateFactor", { factor });
-  return rsp.factor;
-}
-
-export async function updateFactor(factor: Factor) {
-  const rsp = await callMetadata<{ factor: Factor }, RetRsp & { factor: Factor }>("UpdateFactor", { factor });
-  return rsp.factor;
-}
-
-export function getFactor(params: { space_id: string; factor_id: string }) {
-  return callMetadata<typeof params, RetRsp & { factor: Factor }>("GetFactor", params);
-}
-
-export function listFactors(params: { space_id: string; status?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { factors: Factor[]; page_result: PageResult }>("ListFactors", params);
-}
-
 export async function upsertDatasetColumn(dataset_column: DatasetColumn) {
   const rsp = await callMetadata<{ column: DatasetColumn }, RetRsp & { column: DatasetColumn }>("UpsertDatasetColumn", {
     column: dataset_column
@@ -222,12 +233,26 @@ export async function updateView(view: View) {
   return rsp.view;
 }
 
+export function requestViewRebuild(params: { space_id: string; view_id: string }) {
+  return callMetadata<typeof params, RetRsp & { view: View }>("RequestViewRebuild", params);
+}
+
 export function getView(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("GetView", params);
 }
 
-export function listViews(params: { space_id: string; primary_dataset_id?: string; status?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { views: View[]; page_result: PageResult }>("ListViews", params);
+export function listViews(params: {
+  space_id: string;
+  dataset_id?: string;
+  primary_dataset_id?: string;
+  status?: string;
+  page?: Page;
+}) {
+  const { primary_dataset_id, dataset_id, ...rest } = params;
+  return callMetadata<typeof rest & { dataset_id?: string }, RetRsp & { views: View[]; page_result: PageResult }>("ListViews", {
+    ...rest,
+    ...(dataset_id || primary_dataset_id ? { dataset_id: dataset_id || primary_dataset_id } : {})
+  });
 }
 
 export async function upsertViewColumn(view_column: ViewColumn) {
@@ -241,62 +266,45 @@ export function listViewColumns(params: { space_id: string; view_id: string; pag
   return callMetadata<typeof params, RetRsp & { columns: ViewColumn[]; page_result: PageResult }>("ListViewColumns", params);
 }
 
-export async function createPrimaryStoreNode(primary_store_node: PrimaryStoreNode) {
-  const rsp = await callMetadata<{ node: PrimaryStoreNode }, RetRsp & { node: PrimaryStoreNode }>("CreatePrimaryStoreNode", {
-    node: primary_store_node
-  });
+export function listViewRebuildLogs(params: { space_id: string; view_id: string; result?: number; page?: Page }) {
+  return callMetadata<typeof params, RetRsp & { logs: ViewRebuildLog[]; page_result: PageResult }>("ListViewRebuildLogs", params);
+}
+
+export function getDataNode(params: { node_id: string }) {
+  return callMetadata<typeof params, RetRsp & { node: DataNode }>("GetDataNode", params);
+}
+
+export function listDataNodes(params: { status?: string; page?: Page }) {
+  return callMetadata<typeof params, RetRsp & { items: DataNodeListItem[]; page_result: PageResult }>("ListDataNodes", params);
+}
+
+export async function updateDataNode(params: { node_id: string; name: string; status: string }) {
+  const rsp = await callMetadata<typeof params, RetRsp & { node: DataNode }>("UpdateDataNode", params);
   return rsp.node;
 }
 
-export async function updatePrimaryStoreNode(primary_store_node: PrimaryStoreNode) {
-  const rsp = await callMetadata<{ node: PrimaryStoreNode }, RetRsp & { node: PrimaryStoreNode }>("UpdatePrimaryStoreNode", {
-    node: primary_store_node
-  });
-  return rsp.node;
+export function deleteDataNode(params: { node_id: string }) {
+  return callMetadata<typeof params, RetRsp & { node: DataNode }>("DeleteDataNode", params);
 }
 
-export function getPrimaryStoreNode(params: { node_id: string }) {
-  return callMetadata<typeof params, RetRsp & { node: PrimaryStoreNode }>("GetPrimaryStoreNode", params);
+export function checkDatasetActivation(params: { space_id: string; dataset_id: string }) {
+  return callMetadata<
+    typeof params,
+    RetRsp & { dataset_revision: number | string; checks: DatasetActivationCheck[]; ready: boolean }
+  >("CheckDatasetActivation", params);
 }
 
-export function listPrimaryStoreNodes(params: { status?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { nodes: PrimaryStoreNode[]; page_result: PageResult }>(
-    "ListPrimaryStoreNodes",
-    params
-  );
+export function activateDataset(params: { space_id: string; dataset_id: string; expected_revision: number | string }) {
+  return callMetadata<typeof params, RetRsp & { dataset: Dataset; checks: DatasetActivationCheck[] }>("ActivateDataset", params);
 }
 
-export async function createPrimaryStoreRoute(primary_store_route: PrimaryStoreRoute) {
-  const rsp = await callMetadata<{ primary_store_route: PrimaryStoreRoute }, RetRsp & { primary_store_route: PrimaryStoreRoute }>(
-    "CreatePrimaryStoreRoute",
-    { primary_store_route }
-  );
-  return rsp.primary_store_route;
-}
-
-export async function updatePrimaryStoreRoute(primary_store_route: PrimaryStoreRoute) {
-  const rsp = await callMetadata<{ primary_store_route: PrimaryStoreRoute }, RetRsp & { primary_store_route: PrimaryStoreRoute }>(
-    "UpdatePrimaryStoreRoute",
-    { primary_store_route }
-  );
-  return rsp.primary_store_route;
-}
-
-export function getPrimaryStoreRoute(params: { space_id: string; route_id: string }) {
-  return callMetadata<typeof params, RetRsp & { primary_store_route: PrimaryStoreRoute }>("GetPrimaryStoreRoute", params);
-}
-
-export function listPrimaryStoreRoutes(params: {
+export function rebindDatasetDataNode(params: {
   space_id: string;
-  dataset_id?: string;
-  subject_id?: string;
-  status?: string;
-  page?: Page;
+  dataset_id: string;
+  data_node_id: string;
+  expected_revision: number | string;
 }) {
-  return callMetadata<typeof params, RetRsp & { primary_store_routes: PrimaryStoreRoute[]; page_result: PageResult }>(
-    "ListPrimaryStoreRoutes",
-    params
-  );
+  return callMetadata<typeof params, RetRsp & { dataset: Dataset }>("RebindDatasetDataNode", params);
 }
 
 export async function registerArchiveFile(archive_file: ArchiveFile) {
@@ -306,7 +314,14 @@ export async function registerArchiveFile(archive_file: ArchiveFile) {
   return rsp.archive_file;
 }
 
-export function listArchiveFiles(params: { space_id: string; dataset_id?: string; status?: string; page?: Page }) {
+export function listArchiveFiles(params: {
+  space_id: string;
+  dataset_id?: string;
+  status?: string;
+  sort_by?: "min_time" | "max_time" | "created_at" | "updated_at";
+  sort_order?: "asc" | "desc";
+  page?: Page;
+}) {
   return callMetadata<typeof params, RetRsp & { archive_files: ArchiveFile[]; page_result: PageResult }>(
     "ListArchiveFiles",
     params

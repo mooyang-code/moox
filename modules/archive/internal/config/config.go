@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var durablePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var consumerPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var sourcePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 type Config struct {
@@ -38,15 +39,14 @@ type SourceConfig struct {
 
 type EventBusConfig struct {
 	URLs            []string      `yaml:"urls"`
-	Stream          string        `yaml:"stream"`
-	Subject         string        `yaml:"subject"`
-	Durable         string        `yaml:"durable"`
+	CredentialFile  string        `yaml:"credential_file"`
+	Consumer        string        `yaml:"-"`
 	FetchBatch      int           `yaml:"fetch_batch"`
 	FetchMaxWait    time.Duration `yaml:"fetch_max_wait"`
-	AckWait         time.Duration `yaml:"ack_wait"`
-	MaxAckPending   int           `yaml:"max_ack_pending"`
 	DedupeRetention time.Duration `yaml:"dedupe_retention"`
 }
+
+const ArchiveConsumer = "moox_archive_kline_v2"
 
 type MaterializeConfig struct {
 	PendingRows     int           `yaml:"pending_rows"`
@@ -60,6 +60,13 @@ type StorageRPCConfig struct {
 	GatewayNodeID string `yaml:"gateway_node_id"`
 	KeyID         string `yaml:"key_id"`
 	HMACKeyFile   string `yaml:"hmac_key_file"`
+}
+
+func (c StorageRPCConfig) TargetNodeID() string {
+	if nodeID := strings.TrimSpace(c.GatewayNodeID); nodeID != "" {
+		return nodeID
+	}
+	return gatewayauth.ServiceGatewayNodeID()
 }
 
 type COSConfig struct {
@@ -82,16 +89,14 @@ func Default() *Config {
 			StateDir: "../data/archive-state",
 			DeviceID: "parquet-local",
 			Sources: map[string]SourceConfig{
-				"stock_cn":       {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
-				"stock_us":       {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
-				"crypto_binance": {Datasets: []string{"spot_kline", "swap_kline"}},
-				"crypto_okx":     {Datasets: []string{"spot_kline", "swap_kline"}},
+				"stockcn": {Datasets: []string{"dataset_stockcn_equity_kline", "dataset_stockcn_index_kline", "dataset_stockcn_bond_kline"}},
+				"stockus": {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
+				"crypto":  {Datasets: []string{"dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}},
 			},
 			EventBus: EventBusConfig{
-				URLs: []string{"nats://127.0.0.1:4222"}, Stream: "MOOX_STORAGE",
-				Subject: "moox.storage.rows_committed.time_series.v1.>", Durable: "moox_archive_kline_v1",
-				FetchBatch: 128, FetchMaxWait: time.Second, AckWait: 5 * time.Minute,
-				MaxAckPending: 256, DedupeRetention: 168 * time.Hour,
+				URLs:     []string{"nats://127.0.0.1:4222"},
+				Consumer: ArchiveConsumer, FetchBatch: 128, FetchMaxWait: time.Second,
+				DedupeRetention: 168 * time.Hour,
 			},
 			Materialize: MaterializeConfig{PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},
 			StorageRPC:  StorageRPCConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "archive"},
@@ -107,7 +112,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read archive config %s: %w", path, err)
 	}
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse archive config %s: %w", path, err)
 	}
 	cfg.applyDefaults()
@@ -134,26 +141,14 @@ func (c *Config) applyDefaults() {
 	if len(c.Archive.EventBus.URLs) == 0 {
 		c.Archive.EventBus.URLs = d.Archive.EventBus.URLs
 	}
-	if c.Archive.EventBus.Stream == "" {
-		c.Archive.EventBus.Stream = d.Archive.EventBus.Stream
-	}
-	if c.Archive.EventBus.Subject == "" {
-		c.Archive.EventBus.Subject = d.Archive.EventBus.Subject
-	}
-	if c.Archive.EventBus.Durable == "" {
-		c.Archive.EventBus.Durable = d.Archive.EventBus.Durable
+	if c.Archive.EventBus.Consumer == "" {
+		c.Archive.EventBus.Consumer = d.Archive.EventBus.Consumer
 	}
 	if c.Archive.EventBus.FetchBatch == 0 {
 		c.Archive.EventBus.FetchBatch = d.Archive.EventBus.FetchBatch
 	}
 	if c.Archive.EventBus.FetchMaxWait == 0 {
 		c.Archive.EventBus.FetchMaxWait = d.Archive.EventBus.FetchMaxWait
-	}
-	if c.Archive.EventBus.AckWait == 0 {
-		c.Archive.EventBus.AckWait = d.Archive.EventBus.AckWait
-	}
-	if c.Archive.EventBus.MaxAckPending == 0 {
-		c.Archive.EventBus.MaxAckPending = d.Archive.EventBus.MaxAckPending
 	}
 	if c.Archive.EventBus.DedupeRetention == 0 {
 		c.Archive.EventBus.DedupeRetention = d.Archive.EventBus.DedupeRetention
@@ -216,7 +211,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("archive directory %s must not be a symlink", p)
 		}
 	}
-	allowed := map[string]bool{"stock_cn": true, "stock_us": true, "crypto_binance": true, "crypto_okx": true}
+	allowed := map[string]bool{"stockcn": true, "stockhk": true, "stockus": true, "crypto": true}
 	if len(c.Archive.Sources) == 0 {
 		return fmt.Errorf("archive sources are required")
 	}
@@ -239,10 +234,10 @@ func (c *Config) Validate() error {
 	if len(e.URLs) == 0 || strings.TrimSpace(strings.Join(e.URLs, ",")) == "" {
 		return fmt.Errorf("archive eventbus urls are required")
 	}
-	if !durablePattern.MatchString(e.Durable) {
-		return fmt.Errorf("invalid archive eventbus durable %q", e.Durable)
+	if !consumerPattern.MatchString(e.Consumer) {
+		return fmt.Errorf("invalid archive eventbus consumer %q", e.Consumer)
 	}
-	if e.Stream == "" || e.Subject == "" || e.FetchBatch <= 0 || e.FetchMaxWait <= 0 || e.AckWait <= 0 || e.MaxAckPending <= 0 {
+	if e.FetchBatch <= 0 || e.FetchMaxWait <= 0 {
 		return fmt.Errorf("archive eventbus settings are invalid")
 	}
 	if e.DedupeRetention < 168*time.Hour {

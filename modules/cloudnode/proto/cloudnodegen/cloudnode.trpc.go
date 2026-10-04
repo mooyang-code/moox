@@ -25,11 +25,17 @@ type CloudNodeMgrService interface {
 
 	InvokeFunction(ctx context.Context, req *InvokeFunctionReq) (*InvokeFunctionRsp, error)
 
-	BatchCreateNodes(ctx context.Context, req *BatchCreateNodesReq) (*BatchChangeResult, error)
+	SubmitCreateNodes(ctx context.Context, req *BatchCreateNodesReq) (*SubmitNodeBatchRsp, error)
 
-	BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*BatchChangeResult, error)
+	SubmitDeployNodes(ctx context.Context, req *BatchDeployNodesReq) (*SubmitNodeBatchRsp, error)
 
-	BatchDeployNodes(ctx context.Context, req *BatchDeployNodesReq) (*BatchChangeResult, error)
+	SubmitDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*SubmitNodeBatchRsp, error)
+
+	GetNodeBatchChange(ctx context.Context, req *GetNodeBatchChangeReq) (*GetNodeBatchChangeRsp, error)
+
+	BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*BatchDeleteNodesRsp, error)
+
+	SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *BatchUpdateNodeRuntimeConfigsReq) (*SubmitNodeBatchRsp, error)
 
 	ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq) (*ListCloudAccountsRsp, error)
 
@@ -39,9 +45,11 @@ type CloudNodeMgrService interface {
 
 	DeleteCloudAccount(ctx context.Context, req *DeleteCloudAccountReq) (*DeleteCloudAccountRsp, error)
 
-	GetCOSAccountInfo(ctx context.Context, req *GetCOSAccountInfoReq) (*GetCOSAccountInfoRsp, error)
-
 	ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq) (*ListCloudRegionsRsp, error)
+
+	PreviewSCFFunctions(ctx context.Context, req *PreviewSCFFunctionsReq) (*PreviewSCFFunctionsRsp, error)
+
+	ImportSCFFunctions(ctx context.Context, req *ImportSCFFunctionsReq) (*ImportSCFFunctionsRsp, error)
 
 	GetPackageList(ctx context.Context, req *GetPackageListReq) (*GetPackageListRsp, error)
 
@@ -55,21 +63,13 @@ type CloudNodeMgrService interface {
 
 	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error)
 
-	ReportHeartbeat(ctx context.Context, req *ReportHeartbeatReq) (*ReportHeartbeatRsp, error)
-
 	SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq) (*SubmitJobItemsRsp, error)
 
-	PollJobItems(ctx context.Context, req *PollJobItemsReq) (*PollJobItemsRsp, error)
-
 	ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq) (*ReportJobItemStatusRsp, error)
-
-	CancelJobItem(ctx context.Context, req *CancelJobItemReq) (*CancelJobItemRsp, error)
 
 	GetJobItem(ctx context.Context, req *GetJobItemReq) (*GetJobItemRsp, error)
 
 	ListJobItems(ctx context.Context, req *ListJobItemsReq) (*ListJobItemsRsp, error)
-
-	ListJobItemAttempts(ctx context.Context, req *ListJobItemAttemptsReq) (*ListJobItemAttemptsRsp, error)
 
 	InvokeSync(ctx context.Context, req *InvokeSyncReq) (*InvokeSyncRsp, error)
 }
@@ -128,14 +128,68 @@ func CloudNodeMgrService_InvokeFunction_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func CloudNodeMgrService_BatchCreateNodes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+func CloudNodeMgrService_SubmitCreateNodes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &BatchCreateNodesReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).BatchCreateNodes(ctx, reqbody.(*BatchCreateNodesReq))
+		return svr.(CloudNodeMgrService).SubmitCreateNodes(ctx, reqbody.(*BatchCreateNodesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CloudNodeMgrService_SubmitDeployNodes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BatchDeployNodesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).SubmitDeployNodes(ctx, reqbody.(*BatchDeployNodesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CloudNodeMgrService_SubmitDeleteNodes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BatchDeleteNodesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).SubmitDeleteNodes(ctx, reqbody.(*BatchDeleteNodesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CloudNodeMgrService_GetNodeBatchChange_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetNodeBatchChangeReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).GetNodeBatchChange(ctx, reqbody.(*GetNodeBatchChangeReq))
 	}
 
 	var rsp interface{}
@@ -164,14 +218,14 @@ func CloudNodeMgrService_BatchDeleteNodes_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func CloudNodeMgrService_BatchDeployNodes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &BatchDeployNodesReq{}
+func CloudNodeMgrService_SubmitUpdateNodeRuntimeConfigs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BatchUpdateNodeRuntimeConfigsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).BatchDeployNodes(ctx, reqbody.(*BatchDeployNodesReq))
+		return svr.(CloudNodeMgrService).SubmitUpdateNodeRuntimeConfigs(ctx, reqbody.(*BatchUpdateNodeRuntimeConfigsReq))
 	}
 
 	var rsp interface{}
@@ -254,14 +308,14 @@ func CloudNodeMgrService_DeleteCloudAccount_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
-func CloudNodeMgrService_GetCOSAccountInfo_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetCOSAccountInfoReq{}
+func CloudNodeMgrService_ListCloudRegions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListCloudRegionsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).GetCOSAccountInfo(ctx, reqbody.(*GetCOSAccountInfoReq))
+		return svr.(CloudNodeMgrService).ListCloudRegions(ctx, reqbody.(*ListCloudRegionsReq))
 	}
 
 	var rsp interface{}
@@ -272,14 +326,32 @@ func CloudNodeMgrService_GetCOSAccountInfo_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func CloudNodeMgrService_ListCloudRegions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListCloudRegionsReq{}
+func CloudNodeMgrService_PreviewSCFFunctions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PreviewSCFFunctionsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).ListCloudRegions(ctx, reqbody.(*ListCloudRegionsReq))
+		return svr.(CloudNodeMgrService).PreviewSCFFunctions(ctx, reqbody.(*PreviewSCFFunctionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CloudNodeMgrService_ImportSCFFunctions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ImportSCFFunctionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).ImportSCFFunctions(ctx, reqbody.(*ImportSCFFunctionsReq))
 	}
 
 	var rsp interface{}
@@ -398,24 +470,6 @@ func CloudNodeMgrService_CompletePackageUpload_Handler(svr interface{}, ctx cont
 	return rsp, nil
 }
 
-func CloudNodeMgrService_ReportHeartbeat_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReportHeartbeatReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).ReportHeartbeat(ctx, reqbody.(*ReportHeartbeatReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func CloudNodeMgrService_SubmitJobItems_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &SubmitJobItemsReq{}
 	filters, err := f(req)
@@ -434,24 +488,6 @@ func CloudNodeMgrService_SubmitJobItems_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func CloudNodeMgrService_PollJobItems_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PollJobItemsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).PollJobItems(ctx, reqbody.(*PollJobItemsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func CloudNodeMgrService_ReportJobItemStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReportJobItemStatusReq{}
 	filters, err := f(req)
@@ -460,24 +496,6 @@ func CloudNodeMgrService_ReportJobItemStatus_Handler(svr interface{}, ctx contex
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CloudNodeMgrService).ReportJobItemStatus(ctx, reqbody.(*ReportJobItemStatusReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CloudNodeMgrService_CancelJobItem_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CancelJobItemReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).CancelJobItem(ctx, reqbody.(*CancelJobItemReq))
 	}
 
 	var rsp interface{}
@@ -524,24 +542,6 @@ func CloudNodeMgrService_ListJobItems_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func CloudNodeMgrService_ListJobItemAttempts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListJobItemAttemptsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).ListJobItemAttempts(ctx, reqbody.(*ListJobItemAttemptsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func CloudNodeMgrService_InvokeSync_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &InvokeSyncReq{}
 	filters, err := f(req)
@@ -578,16 +578,28 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CloudNodeMgrService_InvokeFunction_Handler,
 		},
 		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/BatchCreateNodes",
-			Func: CloudNodeMgrService_BatchCreateNodes_Handler,
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes",
+			Func: CloudNodeMgrService_SubmitCreateNodes_Handler,
+		},
+		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeployNodes",
+			Func: CloudNodeMgrService_SubmitDeployNodes_Handler,
+		},
+		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes",
+			Func: CloudNodeMgrService_SubmitDeleteNodes_Handler,
+		},
+		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange",
+			Func: CloudNodeMgrService_GetNodeBatchChange_Handler,
 		},
 		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/BatchDeleteNodes",
 			Func: CloudNodeMgrService_BatchDeleteNodes_Handler,
 		},
 		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/BatchDeployNodes",
-			Func: CloudNodeMgrService_BatchDeployNodes_Handler,
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs",
+			Func: CloudNodeMgrService_SubmitUpdateNodeRuntimeConfigs_Handler,
 		},
 		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ListCloudAccounts",
@@ -606,12 +618,16 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CloudNodeMgrService_DeleteCloudAccount_Handler,
 		},
 		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/GetCOSAccountInfo",
-			Func: CloudNodeMgrService_GetCOSAccountInfo_Handler,
-		},
-		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ListCloudRegions",
 			Func: CloudNodeMgrService_ListCloudRegions_Handler,
+		},
+		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/PreviewSCFFunctions",
+			Func: CloudNodeMgrService_PreviewSCFFunctions_Handler,
+		},
+		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ImportSCFFunctions",
+			Func: CloudNodeMgrService_ImportSCFFunctions_Handler,
 		},
 		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/GetPackageList",
@@ -638,24 +654,12 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CloudNodeMgrService_CompletePackageUpload_Handler,
 		},
 		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ReportHeartbeat",
-			Func: CloudNodeMgrService_ReportHeartbeat_Handler,
-		},
-		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitJobItems",
 			Func: CloudNodeMgrService_SubmitJobItems_Handler,
 		},
 		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/PollJobItems",
-			Func: CloudNodeMgrService_PollJobItems_Handler,
-		},
-		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ReportJobItemStatus",
 			Func: CloudNodeMgrService_ReportJobItemStatus_Handler,
-		},
-		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/CancelJobItem",
-			Func: CloudNodeMgrService_CancelJobItem_Handler,
 		},
 		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/GetJobItem",
@@ -664,10 +668,6 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ListJobItems",
 			Func: CloudNodeMgrService_ListJobItems_Handler,
-		},
-		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ListJobItemAttempts",
-			Func: CloudNodeMgrService_ListJobItemAttempts_Handler,
 		},
 		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/InvokeSync",
@@ -696,14 +696,23 @@ func (s *UnimplementedCloudNodeMgr) UpdateNode(ctx context.Context, req *UpdateN
 func (s *UnimplementedCloudNodeMgr) InvokeFunction(ctx context.Context, req *InvokeFunctionReq) (*InvokeFunctionRsp, error) {
 	return nil, errors.New("rpc InvokeFunction of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) BatchCreateNodes(ctx context.Context, req *BatchCreateNodesReq) (*BatchChangeResult, error) {
-	return nil, errors.New("rpc BatchCreateNodes of service CloudNodeMgr is not implemented")
+func (s *UnimplementedCloudNodeMgr) SubmitCreateNodes(ctx context.Context, req *BatchCreateNodesReq) (*SubmitNodeBatchRsp, error) {
+	return nil, errors.New("rpc SubmitCreateNodes of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*BatchChangeResult, error) {
+func (s *UnimplementedCloudNodeMgr) SubmitDeployNodes(ctx context.Context, req *BatchDeployNodesReq) (*SubmitNodeBatchRsp, error) {
+	return nil, errors.New("rpc SubmitDeployNodes of service CloudNodeMgr is not implemented")
+}
+func (s *UnimplementedCloudNodeMgr) SubmitDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*SubmitNodeBatchRsp, error) {
+	return nil, errors.New("rpc SubmitDeleteNodes of service CloudNodeMgr is not implemented")
+}
+func (s *UnimplementedCloudNodeMgr) GetNodeBatchChange(ctx context.Context, req *GetNodeBatchChangeReq) (*GetNodeBatchChangeRsp, error) {
+	return nil, errors.New("rpc GetNodeBatchChange of service CloudNodeMgr is not implemented")
+}
+func (s *UnimplementedCloudNodeMgr) BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*BatchDeleteNodesRsp, error) {
 	return nil, errors.New("rpc BatchDeleteNodes of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) BatchDeployNodes(ctx context.Context, req *BatchDeployNodesReq) (*BatchChangeResult, error) {
-	return nil, errors.New("rpc BatchDeployNodes of service CloudNodeMgr is not implemented")
+func (s *UnimplementedCloudNodeMgr) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *BatchUpdateNodeRuntimeConfigsReq) (*SubmitNodeBatchRsp, error) {
+	return nil, errors.New("rpc SubmitUpdateNodeRuntimeConfigs of service CloudNodeMgr is not implemented")
 }
 func (s *UnimplementedCloudNodeMgr) ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq) (*ListCloudAccountsRsp, error) {
 	return nil, errors.New("rpc ListCloudAccounts of service CloudNodeMgr is not implemented")
@@ -717,11 +726,14 @@ func (s *UnimplementedCloudNodeMgr) UpdateCloudAccount(ctx context.Context, req 
 func (s *UnimplementedCloudNodeMgr) DeleteCloudAccount(ctx context.Context, req *DeleteCloudAccountReq) (*DeleteCloudAccountRsp, error) {
 	return nil, errors.New("rpc DeleteCloudAccount of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) GetCOSAccountInfo(ctx context.Context, req *GetCOSAccountInfoReq) (*GetCOSAccountInfoRsp, error) {
-	return nil, errors.New("rpc GetCOSAccountInfo of service CloudNodeMgr is not implemented")
-}
 func (s *UnimplementedCloudNodeMgr) ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq) (*ListCloudRegionsRsp, error) {
 	return nil, errors.New("rpc ListCloudRegions of service CloudNodeMgr is not implemented")
+}
+func (s *UnimplementedCloudNodeMgr) PreviewSCFFunctions(ctx context.Context, req *PreviewSCFFunctionsReq) (*PreviewSCFFunctionsRsp, error) {
+	return nil, errors.New("rpc PreviewSCFFunctions of service CloudNodeMgr is not implemented")
+}
+func (s *UnimplementedCloudNodeMgr) ImportSCFFunctions(ctx context.Context, req *ImportSCFFunctionsReq) (*ImportSCFFunctionsRsp, error) {
+	return nil, errors.New("rpc ImportSCFFunctions of service CloudNodeMgr is not implemented")
 }
 func (s *UnimplementedCloudNodeMgr) GetPackageList(ctx context.Context, req *GetPackageListReq) (*GetPackageListRsp, error) {
 	return nil, errors.New("rpc GetPackageList of service CloudNodeMgr is not implemented")
@@ -741,29 +753,17 @@ func (s *UnimplementedCloudNodeMgr) InitPackageUpload(ctx context.Context, req *
 func (s *UnimplementedCloudNodeMgr) CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error) {
 	return nil, errors.New("rpc CompletePackageUpload of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) ReportHeartbeat(ctx context.Context, req *ReportHeartbeatReq) (*ReportHeartbeatRsp, error) {
-	return nil, errors.New("rpc ReportHeartbeat of service CloudNodeMgr is not implemented")
-}
 func (s *UnimplementedCloudNodeMgr) SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq) (*SubmitJobItemsRsp, error) {
 	return nil, errors.New("rpc SubmitJobItems of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) PollJobItems(ctx context.Context, req *PollJobItemsReq) (*PollJobItemsRsp, error) {
-	return nil, errors.New("rpc PollJobItems of service CloudNodeMgr is not implemented")
-}
 func (s *UnimplementedCloudNodeMgr) ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq) (*ReportJobItemStatusRsp, error) {
 	return nil, errors.New("rpc ReportJobItemStatus of service CloudNodeMgr is not implemented")
-}
-func (s *UnimplementedCloudNodeMgr) CancelJobItem(ctx context.Context, req *CancelJobItemReq) (*CancelJobItemRsp, error) {
-	return nil, errors.New("rpc CancelJobItem of service CloudNodeMgr is not implemented")
 }
 func (s *UnimplementedCloudNodeMgr) GetJobItem(ctx context.Context, req *GetJobItemReq) (*GetJobItemRsp, error) {
 	return nil, errors.New("rpc GetJobItem of service CloudNodeMgr is not implemented")
 }
 func (s *UnimplementedCloudNodeMgr) ListJobItems(ctx context.Context, req *ListJobItemsReq) (*ListJobItemsRsp, error) {
 	return nil, errors.New("rpc ListJobItems of service CloudNodeMgr is not implemented")
-}
-func (s *UnimplementedCloudNodeMgr) ListJobItemAttempts(ctx context.Context, req *ListJobItemAttemptsReq) (*ListJobItemAttemptsRsp, error) {
-	return nil, errors.New("rpc ListJobItemAttempts of service CloudNodeMgr is not implemented")
 }
 func (s *UnimplementedCloudNodeMgr) InvokeSync(ctx context.Context, req *InvokeSyncReq) (*InvokeSyncRsp, error) {
 	return nil, errors.New("rpc InvokeSync of service CloudNodeMgr is not implemented")
@@ -783,11 +783,17 @@ type CloudNodeMgrClientProxy interface {
 
 	InvokeFunction(ctx context.Context, req *InvokeFunctionReq, opts ...client.Option) (rsp *InvokeFunctionRsp, err error)
 
-	BatchCreateNodes(ctx context.Context, req *BatchCreateNodesReq, opts ...client.Option) (rsp *BatchChangeResult, err error)
+	SubmitCreateNodes(ctx context.Context, req *BatchCreateNodesReq, opts ...client.Option) (rsp *SubmitNodeBatchRsp, err error)
 
-	BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (rsp *BatchChangeResult, err error)
+	SubmitDeployNodes(ctx context.Context, req *BatchDeployNodesReq, opts ...client.Option) (rsp *SubmitNodeBatchRsp, err error)
 
-	BatchDeployNodes(ctx context.Context, req *BatchDeployNodesReq, opts ...client.Option) (rsp *BatchChangeResult, err error)
+	SubmitDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (rsp *SubmitNodeBatchRsp, err error)
+
+	GetNodeBatchChange(ctx context.Context, req *GetNodeBatchChangeReq, opts ...client.Option) (rsp *GetNodeBatchChangeRsp, err error)
+
+	BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (rsp *BatchDeleteNodesRsp, err error)
+
+	SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *BatchUpdateNodeRuntimeConfigsReq, opts ...client.Option) (rsp *SubmitNodeBatchRsp, err error)
 
 	ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq, opts ...client.Option) (rsp *ListCloudAccountsRsp, err error)
 
@@ -797,9 +803,11 @@ type CloudNodeMgrClientProxy interface {
 
 	DeleteCloudAccount(ctx context.Context, req *DeleteCloudAccountReq, opts ...client.Option) (rsp *DeleteCloudAccountRsp, err error)
 
-	GetCOSAccountInfo(ctx context.Context, req *GetCOSAccountInfoReq, opts ...client.Option) (rsp *GetCOSAccountInfoRsp, err error)
-
 	ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq, opts ...client.Option) (rsp *ListCloudRegionsRsp, err error)
+
+	PreviewSCFFunctions(ctx context.Context, req *PreviewSCFFunctionsReq, opts ...client.Option) (rsp *PreviewSCFFunctionsRsp, err error)
+
+	ImportSCFFunctions(ctx context.Context, req *ImportSCFFunctionsReq, opts ...client.Option) (rsp *ImportSCFFunctionsRsp, err error)
 
 	GetPackageList(ctx context.Context, req *GetPackageListReq, opts ...client.Option) (rsp *GetPackageListRsp, err error)
 
@@ -813,21 +821,13 @@ type CloudNodeMgrClientProxy interface {
 
 	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq, opts ...client.Option) (rsp *CompletePackageUploadRsp, err error)
 
-	ReportHeartbeat(ctx context.Context, req *ReportHeartbeatReq, opts ...client.Option) (rsp *ReportHeartbeatRsp, err error)
-
 	SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq, opts ...client.Option) (rsp *SubmitJobItemsRsp, err error)
 
-	PollJobItems(ctx context.Context, req *PollJobItemsReq, opts ...client.Option) (rsp *PollJobItemsRsp, err error)
-
 	ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq, opts ...client.Option) (rsp *ReportJobItemStatusRsp, err error)
-
-	CancelJobItem(ctx context.Context, req *CancelJobItemReq, opts ...client.Option) (rsp *CancelJobItemRsp, err error)
 
 	GetJobItem(ctx context.Context, req *GetJobItemReq, opts ...client.Option) (rsp *GetJobItemRsp, err error)
 
 	ListJobItems(ctx context.Context, req *ListJobItemsReq, opts ...client.Option) (rsp *ListJobItemsRsp, err error)
-
-	ListJobItemAttempts(ctx context.Context, req *ListJobItemAttemptsReq, opts ...client.Option) (rsp *ListJobItemAttemptsRsp, err error)
 
 	InvokeSync(ctx context.Context, req *InvokeSyncReq, opts ...client.Option) (rsp *InvokeSyncRsp, err error)
 }
@@ -901,27 +901,87 @@ func (c *CloudNodeMgrClientProxyImpl) InvokeFunction(ctx context.Context, req *I
 	return rsp, nil
 }
 
-func (c *CloudNodeMgrClientProxyImpl) BatchCreateNodes(ctx context.Context, req *BatchCreateNodesReq, opts ...client.Option) (*BatchChangeResult, error) {
+func (c *CloudNodeMgrClientProxyImpl) SubmitCreateNodes(ctx context.Context, req *BatchCreateNodesReq, opts ...client.Option) (*SubmitNodeBatchRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/BatchCreateNodes")
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes")
 	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("cloudnode")
 	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("BatchCreateNodes")
+	msg.WithCalleeMethod("SubmitCreateNodes")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &BatchChangeResult{}
+	rsp := &SubmitNodeBatchRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *CloudNodeMgrClientProxyImpl) BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (*BatchChangeResult, error) {
+func (c *CloudNodeMgrClientProxyImpl) SubmitDeployNodes(ctx context.Context, req *BatchDeployNodesReq, opts ...client.Option) (*SubmitNodeBatchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeployNodes")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("SubmitDeployNodes")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SubmitNodeBatchRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) SubmitDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (*SubmitNodeBatchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("SubmitDeleteNodes")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SubmitNodeBatchRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) GetNodeBatchChange(ctx context.Context, req *GetNodeBatchChangeReq, opts ...client.Option) (*GetNodeBatchChangeRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("GetNodeBatchChange")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetNodeBatchChangeRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (*BatchDeleteNodesRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
 	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/BatchDeleteNodes")
@@ -934,27 +994,27 @@ func (c *CloudNodeMgrClientProxyImpl) BatchDeleteNodes(ctx context.Context, req 
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &BatchChangeResult{}
+	rsp := &BatchDeleteNodesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *CloudNodeMgrClientProxyImpl) BatchDeployNodes(ctx context.Context, req *BatchDeployNodesReq, opts ...client.Option) (*BatchChangeResult, error) {
+func (c *CloudNodeMgrClientProxyImpl) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *BatchUpdateNodeRuntimeConfigsReq, opts ...client.Option) (*SubmitNodeBatchRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/BatchDeployNodes")
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs")
 	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("cloudnode")
 	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("BatchDeployNodes")
+	msg.WithCalleeMethod("SubmitUpdateNodeRuntimeConfigs")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &BatchChangeResult{}
+	rsp := &SubmitNodeBatchRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1041,26 +1101,6 @@ func (c *CloudNodeMgrClientProxyImpl) DeleteCloudAccount(ctx context.Context, re
 	return rsp, nil
 }
 
-func (c *CloudNodeMgrClientProxyImpl) GetCOSAccountInfo(ctx context.Context, req *GetCOSAccountInfoReq, opts ...client.Option) (*GetCOSAccountInfoRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/GetCOSAccountInfo")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("GetCOSAccountInfo")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetCOSAccountInfoRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *CloudNodeMgrClientProxyImpl) ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq, opts ...client.Option) (*ListCloudRegionsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -1075,6 +1115,46 @@ func (c *CloudNodeMgrClientProxyImpl) ListCloudRegions(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListCloudRegionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) PreviewSCFFunctions(ctx context.Context, req *PreviewSCFFunctionsReq, opts ...client.Option) (*PreviewSCFFunctionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/PreviewSCFFunctions")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("PreviewSCFFunctions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PreviewSCFFunctionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) ImportSCFFunctions(ctx context.Context, req *ImportSCFFunctionsReq, opts ...client.Option) (*ImportSCFFunctionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/ImportSCFFunctions")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("ImportSCFFunctions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ImportSCFFunctionsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1201,26 +1281,6 @@ func (c *CloudNodeMgrClientProxyImpl) CompletePackageUpload(ctx context.Context,
 	return rsp, nil
 }
 
-func (c *CloudNodeMgrClientProxyImpl) ReportHeartbeat(ctx context.Context, req *ReportHeartbeatReq, opts ...client.Option) (*ReportHeartbeatRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/ReportHeartbeat")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("ReportHeartbeat")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReportHeartbeatRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *CloudNodeMgrClientProxyImpl) SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq, opts ...client.Option) (*SubmitJobItemsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -1241,26 +1301,6 @@ func (c *CloudNodeMgrClientProxyImpl) SubmitJobItems(ctx context.Context, req *S
 	return rsp, nil
 }
 
-func (c *CloudNodeMgrClientProxyImpl) PollJobItems(ctx context.Context, req *PollJobItemsReq, opts ...client.Option) (*PollJobItemsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/PollJobItems")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("PollJobItems")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PollJobItemsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *CloudNodeMgrClientProxyImpl) ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq, opts ...client.Option) (*ReportJobItemStatusRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -1275,26 +1315,6 @@ func (c *CloudNodeMgrClientProxyImpl) ReportJobItemStatus(ctx context.Context, r
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReportJobItemStatusRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) CancelJobItem(ctx context.Context, req *CancelJobItemReq, opts ...client.Option) (*CancelJobItemRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/CancelJobItem")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("CancelJobItem")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CancelJobItemRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1335,26 +1355,6 @@ func (c *CloudNodeMgrClientProxyImpl) ListJobItems(ctx context.Context, req *Lis
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListJobItemsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) ListJobItemAttempts(ctx context.Context, req *ListJobItemAttemptsReq, opts ...client.Option) (*ListJobItemAttemptsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/ListJobItemAttempts")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("ListJobItemAttempts")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListJobItemAttemptsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

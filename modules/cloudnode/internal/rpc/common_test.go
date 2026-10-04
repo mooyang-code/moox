@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -34,7 +33,6 @@ func TestMetadataHelpers_ShouldParseMixedTypes(t *testing.T) {
 	assert.Equal(t, "node-a", metadataString(meta, "name"))
 	assert.Equal(t, int32(3), metadataInt32(meta, "count"))
 	assert.True(t, metadataBool(meta, "enabled"))
-	assert.Contains(t, supportedWorkloadsFromMetadata(map[string]any{"biz_type": "collect.kline"}), "collect.kline")
 }
 
 func TestJSONHelpers_ShouldMergeAndStringify(t *testing.T) {
@@ -49,16 +47,7 @@ func TestJSONHelpers_ShouldMergeAndStringify(t *testing.T) {
 	assert.Equal(t, "{}", jsonString(nil))
 }
 
-func TestRevealAndMaskSecret(t *testing.T) {
-	assert.Equal(t, "secret", reveal("secret", true))
-	assert.Equal(t, "", reveal("", false))
-	assert.Equal(t, "****", maskSecret("short"))
-	assert.Equal(t, "abcd****wxyz", maskSecret("abcdefghijwxyz"))
-}
-
-func TestDirectBatchIDAndFormatTime(t *testing.T) {
-	id := directBatchID("create")
-	assert.Contains(t, id, "batch-create-")
+func TestFormatTime(t *testing.T) {
 	assert.Equal(t, "", formatTime(time.Time{}))
 	assert.NotEmpty(t, formatTime(Now()))
 }
@@ -67,15 +56,12 @@ func TestMetadataHelpers_ExtraBranches(t *testing.T) {
 	meta := map[string]any{
 		"i": int(7), "i32": int32(8), "i64": int64(9),
 		"snum": "12", "sbool": "true",
-		"supported_workloads": []any{"collect.kline", "collect.symbol"},
 	}
 	assert.Equal(t, "7", metadataString(meta, "i"))
 	assert.Equal(t, int32(8), metadataInt32(meta, "i32"))
 	assert.Equal(t, int32(9), metadataInt32(meta, "i64"))
 	assert.Equal(t, int32(12), metadataInt32(meta, "snum"))
 	assert.True(t, metadataBool(meta, "sbool"))
-	assert.Contains(t, supportedWorkloadsFromMetadata(meta), "collect.kline")
-	assert.Equal(t, "[]", supportedWorkloadsFromMetadata(map[string]any{}))
 	assert.Equal(t, map[string]any{}, parseJSONMap(""))
 	assert.Equal(t, map[string]any{}, parseJSONMap("{"))
 }
@@ -87,8 +73,4 @@ func TestCompactStrings_ShouldDedupeAndTrim(t *testing.T) {
 
 func TestFirstString_ReturnsFirstNonEmpty(t *testing.T) {
 	assert.Equal(t, "b", firstString("", " b ", "c"))
-}
-
-func TestSpaceFromContext_ReturnsSpaceID(t *testing.T) {
-	assert.Equal(t, "", spaceFromContext(context.Background()))
 }
