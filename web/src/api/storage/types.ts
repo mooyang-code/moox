@@ -242,20 +242,6 @@ export interface FieldGroup {
   attributes?: Record<string, string>;
 }
 
-export interface Factor {
-  space_id: string;
-  factor_id: string;
-  name: string;
-  description?: string;
-  algorithm: string;
-  params_json?: string;
-  value_type: FieldValueType;
-  status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
-}
-
 export interface DatasetColumn {
   space_id: string;
   dataset_id: string;

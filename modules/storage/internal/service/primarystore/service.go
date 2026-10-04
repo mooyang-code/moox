@@ -230,7 +230,7 @@ func rejectMooxSkillWrite(auth *pb.AuthInfo) error {
 
 func isFactorAppID(appID string) bool {
 	switch strings.ToLower(strings.TrimSpace(appID)) {
-	case "factor", "moox-factor", "moox-factor-engine":
+	case "factor", "moox-factor":
 		return true
 	default:
 		return false
@@ -266,7 +266,10 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 			continue
 		}
 		attrs := dataset.GetAttributes()
-		if attrs["dataset_role"] != "factor_result" && attrs["write_owner"] != "factor" {
+		if attrs["dataset_role"] == "factor_result" {
+			return fmt.Errorf("dataset %s/%s requires WriteFactorRows", key.spaceID, key.datasetID)
+		}
+		if attrs["write_owner"] != "factor" {
 			continue
 		}
 		appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))

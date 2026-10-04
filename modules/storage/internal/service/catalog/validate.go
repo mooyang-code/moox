@@ -52,13 +52,6 @@ func validateDatasetID(datasetID string) error {
 	return validateLowerSnakeID("dataset_id", datasetID, 50)
 }
 
-func validateDatasetRole(role string) error {
-	if strings.EqualFold(strings.TrimSpace(role), "merged_factor") {
-		return errors.New("dataset_role merged_factor is not supported")
-	}
-	return nil
-}
-
 func validateDatasetDataNodeID(dataNodeID string) error {
 	if strings.TrimSpace(dataNodeID) == "" {
 		return errors.New("data_node_id is required")

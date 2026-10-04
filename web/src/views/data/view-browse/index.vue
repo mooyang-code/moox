@@ -403,7 +403,6 @@ import { Message, Modal } from "@arco-design/web-vue";
 import {
   listDatasetColumns,
   listDatasets,
-  listFactors,
   listFields,
   listViewColumns,
   listViewRebuildLogs,
@@ -414,7 +413,6 @@ import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
 import type {
   Dataset,
   DatasetColumn,
-  Factor,
   Field,
   FieldValueType,
   RecordRow,
@@ -545,7 +543,6 @@ let metaLoadSequence = 0;
 let viewContextSequence = 0;
 let viewRowsRequestSequence = 0;
 const fields = ref<Field[]>([]);
-const factors = ref<Factor[]>([]);
 const activeViewKey = ref("");
 const tableRows = ref<ViewBrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
@@ -669,7 +666,6 @@ const columnLabels = computed(() => {
     viewColumns.value,
     datasetColumns.value,
     fields.value,
-    factors.value,
     datasets.value,
     activeView.value
   );
@@ -925,9 +921,8 @@ async function loadMeta() {
   try {
     const page = { page: 1, size: 1000 };
     // Views and Datasets are required to render the first result page. Fields
-    // and Factors only decorate labels and can arrive afterwards; keeping them
-    // out of this critical path avoids making a slow metadata read delay the
-    // actual data query.
+    // only decorate labels and can arrive afterwards; keeping them out of this
+    // critical path avoids making a slow metadata read delay the actual query.
     if (targetedViewIds.value.length > 0) {
       const catalog = await loadTargetedViewCatalog(space_id, targetedViewIds.value);
       if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
@@ -945,14 +940,13 @@ async function loadMeta() {
     // These requests are intentionally best-effort. A label catalogue outage
     // must not hide already loaded rows or turn a usable data browser into a
     // blocking spinner.
-    void Promise.all([listFields({ space_id, page }), listFactors({ space_id, page })])
-      .then(([fieldRsp, factorRsp]) => {
+    void listFields({ space_id, page })
+      .then(fieldRsp => {
         if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
         fields.value = fieldRsp.fields || [];
-        factors.value = factorRsp.factors || [];
       })
       .catch(error => {
-        console.warn("加载字段/因子标签失败", error);
+        console.warn("加载字段标签失败", error);
       });
   } catch (error) {
     if (sequence === metaLoadSequence) {

@@ -75,6 +75,11 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return err
 	}
 	defer db.Close()
+	unlock, err := lockImportSet(ctx, runtime.DatabasePath, cfg.SetID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	storage, _, err := newStorageClients(runtime)
 	if err != nil {
 		return err
@@ -82,6 +87,9 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	set, err := db.GetSet(ctx, cfg.SetID)
 	if err != nil {
 		return fmt.Errorf("get factor set: %w", err)
+	}
+	if err := validateImportableSet(set); err != nil {
+		return err
 	}
 	source, err := os.ReadFile(cfg.File)
 	if err != nil {
@@ -91,6 +99,9 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		string(source), cfg.InputColumns, cfg.Outputs, cfg.ParamsJSON, cfg.LookbackPeriods)
 	if err != nil {
 		return err
+	}
+	if err := pyexec.ValidateSourceCode(ctx, runtime.PythonBin, string(source)); err != nil {
+		return fmt.Errorf("load factor source: %w", err)
 	}
 	siblings, err := db.ListFactors(ctx, set.SetID, "")
 	if err != nil {
@@ -146,6 +157,11 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return err
 	}
 	defer db.Close()
+	unlock, err := lockImportSet(ctx, runtime.DatabasePath, cfg.SetID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	storage, _, err := newStorageClients(runtime)
 	if err != nil {
 		return err
@@ -153,6 +169,9 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	set, err := db.GetSet(ctx, cfg.SetID)
 	if err != nil {
 		return fmt.Errorf("get factor set: %w", err)
+	}
+	if err := validateImportableSet(set); err != nil {
+		return err
 	}
 	siblings, err := db.ListFactors(ctx, set.SetID, "")
 	if err != nil {
@@ -186,6 +205,9 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		if normalizeErr != nil {
 			return normalizeErr
 		}
+		if err := pyexec.ValidateSourceCode(ctx, runtime.PythonBin, string(source)); err != nil {
+			return fmt.Errorf("load factor %s: %w", entry.FactorID, err)
+		}
 		if _, duplicate := seenIDs[factor.FactorID]; duplicate {
 			return fmt.Errorf("duplicate factor catalog entry %q", factor.FactorID)
 		}
@@ -205,16 +227,29 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			return fmt.Errorf("materialize factor %s: %w", factor.FactorID, err)
 		}
 	}
-	for _, factor := range prepared {
-		if err := db.CreateFactor(ctx, factor); err != nil {
-			return fmt.Errorf("import factor %s: %w", factor.FactorID, err)
-		}
+	if err := db.CreateFactors(ctx, prepared); err != nil {
+		return fmt.Errorf("import factor catalog: %w", err)
 	}
 	imported := make([]map[string]string, 0, len(prepared))
 	for _, factor := range prepared {
 		imported = append(imported, map[string]string{"factor_id": factor.FactorID, "source_hash": factor.SourceHash, "status": factor.Status})
 	}
 	return json.NewEncoder(out).Encode(map[string]any{"ok": true, "imported": imported})
+}
+
+func validateImportableSet(set domain.FactorSet) error {
+	switch set.Status {
+	case domain.SetStatusEnabled, domain.SetStatusDisabled:
+		return nil
+	case domain.SetStatusDeleting:
+		return errors.New("factor set purge is pending")
+	default:
+		return errors.New("factor set must be enabled or disabled before importing factors")
+	}
+}
+
+func lockImportSet(ctx context.Context, databasePath, setID string) (func(), error) {
+	return catalog.NewLocks(databasePath+".locks").LockContext(ctx, setID)
 }
 
 func normalizeImportedFactor(setID, factorID, factorType, sourcePath, source string, inputs, outputs []string, params string, lookback int) (domain.FactorDef, error) {
@@ -311,7 +346,7 @@ func runOnce(ctx context.Context, cli cliConfig, out io.Writer) error {
 	})
 	worker := recalc.NewWorker(db, runner,
 		recalc.WithClock(periodclock.Continuous{}),
-		recalc.WithLocks(&catalog.Locks{}),
+		recalc.WithLocks(catalog.NewLocks(config.DatabasePath+".locks")),
 		recalc.WithChunkPeriods(1),
 		recalc.WithColumnProvider(storage),
 		recalc.WithSubjectProvider(subjects),

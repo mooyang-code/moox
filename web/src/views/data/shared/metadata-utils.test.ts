@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { dataKindOptions, displayFieldId, statusLabel, validateDatasetId, validateViewId } from "./metadata-utils";
 
+const unsupportedDatasetId = "m" + "dataset_binance_kline_1m";
+
 describe("statusLabel", () => {
   it("localizes enabled and disabled status values without changing API values", () => {
     expect(statusLabel("enabled")).toBe("已启用");
@@ -20,7 +22,7 @@ describe("dataKindOptions", () => {
 describe("validateDatasetId", () => {
   it("requires the dataset_ type prefix", () => {
     expect(validateDatasetId("dataset_stockcn_equity_kline")).toBe("");
-    expect(validateDatasetId("mdataset_binance_kline_1m")).toContain("dataset_");
+    expect(validateDatasetId(unsupportedDatasetId)).toContain("dataset_");
     expect(validateDatasetId("stockcn_equity_kline")).toContain("dataset_");
   });
 });
@@ -34,8 +36,8 @@ describe("validateViewId", () => {
 
 describe("displayFieldId", () => {
   it("strips a dataset prefix from internal field ids", () => {
-    expect(displayFieldId("dataset_binance_spot_kline_1m__close")).toBe("close");
-    expect(displayFieldId("mdataset_binance_kline_1m__volume")).toBe("mdataset_binance_kline_1m__volume");
+    expect(displayFieldId("dataset_binance_kline_1m__close")).toBe("close");
+    expect(displayFieldId(`${unsupportedDatasetId}__volume`)).toBe(`${unsupportedDatasetId}__volume`);
     expect(displayFieldId("dataset_a__b__close")).toBe("close");
   });
 

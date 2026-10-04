@@ -51,6 +51,15 @@ func TestDatasetRowsUpsertedV1IsRejectedByV2Consumer(t *testing.T) {
 	}
 }
 
+func TestDatasetRowsUpsertedRejectsUnknownWriteKind(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	payload := validRowsEvent()
+	payload.WriteKind = "unrecognized"
+	_, err = registry.Encode(DatasetRowsUpserted, payload, validationOptions("event-1", "space", "dataset"))
+	require.Error(t, err)
+}
+
 func TestDatasetRowsUpsertedValidatesSeriesTagShape(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
@@ -124,7 +133,7 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			},
 		},
 		{
-			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "mdataset",
+			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "dataset_result",
 			payload: validFactorPeriodComputed(now),
 			mutate:  func(value proto.Message) { value.(*storagepb.FactorPeriodComputed).TriggerEventId = "" },
 		},
@@ -158,7 +167,7 @@ func TestFactorCompletionRequiresSourceHash(t *testing.T) {
 	require.NoError(t, err)
 	payload := validFactorPeriodComputed(timestamppb.Now())
 	payload.Factors[0].SourceHash = ""
-	_, err = registry.Encode(FactorPeriodComputed, payload, validationOptions("factor-event-1", "space", "mdataset"))
+	_, err = registry.Encode(FactorPeriodComputed, payload, validationOptions("factor-event-1", "space", "dataset_result"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "source_hash is required")
 }

@@ -30,7 +30,6 @@ require_directory() {
 
 require_file "${ROOT}/factor/config/app.yaml"
 require_executable "${ROOT}/bin/moox-factor-cli"
-require_executable "${ROOT}/data/factor/venv/bin/python"
 require_file "${ROOT}/factor/pyworker/worker.py"
 require_directory "${ROOT}/factor/factors"
 require_directory "${ROOT}/python-runtime"
@@ -76,12 +75,11 @@ if [[ -z "${storage_view_secret}" || "${storage_view_secret}" == *$'\n'* || "${s
 fi
 
 export MOOX_FACTOR_DB_PATH="${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor/factor.db}"
-export MOOX_FACTOR_ENGINE_PYTHON_BIN="${MOOX_FACTOR_ENGINE_PYTHON_BIN:-${ROOT}/data/factor/venv/bin/python}"
-export MOOX_FACTOR_ENGINE_WORKER_PATH="${MOOX_FACTOR_ENGINE_WORKER_PATH:-${ROOT}/factor/pyworker/worker.py}"
-export MOOX_FACTOR_ENGINE_FACTORS_DIR="${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
+export MOOX_FACTOR_PYTHON_WORKER_PATH="${MOOX_FACTOR_PYTHON_WORKER_PATH:-${ROOT}/factor/pyworker/worker.py}"
+export MOOX_FACTOR_PYTHON_FACTORS_DIR="${MOOX_FACTOR_PYTHON_FACTORS_DIR:-${ROOT}/data/factor/factors}"
 export MOOX_PYTHON_RUNTIME_PATH="${MOOX_PYTHON_RUNTIME_PATH:-${ROOT}/python-runtime}"
-export MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET="ip://127.0.0.1:11003"
-export MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID="${gateway_node_id}"
+export MOOX_FACTOR_STORAGE_GATEWAY_TARGET="${MOOX_FACTOR_STORAGE_GATEWAY_TARGET:-ip://127.0.0.1:11003}"
+export MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID="${MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID:-${gateway_node_id}}"
 export MOOX_GATEWAY_SERVICE_KEY_ID="factor"
 export MOOX_GATEWAY_CALLER="factor"
 export MOOX_GATEWAY_SERVICE_SECRET_KEY="${secret}"

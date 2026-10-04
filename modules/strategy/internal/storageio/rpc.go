@@ -34,13 +34,14 @@ type RPCClient struct {
 // index on every request, so an index rebuild or cutover fails closed instead
 // of producing a mixed-generation input frame.
 type viewSnapshot struct {
-	mu        sync.Mutex
-	client    *RPCClient
-	spaceID   string
-	indexes   map[string]string
-	revisions map[string]uint64
-	selectors map[string][]*storagepb.TimeSeriesSelector
-	subjects  map[string][]input.Subject
+	mu         sync.Mutex
+	client     *RPCClient
+	spaceID    string
+	indexes    map[string]string
+	revisions  map[string]uint64
+	selectors  map[string][]*storagepb.TimeSeriesSelector
+	restricted map[string]bool
+	subjects   map[string][]input.Subject
 	// requireComplete is true for source Views in scheduled snapshots and false
 	// for factor result Views or provenance-fenced event snapshots. A
 	// factor-ready event is the completeness contract for its current period;
@@ -176,49 +177,51 @@ func (s *viewSnapshot) HistoryPeriods(ctx context.Context, spaceID, viewID, _ st
 }
 
 func (s *viewSnapshot) RestrictSelectors(items []input.PoolItem) {
-	if s == nil || len(items) == 0 {
+	if s == nil {
 		return
 	}
-	byID := make(map[string]string, len(items))
-	byCanonical := make(map[string]string, len(items))
+	byID := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		id := strings.TrimSpace(item.SubjectID)
 		if id == "" {
 			continue
 		}
-		byID[id] = id
-		byCanonical[stripCryptoVenueSuffix(id)] = id
-	}
-	if len(byID) == 0 {
-		return
+		byID[id] = struct{}{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.restricted == nil {
+		s.restricted = make(map[string]bool, len(s.selectors))
+	}
+	type selectorKey struct {
+		subjectID    string
+		freq         string
+		seriesTag    string
+		hasSeriesTag bool
+	}
 	for viewID, selectors := range s.selectors {
-		filtered := make([]*storagepb.TimeSeriesSelector, 0, len(byID))
-		seen := make(map[string]struct{}, len(byID))
+		s.restricted[viewID] = true
+		filtered := make([]*storagepb.TimeSeriesSelector, 0, len(selectors))
+		seen := make(map[selectorKey]struct{}, len(selectors))
 		for _, selector := range selectors {
 			if selector == nil {
 				continue
 			}
-			poolID, ok := byID[selector.GetSubjectId()]
-			if !ok {
-				poolID, ok = byCanonical[stripCryptoVenueSuffix(selector.GetSubjectId())]
-			}
-			if !ok {
+			if _, ok := byID[selector.GetSubjectId()]; !ok {
 				continue
 			}
-			if _, dup := seen[poolID]; dup {
+			key := selectorKey{subjectID: selector.GetSubjectId(), freq: selector.GetFreq()}
+			if selector.SeriesTag != nil {
+				key.seriesTag = selector.GetSeriesTag()
+				key.hasSeriesTag = true
+			}
+			if _, dup := seen[key]; dup {
 				continue
 			}
-			seen[poolID] = struct{}{}
-			selector.SubjectId = poolID
-			selector.SeriesTag = nil
+			seen[key] = struct{}{}
 			filtered = append(filtered, selector)
 		}
-		if len(filtered) > 0 {
-			s.selectors[viewID] = filtered
-		}
+		s.selectors[viewID] = filtered
 	}
 }
 
@@ -234,7 +237,11 @@ func (s *viewSnapshot) readPinnedRowsWithRequirement(ctx context.Context, spaceI
 	indexID := s.indexes[viewID]
 	revision := s.revisions[viewID]
 	selectors := s.selectors[viewID]
+	restricted := s.restricted[viewID]
 	s.mu.Unlock()
+	if restricted && len(selectors) == 0 {
+		return []ViewRow{}, nil
+	}
 	rows, servedRevision, err := s.client.readRowsAtWithRevision(ctx, spaceID, viewID, start, end, indexID, revision, selectors, requireComplete)
 	if err != nil {
 		return nil, err
@@ -371,7 +378,7 @@ func (c *RPCClient) ListSubjects(ctx context.Context, spaceID, viewID string) ([
 			break
 		}
 	}
-	return canonicalizeMergedCatalogSubjects(datasetID, result), nil
+	return result, nil
 }
 
 func (c *RPCClient) ReadPeriod(ctx context.Context, spaceID, viewID string, period time.Time) ([]ViewRow, error) {
@@ -561,7 +568,7 @@ func (c *RPCClient) selectorsForDataset(ctx context.Context, spaceID, datasetID,
 	if len(selectors) == 0 {
 		return nil, fmt.Errorf("%w: view dataset %s has no active dataset subjects", input.ErrNotReady, datasetID)
 	}
-	return canonicalizeMergedSelectors(datasetID, selectors), nil
+	return selectors, nil
 }
 
 func (c *RPCClient) subjectSeriesTag(ctx context.Context, spaceID, subjectID string) (string, error) {
@@ -691,66 +698,6 @@ func retErrorForView(info *commonpb.RetInfo, viewID string) error {
 		}
 	}
 	return fmt.Errorf("%w: storage rpc %s: %s", input.ErrStaleViewSnapshot, info.GetCode().String(), info.GetMsg())
-}
-
-func canonicalizeMergedCatalogSubjects(datasetID string, subjects []input.Subject) []input.Subject {
-	if !isMergedDatasetID(datasetID) {
-		return subjects
-	}
-	out := make([]input.Subject, 0, len(subjects))
-	seen := make(map[string]struct{}, len(subjects))
-	for _, subject := range subjects {
-		id := stripCryptoVenueSuffix(subject.SubjectID)
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		subject.SubjectID = id
-		subject.InstrumentID = id
-		subject.SeriesTag = ""
-		out = append(out, subject)
-	}
-	return out
-}
-
-func canonicalizeMergedSelectors(datasetID string, selectors []*storagepb.TimeSeriesSelector) []*storagepb.TimeSeriesSelector {
-	if !isMergedDatasetID(datasetID) {
-		return selectors
-	}
-	out := make([]*storagepb.TimeSeriesSelector, 0, len(selectors))
-	seen := make(map[string]struct{}, len(selectors))
-	for _, selector := range selectors {
-		if selector == nil {
-			continue
-		}
-		id := stripCryptoVenueSuffix(selector.GetSubjectId())
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		selector.SubjectId = id
-		selector.SeriesTag = nil
-		out = append(out, selector)
-	}
-	return out
-}
-
-func isMergedDatasetID(datasetID string) bool {
-	return strings.HasPrefix(strings.TrimSpace(datasetID), "mdataset_")
-}
-
-func stripCryptoVenueSuffix(subjectID string) string {
-	value := strings.TrimSpace(subjectID)
-	for _, suffix := range []string{"-SPOT", "-SWAP"} {
-		value = strings.TrimSuffix(value, suffix)
-	}
-	return value
 }
 
 func firstNonEmpty(values ...string) string {

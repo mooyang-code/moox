@@ -72,6 +72,80 @@ func TestSubmitIsIdempotentByRequestID(t *testing.T) {
 	require.Equal(t, one, two)
 }
 
+func TestSubmitRetriesOmittedSelectorsAfterEnvironmentChanges(t *testing.T) {
+	db := openRecalcStore(t)
+	seedRecalcSet(t, db, domain.SubjectModeAll, nil,
+		testRecalcFactor("close_factor", domain.FactorStatusEnabled, 3),
+	)
+	subjects := &changingSubjects{values: []string{"BTC"}}
+	svc := NewService(db, &recordingRunner{}, WithClock(periodclock.Continuous{}), WithSubjectProvider(subjects))
+	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	accepted, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "stable-omitted", start, end)
+	require.NoError(t, err)
+	require.Equal(t, []string{"close_factor"}, accepted.FactorIDs)
+	require.Equal(t, []string{"BTC"}, accepted.Subjects)
+
+	require.NoError(t, db.CreateFactor(context.Background(), testRecalcFactor("new_factor", domain.FactorStatusEnabled, 1)))
+	subjects.values = []string{"BTC", "ETH"}
+	retried, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "stable-omitted", start, end)
+	require.NoError(t, err)
+	require.Equal(t, accepted, retried)
+
+	_, err = svc.Submit(context.Background(), "fset_bars_1m", []string{"close_factor"}, nil, "stable-omitted", start, end)
+	require.ErrorContains(t, err, "different recalc request")
+}
+
+type changingSubjects struct{ values []string }
+
+func (s *changingSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return append([]string(nil), s.values...), nil
+}
+
+func TestEnableBackfillAcceptsDisabledFactorWithAtomicVisibility(t *testing.T) {
+	db := openRecalcStore(t)
+	factor := testRecalcFactor("new_factor", domain.FactorStatusDisabled, 2)
+	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"}, factor)
+	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	runner := &recordingRunner{}
+	svc := NewService(db, runner, WithClock(periodclock.Continuous{}))
+	job, err := svc.PrepareEnableBackfill(context.Background(), "fset_bars_1m", "new_factor", "enable-new-factor", start, start.Add(3*time.Minute))
+	require.NoError(t, err)
+	stored, err := db.EnableFactorWithRecalcJob(context.Background(), "new_factor", domain.FactorStatusDisabled, job)
+	require.NoError(t, err)
+	require.Equal(t, store.RecalcStatusAccepted, stored.Status)
+	require.NoError(t, svc.RunJob(context.Background(), stored.JobID))
+	require.Len(t, runner.snapshot(), 1)
+	active, err := db.GetFactor(context.Background(), "new_factor")
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusEnabled, active.Status)
+}
+
+func TestEnableBackfillWithEmptyDatasetCompletesAsNoop(t *testing.T) {
+	db := openRecalcStore(t)
+	factor := testRecalcFactor("new_factor", domain.FactorStatusDisabled, 2)
+	seedRecalcSet(t, db, domain.SubjectModeAll, nil, factor)
+	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	runner := &recordingRunner{}
+	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithSubjectProvider(emptySubjects{}))
+	job, err := svc.PrepareEnableBackfill(context.Background(), "fset_bars_1m", "new_factor", "enable-empty", start, start.Add(time.Minute))
+	require.NoError(t, err)
+	stored, err := db.EnableFactorWithRecalcJob(context.Background(), "new_factor", domain.FactorStatusDisabled, job)
+	require.NoError(t, err)
+	require.NoError(t, svc.RunJob(context.Background(), stored.JobID))
+	completed, err := svc.Get(context.Background(), stored.JobID)
+	require.NoError(t, err)
+	require.Equal(t, store.RecalcStatusSucceeded, completed.Status)
+	require.Equal(t, completed.EndTime, completed.ProgressTime)
+	require.Empty(t, runner.snapshot())
+}
+
+type emptySubjects struct{}
+
+func (emptySubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func TestRunSplitsIntoChunksAndAdvancesProgress(t *testing.T) {
 	db := openRecalcStore(t)
 	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},

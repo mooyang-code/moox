@@ -29,7 +29,7 @@ async function mockGateway(route: Route) {
             task_name: "Binance 现货 K 线 1m",
             data_type: "kline",
             provider: "binance",
-            result: { result_name: "采集结果", view_id: "view_binance_spot_kline_1m", status: "active", data_kind: "time_series" },
+            result: { result_name: "采集结果", view_id: "view_binance_kline_1m", status: "active", data_kind: "time_series" },
             enabled: true
           }
         ],
@@ -43,7 +43,7 @@ async function mockGateway(route: Route) {
         datasets: [
           {
             space_id: "crypto",
-            dataset_id: "dataset_binance_spot_kline_1m",
+            dataset_id: "dataset_binance_kline_1m",
             name: "现货K线",
             data_kind: "DATA_KIND_TIME_SERIES",
             freqs: ["1m"],
@@ -61,9 +61,9 @@ async function mockGateway(route: Route) {
         views: [
           {
             space_id: "crypto",
-            view_id: "view_binance_spot_kline_1m",
+            view_id: "view_binance_kline_1m",
             name: "现货K线视图",
-            dataset_id: "dataset_binance_spot_kline_1m",
+            dataset_id: "dataset_binance_kline_1m",
             status: "active",
             active_index_id: "index-a",
             attributes: { owner_module: "collector", view_role: "collection_browse" }
@@ -151,7 +151,7 @@ async function mockGateway(route: Route) {
           {
             key: {
               space_id: "crypto",
-              dataset_id: "dataset_binance_spot_kline_1m",
+              dataset_id: "dataset_binance_kline_1m",
               subject_id: "BTC-USDT",
               freq: "1m",
               data_time: "2026-09-18T06:57:00Z",

@@ -34,8 +34,6 @@ const storageReadMethods = new Set([
   "ListFieldGroups",
   "GetField",
   "ListFields",
-  "GetFactor",
-  "ListFactors",
   "ListDatasetColumns",
   "GetView",
   "ListViews",

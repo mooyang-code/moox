@@ -88,6 +88,26 @@ func (s *Service) Submit(ctx context.Context, setID string, factorIDs, subjects 
 	if requestID == "" || setID == "" {
 		return store.RecalcJob{}, errors.New("request_id and set_id are required")
 	}
+	set, err := s.db.GetSet(ctx, setID)
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	clock, err := s.worker.clockFor(set.SpaceID)
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	start, end, err = alignRange(clock, set.Freq, start, end)
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	if existing, found, err := s.db.FindRecalcJobByRequestID(ctx, requestID); err != nil {
+		return store.RecalcJob{}, err
+	} else if found {
+		if !matchesSubmitRequest(existing, setID, factorIDs, subjects, start.Unix(), end.Unix()) {
+			return store.RecalcJob{}, fmt.Errorf("request_id %q already belongs to a different recalc request", requestID)
+		}
+		return existing, nil
+	}
 	set, selected, normalizedSubjects, clock, err := s.worker.selection(ctx, setID, factorIDs, subjects)
 	if err != nil {
 		return store.RecalcJob{}, err
@@ -103,16 +123,81 @@ func (s *Service) Submit(ctx context.Context, setID string, factorIDs, subjects 
 	job, err := s.db.CreateRecalcJob(ctx, store.RecalcJob{
 		JobID: requestID, RequestID: requestID, SetID: setID,
 		FactorIDs: ids, Subjects: normalizedSubjects,
+		FactorsOmitted: len(factorIDs) == 0, SubjectsOmitted: len(subjects) == 0,
 		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
 	})
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	if job.SetID != setID || job.StartTime != start.Unix() || job.EndTime != end.Unix() ||
-		!sameStrings(job.FactorIDs, ids) || !sameStrings(job.Subjects, normalizedSubjects) {
+	if !matchesSubmitRequest(job, setID, factorIDs, subjects, start.Unix(), end.Unix()) {
 		return store.RecalcJob{}, fmt.Errorf("request_id %q already belongs to a different recalc request", requestID)
 	}
 	return job, nil
+}
+
+func matchesSubmitRequest(job store.RecalcJob, setID string, factorIDs, subjects []string, start, end int64) bool {
+	if job.SetID != setID || job.StartTime != start || job.EndTime != end ||
+		job.FactorsOmitted != (len(factorIDs) == 0) || job.SubjectsOmitted != (len(subjects) == 0) {
+		return false
+	}
+	if !job.FactorsOmitted {
+		normalized, err := normalizeIDs(factorIDs)
+		if err != nil || !sameStrings(job.FactorIDs, normalized) {
+			return false
+		}
+	}
+	if !job.SubjectsOmitted {
+		normalized, err := normalizeSubjects(subjects)
+		if err != nil || !sameStrings(job.Subjects, normalized) {
+			return false
+		}
+	}
+	return true
+}
+
+// PrepareEnableBackfill validates and builds the accepted job that must be
+// committed atomically with enabling a disabled factor in the catalog store.
+func (s *Service) PrepareEnableBackfill(ctx context.Context, setID, factorID, requestID string, start, end time.Time) (store.RecalcJob, error) {
+	if s == nil || s.db == nil || s.worker == nil {
+		return store.RecalcJob{}, errors.New("factor recalc store is required")
+	}
+	setID = strings.TrimSpace(setID)
+	factorID = strings.TrimSpace(factorID)
+	requestID = strings.TrimSpace(requestID)
+	if setID == "" || factorID == "" || requestID == "" {
+		return store.RecalcJob{}, errors.New("request_id, set_id and factor_id are required")
+	}
+	set, err := s.db.GetSet(ctx, setID)
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	if set.Status != domain.SetStatusEnabled {
+		return store.RecalcJob{}, fmt.Errorf("factor set %q is not enabled", set.SetID)
+	}
+	factor, err := s.db.GetFactor(ctx, factorID)
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	if factor.SetID != setID || factor.Status != domain.FactorStatusDisabled {
+		return store.RecalcJob{}, fmt.Errorf("factor %q must be disabled in set %q before activation", factorID, setID)
+	}
+	clock, err := s.worker.clockFor(set.SpaceID)
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	start, end, err = alignRange(clock, set.Freq, start, end)
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	subjects, err := s.worker.resolveSubjects(ctx, set, nil)
+	if err != nil {
+		return store.RecalcJob{}, err
+	}
+	return store.RecalcJob{
+		JobID: requestID, RequestID: requestID, SetID: setID,
+		FactorIDs: []string{factorID}, Subjects: subjects,
+		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
+	}, nil
 }
 
 func (s *Service) Get(ctx context.Context, jobID string) (store.RecalcJob, error) {
@@ -351,9 +436,6 @@ func normalizeSubjects(values []string) ([]string, error) {
 		result = append(result, value)
 	}
 	sort.Strings(result)
-	if len(result) == 0 {
-		return nil, errors.New("recalc subjects are empty")
-	}
 	return result, nil
 }
 

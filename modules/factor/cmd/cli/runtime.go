@@ -65,17 +65,18 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 			KeyID         string `yaml:"key_id"`
 			HMACKeyFile   string `yaml:"hmac_key_file"`
 		} `yaml:"storage"`
-		ArtifactsDir string `yaml:"artifacts_dir"`
-		Engine       struct {
-			PythonBin      string `yaml:"python_bin"`
-			WorkerPath     string `yaml:"worker_path"`
-			FactorsDir     string `yaml:"factors_dir"`
-			PythonWorkers  int    `yaml:"python_workers"`
-			ReadWorkers    int    `yaml:"read_workers"`
-			ReadTimeoutMS  int    `yaml:"read_timeout_ms"`
-			WriteBatchRows int    `yaml:"write_batch_rows"`
-			TaskTimeoutMS  int    `yaml:"task_timeout_ms"`
-		} `yaml:"engine"`
+		Python struct {
+			Bin         string        `yaml:"bin"`
+			WorkerPath  string        `yaml:"worker_path"`
+			FactorsDir  string        `yaml:"factors_dir"`
+			Workers     int           `yaml:"workers"`
+			TaskTimeout time.Duration `yaml:"task_timeout"`
+		} `yaml:"python"`
+		Pipeline struct {
+			ReadWorkers    int           `yaml:"read_workers"`
+			ReadTimeout    time.Duration `yaml:"read_timeout"`
+			WriteBatchRows int           `yaml:"write_batch_rows"`
+		} `yaml:"pipeline"`
 	}
 	if err := yaml.Unmarshal(raw, &source); err != nil {
 		return runtimeConfig{}, fmt.Errorf("parse config %s: %w", path, err)
@@ -87,32 +88,29 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 		config.GatewayTarget = source.Storage.GatewayTarget
 	}
 	config.GatewayNodeID, config.KeyID, config.HMACKeyFile = source.Storage.GatewayNodeID, source.Storage.KeyID, source.Storage.HMACKeyFile
-	if source.ArtifactsDir != "" {
-		config.FactorsDir = source.ArtifactsDir
+	if source.Python.FactorsDir != "" {
+		config.FactorsDir = source.Python.FactorsDir
 	}
-	if source.Engine.FactorsDir != "" {
-		config.FactorsDir = source.Engine.FactorsDir
+	if source.Python.Bin != "" {
+		config.PythonBin = source.Python.Bin
 	}
-	if source.Engine.PythonBin != "" {
-		config.PythonBin = source.Engine.PythonBin
+	if source.Python.WorkerPath != "" {
+		config.WorkerPath = source.Python.WorkerPath
 	}
-	if source.Engine.WorkerPath != "" {
-		config.WorkerPath = source.Engine.WorkerPath
+	if source.Python.Workers > 0 {
+		config.PythonWorkers = source.Python.Workers
 	}
-	if source.Engine.PythonWorkers > 0 {
-		config.PythonWorkers = source.Engine.PythonWorkers
+	if source.Pipeline.ReadWorkers > 0 {
+		config.ReadWorkers = source.Pipeline.ReadWorkers
 	}
-	if source.Engine.ReadWorkers > 0 {
-		config.ReadWorkers = source.Engine.ReadWorkers
+	if source.Pipeline.ReadTimeout > 0 {
+		config.ReadTimeout = source.Pipeline.ReadTimeout
 	}
-	if source.Engine.ReadTimeoutMS > 0 {
-		config.ReadTimeout = time.Duration(source.Engine.ReadTimeoutMS) * time.Millisecond
+	if source.Pipeline.WriteBatchRows > 0 {
+		config.WriteBatchRows = source.Pipeline.WriteBatchRows
 	}
-	if source.Engine.WriteBatchRows > 0 {
-		config.WriteBatchRows = source.Engine.WriteBatchRows
-	}
-	if source.Engine.TaskTimeoutMS > 0 {
-		config.TaskTimeout = time.Duration(source.Engine.TaskTimeoutMS) * time.Millisecond
+	if source.Python.TaskTimeout > 0 {
+		config.TaskTimeout = source.Python.TaskTimeout
 	}
 	for _, path := range []*string{&config.DatabasePath, &config.WorkerPath, &config.FactorsDir, &config.HMACKeyFile} {
 		if *path != "" && !filepath.IsAbs(*path) {
@@ -122,25 +120,25 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_DB_PATH")); value != "" {
 		config.DatabasePath = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET")); value != "" {
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET")); value != "" {
 		config.GatewayTarget = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID")); value != "" {
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID")); value != "" {
 		config.GatewayNodeID = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_KEY_ID")); value != "" {
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_KEY_ID")); value != "" {
 		config.KeyID = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_RPC_HMAC_KEY_FILE")); value != "" {
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_STORAGE_HMAC_KEY_FILE")); value != "" {
 		config.HMACKeyFile = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_ENGINE_PYTHON_BIN")); value != "" {
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_BIN")); value != "" {
 		config.PythonBin = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_ENGINE_WORKER_PATH")); value != "" {
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_WORKER_PATH")); value != "" {
 		config.WorkerPath = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_ENGINE_FACTORS_DIR")); value != "" {
+	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_FACTORS_DIR")); value != "" {
 		config.FactorsDir = value
 	}
 	return config, nil

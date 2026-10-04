@@ -25,6 +25,8 @@ func ValidationErrorFor(message string) error { return invalid(message) }
 // type cannot block DatasetRowsUpserted or the current period markers.
 var ErrUnsupportedOutboxEvent = errors.New("unsupported outbox event")
 
+var ErrOutboxEntryNotFound = errors.New("outbox entry not found")
+
 // ErrDatasetDeleted is returned after the destructive dataset boundary has
 // been crossed. The tombstone prevents a delayed writer from recreating rows
 // after the metadata object has already been removed.

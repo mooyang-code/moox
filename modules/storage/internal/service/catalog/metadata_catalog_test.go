@@ -424,6 +424,72 @@ type deleteDatasetMetadataStore struct {
 	deleted int
 }
 
+type updateDatasetMetadataStore struct {
+	metadata.Store
+	dataset     *pb.Dataset
+	updated     *pb.Dataset
+	upsertCalls int
+	deleteCalls int
+}
+
+func (s *updateDatasetMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
+	return s.dataset, nil
+}
+
+func (s *updateDatasetMetadataStore) UpsertDataset(_ context.Context, item *pb.Dataset) (*pb.Dataset, error) {
+	s.upsertCalls++
+	s.updated = item
+	s.dataset = item
+	return item, nil
+}
+
+func (s *updateDatasetMetadataStore) DeleteDataset(context.Context, string, string) error {
+	s.deleteCalls++
+	return nil
+}
+
+func TestUpdateDatasetCannotStripOrForgeOwnershipMarkers(t *testing.T) {
+	store := &updateDatasetMetadataStore{dataset: &pb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_factor_result", Name: "因子结果", DataNodeId: "node-a",
+		Attributes: map[string]string{
+			"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor",
+			"source_dataset_id": "dataset_prices",
+		},
+	}}
+	svc, err := NewMetadataService(store, nil, Options{})
+	require.NoError(t, err)
+
+	updated, err := svc.UpdateDataset(context.Background(), &pb.UpdateDatasetReq{Dataset: &pb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_factor_result", Name: "因子结果更新", DataNodeId: "node-a",
+		Attributes: map[string]string{"display_name": "结果"},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, updated.GetRetInfo().GetCode())
+	require.Equal(t, "factor", updated.GetDataset().GetAttributes()["owner_module"])
+	require.Equal(t, "factor_result", updated.GetDataset().GetAttributes()["dataset_role"])
+	require.Equal(t, "factor", updated.GetDataset().GetAttributes()["write_owner"])
+	require.Equal(t, "dataset_prices", updated.GetDataset().GetAttributes()["source_dataset_id"])
+
+	for key, value := range map[string]string{
+		"owner_module": "admin", "dataset_role": "raw_collection", "write_owner": "collector",
+		"source_dataset_id": "dataset_other",
+	} {
+		forged := &pb.Dataset{
+			SpaceId: "crypto", DatasetId: "dataset_factor_result", Name: "因子结果更新", DataNodeId: "node-a",
+			Attributes: map[string]string{key: value},
+		}
+		response, callErr := svc.UpdateDataset(context.Background(), &pb.UpdateDatasetReq{Dataset: forged})
+		require.NoError(t, callErr)
+		require.Equal(t, pb.ErrorCode_INVALID_PARAM, response.GetRetInfo().GetCode(), key)
+	}
+	require.Equal(t, 1, store.upsertCalls)
+
+	deleted, err := svc.DeleteDataset(context.Background(), &pb.DeleteDatasetReq{SpaceId: "crypto", DatasetId: "dataset_factor_result"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, deleted.GetRetInfo().GetCode())
+	require.Zero(t, store.deleteCalls, "metadata ownership must not be clearable through UpdateDataset")
+}
+
 func (s *deleteDatasetMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
 	if s.dataset == nil {
 		return nil, sql.ErrNoRows
@@ -457,6 +523,38 @@ func TestDeleteCollectorDatasetRequiresSignedCollectorIdentity(t *testing.T) {
 			svc, err := NewMetadataService(store, nil, Options{OperatorAuthSecret: "secret"})
 			require.NoError(t, err)
 			rsp, err := svc.DeleteDataset(context.Background(), &pb.DeleteDatasetReq{AuthInfo: test.auth, SpaceId: "crypto", DatasetId: "dataset-task"})
+			require.NoError(t, err)
+			require.Equal(t, test.want, rsp.GetRetInfo().GetCode())
+			if test.want == pb.ErrorCode_SUCCESS {
+				require.Equal(t, 1, store.deleted)
+			} else {
+				require.Zero(t, store.deleted)
+			}
+		})
+	}
+}
+
+func TestDeleteFactorResultDatasetRequiresSignedFactorIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		auth *pb.AuthInfo
+		want pb.ErrorCode
+	}{
+		{name: "missing", want: pb.ErrorCode_NO_PERMISSION},
+		{name: "wrong hmac", auth: &pb.AuthInfo{AppId: "moox-factor", AppKey: "wrong"}, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "other signed service", auth: &pb.AuthInfo{AppId: "admin-gateway", AppKey: serviceAuthKey("secret", "admin-gateway")}, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "collector signed", auth: &pb.AuthInfo{AppId: "moox-collector", AppKey: serviceAuthKey("secret", "moox-collector")}, want: pb.ErrorCode_NO_PERMISSION},
+		{name: "signed factor", auth: &pb.AuthInfo{AppId: "moox-factor", AppKey: serviceAuthKey("secret", "moox-factor")}, want: pb.ErrorCode_SUCCESS},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &deleteDatasetMetadataStore{dataset: &pb.Dataset{
+				SpaceId: "crypto", DatasetId: "dataset-factor", Attributes: map[string]string{"dataset_role": "factor_result", "owner_module": "factor"},
+			}}
+			svc, err := NewMetadataService(store, nil, Options{OperatorAuthSecret: "secret"})
+			require.NoError(t, err)
+			rsp, err := svc.DeleteDataset(context.Background(), &pb.DeleteDatasetReq{
+				AuthInfo: test.auth, SpaceId: "crypto", DatasetId: "dataset-factor",
+			})
 			require.NoError(t, err)
 			require.Equal(t, test.want, rsp.GetRetInfo().GetCode())
 			if test.want == pb.ErrorCode_SUCCESS {

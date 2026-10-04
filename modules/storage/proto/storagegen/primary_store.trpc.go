@@ -30,11 +30,7 @@ type PrimaryStoreService interface {
 
 	RecordDatasetPeriodFailures(ctx context.Context, req *PrimaryRecordDatasetPeriodFailuresReq) (*PrimaryRecordDatasetPeriodFailuresRsp, error)
 
-	CommitInput(ctx context.Context, req *PrimaryCommitInputReq) (*PrimaryCommitInputRsp, error)
-
 	WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq) (*PrimaryWriteFactorRowsRsp, error)
-
-	LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq) (*PrimaryLookupWriteReceiptRsp, error)
 
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error)
 
@@ -147,24 +143,6 @@ func PrimaryStoreService_RecordDatasetPeriodFailures_Handler(svr interface{}, ct
 	return rsp, nil
 }
 
-func PrimaryStoreService_CommitInput_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrimaryCommitInputReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).CommitInput(ctx, reqbody.(*PrimaryCommitInputReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func PrimaryStoreService_WriteFactorRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &PrimaryWriteFactorRowsReq{}
 	filters, err := f(req)
@@ -173,24 +151,6 @@ func PrimaryStoreService_WriteFactorRows_Handler(svr interface{}, ctx context.Co
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(PrimaryStoreService).WriteFactorRows(ctx, reqbody.(*PrimaryWriteFactorRowsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func PrimaryStoreService_LookupWriteReceipt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrimaryLookupWriteReceiptReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).LookupWriteReceipt(ctx, reqbody.(*PrimaryLookupWriteReceiptReq))
 	}
 
 	var rsp interface{}
@@ -407,16 +367,8 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_RecordDatasetPeriodFailures_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/CommitInput",
-			Func: PrimaryStoreService_CommitInput_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.PrimaryStore/WriteFactorRows",
 			Func: PrimaryStoreService_WriteFactorRows_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.PrimaryStore/LookupWriteReceipt",
-			Func: PrimaryStoreService_LookupWriteReceipt_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReadFields",
@@ -488,14 +440,8 @@ func (s *UnimplementedPrimaryStore) CommitTimeSeriesBatch(ctx context.Context, r
 func (s *UnimplementedPrimaryStore) RecordDatasetPeriodFailures(ctx context.Context, req *PrimaryRecordDatasetPeriodFailuresReq) (*PrimaryRecordDatasetPeriodFailuresRsp, error) {
 	return nil, errors.New("rpc RecordDatasetPeriodFailures of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) CommitInput(ctx context.Context, req *PrimaryCommitInputReq) (*PrimaryCommitInputRsp, error) {
-	return nil, errors.New("rpc CommitInput of service PrimaryStore is not implemented")
-}
 func (s *UnimplementedPrimaryStore) WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq) (*PrimaryWriteFactorRowsRsp, error) {
 	return nil, errors.New("rpc WriteFactorRows of service PrimaryStore is not implemented")
-}
-func (s *UnimplementedPrimaryStore) LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq) (*PrimaryLookupWriteReceiptRsp, error) {
-	return nil, errors.New("rpc LookupWriteReceipt of service PrimaryStore is not implemented")
 }
 func (s *UnimplementedPrimaryStore) ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error) {
 	return nil, errors.New("rpc ReadFields of service PrimaryStore is not implemented")
@@ -547,11 +493,7 @@ type PrimaryStoreClientProxy interface {
 
 	RecordDatasetPeriodFailures(ctx context.Context, req *PrimaryRecordDatasetPeriodFailuresReq, opts ...client.Option) (rsp *PrimaryRecordDatasetPeriodFailuresRsp, err error)
 
-	CommitInput(ctx context.Context, req *PrimaryCommitInputReq, opts ...client.Option) (rsp *PrimaryCommitInputRsp, err error)
-
 	WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq, opts ...client.Option) (rsp *PrimaryWriteFactorRowsRsp, err error)
-
-	LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq, opts ...client.Option) (rsp *PrimaryLookupWriteReceiptRsp, err error)
 
 	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq, opts ...client.Option) (rsp *PrimaryReadFieldsRsp, err error)
 
@@ -683,26 +625,6 @@ func (c *PrimaryStoreClientProxyImpl) RecordDatasetPeriodFailures(ctx context.Co
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) CommitInput(ctx context.Context, req *PrimaryCommitInputReq, opts ...client.Option) (*PrimaryCommitInputRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/CommitInput")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("CommitInput")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PrimaryCommitInputRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *PrimaryStoreClientProxyImpl) WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq, opts ...client.Option) (*PrimaryWriteFactorRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -717,26 +639,6 @@ func (c *PrimaryStoreClientProxyImpl) WriteFactorRows(ctx context.Context, req *
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PrimaryWriteFactorRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *PrimaryStoreClientProxyImpl) LookupWriteReceipt(ctx context.Context, req *PrimaryLookupWriteReceiptReq, opts ...client.Option) (*PrimaryLookupWriteReceiptRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/LookupWriteReceipt")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("LookupWriteReceipt")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PrimaryLookupWriteReceiptRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

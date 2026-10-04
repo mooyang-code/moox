@@ -1,7 +1,6 @@
 import type {
   Dataset,
   DatasetColumn,
-  Factor,
   Field,
   FieldValueType,
   FilterCond,
@@ -133,11 +132,10 @@ export function buildViewColumnLabels(
   viewColumns: ViewColumn[],
   datasetColumns: DatasetColumn[],
   fields: Field[],
-  factors: Factor[],
   datasets: Array<Pick<Dataset, "dataset_id" | "name">> = [],
   view?: Pick<View, "dataset_id"> | null
 ) {
-  const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields, factors);
+  const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields);
   const datasetColumnByQualifiedName = new Map<string, DatasetColumn>();
   for (const column of datasetColumns) {
     if (!column.dataset_id || !column.column_name) continue;
@@ -299,9 +297,8 @@ function appendDatasetName(label: string, datasetId: string, datasets: Array<Pic
   return `${label}（${dataset?.name || datasetId}）`;
 }
 
-function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field[], factors: Factor[]) {
+function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field[]) {
   const fieldByID = new Map(fields.map(item => [item.field_id, item]));
-  const factorByID = new Map(factors.map(item => [item.factor_id, item]));
   const labels: Record<string, string> = {};
   for (const column of datasetColumns) {
     if (!column.column_name) continue;
@@ -322,10 +319,7 @@ function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field
       continue;
     }
     if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FACTOR", 2)) {
-      const label = readableMetadataLabel(
-        column.column_name,
-        factorByID.get(column.origin_id)?.name || factorByID.get(column.column_name)?.name
-      );
+      const label = readableMetadataLabel(column.column_name);
       labels[labelKey] = label;
       if (!column.dataset_id) labels[column.column_name] = label;
       continue;

@@ -14,6 +14,7 @@ const (
 	SetStatusPending  = "pending"
 	SetStatusEnabled  = "enabled"
 	SetStatusDisabled = "disabled"
+	SetStatusDeleting = "deleting"
 )
 
 // FactorSet groups definitions over one source dataset and frequency.

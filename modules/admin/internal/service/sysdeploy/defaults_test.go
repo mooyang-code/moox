@@ -292,6 +292,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 		t.Fatalf("storage-primary general gateway methods expose DeleteSpace: %v", storageExtra.GatewayMethods)
 	}
 	for _, method := range []string{
+		"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors",
 		"Register" + "DataNode",
 		"Create" + "PrimaryStore" + "Node",
 		"List" + "PrimaryStore" + "Nodes",

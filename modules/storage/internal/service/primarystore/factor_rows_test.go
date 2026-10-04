@@ -64,6 +64,40 @@ func TestWriteFactorRowsRejectsNonFactorResultDataset(t *testing.T) {
 	}
 }
 
+func TestWriteFactorRowsRejectsMismatchedDatasetOwner(t *testing.T) {
+	for _, attrs := range []map[string]string{
+		{"owner_module": "collector", "dataset_role": "factor_result", "write_owner": "factor"},
+		{"owner_module": "factor", "dataset_role": "raw_collection", "write_owner": "factor"},
+		{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "collector"},
+	} {
+		resolved := false
+		svc, err := New(Options{
+			Resolver: func(context.Context, string, string) (DataNodeClient, error) {
+				resolved = true
+				return &factorRowsNode{}, nil
+			},
+			Snapshot: func() metadata.RequestSnapshot {
+				return factorRowsSnapshot{dataset: &pb.Dataset{
+					SpaceId: "space", DatasetId: "result", Attributes: attrs,
+				}}
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rsp, err := svc.WriteFactorRows(context.Background(), &pb.PrimaryWriteFactorRowsReq{
+			AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", DatasetId: "result", CommitId: "commit-1",
+			Rows: []*pb.RowFieldUpsert{factorRowsRecord("value")},
+		})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+			t.Fatalf("attrs=%v response=%v err=%v", attrs, rsp, err)
+		}
+		if resolved {
+			t.Fatalf("mismatched Dataset owner reached DataNode: attrs=%v", attrs)
+		}
+	}
+}
+
 func TestWriteFactorRowsRejectsNonFactorCaller(t *testing.T) {
 	resolved := false
 	svc, err := New(Options{
@@ -148,10 +182,34 @@ func TestWriteFactorRowsRejectsUnknownColumns(t *testing.T) {
 	}
 }
 
+func TestWriteFactorRowsDoesNotTreatOriginIDAsColumnName(t *testing.T) {
+	resolved := false
+	svc, err := New(Options{
+		Resolver: func(context.Context, string, string) (DataNodeClient, error) {
+			resolved = true
+			return &factorRowsNode{}, nil
+		},
+		Snapshot: factorRowsMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsp, err := svc.WriteFactorRows(context.Background(), &pb.PrimaryWriteFactorRowsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", DatasetId: "result", CommitId: "commit-origin-id",
+		Rows: []*pb.RowFieldUpsert{factorRowsRecord("factor-id")},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
+		t.Fatalf("response=%v err=%v", rsp, err)
+	}
+	if resolved {
+		t.Fatal("origin_id was treated as a writable column name")
+	}
+}
+
 func factorRowsMetadata() metadata.RequestSnapshot {
 	return factorRowsSnapshot{
-		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "result", DataNodeId: "node-owner", Status: "active", Attributes: map[string]string{"dataset_role": "factor_result"}},
-		columns: []*pb.DatasetColumn{{ColumnName: "value", OriginId: "value", Status: "active"}},
+		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "result", DataNodeId: "node-owner", Status: "active", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"}},
+		columns: []*pb.DatasetColumn{{ColumnName: "value", OriginId: "factor-id", Status: "active"}},
 	}
 }
 

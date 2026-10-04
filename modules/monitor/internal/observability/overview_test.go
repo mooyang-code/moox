@@ -659,7 +659,7 @@ func TestBuilderIgnoresDatasetEnabledFromSupersededFactorBoot(t *testing.T) {
 	now := time.Date(2026, 9, 15, 12, 30, 0, 0, time.UTC)
 	oldBoot := "af0221ff-91e9-4cb2-b1e3-00d434de7bf1"
 	newBoot := "200c376c-2528-4ac9-a17b-f443b3fa49c0"
-	retired := `{"dataset_id":"dataset_crypto_spot_kline_1m_factor","freq":"1m","space_id":"crypto"}`
+	retired := `{"dataset_id":"dataset_factor_binance_kline_1m","freq":"1m","space_id":"crypto"}`
 	live := `{"dataset_id":"dataset_factor_binance_kline_1m","freq":"1m","space_id":"crypto"}`
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		require.NoError(t, db.Create([]monmetrics.MetricService{

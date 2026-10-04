@@ -326,14 +326,13 @@ import {
   listDatasetColumns,
   listDatasets,
   listDatasetSubjects,
-  listFactors,
   listFields,
   listSubjects,
   listViews
 } from "@/api/storage/metadata";
 import { readRecordRows, readTimeSeriesRows } from "@/api/storage/access";
 import { queryTimeSeriesRows } from "@/api/storage/view";
-import type { Dataset, DatasetColumn, Factor, Field, PageResult, RecordRow, SortOrder } from "@/api/storage/types";
+import type { Dataset, DatasetColumn, Field, PageResult, RecordRow, SortOrder } from "@/api/storage/types";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { datasetMatchesAttribution, type DatasetRole, type OwnerModule } from "@/views/data/shared/module-attribution";
 import { useSpaceStore } from "@/store/modules/space";
@@ -390,7 +389,6 @@ const hasAttributionFilter = computed(() =>
 );
 const datasetColumns = ref<DatasetColumn[]>([]);
 const fields = ref<Field[]>([]);
-const factors = ref<Factor[]>([]);
 const dataIds = ref<BrowseDataId[]>([]);
 const activeDataId = ref("");
 const activeFreq = ref("");
@@ -455,7 +453,7 @@ const previewHasMore = computed(() => (mode.value === "record" ? recordPreviewHa
 
 const preferredColumnNames = computed(() => datasetColumns.value.map(item => item.column_name).filter(Boolean));
 
-const columnLabels = computed(() => buildColumnLabels(datasetColumns.value, fields.value, factors.value));
+const columnLabels = computed(() => buildColumnLabels(datasetColumns.value, fields.value));
 
 const detailColumns = computed(() => {
   const row = detailRow.value;
@@ -470,14 +468,12 @@ async function loadMeta() {
   metaLoading.value = true;
   try {
     const page = { page: 1, size: 1000 };
-    const [datasetItems, fieldRsp, factorRsp] = await Promise.all([
+    const [datasetItems, fieldRsp] = await Promise.all([
       hasAttributionFilter.value ? listAllDatasets(space_id) : listDatasets({ space_id, page }).then(rsp => rsp.datasets || []),
-      listFields({ space_id, page }),
-      listFactors({ space_id, page })
+      listFields({ space_id, page })
     ]);
     datasets.value = datasetItems;
     fields.value = fieldRsp.fields || [];
-    factors.value = factorRsp.factors || [];
     ensureSelectedDataset();
     await loadDatasetContext();
   } catch (error) {

@@ -141,7 +141,7 @@ func TestBuildDatasetRowsUpsertedMessageCarriesWriteSource(t *testing.T) {
 }
 
 func TestBuildDatasetRowsUpsertedMessageCarriesWriteKind(t *testing.T) {
-	data, err := BuildDatasetRowsUpsertedMessageWithKind("node-1", "", WriteKindInputCommit, "crypto", "spot_kline", []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v1"}}}}})
+	data, err := BuildDatasetRowsUpsertedMessageWithKind("node-1", "", WriteKindFactorResult, "crypto", "spot_kline", []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v1"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestBuildDatasetRowsUpsertedMessageCarriesWriteKind(t *testing.T) {
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.GetWriteKind() != WriteKindInputCommit {
+	if payload.GetWriteKind() != WriteKindFactorResult {
 		t.Fatalf("write_kind = %q", payload.GetWriteKind())
 	}
 }

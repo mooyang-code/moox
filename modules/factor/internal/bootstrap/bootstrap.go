@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -89,6 +88,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	auth := factorAuthInfo()
 	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, credentials, auth)
 	metadataSubjects := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, credentials)...)
+	subjectProvider := datasetSubjectProvider{client: metadataSubjects, auth: auth}
 
 	pythonPool, err := pyexec.New(appCtx, cfg.Python.Workers, process.Config{
 		PythonBin: cfg.Python.Bin, WorkerPath: cfg.Python.WorkerPath,
@@ -121,15 +121,17 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	var recalcService *recalc.Service
 	catalogService := catalog.NewService(db, storage,
 		catalog.WithFactorsDir(cfg.Python.FactorsDir),
+		catalog.WithLockDir(cfg.Database.Path+".locks"),
 		catalog.WithSourceChecker(sourceChecker{python: cfg.Python}),
 		catalog.WithRecalcSubmitter(recalcSubmitter{service: func() *recalc.Service { return recalcService }}),
+		catalog.WithEarliestPeriodProvider(datasetEarliestPeriodProvider{storage: storage, subjects: subjectProvider}),
 		catalog.WithNotifier(setNotifier),
 	)
 	recalcService = recalc.NewService(db, measuredRunner,
 		recalc.WithChunkPeriods(cfg.Recalc.ChunkPeriods),
 		recalc.WithLocks(catalogService.Locks()),
 		recalc.WithColumnProvider(storage),
-		recalc.WithSubjectProvider(datasetSubjectProvider{client: metadataSubjects, auth: auth}),
+		recalc.WithSubjectProvider(subjectProvider),
 	)
 
 	if err := catalogService.Reconcile(appCtx); err != nil {
@@ -390,32 +392,21 @@ func (n *consumerNotifier) SetsChanged() {
 type sourceChecker struct{ python PythonConfig }
 
 func (s sourceChecker) CheckSource(ctx context.Context, factor domain.FactorDef, sourcePath string) error {
-	const validator = "import ast,pathlib,sys\np=pathlib.Path(sys.argv[1])\nt=ast.parse(p.read_text())\nif not any(isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name=='compute' for n in t.body): raise ValueError('compute(df, params, context) is required')"
-	cmd := exec.CommandContext(ctx, s.python.Bin, "-c", validator, sourcePath)
-	if err := cmd.Run(); err != nil {
-		return errors.New("source must be valid Python and define compute(df, params, context)")
-	}
-	return nil
+	return pyexec.ValidateSource(ctx, s.python.Bin, sourcePath)
 }
 
 type recalcSubmitter struct{ service func() *recalc.Service }
 
-func (s recalcSubmitter) Submit(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef, start, end time.Time) error {
+func (s recalcSubmitter) PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, factor domain.FactorDef, start, end time.Time) (store.RecalcJob, error) {
 	service := s.service()
 	if service == nil {
-		return errors.New("factor recalc service is not initialized")
+		return store.RecalcJob{}, errors.New("factor recalc service is not initialized")
 	}
-	factorIDs := make([]string, 0, len(factors))
-	for _, factor := range factors {
-		factorIDs = append(factorIDs, factor.FactorID)
-	}
-	sort.Strings(factorIDs)
 	requestID, err := newRequestID()
 	if err != nil {
-		return err
+		return store.RecalcJob{}, err
 	}
-	_, err = service.Submit(ctx, set.SetID, factorIDs, nil, requestID, start, end)
-	return err
+	return service.PrepareEnableBackfill(ctx, set.SetID, factor.FactorID, requestID, start, end)
 }
 
 type recalcRPCAdapter struct{ service *recalc.Service }
@@ -462,6 +453,32 @@ func newRequestID() (string, error) {
 type datasetSubjectProvider struct {
 	client storagepb.MetadataClientProxy
 	auth   *commonpb.AuthInfo
+}
+
+type datasetEarliestPeriodProvider struct {
+	storage  *storageio.Client
+	subjects datasetSubjectProvider
+}
+
+func (p datasetEarliestPeriodProvider) EarliestDatasetPeriod(ctx context.Context, spaceID, datasetID, freq string) (time.Time, bool, error) {
+	if p.storage == nil {
+		return time.Time{}, false, errors.New("Storage history client is required")
+	}
+	subjects, err := p.subjects.ListDatasetSubjects(ctx, spaceID, datasetID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if len(subjects) == 0 {
+		return time.Time{}, false, nil
+	}
+	columns, err := p.storage.DatasetColumns(ctx, spaceID, datasetID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if len(columns) == 0 {
+		return time.Time{}, false, fmt.Errorf("source Dataset %s/%s has no readable columns", spaceID, datasetID)
+	}
+	return p.storage.EarliestPeriod(ctx, spaceID, datasetID, freq, subjects, columns)
 }
 
 func (p datasetSubjectProvider) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error) {

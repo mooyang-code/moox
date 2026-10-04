@@ -160,8 +160,8 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 	if credentials.KeyID == "" || credentials.Caller == "" || credentials.Secret == "" {
 		t.Fatal("gateway credentials are required")
 	}
-	target := requiredArchiveEnv(t, "MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET")
-	nodeID := requiredArchiveEnv(t, "MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID")
+	target := requiredArchiveEnv(t, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	nodeID := requiredArchiveEnv(t, "MOOX_STORAGE_RPC_GATEWAY_NODE_ID")
 	options := gatewayauth.NewTRPCClientOptions(target, nodeID, credentials)
 	primary := storagepb.NewPrimaryStoreClientProxy(options...)
 	metadata := storagepb.NewMetadataClientProxy(options...)

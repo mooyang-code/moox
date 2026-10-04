@@ -115,10 +115,13 @@ func (l *Lanes) runJob(setID string, job laneJob) {
 	l.setActive(setID, true)
 	defer l.setActive(setID, false)
 	if l.locks != nil {
-		unlock := l.locks.Lock(setID)
-		if unlock != nil {
-			defer unlock()
+		unlock, err := l.locks.LockContext(job.ctx, setID)
+		if err != nil {
+			result.err = err
+			job.done <- result
+			return
 		}
+		defer unlock()
 	}
 	result.outcome, result.err = job.run(job.ctx)
 	job.done <- result

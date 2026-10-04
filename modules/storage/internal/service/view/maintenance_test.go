@@ -187,7 +187,7 @@ func TestPeriodBoundedViewCanRebuildForFileCapacity(t *testing.T) {
 
 func TestRevisionRepairIsNotClassifiedAsOptionalCapacityMaintenance(t *testing.T) {
 	view := &pb.View{
-		SpaceId: "crypto", ViewId: "view_crypto_spot_kline_1m", ActiveIndexId: "active",
+		SpaceId: "crypto", ViewId: "view_binance_kline_1m", ActiveIndexId: "active",
 		DesiredViewRevision: 2, ActiveViewRevision: 1, KeepDuration: "0",
 	}
 	stats := viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}

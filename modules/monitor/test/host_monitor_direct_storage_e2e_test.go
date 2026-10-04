@@ -27,8 +27,8 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	if credentials.KeyID == "" || credentials.Caller == "" || credentials.Secret == "" {
 		t.Fatal("gateway credentials are required")
 	}
-	target := normalizeGatewayTarget(requiredMonitorEnv(t, "MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET"))
-	nodeID := requiredMonitorEnv(t, "MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID")
+	target := normalizeGatewayTarget(requiredMonitorEnv(t, "MOOX_STORAGE_RPC_GATEWAY_TARGET"))
+	nodeID := requiredMonitorEnv(t, "MOOX_STORAGE_RPC_GATEWAY_NODE_ID")
 	options := gatewayauth.NewTRPCClientOptions(target, nodeID, credentials)
 	primary := storagepb.NewPrimaryStoreClientProxy(options...)
 	_ = requiredMonitorEnv(t, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")

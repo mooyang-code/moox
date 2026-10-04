@@ -62,7 +62,7 @@ rules: {r: {pool: [000001.SZ], score: ma20, weight: 1}}
 	require.ErrorContains(t, err, "require a ViewDataReady event trigger")
 }
 
-func TestCompileWithBindingsAllowsViewDataReadyWithoutFactorBindings(t *testing.T) {
+func TestCompileAllowsViewDataReadyWithoutFactorDependencies(t *testing.T) {
 	dsl, err := config.Parse([]byte(`name: source-only
 triggers: {event: {name: ViewDataReady}}
 data: {bar: 1d, calendar: cn_stock}

@@ -12,53 +12,22 @@
 - `--yes` 才会执行修改；没有 `--yes` 的命令只能用于查看帮助或失败退出。
 - 所有命令输出 sanitized JSON；应保留 `backup_path`、`pending_before` 和 `deleted` 等字段用于运维记录。
 
-## 清理 Factor 历史积压
+## Factor 周期诊断与补算
 
-当 Factor 结果长时间处理旧周期、`factor_view_ready_v1` 的 pending 持续增长时，使用：
-
-```bash
-moox-cli factor clear-queue \
-  --package-root /home/<user>/moox/prod \
-  --credential-file /home/<user>/.config/moox/eventbus/internal-admin.yaml \
-  --yes
-```
-
-默认目标是 `MOOX_STORAGE/factor_view_ready_v1`。命令按以下顺序执行：
-
-1. 停止 Factor，避免删除 durable consumer 时仍有旧连接竞争。
-2. 读取 consumer 的 `pending`、`ack_pending`，删除 durable consumer。
-3. 启动 Factor；Factor 会按 `DeliverNew` 重建 consumer，只接收清理完成后的新事件。
-
-该操作不会删除 Factor 定义、结果 View 或 Storage 数据。`--dry-run` 不连接 EventBus，JSON 里的 `pending_before` 恒为 0；真实积压只出现在 `--yes` 的 summary。若 Factor 已在处理当前分钟、但日志是 Storage `:11003` `i/o timeout`，先降 `view_read_workers`（见 `view-catchup.md`），不要反复 `clear-queue`。
-
-只检查参数、不连接 EventBus：
+Factor 的实时入口是 durable `factor_collector_period_v1`。积压时查看 JetStream pending、
+最旧事件时间，以及 Factor 的 `factor_period_lag_seconds{set}`、
+`factor_last_period_time{set}`、`factor_lane_backlog{set}`、
+`factor_period_duration_seconds{set,stage}` 和 `factor_failures_total`。不要删除 durable
+来丢弃尚未处理的周期；恢复服务后由 JetStream 重投，历史修正通过显式 Recalc job 完成。
 
 ```bash
-moox-cli factor clear-queue --dry-run
+moox-factor-cli recalc --set fset_binance_kline_1m \
+  --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
 ```
 
-可选参数：
-
-| 参数 | 默认值 | 用途 |
-| --- | --- | --- |
-| `--stream` | `MOOX_STORAGE` | JetStream stream |
-| `--consumer` | `factor_view_ready_v1` | 要删除的 durable consumer |
-| `--credential-file` | 环境变量或 `~/.config/moox/eventbus/internal-admin.yaml` | NATS admin 凭据 |
-| `--eventbus-url` | 凭据文件/环境配置 | 覆盖 EventBus 地址 |
-| `--package-root` | `MOOX_FACTOR_PACKAGE_ROOT` 或可执行文件推导值 | `restart.sh` 所在部署根目录 |
-| `--timeout` | `2m` | 停止、EventBus 操作和启动的总超时 |
-| `--restart` | `true` | 是否自动停止并重启 Factor |
-| `--yes` | `false` | 执行删除和重启的确认开关 |
-
-如果使用 `moox-factor-cli` 直接调用，参数和默认值完全相同：
-
-```bash
-moox-factor-cli clear-queue --package-root /home/<user>/moox/prod --yes
-```
-
-`moox-cli` 查找 Factor CLI 的顺序是 `MOOX_FACTOR_CLI`、同目录的
-`moox-factor-cli`、发布包中的 Factor bin 目录、最后是 `PATH`。无法自动定位时设置
-`MOOX_FACTOR_CLI=/absolute/path/to/moox-factor-cli`。
+Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行。查看或提交任务请使用
+FactorMgr 接口；Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
+`run-once` 和 `status`。
 
 ## 清理 Storage View 积压并触发 A/B 重建
 
@@ -69,14 +38,14 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_crypto_spot_kline_1m \
+  --view-id view_binance_kline_1m \
   --consumer storage_view_kline \
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
   --yes
 ```
 
-独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。控制机上的 `internal-admin.yaml` 默认 `tls://127.0.0.1:4222`，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。四个 crypto kline View 共用 `storage_view_kline`：只在第一个 View 删除 durable，其余 `--reset-consumer=false`。因子 View 用 `--consumer storage_view_factor`。
+独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。控制机上的 `internal-admin.yaml` 默认 `tls://127.0.0.1:4222`，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。三个 crypto kline View 共用 `storage_view_kline`：只在第一个 View 删除 durable，其余 `--reset-consumer=false`。因子 View 用 `--consumer storage_view_factor`。
 
 默认流程：
 
@@ -95,7 +64,7 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_crypto_spot_kline_1m \
+  --view-id view_binance_kline_1m \
   --consumer storage_view_kline \
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
@@ -111,7 +80,7 @@ moox-cli storage repair-view \
 | `--storage-conf` | `MOOX_STORAGE_CONFIG` 或 `config/storage.yaml` | Storage 配置 |
 | `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | `start.sh`/`stop.sh` 所在根目录 |
 | `--stream` | `MOOX_STORAGE` | JetStream stream |
-| `--consumer` | `storage_view_kline` | 分区 durable；kline 四个行情 View 共用，因子 View 用 `storage_view_factor` |
+| `--consumer` | `storage_view_kline` | 分区 durable；kline 三个行情 View 共用，因子 View 用 `storage_view_factor` |
 | `--deliver-policy` | `new` | 重建 consumer 的投递策略；重放时才使用 `all` |
 | `--credential-file` | Storage/EventBus admin 环境变量 | NATS admin 凭据 |
 | `--eventbus-url` | 凭据文件/环境配置 | 覆盖 EventBus 地址 |
@@ -162,7 +131,7 @@ moox-cli storage force-rebuild-view \
   --storage-conf /home/<user>/moox/storage/config/storage.yaml \
   --package-root /home/<user>/moox/storage \
   --space-id crypto \
-	--view-id view_crypto_spot_kline_1m_factor \
+	--view-id view_factor_binance_kline_1m \
   --lookback 72h \
   --dry-run
 ```
@@ -181,7 +150,7 @@ moox-cli storage force-rebuild-view \
 /home/<user>/moox/storage/bin/moox-storage-cli retain-views \
   --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
   --package-root /home/<user>/moox/storage \
-  --keep-view crypto/view_crypto_spot_kline_1m \
+  --keep-view crypto/view_binance_kline_1m \
   --keep-view crypto/view_crypto_swap_kline_1h \
   --keep-view crypto/view_crypto_spot_kline_1h \
   --keep-view mooxsys/view_mooxsys_host_resource \
@@ -207,7 +176,7 @@ Storage 服务的时序 View 默认按所有频率回溯 `5000` 根；任一序�
 
 1. 按 [`view-catchup.md`](view-catchup.md) 先确认卡在 Primary、View durable、还是 Factor 读超时；不要看到结果停滞就直接删除数据。
 2. 对目标命令执行 `--dry-run`，确认 stream、consumer、Space、View 和 package root。
-3. Factor 仅在 durable 积压旧周期时 `clear-queue`；View kline 不追赶时 `repair-view`。读超时打满 View 时先降并发，不要循环清队列。
+3. Factor durable 积压时恢复服务并检查重投，不删除 consumer；历史数据修正使用有界 Recalc。View kline 不追赶时 `repair-view`。
 4. 记录 JSON 中的 pending 数、删除结果、备份路径和重启状态。`repair-view` 在 stop 之后失败时必须把 `storage-view` 拉起来。
 5. 等待新周期事件进入后，再查询 View/Factor 最新 `c_period_time` / `output_watermark`；不要用“进程已启动”代替数据已追赶的验收。
 6. 只有 Source 事件可完整重放、并已确认备份可用时，才升级到 `--reset-view-indexes --deliver-policy=all`。

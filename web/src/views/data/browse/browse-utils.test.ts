@@ -138,15 +138,15 @@ describe("rowsToColumnNames", () => {
         [
           {
             fields: [
-              { field_id: "dataset_binance_spot_kline_1m.open" },
-              { field_id: "dataset_binance_spot_kline_1m.bias__bias_20" },
-              { field_id: "dataset_binance_spot_kline_1m.cci__cci" }
+              { field_id: "dataset_binance_kline_1m.open" },
+              { field_id: "dataset_binance_kline_1m.bias__bias_20" },
+              { field_id: "dataset_binance_kline_1m.cci__cci" }
             ]
           }
         ],
-        ["dataset_binance_spot_kline_1m.open", "dataset_binance_spot_kline_1m.close"]
+        ["dataset_binance_kline_1m.open", "dataset_binance_kline_1m.close"]
       )
-    ).toEqual(["dataset_binance_spot_kline_1m.open", "dataset_binance_spot_kline_1m.close"]);
+    ).toEqual(["dataset_binance_kline_1m.open", "dataset_binance_kline_1m.close"]);
   });
 
   it("discovers columns from rows only when no projection is declared", () => {
@@ -163,15 +163,15 @@ describe("rowsToColumnNames", () => {
 describe("buildViewFilterFieldOptions", () => {
   it("keeps search fields aligned with the table projection", () => {
     const labels = {
-      "dataset_binance_spot_kline_1m.open": "开盘价",
-      "dataset_binance_spot_kline_1m.close": "收盘价",
+      "dataset_binance_kline_1m.open": "开盘价",
+      "dataset_binance_kline_1m.close": "收盘价",
       amount: "成交额"
     };
     const options = buildViewFilterFieldOptions(
       "time_series",
       [
-        { column_name: "dataset_binance_spot_kline_1m.open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-        { column_name: "dataset_binance_spot_kline_1m.close", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
+        { column_name: "dataset_binance_kline_1m.open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+        { column_name: "dataset_binance_kline_1m.close", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
       ],
       [
         { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
@@ -186,8 +186,8 @@ describe("buildViewFilterFieldOptions", () => {
       "freq",
       "series_tag",
       "data_time",
-      "dataset_binance_spot_kline_1m.open",
-      "dataset_binance_spot_kline_1m.close"
+      "dataset_binance_kline_1m.open",
+      "dataset_binance_kline_1m.close"
     ]);
     expect(options.map(item => item.label)).not.toContain("成交额");
   });
@@ -223,7 +223,6 @@ describe("view factor column labels", () => {
           attributes: { display_name: "bias_5", factor_output: "bias_5" }
         } as DatasetColumn
       ],
-      [],
       [],
       [],
       { dataset_id: "bin_e0a2079753cf4faf" }

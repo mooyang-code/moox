@@ -49,6 +49,37 @@ func (r loaderReader) HistoryPeriods(context.Context, string, string, string, ti
 	return r.history, nil
 }
 
+type emptyPoolReader struct {
+	subjects     []input.Subject
+	historyCalls int
+	periodCalls  int
+	restrictedTo int
+}
+
+func (r *emptyPoolReader) BeginViewSnapshot(context.Context, string, []string) (ViewReader, error) {
+	return r, nil
+}
+
+func (r *emptyPoolReader) ReadPeriod(context.Context, string, string, time.Time) ([]ViewRow, error) {
+	r.periodCalls++
+	return nil, nil
+}
+
+func (r *emptyPoolReader) ListSubjects(context.Context, string, string) ([]input.Subject, error) {
+	return r.subjects, nil
+}
+
+func (r *emptyPoolReader) HistoryPeriods(context.Context, string, string, string, time.Time, time.Time) (map[string]int, error) {
+	r.historyCalls++
+	return map[string]int{"BTC-USDT": 10}, nil
+}
+
+func (r *emptyPoolReader) RestrictSelectors(items []input.PoolItem) {
+	r.restrictedTo = len(items)
+}
+
+func (*emptyPoolReader) ViewProvenance(string) (string, uint64, bool) { return "index", 1, true }
+
 func TestLoaderAcceptsCompleteNonEmptyPool(t *testing.T) {
 	reader := loaderReader{
 		subjects: []input.Subject{{SubjectID: "btc-binance", InstrumentID: "BTC-USDT-SPOT", Exchange: "binance", Active: true}},
@@ -73,17 +104,35 @@ func TestLoaderAcceptsCompleteNonEmptyPool(t *testing.T) {
 	}
 }
 
-func TestLoaderAliasesMergedSourceShortNames(t *testing.T) {
+func TestLoaderSkipsHistoryAndRowsForEmptyResolvedPool(t *testing.T) {
+	reader := &emptyPoolReader{subjects: []input.Subject{{SubjectID: "btc", InstrumentID: "BTC-USDT", Active: true}}}
+	compiled := compiler.CompiledStrategy{
+		SpaceID: "space", SourceView: compiler.CompiledView{ID: "source", Frequency: "1m"},
+		InstrumentPool: config.InstrumentPoolRule{MinHistoryPeriods: 3},
+	}
+	period := time.Date(2026, 10, 4, 0, 1, 0, 0, time.UTC)
+	got, err := (Loader{Reader: reader}).LoadPeriodAtWithPool(
+		context.Background(), domain.StrategyRunner{SpaceID: "space", StrategyID: "strategy"}, compiled,
+		period, period, nil, func([]input.Subject, time.Time) (map[string][]string, []string, error) {
+			return nil, nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 0 || reader.historyCalls != 0 || reader.periodCalls != 0 || reader.restrictedTo != 0 {
+		t.Fatalf("empty pool performed storage reads or admitted items: input=%+v reader=%+v", got, reader)
+	}
+}
+
+func TestLoaderAliasesCanonicalDatasetShortNames(t *testing.T) {
 	reader := loaderReader{
 		subjects: []input.Subject{{SubjectID: "BTC-USDT", InstrumentID: "BTC-USDT", Exchange: "binance", Active: true}},
 		history:  map[string]int{"BTC-USDT": 3},
 		rows: map[string][]ViewRow{
 			"source": {{
 				InstrumentID: "BTC-USDT", SubjectID: "BTC-USDT", DataTime: time.Unix(60, 0),
-				Values: map[string]string{
-					"dataset_binance_spot_kline_1m__close": "101.5",
-					"dataset_binance_swap_kline_1m__close": "102.5",
-				},
+				Values: map[string]string{"dataset_binance_kline_1m__close": "101.5"},
 			}},
 		},
 	}
@@ -99,10 +148,10 @@ func TestLoaderAliasesMergedSourceShortNames(t *testing.T) {
 		t.Fatalf("loaded items = %d", len(got.Items))
 	}
 	if got.Items[0].Values["close"].String() != "101.5" {
-		t.Fatalf("close alias = %v, want spot close 101.5", got.Items[0].Values["close"])
+		t.Fatalf("close alias = %v, want canonical dataset close 101.5", got.Items[0].Values["close"])
 	}
-	if got.Items[0].Values["dataset_binance_swap_kline_1m__close"].String() != "102.5" {
-		t.Fatalf("physical swap close missing: %+v", got.Items[0].Values)
+	if got.Items[0].Values["dataset_binance_kline_1m__close"].String() != "101.5" {
+		t.Fatalf("physical dataset close missing: %+v", got.Items[0].Values)
 	}
 }
 

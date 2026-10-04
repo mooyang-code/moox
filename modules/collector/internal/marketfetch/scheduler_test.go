@@ -406,11 +406,11 @@ func TestTickSharesOneFetchAcrossTaskWriteTargets(t *testing.T) {
 	for _, task := range []domain.CollectionTask{
 		{
 			SpaceID: "crypto", TaskID: "bars-a", DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars_a","frequency":"1m","output_fields":["close"]}`,
-			ResultViewID: "view-bars-a", Enabled: true,
+			ResultDatasetID: "bars_a", ResultViewID: "view-bars-a", Enabled: true,
 		},
 		{
 			SpaceID: "crypto", TaskID: "bars-b", DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"bars_b","frequency":"1m","output_fields":["close","volume"]}`,
-			ResultViewID: "view-bars-b", Enabled: true,
+			ResultDatasetID: "bars_b", ResultViewID: "view-bars-b", Enabled: true,
 		},
 	} {
 		require.NoError(t, db.Tasks().Create(ctx, task))
@@ -536,8 +536,8 @@ func TestTimerTickPersistsOneFrozenManifestWithoutInvokingSCF(t *testing.T) {
 	ctx := context.Background()
 	task := domain.CollectionTask{
 		SpaceID: StockCNSpaceID, TaskID: "stock-bars", TaskName: "Stock Bars", DataType: "kline", Enabled: true,
-		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","instrument_type":"equity","subject_tags":["stockcn_equity"],"target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
-		ResultViewID:  "view-stock-bars",
+		CollectParams:   `{"provider":"stockcn_multi","market_type":"equity","instrument_type":"equity","subject_tags":["stockcn_equity"],"target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
+		ResultDatasetID: "dataset_stockcn_equity_kline", ResultViewID: "view-stock-bars",
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
 	now := time.Now().UTC().Add(2 * time.Minute).Truncate(time.Minute).Add(8 * time.Second)
@@ -617,8 +617,8 @@ func TestTimerPlanningFreezesAllGroupMembershipWhenAGroupIsUnavailable(t *testin
 	ctx := context.Background()
 	task := domain.CollectionTask{
 		SpaceID: StockCNSpaceID, TaskID: "stock-bars", TaskName: "Stock Bars", DataType: "kline", Enabled: true,
-		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","instrument_type":"equity","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
-		ResultViewID:  "view-stock-bars",
+		CollectParams:   `{"provider":"stockcn_multi","market_type":"equity","instrument_type":"equity","target_dataset_id":"dataset_stockcn_equity_kline","frequency":"1m"}`,
+		ResultDatasetID: "dataset_stockcn_equity_kline", ResultViewID: "view-stock-bars",
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
 	period := time.Date(2026, 9, 30, 2, 14, 0, 0, time.UTC)

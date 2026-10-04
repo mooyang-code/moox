@@ -68,11 +68,11 @@ func (r *primaryHistoryRangeReader) ReadTimeSeriesRows(_ context.Context, req *p
 func TestPeriodBackfillUsesPrimaryInsteadOfCopyingActiveAndReportsRowsWritten(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	view := &pb.View{
-		SpaceId:          "space",
-		ViewId:           "prices",
-		Engine:           "duckdb",
-		DatasetId: "market",
-		FilterJson:       `{"freq":"1m"}`,
+		SpaceId:    "space",
+		ViewId:     "prices",
+		Engine:     "duckdb",
+		DatasetId:  "market",
+		FilterJson: `{"freq":"1m"}`,
 	}
 	metadata := &maintenanceMetadata{view: view}
 	svc := &Service{
@@ -156,7 +156,7 @@ func TestCapacityMaintenanceRequiresSubjectCatalog(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := &Service{metadataClient: tt.metadata}
-			ok, reason := svc.capacityMaintenanceCatalogReady(context.Background(), nil, &pb.View{SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m"})
+			ok, reason := svc.capacityMaintenanceCatalogReady(context.Background(), nil, &pb.View{SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m"})
 			if ok != tt.wantOK || reason != tt.wantWhy {
 				t.Fatalf("capacityMaintenanceCatalogReady() = (%v, %q), want (%v, %q)", ok, reason, tt.wantOK, tt.wantWhy)
 			}
@@ -207,12 +207,12 @@ func TestPeriodBackfillActivatesWithAvailableHistoryBelowTarget(t *testing.T) {
 func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	view := &pb.View{
-		SpaceId:          "space",
-		ViewId:           "factor-result-view",
-		Engine:           "duckdb",
-		DatasetId: "factor-results",
-		FilterJson:       `{"freq":"1m"}`,
-		Attributes:       map[string]string{"dataset_role": "factor_result"},
+		SpaceId:    "space",
+		ViewId:     "factor-result-view",
+		Engine:     "duckdb",
+		DatasetId:  "factor-results",
+		FilterJson: `{"freq":"1m"}`,
+		Attributes: map[string]string{"dataset_role": "factor_result"},
 	}
 	runtime := &viewRuntime{next: "factor-result-view-b"}
 	svc := &Service{
@@ -237,12 +237,12 @@ func TestFactorResultViewBackfillsExistingPrimaryOutput(t *testing.T) {
 	activeKey.GetTimeSeries().DataTime = "2026-08-18T00:01:00Z"
 	engine := &primaryHistoryBackfillEngine{queryRows: []*pb.RowFieldValues{{Key: activeKey}}}
 	view := &pb.View{
-		SpaceId:          "space",
-		ViewId:           "factor-result-view",
-		Engine:           "duckdb",
-		DatasetId: "factor-results",
-		FilterJson:       `{"freq":"1m"}`,
-		Attributes:       map[string]string{"dataset_role": "factor_result"},
+		SpaceId:    "space",
+		ViewId:     "factor-result-view",
+		Engine:     "duckdb",
+		DatasetId:  "factor-results",
+		FilterJson: `{"freq":"1m"}`,
+		Attributes: map[string]string{"dataset_role": "factor_result"},
 	}
 	runtime := &viewRuntime{active: "factor-result-view-a", next: "factor-result-view-b"}
 	rangeReader := &primaryHistoryRangeReader{rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
@@ -268,7 +268,7 @@ func TestFactorResultViewBackfillsExistingPrimaryOutput(t *testing.T) {
 
 func TestMarshalTimeSeriesHistoryCursorConvertsReadKeyToRowKey(t *testing.T) {
 	readKey := &pb.TimeSeriesKey{
-		SpaceId: "crypto", DatasetId: "dataset_binance_spot_kline_1m",
+		SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m",
 		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-18T10:00:00Z", SeriesTag: "default",
 	}
 
@@ -423,11 +423,11 @@ func TestFormatPeriodSeriesKeyUsesReadableIdentity(t *testing.T) {
 }
 
 func TestBuildPeriodHistorySelectorsLeavesEmptyDatasetBindingsUnfiltered(t *testing.T) {
-	selectors, expected := buildPeriodHistorySelectors("crypto", "dataset_binance_spot_kline_1m", "1m", nil)
+	selectors, expected := buildPeriodHistorySelectors("crypto", "dataset_binance_kline_1m", "1m", nil)
 	if len(selectors) != 0 || len(expected) != 0 {
 		t.Fatalf("empty bindings selectors=%v expected=%v, want unfiltered scan", selectors, expected)
 	}
-	selectors, expected = buildPeriodHistorySelectors("crypto", "dataset_binance_spot_kline_1m", "1m", []string{"BTC-USDT"})
+	selectors, expected = buildPeriodHistorySelectors("crypto", "dataset_binance_kline_1m", "1m", []string{"BTC-USDT"})
 	if len(selectors) != 1 || len(expected) != 1 || selectors[0].GetSubjectId() != "BTC-USDT" {
 		t.Fatalf("bound selectors=%v expected=%v, want one selector", selectors, expected)
 	}

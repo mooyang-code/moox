@@ -38,8 +38,11 @@ func (s *Service) WriteFactorRows(ctx context.Context, req *pb.PrimaryWriteFacto
 	if !ok || dataset == nil || dataset.GetSpaceId() != req.GetSpaceId() || dataset.GetDatasetId() != req.GetDatasetId() {
 		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("factor result Dataset is not present in the request metadata snapshot"))}, nil
 	}
-	if dataset.GetAttributes()["dataset_role"] != "factor_result" {
-		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("factor writes require factor_result Dataset role"))}, nil
+	attrs := dataset.GetAttributes()
+	if !strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "factor_result") ||
+		!strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") ||
+		!strings.EqualFold(strings.TrimSpace(attrs["write_owner"]), "factor") {
+		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("factor writes require a factor-owned factor_result Dataset"))}, nil
 	}
 	ownerNodeID := strings.TrimSpace(dataset.GetDataNodeId())
 	if ownerNodeID == "" {
@@ -107,9 +110,6 @@ func factorResultColumnNames(snapshot metadata.RequestSnapshot, spaceID, dataset
 			}
 			if column.GetColumnName() != "" {
 				columns[column.GetColumnName()] = struct{}{}
-			}
-			if column.GetOriginId() != "" {
-				columns[column.GetOriginId()] = struct{}{}
 			}
 		}
 		if page == nil || !page.GetHasMore() || len(items) == 0 {

@@ -56,6 +56,27 @@ func (s *Store) CreateFactor(ctx context.Context, def domain.FactorDef) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
 	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return insertFactor(tx, def)
+	})
+}
+
+// CreateFactors inserts one catalog import atomically.
+func (s *Store) CreateFactors(ctx context.Context, defs []domain.FactorDef) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, def := range defs {
+			if err := insertFactor(tx, def); err != nil {
+				return fmt.Errorf("insert factor %q: %w", def.FactorID, err)
+			}
+		}
+		return nil
+	})
+}
+
+func insertFactor(tx *gorm.DB, def domain.FactorDef) error {
 	def.FactorID = strings.TrimSpace(def.FactorID)
 	def.SetID = strings.TrimSpace(def.SetID)
 	if def.FactorID == "" || def.SetID == "" {
@@ -81,7 +102,7 @@ func (s *Store) CreateFactor(ctx context.Context, def domain.FactorDef) error {
 	if def.AllowPartialUniverse {
 		partial = 1
 	}
-	err = s.db.WithContext(ctx).Exec(`
+	err = tx.Exec(`
 		INSERT INTO t_factor_defs
 		(c_factor_id, c_set_id, c_name, c_factor_type, c_source_code, c_source_hash,
 		 c_input_columns_json, c_outputs_json, c_params_json, c_lookback_periods,

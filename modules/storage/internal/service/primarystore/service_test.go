@@ -411,10 +411,6 @@ func TestMooxSkillWriteMethodsAreDeniedBeforeDataNodeResolution(t *testing.T) {
 			})
 			return rsp.GetRetInfo(), callErr
 		},
-		"CommitInput": func() (*pb.RetInfo, error) {
-			rsp, callErr := svc.CommitInput(context.Background(), &pb.PrimaryCommitInputReq{AuthInfo: auth, CommitId: "commit-1", RequiredFields: []string{"value"}, Row: row})
-			return rsp.GetRetInfo(), callErr
-		},
 		"WriteFactorRows": func() (*pb.RetInfo, error) {
 			rsp, callErr := svc.WriteFactorRows(context.Background(), &pb.PrimaryWriteFactorRowsReq{AuthInfo: auth, SpaceId: "space", DatasetId: "dataset", CommitId: "commit-1", Rows: []*pb.RowFieldUpsert{row}})
 			return rsp.GetRetInfo(), callErr
@@ -443,7 +439,7 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 			return &pb.ReadFieldsRsp{RetInfo: successRetInfo()}, nil
 		},
 	}}
-	svc, err := New(Options{Node: node})
+	svc, err := New(Options{Node: node, Snapshot: func() metadata.RequestSnapshot { return markerRoutingSnapshot{} }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,13 +454,13 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 		t.Fatalf("upsert rsp=%v err=%v", upsert, err)
 	}
 	collected, err := svc.ReportCollectorPeriodCompleted(context.Background(), &pb.ReportCollectorPeriodCompletedReq{
-		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space", Marker: &pb.CollectorPeriodCompletedMarker{DatasetId: "dataset"},
+		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space", Marker: &pb.CollectorPeriodCompletedMarker{DatasetId: "collector-data"},
 	})
 	if err != nil || collected.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("collected rsp=%v err=%v", collected, err)
 	}
 	computed, err := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
-		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{DatasetId: "dataset"},
+		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{DatasetId: "factor-data"},
 	})
 	if err != nil || computed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("computed rsp=%v err=%v", computed, err)
@@ -481,16 +477,19 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	}
 }
 
-func TestFactorResultWritesAllowEngineIdentity(t *testing.T) {
-	wrote := 0
+func TestFactorResultRequiresDedicatedWriteRPC(t *testing.T) {
+	resolved := 0
 	node := &recordingMarkerNode{recordingNode: &recordingNode{
-		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-			wrote++
-			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
+		write: func(_ context.Context, _ *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			t.Fatal("factor_result generic upsert reached DataNode")
+			return nil, nil
 		},
 	}}
 	svc, err := New(Options{
-		Node: node,
+		Resolver: func(context.Context, string, string) (DataNodeClient, error) {
+			resolved++
+			return node, nil
+		},
 		Snapshot: func() metadata.RequestSnapshot {
 			return factorResultSnapshot{}
 		},
@@ -500,14 +499,14 @@ func TestFactorResultWritesAllowEngineIdentity(t *testing.T) {
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "factor_result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}},
 	}
-	for _, appID := range []string{"factor", "moox-factor", "moox-factor-engine"} {
-		wrote = 0
-		upsert, upsertErr := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
-			AuthInfo: &pb.AuthInfo{AppId: appID}, Rows: []*pb.RowFieldUpsert{row},
-		})
+	for _, appID := range []string{"factor", "moox-factor", "collector"} {
+		upsert, upsertErr := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, Rows: []*pb.RowFieldUpsert{row}})
 		require.NoError(t, upsertErr, appID)
-		require.Equal(t, pb.ErrorCode_SUCCESS, upsert.GetRetInfo().GetCode(), appID)
-		require.Equal(t, 1, wrote, appID)
+		require.Equal(t, pb.ErrorCode_NO_PERMISSION, upsert.GetRetInfo().GetCode(), appID)
+		require.Contains(t, upsert.GetRetInfo().GetMsg(), "requires WriteFactorRows", appID)
+		require.Equal(t, 0, resolved, appID)
+	}
+	for _, appID := range []string{"factor", "moox-factor"} {
 		computed, markerErr := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
 			AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space",
 			Marker: &pb.FactorPeriodComputedMarker{DatasetId: "factor_result"},
@@ -515,20 +514,33 @@ func TestFactorResultWritesAllowEngineIdentity(t *testing.T) {
 		require.NoError(t, markerErr, appID)
 		require.Equal(t, pb.ErrorCode_SUCCESS, computed.GetRetInfo().GetCode(), appID)
 	}
-	denied, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row},
-	})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_NO_PERMISSION, denied.GetRetInfo().GetCode())
-	require.Contains(t, denied.GetRetInfo().GetMsg(), "writable only by Factor")
 }
 
 type factorResultSnapshot struct{}
 
+type markerRoutingSnapshot struct{}
+
+func (markerRoutingSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
+	attrs := map[string]string{}
+	switch datasetID {
+	case "collector-data":
+		attrs = map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}
+	case "factor-data":
+		attrs = map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"}
+	}
+	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataNodeId: "node-owner", Attributes: attrs}, true
+}
+
+func (markerRoutingSnapshot) GetDataNode(string) (*pb.DataNode, bool) { return nil, false }
+
+func (markerRoutingSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	return nil, &pb.PageResult{}, nil
+}
+
 func (factorResultSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
 	return &pb.Dataset{
-		SpaceId: spaceID, DatasetId: datasetID,
-		Attributes: map[string]string{"dataset_role": "factor_result"},
+		SpaceId: spaceID, DatasetId: datasetID, DataNodeId: "node-owner",
+		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
 	}, true
 }
 
@@ -721,7 +733,7 @@ func TestValidateMooxSkillReadRequestAllowsOnlyExportedKlineSelectors(t *testing
 		{name: "crypto wildcard series", req: request("crypto", "dataset_binance_kline_1m", "1m", nil), wantErr: true},
 		{name: "crypto empty series", req: request("crypto", "dataset_binance_kline_1m", "1m", &emptyTag), wantErr: true},
 		{name: "crypto other series", req: request("crypto", "dataset_binance_kline_1m", "1m", &otherTag), wantErr: true},
-		{name: "crypto old dataset", req: request("crypto", "dataset_binance_spot_kline_1m", "1m", &cryptoSpotTag), wantErr: true},
+		{name: "crypto unregistered dataset", req: request("crypto", "dataset_unregistered", "1m", &cryptoSpotTag), wantErr: true},
 		{name: "stock cn default series 1m", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", &defaultTag)},
 		{name: "stock cn wildcard series", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", nil), wantErr: true},
 		{name: "stock cn provider series", req: request("stockcn", "dataset_stockcn_equity_kline", "1m", &cryptoSpotTag), wantErr: true},

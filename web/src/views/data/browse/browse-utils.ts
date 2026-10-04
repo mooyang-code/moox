@@ -3,7 +3,6 @@ import type {
   Dataset,
   DatasetColumn,
   DatasetColumnOriginType,
-  Factor,
   Field,
   RecordRow,
   DatasetSubject,
@@ -86,18 +85,17 @@ export function displayDataIdText(item: BrowseDataId) {
   return item.id;
 }
 
-export function buildColumnLabels(columns: DatasetColumn[], fields: Field[], factors: Factor[]) {
+export function buildColumnLabels(columns: DatasetColumn[], fields: Field[]) {
   const fieldByID = new Map(fields.map(item => [item.field_id, item]));
-  const factorByID = new Map(factors.map(item => [item.factor_id, item]));
   const labels: Record<string, string> = {};
   for (const column of columns) {
     if (!column.column_name) continue;
-    labels[column.column_name] = resolveColumnLabel(column, fieldByID, factorByID);
+    labels[column.column_name] = resolveColumnLabel(column, fieldByID);
   }
   return labels;
 }
 
-function resolveColumnLabel(column: DatasetColumn, fieldByID: Map<string, Field>, factorByID: Map<string, Factor>) {
+function resolveColumnLabel(column: DatasetColumn, fieldByID: Map<string, Field>) {
   const columnDisplayName = displayName(column.attributes);
   if (columnDisplayName) return columnDisplayName;
   if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FIELD", 1)) {
@@ -107,10 +105,7 @@ function resolveColumnLabel(column: DatasetColumn, fieldByID: Map<string, Field>
     );
   }
   if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FACTOR", 2)) {
-    return readableColumnLabel(
-      column.column_name,
-      factorByID.get(column.origin_id)?.name || factorByID.get(column.column_name)?.name
-    );
+    return readableColumnLabel(column.column_name);
   }
   return systemColumnLabels[column.origin_id] || readableColumnLabel(column.column_name);
 }

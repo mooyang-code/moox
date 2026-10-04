@@ -34,6 +34,10 @@ func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.PrimaryDeleteDa
 	if owner == "" {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not owned by the authorized destructive caller"))}, nil
 	}
+	ownerNodeID := strings.TrimSpace(dataset.GetDataNodeId())
+	if ownerNodeID == "" {
+		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("dataset has no owner DataNode"))}, nil
+	}
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), owner); err != nil {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: markerError(err)}, nil
 	}
@@ -49,7 +53,7 @@ func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.PrimaryDeleteDa
 	if err != nil {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	response, err := adminNode.DeleteDatasetRows(ctx, &pb.DeleteDatasetRowsReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId()})
+	response, err := adminNode.DeleteDatasetRows(ctx, &pb.DeleteDatasetRowsReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId()})
 	if err != nil {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
@@ -76,6 +80,10 @@ func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.PrimaryRestore
 	if owner == "" {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not owned by the authorized destructive caller"))}, nil
 	}
+	ownerNodeID := strings.TrimSpace(dataset.GetDataNodeId())
+	if ownerNodeID == "" {
+		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("dataset has no owner DataNode"))}, nil
+	}
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), owner); err != nil {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: markerError(err)}, nil
 	}
@@ -91,7 +99,7 @@ func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.PrimaryRestore
 	if err != nil {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	response, err := adminNode.RestoreDatasetRows(ctx, &pb.RestoreDatasetRowsReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId()})
+	response, err := adminNode.RestoreDatasetRows(ctx, &pb.RestoreDatasetRowsReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId()})
 	if err != nil {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}

@@ -20,6 +20,28 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 	var reconcileErrors []error
 	for _, set := range sets {
+		factors, err := s.db.ListFactors(ctx, set.SetID, "")
+		if err != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("list factors for set %q: %w", set.SetID, err))
+		} else {
+			unlock, lockErr := s.locks.LockContext(ctx, set.SetID)
+			if lockErr != nil {
+				reconcileErrors = append(reconcileErrors, fmt.Errorf("lock factor set %q: %w", set.SetID, lockErr))
+				continue
+			}
+			for _, factor := range factors {
+				if _, err := s.artifacts.Materialize(factor); err != nil {
+					reconcileErrors = append(reconcileErrors, fmt.Errorf("restore factor source %q: %w", factor.FactorID, err))
+				}
+			}
+			unlock()
+		}
+		if set.Status == domain.SetStatusDeleting {
+			if err := s.DeleteSet(ctx, set.SetID, true); err != nil {
+				reconcileErrors = append(reconcileErrors, fmt.Errorf("resume factor set purge %q: %w", set.SetID, err))
+			}
+			continue
+		}
 		if set.Status != domain.SetStatusEnabled {
 			continue
 		}
@@ -31,7 +53,10 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 func (s *Service) ReconcileSet(ctx context.Context, setID string) error {
-	unlock := s.locks.Lock(strings.TrimSpace(setID))
+	unlock, err := s.locks.LockContext(ctx, strings.TrimSpace(setID))
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	set, err := s.db.GetSet(ctx, setID)
 	if err != nil {

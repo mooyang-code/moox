@@ -14,6 +14,72 @@ import (
 
 const readPageSize = 2000
 
+const earliestPeriodSelectorBatchSize = 128
+
+func (c *Client) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq string, subjects, columns []string) (time.Time, bool, error) {
+	if err := c.primaryReady("read earliest dataset period"); err != nil {
+		return time.Time{}, false, err
+	}
+	spaceID, datasetID, freq = strings.TrimSpace(spaceID), strings.TrimSpace(datasetID), strings.TrimSpace(freq)
+	if spaceID == "" || datasetID == "" || freq == "" {
+		return time.Time{}, false, fmt.Errorf("space_id, dataset_id and freq are required")
+	}
+	var err error
+	subjects, err = normalizeReadList("subjects", subjects, true)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	columns, err = normalizeReadList("columns", columns, true)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	end := time.Now().UTC()
+	var earliest time.Time
+	for offset := 0; offset < len(subjects); offset += earliestPeriodSelectorBatchSize {
+		limit := offset + earliestPeriodSelectorBatchSize
+		if limit > len(subjects) {
+			limit = len(subjects)
+		}
+		selectors := make([]*storagepb.TimeSeriesSelector, 0, limit-offset)
+		for _, subject := range subjects[offset:limit] {
+			selectors = append(selectors, &storagepb.TimeSeriesSelector{
+				SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: freq,
+			})
+		}
+		rsp, callErr := c.primary.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+			AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
+			TimeRange: &storagepb.TimeRange{StartTime: "0001-01-01T00:00:00Z", EndTime: end.Format(time.RFC3339Nano)},
+			Order:     storagepb.SortOrder_SORT_ORDER_ASC, ColumnNames: columns,
+			Page: &commonpb.Page{Page: 1, Size: 1},
+		})
+		if callErr != nil {
+			return time.Time{}, false, rpcError("read earliest dataset period", callErr)
+		}
+		if rsp == nil {
+			return time.Time{}, false, fmt.Errorf("%w: read earliest dataset period returned an empty response", ErrInfra)
+		}
+		if err := readResponseError("read earliest dataset period", rsp.GetRetInfo()); err != nil {
+			return time.Time{}, false, err
+		}
+		if len(rsp.GetRows()) == 0 {
+			continue
+		}
+		row := rsp.GetRows()[0]
+		if row == nil || row.GetKey() == nil || row.GetKey().GetSpaceId() != spaceID ||
+			row.GetKey().GetDatasetId() != datasetID || row.GetKey().GetFreq() != freq {
+			return time.Time{}, false, fmt.Errorf("%w: earliest dataset period returned an invalid row identity", ErrInfra)
+		}
+		period, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+		if parseErr != nil {
+			return time.Time{}, false, fmt.Errorf("parse earliest dataset period %q: %w", row.GetKey().GetDataTime(), parseErr)
+		}
+		if earliest.IsZero() || period.Before(earliest) {
+			earliest = period.UTC()
+		}
+	}
+	return earliest, !earliest.IsZero(), nil
+}
+
 func (c *Client) ReadWindow(ctx context.Context, req ReadRequest) (map[string]*Frame, error) {
 	if err := c.primaryReady("read time-series window"); err != nil {
 		return nil, err

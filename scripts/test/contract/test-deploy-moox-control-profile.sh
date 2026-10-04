@@ -247,7 +247,7 @@ grep -Fq '"MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}
 grep -Fq '"MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'STARTUP_WAIT_SECONDS="${MOOX_COLLECTOR_STARTUP_WAIT_SECONDS:-25}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq '"MOOX_COLLECTOR_RESULT_DATA_NODE_ID=${MOOX_COLLECTOR_RESULT_DATA_NODE_ID:-storage-node-0}"' "${TMP_ROOT}/unpacked/start.sh"
-grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_FACTOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'reuse EventBus identities and ensure missing roles in ${eventbus_credentials_dir}' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'preserve EventBus identities after control data reset in ${eventbus_credentials_dir}' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'MOOX_PRESERVE_EXTERNAL_EVENTBUS_CREDENTIALS' "${TMP_ROOT}/unpacked/start.sh"

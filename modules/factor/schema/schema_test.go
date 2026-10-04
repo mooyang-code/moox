@@ -22,14 +22,8 @@ func TestFactorSchemaContainsOnlySetsDefsAndRecalcJobs(t *testing.T) {
 			t.Fatalf("AllSQL() missing %q", want)
 		}
 	}
-	for _, removed := range []string{
-		"t_factor_subject_runs", "t_factor_subject_heads", "t_factor_period_barriers",
-		"t_factor_period_pairs", "t_factor_output_manifests", "t_factor_bindings",
-		"t_factor_merged_datasets", "t_factor_catalog", "t_factor_engine_status",
-	} {
-		if strings.Contains(sql, removed) {
-			t.Fatalf("factor schema still contains retired table %q", removed)
-		}
+	if got := strings.Count(sql, "CREATE TABLE IF NOT EXISTS"); got != 3 {
+		t.Fatalf("factor schema creates %d tables, want exactly 3", got)
 	}
 }
 

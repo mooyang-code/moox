@@ -22,11 +22,7 @@ type DataNodeRuntimeService interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *UpsertFieldsReq) (*UpsertFieldsRsp, error)
 
-	CommitInput(ctx context.Context, req *CommitInputReq) (*CommitInputRsp, error)
-
 	WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq) (*WriteFactorRowsRsp, error)
-
-	LookupWriteReceipt(ctx context.Context, req *LookupWriteReceiptReq) (*LookupWriteReceiptRsp, error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error)
 
@@ -53,24 +49,6 @@ func DataNodeRuntimeService_UpsertFields_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func DataNodeRuntimeService_CommitInput_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CommitInputReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeRuntimeService).CommitInput(ctx, reqbody.(*CommitInputReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func DataNodeRuntimeService_WriteFactorRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &WriteFactorRowsReq{}
 	filters, err := f(req)
@@ -79,24 +57,6 @@ func DataNodeRuntimeService_WriteFactorRows_Handler(svr interface{}, ctx context
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(DataNodeRuntimeService).WriteFactorRows(ctx, reqbody.(*WriteFactorRowsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func DataNodeRuntimeService_LookupWriteReceipt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &LookupWriteReceiptReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeRuntimeService).LookupWriteReceipt(ctx, reqbody.(*LookupWriteReceiptReq))
 	}
 
 	var rsp interface{}
@@ -171,16 +131,8 @@ var DataNodeRuntimeServer_ServiceDesc = server.ServiceDesc{
 			Func: DataNodeRuntimeService_UpsertFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNodeRuntime/CommitInput",
-			Func: DataNodeRuntimeService_CommitInput_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.DataNodeRuntime/WriteFactorRows",
 			Func: DataNodeRuntimeService_WriteFactorRows_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataNodeRuntime/LookupWriteReceipt",
-			Func: DataNodeRuntimeService_LookupWriteReceipt_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.DataNodeRuntime/ReadFields",
@@ -548,14 +500,8 @@ type UnimplementedDataNodeRuntime struct{}
 func (s *UnimplementedDataNodeRuntime) UpsertFields(ctx context.Context, req *UpsertFieldsReq) (*UpsertFieldsRsp, error) {
 	return nil, errors.New("rpc UpsertFields of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNodeRuntime) CommitInput(ctx context.Context, req *CommitInputReq) (*CommitInputRsp, error) {
-	return nil, errors.New("rpc CommitInput of service DataNodeRuntime is not implemented")
-}
 func (s *UnimplementedDataNodeRuntime) WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq) (*WriteFactorRowsRsp, error) {
 	return nil, errors.New("rpc WriteFactorRows of service DataNodeRuntime is not implemented")
-}
-func (s *UnimplementedDataNodeRuntime) LookupWriteReceipt(ctx context.Context, req *LookupWriteReceiptReq) (*LookupWriteReceiptRsp, error) {
-	return nil, errors.New("rpc LookupWriteReceipt of service DataNodeRuntime is not implemented")
 }
 func (s *UnimplementedDataNodeRuntime) ReadFields(ctx context.Context, req *ReadFieldsReq) (*ReadFieldsRsp, error) {
 	return nil, errors.New("rpc ReadFields of service DataNodeRuntime is not implemented")
@@ -623,11 +569,7 @@ type DataNodeRuntimeClientProxy interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *UpsertFieldsReq, opts ...client.Option) (rsp *UpsertFieldsRsp, err error)
 
-	CommitInput(ctx context.Context, req *CommitInputReq, opts ...client.Option) (rsp *CommitInputRsp, err error)
-
 	WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq, opts ...client.Option) (rsp *WriteFactorRowsRsp, err error)
-
-	LookupWriteReceipt(ctx context.Context, req *LookupWriteReceiptReq, opts ...client.Option) (rsp *LookupWriteReceiptRsp, err error)
 
 	ReadFields(ctx context.Context, req *ReadFieldsReq, opts ...client.Option) (rsp *ReadFieldsRsp, err error)
 
@@ -665,26 +607,6 @@ func (c *DataNodeRuntimeClientProxyImpl) UpsertFields(ctx context.Context, req *
 	return rsp, nil
 }
 
-func (c *DataNodeRuntimeClientProxyImpl) CommitInput(ctx context.Context, req *CommitInputReq, opts ...client.Option) (*CommitInputRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/CommitInput")
-	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNodeRuntime")
-	msg.WithCalleeMethod("CommitInput")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CommitInputRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *DataNodeRuntimeClientProxyImpl) WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq, opts ...client.Option) (*WriteFactorRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -699,26 +621,6 @@ func (c *DataNodeRuntimeClientProxyImpl) WriteFactorRows(ctx context.Context, re
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &WriteFactorRowsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataNodeRuntimeClientProxyImpl) LookupWriteReceipt(ctx context.Context, req *LookupWriteReceiptReq, opts ...client.Option) (*LookupWriteReceiptRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/LookupWriteReceipt")
-	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNodeRuntime")
-	msg.WithCalleeMethod("LookupWriteReceipt")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &LookupWriteReceiptRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

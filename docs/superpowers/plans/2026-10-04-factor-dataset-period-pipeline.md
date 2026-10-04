@@ -72,6 +72,7 @@ const (
 	SetStatusPending  = "pending"
 	SetStatusEnabled  = "enabled"
 	SetStatusDisabled = "disabled"
+	SetStatusDeleting = "deleting" // 内部 purge 恢复状态；启动/周期 Reconcile 续跑
 
 	FactorStatusEnabled  = "enabled"
 	FactorStatusDisabled = "disabled"
@@ -638,6 +639,7 @@ type Metadata interface {
   - `TestCreateFactorValidatesAgainstSourceColumnsAndLoadsSource`：源码试加载失败（注入 `SourceChecker` fake）时拒绝；
   - `TestEnableFactorAddsColumnsThenSubmitsRecalc`：调用顺序为 UpsertColumns → 状态 enabled → `RecalcSubmitter.Submit(set, [factor], now−keep, 当前周期)`；
   - `TestDisableFactorKeepsColumns`：停用不调用任何 Metadata 写方法；
+  - `TestReconcileResumesDurableResultDatasetPurge`：Storage 删除失败后保留 `deleting` 状态，下一次 Reconcile 重试并删除本地因子集；`TestReconcileFinishesPurgeAfterStorageMetadataWasAlreadyDeleted` 覆盖 Storage 已提交、进程在本地删除前退出；
   - `TestDeleteFactorRequiresDisabled`；
   - `TestUpdateFactorRequiresDisabled`；
   - `TestReconcileSetAddsNewSourceColumns`：源数据集新增列后结果数据集补列；
@@ -646,7 +648,7 @@ type Metadata interface {
 - [ ] **Step 3：实现。**
   - `locks.go`：每个 set 一把 `sync.Mutex`，供 pipeline、recalc、catalog 共享：`func (l *Locks) Lock(setID string) (unlock func())`。
   - `artifacts.go`：把源码物化到 `<factors_dir>/<name>/<source_hash>.py`（存在则跳过，写临时文件后 rename）。
-  - `reconcile.go`：启动时与每 5 分钟对 enabled 因子集执行 `ReconcileSet`。
+  - `reconcile.go`：启动时与每 5 分钟对 enabled 因子集执行 `ReconcileSet`，并自动续跑持久化的 `deleting` purge 状态。
   - 状态变更后通知 trigger 刷新过滤主题：`type Notifier interface{ SetsChanged() }`。
 - [ ] **Step 4：验证并提交** `feat(factor): manage factor set lifecycle and result dataset columns`。
 
@@ -806,7 +808,7 @@ cd modules/factor && go build ./... && go vet ./... && go test ./internal/bootst
 - [ ] **Step 4：CLI 子命令**（直连 SQLite 与 Storage，或经 RPC，与现有 CLI 风格一致）：
   - `init`：初始化 SQLite；
   - `import --set <set_id> --file <factor.py> --factor-id ... --outputs ... --inputs ... --lookback ... [--params JSON]`；
-  - `import-catalog --dir modules/factor/factors --set <set_id>`：读取 `catalog.json` 批量导入（disabled）；
+  - `import-catalog --dir modules/factor/factors --set <set_id>`：读取 `catalog.json` 批量导入（disabled）；`import` 与 `import-catalog` 必须在读集合及校验/写入期间持有与服务共用的跨进程 set 锁，拒绝 pending/deleting 集合，批量写入使用 SQLite 单事务；
   - `recalc --set ... --start ... --end ... [--factor ...] [--subject ...]`：提交异步任务；
   - `run-once --set ... --period <RFC3339>`：同步补算一个周期并打印各因子状态；
   - `status`：调用 `GetStatus`。
@@ -829,10 +831,10 @@ cd modules/factor && go build ./... && go vet ./... && go test ./internal/bootst
 - [ ] **Step 1：** 删除目录后全仓搜索残留：
 
 ```bash
-rg -n "moox-merge|modules/merge|factor-engine|factor_engine|cmd/engine|inputcache|catalogsync|taskrunner|MergePeriodCompleted|mdataset_|merged_factor|FactorBinding|ListBindings" --glob '!docs/**' --glob '!*.pb.go'
+rg -n "moox-merge|modules/merge|factor-engine|factor_engine|cmd/engine|inputcache|catalogsync|taskrunner|MergePeriodCompleted|mdataset_|merged_factor|FactorBinding|ListBindings" --glob '!docs/**' --glob '!*.pb.go' --glob '!skills/debug/**' --glob '!scripts/check/check-package-boundaries.sh'
 ```
 
-  预期：无结果（`docs/` 在 Task 25 处理）。
+  预期：无结果（`docs/` 在 Task 27 处理；排除仍使用其自身 taskrunner 的 SCF debug 文档和包边界脚本中 Collector taskrunner 的豁免规则）。
 - [ ] **Step 2：验证**：
 
 ```bash

@@ -1,8 +1,8 @@
 # MooX Storage
 
-> scalar `series_tag` 和 Schema v6 已完成代码切换；生产发布与真实跨模块 E2E
-> 验收仍按[实施计划](../../docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md)
-> 执行。
+> Storage 是字段级事实存储。`factor_result` Dataset 激活时自动创建默认 View；Factor
+> 通过专用 `WriteFactorRows` 写入携带列与因子列，并在行之后报告周期完成标记。相关契约见
+> [因子数据集周期流水线设计](../../docs/superpowers/specs/2026-10-04-factor-dataset-period-pipeline-design.md)。
 
 MooX Storage 是字段级事实存储和可重建 View 服务。当前实现只有三种进程角色：
 
@@ -124,18 +124,20 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 moox.event.storage.dataset.rows.upserted.v2.<space-token>.<dataset-token>
 ```
 
-Token 是可逆的小写无 Padding Base32。View 使用四个相互独立的 durable：`storage_view_kline`、
+Token 是可逆的小写无 Padding Base32。View 使用相互独立的 durable：`storage_view_kline`、
 `storage_view_factor`、`storage_view_metrics`、`storage_view_misc`。每个 durable 的
 `FetchBatch`、`MaxAckPending`、worker 和精确 Dataset subject 都在
-`storage.view.consumer_partitions` 中配置；K 线分区默认只接收
-`crypto/dataset_binance_spot_kline_1m`、`crypto/dataset_binance_swap_kline_1m`、
-`crypto/dataset_spot_kline_1h` 和 `crypto/dataset_perpetual_kline_1h`，因子分区只接收
-`crypto/dataset_crypto_spot_kline_1m_factor`。同一 Dataset 的 rows、Marker 和 SyncPoint
+`storage.view.consumer_partitions` 中配置；K 线分区包含
+`crypto/dataset_binance_kline_1m`、`crypto/dataset_spot_kline_1h` 和
+`crypto/dataset_perpetual_kline_1h`，因子分区包含
+`crypto/dataset_factor_binance_kline_1m`。结果 Dataset 采用 `factor_result` 角色，激活时
+自动维护默认 View。因子分区只消费结果 Dataset 的行和周期 Marker，以单并发保证写入行先于
+`FactorPeriodComputed`。同一 Dataset 的 rows、Marker 和 SyncPoint
 进入同一个 Dataset 队列（队列键为 `space_id + dataset_id`），不同分区和 Dataset 可并行；同一 Dataset
 仍按事件顺序消费，避免 rows 越过 Marker。连续 rows delivery 会在不跨越 Marker 的前提下合并为一次索引写入，
-因此单个因子 Dataset 也能通过批量事务提高吞吐。因子分区默认 `fetch_batch=16`、`max_workers=8`、
-`max_ack_pending=128`；Factor 会按同一 subject/period 把多个因子输出合并成一次 Primary 写入，减少
-DuckDB 事务和事件数量。若机器内存不足，应优先降低因子分区 worker，而不是扩大 K 线分区。
+因此单个因子 Dataset 也能通过批量事务提高吞吐。因子分区默认 `fetch_batch=1`、`max_workers=1`、
+`max_ack_pending=1`；Factor 在一个 `WriteFactorRows` 请求中写入完整结果行，随后通过同一
+Dataset outbox 上报完成 Marker。若机器内存不足，应优先降低非因子分区 worker，而不是扩大 K 线分区。
 Active 写失败时保持当前 Delivery 并本地退避；无法恢复的
 Subject/Proto/Payload 错误执行 `Term`，避免毒消息永久阻塞全部 Dataset。
 

@@ -202,29 +202,32 @@ func (r *Relay) flush(ctx context.Context) error {
 	}
 	confirmed := make([]uint64, 0, len(entries))
 	for _, entry := range entries {
-		data, err := r.store.PrepareOutboxPublication(ctx, entry.ID, time.Now().UTC())
+		var ack *jetstream.PublishAck
+		publishAttempted := false
+		err := r.store.PublishOutboxPublication(ctx, entry.ID, func(data []byte) error {
+			// Keep this Dataset's purge serialized with its broker acknowledgement.
+			publishAttempted = true
+			publishCtx, cancel := context.WithTimeout(ctx, r.options.PublishTimeout)
+			defer cancel()
+			var publishErr error
+			ack, publishErr = r.publish(publishCtx, data)
+			return publishErr
+		})
 		if err != nil {
 			if pebble.IsUnsupportedOutboxEvent(err) {
 				log.Printf("storage outbox dropping unsupported event %d: %v", entry.ID, err)
 				confirmed = append(confirmed, entry.ID)
 				continue
 			}
-			if len(confirmed) > 0 {
-				err = errors.Join(err, r.cleanupConfirmed(ctx, confirmed))
+			if errors.Is(err, pebble.ErrOutboxEntryNotFound) {
+				continue
 			}
-			return err
-		}
-		// A disconnected EventBus client must not wedge the single relay
-		// goroutine forever. Keep the outbox entry for the next poll when the
-		// bounded publish attempt expires; the EventID makes the retry idempotent.
-		publishCtx, cancel := context.WithTimeout(ctx, r.options.PublishTimeout)
-		ack, err := r.publish(publishCtx, data)
-		cancel()
-		if err != nil {
-			r.metrics.IncOutboxPublishError()
-			r.observePublisherReady()
-			r.publishFailures++
-			r.reconnectPublisher(ctx)
+			if publishAttempted {
+				r.metrics.IncOutboxPublishError()
+				r.observePublisherReady()
+				r.publishFailures++
+				r.reconnectPublisher(ctx)
+			}
 			if len(confirmed) > 0 {
 				err = errors.Join(err, r.cleanupConfirmed(ctx, confirmed))
 			}

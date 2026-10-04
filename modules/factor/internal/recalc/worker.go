@@ -105,9 +105,18 @@ func (w *Worker) Run(ctx context.Context, jobID string) error {
 			})
 			return err
 		}
-		set, _, _, clock, err := w.selection(ctx, job.SetID, job.FactorIDs, job.Subjects)
+		set, _, subjects, clock, err := w.selection(ctx, job.SetID, job.FactorIDs, job.Subjects)
 		if err != nil {
 			return w.fail(ctx, job.JobID, err)
+		}
+		if len(subjects) == 0 {
+			_, err := w.db.UpdateRecalcJob(ctx, job.JobID, func(current *store.RecalcJob) error {
+				current.ProgressTime = current.EndTime
+				current.Status = store.RecalcStatusSucceeded
+				current.Error = ""
+				return nil
+			})
+			return err
 		}
 		duration, err := clock.Duration(set.Freq)
 		if err != nil {
@@ -181,7 +190,10 @@ func (w *Worker) RunOnce(ctx context.Context, setID string, factorIDs, subjects 
 }
 
 func (w *Worker) runChunk(ctx context.Context, jobID, setID string, factorIDs, subjects []string, start, end time.Time) (pipeline.Outcome, error) {
-	unlock := w.cfg.locks.Lock(setID)
+	unlock, err := w.cfg.locks.LockContext(ctx, setID)
+	if err != nil {
+		return pipeline.Outcome{}, err
+	}
 	defer unlock()
 	if err := ctx.Err(); err != nil {
 		return pipeline.Outcome{}, err

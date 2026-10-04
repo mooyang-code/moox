@@ -107,7 +107,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		{
 			name: "factor period computed", event: FactorPeriodComputed,
 			payload:   validFactorPeriodComputed(now),
-			subjectID: "mdataset",
+			subjectID: "dataset_result",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeFactorPeriodComputed(registry, raw, subject, id)
 				return payload, err
@@ -261,7 +261,7 @@ func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
 
 func validFactorPeriodComputed(now *timestamppb.Timestamp) *storagepb.FactorPeriodComputed {
 	return &storagepb.FactorPeriodComputed{
-		DatasetId: "mdataset", SourceDatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
+		DatasetId: "dataset_result", SourceDatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
 		UniverseSubjectIds: []string{"BTC-USDT"},
 		Factors:            []*storagepb.FactorPeriodState{{FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
 		ComputedAt:         now, TriggerEventId: "collector-completed-1",

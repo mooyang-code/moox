@@ -64,12 +64,12 @@ type testSetLocks struct {
 	locked map[string]int
 }
 
-func (l *testSetLocks) Lock(setID string) func() {
+func (l *testSetLocks) LockContext(_ context.Context, setID string) (func(), error) {
 	if l.locked == nil {
 		l.locked = make(map[string]int)
 	}
 	l.locked[setID]++
-	return func() { l.locked[setID]-- }
+	return func() { l.locked[setID]-- }, nil
 }
 
 func TestHandlerAcksWhenNoEnabledSet(t *testing.T) {

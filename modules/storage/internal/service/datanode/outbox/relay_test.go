@@ -6,6 +6,8 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +33,26 @@ type blockingPublisher struct{}
 func (blockingPublisher) PublishMessage(ctx context.Context, _ []byte) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+type gatedPublisher struct {
+	entered     chan struct{}
+	release     chan struct{}
+	published   chan struct{}
+	enteredOnce sync.Once
+	calls       atomic.Int32
+}
+
+func (p *gatedPublisher) PublishMessage(ctx context.Context, _ []byte) error {
+	p.calls.Add(1)
+	p.enteredOnce.Do(func() { close(p.entered) })
+	select {
+	case <-p.release:
+		close(p.published)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (p *testPublisher) PublishMessage(_ context.Context, data []byte) error {
@@ -97,7 +119,7 @@ func TestRelayDropsUnsupportedLegacyOutboxEventsAndPublishesTheRest(t *testing.T
 	defer store.Close()
 	legacy, err := proto.Marshal(&eventpb.EventMessage{
 		EventId: "legacy-period-collected", EventName: "event.storage.dataset.period.collected", EventVersion: 1,
-		SpaceId: "crypto", SubjectId: "dataset_binance_spot_kline_1m",
+		SpaceId: "crypto", SubjectId: "dataset_binance_kline_1m",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +154,114 @@ func TestRelayDropsUnsupportedLegacyOutboxEventsAndPublishesTheRest(t *testing.T
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("remaining outbox=%v err=%v", entries, err)
+	}
+}
+
+func TestRelayPublicationIsSerializedWithDatasetPurge(t *testing.T) {
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	insertRecordOutboxEvent(t, store, "space", "dataset-purge")
+	publisher := &gatedPublisher{entered: make(chan struct{}), release: make(chan struct{}), published: make(chan struct{})}
+	relay, err := NewRelay(store, publisher, RelayOptions{BatchSize: 10, PublishTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- relay.flush(context.Background()) }()
+	select {
+	case <-publisher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not enter publisher")
+	}
+
+	otherDatasetWrite := make(chan error, 1)
+	go func() {
+		row := &pb.RowFieldUpsert{
+			Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset-other", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
+			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}},
+		}
+		otherDatasetWrite <- store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{row})
+	}()
+	select {
+	case err := <-otherDatasetWrite:
+		if err != nil {
+			t.Fatalf("write to another dataset during publish: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("slow publication blocked a write to another dataset")
+	}
+
+	deleteStarted := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		close(deleteStarted)
+		_, deleteErr := store.DeleteDatasetRows(context.Background(), "space", "dataset-purge")
+		deleteDone <- deleteErr
+	}()
+	<-deleteStarted
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("purge completed while an outbox publication held its lease: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(publisher.release)
+	if err := <-flushDone; err != nil {
+		t.Fatalf("relay flush: %v", err)
+	}
+	select {
+	case <-publisher.published:
+	case <-time.After(time.Second):
+		t.Fatal("publisher did not confirm the event")
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("dataset purge: %v", err)
+	}
+
+	if err := relay.flush(context.Background()); err != nil {
+		t.Fatalf("relay flush after purge: %v", err)
+	}
+	if calls := publisher.calls.Load(); calls != 1 {
+		t.Fatalf("publisher calls = %d after purge, want 1", calls)
+	}
+}
+
+func TestPurgeWinningOutboxLockPreventsPublication(t *testing.T) {
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	insertRecordOutboxEvent(t, store, "space", "dataset-purge")
+	if _, err := store.DeleteDatasetRows(context.Background(), "space", "dataset-purge"); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &testPublisher{}
+	relay, err := NewRelay(store, publisher, RelayOptions{BatchSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.values) != 0 {
+		t.Fatalf("published %d events after purge won the outbox lock", len(publisher.values))
+	}
+}
+
+func insertRecordOutboxEvent(t *testing.T, store *pebble.Store, spaceID, datasetID string) {
+	t.Helper()
+	rows := []*pb.RowFieldUpsert{{
+		Key:    &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
+		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}},
+	}}
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

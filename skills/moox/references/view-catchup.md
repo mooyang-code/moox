@@ -11,12 +11,12 @@
 | Primary | `moox_storage_dataset_output_watermark_timestamp_seconds` | 事实是否已写入。`data kline get` 走 Primary，不代表 View |
 | View 索引 | `moox_storage_view_output_watermark_timestamp_seconds` | DuckDB 已提交的业务时间 |
 | View period 表 | `t_view_period_dataset_states` 的 `MAX(c_period_time)` / `c_updated_at` | period-ready / Factor 触发水位；可与索引水位短暂不一致 |
-| Factor 计算 | 控制面 `moox_factor_dataset_output_watermark_timestamp_seconds` 与 `last_success` | 是否在算、是否在写 |
-| JetStream | View：`moox_storage_view_consumer_partition_lag_messages` + `oldest_pending_event_age_seconds`；Factor：`clear-queue --yes` 才会打印 `pending_before` | 积压还是处理挂死 |
+| Factor 计算 | `factor_period_total{set,status}`、`factor_period_lag_seconds{set}`、`factor_last_period_time{set}` | 各因子集是否在算、是否在写 |
+| JetStream | View：`moox_storage_view_consumer_partition_lag_messages` + `oldest_pending_event_age_seconds`；Factor durable：`factor_collector_period_v1` pending/redelivered | 积压还是处理挂死 |
 
 `c_period_time` 是 unix 秒。`t_views.c_mtime` 不是 K 线水位。
 
-crypto 行情 View 至少有：`view_crypto_spot_kline_1m`、`view_crypto_swap_kline_1m`、`view_crypto_spot_kline_1h`、`view_crypto_swap_kline_1h`，以及 `view_crypto_spot_kline_1m_factor`。
+初始化的 Binance 1m 行情使用 `dataset_binance_kline_1m` 与 `view_binance_kline_1m`；Spot/Swap 通过 `series_tag` 区分。一个因子集的结果 View 由 Storage 按结果 Dataset 自动维护。
 
 ## 生产路径（不要混用）
 
@@ -42,7 +42,7 @@ crypto 行情 View 至少有：`view_crypto_spot_kline_1m`、`view_crypto_swap_k
 - 把 EventBus token、HMAC、`internal-admin.yaml` 打进命令行、日志或聊天
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
-- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。时序只消费 mdataset 的 `DatasetRowsUpserted`，重建窗口漏掉的标的靠之后的 live 输入提交或显式 Recalc
+- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是 Collector 周期完成事件，源数据从 Storage PrimaryStore 读取；重建窗口漏掉的周期使用显式 Recalc
 
 ## Storage View：kline 分区挂死
 
@@ -54,17 +54,17 @@ crypto 行情 View 至少有：`view_crypto_spot_kline_1m`、`view_crypto_swap_k
 - ACK 计数不涨，但 `in_progress` 仍在增加
 - misc / metrics 分区仍在刷 `mooxsys`。分区隔离挡不住同进程的 `pending-subjects` fsync；旧二进制 from-scratch 重建 metrics 时会把 kline ACK 窗口一起占满
 
-这是 durable 被未完成投递占满，不是“没数据”。四个 crypto kline View **共用** `storage_view_kline`。
+这是 durable 被未完成投递占满，不是“没数据”。三个 crypto kline View **共用** `storage_view_kline`；Binance 现货与永续 1m 共用 `view_binance_kline_1m`。
 
 在 Storage 主机、用**该机同版本** `moox-cli`：
 
 ```bash
-# 先 dry-run 四个 View，确认 db_path / active_index / 下一档 desired revision
+# 先 dry-run 三个行情 View，确认 db_path / active_index / 下一档 desired revision
 moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_crypto_spot_kline_1m \
+  --view-id view_binance_kline_1m \
   --consumer storage_view_kline \
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
@@ -77,26 +77,20 @@ moox-cli storage repair-view \
 
 控制机上的 `internal-admin.yaml` 的 `urls` 是 `tls://127.0.0.1:4222`。拷到 Storage 后若不覆盖地址，删除 consumer 会 `nats: no servers available for connection`，而 View 可能已被 stop。必须加 `--eventbus-url tls://<EventBus公网IP>:4222`，CA 用 Storage 上已有的 `ca.pem`。凭据 mode `0600`，只打印字节数和权限。
 
-## Factor：队列积压还是把 View 打满
+## Factor 周期诊断
 
-先看控制面 Factor 日志和指标，再决定清队列：
+Factor 消费 `CollectorPeriodCompleted`，durable 名为 `factor_collector_period_v1`；对
+Storage 的计算输入读取走 PrimaryStore，不读取 View。先看该 durable 的 pending 与
+redelivery，再按 `set` 查看 `factor_period_lag_seconds`、`factor_last_period_time`、
+`factor_lane_backlog` 和 `factor_period_total`。检查 `factor_failures_total` 中的失败因子
+与原因，`factor_python_busy` 用于判断 Python 槽位是否持续饱和。
 
 | 现象 | 判断 | 动作 |
 |---|---|---|
-| `factor_view_ready_v1` `pending` 很大，且在算很旧的 `period_time` | durable 积压 | `moox-cli factor clear-queue --dry-run` 后 `--yes`（在 **控制面** `/data/moox/prod`） |
-| `pending` 很小（甚至 1），`period_time` 已是当前分钟，但大量 `11003` `i/o timeout` / `factor_view_read_retry` | View 读并发把 DuckDB 打满 | **不要**指望再清一次队列就能好。同一周期应对所有 subject **一次** `IN` 查询（日志 `factor_view_read_batch_done`）。若仍是逐标的 `factor_view_read_done`，说明跑的是旧二进制。`view_read_workers` 只约束不同 source View/周期，不要再调到 8+ |
-| Factor Primary/View 水位随 `last_success` 前进 | 已在追 | 等当前 period 跑完；批量读之后一根 1m 应在秒到几十秒级，而不是按标的累加几分钟 |
-
-`clear-queue --dry-run` **不连 EventBus**，JSON 里的 `pending_before` 恒为 0，不能当积压证据。`--yes` 的 summary 才有真实 pending。
-
-Factor 操作主机是跑 `moox-factor` 的控制面，不是 Storage：
-
-```bash
-moox-cli factor clear-queue \
-  --package-root /data/moox/prod \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
-  --dry-run
-```
+| durable pending 持续增长，最旧事件周期远早于当前时间 | 输入周期积压 | 检查 Factor 是否运行、过滤集合是否 enabled、Storage Gateway 可达性和 `AckWait`；不要删除 consumer，恢复后由 JetStream 重投 |
+| pending 低但 lag 或 set lane backlog 高 | 单个或多个集合处理较慢 | 对照 `factor_period_duration_seconds{set,stage}` 定位 read、compute、write 或 report 阶段 |
+| `factor_failures_total` 增长 | 因子或标的数据失败 | 检查对应因子错误、输入列和上游缺失 subject；基础设施错误会重试，业务失败会进入周期终态 |
+| 实时已追平但历史值需修正 | 历史补算 | 提交有界 Recalc 范围；已完成分块不会回滚 |
 
 控制面连本机 EventBus，一般不必 `--eventbus-url`。
 
@@ -104,5 +98,5 @@ moox-cli factor clear-queue \
 
 - 1m：View `output_watermark` 与 Primary 相差分钟级；`c_updated_at` 继续前进
 - 1h：对齐到**已收盘**小时（与 Primary 1h 相同），不要用当前未结束小时当缺口
-- Factor：`last_success` 接近墙钟；输出水位随正在计算的 `period_time` 前进；日志出现 `status=complete` 的 `factor_batch_done`，而不再是整批 `i/o timeout`
+- Factor：每个 enabled set 的 `factor_last_period_time` 接近最新已收盘周期；`factor_period_total` 持续增长且 lag 回落
 - 不要只看 `storage-view` / `moox-factor` 的 pid

@@ -47,7 +47,6 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 			assert.Equal(t, []string{
 				"moox.event.storage.dataset.rows.upserted.v2.>",
 				"moox.event.storage.collector.period.completed.v1.>",
-				"moox.event.storage.merge.period.completed.v1.>",
 				"moox.event.storage.dataset.factor_period.computed.v1.>",
 				"moox.event.storage.view.data.ready.v1.>",
 				"moox.event.storage.dataset.sync_point.v1.>",

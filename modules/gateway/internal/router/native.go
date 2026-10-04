@@ -157,7 +157,7 @@ func nativeReadOnlyMethod(method string) bool {
 	switch method {
 	case "GetSpace", "ListSpaces", "GetDataSource", "ListDataSources", "GetSubject", "ListSubjects", "GetTag", "ListTags", "ListTagMembers",
 		"GetDataset", "ListDatasets", "ListDatasetSubjects", "GetFieldGroup", "ListFieldGroups",
-		"GetField", "ListFields", "GetFactor", "ListFactors", "ListDatasetColumns", "GetView",
+		"GetField", "ListFields", "ListDatasetColumns", "GetView",
 		"ListViews", "ListViewColumns", "GetDataNode", "ListDataNodes", "CheckDatasetActivation",
 		"ListArchiveFiles", "ReadFields", "ReadTimeSeriesRows", "ReadRecordRows", "QueryTimeSeriesRows",
 		"SearchRecordRows":

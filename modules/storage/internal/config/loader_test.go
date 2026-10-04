@@ -88,7 +88,7 @@ func TestCheckedInStorageConfigUsesOneMinuteMaintenanceAndFiveThousandLookback(t
 
 func TestLoadViewMaintenancePolicyRejectsUnknownFieldsAndResolvesOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "maintenance.json")
-	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":7000},"views":[{"space_id":"crypto","view_id":"view_crypto_spot_kline_1m","rebuild_lookback_periods":5500}]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":7000},"views":[{"space_id":"crypto","view_id":"view_binance_kline_1m","rebuild_lookback_periods":5500}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := LoadViewMaintenancePolicy(path)
@@ -101,7 +101,7 @@ func TestLoadViewMaintenancePolicyRejectsUnknownFieldsAndResolvesOverrides(t *te
 	if got := policy.ResolvePolicy("mooxsys", "view_mooxsys_host_disk"); got.MaxPeriodsPerSeries != 7000 || got.RebuildLookbackPeriods != 5000 {
 		t.Fatalf("system policy=%#v", got)
 	}
-	if got := policy.ResolvePolicy("crypto", "view_crypto_spot_kline_1m"); got.RebuildLookbackPeriods != 5500 || got.MaxPeriodsPerSeries != 6000 {
+	if got := policy.ResolvePolicy("crypto", "view_binance_kline_1m"); got.RebuildLookbackPeriods != 5500 || got.MaxPeriodsPerSeries != 6000 {
 		t.Fatalf("view policy=%#v", got)
 	}
 	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"unexpected":true}`), 0o600); err != nil {
@@ -152,7 +152,7 @@ func TestCheckedInStorageViewProfilesUseCapacityDefaults(t *testing.T) {
 	}
 	for _, target := range []struct{ spaceID, viewID string }{
 		{spaceID: "mooxsys", viewID: "view_mooxsys_host_disk"},
-		{spaceID: "crypto", viewID: "view_binance_spot_kline_1m"},
+		{spaceID: "crypto", viewID: "view_binance_kline_1m"},
 	} {
 		resolved := policy.ResolvePolicy(target.spaceID, target.viewID)
 		if resolved.RebuildLookbackPeriods != 5000 || resolved.MaxPeriodsPerSeries != 6000 || resolved.MaxViewFileBytes != 1<<30 {
@@ -222,7 +222,7 @@ func TestLoadViewMaintenancePolicyRejectsMaxNotAboveLookback(t *testing.T) {
 
 func TestLoadViewMaintenancePolicyRejectsInvalidResolvedOverrideLimits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "maintenance.json")
-	body := `{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"views":[{"space_id":"crypto","view_id":"view_binance_spot_kline_1m","rebuild_lookback_periods":6000,"max_periods_per_series":6000}]}`
+	body := `{"maintenance_check_interval":"1m","capacity_check_interval":"1h","capacity_check_jitter":"1h","rebuild_lookback_periods":5000,"max_periods_per_series":6000,"max_view_file_bytes":1073741824,"views":[{"space_id":"crypto","view_id":"view_binance_kline_1m","rebuild_lookback_periods":6000,"max_periods_per_series":6000}]}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

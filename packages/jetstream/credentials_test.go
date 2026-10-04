@@ -70,8 +70,8 @@ func TestApplyCredentialFilePreservesExplicitEndpoint(t *testing.T) {
 
 func TestApplyCredentialFileReplacesLoopbackWithRoutableRoleURL(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "factor-engine-eventbus.yaml")
-	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://203.0.113.10:4222\nusername: factor-engine-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
+	path := filepath.Join(dir, "factor-eventbus.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://203.0.113.10:4222\nusername: factor-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config := Config{URLs: []string{"nats://127.0.0.1:4222"}}

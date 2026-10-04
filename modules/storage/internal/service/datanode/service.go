@@ -119,25 +119,6 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*p
 	return &pb.UpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
 }
 
-func (s *Service) CommitInput(ctx context.Context, req *pb.CommitInputReq) (*pb.CommitInputRsp, error) {
-	if req == nil {
-		return &pb.CommitInputRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
-	}
-	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.CommitInputRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
-	}
-	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.CommitInputRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	receipt, err := s.store.CommitInput(ctx, pebble.InputCommit{
-		CommitID: req.GetCommitId(), RequiredFields: req.GetRequiredFields(), Row: req.GetRow(), WriteKind: pebble.WriteKindInputCommit,
-	})
-	if err != nil {
-		return &pb.CommitInputRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
-	}
-	return &pb.CommitInputRsp{RetInfo: retinfo.Success("success"), Receipt: protoWriteReceipt(receipt)}, nil
-}
-
 func (s *Service) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
 	if req == nil {
 		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
@@ -153,35 +134,6 @@ func (s *Service) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsRe
 		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Success("success"), RowsWritten: rowsWritten}, nil
-}
-
-func (s *Service) LookupWriteReceipt(ctx context.Context, req *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error) {
-	if req == nil {
-		return &pb.LookupWriteReceiptRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
-	}
-	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.LookupWriteReceiptRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
-	}
-	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.LookupWriteReceiptRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	receipt, err := s.store.LookupWriteReceipt(ctx, req.GetCommitId())
-	if err != nil {
-		return &pb.LookupWriteReceiptRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
-	}
-	return &pb.LookupWriteReceiptRsp{RetInfo: retinfo.Success("success"), Receipt: protoWriteReceipt(receipt)}, nil
-}
-
-func protoWriteReceipt(in *pebble.WriteReceipt) *pb.WriteReceipt {
-	if in == nil {
-		return nil
-	}
-	return &pb.WriteReceipt{
-		CommitId:   in.CommitID,
-		Position:   &pb.CommittedPosition{NodeId: in.Position.NodeID, StoreId: in.Position.StoreID, Sequence: in.Position.Sequence},
-		InputReady: in.InputReady,
-		WriteKind:  in.WriteKind,
-	}
 }
 
 func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {

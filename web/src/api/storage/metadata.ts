@@ -9,7 +9,6 @@ import type {
   DatasetColumn,
   DatasetSubject,
   DatasetMutation,
-  Factor,
   Field,
   FieldGroup,
   Page,
@@ -208,24 +207,6 @@ export function batchUpdateFields(params: {
 
 export function deleteFieldGroup(params: { space_id: string; group_id: string }) {
   return callMetadata<typeof params, RetRsp>("DeleteFieldGroup", params);
-}
-
-export async function createFactor(factor: Factor) {
-  const rsp = await callMetadata<{ factor: Factor }, RetRsp & { factor: Factor }>("CreateFactor", { factor });
-  return rsp.factor;
-}
-
-export async function updateFactor(factor: Factor) {
-  const rsp = await callMetadata<{ factor: Factor }, RetRsp & { factor: Factor }>("UpdateFactor", { factor });
-  return rsp.factor;
-}
-
-export function getFactor(params: { space_id: string; factor_id: string }) {
-  return callMetadata<typeof params, RetRsp & { factor: Factor }>("GetFactor", params);
-}
-
-export function listFactors(params: { space_id: string; status?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { factors: Factor[]; page_result: PageResult }>("ListFactors", params);
 }
 
 export async function upsertDatasetColumn(dataset_column: DatasetColumn) {

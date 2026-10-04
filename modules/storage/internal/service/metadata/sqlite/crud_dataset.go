@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -95,6 +96,9 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	defer func() { _ = tx.Rollback() }()
 	existing, err := getDatasetTx(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
 	if err != nil {
+		return nil, err
+	}
+	if err := coremetadata.PreserveDatasetOwnerAttributes(existing, item); err != nil {
 		return nil, err
 	}
 	if item.GetRevision() != 0 && item.GetRevision() != existing.GetRevision() {
@@ -201,7 +205,21 @@ func (s *Store) GetDataset(ctx context.Context, spaceID string, datasetID string
 }
 
 func (s *Store) DeleteDataset(ctx context.Context, spaceID string, datasetID string) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	dataset, err := getDatasetTx(ctx, tx, spaceID, datasetID)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]), "factor_result") {
+		if err := deleteManagedFactorResultDefaultView(ctx, tx, dataset); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID)
 	if err != nil {
 		return err
 	}
@@ -212,7 +230,65 @@ func (s *Store) DeleteDataset(ctx context.Context, spaceID string, datasetID str
 	if affected != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
+}
+
+func deleteManagedFactorResultDefaultView(ctx context.Context, tx *sql.Tx, dataset *pb.Dataset) error {
+	attrs := dataset.GetAttributes()
+	if !strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") || !strings.EqualFold(strings.TrimSpace(attrs["write_owner"]), "factor") {
+		return errors.New("factor_result Dataset ownership metadata is invalid")
+	}
+	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`,
+		[]any{dataset.GetSpaceId(), viewID}, func() *pb.View { return &pb.View{} })
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !isManagedFactorResultDefaultView(dataset, view) {
+		return fmt.Errorf("factor_result default View %s/%s does not match its managed contract", dataset.GetSpaceId(), viewID)
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, dataset.GetSpaceId(), viewID)
+	return err
+}
+
+func isManagedFactorResultDefaultView(dataset *pb.Dataset, view *pb.View) bool {
+	if dataset == nil || view == nil || dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES || len(dataset.GetFreqs()) != 1 || strings.TrimSpace(dataset.GetFreqs()[0]) == "" {
+		return false
+	}
+	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
+	if err != nil || view.GetViewId() != viewID || view.GetDatasetId() != dataset.GetDatasetId() || view.GetStatus() != "active" ||
+		view.GetEngine() != "duckdb" || view.GetKeepDuration() != dataset.GetKeepDuration() ||
+		!equalStrings(view.GetGrainKeys(), []string{"subject_id", "freq", "data_time", "series_tag"}) {
+		return false
+	}
+	viewAttrs := view.GetAttributes()
+	if viewAttrs["owner_module"] != "factor" || viewAttrs["view_role"] != "factor_result" ||
+		viewAttrs["managed_by"] != "storage" || viewAttrs["primary_dataset_role"] != "factor_result" {
+		return false
+	}
+	var filter map[string]string
+	if json.Unmarshal([]byte(view.GetFilterJson()), &filter) != nil || len(filter) != 1 {
+		return false
+	}
+	return strings.TrimSpace(filter["freq"]) == strings.TrimSpace(dataset.GetFreqs()[0])
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) GetDatasetColumn(ctx context.Context, spaceID string, datasetID string, columnName string) (*pb.DatasetColumn, error) {

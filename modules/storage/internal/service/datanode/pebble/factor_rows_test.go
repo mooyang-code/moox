@@ -42,18 +42,6 @@ func TestFactorRowsWholeRowUpsertOverwritesNullFields(t *testing.T) {
 	}
 }
 
-func TestFactorRowsRejectReservedInputAttributes(t *testing.T) {
-	store := openFactorRowsStore(t)
-	row := &pb.RowFieldUpsert{
-		Key:        factorRowsKey("row-reserved"),
-		Fields:     []*pb.FieldValue{doubleField("close", 10)},
-		Attributes: map[string]*pb.TypedValue{attrInputReady: {Value: &pb.TypedValue_BoolValue{BoolValue: true}}},
-	}
-	if _, err := store.WriteFactorRows(context.Background(), "space", "factor_result", "commit-reserved", []*pb.RowFieldUpsert{row}); err == nil {
-		t.Fatal("factor result write accepted a reserved input attribute")
-	}
-}
-
 func TestFactorRowsSameCommitIDIsIdempotent(t *testing.T) {
 	store := openFactorRowsStore(t)
 	rows := []*pb.RowFieldUpsert{
@@ -130,6 +118,10 @@ func openFactorRowsStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func doubleField(id string, value float64) *pb.FieldValue {
+	return &pb.FieldValue{FieldId: id, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}}}
 }
 
 func factorRowsKey(recordID string) *pb.RowKey {

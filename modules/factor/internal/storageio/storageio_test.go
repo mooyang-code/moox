@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -43,6 +44,33 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 	require.Equal(t, []any{base, "venue:a", float64(1)}, got["BTC"].Rows[0])
 	require.Equal(t, []any{base.Add(time.Minute), "venue:b", float64(2)}, got["BTC"].Rows[1])
 	require.Equal(t, []any{base, "", float64(3)}, got["ETH"].Rows[0])
+}
+
+func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
+	earlier := time.Date(2025, 2, 3, 4, 5, 0, 0, time.UTC)
+	later := earlier.Add(time.Hour)
+	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
+		{Rows: []*storagepb.TimeSeriesRow{readRow("subject-000", later, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
+		{Rows: []*storagepb.TimeSeriesRow{readRow("subject-128", earlier, "", map[string]*storagepb.TypedValue{"close": double(1)})}},
+	}}
+	subjects := make([]string, 129)
+	for i := range subjects {
+		subjects[i] = fmt.Sprintf("subject-%03d", i)
+	}
+
+	got, found, err := NewClient(primary, nil, nil).EarliestPeriod(context.Background(), "crypto", "bars", "1m", subjects, []string{"close"})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, earlier, got)
+	require.Len(t, primary.readRequests, 2)
+	for _, request := range primary.readRequests {
+		require.Equal(t, storagepb.SortOrder_SORT_ORDER_ASC, request.GetOrder())
+		require.Equal(t, uint32(1), request.GetPage().GetSize())
+		require.Equal(t, "0001-01-01T00:00:00Z", request.GetTimeRange().GetStartTime())
+		require.Equal(t, "1m", request.GetSelectors()[0].GetFreq())
+	}
+	require.Len(t, primary.readRequests[0].GetSelectors(), earliestPeriodSelectorBatchSize)
+	require.Len(t, primary.readRequests[1].GetSelectors(), 1)
 }
 
 func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
@@ -214,16 +242,16 @@ func TestDeleteFactorResultDatasetPurgesRowsBeforeMetadata(t *testing.T) {
 	require.Equal(t, "factor", primary.deleteRowsRequests[0].GetAuthInfo().GetAppId())
 }
 
-func TestDeleteFactorResultDatasetRestoresRowsWhenMetadataDeleteFails(t *testing.T) {
+func TestDeleteFactorResultDatasetKeepsTombstoneWhenMetadataDeleteFails(t *testing.T) {
 	dataset := &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: "factor_result", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
 	}
 	metadata := &metadataFake{
-		getDatasetRsps: []*storagepb.GetDatasetRsp{
-			{RetInfo: successRet(), Dataset: dataset},
-			{RetInfo: successRet(), Dataset: dataset},
+		dataset: dataset,
+		deleteRsps: []*storagepb.DeleteDatasetRsp{
+			{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "metadata unavailable"}},
+			{RetInfo: successRet()},
 		},
-		deleteRsp: &storagepb.DeleteDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "metadata unavailable"}},
 	}
 	primary := &primaryFake{}
 	client := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
@@ -231,7 +259,12 @@ func TestDeleteFactorResultDatasetRestoresRowsWhenMetadataDeleteFails(t *testing
 	err := client.DeleteDataset(context.Background(), "crypto", "factor_result")
 	require.ErrorContains(t, err, "metadata unavailable")
 	require.Len(t, primary.deleteRowsRequests, 1)
-	require.Len(t, primary.restoreRowsRequests, 1)
+	require.Empty(t, primary.restoreRowsRequests)
+	// The DataNode's durable tombstone makes the purge idempotent: retrying the
+	// still-present metadata deletion can complete after the transient failure.
+	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
+	require.Len(t, primary.deleteRowsRequests, 2)
+	require.Len(t, metadata.deleteRequests, 2)
 }
 
 func TestCreateResultDatasetRetryIsIdempotent(t *testing.T) {
@@ -250,6 +283,17 @@ func TestActivateDatasetUsesCurrentRevision(t *testing.T) {
 	}}
 	require.NoError(t, NewClient(nil, metadata, nil).ActivateDataset(context.Background(), "crypto", "factor_result"))
 	require.Equal(t, uint64(12), metadata.activateRequests[0].GetExpectedRevision())
+}
+
+func TestActivateFactorResultClearsDeletionTombstone(t *testing.T) {
+	metadata := &metadataFake{dataset: &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "factor_result", Revision: 12, Status: "disabled",
+		Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}}
+	primary := &primaryFake{}
+	require.NoError(t, NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor"}).ActivateDataset(context.Background(), "crypto", "factor_result"))
+	require.Len(t, primary.restoreRowsRequests, 1)
+	require.Equal(t, "factor_result", primary.restoreRowsRequests[0].GetDatasetId())
 }
 
 func validReadRequest() ReadRequest {
@@ -293,6 +337,7 @@ type metadataFake struct {
 	activateRequests []*storagepb.ActivateDatasetReq
 	deleteRequests   []*storagepb.DeleteDatasetReq
 	deleteRsp        *storagepb.DeleteDatasetRsp
+	deleteRsps       []*storagepb.DeleteDatasetRsp
 }
 
 func (f *metadataFake) GetDataset(_ context.Context, req *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {
@@ -343,6 +388,11 @@ func (f *metadataFake) ActivateDataset(_ context.Context, req *storagepb.Activat
 
 func (f *metadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq, _ ...client.Option) (*storagepb.DeleteDatasetRsp, error) {
 	f.deleteRequests = append(f.deleteRequests, proto.Clone(req).(*storagepb.DeleteDatasetReq))
+	if len(f.deleteRsps) > 0 {
+		response := f.deleteRsps[0]
+		f.deleteRsps = f.deleteRsps[1:]
+		return response, nil
+	}
 	if f.deleteRsp != nil {
 		return f.deleteRsp, nil
 	}

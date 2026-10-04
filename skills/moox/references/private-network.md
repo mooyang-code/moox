@@ -25,7 +25,7 @@ moox-cli setup scf-network-plan --file ./moox.toml
 
 | 链路 | 配置 | 规则 |
 |---|---|---|
-| Storage 原生 tRPC | `MOOX_STORAGE_RPC_GATEWAY_TARGET` / `MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET` | 同地域私网或跨地域公网 `ip://<host>:11003` |
+| Storage 原生 tRPC | `MOOX_STORAGE_RPC_GATEWAY_TARGET` | 同地域私网或跨地域公网 `ip://<host>:11003` |
 | EventBus | `MOOX_EVENTBUS_NATS_URL` | 按 EventBus 证书 SAN 选择可验证的公网/专用入口 |
 | 上游交易所 / CLS | `public_net_status` | 需要访问公网时为 `ENABLE` |
 

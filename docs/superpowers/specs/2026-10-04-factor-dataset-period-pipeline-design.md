@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS t_factor_sets (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_subject_mode IN ('all', 'include')),
-    CHECK (c_status IN ('pending', 'enabled', 'disabled')),
+    CHECK (c_status IN ('pending', 'enabled', 'disabled', 'deleting')),
     UNIQUE (c_space_id, c_source_dataset_id, c_freq),
     UNIQUE (c_result_dataset_id)
 );
@@ -502,7 +502,7 @@ context：
 ## 13. 生命周期
 
 ```text
-因子集:  pending ──(结果数据集激活成功)──▶ enabled ⇄ disabled ──(无因子)──▶ 删除
+因子集:  pending ──(结果数据集激活成功)──▶ enabled ⇄ disabled ──(purge 且无因子)──▶ deleting ──(Storage 清理完成)──▶ 删除
 因子:    disabled ──启用──▶ enabled ──停用──▶ disabled ──▶ 修改 / 删除
 ```
 
@@ -515,6 +515,8 @@ context：
 | 停用因子集 | 移出消费过滤；在途周期允许完成 | 立即 |
 
 生命周期操作与周期任务、补算块之间用因子集级锁串行。
+
+`purge=true` 时先持久化内部状态 `deleting`，再幂等删除 Storage 结果数据集，最后删除本地因子集。启动与周期 Reconcile 必须续跑 `deleting` 集合；它覆盖进程在 DataNode tombstone、Metadata 删除或本地 SQLite 删除之间退出的情况。`deleting` 不接受写入或重新启用。
 
 ## 14. 补算
 

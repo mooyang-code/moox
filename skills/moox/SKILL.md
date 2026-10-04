@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, factor clear-queue, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
+description: Use when working in the MooX monorepo, operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -77,19 +77,19 @@ For requests to fetch collected market data, such as “获取 BTC-USDT 的 1m K
 catalog constraints, packaged credential handling, and result summary contract for
 `moox-cli data kline get`.
 
-For queue backlog and View recovery, read
+For View recovery, read
 [`references/cli-operations.md`](references/cli-operations.md) before operating. It documents
-the safe dry-run-first workflow, the Factor `clear-queue` command, Storage `repair-view`,
+the safe dry-run-first workflow and Storage `repair-view`; Factor recovery uses durable lag diagnosis and explicit Recalc, not consumer deletion,
 Storage `force-rebuild-view`, durable names, defaults, credential lookup, backups, the
 `storage.view.rebuild_lookback` coverage gate, and the high-risk full index reset.
 Never delete a durable consumer or a View index by hand when the corresponding `moox-cli`
 operation is available.
 
-When crypto K-line or Factor watermarks stall, read
+When crypto K-line or Factor periods stall, read
 [`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
-Factor separately. A full kline ACK window plus a multi-hour `oldest_pending_event_age` is a
-hung durable, not missing Primary facts. Factor `i/o timeout` to Storage `:11003` with a tiny
-JetStream pending is a View-read stampede, not a reason to keep deleting `factor_view_ready_v1`.
+Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
+the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
+distinguish event backlog, Storage failures, and Python saturation.
 
 ### Tencent Lighthouse Firewall
 
@@ -235,10 +235,9 @@ shutdown.
 That check requires the already-running Admin/CloudNode control plane and at
 least one Tencent cloud account; a failed check must not stop the current
 deployment.
-The managed Factor configuration uses an `info` CLS writer so
-`factor_view_read_done`, `factor_task_done`, and `factor_view_ready_done` can
-be used to diagnose calculation freshness; other services keep the lower
-volume `warn` policy.
+The managed Factor configuration uses an `info` CLS writer. Diagnose calculation freshness
+with `factor_period_total`, `factor_period_lag_seconds`, `factor_lane_backlog` and structured
+period pipeline logs; other services keep the lower-volume `warn` policy.
 
 ### Tencent CLS Log Query And Verification
 

@@ -261,7 +261,7 @@ func isUniqueConstraint(err error) bool {
 
 func validSetStatus(status string) bool {
 	switch status {
-	case domain.SetStatusPending, domain.SetStatusEnabled, domain.SetStatusDisabled:
+	case domain.SetStatusPending, domain.SetStatusEnabled, domain.SetStatusDisabled, domain.SetStatusDeleting:
 		return true
 	default:
 		return false

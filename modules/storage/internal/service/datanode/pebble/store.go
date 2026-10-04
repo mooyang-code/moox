@@ -65,6 +65,8 @@ type Store struct {
 	processedEventRetention time.Duration
 	datasetWriteMu          sync.RWMutex
 	outboxMu                sync.Mutex
+	outboxPublicationMu     sync.Mutex
+	outboxPublicationLocks  map[outboxDatasetScope]*outboxPublicationLock
 	periodMu                sync.Mutex
 	periodFinalizeMu        sync.Mutex
 	periodNow               func() time.Time
@@ -774,9 +776,86 @@ func (s *Store) PrepareOutboxPublication(ctx context.Context, id uint64, now tim
 	}
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
+	return s.prepareOutboxPublicationLocked(ctx, id)
+}
+
+// PublishOutboxPublication holds a dataset-scoped fence through the external
+// publish acknowledgement. Local outbox mutations use outboxMu only while
+// touching Pebble, so a slow broker cannot block writes to other datasets.
+func (s *Store) PublishOutboxPublication(ctx context.Context, id uint64, publish func([]byte) error) error {
+	if s == nil || s.db == nil {
+		return errors.New("pebble store is closed")
+	}
+	if publish == nil {
+		return errors.New("outbox publisher callback is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if id == 0 {
+		return errors.New("outbox id is required")
+	}
+	data, err := s.PrepareOutboxPublication(ctx, id, time.Time{})
+	if err != nil {
+		return err
+	}
+	message := &eventpb.EventMessage{}
+	if err := proto.Unmarshal(data, message); err != nil {
+		return fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
+	}
+	spaceID, datasetID := strings.TrimSpace(message.GetSpaceId()), strings.TrimSpace(message.GetSubjectId())
+	if spaceID == "" || datasetID == "" {
+		return fmt.Errorf("outbox entry %d has no dataset scope", id)
+	}
+	unlock := s.lockOutboxDatasetPublication(spaceID, datasetID)
+	defer unlock()
+	data, err = s.PrepareOutboxPublication(ctx, id, time.Time{})
+	if err != nil {
+		return err
+	}
+	return publish(data)
+}
+
+type outboxDatasetScope struct{ spaceID, datasetID string }
+
+type outboxPublicationLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (s *Store) lockOutboxDatasetPublication(spaceID, datasetID string) func() {
+	scope := outboxDatasetScope{spaceID: spaceID, datasetID: datasetID}
+	s.outboxPublicationMu.Lock()
+	if s.outboxPublicationLocks == nil {
+		s.outboxPublicationLocks = make(map[outboxDatasetScope]*outboxPublicationLock)
+	}
+	lock := s.outboxPublicationLocks[scope]
+	if lock == nil {
+		lock = &outboxPublicationLock{}
+		s.outboxPublicationLocks[scope] = lock
+	}
+	lock.refs++
+	s.outboxPublicationMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.outboxPublicationMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.outboxPublicationLocks, scope)
+		}
+		s.outboxPublicationMu.Unlock()
+	}
+}
+
+func (s *Store) prepareOutboxPublicationLocked(ctx context.Context, id uint64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	data, closer, err := s.db.Get([]byte(outboxKey(id)))
 	if errors.Is(err, cpebble.ErrNotFound) {
-		return nil, fmt.Errorf("outbox entry %d not found", id)
+		return nil, fmt.Errorf("%w: %d", ErrOutboxEntryNotFound, id)
 	}
 	if err != nil {
 		return nil, err

@@ -48,13 +48,19 @@ func TestLoadRejectsLegacyConfigSections(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSourceCheckerValidatesSyntaxAndComputeContract(t *testing.T) {
+func TestSourceCheckerLoadsModuleAndValidatesComputeContract(t *testing.T) {
 	checker := sourceChecker{python: PythonConfig{Bin: "python3"}}
 	path := filepath.Join(t.TempDir(), "factor.py")
 	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params, context):\n    return df\n"), 0o600))
 	require.NoError(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path))
-	require.NoError(t, os.WriteFile(path, []byte("def other():\n    return 1\n"), 0o600))
-	require.Error(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path))
-	require.NoError(t, os.WriteFile(path, []byte("def compute(:\n"), 0o600))
-	require.Error(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path))
+	for _, source := range []string{
+		"def other():\n    return 1\n",
+		"def compute(:\n",
+		"import moox_missing_factor_dependency_for_test\ndef compute(df, params, context):\n    return df\n",
+		"raise RuntimeError('top-level load failure')\ndef compute(df, params, context):\n    return df\n",
+		"def compute():\n    return 1\n",
+	} {
+		require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
+		require.Error(t, checker.CheckSource(t.Context(), domain.FactorDef{}, path), source)
+	}
 }

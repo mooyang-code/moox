@@ -308,7 +308,7 @@ func migrateReadTimeSeriesGatewayRoutes(existing, defaults []map[string]any) ([]
 		if !ok {
 			continue
 		}
-		rewritten, rewriteChanged := rewriteRetiredStorageGatewayMethods(methods)
+		rewritten, rewriteChanged := normalizeStorageGatewayMethods(methods)
 		if rewriteChanged {
 			route["gateway_methods"] = rewritten
 			changed = true
@@ -608,10 +608,7 @@ func intersectsStringSet(left, right []string) bool {
 	return false
 }
 
-func rewriteRetiredStorageGatewayMethods(methods []string) ([]string, bool) {
-	aliases := map[string]string{
-		"ReportDatasetPeriodCollected": "ReportCollectorPeriodCompleted",
-	}
+func normalizeStorageGatewayMethods(methods []string) ([]string, bool) {
 	out := make([]string, 0, len(methods))
 	seen := make(map[string]struct{}, len(methods))
 	changed := false
@@ -619,10 +616,6 @@ func rewriteRetiredStorageGatewayMethods(methods []string) ([]string, bool) {
 		method = strings.TrimSpace(method)
 		if method == "" {
 			continue
-		}
-		if next, ok := aliases[method]; ok {
-			method = next
-			changed = true
 		}
 		if _, dup := seen[method]; dup {
 			changed = true
@@ -674,7 +667,7 @@ func mergeDefaultGatewayMethods(existingValue, defaultValue any) ([]string, bool
 	if json.Unmarshal(existingRaw, &existing) != nil || json.Unmarshal(defaultRaw, &defaults) != nil {
 		return nil, false
 	}
-	existing, changed := rewriteRetiredStorageGatewayMethods(existing)
+	existing, changed := normalizeStorageGatewayMethods(existing)
 	seen := make(map[string]struct{}, len(existing)+len(defaults))
 	for _, method := range existing {
 		method = strings.TrimSpace(method)

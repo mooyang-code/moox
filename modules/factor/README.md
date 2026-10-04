@@ -1,239 +1,61 @@
 # MooX Factor
 
-`moox-factor` 是外网控制面：因子定义、绑定、mdataset 构造配置、目录快照与 FactorMgr。
-复合 mdataset 的行合并由独立服务 `moox-merge` 完成（见 `modules/merge`），不是 Factor 模块的一部分。
-`moox-factor-engine` 在计算节点运行 Python worker：时序消费 `DatasetRowsUpserted`
-（`write_kind=input_commit` 且 `input_ready`），截面消费关联 `MergePeriodCompleted`
-的 `ViewDataReady`，再把绑定拥有的因子列写回同一 mdataset。
-控制面不启动 Python 计算依赖，也不启动实时消费者；引擎通过 NATS request-reply 拉取版本化目录。
+`moox-factor` manages factor sets and definitions and runs the dataset-driven factor period
+pipeline in one process. It consumes `CollectorPeriodCompleted`, reads source rows through
+Storage PrimaryStore, writes carried source values plus factor outputs to a `factor_result`
+Dataset, and reports `FactorPeriodComputed`. Storage maintains the default result View;
+View is a query index, not an input to Factor computation.
 
-实时计算不在控制面进程内执行。缓存是可丢弃的本机优化，计算正确性不依赖缓存；
-引擎示例将 `cache.enabled` 保持为 `false`。
+The architecture and RPC/data contracts are documented in
+[`docs/因子计算模块设计.md`](../../docs/因子计算模块设计.md) and the canonical
+[design](../../docs/superpowers/specs/2026-10-04-factor-dataset-period-pipeline-design.md).
 
 ## Build And Run
 
 ```bash
 ./scripts/build/build.sh factor
-./scripts/build/build.sh factor-engine
-./scripts/build/build.sh merge
-
-# 控制面、独立 Merge、引擎分别启动
 ./bin/moox-factor
-./bin/moox-merge
-./bin/moox-factor-engine
+```
 
+The service reads `./config/app.yaml`. The config sections are `database`, `storage`,
+`eventbus`, `python`, `pipeline`, and `recalc`. Python defaults are in
+`modules/factor/config/app.yaml`; deployment supplies Storage gateway and EventBus credentials.
+
+## CLI
+
+```bash
 ./bin/moox-factor-cli init --db ./data/factor/factor.db
 ./bin/moox-factor-cli import \
-  --factor-type timeseries \
-  --db ./data/factor/factor.db \
-  --factors-dir ./factors \
-  --file ./factors/Bias.py \
-  --factor-id bias \
-  --input-columns close \
-  --outputs bias_20,bias_96 \
-  --params-json '{"windows":[20,96]}' \
-  --lookback-periods 200
-
-# 导入仓库提供的 12 个 XBX MooX 因子定义（全部保持 disabled）
-./bin/moox-factor-cli import-catalog \
-  --db ./data/factor/factor.db \
-  --factors-dir ./factors \
-  --catalog ./factors/catalog.json
-
-./bin/moox-factor-cli run-once \
-  --config ./factor/config/app.yaml \
-  --space quant \
-  --dataset portfolio_nav \
-  --subject fund-a \
-  --freq 1m \
-  --start-time 2026-07-26T00:00:00Z \
-  --end-time 2026-07-27T00:00:00Z
-
-# 清理引擎 durable 积压（默认 factor_view_ready_v1；时序队列为 factor_dataset_rows_v1）
-./bin/moox-factor-cli clear-queue \
-  --package-root /data/moox/factor-engine \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
-  --yes
+  --config ./config/app.yaml --set fset_binance_kline_1m \
+  --file ./factors/Bias.py --factor-id bias \
+  --inputs close --outputs bias_20 --params '{"window":20}' --lookback 20
+./bin/moox-factor-cli import-catalog --set fset_binance_kline_1m --dir ./factors
+./bin/moox-factor-cli recalc --set fset_binance_kline_1m \
+  --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
+./bin/moox-factor-cli run-once --set fset_binance_kline_1m \
+  --period 2026-10-04T00:10:00Z
+./bin/moox-factor-cli status --target ip://127.0.0.1:11004
 ```
+
+`import` creates or updates a disabled definition. Enabling is done via FactorMgr after the
+result Dataset schema has been reconciled. `recalc` submits an asynchronous range job;
+`run-once` invokes one period directly for local diagnosis. Supported commands are `init`,
+`import`, `import-catalog`, `recalc`, `run-once`, and `status`.
 
 ## XBX Factor Catalog
 
-The XBX migration is shipped as ordinary MooX `compute(df, params, context)` modules in
-`modules/factor/factors/`. There is no `xbx_` prefix and the source files are
-safe to import with the normal CLI. `catalog.json` is the reproducible import
-manifest for all 12 definitions; `import-catalog` creates or updates each
-definition in one operation. Every import creates or updates a disabled
-definition; enable it only after a binding has declared its source columns,
-outputs, lookback and result dataset.
+The catalog manifest and ordinary Python factors live under `modules/factor/factors/`.
+`import-catalog` imports the definitions for a factor set; they remain disabled until explicitly
+enabled. Every definition states its complete input columns, outputs, params, and maximum
+lookback. Factor does not infer OHLCV dependencies or depend on another Factor's output.
 
-The catalog lookbacks are deliberately larger than the visible window for
-nested rolling/rank formulas (for example `BiasQ` and `Cci` use 39 rows for a
-20-period window). This preserves the same latest value as XBX when the task
-runner truncates the input history to `lookback_periods`.
+## Operational Signals
 
-| File | Required input columns | Formula / default output |
-| --- | --- | --- |
-| `Bias.py` | `close` | `close / rolling_mean(close, n)` -> `bias_<n>` |
-| `BiasQ.py` | `close` | rolling percentile rank of Bias -> `bias_q_<n>` |
-| `Cci.py` | `high, low, close` | XBX CCI -> `cci` |
-| `CirculatingMcap.py` | `circulating_supply, close` | `circulating_supply * close` -> `circulating_mcap` |
-| `MinMax.py` | `high, low, close` | rolling typical-price min/max -> `minmax_<n>` |
-| `QuoteVolumeMean.py` | `quote_volume` | rolling mean -> `quote_volume_mean_<n>` |
-| `QuoteVolumeMeanQ.py` | `quote_volume` | rolling percentile rank of mean -> `quote_volume_mean_q_<n>` |
-| `VolumeMeanQ.py` | `volume` | rolling percentile rank of mean -> `volume_mean_q_<n>` |
-| `ZfAbsMean.py` | `open, high, low, close` | positive-return amplitude rank -> `zf_abs_mean_<n>` |
-| `ZfMeanQ.py` | `open, high, low` | amplitude rank -> `zf_mean_q_<n>` |
-| `ZfStd.py` | `open, high, low, close` | signed amplitude standard deviation -> `zf_std_<n>` |
-| `ZscoreAbsMeanQ.py` | `close` | absolute z-score mean rank -> `zscore_abs_mean_q_<n>` |
+The JetStream durable consumer is `factor_collector_period_v1`. Its lag represents unprocessed
+Collector periods; restart recovery is provided by JetStream redelivery. Inspect Factor's
+Prometheus metrics: `factor_period_total`, `factor_period_duration_seconds`,
+`factor_period_lag_seconds`, `factor_failures_total`, `factor_lane_backlog`,
+`factor_python_busy`, and `factor_last_period_time`.
 
-For a single-window binding, import a module with explicit metadata. The
-following example registers the same source with two Bias outputs:
-
-```bash
-./bin/moox-factor-cli import \
-  --factor-type timeseries \
-  --db ./data/factor/factor.db \
-  --factors-dir ./factors \
-  --file ./factors/Bias.py \
-  --factor-id bias \
-  --input-columns close \
-  --outputs bias_20,bias_96 \
-  --params-json '{"windows":[20,96]}' \
-  --lookback-periods 96
-```
-
-Use the same command shape for the remaining modules, changing
-`--input-columns`, `--outputs`, `--params-json` and `--lookback-periods` to the
-binding's actual window. `CirculatingMcap.py` deliberately treats
-`circulating_supply` as an ordinary source column; it is not a framework-level
-concept. The factor remains disabled until the selected source View exposes
-that column and metadata validation succeeds.
-
-## Runtime Contract
-
-- 当前 schema 不兼容早期实验数据库；检测到旧表或旧列时会拒绝启动，请新建数据库。
-- `FactorDef` 由 `factor_id/name/source_code/source_hash/input_columns/outputs/
-  params_json/lookback_periods/status` 组成；`input_columns` 和 `outputs` 显式声明完整
-  输入输出，框架不猜测源码依赖，也不隐式请求 OHLCV。
-- `data_time` 与 `series_tag` 是框架注入的系统列，不属于 `input_columns` 或
-  `outputs`；tag 是不透明字符串，时间按 RFC3339Nano 往返。
-- Python 入口固定为 `compute(df, params, context)`；`params` 是 dict，返回 pandas DataFrame
-  必须含 `data_time`、`series_tag` 和全部 `outputs`，且行身份唯一。
-- `params_json` 必须是 JSON object，`lookback_periods` 按不同 `data_time` 计数，
-  不受同一时间点 tag 数量影响。
-- 同一完整 binding scope 的实时事件在固定窗口内合并为 `[min(data_time), max(data_time) + 1ns)` 半开范围。
-- scope 不包含 tag；任一 tag 变化会读取该时间范围的全部 tag，支持同 Dataset 跨 tag
-  计算。
-- 手动补算使用 `[start_time, end_time)`；超过 2000 个目标 period 时自动分 chunk，
-  不会拆开同一时间点的 tag cohort。
-- `run-once` 执行适用于当前 source、freq、subject 的 enabled binding，并按 binding
-  的结果 Dataset 分组写回。控制面 `RecalcFactor` 只受理异步 job，由引擎执行。
-- Python 输出可以产生与输入不同的 tag，例如 `venue_pair:binance-okx`；数值只能是
-  有限数值或 `null`。
-- `null` 会显式清除对应单元格的旧值，不影响同一行的其他因子列。
-- `run-once --config /absolute/path/to/app.yaml` 复用服务配置中的 DB、Python worker、
-  factors、Storage Gateway 和 timeout；run-once 固定使用一个 Python worker，CLI 显式
-  `--db/--factors-dir` 优先。
-  部署包应从干净 shell 使用 `bin/moox-factor-run-once`，由 wrapper 注入绝对路径和凭证。
-- 新建和 CLI import 的 Factor 一律为 `disabled`；更新定义和再次 import 都保留现有
-  状态。`SetFactorStatus` 是唯一启用/禁用入口，启用时会先完成 Storage metadata
-  reconciliation，失败则保持 disabled。
-
-## 因子独立性与复合因子
-
-系统中注册的每个 Factor 都必须是独立、无外部因子依赖的计算单元：
-
-- Factor 只能读取当前 binding 所属 mdataset 中由 `input_columns` 声明的字段；
-- Factor 不能引用、动态加载或等待另一个已注册 Factor，也不能覆盖其他绑定的输出列；
-- Factor 服务不解析因子之间的依赖关系，不提供 Factor DAG、拓扑调度、中间结果复用或
-  跨因子版本协调；
-- 同一批次中的多个 Factor 只是共享一次 mdataset 读取和 Python 调用，计算、校验与
-  写回仍彼此独立，不存在执行先后关系。
-
-需要 MA、RSI 等基础算法的复合因子，应由业务在自己的 `compute(df, params, context)` 中展开完整
-计算逻辑。即使相同基础算法已经作为另一个 Factor 注册，也不能直接引用其源码或结果。
-系统接受由此产生的少量重复计算，以换取确定的输入快照、简单的并发模型和清晰的故障
-边界。
-
-```python
-import pandas
-
-def compute(df, params, context):
-    close = df["close"]
-    ma20 = close.rolling(20).mean()
-    ma60 = close.rolling(60).mean()
-    return pandas.DataFrame({
-        "data_time": df["data_time"],
-        "series_tag": df["series_tag"],
-        "trend": (ma20 - ma60) / ma60,
-    })
-```
-
-该示例应声明 `input_columns=["close"]`、`outputs=["trend"]` 和
-`lookback_periods=60`。`lookback_periods` 必须覆盖复合逻辑实际需要的完整原始历史；
-例如先计算 MA20，再对 MA20 做 60 周期滚动，至少需要 `20 + 60 - 1 = 79` 个周期。
-Factor 服务不会从 Python 源码自动推断或补足这个值。
-
-```python
-import pandas
-
-def compute(df, params, context):
-    left = df[df["series_tag"] == params["left_tag"]].set_index("data_time")
-    right = df[df["series_tag"] == params["right_tag"]].set_index("data_time")
-    joined = left[["close"]].join(right[["close"]], lsuffix="_left", rsuffix="_right")
-    return pandas.DataFrame({
-        "data_time": joined.index,
-        "series_tag": params["output_tag"],
-        "spread": joined["close_left"] - joined["close_right"],
-    })
-```
-
-时序 Consumer 只消费 Storage 发布的 `DatasetRowsUpserted`：`write_kind=input_commit`
-且行已 `input_ready`。`factor_patch` 写回不得再次触发时序。截面 Consumer 只消费
-关联 `MergePeriodCompleted` 的 `ViewDataReady`；关联 `FactorPeriodComputed` 的结果
-Ready 不得再开新截面。策略只在因子结果 View 可读时消费 `ViewDataReady`。
-进程在执行中断时由 durable consumer 重投；缺口用 `run-once` 或控制面受理、引擎异步
-执行的 Recalc 修复，补算完成不发布直播 `FactorPeriodComputed`。
-
-常驻服务把 View 读取与 Python 计算拆成两个独立的有界并发阶段：
-
-- `engine.view_read_workers` 默认 `2`，控制不同 subject 的并行 View 读取；任意读取完成
-  后立即补入下一个 subject，不等待固定批次。约 500 个 crypto subject 时，8 路 lookback
-  仍会把 Storage View / DuckDB 打满，表现为 `11003` `i/o timeout`、源 K 线 period-ready
-  大量 failed、Factor 跳分钟。不要把默认值调回 8 或几十路。
-- `engine.view_read_timeout_ms` 默认 `20000`，控制单次 View RPC；超时任务释放读取槽位并
-  移到队尾重试一次，不阻塞其他 subject。
-- `engine.python_workers` 默认 `32`，控制全局 Python 计算进程和数据就绪任务并发；启动
-  时只预热一个 Python 进程，其余槽位按任务需要惰性启动。
-- `engine.batch_enabled` 默认 `true`，将同一 source View、frequency、period、subject
-  下的多个因子合并为一次 Python 调用；结果仍按 binding 独立校验和写回。设为 `false`
-  可回退到逐因子执行。
-
-相同 subject、period、目标窗口和 trigger 的多个因子共享一次 View 读取；读取时使用组内
-最大的 lookback，批量模式会在 Python 端为每个因子恢复其独立的 lookback 窗口。读取列为这些
-因子输入列的并集，并在批量模式下共享一次 Python 执行。读取结果通过容量为
-`2 * python_workers` 的内部队列形成背压，不增加可调批次、每 binding 并发或第三个队列
-配置；不同 subject 仍可并行。
-
-### CLS 运行日志
-
-启用 CLS 的生产发布会在 Factor 配置中注入 `info` 级别的 CLS writer，保留本地
-console writer；Topic ID 由发布前的 CLS 预检解析，不写入源码。以下记录用于定位
-计算延迟、读取超时和写回失败：
-
-- `factor_view_read_done`：一次共享 View 读取的 subject、period、attempt、耗时和列数。
-- `factor_view_read_retry`：读取失败后移到队尾重试。
-- `factor_task_start` / `factor_task_done`：因子任务的输入范围、输出 Dataset、状态和耗时。
-- `factor_view_ready_done`：本周期全部任务与结果 Marker 已提交。
-- `factor_view_ready_report_failed`：结果 Marker 上报失败，事件会保持待处理并重试。
-
-当 Factor 输出持久化返回 SQLite 损坏错误（例如 `database disk image is malformed`）时，
-服务会锁存写入故障并让 `/readyz` 返回未就绪；Monitor 的默认服务告警会触发，并将具体
-数据库错误放入告警原因。修复方式是停止 Factor、删除并重新初始化 Factor 数据库，再按
-现有流程重建相关 View 和结果。
-
-日志不包含源码、凭证或请求体；可在 CLS 固定 Topic 中按 `service_name=factor` 和上述
-事件名筛选。
-
-Bias 和 CCI 是 K 线模板示例，不是运行时协议。核心模块不提供 `period`、
-`Depends`、Dimensions Map、多 tag、Factor DAG、持久化 inbox 或 exactly-once。
+Do not clear a Factor consumer to recover it. Diagnose durable lag, set-lane backlog, Storage
+errors, and Python worker saturation; use an explicit Recalc job for historical correction.

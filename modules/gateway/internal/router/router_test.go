@@ -66,6 +66,8 @@ func TestNativeReadOnlyMethodAllowlist(t *testing.T) {
 		{method: "ListViews", read: true},
 		{method: "QueryTimeSeriesRows", read: true},
 		{method: "GetSpace", read: true},
+		{method: "GetFactor", read: false},
+		{method: "ListFactors", read: false},
 		{method: "UpdateView", read: false},
 		{method: "ActivateViewIndex", read: false},
 	} {

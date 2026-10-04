@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS t_factor_sets (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_subject_mode IN ('all', 'include')),
-    CHECK (c_status IN ('pending', 'enabled', 'disabled')),
+    CHECK (c_status IN ('pending', 'enabled', 'disabled', 'deleting')),
     UNIQUE (c_space_id, c_source_dataset_id, c_freq),
     UNIQUE (c_result_dataset_id)
 );
@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_set_id TEXT NOT NULL,
     c_factor_ids_json TEXT NOT NULL DEFAULT '[]',
     c_subjects_json TEXT NOT NULL DEFAULT '[]',
+    c_factors_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_factors_omitted IN (0, 1)),
+    c_subjects_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_subjects_omitted IN (0, 1)),
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'accepted',

@@ -163,9 +163,12 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 	// can report complete, delaying the newest signal by one whole period.
 	// period+1ns includes the requested bar without looking beyond it.
 	end = storagePeriod.Add(time.Nanosecond)
-	history, err := reader.HistoryPeriods(ctx, runner.SpaceID, compiled.SourceView.ID, compiled.SourceView.Frequency, start, end)
-	if err != nil {
-		return input.EvaluationInput{}, fmt.Errorf("%w: read history: %w", input.ErrNotReady, err)
+	history := map[string]int{}
+	if !compiled.InstrumentPool.IncludeSet || len(compiled.InstrumentPool.Include) > 0 {
+		history, err = reader.HistoryPeriods(ctx, runner.SpaceID, compiled.SourceView.ID, compiled.SourceView.Frequency, start, end)
+		if err != nil {
+			return input.EvaluationInput{}, fmt.Errorf("%w: read history: %w", input.ErrNotReady, err)
+		}
 	}
 	pool := input.BuildPool(compiled.InstrumentPool, subjects, history)
 	if pool.Err != nil {
@@ -173,6 +176,9 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 	}
 	if restrictor, ok := reader.(viewSelectorRestrictor); ok {
 		restrictor.RestrictSelectors(pool.Items)
+	}
+	if len(pool.Items) == 0 {
+		return emptyEvaluationInput(reader, runner, compiled, period, duration, pool), nil
 	}
 	rowsByInstrument := make(map[string]input.InstrumentInput, len(pool.Items))
 	sourceRowsPresent := make(map[string]bool, len(pool.Items))
@@ -346,6 +352,34 @@ func (l Loader) loadWithPeriods(ctx context.Context, runner domain.StrategyRunne
 	}
 	sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].InstrumentID < result.Items[j].InstrumentID })
 	return result, nil
+}
+
+func emptyEvaluationInput(reader ViewReader, runner domain.StrategyRunner, compiled compiler.CompiledStrategy, period time.Time, duration time.Duration, pool input.PoolResult) input.EvaluationInput {
+	barIndex := int64(-1)
+	barEndAt := func(offset int) time.Time { return period.UTC().Add(time.Duration(offset) * duration) }
+	if boundaries, err := input.FromBarEnd(compiled.Data.Calendar, compiled.SourceView.Frequency, period); err == nil {
+		barIndex = boundaries.BarIndex
+		barEndAt = func(offset int) time.Time {
+			value, advanceErr := input.AdvanceBarEnd(compiled.Data.Calendar, compiled.SourceView.Frequency, period, offset)
+			if advanceErr != nil {
+				return period.UTC().Add(time.Duration(offset) * duration)
+			}
+			return value
+		}
+	}
+	result := input.EvaluationInput{
+		SpaceID: runner.SpaceID, StrategyID: runner.StrategyID,
+		PeriodEnd: period.UTC().Format(time.RFC3339Nano), SourceViewID: compiled.SourceView.ID,
+		DataFrequency: compiled.SourceView.Frequency, Ineligible: pool.Ineligible,
+		BarIndex: barIndex, BarDuration: duration, BarEndAt: barEndAt,
+	}
+	if provenance, ok := reader.(SnapshotProvenanceReader); ok {
+		result.SourceIndexID, result.SourceIndexRevision, _ = provenance.ViewProvenance(compiled.SourceView.ID)
+		if len(compiled.Dependencies.FactorResultViewIDs) > 0 {
+			result.ResultIndexID, result.ResultIndexRevision, _ = provenance.ViewProvenance(compiled.Dependencies.FactorResultViewIDs[0])
+		}
+	}
+	return result
 }
 
 // validateUniqueSeriesRows prevents a wildcard selector from silently

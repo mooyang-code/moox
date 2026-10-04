@@ -86,13 +86,14 @@ freshness 先经过市场日历门禁：`crypto` 按 UTC 24x7 运行，`stockcn`
 
 发布使用一个共享 `metrics-publisher` 发布角色和一个独立 `monitor-metrics-consumer` 消费角色。Publisher 只能发布 metrics snapshot；Monitor consumer 只订阅固定 metrics/host topic 和 durable。Monitor 为单实例，不能复用 Publisher 凭据消费，也不通过多实例抢占 durable。
 
-Collector、CloudNode、Factor、Strategy、Trade、Archive 使用固定低基数
-`moox_<module>_*` 指标和代码内置的模块健康检查注册表。只有具备同一业务时间域的权威输入、输出时间时
+Collector、CloudNode、Strategy、Trade、Archive 使用固定低基数
+`moox_<module>_*` 指标和代码内置的模块健康检查注册表。Factor 使用 `factor_*` 的固定低基数
+指标，以因子集 ID 区分周期与 lane 状态。只有具备同一业务时间域的权威输入、输出时间时
 才生成水位健康检查；Collector、Factor 的实时连续性按启用中的 Dataset + Frequency 独立判断，
 不把多个时序汇总成一个模块水位。穿过 Storage 的功能检查当前显式延期，不从相邻模块水位
 推断 Storage 已正确处理。
 
-View 驱动因子链路额外暴露以下固定低基数指标（不包含 subject、period 或 row key）：
+因子数据集周期流水线暴露以下固定低基数指标（不包含 subject、period 或 row key）：
 
 | 指标 | 标签 | 含义 |
 | --- | --- | --- |
@@ -103,14 +104,13 @@ View 驱动因子链路额外暴露以下固定低基数指标（不包含 subje
 | `moox_storage_view_restore_duration_seconds` | 无 | 最近一次 View 索引恢复耗时 |
 | `moox_storage_view_restore_ready` | 无 | 最近一次 View 索引恢复是否完成 |
 | `moox_storage_view_restore_failures_total` | 无 | View 索引恢复失败累计次数 |
-| `moox_factor_period_running` | `source_view,frequency` | 正在执行的因子周期数量 |
-| `moox_factor_period_degraded_total` | `source_view,frequency` | 输入缺失或因子执行失败而降级的周期数量 |
-| `moox_factor_batch_running` | `source_view,frequency` | 当前 View-ready 运行中尚未完成的标的批次数（包含排队批次） |
-| `moox_factor_batch_total` | `source_view,frequency,status` | 标的批次完成数量 |
-| `moox_factor_batch_factor_total` | `source_view,frequency` | 批次内处理的因子成员数量 |
-| `moox_factor_batch_elapsed_seconds` | `source_view,frequency` | View-ready 本轮总耗时（按标的批次记录，非单批精确耗时） |
-| `moox_factor_manifest_clear_total` | `binding` | 因跳过/失败 subject 清理结果 manifest 的次数 |
-| `moox_factor_source_ready_lag_seconds` | `source_view,frequency` | Factor 开始执行时 Source ready 的滞后秒数 |
+| `factor_period_duration_seconds` | `set,stage` | 周期 pipeline 的 plan/load/compute/assemble/write/report 阶段耗时 |
+| `factor_period_lag_seconds` | `set` | 目标周期到报告完成之间的滞后秒数 |
+| `factor_period_total` | `set,status` | 完成的因子周期数，按状态分类 |
+| `factor_failures_total` | `set,factor,reason` | 因子计算失败数量 |
+| `factor_lane_backlog` | `set` | 因子集串行 lane 的排队周期数 |
+| `factor_python_busy` | 无 | 正在执行工作的 Python worker 数量 |
+| `factor_last_period_time` | `set` | 最近完成周期的 Unix 时间戳 |
 
 这些指标只用于运行观测，不改变完成事件的 payload，也不作为是否发布 ready 的判定条件。
 

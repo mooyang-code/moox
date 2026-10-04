@@ -40,8 +40,12 @@ func (a Artifacts) Materialize(factor domain.FactorDef) (string, error) {
 		return "", fmt.Errorf("open factor artifacts root without following symlinks: %w", err)
 	}
 	defer unix.Close(rootFD)
-	if err := unix.Mkdirat(rootFD, factor.Name, 0o755); err != nil && err != unix.EEXIST {
-		return "", fmt.Errorf("create factor artifact directory: %w", err)
+	if err := unix.Mkdirat(rootFD, factor.Name, 0o755); err != nil {
+		if err != unix.EEXIST {
+			return "", fmt.Errorf("create factor artifact directory: %w", err)
+		}
+	} else if err := unix.Fsync(rootFD); err != nil {
+		return "", fmt.Errorf("sync factor artifacts root: %w", err)
 	}
 	dirFD, err := unix.Openat(rootFD, factor.Name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -83,6 +87,9 @@ func (a Artifacts) Materialize(factor domain.FactorDef) (string, error) {
 			}
 		}
 		return "", fmt.Errorf("publish factor artifact without replacement: %w", err)
+	}
+	if err := unix.Fsync(dirFD); err != nil {
+		return "", fmt.Errorf("sync factor artifact directory: %w", err)
 	}
 	return path, nil
 }

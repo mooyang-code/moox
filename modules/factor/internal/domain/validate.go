@@ -60,7 +60,7 @@ func ValidateSet(set FactorSet) error {
 		return fmt.Errorf("subject_mode must be %q or %q", SubjectModeAll, SubjectModeInclude)
 	}
 	switch set.Status {
-	case SetStatusPending, SetStatusEnabled, SetStatusDisabled:
+	case SetStatusPending, SetStatusEnabled, SetStatusDisabled, SetStatusDeleting:
 		return nil
 	default:
 		return fmt.Errorf("invalid factor set status %q", set.Status)

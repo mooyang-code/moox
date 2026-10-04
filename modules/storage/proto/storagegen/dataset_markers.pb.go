@@ -85,77 +85,6 @@ func (x *CommittedPosition) GetSequence() uint64 {
 	return 0
 }
 
-type WriteReceipt struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	CommitId   string             `protobuf:"bytes,1,opt,name=commit_id,json=commitId,proto3" json:"commit_id,omitempty"`
-	Position   *CommittedPosition `protobuf:"bytes,2,opt,name=position,proto3" json:"position,omitempty"`
-	InputReady bool               `protobuf:"varint,3,opt,name=input_ready,json=inputReady,proto3" json:"input_ready,omitempty"`
-	WriteKind  string             `protobuf:"bytes,4,opt,name=write_kind,json=writeKind,proto3" json:"write_kind,omitempty"`
-}
-
-func (x *WriteReceipt) Reset() {
-	*x = WriteReceipt{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_dataset_markers_proto_msgTypes[1]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *WriteReceipt) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WriteReceipt) ProtoMessage() {}
-
-func (x *WriteReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_dataset_markers_proto_msgTypes[1]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WriteReceipt.ProtoReflect.Descriptor instead.
-func (*WriteReceipt) Descriptor() ([]byte, []int) {
-	return file_dataset_markers_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *WriteReceipt) GetCommitId() string {
-	if x != nil {
-		return x.CommitId
-	}
-	return ""
-}
-
-func (x *WriteReceipt) GetPosition() *CommittedPosition {
-	if x != nil {
-		return x.Position
-	}
-	return nil
-}
-
-func (x *WriteReceipt) GetInputReady() bool {
-	if x != nil {
-		return x.InputReady
-	}
-	return false
-}
-
-func (x *WriteReceipt) GetWriteKind() string {
-	if x != nil {
-		return x.WriteKind
-	}
-	return ""
-}
-
 // CollectorPeriodCompletedMarker is the Storage RPC form of a collector-period
 // completion decision. space_id is carried by the containing request.
 type CollectorPeriodCompletedMarker struct {
@@ -179,7 +108,7 @@ type CollectorPeriodCompletedMarker struct {
 func (x *CollectorPeriodCompletedMarker) Reset() {
 	*x = CollectorPeriodCompletedMarker{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_dataset_markers_proto_msgTypes[2]
+		mi := &file_dataset_markers_proto_msgTypes[1]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -192,7 +121,7 @@ func (x *CollectorPeriodCompletedMarker) String() string {
 func (*CollectorPeriodCompletedMarker) ProtoMessage() {}
 
 func (x *CollectorPeriodCompletedMarker) ProtoReflect() protoreflect.Message {
-	mi := &file_dataset_markers_proto_msgTypes[2]
+	mi := &file_dataset_markers_proto_msgTypes[1]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -205,7 +134,7 @@ func (x *CollectorPeriodCompletedMarker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollectorPeriodCompletedMarker.ProtoReflect.Descriptor instead.
 func (*CollectorPeriodCompletedMarker) Descriptor() ([]byte, []int) {
-	return file_dataset_markers_proto_rawDescGZIP(), []int{2}
+	return file_dataset_markers_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *CollectorPeriodCompletedMarker) GetDatasetId() string {
@@ -299,7 +228,7 @@ type FactorPeriodState struct {
 func (x *FactorPeriodState) Reset() {
 	*x = FactorPeriodState{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_dataset_markers_proto_msgTypes[3]
+		mi := &file_dataset_markers_proto_msgTypes[2]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -312,7 +241,7 @@ func (x *FactorPeriodState) String() string {
 func (*FactorPeriodState) ProtoMessage() {}
 
 func (x *FactorPeriodState) ProtoReflect() protoreflect.Message {
-	mi := &file_dataset_markers_proto_msgTypes[3]
+	mi := &file_dataset_markers_proto_msgTypes[2]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -325,7 +254,7 @@ func (x *FactorPeriodState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FactorPeriodState.ProtoReflect.Descriptor instead.
 func (*FactorPeriodState) Descriptor() ([]byte, []int) {
-	return file_dataset_markers_proto_rawDescGZIP(), []int{3}
+	return file_dataset_markers_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *FactorPeriodState) GetFactorId() string {
@@ -377,7 +306,7 @@ type FactorPeriodComputedMarker struct {
 func (x *FactorPeriodComputedMarker) Reset() {
 	*x = FactorPeriodComputedMarker{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_dataset_markers_proto_msgTypes[4]
+		mi := &file_dataset_markers_proto_msgTypes[3]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -390,7 +319,7 @@ func (x *FactorPeriodComputedMarker) String() string {
 func (*FactorPeriodComputedMarker) ProtoMessage() {}
 
 func (x *FactorPeriodComputedMarker) ProtoReflect() protoreflect.Message {
-	mi := &file_dataset_markers_proto_msgTypes[4]
+	mi := &file_dataset_markers_proto_msgTypes[3]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -403,7 +332,7 @@ func (x *FactorPeriodComputedMarker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FactorPeriodComputedMarker.ProtoReflect.Descriptor instead.
 func (*FactorPeriodComputedMarker) Descriptor() ([]byte, []int) {
-	return file_dataset_markers_proto_rawDescGZIP(), []int{4}
+	return file_dataset_markers_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *FactorPeriodComputedMarker) GetDatasetId() string {
@@ -491,7 +420,7 @@ type DatasetSyncPointMarker struct {
 func (x *DatasetSyncPointMarker) Reset() {
 	*x = DatasetSyncPointMarker{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_dataset_markers_proto_msgTypes[5]
+		mi := &file_dataset_markers_proto_msgTypes[4]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -504,7 +433,7 @@ func (x *DatasetSyncPointMarker) String() string {
 func (*DatasetSyncPointMarker) ProtoMessage() {}
 
 func (x *DatasetSyncPointMarker) ProtoReflect() protoreflect.Message {
-	mi := &file_dataset_markers_proto_msgTypes[5]
+	mi := &file_dataset_markers_proto_msgTypes[4]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -517,7 +446,7 @@ func (x *DatasetSyncPointMarker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DatasetSyncPointMarker.ProtoReflect.Descriptor instead.
 func (*DatasetSyncPointMarker) Descriptor() ([]byte, []int) {
-	return file_dataset_markers_proto_rawDescGZIP(), []int{5}
+	return file_dataset_markers_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DatasetSyncPointMarker) GetSyncPointId() string {
@@ -571,7 +500,7 @@ type ViewPeriodDatasetState struct {
 func (x *ViewPeriodDatasetState) Reset() {
 	*x = ViewPeriodDatasetState{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_dataset_markers_proto_msgTypes[6]
+		mi := &file_dataset_markers_proto_msgTypes[5]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -584,7 +513,7 @@ func (x *ViewPeriodDatasetState) String() string {
 func (*ViewPeriodDatasetState) ProtoMessage() {}
 
 func (x *ViewPeriodDatasetState) ProtoReflect() protoreflect.Message {
-	mi := &file_dataset_markers_proto_msgTypes[6]
+	mi := &file_dataset_markers_proto_msgTypes[5]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +526,7 @@ func (x *ViewPeriodDatasetState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewPeriodDatasetState.ProtoReflect.Descriptor instead.
 func (*ViewPeriodDatasetState) Descriptor() ([]byte, []int) {
-	return file_dataset_markers_proto_rawDescGZIP(), []int{6}
+	return file_dataset_markers_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ViewPeriodDatasetState) GetSpaceId() string {
@@ -695,7 +624,7 @@ type ViewSyncPoint struct {
 func (x *ViewSyncPoint) Reset() {
 	*x = ViewSyncPoint{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_dataset_markers_proto_msgTypes[7]
+		mi := &file_dataset_markers_proto_msgTypes[6]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -708,7 +637,7 @@ func (x *ViewSyncPoint) String() string {
 func (*ViewSyncPoint) ProtoMessage() {}
 
 func (x *ViewSyncPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_dataset_markers_proto_msgTypes[7]
+	mi := &file_dataset_markers_proto_msgTypes[6]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -721,7 +650,7 @@ func (x *ViewSyncPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewSyncPoint.ProtoReflect.Descriptor instead.
 func (*ViewSyncPoint) Descriptor() ([]byte, []int) {
-	return file_dataset_markers_proto_rawDescGZIP(), []int{7}
+	return file_dataset_markers_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ViewSyncPoint) GetSpaceId() string {
@@ -780,17 +709,6 @@ var file_dataset_markers_proto_rawDesc = []byte{
 	0x72, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x74, 0x6f,
 	0x72, 0x65, 0x49, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x65,
 	0x18, 0x03, 0x20, 0x01, 0x28, 0x04, 0x52, 0x08, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x65,
-	0x22, 0xad, 0x01, 0x0a, 0x0c, 0x57, 0x72, 0x69, 0x74, 0x65, 0x52, 0x65, 0x63, 0x65, 0x69, 0x70,
-	0x74, 0x12, 0x1b, 0x0a, 0x09, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x49, 0x64, 0x12, 0x40,
-	0x0a, 0x08, 0x70, 0x6f, 0x73, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b,
-	0x32, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f,
-	0x72, 0x61, 0x67, 0x65, 0x2e, 0x43, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x50, 0x6f,
-	0x73, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x52, 0x08, 0x70, 0x6f, 0x73, 0x69, 0x74, 0x69, 0x6f, 0x6e,
-	0x12, 0x1f, 0x0a, 0x0b, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x5f, 0x72, 0x65, 0x61, 0x64, 0x79, 0x18,
-	0x03, 0x20, 0x01, 0x28, 0x08, 0x52, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x52, 0x65, 0x61, 0x64,
-	0x79, 0x12, 0x1d, 0x0a, 0x0a, 0x77, 0x72, 0x69, 0x74, 0x65, 0x5f, 0x6b, 0x69, 0x6e, 0x64, 0x18,
-	0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x77, 0x72, 0x69, 0x74, 0x65, 0x4b, 0x69, 0x6e, 0x64,
 	0x22, 0xfe, 0x03, 0x0a, 0x1e, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x50, 0x65,
 	0x72, 0x69, 0x6f, 0x64, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x4d, 0x61, 0x72,
 	0x6b, 0x65, 0x72, 0x12, 0x1d, 0x0a, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69,
@@ -930,32 +848,30 @@ func file_dataset_markers_proto_rawDescGZIP() []byte {
 	return file_dataset_markers_proto_rawDescData
 }
 
-var file_dataset_markers_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_dataset_markers_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_dataset_markers_proto_goTypes = []interface{}{
 	(*CommittedPosition)(nil),              // 0: trpc.moox.storage.CommittedPosition
-	(*WriteReceipt)(nil),                   // 1: trpc.moox.storage.WriteReceipt
-	(*CollectorPeriodCompletedMarker)(nil), // 2: trpc.moox.storage.CollectorPeriodCompletedMarker
-	(*FactorPeriodState)(nil),              // 3: trpc.moox.storage.FactorPeriodState
-	(*FactorPeriodComputedMarker)(nil),     // 4: trpc.moox.storage.FactorPeriodComputedMarker
-	(*DatasetSyncPointMarker)(nil),         // 5: trpc.moox.storage.DatasetSyncPointMarker
-	(*ViewPeriodDatasetState)(nil),         // 6: trpc.moox.storage.ViewPeriodDatasetState
-	(*ViewSyncPoint)(nil),                  // 7: trpc.moox.storage.ViewSyncPoint
-	(*timestamppb.Timestamp)(nil),          // 8: google.protobuf.Timestamp
+	(*CollectorPeriodCompletedMarker)(nil), // 1: trpc.moox.storage.CollectorPeriodCompletedMarker
+	(*FactorPeriodState)(nil),              // 2: trpc.moox.storage.FactorPeriodState
+	(*FactorPeriodComputedMarker)(nil),     // 3: trpc.moox.storage.FactorPeriodComputedMarker
+	(*DatasetSyncPointMarker)(nil),         // 4: trpc.moox.storage.DatasetSyncPointMarker
+	(*ViewPeriodDatasetState)(nil),         // 5: trpc.moox.storage.ViewPeriodDatasetState
+	(*ViewSyncPoint)(nil),                  // 6: trpc.moox.storage.ViewSyncPoint
+	(*timestamppb.Timestamp)(nil),          // 7: google.protobuf.Timestamp
 }
 var file_dataset_markers_proto_depIdxs = []int32{
-	0, // 0: trpc.moox.storage.WriteReceipt.position:type_name -> trpc.moox.storage.CommittedPosition
-	0, // 1: trpc.moox.storage.CollectorPeriodCompletedMarker.committed_positions:type_name -> trpc.moox.storage.CommittedPosition
-	8, // 2: trpc.moox.storage.CollectorPeriodCompletedMarker.collected_at:type_name -> google.protobuf.Timestamp
-	3, // 3: trpc.moox.storage.FactorPeriodComputedMarker.factors:type_name -> trpc.moox.storage.FactorPeriodState
-	8, // 4: trpc.moox.storage.FactorPeriodComputedMarker.computed_at:type_name -> google.protobuf.Timestamp
-	8, // 5: trpc.moox.storage.ViewPeriodDatasetState.occurred_at:type_name -> google.protobuf.Timestamp
-	8, // 6: trpc.moox.storage.ViewPeriodDatasetState.updated_at:type_name -> google.protobuf.Timestamp
-	8, // 7: trpc.moox.storage.ViewSyncPoint.applied_at:type_name -> google.protobuf.Timestamp
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	0, // 0: trpc.moox.storage.CollectorPeriodCompletedMarker.committed_positions:type_name -> trpc.moox.storage.CommittedPosition
+	7, // 1: trpc.moox.storage.CollectorPeriodCompletedMarker.collected_at:type_name -> google.protobuf.Timestamp
+	2, // 2: trpc.moox.storage.FactorPeriodComputedMarker.factors:type_name -> trpc.moox.storage.FactorPeriodState
+	7, // 3: trpc.moox.storage.FactorPeriodComputedMarker.computed_at:type_name -> google.protobuf.Timestamp
+	7, // 4: trpc.moox.storage.ViewPeriodDatasetState.occurred_at:type_name -> google.protobuf.Timestamp
+	7, // 5: trpc.moox.storage.ViewPeriodDatasetState.updated_at:type_name -> google.protobuf.Timestamp
+	7, // 6: trpc.moox.storage.ViewSyncPoint.applied_at:type_name -> google.protobuf.Timestamp
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_dataset_markers_proto_init() }
@@ -977,18 +893,6 @@ func file_dataset_markers_proto_init() {
 			}
 		}
 		file_dataset_markers_proto_msgTypes[1].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*WriteReceipt); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_dataset_markers_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*CollectorPeriodCompletedMarker); i {
 			case 0:
 				return &v.state
@@ -1000,7 +904,7 @@ func file_dataset_markers_proto_init() {
 				return nil
 			}
 		}
-		file_dataset_markers_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
+		file_dataset_markers_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*FactorPeriodState); i {
 			case 0:
 				return &v.state
@@ -1012,7 +916,7 @@ func file_dataset_markers_proto_init() {
 				return nil
 			}
 		}
-		file_dataset_markers_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
+		file_dataset_markers_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*FactorPeriodComputedMarker); i {
 			case 0:
 				return &v.state
@@ -1024,7 +928,7 @@ func file_dataset_markers_proto_init() {
 				return nil
 			}
 		}
-		file_dataset_markers_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
+		file_dataset_markers_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*DatasetSyncPointMarker); i {
 			case 0:
 				return &v.state
@@ -1036,7 +940,7 @@ func file_dataset_markers_proto_init() {
 				return nil
 			}
 		}
-		file_dataset_markers_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
+		file_dataset_markers_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ViewPeriodDatasetState); i {
 			case 0:
 				return &v.state
@@ -1048,7 +952,7 @@ func file_dataset_markers_proto_init() {
 				return nil
 			}
 		}
-		file_dataset_markers_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
+		file_dataset_markers_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ViewSyncPoint); i {
 			case 0:
 				return &v.state
@@ -1067,7 +971,7 @@ func file_dataset_markers_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_dataset_markers_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

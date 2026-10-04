@@ -42,11 +42,6 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 			}
 			fieldIDs[field.GetFieldId()] = struct{}{}
 		}
-		for name := range row.GetAttributes() {
-			if reservedWriteAttribute(name) {
-				return 0, invalidf("factor result cannot write reserved attribute %q", name)
-			}
-		}
 	}
 
 	normalized, err := s.normalizeWriteRows(ctx, rows)
@@ -84,16 +79,16 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 		}
 		return uint64(len(normalized)), nil
 	}
-	var receipt *WriteReceipt
+	var receipt *commitReceipt
 	entries, err := s.writeFieldsEventLocked(ctx, normalized, "", func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return BuildDatasetRowsUpsertedMessageWithKind(s.nodeID, "", WriteKindFactorResult, spaceID, datasetID, rows)
 	}, func(batch *cpebble.Batch, entries []*OutboxEntry) error {
 		if len(entries) != 1 {
 			return errors.New("factor result write requires one outbox position")
 		}
-		receipt = &WriteReceipt{
+		receipt = &commitReceipt{
 			CommitID: commitID, SpaceID: spaceID, DatasetID: datasetID,
-			Position:  WritePosition{NodeID: s.nodeID, StoreID: s.sourceStoreID, Sequence: entries[0].ID},
+			Position:  commitPosition{NodeID: s.nodeID, StoreID: s.sourceStoreID, Sequence: entries[0].ID},
 			WriteKind: WriteKindFactorResult,
 		}
 		return persistReceipt(batch, s.writeOptions, receipt, fingerprint)

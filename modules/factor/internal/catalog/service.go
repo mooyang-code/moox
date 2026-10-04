@@ -24,7 +24,11 @@ type SourceChecker interface {
 // RecalcSubmitter durably accepts an initial historical backfill before the
 // factor becomes visible to live triggers.
 type RecalcSubmitter interface {
-	Submit(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef, start, end time.Time) error
+	PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, factor domain.FactorDef, start, end time.Time) (store.RecalcJob, error)
+}
+
+type EarliestPeriodProvider interface {
+	EarliestDatasetPeriod(ctx context.Context, spaceID, datasetID, freq string) (time.Time, bool, error)
 }
 
 // Notifier refreshes the trigger's set filters after catalog changes.
@@ -35,11 +39,15 @@ type Notifier interface {
 type Option func(*Service)
 
 func WithFactorsDir(path string) Option { return func(s *Service) { s.artifacts.FactorsDir = path } }
+func WithLockDir(path string) Option    { return func(s *Service) { s.locks = NewLocks(path) } }
 func WithSourceChecker(checker SourceChecker) Option {
 	return func(s *Service) { s.sourceChecker = checker }
 }
 func WithRecalcSubmitter(submitter RecalcSubmitter) Option {
 	return func(s *Service) { s.recalc = submitter }
+}
+func WithEarliestPeriodProvider(provider EarliestPeriodProvider) Option {
+	return func(s *Service) { s.earliestPeriod = provider }
 }
 func WithNotifier(notifier Notifier) Option { return func(s *Service) { s.notifier = notifier } }
 func WithClock(now func() time.Time) Option {
@@ -52,18 +60,19 @@ func WithClock(now func() time.Time) Option {
 
 // Service coordinates local factor definitions with Storage metadata.
 type Service struct {
-	db            *store.Store
-	metadata      storageio.Metadata
-	sourceChecker SourceChecker
-	recalc        RecalcSubmitter
-	notifier      Notifier
-	artifacts     Artifacts
-	locks         Locks
-	now           func() time.Time
+	db             *store.Store
+	metadata       storageio.Metadata
+	sourceChecker  SourceChecker
+	recalc         RecalcSubmitter
+	earliestPeriod EarliestPeriodProvider
+	notifier       Notifier
+	artifacts      Artifacts
+	locks          *Locks
+	now            func() time.Time
 }
 
 func NewService(db *store.Store, metadata storageio.Metadata, options ...Option) *Service {
-	s := &Service{db: db, metadata: metadata, now: time.Now}
+	s := &Service{db: db, metadata: metadata, now: time.Now, locks: NewLocks("")}
 	for _, option := range options {
 		if option != nil {
 			option(s)
@@ -73,7 +82,7 @@ func NewService(db *store.Store, metadata storageio.Metadata, options ...Option)
 }
 
 // Locks exposes the per-set locks shared with live pipeline and recalculation.
-func (s *Service) Locks() *Locks { return &s.locks }
+func (s *Service) Locks() *Locks { return s.locks }
 
 func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.FactorSet, error) {
 	if s == nil || s.db == nil || s.metadata == nil {
@@ -106,13 +115,19 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 	if err := domain.ValidateSet(in); err != nil {
 		return domain.FactorSet{}, err
 	}
-	unlock := s.locks.Lock(in.SetID)
+	unlock, err := s.locks.LockContext(ctx, in.SetID)
+	if err != nil {
+		return domain.FactorSet{}, err
+	}
 	defer unlock()
 	existing, err := s.db.GetSet(ctx, in.SetID)
 	newSet := errors.Is(err, gorm.ErrRecordNotFound)
 	if err == nil {
 		if err := sameSetIdentity(existing, in); err != nil {
 			return domain.FactorSet{}, err
+		}
+		if existing.Status == domain.SetStatusDeleting {
+			return domain.FactorSet{}, errors.New("factor set purge is pending")
 		}
 		if existing.Status != domain.SetStatusPending {
 			return existing, nil
@@ -146,7 +161,10 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 }
 
 func (s *Service) UpdateSetSubjects(ctx context.Context, setID, mode string, subjects []string) (domain.FactorSet, error) {
-	unlock := s.locks.Lock(strings.TrimSpace(setID))
+	unlock, err := s.locks.LockContext(ctx, strings.TrimSpace(setID))
+	if err != nil {
+		return domain.FactorSet{}, err
+	}
 	defer unlock()
 	set, err := s.db.GetSet(ctx, setID)
 	if err != nil {
@@ -154,6 +172,9 @@ func (s *Service) UpdateSetSubjects(ctx context.Context, setID, mode string, sub
 	}
 	if set.Status == domain.SetStatusPending {
 		return domain.FactorSet{}, errors.New("pending factor set cannot be updated")
+	}
+	if set.Status == domain.SetStatusDeleting {
+		return domain.FactorSet{}, errors.New("factor set purge is pending")
 	}
 	set.SubjectMode, set.Subjects = mode, append([]string(nil), subjects...)
 	if set.Subjects == nil {
@@ -171,7 +192,10 @@ func (s *Service) UpdateSetSubjects(ctx context.Context, setID, mode string, sub
 
 func (s *Service) SetSetStatus(ctx context.Context, setID, status string) (domain.FactorSet, error) {
 	setID = strings.TrimSpace(setID)
-	unlock := s.locks.Lock(setID)
+	unlock, err := s.locks.LockContext(ctx, setID)
+	if err != nil {
+		return domain.FactorSet{}, err
+	}
 	defer unlock()
 	set, err := s.db.GetSet(ctx, setID)
 	if err != nil {
@@ -179,6 +203,9 @@ func (s *Service) SetSetStatus(ctx context.Context, setID, status string) (domai
 	}
 	if status != domain.SetStatusEnabled && status != domain.SetStatusDisabled {
 		return domain.FactorSet{}, fmt.Errorf("status must be %q or %q", domain.SetStatusEnabled, domain.SetStatusDisabled)
+	}
+	if set.Status == domain.SetStatusDeleting {
+		return domain.FactorSet{}, errors.New("factor set purge is pending")
 	}
 	if set.Status == status {
 		return set, nil
@@ -200,13 +227,16 @@ func (s *Service) SetSetStatus(ctx context.Context, setID, status string) (domai
 
 func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error {
 	setID = strings.TrimSpace(setID)
-	unlock := s.locks.Lock(setID)
+	unlock, err := s.locks.LockContext(ctx, setID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	set, err := s.db.GetSet(ctx, setID)
 	if err != nil {
 		return err
 	}
-	if set.Status != domain.SetStatusDisabled {
+	if set.Status != domain.SetStatusDisabled && !(purge && set.Status == domain.SetStatusDeleting) {
 		return errors.New("factor set must be disabled before deletion")
 	}
 	factors, err := s.db.ListFactors(ctx, setID, "")
@@ -219,6 +249,11 @@ func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error
 	if purge {
 		if s.metadata == nil {
 			return errors.New("Storage metadata is required to purge the result dataset")
+		}
+		if set.Status != domain.SetStatusDeleting {
+			if err := s.db.SetSetStatus(ctx, set.SetID, domain.SetStatusDisabled, domain.SetStatusDeleting); err != nil {
+				return fmt.Errorf("persist factor result purge intent: %w", err)
+			}
 		}
 		if err := s.metadata.DeleteDataset(ctx, set.SpaceID, set.ResultDatasetID); err != nil {
 			return fmt.Errorf("delete factor result dataset: %w", err)
@@ -249,7 +284,10 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	unlock := s.locks.Lock(set.SetID)
+	unlock, err := s.locks.LockContext(ctx, set.SetID)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
 	defer unlock()
 	set, err = s.db.GetSet(ctx, set.SetID)
 	if err != nil {
@@ -257,6 +295,9 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 	}
 	if set.Status == domain.SetStatusPending {
 		return domain.FactorDef{}, errors.New("factor set is not ready")
+	}
+	if set.Status == domain.SetStatusDeleting {
+		return domain.FactorDef{}, errors.New("factor set purge is pending")
 	}
 	if in.Status != "" && in.Status != domain.FactorStatusDisabled {
 		return domain.FactorDef{}, errors.New("new factor definitions must be disabled")
@@ -291,7 +332,10 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	unlock := s.locks.Lock(initial.SetID)
+	unlock, err := s.locks.LockContext(ctx, initial.SetID)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
 	defer unlock()
 	existing, err := s.db.GetFactor(ctx, in.FactorID)
 	if err != nil {
@@ -317,6 +361,9 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 	set, err := s.db.GetSet(ctx, existing.SetID)
 	if err != nil {
 		return domain.FactorDef{}, err
+	}
+	if set.Status == domain.SetStatusDeleting {
+		return domain.FactorDef{}, errors.New("factor set purge is pending")
 	}
 	if set.Status == domain.SetStatusPending {
 		return domain.FactorDef{}, errors.New("factor set is not ready")
@@ -346,7 +393,10 @@ func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) 
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	unlock := s.locks.Lock(initial.SetID)
+	unlock, err := s.locks.LockContext(ctx, initial.SetID)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
 	defer unlock()
 	factor, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
@@ -354,6 +404,13 @@ func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) 
 	}
 	if factor.SetID != initial.SetID {
 		return domain.FactorDef{}, errors.New("factor set changed while waiting for its lifecycle lock")
+	}
+	set, err := s.db.GetSet(ctx, factor.SetID)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
+	if set.Status == domain.SetStatusDeleting {
+		return domain.FactorDef{}, errors.New("factor set purge is pending")
 	}
 	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
 		return domain.FactorDef{}, fmt.Errorf("status must be %q or %q", domain.FactorStatusEnabled, domain.FactorStatusDisabled)
@@ -370,10 +427,6 @@ func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) 
 		}
 		s.notify()
 		return s.db.GetFactor(ctx, factor.FactorID)
-	}
-	set, err := s.db.GetSet(ctx, factor.SetID)
-	if err != nil {
-		return domain.FactorDef{}, err
 	}
 	if set.Status == domain.SetStatusPending {
 		return domain.FactorDef{}, errors.New("factor set is not ready")
@@ -406,14 +459,15 @@ func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) 
 	if err := s.ensureResultColumns(ctx, set, source, columns, activeFactors...); err != nil {
 		return domain.FactorDef{}, err
 	}
-	// Submit persists the backfill intent before the factor becomes visible to
-	// live triggers. A crash after Submit is recoverable from the accepted job;
-	// a Submit error leaves the factor disabled.
-	if err := s.recalc.Submit(ctx, set, []domain.FactorDef{factor}, start, end); err != nil {
-		return domain.FactorDef{}, fmt.Errorf("submit factor backfill: %w", err)
+	// Persist the accepted backfill and expose the factor in one SQLite
+	// transaction so neither the worker nor live triggers can observe half of
+	// the activation.
+	job, err := s.recalc.PrepareEnableBackfill(ctx, set, factor, start, end)
+	if err != nil {
+		return domain.FactorDef{}, fmt.Errorf("prepare factor backfill: %w", err)
 	}
 	if factor.Status != domain.FactorStatusEnabled {
-		if err := s.db.SetFactorStatus(ctx, factor.FactorID, factor.Status, domain.FactorStatusEnabled); err != nil {
+		if _, err := s.db.EnableFactorWithRecalcJob(ctx, factor.FactorID, factor.Status, job); err != nil {
 			return domain.FactorDef{}, err
 		}
 		factor.Status = domain.FactorStatusEnabled
@@ -427,7 +481,10 @@ func (s *Service) DeleteFactor(ctx context.Context, factorID string) error {
 	if err != nil {
 		return err
 	}
-	unlock := s.locks.Lock(initial.SetID)
+	unlock, err := s.locks.LockContext(ctx, initial.SetID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	factor, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
@@ -435,6 +492,13 @@ func (s *Service) DeleteFactor(ctx context.Context, factorID string) error {
 	}
 	if factor.SetID != initial.SetID {
 		return errors.New("factor set changed while waiting for its lifecycle lock")
+	}
+	set, err := s.db.GetSet(ctx, factor.SetID)
+	if err != nil {
+		return err
+	}
+	if set.Status == domain.SetStatusDeleting {
+		return errors.New("factor set purge is pending")
 	}
 	if factor.Status != domain.FactorStatusDisabled {
 		return errors.New("factor must be disabled before deletion")
@@ -506,18 +570,45 @@ func (s *Service) backfillWindow(ctx context.Context, set domain.FactorSet) (tim
 	keepDuration := strings.TrimSpace(dataset.KeepDuration)
 	switch keepDuration {
 	case "0":
-		start = time.Unix(0, 0).UTC()
+		if s.earliestPeriod == nil {
+			return time.Time{}, time.Time{}, errors.New("earliest source period provider is required for unlimited retention backfill")
+		}
+		var found bool
+		start, found, err = s.earliestPeriod.EarliestDatasetPeriod(ctx, set.SpaceID, set.SourceDatasetID, set.Freq)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("find earliest source period: %w", err)
+		}
+		if found {
+			start = floorPeriod(start, periodSeconds)
+		} else {
+			// An empty source has no historical range to backfill. Keep the
+			// accepted job bounded to the most recent completed period.
+			start = end.Add(-duration)
+		}
 	default:
 		keep, parseErr := time.ParseDuration(keepDuration)
 		if parseErr != nil || keep <= 0 {
 			return time.Time{}, time.Time{}, fmt.Errorf("invalid result dataset keep_duration %q", keepDuration)
 		}
 		start = now.Add(-keep)
+		start = floorPeriod(start, periodSeconds)
+	}
+	if _, err := clock.Align(start, set.Freq); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("align factor backfill start: %w", err)
 	}
 	if !start.Before(end) {
 		return time.Time{}, time.Time{}, errors.New("factor backfill window is empty")
 	}
 	return start, end, nil
+}
+
+func floorPeriod(value time.Time, periodSeconds int64) time.Time {
+	seconds := value.Unix()
+	remainder := seconds % periodSeconds
+	if remainder < 0 {
+		remainder += periodSeconds
+	}
+	return time.Unix(seconds-remainder, 0).UTC()
 }
 
 func (s *Service) notify() {

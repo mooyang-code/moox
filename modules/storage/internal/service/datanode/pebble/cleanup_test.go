@@ -101,7 +101,7 @@ func TestDeleteDatasetRowsRemovesReceiptsMarkersAndOutbox(t *testing.T) {
 	}
 	defer store.Close()
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "delete-me", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	if _, err := store.CommitInput(context.Background(), InputCommit{CommitID: "receipt-1", RequiredFields: []string{"close"}, Row: &pb.RowFieldUpsert{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}, WriteKind: WriteKindInputCommit}); err != nil {
+	if _, err := store.WriteFactorRows(context.Background(), "s", "delete-me", "receipt-1", []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	marker, _, err := BuildCollectorPeriodCompletedMessage("s", &pb.CollectorPeriodCompletedMarker{DatasetId: "delete-me", Frequency: "1m", PeriodTime: 1, Status: "complete", BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "scope-1", CollectedAt: timestamppb.New(time.Unix(1, 0))})
@@ -117,8 +117,8 @@ func TestDeleteDatasetRowsRemovesReceiptsMarkersAndOutbox(t *testing.T) {
 	if _, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.LookupWriteReceipt(context.Background(), "receipt-1"); err == nil {
-		t.Fatal("write receipt survived dataset deletion")
+	if receipt, _, err := store.loadReceiptLocked("receipt-1"); err != nil || receipt != nil {
+		t.Fatalf("write receipt survived dataset deletion: receipt=%v err=%v", receipt, err)
 	}
 	if entries, err := store.ListOutbox(context.Background(), 0, 20); err != nil || len(entries) != 0 {
 		t.Fatalf("outbox after cleanup entries=%d err=%v", len(entries), err)

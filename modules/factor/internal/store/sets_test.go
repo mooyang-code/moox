@@ -36,6 +36,17 @@ func testFactorDef(factorID, status string) domain.FactorDef {
 	}
 }
 
+func TestCreateFactorsRollsBackCatalogImportOnConflict(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
+	factor := testFactorDef("factor_close", domain.FactorStatusDisabled)
+	err := s.CreateFactors(ctx, []domain.FactorDef{factor, factor})
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = s.GetFactor(ctx, factor.FactorID)
+	require.Error(t, err)
+}
+
 func TestCreateSetRejectsDuplicateSourceFreq(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

@@ -125,7 +125,7 @@ func TestInventoryReconcilerBindsDynamicDatasetAndPublishesRouteReadyOnce(t *tes
 	}}}
 	primary := &syncPointAppenderFake{}
 	var specs []dynamicDatasetConsumerSpec
-	reconciler := newInventoryReconcilerForTest(metadata, primary, []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m"}}, func(_ context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
+	reconciler := newInventoryReconcilerForTest(metadata, primary, []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m"}}, func(_ context.Context, spec dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
 		specs = append(specs, spec)
 		return &dynamicDatasetConsumerBinding{partitionID: spec.partitionID, durable: spec.durable}, nil
 	})
@@ -231,9 +231,9 @@ func TestInventoryReconcilerRetriesRouteReadyAndStopsRemovedDataset(t *testing.T
 }
 
 func TestInventoryReconcilerLeavesExactRoutesOnSharedConsumers(t *testing.T) {
-	metadata := &inventoryMetadataFake{views: []*pb.View{{SpaceId: "crypto", ViewId: "kline_view", Status: "active", DatasetId: "dataset_binance_spot_kline_1m"}}}
+	metadata := &inventoryMetadataFake{views: []*pb.View{{SpaceId: "crypto", ViewId: "kline_view", Status: "active", DatasetId: "dataset_binance_kline_1m"}}}
 	binds := 0
-	reconciler := newInventoryReconcilerForTest(metadata, &syncPointAppenderFake{}, []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m"}}, func(context.Context, dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
+	reconciler := newInventoryReconcilerForTest(metadata, &syncPointAppenderFake{}, []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m"}}, func(context.Context, dynamicDatasetConsumerSpec) (*dynamicDatasetConsumerBinding, error) {
 		binds++
 		return nil, nil
 	})
@@ -284,7 +284,7 @@ func TestInventoryReconcilerKeepsExactRouteOutsideWildcardSpace(t *testing.T) {
 
 func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 	opts := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{
-		{PartitionID: "kline", Consumer: "storage_view_kline", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_spot_kline_1m"}}},
+		{PartitionID: "kline", Consumer: "storage_view_kline", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m"}}},
 		{PartitionID: "factor", Consumer: "storage_view_factor", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}}},
 		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}, {SpaceID: "crypto", DatasetID: "*"}}},
 	}}
@@ -292,7 +292,7 @@ func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := exact[datasetRef{spaceID: "crypto", datasetID: "dataset_binance_spot_kline_1m"}]; !ok {
+	if _, ok := exact[datasetRef{spaceID: "crypto", datasetID: "dataset_binance_kline_1m"}]; !ok {
 		t.Fatalf("static kline route missing from exact set: %#v", exact)
 	}
 	if _, ok := exact[datasetRef{spaceID: "stockcn", datasetID: "stock_kline"}]; ok {

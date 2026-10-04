@@ -123,6 +123,86 @@ func TestDeleteSetKeepsResultDatasetUnlessPurging(t *testing.T) {
 	}
 }
 
+func TestReconcileResumesDurableResultDatasetPurge(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	set, err := svc.CreateSet(context.Background(), newSet())
+	require.NoError(t, err)
+	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
+	meta.deleteErrs = 1
+
+	err = svc.DeleteSet(context.Background(), set.SetID, true)
+	require.ErrorContains(t, err, "temporary metadata failure")
+	pending, err := db.GetSet(context.Background(), set.SetID)
+	require.NoError(t, err)
+	require.Equal(t, domain.SetStatusDeleting, pending.Status)
+	_, err = svc.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled)
+	require.ErrorContains(t, err, "purge is pending")
+	_, err = svc.CreateFactor(context.Background(), testFactor())
+	require.ErrorContains(t, err, "purge is pending")
+
+	// Reconcile runs at startup and periodically. It resumes after failures at
+	// any point after the durable intent, including a crash after physical purge.
+	require.NoError(t, svc.Reconcile(context.Background()))
+	_, err = db.GetSet(context.Background(), set.SetID)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = meta.GetDataset(context.Background(), set.SpaceID, set.ResultDatasetID)
+	require.Error(t, err)
+}
+
+func TestDeletingSetRejectsLifecycleMutation(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	set, err := svc.CreateSet(context.Background(), newSet())
+	require.NoError(t, err)
+	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
+	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusDisabled, domain.SetStatusDeleting))
+
+	retry := set
+	retry.Status = domain.SetStatusPending
+	_, err = svc.CreateSet(context.Background(), retry)
+	require.ErrorContains(t, err, "purge is pending")
+	_, err = svc.UpdateSetSubjects(context.Background(), set.SetID, domain.SubjectModeInclude, []string{"BTC"})
+	require.ErrorContains(t, err, "purge is pending")
+	_, err = svc.SetSetStatus(context.Background(), set.SetID, domain.SetStatusDisabled)
+	require.ErrorContains(t, err, "purge is pending")
+	_, err = svc.CreateFactor(context.Background(), testFactor())
+	require.ErrorContains(t, err, "purge is pending")
+
+	// Even if an invariant-breaking writer inserted a member, factor mutations
+	// still cannot alter the pending purge into an enabled or stuck state.
+	factor := testFactor()
+	factor.Status = domain.FactorStatusDisabled
+	require.NoError(t, db.CreateFactor(context.Background(), factor))
+	_, err = svc.UpdateFactor(context.Background(), factor)
+	require.ErrorContains(t, err, "purge is pending")
+	_, err = svc.SetFactorStatus(context.Background(), factor.FactorID, domain.FactorStatusDisabled)
+	require.ErrorContains(t, err, "purge is pending")
+	err = svc.DeleteFactor(context.Background(), factor.FactorID)
+	require.ErrorContains(t, err, "purge is pending")
+	stored, err := db.GetSet(context.Background(), set.SetID)
+	require.NoError(t, err)
+	require.Equal(t, domain.SetStatusDeleting, stored.Status)
+}
+
+func TestReconcileFinishesPurgeAfterStorageMetadataWasAlreadyDeleted(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	set, err := svc.CreateSet(context.Background(), newSet())
+	require.NoError(t, err)
+	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
+	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusDisabled, domain.SetStatusDeleting))
+	// Models process death after Storage's metadata commit and before the local
+	// Factor set row is removed. DeleteDataset is idempotent for the retry.
+	require.NoError(t, meta.DeleteDataset(context.Background(), set.SpaceID, set.ResultDatasetID))
+	require.NoError(t, svc.Reconcile(context.Background()))
+	_, err = db.GetSet(context.Background(), set.SetID)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
 func TestCreateFactorValidatesAgainstSourceColumnsAndLoadsSource(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
@@ -170,7 +250,7 @@ func TestEnableFactorAddsColumnsThenSubmitsRecalc(t *testing.T) {
 	require.Equal(t, []string{"disabled"}, recalc.order)
 	require.Equal(t, domain.SetID("dataset_prices", "1m"), recalc.set.SetID)
 	require.Equal(t, []string{"momentum"}, factorIDs(recalc.factors))
-	require.Equal(t, now.Add(-720*time.Hour), recalc.start)
+	require.Equal(t, time.Date(2026, 9, 4, 10, 3, 0, 0, time.UTC), recalc.start)
 	require.Equal(t, time.Date(2026, 10, 4, 10, 3, 0, 0, time.UTC), recalc.end)
 	var output storageio.ColumnInfo
 	for _, col := range meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))] {
@@ -182,6 +262,46 @@ func TestEnableFactorAddsColumnsThenSubmitsRecalc(t *testing.T) {
 	require.Equal(t, map[string]string{
 		"display_name": "momentum", "factor_output": "momentum", "origin_factor_id": "momentum",
 	}, output.Attributes)
+}
+
+func TestUnlimitedRetentionBackfillStartsAtEarliestSourcePeriod(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	now := time.Date(2026, 10, 4, 10, 3, 37, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	set, err := db.GetSet(context.Background(), domain.SetID("dataset_prices", "1m"))
+	require.NoError(t, err)
+	result := meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)]
+	result.KeepDuration = "0"
+	meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)] = result
+	earliest := time.Date(2025, 1, 2, 3, 4, 25, 0, time.UTC)
+	provider := &earliestPeriodFake{period: earliest, found: true}
+	svc.earliestPeriod = provider
+
+	start, end, err := svc.backfillWindow(context.Background(), set)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2025, 1, 2, 3, 4, 0, 0, time.UTC), start)
+	require.Equal(t, time.Date(2026, 10, 4, 10, 3, 0, 0, time.UTC), end)
+	require.Equal(t, set.SpaceID, provider.spaceID)
+	require.Equal(t, set.SourceDatasetID, provider.datasetID)
+	require.Equal(t, set.Freq, provider.freq)
+}
+
+func TestUnlimitedRetentionWithoutSourceRowsUsesOneCompletedPeriod(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	set, err := db.GetSet(context.Background(), domain.SetID("dataset_prices", "1m"))
+	require.NoError(t, err)
+	result := meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)]
+	result.KeepDuration = "0"
+	meta.datasets[resultKey(set.SpaceID, set.ResultDatasetID)] = result
+	svc.earliestPeriod = &earliestPeriodFake{}
+
+	start, end, err := svc.backfillWindow(context.Background(), set)
+	require.NoError(t, err)
+	require.Equal(t, end.Add(-time.Minute), start)
 }
 
 func TestEnableFactorSubmitFailureLeavesFactorDisabled(t *testing.T) {
@@ -279,6 +399,21 @@ func TestReconcileSetAddsNewSourceColumns(t *testing.T) {
 	require.NoError(t, svc.ReconcileSet(context.Background(), domain.SetID("dataset_prices", "1m")))
 	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
 	require.ElementsMatch(t, []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume")}, meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))])
+}
+
+func TestReconcileRestoresMissingFactorArtifactsFromSQLite(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	factor, err := svc.CreateFactor(context.Background(), testFactor())
+	require.NoError(t, err)
+	path := filepath.Join(svc.artifacts.FactorsDir, factor.Name, factor.SourceHash+".py")
+	require.NoError(t, os.Remove(path))
+
+	require.NoError(t, svc.Reconcile(context.Background()))
+	restored, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, factor.SourceCode, string(restored))
 }
 
 func TestReconcileRejectsSourceColumnCollisionWithEnabledFactor(t *testing.T) {
@@ -459,6 +594,7 @@ type metadataFake struct {
 	createCalls            int
 	createdDatasets        int
 	activateErrs           int
+	deleteErrs             int
 	writeOps               []string
 }
 
@@ -561,6 +697,10 @@ func (f *metadataFake) DeleteDataset(_ context.Context, spaceID, datasetID strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writeOps = append(f.writeOps, "delete")
+	if f.deleteErrs > 0 {
+		f.deleteErrs--
+		return errors.New("temporary metadata failure")
+	}
 	delete(f.datasets, resultKey(spaceID, datasetID))
 	delete(f.columns, resultKey(spaceID, datasetID))
 	return nil
@@ -590,14 +730,31 @@ type recalcFake struct {
 	err     error
 }
 
-func (f *recalcFake) Submit(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef, start, end time.Time) error {
-	for _, factor := range factors {
-		stored, err := f.db.GetFactor(ctx, factor.FactorID)
-		if err != nil {
-			return err
-		}
-		f.order = append(f.order, stored.Status)
+type earliestPeriodFake struct {
+	period                   time.Time
+	found                    bool
+	err                      error
+	spaceID, datasetID, freq string
+}
+
+func (f *earliestPeriodFake) EarliestDatasetPeriod(_ context.Context, spaceID, datasetID, freq string) (time.Time, bool, error) {
+	f.spaceID, f.datasetID, f.freq = spaceID, datasetID, freq
+	return f.period, f.found, f.err
+}
+
+func (f *recalcFake) PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, factor domain.FactorDef, start, end time.Time) (store.RecalcJob, error) {
+	stored, err := f.db.GetFactor(ctx, factor.FactorID)
+	if err != nil {
+		return store.RecalcJob{}, err
 	}
-	f.set, f.factors, f.start, f.end = set, factors, start, end
-	return f.err
+	f.order = append(f.order, stored.Status)
+	f.set, f.factors, f.start, f.end = set, []domain.FactorDef{factor}, start, end
+	if f.err != nil {
+		return store.RecalcJob{}, f.err
+	}
+	return store.RecalcJob{
+		JobID: "enable-" + factor.FactorID, RequestID: "enable-" + factor.FactorID,
+		SetID: set.SetID, FactorIDs: []string{factor.FactorID}, Subjects: []string{"BTC-USDT"},
+		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
+	}, nil
 }

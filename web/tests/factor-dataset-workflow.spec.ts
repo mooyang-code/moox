@@ -6,13 +6,13 @@ const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: 
 let jobs: Array<Record<string, unknown>> = [];
 
 const factorSet = {
-  set_id: "factor_set_spot_1m",
+  set_id: "fset_binance_kline_1m",
   space_id: "crypto",
-  source_dataset_id: "dataset_binance_spot_kline_1m",
+  source_dataset_id: "dataset_binance_kline_1m",
   freq: "1m",
   subject_mode: "all",
   subjects: [],
-  result_dataset_id: "dataset_binance_spot_kline_1m_factor",
+  result_dataset_id: "dataset_factor_binance_kline_1m",
   status: "enabled"
 };
 
@@ -52,7 +52,7 @@ async function mockGateway(route: Route) {
         datasets: [
           {
             space_id: "crypto",
-            dataset_id: "dataset_binance_spot_kline_1m",
+            dataset_id: "dataset_binance_kline_1m",
             name: "现货K线",
             status: "active",
             freqs: ["1m"],
@@ -131,7 +131,7 @@ async function mockGateway(route: Route) {
   if (method === "ListViews") {
     return route.fulfill({
       json: ok({
-        views: [{ space_id: "crypto", view_id: "view_binance_spot_kline_1m_factor", name: "现货K线因子结果", dataset_id: factorSet.result_dataset_id, status: "active", attributes: { owner_module: "factor", view_role: "factor_result" } }],
+        views: [{ space_id: "crypto", view_id: "view_factor_binance_kline_1m", name: "现货K线因子结果", dataset_id: factorSet.result_dataset_id, status: "active", attributes: { owner_module: "factor", view_role: "factor_result" } }],
         page_result: { page: 1, size: 200, total: 1, has_more: false }
       })
     });
@@ -140,10 +140,10 @@ async function mockGateway(route: Route) {
     return route.fulfill({
       json: ok({
         columns: [
-          { view_id: "view_binance_spot_kline_1m_factor", column_name: "subject_id" },
-          { view_id: "view_binance_spot_kline_1m_factor", column_name: "data_time" },
-          { view_id: "view_binance_spot_kline_1m_factor", column_name: "close" },
-          { view_id: "view_binance_spot_kline_1m_factor", column_name: "bias_5", attributes: { origin_factor_id: "bias", factor_output: "bias_5" } }
+          { view_id: "view_factor_binance_kline_1m", column_name: "subject_id" },
+          { view_id: "view_factor_binance_kline_1m", column_name: "data_time" },
+          { view_id: "view_factor_binance_kline_1m", column_name: "close" },
+          { view_id: "view_factor_binance_kline_1m", column_name: "bias_5", attributes: { origin_factor_id: "bias", factor_output: "bias_5" } }
         ],
         page_result: { page: 1, size: 500, total: 4, has_more: false }
       })
@@ -166,7 +166,7 @@ test("factor sets scope definitions, results and async recalculation", async ({ 
   await page.goto("/#/factor/definitions");
   await expect(page.getByText("Bias")).toBeVisible();
   await page.goto("/#/factor/results");
-  await expect(page.getByText(`Storage 结果 View view_binance_spot_kline_1m_factor`)).toBeVisible();
+  await expect(page.getByText(`Storage 结果 View view_factor_binance_kline_1m`)).toBeVisible();
   await page.goto("/#/factor/tasks");
   await expect(page.getByText("实时消费运行中")).toBeVisible();
   await page.getByPlaceholder("留空自动生成").fill("recalc-e2e");

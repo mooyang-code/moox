@@ -19,15 +19,7 @@ func (n *factorDatasetAdminNode) UpsertFields(context.Context, *pb.UpsertFieldsR
 	return nil, nil
 }
 
-func (*factorDatasetAdminNode) CommitInput(context.Context, *pb.CommitInputReq) (*pb.CommitInputRsp, error) {
-	return nil, nil
-}
-
 func (*factorDatasetAdminNode) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	return nil, nil
-}
-
-func (*factorDatasetAdminNode) LookupWriteReceipt(context.Context, *pb.LookupWriteReceiptReq) (*pb.LookupWriteReceiptRsp, error) {
 	return nil, nil
 }
 
@@ -45,7 +37,7 @@ func (*factorDatasetAdminNode) GetNodeState(context.Context, *pb.GetNodeStateReq
 
 func (n *factorDatasetAdminNode) DeleteDatasetRows(_ context.Context, req *pb.DeleteDatasetRowsReq) (*pb.DeleteDatasetRowsRsp, error) {
 	n.deleted++
-	if req.GetDatasetId() != "dataset_factor_prices_1m" || req.GetAuthInfo().GetAppId() != "factor" {
+	if req.GetDatasetId() != "dataset_factor_prices_1m" || req.GetNodeId() != "factor-node" || req.GetAuthInfo().GetAppId() != "factor" {
 		return &pb.DeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("unexpected factor delete request"))}, nil
 	}
 	return &pb.DeleteDatasetRowsRsp{RetInfo: successRetInfo(), DeletedRanges: 1}, nil
@@ -53,7 +45,7 @@ func (n *factorDatasetAdminNode) DeleteDatasetRows(_ context.Context, req *pb.De
 
 func (n *factorDatasetAdminNode) RestoreDatasetRows(_ context.Context, req *pb.RestoreDatasetRowsReq) (*pb.RestoreDatasetRowsRsp, error) {
 	n.restored++
-	if req.GetDatasetId() != "dataset_factor_prices_1m" || req.GetAuthInfo().GetAppId() != "factor" {
+	if req.GetDatasetId() != "dataset_factor_prices_1m" || req.GetNodeId() != "factor-node" || req.GetAuthInfo().GetAppId() != "factor" {
 		return &pb.RestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("unexpected factor restore request"))}, nil
 	}
 	return &pb.RestoreDatasetRowsRsp{RetInfo: successRetInfo()}, nil

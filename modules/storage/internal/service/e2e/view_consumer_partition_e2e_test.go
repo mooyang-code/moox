@@ -32,7 +32,7 @@ func TestViewConsumerPartitionsKeepKlineIndependentFromMetrics(t *testing.T) {
 	auth := &storagegen.AuthInfo{AppId: "partition-e2e", AppKey: datanode.ServiceAuthKey("partition-secret", "partition-e2e")}
 	service.SetPrimaryAuth(auth)
 	service.SetPrimaryReader(concurrencyPrimaryReader{})
-	prepareConcurrencyView(t, ctx, service, auth, "dataset_binance_spot_kline_1m")
+	prepareConcurrencyView(t, ctx, service, auth, "dataset_binance_kline_1m")
 	prepareConcurrencyView(t, ctx, service, auth, "dataset_mooxsys_service_metrics")
 	prepareConcurrencyView(t, ctx, service, auth, "other_dataset")
 
@@ -88,7 +88,7 @@ func TestViewConsumerPartitionsKeepKlineIndependentFromMetrics(t *testing.T) {
 	}
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
 		PartitionConfigs: []viewservice.EventConsumerOptions{
-			{PartitionID: "kline", Consumer: events.StorageViewKlineConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "dataset_binance_spot_kline_1m"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
+			{PartitionID: "kline", Consumer: events.StorageViewKlineConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "dataset_binance_kline_1m"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
 			{PartitionID: "system_metrics", Consumer: events.StorageViewMetricsConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "dataset_mooxsys_service_metrics"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
 			{PartitionID: "misc", Consumer: events.StorageViewMiscConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "other_dataset"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
 		},
@@ -104,8 +104,8 @@ func TestViewConsumerPartitionsKeepKlineIndependentFromMetrics(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("metrics partition did not enter the blocked delivery")
 	}
-	publishPartitionRow(t, ctx, publisher, "quant", "dataset_binance_spot_kline_1m", "kline-1")
-	waitForConcurrencyRows(t, ctx, service, auth, "dataset_binance_spot_kline_1m")
+	publishPartitionRow(t, ctx, publisher, "quant", "dataset_binance_kline_1m", "kline-1")
+	waitForConcurrencyRows(t, ctx, service, auth, "dataset_binance_kline_1m")
 	publishPartitionRow(t, ctx, publisher, "quant", "other_dataset", "other-1")
 	waitForConcurrencyRows(t, ctx, service, auth, "other_dataset")
 	for _, durable := range []string{events.StorageViewKlineConsumer, events.StorageViewMiscConsumer} {

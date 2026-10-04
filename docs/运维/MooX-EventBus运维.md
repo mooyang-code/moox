@@ -24,7 +24,7 @@ CloudNode 作业队列由 CloudNode ensure，SCF worker 只能 bind。
 
 | 资源 | Subject/用途 | 容量边界 |
 | --- | --- | --- |
-| `MOOX_STORAGE` | `event.storage.dataset.rows.upserted` | 72 小时或 1 GiB |
+| `MOOX_STORAGE` | Dataset rows、Collector 周期完成、Factor 计算完成和 View 就绪事件 | 72 小时或 1 GiB |
 | `MOOX_METRICS` | 两类 metrics 事件 | 24 小时或 256 MiB |
 | `MOOX_CLOUDNODE_EXEC` | 云任务 work queue | 72 小时或 256 MiB |
 | `MOOX_TRADE` | Strategy session-scoped weight target work queue (`moox.event.trade.target.weight_requested.v1.>`) | 7 天或 256 MiB |
@@ -37,6 +37,12 @@ CloudNode 作业队列由 CloudNode ensure，SCF worker 只能 bind。
 
 事件名称、版本、payload、owner、Stream 和 subject family 由
 `packages/events/registry.go` 唯一声明。新项目不保留旧 Subject 兼容别名。
+
+Factor 的 durable consumer 为 `factor_collector_period_v1`，订阅已启用因子集对应的
+`CollectorPeriodCompleted` subject，采用 `DeliverNew` 和至少一次投递。默认最大未确认数为
+16，处理期间每 30 秒发送 InProgress；AckWait 根据最大周期预算加 1 分钟设置。Factor
+成功写完结果 Dataset 后再报告 `FactorPeriodComputed`，该标记与结果 rows 由 Storage 同一
+Dataset outbox 保序发布，View 随后发出 `ViewDataReady`。
 
 ## 积压和错误
 

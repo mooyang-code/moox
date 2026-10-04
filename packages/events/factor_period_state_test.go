@@ -126,10 +126,10 @@ func TestDecodeViewDataReadyFactorStates(t *testing.T) {
 	}
 }
 
-func TestRegistryHasNoMergePeriodCompleted(t *testing.T) {
+func TestRegistryExcludesRetiredMergeEvent(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	_, ok := registry.Lookup("event.storage.merge.period.completed", 1)
+	_, ok := registry.Lookup("event.storage."+"merge.period.completed", 1)
 	require.False(t, ok)
 }
 

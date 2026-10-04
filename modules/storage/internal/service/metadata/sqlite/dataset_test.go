@@ -49,6 +49,101 @@ func TestDatasetCreateDefaultsAndRequiresActiveDataNode(t *testing.T) {
 	}
 }
 
+func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+	if _, err := store.CreateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
+		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"}, KeepDuration: "0",
+		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateView(ctx, &pb.View{
+		SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result",
+		DatasetId: "dataset_factor_result", Engine: "duckdb", KeepDuration: "0", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+		FilterJson: `{"freq":"1H"}`, Attributes: map[string]string{
+			"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage", "primary_dataset_role": "factor_result",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteDataset(ctx, "space", "dataset_factor_result"); err != nil {
+		t.Fatalf("DeleteDataset() error = %v", err)
+	}
+	if _, err := store.GetDataset(ctx, "space", "dataset_factor_result"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetDataset() error = %v, want no rows", err)
+	}
+	if _, err := store.GetView(ctx, "space", "view_factor_result"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetView() error = %v, want no rows", err)
+	}
+}
+
+func TestDeleteDatasetRejectsReferencedOrdinaryDatasetWithoutDeletingView(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+	if _, err := store.CreateDataset(ctx, &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset-ordinary", DataSourceId: "source", DataNodeId: "node-a",
+		Name: "Ordinary", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateView(ctx, &pb.View{
+		SpaceId: "space", ViewId: "view-ordinary", Name: "Ordinary view", DatasetId: "dataset-ordinary", Engine: "duckdb",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteDataset(ctx, "space", "dataset-ordinary"); err == nil {
+		t.Fatal("DeleteDataset() succeeded while an ordinary View references the Dataset")
+	}
+	if _, err := store.GetDataset(ctx, "space", "dataset-ordinary"); err != nil {
+		t.Fatalf("Dataset was deleted after rejected request: %v", err)
+	}
+	if _, err := store.GetView(ctx, "space", "view-ordinary"); err != nil {
+		t.Fatalf("ordinary View was deleted after rejected request: %v", err)
+	}
+}
+
+func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+	dataset := &pb.Dataset{
+		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
+		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"1H"}, KeepDuration: "0",
+		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
+	}
+	if _, err := store.CreateDataset(ctx, dataset); err != nil {
+		t.Fatal(err)
+	}
+	managedAttrs := map[string]string{"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage", "primary_dataset_role": "factor_result"}
+	for _, view := range []*pb.View{
+		{
+			SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result", DatasetId: dataset.GetDatasetId(),
+			Engine: "duckdb", KeepDuration: "0", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+			FilterJson: `{"freq":"1H"}`, Attributes: managedAttrs,
+		},
+		{SpaceId: "space", ViewId: "view_factor_extra", Name: "Extra view", DatasetId: dataset.GetDatasetId(), Engine: "duckdb"},
+	} {
+		if _, err := store.CreateView(ctx, view); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.DeleteDataset(ctx, "space", dataset.GetDatasetId()); err == nil {
+		t.Fatal("DeleteDataset() succeeded while another View references the Dataset")
+	}
+	for _, viewID := range []string{"view_factor_result", "view_factor_extra"} {
+		if _, err := store.GetView(ctx, "space", viewID); err != nil {
+			t.Fatalf("View %s was deleted after rollback: %v", viewID, err)
+		}
+	}
+}
+
 func TestCollectorOwnedDatasetMayOmitDataSource(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)

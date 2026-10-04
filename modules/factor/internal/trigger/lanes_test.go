@@ -15,7 +15,7 @@ type laneTestLocks struct {
 	active map[string]int
 }
 
-func (l *laneTestLocks) Lock(setID string) func() {
+func (l *laneTestLocks) LockContext(_ context.Context, setID string) (func(), error) {
 	l.mu.Lock()
 	if l.active == nil {
 		l.active = make(map[string]int)
@@ -26,7 +26,7 @@ func (l *laneTestLocks) Lock(setID string) func() {
 		l.mu.Lock()
 		l.active[setID]--
 		l.mu.Unlock()
-	}
+	}, nil
 }
 
 func TestLanesSerialPerSetParallelAcrossSets(t *testing.T) {

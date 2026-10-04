@@ -6,12 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"google.golang.org/protobuf/proto"
 )
@@ -169,6 +167,8 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
+	unlockPublication := s.lockOutboxDatasetPublication(spaceID, datasetID)
+	defer unlockPublication()
 	// Stop history backfill and all writes while the dataset ranges are
 	// removed. Otherwise a concurrent write could repopulate the result after
 	// the metadata object has been deleted.
@@ -326,22 +326,16 @@ func (s *Store) stageDatasetPeriodCleanup(batch *cpebble.Batch, spaceID, dataset
 // survive a task result deletion.
 func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, datasetID string) (int, error) {
 	matchingOutbox := make(map[string]struct{})
-	sequenceDataset := make(map[uint64]bool)
 	outboxIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: nextPrefix([]byte(outboxPrefix))})
 	if err != nil {
 		return 0, err
 	}
 	for valid := outboxIter.First(); valid; valid = outboxIter.Next() {
-		id, parseErr := strconv.ParseUint(strings.TrimPrefix(string(outboxIter.Key()), outboxPrefix), 10, 64)
-		if parseErr != nil {
-			continue
-		}
 		message := &eventpb.EventMessage{}
 		if proto.Unmarshal(outboxIter.Value(), message) != nil {
 			continue
 		}
 		belongs := message.GetSpaceId() == spaceID && message.GetSubjectId() == datasetID
-		sequenceDataset[id] = belongs
 		if belongs {
 			key := append([]byte(nil), outboxIter.Key()...)
 			if err := batch.Delete(key, s.writeOptions); err != nil {
@@ -369,17 +363,6 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 			continue
 		}
 		belongs := stored.SpaceID == spaceID && stored.DatasetID == datasetID
-		if stored.SpaceID == "" && stored.DatasetID == "" {
-			belongs = sequenceDataset[stored.Sequence]
-			if !belongs {
-				inferredSpace, inferredDataset, inferErr := s.receiptDataset(strings.TrimPrefix(string(receiptIter.Key()), writeReceiptPrefix))
-				if inferErr != nil {
-					_ = receiptIter.Close()
-					return 0, inferErr
-				}
-				belongs = inferredSpace == spaceID && inferredDataset == datasetID
-			}
-		}
 		if !belongs {
 			continue
 		}
@@ -448,29 +431,6 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 		}
 	}
 	return len(matchingOutbox), nil
-}
-
-// receiptDataset recovers ownership for receipts written before SpaceID and
-// DatasetID were added to the persisted receipt. The fingerprint retains the
-// original RowFieldUpsert, so this also works after the relay has removed the
-// corresponding outbox entry.
-func (s *Store) receiptDataset(commitID string) (string, string, error) {
-	data, closer, err := s.db.Get([]byte(writeReceiptBodyPref + commitID))
-	if errors.Is(err, cpebble.ErrNotFound) {
-		return "", "", nil
-	}
-	if err != nil {
-		return "", "", err
-	}
-	body := append([]byte(nil), data...)
-	if err := closer.Close(); err != nil {
-		return "", "", err
-	}
-	row := &pb.RowFieldUpsert{}
-	if err := proto.Unmarshal(body, row); err != nil || row.GetKey() == nil {
-		return "", "", nil
-	}
-	return row.GetKey().GetSpaceId(), row.GetKey().GetDatasetId(), nil
 }
 
 // RestoreDatasetRows clears the deletion tombstone when a new task recreates

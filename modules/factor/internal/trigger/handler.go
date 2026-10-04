@@ -24,7 +24,7 @@ type PipelineRunner interface {
 }
 
 type SetLocks interface {
-	Lock(string) func()
+	LockContext(context.Context, string) (func(), error)
 }
 
 type HandlerConfig struct {
