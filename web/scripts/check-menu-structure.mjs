@@ -63,12 +63,9 @@ const trading = findDirectory("trading");
 const ops = findDirectory("ops");
 
 assert(zhCN.includes('["compute-collector"]: "数据采集"'), "compute-collector zh-CN label must be 数据采集");
-assert(zhCN.includes('["factor-definitions"]: "因子定义"'), "factor-definitions zh-CN label must be 因子定义");
 assert(zhCN.includes('["collector-tasks"]: "采集任务"'), "collector-tasks zh-CN label must be 采集任务");
 assert(zhCN.includes('["data-fields"]: "基础字段"'), "data-fields zh-CN label must be 基础字段");
-assert(zhCN.includes('["factor-sets"]: "因子集"'), "factor-sets zh-CN label must be 因子集");
-assert(zhCN.includes('["factor-tasks"]: "计算任务"'), "factor-tasks zh-CN label must be 计算任务");
-assert(zhCN.includes('["factor-results"]: "因子结果"'), "factor-results zh-CN label must be 因子结果");
+assert(zhCN.includes('["factor-workbench"]: "因子工作台"'), "factor-workbench zh-CN label must be 因子工作台");
 
 assertNotVisible("data-assets");
 assert(dataCollection.parentId === "0", "compute-collector must be a root menu");
@@ -160,21 +157,13 @@ for (const hiddenLabel of ["规则正在回填", "按规则展开任务"]) {
   assert(!collectorTaskUI.includes(hiddenLabel), `collector task UI must not expose ${hiddenLabel}`);
 }
 
-const factorSets = findMenu("factor-sets");
-const factorDefinitions = findMenu("factor-definitions");
-const factorTasks = findMenu("factor-tasks");
-const factorResults = findMenu("factor-results");
-assert(factorSets.parentId === factorCompute.id, "factor-sets must be under factor compute");
-assert(factorDefinitions.parentId === factorCompute.id, "factor-definitions must be under factor compute");
-assert(factorTasks.parentId === factorCompute.id, "factor-tasks must be under factor compute");
-assert(factorResults.parentId === factorCompute.id, "factor-results must be under factor compute");
-assert(factorSets.sort < factorDefinitions.sort, "factor definitions must appear after factor sets");
-assert(factorDefinitions.sort < factorTasks.sort, "factor tasks must appear after definitions");
-assert(factorTasks.sort < factorResults.sort, "factor results must appear after tasks");
-assert(routes.includes('path: "/factor/sets"'), "factor sets route must exist");
-assert(routes.includes('path: "/factor/definitions"'), "factor definitions route must exist");
-assert(routes.includes('path: "/factor/tasks"'), "factor tasks route must exist");
-assert(routes.includes('path: "/factor/results"'), "factor results route must exist");
+const factorWorkbench = findMenu("factor-workbench");
+assert(factorWorkbench.parentId === factorCompute.id, "factor-workbench must be under factor compute");
+assert(routes.includes('path: "/factor/workbench"'), "factor workbench route must exist");
+for (const retired of ["factor-sets", "factor-definitions", "factor-tasks", "factor-results"]) {
+  assert(!staticMenu.includes(`"${retired}", "${retired}"`), `${retired} must be merged into the factor workbench`);
+  assert(!routes.includes(`name: "${retired}"`), `${retired} route must be removed`);
+}
 for (const retired of ["factor-bindings", "factor-datasets", "factor-construct"]) {
   assert(!staticMenu.includes(`"${retired}", "${retired}"`), `${retired} must not remain visible`);
 }

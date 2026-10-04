@@ -9,8 +9,11 @@ import type {
   ListFactorSetsRsp,
   ListFactorsReq,
   ListFactorsRsp,
+  ListRecalcJobsReq,
+  ListRecalcJobsRsp,
   RecalcFactorsReq,
-  RecalcJob
+  RecalcJob,
+  SetFactorStatusResult
 } from "./types";
 
 export type CreateFactorSetInput = Pick<FactorSet, "space_id" | "source_dataset_id" | "freq" | "subject_mode" | "subjects"> &
@@ -67,12 +70,12 @@ export function listFactors(params: ListFactorsReq) {
   return callFactor<ListFactorsReq, FactorRetRsp<ListFactorsRsp>>("ListFactors", params);
 }
 
-export async function setFactorStatus(factor_id: string, status: string) {
-  const rsp = await callFactor<{ factor_id: string; status: string }, FactorRetRsp<{ factor: FactorDef }>>("SetFactorStatus", {
+export async function setFactorStatus(factor_id: string, status: string): Promise<SetFactorStatusResult> {
+  const rsp = await callFactor<{ factor_id: string; status: string }, FactorRetRsp<SetFactorStatusResult>>("SetFactorStatus", {
     factor_id,
     status
   });
-  return rsp.factor;
+  return { factor: rsp.factor, backfill_job: rsp.backfill_job };
 }
 
 export function deleteFactor(factor_id: string) {
@@ -91,6 +94,10 @@ export async function recalcFactors(params: RecalcFactorsReq) {
 export async function cancelRecalcJob(job_id: string) {
   const rsp = await callFactor<{ job_id: string }, FactorRetRsp<{ job: RecalcJob }>>("CancelRecalcJob", { job_id });
   return rsp.job;
+}
+
+export function listRecalcJobs(params: ListRecalcJobsReq) {
+  return callFactor<ListRecalcJobsReq, FactorRetRsp<ListRecalcJobsRsp>>("ListRecalcJobs", params);
 }
 
 export async function getRecalcJob(job_id: string) {

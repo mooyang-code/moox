@@ -355,27 +355,40 @@ func (s *Store) FindRecalcJobByRequestID(ctx context.Context, requestID string) 
 	return job, err == nil, err
 }
 
-// ListRecalcJobs returns all jobs or filters by one or more statuses.
-func (s *Store) ListRecalcJobs(ctx context.Context, statuses ...string) ([]RecalcJob, error) {
+// RecalcJobFilter narrows ListRecalcJobs; zero fields match everything.
+type RecalcJobFilter struct {
+	SetID    string
+	Statuses []string
+}
+
+// ListRecalcJobs returns jobs newest first, optionally restricted to one factor set and statuses.
+func (s *Store) ListRecalcJobs(ctx context.Context, filter RecalcJobFilter) ([]RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
 	query := `SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
 	 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
 	 FROM t_factor_recalc_jobs`
-	filtered := make([]string, 0, len(statuses))
-	for _, status := range statuses {
+	var conditions []string
+	var args []any
+	if setID := strings.TrimSpace(filter.SetID); setID != "" {
+		conditions = append(conditions, "c_set_id = ?")
+		args = append(args, setID)
+	}
+	var statuses []string
+	for _, status := range filter.Statuses {
 		if status = strings.TrimSpace(status); status != "" {
-			filtered = append(filtered, status)
+			statuses = append(statuses, status)
 		}
 	}
-	var args []any
-	if len(filtered) > 0 {
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(filtered)), ",")
-		query += " WHERE c_status IN (" + placeholders + ")"
-		for _, status := range filtered {
+	if len(statuses) > 0 {
+		conditions = append(conditions, "c_status IN ("+strings.TrimSuffix(strings.Repeat("?,", len(statuses)), ",")+")")
+		for _, status := range statuses {
 			args = append(args, status)
 		}
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	query += " ORDER BY c_ctime DESC, c_job_id"
 	var rows []recalcJobRow

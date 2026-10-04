@@ -429,7 +429,7 @@ func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 			!reflect.DeepEqual(extra.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
 			t.Fatalf("moox_factor gateway contract = methods %v callers %v", extra.GatewayMethods, extra.GatewayCallers)
 		}
-		if len(extra.GatewayRoutes) != 1 || !reflect.DeepEqual(extra.GatewayRoutes[0].GatewayMethods, []string{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "GetStatus"}) ||
+		if len(extra.GatewayRoutes) != 1 || !reflect.DeepEqual(extra.GatewayRoutes[0].GatewayMethods, []string{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "ListRecalcJobs", "GetStatus"}) ||
 			!reflect.DeepEqual(extra.GatewayRoutes[0].GatewayCallers, []string{"admin-gateway", "moox-cli", "strategy"}) {
 			t.Fatalf("moox_factor read gateway contract = %+v", extra.GatewayRoutes)
 		}

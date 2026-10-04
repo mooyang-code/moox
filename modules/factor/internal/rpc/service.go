@@ -24,7 +24,7 @@ type CatalogAPI interface {
 	ListSets(ctx context.Context) ([]domain.FactorSet, error)
 	CreateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error)
 	UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error)
-	SetFactorStatus(ctx context.Context, factorID, status string) (domain.FactorDef, error)
+	SetFactorStatus(ctx context.Context, factorID, status string) (domain.FactorDef, string, error)
 	DeleteFactor(ctx context.Context, factorID string) error
 	GetFactor(ctx context.Context, factorID string) (domain.FactorDef, error)
 	ListFactors(ctx context.Context, setID, status string) ([]domain.FactorDef, error)
@@ -49,8 +49,17 @@ type RecalcJob struct {
 // RecalcAPI isolates asynchronous recalculation orchestration from RPC.
 type RecalcAPI interface {
 	Submit(ctx context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (RecalcJob, error)
+	List(ctx context.Context, setID string, statuses []string) ([]RecalcJob, error)
 	Get(ctx context.Context, jobID string) (RecalcJob, error)
 	Cancel(ctx context.Context, jobID string) (RecalcJob, error)
+}
+
+// FactorPeriodState is one factor's outcome for the most recent live period.
+type FactorPeriodState struct {
+	FactorID       string
+	Status         string
+	FailedSubjects []string
+	SourceHash     string
 }
 
 type SetRunSummary struct {
@@ -58,6 +67,8 @@ type SetRunSummary struct {
 	LastPeriodTime int64
 	LastStatus     string
 	LagSeconds     int64
+	Factors        []FactorPeriodState
+	FailedSubjects []string
 }
 
 type FactorLaneStatus struct {
@@ -252,11 +263,19 @@ func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorSt
 	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
 		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("status must be %q or %q", domain.FactorStatusEnabled, domain.FactorStatusDisabled))}, nil
 	}
-	factor, err := s.catalog.SetFactorStatus(ctx, req.GetFactorId(), status)
+	factor, backfillJobID, err := s.catalog.SetFactorStatus(ctx, req.GetFactorId(), status)
 	if err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
-	return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorDefToPB(factor)}, nil
+	rsp := &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorDefToPB(factor)}
+	if backfillJobID != "" {
+		job, err := s.recalc.Get(ctx, backfillJobID)
+		if err != nil {
+			return &factorpb.SetFactorStatusRsp{RetInfo: inner(fmt.Errorf("load backfill job %s: %w", backfillJobID, err))}, nil
+		}
+		rsp.BackfillJob = recalcJobToPB(job)
+	}
+	return rsp, nil
 }
 
 func (s *Service) DeleteFactor(ctx context.Context, req *factorpb.DeleteFactorReq) (*factorpb.DeleteFactorRsp, error) {
@@ -328,6 +347,23 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 		return &factorpb.RecalcFactorsRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.RecalcFactorsRsp{RetInfo: success(), Job: recalcJobToPB(job)}, nil
+}
+
+func (s *Service) ListRecalcJobs(ctx context.Context, req *factorpb.ListRecalcJobsReq) (*factorpb.ListRecalcJobsRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
+		return &factorpb.ListRecalcJobsRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
+	}
+	jobs, err := s.recalc.List(ctx, req.GetSetId(), cloneStrings(req.GetStatuses()))
+	if err != nil {
+		return &factorpb.ListRecalcJobsRsp{RetInfo: inner(err)}, nil
+	}
+	page, size := pageParams(req.GetPage())
+	items, total := paginate(jobs, page, size)
+	out := make([]*factorpb.RecalcJob, 0, len(items))
+	for _, job := range items {
+		out = append(out, recalcJobToPB(job))
+	}
+	return &factorpb.ListRecalcJobsRsp{RetInfo: success(), Jobs: out, PageResult: pageResult(page, size, total)}, nil
 }
 
 func (s *Service) GetRecalcJob(ctx context.Context, req *factorpb.GetRecalcJobReq) (*factorpb.GetRecalcJobRsp, error) {

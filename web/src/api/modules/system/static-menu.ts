@@ -60,11 +60,8 @@ export const systemMenu = [
   menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
   menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4),
 
-  directory("0240", "0", "/factor/definitions", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
-  menu("024007", "0240", "/factor/sets", "factor-sets", "factor-sets", "factor/sets/index", 1),
-  menu("024001", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 2),
-  menu("024006", "0240", "/factor/tasks", "factor-tasks", "factor-tasks", "factor/tasks/index", 3),
-  menu("024008", "0240", "/factor/results", "factor-results", "factor-results", "factor/results/index", 4),
+  directory("0240", "0", "/factor/workbench", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
+  menu("024001", "0240", "/factor/workbench", "factor-workbench", "factor-workbench", "factor/workbench/index", 1),
 
   directory("0250", "0", "/strategy/running", "strategy", "strategy", 4, { svgIcon: "mind-mapping", icon: "" }),
   menu("025002", "0250", "/strategy/overview", "strategy-overview", "strategy-definitions", "strategy/overview/index", 1),

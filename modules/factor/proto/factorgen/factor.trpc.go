@@ -45,6 +45,8 @@ type FactorMgrService interface {
 
 	RecalcFactors(ctx context.Context, req *RecalcFactorsReq) (*RecalcFactorsRsp, error)
 
+	ListRecalcJobs(ctx context.Context, req *ListRecalcJobsReq) (*ListRecalcJobsRsp, error)
+
 	GetRecalcJob(ctx context.Context, req *GetRecalcJobReq) (*GetRecalcJobRsp, error)
 
 	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq) (*CancelRecalcJobRsp, error)
@@ -286,6 +288,24 @@ func FactorMgrService_RecalcFactors_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
+func FactorMgrService_ListRecalcJobs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListRecalcJobsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ListRecalcJobs(ctx, reqbody.(*ListRecalcJobsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func FactorMgrService_GetRecalcJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetRecalcJobReq{}
 	filters, err := f(req)
@@ -398,6 +418,10 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_RecalcFactors_Handler,
 		},
 		{
+			Name: "/trpc.moox.factor.FactorMgr/ListRecalcJobs",
+			Func: FactorMgrService_ListRecalcJobs_Handler,
+		},
+		{
 			Name: "/trpc.moox.factor.FactorMgr/GetRecalcJob",
 			Func: FactorMgrService_GetRecalcJob_Handler,
 		},
@@ -462,6 +486,9 @@ func (s *UnimplementedFactorMgr) ListFactors(ctx context.Context, req *ListFacto
 func (s *UnimplementedFactorMgr) RecalcFactors(ctx context.Context, req *RecalcFactorsReq) (*RecalcFactorsRsp, error) {
 	return nil, errors.New("rpc RecalcFactors of service FactorMgr is not implemented")
 }
+func (s *UnimplementedFactorMgr) ListRecalcJobs(ctx context.Context, req *ListRecalcJobsReq) (*ListRecalcJobsRsp, error) {
+	return nil, errors.New("rpc ListRecalcJobs of service FactorMgr is not implemented")
+}
 func (s *UnimplementedFactorMgr) GetRecalcJob(ctx context.Context, req *GetRecalcJobReq) (*GetRecalcJobRsp, error) {
 	return nil, errors.New("rpc GetRecalcJob of service FactorMgr is not implemented")
 }
@@ -505,6 +532,8 @@ type FactorMgrClientProxy interface {
 	ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (rsp *ListFactorsRsp, err error)
 
 	RecalcFactors(ctx context.Context, req *RecalcFactorsReq, opts ...client.Option) (rsp *RecalcFactorsRsp, err error)
+
+	ListRecalcJobs(ctx context.Context, req *ListRecalcJobsReq, opts ...client.Option) (rsp *ListRecalcJobsRsp, err error)
 
 	GetRecalcJob(ctx context.Context, req *GetRecalcJobReq, opts ...client.Option) (rsp *GetRecalcJobRsp, err error)
 
@@ -776,6 +805,26 @@ func (c *FactorMgrClientProxyImpl) RecalcFactors(ctx context.Context, req *Recal
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RecalcFactorsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ListRecalcJobs(ctx context.Context, req *ListRecalcJobsReq, opts ...client.Option) (*ListRecalcJobsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListRecalcJobs")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ListRecalcJobs")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListRecalcJobsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

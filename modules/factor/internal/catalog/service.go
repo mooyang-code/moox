@@ -388,66 +388,68 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 	return s.db.GetFactor(ctx, factor.FactorID)
 }
 
-func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) (domain.FactorDef, error) {
+// SetFactorStatus 变更因子状态；启用时返回自动提交的回填任务 ID，其余情况为空。
+func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) (domain.FactorDef, string, error) {
 	initial, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	unlock, err := s.locks.LockContext(ctx, initial.SetID)
 	if err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	defer unlock()
 	factor, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	if factor.SetID != initial.SetID {
-		return domain.FactorDef{}, errors.New("factor set changed while waiting for its lifecycle lock")
+		return domain.FactorDef{}, "", errors.New("factor set changed while waiting for its lifecycle lock")
 	}
 	set, err := s.db.GetSet(ctx, factor.SetID)
 	if err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	if set.Status == domain.SetStatusDeleting {
-		return domain.FactorDef{}, errors.New("factor set purge is pending")
+		return domain.FactorDef{}, "", errors.New("factor set purge is pending")
 	}
 	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
-		return domain.FactorDef{}, fmt.Errorf("status must be %q or %q", domain.FactorStatusEnabled, domain.FactorStatusDisabled)
+		return domain.FactorDef{}, "", fmt.Errorf("status must be %q or %q", domain.FactorStatusEnabled, domain.FactorStatusDisabled)
 	}
 	if status == domain.FactorStatusEnabled && factor.Status == domain.FactorStatusEnabled {
-		return factor, nil
+		return factor, "", nil
 	}
 	if status == domain.FactorStatusDisabled {
 		if factor.Status == domain.FactorStatusDisabled {
-			return factor, nil
+			return factor, "", nil
 		}
 		if err := s.db.SetFactorStatus(ctx, factor.FactorID, factor.Status, status); err != nil {
-			return domain.FactorDef{}, err
+			return domain.FactorDef{}, "", err
 		}
 		s.notify()
-		return s.db.GetFactor(ctx, factor.FactorID)
+		updated, err := s.db.GetFactor(ctx, factor.FactorID)
+		return updated, "", err
 	}
 	if set.Status == domain.SetStatusPending {
-		return domain.FactorDef{}, errors.New("factor set is not ready")
+		return domain.FactorDef{}, "", errors.New("factor set is not ready")
 	}
 	if s.recalc == nil {
-		return domain.FactorDef{}, errors.New("recalc submitter is required to enable a factor")
+		return domain.FactorDef{}, "", errors.New("recalc submitter is required to enable a factor")
 	}
 	source, columns, err := s.sourceDataset(ctx, set)
 	if err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	factors, err := s.db.ListFactors(ctx, set.SetID, "")
 	if err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	if err := domain.ValidateFactor(factor, columnNames(columns), factors); err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	start, end, err := s.backfillWindow(ctx, set)
 	if err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	activeFactors := make([]domain.FactorDef, 0, len(factors)+1)
 	for _, candidate := range factors {
@@ -457,23 +459,23 @@ func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) 
 	}
 	activeFactors = replaceFactor(activeFactors, factor)
 	if err := s.ensureResultColumns(ctx, set, source, columns, activeFactors...); err != nil {
-		return domain.FactorDef{}, err
+		return domain.FactorDef{}, "", err
 	}
 	// Persist the accepted backfill and expose the factor in one SQLite
 	// transaction so neither the worker nor live triggers can observe half of
 	// the activation.
 	job, err := s.recalc.PrepareEnableBackfill(ctx, set, factor, start, end)
 	if err != nil {
-		return domain.FactorDef{}, fmt.Errorf("prepare factor backfill: %w", err)
+		return domain.FactorDef{}, "", fmt.Errorf("prepare factor backfill: %w", err)
 	}
 	if factor.Status != domain.FactorStatusEnabled {
 		if _, err := s.db.EnableFactorWithRecalcJob(ctx, factor.FactorID, factor.Status, job); err != nil {
-			return domain.FactorDef{}, err
+			return domain.FactorDef{}, "", err
 		}
 		factor.Status = domain.FactorStatusEnabled
 		s.notify()
 	}
-	return factor, nil
+	return factor, job.JobID, nil
 }
 
 func (s *Service) DeleteFactor(ctx context.Context, factorID string) error {

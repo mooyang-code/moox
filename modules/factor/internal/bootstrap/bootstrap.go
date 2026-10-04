@@ -386,7 +386,7 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		r.metrics.PeriodLag.WithLabelValues(setID).Set(max(0, time.Since(periodTime).Seconds()))
 		if !periodTime.IsZero() && (err == nil || outcome.Status != "") {
 			r.metrics.LastPeriodTime.WithLabelValues(setID).Set(float64(periodTime.Unix()))
-			r.runs.record(setID, periodTime, status)
+			r.runs.record(setID, periodTime, status, outcome)
 		}
 	}
 	for _, factor := range outcome.Factors {
@@ -468,6 +468,18 @@ type recalcRPCAdapter struct{ service *recalc.Service }
 func (a recalcRPCAdapter) Submit(ctx context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
 	job, err := a.service.Submit(ctx, setID, factorIDs, subjects, requestID, start, end)
 	return rpcJob(job), err
+}
+
+func (a recalcRPCAdapter) List(ctx context.Context, setID string, statuses []string) ([]factorrpc.RecalcJob, error) {
+	jobs, err := a.service.List(ctx, setID, statuses)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]factorrpc.RecalcJob, 0, len(jobs))
+	for _, job := range jobs {
+		out = append(out, rpcJob(job))
+	}
+	return out, nil
 }
 
 func (a recalcRPCAdapter) Get(ctx context.Context, jobID string) (factorrpc.RecalcJob, error) {

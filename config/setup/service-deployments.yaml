@@ -287,7 +287,7 @@ services:
       gateway_routes:
         - service_path: trpc.moox.factor.FactorMgr
           port: 11403
-          gateway_methods: [GetFactorSet, ListFactorSets, GetFactor, ListFactors, GetStatus]
+          gateway_methods: [GetFactorSet, ListFactorSets, GetFactor, ListFactors, ListRecalcJobs, GetStatus]
           gateway_callers: [admin-gateway, moox-cli, strategy]
   - name: moox_strategy
     kind: strategy

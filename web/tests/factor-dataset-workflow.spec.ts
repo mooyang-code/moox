@@ -109,13 +109,9 @@ async function mockGateway(route: Route) {
     jobs = [job, ...jobs.filter(item => item.job_id !== job.job_id)];
     return route.fulfill({ json: ok({ job }) });
   }
-  if (method === "GetRecalcJob") {
-    const job = jobs.find(item => item.job_id === body.job_id) || {
-      job_id: body.job_id,
-      status: "accepted",
-      request_id: body.job_id
-    };
-    return route.fulfill({ json: ok({ job }) });
+  if (method === "ListRecalcJobs") {
+    const items = jobs.filter(item => item.set_id === body.set_id);
+    return route.fulfill({ json: ok({ jobs: items, page_result: { page: 1, size: 20, total: items.length, has_more: false } }) });
   }
   if (method === "GetStatus") {
     return route.fulfill({
@@ -159,16 +155,15 @@ test.beforeEach(async ({ page }) => {
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockGateway);
 });
 
-test("factor sets scope definitions, results and async recalculation", async ({ page }) => {
-  await page.goto("/#/factor/sets");
+test("factor workbench scopes factors, results and async recalculation to one set", async ({ page }) => {
+  await page.goto("/#/factor/workbench");
   await expect(page.getByText(factorSet.set_id)).toBeVisible();
   await expect(page.getByText(factorSet.result_dataset_id)).toBeVisible();
-  await page.goto("/#/factor/definitions");
-  await expect(page.getByText("Bias")).toBeVisible();
-  await page.goto("/#/factor/results");
-  await expect(page.getByText(`Storage 结果 View view_factor_binance_kline_1m`)).toBeVisible();
-  await page.goto("/#/factor/tasks");
-  await expect(page.getByText("实时消费运行中")).toBeVisible();
+  await page.getByRole("tab", { name: "因子" }).click();
+  await expect(page.getByText("Bias", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "结果" }).click();
+  await expect(page.getByText("结果 View view_factor_binance_kline_1m")).toBeVisible();
+  await page.getByRole("tab", { name: "补算" }).click();
   await page.getByPlaceholder("留空自动生成").fill("recalc-e2e");
   await page.getByRole("button", { name: "提交补算" }).click();
   await expect(page.getByText("已受理")).toBeVisible();

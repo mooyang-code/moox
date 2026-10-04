@@ -57,28 +57,10 @@ export const staticRoutes = [
         meta: { title: "data-fields" }
       },
       {
-        path: "/factor/sets",
-        name: "factor-sets",
-        component: () => import("@/views/factor/sets/index.vue"),
-        meta: { title: "factor-sets" }
-      },
-      {
-        path: "/factor/definitions",
-        name: "factor-definitions",
-        component: () => import("@/views/factor/definitions/index.vue"),
-        meta: { title: "factor-definitions" }
-      },
-      {
-        path: "/factor/tasks",
-        name: "factor-tasks",
-        component: () => import("@/views/factor/tasks/index.vue"),
-        meta: { title: "factor-tasks" }
-      },
-      {
-        path: "/factor/results",
-        name: "factor-results",
-        component: () => import("@/views/factor/results/index.vue"),
-        meta: { title: "factor-results" }
+        path: "/factor/workbench",
+        name: "factor-workbench",
+        component: () => import("@/views/factor/workbench/index.vue"),
+        meta: { title: "factor-workbench" }
       },
       {
         path: "/strategy/overview",

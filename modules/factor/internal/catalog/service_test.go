@@ -178,7 +178,7 @@ func TestDeletingSetRejectsLifecycleMutation(t *testing.T) {
 	require.NoError(t, db.CreateFactor(context.Background(), factor))
 	_, err = svc.UpdateFactor(context.Background(), factor)
 	require.ErrorContains(t, err, "purge is pending")
-	_, err = svc.SetFactorStatus(context.Background(), factor.FactorID, domain.FactorStatusDisabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), factor.FactorID, domain.FactorStatusDisabled)
 	require.ErrorContains(t, err, "purge is pending")
 	err = svc.DeleteFactor(context.Background(), factor.FactorID)
 	require.ErrorContains(t, err, "purge is pending")
@@ -243,9 +243,11 @@ func TestEnableFactorAddsColumnsThenSubmitsRecalc(t *testing.T) {
 	require.NoError(t, err)
 	meta.writeOps = nil
 
-	factor, err := svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	factor, jobID, err := svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.NoError(t, err)
 	require.Equal(t, domain.FactorStatusEnabled, factor.Status)
+	require.NotEmpty(t, jobID)
+	require.Equal(t, "enable-momentum", jobID)
 	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
 	require.Equal(t, []string{"disabled"}, recalc.order)
 	require.Equal(t, domain.SetID("dataset_prices", "1m"), recalc.set.SetID)
@@ -313,7 +315,7 @@ func TestEnableFactorSubmitFailureLeavesFactorDisabled(t *testing.T) {
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.ErrorContains(t, err, "durable job store unavailable")
 	stored, err := db.GetFactor(context.Background(), "momentum")
 	require.NoError(t, err)
@@ -330,9 +332,9 @@ func TestEnableFactorIsIdempotentAfterBackfillIntentIsAccepted(t *testing.T) {
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.NoError(t, err)
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.NoError(t, err)
 	require.Len(t, recalc.order, 1)
 }
@@ -343,14 +345,15 @@ func TestDisableFactorKeepsColumns(t *testing.T) {
 	svc := newReadyService(t, db, meta)
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.NoError(t, err)
 	before := append([]storageio.ColumnInfo(nil), meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))]...)
 	meta.writeOps = nil
 
-	factor, err := svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusDisabled)
+	factor, jobID, err := svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusDisabled)
 	require.NoError(t, err)
 	require.Equal(t, domain.FactorStatusDisabled, factor.Status)
+	require.Empty(t, jobID)
 	require.Empty(t, meta.writeOps)
 	require.Equal(t, before, meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))])
 }
@@ -361,7 +364,7 @@ func TestDeleteFactorRequiresDisabled(t *testing.T) {
 	svc := newReadyService(t, db, meta)
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.NoError(t, err)
 
 	err = svc.DeleteFactor(context.Background(), "momentum")
@@ -377,7 +380,7 @@ func TestUpdateFactorRequiresDisabled(t *testing.T) {
 	factor, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 	factor.Status = domain.FactorStatusEnabled
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.NoError(t, err)
 	factor.SourceCode = "def compute(frame, context): return frame['close'] + 1"
 	factor.SourceHash = ""
@@ -424,7 +427,7 @@ func TestReconcileRejectsSourceColumnCollisionWithEnabledFactor(t *testing.T) {
 	svc.recalc = recalc
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.NoError(t, err)
 	meta.sourceColumns = append(meta.sourceColumns, sourceColumn("momentum"))
 	meta.writeOps = nil
@@ -482,9 +485,9 @@ func TestFactorStatusChangesNotifyTrigger(t *testing.T) {
 	svc.notifier = notifier
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusEnabled)
 	require.NoError(t, err)
-	_, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusDisabled)
+	_, _, err = svc.SetFactorStatus(context.Background(), "momentum", domain.FactorStatusDisabled)
 	require.NoError(t, err)
 	require.Equal(t, 2, notifier.calls)
 }

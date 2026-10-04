@@ -163,20 +163,29 @@ func TestUpdateRecalcProgressAndCancel(t *testing.T) {
 	require.EqualValues(t, 300, job.ProgressTime)
 }
 
-func TestListRecalcJobsFiltersStatuses(t *testing.T) {
+func TestListRecalcJobsFiltersSetAndStatuses(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	for _, job := range []RecalcJob{
 		{JobID: "job-a", RequestID: "req-a", SetID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusAccepted},
 		{JobID: "job-b", RequestID: "req-b", SetID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
+		{JobID: "job-c", RequestID: "req-c", SetID: "other", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
 	} {
 		_, err := s.CreateRecalcJob(ctx, job)
 		require.NoError(t, err)
 	}
-	jobs, err := s.ListRecalcJobs(ctx, RecalcStatusRunning)
+	running, err := s.ListRecalcJobs(ctx, RecalcJobFilter{Statuses: []string{RecalcStatusRunning}})
+	require.NoError(t, err)
+	require.Len(t, running, 2)
+
+	jobs, err := s.ListRecalcJobs(ctx, RecalcJobFilter{SetID: "set", Statuses: []string{RecalcStatusRunning}})
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
 	require.Equal(t, "job-b", jobs[0].JobID)
+
+	all, err := s.ListRecalcJobs(ctx, RecalcJobFilter{SetID: "set"})
+	require.NoError(t, err)
+	require.Len(t, all, 2)
 }
 
 func TestRecalcJobPersistsAcrossStoreReopen(t *testing.T) {

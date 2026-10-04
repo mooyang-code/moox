@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	factorrpc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 )
 
@@ -17,13 +18,15 @@ type runTracker struct {
 }
 
 type trackedRun struct {
-	periodTime time.Time
-	status     string
+	periodTime     time.Time
+	status         string
+	factors        []factorrpc.FactorPeriodState
+	failedSubjects []string
 }
 
 func newRunTracker() *runTracker { return &runTracker{runs: make(map[string]trackedRun)} }
 
-func (t *runTracker) record(setID string, periodTime time.Time, status string) {
+func (t *runTracker) record(setID string, periodTime time.Time, status string, outcome pipeline.Outcome) {
 	if t == nil || setID == "" || periodTime.IsZero() {
 		return
 	}
@@ -32,7 +35,19 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string) {
 	if current, ok := t.runs[setID]; ok && current.periodTime.After(periodTime) {
 		return
 	}
-	t.runs[setID] = trackedRun{periodTime: periodTime, status: status}
+	factors := make([]factorrpc.FactorPeriodState, 0, len(outcome.Factors))
+	for _, factor := range outcome.Factors {
+		factors = append(factors, factorrpc.FactorPeriodState{
+			FactorID:       factor.FactorID,
+			Status:         factor.Status,
+			FailedSubjects: factor.FailedSubjects,
+			SourceHash:     factor.SourceHash,
+		})
+	}
+	t.runs[setID] = trackedRun{
+		periodTime: periodTime, status: status, factors: factors,
+		failedSubjects: outcome.FailedSubjects,
+	}
 }
 
 func (t *runTracker) latest(setID string, now time.Time) factorrpc.SetRunSummary {
@@ -67,5 +82,8 @@ func summaryOf(setID string, run trackedRun, now time.Time) factorrpc.SetRunSumm
 	if lag < 0 {
 		lag = 0
 	}
-	return factorrpc.SetRunSummary{SetID: setID, LastPeriodTime: run.periodTime.Unix(), LastStatus: run.status, LagSeconds: lag}
+	return factorrpc.SetRunSummary{
+		SetID: setID, LastPeriodTime: run.periodTime.Unix(), LastStatus: run.status, LagSeconds: lag,
+		Factors: run.factors, FailedSubjects: run.failedSubjects,
+	}
 }

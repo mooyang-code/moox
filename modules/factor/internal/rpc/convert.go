@@ -99,11 +99,22 @@ func factorDefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 }
 
 func setRunSummaryToPB(summary SetRunSummary) *factorpb.SetRunSummary {
+	factors := make([]*factorpb.FactorPeriodState, 0, len(summary.Factors))
+	for _, factor := range summary.Factors {
+		factors = append(factors, &factorpb.FactorPeriodState{
+			FactorId:       factor.FactorID,
+			Status:         factor.Status,
+			FailedSubjects: cloneStrings(factor.FailedSubjects),
+			SourceHash:     factor.SourceHash,
+		})
+	}
 	return &factorpb.SetRunSummary{
 		SetId:          summary.SetID,
 		LastPeriodTime: summary.LastPeriodTime,
 		LastStatus:     summary.LastStatus,
 		LagSeconds:     summary.LagSeconds,
+		Factors:        factors,
+		FailedSubjects: cloneStrings(summary.FailedSubjects),
 	}
 }
 

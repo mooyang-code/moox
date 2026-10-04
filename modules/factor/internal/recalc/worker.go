@@ -28,7 +28,7 @@ func (w *Worker) RunPending(ctx context.Context) error {
 	if w == nil || w.db == nil {
 		return errors.New("factor recalc store is required")
 	}
-	jobs, err := w.db.ListRecalcJobs(ctx, store.RecalcStatusAccepted, store.RecalcStatusRunning)
+	jobs, err := w.db.ListRecalcJobs(ctx, store.RecalcJobFilter{Statuses: []string{store.RecalcStatusAccepted, store.RecalcStatusRunning}})
 	if err != nil {
 		return err
 	}

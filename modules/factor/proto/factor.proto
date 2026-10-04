@@ -36,11 +36,20 @@ message FactorDef {
   string updated_at = 14;
 }
 
+message FactorPeriodState {
+  string factor_id = 1;
+  string status = 2;
+  repeated string failed_subjects = 3;
+  string source_hash = 4;
+}
+
 message SetRunSummary {
   string set_id = 1;
   int64 last_period_time = 2;
   string last_status = 3;
   int64 lag_seconds = 4;
+  repeated FactorPeriodState factors = 5;
+  repeated string failed_subjects = 6;
 }
 
 message FactorSetInfo {
@@ -132,6 +141,7 @@ message SetFactorStatusReq {
 message SetFactorStatusRsp {
   common.RetInfo ret_info = 1;
   FactorDef factor = 2;
+  RecalcJob backfill_job = 3;
 }
 
 message DeleteFactorReq { string factor_id = 1; }
@@ -165,6 +175,17 @@ message RecalcFactorsReq {
 message RecalcFactorsRsp {
   common.RetInfo ret_info = 1;
   RecalcJob job = 2;
+}
+
+message ListRecalcJobsReq {
+  string set_id = 1;
+  repeated string statuses = 2;
+  common.Page page = 3;
+}
+message ListRecalcJobsRsp {
+  common.RetInfo ret_info = 1;
+  repeated RecalcJob jobs = 2;
+  common.PageResult page_result = 3;
 }
 
 message GetRecalcJobReq { string job_id = 1; }
@@ -209,6 +230,7 @@ service FactorMgr {
   rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
   rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
   rpc RecalcFactors(RecalcFactorsReq) returns (RecalcFactorsRsp);
+  rpc ListRecalcJobs(ListRecalcJobsReq) returns (ListRecalcJobsRsp);
   rpc GetRecalcJob(GetRecalcJobReq) returns (GetRecalcJobRsp);
   rpc CancelRecalcJob(CancelRecalcJobReq) returns (CancelRecalcJobRsp);
   rpc GetStatus(GetStatusReq) returns (GetStatusRsp);

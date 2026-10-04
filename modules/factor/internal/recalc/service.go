@@ -215,6 +215,13 @@ func (s *Service) Get(ctx context.Context, jobID string) (store.RecalcJob, error
 	return s.db.GetRecalcJob(ctx, jobID)
 }
 
+func (s *Service) List(ctx context.Context, setID string, statuses []string) ([]store.RecalcJob, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("factor recalc store is required")
+	}
+	return s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{SetID: setID, Statuses: statuses})
+}
+
 func (s *Service) Cancel(ctx context.Context, jobID string) (store.RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")

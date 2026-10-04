@@ -462,7 +462,7 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, routes, 1)
 		readRoute := routes[0].(map[string]any)
-		require.Equal(t, []any{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "GetStatus"}, readRoute["gateway_methods"])
+		require.Equal(t, []any{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "ListRecalcJobs", "GetStatus"}, readRoute["gateway_methods"])
 		require.Equal(t, []any{"admin-gateway", "moox-cli", "strategy"}, readRoute["gateway_callers"])
 		return
 	}

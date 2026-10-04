@@ -53,12 +53,13 @@
 菜单“因子计算”下只保留一个入口“因子工作台”，路由：
 
 ```text
-/factor/workbench/:setId?/:tab?        tab ∈ overview | factors | recalc | results
+/factor/workbench?set=<set_id>&tab=<tab>        tab ∈ overview | factors | recalc | results
 ```
 
-- 无 `setId` 时自动选中当前空间的第一个因子集；无因子集时显示空态引导“新建因子集”。
+- 选中的因子集与页签放在 query（`set`、`tab`）而不是路径参数：与现有 `/collector/tasks?tab=` 约定一致，且菜单、标签页缓存都按路由 name 工作，无需特殊处理动态路由。
+- 无 `set` 时自动选中当前空间的第一个因子集；无因子集时显示空态引导“新建因子集”。
 - 旧路由 `/factor/sets`、`/factor/definitions`、`/factor/tasks`、`/factor/results` 删除（新项目无需兼容），
-  `?set_id=` 查询参数一并删除。
+  旧的 `?set_id=` 查询参数一并删除。补算页签额外支持 `job=<job_id>` 高亮启用回填产生的任务。
 - 切换空间时清空当前因子集并重新选择。
 
 页面布局（桌面端左右两栏，窄屏左栏折叠为顶部下拉）：

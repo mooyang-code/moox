@@ -112,7 +112,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 	want := []string{
 		"CreateFactorSet", "UpdateFactorSet", "SetFactorSetStatus", "DeleteFactorSet", "GetFactorSet", "ListFactorSets",
 		"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor", "GetFactor", "ListFactors",
-		"RecalcFactors", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
+		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
 	}
 	got := make([]string, 0, service.Methods().Len())
 	for i := 0; i < service.Methods().Len(); i++ {
@@ -154,8 +154,11 @@ func (f *catalogFake) CreateFactor(_ context.Context, in domain.FactorDef) (doma
 func (f *catalogFake) UpdateFactor(_ context.Context, in domain.FactorDef) (domain.FactorDef, error) {
 	return in, nil
 }
-func (f *catalogFake) SetFactorStatus(_ context.Context, factorID, status string) (domain.FactorDef, error) {
-	return domain.FactorDef{FactorID: factorID, Status: status}, nil
+func (f *catalogFake) SetFactorStatus(_ context.Context, factorID, status string) (domain.FactorDef, string, error) {
+	if status == domain.FactorStatusEnabled {
+		return domain.FactorDef{FactorID: factorID, Status: status}, "factor-enable-" + factorID, nil
+	}
+	return domain.FactorDef{FactorID: factorID, Status: status}, "", nil
 }
 func (f *catalogFake) DeleteFactor(context.Context, string) error { return nil }
 func (f *catalogFake) GetFactor(context.Context, string) (domain.FactorDef, error) {
@@ -167,6 +170,9 @@ func (f *catalogFake) ListFactors(context.Context, string, string) ([]domain.Fac
 
 type recalcFake struct {
 	submitCalls int
+	jobs        []RecalcJob
+	listSetID   string
+	listStatus  []string
 	job         RecalcJob
 	setID       string
 	factorIDs   []string
@@ -182,9 +188,48 @@ func (f *recalcFake) Submit(_ context.Context, setID string, factorIDs, subjects
 	f.job = RecalcJob{JobID: requestID, RequestID: requestID, SetID: setID, FactorIDs: factorIDs, Subjects: subjects, StartTime: start, EndTime: end}
 	return f.job, nil
 }
-func (f *recalcFake) Get(context.Context, string) (RecalcJob, error) {
+func (f *recalcFake) List(_ context.Context, setID string, statuses []string) ([]RecalcJob, error) {
+	f.listSetID, f.listStatus = setID, statuses
+	return f.jobs, nil
+}
+func (f *recalcFake) Get(_ context.Context, jobID string) (RecalcJob, error) {
+	if f.job.JobID == "" {
+		return RecalcJob{JobID: jobID}, nil
+	}
 	return f.job, nil
 }
 func (f *recalcFake) Cancel(context.Context, string) (RecalcJob, error) {
 	return f.job, nil
+}
+
+func TestSetFactorStatusReturnsBackfillJobOnEnable(t *testing.T) {
+	svc := NewService(&catalogFake{}, &recalcFake{})
+
+	enabled, err := svc.SetFactorStatus(context.Background(), &factorpb.SetFactorStatusReq{FactorId: "momentum", Status: domain.FactorStatusEnabled})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, enabled.GetRetInfo().GetCode())
+	require.Equal(t, "factor-enable-momentum", enabled.GetBackfillJob().GetJobId())
+
+	disabled, err := svc.SetFactorStatus(context.Background(), &factorpb.SetFactorStatusReq{FactorId: "momentum", Status: domain.FactorStatusDisabled})
+	require.NoError(t, err)
+	require.Nil(t, disabled.GetBackfillJob())
+}
+
+func TestListRecalcJobsFiltersBySetAndPaginates(t *testing.T) {
+	recalc := &recalcFake{jobs: []RecalcJob{{JobID: "job-3"}, {JobID: "job-2"}, {JobID: "job-1"}}}
+	svc := NewService(&catalogFake{}, recalc)
+
+	missing, err := svc.ListRecalcJobs(context.Background(), &factorpb.ListRecalcJobsReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
+
+	rsp, err := svc.ListRecalcJobs(context.Background(), &factorpb.ListRecalcJobsReq{
+		SetId: "fset_a", Statuses: []string{"running"}, Page: &commonpb.Page{Page: 1, Size: 2},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fset_a", recalc.listSetID)
+	require.Equal(t, []string{"running"}, recalc.listStatus)
+	require.Len(t, rsp.GetJobs(), 2)
+	require.EqualValues(t, 3, rsp.GetPageResult().GetTotal())
+	require.True(t, rsp.GetPageResult().GetHasMore())
 }

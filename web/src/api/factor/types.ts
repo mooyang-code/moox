@@ -1,7 +1,9 @@
 import type { Page, PageResult, RetInfo } from "@/api/storage/types";
 
 export type FactorStatus = "enabled" | "disabled";
-export type FactorSetStatus = "pending" | "enabled" | "disabled";
+export type FactorSetStatus = "pending" | "enabled" | "disabled" | "deleting";
+export type PeriodFactorStatus = "complete" | "degraded" | "skipped";
+export type RecalcJobStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
 export type SubjectMode = "all" | "include";
 export type FactorType = "timeseries" | "cross_section";
 
@@ -35,11 +37,20 @@ export interface FactorDef {
   updated_at?: string;
 }
 
+export interface FactorPeriodState {
+  factor_id: string;
+  status: PeriodFactorStatus;
+  failed_subjects?: string[];
+  source_hash?: string;
+}
+
 export interface SetRunSummary {
   set_id: string;
   last_period_time: number;
   last_status: string;
   lag_seconds: number;
+  factors?: FactorPeriodState[];
+  failed_subjects?: string[];
 }
 
 export interface FactorSetInfo {
@@ -80,7 +91,7 @@ export interface RecalcJob {
   subjects: string[];
   start_time: string;
   end_time: string;
-  status: string;
+  status: RecalcJobStatus;
   progress_time: string;
   error: string;
   created_at: string;
@@ -108,4 +119,20 @@ export interface ListFactorsReq {
 export interface ListFactorsRsp {
   factors: FactorDef[];
   page_result: PageResult;
+}
+
+export interface ListRecalcJobsReq {
+  set_id: string;
+  statuses?: RecalcJobStatus[];
+  page?: Page;
+}
+
+export interface ListRecalcJobsRsp {
+  jobs: RecalcJob[];
+  page_result: PageResult;
+}
+
+export interface SetFactorStatusResult {
+  factor: FactorDef;
+  backfill_job?: RecalcJob;
 }
