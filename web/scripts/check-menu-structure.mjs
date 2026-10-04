@@ -66,9 +66,9 @@ assert(zhCN.includes('["compute-collector"]: "数据采集"'), "compute-collecto
 assert(zhCN.includes('["factor-definitions"]: "因子定义"'), "factor-definitions zh-CN label must be 因子定义");
 assert(zhCN.includes('["collector-tasks"]: "采集任务"'), "collector-tasks zh-CN label must be 采集任务");
 assert(zhCN.includes('["data-fields"]: "基础字段"'), "data-fields zh-CN label must be 基础字段");
-assert(zhCN.includes('["factor-datasets"]: "复合因子数据集"'), "factor-datasets zh-CN label must be 复合因子数据集");
-assert(zhCN.includes('["factor-construct"]: "构造配置"'), "factor-construct zh-CN label must be 构造配置");
+assert(zhCN.includes('["factor-sets"]: "因子集"'), "factor-sets zh-CN label must be 因子集");
 assert(zhCN.includes('["factor-tasks"]: "计算任务"'), "factor-tasks zh-CN label must be 计算任务");
+assert(zhCN.includes('["factor-results"]: "因子结果"'), "factor-results zh-CN label must be 因子结果");
 
 assertNotVisible("data-assets");
 assert(dataCollection.parentId === "0", "compute-collector must be a root menu");
@@ -156,27 +156,28 @@ assert(!staticMenu.includes('menu("0302"'), "code packages must not remain a sep
 for (const hiddenLabel of ["数据集管理", "集合定义", "基础数据集"]) {
   assert(!collectorTaskUI.includes(hiddenLabel), `collector task UI must not expose ${hiddenLabel}`);
 }
-for (const hiddenLabel of ["规则正在回填", "按规则展开任务", "数据集"]) {
+for (const hiddenLabel of ["规则正在回填", "按规则展开任务"]) {
   assert(!collectorTaskUI.includes(hiddenLabel), `collector task UI must not expose ${hiddenLabel}`);
 }
 
+const factorSets = findMenu("factor-sets");
 const factorDefinitions = findMenu("factor-definitions");
-const factorDatasets = findMenu("factor-datasets");
-const factorConstruct = findMenu("factor-construct");
-const factorBindings = findMenu("factor-bindings");
 const factorTasks = findMenu("factor-tasks");
+const factorResults = findMenu("factor-results");
+assert(factorSets.parentId === factorCompute.id, "factor-sets must be under factor compute");
 assert(factorDefinitions.parentId === factorCompute.id, "factor-definitions must be under factor compute");
-assert(factorDatasets.parentId === factorCompute.id, "factor-datasets must be under factor compute");
-assert(factorConstruct.parentId === factorCompute.id, "factor-construct must be under factor compute");
-assert(factorBindings.parentId === factorCompute.id, "factor-bindings must be under factor compute");
 assert(factorTasks.parentId === factorCompute.id, "factor-tasks must be under factor compute");
-assert(factorDefinitions.sort < factorDatasets.sort, "factor datasets must appear after definitions");
-assert(factorDatasets.sort < factorConstruct.sort, "construct must appear after factor datasets");
-assert(factorConstruct.sort < factorBindings.sort, "bindings must appear after construct");
-assert(factorBindings.sort < factorTasks.sort, "tasks must appear after bindings");
-assert(routes.includes('path: "/factor/datasets"'), "factor datasets route must exist");
-assert(routes.includes('path: "/factor/construct"'), "factor construct route must exist");
+assert(factorResults.parentId === factorCompute.id, "factor-results must be under factor compute");
+assert(factorSets.sort < factorDefinitions.sort, "factor definitions must appear after factor sets");
+assert(factorDefinitions.sort < factorTasks.sort, "factor tasks must appear after definitions");
+assert(factorTasks.sort < factorResults.sort, "factor results must appear after tasks");
+assert(routes.includes('path: "/factor/sets"'), "factor sets route must exist");
+assert(routes.includes('path: "/factor/definitions"'), "factor definitions route must exist");
 assert(routes.includes('path: "/factor/tasks"'), "factor tasks route must exist");
+assert(routes.includes('path: "/factor/results"'), "factor results route must exist");
+for (const retired of ["factor-bindings", "factor-datasets", "factor-construct"]) {
+  assert(!staticMenu.includes(`"${retired}", "${retired}"`), `${retired} must not remain visible`);
+}
 
 assertNotVisible("data-modeling");
 assertNotVisible("data-mgmt");
@@ -188,6 +189,5 @@ assertNotVisible("data-view-list");
 assertNotVisible("data-view-browse");
 assertNotVisible("collector-datasets");
 assertNotVisible("collector-views");
-assertNotVisible("factor-results");
 
 console.log("menu structure ok");

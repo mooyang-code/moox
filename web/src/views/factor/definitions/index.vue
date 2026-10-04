@@ -2,14 +2,19 @@
   <div class="moox-page">
     <div class="moox-inner">
       <div class="page-head">
-        <h2>因子计算</h2>
+        <h2>因子定义</h2>
         <a-space wrap>
+          <a-select v-model="selectedSetId" placeholder="因子集" style="width: 300px" :loading="setsLoading" @change="reloadFirstPage">
+            <a-option v-for="set in availableSets" :key="set.set_id" :value="set.set_id">
+              {{ set.source_dataset_id }} · {{ set.freq }}（{{ set.set_id }}）
+            </a-option>
+          </a-select>
           <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
             <a-option value="enabled">已启用</a-option>
             <a-option value="disabled">已停用</a-option>
           </a-select>
           <a-button @click="reloadFirstPage">查询</a-button>
-          <a-button type="primary" status="success" @click="openCreate">
+            <a-button type="primary" status="success" :disabled="!selectedSetId" @click="openCreate">
             <template #icon><icon-plus /></template>
             新增因子
           </a-button>
@@ -52,12 +57,12 @@
             <template #cell="{ record }">
               <a-space>
                 <a-button size="mini" type="text" @click="openDetail(record)">详情</a-button>
-                <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+                <a-button size="mini" type="text" :disabled="record.status !== 'disabled'" @click="openEdit(record)">编辑</a-button>
                 <a-button size="mini" type="text" @click="toggleStatus(record)">
                   {{ record.status === "enabled" ? "禁用" : "启用" }}
                 </a-button>
-                <a-popconfirm content="仅无绑定因子可删除，确认继续？" @ok="remove(record)">
-                  <a-button size="mini" type="text" status="danger">删除</a-button>
+                <a-popconfirm content="删除因子定义后不可恢复，确认继续？" @ok="remove(record)">
+                  <a-button size="mini" type="text" status="danger" :disabled="record.status !== 'disabled'">删除</a-button>
                 </a-popconfirm>
               </a-space>
             </template>
@@ -106,7 +111,7 @@
           <a-input v-model="form.factor_id" :disabled="editing" placeholder="Bias" />
         </a-form-item>
         <a-form-item field="name" label="Python 模块名" required>
-          <a-input v-model="form.name" :disabled="editing" placeholder="Bias" />
+          <a-input v-model="form.name" placeholder="Bias" />
         </a-form-item>
         <a-form-item field="factor_type" label="因子类型" required>
           <a-select v-model="form.factor_type">
@@ -123,11 +128,14 @@
         <a-form-item field="lookback_periods" label="回看周期数" required>
           <a-input-number v-model="form.lookback_periods" :min="1" />
         </a-form-item>
+        <a-form-item field="allow_partial_universe" label="截面计算">
+          <a-checkbox v-model="form.allow_partial_universe">允许部分对象参与计算</a-checkbox>
+        </a-form-item>
         <a-form-item class="form-span-2" field="input_columns" label="输入列" required>
           <a-input-tag v-model="inputTags" allow-clear placeholder="输入列名后回车" />
         </a-form-item>
         <a-form-item class="form-span-2" field="outputs" label="输出列" required>
-          <a-input-tag v-model="outputTags" :disabled="editing" allow-clear placeholder="输入输出列名后回车" />
+          <a-input-tag v-model="outputTags" allow-clear placeholder="输入输出列名后回车" />
         </a-form-item>
         <a-form-item class="form-span-2" field="params_json" label="参数 JSON" required>
           <a-textarea v-model="form.params_json" :auto-size="{ minRows: 4, maxRows: 10 }" />
@@ -141,29 +149,39 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { createFactorDef, deleteFactorDef, listFactorDefs, setFactorStatus, updateFactorDef } from "@/api/factor";
-import type { FactorDef } from "@/api/factor/types";
+import { createFactor, deleteFactor, listFactorSets, listFactors, setFactorStatus, updateFactor } from "@/api/factor";
+import type { FactorDef, FactorSet } from "@/api/factor/types";
 import CodeBlock from "@/components/code-block/index.vue";
 import { applyPageResult, defaultPagination, formatTime, statusLabel } from "@/views/data/shared/metadata-utils";
+import { useSpaceStore } from "@/store/modules/space";
 import { validateFactorParamsJSON } from "./factor-form";
 
 defineOptions({ name: "FactorDefinitions" });
 
 const rows = ref<FactorDef[]>([]);
+const sets = ref<FactorSet[]>([]);
 const loading = ref(false);
+const setsLoading = ref(false);
 const visible = ref(false);
 const detailVisible = ref(false);
 const editing = ref(false);
 const selectedFactor = ref<FactorDef | null>(null);
 const pagination = reactive(defaultPagination());
-const filters = reactive({ status: "" });
+const filters = reactive({ status: "" as FactorDef["status"] | "" });
+const selectedSetId = ref("");
+const spaceStore = useSpaceStore();
+const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
+const availableSets = computed(() => sets.value.filter(set => set.space_id === selectedSpaceId.value));
 const inputTags = ref<string[]>(["close"]);
 const outputTags = ref<string[]>(["bias_20"]);
+let setsLoadSequence = 0;
+let factorsLoadSequence = 0;
 
 const form = reactive<FactorDef>({
   factor_id: "",
+  set_id: "",
   factor_type: "timeseries",
   name: "",
   source_code: "",
@@ -171,6 +189,7 @@ const form = reactive<FactorDef>({
   outputs: ["bias_20"],
   params_json: `{"windows":[20]}`,
   lookback_periods: 200,
+  allow_partial_universe: false,
   status: "disabled"
 });
 
@@ -181,16 +200,28 @@ function factorTypeLabel(type: string) {
 }
 
 async function load() {
+  const sequence = ++factorsLoadSequence;
+  const setId = selectedSetId.value;
+  if (!setId) {
+    rows.value = [];
+    pagination.total = 0;
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   try {
-    const rsp = await listFactorDefs({
+    const rsp = await listFactors({
+      set_id: setId,
       status: filters.status || undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
+    if (sequence !== factorsLoadSequence || setId !== selectedSetId.value) return;
     rows.value = rsp.factors || [];
     applyPageResult(pagination, rsp.page_result);
+  } catch (error) {
+    if (sequence === factorsLoadSequence) Message.error(error instanceof Error ? error.message : "因子定义加载失败");
   } finally {
-    loading.value = false;
+    if (sequence === factorsLoadSequence) loading.value = false;
   }
 }
 
@@ -202,6 +233,7 @@ function reloadFirstPage() {
 function resetForm() {
   Object.assign(form, {
     factor_id: "",
+    set_id: selectedSetId.value,
     name: "",
     source_code: [
       "def compute(df, params, context):",
@@ -217,6 +249,7 @@ function resetForm() {
     outputs: ["bias_20"],
     params_json: `{"windows":[20]}`,
     lookback_periods: 200,
+    allow_partial_universe: false,
     factor_type: "timeseries",
     status: "disabled"
   });
@@ -225,6 +258,10 @@ function resetForm() {
 }
 
 function openCreate() {
+  if (!selectedSetId.value) {
+    Message.warning("请先选择因子集");
+    return;
+  }
   editing.value = false;
   resetForm();
   visible.value = true;
@@ -236,6 +273,7 @@ function openDetail(record: FactorDef) {
 }
 
 function openEdit(record: FactorDef) {
+  if (record.status !== "disabled") return;
   editing.value = true;
   Object.assign(form, record);
   inputTags.value = [...(record.input_columns || [])];
@@ -265,23 +303,32 @@ async function submit() {
     outputs: [...outputTags.value],
     params_json: paramsJSON
   };
-  if (editing.value) await updateFactorDef(payload);
-  else await createFactorDef(payload);
-  Message.success("因子已保存");
-  visible.value = false;
-  await load();
+  payload.set_id = selectedSetId.value;
+  try {
+    if (editing.value) await updateFactor(payload);
+    else await createFactor(payload);
+    Message.success("因子已保存");
+    visible.value = false;
+    await load();
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "保存因子失败");
+  }
 }
 
 async function toggleStatus(record: FactorDef) {
   const next = record.status === "enabled" ? "disabled" : "enabled";
-  await setFactorStatus(record.factor_id, next);
-  Message.success("状态已更新");
-  await load();
+  try {
+    await setFactorStatus(record.factor_id, next);
+    Message.success("状态已更新");
+    await load();
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "更新因子状态失败");
+  }
 }
 
 async function remove(record: FactorDef) {
   try {
-    await deleteFactorDef(record.factor_id);
+    await deleteFactor(record.factor_id);
     Message.success("因子已删除");
     await load();
   } catch (error) {
@@ -306,7 +353,48 @@ function factorStatusColor(status?: string) {
   return "gray";
 }
 
-onMounted(load);
+onMounted(loadSets);
+
+async function loadSets() {
+  const spaceId = selectedSpaceId.value;
+  const sequence = ++setsLoadSequence;
+  if (!spaceId) {
+    sets.value = [];
+    selectedSetId.value = "";
+    setsLoading.value = false;
+    return;
+  }
+  setsLoading.value = true;
+  try {
+    const items: FactorSet[] = [];
+    for (let page = 1; ; page += 1) {
+      const rsp = await listFactorSets({ page: { page, size: 500 } });
+      items.push(...(rsp.factor_sets || []).map(item => item.factor_set).filter((set): set is FactorSet => Boolean(set)));
+      if (!rsp.page_result?.has_more || !(rsp.factor_sets || []).length) break;
+    }
+    if (sequence !== setsLoadSequence || spaceId !== selectedSpaceId.value) return;
+    sets.value = items.filter(set => set.space_id === spaceId);
+    if (!sets.value.some(set => set.set_id === selectedSetId.value)) {
+      selectedSetId.value = sets.value[0]?.set_id || "";
+    }
+    await load();
+  } catch (error) {
+    if (sequence === setsLoadSequence) Message.error(error instanceof Error ? error.message : "因子集加载失败");
+  } finally {
+    if (sequence === setsLoadSequence) setsLoading.value = false;
+  }
+}
+
+watch(selectedSpaceId, () => {
+  selectedSetId.value = "";
+  pagination.current = 1;
+  loadSets();
+});
+
+watch(selectedSetId, () => {
+  pagination.current = 1;
+  load();
+});
 </script>
 
 <style scoped>

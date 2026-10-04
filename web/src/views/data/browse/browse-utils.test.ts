@@ -246,14 +246,14 @@ describe("viewBoundDatasetId", () => {
   });
 
   it("falls back to primary_dataset_id for older view payloads", () => {
-    expect(viewBoundDatasetId({ primary_dataset_id: "mdataset_binance_kline_1m" })).toBe("mdataset_binance_kline_1m");
+    expect(viewBoundDatasetId({ primary_dataset_id: "dataset_binance_kline_1m" })).toBe("dataset_binance_kline_1m");
   });
 
   it("treats SQL time_series data_kind as a time-series dataset", () => {
     expect(
       viewModeFromPrimaryDataset(
-        [{ dataset_id: "mdataset_binance_kline_1m", data_kind: "time_series" as never }],
-        "mdataset_binance_kline_1m"
+        [{ dataset_id: "dataset_binance_kline_1m", data_kind: "time_series" as never }],
+        "dataset_binance_kline_1m"
       )
     ).toBe("time_series");
   });

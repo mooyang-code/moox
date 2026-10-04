@@ -346,7 +346,7 @@ const pipeline = [
   { key: "rules", stage: "02", label: "采集任务", color: "#0d9488", path: "/collector/tasks" },
   { key: "datasets", stage: "03", label: "采集结果", color: "#059669", path: "/collector/tasks?tab=results" },
   { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
-  { key: "views", stage: "05", label: "构造配置", color: "#ea580c", path: "/factor/construct" },
+  { key: "views", stage: "05", label: "因子集", color: "#ea580c", path: "/factor/sets" },
   { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
 ];
 
@@ -382,7 +382,7 @@ const workflowLinks = [
   {
     title: "因子结果",
     description: "查看因子计算写回结果",
-    path: "/factor/datasets",
+    path: "/factor/results",
     icon: "F",
     tint: "rgba(192, 38, 211, 12%)"
   },
@@ -393,7 +393,7 @@ const setupSteps = [
   { title: "创建空间", description: "空间是采集、计算与交易的隔离边界，管理台所有请求都带空间上下文。" },
   { title: "创建采集任务", description: "在数据采集中配置数据源、采集对象、基础字段和任务结果。" },
   { title: "启动采集链路", description: "collector 按采集任务展开执行，经 cloudnode 下发到云节点写入结果。" },
-  { title: "查询与因子", description: "用采集结果索引浏览 K 线；因子输出写回复合结果。" }
+  { title: "查询与因子", description: "用采集结果索引浏览 K 线；因子输出写入结果数据集和结果索引。" }
 ];
 
 const nodesTotal = ref<number | null>(null);
@@ -498,7 +498,7 @@ const incidentItems = [
     title: "factor.momentum 今日未刷新",
     meta: "因子结果延迟 48m",
     action: "打开结果",
-    path: "/factor/datasets",
+    path: "/factor/results",
     tone: "danger"
   },
   {

@@ -84,7 +84,7 @@ describe("page layout standards", () => {
 
   it("keeps factor list controls in one compact header", () => {
     const definitions = read("factor/definitions/index.vue");
-    const bindings = read("factor/bindings/index.vue");
+    const sets = read("factor/sets/index.vue");
 
     expect(definitions).not.toContain("维护生产计算用的 Python 因子源码");
     expect(definitions).not.toContain("本页管理的是 factor 服务自己的计算定义");
@@ -92,11 +92,10 @@ describe("page layout standards", () => {
     expectMargin(definitions, ".page-head", "margin-bottom", 5);
     expect(definitions).not.toMatch(/\.page-head\s*\{[^}]*\bgap:/);
 
-    expect(bindings).not.toContain("把启用的因子绑定到 K 线数据集");
-    expect(bindings).not.toContain('class="filters"');
-    expectMargin(bindings, ".page-head", "margin-bottom", 5);
-    expect(bindings).not.toMatch(/\.page-head\s*\{[^}]*\bgap:/);
-    expect(bindings).not.toContain(".top-alert {");
+    expect(sets).toContain("新建因子集");
+    expect(sets).not.toContain('class="filters"');
+    expectMargin(sets, ".page-head", "margin-bottom", 5);
+    expect(sets).not.toMatch(/\.page-head\s*\{[^}]*\bgap:/);
   });
 
   it("uses the multi-tab spacing standard", () => {
@@ -208,13 +207,13 @@ describe("page layout standards", () => {
     expect(cloudNodes).not.toMatch(/\.cloud-node-toolbar\s*\{[^}]*justify-content:\s*flex-end;/);
     expect(cloudNodes).not.toMatch(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/);
 
-    expect(factorResults).toContain('class="factor-results-content"');
-    expectMargin(factorResults, ".factor-results-content", "margin-top", 12);
+    expect(factorResults).toContain('class="status-strip"');
+    expect(factorResults).toContain("Storage 结果 View");
     expect(factorResults).toContain(':embedded="true"');
     expect(factorResults).toMatch(
       /\.factor-results-workbench > \.moox-inner\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;/
     );
-    expect(factorResults).toMatch(/\.factor-results-content :deep\(\.moox-page\)\s*\{[\s\S]*?overflow:\s*auto;/);
+    expect(factorResults).not.toContain("ViewDefinitions");
 
     expect(positions).toContain("<h2>持仓</h2>");
     expect(positions).not.toContain('<a-button @click="loadPositions">');

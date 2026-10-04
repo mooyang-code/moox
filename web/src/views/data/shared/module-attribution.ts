@@ -3,7 +3,7 @@ import type { Dataset, View } from "@/api/storage/types";
 export const ownerModules = ["collector", "factor", "trade", "manual", "system"] as const;
 export type OwnerModule = (typeof ownerModules)[number];
 
-export const datasetRoles = ["raw_collection", "factor_result", "merged_factor", "import", "analysis", "manual"] as const;
+export const datasetRoles = ["raw_collection", "factor_result", "import", "analysis", "manual"] as const;
 export type DatasetRole = (typeof datasetRoles)[number];
 
 export const viewRoles = ["collection_browse", "factor_result", "analysis", "manual"] as const;
@@ -82,11 +82,6 @@ export function fieldOwnershipLabel(column: { origin_type?: string | number; att
     return "因子输出";
   }
   return "基础字段";
-}
-
-export function isMergedFactorDataset(dataset: Dataset) {
-  const attrs = dataset.attributes || {};
-  return dataset.dataset_id.startsWith("mdataset_") || clean(attrs.dataset_role) === "merged_factor";
 }
 
 export function isLikelyFactorResultDataset(dataset: Dataset) {

@@ -3,7 +3,10 @@ import type { Dataset, View } from "@/api/storage/types";
 import { mergeViewAttribution, type OwnerModule, type ViewRole } from "@/views/data/shared/module-attribution";
 
 export function defaultViewIdForDataset(datasetId: string) {
-  const rest = datasetId.replace(/^(?:mdataset_|dataset_)/, "").replace(/[^a-z0-9_]/g, "");
+  if (!datasetId.startsWith("dataset_") || datasetId.length === "dataset_".length) {
+    throw new Error("Dataset ID must start with dataset_ and include a suffix");
+  }
+  const rest = datasetId.replace(/^dataset_/, "").replace(/[^a-z0-9_]/g, "");
   const candidate = `view_${rest}`;
   if (candidate.length <= 30 && /^view_[a-z][a-z0-9_]*$/.test(candidate)) {
     return candidate;
@@ -42,6 +45,9 @@ export async function ensureDefaultView(
   });
   if ((existing.views || []).length > 0) {
     return existing.views[0];
+  }
+  if (input.ownerModule === "factor" && input.viewRole === "factor_result") {
+    throw new Error("Storage creates the default View for factor_result datasets");
   }
   return createView(buildDefaultView(dataset, input));
 }

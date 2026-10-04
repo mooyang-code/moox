@@ -1,37 +1,43 @@
 <template>
   <div class="moox-page factor-results-workbench">
     <div class="moox-inner">
-      <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="因子结果" @change="syncRoute" />
-      <section class="factor-results-content">
-        <ViewDefinitions
-          v-if="activeTab === 'definitions'"
-          :embedded="true"
-          owner-module="factor"
-          view-role="factor_result"
-          managed-by="factor"
-          :filter-owner-modules="['factor']"
-          :filter-dataset-roles="['factor_result']"
-          :filter-view-roles="['factor_result']"
-          :allowed-primary-dataset-ids="targetDatasetIds"
-        />
+      <div class="page-head">
+        <h2>因子结果</h2>
+        <a-space wrap>
+          <a-select v-model="selectedSetId" placeholder="选择因子集" :loading="setsLoading" style="width: min(420px, 60vw)" @change="syncRoute">
+            <a-option v-for="set in availableSets" :key="set.set_id" :value="set.set_id">
+              {{ set.source_dataset_id }} · {{ set.freq }}（{{ set.set_id }}）
+            </a-option>
+          </a-select>
+          <a-button aria-label="刷新因子结果" @click="refresh"><template #icon><icon-refresh /></template></a-button>
+        </a-space>
+      </div>
+
+      <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
+      <a-empty v-else-if="!selectedSet" description="当前空间没有因子集" />
+      <template v-else>
+        <div class="status-strip">
+          <a-tag size="small" :color="selectedSet.status === 'enabled' ? 'green' : 'orange'">{{ statusLabel(selectedSet.status) }}</a-tag>
+          <span>结果数据集 {{ selectedSet.result_dataset_id }}</span>
+          <span>Storage 结果 View {{ resultView?.view_id || "准备中" }}</span>
+          <span>Python Workers {{ engineStatus.python_workers }}</span>
+          <span>忙碌 {{ engineStatus.python_busy }}</span>
+          <span>Consumer {{ engineStatus.consumer_running ? "运行中" : "停止" }}</span>
+        </div>
         <ViewBrowse
-          v-else
+          v-if="resultView"
+          :key="`${selectedSpaceId}/${resultView.view_id}`"
           :embedded="true"
-          empty-description="暂无因子结果视图，请先在“结果视图”中创建一个结果视图"
-          :allowed-primary-dataset-ids="targetDatasetIds"
+          page-title="因子结果数据"
+          empty-description="Storage 尚未提供该因子集的默认结果 View"
+          :view-ids="[resultView.view_id]"
           :view-owner-modules="['factor']"
           :view-roles="['factor_result']"
           :auto-refresh-interval-ms="60000"
-        >
-          <template #status-extra>
-            <span class="engine-status">
-              <span>Python Workers {{ engineStatus.python_workers }}</span>
-              <span>执行中 {{ engineStatus.active_tasks }}</span>
-              <span>等待中 {{ engineStatus.pending_tasks }}</span>
-            </span>
-          </template>
-        </ViewBrowse>
-      </section>
+        />
+        <a-empty v-else-if="!resultViewLoading" description="Storage 尚未提供该因子集的默认结果 View" />
+        <a-spin v-else class="result-view-loading" />
+      </template>
     </div>
   </div>
 </template>
@@ -39,12 +45,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import PageTitleTabs from "@/components/page-title-tabs/index.vue";
-import { getEngineStatus, listFactorBindings } from "@/api/factor";
-import type { EngineStatus, FactorBinding } from "@/api/factor/types";
+import { Message } from "@arco-design/web-vue";
+import { getFactorStatus, listFactorSets } from "@/api/factor";
+import type { EngineStatus, FactorSetInfo } from "@/api/factor/types";
+import { listViews } from "@/api/storage/metadata";
+import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { factorBindingTargetDatasetIds } from "@/views/data/shared/factor-result-dataset";
-import ViewDefinitions from "@/views/data/views/index.vue";
+import { statusLabel } from "@/views/data/shared/metadata-utils";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
 
 defineOptions({ name: "FactorResults" });
@@ -53,117 +60,118 @@ const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
-const bindings = ref<FactorBinding[]>([]);
+const allSetInfos = ref<FactorSetInfo[]>([]);
+const selectedSetId = ref(String(route.query.set_id || ""));
+const setsLoading = ref(false);
+const resultView = ref<View | null>(null);
+const resultViewLoading = ref(false);
 const engineStatus = ref<EngineStatus>({
   ret_info: { code: 0, msg: "" },
+  consumer_running: false,
   python_workers: 0,
-  active_tasks: 0,
-  pending_tasks: 0
+  python_busy: 0,
+  lanes: [],
+  recent_runs: []
 });
-const activeTab = ref(tabFromRoute());
-const spaceResolved = ref(false);
-let engineStatusTimer: number | undefined;
-type FactorResultTab = "definitions" | "browse";
+let statusTimer: number | undefined;
+let setLoadSequence = 0;
+let resultViewSequence = 0;
 
-const tabs = [
-  { key: "definitions", label: "结果视图" },
-  { key: "browse", label: "查看结果" }
-] as const;
-const normalizedQuery = computed(() => String(route.query.tab || ""));
+const availableSets = computed(() => allSetInfos.value.map(info => info.factor_set).filter(set => set?.space_id === selectedSpaceId.value));
+const selectedSet = computed(() => availableSets.value.find(set => set.set_id === selectedSetId.value));
 
-const targetDatasetIds = computed(() => factorBindingTargetDatasetIds(bindings.value));
-
-function tabFromRoute() {
-  return route.query.tab === "definitions" ? "definitions" : "browse";
+async function loadResultView() {
+  const set = selectedSet.value;
+  const sequence = ++resultViewSequence;
+  resultView.value = null;
+  if (!set) {
+    resultViewLoading.value = false;
+    return;
+  }
+  resultViewLoading.value = true;
+  try {
+    const rsp = await listViews({
+      space_id: set.space_id,
+      dataset_id: set.result_dataset_id,
+      status: "active",
+      page: { page: 1, size: 100 }
+    });
+    if (sequence !== resultViewSequence || selectedSet.value?.set_id !== set.set_id) return;
+    resultView.value = (rsp.views || []).find(view =>
+      view.attributes?.owner_module === "factor" && view.attributes?.view_role === "factor_result"
+    ) || null;
+  } catch (error) {
+    if (sequence === resultViewSequence) Message.error(error instanceof Error ? error.message : "结果 View 加载失败");
+  } finally {
+    if (sequence === resultViewSequence) resultViewLoading.value = false;
+  }
 }
 
-function syncRoute(key: string | number) {
-  const tab: FactorResultTab = key === "definitions" ? "definitions" : "browse";
-  activeTab.value = tab;
-  router.replace({ path: "/factor/results", query: tab === "definitions" ? { tab } : {} });
-}
-
-async function loadBindings() {
-  if (!selectedSpaceId.value) {
-    bindings.value = [];
+async function loadSets() {
+  const spaceId = selectedSpaceId.value;
+  const sequence = ++setLoadSequence;
+  if (!spaceId) {
+    allSetInfos.value = [];
+    selectedSetId.value = "";
+    setsLoading.value = false;
     return;
   }
-  // The layout loads the space list in parallel with this page. Do not mark
-  // the lookup resolved until that list is available, otherwise a persisted
-  // space ID could suppress the cross-space fallback on the first render.
-  if (spaceStore.spaces.length === 0) {
-    return;
-  }
-  const currentSpaceId = selectedSpaceId.value;
-  const currentBindings = await listAllBindings(currentSpaceId);
-  if (currentBindings.length > 0 || spaceResolved.value) {
-    bindings.value = currentBindings;
-    spaceResolved.value = true;
-    return;
-  }
-
-  // The global space selector defaults to the first business space (usually
-  // stockcn). Factor result views are scoped by space, so a default factor
-  // binding in another space would otherwise look like "no result view".
-  // Resolve that once on entry, while still allowing the user to switch back
-  // manually after the page has loaded.
-  for (const space of spaceStore.spaces) {
-    if (space.space_id === currentSpaceId) {
-      continue;
+  setsLoading.value = true;
+  try {
+    const items: FactorSetInfo[] = [];
+    for (let page = 1; ; page += 1) {
+      const rsp = await listFactorSets({ page: { page, size: 500 } });
+      items.push(...(rsp.factor_sets || []));
+      if (!rsp.page_result?.has_more || !(rsp.factor_sets || []).length) break;
     }
-    const candidateBindings = await listAllBindings(space.space_id);
-    if (candidateBindings.length === 0) {
-      continue;
+    if (sequence !== setLoadSequence || selectedSpaceId.value !== spaceId) return;
+    allSetInfos.value = items.filter(info => info.factor_set?.space_id === spaceId);
+    if (!allSetInfos.value.some(info => info.factor_set.set_id === selectedSetId.value)) {
+      selectedSetId.value = allSetInfos.value[0]?.factor_set.set_id || "";
     }
-    spaceResolved.value = true;
-    spaceStore.setSelectedSpace(space.space_id);
-    return;
+  } catch (error) {
+    if (sequence === setLoadSequence) Message.error(error instanceof Error ? error.message : "因子集加载失败");
+  } finally {
+    if (sequence === setLoadSequence) setsLoading.value = false;
   }
-  bindings.value = currentBindings;
-  spaceResolved.value = true;
 }
 
 async function loadEngineStatus() {
-  engineStatus.value = await getEngineStatus();
-}
-
-async function listAllBindings(spaceId: string) {
-  const items: FactorBinding[] = [];
-  const size = 500;
-  for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listFactorBindings({
-      space_id: spaceId,
-      status: "enabled",
-      page: { page: pageNo, size }
-    });
-    items.push(...(rsp.bindings || []));
-    if (!rsp.page_result?.has_more || (rsp.bindings || []).length === 0) {
-      return items;
-    }
+  try {
+    engineStatus.value = await getFactorStatus();
+  } catch {
+    engineStatus.value = {
+      ret_info: { code: 0, msg: "" },
+      consumer_running: false,
+      python_workers: 0,
+      python_busy: 0,
+      lanes: [],
+      recent_runs: []
+    };
   }
 }
 
-watch(selectedSpaceId, loadBindings);
-watch(
-  () => spaceStore.spaces.length,
-  () => {
-    if (!spaceResolved.value) {
-      loadBindings();
-    }
-  }
-);
-watch(normalizedQuery, () => {
-  activeTab.value = tabFromRoute();
+function syncRoute() {
+  router.replace({ path: "/factor/results", query: selectedSetId.value ? { set_id: selectedSetId.value } : {} });
+}
+
+async function refresh() {
+  await Promise.all([loadSets(), loadEngineStatus()]);
+}
+
+watch(selectedSpaceId, () => loadSets());
+watch(selectedSet, () => loadResultView(), { immediate: true });
+watch(() => route.query.set_id, value => {
+  const next = String(value || "");
+  if (next !== selectedSetId.value) selectedSetId.value = next;
 });
 onMounted(() => {
-  loadBindings();
+  loadSets();
   loadEngineStatus();
-  engineStatusTimer = window.setInterval(loadEngineStatus, 5000);
+  statusTimer = window.setInterval(loadEngineStatus, 5000);
 });
 onBeforeUnmount(() => {
-  if (engineStatusTimer !== undefined) {
-    window.clearInterval(engineStatusTimer);
-  }
+  if (statusTimer !== undefined) window.clearInterval(statusTimer);
 });
 </script>
 
@@ -182,31 +190,34 @@ onBeforeUnmount(() => {
   min-height: 0;
   flex-direction: column;
 }
-.factor-results-content {
-  min-height: 0;
-  flex: 1;
-  margin-top: var(--moox-space-3);
-  overflow: hidden;
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-3);
 }
-.engine-status {
-  display: inline-flex;
-  gap: var(--moox-space-5);
+
+.page-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--moox-space-4);
+  margin-bottom: var(--moox-space-3);
   color: var(--color-text-2);
   font-size: 13px;
-  line-height: 20px;
 }
-.factor-results-content :deep(.moox-page) {
-  height: 100%;
-  min-height: 0;
-  padding: 0;
-  overflow: auto;
-  background: transparent;
-}
-.factor-results-content :deep(.moox-page > .moox-inner) {
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
+
+.result-view-loading {
+  display: flex;
+  justify-content: center;
+  padding: var(--moox-space-8);
 }
 </style>

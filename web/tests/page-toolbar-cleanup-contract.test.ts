@@ -48,7 +48,7 @@ describe("page toolbar cleanup contract", () => {
       "data/subjects/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">', '<a-button @click="loadSymbols">'],
       "data/views/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">'],
       "data/views/components/view-column-panel.vue": ['<a-button :disabled="!viewId" @click="load">'],
-      "factor/bindings/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">'],
+      "factor/sets/index.vue": ['<a-button @click="load">'],
       "factor/definitions/index.vue": ['<a-button @click="load">'],
       "ops/service-management/gateway-nodes.vue": ['aria-label="刷新节点状态"'],
       "settings/secrets/index.vue": ['<a-button @click="load">'],

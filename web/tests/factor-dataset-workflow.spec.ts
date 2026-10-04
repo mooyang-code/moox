@@ -3,7 +3,32 @@ import { installE2ESession } from "./e2e-session";
 
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
 
-let jobs: Array<{ job_id: string; status: string; request_id: string }> = [];
+let jobs: Array<Record<string, unknown>> = [];
+
+const factorSet = {
+  set_id: "factor_set_spot_1m",
+  space_id: "crypto",
+  source_dataset_id: "dataset_binance_spot_kline_1m",
+  freq: "1m",
+  subject_mode: "all",
+  subjects: [],
+  result_dataset_id: "dataset_binance_spot_kline_1m_factor",
+  status: "enabled"
+};
+
+const factor = {
+  factor_id: "bias",
+  set_id: factorSet.set_id,
+  factor_type: "timeseries",
+  name: "Bias",
+  source_code: "def compute(df, params, context): return df",
+  source_hash: "sha256:abcd",
+  input_columns: ["close"],
+  outputs: ["bias_5"],
+  params_json: "{}",
+  lookback_periods: 5,
+  status: "enabled"
+};
 
 async function mockGateway(route: Route) {
   const method = route.request().url().split("/").pop();
@@ -35,20 +60,27 @@ async function mockGateway(route: Route) {
           },
           {
             space_id: "crypto",
-            dataset_id: "mdataset_binance_kline_1m",
-            name: "复合K线",
+            dataset_id: factorSet.result_dataset_id,
+            name: "现货K线因子结果",
             status: "active",
-            attributes: {
-              owner_module: "factor",
-              dataset_role: "merged_factor",
-              merge_mode: "system",
-              storage_resource_state: "created"
-            }
+            freqs: ["1m"],
+            attributes: { owner_module: "factor", dataset_role: "factor_result" }
           }
         ],
         page_result: { page: 1, size: 20, total: 2, has_more: false }
       })
     });
+  }
+  if (method === "ListFactorSets") {
+    return route.fulfill({
+      json: ok({
+        factor_sets: [{ factor_set: factorSet, factors: [factor], last_run: { set_id: factorSet.set_id, last_period_time: 1791086400, last_status: "complete", lag_seconds: 30 } }],
+        page_result: { page: 1, size: 500, total: 1, has_more: false }
+      })
+    });
+  }
+  if (method === "ListFactors") {
+    return route.fulfill({ json: ok({ factors: [factor], page_result: { page: 1, size: 20, total: 1, has_more: false } }) });
   }
   if (method === "ListDatasetColumns") {
     return route.fulfill({
@@ -61,10 +93,21 @@ async function mockGateway(route: Route) {
       })
     });
   }
-  if (method === "RecalcFactor") {
-    const job = { job_id: body.request_id || "job-1", request_id: body.request_id || "job-1", status: "accepted" };
+  if (method === "RecalcFactors") {
+    const job = {
+      job_id: body.request_id || "job-1",
+      request_id: body.request_id || "job-1",
+      set_id: body.set_id,
+      factor_ids: body.factor_ids || [],
+      subjects: body.subjects || [],
+      start_time: body.start_time,
+      end_time: body.end_time,
+      status: "accepted",
+      progress_time: "",
+      error: ""
+    };
     jobs = [job, ...jobs.filter(item => item.job_id !== job.job_id)];
-    return route.fulfill({ json: ok(job) });
+    return route.fulfill({ json: ok({ job }) });
   }
   if (method === "GetRecalcJob") {
     const job = jobs.find(item => item.job_id === body.job_id) || {
@@ -72,20 +115,41 @@ async function mockGateway(route: Route) {
       status: "accepted",
       request_id: body.job_id
     };
-    return route.fulfill({ json: ok(job) });
+    return route.fulfill({ json: ok({ job }) });
   }
-  if (method === "GetEngineStatus") {
+  if (method === "GetStatus") {
     return route.fulfill({
       json: ok({
+        consumer_running: true,
         python_workers: 0,
-        active_tasks: 0,
-        pending_tasks: jobs.length,
-        desired_revision: 4,
-        applied_revision: 4,
-        engine_id: "local-engine"
+        python_busy: 0,
+        lanes: [],
+        recent_runs: []
       })
     });
   }
+  if (method === "ListViews") {
+    return route.fulfill({
+      json: ok({
+        views: [{ space_id: "crypto", view_id: "view_binance_spot_kline_1m_factor", name: "现货K线因子结果", dataset_id: factorSet.result_dataset_id, status: "active", attributes: { owner_module: "factor", view_role: "factor_result" } }],
+        page_result: { page: 1, size: 200, total: 1, has_more: false }
+      })
+    });
+  }
+  if (method === "ListViewColumns") {
+    return route.fulfill({
+      json: ok({
+        columns: [
+          { view_id: "view_binance_spot_kline_1m_factor", column_name: "subject_id" },
+          { view_id: "view_binance_spot_kline_1m_factor", column_name: "data_time" },
+          { view_id: "view_binance_spot_kline_1m_factor", column_name: "close" },
+          { view_id: "view_binance_spot_kline_1m_factor", column_name: "bias_5", attributes: { origin_factor_id: "bias", factor_output: "bias_5" } }
+        ],
+        page_result: { page: 1, size: 500, total: 4, has_more: false }
+      })
+    });
+  }
+  if (method === "ListViewData") return route.fulfill({ json: ok({ rows: [], page_result: { page: 1, size: 100, total: 0, has_more: false } }) });
   return route.fulfill({ json: ok() });
 }
 
@@ -95,23 +159,17 @@ test.beforeEach(async ({ page }) => {
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockGateway);
 });
 
-test("factor pages show construct status, field ownership and async recalc", async ({ page }) => {
-  await page.goto("/#/factor/datasets");
-  await expect(page.getByText("mdataset_binance_kline_1m")).toBeVisible();
-  await page.goto("/#/factor/construct");
-  await expect(page.getByText("system")).toBeVisible();
-  await expect(page.getByText("created")).toBeVisible();
-  await expect(page.getByText("因子输出")).toBeVisible();
-  await page.getByRole("button", { name: "重试恢复" }).click();
-  await expect(page.getByText("created")).toBeVisible();
+test("factor sets scope definitions, results and async recalculation", async ({ page }) => {
+  await page.goto("/#/factor/sets");
+  await expect(page.getByText(factorSet.set_id)).toBeVisible();
+  await expect(page.getByText(factorSet.result_dataset_id)).toBeVisible();
+  await page.goto("/#/factor/definitions");
+  await expect(page.getByText("Bias")).toBeVisible();
+  await page.goto("/#/factor/results");
+  await expect(page.getByText(`Storage 结果 View view_binance_spot_kline_1m_factor`)).toBeVisible();
   await page.goto("/#/factor/tasks");
-  await expect(page.getByText("local-engine")).toBeVisible();
-  await page.getByPlaceholder("请求 ID").fill("recalc-e2e");
-  await page.getByPlaceholder("输入数据集").fill("dataset_binance_spot_kline_1m");
-  await page.getByPlaceholder("对象").fill("BTC-USDT");
-  await page.getByPlaceholder("频率").fill("1m");
-  await page.getByPlaceholder("开始时间").fill("2026-09-13T12:00:00Z");
-  await page.getByPlaceholder("结束时间").fill("2026-09-13T12:01:00Z");
+  await expect(page.getByText("实时消费运行中")).toBeVisible();
+  await page.getByPlaceholder("留空自动生成").fill("recalc-e2e");
   await page.getByRole("button", { name: "提交补算" }).click();
-  await expect(page.getByText("accepted")).toBeVisible();
+  await expect(page.getByText("已受理")).toBeVisible();
 });

@@ -11,12 +11,14 @@ describe("strategy instance creation contract", () => {
     expect(source).not.toContain("setInstanceEnabled(");
   });
 
-  it("loads paginated metadata and checks the result binding", () => {
+  it("loads paginated factor sets and validates result columns by set", () => {
     expect(source).toContain("loadAllViews");
-    expect(source).toContain("loadAllFactors");
-    expect(source).toContain("loadAllBindings");
+    expect(source).toContain("loadAllFactorSets");
+    expect(source).not.toContain("loadAllBindings");
     expect(source).toContain("findOutputColumn");
-    expect(source).toContain("每个因子都必须选择定义、绑定、输出和结果列");
+    expect(source).toContain("每个因子都必须选择因子集、定义、输出和结果列");
+    expect(source).toContain("buildInputBindings");
+    expect(source).not.toContain("binding_id");
     expect(source).toContain("创建请求结果未知，但实例 ID 已存在");
   });
 });

@@ -18,9 +18,9 @@ describe("dataKindOptions", () => {
 });
 
 describe("validateDatasetId", () => {
-  it("requires the dataset_ or mdataset_ type prefix", () => {
+  it("requires the dataset_ type prefix", () => {
     expect(validateDatasetId("dataset_stockcn_equity_kline")).toBe("");
-    expect(validateDatasetId("mdataset_binance_kline_1m")).toBe("");
+    expect(validateDatasetId("mdataset_binance_kline_1m")).toContain("dataset_");
     expect(validateDatasetId("stockcn_equity_kline")).toContain("dataset_");
   });
 });
@@ -33,9 +33,9 @@ describe("validateViewId", () => {
 });
 
 describe("displayFieldId", () => {
-  it("strips the internal dataset prefix from merged field ids", () => {
+  it("strips a dataset prefix from internal field ids", () => {
     expect(displayFieldId("dataset_binance_spot_kline_1m__close")).toBe("close");
-    expect(displayFieldId("mdataset_binance_kline_1m__volume")).toBe("volume");
+    expect(displayFieldId("mdataset_binance_kline_1m__volume")).toBe("mdataset_binance_kline_1m__volume");
     expect(displayFieldId("dataset_a__b__close")).toBe("close");
   });
 

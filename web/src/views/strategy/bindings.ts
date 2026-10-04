@@ -1,11 +1,12 @@
-import type { FactorBinding, FactorDef } from "@/api/factor/types";
+import type { FactorDef, FactorSet, FactorSetInfo } from "@/api/factor/types";
 import type { View, ViewColumn } from "@/api/storage/types";
 
 export interface BindingSelection {
   factor: FactorDef;
-  binding: FactorBinding;
+  factorSet: FactorSet;
   output: string;
   column_name: string;
+  result_view_id: string;
 }
 
 export function validateAliasConflicts(selections: BindingSelection[]): string | null {
@@ -36,24 +37,22 @@ export function normalizeFrequency(value: string): string {
 }
 
 export function findOutputColumn(columns: ViewColumn[], factorId: string, output: string): ViewColumn | null {
-  return (
-    columns.find(column => column.attributes?.origin_factor_id === factorId && column.attributes?.factor_output === output) ?? null
-  );
+  return columns.find(column => column.attributes?.origin_factor_id === factorId && column.attributes?.factor_output === output) ?? null;
 }
 
-export function validBindings(bindings: FactorBinding[], sourceViewId: string, frequency: string): FactorBinding[] {
+export function validFactorSets(sets: FactorSetInfo[], sourceView: View, frequency: string): FactorSetInfo[] {
   const normalizedFrequency = normalizeFrequency(frequency);
-  return bindings.filter(binding => {
-    const bindingFrequency = binding.freq ? normalizeFrequency(binding.freq) : "";
-    return binding.status === "enabled" && binding.source_view_id === sourceViewId && (!bindingFrequency || bindingFrequency === normalizedFrequency);
-  });
+  return sets.filter(({ factor_set: set }) =>
+    set.status === "enabled" && set.space_id === sourceView.space_id && set.source_dataset_id === sourceView.dataset_id &&
+    normalizeFrequency(set.freq) === normalizedFrequency
+  );
 }
 
 export function canCombineSelections(selections: BindingSelection[], sourceView: View): { ok: boolean; reason?: string } {
   if (!selections.length) return { ok: true };
-  const resultViewIds = new Set(selections.map(selection => selection.binding.result_view_id).filter(Boolean));
-  if (resultViewIds.size !== 1) return { ok: false, reason: "所有因子必须共用一个结果 View" };
-  if (resultViewIds.has(sourceView.view_id)) return { ok: false, reason: "因子结果 View 必须不同于源 View" };
+  const resultDatasetIds = new Set(selections.map(selection => selection.factorSet.result_dataset_id));
+  if (resultDatasetIds.size !== 1) return { ok: false, reason: "所有因子必须属于同一个因子集" };
+  if (resultDatasetIds.has(sourceView.dataset_id)) return { ok: false, reason: "因子结果数据集必须不同于源数据集" };
   return { ok: true };
 }
 
@@ -63,18 +62,18 @@ export function buildInputBindings(sourceView: View, frequency: string, selectio
     frequency: normalizeFrequency(frequency),
     factors: selections.map(selection => ({
       factor_id: selection.factor.factor_id,
+      set_id: selection.factorSet.set_id,
       source_hash: selection.factor.source_hash ?? "",
       input_columns: selection.factor.input_columns,
       params_json: selection.factor.params_json,
       lookback_periods: selection.factor.lookback_periods,
-      binding_id: selection.binding.binding_id ?? "",
-      frequency: normalizeFrequency(selection.binding.freq || frequency),
-      result_dataset_id: selection.binding.result_dataset_id ?? "",
-      result_view_id: selection.binding.result_view_id ?? "",
+      frequency: normalizeFrequency(selection.factorSet.freq || frequency),
+      result_dataset_id: selection.factorSet.result_dataset_id,
+      result_view_id: selection.result_view_id,
       output: selection.output,
       column_name: selection.column_name,
-      subject_mode: selection.binding.subject_mode,
-      subjects_json: selection.binding.subjects_json
+      subject_mode: selection.factorSet.subject_mode,
+      subjects_json: JSON.stringify(selection.factorSet.subjects || [])
     }))
   };
   return JSON.stringify(payload, null, 2);
