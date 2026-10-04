@@ -24,7 +24,7 @@ type fakeSetupInitFactor struct {
 
 func (f *fakeSetupInitFactor) Apply(_ context.Context, items []setupFactorItem) (setupFactorSummary, error) {
 	f.items = append([]setupFactorItem(nil), items...)
-	return setupFactorSummary{Enabled: true, Planned: len(items), Imported: len(items), Bound: len(items)}, nil
+	return setupFactorSummary{Enabled: true, Planned: len(items), Imported: len(items), Associated: len(items)}, nil
 }
 
 func (f *fakeSetupInitFactor) Close() error { return nil }
@@ -67,8 +67,9 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 		FactorType: "timeseries",
 		FactorID:   "bias", File: "timeseries/bias.py", InputColumns: []string{"close"},
 		Outputs: []string{"bias_5"}, ParamsJSON: `{"windows":[5]}`, LookbackPeriods: 5,
-		SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m",
+		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m",
 	}}
+	snapshot.Manifest.Factors.Sets = []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m"}}
 	factor := &fakeSetupInitFactor{}
 	cmd := newSetupCommand(setupDeps{
 		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -338,14 +339,6 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 			},
 			want: `references undefined field "missing"`,
 		},
-		{
-			name: "factor",
-			column: seedDatasetColumn{
-				SpaceID: "crypto", DatasetID: "kline", ColumnName: "ma",
-				OriginType: "factor", OriginID: "missing",
-			},
-			want: `references undefined factor "missing"`,
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -381,6 +374,22 @@ func TestSetupInitAllowsRawDatasetFieldColumnOrigin(t *testing.T) {
 
 	seed.DatasetColumns[0].OriginID = "dataset_missing_source__open"
 	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `undefined field "dataset_missing_source__open"`)
+}
+
+func TestSetupInitAllowsFactorColumnOriginWithoutStorageFactorMetadata(t *testing.T) {
+	seed := metadataSeed{
+		Spaces:      []seedSpace{{SpaceID: "crypto"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance"}},
+		Datasets: []seedDataset{{
+			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", DataSourceID: "binance",
+			DataKind: "time_series", Freqs: []string{"1m"},
+		}},
+		DatasetColumns: []seedDatasetColumn{{
+			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", ColumnName: "bias_20",
+			OriginType: "FACTOR", OriginID: "Bias", ValueType: "DOUBLE",
+		}},
+	}
+	require.NoError(t, validateSetupMetadataDependencies(seed))
 }
 
 func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {

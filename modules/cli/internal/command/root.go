@@ -142,7 +142,6 @@ func showLogo() {
 	fmt.Println("    🔐 auth (认证)         用户注册、登录、密码管理")
 	fmt.Println("    🧭 metadata (元数据)   通过服务导入存储元数据")
 	fmt.Println("    📦 storage (存储)      高性能数据读写与 View 重建服务")
-	fmt.Println("    🧮 factor (因子)       清理 Factor durable consumer 历史积压")
 	fmt.Println("    🛠️  ops (云运维)        腾讯云防火墙与内网组网")
 	fmt.Println()
 	fmt.Println("📖 使用帮助:")

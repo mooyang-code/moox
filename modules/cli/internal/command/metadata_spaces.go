@@ -123,11 +123,6 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 			out.Fields = append(out.Fields, item)
 		}
 	}
-	for _, item := range seed.Factors {
-		if keep(item.SpaceID) {
-			out.Factors = append(out.Factors, item)
-		}
-	}
 	for _, item := range seed.DatasetColumns {
 		if keep(item.SpaceID) {
 			out.DatasetColumns = append(out.DatasetColumns, item)

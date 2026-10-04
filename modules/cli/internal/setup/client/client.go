@@ -24,7 +24,6 @@ const (
 	sysDeployRemoteAddress = "127.0.0.1:11109"
 	maxResponseBytes       = 1 << 20
 	TradeGatewayHTTPSPort  = 11001
-	FactorEngineHealthPort = 11415
 )
 
 var storageDeploymentNames = []string{

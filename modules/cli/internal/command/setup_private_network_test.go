@@ -112,17 +112,6 @@ func TestPrivateNetworkRewriteRunsWhenProbesSkipped(t *testing.T) {
 	require.False(t, shouldRewritePublicStorageRPC(privatenet.Options{DryRun: true, RewriteRuntime: true}))
 }
 
-func TestAppendMissingFactorHostsFromSnapshot(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	snapshot.Manifest.OtherHosts = append(snapshot.Manifest.OtherHosts, setupconfig.Host{
-		Name: "factor-1", Address: "192.168.0.102", Provider: "lan",
-	})
-	hosts := appendMissingFactorHosts(nil, snapshot)
-	require.Len(t, hosts, 1)
-	require.Equal(t, "factor-1", hosts[0].Name)
-	require.Equal(t, "192.168.0.102", hosts[0].Address)
-}
-
 func TestRewriteStorageRPCUsesPublicGateway(t *testing.T) {
 	result := privatenet.Result{
 		RecommendedConfig: privatenet.RecommendedConfig{
@@ -131,7 +120,6 @@ func TestRewriteStorageRPCUsesPublicGateway(t *testing.T) {
 		},
 		Plan: privatenet.Plan{Hosts: []privatenet.ResolvedHost{
 			{HostTarget: privatenet.HostTarget{Name: "control", Address: "106.53.107.122", Roles: []string{"control"}}},
-			{HostTarget: privatenet.HostTarget{Name: "factor-1", Address: "192.168.0.102", Roles: []string{"factor-1"}}},
 		}},
 	}
 	seen := map[string]string{}
@@ -139,17 +127,12 @@ func TestRewriteStorageRPCUsesPublicGateway(t *testing.T) {
 		seen[publicIP] = script
 		require.Contains(t, script, "10.206.0.5 146.56.196.204")
 		require.NotContains(t, script, "146.56.196.204 10.206.0.5")
-		if publicIP == "106.53.107.122" {
-			require.Contains(t, script, "/data/moox/prod/config/runtime.env")
-			require.Contains(t, script, "./start.sh collector")
-			return "rewrote ip://10.206.0.5:11003 -> ip://146.56.196.204:11003\nMOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=ip://146.56.196.204:11003\n", nil
-		}
-		require.Equal(t, "192.168.0.102", publicIP)
-		require.Contains(t, script, ".config/moox/factor-engine/runtime.env")
-		require.Contains(t, script, "factor-engine")
-		return "rewrote ip://10.206.0.5:11003 -> ip://146.56.196.204:11003\nMOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=ip://146.56.196.204:11003\n", nil
+		require.Equal(t, "106.53.107.122", publicIP)
+		require.Contains(t, script, "/data/moox/prod/config/runtime.env")
+		require.Contains(t, script, "./start.sh collector")
+		return "rewrote ip://10.206.0.5:11003 -> ip://146.56.196.204:11003\nMOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=ip://146.56.196.204:11003\n", nil
 	}
 	require.NoError(t, rewriteMainlandStorageRPC(t.Context(), exec, result, io.Discard))
+	require.Len(t, seen, 1)
 	require.Contains(t, seen, "106.53.107.122")
-	require.Contains(t, seen, "192.168.0.102")
 }

@@ -71,11 +71,6 @@ func validateReservedInternalSpaces(seed metadataSeed) error {
 			return err
 		}
 	}
-	for _, item := range seed.Factors {
-		if err := check("factors", item.SpaceID); err != nil {
-			return err
-		}
-	}
 	for _, item := range seed.DatasetColumns {
 		if err := check("dataset_columns", item.SpaceID); err != nil {
 			return err
@@ -222,29 +217,9 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
-	for _, item := range seed.Factors {
-		factor, err := item.toPB()
-		if err != nil {
-			return nil, err
-		}
-		calls = append(calls, metadataImportCall{
-			Resource: "factors",
-			Method:   "CreateFactor",
-			Request:  &pb.CreateFactorReq{Factor: factor},
-			Response: &pb.CreateFactorRsp{},
-			Exists: &metadataExistsProbe{
-				Method:   "GetFactor",
-				Request:  &pb.GetFactorReq{SpaceId: factor.GetSpaceId(), FactorId: factor.GetFactorId()},
-				Response: &pb.GetFactorRsp{},
-			},
-		})
-	}
-	displayNames := make(map[string]string, len(seed.Fields)+len(seed.Factors))
+	displayNames := make(map[string]string, len(seed.Fields))
 	for _, item := range seed.Fields {
 		displayNames[metadataDisplayNameKey(item.SpaceID, "FIELD", item.FieldID)] = item.Name
-	}
-	for _, item := range seed.Factors {
-		displayNames[metadataDisplayNameKey(item.SpaceID, "FACTOR", item.FactorID)] = item.Name
 	}
 	for _, item := range seed.DatasetColumns {
 		if strings.TrimSpace(item.Attributes["display_name"]) == "" {
@@ -579,8 +554,6 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		return true, rsp.GetFieldGroup()
 	case *pb.GetFieldRsp:
 		return true, rsp.GetField()
-	case *pb.GetFactorRsp:
-		return true, rsp.GetFactor()
 	case *pb.GetDeviceRsp:
 		return true, rsp.GetDevice()
 	case *pb.GetViewRsp:
@@ -609,8 +582,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		expected = req.GetField()
 	case *pb.UpsertDatasetColumnReq:
 		expected = req.GetColumn()
-	case *pb.CreateFactorReq:
-		expected = req.GetFactor()
 	case *pb.CreateDeviceReq:
 		expected = req.GetDevice()
 	case *pb.CreateViewReq:
@@ -703,18 +674,6 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetValueType() == y.GetValueType() &&
 			x.GetRequired() == y.GetRequired() &&
 			slices.Equal(x.GetAliases(), y.GetAliases()) &&
-			x.GetStatus() == y.GetStatus() &&
-			maps.Equal(x.GetAttributes(), y.GetAttributes())
-	}
-	if resource == "factors" {
-		x, y := a.(*pb.Factor), b.(*pb.Factor)
-		return x.GetSpaceId() == y.GetSpaceId() &&
-			x.GetFactorId() == y.GetFactorId() &&
-			x.GetName() == y.GetName() &&
-			x.GetDescription() == y.GetDescription() &&
-			x.GetAlgorithm() == y.GetAlgorithm() &&
-			x.GetParamsJson() == y.GetParamsJson() &&
-			x.GetValueType() == y.GetValueType() &&
 			x.GetStatus() == y.GetStatus() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
@@ -891,14 +850,6 @@ func (s seedField) toPB() (*pb.Field, error) {
 
 func (s seedFieldGroup) toPB() *pb.FieldGroup {
 	return &pb.FieldGroup{SpaceId: s.SpaceID, GroupId: s.GroupID, Name: s.Name, Description: s.Description, ParentGroupId: s.ParentGroupID, SortOrder: s.SortOrder, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
-}
-
-func (s seedFactor) toPB() (*pb.Factor, error) {
-	valueType, err := parseFieldValueType(s.ValueType)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.Factor{SpaceId: s.SpaceID, FactorId: s.FactorID, Name: s.Name, Description: s.Description, Algorithm: s.Algorithm, ParamsJson: s.ParamsJSON, ValueType: valueType, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

@@ -1960,14 +1960,6 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 		// Gateway route.
 		tradeConsoleBindAddress = "127.0.0.1"
 	}
-	if isFactorEngineService(service) {
-		if err := requireDedicatedFactorEngineDeployDir(deployDir); err != nil {
-			return setupdeploy.ServiceResult{}, err
-		}
-		if err := syncFactorEngineRuntimeFromControl(ctx, snapshot, transport, host); err != nil {
-			return setupdeploy.ServiceResult{}, err
-		}
-	}
 	result, err := setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
 		PackagePath: packagePath, ServiceName: service, DeployDir: deployDir,
 		EventBusURL: setupEventBusURL(snapshot.Manifest), TradeConsoleBindAddress: tradeConsoleBindAddress,

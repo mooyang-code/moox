@@ -1076,6 +1076,11 @@ func TestLoadFactorSetupDefaultsAndItems(t *testing.T) {
 enabled = true
 source_dir = "./examples/factors"
 
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+
 [[factors.items]]
 factor_id = "bias"
 factor_type = "timeseries"
@@ -1084,8 +1089,7 @@ input_columns = ["close"]
 outputs = ["bias_5"]
 params_json = '{"windows":[5]}'
 lookback_periods = 5
-space_id = "crypto"
-source_view_id = "view_crypto_kline_1m"
+source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
@@ -1093,8 +1097,9 @@ freq = "1m"
 	assert.True(t, snapshot.Manifest.Factors.Enabled)
 	assert.Equal(t, "examples/factors", snapshot.Manifest.Factors.SourceDir)
 	require.Len(t, snapshot.Manifest.Factors.Items, 1)
+	require.Len(t, snapshot.Manifest.Factors.Sets, 1)
 	assert.Equal(t, "bias", snapshot.Manifest.Factors.Items[0].FactorID)
-	assert.Equal(t, "all", snapshot.Manifest.Factors.Items[0].SubjectMode)
+	assert.Equal(t, "all", snapshot.Manifest.Factors.Sets[0].SubjectMode)
 	assert.Equal(t, "enabled", snapshot.Manifest.Factors.Items[0].Status)
 }
 
@@ -1112,17 +1117,38 @@ func TestLoadRejectsInvalidFactorTypeBeforeSetup(t *testing.T) {
 [factors]
 enabled = true
 source_dir = "examples/factors"
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_prices"
+freq = "1m"
 [[factors.items]]
 factor_id = "Bias"
 file = "Bias.py"
-space_id = "crypto"
-source_view_id = "view"
+source_dataset_id = "dataset_prices"
 freq = "1m"
 lookback_periods = 20
 ` + declaration + "\n"
 		_, err := Load(writeManifest(t, root, body, 0o600), root)
 		require.ErrorContains(t, err, "factor_type")
 	}
+}
+
+func TestLoadRejectsFactorWithoutMatchingSet(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "examples/factors"
+[[factors.items]]
+factor_id = "Bias"
+factor_type = "timeseries"
+file = "Bias.py"
+source_dataset_id = "dataset_prices"
+freq = "1m"
+lookback_periods = 20
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "no matching factor set")
 }
 
 func TestLoadNotificationWebhook(t *testing.T) {

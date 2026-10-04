@@ -360,13 +360,10 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("storage-primary general route exposes collector period method %s", method)
 		}
 	}
-	for _, method := range []string{"ReportCollectorPeriodCompleted", "ReportMergePeriodCompleted", "CommitInput", "PatchFactor", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
+	for _, method := range []string{"ReportCollectorPeriodCompleted", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
 		if !containsString(primaryRoute.GatewayMethods, method) {
 			t.Fatalf("storage-primary gateway route missing %s: %v", method, primaryRoute.GatewayMethods)
 		}
-	}
-	if !containsString(primaryRoute.GatewayCallers, "merge") {
-		t.Fatalf("storage-primary gateway route missing merge caller: %v", primaryRoute.GatewayCallers)
 	}
 	for i := range storageExtra.GatewayRoutes {
 		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.DataShard" {
@@ -424,14 +421,14 @@ func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantMethods := []string{
-			"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor",
-			"UpsertBinding", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
+			"CreateFactorSet", "UpdateFactorSet", "SetFactorSetStatus", "DeleteFactorSet",
+			"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor", "RecalcFactors", "GetRecalcJob", "CancelRecalcJob",
 		}
 		if !reflect.DeepEqual(extra.GatewayMethods, wantMethods) ||
 			!reflect.DeepEqual(extra.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
 			t.Fatalf("moox_factor gateway contract = methods %v callers %v", extra.GatewayMethods, extra.GatewayCallers)
 		}
-		if len(extra.GatewayRoutes) != 1 || !reflect.DeepEqual(extra.GatewayRoutes[0].GatewayMethods, []string{"GetFactor", "ListFactors", "ListBindings"}) ||
+		if len(extra.GatewayRoutes) != 1 || !reflect.DeepEqual(extra.GatewayRoutes[0].GatewayMethods, []string{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "GetStatus"}) ||
 			!reflect.DeepEqual(extra.GatewayRoutes[0].GatewayCallers, []string{"admin-gateway", "moox-cli", "strategy"}) {
 			t.Fatalf("moox_factor read gateway contract = %+v", extra.GatewayRoutes)
 		}

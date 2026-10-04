@@ -640,17 +640,28 @@ type SCFFetcher struct {
 	Spaces        []SCFFetcherSpace      `toml:"spaces"`
 }
 
-// FactorSetup describes the local Python factors and their default View
-// bindings imported by `moox-cli setup init` or `setup factors`.
+// FactorSetup describes the local Python factors and their dataset-backed sets
+// imported by `moox-cli setup init` or `setup factors`.
 type FactorSetup struct {
 	Enabled   bool              `toml:"enabled"`
 	SourceDir string            `toml:"source_dir"`
+	Sets      []FactorSetupSet  `toml:"sets"`
 	Items     []FactorSetupItem `toml:"items"`
+}
+
+// FactorSetupSet identifies the source Dataset and subject scope shared by a
+// group of factor definitions.
+type FactorSetupSet struct {
+	SpaceID         string   `toml:"space_id"`
+	SourceDatasetID string   `toml:"source_dataset_id"`
+	Freq            string   `toml:"freq"`
+	SubjectMode     string   `toml:"subject_mode"`
+	Subjects        []string `toml:"subjects"`
 }
 
 // FactorSetupItem is intentionally declarative: the source file remains the
 // source of truth while this block supplies the runtime contract required by
-// FactorMgr and the default source View binding.
+// FactorMgr. Items associate with a set by source_dataset_id and freq.
 type FactorSetupItem struct {
 	FactorType      string   `toml:"factor_type"`
 	FactorID        string   `toml:"factor_id"`
@@ -660,11 +671,8 @@ type FactorSetupItem struct {
 	Outputs         []string `toml:"outputs"`
 	ParamsJSON      string   `toml:"params_json"`
 	LookbackPeriods int      `toml:"lookback_periods"`
-	SpaceID         string   `toml:"space_id"`
-	SourceViewID    string   `toml:"source_view_id"`
+	SourceDatasetID string   `toml:"source_dataset_id"`
 	Freq            string   `toml:"freq"`
-	SubjectMode     string   `toml:"subject_mode"`
-	Subjects        []string `toml:"subjects"`
 	Status          string   `toml:"status"`
 }
 
@@ -1508,6 +1516,36 @@ func validateFactorSetup(cfg *FactorSetup) error {
 	if cfg.SourceDir == "" || cfg.SourceDir == "." || filepath.IsAbs(cfg.SourceDir) || cfg.SourceDir == ".." || strings.HasPrefix(cfg.SourceDir, "../") {
 		return fmt.Errorf("config_invalid: factors.source_dir must be a repository-relative directory")
 	}
+	setKeys := make(map[string]struct{}, len(cfg.Sets))
+	for index := range cfg.Sets {
+		set := &cfg.Sets[index]
+		path := fmt.Sprintf("factors.sets[%d]", index)
+		set.SpaceID = strings.TrimSpace(set.SpaceID)
+		set.SourceDatasetID = strings.TrimSpace(set.SourceDatasetID)
+		set.Freq = strings.TrimSpace(set.Freq)
+		set.SubjectMode = strings.TrimSpace(set.SubjectMode)
+		if set.SpaceID == "" || set.SourceDatasetID == "" || set.Freq == "" {
+			return fmt.Errorf("config_invalid: %s requires space_id, source_dataset_id and freq", path)
+		}
+		key := factorSetupSetKey(set.SourceDatasetID, set.Freq)
+		if _, ok := setKeys[key]; ok {
+			return fmt.Errorf("config_invalid: factor set for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
+		}
+		setKeys[key] = struct{}{}
+		if set.SubjectMode == "" {
+			set.SubjectMode = "all"
+		}
+		if set.SubjectMode != "all" && set.SubjectMode != "include" {
+			return fmt.Errorf("config_invalid: %s.subject_mode must be all or include", path)
+		}
+		set.Subjects = uniqueTrimmedStrings(set.Subjects)
+		if set.SubjectMode == "include" && len(set.Subjects) == 0 {
+			return fmt.Errorf("config_invalid: %s.subjects must not be empty for include mode", path)
+		}
+		if set.SubjectMode == "all" && len(set.Subjects) != 0 {
+			return fmt.Errorf("config_invalid: %s.subjects must be empty when subject_mode is all", path)
+		}
+	}
 	seen := make(map[string]struct{}, len(cfg.Items))
 	for index := range cfg.Items {
 		item := &cfg.Items[index]
@@ -1519,13 +1557,14 @@ func validateFactorSetup(cfg *FactorSetup) error {
 		item.FactorID = strings.TrimSpace(item.FactorID)
 		item.File = filepath.ToSlash(filepath.Clean(strings.TrimSpace(item.File)))
 		item.Name = strings.TrimSpace(item.Name)
-		item.SpaceID = strings.TrimSpace(item.SpaceID)
-		item.SourceViewID = strings.TrimSpace(item.SourceViewID)
+		item.SourceDatasetID = strings.TrimSpace(item.SourceDatasetID)
 		item.Freq = strings.TrimSpace(item.Freq)
-		item.SubjectMode = strings.TrimSpace(item.SubjectMode)
 		item.Status = strings.TrimSpace(item.Status)
-		if item.FactorID == "" || item.File == "" || item.SpaceID == "" || item.SourceViewID == "" || item.Freq == "" {
-			return fmt.Errorf("config_invalid: %s requires factor_id, file, space_id, source_view_id and freq", path)
+		if item.FactorID == "" || item.File == "" || item.SourceDatasetID == "" || item.Freq == "" {
+			return fmt.Errorf("config_invalid: %s requires factor_id, file, source_dataset_id and freq", path)
+		}
+		if _, ok := setKeys[factorSetupSetKey(item.SourceDatasetID, item.Freq)]; !ok {
+			return fmt.Errorf("config_invalid: %s has no matching factor set for source_dataset_id %q and freq %q", path, item.SourceDatasetID, item.Freq)
 		}
 		if filepath.IsAbs(item.File) || item.File == ".." || strings.HasPrefix(item.File, "../") {
 			return fmt.Errorf("config_invalid: %s.file must stay under factors.source_dir", path)
@@ -1543,15 +1582,6 @@ func validateFactorSetup(cfg *FactorSetup) error {
 		if item.LookbackPeriods < 1 {
 			return fmt.Errorf("config_invalid: %s.lookback_periods must be at least 1", path)
 		}
-		if item.SubjectMode == "" {
-			item.SubjectMode = "all"
-		}
-		if item.SubjectMode != "all" && item.SubjectMode != "include" {
-			return fmt.Errorf("config_invalid: %s.subject_mode must be all or include", path)
-		}
-		if item.SubjectMode == "include" && len(item.Subjects) == 0 {
-			return fmt.Errorf("config_invalid: %s.subjects must not be empty for include mode", path)
-		}
 		if item.Status == "" {
 			item.Status = "enabled"
 		}
@@ -1560,6 +1590,27 @@ func validateFactorSetup(cfg *FactorSetup) error {
 		}
 	}
 	return nil
+}
+
+func factorSetupSetKey(sourceDatasetID, freq string) string {
+	return strings.TrimSpace(sourceDatasetID) + "\x00" + strings.TrimSpace(freq)
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func validateSCFFetcher(cfg *SCFFetcher) error {

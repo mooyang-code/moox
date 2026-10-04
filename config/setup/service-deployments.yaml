@@ -114,8 +114,8 @@ services:
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102
           max_body_bytes: 33554432
-          gateway_methods: [UpsertFields, ReadFields, ReadRecordRows, DeleteDatasetRows, RestoreDatasetRows, ReportCollectorPeriodCompleted, ReportMergePeriodCompleted, CommitInput, PatchFactor, AppendDatasetSyncPoint, WaitViewSyncPoint, ReportFactorPeriodComputed, GetFactorPeriodComputed]
-          gateway_callers: [admin-gateway, collector, factor, merge, monitor, archive, storage-view]
+          gateway_methods: [UpsertFields, ReadFields, ReadRecordRows, DeleteDatasetRows, RestoreDatasetRows, ReportCollectorPeriodCompleted, AppendDatasetSyncPoint, WaitViewSyncPoint, ReportFactorPeriodComputed, GetFactorPeriodComputed]
+          gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view]
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102
           max_body_bytes: 33554432
@@ -271,18 +271,18 @@ services:
     gateway_enabled: true
     scope: internal
     status: active
-    description: 因子计算服务，承载因子定义、绑定、补算与结果写回
+    description: 因子计算服务，承载因子集、因子定义、补算与结果写回
     extra_config:
       health_url: http://127.0.0.1:11414/readyz
       health_kind: readiness
       monitor_enabled: true
       timeout_ms: 120000
-      gateway_methods: [CreateFactor, UpdateFactor, SetFactorStatus, DeleteFactor, UpsertBinding, DeleteBinding, RecalcFactor, GetEngineStatus]
+      gateway_methods: [CreateFactorSet, UpdateFactorSet, SetFactorSetStatus, DeleteFactorSet, CreateFactor, UpdateFactor, SetFactorStatus, DeleteFactor, RecalcFactors, GetRecalcJob, CancelRecalcJob]
       gateway_callers: [admin-gateway, moox-cli]
       gateway_routes:
         - service_path: trpc.moox.factor.FactorMgr
           port: 11403
-          gateway_methods: [GetFactor, ListFactors, ListBindings]
+          gateway_methods: [GetFactorSet, ListFactorSets, GetFactor, ListFactors, GetStatus]
           gateway_callers: [admin-gateway, moox-cli, strategy]
   - name: moox_strategy
     kind: strategy

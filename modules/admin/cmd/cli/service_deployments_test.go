@@ -61,6 +61,27 @@ func TestLoadServiceDeploymentSeed_MatchesDefaultDeploymentContract(t *testing.T
 	}
 }
 
+func TestServiceDeploymentsHaveNoMergeOrFactorEngine(t *testing.T) {
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
+	require.NoError(t, err)
+	require.Len(t, seed.Services, 28)
+	allowedKinds := map[string]struct{}{
+		"admin_rpc": {}, "archive": {}, "cloudnode": {}, "collector": {}, "collector_runtime": {},
+		"collector_subject": {}, "eventbus": {}, "factor": {}, "frontend": {}, "gateway": {},
+		"hostagent": {}, "monitor": {}, "storage": {}, "strategy": {}, "trade": {},
+	}
+	for _, service := range seed.Services {
+		_, ok := allowedKinds[service.Kind]
+		require.Truef(t, ok, "unexpected service kind %q for %q", service.Kind, service.Name)
+	}
+	defaults := sysdeploy.DefaultDeployments(seed.Node.ID)
+	require.Len(t, defaults, 28)
+	for _, deployment := range defaults {
+		_, ok := allowedKinds[deployment.ServiceKind]
+		require.Truef(t, ok, "unexpected default service kind %q for %q", deployment.ServiceKind, deployment.ServiceName)
+	}
+}
+
 func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "admin.db")
@@ -433,15 +454,15 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 			continue
 		}
 		require.Equal(t, []any{
-			"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor",
-			"UpsertBinding", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
+			"CreateFactorSet", "UpdateFactorSet", "SetFactorSetStatus", "DeleteFactorSet",
+			"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor", "RecalcFactors", "GetRecalcJob", "CancelRecalcJob",
 		}, item.ExtraConfig["gateway_methods"])
 		require.Equal(t, []any{"admin-gateway", "moox-cli"}, item.ExtraConfig["gateway_callers"])
 		routes, ok := item.ExtraConfig["gateway_routes"].([]any)
 		require.True(t, ok)
 		require.Len(t, routes, 1)
 		readRoute := routes[0].(map[string]any)
-		require.Equal(t, []any{"GetFactor", "ListFactors", "ListBindings"}, readRoute["gateway_methods"])
+		require.Equal(t, []any{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "GetStatus"}, readRoute["gateway_methods"])
 		require.Equal(t, []any{"admin-gateway", "moox-cli", "strategy"}, readRoute["gateway_callers"])
 		return
 	}

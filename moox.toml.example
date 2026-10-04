@@ -68,12 +68,18 @@ period_snapshot_retention = "720h"
 channel_type = "wecom"
 webhook_url = ""
 
-# setup init 导入本地 Python 因子，并建立默认 Source View 绑定。
+# setup init 导入本地 Python 因子，并按源数据集与频率建立因子集。
 # outputs 同时作为结果列的 display_name，例如 bias_20、ma_20。
-# 关闭默认因子导入请设置 factors.enabled = false；也可以复制条目改成自己的 View、频率和参数。
+# 关闭默认因子导入请设置 factors.enabled = false；也可以复制条目改成自己的数据集、频率和参数。
 [factors]
 enabled = false
 source_dir = "./modules/factor/factors"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_binance_kline_1m"
+freq = "1m"
+subject_mode = "all"
 
 [[factors.items]]
 factor_id = "Bias"
@@ -84,10 +90,8 @@ input_columns = ["close"]
 outputs = ["bias_5", "bias_20"]
 params_json = '{"windows":[5,20]}'
 lookback_periods = 20
-space_id = "crypto"
-source_view_id = "view_binance_kline_1m"
+source_dataset_id = "dataset_binance_kline_1m"
 freq = "1m"
-subject_mode = "all"
 status = "enabled"
 
 [[factors.items]]
@@ -99,10 +103,8 @@ input_columns = ["high", "low", "close"]
 outputs = ["cci"]
 params_json = '{"window":20}'
 lookback_periods = 20
-space_id = "crypto"
-source_view_id = "view_binance_kline_1m"
+source_dataset_id = "dataset_binance_kline_1m"
 freq = "1m"
-subject_mode = "all"
 status = "enabled"
 
 [[factors.items]]
@@ -114,10 +116,8 @@ input_columns = ["high", "low", "close"]
 outputs = ["minmax_20"]
 params_json = '{"window":20}'
 lookback_periods = 20
-space_id = "crypto"
-source_view_id = "view_binance_kline_1m"
+source_dataset_id = "dataset_binance_kline_1m"
 freq = "1m"
-subject_mode = "all"
 status = "enabled"
 
 [[factors.items]]
@@ -129,10 +129,8 @@ input_columns = ["quote_volume"]
 outputs = ["quote_volume_mean_20"]
 params_json = '{"window":20}'
 lookback_periods = 20
-space_id = "crypto"
-source_view_id = "view_binance_kline_1m"
+source_dataset_id = "dataset_binance_kline_1m"
 freq = "1m"
-subject_mode = "all"
 status = "enabled"
 
 # 短时行情 SCF 按 Space 独立发布、独立消费任务。所有市场复用通用

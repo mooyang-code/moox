@@ -188,7 +188,6 @@ func defaultEnsurePrivateNetwork(ctx context.Context, snapshot *setupconfig.Snap
 		}
 	}
 	if shouldRewritePublicStorageRPC(opts) {
-		result.Plan.Hosts = appendMissingFactorHosts(result.Plan.Hosts, snapshot)
 		if err := rewriteMainlandStorageRPC(applyCtx, exec, result, stderr); err != nil {
 			result.Status = "rewrite_failed"
 			return result, err
@@ -206,50 +205,6 @@ func shouldRewritePublicStorageRPC(opts privatenet.Options) bool {
 	return opts.RewriteRuntime && !opts.DryRun
 }
 
-func isFactorRewriteHost(host privatenet.ResolvedHost) bool {
-	if strings.Contains(strings.ToLower(host.Name), "factor") {
-		return true
-	}
-	for _, role := range host.Roles {
-		if strings.Contains(strings.ToLower(role), "factor") {
-			return true
-		}
-	}
-	return false
-}
-
-func appendMissingFactorHosts(hosts []privatenet.ResolvedHost, snapshot *setupconfig.Snapshot) []privatenet.ResolvedHost {
-	if snapshot == nil {
-		return hosts
-	}
-	seen := map[string]struct{}{}
-	for _, host := range hosts {
-		if address := strings.TrimSpace(host.Address); address != "" {
-			seen[address] = struct{}{}
-		}
-	}
-	for _, host := range snapshot.Manifest.Hosts() {
-		if !strings.Contains(strings.ToLower(strings.TrimSpace(host.Name)), "factor") {
-			continue
-		}
-		address := strings.TrimSpace(host.Address)
-		if address == "" {
-			address = strings.TrimSpace(host.Host)
-		}
-		if address == "" {
-			continue
-		}
-		if _, ok := seen[address]; ok {
-			continue
-		}
-		seen[address] = struct{}{}
-		hosts = append(hosts, privatenet.ResolvedHost{
-			HostTarget: privatenet.HostTarget{Name: host.Name, Address: address, Roles: []string{host.Name}},
-		})
-	}
-	return hosts
-}
-
 func rewriteMainlandStorageRPC(ctx context.Context, exec func(context.Context, string, string) (string, error), result privatenet.Result, stderr io.Writer) error {
 	publicIP := strings.TrimSpace(result.RecommendedConfig.StoragePublicIP)
 	privateIP := strings.TrimSpace(result.RecommendedConfig.StoragePrivateIP)
@@ -264,15 +219,9 @@ func rewriteMainlandStorageRPC(ctx context.Context, exec func(context.Context, s
 			}
 			rewrote = true
 		}
-		if isFactorRewriteHost(host) {
-			if err := rewriteFactorEngineStorageRPC(ctx, exec, host.Address, privateIP, publicIP, stderr); err != nil {
-				return err
-			}
-			rewrote = true
-		}
 	}
 	if !rewrote {
-		return fmt.Errorf("private-network: no control or factor host to rewrite")
+		return fmt.Errorf("private-network: no control host to rewrite")
 	}
 	return nil
 }
@@ -312,57 +261,6 @@ tr "\0" "\n" < /proc/$pid/environ | grep "^MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TA
 	}
 	if !strings.Contains(stdout, "ip://"+publicIP+":11003") {
 		return fmt.Errorf("collector did not pick up public storage rpc target")
-	}
-	return nil
-}
-
-func rewriteFactorEngineStorageRPC(ctx context.Context, exec func(context.Context, string, string) (string, error), hostIP, privateIP, publicIP string, stderr io.Writer) error {
-	script := fmt.Sprintf(`set -euo pipefail
-rewritten=0
-for envfile in "$HOME/.config/moox/factor-engine/runtime.env" "$HOME/moox/factor-engine/config/runtime.env"; do
-  if test -f "$envfile"; then
-    cp -a "$envfile" "$envfile.pre-public-net"
-    python3 -c 'import pathlib,sys
-p=pathlib.Path(sys.argv[3])
-text=p.read_text()
-old="ip://"+sys.argv[1]+":11003"
-new="ip://"+sys.argv[2]+":11003"
-if old in text:
-    p.write_text(text.replace(old,new,1))
-    print("rewrote "+old+" -> "+new+" in "+str(p))
-elif new in text:
-    print("already "+new+" in "+str(p))
-else:
-    raise SystemExit("storage rpc target "+old+" not found in "+str(p))
-' %s %s "$envfile"
-    rewritten=1
-  fi
-done
-test "$rewritten" = 1
-start=""
-for candidate in "$HOME/moox/factor-engine/start.sh"; do
-  if test -x "$candidate"; then
-    start="$candidate"
-    break
-  fi
-done
-test -n "$start"
-"$start"
-pid=$(cat "$(dirname "$start")/run/factor-engine.pid")
-tr "\0" "\n" < /proc/$pid/environ | grep "^MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=" || true
-`, privateIP, publicIP)
-	if stderr != nil {
-		fmt.Fprintf(stderr, "rewrite factor-engine storage rpc %s -> %s on %s\n", privateIP, publicIP, hostIP)
-	}
-	stdout, err := exec(ctx, hostIP, script)
-	if stderr != nil && strings.TrimSpace(stdout) != "" {
-		fmt.Fprintln(stderr, strings.TrimSpace(stdout))
-	}
-	if err != nil {
-		return fmt.Errorf("rewrite factor-engine runtime: %w", err)
-	}
-	if !strings.Contains(stdout, "ip://"+publicIP+":11003") {
-		return fmt.Errorf("factor-engine did not pick up public storage rpc target")
 	}
 	return nil
 }

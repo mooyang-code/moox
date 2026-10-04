@@ -125,7 +125,6 @@ type metadataSeed struct {
 	Datasets       []seedDataset       `yaml:"datasets"`
 	FieldGroups    []seedFieldGroup    `yaml:"field_groups"`
 	Fields         []seedField         `yaml:"fields"`
-	Factors        []seedFactor        `yaml:"factors"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
 	Views          []seedView          `yaml:"views"`
 	ViewColumns    []seedViewColumn    `yaml:"view_columns"`
@@ -220,17 +219,6 @@ type seedFieldGroup struct {
 	ParentGroupID string `yaml:"parent_group_id"`
 	SortOrder     uint32 `yaml:"sort_order"`
 	seedCommon    `yaml:",inline"`
-}
-
-type seedFactor struct {
-	SpaceID     string `yaml:"space_id"`
-	FactorID    string `yaml:"factor_id"`
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Algorithm   string `yaml:"algorithm"`
-	ParamsJSON  string `yaml:"params_json"`
-	ValueType   string `yaml:"value_type"`
-	seedCommon  `yaml:",inline"`
 }
 
 type seedDatasetColumn struct {

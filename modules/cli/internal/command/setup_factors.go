@@ -11,9 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	adminclient "github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -32,8 +32,9 @@ type setupFactorItem struct {
 	Outputs         []string
 	ParamsJSON      string
 	LookbackPeriods int
+	SetID           string
 	SpaceID         string
-	SourceViewID    string
+	SourceDatasetID string
 	Freq            string
 	SubjectMode     string
 	Subjects        []string
@@ -41,11 +42,12 @@ type setupFactorItem struct {
 }
 
 type setupFactorSummary struct {
-	Enabled   bool `json:"enabled"`
-	Planned   int  `json:"planned"`
-	Imported  int  `json:"imported"`
-	Bound     int  `json:"bound"`
-	Unchanged int  `json:"unchanged"`
+	Enabled     bool `json:"enabled"`
+	Planned     int  `json:"planned"`
+	SetsCreated int  `json:"sets_created"`
+	Imported    int  `json:"imported"`
+	Associated  int  `json:"associated"`
+	Unchanged   int  `json:"unchanged"`
 }
 
 type setupInitFactor interface {
@@ -53,37 +55,32 @@ type setupInitFactor interface {
 	Close() error
 }
 
-// These defaults define the initial factor bindings for a fresh installation.
-// Users can replace the list in moox.toml when they need another View contract.
+// These defaults define the initial factor set for a fresh installation.
 func defaultSetupFactorItems() []setupconfig.FactorSetupItem {
 	return []setupconfig.FactorSetupItem{
 		{
 			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", Name: "Bias",
 			InputColumns: []string{"close"}, Outputs: []string{"bias_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m",
-			SubjectMode: "all", Status: "enabled",
+			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "Cci", File: "Cci.py", Name: "Cci",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"cci"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m",
-			SubjectMode: "all", Status: "enabled",
+			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "MinMax", File: "MinMax.py", Name: "MinMax",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"minmax_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m",
-			SubjectMode: "all", Status: "enabled",
+			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "QuoteVolumeMean", File: "QuoteVolumeMean.py", Name: "QuoteVolumeMean",
 			InputColumns: []string{"quote_volume"}, Outputs: []string{"quote_volume_mean_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SpaceID: "crypto", SourceViewID: "view_binance_kline_1m", Freq: "1m",
-			SubjectMode: "all", Status: "enabled",
+			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", Status: "enabled",
 		},
 	}
 }
@@ -96,7 +93,7 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFa
 		manifest.Factors.SourceDir = "modules/factor/factors"
 	}
 	items := manifest.Factors.Items
-	if len(items) == 0 {
+	if len(items) == 0 && len(manifest.Factors.Sets) == 0 {
 		defaultRoot := filepath.Join(repoRoot, filepath.FromSlash(manifest.Factors.SourceDir))
 		if _, err := os.Stat(defaultRoot); err != nil {
 			if os.IsNotExist(err) {
@@ -105,6 +102,22 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFa
 			return nil, fmt.Errorf("stat factors directory: %w", err)
 		}
 		items = defaultSetupFactorItems()
+		manifest.Factors.Sets = []setupconfig.FactorSetupSet{{
+			SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", SubjectMode: "all",
+		}}
+	} else if len(items) == 0 {
+		return nil, fmt.Errorf("factors.items must be configured when factors.sets is specified")
+	}
+	sets := make(map[string]setupconfig.FactorSetupSet, len(manifest.Factors.Sets))
+	for _, set := range manifest.Factors.Sets {
+		key := factorSetupIdentity(set.SourceDatasetID, set.Freq)
+		if key == "\x00" {
+			return nil, fmt.Errorf("factor set requires source_dataset_id and freq")
+		}
+		if _, exists := sets[key]; exists {
+			return nil, fmt.Errorf("factor set for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
+		}
+		sets[key] = set
 	}
 	root := filepath.Join(repoRoot, filepath.FromSlash(manifest.Factors.SourceDir))
 	result := make([]setupFactorItem, 0, len(items))
@@ -176,24 +189,42 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFa
 		if status == "" {
 			status = "enabled"
 		}
-		subjectMode := strings.TrimSpace(item.SubjectMode)
-		if subjectMode == "" {
-			subjectMode = "all"
+		datasetID, freq := strings.TrimSpace(item.SourceDatasetID), strings.TrimSpace(item.Freq)
+		set, ok := sets[factorSetupIdentity(datasetID, freq)]
+		if !ok {
+			return nil, fmt.Errorf("factor %q has no matching set for source_dataset_id %q and freq %q", factorID, datasetID, freq)
 		}
-		subjects := cleanStrings(item.Subjects)
-		if subjectMode == "include" && len(subjects) == 0 {
-			return nil, fmt.Errorf("factor %q include binding requires subjects", factorID)
-		}
+		setID := factorSetID(datasetID, freq)
 		hash := sha256.Sum256([]byte(sourceCode))
 		result = append(result, setupFactorItem{
 			FactorType: item.FactorType,
-			FactorID:   factorID, Name: name, SourceCode: sourceCode, SourceHash: hex.EncodeToString(hash[:]),
+			FactorID:   factorID, Name: name, SourceCode: sourceCode, SourceHash: "sha256:" + hex.EncodeToString(hash[:]),
 			InputColumns: inputColumns, Outputs: outputs, ParamsJSON: params, LookbackPeriods: item.LookbackPeriods,
-			SpaceID: strings.TrimSpace(item.SpaceID), SourceViewID: strings.TrimSpace(item.SourceViewID), Freq: strings.TrimSpace(item.Freq),
-			SubjectMode: subjectMode, Subjects: subjects, Status: status,
+			SetID: setID, SpaceID: strings.TrimSpace(set.SpaceID), SourceDatasetID: datasetID, Freq: freq,
+			SubjectMode: defaultString(strings.TrimSpace(set.SubjectMode), "all"), Subjects: cleanStrings(set.Subjects), Status: status,
 		})
 	}
 	return result, nil
+}
+
+func factorSetupIdentity(sourceDatasetID, freq string) string {
+	return strings.TrimSpace(sourceDatasetID) + "\x00" + strings.TrimSpace(freq)
+}
+
+func factorSetID(sourceDatasetID, freq string) string {
+	suffix := strings.TrimPrefix(strings.TrimSpace(sourceDatasetID), "dataset_")
+	freq = strings.TrimSpace(freq)
+	if !strings.HasSuffix(suffix, "_"+freq) {
+		suffix += "_" + freq
+	}
+	return "fset_" + suffix
+}
+
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func cleanStrings(values []string) []string {
@@ -300,6 +331,7 @@ type factorAPIResponse struct {
 	Factor  struct {
 		FactorType      string   `json:"factor_type"`
 		FactorID        string   `json:"factor_id"`
+		SetID           string   `json:"set_id"`
 		Name            string   `json:"name"`
 		SourceCode      string   `json:"source_code"`
 		SourceHash      string   `json:"source_hash"`
@@ -309,19 +341,15 @@ type factorAPIResponse struct {
 		LookbackPeriods int      `json:"lookback_periods"`
 		Status          string   `json:"status"`
 	} `json:"factor"`
-	Binding    factorAPIBinding     `json:"binding"`
-	Bindings   []factorAPIBinding   `json:"bindings"`
-	PageResult *factorAPIPageResult `json:"page_result"`
-}
-
-type factorAPIPageResult struct {
-	HasMore bool `json:"has_more"`
-}
-
-type factorAPIBinding struct {
-	BindingID string `json:"binding_id"`
-	FactorID  string `json:"factor_id"`
-	Status    string `json:"status"`
+	FactorSet struct {
+		SetID           string   `json:"set_id"`
+		SpaceID         string   `json:"space_id"`
+		SourceDatasetID string   `json:"source_dataset_id"`
+		Freq            string   `json:"freq"`
+		SubjectMode     string   `json:"subject_mode"`
+		Subjects        []string `json:"subjects"`
+		Status          string   `json:"status"`
+	} `json:"factor_set"`
 }
 
 func (r factorAPIResponse) err(method string) error {
@@ -347,151 +375,99 @@ func (r *remoteSetupFactor) call(ctx context.Context, method string, body any, r
 
 func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) (setupFactorSummary, error) {
 	summary := setupFactorSummary{Enabled: len(items) > 0, Planned: len(items)}
-	// Drop stale setup-* bindings before enable, so SetFactorStatus does not
-	// revalidate a leftover source View that this run is replacing.
-	if err := r.removeObsoleteSetupBindings(ctx, items); err != nil {
-		return summary, err
-	}
+	sets := make(map[string]setupFactorItem, len(items))
 	for _, item := range items {
+		if previous, ok := sets[item.SetID]; ok &&
+			(previous.SpaceID != item.SpaceID || previous.SourceDatasetID != item.SourceDatasetID || previous.Freq != item.Freq || previous.SubjectMode != item.SubjectMode || !slices.Equal(previous.Subjects, item.Subjects)) {
+			return summary, fmt.Errorf("factor set %q has conflicting configuration", item.SetID)
+		}
+		sets[item.SetID] = item
+	}
+	setIDs := make([]string, 0, len(sets))
+	for setID := range sets {
+		setIDs = append(setIDs, setID)
+	}
+	sort.Strings(setIDs)
+	for _, setID := range setIDs {
+		item := sets[setID]
 		get := factorAPIResponse{}
-		err := r.call(ctx, "GetFactor", map[string]any{"factor_id": item.FactorID}, &get)
-		notFound := get.RetInfo.Code == 9 || get.RetInfo.Code == 5 ||
-			(get.RetInfo.Code == 4 && strings.Contains(strings.ToLower(get.RetInfo.Msg), "not found"))
-		if err != nil && !notFound {
+		err := r.call(ctx, "GetFactorSet", map[string]any{"set_id": setID}, &get)
+		if err != nil && !factorAPINotFound(get) {
 			return summary, err
 		}
 		if err != nil {
 			create := factorAPIResponse{}
+			if createErr := r.call(ctx, "CreateFactorSet", map[string]any{"factor_set": map[string]any{
+				"set_id": setID, "space_id": item.SpaceID, "source_dataset_id": item.SourceDatasetID,
+				"freq": item.Freq, "subject_mode": item.SubjectMode, "subjects": item.Subjects, "status": "pending",
+			}}, &create); createErr != nil {
+				return summary, createErr
+			}
+			summary.SetsCreated++
+			continue
+		}
+		if get.FactorSet.SpaceID != item.SpaceID || get.FactorSet.SourceDatasetID != item.SourceDatasetID || get.FactorSet.Freq != item.Freq {
+			return summary, fmt.Errorf("factor set %q already exists with a different source identity", setID)
+		}
+		if get.FactorSet.SubjectMode != item.SubjectMode || !slices.Equal(cleanStrings(get.FactorSet.Subjects), item.Subjects) {
+			updated := factorAPIResponse{}
+			if updateErr := r.call(ctx, "UpdateFactorSet", map[string]any{
+				"set_id": setID, "subject_mode": item.SubjectMode, "subjects": item.Subjects,
+			}, &updated); updateErr != nil {
+				return summary, updateErr
+			}
+		}
+		summary.Unchanged++
+	}
+	for _, item := range items {
+		get := factorAPIResponse{}
+		err := r.call(ctx, "GetFactor", map[string]any{"factor_id": item.FactorID}, &get)
+		if err != nil && !factorAPINotFound(get) {
+			return summary, err
+		}
+		created := false
+		if err != nil {
+			create := factorAPIResponse{}
 			if createErr := r.call(ctx, "CreateFactor", map[string]any{"factor": map[string]any{
-				"factor_type": item.FactorType,
-				"factor_id":   item.FactorID, "name": item.Name, "source_code": item.SourceCode,
+				"factor_type": item.FactorType, "factor_id": item.FactorID, "set_id": item.SetID,
+				"name": item.Name, "source_code": item.SourceCode, "source_hash": item.SourceHash,
 				"input_columns": item.InputColumns, "outputs": item.Outputs, "params_json": item.ParamsJSON,
 				"lookback_periods": item.LookbackPeriods, "status": "disabled",
 			}}, &create); createErr != nil {
 				return summary, createErr
 			}
 			summary.Imported++
+			created = true
 		} else {
 			if !sameFactorContract(get.Factor, item) {
 				return summary, fmt.Errorf("factor %q already exists with a different definition; update moox.toml or replace it explicitly", item.FactorID)
 			}
 			summary.Unchanged++
 		}
-
-		subjectsJSON, _ := json.Marshal(item.Subjects)
-		bindingID := "setup-" + item.FactorID + "-" + item.SpaceID + "-" + item.SourceViewID + "-" + item.Freq
-		// Keep a newly-created (or previously disabled) factor non-executable
-		// until the Result View contract has been reconciled.  The Factor RPC
-		// treats disabled factors as immediately ready, so sending an enabled
-		// binding before SetFactorStatus would expose a small cross-RPC window
-		// in which a queued source-ready event can run against an unbuilt View.
-		initialStatus := item.Status
-		if item.Status == "enabled" && (get.Factor.Status != "enabled") {
-			initialStatus = "disabled"
+		currentStatus := "disabled"
+		if !created {
+			currentStatus = get.Factor.Status
 		}
-		binding := map[string]any{
-			"binding_id": bindingID, "factor_id": item.FactorID, "space_id": item.SpaceID,
-			"source_view_id": item.SourceViewID, "freq": item.Freq, "subject_mode": item.SubjectMode,
-			"subjects_json": string(subjectsJSON), "status": initialStatus,
-		}
-		upsert := factorAPIResponse{}
-		if err := r.callWithSourceViewRetry(ctx, "UpsertBinding", map[string]any{"binding": binding}, &upsert); err != nil {
-			if !isSourceViewUnavailable(err) {
-				return summary, err
-			}
-			binding["status"] = "pending_view"
-			pending := factorAPIResponse{}
-			if pendingErr := r.call(ctx, "UpsertBinding", map[string]any{"binding": binding}, &pending); pendingErr != nil {
-				return summary, pendingErr
-			}
-		}
-		if initialStatus == "enabled" && upsert.Binding.Status != "" &&
-			upsert.Binding.Status != "enabled" && upsert.Binding.Status != "pending_view" {
-			return summary, fmt.Errorf("factor %q binding is %s", item.FactorID, upsert.Binding.Status)
-		}
-		if item.Status == "enabled" {
+		if currentStatus != item.Status {
 			status := factorAPIResponse{}
-			if err := r.call(ctx, "SetFactorStatus", map[string]any{"factor_id": item.FactorID, "status": "enabled"}, &status); err != nil {
-				return summary, err
-			}
-			// CreateFactor starts disabled. The first UpsertBinding therefore
-			// cannot observe an in-progress Result View build. Reconcile once
-			// more after enabling the Factor so a fresh install remains pending
-			// until the Result View is actually readable.
-			binding["status"] = "enabled"
-			ready := factorAPIResponse{}
-			if err := r.callWithSourceViewRetry(ctx, "UpsertBinding", map[string]any{"binding": binding}, &ready); err != nil {
-				if !isSourceViewUnavailable(err) {
-					return summary, err
-				}
-				// Source Views have no active index on a brand-new installation
-				// until the first source data is indexed. Keep the intended
-				// executable factor enabled, but persist its binding as pending
-				// so the Factor reconciler can promote it later.
-				binding["status"] = "pending_view"
-				pending := factorAPIResponse{}
-				if pendingErr := r.call(ctx, "UpsertBinding", map[string]any{"binding": binding}, &pending); pendingErr != nil {
-					return summary, pendingErr
-				}
-			}
-			if ready.Binding.Status != "" && ready.Binding.Status != "enabled" && ready.Binding.Status != "pending_view" {
-				return summary, fmt.Errorf("factor %q binding is %s", item.FactorID, ready.Binding.Status)
-			}
-		} else {
-			status := factorAPIResponse{}
-			if err := r.call(ctx, "SetFactorStatus", map[string]any{"factor_id": item.FactorID, "status": "disabled"}, &status); err != nil {
+			if err := r.call(ctx, "SetFactorStatus", map[string]any{"factor_id": item.FactorID, "status": item.Status}, &status); err != nil {
 				return summary, err
 			}
 		}
-		summary.Bound++
-	}
-	if err := r.removeObsoleteSetupBindings(ctx, items); err != nil {
-		return summary, err
+		summary.Associated++
 	}
 	return summary, nil
 }
 
-func (r *remoteSetupFactor) removeObsoleteSetupBindings(ctx context.Context, items []setupFactorItem) error {
-	desired := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		desired["setup-"+item.FactorID+"-"+item.SpaceID+"-"+item.SourceViewID+"-"+item.Freq] = struct{}{}
-	}
-	var obsolete []string
-	for page := 1; ; page++ {
-		list := factorAPIResponse{}
-		if err := r.call(ctx, "ListBindings", map[string]any{"page": map[string]any{"page": page, "size": 1000}}, &list); err != nil {
-			return err
-		}
-		for _, binding := range list.Bindings {
-			if !strings.HasPrefix(binding.BindingID, "setup-") {
-				continue
-			}
-			if _, ok := desired[binding.BindingID]; ok {
-				continue
-			}
-			obsolete = append(obsolete, binding.BindingID)
-		}
-		if list.PageResult == nil || !list.PageResult.HasMore {
-			break
-		}
-		if page >= 10000 {
-			return fmt.Errorf("ListBindings pagination exceeded 10000 pages")
-		}
-	}
-	// Collect all IDs before deleting. The server uses offset pagination, so
-	// deleting page 1 while traversing would shift page 2 and skip records.
-	for _, bindingID := range obsolete {
-		removed := factorAPIResponse{}
-		if err := r.call(ctx, "DeleteBinding", map[string]any{"binding_id": bindingID}, &removed); err != nil {
-			return err
-		}
-	}
-	return nil
+func factorAPINotFound(response factorAPIResponse) bool {
+	return response.RetInfo.Code == 9 || response.RetInfo.Code == 5 ||
+		(response.RetInfo.Code == 4 && strings.Contains(strings.ToLower(response.RetInfo.Msg), "not found"))
 }
 
 func sameFactorContract(got struct {
 	FactorType      string   `json:"factor_type"`
 	FactorID        string   `json:"factor_id"`
+	SetID           string   `json:"set_id"`
 	Name            string   `json:"name"`
 	SourceCode      string   `json:"source_code"`
 	SourceHash      string   `json:"source_hash"`
@@ -504,7 +480,7 @@ func sameFactorContract(got struct {
 	if got.FactorType != want.FactorType {
 		return false
 	}
-	if got.SourceHash != want.SourceHash || got.Name != want.Name || got.LookbackPeriods != want.LookbackPeriods || !slicesEqual(got.InputColumns, want.InputColumns) || !slicesEqual(got.Outputs, want.Outputs) {
+	if got.SetID != want.SetID || got.SourceHash != want.SourceHash || got.Name != want.Name || got.LookbackPeriods != want.LookbackPeriods || !slicesEqual(got.InputColumns, want.InputColumns) || !slicesEqual(got.Outputs, want.Outputs) {
 		return false
 	}
 	return canonicalJSON(got.ParamsJSON) == canonicalJSON(want.ParamsJSON)
@@ -534,44 +510,6 @@ func canonicalJSON(raw string) string {
 		return strings.TrimSpace(raw)
 	}
 	return string(encoded)
-}
-
-func (r *remoteSetupFactor) callWithSourceViewRetry(ctx context.Context, method string, body any, response *factorAPIResponse) error {
-	const retryInterval = time.Second
-	const maxWait = 35 * time.Second
-	deadline := time.Now().Add(maxWait)
-	for {
-		*response = factorAPIResponse{}
-		err := r.call(ctx, method, body, response)
-		pendingView := method == "UpsertBinding" && response.Binding.Status == "pending_view"
-		if err == nil && (method != "UpsertBinding" || !pendingView) {
-			return nil
-		}
-		if err == nil && pendingView {
-			// pending_view is a successful durable state on a fresh install: the
-			// source View has no active index until its first data arrives. The
-			// Factor reconciler will promote the binding after that index exists.
-			return nil
-		}
-		if isSourceViewUnavailable(err) {
-			return err
-		}
-		if err != nil && !strings.Contains(err.Error(), "must have an active index") {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(retryInterval):
-		}
-	}
-}
-
-func isSourceViewUnavailable(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "must have an active index")
 }
 
 func (r *remoteSetupFactor) Close() error {

@@ -11,7 +11,6 @@ moox-cli setup init ...             # 一次初始化 Admin 空间、Storage 元
 moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
 moox-cli storage repair-view ...    # 清理 View durable consumer 积压并触发 A/B 重建
 moox-cli storage reset-view-consumers ... # 删除全部 View durable/消息/索引并从 Primary 回溯重建
-moox-cli factor clear-queue ...     # 清空 Factor durable consumer 历史积压并重启 Factor
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包、发布/部署及 Timer 只读盘点
 moox-cli collector period-inventory ... # 一致只读盘点 Collector SQLite 周期与运行态
@@ -111,23 +110,6 @@ moox-cli storage repair-view \
 active 索引不会被删除。NATS 删除 consumer 需要 EventBus internal-admin 凭据，使用
 `--credential-file` 或 `MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE` 指定，命令不会输出凭据。
 先执行 `--dry-run` 可只检查 View 和将要执行的动作。
-
-### Factor 队列积压清理
-
-当 Factor 因历史 `ViewDataReady` 或 `DatasetRowsUpserted` 事件积压而长期重算旧周期时，可在部署根目录执行：
-
-```bash
-moox-cli factor clear-queue \
-  --package-root /data/moox/prod \
-  --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
-  --yes
-```
-
-命令会先停止 Factor，读取并删除 `MOOX_STORAGE/factor_view_ready_v1` durable consumer，
-再启动 Factor。新建 consumer 使用 `DeliverNew`，因此只处理清理完成后的新事件；命令不会删除
-View、Factor 结果或其他数据。可先用 `--dry-run` 检查参数，若不希望自动重启可传
-`--restart=false`。若部署环境无法从 `moox-factor-cli` 自动定位根目录，请显式传
-`--package-root`；NATS 管理凭据也可通过 `MOOX_EVENTBUS_INTERNAL_ADMIN_CREDENTIAL_FILE` 提供。
 
 全量丢弃 View 历史时优先使用上面的 `reset-view-consumers`。它直接从保留的 Primary
 事实数据回溯构建，不依赖 JetStream 旧消息，也不会误删 Primary。
@@ -244,19 +226,6 @@ moox-cli setup deploy-service \
   --package ./release/moox-admin-linux-amd64.zip
 ```
 
-内网因子引擎使用独立打包入口，必须部署到单独目录，不要覆盖控制面或 Storage 的 `start.sh`：
-
-```bash
-./scripts/build/package-factor-engine.sh \
-  --output ./release/moox-factor-engine-linux-amd64.zip
-moox-cli setup deploy-service \
-  --file ./moox.toml \
-  --host compute \
-  --service factor-engine \
-  --package ./release/moox-factor-engine-linux-amd64.zip \
-  --deploy-dir /data/moox/factor-engine
-```
-
 发布成功后，CLI 会以幂等方式把服务写入 Admin 的 `t_service_deployments`。
 Monitor 会从该目录同步系统服务检查，因此服务总览无需再手工创建服务记录。
 
@@ -310,11 +279,12 @@ moox-cli setup factors --file ./moox.toml
 Crypto 与 StockCN 发布会先在 reservation 专属的临时 Invoke 函数上验证候选包，之后才更新生产 Invoke/Timer fleet；激活 StockCN 时必须逐地域提供发布结果中的精确 package ID，版本字符串相同但包 ID 不同也会拒绝。
 
 如果 `moox.toml` 启用了 `[factors]`，同一个 `setup init` 还会从
-`factors.source_dir` 读取 Python 因子，调用 FactorMgr 导入定义、建立绑定并启用因子。
-仓库的 `moox.toml.example` 已给出 `Bias`、`Cci` 到
-`crypto/view_binance_kline_1m` 的默认配置；修改
-`[[factors.items]]` 的 `space_id`、`source_view_id`、`freq` 和参数即可切换默认关联。
-重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，命令会停止而不会静默覆盖已有因子。修改同一因子的默认 View 或频率后再次执行，会删除此前由 `setup factors` 创建的旧绑定。
+`factors.source_dir` 读取 Python 因子，先创建对应的 FactorSet，再导入定义并按配置启用。
+`[[factors.sets]]` 用 `space_id`、`source_dataset_id`、`freq` 和 subject scope 描述因子集；
+`[[factors.items]]` 通过相同的 `source_dataset_id` 与 `freq` 关联到因子集。
+仓库的 `moox.toml.example` 展示了 `dataset_binance_kline_1m` 上的示例。
+重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，
+命令会停止而不会静默覆盖已有因子。
 
 `deploy-storage` 同机部署 `storage-primary` 和统一的 `storage-view`，并更新控制面的 Storage 服务
 位置。主机 SSH 账号、密码、端口和运营商标记统一维护在 `moox.toml` 的
@@ -324,7 +294,7 @@ Crypto 与 StockCN 发布会先在 reservation 专属的临时 Invoke 函数上�
 Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。
 
 如果 Storage 已经初始化过且当前 seed 与线上元数据不同，`setup init` 会按设计停止；此时使用
-`setup factors` 可以只补齐因子定义和 View 绑定，不会触碰现有 Storage 元数据。
+`setup factors` 可以只补齐因子集和因子定义，不会触碰现有 Storage 元数据。
 
 `deploy-storage` 成功启动 Storage 后会自动安装并启用每 10 秒检查一次的
 `systemd` watchdog；如需只补装或更新 watchdog，可执行：

@@ -24,7 +24,7 @@ func TestCollectorPeriodGatewayContract(t *testing.T) {
 				if !found || resolved != method || route.Address != "127.0.0.1:20102" {
 					t.Errorf("collector cannot reach %s: route=%+v method=%q found=%v", rpc, route, resolved, found)
 				}
-				for _, caller := range []string{"admin-gateway", "moox-cli", "moox-skill", "factor", "merge", "monitor", "archive", "storage-view", "strategy", ""} {
+				for _, caller := range []string{"admin-gateway", "moox-cli", "moox-skill", "factor", "monitor", "archive", "storage-view", "strategy", ""} {
 					if _, _, allowed := table.ResolveRPCForCaller(rpc, caller); allowed {
 						t.Errorf("%s can invoke collector-only method %s", caller, method)
 					}

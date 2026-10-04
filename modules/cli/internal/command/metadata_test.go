@@ -218,6 +218,9 @@ func TestParseDatasetColumnOriginType(t *testing.T) {
 	typ, err := parseDatasetColumnOriginType("FIELD")
 	require.NoError(t, err)
 	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, typ)
+	typ, err = parseDatasetColumnOriginType("FACTOR")
+	require.NoError(t, err)
+	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, typ)
 }
 
 func TestParseColumnOriginType(t *testing.T) {
@@ -266,7 +269,6 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Source: "binance", MarketType: "spot"}},
 		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"}, SubjectTags: []string{"binance_spot"}}},
 		Fields:         []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
-		Factors:        []seedFactor{{SpaceID: "crypto", FactorID: "ma", ValueType: "DOUBLE"}},
 		DatasetColumns: []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
 		Views: []seedView{{
 			SpaceID: "crypto", ViewID: "v1", Name: "View", PrimaryDatasetID: "kline", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
@@ -277,7 +279,10 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 	}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(calls), 12)
+	require.NotEmpty(t, calls)
+	for _, call := range calls {
+		require.NotEqual(t, "factors", call.Resource)
+	}
 }
 
 func TestBuildMetadataImportCallsBackfillsColumnDisplayName(t *testing.T) {
@@ -308,9 +313,6 @@ func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *
 			{SpaceID: "crypto", FieldID: "close", Name: "币种收盘价", ValueType: "DOUBLE"},
 			{SpaceID: "crypto", FieldID: "alpha", Name: "普通指标", ValueType: "DOUBLE"},
 		},
-		Factors: []seedFactor{
-			{SpaceID: "crypto", FactorID: "alpha", Name: "因子指标", ValueType: "DOUBLE"},
-		},
 		DatasetColumns: []seedDatasetColumn{
 			{
 				SpaceID: "stockcn", DatasetID: "stock", ColumnName: "close",
@@ -323,10 +325,6 @@ func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *
 			{
 				SpaceID: "crypto", DatasetID: "spot", ColumnName: "alpha_field",
 				OriginType: "FIELD", OriginID: "alpha", ValueType: "DOUBLE",
-			},
-			{
-				SpaceID: "crypto", DatasetID: "spot", ColumnName: "alpha_factor",
-				OriginType: "FACTOR", OriginID: "alpha", ValueType: "DOUBLE",
 			},
 		},
 	}
@@ -341,10 +339,9 @@ func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *
 		got[column.GetSpaceId()+"/"+column.GetColumnName()] = column.GetAttributes()["display_name"]
 	}
 	require.Equal(t, map[string]string{
-		"stockcn/close":       "股票收盘价",
-		"crypto/close":        "币种收盘价",
-		"crypto/alpha_field":  "普通指标",
-		"crypto/alpha_factor": "因子指标",
+		"stockcn/close":      "股票收盘价",
+		"crypto/close":       "币种收盘价",
+		"crypto/alpha_field": "普通指标",
 	}, got)
 }
 
@@ -462,10 +459,6 @@ func TestParseEnumsAllValues(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, tc.typ, got)
 	}
-	origin, value, err := parseDatasetColumnAndValueTypes("FACTOR", "DOUBLE")
-	require.NoError(t, err)
-	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, origin)
-	assert.Equal(t, pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, value)
 	origin2, err := parseColumnOriginType("EXPRESSION")
 	require.NoError(t, err)
 	assert.Equal(t, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION, origin2)
@@ -512,9 +505,6 @@ func TestSeedToPBAllTypes(t *testing.T) {
 	field, err := (seedField{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, field.GetValueType())
-	factor, err := (seedFactor{SpaceID: "crypto", FactorID: "ma", ValueType: "DOUBLE"}).toPB()
-	require.NoError(t, err)
-	assert.Equal(t, "ma", factor.GetFactorId())
 	col, err := (seedDatasetColumn{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, "close", col.GetColumnName())
@@ -810,10 +800,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			Description: "收盘价格", ValueType: "DOUBLE", Unit: "USDT",
 			ValidationRuleJSON: "{}", WriteExample: "1.5", SortOrder: 1,
 		}},
-		Factors: []seedFactor{{
-			SpaceID: "crypto", FactorID: "ma20", Name: "均线", Description: "20周期均线",
-			Algorithm: "ma", ParamsJSON: "{}", ValueType: "DOUBLE",
-		}},
 		DatasetColumns: []seedDatasetColumn{{
 			SpaceID: "crypto", DatasetID: "kline", ColumnName: "close",
 			OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE", Required: true,
@@ -842,8 +828,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	field, err := seed.Fields[0].toPB()
 	require.NoError(t, err)
-	factor, err := seed.Factors[0].toPB()
-	require.NoError(t, err)
 	datasetColumn, err := seed.DatasetColumns[0].toPB()
 	require.NoError(t, err)
 	viewColumn, err := seed.ViewColumns[0].toPB()
@@ -864,9 +848,6 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		},
 		"GetField": func(w http.ResponseWriter, _ *http.Request) {
 			writeProtoJSON(w, &pb.GetFieldRsp{RetInfo: storageOK(), Field: field})
-		},
-		"GetFactor": func(w http.ResponseWriter, _ *http.Request) {
-			writeProtoJSON(w, &pb.GetFactorRsp{RetInfo: storageOK(), Factor: factor})
 		},
 		"ListDatasetColumns": func(w http.ResponseWriter, _ *http.Request) {
 			writeProtoJSON(w, &pb.ListDatasetColumnsRsp{RetInfo: storageOK(), Columns: []*pb.DatasetColumn{datasetColumn}})

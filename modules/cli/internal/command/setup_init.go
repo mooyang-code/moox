@@ -449,15 +449,6 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 			return err
 		}
 	}
-	factors := make(map[string]struct{}, len(seed.Factors))
-	for _, item := range seed.Factors {
-		if err := requireSpace("factor", item.SpaceID); err != nil {
-			return err
-		}
-		if err := addSetupMetadataKey(factors, setupMetadataKey(item.SpaceID, item.FactorID), "factor"); err != nil {
-			return err
-		}
-	}
 	datasetColumns := make(map[string]struct{}, len(seed.DatasetColumns))
 	for _, item := range seed.DatasetColumns {
 		if _, ok := datasets[setupMetadataKey(item.SpaceID, item.DatasetID)]; !ok {
@@ -479,19 +470,11 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		}
 		switch originType {
 		case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
-			if err := validateSetupFieldColumnOrigin(fields, datasets, item); err != nil {
+			if err := validateSetupFieldColumnOrigin(fields, item); err != nil {
 				return err
 			}
 		case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
-			if _, ok := factors[setupMetadataKey(item.SpaceID, item.OriginID)]; !ok {
-				return fmt.Errorf(
-					"dataset_column %s/%s/%s references undefined factor %q",
-					item.SpaceID,
-					item.DatasetID,
-					item.ColumnName,
-					item.OriginID,
-				)
-			}
+			// Factor definitions are owned by FactorMgr, not Storage metadata.
 		}
 	}
 	views := make(map[string]struct{}, len(seed.Views))
@@ -599,37 +582,9 @@ func setupMetadataColumnKey(spaceID, parentID, columnName string) string {
 	}, "\x00")
 }
 
-func validateSetupFieldColumnOrigin(
-	fields map[string]struct{},
-	datasets map[string]struct{},
-	item seedDatasetColumn,
-) error {
+func validateSetupFieldColumnOrigin(fields map[string]struct{}, item seedDatasetColumn) error {
 	if _, ok := fields[setupMetadataKey(item.SpaceID, item.OriginID)]; ok {
 		return nil
-	}
-	sourceDatasetID, sourceField, mapped := splitMappedSourceOrigin(item.OriginID)
-	if mapped && strings.HasPrefix(strings.TrimSpace(item.DatasetID), "mdataset_") {
-		if _, ok := datasets[setupMetadataKey(item.SpaceID, sourceDatasetID)]; !ok {
-			return fmt.Errorf(
-				"dataset_column %s/%s/%s mapped origin %q references undefined source dataset %q",
-				item.SpaceID,
-				item.DatasetID,
-				item.ColumnName,
-				item.OriginID,
-				sourceDatasetID,
-			)
-		}
-		if _, ok := fields[setupMetadataKey(item.SpaceID, sourceField)]; ok {
-			return nil
-		}
-		return fmt.Errorf(
-			"dataset_column %s/%s/%s mapped origin %q references undefined field %q",
-			item.SpaceID,
-			item.DatasetID,
-			item.ColumnName,
-			item.OriginID,
-			sourceField,
-		)
 	}
 	return fmt.Errorf(
 		"dataset_column %s/%s/%s references undefined field %q",
@@ -638,23 +593,6 @@ func validateSetupFieldColumnOrigin(
 		item.ColumnName,
 		item.OriginID,
 	)
-}
-
-func splitMappedSourceOrigin(originID string) (datasetID, fieldID string, ok bool) {
-	originID = strings.TrimSpace(originID)
-	idx := strings.LastIndex(originID, "__")
-	if idx <= 0 || idx+2 >= len(originID) {
-		return "", "", false
-	}
-	datasetID = originID[:idx]
-	fieldID = originID[idx+2:]
-	if fieldID == "" {
-		return "", "", false
-	}
-	if !strings.HasPrefix(datasetID, "dataset_") && !strings.HasPrefix(datasetID, "mdataset_") {
-		return "", "", false
-	}
-	return datasetID, fieldID, true
 }
 
 func validateCanonicalSetupView(view seedView, datasets map[string]seedDataset) error {

@@ -255,7 +255,7 @@ func TestServiceImpl_SeedDefaults_PreservesExplicitStorageRouteRestrictions(t *t
 				if route["service_path"] == "trpc.moox.storage.PrimaryStore" && containsAny(methods, "ReadTimeSeriesRows") {
 					readRoute = route
 				}
-				for _, writeMethod := range []string{"UpsertFields", "ReportCollectorPeriodCompleted", "ReportMergePeriodCompleted", "ReportFactorPeriodComputed", "AppendDatasetSyncPoint"} {
+				for _, writeMethod := range []string{"UpsertFields", "ReportCollectorPeriodCompleted", "ReportFactorPeriodComputed", "AppendDatasetSyncPoint"} {
 					require.NotContains(t, methods, writeMethod, "operator-deleted write route was restored")
 				}
 			}
