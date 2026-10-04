@@ -260,7 +260,8 @@ import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
-import { listDataSources, listDatasets, listFactors, listSubjects, listViews } from "@/api/storage/metadata";
+import { listFactorSets } from "@/api/factor";
+import { listDataSources, listDatasets, listSubjects, listViews } from "@/api/storage/metadata";
 import type { Dataset, PageResult, View } from "@/api/storage/types";
 import { pageResultTotal, statusLabel } from "@/views/data/shared/metadata-utils";
 import {
@@ -334,6 +335,7 @@ const counts = reactive<Record<string, number | null>>({
   datasets: null,
   views: null,
   factors: null,
+  factorSets: null,
   accounts: null,
   subjects: null,
   tasks: null
@@ -346,7 +348,7 @@ const pipeline = [
   { key: "rules", stage: "02", label: "采集任务", color: "#0d9488", path: "/collector/tasks" },
   { key: "datasets", stage: "03", label: "采集结果", color: "#059669", path: "/collector/tasks?tab=results" },
   { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
-  { key: "views", stage: "05", label: "因子集", color: "#ea580c", path: "/factor/sets" },
+  { key: "factorSets", stage: "05", label: "因子集", color: "#ea580c", path: "/factor/sets" },
   { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
 ];
 
@@ -620,8 +622,11 @@ async function loadSpaceScoped() {
       counts.datasets = result.datasets;
       counts.views = result.views;
     }),
-    listFactors({ space_id: spaceId, page }).then(rsp => {
-      if (isCurrent()) counts.factors = countFrom(rsp.page_result, rsp.factors?.length);
+    listFactorSets({ page: { page: 1, size: 500 } }).then(rsp => {
+      if (!isCurrent()) return;
+      const sets = (rsp.factor_sets ?? []).filter(item => item.factor_set.space_id === spaceId);
+      counts.factorSets = sets.length;
+      counts.factors = sets.reduce((total, item) => total + (item.factors?.length ?? 0), 0);
     }),
     listSubjects({ space_id: spaceId, page }).then(rsp => {
       if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
