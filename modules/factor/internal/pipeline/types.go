@@ -20,6 +20,7 @@ type Plan struct {
 	Mode           Mode
 	Set            domain.FactorSet
 	Factors        []domain.FactorDef
+	PeriodTime     time.Time // 实时模式的目标周期 T；补算为零值
 	TargetStart    time.Time
 	TargetEnd      time.Time
 	Expected       []string
@@ -46,6 +47,7 @@ type Config struct {
 	ReadTimeout       time.Duration
 	WriteBatchRows    int
 	WriteRetries      int
+	WriteRetryBackoff time.Duration
 	PythonWorkers     int
 	FactorsDir        string
 }

@@ -109,9 +109,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	baseRunner := pipeline.NewRunner(observedStorage, pythonPool, mustCryptoClock(), pipeline.Config{
 		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
 		ReadTimeout: cfg.Pipeline.ReadTimeout, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
-		PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
+		WriteRetryBackoff: 300 * time.Millisecond,
+		PythonWorkers:     cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
 	})
-	measuredRunner := &measuredRunner{inner: baseRunner, metrics: metrics, health: monitor}
+	runs := newRunTracker()
+	measuredRunner := &measuredRunner{inner: baseRunner, metrics: metrics, health: monitor, runs: runs}
 
 	locator, err := trigger.NewStoreSetLocator(db)
 	if err != nil {
@@ -161,8 +163,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	setNotifier.setConsumer(consumer)
 	runtime.stopMetrics = startMetricsReporter(appCtx, consumer, pythonPool, metrics)
 
-	status := runtimeStatus{consumer: consumer, python: pythonPool, workers: cfg.Python.Workers, metrics: metrics}
-	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithStatusAPI(status))
+	status := runtimeStatus{consumer: consumer, python: pythonPool, workers: cfg.Python.Workers, metrics: metrics, runs: runs}
+	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithStatusAPI(status), factorrpc.WithRunSummaryAPI(status))
 	registered := false
 	for _, name := range []string{"trpc.moox.factor.FactorMgr", "trpc.moox.factor.FactorMgr.trpc"} {
 		if service := s.Service(name); service != nil {
@@ -325,13 +327,18 @@ type measuredRunner struct {
 	}
 	metrics *observability.Metrics
 	health  *Health
+	runs    *runTracker
 }
 
 func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
 	started := time.Now()
+	periodTime := plan.PeriodTime
+	if periodTime.IsZero() {
+		periodTime = plan.TargetStart
+	}
 	r.health.StartLane(plan.Set.SetID, started)
 	defer r.health.EndLane(plan.Set.SetID)
-	log.InfoContextf(ctx, "factor_period_start set_id=%s period_time=%s mode=%d", plan.Set.SetID, plan.TargetStart.UTC().Format(time.RFC3339), plan.Mode)
+	log.InfoContextf(ctx, "factor_period_start set_id=%s period_time=%s mode=%d", plan.Set.SetID, periodTime.UTC().Format(time.RFC3339), plan.Mode)
 	outcome, err := r.inner.Run(ctx, plan)
 	setID := plan.Set.SetID
 	for stage, duration := range outcome.StageDurations {
@@ -346,9 +353,10 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 	}
 	if plan.Mode == pipeline.ModeLive {
 		r.metrics.PeriodTotal.WithLabelValues(setID, status).Inc()
-		r.metrics.PeriodLag.WithLabelValues(setID).Set(max(0, time.Since(plan.TargetStart).Seconds()))
-		if !plan.TargetStart.IsZero() && (err == nil || outcome.Status != "") {
-			r.metrics.LastPeriodTime.WithLabelValues(setID).Set(float64(plan.TargetStart.Unix()))
+		r.metrics.PeriodLag.WithLabelValues(setID).Set(max(0, time.Since(periodTime).Seconds()))
+		if !periodTime.IsZero() && (err == nil || outcome.Status != "") {
+			r.metrics.LastPeriodTime.WithLabelValues(setID).Set(float64(periodTime.Unix()))
+			r.runs.record(setID, periodTime, status)
 		}
 	}
 	for _, factor := range outcome.Factors {
@@ -362,9 +370,9 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		}
 	}
 	if err != nil {
-		log.ErrorContextf(ctx, "factor_period_failed set_id=%s period_time=%s error=%v", setID, plan.TargetStart.UTC().Format(time.RFC3339), err)
+		log.ErrorContextf(ctx, "factor_period_failed set_id=%s period_time=%s error=%v", setID, periodTime.UTC().Format(time.RFC3339), err)
 	} else {
-		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d duration=%s", setID, plan.TargetStart.UTC().Format(time.RFC3339), status, outcome.RowsWritten, time.Since(started))
+		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d duration=%s", setID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, time.Since(started))
 	}
 	return outcome, err
 }
@@ -524,10 +532,11 @@ type runtimeStatus struct {
 	python   *pyexec.Pool
 	workers  int
 	metrics  *observability.Metrics
+	runs     *runTracker
 }
 
 func (s runtimeStatus) GetStatus(context.Context) (factorrpc.RuntimeStatus, error) {
-	status := factorrpc.RuntimeStatus{PythonWorkers: int32(s.workers)}
+	status := factorrpc.RuntimeStatus{PythonWorkers: int32(s.workers), RecentRuns: s.runs.all(time.Now())}
 	if s.consumer != nil {
 		status.ConsumerRunning = s.consumer.Ready()
 		for _, lane := range s.consumer.LaneStatuses() {
@@ -541,8 +550,8 @@ func (s runtimeStatus) GetStatus(context.Context) (factorrpc.RuntimeStatus, erro
 	return status, nil
 }
 
-func (s runtimeStatus) LatestRun(context.Context, string) (factorrpc.SetRunSummary, error) {
-	return factorrpc.SetRunSummary{}, nil
+func (s runtimeStatus) LatestRun(_ context.Context, setID string) (factorrpc.SetRunSummary, error) {
+	return s.runs.latest(setID, time.Now()), nil
 }
 
 var _ catalog.Notifier = (*consumerNotifier)(nil)

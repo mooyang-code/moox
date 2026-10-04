@@ -70,7 +70,7 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 		}
 	}
 	return Plan{
-		Mode: ModeLive, Set: input.Set, Factors: factors,
+		Mode: ModeLive, Set: input.Set, Factors: factors, PeriodTime: target,
 		TargetStart: window[0], TargetEnd: target.Add(duration),
 		Expected: expected, Available: available, UpstreamFailed: upstreamFailed,
 		CarryColumns: uniqueSorted(input.CarryColumns), WriteCarry: true,

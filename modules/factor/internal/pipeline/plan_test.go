@@ -30,6 +30,7 @@ func TestBuildLivePlanIntersectsUniverseAndScope(t *testing.T) {
 	require.Equal(t, []string{"BTC"}, plan.Available)
 	require.Equal(t, []string{"ETH"}, plan.UpstreamFailed)
 	require.Equal(t, target.Add(-19*time.Minute), plan.TargetStart)
+	require.Equal(t, target, plan.PeriodTime)
 	require.Equal(t, target.Add(time.Minute), plan.TargetEnd)
 	require.Equal(t, []string{"close", "volume"}, plan.CarryColumns)
 	require.Equal(t, []string{"long", "short"}, []string{plan.Factors[0].FactorID, plan.Factors[1].FactorID})

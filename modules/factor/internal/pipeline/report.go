@@ -61,7 +61,7 @@ func (r *Runner) Report(ctx context.Context, plan Plan, outcome Outcome) error {
 		TriggerEventID: plan.TriggerEventID, ComputedAt: time.Now().UTC(),
 	}
 	if err := r.store.ReportComputed(ctx, marker); err != nil {
-		return fmt.Errorf("%w: report factor period computed: %v", storageio.ErrInfra, err)
+		return fmt.Errorf("report factor period computed: %w", err)
 	}
 	return nil
 }

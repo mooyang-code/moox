@@ -35,6 +35,11 @@ func (c *Client) ReportComputed(ctx context.Context, marker PeriodMarker) error 
 		return fmt.Errorf("%w: report factor period computed returned an empty response", ErrInfra)
 	}
 	if err := responseError("report factor period computed", rsp.GetRetInfo()); err != nil {
+		if rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_CONFLICT {
+			// A concurrent redelivery already reported this period; the next
+			// attempt's ComputedExists pre-check settles it.
+			return fmt.Errorf("%w: %w", ErrInfra, err)
+		}
 		return err
 	}
 	expected := computedEventID(marker.SpaceID, protoMarker)
