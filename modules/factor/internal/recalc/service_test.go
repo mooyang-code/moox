@@ -416,3 +416,70 @@ func testRecalcFactor(id, status string, lookback int) domain.FactorDef {
 		LookbackPeriods: lookback, Status: status,
 	}
 }
+
+func TestTransientChunkFailureIsRetriedWithoutFailingJob(t *testing.T) {
+	db := openRecalcStore(t)
+	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+		testRecalcFactor("close_factor", domain.FactorStatusEnabled, 3),
+	)
+	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	calls := 0
+	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
+		calls++
+		if calls == 1 {
+			return pipeline.Outcome{}, errors.Join(storageio.ErrInfra, errors.New("storage unavailable"))
+		}
+		return pipeline.Outcome{Status: "complete"}, nil
+	}}
+	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2000), WithChunkRetry(3, time.Millisecond))
+	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-retry", start, start.Add(10*time.Minute))
+	require.NoError(t, err)
+	require.NoError(t, svc.RunJob(context.Background(), "req-retry"))
+	require.Equal(t, 2, calls)
+	job, err := svc.Get(context.Background(), "req-retry")
+	require.NoError(t, err)
+	require.Equal(t, store.RecalcStatusSucceeded, job.Status)
+}
+
+func TestPermanentChunkFailureFailsJobWithoutRetry(t *testing.T) {
+	db := openRecalcStore(t)
+	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+		testRecalcFactor("close_factor", domain.FactorStatusEnabled, 3),
+	)
+	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	calls := 0
+	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
+		calls++
+		return pipeline.Outcome{}, errors.New("column missing")
+	}}
+	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithChunkRetry(3, time.Millisecond))
+	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-perm", start, start.Add(10*time.Minute))
+	require.NoError(t, err)
+	require.Error(t, svc.RunJob(context.Background(), "req-perm"))
+	require.Equal(t, 1, calls)
+	job, err := svc.Get(context.Background(), "req-perm")
+	require.NoError(t, err)
+	require.Equal(t, store.RecalcStatusFailed, job.Status)
+}
+
+func TestDegradedChunkIsRecordedOnSucceededJob(t *testing.T) {
+	db := openRecalcStore(t)
+	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+		testRecalcFactor("close_factor", domain.FactorStatusEnabled, 3),
+	)
+	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
+		return pipeline.Outcome{
+			Status: "degraded", FailedSubjects: []string{"BTC"},
+			Factors: []storageio.FactorState{{FactorID: "close_factor", Status: "degraded"}},
+		}, nil
+	}}
+	svc := NewService(db, runner, WithClock(periodclock.Continuous{}))
+	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-deg", start, start.Add(10*time.Minute))
+	require.NoError(t, err)
+	require.NoError(t, svc.RunJob(context.Background(), "req-deg"))
+	job, err := svc.Get(context.Background(), "req-deg")
+	require.NoError(t, err)
+	require.Equal(t, store.RecalcStatusSucceeded, job.Status)
+	require.Equal(t, "degraded: failed_subjects=1 factors=close_factor", job.Error)
+}

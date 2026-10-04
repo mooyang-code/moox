@@ -33,6 +33,8 @@ type SubjectProvider interface {
 type config struct {
 	chunkPeriods int
 	pollInterval time.Duration
+	chunkRetries int
+	retryBackoff time.Duration
 	clock        periodclock.Clock
 	locks        *catalog.Locks
 	columns      ColumnProvider
@@ -41,8 +43,11 @@ type config struct {
 
 type Option func(*config)
 
-func WithChunkPeriods(n int) Option            { return func(cfg *config) { cfg.chunkPeriods = n } }
-func WithPollInterval(d time.Duration) Option  { return func(cfg *config) { cfg.pollInterval = d } }
+func WithChunkPeriods(n int) Option           { return func(cfg *config) { cfg.chunkPeriods = n } }
+func WithPollInterval(d time.Duration) Option { return func(cfg *config) { cfg.pollInterval = d } }
+func WithChunkRetry(attempts int, backoff time.Duration) Option {
+	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
+}
 func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
 func WithLocks(locks *catalog.Locks) Option    { return func(cfg *config) { cfg.locks = locks } }
 func WithColumnProvider(provider ColumnProvider) Option {
@@ -53,7 +58,7 @@ func WithSubjectProvider(provider SubjectProvider) Option {
 }
 
 func defaultConfig(options []Option) config {
-	cfg := config{chunkPeriods: defaultChunkPeriods, pollInterval: time.Second}
+	cfg := config{chunkPeriods: defaultChunkPeriods, pollInterval: time.Second, chunkRetries: 3, retryBackoff: 5 * time.Second}
 	for _, option := range options {
 		if option != nil {
 			option(&cfg)
@@ -61,6 +66,9 @@ func defaultConfig(options []Option) config {
 	}
 	if cfg.chunkPeriods <= 0 {
 		cfg.chunkPeriods = defaultChunkPeriods
+	}
+	if cfg.chunkRetries <= 0 {
+		cfg.chunkRetries = 1
 	}
 	if cfg.pollInterval <= 0 {
 		cfg.pollInterval = time.Second

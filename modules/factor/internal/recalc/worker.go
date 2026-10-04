@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 )
 
@@ -131,7 +132,8 @@ func (w *Worker) Run(ctx context.Context, jobID string) error {
 			chunkEnd = end
 		}
 		chunkStart := time.Unix(start, 0).UTC()
-		if _, err := w.runChunk(ctx, job.JobID, job.SetID, job.FactorIDs, job.Subjects, chunkStart, chunkEnd); err != nil {
+		outcome, err := w.runChunkWithRetry(ctx, job.JobID, job.SetID, job.FactorIDs, job.Subjects, chunkStart, chunkEnd)
+		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -146,7 +148,11 @@ func (w *Worker) Run(ctx context.Context, jobID string) error {
 				return nil
 			}
 			current.ProgressTime = chunkEnd.Unix()
-			current.Error = ""
+			if note := degradedNote(outcome); note != "" {
+				current.Error = note
+			} else if !strings.HasPrefix(current.Error, degradedPrefix) {
+				current.Error = ""
+			}
 			if current.ProgressTime >= current.EndTime {
 				current.Status = store.RecalcStatusSucceeded
 			} else {
@@ -251,4 +257,50 @@ func (w *Worker) release() { <-w.serial }
 
 func terminal(status string) bool {
 	return status == store.RecalcStatusSucceeded || status == store.RecalcStatusFailed || status == store.RecalcStatusCancelled
+}
+
+const degradedPrefix = "degraded:"
+
+// runChunkWithRetry retries a chunk only for transient Storage failures. Progress
+// is committed after a successful chunk, so a final failure still leaves the job
+// resumable from the last completed chunk by a new request.
+func (w *Worker) runChunkWithRetry(ctx context.Context, jobID, setID string, factorIDs, subjects []string, start, end time.Time) (pipeline.Outcome, error) {
+	var lastErr error
+	for attempt := 1; attempt <= w.cfg.chunkRetries; attempt++ {
+		outcome, err := w.runChunk(ctx, jobID, setID, factorIDs, subjects, start, end)
+		if err == nil {
+			return outcome, nil
+		}
+		lastErr = err
+		if !errors.Is(err, storageio.ErrInfra) || attempt == w.cfg.chunkRetries {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt) * w.cfg.retryBackoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return pipeline.Outcome{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return pipeline.Outcome{}, lastErr
+}
+
+// degradedNote summarises partial failures of a chunk; the job still succeeds
+// because the factor values of unaffected subjects were written.
+func degradedNote(outcome pipeline.Outcome) string {
+	if outcome.Status != "degraded" {
+		return ""
+	}
+	var factors []string
+	for _, factor := range outcome.Factors {
+		if factor.Status != "complete" {
+			factors = append(factors, factor.FactorID)
+		}
+	}
+	note := fmt.Sprintf("%s failed_subjects=%d", degradedPrefix, len(outcome.FailedSubjects))
+	if len(factors) > 0 {
+		note += " factors=" + strings.Join(factors, ",")
+	}
+	return note
 }
