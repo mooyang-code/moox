@@ -648,7 +648,7 @@ func resultDatasetSpec(set domain.FactorSet, source storageio.DatasetInfo, colum
 		DataSourceID: source.DataSourceID, DataNodeID: source.DataNodeID,
 		DataKind: storageio.DataKindTimeSeries, Frequency: set.Freq, KeepDuration: source.KeepDuration,
 		SubjectTags: append([]string(nil), source.SubjectTags...), Attributes: map[string]string{
-			"dataset_role": storageio.DatasetRoleFactorResult, "source_dataset_id": source.DatasetID, "write_owner": "factor",
+			"owner_module": "factor", "dataset_role": storageio.DatasetRoleFactorResult, "source_dataset_id": source.DatasetID, "write_owner": "factor",
 		},
 		Columns: columns,
 	}

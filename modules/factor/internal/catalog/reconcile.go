@@ -92,7 +92,7 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 		result.DataSourceID != source.DataSourceID || result.DataNodeID != source.DataNodeID ||
 		result.KeepDuration != source.KeepDuration || result.DataKind != storageio.DataKindTimeSeries ||
 		!equalStrings(result.Freqs, []string{set.Freq}) || !equalStrings(result.SubjectTags, source.SubjectTags) ||
-		result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
+		result.Attributes["owner_module"] != "factor" || result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
 		result.Attributes["source_dataset_id"] != set.SourceDatasetID || result.Attributes["write_owner"] != "factor" {
 		return fmt.Errorf("result dataset %q does not match the factor result contract", set.ResultDatasetID)
 	}

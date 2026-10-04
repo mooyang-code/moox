@@ -70,7 +70,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 }
 
 func isFactorHistoryRead(req *pb.ReadTimeSeriesRowsReq) bool {
-	return req != nil && len(req.GetKeys()) == 0 && strings.EqualFold(strings.TrimSpace(req.GetAuthInfo().GetAppId()), "factor")
+	return req != nil && len(req.GetKeys()) == 0 && isFactorAppID(req.GetAuthInfo().GetAppId())
 }
 
 func validateFactorHistoryRead(req *pb.ReadTimeSeriesRowsReq) error {

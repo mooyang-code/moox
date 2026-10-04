@@ -30,6 +30,8 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	require.Equal(t, "storage-node-0", meta.createdSpec.DataNodeID)
 	require.Equal(t, "720h", meta.createdSpec.KeepDuration)
 	require.Equal(t, storageio.DatasetRoleFactorResult, meta.createdSpec.Attributes["dataset_role"])
+	require.Equal(t, "factor", meta.createdSpec.Attributes["owner_module"])
+	require.Equal(t, "factor", meta.createdSpec.Attributes["write_owner"])
 	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close")}, meta.createdSpec.Columns)
 	require.Equal(t, "因子结果", meta.createdSpec.Name)
 	require.LessOrEqual(t, len([]rune(meta.createdSpec.Name)), 10)

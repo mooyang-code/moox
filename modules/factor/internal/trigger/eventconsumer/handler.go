@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type HandlerConfig struct {
@@ -141,8 +142,10 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
 	if errors.Is(err, storageio.ErrInfra) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		log.WarnContextf(ctx, "factor_period_retry set_id=%s period_time=%d error=%v", setID, payload.GetPeriodTime(), err)
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: h.cfg.NakDelay, Err: err}
 	}
+	log.ErrorContextf(ctx, "factor_period_rejected set_id=%s period_time=%d error=%v", setID, payload.GetPeriodTime(), err)
 	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 }
 
