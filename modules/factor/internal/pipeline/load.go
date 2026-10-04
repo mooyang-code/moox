@@ -136,6 +136,9 @@ func (r *Runner) readBatch(ctx context.Context, plan Plan, start time.Time, subj
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
+	if plan.Mode == ModeRecalc && r.cfg.RecalcReadTimeout > 0 {
+		timeout = r.cfg.RecalcReadTimeout
+	}
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
 		if err := ctx.Err(); err != nil {

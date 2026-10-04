@@ -7,7 +7,7 @@ Runner、成交回报或本地推导状态当成策略事实。
 ## 验收边界
 
 - 策略定义页只保存 `strategy_id + dsl_yaml`，编辑器的 YAML 检查不等同于运行校验。
-- 实例创建只从当前 Space 的 View、Factor、Binding、结果列和逻辑账户元数据生成绑定，提交时固定 `enabled=false`。
+- 实例创建只从当前 Space 的 View、Factor 因子集、结果列和逻辑账户元数据生成绑定，提交时固定 `enabled=false`。
 - 实例详情分别展示当前目标和历史结果；目标权重不等于成交数量，`sent` 不等于成交。
 - 停用不执行清仓；停用后残留 `session_id` 只表示后台控制尚未完成，不能推导为清仓成功。
 - 当前目标按 `enabled/session_id/bar_end_time/valid_until` 判定为无结果、零仓位、有效、过期或未知；接口失败保留独立错误态。

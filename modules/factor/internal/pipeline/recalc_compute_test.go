@@ -83,3 +83,29 @@ func recalcFrames(subjects []string, start time.Time, targetPeriods int) LoadRes
 	}
 	return LoadResult{Frames: frames, Available: append([]string(nil), subjects...)}
 }
+
+func TestPanelIndexSliceCutsHalfOpenWindowPerSubject(t *testing.T) {
+	base := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	at := func(minute int) time.Time { return base.Add(time.Duration(minute) * time.Minute) }
+	frames := map[string]*storageio.Frame{
+		"BTC": {Columns: []string{"data_time", "series_tag", "close"}, Rows: [][]any{
+			{at(3), "t", 3.0}, {at(1), "t", 1.0}, {at(2), "t", 2.0}, {at(4), "t", 4.0},
+		}},
+		"ETH": {Columns: []string{"data_time", "series_tag", "close"}, Rows: [][]any{
+			{at(1), "t", 11.0}, {at(2), "t", 12.0}, {at(3), "t", 13.0},
+		}},
+	}
+	panel, err := buildPanelFrame([]string{"BTC", "ETH"}, frames)
+	require.NoError(t, err)
+	index, err := newPanelIndex(panel)
+	require.NoError(t, err)
+
+	got := index.slice(at(2), at(4))
+	require.Equal(t, panel.Columns, got.Columns)
+	closes := make([]float64, 0, len(got.Rows))
+	for _, row := range got.Rows {
+		closes = append(closes, row[3].(float64))
+	}
+	require.Equal(t, []float64{2, 3, 12, 13}, closes)
+	require.Empty(t, index.slice(at(10), at(11)).Rows)
+}

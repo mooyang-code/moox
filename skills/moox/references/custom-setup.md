@@ -86,7 +86,7 @@ HTTPS webhook 后，部署会以 mode `0600` 的运行时环境文件交给 Moni
 
 不在 `moox.toml` 中重复登记标准微服务、健康检查 URL、指标 subject 或实时
 Dataset + Frequency。标准服务由 SysDeploy 默认清单维护；所有启用中的实时
-TimeSeries Dataset + Frequency 由 Monitor 从 Collector 规则和 Factor binding
+TimeSeries Dataset + Frequency 由 Monitor 从 Collector 规则和 Factor 因子集
 自动刷新。用户自行增加的非标准服务，应在控制面就绪后注册到 SysDeploy，而不是写进
 初始化清单。
 

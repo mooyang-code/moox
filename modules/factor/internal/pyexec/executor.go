@@ -123,6 +123,17 @@ func (p *Pool) Exec(ctx context.Context, req Request) ([]ItemResult, error) {
 	return decodeResponse(response.Meta, requestID, req.Factors)
 }
 
+// Ready reports whether the executor is open and no worker slot is in a
+// permanent crash loop.
+func (p *Pool) Ready() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return !p.closed && p.pool != nil && p.pool.ReadyStarted()
+}
+
 func (p *Pool) Busy() int {
 	if p == nil {
 		return 0

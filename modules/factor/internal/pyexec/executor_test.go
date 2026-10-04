@@ -229,3 +229,20 @@ func errUnexpectedResult(results []ItemResult) error {
 type unexpectedResultError struct{ results []ItemResult }
 
 func (e *unexpectedResultError) Error() string { return "unexpected executor results" }
+
+func TestPoolReadyReflectsLifecycle(t *testing.T) {
+	executor := newTestExecutor(t, 1, 5*time.Second)
+	if !executor.Ready() {
+		t.Fatal("warmed executor must be ready")
+	}
+	if err := executor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if executor.Ready() {
+		t.Fatal("closed executor must not be ready")
+	}
+	var missing *Pool
+	if missing.Ready() {
+		t.Fatal("nil executor must not be ready")
+	}
+}

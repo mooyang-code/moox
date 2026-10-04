@@ -480,7 +480,7 @@ func addConsumedSourceField(fields, factorFields map[string]struct{}, field stri
 
 func rowHasField(values map[string]string, field string) bool {
 	for name := range values {
-		if strings.EqualFold(strings.TrimSpace(name), field) || strings.EqualFold(mergedSourceShortName(name), field) {
+		if strings.EqualFold(strings.TrimSpace(name), field) || strings.EqualFold(factorOutputShortName(name), field) {
 			return true
 		}
 	}
@@ -775,7 +775,7 @@ func copySourceColumns(dst map[string]quant.Decimal, src map[string]string) {
 			continue
 		}
 		dst[column] = parsed
-		if short := mergedSourceShortName(column); short != "" {
+		if short := factorOutputShortName(column); short != "" {
 			if _, exists := dst[short]; !exists {
 				dst[short] = parsed
 			}
@@ -783,7 +783,9 @@ func copySourceColumns(dst map[string]quant.Decimal, src map[string]string) {
 	}
 }
 
-func mergedSourceShortName(column string) string {
+// factorOutputShortName returns the output part of a Factor View column named
+// <scope>__<output>.
+func factorOutputShortName(column string) string {
 	column = strings.TrimSpace(column)
 	index := strings.LastIndex(column, "__")
 	if index <= 0 || index+2 >= len(column) {

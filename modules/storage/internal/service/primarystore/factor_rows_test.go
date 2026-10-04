@@ -6,6 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 type factorRowsNode struct {
@@ -217,5 +218,57 @@ func factorRowsRecord(field string) *pb.RowFieldUpsert {
 	return &pb.RowFieldUpsert{
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row-1", Version: "v1"}}},
 		Fields: []*pb.FieldValue{{FieldId: field, Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}},
+	}
+}
+
+func TestWriteFactorRowsRejectsInactiveDatasetAndRowAttributes(t *testing.T) {
+	cases := []struct {
+		name     string
+		snapshot func() metadata.RequestSnapshot
+		row      *pb.RowFieldUpsert
+	}{
+		{
+			name: "inactive Dataset",
+			snapshot: func() metadata.RequestSnapshot {
+				snapshot := factorRowsMetadata().(factorRowsSnapshot)
+				snapshot.dataset = proto.Clone(snapshot.dataset).(*pb.Dataset)
+				snapshot.dataset.Status = "disabled"
+				return snapshot
+			},
+			row: factorRowsRecord("value"),
+		},
+		{
+			name:     "row attributes",
+			snapshot: factorRowsMetadata,
+			row: func() *pb.RowFieldUpsert {
+				row := factorRowsRecord("value")
+				row.Attributes = map[string]*pb.TypedValue{"note": {Value: &pb.TypedValue_StringValue{StringValue: "x"}}}
+				return row
+			}(),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved := false
+			svc, err := New(Options{
+				Resolver: func(context.Context, string, string) (DataNodeClient, error) {
+					resolved = true
+					return &factorRowsNode{}, nil
+				},
+				Snapshot: tc.snapshot,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rsp, err := svc.WriteFactorRows(context.Background(), &pb.PrimaryWriteFactorRowsReq{
+				AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", DatasetId: "result", CommitId: "commit-1", Rows: []*pb.RowFieldUpsert{tc.row},
+			})
+			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
+				t.Fatalf("response=%v err=%v", rsp, err)
+			}
+			if resolved {
+				t.Fatal("rejected write reached DataNode resolver")
+			}
+		})
 	}
 }

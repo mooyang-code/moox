@@ -140,7 +140,11 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if cfg.FactorsDir != "" {
 		runtime.FactorsDir = cfg.FactorsDir
 	}
-	catalogPath := filepath.Join(runtime.FactorsDir, "catalog.json")
+	catalogDir := cfg.CatalogDir
+	if catalogDir == "" {
+		catalogDir = runtime.FactorsDir
+	}
+	catalogPath := filepath.Join(catalogDir, "catalog.json")
 	raw, err := os.ReadFile(catalogPath)
 	if err != nil {
 		return fmt.Errorf("read factor catalog: %w", err)
@@ -187,7 +191,7 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		if entry.File == "" || filepath.Base(entry.File) != entry.File {
 			return fmt.Errorf("factor %q has an invalid file path", entry.FactorID)
 		}
-		path := filepath.Join(runtime.FactorsDir, entry.File)
+		path := filepath.Join(catalogDir, entry.File)
 		source, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return fmt.Errorf("read factor %s: %w", entry.FactorID, readErr)

@@ -297,9 +297,12 @@ message RecalcFactorsReq {
 
 ### 8.2 事件
 
-消费：`event.storage.collector.period.completed` v1，过滤主题按启用中的因子集生成：
-`moox.event.storage.collector.period.completed.v1.<space>.<source_dataset_id>`；durable 名称
-`factor_collector_period_v1`。
+消费：`event.storage.collector.period.completed` v1。durable `factor_collector_period_v1` 订阅
+整个事件族 `moox.event.storage.collector.period.completed.v1.>`：JetStream 无法在保留确认状态的
+前提下扩展 durable 的 FilterSubjects，而每个周期只有每个源数据集一条事件，量级很小。
+启用中的因子集生成精确主题
+`moox.event.storage.collector.period.completed.v1.<space>.<source_dataset_id>`，用于状态展示与路由；
+handler 对没有启用因子集的事件直接 ACK。
 
 发布（经 Storage RPC 追加到结果数据集 outbox）：`FactorPeriodComputed`，payload 以因子为单位：
 
@@ -508,11 +511,11 @@ context：
 
 | 操作 | 步骤 | 生效 |
 |---|---|---|
-| 创建因子集 | 源数据集 active、freqs 含该频率、角色不是 factor_result → pending → 创建并激活结果数据集 → enabled → 刷新消费过滤 | 下一个周期事件 |
+| 创建因子集 | 源数据集 active、freqs 含该频率、角色不是 factor_result → pending → 创建并激活结果数据集 → enabled → 刷新路由主题 | 下一个周期事件 |
 | 创建因子 | `input_columns ⊆ 源数据集列`；输出合规且不冲突；lookback ≥ 1；源码试 LOAD 成功 → disabled | — |
 | 启用因子 | 加列 → enabled → 自动补算 `[now − 结果数据集保留期, 当前周期)`，仅该因子 | 实时从下一周期，历史由补算回填 |
 | 修改因子 | 只能 disabled 时修改；流程“停用 → 修改 → 启用（自动补算）” | — |
-| 停用因子集 | 移出消费过滤；在途周期允许完成 | 立即 |
+| 停用因子集 | 移出路由主题（事件到达时直接 ACK）；在途周期允许完成 | 立即 |
 
 生命周期操作与周期任务、补算块之间用因子集级锁串行。
 

@@ -76,7 +76,7 @@ type Row struct {
 	Values         map[string]quant.Decimal
 	PreviousValues map[string]quant.Decimal
 	// ScopedFields are intentionally absent for this instrument because a
-	// subject-scoped binding does not cover it.  Missing non-scoped fields are
+	// subject-scoped input does not cover it.  Missing non-scoped fields are
 	// treated as incomplete input rather than silently evaluated as zero.
 	ScopedFields      map[string]bool
 	ScopedFieldsReady bool
@@ -290,7 +290,7 @@ func evaluateRule(name string, rule Rule, rows []row, period time.Time, barIndex
 		}
 	}
 	candidates := filterPool(rows, rule.Pool, rule.PoolSet)
-	// A Factor binding may intentionally cover only part of a rule's literal
+	// A Factor-scoped input may intentionally cover only part of a rule's literal
 	// pool. Rows without that scoped value are not candidates for this rule;
 	// filtering them here avoids treating a binding scope as a global
 	// completeness failure while preserving strict checks for fields that are

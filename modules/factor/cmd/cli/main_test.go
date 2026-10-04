@@ -34,7 +34,15 @@ func TestParseImportCatalogUsesDirectoryAndSet(t *testing.T) {
 	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/opt/factors"})
 	require.NoError(t, err)
 	require.Equal(t, "fset_bars_1m", cfg.SetID)
-	require.Equal(t, "/opt/factors", cfg.FactorsDir)
+	require.Equal(t, "/opt/factors", cfg.CatalogDir)
+	require.Empty(t, cfg.FactorsDir, "the catalog source directory must not double as the artifact directory")
+}
+
+func TestParseImportCatalogArtifactDirectoryIsSeparate(t *testing.T) {
+	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/src/factors", "--factors-dir", "/var/lib/moox/factors"})
+	require.NoError(t, err)
+	require.Equal(t, "/src/factors", cfg.CatalogDir)
+	require.Equal(t, "/var/lib/moox/factors", cfg.FactorsDir)
 }
 
 func TestParseRecalcRangeAndSelectors(t *testing.T) {

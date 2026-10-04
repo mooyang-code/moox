@@ -137,7 +137,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 		recalc.WithSubjectProvider(subjectProvider),
 	)
 
-	if err := catalogService.Reconcile(appCtx); err != nil {
+	if err := reconcileAtStartup(appCtx, catalogService, startupReconcileAttempts, startupReconcileBackoff); err != nil {
 		return nil, fmt.Errorf("reconcile factor result datasets at startup: %w", err)
 	}
 	stopCatalog, err := startCatalogReconciler(appCtx, catalogService, 5*time.Minute)
@@ -223,7 +223,7 @@ func (r *Runtime) healthSnapshot(db *store.Store, consumer *eventconsumer.Consum
 			ctx = context.Background()
 		}
 		dbReady := db != nil && db.Ping(ctx) == nil
-		pythonReady := python != nil
+		pythonReady := python.Ready()
 		consumerReady := consumer != nil && consumer.Ready()
 		monitor.SetDependency("sqlite", dbReady)
 		monitor.SetDependency("python", pythonReady)
@@ -238,6 +238,35 @@ func (r *Runtime) healthSnapshot(db *store.Store, consumer *eventconsumer.Consum
 			Details: map[string]any{"reasons": status.Reasons, "consumer_ready": consumerReady, "python_busy": python.Busy()},
 		}
 	}
+}
+
+const (
+	startupReconcileAttempts = 5
+	startupReconcileBackoff  = 2 * time.Second
+)
+
+// reconcileAtStartup tolerates a Storage that is still coming up: result
+// datasets must exist before the first period is written (a missing dataset is
+// a permanent write error), so the consumer may only start after one success.
+func reconcileAtStartup(ctx context.Context, service *catalog.Service, attempts int, backoff time.Duration) error {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err = service.Reconcile(ctx); err == nil {
+			return nil
+		}
+		log.ErrorContextf(ctx, "factor startup reconcile attempt %d/%d failed: %v", attempt, attempts, err)
+		if attempt == attempts {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt) * backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+	return err
 }
 
 func startCatalogReconciler(ctx context.Context, service *catalog.Service, interval time.Duration) (func() error, error) {
@@ -371,11 +400,27 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		}
 	}
 	if err != nil {
+		r.metrics.Failures.WithLabelValues(setID, periodFailureFactor, periodFailureReason(err)).Inc()
 		log.ErrorContextf(ctx, "factor_period_failed set_id=%s period_time=%s error=%v", setID, periodTime.UTC().Format(time.RFC3339), err)
 	} else {
 		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d duration=%s", setID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, time.Since(started))
 	}
 	return outcome, err
+}
+
+// periodFailureFactor labels failures that abort a whole period before any
+// individual factor outcome exists.
+const periodFailureFactor = "*"
+
+func periodFailureReason(err error) string {
+	switch {
+	case errors.Is(err, storageio.ErrInfra):
+		return "storage_unavailable"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "timeout"
+	default:
+		return "internal"
+	}
 }
 
 type consumerNotifier struct {

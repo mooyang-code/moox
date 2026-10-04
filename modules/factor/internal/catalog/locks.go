@@ -15,9 +15,12 @@ import (
 )
 
 // Locks serializes catalog changes with live and recalculation work for a set.
+// The in-process lock is a one-slot channel: blocked acquirers are served in
+// arrival order, so a recalc job that releases and immediately re-acquires
+// between chunks cannot starve a live period that is already waiting.
 type Locks struct {
 	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	locks map[string]chan struct{}
 	dir   string
 }
 
@@ -47,29 +50,27 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 	}
 	l.mu.Lock()
 	if l.locks == nil {
-		l.locks = make(map[string]*sync.Mutex)
+		l.locks = make(map[string]chan struct{})
 	}
-	lock := l.locks[setID]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		l.locks[setID] = lock
+	slot := l.locks[setID]
+	if slot == nil {
+		slot = make(chan struct{}, 1)
+		l.locks[setID] = slot
 	}
 	l.mu.Unlock()
-	for !lock.TryLock() {
-		timer := time.NewTimer(10 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
+	select {
+	case slot <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
+	release := func() { <-slot }
 	if l.dir == "" {
-		return lock.Unlock, nil
+		var once sync.Once
+		return func() { once.Do(release) }, nil
 	}
 	fd, err := l.openFileLock(setID)
 	if err != nil {
-		lock.Unlock()
+		release()
 		return nil, err
 	}
 	for {
@@ -77,7 +78,7 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 			break
 		} else if err != unix.EWOULDBLOCK && err != unix.EAGAIN && err != unix.EINTR {
 			_ = unix.Close(fd)
-			lock.Unlock()
+			release()
 			return nil, err
 		}
 		timer := time.NewTimer(10 * time.Millisecond)
@@ -85,7 +86,7 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 		case <-ctx.Done():
 			timer.Stop()
 			_ = unix.Close(fd)
-			lock.Unlock()
+			release()
 			return nil, ctx.Err()
 		case <-timer.C:
 		}
@@ -95,7 +96,7 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 		once.Do(func() {
 			_ = unix.Flock(fd, unix.LOCK_UN)
 			_ = unix.Close(fd)
-			lock.Unlock()
+			release()
 		})
 	}, nil
 }

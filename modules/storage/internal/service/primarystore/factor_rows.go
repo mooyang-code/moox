@@ -44,6 +44,9 @@ func (s *Service) WriteFactorRows(ctx context.Context, req *pb.PrimaryWriteFacto
 		!strings.EqualFold(strings.TrimSpace(attrs["write_owner"]), "factor") {
 		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("factor writes require a factor-owned factor_result Dataset"))}, nil
 	}
+	if dataset.GetStatus() != "active" {
+		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("factor result Dataset is %q, writes require active", dataset.GetStatus()))}, nil
+	}
 	ownerNodeID := strings.TrimSpace(dataset.GetDataNodeId())
 	if ownerNodeID == "" {
 		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("factor result Dataset has no owner DataNode"))}, nil
@@ -60,6 +63,9 @@ func (s *Service) WriteFactorRows(ctx context.Context, req *pb.PrimaryWriteFacto
 		}
 		if len(row.GetFields()) == 0 {
 			return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("factor result row fields are required"))}, nil
+		}
+		if len(row.GetAttributes()) != 0 {
+			return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("factor result rows do not support row attributes"))}, nil
 		}
 		if err := validateRow(ctx, row, s.validate); err != nil {
 			return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil

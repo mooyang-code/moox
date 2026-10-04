@@ -1,9 +1,13 @@
 package bootstrap
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,4 +25,11 @@ func TestRunTrackerKeepsNewestPeriodAndComputesLag(t *testing.T) {
 	require.Len(t, tracker.all(t1), 2)
 	require.Equal(t, "fset_a", tracker.all(t1)[0].SetID)
 	require.Zero(t, tracker.latest("missing", t1).LastPeriodTime)
+}
+
+func TestPeriodFailureReasonClassifiesAbortedPeriods(t *testing.T) {
+	require.Equal(t, "storage_unavailable", periodFailureReason(fmt.Errorf("write: %w", storageio.ErrInfra)))
+	require.Equal(t, "timeout", periodFailureReason(fmt.Errorf("compute: %w", context.DeadlineExceeded)))
+	require.Equal(t, "timeout", periodFailureReason(context.Canceled))
+	require.Equal(t, "internal", periodFailureReason(errors.New("assemble failed")))
 }

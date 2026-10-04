@@ -45,6 +45,7 @@ type Config struct {
 	ReadWorkers       int
 	ReadRetries       int
 	ReadTimeout       time.Duration
+	RecalcReadTimeout time.Duration // 补算单批读取超时；零值为 6 倍 ReadTimeout，因为补算窗口覆盖整块历史
 	WriteBatchRows    int
 	WriteRetries      int
 	WriteRetryBackoff time.Duration
@@ -71,6 +72,9 @@ func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Cl
 	}
 	if cfg.ReadTimeout <= 0 {
 		cfg.ReadTimeout = 20 * time.Second
+	}
+	if cfg.RecalcReadTimeout <= 0 {
+		cfg.RecalcReadTimeout = 6 * cfg.ReadTimeout
 	}
 	if cfg.WriteBatchRows <= 0 {
 		cfg.WriteBatchRows = 1000

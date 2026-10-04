@@ -96,7 +96,8 @@ func parseArgs(args []string) (cliConfig, error) {
 		cfg.DBPath, cfg.FactorsDir = "", ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
-		fs.StringVar(&cfg.FactorsDir, "dir", "", "directory containing catalog.json and Python files (overrides config)")
+		fs.StringVar(&cfg.CatalogDir, "dir", "", "directory containing catalog.json and Python sources (defaults to the factors directory)")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "immutable factor artifact directory (overrides config)")
 		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
 	case "recalc":
 		cfg.DBPath = ""

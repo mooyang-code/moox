@@ -86,7 +86,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 				if len(item.Columns) == 0 {
 					item.Columns = previous.Columns
 				}
-				item.Rows = append(append([][]any(nil), previous.Rows...), item.Rows...)
+				item.Rows = append(previous.Rows, item.Rows...)
 			}
 		}
 		computation.Results[factorID][key] = item
@@ -135,11 +135,17 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		return Computation{}, errors.New("factor Python executor is required")
 	}
 	var panel storageio.Frame
+	var panels *panelIndex
 	if len(crossFactors) > 0 {
 		var panelErr error
 		panel, panelErr = buildPanelFrame(available, loaded.Frames)
 		if panelErr != nil {
 			return Computation{}, panelErr
+		}
+		if plan.Mode == ModeRecalc {
+			if panels, panelErr = newPanelIndex(panel); panelErr != nil {
+				return Computation{}, panelErr
+			}
 		}
 	}
 
@@ -170,9 +176,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 					if windowErr != nil {
 						contextErr = windowErr
 					} else {
-						var periodPanel storageio.Frame
-						periodPanel, contextErr = buildPanelFrameRange(available, loaded.Frames, factorStart[0], task.target.Add(freqDuration))
-						frame = periodPanel
+						frame = panels.slice(factorStart[0], task.target.Add(freqDuration))
 						contextValues["target_period_times"] = []string{task.target.UTC().Format(time.RFC3339Nano)}
 					}
 				}
@@ -395,23 +399,65 @@ func buildPanelFrame(subjects []string, frames map[string]*storageio.Frame) (sto
 	return panel, nil
 }
 
-func buildPanelFrameRange(subjects []string, frames map[string]*storageio.Frame, start, end time.Time) (storageio.Frame, error) {
-	panel, err := buildPanelFrame(subjects, frames)
-	if err != nil {
-		return storageio.Frame{}, err
-	}
-	filtered := panel.Rows[:0]
+// panelIndex keeps the cross-section panel grouped by subject with rows ordered
+// by data_time, so a recalc period can cut its lookback window by binary search
+// instead of re-scanning and re-parsing the whole chunk for every period.
+type panelIndex struct {
+	columns  []string
+	subjects []panelSubject
+}
+
+type panelSubject struct {
+	times []time.Time
+	rows  [][]any
+}
+
+func newPanelIndex(panel storageio.Frame) (*panelIndex, error) {
+	index := &panelIndex{columns: append([]string(nil), panel.Columns...)}
+	current := -1
+	var currentSubject any
 	for rowNo, row := range panel.Rows {
-		at, timeErr := parseDataTime(row[0])
-		if timeErr != nil {
-			return storageio.Frame{}, fmt.Errorf("panel row %d data_time: %w", rowNo, timeErr)
+		at, err := parseDataTime(row[0])
+		if err != nil {
+			return nil, fmt.Errorf("panel row %d data_time: %w", rowNo, err)
 		}
-		if !at.Before(start) && at.Before(end) {
-			filtered = append(filtered, row)
+		if current < 0 || row[2] != currentSubject {
+			index.subjects = append(index.subjects, panelSubject{})
+			current++
+			currentSubject = row[2]
+		}
+		group := &index.subjects[current]
+		group.times = append(group.times, at)
+		group.rows = append(group.rows, row)
+	}
+	for i := range index.subjects {
+		group := &index.subjects[i]
+		if !sort.SliceIsSorted(group.rows, func(a, b int) bool { return group.times[a].Before(group.times[b]) }) {
+			order := make([]int, len(group.rows))
+			for k := range order {
+				order[k] = k
+			}
+			sort.SliceStable(order, func(a, b int) bool { return group.times[order[a]].Before(group.times[order[b]]) })
+			times := make([]time.Time, len(order))
+			rows := make([][]any, len(order))
+			for k, from := range order {
+				times[k], rows[k] = group.times[from], group.rows[from]
+			}
+			group.times, group.rows = times, rows
 		}
 	}
-	panel.Rows = filtered
-	return panel, nil
+	return index, nil
+}
+
+// slice returns the rows with start <= data_time < end, subject by subject.
+func (p *panelIndex) slice(start, end time.Time) storageio.Frame {
+	frame := storageio.Frame{Columns: append([]string(nil), p.columns...)}
+	for _, group := range p.subjects {
+		lo := sort.Search(len(group.times), func(i int) bool { return !group.times[i].Before(start) })
+		hi := sort.Search(len(group.times), func(i int) bool { return !group.times[i].Before(end) })
+		frame.Rows = append(frame.Rows, group.rows[lo:hi]...)
+	}
+	return frame
 }
 
 func equalStrings(left, right []string) bool {

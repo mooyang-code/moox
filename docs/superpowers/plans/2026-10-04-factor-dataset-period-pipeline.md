@@ -279,7 +279,7 @@ const ConsumerName = "factor_collector_period_v1"
 
 type SetLocator interface {
 	EnabledSetByDataset(ctx context.Context, spaceID, datasetID, freq string) (domain.FactorSet, []domain.FactorDef, bool, error)
-	FilterSubjects(ctx context.Context) ([]string, error) // 由 enabled 因子集生成 JetStream 过滤主题
+	FilterSubjects(ctx context.Context) ([]string, error) // 由 enabled 因子集生成精确路由主题；durable 订阅整个事件族
 }
 ```
 
@@ -755,7 +755,7 @@ func CommitID(setID string, periodTime int64, rows []ResultRow) string
   - `TestHandlerAcksDegradedOutcome`；
   - `TestLanesSerialPerSetParallelAcrossSets`：同一 set 的两个周期严格串行，不同 set 并行；
   - `TestLaneHoldsSetLockDuringRun`：执行期间 `Locks.Lock(setID)` 被持有；
-  - `TestFilterSubjectsFollowEnabledSets`：`SetsChanged()` 后消费过滤主题更新为 `moox.event.storage.collector.period.completed.v1.<space>.<dataset>` 列表；
+  - `TestFilterSubjectsFollowEnabledSets`：`SetsChanged()` 后路由主题更新为 `moox.event.storage.collector.period.completed.v1.<space>.<dataset>` 列表；
   - `TestHandlerTerminatesMalformedEvent`：无法解码的消息 `Term`，不无限重投。
 - [ ] **Step 2：运行确认失败**：`cd modules/factor && go test ./internal/trigger/ -count=1`。
 - [ ] **Step 3：实现。** 使用 `packages/eventbus`（或现有 JetStream 封装，`rg -n "func NewDurableConsumer|FilterSubjects" packages` 定位）。durable 名称为 `eventconsumer.ConsumerName`，`DeliverNew`，`AckWait` 不低于 `period_budget_max + 1m`；处理中定期 `InProgress()` 续期。

@@ -146,3 +146,25 @@ func (*fakeStore) ReportComputed(context.Context, storageio.PeriodMarker) error 
 func (*fakeStore) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
 	return false, nil
 }
+
+func TestRecalcReadUsesLongerTimeoutThanLive(t *testing.T) {
+	deadlines := map[Mode]time.Duration{}
+	for _, mode := range []Mode{ModeLive, ModeRecalc} {
+		var got time.Duration
+		store := &fakeStore{read: func(ctx context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			got = time.Until(deadline)
+			return emptyFrames(req), nil
+		}}
+		runner := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadTimeout: 10 * time.Second})
+		target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+		plan := computePlan(target, []domain.FactorDef{testPipelineFactor("momentum", domain.FactorTypeTimeSeries, 2, false)}, []string{"BTC"})
+		plan.Mode = mode
+		_, err := runner.Load(context.Background(), plan)
+		require.NoError(t, err)
+		deadlines[mode] = got
+	}
+	require.Greater(t, deadlines[ModeRecalc], 30*time.Second)
+	require.LessOrEqual(t, deadlines[ModeLive], 10*time.Second)
+}
