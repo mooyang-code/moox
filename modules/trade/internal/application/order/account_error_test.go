@@ -160,7 +160,7 @@ func TestSubmitAccountErrorOnlyAfterPersistedOutcome(t *testing.T) {
 			s, db, adapter := newTestService(t)
 			pending, err := s.Place(context.Background(), "space-1", testSpec(s.now()))
 			require.NoError(t, err)
-			cause := &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("venue rejected")}
+			cause := &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("exchange rejected")}
 			adapter.placeErr = cause
 			dbErr := errors.New("injected update failure")
 			if persistenceFailure {
@@ -256,7 +256,7 @@ func TestCancelAccountErrorOnlyAfterPersistedOutcome(t *testing.T) {
 				_, err = s.Cancel(ctx, "space-1", string(pending.ID))
 				require.NoError(t, err)
 			}
-			cause := &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New("venue timeout")}
+			cause := &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New("exchange timeout")}
 			adapter.cancelErr = cause
 			dbErr := errors.New("injected cancel update failure")
 			if persistenceFailure {

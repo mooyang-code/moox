@@ -746,7 +746,7 @@ func CommitID(setID string, periodTime int64, rows []ResultRow) string
 ### Task 18：trigger 消费与因子集 lane
 
 **Files:**
-- Rewrite: `modules/factor/internal/trigger/`（删除 `dataset_rows.go`、`period_barrier.go`、`subject_runs.go`、`view_ready_runner.go`、`eventconsumer/`；新建 `consumer.go`、`lanes.go`、`handler.go` 及测试）
+- Rewrite: `modules/factor/internal/trigger/`（删除 `dataset_rows.go`、`period_barrier.go`、`subject_runs.go`、`view_ready_runner.go`；新建 `locator.go`、`lanes.go` 与 `eventconsumer/{consumer.go,handler.go}` 及测试，JetStream 投递策略只允许出现在 `eventconsumer` 包内）
 
 - [ ] **Step 1：写失败测试**（fake JetStream 消息、fake Runner）：
   - `TestHandlerAcksWhenNoEnabledSet`；
@@ -758,7 +758,7 @@ func CommitID(setID string, periodTime int64, rows []ResultRow) string
   - `TestFilterSubjectsFollowEnabledSets`：`SetsChanged()` 后消费过滤主题更新为 `moox.event.storage.collector.period.completed.v1.<space>.<dataset>` 列表；
   - `TestHandlerTerminatesMalformedEvent`：无法解码的消息 `Term`，不无限重投。
 - [ ] **Step 2：运行确认失败**：`cd modules/factor && go test ./internal/trigger/ -count=1`。
-- [ ] **Step 3：实现。** 使用 `packages/eventbus`（或现有 JetStream 封装，`rg -n "func NewDurableConsumer|FilterSubjects" packages` 定位）。durable 名称为 `trigger.ConsumerName`，`DeliverNew`，`AckWait` 不低于 `period_budget_max + 1m`；处理中定期 `InProgress()` 续期。
+- [ ] **Step 3：实现。** 使用 `packages/eventbus`（或现有 JetStream 封装，`rg -n "func NewDurableConsumer|FilterSubjects" packages` 定位）。durable 名称为 `eventconsumer.ConsumerName`，`DeliverNew`，`AckWait` 不低于 `period_budget_max + 1m`；处理中定期 `InProgress()` 续期。
 - [ ] **Step 4：验证并提交** `feat(factor): trigger factor sets from collector period completion`。
 
 ### Task 19：单进程装配、配置、健康检查与指标
@@ -944,21 +944,22 @@ cd ../admin && go test ./... -count=1
 
 ## 阶段 7：端到端验收
 
-### Task 25：端到端测试脚本
+### Task 25：端到端测试
+
+**实现说明：** Go `internal` 规则使 `modules/factor` 无法引用 `modules/storage/internal` 的真实 Storage 夹具，因此进程内 E2E 落在 Factor 流水线层：内存 Storage（沿用 `WriteFactorRows` 的 `commit_id` 幂等/冲突语义）+ 真实 Python worker + 真实 `Runner.Run`。含真实 Storage、NATS 的多进程链路由 Task 26 在部署环境验收。
 
 **Files:**
-- Create: `scripts/test/e2e/test-factor-period-pipeline.sh`
-- Create: `modules/factor/test/period_pipeline_e2e_test.go`（进程内：真实 SQLite + Storage 测试服务 + 内嵌 NATS + 真实 Python worker；以 `modules/storage/internal/service/e2e` 现有夹具为参考）
+- Create: `modules/factor/internal/pipeline/period_e2e_test.go`
 
-- [ ] **Step 1：进程内 E2E 用例：**
-  - `TestE2ELivePeriodWritesResultAndViewReady`：写 3 个标的 × 2 个 tag × 25 根 1m K 线 → 上报 `CollectorPeriodCompleted(T)` → 等待结果 View `ViewDataReady(kind=factor_period.computed, period_time=T)` → 读结果 View：每个 `(subject, tag)` 在 T 有一行，携带列与源一致，`bias_20` 等因子列非空；
-  - `TestE2EDuplicateDeliveryIsIdempotent`：同一事件投递两次，结果行与完成标记各一份；
-  - `TestE2EDegradedUpstreamSubject`：上游 failed 一个标的，结果中该标的无因子行，事件 `failed_subjects` 包含它；
-  - `TestE2EEnableFactorBackfills`：启用新因子后，补算任务 succeeded，保留期窗口内历史行出现新列值；
-  - `TestE2EDisableFactorKeepsColumnStopsWriting`：停用后下一周期该列为 null，View 列仍存在，View 未重建（active index 不变）。
-- [ ] **Step 2：运行**：`cd modules/factor && go test ./test/ -run E2E -count=1 -timeout 10m`。
-- [ ] **Step 3：shell 脚本**按 `scripts/test/e2e/test-series-tag-e2e.sh` 的风格编排本机多进程：启动 NATS、Storage、moox-factor，注入 K 线和完成事件，断言结果 View 行数与事件。
-- [ ] **Step 4：提交** `test(factor): cover live period pipeline end to end`。
+- [x] **Step 1：进程内 E2E 用例（`TestLivePeriodEndToEnd`）：**
+  - `writes_result_rows_and_complete_marker`：3 个标的 × 10 根 1m K 线，T 周期每个标的写入 1 行，携带列 `close` 与源一致，因子列 `mean3` 为真实 Python 计算值；完成标记 `complete`、`universe_subjects` 与因子状态正确；
+  - `duplicate_delivery_is_idempotent`：同一周期重复执行，只产生一个确定性 `commit_id`，结果行不重复；
+  - `upstream_failed_subject_degrades_the_period`：上游 failed 一个标的，结果中该标的无行，标记为 `degraded` 且 `failed_subjects` 包含它；
+  - `failing_factor_writes_null_column_and_degrades`：因子抛异常，该列写 NULL，其余因子正常，周期 `degraded`；
+  - `no_enabled_factor_still_reports_the_period`：因子停用后不计算不写入，但仍上报完成标记。
+- [x] **Step 2：运行**：`cd modules/factor && go test ./internal/pipeline/ -run TestLivePeriodEndToEnd -count=1`（需要 `python3` 与 pandas，缺失时自动跳过）。
+- [x] **补算启用与停用保列**：分别由 `internal/recalc` 的 `TestEnableBackfillAcceptsDisabledFactorWithAtomicVisibility`、`internal/catalog` 的 `TestEnableFactorAddsColumnsThenSubmitsRecalc`、`TestDisableFactorKeepsColumns` 覆盖。
+- [ ] **Step 3：多进程 shell 脚本** `scripts/test/e2e/test-factor-period-pipeline.sh`（启动 NATS、Storage、moox-factor，注入 K 线与完成事件，断言结果 View 行数与事件）：需要部署环境，并入 Task 26。
 
 ### Task 26：真实链路验收（本机或测试环境）
 
@@ -1003,11 +1004,11 @@ rg -n "moox-merge|factor-engine|mdataset_|ViewSourcePeriodReady|ViewFactorPeriod
 - [ ] `cd web && npm run test` 通过。
 - [ ] 所有 `modules/*/schema/*.sql` 逐个载入空 SQLite 成功；`git diff --check` 无告警。
 - [ ] `bash scripts/check/verify-event-contracts.sh`、`check-module-boundaries.sh`、`check-package-boundaries.sh`、`check-gofmt.sh` 通过。
-- [ ] Task 25 进程内 E2E 全部通过；Task 26 真实链路验收记录已归档。
-- [ ] 设计 §2 的 D1–D15 均可在代码中找到对应实现或约束测试：D12 对应 `TestDisableFactorKeepsColumns` 与 `TestE2EDisableFactorKeepsColumnStopsWriting`；D13 对应 `TestForSpaceStockCNUnsupported`；D14 对应补算请求中没有扩展参数；D15 对应 `TestLanesSerialPerSetParallelAcrossSets`。
+- [ ] Task 25 进程内 E2E 全部通过；Task 26 真实链路验收记录已归档（待部署环境执行）。
+- [ ] 设计 §2 的 D1–D15 均可在代码中找到对应实现或约束测试：D12 对应 `TestDisableFactorKeepsColumns` 与 `TestLivePeriodEndToEnd/no_enabled_factor_still_reports_the_period`；D13 对应 `TestForSpaceStockCNUnsupported`；D14 对应补算请求中没有扩展参数；D15 对应 `TestLanesSerialPerSetParallelAcrossSets`。
 
 ## 自检记录
 
 - 设计覆盖：设计 §5（单 DataNode、标记顺序）对应 Task 3、5；§7 对应 Task 9；§8 对应 Task 1、3、12；§10 对应 Task 16–18；§11 对应 Task 15；§12 对应 Task 4、13；§13 对应 Task 13；§14 对应 Task 20；§15 的失败语义分布在 Task 14、16–18 的测试中；§18 对应 Task 19；§19 对应 Task 7、8、22–24。
-- 类型一致性：`storageio.Store`、`pipeline.Plan/Outcome`、`pyexec.Executor`、`catalog.Locks`、`trigger.ConsumerName` 均在“接口约定”或首次出现的 Task 中定义，后续 Task 只引用这些名称。
+- 类型一致性：`storageio.Store`、`pipeline.Plan/Outcome`、`pyexec.Executor`、`catalog.Locks`、`eventconsumer.ConsumerName` 均在“接口约定”或首次出现的 Task 中定义，后续 Task 只引用这些名称。
 - TODO 范围：A 股日历、环形缓冲增量读取、`committed_positions` 简化不在本计划内，见设计 §20。

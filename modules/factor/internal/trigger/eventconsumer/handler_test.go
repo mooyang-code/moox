@@ -1,4 +1,4 @@
-package trigger
+package eventconsumer
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -141,7 +142,7 @@ func TestHandlerTerminatesMalformedEvent(t *testing.T) {
 
 func TestFilterSubjectsFollowEnabledSets(t *testing.T) {
 	sets := &mutableFilterSetSource{sets: []domain.FactorSet{enabledTestSet()}}
-	locator, err := NewStoreSetLocator(sets)
+	locator, err := trigger.NewStoreSetLocator(sets)
 	require.NoError(t, err)
 	consumer := &Consumer{sets: locator}
 	require.NoError(t, consumer.RefreshFilters(context.Background()))

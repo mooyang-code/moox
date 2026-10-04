@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -42,7 +43,7 @@ const factorHealthService = "trpc.moox.factor.Health"
 type Runtime struct {
 	store       *store.Store
 	python      *pyexec.Pool
-	consumer    *trigger.Consumer
+	consumer    *eventconsumer.Consumer
 	stopRecalc  func() error
 	stopCatalog func() error
 	stopMetrics func() error
@@ -151,7 +152,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.stopRecalc = stopRecalc
 
-	consumer, err := trigger.NewConsumer(appCtx, trigger.ConsumerConfig{
+	consumer, err := eventconsumer.NewConsumer(appCtx, eventconsumer.ConsumerConfig{
 		URLs: cfg.EventBus.URLs, CredentialFile: cfg.EventBus.CredentialFile,
 		FetchMaxWait: cfg.EventBus.FetchMaxWait, PeriodBudgetMin: cfg.Pipeline.PeriodBudgetMin,
 		PeriodBudgetMax: cfg.Pipeline.PeriodBudgetMax,
@@ -216,7 +217,7 @@ func (r *Runtime) Close() error {
 	return r.err
 }
 
-func (r *Runtime) healthSnapshot(db *store.Store, consumer *trigger.Consumer, python *pyexec.Pool, monitor *Health) healthz.SnapshotFunc {
+func (r *Runtime) healthSnapshot(db *store.Store, consumer *eventconsumer.Consumer, python *pyexec.Pool, monitor *Health) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		if ctx == nil {
 			ctx = context.Background()
@@ -267,7 +268,7 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 	}, nil
 }
 
-func startMetricsReporter(ctx context.Context, consumer *trigger.Consumer, python *pyexec.Pool, metrics *observability.Metrics) func() error {
+func startMetricsReporter(ctx context.Context, consumer *eventconsumer.Consumer, python *pyexec.Pool, metrics *observability.Metrics) func() error {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -379,10 +380,10 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 
 type consumerNotifier struct {
 	mu       sync.RWMutex
-	consumer *trigger.Consumer
+	consumer *eventconsumer.Consumer
 }
 
-func (n *consumerNotifier) setConsumer(consumer *trigger.Consumer) {
+func (n *consumerNotifier) setConsumer(consumer *eventconsumer.Consumer) {
 	n.mu.Lock()
 	n.consumer = consumer
 	n.mu.Unlock()
@@ -528,7 +529,7 @@ func (p datasetSubjectProvider) ListDatasetSubjects(ctx context.Context, spaceID
 }
 
 type runtimeStatus struct {
-	consumer *trigger.Consumer
+	consumer *eventconsumer.Consumer
 	python   *pyexec.Pool
 	workers  int
 	metrics  *observability.Metrics

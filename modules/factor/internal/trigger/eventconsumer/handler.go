@@ -1,4 +1,4 @@
-package trigger
+package eventconsumer
 
 import (
 	"context"
@@ -10,22 +10,10 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
-
-type PeriodStore interface {
-	ComputedExists(context.Context, string, string, string, int64) (bool, error)
-	DatasetColumns(context.Context, string, string) ([]string, error)
-}
-
-type PipelineRunner interface {
-	Run(context.Context, pipeline.Plan) (pipeline.Outcome, error)
-}
-
-type SetLocks interface {
-	LockContext(context.Context, string) (func(), error)
-}
 
 type HandlerConfig struct {
 	NakDelay          time.Duration
@@ -35,16 +23,16 @@ type HandlerConfig struct {
 }
 
 type Handler struct {
-	sets     SetLocator
-	store    PeriodStore
-	runner   PipelineRunner
-	lanes    *Lanes
+	sets     trigger.SetLocator
+	store    trigger.PeriodStore
+	runner   trigger.PipelineRunner
+	lanes    *trigger.Lanes
 	registry *events.Registry
 	initErr  error
 	cfg      HandlerConfig
 }
 
-func NewHandler(sets SetLocator, periodStore PeriodStore, runner PipelineRunner, locks SetLocks, cfg HandlerConfig) *Handler {
+func NewHandler(sets trigger.SetLocator, periodStore trigger.PeriodStore, runner trigger.PipelineRunner, locks trigger.SetLocks, cfg HandlerConfig) *Handler {
 	if cfg.NakDelay <= 0 {
 		cfg.NakDelay = 10 * time.Second
 	}
@@ -62,7 +50,7 @@ func NewHandler(sets SetLocator, periodStore PeriodStore, runner PipelineRunner,
 	}
 	registry, initErr := events.DefaultRegistry()
 	return &Handler{
-		sets: sets, store: periodStore, runner: runner, lanes: NewLanes(locks), registry: registry, initErr: initErr, cfg: cfg,
+		sets: sets, store: periodStore, runner: runner, lanes: trigger.NewLanes(locks), registry: registry, initErr: initErr, cfg: cfg,
 	}
 }
 
@@ -70,6 +58,13 @@ func (h *Handler) Close() {
 	if h != nil && h.lanes != nil {
 		h.lanes.Close()
 	}
+}
+
+func (h *Handler) LaneStatuses() []trigger.LaneStatus {
+	if h == nil || h.lanes == nil {
+		return nil
+	}
+	return h.lanes.Status()
 }
 
 func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {

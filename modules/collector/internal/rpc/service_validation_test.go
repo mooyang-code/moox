@@ -18,6 +18,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
 )
@@ -655,8 +656,8 @@ func TestUpdateSharedTaskDoesNotRewriteSetupOwnedDatasetOrView(t *testing.T) {
 			ids.ViewID: {SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active", Columns: []*storagepb.ViewColumn{{ColumnName: "dataset_binance_kline_1m.open"}}},
 		},
 	}
-	beforeDataset := *metadata.datasets[ids.DatasetID]
-	beforeView := *metadata.views[ids.ViewID]
+	beforeDataset := proto.Clone(metadata.datasets[ids.DatasetID]).(*storagepb.Dataset)
+	beforeView := proto.Clone(metadata.views[ids.ViewID]).(*storagepb.View)
 	service := &Service{
 		taskRepo: db.Tasks(), datasetSrc: acceptingKlineDatasetSource{},
 		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
@@ -669,8 +670,8 @@ func TestUpdateSharedTaskDoesNotRewriteSetupOwnedDatasetOrView(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, &beforeDataset, metadata.datasets[ids.DatasetID], "one task must not replace the shared Dataset tag scope")
-	require.Equal(t, &beforeView, metadata.views[ids.ViewID], "one task must not replace the setup-owned shared View projection")
+	require.True(t, proto.Equal(beforeDataset, metadata.datasets[ids.DatasetID]), "one task must not replace the shared Dataset tag scope")
+	require.True(t, proto.Equal(beforeView, metadata.views[ids.ViewID]), "one task must not replace the setup-owned shared View projection")
 }
 
 type acceptingKlineDatasetSource struct{}

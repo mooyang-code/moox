@@ -1,16 +1,14 @@
-package trigger
+package eventconsumer
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	nats "github.com/nats-io/nats.go"
@@ -18,64 +16,6 @@ import (
 )
 
 const ConsumerName = "factor_collector_period_v1"
-
-// SetLocator resolves an enabled set and its current exact event filters.
-type SetLocator interface {
-	EnabledSetByDataset(context.Context, string, string, string) (domain.FactorSet, []domain.FactorDef, bool, error)
-	FilterSubjects(context.Context) ([]string, error)
-}
-
-// SetRepository is the catalog surface used by StoreSetLocator.
-type SetRepository interface {
-	EnabledSetByDataset(context.Context, string, string, string) (domain.FactorSet, []domain.FactorDef, bool, error)
-	ListSets(context.Context) ([]domain.FactorSet, error)
-}
-
-// StoreSetLocator adapts the Factor SQLite store to the trigger catalog contract.
-type StoreSetLocator struct {
-	store    SetRepository
-	registry *events.Registry
-}
-
-func NewStoreSetLocator(db SetRepository) (*StoreSetLocator, error) {
-	if db == nil {
-		return nil, fmt.Errorf("factor set repository is required")
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return nil, err
-	}
-	return &StoreSetLocator{store: db, registry: registry}, nil
-}
-
-func (l *StoreSetLocator) EnabledSetByDataset(ctx context.Context, spaceID, datasetID, freq string) (domain.FactorSet, []domain.FactorDef, bool, error) {
-	if l == nil || l.store == nil {
-		return domain.FactorSet{}, nil, false, fmt.Errorf("factor set locator is not initialized")
-	}
-	return l.store.EnabledSetByDataset(ctx, spaceID, datasetID, freq)
-}
-
-func (l *StoreSetLocator) FilterSubjects(ctx context.Context) ([]string, error) {
-	if l == nil || l.store == nil || l.registry == nil {
-		return nil, fmt.Errorf("factor set locator is not initialized")
-	}
-	sets, err := l.store.ListSets(ctx)
-	if err != nil {
-		return nil, err
-	}
-	filters := make([]string, 0, len(sets))
-	for _, set := range sets {
-		if set.Status != domain.SetStatusEnabled {
-			continue
-		}
-		subject, err := l.registry.RenderSubject(events.CollectorPeriodCompleted, set.SpaceID, set.SourceDatasetID)
-		if err != nil {
-			return nil, fmt.Errorf("render collector period subject for set %s: %w", set.SetID, err)
-		}
-		filters = append(filters, subject)
-	}
-	return normalizeFilters(filters), nil
-}
 
 type ConsumerConfig struct {
 	URLs               []string
@@ -130,7 +70,7 @@ type ConsumerStatus struct {
 // subjects are refreshed locally because JetStream cannot widen a durable's
 // FilterSubjects without replacing its acknowledgement state.
 type Consumer struct {
-	sets     SetLocator
+	sets     trigger.SetLocator
 	handler  *Handler
 	consumer *events.Consumer
 	client   *jetstream.Client
@@ -145,7 +85,7 @@ type Consumer struct {
 	runWG              sync.WaitGroup
 }
 
-func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets SetLocator, periodStore PeriodStore, runner PipelineRunner, locks SetLocks) (*Consumer, error) {
+func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocator, periodStore trigger.PeriodStore, runner trigger.PipelineRunner, locks trigger.SetLocks) (*Consumer, error) {
 	if sets == nil || periodStore == nil || runner == nil {
 		return nil, fmt.Errorf("factor trigger set locator, Storage and pipeline runner are required")
 	}
@@ -228,11 +168,11 @@ func (c *Consumer) CurrentFilterSubjects() []string {
 	return append([]string(nil), c.filters...)
 }
 
-func (c *Consumer) LaneStatuses() []LaneStatus {
-	if c == nil || c.handler == nil || c.handler.lanes == nil {
+func (c *Consumer) LaneStatuses() []trigger.LaneStatus {
+	if c == nil || c.handler == nil {
 		return nil
 	}
-	return c.handler.lanes.Status()
+	return c.handler.LaneStatuses()
 }
 
 func (c *Consumer) RefreshFilters(ctx context.Context) error {
@@ -249,7 +189,7 @@ func (c *Consumer) RefreshFilters(ctx context.Context) error {
 		c.mu.Unlock()
 		return err
 	}
-	filters = normalizeFilters(filters)
+	filters = trigger.NormalizeFilters(filters)
 	c.mu.Lock()
 	c.filters = filters
 	c.filterRefreshError = ""
@@ -308,23 +248,3 @@ func runUntilCancelled(ctx context.Context, run func(context.Context) error) {
 		}
 	}
 }
-
-func normalizeFilters(filters []string) []string {
-	seen := make(map[string]struct{}, len(filters))
-	out := make([]string, 0, len(filters))
-	for _, filter := range filters {
-		filter = strings.TrimSpace(filter)
-		if filter == "" {
-			continue
-		}
-		if _, ok := seen[filter]; ok {
-			continue
-		}
-		seen[filter] = struct{}{}
-		out = append(out, filter)
-	}
-	sort.Strings(out)
-	return out
-}
-
-var _ SetLocator = (*StoreSetLocator)(nil)
