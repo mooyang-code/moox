@@ -155,6 +155,19 @@ func TestNoEnabledFactorsStillReportsComplete(t *testing.T) {
 	require.Empty(t, store.writeCalls)
 }
 
+func TestNoEnabledFactorsWithUpstreamFailureReportsDegraded(t *testing.T) {
+	store := &outputStore{}
+	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
+	plan := Plan{Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC", "ETH"}, UpstreamFailed: []string{"ETH"}}
+	outcome, err := runner.Run(context.Background(), plan)
+	require.NoError(t, err)
+	require.Equal(t, "degraded", outcome.Status)
+	require.Equal(t, []string{"ETH"}, outcome.FailedSubjects)
+	require.Len(t, store.markers, 1)
+	require.Equal(t, "degraded", store.markers[0].Status)
+	require.Equal(t, []string{"ETH"}, store.markers[0].FailedSubjects)
+}
+
 func successfulComputation(factor domain.FactorDef, columns []string, rows [][]any) Computation {
 	return Computation{
 		Results:      map[string]map[string]pyexec.ItemResult{factor.FactorID: {"BTC": {FactorID: factor.FactorID, Columns: columns, Rows: rows}}},

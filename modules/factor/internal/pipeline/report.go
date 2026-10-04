@@ -128,9 +128,6 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	}
 	outcome = mergeOutcomeDurations(outcomeFor(plan, loaded, computation), outcome)
 	outcome.RowsWritten = rowsWritten
-	if len(plan.Factors) == 0 {
-		outcome.Status = "complete"
-	}
 	stage := time.Now()
 	if err := r.Report(ctx, plan, outcome); err != nil {
 		return outcome, err
