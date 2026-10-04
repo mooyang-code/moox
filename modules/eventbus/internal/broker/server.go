@@ -51,6 +51,8 @@ type subjectPermission struct {
 	Deny  []string `yaml:"deny"`
 }
 
+const kvStoreHeadroomBytes = 256 << 20
+
 func New(cfg *config.Config) (*Server, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("broker config is nil")
@@ -61,23 +63,32 @@ func New(cfg *config.Config) (*Server, error) {
 	if err := os.MkdirAll(cfg.Broker.StoreDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create broker store dir: %w", err)
 	}
-	opts := &natsserver.Options{
-		ServerName: cfg.Broker.ServerName, Host: cfg.Broker.Host, Port: cfg.Broker.Port,
-		JetStream: true, JetStreamStrict: true, StoreDir: cfg.Broker.StoreDir,
-		MaxPayload: int32(cfg.Broker.MaxPayloadBytes), NoSigs: true, DisableJetStreamBanner: true,
+	// The embedded server only honors an explicit JetStream store limit when it
+	// comes from a parsed config; assigning Options.JetStreamMaxStore directly
+	// is ignored and silently falls back to 75% of the free disk, which makes
+	// restarts fail whenever free space drops below the declared stream limits.
+	var maxStore int64
+	for _, stream := range cfg.Streams {
+		if stream.MaxBytes > 0 {
+			maxStore += stream.MaxBytes
+		}
 	}
+	if maxStore > 0 {
+		// Key-value buckets have no max_bytes and each reserves one byte; keep
+		// headroom so the exact sum of declared streams never blocks them.
+		maxStore += kvStoreHeadroomBytes
+	}
+	opts, err := jetStreamBaseOptions(cfg.Broker.StoreDir, maxStore)
+	if err != nil {
+		return nil, err
+	}
+	opts.ServerName, opts.Host, opts.Port = cfg.Broker.ServerName, cfg.Broker.Host, cfg.Broker.Port
+	opts.JetStreamStrict = true
+	opts.MaxPayload, opts.NoSigs, opts.DisableJetStreamBanner = int32(cfg.Broker.MaxPayloadBytes), true, true
 	if cfg.Broker.ClientAdvertise != "" {
 		opts.ClientAdvertise = cfg.Broker.ClientAdvertise
 	}
 	var clusterTLS *tls.Config
-	// JetStream's account store limit defaults to a small development value.
-	// Raise it to cover the sum of declared stream limits while still keeping
-	// each configured per-stream max_bytes as the effective retention bound.
-	for _, stream := range cfg.Streams {
-		if stream.MaxBytes > 0 {
-			opts.JetStreamMaxStore += stream.MaxBytes
-		}
-	}
 	if cfg.Broker.Auth.Enabled {
 		if cfg.Broker.Auth.UsersFile != "" {
 			users, err := loadUsersFile(cfg.Broker.Auth.UsersFile)
@@ -139,6 +150,29 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("create nats server: %w", err)
 	}
 	return &Server{cfg: cfg, ns: ns}, nil
+}
+
+func jetStreamBaseOptions(storeDir string, maxStore int64) (*natsserver.Options, error) {
+	dir, err := os.MkdirTemp("", "moox-eventbus-js-")
+	if err != nil {
+		return nil, fmt.Errorf("create jetstream config dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	var body strings.Builder
+	fmt.Fprintf(&body, "jetstream {\n  store_dir: %q\n", storeDir)
+	if maxStore > 0 {
+		fmt.Fprintf(&body, "  max_file_store: %d\n", maxStore)
+	}
+	body.WriteString("}\n")
+	path := dir + "/jetstream.conf"
+	if err := os.WriteFile(path, []byte(body.String()), 0o600); err != nil {
+		return nil, fmt.Errorf("write jetstream config: %w", err)
+	}
+	opts, err := natsserver.ProcessConfigFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("parse jetstream config: %w", err)
+	}
+	return opts, nil
 }
 
 func validateServerCertificate(cfg *config.Config, cert tls.Certificate) error {
