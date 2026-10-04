@@ -105,3 +105,37 @@ func collectorPeriodGatewayTable(t *testing.T, source string) *gatewayproxy.Tabl
 	}
 	return table
 }
+
+func TestFactorPrimaryStoreGatewayContract(t *testing.T) {
+	factorOnly := []string{"WriteFactorRows"}
+	factorShared := []string{"ReadTimeSeriesRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}
+	tables := make(map[string]*gatewayproxy.Table)
+	for _, source := range []string{"defaults", "deployment_yaml"} {
+		table := collectorPeriodGatewayTable(t, source)
+		tables[source] = table
+		t.Run(source, func(t *testing.T) {
+			for _, method := range append(append([]string(nil), factorOnly...), factorShared...) {
+				rpc := "/trpc.moox.storage.PrimaryStore/" + method
+				if _, resolved, found := table.ResolveRPCForCaller(rpc, "factor"); !found || resolved != method {
+					t.Errorf("factor cannot reach %s", rpc)
+				}
+			}
+			for _, method := range factorOnly {
+				rpc := "/trpc.moox.storage.PrimaryStore/" + method
+				for _, caller := range []string{"admin-gateway", "moox-cli", "moox-skill", "collector", "monitor", "archive", "storage-view", "strategy", ""} {
+					if _, _, allowed := table.ResolveRPCForCaller(rpc, caller); allowed {
+						t.Errorf("%s can invoke factor-only method %s", caller, method)
+					}
+				}
+			}
+		})
+	}
+	for _, method := range factorOnly {
+		rpc := "/trpc.moox.storage.PrimaryStore/" + method
+		defaults, _, defaultFound := tables["defaults"].ResolveRPCForCaller(rpc, "factor")
+		yamlRoute, _, yamlFound := tables["deployment_yaml"].ResolveRPCForCaller(rpc, "factor")
+		if defaultFound != yamlFound || !reflect.DeepEqual(defaults, yamlRoute) {
+			t.Errorf("default/YAML route drift for %s: defaults=%+v YAML=%+v", method, defaults, yamlRoute)
+		}
+	}
+}

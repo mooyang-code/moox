@@ -124,6 +124,11 @@ services:
         - service_path: trpc.moox.storage.PrimaryStore
           port: 20102
           max_body_bytes: 33554432
+          gateway_methods: [WriteFactorRows]
+          gateway_callers: [factor]
+        - service_path: trpc.moox.storage.PrimaryStore
+          port: 20102
+          max_body_bytes: 33554432
           gateway_methods: [ReadTimeSeriesRows]
           gateway_callers: [admin-gateway, collector, factor, monitor, archive, storage-view, strategy, moox-skill]
   - name: storage-view
