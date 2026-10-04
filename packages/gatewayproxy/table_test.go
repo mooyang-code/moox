@@ -166,9 +166,13 @@ func TestTableResolveRPCForCallerSelectsDisjointNativeRoute(t *testing.T) {
 		{ServiceID: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"admin-gateway"}},
 		{ServiceID: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
 	})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	var table Table
-	if err := table.Replace(snapshot); err != nil { t.Fatal(err) }
+	if err := table.Replace(snapshot); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct{ caller, service string }{{"admin-gateway", "trade_console"}, {"strategy", "trade_owner"}} {
 		route, method, ok := table.ResolveRPCForCaller("/trpc.moox.trade.TradeConsoleService/GetLogicalAccount", test.caller)
 		if !ok || method != "GetLogicalAccount" || route.ServiceID != test.service {

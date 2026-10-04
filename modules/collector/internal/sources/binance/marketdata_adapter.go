@@ -13,10 +13,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"trpc.group/trpc-go/trpc-go/log"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var (

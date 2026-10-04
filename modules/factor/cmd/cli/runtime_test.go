@@ -66,6 +66,6 @@ func TestImportLockUsesServiceDatabaseLockDirectory(t *testing.T) {
 	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	_, err = catalog.NewLocks(databasePath + ".locks").LockContext(ctx, "set_prices")
+	_, err = catalog.NewLocks(databasePath+".locks").LockContext(ctx, "set_prices")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }

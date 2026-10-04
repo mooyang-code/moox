@@ -132,7 +132,7 @@ func monotonicMetric(name string) bool {
 		strings.HasSuffix(name, "_dataset_output_watermark_timestamp_seconds") ||
 		name == ViewDatasetOutputLastDataTimeMetric ||
 		strings.HasSuffix(name, "_view_output_watermark_timestamp_seconds") ||
-	strings.HasSuffix(name, "_business_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_business_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_input_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_last_success_timestamp_seconds") ||
 		strings.HasSuffix(name, "_last_error_timestamp_seconds") ||
