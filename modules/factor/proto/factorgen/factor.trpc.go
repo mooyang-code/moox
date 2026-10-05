@@ -38,8 +38,11 @@ type FactorMgrService interface {
 	DeleteFactor(ctx context.Context, req *DeleteFactorReq) (*DeleteFactorRsp, error)
 
 	GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error)
+
 	AddFactorToSet(ctx context.Context, req *AddFactorToSetReq) (*AddFactorToSetRsp, error)
+
 	RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq) (*RemoveFactorFromSetRsp, error)
+
 	SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq) (*SetFactorMemberStatusRsp, error)
 
 	ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error)
@@ -488,6 +491,120 @@ func RegisterFactorMgrService(s server.Service, svr FactorMgrService) {
 	}
 }
 
+// FactorEngineService defines service.
+type FactorEngineService interface {
+	SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq) (*SyncEngineCatalogRsp, error)
+
+	EngineHeartbeat(ctx context.Context, req *EngineHeartbeatReq) (*EngineHeartbeatRsp, error)
+
+	PullRecalcJob(ctx context.Context, req *PullRecalcJobReq) (*PullRecalcJobRsp, error)
+
+	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error)
+}
+
+func FactorEngineService_SyncEngineCatalog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncEngineCatalogReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).SyncEngineCatalog(ctx, reqbody.(*SyncEngineCatalogReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorEngineService_EngineHeartbeat_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &EngineHeartbeatReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).EngineHeartbeat(ctx, reqbody.(*EngineHeartbeatReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorEngineService_PullRecalcJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PullRecalcJobReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).PullRecalcJob(ctx, reqbody.(*PullRecalcJobReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorEngineService_ReportRecalcProgress_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReportRecalcProgressReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).ReportRecalcProgress(ctx, reqbody.(*ReportRecalcProgressReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// FactorEngineServer_ServiceDesc descriptor for server.RegisterService.
+var FactorEngineServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.factor.FactorEngine",
+	HandlerType: ((*FactorEngineService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.factor.FactorEngine/SyncEngineCatalog",
+			Func: FactorEngineService_SyncEngineCatalog_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/EngineHeartbeat",
+			Func: FactorEngineService_EngineHeartbeat_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/PullRecalcJob",
+			Func: FactorEngineService_PullRecalcJob_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/ReportRecalcProgress",
+			Func: FactorEngineService_ReportRecalcProgress_Handler,
+		},
+	},
+}
+
+// RegisterFactorEngineService registers service.
+func RegisterFactorEngineService(s server.Service, svr FactorEngineService) {
+	if err := s.Register(&FactorEngineServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("FactorEngine register error:%v", err))
+	}
+}
+
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedFactorMgr struct{}
@@ -550,6 +667,21 @@ func (s *UnimplementedFactorMgr) GetStatus(ctx context.Context, req *GetStatusRe
 	return nil, errors.New("rpc GetStatus of service FactorMgr is not implemented")
 }
 
+type UnimplementedFactorEngine struct{}
+
+func (s *UnimplementedFactorEngine) SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq) (*SyncEngineCatalogRsp, error) {
+	return nil, errors.New("rpc SyncEngineCatalog of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) EngineHeartbeat(ctx context.Context, req *EngineHeartbeatReq) (*EngineHeartbeatRsp, error) {
+	return nil, errors.New("rpc EngineHeartbeat of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) PullRecalcJob(ctx context.Context, req *PullRecalcJobReq) (*PullRecalcJobRsp, error) {
+	return nil, errors.New("rpc PullRecalcJob of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error) {
+	return nil, errors.New("rpc ReportRecalcProgress of service FactorEngine is not implemented")
+}
+
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -577,8 +709,11 @@ type FactorMgrClientProxy interface {
 	DeleteFactor(ctx context.Context, req *DeleteFactorReq, opts ...client.Option) (rsp *DeleteFactorRsp, err error)
 
 	GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (rsp *GetFactorRsp, err error)
+
 	AddFactorToSet(ctx context.Context, req *AddFactorToSetReq, opts ...client.Option) (rsp *AddFactorToSetRsp, err error)
+
 	RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq, opts ...client.Option) (rsp *RemoveFactorFromSetRsp, err error)
+
 	SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq, opts ...client.Option) (rsp *SetFactorMemberStatusRsp, err error)
 
 	ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (rsp *ListFactorsRsp, err error)
@@ -977,6 +1112,106 @@ func (c *FactorMgrClientProxyImpl) GetStatus(ctx context.Context, req *GetStatus
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// FactorEngineClientProxy defines service client proxy
+type FactorEngineClientProxy interface {
+	SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq, opts ...client.Option) (rsp *SyncEngineCatalogRsp, err error)
+
+	EngineHeartbeat(ctx context.Context, req *EngineHeartbeatReq, opts ...client.Option) (rsp *EngineHeartbeatRsp, err error)
+
+	PullRecalcJob(ctx context.Context, req *PullRecalcJobReq, opts ...client.Option) (rsp *PullRecalcJobRsp, err error)
+
+	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq, opts ...client.Option) (rsp *ReportRecalcProgressRsp, err error)
+}
+
+type FactorEngineClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewFactorEngineClientProxy = func(opts ...client.Option) FactorEngineClientProxy {
+	return &FactorEngineClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *FactorEngineClientProxyImpl) SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq, opts ...client.Option) (*SyncEngineCatalogRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/SyncEngineCatalog")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("SyncEngineCatalog")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SyncEngineCatalogRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) EngineHeartbeat(ctx context.Context, req *EngineHeartbeatReq, opts ...client.Option) (*EngineHeartbeatRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/EngineHeartbeat")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("EngineHeartbeat")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &EngineHeartbeatRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) PullRecalcJob(ctx context.Context, req *PullRecalcJobReq, opts ...client.Option) (*PullRecalcJobRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/PullRecalcJob")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("PullRecalcJob")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PullRecalcJobRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq, opts ...client.Option) (*ReportRecalcProgressRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/ReportRecalcProgress")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("ReportRecalcProgress")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReportRecalcProgressRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

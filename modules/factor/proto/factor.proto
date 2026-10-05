@@ -88,6 +88,7 @@ message RecalcJob {
   string error = 10;
   string created_at = 11;
   string updated_at = 12;
+  string engine_id = 13;
 }
 
 message CreateFactorSetReq { FactorSet factor_set = 1; }
@@ -241,6 +242,18 @@ message FactorLaneStatus {
   bool active = 3;
 }
 
+// EngineInfo describes the compute engine as last seen by moox-factor-mgr.
+message EngineInfo {
+  string engine_id = 1;
+  string boot_id = 2;
+  string version = 3;
+  bool online = 4;
+  string last_heartbeat_at = 5;
+  string catalog_hash = 6;
+  string catalog_synced_at = 7;
+  bool catalog_in_sync = 8;
+}
+
 message GetStatusReq {}
 message GetStatusRsp {
   common.RetInfo ret_info = 1;
@@ -249,6 +262,7 @@ message GetStatusRsp {
   int32 python_busy = 4;
   repeated FactorLaneStatus lanes = 5;
   repeated SetRunSummary recent_runs = 6;
+  EngineInfo engine = 7;
 }
 
 service FactorMgr {
@@ -271,4 +285,77 @@ service FactorMgr {
   rpc GetRecalcJob(GetRecalcJobReq) returns (GetRecalcJobRsp);
   rpc CancelRecalcJob(CancelRecalcJobReq) returns (CancelRecalcJobRsp);
   rpc GetStatus(GetStatusReq) returns (GetStatusRsp);
+}
+
+// FactorEngine is the internal contract between moox-factor-mgr and the
+// outbound-only moox-factor-engine; only the factor-engine caller may use it.
+message EngineIdentity {
+  string engine_id = 1;
+  string boot_id = 2;
+  string version = 3;
+}
+
+message EngineSet {
+  FactorSet factor_set = 1;
+  repeated FactorDef factors = 2;
+  bool result_ready = 3;
+}
+
+message SyncEngineCatalogReq {
+  EngineIdentity engine = 1;
+  string known_hash = 2;
+}
+message SyncEngineCatalogRsp {
+  common.RetInfo ret_info = 1;
+  string catalog_hash = 2;
+  bool not_modified = 3;
+  repeated EngineSet sets = 4;
+}
+
+message EngineRuntimeStatus {
+  bool consumer_running = 1;
+  int32 python_workers = 2;
+  int32 python_busy = 3;
+  repeated FactorLaneStatus lanes = 4;
+  repeated SetRunSummary recent_runs = 5;
+  string catalog_hash = 6;
+  string catalog_synced_at = 7;
+}
+
+message EngineHeartbeatReq {
+  EngineIdentity engine = 1;
+  EngineRuntimeStatus status = 2;
+}
+message EngineHeartbeatRsp {
+  common.RetInfo ret_info = 1;
+  int64 lease_ttl_seconds = 2;
+}
+
+message PullRecalcJobReq { EngineIdentity engine = 1; }
+message PullRecalcJobRsp {
+  common.RetInfo ret_info = 1;
+  bool found = 2;
+  RecalcJob job = 3;
+  string lease_token = 4;
+  EngineSet set = 5;
+}
+
+message ReportRecalcProgressReq {
+  EngineIdentity engine = 1;
+  string job_id = 2;
+  string lease_token = 3;
+  string progress_time = 4;
+  string status = 5;
+  string error = 6;
+}
+message ReportRecalcProgressRsp {
+  common.RetInfo ret_info = 1;
+  string job_status = 2;
+}
+
+service FactorEngine {
+  rpc SyncEngineCatalog(SyncEngineCatalogReq) returns (SyncEngineCatalogRsp);
+  rpc EngineHeartbeat(EngineHeartbeatReq) returns (EngineHeartbeatRsp);
+  rpc PullRecalcJob(PullRecalcJobReq) returns (PullRecalcJobRsp);
+  rpc ReportRecalcProgress(ReportRecalcProgressReq) returns (ReportRecalcProgressRsp);
 }
