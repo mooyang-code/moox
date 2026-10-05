@@ -52,7 +52,6 @@ func factorSetFromPB(pb *factorpb.FactorSet) (domain.FactorSet, error) {
 func factorDefToPB(factor domain.FactorDef) *factorpb.FactorDef {
 	return &factorpb.FactorDef{
 		FactorId:             factor.FactorID,
-		SetId:                factor.SetID,
 		Name:                 factor.Name,
 		FactorType:           factor.FactorType,
 		SourceCode:           factor.SourceCode,
@@ -62,10 +61,57 @@ func factorDefToPB(factor domain.FactorDef) *factorpb.FactorDef {
 		ParamsJson:           factor.ParamsJSON,
 		LookbackPeriods:      int32(factor.LookbackPeriods),
 		AllowPartialUniverse: factor.AllowPartialUniverse,
-		Status:               factor.Status,
 		CreatedAt:            formatTime(factor.CreatedAt),
 		UpdatedAt:            formatTime(factor.UpdatedAt),
 	}
+}
+
+// factorDefToPBListed is factorDefToPB for list responses: unless the caller
+// asked for it, source_code is left out and only source_hash identifies the code.
+func factorDefToPBListed(factor domain.FactorDef, includeSource bool) *factorpb.FactorDef {
+	pb := factorDefToPB(factor)
+	if !includeSource {
+		pb.SourceCode = ""
+	}
+	return pb
+}
+
+func usagesToPB(usages []domain.FactorUsage) []*factorpb.FactorUsage {
+	out := make([]*factorpb.FactorUsage, 0, len(usages))
+	for _, usage := range usages {
+		out = append(out, &factorpb.FactorUsage{SetId: usage.SetID, Status: usage.Status})
+	}
+	return out
+}
+
+func factorInfosToPB(infos []domain.FactorInfo, includeSource bool) []*factorpb.FactorInfo {
+	out := make([]*factorpb.FactorInfo, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, &factorpb.FactorInfo{
+			Factor: factorDefToPBListed(info.Factor, includeSource), Usages: usagesToPB(info.Usages),
+		})
+	}
+	return out
+}
+
+func memberToPB(member domain.SetMember, includeSource bool) *factorpb.FactorMember {
+	return &factorpb.FactorMember{
+		SetId:     member.SetID,
+		FactorId:  member.FactorID,
+		Status:    member.Status,
+		Factor:    factorDefToPBListed(member.Factor, includeSource),
+		CreatedAt: formatTime(member.CreatedAt),
+		UpdatedAt: formatTime(member.UpdatedAt),
+	}
+}
+
+// membersToPB renders a set's members without source code (list-style response).
+func membersToPB(members []domain.SetMember) []*factorpb.FactorMember {
+	out := make([]*factorpb.FactorMember, 0, len(members))
+	for _, member := range members {
+		out = append(out, memberToPB(member, false))
+	}
+	return out
 }
 
 func factorDefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
@@ -82,7 +128,6 @@ func factorDefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 	}
 	return domain.FactorDef{
 		FactorID:             pb.GetFactorId(),
-		SetID:                pb.GetSetId(),
 		Name:                 pb.GetName(),
 		FactorType:           pb.GetFactorType(),
 		SourceCode:           pb.GetSourceCode(),
@@ -92,7 +137,6 @@ func factorDefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 		ParamsJSON:           pb.GetParamsJson(),
 		LookbackPeriods:      int(pb.GetLookbackPeriods()),
 		AllowPartialUniverse: pb.GetAllowPartialUniverse(),
-		Status:               pb.GetStatus(),
 		CreatedAt:            createdAt,
 		UpdatedAt:            updatedAt,
 	}, nil

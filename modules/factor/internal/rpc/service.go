@@ -20,14 +20,17 @@ type CatalogAPI interface {
 	UpdateSetSubjects(ctx context.Context, setID, mode string, subjects []string) (domain.FactorSet, error)
 	SetSetStatus(ctx context.Context, setID, status string) (domain.FactorSet, error)
 	DeleteSet(ctx context.Context, setID string, purge bool) error
-	GetSet(ctx context.Context, setID string) (domain.FactorSet, []domain.FactorDef, error)
+	GetSet(ctx context.Context, setID string) (domain.FactorSet, []domain.SetMember, error)
 	ListSets(ctx context.Context) ([]domain.FactorSet, error)
 	CreateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error)
 	UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error)
-	SetFactorStatus(ctx context.Context, factorID, status string) (domain.FactorDef, string, error)
 	DeleteFactor(ctx context.Context, factorID string) error
-	GetFactor(ctx context.Context, factorID string) (domain.FactorDef, error)
-	ListFactors(ctx context.Context, setID, status string) ([]domain.FactorDef, error)
+	GetFactor(ctx context.Context, factorID string) (domain.FactorInfo, error)
+	ListFactors(ctx context.Context, setID, status string) ([]domain.FactorInfo, error)
+	AddFactorToSet(ctx context.Context, setID, factorID string) (domain.SetMember, error)
+	RemoveFactorFromSet(ctx context.Context, setID, factorID string) error
+	// SetFactorMemberStatus returns the backfill job id when the member is enabled.
+	SetFactorMemberStatus(ctx context.Context, setID, factorID, status string) (domain.SetMember, string, error)
 }
 
 // RecalcJob is the RPC-facing representation of one durable recalc request.
@@ -178,7 +181,7 @@ func (s *Service) GetFactorSet(ctx context.Context, req *factorpb.GetFactorSetRe
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.GetFactorSetRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
-	set, factors, err := s.catalog.GetSet(ctx, req.GetSetId())
+	set, members, err := s.catalog.GetSet(ctx, req.GetSetId())
 	if err != nil {
 		return &factorpb.GetFactorSetRsp{RetInfo: inner(err)}, nil
 	}
@@ -187,7 +190,7 @@ func (s *Service) GetFactorSet(ctx context.Context, req *factorpb.GetFactorSetRe
 		return &factorpb.GetFactorSetRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.GetFactorSetRsp{
-		RetInfo: success(), FactorSet: factorSetToPB(set), Factors: factorDefsToPB(factors), LastRun: setRunSummaryToPBIfPresent(summary),
+		RetInfo: success(), FactorSet: factorSetToPB(set), Members: membersToPB(members), LastRun: setRunSummaryToPBIfPresent(summary),
 	}, nil
 }
 
@@ -206,7 +209,7 @@ func (s *Service) ListFactorSets(ctx context.Context, req *factorpb.ListFactorSe
 	items, total := paginate(filtered, page, size)
 	infos := make([]*factorpb.FactorSetInfo, 0, len(items))
 	for _, set := range items {
-		_, factors, err := s.catalog.GetSet(ctx, set.SetID)
+		_, members, err := s.catalog.GetSet(ctx, set.SetID)
 		if err != nil {
 			return &factorpb.ListFactorSetsRsp{RetInfo: inner(err)}, nil
 		}
@@ -214,7 +217,7 @@ func (s *Service) ListFactorSets(ctx context.Context, req *factorpb.ListFactorSe
 		if err != nil {
 			return &factorpb.ListFactorSetsRsp{RetInfo: inner(err)}, nil
 		}
-		infos = append(infos, &factorpb.FactorSetInfo{FactorSet: factorSetToPB(set), Factors: factorDefsToPB(factors), LastRun: setRunSummaryToPBIfPresent(summary)})
+		infos = append(infos, &factorpb.FactorSetInfo{FactorSet: factorSetToPB(set), Members: membersToPB(members), LastRun: setRunSummaryToPBIfPresent(summary)})
 	}
 	return &factorpb.ListFactorSetsRsp{RetInfo: success(), FactorSets: infos, PageResult: pageResult(page, size, total)}, nil
 }
@@ -227,8 +230,8 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 	if err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	if strings.TrimSpace(factor.SetID) == "" {
-		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
+	if strings.TrimSpace(factor.FactorID) == "" {
+		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
 	}
 	created, err := s.catalog.CreateFactor(ctx, factor)
 	if err != nil {
@@ -245,8 +248,8 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	if strings.TrimSpace(factor.FactorID) == "" || strings.TrimSpace(factor.SetID) == "" {
-		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id and set_id are required"))}, nil
+	if strings.TrimSpace(factor.FactorID) == "" {
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
 	}
 	updated, err := s.catalog.UpdateFactor(ctx, factor)
 	if err != nil {
@@ -255,23 +258,44 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	return &factorpb.UpdateFactorRsp{RetInfo: success(), Factor: factorDefToPB(updated)}, nil
 }
 
-func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorStatusReq) (*factorpb.SetFactorStatusRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetFactorId()) == "" {
-		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
+func (s *Service) AddFactorToSet(ctx context.Context, req *factorpb.AddFactorToSetReq) (*factorpb.AddFactorToSetRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
+		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
+	}
+	member, err := s.catalog.AddFactorToSet(ctx, req.GetSetId(), req.GetFactorId())
+	if err != nil {
+		return &factorpb.AddFactorToSetRsp{RetInfo: inner(err)}, nil
+	}
+	return &factorpb.AddFactorToSetRsp{RetInfo: success(), Member: memberToPB(member, false)}, nil
+}
+
+func (s *Service) RemoveFactorFromSet(ctx context.Context, req *factorpb.RemoveFactorFromSetReq) (*factorpb.RemoveFactorFromSetRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
+		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
+	}
+	if err := s.catalog.RemoveFactorFromSet(ctx, req.GetSetId(), req.GetFactorId()); err != nil {
+		return &factorpb.RemoveFactorFromSetRsp{RetInfo: inner(err)}, nil
+	}
+	return &factorpb.RemoveFactorFromSetRsp{RetInfo: success()}, nil
+}
+
+func (s *Service) SetFactorMemberStatus(ctx context.Context, req *factorpb.SetFactorMemberStatusReq) (*factorpb.SetFactorMemberStatusRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
+		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
 	}
 	status := req.GetStatus()
-	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
-		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("status must be %q or %q", domain.FactorStatusEnabled, domain.FactorStatusDisabled))}, nil
+	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
+		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled))}, nil
 	}
-	factor, backfillJobID, err := s.catalog.SetFactorStatus(ctx, req.GetFactorId(), status)
+	member, backfillJobID, err := s.catalog.SetFactorMemberStatus(ctx, req.GetSetId(), req.GetFactorId(), status)
 	if err != nil {
-		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+		return &factorpb.SetFactorMemberStatusRsp{RetInfo: inner(err)}, nil
 	}
-	rsp := &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorDefToPB(factor)}
+	rsp := &factorpb.SetFactorMemberStatusRsp{RetInfo: success(), Member: memberToPB(member, false)}
 	if backfillJobID != "" {
 		job, err := s.recalc.Get(ctx, backfillJobID)
 		if err != nil {
-			return &factorpb.SetFactorStatusRsp{RetInfo: inner(fmt.Errorf("load backfill job %s: %w", backfillJobID, err))}, nil
+			return &factorpb.SetFactorMemberStatusRsp{RetInfo: inner(fmt.Errorf("load backfill job %s: %w", backfillJobID, err))}, nil
 		}
 		rsp.BackfillJob = recalcJobToPB(job)
 	}
@@ -292,17 +316,18 @@ func (s *Service) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*f
 	if req == nil || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.GetFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
 	}
-	factor, err := s.catalog.GetFactor(ctx, req.GetFactorId())
+	info, err := s.catalog.GetFactor(ctx, req.GetFactorId())
 	if err != nil {
 		return &factorpb.GetFactorRsp{RetInfo: inner(err)}, nil
 	}
-	return &factorpb.GetFactorRsp{RetInfo: success(), Factor: factorDefToPB(factor)}, nil
+	// GetFactor is the one read that always carries the source code.
+	return &factorpb.GetFactorRsp{RetInfo: success(), Factor: factorDefToPB(info.Factor), Usages: usagesToPB(info.Usages)}, nil
 }
 
 func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq) (*factorpb.ListFactorsRsp, error) {
-	setID, status := "", ""
+	setID, status, includeSource := "", "", false
 	if req != nil {
-		setID, status = req.GetSetId(), req.GetStatus()
+		setID, status, includeSource = req.GetSetId(), req.GetStatus(), req.GetIncludeSource()
 	}
 	factors, err := s.catalog.ListFactors(ctx, setID, status)
 	if err != nil {
@@ -310,7 +335,7 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 	}
 	page, size := pageParams(pageFromFactorReq(req))
 	items, total := paginate(factors, page, size)
-	return &factorpb.ListFactorsRsp{RetInfo: success(), Factors: factorDefsToPB(items), PageResult: pageResult(page, size, total)}, nil
+	return &factorpb.ListFactorsRsp{RetInfo: success(), Factors: factorInfosToPB(items, includeSource), PageResult: pageResult(page, size, total)}, nil
 }
 
 func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactorsReq) (*factorpb.RecalcFactorsRsp, error) {
@@ -422,14 +447,6 @@ func (s *Service) latestRun(ctx context.Context, setID string) (SetRunSummary, e
 		summary.SetID = setID
 	}
 	return summary, nil
-}
-
-func factorDefsToPB(factors []domain.FactorDef) []*factorpb.FactorDef {
-	out := make([]*factorpb.FactorDef, 0, len(factors))
-	for _, factor := range factors {
-		out = append(out, factorDefToPB(factor))
-	}
-	return out
 }
 
 func pageFromSetReq(req *factorpb.ListFactorSetsReq) *commonpb.Page {
