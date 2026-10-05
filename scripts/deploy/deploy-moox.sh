@@ -4114,12 +4114,6 @@ PY
     local access_target_node="${MOOX_STORAGE_ACCESS_TARGET_NODE:-storage-access-${NODE_ID}}"
     local access_upstream_target_node="${MOOX_STORAGE_ACCESS_UPSTREAM_TARGET_NODE:-${MOOX_GATEWAY_NODE_ID:-${NODE_ID}}}"
     local access_upstream_target="${MOOX_STORAGE_ACCESS_UPSTREAM_TARGET:-}"
-    local access_inbound_key_id="${MOOX_STORAGE_ACCESS_INBOUND_KEY_ID:-collector}"
-    local access_inbound_caller="${MOOX_STORAGE_ACCESS_INBOUND_CALLER:-collector}"
-    local access_upstream_key_id="${MOOX_STORAGE_ACCESS_UPSTREAM_KEY_ID:-collector}"
-    local access_upstream_caller="${MOOX_STORAGE_ACCESS_UPSTREAM_CALLER:-collector}"
-    local access_inbound_secret="${MOOX_STORAGE_ACCESS_INBOUND_SECRET:-}"
-    local access_upstream_secret="${MOOX_STORAGE_ACCESS_UPSTREAM_SECRET:-}"
     [[ "${access_target_node}" =~ ^[a-z0-9][a-z0-9_-]{0,127}$ ]] || fail "MOOX_STORAGE_ACCESS_TARGET_NODE is invalid"
     [[ "${access_upstream_target_node}" =~ ^[a-z0-9][a-z0-9_-]{0,127}$ ]] || fail "MOOX_STORAGE_ACCESS_UPSTREAM_TARGET_NODE is invalid"
     if [[ -z "${access_upstream_target}" ]]; then
@@ -4129,27 +4123,44 @@ PY
         fail "MOOX_STORAGE_ACCESS_UPSTREAM_TARGET is required when Storage Access is deployed without a local Storage Gateway"
       fi
     fi
-    if [[ -z "${access_inbound_secret}" ]]; then
-      access_inbound_secret="$(tr -d '\r\n' <"${STAGE_DIR}/secrets/gateway-collector.key")"
+    # The factor-engine principal's inbound key is copied to the operator
+    # machine that runs moox-factor-engine. Pass a stable key file to keep it;
+    # otherwise a generated key is only installed when the target has none.
+    local engine_key="${STAGE_DIR}/secrets/storage-access-factor-engine.key"
+    rm -f "${engine_key}" "${engine_key}.generated"
+    if [[ -n "${MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE:-}" ]]; then
+      [[ -f "${MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE}" && ! -L "${MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE}" ]] || \
+        fail "MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE must be a regular file"
+      (umask 077; tr -d '\r\n' <"${MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE}" >"${engine_key}")
+    else
+      (umask 077; openssl rand -hex 32 >"${engine_key}")
+      : >"${engine_key}.generated"
     fi
-    if [[ -z "${access_upstream_secret}" ]]; then
-      access_upstream_secret="$(tr -d '\r\n' <"${STAGE_DIR}/secrets/gateway-collector.key")"
-    fi
-    [[ -n "${access_inbound_secret}" && -n "${access_upstream_secret}" ]] || fail "Storage Access credentials cannot be empty"
-    [[ "${access_inbound_secret}" != *$'\n'* && "${access_inbound_secret}" != *$'\r'* && "${access_upstream_secret}" != *$'\n'* && "${access_upstream_secret}" != *$'\r'* ]] || fail "Storage Access credentials must contain exactly one line"
+    [[ -s "${engine_key}" ]] || fail "Storage Access factor-engine key cannot be empty"
+    chmod 0600 "${engine_key}"
+    for access_key in gateway-collector.key gateway-factor.key; do
+      [[ -s "${STAGE_DIR}/secrets/${access_key}" ]] || fail "Storage Access requires ${access_key}"
+    done
+    (umask 077; cat >"${STAGE_DIR}/secrets/storage-access-principals.yaml" <<'PRINCIPALS'
+version: 1
+principals:
+  - name: collector
+    methods: collector
+    inbound: {key_id: collector, caller: collector, secret_file: gateway-collector.key}
+    upstream: {key_id: collector, caller: collector, secret_file: gateway-collector.key}
+  - name: factor-engine
+    methods: factor-engine
+    inbound: {key_id: factor-engine, caller: factor-engine, secret_file: storage-access-factor-engine.key}
+    upstream: {key_id: factor, caller: factor, secret_file: gateway-factor.key}
+PRINCIPALS
+    )
     (umask 077; {
-      printf 'MOOX_STORAGE_ACCESS_INBOUND_KEY_ID=%q\n' "${access_inbound_key_id}"
-      printf 'MOOX_STORAGE_ACCESS_INBOUND_CALLER=%q\n' "${access_inbound_caller}"
-      printf 'MOOX_STORAGE_ACCESS_INBOUND_SECRET=%q\n' "${access_inbound_secret}"
-      printf 'MOOX_STORAGE_ACCESS_UPSTREAM_KEY_ID=%q\n' "${access_upstream_key_id}"
-      printf 'MOOX_STORAGE_ACCESS_UPSTREAM_CALLER=%q\n' "${access_upstream_caller}"
-      printf 'MOOX_STORAGE_ACCESS_UPSTREAM_SECRET=%q\n' "${access_upstream_secret}"
+      printf 'MOOX_STORAGE_ACCESS_PRINCIPALS_FILE=%q\n' "${DEPLOY_DIR}/secrets/storage-access-principals.yaml"
       printf 'MOOX_STORAGE_ACCESS_TARGET_NODE=%q\n' "${access_target_node}"
       printf 'MOOX_STORAGE_ACCESS_UPSTREAM_TARGET_NODE=%q\n' "${access_upstream_target_node}"
       printf 'MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=%q\n' "${access_upstream_target}"
-      printf 'MOOX_STORAGE_ACCESS_ALLOWED_CALLERS=%q\n' "${MOOX_STORAGE_ACCESS_ALLOWED_CALLERS:-collector}"
     } >"${STAGE_DIR}/secrets/storage-access.env")
-    chmod 0600 "${STAGE_DIR}/secrets/storage-access.env"
+    chmod 0600 "${STAGE_DIR}/secrets/storage-access.env" "${STAGE_DIR}/secrets/storage-access-principals.yaml"
   fi
   {
     printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-cli\n'
@@ -4939,8 +4950,15 @@ sync_local_stage() {
   fi
   if [[ "${WITH_STORAGE_ACCESS}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-access.env" "${deploy_dir}/secrets/storage-access.env"
+    install -m 0600 "${STAGE_DIR}/secrets/storage-access-principals.yaml" "${deploy_dir}/secrets/storage-access-principals.yaml"
+    if [[ -f "${STAGE_DIR}/secrets/storage-access-factor-engine.key.generated" && -s "${deploy_dir}/secrets/storage-access-factor-engine.key" ]]; then
+      chmod 0600 "${deploy_dir}/secrets/storage-access-factor-engine.key"
+    else
+      install -m 0600 "${STAGE_DIR}/secrets/storage-access-factor-engine.key" "${deploy_dir}/secrets/storage-access-factor-engine.key"
+    fi
   elif [[ "${component_overlay}" -eq 0 ]]; then
-    rm -f "${deploy_dir}/secrets/storage-access.env"
+    rm -f "${deploy_dir}/secrets/storage-access.env" "${deploy_dir}/secrets/storage-access-principals.yaml" \
+      "${deploy_dir}/secrets/storage-access-factor-engine.key"
   fi
   if [[ -f "${STAGE_DIR}/secrets/storage-internal-auth.env" ]]; then
     if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/storage-internal-auth.env" ]]; then

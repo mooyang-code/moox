@@ -14,9 +14,9 @@ import (
 
 func accessRead() error {
 	credentials := gatewayauth.Credentials{
-		KeyID:  strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_KEY_ID")),
-		Caller: strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_CALLER")),
-		Secret: os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_SECRET"),
+		KeyID:  strings.TrimSpace(os.Getenv("MOOX_ACCESS_PROBE_KEY_ID")),
+		Caller: strings.TrimSpace(os.Getenv("MOOX_ACCESS_PROBE_CALLER")),
+		Secret: os.Getenv("MOOX_ACCESS_PROBE_SECRET"),
 	}
 	target := strings.TrimSpace(os.Getenv("MOOX_ACCESS_TARGET"))
 	targetNode := strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET_NODE"))
@@ -74,9 +74,9 @@ func accessRead() error {
 
 func viewRead() error {
 	credentials := gatewayauth.Credentials{
-		KeyID:  strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_KEY_ID")),
-		Caller: strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_CALLER")),
-		Secret: os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_SECRET"),
+		KeyID:  strings.TrimSpace(os.Getenv("MOOX_ACCESS_PROBE_KEY_ID")),
+		Caller: strings.TrimSpace(os.Getenv("MOOX_ACCESS_PROBE_CALLER")),
+		Secret: os.Getenv("MOOX_ACCESS_PROBE_SECRET"),
 	}
 	options := gatewayauth.NewTRPCClientOptions(strings.TrimSpace(os.Getenv("MOOX_ACCESS_TARGET")), strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET_NODE")), credentials)
 	reader := pb.NewDataViewClientProxy(options...)
