@@ -18,11 +18,18 @@ type ClientOptions struct {
 	Timeout     time.Duration
 	CAFile      string
 	CAPEMBase64 string
+	// IgnoreProxyEnv connects directly even when HTTP(S)_PROXY is set, for
+	// callers on operator machines whose shell routes traffic through a local
+	// proxy that must not carry service credentials.
+	IgnoreProxyEnv bool
 }
 
 // NewHTTPClient returns a client that permits plaintext only for loopback targets.
 func NewHTTPClient(options ClientOptions) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if options.IgnoreProxyEnv {
+		transport.Proxy = nil
+	}
 	caFile := strings.TrimSpace(options.CAFile)
 	caMaterial := strings.TrimSpace(options.CAPEMBase64)
 	if caFile != "" && caMaterial != "" {

@@ -1,0 +1,53 @@
+# moox-factor-engine 配置：引擎只做出站连接，相对路径相对于安装根目录（config 的上一级）
+engine:
+  # 稳定的引擎 ID；为空时取 factor-engine@<主机名>
+  id: ""
+  heartbeat_interval: 10s
+
+# 经控制机服务 HTTPS 入口调用 moox-factor-mgr 的 FactorEngine 服务
+manager:
+  url: https://127.0.0.1:11001
+  node_id: control
+  ca_file: ./secrets/control-caddy-root.crt
+  key_id: factor-engine
+  hmac_key_file: ./secrets/gateway-factor-engine.key
+  timeout: 30s
+
+# 按 UTC 对齐：每 interval 的第 offset 拉取一次目录
+catalog_sync:
+  interval: 1m
+  offset: 45s
+  state_file: ./data/engine/catalog.json
+
+# 经 Storage 机 storage-access 读写数据（factor-engine 主体）
+storage:
+  gateway_target: "ip://127.0.0.1:11004"
+  gateway_node_id: ""
+  key_id: factor-engine
+  hmac_key_file: ./secrets/storage-access-factor-engine.key
+  auth_secret_file: ./secrets/storage-primary-auth.secret
+
+eventbus:
+  urls:
+    - tls://127.0.0.1:4222
+  credential_file: ./secrets/factor-eventbus.yaml
+  fetch_max_wait: 10s
+
+python:
+  bin: ./venv/bin/python
+  worker_path: ./pyworker/worker.py
+  factors_dir: ./data/engine/factors
+  workers: 8
+  task_timeout: 30s
+
+pipeline:
+  read_batch_subjects: 100
+  read_workers: 4
+  read_timeout: 20s
+  write_batch_rows: 1000
+  period_budget_min: 60s
+  period_budget_max: 15m
+
+recalc:
+  chunk_periods: 500
+  poll_interval: 5s

@@ -1,0 +1,42 @@
+global:
+  namespace: Development
+  env_name: dev
+
+server:
+  filter:
+    - recovery
+    - prometheus
+  timeout: 120000
+  admin:
+    ip: 127.0.0.1
+    port: 11945
+    read_timeout: 3000
+    write_timeout: 60000
+  service:
+    - name: trpc.moox.factor.Health
+      ip: 127.0.0.1
+      port: 11417
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+
+client:
+  filter:
+    - transinfo-blocker
+
+plugins:
+  security:
+    transinfo-blocker:
+      default:
+        mode: whitelist
+        keys:
+          - traceparent
+          - tracestate
+          - x-moox-trace-id
+          - x-moox-space-id
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12945
+      path: /metrics
+      enablepush: false
