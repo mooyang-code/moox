@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 )
@@ -45,8 +47,26 @@ type RecalcJob struct {
 	Status       string
 	ProgressTime time.Time
 	Error        string
+	EngineID     string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+// JobFromStore converts a stored recalc job to its RPC representation.
+func JobFromStore(job store.RecalcJob) RecalcJob {
+	return RecalcJob{
+		JobID: job.JobID, RequestID: job.RequestID, SetID: job.SetID,
+		FactorIDs: append([]string(nil), job.FactorIDs...), Subjects: append([]string(nil), job.Subjects...),
+		StartTime: unixTime(job.StartTime), EndTime: unixTime(job.EndTime), ProgressTime: unixTime(job.ProgressTime),
+		Status: job.Status, Error: job.Error, EngineID: job.EngineID, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
+	}
+}
+
+func unixTime(value int64) time.Time {
+	if value == 0 {
+		return time.Time{}
+	}
+	return time.Unix(value, 0).UTC()
 }
 
 // RecalcAPI isolates asynchronous recalculation orchestration from RPC.
@@ -57,40 +77,23 @@ type RecalcAPI interface {
 	Cancel(ctx context.Context, jobID string) (RecalcJob, error)
 }
 
-type RuntimeStatus struct {
-	ConsumerRunning bool
-	PythonWorkers   int32
-	PythonBusy      int32
-	Lanes           []domain.LaneStatus
-	RecentRuns      []domain.SetRunSummary
-}
-
-// StatusAPI supplies runtime state collected outside the catalog.
-type StatusAPI interface {
-	GetStatus(ctx context.Context) (RuntimeStatus, error)
-}
-
-// RunSummaryAPI supplies the most recent published period for set summaries.
-type RunSummaryAPI interface {
-	LatestRun(ctx context.Context, setID string) (domain.SetRunSummary, error)
+// EngineAPI is the manager's view of the compute engine, fed by heartbeats.
+type EngineAPI interface {
+	Engine(ctx context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error)
+	LatestRun(setID string) domain.SetRunSummary
 }
 
 type ServiceOption func(*Service)
 
-func WithStatusAPI(status StatusAPI) ServiceOption {
-	return func(s *Service) { s.status = status }
-}
-
-func WithRunSummaryAPI(summaries RunSummaryAPI) ServiceOption {
-	return func(s *Service) { s.summaries = summaries }
+func WithEngineAPI(engine EngineAPI) ServiceOption {
+	return func(s *Service) { s.engine = engine }
 }
 
 // Service implements the FactorMgr RPC contract and delegates domain work.
 type Service struct {
-	catalog   CatalogAPI
-	recalc    RecalcAPI
-	status    StatusAPI
-	summaries RunSummaryAPI
+	catalog CatalogAPI
+	recalc  RecalcAPI
+	engine  EngineAPI
 }
 
 func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Service {
@@ -107,7 +110,7 @@ func (s *Service) CreateFactorSet(ctx context.Context, req *factorpb.CreateFacto
 	if req == nil || req.GetFactorSet() == nil {
 		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(fmt.Errorf("factor_set is required"))}, nil
 	}
-	in, err := factorSetFromPB(req.GetFactorSet())
+	in, err := factorwire.SetFromPB(req.GetFactorSet())
 	if err != nil {
 		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(err)}, nil
 	}
@@ -115,18 +118,18 @@ func (s *Service) CreateFactorSet(ctx context.Context, req *factorpb.CreateFacto
 	if err != nil {
 		return &factorpb.CreateFactorSetRsp{RetInfo: inner(err)}, nil
 	}
-	return &factorpb.CreateFactorSetRsp{RetInfo: success(), FactorSet: factorSetToPB(set)}, nil
+	return &factorpb.CreateFactorSetRsp{RetInfo: success(), FactorSet: factorwire.SetToPB(set)}, nil
 }
 
 func (s *Service) UpdateFactorSet(ctx context.Context, req *factorpb.UpdateFactorSetReq) (*factorpb.UpdateFactorSetRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
-	set, err := s.catalog.UpdateSetSubjects(ctx, req.GetSetId(), req.GetSubjectMode(), cloneStrings(req.GetSubjects()))
+	set, err := s.catalog.UpdateSetSubjects(ctx, req.GetSetId(), req.GetSubjectMode(), factorwire.CloneStrings(req.GetSubjects()))
 	if err != nil {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: inner(err)}, nil
 	}
-	return &factorpb.UpdateFactorSetRsp{RetInfo: success(), FactorSet: factorSetToPB(set)}, nil
+	return &factorpb.UpdateFactorSetRsp{RetInfo: success(), FactorSet: factorwire.SetToPB(set)}, nil
 }
 
 func (s *Service) SetFactorSetStatus(ctx context.Context, req *factorpb.SetFactorSetStatusReq) (*factorpb.SetFactorSetStatusRsp, error) {
@@ -141,7 +144,7 @@ func (s *Service) SetFactorSetStatus(ctx context.Context, req *factorpb.SetFacto
 	if err != nil {
 		return &factorpb.SetFactorSetStatusRsp{RetInfo: inner(err)}, nil
 	}
-	return &factorpb.SetFactorSetStatusRsp{RetInfo: success(), FactorSet: factorSetToPB(set)}, nil
+	return &factorpb.SetFactorSetStatusRsp{RetInfo: success(), FactorSet: factorwire.SetToPB(set)}, nil
 }
 
 func (s *Service) DeleteFactorSet(ctx context.Context, req *factorpb.DeleteFactorSetReq) (*factorpb.DeleteFactorSetRsp, error) {
@@ -162,12 +165,9 @@ func (s *Service) GetFactorSet(ctx context.Context, req *factorpb.GetFactorSetRe
 	if err != nil {
 		return &factorpb.GetFactorSetRsp{RetInfo: inner(err)}, nil
 	}
-	summary, err := s.latestRun(ctx, set.SetID)
-	if err != nil {
-		return &factorpb.GetFactorSetRsp{RetInfo: inner(err)}, nil
-	}
+	summary := s.latestRun(set.SetID)
 	return &factorpb.GetFactorSetRsp{
-		RetInfo: success(), FactorSet: factorSetToPB(set), Members: membersToPB(members), LastRun: setRunSummaryToPBIfPresent(summary),
+		RetInfo: success(), FactorSet: factorwire.SetToPB(set), Members: membersToPB(members), LastRun: setRunSummaryToPBIfPresent(summary),
 	}, nil
 }
 
@@ -190,11 +190,8 @@ func (s *Service) ListFactorSets(ctx context.Context, req *factorpb.ListFactorSe
 		if err != nil {
 			return &factorpb.ListFactorSetsRsp{RetInfo: inner(err)}, nil
 		}
-		summary, err := s.latestRun(ctx, set.SetID)
-		if err != nil {
-			return &factorpb.ListFactorSetsRsp{RetInfo: inner(err)}, nil
-		}
-		infos = append(infos, &factorpb.FactorSetInfo{FactorSet: factorSetToPB(set), Members: membersToPB(members), LastRun: setRunSummaryToPBIfPresent(summary)})
+		summary := s.latestRun(set.SetID)
+		infos = append(infos, &factorpb.FactorSetInfo{FactorSet: factorwire.SetToPB(set), Members: membersToPB(members), LastRun: setRunSummaryToPBIfPresent(summary)})
 	}
 	return &factorpb.ListFactorSetsRsp{RetInfo: success(), FactorSets: infos, PageResult: pageResult(page, size, total)}, nil
 }
@@ -203,7 +200,7 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 	if req == nil || req.GetFactor() == nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor is required"))}, nil
 	}
-	factor, err := factorDefFromPB(req.GetFactor())
+	factor, err := factorwire.DefFromPB(req.GetFactor())
 	if err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(err)}, nil
 	}
@@ -214,14 +211,14 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 	if err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
-	return &factorpb.CreateFactorRsp{RetInfo: success(), Factor: factorDefToPB(created)}, nil
+	return &factorpb.CreateFactorRsp{RetInfo: success(), Factor: factorwire.DefToPB(created)}, nil
 }
 
 func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorReq) (*factorpb.UpdateFactorRsp, error) {
 	if req == nil || req.GetFactor() == nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor is required"))}, nil
 	}
-	factor, err := factorDefFromPB(req.GetFactor())
+	factor, err := factorwire.DefFromPB(req.GetFactor())
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(err)}, nil
 	}
@@ -232,7 +229,7 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
-	return &factorpb.UpdateFactorRsp{RetInfo: success(), Factor: factorDefToPB(updated)}, nil
+	return &factorpb.UpdateFactorRsp{RetInfo: success(), Factor: factorwire.DefToPB(updated)}, nil
 }
 
 func (s *Service) AddFactorToSet(ctx context.Context, req *factorpb.AddFactorToSetReq) (*factorpb.AddFactorToSetRsp, error) {
@@ -298,7 +295,7 @@ func (s *Service) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*f
 		return &factorpb.GetFactorRsp{RetInfo: inner(err)}, nil
 	}
 	// GetFactor is the one read that always carries the source code.
-	return &factorpb.GetFactorRsp{RetInfo: success(), Factor: factorDefToPB(info.Factor), Usages: usagesToPB(info.Usages)}, nil
+	return &factorpb.GetFactorRsp{RetInfo: success(), Factor: factorwire.DefToPB(info.Factor), Usages: usagesToPB(info.Usages)}, nil
 }
 
 func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq) (*factorpb.ListFactorsRsp, error) {
@@ -319,11 +316,11 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetRequestId()) == "" {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("set_id and request_id are required"))}, nil
 	}
-	start, err := parseTime(req.GetStartTime())
+	start, err := factorwire.ParseTime(req.GetStartTime())
 	if err != nil || start.IsZero() {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("start_time must be an RFC3339 timestamp"))}, nil
 	}
-	end, err := parseTime(req.GetEndTime())
+	end, err := factorwire.ParseTime(req.GetEndTime())
 	if err != nil || end.IsZero() {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("end_time must be an RFC3339 timestamp"))}, nil
 	}
@@ -344,7 +341,7 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 	if _, err := clock.Align(end, set.Freq); err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("end_time must be aligned to %s: %w", set.Freq, err))}, nil
 	}
-	job, err := s.recalc.Submit(ctx, req.GetSetId(), cloneStrings(req.GetFactorIds()), cloneStrings(req.GetSubjects()), req.GetRequestId(), start, end)
+	job, err := s.recalc.Submit(ctx, req.GetSetId(), factorwire.CloneStrings(req.GetFactorIds()), factorwire.CloneStrings(req.GetSubjects()), req.GetRequestId(), start, end)
 	if err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: inner(err)}, nil
 	}
@@ -355,7 +352,7 @@ func (s *Service) ListRecalcJobs(ctx context.Context, req *factorpb.ListRecalcJo
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.ListRecalcJobsRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
-	jobs, err := s.recalc.List(ctx, req.GetSetId(), cloneStrings(req.GetStatuses()))
+	jobs, err := s.recalc.List(ctx, req.GetSetId(), factorwire.CloneStrings(req.GetStatuses()))
 	if err != nil {
 		return &factorpb.ListRecalcJobsRsp{RetInfo: inner(err)}, nil
 	}
@@ -391,39 +388,36 @@ func (s *Service) CancelRecalcJob(ctx context.Context, req *factorpb.CancelRecal
 }
 
 func (s *Service) GetStatus(ctx context.Context, _ *factorpb.GetStatusReq) (*factorpb.GetStatusRsp, error) {
-	if s.status == nil {
-		return &factorpb.GetStatusRsp{RetInfo: inner(fmt.Errorf("runtime status service is not initialized"))}, nil
+	if s.engine == nil {
+		return &factorpb.GetStatusRsp{RetInfo: inner(fmt.Errorf("engine status is not initialized"))}, nil
 	}
-	status, err := s.status.GetStatus(ctx)
+	info, status, seen, err := s.engine.Engine(ctx)
 	if err != nil {
 		return &factorpb.GetStatusRsp{RetInfo: inner(err)}, nil
 	}
-	lanes := make([]*factorpb.FactorLaneStatus, 0, len(status.Lanes))
-	for _, lane := range status.Lanes {
-		lanes = append(lanes, &factorpb.FactorLaneStatus{SetId: lane.SetID, Queued: lane.Queued, Active: lane.Active})
+	if !seen {
+		return &factorpb.GetStatusRsp{RetInfo: success(), Engine: &factorpb.EngineInfo{}}, nil
 	}
 	recent := make([]*factorpb.SetRunSummary, 0, len(status.RecentRuns))
 	for _, run := range status.RecentRuns {
-		recent = append(recent, setRunSummaryToPB(run))
+		recent = append(recent, factorwire.RunSummaryToPB(run))
 	}
 	return &factorpb.GetStatusRsp{
 		RetInfo: success(), ConsumerRunning: status.ConsumerRunning, PythonWorkers: status.PythonWorkers,
-		PythonBusy: status.PythonBusy, Lanes: lanes, RecentRuns: recent,
+		PythonBusy: status.PythonBusy, Lanes: factorwire.LanesToPB(status.Lanes), RecentRuns: recent,
+		Engine: &factorpb.EngineInfo{
+			EngineId: info.EngineID, BootId: info.BootID, Version: info.Version, Online: info.Online,
+			LastHeartbeatAt: factorwire.FormatTime(info.LastHeartbeatAt), CatalogHash: info.CatalogHash,
+			CatalogSyncedAt: factorwire.FormatTime(info.CatalogSyncedAt), CatalogInSync: info.CatalogInSync,
+		},
 	}, nil
 }
 
-func (s *Service) latestRun(ctx context.Context, setID string) (domain.SetRunSummary, error) {
-	if s.summaries == nil {
-		return domain.SetRunSummary{SetID: setID}, nil
+func (s *Service) latestRun(setID string) domain.SetRunSummary {
+	if s.engine == nil {
+		return domain.SetRunSummary{SetID: setID}
 	}
-	summary, err := s.summaries.LatestRun(ctx, setID)
-	if err != nil {
-		return domain.SetRunSummary{}, err
-	}
-	if summary.SetID == "" {
-		summary.SetID = setID
-	}
-	return summary, nil
+	return s.engine.LatestRun(setID)
 }
 
 func pageFromSetReq(req *factorpb.ListFactorSetsReq) *commonpb.Page {

@@ -467,7 +467,7 @@ type recalcRPCAdapter struct{ service *recalc.Service }
 
 func (a recalcRPCAdapter) Submit(ctx context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
 	job, err := a.service.Submit(ctx, setID, factorIDs, subjects, requestID, start, end)
-	return rpcJob(job), err
+	return factorrpc.JobFromStore(job), err
 }
 
 func (a recalcRPCAdapter) List(ctx context.Context, setID string, statuses []string) ([]factorrpc.RecalcJob, error) {
@@ -477,35 +477,19 @@ func (a recalcRPCAdapter) List(ctx context.Context, setID string, statuses []str
 	}
 	out := make([]factorrpc.RecalcJob, 0, len(jobs))
 	for _, job := range jobs {
-		out = append(out, rpcJob(job))
+		out = append(out, factorrpc.JobFromStore(job))
 	}
 	return out, nil
 }
 
 func (a recalcRPCAdapter) Get(ctx context.Context, jobID string) (factorrpc.RecalcJob, error) {
 	job, err := a.service.Get(ctx, jobID)
-	return rpcJob(job), err
+	return factorrpc.JobFromStore(job), err
 }
 
 func (a recalcRPCAdapter) Cancel(ctx context.Context, jobID string) (factorrpc.RecalcJob, error) {
 	job, err := a.service.Cancel(ctx, jobID)
-	return rpcJob(job), err
-}
-
-func rpcJob(job store.RecalcJob) factorrpc.RecalcJob {
-	return factorrpc.RecalcJob{
-		JobID: job.JobID, RequestID: job.RequestID, SetID: job.SetID,
-		FactorIDs: append([]string(nil), job.FactorIDs...), Subjects: append([]string(nil), job.Subjects...),
-		StartTime: unixTime(job.StartTime), EndTime: unixTime(job.EndTime), ProgressTime: unixTime(job.ProgressTime),
-		Status: job.Status, Error: job.Error, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
-	}
-}
-
-func unixTime(value int64) time.Time {
-	if value == 0 {
-		return time.Time{}
-	}
-	return time.Unix(value, 0).UTC()
+	return factorrpc.JobFromStore(job), err
 }
 
 func newRequestID() (string, error) {

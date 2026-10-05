@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +27,7 @@ func TestConvertFactorDefRoundTrip(t *testing.T) {
 		UpdatedAt:            updatedAt,
 	}
 
-	got, err := factorDefFromPB(factorDefToPB(want))
+	got, err := factorwire.DefFromPB(factorwire.DefToPB(want))
 
 	require.NoError(t, err)
 	require.Equal(t, want, got)
@@ -54,7 +55,7 @@ func TestConvertMemberRoundTrip(t *testing.T) {
 	require.Equal(t, domain.MemberStatusEnabled, full.GetStatus())
 	require.Equal(t, "2026-10-04T10:12:12Z", full.GetUpdatedAt())
 	require.Equal(t, "code", full.GetFactor().GetSourceCode())
-	got, err := factorDefFromPB(full.GetFactor())
+	got, err := factorwire.DefFromPB(full.GetFactor())
 	require.NoError(t, err)
 	require.Equal(t, def, got)
 
@@ -78,7 +79,7 @@ func TestConvertFactorSetRoundTrip(t *testing.T) {
 		UpdatedAt:       createdAt.Add(time.Minute),
 	}
 
-	got, err := factorSetFromPB(factorSetToPB(want))
+	got, err := factorwire.SetFromPB(factorwire.SetToPB(want))
 
 	require.NoError(t, err)
 	require.Equal(t, want, got)
@@ -107,7 +108,7 @@ func TestConvertRecalcJobRoundTrip(t *testing.T) {
 }
 
 func TestFactorDefPBDoesNotExposeSourcePath(t *testing.T) {
-	got := factorDefToPB(domain.FactorDef{
+	got := factorwire.DefToPB(domain.FactorDef{
 		FactorID: "rolling_mean",
 	})
 
