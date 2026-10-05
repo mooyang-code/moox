@@ -159,7 +159,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			if dataset.Producer == "factor" {
 				if !factorExpectedKnown {
-					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "moox_factor")
+					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "moox_factor_mgr")
 					if err != nil {
 						return err
 					}

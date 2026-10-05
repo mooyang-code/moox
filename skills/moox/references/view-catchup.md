@@ -99,4 +99,4 @@ redelivery，再按 `set` 查看 `factor_period_lag_seconds`、`factor_last_peri
 - 1m：View `output_watermark` 与 Primary 相差分钟级；`c_updated_at` 继续前进
 - 1h：对齐到**已收盘**小时（与 Primary 1h 相同），不要用当前未结束小时当缺口
 - Factor：每个 enabled set 的 `factor_last_period_time` 接近最新已收盘周期；`factor_period_total` 持续增长且 lag 回落
-- 不要只看 `storage-view` / `moox-factor` 的 pid
+- 不要只看 `storage-view` / `moox-factor-mgr` 的 pid

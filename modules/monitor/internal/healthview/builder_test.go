@@ -187,7 +187,7 @@ func TestAlertTitleUsesHumanReadableHostAndServiceNames(t *testing.T) {
 	if got := alertTitle("dataset:storage_view:view_crypto_kline_1m:1m"); got != "行情结果视图 · view_crypto_kline_1m / 1m" {
 		t.Fatalf("market view alert title = %q", got)
 	}
-	if got := alertTitle("sysdeploy:control:moox_factor"); got != "因子计算服务" {
+	if got := alertTitle("sysdeploy:control:moox_factor_mgr"); got != "因子计算服务" {
 		t.Fatalf("factor service alert title = %q", got)
 	}
 }

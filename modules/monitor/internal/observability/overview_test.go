@@ -549,10 +549,10 @@ func TestBuilderSysDeployFailureOverridesFreshReporter(t *testing.T) {
 func TestBuilderIncludesSysDeployServiceWithoutReporter(t *testing.T) {
 	query, repositories := openOverviewState(t, func(*gorm.DB) {})
 	check := domain.Check{
-		SpaceID: "mooxsys", CheckID: "sysdeploy:node-b:moox_factor",
-		Name: "moox_factor@node-b", Kind: domain.CheckKindHTTP,
+		SpaceID: "mooxsys", CheckID: "sysdeploy:node-b:moox_factor_mgr",
+		Name: "moox_factor_mgr@node-b", Kind: domain.CheckKindHTTP,
 		Source: domain.CheckSourceSysDeploy, Enabled: true,
-		Labels: `{"node_id":"node-b","service_name":"moox_factor"}`,
+		Labels: `{"node_id":"node-b","service_name":"moox_factor_mgr"}`,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
 		t.Fatal(err)
@@ -664,28 +664,28 @@ func TestBuilderIgnoresDatasetEnabledFromSupersededFactorBoot(t *testing.T) {
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		require.NoError(t, db.Create([]monmetrics.MetricService{
 			{
-				ServiceName: "moox_factor", InstanceID: "moox_factor@control", NodeID: "control",
+				ServiceName: "moox_factor_mgr", InstanceID: "moox_factor_mgr@control", NodeID: "control",
 				BootID: oldBoot, Version: "sha256:old", LastSeenAt: now, CreatedAt: now.Add(-72 * time.Hour),
 			},
 			{
-				ServiceName: "moox_factor", InstanceID: "moox_factor@control", NodeID: "control",
+				ServiceName: "moox_factor_mgr", InstanceID: "moox_factor_mgr@control", NodeID: "control",
 				BootID: newBoot, Version: "sha256:new", LastSeenAt: now.Add(-time.Second), CreatedAt: now.Add(-time.Minute),
 			},
 		}).Error)
-		seedOverviewMetricForInstance(t, db, "retired-enabled", "moox_factor", "moox_factor@control", "moox_factor_dataset_enabled", retired, 1, now)
+		seedOverviewMetricForInstance(t, db, "retired-enabled", "moox_factor_mgr", "moox_factor_mgr@control", "moox_factor_dataset_enabled", retired, 1, now)
 		require.NoError(t, db.Model(&monmetrics.MetricLatest{}).Where("c_series_id = ?", "retired-enabled").Updates(map[string]any{
 			"c_message_id":       oldBoot + "-00000000000000009261",
 			"c_producer_version": "sha256:old",
 		}).Error)
-		seedOverviewMetricForInstance(t, db, "retired-interval", "moox_factor", "moox_factor@control", "moox_factor_dataset_expected_interval_seconds", retired, 60, now)
-		seedOverviewMetricForInstance(t, db, "retired-run", "moox_factor", "moox_factor@control", "moox_factor_dataset_last_run_timestamp_seconds", retired, float64(now.Add(-3*24*time.Hour).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "live-enabled", "moox_factor", "moox_factor@control", "moox_factor_dataset_enabled", live, 1, now)
+		seedOverviewMetricForInstance(t, db, "retired-interval", "moox_factor_mgr", "moox_factor_mgr@control", "moox_factor_dataset_expected_interval_seconds", retired, 60, now)
+		seedOverviewMetricForInstance(t, db, "retired-run", "moox_factor_mgr", "moox_factor_mgr@control", "moox_factor_dataset_last_run_timestamp_seconds", retired, float64(now.Add(-3*24*time.Hour).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "live-enabled", "moox_factor_mgr", "moox_factor_mgr@control", "moox_factor_dataset_enabled", live, 1, now)
 		require.NoError(t, db.Model(&monmetrics.MetricLatest{}).Where("c_series_id = ?", "live-enabled").Updates(map[string]any{
 			"c_message_id":       newBoot + "-00000000000000000007",
 			"c_producer_version": "sha256:new",
 		}).Error)
-		seedOverviewMetricForInstance(t, db, "live-interval", "moox_factor", "moox_factor@control", "moox_factor_dataset_expected_interval_seconds", live, 60, now)
-		seedOverviewMetricForInstance(t, db, "inventory", "moox_factor", "moox_factor@control", "moox_factor_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
+		seedOverviewMetricForInstance(t, db, "live-interval", "moox_factor_mgr", "moox_factor_mgr@control", "moox_factor_dataset_expected_interval_seconds", live, 60, now)
+		seedOverviewMetricForInstance(t, db, "inventory", "moox_factor_mgr", "moox_factor_mgr@control", "moox_factor_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).Build(t.Context(), "crypto")
 	require.NoError(t, err)

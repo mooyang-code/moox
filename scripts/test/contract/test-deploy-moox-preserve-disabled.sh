@@ -50,8 +50,8 @@ ensure_required_binary moox-archive
 ensure_required_binary moox-archive-cli
 ensure_required_binary moox-gateway
 ensure_required_binary moox-gateway-cli
-ensure_required_binary moox-factor
-ensure_required_binary moox-factor-cli
+ensure_required_binary moox-factor-mgr
+ensure_required_binary moox-factor-mgr-cli
 
 HEALTH_SECRET_CLI="${TMP_ROOT}/moox-admin-cli"
 printf '#!/usr/bin/env bash\nprintf '\''{"status":"ok","bytes":32,"secret":"%%064d"}\\n'\'' 0\n' >"${HEALTH_SECRET_CLI}"
@@ -68,7 +68,7 @@ mkdir -p "${DEPLOY_DIR}/secrets" "${DEPLOY_DIR}/certs/caddy"
 printf 'keep-this-ca\n' >"${DEPLOY_DIR}/certs/caddy/root.crt"
 seed_disabled_component cloudnode moox-cloudnode moox-cloudnode-cli
 seed_disabled_component collector moox-collector moox-collector-cli
-seed_disabled_component factor moox-factor moox-factor-cli
+seed_disabled_component factor-mgr moox-factor-mgr moox-factor-mgr-cli
 seed_disabled_component strategy moox-strategy moox-strategy-cli
 seed_disabled_component trade moox-trade moox-trade-cli
 seed_disabled_component hostagent moox-host-agent moox-host-agent-cli
@@ -98,7 +98,7 @@ cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
   --no-web-host \
   --no-cloudnode \
   --no-collector \
-	  --no-factor --no-strategy --no-trade \
+	  --no-factor-mgr --no-strategy --no-trade \
 	  --no-hostagent \
   --no-monitor \
   --node-id preserve-test \
@@ -122,8 +122,8 @@ for path in \
   bin/moox-cloudnode-cli \
   bin/moox-collector \
   bin/moox-collector-cli \
-  bin/moox-factor \
-  bin/moox-factor-cli \
+  bin/moox-factor-mgr \
+  bin/moox-factor-mgr-cli \
   bin/moox-strategy \
   bin/moox-strategy-cli \
   bin/moox-trade \
@@ -154,7 +154,7 @@ printf 'keep-edge-config\n' >"${DEPLOY_DIR}/config/caddy/edge.env"
 for path in start.sh stop.sh status.sh healthcheck.sh; do
   cp "${DEPLOY_DIR}/${path}" "${TMP_ROOT}/${path}.before"
 done
-grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR=0' "${DEPLOY_DIR}/config/components.env"
+grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR_MGR=0' "${DEPLOY_DIR}/config/components.env"
 grep -Fxq "MOOX_CLS_TOPIC_ID='topic-existing'" "${DEPLOY_DIR}/config/resources.env"
 for path in \
   secrets/gateway-control.key \
@@ -203,7 +203,7 @@ for path in admin gateway bin/moox-admin bin/moox-admin-cli bin/moox-gateway bin
 done
 grep -Fxq 'keep-admin-jwt' "${DEPLOY_DIR}/secrets/admin-jwt.env"
 grep -Fxq 'keep-edge-config' "${DEPLOY_DIR}/config/caddy/edge.env"
-grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR=1' "${DEPLOY_DIR}/config/components.env"
+grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR_MGR=1' "${DEPLOY_DIR}/config/components.env"
 grep -Fxq 'MOOX_INSTALLED_WITH_ADMIN=1' "${DEPLOY_DIR}/config/components.env"
 grep -Fxq 'MOOX_INSTALLED_WITH_GATEWAY=1' "${DEPLOY_DIR}/config/components.env"
 grep -Fxq "MOOX_CLS_TOPIC_ID='topic-existing'" "${DEPLOY_DIR}/config/resources.env"
@@ -214,7 +214,7 @@ for path in start.sh stop.sh status.sh healthcheck.sh; do
   }
 done
 grep -Fq 'MOOX_BINARY_SHA256=sha256:${binary_hash}' "${DEPLOY_DIR}/start.sh"
-grep -Fq 'factor) url=http://127.0.0.1:11414/readyz; health_path=/readyz' "${DEPLOY_DIR}/healthcheck.sh"
+grep -Fq 'factor-mgr) url=http://127.0.0.1:11414/readyz; health_path=/readyz' "${DEPLOY_DIR}/healthcheck.sh"
 for path in \
   secrets/gateway-control.key \
   secrets/gateway-service.key \
@@ -230,7 +230,7 @@ do
   }
 done
 cmp "${TMP_ROOT}/admin-encryption-key.before" "${HOME}/.config/moox/credentials/admin-encryption-key"
-[[ ! -e "${DEPLOY_DIR}/factor/config/keep.txt" ]] || {
+[[ ! -e "${DEPLOY_DIR}/factor-mgr/config/keep.txt" ]] || {
   echo "component-only update did not replace the selected Factor component" >&2
   exit 1
 }

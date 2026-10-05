@@ -113,7 +113,6 @@ bash -n \
   "${ROOT}/scripts/build/build-release-binaries.sh" \
   "${ROOT}/scripts/release/publish-release-binaries.sh" \
   "${ROOT}/scripts/test/contract/test-deploy-moox-factor.sh" \
-  "${ROOT}/scripts/runtime/moox-factor-run-once.sh" \
   "${ROOT}/scripts/build/package-service.sh" \
   "${ROOT}/scripts/release/release.sh" \
   "${ROOT}/scripts/release/release-matrix.sh"

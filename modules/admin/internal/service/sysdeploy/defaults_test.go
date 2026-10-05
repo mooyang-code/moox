@@ -234,7 +234,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	var factorExtra struct {
 		TimeoutMS int64 `json:"timeout_ms"`
 	}
-	if err := json.Unmarshal([]byte(byName["moox_factor"].ExtraConfig), &factorExtra); err != nil {
+	if err := json.Unmarshal([]byte(byName["moox_factor_mgr"].ExtraConfig), &factorExtra); err != nil {
 		t.Fatalf("unmarshal factor extra_config: %v", err)
 	}
 	if factorExtra.TimeoutMS != 120000 {
@@ -407,7 +407,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 
 func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 	for _, item := range DefaultDeployments(testAdminNodeID) {
-		if item.ServiceName != "moox_factor" {
+		if item.ServiceName != "moox_factor_mgr" {
 			continue
 		}
 		var extra struct {
@@ -428,15 +428,15 @@ func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 		}
 		if !reflect.DeepEqual(extra.GatewayMethods, wantMethods) ||
 			!reflect.DeepEqual(extra.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
-			t.Fatalf("moox_factor gateway contract = methods %v callers %v", extra.GatewayMethods, extra.GatewayCallers)
+			t.Fatalf("moox_factor_mgr gateway contract = methods %v callers %v", extra.GatewayMethods, extra.GatewayCallers)
 		}
 		if len(extra.GatewayRoutes) != 1 || !reflect.DeepEqual(extra.GatewayRoutes[0].GatewayMethods, []string{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "ListRecalcJobs", "GetStatus"}) ||
 			!reflect.DeepEqual(extra.GatewayRoutes[0].GatewayCallers, []string{"admin-gateway", "moox-cli", "strategy"}) {
-			t.Fatalf("moox_factor read gateway contract = %+v", extra.GatewayRoutes)
+			t.Fatalf("moox_factor_mgr read gateway contract = %+v", extra.GatewayRoutes)
 		}
 		return
 	}
-	t.Fatal("moox_factor deployment is missing")
+	t.Fatal("moox_factor_mgr deployment is missing")
 }
 
 func containsString(items []string, want string) bool {

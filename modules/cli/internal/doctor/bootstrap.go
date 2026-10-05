@@ -448,7 +448,7 @@ func checkResult(id string, status core.CheckStatus, summary string, err error, 
 }
 
 func processPIDName(service string) string {
-	return map[string]string{"admin_gateway": "admin", "web_host": "web-host", "storage-primary": "storage-primary", "storage-view": "storage-view", "eventbus": "eventbus", "moox_gateway": "gateway", "moox_monitor": "monitor", "moox_collector": "collector", "moox_cloudnode": "cloudnode", "moox_factor": "factor", "moox_strategy": "strategy", "moox_trade": "trade", "moox_archive": "archive", "moox_hostagent": "host-agent"}[service]
+	return map[string]string{"admin_gateway": "admin", "web_host": "web-host", "storage-primary": "storage-primary", "storage-view": "storage-view", "eventbus": "eventbus", "moox_gateway": "gateway", "moox_monitor": "monitor", "moox_collector": "collector", "moox_cloudnode": "cloudnode", "moox_factor_mgr": "factor-mgr", "moox_strategy": "strategy", "moox_trade": "trade", "moox_archive": "archive", "moox_hostagent": "host-agent"}[service]
 }
 
 func processAlive(path string) bool {

@@ -830,7 +830,7 @@ has_log_default() {
 # services retain the lower-volume warn/error policy.
 cls_log_level() {
   case "/$1" in
-    */factor/config/trpc_go*.yaml) printf 'info\n' ;;
+    */factor-mgr/config/trpc_go*.yaml) printf 'info\n' ;;
     *) printf 'warn\n' ;;
   esac
 }
@@ -966,7 +966,7 @@ class UniqueKeySafeLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 path, expected_topic = sys.argv[1:]
-expected_level = "info" if "/factor/config/trpc_go" in "/" + path else "warn"
+expected_level = "info" if "/factor-mgr/config/trpc_go" in "/" + path else "warn"
 with open(path, encoding="utf-8") as stream:
     document = yaml.load(stream, Loader=UniqueKeySafeLoader)
 if not isinstance(document, dict):

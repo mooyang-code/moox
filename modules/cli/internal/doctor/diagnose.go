@@ -112,7 +112,7 @@ func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, healthChecks []repor
 			reporterDependencies = []string{"diagnose.context"}
 		}
 		specs = append(specs, core.CheckSpec{ID: reporterID, RequiredDependencies: reporterDependencies, OptionalDependencies: []string{health[component.GetComponentId()]}})
-		module := strings.TrimPrefix(component.GetComponentId(), "moox_")
+		module := componentModule(component.GetComponentId())
 		freshnessEnabled := component.GetFunctionalObservability() == "deferred" || moduleFreshnessEnabled(healthChecks, module)
 		if component.GetFunctionalObservability() != "not_applicable" && freshnessEnabled {
 			freshnessDependencies := []string{reporterID}
@@ -204,7 +204,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		if component.GetTransport() != "reporter" {
 			return checkResult(spec.ID, core.StatusSkipped, "component does not use Reporter transport", nil)
 		}
-		module := strings.TrimPrefix(component.GetComponentId(), "moox_")
+		module := componentModule(component.GetComponentId())
 		metricErrorsName := report.ModuleMetricName(module, report.ModuleMetricErrors)
 		for _, metric := range r.context.GetModuleObservations() {
 			if metric.GetComponentId() == component.GetComponentId() && metric.GetSummary() == metricErrorsName && metric.GetValue() > 0 && recentMetricError(r.context.GetModuleObservations(), component.GetComponentId(), r.now()) {
@@ -246,7 +246,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		if len(observations) == 0 {
 			return checkResult(spec.ID, core.StatusUnknown, "no functional observation exists for an enabled workload", nil, "inspect_health_check_input")
 		}
-		module := strings.TrimPrefix(component.GetComponentId(), "moox_")
+		module := componentModule(component.GetComponentId())
 		byHealthCheck := map[string]time.Time{}
 		for _, observation := range observations {
 			labels := map[string]string{}
@@ -366,7 +366,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 }
 
 func recentMetricError(observations []*monitorpb.DoctorObservation, componentID string, now time.Time) bool {
-	module := strings.TrimPrefix(componentID, "moox_")
+	module := componentModule(componentID)
 	metricName := report.ModuleMetricName(module, report.ModuleMetricLastMetricsError)
 	for _, metric := range observations {
 		if metric.GetComponentId() != componentID || metric.GetSummary() != metricName {
@@ -453,7 +453,7 @@ func findObservation(items []*monitorpb.DoctorObservation, componentID string) *
 
 func (r *diagnoseRunner) moduleSuccessObservations(componentID string) []*monitorpb.DoctorObservation {
 	result := make([]*monitorpb.DoctorObservation, 0)
-	module := strings.TrimPrefix(componentID, "moox_")
+	module := componentModule(componentID)
 	metricName := report.ModuleMetricName(module, report.ModuleMetricLastSuccess)
 	for _, item := range r.context.GetModuleObservations() {
 		if item.GetComponentId() != componentID || item.GetSummary() != metricName {
@@ -491,7 +491,7 @@ func (r *diagnoseRunner) moduleExpected(module string) bool {
 		return true
 	}
 	for _, component := range r.context.GetExpectedComponents() {
-		if strings.TrimPrefix(component.GetComponentId(), "moox_") == module {
+		if componentModule(component.GetComponentId()) == module {
 			return component.GetExpected()
 		}
 	}
@@ -525,6 +525,12 @@ func healthCheckIDs(config []report.ModuleHealthCheck) []string {
 		}
 	}
 	return ids
+}
+
+// componentModule maps a component id to the module name used by module
+// health checks; moox_factor_mgr reports its metrics as module "factor".
+func componentModule(componentID string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(componentID, "moox_"), "_mgr")
 }
 
 func moduleFreshnessEnabled(config []report.ModuleHealthCheck, module string) bool {

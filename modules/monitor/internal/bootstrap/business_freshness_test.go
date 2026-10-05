@@ -579,7 +579,7 @@ func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testi
 	now := time.Now().UTC().Truncate(time.Second)
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		if err := db.Create(&monmetrics.MetricService{
-			ServiceName: "moox_factor", InstanceID: "moox_factor@control", BootID: "old-boot",
+			ServiceName: "moox_factor_mgr", InstanceID: "moox_factor_mgr@control", BootID: "old-boot",
 			NodeID: "control", LastSeenAt: now.Add(-time.Hour), IsStale: true,
 		}).Error; err != nil {
 			t.Fatal(err)
@@ -592,13 +592,13 @@ func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testi
 	repositories := manager.Repositories()
 	for _, check := range []*domain.Check{
 		{
-			CheckID: "sysdeploy:control:moox_factor", Name: "moox_factor@control",
+			CheckID: "sysdeploy:control:moox_factor_mgr", Name: "moox_factor_mgr@control",
 			Source: domain.CheckSourceSysDeploy, Enabled: false, IntervalSeconds: 30,
 		},
 		{
 			SpaceID: monmetrics.InternalMetricSpaceID,
-			CheckID: "reporter:control:moox_factor:moox_factor@control",
-			Name:    "Reporter moox_factor control moox_factor@control",
+			CheckID: "reporter:control:moox_factor_mgr:moox_factor_mgr@control",
+			Name:    "Reporter moox_factor_mgr control moox_factor_mgr@control",
 			Source:  domain.CheckSourceObservability, Kind: domain.CheckKindExternal,
 			Enabled: true, IntervalSeconds: 30,
 		},
@@ -616,7 +616,7 @@ func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testi
 	results, err := repositories.Results.Recent(
 		t.Context(),
 		monmetrics.InternalMetricSpaceID,
-		"reporter:control:moox_factor:moox_factor@control",
+		"reporter:control:moox_factor_mgr:moox_factor_mgr@control",
 		1,
 	)
 	if err != nil {
@@ -641,14 +641,14 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 	labels := `{"dataset_id":"factor_output","freq":"1m","space_id":"crypto"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		if err := db.Create(&monmetrics.MetricSeries{
-			ServiceName: "moox_factor", InstanceID: "moox_factor@control",
+			ServiceName: "moox_factor_mgr", InstanceID: "moox_factor_mgr@control",
 			SeriesID: "factor-enabled", MetricName: "moox_factor_dataset_enabled",
 			MetricType: "gauge", LabelsJSON: labels, LastSeenAt: now.Add(-time.Hour), IsStale: true,
 		}).Error; err != nil {
 			t.Fatal(err)
 		}
 		if err := db.Create(&monmetrics.MetricLatest{
-			SeriesID: "factor-enabled", ServiceName: "moox_factor", InstanceID: "moox_factor@control",
+			SeriesID: "factor-enabled", ServiceName: "moox_factor_mgr", InstanceID: "moox_factor_mgr@control",
 			MetricName: "moox_factor_dataset_enabled", MetricType: "gauge",
 			LabelsJSON: labels, Value: 1, ObservedAt: now.Add(-time.Hour),
 		}).Error; err != nil {
@@ -662,7 +662,7 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 	repositories := manager.Repositories()
 	for _, check := range []*domain.Check{
 		{
-			CheckID: "sysdeploy:control:moox_factor", Name: "moox_factor@control",
+			CheckID: "sysdeploy:control:moox_factor_mgr", Name: "moox_factor_mgr@control",
 			Source: domain.CheckSourceSysDeploy, Enabled: false, IntervalSeconds: 30,
 		},
 		{
@@ -716,7 +716,7 @@ func TestServiceDeploymentExpectedAcceptsConfiguredLimit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	expected, err := serviceDeploymentExpected(t.Context(), manager.Repositories().Checks, "moox_factor")
+	expected, err := serviceDeploymentExpected(t.Context(), manager.Repositories().Checks, "moox_factor_mgr")
 	if err != nil || !expected {
 		t.Fatalf("expected = %v, err = %v", expected, err)
 	}

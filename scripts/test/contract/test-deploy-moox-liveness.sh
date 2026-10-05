@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 SCRIPT="${ROOT}/scripts/deploy/deploy-moox.sh"
 
-grep -Fq 'factor) url=http://127.0.0.1:11414/healthz ;;' "${SCRIPT}"
+grep -Fq 'factor-mgr) url=http://127.0.0.1:11414/healthz ;;' "${SCRIPT}"
 grep -Fq 'storage-node) url=http://127.0.0.1:20212/healthz ;;' "${SCRIPT}"
 ! grep -Fq 'factor|storage-node) return 1' "${SCRIPT}"
 

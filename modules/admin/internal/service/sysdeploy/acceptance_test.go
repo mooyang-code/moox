@@ -255,7 +255,7 @@ func TestUniqueConstraintClassificationIsNarrow(t *testing.T) {
 }
 
 func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
-	allowed := map[string]string{"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret"}
+	allowed := map[string]string{"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor_mgr": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret"}
 	sensitive := map[string]bool{"trade_console": true}
 	for _, row := range DefaultDeployments("node-a") {
 		if serviceID, ok := allowed[row.ServiceName]; ok {

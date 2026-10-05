@@ -52,20 +52,20 @@ func (s deploymentSourceStub) DesiredDeployments(context.Context) ([]*adminpb.Se
 func TestBuilderMarksDisabledAsNotExpectedAndStorageDeferred(t *testing.T) {
 	builder := Builder{
 		Deployments: deploymentSourceStub{rows: []*adminpb.ServiceDeployment{
-			{ServiceName: "moox_factor", NodeId: "node-a", Status: "disabled"},
+			{ServiceName: "moox_factor_mgr", NodeId: "node-a", Status: "disabled"},
 			{ServiceName: "storage-primary", NodeId: "node-a", Status: "active"},
 		}},
 		HealthChecks: []report.ModuleHealthCheck{{ID: "factor-calculation", Module: "factor", MaxLag: time.Minute, Enabled: true}},
 		Now:          func() time.Time { return time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC) },
 	}
-	got, err := builder.Build(context.Background(), "node-a", []string{"moox_factor", "storage_primary"}, []string{"factor-calculation"})
+	got, err := builder.Build(context.Background(), "node-a", []string{"moox_factor_mgr", "storage_primary"}, []string{"factor-calculation"})
 	require.NoError(t, err)
 	require.Len(t, got.ExpectedComponents, 2)
 	byID := map[string]ExpectedComponent{}
 	for _, component := range got.ExpectedComponents {
 		byID[component.ComponentID] = component
 	}
-	require.False(t, byID["moox_factor"].Expected)
+	require.False(t, byID["moox_factor_mgr"].Expected)
 	require.Equal(t, "deferred", byID["storage_primary"].FunctionalObservability)
 	require.Empty(t, got.Watermarks)
 }

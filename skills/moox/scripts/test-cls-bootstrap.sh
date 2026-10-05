@@ -11,9 +11,9 @@ printf 'success\n' >"${mode_file}"
 
 new_stage() {
   local stage=$1
-  mkdir -p "${stage}/bin" "${stage}/factor/config" "${stage}/storage/config" \
+  mkdir -p "${stage}/bin" "${stage}/factor-mgr/config" "${stage}/storage/config" \
     "${stage}/nolog/config" "${stage}/bare/config" "${stage}/ignored/config"
-  cp "${ROOT}/modules/factor/config/trpc_go.yaml" "${stage}/factor/config/trpc_go.yaml"
+  cp "${ROOT}/modules/factor/config/trpc_go.yaml" "${stage}/factor-mgr/config/trpc_go.yaml"
   cp "${ROOT}/modules/storage/config/trpc_go.yaml" "${stage}/storage/config/trpc_go-prod.yaml"
   printf 'leave me alone\n' >"${stage}/ignored/config/not-trpc.yaml"
   printf 'plugins:\n  metrics:\n    prometheus:\n      port: 1234\n' \
@@ -237,15 +237,15 @@ if grep -q -- '--cloud-account-id' "${calls}"; then
   echo 'default invocation unexpectedly supplied cloud-account-id' >&2
   exit 1
 fi
-grep -q 'writer: cls' "${STAGE}/factor/config/trpc_go.yaml"
-grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${STAGE}/factor/config/trpc_go.yaml"
+grep -q 'writer: cls' "${STAGE}/factor-mgr/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${STAGE}/factor-mgr/config/trpc_go.yaml"
 grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${STAGE}/storage/config/trpc_go-prod.yaml"
 grep -q "^MOOX_CLS_LOGSET_ID='logset-fixed'$" "${STAGE}/config/resources.env"
 grep -q "^MOOX_CLS_TOPIC_ID='topic-fixed'$" "${STAGE}/config/resources.env"
 grep -q "^MOOX_CLS_ACCOUNT_ID='acct-first'$" "${STAGE}/config/resources.env"
 [[ $(file_mode "${STAGE}/config/resources.env") == 644 ]]
 ! grep -q 'MOOX_CLS_SECRET_' "${STAGE}/config/resources.env"
-assert_cls_log_writer "${STAGE}/factor/config/trpc_go.yaml" info
+assert_cls_log_writer "${STAGE}/factor-mgr/config/trpc_go.yaml" info
 assert_cls_log_writer "${STAGE}/storage/config/trpc_go-prod.yaml"
 assert_cls_log_writer "${STAGE}/nolog/config/trpc_go.yaml"
 assert_cls_log_writer "${STAGE}/bare/config/trpc_go-test.yaml"
@@ -260,7 +260,7 @@ MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" \
   --target localhost --deploy-dir "${DEPLOY}" --stage-dir "${STAGE}" \
   --admin-url http://127.0.0.1:11002 --cloud-account-id 'explicit-account' >>"${output}" 2>&1
-[[ $(grep -c 'writer: cls' "${STAGE}/factor/config/trpc_go.yaml") == 1 ]]
+[[ $(grep -c 'writer: cls' "${STAGE}/factor-mgr/config/trpc_go.yaml") == 1 ]]
 grep -q -- '--cloud-account-id explicit-account' "${calls}"
 [[ $(wc -l <"${calls}" | tr -d ' ') == 2 ]]
 assert_no_secrets "${output}" "${STAGE}"
@@ -382,7 +382,7 @@ MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
   --deploy-dir "${DEAD_DEPLOY}" --stage-dir "${DEAD_STAGE}" \
   --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1
-grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${DEAD_STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${DEAD_STAGE}/factor-mgr/config/trpc_go.yaml"
 [[ ! -e "${DEAD_STAGE}/.cls-bootstrap.lock" ]]
 
 # A failure during either stage or credential commit restores the whole release.
@@ -432,10 +432,10 @@ for invalid_config_case in malformed-yaml wrong-level duplicate-writer duplicate
   new_deploy "${INVALID_DEPLOY}"
   case "${invalid_config_case}" in
     malformed-yaml)
-      printf 'broken: [\n' >>"${INVALID_STAGE}/factor/config/trpc_go.yaml"
+      printf 'broken: [\n' >>"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml"
       ;;
     wrong-level)
-      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+      cat >"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml" <<'YAML'
 plugins:
   log:
     default:
@@ -448,7 +448,7 @@ plugins:
 YAML
       ;;
     duplicate-writer)
-      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+      cat >"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml" <<'YAML'
 plugins:
   log:
     default:
@@ -461,7 +461,7 @@ plugins:
 YAML
       ;;
     duplicate-mapping-key)
-      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+      cat >"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml" <<'YAML'
 plugins:
   metrics:
     prometheus:
@@ -474,7 +474,7 @@ plugins:
 YAML
       ;;
     duplicate-nested-key)
-      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+      cat >"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml" <<'YAML'
 plugins:
   metrics:
     prometheus:
@@ -488,7 +488,7 @@ plugins:
 YAML
       ;;
     complex-duplicate-key)
-      cat >"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+      cat >"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml" <<'YAML'
 ? [one, two]
 : first
 ? [one, two]
@@ -501,13 +501,13 @@ plugins:
 YAML
       ;;
     orphan-begin)
-      printf '# BEGIN MOOX MANAGED CLS\n' >>"${INVALID_STAGE}/factor/config/trpc_go.yaml"
+      printf '# BEGIN MOOX MANAGED CLS\n' >>"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml"
       ;;
     orphan-end)
-      printf '# END MOOX MANAGED CLS\n' >>"${INVALID_STAGE}/factor/config/trpc_go.yaml"
+      printf '# END MOOX MANAGED CLS\n' >>"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml"
       ;;
     nested-markers)
-      cat >>"${INVALID_STAGE}/factor/config/trpc_go.yaml" <<'YAML'
+      cat >>"${INVALID_STAGE}/factor-mgr/config/trpc_go.yaml" <<'YAML'
 # BEGIN MOOX MANAGED CLS
 # BEGIN MOOX MANAGED CLS
 # END MOOX MANAGED CLS

@@ -41,7 +41,7 @@ Options:
 Examples:
   ./scripts/release/publish-release-binaries.sh --target user@host --dir /data/moox/prod
   ./scripts/release/publish-release-binaries.sh --artifact release/moox-binaries-v1-linux-amd64 \
-    --target user@host --dir /data/moox/prod --binary moox-factor --restart
+    --target user@host --dir /data/moox/prod --binary moox-factor-mgr --restart
 EOF
 }
 

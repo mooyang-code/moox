@@ -49,6 +49,9 @@ contains() {
 for module in "${modules[@]}"; do
 	modfile="modules/${module}/go.mod"
 	main="modules/${module}/cmd/server/main.go"
+	if [[ "${module}" == factor ]]; then
+		main="modules/factor/cmd/mgr/main.go"
+	fi
 	configs=("modules/${module}/config/trpc_go.yaml")
 	if [[ "${module}" == storage ]]; then
 		configs=(modules/storage/config/trpc_go*.yaml)
@@ -148,7 +151,7 @@ require_text skills/moox/scripts/cls-bootstrap.sh 'MOOX_CLS_LOGSET_ID' 'CLS boot
 require_text skills/moox/scripts/cls-bootstrap.sh 'MOOX_CLS_ACCOUNT_ID' 'CLS bootstrap must persist selected cloud account metadata'
 require_text scripts/deploy/deploy-moox.sh 'source "${ROOT}/config/resources.env"' 'lifecycle must load generated resource metadata'
 require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET_ID}' 'staged CLS writer must retain credential placeholders'
-require_text skills/moox/scripts/cls-bootstrap.sh '*/factor/config/trpc_go*.yaml' 'Factor CLS rendering must cover the service config'
+require_text skills/moox/scripts/cls-bootstrap.sh '*/factor-mgr/config/trpc_go*.yaml' 'Factor CLS rendering must cover the service config'
 require_text skills/moox/scripts/cls-bootstrap.sh 'level: " level' 'Factor CLS rendering must retain calculation info logs'
 bash skills/moox/scripts/test-cls-query.sh >/dev/null
 require_text 'docs/运维/tRPC插件运行基线.md' 'config/resources.env' 'operations baseline must document generated CLS resource metadata'

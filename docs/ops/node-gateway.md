@@ -121,7 +121,7 @@ ssh ubuntu@106.53.107.122 'sqlite3 /home/ubuntu/moox/prod/data/admin.db' < /tmp/
   --gateway-control-key-file /tmp/moox-gateway-control.key \
   --gateway-service-key-file /tmp/moox-gateway-service.key \
   --no-admin --no-web-host --no-monitor --no-storage --no-archive --no-eventbus \
-  --no-cloudnode --no-collector --no-factor
+  --no-cloudnode --no-collector --no-factor-mgr
 ```
 
 部署脚本拒绝 `--monitor-peer`。Monitor 需要完整 EventBus/metrics 链路，不存在

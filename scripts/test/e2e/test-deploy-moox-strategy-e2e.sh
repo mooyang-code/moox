@@ -97,7 +97,7 @@ done
   --gateway-control-key-file "${TMP_ROOT}/control.key" \
   --gateway-service-key-file "${TMP_ROOT}/service.key" \
   --no-admin --no-storage --no-archive --no-web-host --no-cloudnode \
-  --no-collector --no-factor --no-trade --no-monitor --no-hostagent --reuse-web-assets
+  --no-collector --no-factor-mgr --no-trade --no-monitor --no-hostagent --reuse-web-assets
 
 sign_health_request() {
   local timestamp nonce body_hash canonical signature

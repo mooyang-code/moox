@@ -300,7 +300,7 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		if component.FunctionalObservability != doctor.FunctionalObservabilityActive {
 			continue
 		}
-		module := strings.TrimPrefix(component.ComponentID, "moox_")
+		module := componentModule(component.ComponentID)
 		lastSuccessMetric := report.ModuleMetricName(module, report.ModuleMetricLastSuccess)
 		lastErrorMetric := report.ModuleMetricName(module, report.ModuleMetricLastError)
 		businessWatermarkMetric := report.ModuleMetricName(module, report.ModuleMetricBusinessWatermark)
@@ -495,4 +495,10 @@ func enforceBounds(context Context) error {
 			context.Watermarks[j].Module+context.Watermarks[j].HealthCheckID
 	})
 	return nil
+}
+
+// componentModule maps a component id to the module name used in module
+// metrics; moox_factor_mgr reports its metrics as module "factor".
+func componentModule(componentID string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(componentID, "moox_"), "_mgr")
 }

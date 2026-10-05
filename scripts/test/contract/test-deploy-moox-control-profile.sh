@@ -127,15 +127,15 @@ done
 grep -Fxq 'MOOX_LOCAL_LOG_MAX_SIZE_MB=50' "${TMP_ROOT}/unpacked/config/log-rotation.env"
 grep -Fxq 'MOOX_LOCAL_LOG_BACKUP_COUNT=5' "${TMP_ROOT}/unpacked/config/log-rotation.env"
 grep -Fq 'moox-log-rotate' "${TMP_ROOT}/unpacked/healthcheck.sh"
-for binary in moox-storage moox-archive moox-factor; do
+for binary in moox-storage moox-archive moox-factor-mgr; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected control binary: ${binary}" >&2; exit 1; }
 done
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]
 [[ -s "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env" ]]
 [[ -s "${TMP_ROOT}/unpacked/config/components.env" ]]
-grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR=0' "${TMP_ROOT}/unpacked/config/components.env"
+grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR_MGR=0' "${TMP_ROOT}/unpacked/config/components.env"
 grep -Fxq 'MOOX_INSTALLED_WITH_ADMIN=1' "${TMP_ROOT}/unpacked/config/components.env"
-MOOX_WITH_FACTOR=1 bash -c 'source "$1"; [[ "${MOOX_WITH_FACTOR}" == 1 ]]' _ "${TMP_ROOT}/unpacked/config/components.env"
+MOOX_WITH_FACTOR_MGR=1 bash -c 'source "$1"; [[ "${MOOX_WITH_FACTOR_MGR}" == 1 ]]' _ "${TMP_ROOT}/unpacked/config/components.env"
 MOOX_WITH_ADMIN=0 bash -c 'source "$1"; [[ "${MOOX_WITH_ADMIN}" == 0 ]]' _ "${TMP_ROOT}/unpacked/config/components.env"
 grep -Eq '^MOOX_STORAGE_PRIMARY_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
 grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
@@ -258,7 +258,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --target localhost --dir "${TMP_ROOT}/deploy-web-host" --stage "${TMP_ROOT}/stage-web-host" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
   --no-admin --with-web-host --no-storage --no-storage-access --no-archive --no-eventbus \
-  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor \
+  --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor \
   --no-hostagent --no-gateway --node-id control --gateway-control-url http://127.0.0.1:11000 \
   --monitor-instance-id monitor-control --public-host 106.53.107.122 --service-https-port 11001 >/dev/null
 
@@ -272,7 +272,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --target localhost --dir "${TMP_ROOT}/deploy-web-host-reversed" --stage "${TMP_ROOT}/stage-web-host-reversed" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
   --with-web-host --no-admin --no-storage --no-storage-access --no-archive --no-eventbus \
-  --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor \
+  --no-cloudnode --no-collector --no-factor-mgr --no-strategy --no-trade --no-monitor \
   --no-hostagent --no-gateway --node-id control --gateway-control-url http://127.0.0.1:11000 \
   --monitor-instance-id monitor-control --public-host 106.53.107.122 --service-https-port 11001 >/dev/null
 
@@ -301,7 +301,7 @@ cp "${WEB_HOST_OVERLAY_DEPLOY}/bin/moox-admin" "${TMP_ROOT}/admin-before-web-hos
   --stage "${TMP_ROOT}/stage-installed-web-host" --goos linux --goarch amd64 \
   --skip-build --reuse-web-assets --no-start --component-overlay \
   --no-admin --with-web-host --no-gateway --no-storage --no-storage-access \
-  --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor \
+  --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor-mgr \
   --no-strategy --no-trade --no-monitor --no-hostagent --local-ca skip --target-ca skip \
   --node-id control --gateway-control-url http://127.0.0.1:11000 \
   --gateway-ca-bundle "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" \
@@ -325,7 +325,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy/deploy-moox
   --package-only --archive "${DEFAULT_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-default" --stage "${TMP_ROOT}/stage-default" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
-  --no-storage --no-storage-access --no-archive --no-factor --no-strategy --no-trade --no-monitor \
+  --no-storage --no-storage-access --no-archive --no-factor-mgr --no-strategy --no-trade --no-monitor \
   --node-id control --gateway-control-url http://127.0.0.1:11000 >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked-default"

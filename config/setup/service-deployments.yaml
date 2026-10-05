@@ -265,7 +265,7 @@ services:
       max_body_bytes: 33554432
       gateway_methods: ["*"]
       gateway_callers: ["*"]
-  - name: moox_factor
+  - name: moox_factor_mgr
     kind: factor
     deployment_mode: process
     protocol: http

@@ -450,7 +450,7 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
 	for _, item := range seed.Services {
-		if item.Name != "moox_factor" {
+		if item.Name != "moox_factor_mgr" {
 			continue
 		}
 		require.Equal(t, []any{
@@ -467,7 +467,7 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 		require.Equal(t, []any{"admin-gateway", "moox-cli", "strategy"}, readRoute["gateway_callers"])
 		return
 	}
-	t.Fatal("moox_factor deployment is missing")
+	t.Fatal("moox_factor_mgr deployment is missing")
 }
 
 func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
@@ -484,7 +484,7 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 func TestDisableSeedServicesUsesDeploymentProfile(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, disableSeedServices(&seed, "moox_archive, moox_factor,moox_strategy,trade_owner"))
+	require.NoError(t, disableSeedServices(&seed, "moox_archive, moox_factor_mgr,moox_strategy,trade_owner"))
 	statuses := map[string]string{}
 	gatewayEnabled := map[string]bool{}
 	for _, service := range seed.Services {
@@ -492,7 +492,7 @@ func TestDisableSeedServicesUsesDeploymentProfile(t *testing.T) {
 		gatewayEnabled[service.Name] = service.GatewayEnabled
 	}
 	require.Equal(t, "disabled", statuses["moox_archive"])
-	require.Equal(t, "disabled", statuses["moox_factor"])
+	require.Equal(t, "disabled", statuses["moox_factor_mgr"])
 	require.Equal(t, "disabled", statuses["moox_strategy"])
 	require.Equal(t, "disabled", statuses["trade_owner"])
 	require.False(t, gatewayEnabled["trade_owner"])

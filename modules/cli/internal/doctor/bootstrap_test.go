@@ -57,7 +57,7 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 	pathCalls, processCalls := 0, 0
 	runner := &bootstrapRunner{
 		manifest:    manifest,
-		deployments: map[string]*adminpb.ServiceDeployment{"moox_factor": {ServiceName: "moox_factor", Status: "active"}},
+		deployments: map[string]*adminpb.ServiceDeployment{"moox_factor_mgr": {ServiceName: "moox_factor_mgr", Status: "active"}},
 		options: BootstrapOptions{
 			NodeID:        "node-a",
 			ReleaseRoot:   t.TempDir(),
@@ -65,8 +65,8 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 			ProcessAlive:  func(string) bool { processCalls++; return true },
 		},
 	}
-	pathResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.path_permissions:moox_factor@node-a"}, nil)
-	processResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.service_autostart:moox_factor@node-a"}, nil)
+	pathResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.path_permissions:moox_factor_mgr@node-a"}, nil)
+	processResult := runner.run(context.Background(), core.CheckSpec{ID: "bootstrap.service_autostart:moox_factor_mgr@node-a"}, nil)
 	require.Equal(t, core.StatusPass, pathResult.Status)
 	require.Equal(t, core.StatusPass, processResult.Status)
 	require.Positive(t, pathCalls)

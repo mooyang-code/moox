@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-- `moox-cli`、`moox-factor-cli` 和 `moox-storage-cli` 必须来自同一版本发布包。
+- `moox-cli`、`moox-factor-mgr-cli` 和 `moox-storage-cli` 必须来自同一版本发布包。
 - 操作主机需要能访问本机或配置的 EventBus，并能读取 EventBus internal-admin 凭据。
 - 不要把凭据写进命令、脚本、日志或 Skill。优先使用环境变量：
   `MOOX_EVENTBUS_INTERNAL_ADMIN_CREDENTIAL_FILE`，也可以使用命令的
@@ -21,12 +21,12 @@ Factor 的实时入口是 durable `factor_collector_period_v1`。积压时查看
 来丢弃尚未处理的周期；恢复服务后由 JetStream 重投，历史修正通过显式 Recalc job 完成。
 
 ```bash
-moox-factor-cli recalc --set fset_binance_kline_1m \
+moox-factor-mgr-cli recalc --set fset_binance_kline_1m \
   --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
 ```
 
 Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行。查看或提交任务请使用
-FactorMgr 接口。因子定义与因子集解耦：`moox-factor-cli import` 只创建定义，加 `--set` 才会
+FactorMgr 接口。因子定义与因子集解耦：`moox-factor-mgr-cli import` 只创建定义，加 `--set` 才会
 把它作为 disabled 成员加入因子集；启用成员走 FactorMgr `SetFactorMemberStatus`，不是
 CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.sets]]`、
 `[[factors.definitions]]`、`[[factors.members]]` 依次补齐因子集、定义和成员，重复执行只补缺

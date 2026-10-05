@@ -150,8 +150,8 @@ components:
     writable_paths: [data/cloudnode]
     recovery_action_ids: [restart_service_manually]
     required_in_default_profile: true
-  - component_id: moox_factor
-    service_name: moox_factor
+  - component_id: moox_factor_mgr
+    service_name: moox_factor_mgr
     role: factor
     description: Factor calculation scheduler and runtime
     duties: [calculate and persist factor results]
@@ -161,8 +161,8 @@ components:
     transport: reporter
     functional_observability: active
     health_path: /readyz
-    config_paths: [factor/config/app.yaml, factor/config/trpc_go.yaml]
-    writable_paths: [data/factor]
+    config_paths: [factor-mgr/config/app.yaml, factor-mgr/config/trpc_go.yaml]
+    writable_paths: [data/factor-mgr]
     recovery_action_ids: [replay_factor_window_manually, restart_service_manually]
     required_in_default_profile: true
   - component_id: moox_strategy
@@ -172,7 +172,7 @@ components:
     duties: [evaluate strategies and persist targets]
     inputs: [factor and view inputs]
     outputs: [strategy evaluations]
-    dependencies: [moox_factor, storage_view, eventbus]
+    dependencies: [moox_factor_mgr, storage_view, eventbus]
     transport: reporter
     functional_observability: active
     health_path: /readyz
