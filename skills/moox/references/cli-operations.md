@@ -26,7 +26,12 @@ moox-factor-cli recalc --set fset_binance_kline_1m \
 ```
 
 Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行。查看或提交任务请使用
-FactorMgr 接口；Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
+FactorMgr 接口。因子定义与因子集解耦：`moox-factor-cli import` 只创建定义，加 `--set` 才会
+把它作为 disabled 成员加入因子集；启用成员走 FactorMgr `SetFactorMemberStatus`，不是
+CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.sets]]`、
+`[[factors.definitions]]`、`[[factors.members]]` 依次补齐因子集、定义和成员，重复执行只补缺
+不删除；旧的 `[[factors.items]]` 已移除。
+Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
 `run-once` 和 `status`。
 
 ## 清理 Storage View 积压并触发 A/B 重建

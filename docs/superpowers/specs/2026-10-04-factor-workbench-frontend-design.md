@@ -5,6 +5,12 @@
 状态：设计草案，待确认后实施。后端基线见
 [因子计算模块重构设计](./2026-10-04-factor-dataset-period-pipeline-design.md)。
 
+> **修订说明（2026-10-04）：** 本文的信息架构（以因子集为中心的单一工作台、因子属于因子集）已被
+> [多页面前端设计](./2026-10-04-factor-multi-page-frontend-design.md) 与
+> [因子定义与因子集成员关系设计](./2026-10-04-factor-definition-set-membership-design.md) 取代：
+> 因子定义无状态、不带 `set_id`，启停属于因子集成员，页面拆为 3 个菜单页。下文 §5.4、§7、§8
+> 中凡涉及因子自带状态、`SetFactorStatus` 或按因子集过滤因子的描述，以新设计为准，仅作历史参考。
+
 ## 1. 背景与目标
 
 后端已重构为“数据集驱动的周期流水线”：一个因子集（FactorSet）绑定一个源数据集和一个频率，
@@ -109,6 +115,8 @@
 
 ### 5.4 因子页签
 
+> 已被 2026-10-04 因子定义解耦设计修订：因子状态属于因子集成员，`SetFactorStatus` 已由 `SetFactorMemberStatus` 取代（返回 `member` 与 `backfill_job`）；本节仅作历史参考。
+
 列表列：因子 ID、模块名、类型、输入列、输出列、回看周期、状态、最近周期状态（来自 `last_run.factors`）、操作。
 
 操作规则（与后端一致，按钮禁用时用 tooltip 说明原因）：
@@ -178,6 +186,8 @@ web/src/views/factor/workbench/
 
 ## 7. 后端配套变更（FactorMgr）
 
+> 已被 2026-10-04 因子定义解耦设计修订：因子状态属于因子集成员，`SetFactorStatus` 已由 `SetFactorMemberStatus` 取代（返回 `member` 与 `backfill_job`）；本节仅作历史参考。
+
 前端要如实展示状态，需要后端补三处，均在 `factor.proto`：
 
 1. **`ListRecalcJobs`**
@@ -210,6 +220,8 @@ web/src/views/factor/workbench/
 防止默认值与 YAML 漂移。
 
 ## 8. 状态与文案映射
+
+> 已被 2026-10-04 因子定义解耦设计修订：因子状态属于因子集成员，`SetFactorStatus` 已由 `SetFactorMemberStatus` 取代（返回 `member` 与 `backfill_job`）；本节仅作历史参考。
 
 | 对象 | 值 | 文案 | 颜色 |
 |---|---|---|---|

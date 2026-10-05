@@ -5,6 +5,12 @@
 状态：设计基线，已确认关键取舍；本文描述目标架构，不表示功能已经实现。实施计划见
 [因子计算模块重构执行计划](../plans/2026-10-04-factor-dataset-period-pipeline.md)。
 
+> **修订说明（2026-10-04）：** 因子定义与因子集已解耦：`FactorDef` 不再带 `set_id` 与启停状态，
+> 新增成员关系 `FactorSetMember`（表 `t_factor_set_members`）承载启停，一个定义可加入多个因子集。
+> 本文 §2 D8、§6、§7、§8.1、§9、§10、§13、§14、§19 已按此同步；完整设计见
+> [因子定义与因子集成员关系设计](./2026-10-04-factor-definition-set-membership-design.md)，
+> 执行见 [因子定义解耦与多页面前端执行计划](../plans/2026-10-04-factor-definition-membership-and-multipage-frontend.md)。
+
 ## 1. 背景与目标
 
 现有因子模块（约 2 万行非测试 Go 代码）同时维护三条触发链路、十余张本地账本表、控制面与引擎
@@ -40,7 +46,7 @@
 | D5 | 策略继续等待结果 View 的 `ViewDataReady(completion_kind=factor_period.computed)`。 |
 | D6 | 一个数据集只属于一个 DataNode，激活后不可变更；迁移是离线运维操作。 |
 | D7 | 控制面与引擎合并为单进程 `moox-factor`。 |
-| D8 | 每个 `(space, 源数据集, 频率)` 只有一个因子集，对应唯一结果数据集。 |
+| D8 | 每个 `(space, 源数据集, 频率)` 只有一个因子集，对应唯一结果数据集；因子定义是全局的，经成员关系加入一个或多个因子集。 |
 | D9 | 结果数据集携带源数据集的全部业务列。 |
 | D10 | 下线 `moox-merge`；现货与永续写入同一多 tag 源数据集。 |
 | D11 | 删除 Storage 侧的因子元数据实体（Metadata `CreateFactor/UpdateFactor/GetFactor`）。 |
@@ -138,7 +144,8 @@
 |---|---|---|
 | 源数据集 | 原始采集数据，`dataset_role=raw_collection` | 例 `dataset_binance_kline_1m` |
 | 因子定义 FactorDef | 一个 Python 算法、一组静态参数、显式输入输出 | `factor_id` 全局唯一，`[A-Za-z_][A-Za-z0-9_]*` |
-| 因子集 FactorSet | 绑定 `(space, 源数据集, 频率)` 的一组因子 | `fset_<源后缀>` |
+| 因子集 FactorSet | 绑定 `(space, 源数据集, 频率)` 的一组因子成员 | `fset_<源后缀>` |
+| 因子集成员 FactorSetMember | 定义在某个因子集中的运行实例，启停状态属于成员 | 主键 `(set_id, factor_id)` |
 | 结果数据集 | 因子集唯一输出：携带列 + 因子输出列 | `dataset_factor_<源后缀>` |
 | 周期 T | 事件 `period_time`，UTC 周期起点 epoch 秒 | — |
 | 周期任务 PeriodJob | 一个因子集在一个周期上的一次完整执行 | 仅存在于内存 |
@@ -155,7 +162,7 @@
 
 ## 7. 数据模型（SQLite）
 
-只保留三张表；`c_mtime` 触发器按 schema 规范补齐。
+只保留四张表；`c_mtime` 触发器按 schema 规范补齐。
 
 ```sql
 PRAGMA foreign_keys = ON;
@@ -178,10 +185,9 @@ CREATE TABLE IF NOT EXISTS t_factor_sets (
     UNIQUE (c_result_dataset_id)
 );
 
--- 因子定义：每个因子只属于一个因子集
+-- 因子定义：只描述算法，与因子集无关，无运行状态
 CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_factor_id TEXT NOT NULL PRIMARY KEY,
-    c_set_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_factor_type TEXT NOT NULL,
     c_source_code TEXT NOT NULL,
@@ -191,17 +197,28 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_params_json TEXT NOT NULL DEFAULT '{}',
     c_lookback_periods INTEGER NOT NULL,
     c_allow_partial_universe INTEGER NOT NULL DEFAULT 0,
-    c_status TEXT NOT NULL DEFAULT 'disabled',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_factor_type IN ('timeseries', 'cross_section')),
     CHECK (c_lookback_periods >= 1),
-    CHECK (c_allow_partial_universe IN (0, 1)),
-    CHECK (c_status IN ('enabled', 'disabled')),
-    FOREIGN KEY (c_set_id) REFERENCES t_factor_sets (c_set_id)
+    CHECK (c_allow_partial_universe IN (0, 1))
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_factor_defs_set ON t_factor_defs (c_set_id, c_status);
+-- 因子集成员：定义在某个因子集中的运行实例，启停状态属于成员
+CREATE TABLE IF NOT EXISTS t_factor_set_members (
+    c_set_id TEXT NOT NULL,
+    c_factor_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'disabled',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_set_id, c_factor_id),
+    CHECK (c_status IN ('enabled', 'disabled')),
+    FOREIGN KEY (c_set_id) REFERENCES t_factor_sets (c_set_id),
+    FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_factor_set_members_set ON t_factor_set_members (c_set_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_factor_set_members_factor ON t_factor_set_members (c_factor_id);
 
 -- 补算任务：只用于异步受理、查询和取消
 CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
@@ -210,6 +227,8 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_set_id TEXT NOT NULL,
     c_factor_ids_json TEXT NOT NULL DEFAULT '[]',
     c_subjects_json TEXT NOT NULL DEFAULT '[]',
+    c_factors_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_factors_omitted IN (0, 1)),
+    c_subjects_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_subjects_omitted IN (0, 1)),
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'accepted',
@@ -227,7 +246,8 @@ CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_status ON t_factor_recalc_jo
 
 说明：
 
-- 不设 `UNIQUE(c_name)`：同一 Python 模块配不同参数可注册为多个因子；冲突由“因子集内输出唯一”约束。
+- 不设 `UNIQUE(c_name)`：同一 Python 模块配不同参数可注册为多个因子；冲突由“因子集内输出唯一”约束（加入因子集与启用成员时校验）。
+- `c_factors_omitted` / `c_subjects_omitted` 标记补算请求省略了因子或标的（取默认全部）。
 - `c_allow_partial_universe` 取代原 `params_json.allow_degraded`，仅对截面因子有意义。
 - 源码以 SQLite 为准；运行时物化为不可变文件 `<factors_dir>/<name>/<source_hash>.py` 供 Python 加载。
 - 删除的表：`t_factor_subject_runs`、`t_factor_subject_heads`、`t_factor_subject_gc`、
@@ -244,13 +264,16 @@ CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_status ON t_factor_recalc_jo
 | 因子集 | `CreateFactorSet` | 校验源数据集 → 写入 pending → 创建并激活结果数据集 → enabled |
 | | `UpdateFactorSet` | 只允许修改 `subject_mode/subjects` |
 | | `SetFactorSetStatus` | enabled ⇄ disabled；disabled 后不再处理该数据集事件 |
-| | `DeleteFactorSet` | 必须无因子；结果数据集默认保留，`purge=true` 时删除 |
+| | `DeleteFactorSet` | 必须无成员；结果数据集默认保留，`purge=true` 时删除 |
 | | `GetFactorSet` / `ListFactorSets` | 返回因子集、成员因子、最近周期运行摘要 |
-| 因子 | `CreateFactor` | 必须指定 `set_id`；创建后为 disabled |
-| | `UpdateFactor` | 只允许 disabled 时修改 |
-| | `SetFactorStatus` | 启用：加列 → enabled → 自动补算；停用：停止写入 |
-| | `DeleteFactor` | 只允许删除 disabled 因子；保留结果列 |
-| | `GetFactor` / `ListFactors` | 按 `set_id`、状态过滤 |
+| 因子定义 | `CreateFactor` | 只创建全局定义，无 `set_id`、无状态；做静态校验 |
+| | `UpdateFactor` | 任一因子集里存在 enabled 成员时拒绝；其余情况可改 |
+| | `DeleteFactor` | 仍被任何成员引用时拒绝；保留结果列 |
+| | `GetFactor` | 返回定义与 `usages`（使用它的因子集及成员状态），总是含源码 |
+| | `ListFactors` | 不带 `set_id` 列全部定义；带 `set_id` 只列该因子集成员；可按成员状态过滤；默认不返回源码，`include_source=true` 才返回 |
+| 因子集成员 | `AddFactorToSet` | 结合源数据集做成员校验；成员以 disabled 创建 |
+| | `RemoveFactorFromSet` | 只允许移出 disabled 成员；保留结果列 |
+| | `SetFactorMemberStatus` | 启用：全量重校验 → 加列 → 原子 enabled + 提交补算（返回 `backfill_job`）→ 通知；停用：停止写入 |
 | 补算 | `RecalcFactors` / `GetRecalcJob` / `CancelRecalcJob` | 异步任务 |
 | 运行 | `GetStatus` | 消费者、Python 池、各 lane 状态和最近周期 |
 
@@ -270,7 +293,6 @@ message FactorSet {
 
 message FactorDef {
   string factor_id = 1;
-  string set_id = 2;
   string name = 3;
   string factor_type = 4;
   string source_code = 5;
@@ -280,9 +302,27 @@ message FactorDef {
   string params_json = 9;
   int32 lookback_periods = 10;
   bool allow_partial_universe = 11;
-  string status = 12;
   string created_at = 13;
   string updated_at = 14;
+}
+
+message FactorUsage {
+  string set_id = 1;
+  string status = 2;
+}
+
+message FactorInfo {
+  FactorDef factor = 1;
+  repeated FactorUsage usages = 2;
+}
+
+message FactorMember {
+  string set_id = 1;
+  string factor_id = 2;
+  string status = 3;
+  FactorDef factor = 4;
+  string created_at = 5;
+  string updated_at = 6;
 }
 
 message RecalcFactorsReq {
@@ -386,8 +426,8 @@ modules/factor/
 
 | 包 | 职责 |
 |---|---|
-| domain | `FactorSet`、`FactorDef`、命名函数、纯函数校验 |
-| store | 增删改查；按 `(space, dataset, freq)` 查因子集及其 enabled 因子 |
+| domain | `FactorSet`、`FactorDef`、`FactorSetMember`、命名函数、`ValidateDefinition`（静态）与 `ValidateMembership`（结合数据集）纯函数校验 |
+| store | 增删改查；按 `(space, dataset, freq)` 查因子集及其 enabled 成员；成员表 `t_factor_set_members` |
 | catalog | 编排：校验 → SQLite → Storage 元数据对齐 → 自动补算 |
 | periodclock | `Align`、`Next`、`Window(T, freq, N)`；一期只实现连续周期 |
 | trigger | 解码事件、路由到因子集 lane、ACK/NAK |
@@ -409,7 +449,7 @@ modules/factor/
 
 ### 10.2 规划
 
-- 冻结配置快照：开始时刻的 enabled 因子及其 source_hash、参数、lookback；执行中的配置变化从下一周期生效。
+- 冻结配置快照：开始时刻的 enabled 成员对应的因子及其 source_hash、参数、lookback；执行中的配置变化从下一周期生效。
 - 标的：`expected = universe ∩ 因子集标的范围`，`available = expected − 上游 failed`。
 - 窗口：`N = max(lookback)`；`periodclock.Window(T, freq, N)` 得到 `[T₋ₙ₊₁ … T]`；读取范围
   `[T₋ₙ₊₁, T + freq)`。
@@ -505,16 +545,19 @@ context：
 ## 13. 生命周期
 
 ```text
-因子集:  pending ──(结果数据集激活成功)──▶ enabled ⇄ disabled ──(purge 且无因子)──▶ deleting ──(Storage 清理完成)──▶ 删除
-因子:    disabled ──启用──▶ enabled ──停用──▶ disabled ──▶ 修改 / 删除
+因子集:  pending ──(结果数据集激活成功)──▶ enabled ⇄ disabled ──(purge 且无成员)──▶ deleting ──(Storage 清理完成)──▶ 删除
+因子定义: 创建 ──▶ 修改（无 enabled 成员）──▶ 删除（无成员）
+成员:    加入(disabled) ──启用──▶ enabled ──停用──▶ disabled ──▶ 移出
 ```
 
 | 操作 | 步骤 | 生效 |
 |---|---|---|
 | 创建因子集 | 源数据集 active、freqs 含该频率、角色不是 factor_result → pending → 创建并激活结果数据集 → enabled → 刷新路由主题 | 下一个周期事件 |
-| 创建因子 | `input_columns ⊆ 源数据集列`；输出合规且不冲突；lookback ≥ 1；源码试 LOAD 成功 → disabled | — |
-| 启用因子 | 加列 → enabled → 自动补算 `[now − 结果数据集保留期, 当前周期)`，仅该因子 | 实时从下一周期，历史由补算回填 |
-| 修改因子 | 只能 disabled 时修改；流程“停用 → 修改 → 启用（自动补算）” | — |
+| 创建因子定义 | 静态校验：ID、类型、输入输出声明、lookback ≥ 1、源码 hash；不绑定因子集 | — |
+| 加入因子集 | `input_columns ⊆ 源数据集列`；输出不与源列或其他因子冲突 → 成员 disabled | — |
+| 启用成员 | 全量重校验 → 加列 → 原子写 enabled 与补算任务 → 自动补算 `[now − 结果数据集保留期, 当前周期)`，仅该因子 | 实时从下一周期，历史由补算回填 |
+| 修改因子定义 | 任一因子集存在 enabled 成员时拒绝；流程“停用所有成员 → 修改 → 启用（自动补算）”；source_hash 变化后下次启用重新校验 | — |
+| 移出因子集 | 只允许 disabled 成员；保留结果列 | — |
 | 停用因子集 | 移出路由主题（事件到达时直接 ACK）；在途周期允许完成 | 立即 |
 
 生命周期操作与周期任务、补算块之间用因子集级锁串行。
@@ -530,7 +573,7 @@ context：
 - 不发布 `FactorPeriodComputed`。
 - 与实时共享 Python 池；每块开始前获取因子集锁、结束释放，实时周期可插入块间执行。
 - 影响范围由调用方决定（D14），系统不自动扩展。
-- 自动触发：启用因子；创建因子集时回填保留期窗口。
+- 自动触发：启用成员；创建因子集时回填保留期窗口。
 - CLI：`run-once` 同步执行一次补算并打印结果；`recalc` 提交异步任务。
 
 ## 15. 失败语义
@@ -612,10 +655,10 @@ recalc:
 |---|---|
 | Collector | 现货与永续写入同一数据集 `dataset_binance_kline_1m`，series_tag 沿用 `defaultMarketSeriesTag`；周期完成期望项按 `(subject, series_tag)` 统计，全部 tag 终态后才上报 |
 | Storage | 新增 `WriteFactorRows`；`factor_result` 激活自动建默认 View，加列增量同步不重建；`FactorPeriodComputed`/`ViewDataReady` 改为 `factors[]`；强制数据集单 DataNode；删除因子元数据实体；删除 Merge 事件处理、`mdataset_` 前缀和 `merged_factor` 角色 |
-| Strategy | 读取结果 View；按 `factors[]` 判断降级；`factorio` 改为查询因子集；删除 merge 完成类型判断 |
+| Strategy | 读取结果 View；按 `factors[]` 判断降级；`factorio` 改为查询因子集成员（`ListFactors(set_id)`，启用状态取自 usages）；删除 merge 完成类型判断 |
 | Merge | 删除模块、部署、配置、凭证 |
-| Web | 因子页面改为“因子集 / 因子定义 / 补算任务 / 结果”，删除 bindings、construct、mdataset 页面 |
-| CLI / Admin | `moox.toml` 因子配置改为因子集 + 因子；删除 merge 与 factor-engine 部署项；更新 EventBus 凭证中的 consumer 名称 |
+| Web | 因子页面改为“因子库 / 因子集 / 因子工作台”三个菜单页（见 [多页面前端设计](./2026-10-04-factor-multi-page-frontend-design.md)），删除 bindings、construct、mdataset 页面 |
+| CLI / Admin | `moox.toml` 因子配置改为 `[[factors.sets]]` + `[[factors.definitions]]` + `[[factors.members]]`；删除 merge 与 factor-engine 部署项；更新 EventBus 凭证中的 consumer 名称 |
 
 ## 20. TODO
 

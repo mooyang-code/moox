@@ -67,6 +67,8 @@
 
 ## 接口约定
 
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
+
 以下 Go 签名在多个 Task 中引用，实现时必须保持一致；字段可增，但名称与语义不得改变。
 
 ```go
@@ -502,6 +504,8 @@ rg -n "dataset_binance_(spot|swap)_kline_1m|mdataset_binance_kline_1m|view_binan
 
 ### Task 9：重写 SQLite schema 与仓储
 
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
+
 **Files:**
 - Rewrite: `modules/factor/schema/factor.sql`
 - Rewrite: `modules/factor/internal/store/`（删除旧文件，新建 `database.go`、`sets.go`、`defs.go`、`recalc_jobs.go` 及测试）
@@ -557,6 +561,8 @@ func (s *Store) ListRecalcJobs(ctx context.Context, statuses ...string) ([]Recal
 
 ### Task 10：domain 实体、命名与校验
 
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
+
 **Files:**
 - Rewrite: `modules/factor/internal/domain/`（删除 `merged_dataset.go` 等旧文件，新建 `types.go`、`naming.go`、`validate.go` 及测试）
 
@@ -587,6 +593,8 @@ func (s *Store) ListRecalcJobs(ctx context.Context, statuses ...string) ([]Recal
 - [ ] **Step 3：提交** `feat(factor): add continuous period clock for crypto windows`。
 
 ### Task 12：factor.proto 与 RPC 骨架
+
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
 
 **Files:**
 - Rewrite: `modules/factor/proto/factor.proto`，重新生成 `modules/factor/proto/factorgen/`
@@ -620,6 +628,8 @@ type CatalogAPI interface {
 - [ ] **Step 5：验证并提交** `refactor(factor): reshape FactorMgr around factor sets`。
 
 ### Task 13：catalog 生命周期与结果数据集对齐
+
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
 
 **Files:**
 - Create: `modules/factor/internal/catalog/{service.go,reconcile.go,locks.go,artifacts.go}` 及测试
@@ -795,6 +805,8 @@ cd modules/factor && go build ./... && go vet ./... && go test ./internal/bootst
 
 ### Task 20：recalc 服务与 CLI
 
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
+
 **Files:**
 - Create: `modules/factor/internal/recalc/{service.go,worker.go}` 及测试
 - Rewrite: `modules/factor/cmd/cli/main.go`
@@ -859,6 +871,8 @@ find modules/factor -name '*.go' ! -name '*_test.go' ! -path '*/factorgen/*' | x
 
 ### Task 22：Strategy 适配
 
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
+
 **Files:**
 - Modify: `modules/strategy/internal/trigger/processor.go`、`modules/strategy/internal/storageio/{rpc.go,view.go}`、`modules/strategy/internal/factorio/client.go`、`modules/strategy/internal/compiler/{types.go,verify_dependencies.go}`、`modules/strategy/internal/bootstrap/bootstrap.go` 及测试
 - Modify: `modules/strategy/docs/coin-selection-runtime.md`
@@ -896,6 +910,8 @@ find modules/factor -name '*.go' ! -name '*_test.go' ! -path '*/factorgen/*' | x
 - [ ] **Step 5：提交** `refactor(web): manage factor sets, definitions and recalc jobs`。
 
 ### Task 24：CLI setup、Admin 部署与 EventBus 凭证
+
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
 
 **Files:**
 - Modify: `modules/cli/internal/setup/config/config.go`、`config_test.go`、`moox.toml.example`、`moox.toml`
@@ -953,6 +969,8 @@ cd ../admin && go test ./... -count=1
 
 ### Task 25：端到端测试
 
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
+
 **实现说明：** Go `internal` 规则使 `modules/factor` 无法引用 `modules/storage/internal` 的真实 Storage 夹具，因此进程内 E2E 落在 Factor 流水线层：内存 Storage（沿用 `WriteFactorRows` 的 `commit_id` 幂等/冲突语义）+ 真实 Python worker + 真实 `Runner.Run`。含真实 Storage、NATS 的多进程链路由 Task 26 在部署环境验收。
 
 **Files:**
@@ -981,6 +999,8 @@ cd ../admin && go test ./... -count=1
 ## 阶段 8：文档
 
 ### Task 27：文档与技能同步
+
+> **已被 2026-10-04 因子定义解耦计划修订：** 涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分以 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 A、B 为准，本 Task 原文仅作历史记录。
 
 **Files:**
 - Rewrite: `docs/因子计算模块设计.md`（以设计文档为蓝本，描述已实现状态）、`modules/factor/README.md`

@@ -56,6 +56,8 @@
 * [因子计算模块设计](因子计算模块设计.md)
 * [因子数据集周期流水线设计](superpowers/specs/2026-10-04-factor-dataset-period-pipeline-design.md)
 * [因子数据集周期流水线执行计划](superpowers/plans/2026-10-04-factor-dataset-period-pipeline.md)
+* [因子定义与因子集成员关系设计](superpowers/specs/2026-10-04-factor-definition-set-membership-design.md)
+* [因子定义解耦与多页面前端执行计划](superpowers/plans/2026-10-04-factor-definition-membership-and-multipage-frontend.md)
 * [Strategy 策略模块架构设计](策略模块架构设计.md)
 * [MooX 策略执行框架设计](策略执行框架设计.md)
 * [Strategy Python 策略接入手册（V1 历史参考）](策略模块Python策略接入手册.md)
