@@ -1,7 +1,7 @@
 <template>
   <a-modal
     v-model:visible="visible"
-    title="新建因子集"
+    title="新建计算任务"
     :width="640"
     :ok-loading="submitting"
     :on-before-ok="submit"
@@ -113,11 +113,11 @@ async function submit() {
       subject_mode: form.subject_mode,
       subjects: form.subject_mode === "include" ? [...subjects.value] : []
     });
-    Message.success(`因子集已创建：${created.set_id}`);
+    Message.success(`计算任务已创建：${created.set_id}`);
     emit("created", created.set_id);
     return true;
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "创建因子集失败");
+    Message.error(error instanceof Error ? error.message : "创建计算任务失败");
     return false;
   } finally {
     submitting.value = false;

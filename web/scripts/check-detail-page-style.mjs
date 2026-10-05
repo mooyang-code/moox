@@ -21,6 +21,7 @@ const pageShellFiles = [
   "src/views/factor/definitions/index.vue",
   "src/views/factor/editor/index.vue",
   "src/views/factor/task-management/index.vue",
+  "src/views/factor/compute-tasks/index.vue",
   "src/views/collector/cloud-node/cloud-node.vue",
   "src/views/collector/cloud-node/function-package-manage.vue",
   "src/views/collector/task-management/index.vue",
