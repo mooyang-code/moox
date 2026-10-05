@@ -110,3 +110,6 @@ node_modules/
 /.pnpm-store/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# local build toolchain cache
+/.toolchain/
