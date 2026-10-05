@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,13 +53,16 @@ func runInit(cfg cliConfig, out io.Writer) error {
 	}
 	return json.NewEncoder(out).Encode(map[string]any{
 		"ok": true, "database": cfg.DBPath,
-		"tables": []string{"t_factor_sets", "t_factor_defs", "t_factor_recalc_jobs"},
+		"tables": []string{"t_factor_sets", "t_factor_defs", "t_factor_set_members", "t_factor_recalc_jobs"},
 	})
 }
 
+// runImport registers one definition. With --set it also attaches the
+// definition to that factor set as a disabled member; enabling (which adds
+// result columns and submits a backfill) goes through FactorMgr.
 func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
-	if cfg.SetID == "" || cfg.File == "" || cfg.FactorID == "" || len(cfg.InputColumns) == 0 || len(cfg.Outputs) == 0 || cfg.LookbackPeriods < 1 {
-		return errors.New("--set, --file, --factor-id, --inputs, --outputs and --lookback are required")
+	if cfg.File == "" || cfg.FactorID == "" || len(cfg.InputColumns) == 0 || len(cfg.Outputs) == 0 || cfg.LookbackPeriods < 1 {
+		return errors.New("--file, --factor-id, --inputs, --outputs and --lookback are required")
 	}
 	runtime, err := loadRuntimeConfig(cfg.ConfigPath)
 	if err != nil {
@@ -75,44 +79,35 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return err
 	}
 	defer db.Close()
-	unlock, err := lockImportSet(ctx, runtime.DatabasePath, cfg.SetID)
+	unlock, err := lockImport(ctx, runtime.DatabasePath, []string{cfg.FactorID}, cfg.SetID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	storage, _, err := newStorageClients(runtime)
-	if err != nil {
-		return err
-	}
-	set, err := db.GetSet(ctx, cfg.SetID)
-	if err != nil {
-		return fmt.Errorf("get factor set: %w", err)
-	}
-	if err := validateImportableSet(set); err != nil {
-		return err
-	}
 	source, err := os.ReadFile(cfg.File)
 	if err != nil {
 		return fmt.Errorf("read factor source: %w", err)
 	}
-	factor, err := normalizeImportedFactor(cfg.SetID, cfg.FactorID, cfg.FactorType, cfg.File,
+	factor, err := normalizeImportedFactor(cfg.FactorID, cfg.FactorType, cfg.File,
 		string(source), cfg.InputColumns, cfg.Outputs, cfg.ParamsJSON, cfg.LookbackPeriods)
 	if err != nil {
 		return err
 	}
+	if err := domain.ValidateDefinition(factor); err != nil {
+		return fmt.Errorf("validate factor: %w", err)
+	}
 	if err := pyexec.ValidateSourceCode(ctx, runtime.PythonBin, string(source)); err != nil {
 		return fmt.Errorf("load factor source: %w", err)
 	}
-	siblings, err := db.ListFactors(ctx, set.SetID, "")
-	if err != nil {
-		return err
-	}
-	sourceColumns, err := storage.DatasetColumns(ctx, set.SpaceID, set.SourceDatasetID)
-	if err != nil {
-		return fmt.Errorf("list source dataset columns: %w", err)
-	}
-	if err := domain.ValidateFactor(factor, sourceColumns, siblings); err != nil {
-		return fmt.Errorf("validate factor: %w", err)
+	var target *importTarget
+	if cfg.SetID != "" {
+		target, err = loadImportTarget(ctx, db, runtime, cfg.SetID)
+		if err != nil {
+			return err
+		}
+		if err := target.validate(factor, nil); err != nil {
+			return fmt.Errorf("validate factor for set %s: %w", cfg.SetID, err)
+		}
 	}
 	if _, err := (catalog.Artifacts{FactorsDir: runtime.FactorsDir}).Materialize(factor); err != nil {
 		return fmt.Errorf("materialize factor source: %w", err)
@@ -120,16 +115,20 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if err := db.CreateFactor(ctx, factor); err != nil {
 		return err
 	}
-	return json.NewEncoder(out).Encode(map[string]any{
-		"ok": true, "factor_id": factor.FactorID, "set_id": factor.SetID,
-		"source_hash": factor.SourceHash, "status": factor.Status,
-	})
+	result := map[string]any{"ok": true, "factor_id": factor.FactorID, "source_hash": factor.SourceHash}
+	if target != nil {
+		if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID); err != nil {
+			return fmt.Errorf("add factor to set: %w", err)
+		}
+		result["set_id"], result["member_status"] = target.set.SetID, domain.MemberStatusDisabled
+	}
+	return json.NewEncoder(out).Encode(result)
 }
 
+// runImportCatalog registers every definition in catalog.json. The catalog
+// itself carries no set; with --set the definitions are also attached to that
+// set as disabled members.
 func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
-	if cfg.SetID == "" {
-		return errors.New("--set is required")
-	}
 	runtime, err := loadRuntimeConfig(cfg.ConfigPath)
 	if err != nil {
 		return err
@@ -161,29 +160,29 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return err
 	}
 	defer db.Close()
-	unlock, err := lockImportSet(ctx, runtime.DatabasePath, cfg.SetID)
+	factorIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		factorIDs = append(factorIDs, entry.FactorID)
+	}
+	unlock, err := lockImport(ctx, runtime.DatabasePath, factorIDs, cfg.SetID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	storage, _, err := newStorageClients(runtime)
+	var target *importTarget
+	if cfg.SetID != "" {
+		target, err = loadImportTarget(ctx, db, runtime, cfg.SetID)
+		if err != nil {
+			return err
+		}
+	}
+	existing, err := db.ListFactors(ctx)
 	if err != nil {
 		return err
 	}
-	set, err := db.GetSet(ctx, cfg.SetID)
-	if err != nil {
-		return fmt.Errorf("get factor set: %w", err)
-	}
-	if err := validateImportableSet(set); err != nil {
-		return err
-	}
-	siblings, err := db.ListFactors(ctx, set.SetID, "")
-	if err != nil {
-		return err
-	}
-	sourceColumns, err := storage.DatasetColumns(ctx, set.SpaceID, set.SourceDatasetID)
-	if err != nil {
-		return fmt.Errorf("list source dataset columns: %w", err)
+	known := make(map[string]struct{}, len(existing))
+	for _, factor := range existing {
+		known[factor.FactorID] = struct{}{}
 	}
 	seenIDs := make(map[string]struct{}, len(entries))
 	prepared := make([]domain.FactorDef, 0, len(entries))
@@ -204,7 +203,7 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		if marshalErr != nil {
 			return fmt.Errorf("encode params for %s: %w", entry.FactorID, marshalErr)
 		}
-		factor, normalizeErr := normalizeImportedFactor(cfg.SetID, entry.FactorID, entry.FactorType,
+		factor, normalizeErr := normalizeImportedFactor(entry.FactorID, entry.FactorType,
 			path, string(source), entry.InputColumns, entry.Outputs, string(paramsJSON), entry.LookbackPeriods)
 		if normalizeErr != nil {
 			return normalizeErr
@@ -216,13 +215,16 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			return fmt.Errorf("duplicate factor catalog entry %q", factor.FactorID)
 		}
 		seenIDs[factor.FactorID] = struct{}{}
-		for _, sibling := range siblings {
-			if sibling.FactorID == factor.FactorID {
-				return fmt.Errorf("factor %q already exists", factor.FactorID)
-			}
+		if _, exists := known[factor.FactorID]; exists {
+			return fmt.Errorf("factor %q already exists", factor.FactorID)
 		}
-		if err := domain.ValidateFactor(factor, sourceColumns, append(siblings, prepared...)); err != nil {
+		if err := domain.ValidateDefinition(factor); err != nil {
 			return fmt.Errorf("validate factor %s: %w", factor.FactorID, err)
+		}
+		if target != nil {
+			if err := target.validate(factor, prepared); err != nil {
+				return fmt.Errorf("validate factor %s for set %s: %w", factor.FactorID, cfg.SetID, err)
+			}
 		}
 		prepared = append(prepared, factor)
 	}
@@ -236,9 +238,61 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	}
 	imported := make([]map[string]string, 0, len(prepared))
 	for _, factor := range prepared {
-		imported = append(imported, map[string]string{"factor_id": factor.FactorID, "source_hash": factor.SourceHash, "status": factor.Status})
+		item := map[string]string{"factor_id": factor.FactorID, "source_hash": factor.SourceHash}
+		if target != nil {
+			if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID); err != nil {
+				return fmt.Errorf("add factor %s to set: %w", factor.FactorID, err)
+			}
+			item["member_status"] = domain.MemberStatusDisabled
+		}
+		imported = append(imported, item)
 	}
-	return json.NewEncoder(out).Encode(map[string]any{"ok": true, "imported": imported})
+	result := map[string]any{"ok": true, "imported": imported}
+	if target != nil {
+		result["set_id"] = target.set.SetID
+	}
+	return json.NewEncoder(out).Encode(result)
+}
+
+// importTarget is the set (and its source columns) that imported definitions are attached to.
+type importTarget struct {
+	set           domain.FactorSet
+	sourceColumns []string
+	siblings      []domain.FactorDef
+}
+
+func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfig, setID string) (*importTarget, error) {
+	storage, _, err := newStorageClients(runtime)
+	if err != nil {
+		return nil, err
+	}
+	set, err := db.GetSet(ctx, setID)
+	if err != nil {
+		return nil, fmt.Errorf("get factor set: %w", err)
+	}
+	if err := validateImportableSet(set); err != nil {
+		return nil, err
+	}
+	members, err := db.ListMembers(ctx, set.SetID, "")
+	if err != nil {
+		return nil, err
+	}
+	siblings := make([]domain.FactorDef, 0, len(members))
+	for _, member := range members {
+		siblings = append(siblings, member.Factor)
+	}
+	sourceColumns, err := storage.DatasetColumns(ctx, set.SpaceID, set.SourceDatasetID)
+	if err != nil {
+		return nil, fmt.Errorf("list source dataset columns: %w", err)
+	}
+	return &importTarget{set: set, sourceColumns: sourceColumns, siblings: siblings}, nil
+}
+
+// validate runs the dataset-dependent membership checks; result-dataset column
+// ownership is checked later when FactorMgr enables the member.
+func (t *importTarget) validate(factor domain.FactorDef, pending []domain.FactorDef) error {
+	siblings := append(append([]domain.FactorDef(nil), t.siblings...), pending...)
+	return domain.ValidateMembership(t.set, factor, t.sourceColumns, siblings, nil)
 }
 
 func validateImportableSet(set domain.FactorSet) error {
@@ -252,19 +306,49 @@ func validateImportableSet(set domain.FactorSet) error {
 	}
 }
 
-func lockImportSet(ctx context.Context, databasePath, setID string) (func(), error) {
-	return catalog.NewLocks(databasePath+".locks").LockContext(ctx, setID)
+// lockImport takes the definition locks (ascending) and then the optional set
+// lock, the same order the catalog service uses.
+func lockImport(ctx context.Context, databasePath string, factorIDs []string, setID string) (func(), error) {
+	locks := catalog.NewLocks(databasePath + ".locks")
+	ids := append([]string(nil), factorIDs...)
+	sort.Strings(ids)
+	var unlocks []func()
+	release := func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}
+	for i, id := range ids {
+		if i > 0 && id == ids[i-1] {
+			continue
+		}
+		unlock, err := locks.LockFactorContext(ctx, id)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		unlocks = append(unlocks, unlock)
+	}
+	if setID != "" {
+		unlock, err := locks.LockContext(ctx, setID)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		unlocks = append(unlocks, unlock)
+	}
+	return release, nil
 }
 
-func normalizeImportedFactor(setID, factorID, factorType, sourcePath, source string, inputs, outputs []string, params string, lookback int) (domain.FactorDef, error) {
+func normalizeImportedFactor(factorID, factorType, sourcePath, source string, inputs, outputs []string, params string, lookback int) (domain.FactorDef, error) {
 	if strings.ToLower(filepath.Ext(sourcePath)) != ".py" {
 		return domain.FactorDef{}, errors.New("factor source file must end in .py")
 	}
 	name := strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
 	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{
-		SetID: setID, FactorID: factorID, Name: name, FactorType: factorType,
+		FactorID: factorID, Name: name, FactorType: factorType,
 		SourceCode: source, InputColumns: inputs, Outputs: outputs,
-		ParamsJSON: params, LookbackPeriods: lookback, Status: domain.FactorStatusDisabled,
+		ParamsJSON: params, LookbackPeriods: lookback,
 	})
 	if err != nil {
 		return domain.FactorDef{}, err

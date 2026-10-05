@@ -84,7 +84,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "immutable factor artifact directory (overrides config)")
-		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&cfg.SetID, "set", "", "also add the definition to this factor set as a disabled member")
 		fs.StringVar(&cfg.File, "file", "", "Python factor source file")
 		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
 		fs.StringVar(&cfg.FactorType, "factor-type", cfg.FactorType, "timeseries or cross_section")
@@ -98,7 +98,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.CatalogDir, "dir", "", "directory containing catalog.json and Python sources (defaults to the factors directory)")
 		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "immutable factor artifact directory (overrides config)")
-		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&cfg.SetID, "set", "", "also add the definitions to this factor set as disabled members")
 	case "recalc":
 		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")

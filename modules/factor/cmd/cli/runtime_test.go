@@ -61,11 +61,14 @@ func TestValidateImportableSetRejectsPendingAndDeleting(t *testing.T) {
 
 func TestImportLockUsesServiceDatabaseLockDirectory(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "factor.db")
-	unlock, err := lockImportSet(context.Background(), databasePath, "set_prices")
+	unlock, err := lockImport(context.Background(), databasePath, []string{"momentum", "bias", "momentum"}, "set_prices")
 	require.NoError(t, err)
 	defer unlock()
+	locks := catalog.NewLocks(databasePath + ".locks")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	_, err = catalog.NewLocks(databasePath+".locks").LockContext(ctx, "set_prices")
+	_, err = locks.LockContext(ctx, "set_prices")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	_, err = locks.LockFactorContext(ctx, "bias")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }

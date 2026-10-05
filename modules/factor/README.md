@@ -1,6 +1,6 @@
 # MooX Factor
 
-`moox-factor` manages factor sets and definitions and runs the dataset-driven factor period
+`moox-factor` manages factor definitions, factor sets (计算任务) and their members, and runs the dataset-driven factor period
 pipeline in one process. It consumes `CollectorPeriodCompleted`, reads source rows through
 Storage PrimaryStore, writes carried source values plus factor outputs to a `factor_result`
 Dataset, and reports `FactorPeriodComputed`. Storage maintains the default result View;
@@ -26,10 +26,10 @@ The service reads `./config/app.yaml`. The config sections are `database`, `stor
 ```bash
 ./bin/moox-factor-cli init --db ./data/factor/factor.db
 ./bin/moox-factor-cli import \
-  --config ./config/app.yaml --set fset_binance_kline_1m \
+  --config ./config/app.yaml \
   --file ./factors/Bias.py --factor-id bias \
   --inputs close --outputs bias_20 --params '{"window":20}' --lookback 20
-./bin/moox-factor-cli import-catalog --set fset_binance_kline_1m --dir ./factors
+./bin/moox-factor-cli import-catalog --dir ./factors
 ./bin/moox-factor-cli recalc --set fset_binance_kline_1m \
   --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
 ./bin/moox-factor-cli run-once --set fset_binance_kline_1m \
@@ -37,16 +37,19 @@ The service reads `./config/app.yaml`. The config sections are `database`, `stor
 ./bin/moox-factor-cli status --target ip://127.0.0.1:11004
 ```
 
-`import` creates or updates a disabled definition. Enabling is done via FactorMgr after the
-result Dataset schema has been reconciled. `recalc` submits an asynchronous range job;
+`import` creates a standalone definition: the algorithm, parameters and input/output column
+names only, with no factor set and no run state. Adding `--set <set_id>` also attaches it to that
+factor set as a disabled member after validating it against the set's source dataset. Enabling a
+member (which adds the result columns and submits the backfill) is done via FactorMgr
+`SetFactorMemberStatus`. `recalc` submits an asynchronous range job;
 `run-once` invokes one period directly for local diagnosis. Supported commands are `init`,
 `import`, `import-catalog`, `recalc`, `run-once`, and `status`.
 
 ## XBX Factor Catalog
 
 The catalog manifest and ordinary Python factors live under `modules/factor/factors/`.
-`import-catalog` imports the definitions for a factor set; they remain disabled until explicitly
-enabled. Every definition states its complete input columns, outputs, params, and maximum
+`import-catalog` imports the definitions only (add `--set` to also attach them as disabled
+members); a member runs only after it is explicitly enabled in a factor set. Every definition states its complete input columns, outputs, params, and maximum
 lookback. Factor does not infer OHLCV dependencies or depend on another Factor's output.
 
 ## Operational Signals
