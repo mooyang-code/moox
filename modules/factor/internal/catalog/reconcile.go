@@ -64,6 +64,12 @@ func (s *Service) ReconcileSet(ctx context.Context, setID string) error {
 }
 
 func (s *Service) reconcileSetUnlocked(ctx context.Context, set domain.FactorSet) error {
+	err := s.reconcileResultColumns(ctx, set)
+	s.markReady(set.SetID, err == nil)
+	return err
+}
+
+func (s *Service) reconcileResultColumns(ctx context.Context, set domain.FactorSet) error {
 	source, columns, err := s.sourceDataset(ctx, set)
 	if err != nil {
 		return err

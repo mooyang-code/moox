@@ -313,7 +313,7 @@ func (w *Worker) selection(ctx context.Context, setID string, factorIDs, subject
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
-	selected, err := selectFactors(members, factorIDs)
+	selected, err := domain.SelectEnabledFactors(members, factorIDs)
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
@@ -349,41 +349,6 @@ func (w *Worker) resolveSubjects(ctx context.Context, set domain.FactorSet, requ
 		}
 	}
 	return resolved, nil
-}
-
-// selectFactors resolves a recalc request against the set's members: no ids
-// means every enabled member, explicit ids must all be enabled members.
-func selectFactors(members []domain.SetMember, factorIDs []string) ([]domain.FactorDef, error) {
-	byID := make(map[string]domain.SetMember, len(members))
-	enabled := make([]domain.FactorDef, 0, len(members))
-	for _, member := range members {
-		byID[member.FactorID] = member
-		if member.Status == domain.MemberStatusEnabled {
-			enabled = append(enabled, member.Factor)
-		}
-	}
-	if len(factorIDs) == 0 {
-		if len(enabled) == 0 {
-			return nil, errors.New("factor set has no enabled members")
-		}
-		return enabled, nil
-	}
-	requested, err := normalizeIDs(factorIDs)
-	if err != nil {
-		return nil, err
-	}
-	selected := make([]domain.FactorDef, 0, len(requested))
-	for _, id := range requested {
-		member, ok := byID[id]
-		if !ok {
-			return nil, fmt.Errorf("factor %q is not a member of set", id)
-		}
-		if member.Status != domain.MemberStatusEnabled {
-			return nil, fmt.Errorf("factor %q is not enabled in set", id)
-		}
-		selected = append(selected, member.Factor)
-	}
-	return selected, nil
 }
 
 func (w *Worker) columns(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef) ([]string, error) {

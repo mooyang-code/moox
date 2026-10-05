@@ -142,7 +142,7 @@ func factorDefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 	}, nil
 }
 
-func setRunSummaryToPB(summary SetRunSummary) *factorpb.SetRunSummary {
+func setRunSummaryToPB(summary domain.SetRunSummary) *factorpb.SetRunSummary {
 	factors := make([]*factorpb.FactorPeriodState, 0, len(summary.Factors))
 	for _, factor := range summary.Factors {
 		factors = append(factors, &factorpb.FactorPeriodState{
@@ -162,7 +162,7 @@ func setRunSummaryToPB(summary SetRunSummary) *factorpb.SetRunSummary {
 	}
 }
 
-func setRunSummaryToPBIfPresent(summary SetRunSummary) *factorpb.SetRunSummary {
+func setRunSummaryToPBIfPresent(summary domain.SetRunSummary) *factorpb.SetRunSummary {
 	if summary.LastPeriodTime == 0 && summary.LastStatus == "" && summary.LagSeconds == 0 {
 		return nil
 	}

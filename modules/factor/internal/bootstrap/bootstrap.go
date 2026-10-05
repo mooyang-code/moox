@@ -598,7 +598,7 @@ func (s runtimeStatus) GetStatus(context.Context) (factorrpc.RuntimeStatus, erro
 	if s.consumer != nil {
 		status.ConsumerRunning = s.consumer.Ready()
 		for _, lane := range s.consumer.LaneStatuses() {
-			status.Lanes = append(status.Lanes, factorrpc.FactorLaneStatus{SetID: lane.SetID, Queued: int32(lane.Queued), Active: lane.Active})
+			status.Lanes = append(status.Lanes, domain.LaneStatus{SetID: lane.SetID, Queued: int32(lane.Queued), Active: lane.Active})
 		}
 	}
 	if s.python != nil {
@@ -608,7 +608,7 @@ func (s runtimeStatus) GetStatus(context.Context) (factorrpc.RuntimeStatus, erro
 	return status, nil
 }
 
-func (s runtimeStatus) LatestRun(_ context.Context, setID string) (factorrpc.SetRunSummary, error) {
+func (s runtimeStatus) LatestRun(_ context.Context, setID string) (domain.SetRunSummary, error) {
 	return s.runs.latest(setID, time.Now()), nil
 }
 

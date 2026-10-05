@@ -52,6 +52,12 @@ func WithEarliestPeriodProvider(provider EarliestPeriodProvider) Option {
 	return func(s *Service) { s.earliestPeriod = provider }
 }
 func WithNotifier(notifier Notifier) Option { return func(s *Service) { s.notifier = notifier } }
+
+// WithReadyRecorder receives whether each set's result dataset accepted its
+// columns; the compute engine only writes to ready sets.
+func WithReadyRecorder(record func(setID string, ready bool)) Option {
+	return func(s *Service) { s.recordReady = record }
+}
 func WithClock(now func() time.Time) Option {
 	return func(s *Service) {
 		if now != nil {
@@ -68,6 +74,7 @@ type Service struct {
 	recalc         RecalcSubmitter
 	earliestPeriod EarliestPeriodProvider
 	notifier       Notifier
+	recordReady    func(setID string, ready bool)
 	artifacts      artifacts.Artifacts
 	locks          *setlock.Locks
 	now            func() time.Time
@@ -158,6 +165,7 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 	if err := s.db.SetSetStatus(ctx, in.SetID, domain.SetStatusPending, domain.SetStatusEnabled); err != nil {
 		return domain.FactorSet{}, fmt.Errorf("enable factor set after result dataset activation: %w", err)
 	}
+	s.markReady(in.SetID, true)
 	s.notify()
 	return s.db.GetSet(ctx, in.SetID)
 }
@@ -554,6 +562,7 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, st
 	if err := s.ensureResultColumns(ctx, set, source, columns, activeFactors...); err != nil {
 		return domain.SetMember{}, "", err
 	}
+	s.markReady(set.SetID, true)
 	// Persist the accepted backfill and expose the member in one SQLite
 	// transaction so neither the worker nor live triggers can observe half of
 	// the activation.
@@ -731,6 +740,12 @@ func floorPeriod(value time.Time, periodSeconds int64) time.Time {
 		remainder += periodSeconds
 	}
 	return time.Unix(seconds-remainder, 0).UTC()
+}
+
+func (s *Service) markReady(setID string, ready bool) {
+	if s.recordReady != nil {
+		s.recordReady(setID, ready)
+	}
 }
 
 func (s *Service) notify() {

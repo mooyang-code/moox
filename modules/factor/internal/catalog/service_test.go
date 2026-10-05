@@ -1003,3 +1003,24 @@ func (f *recalcFake) PrepareEnableBackfill(ctx context.Context, set domain.Facto
 		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
 	}, nil
 }
+
+func TestReconcileRecordsResultReady(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	ready := map[string]bool{}
+	svc := NewService(db, meta, WithFactorsDir(t.TempDir()), WithReadyRecorder(func(setID string, ok bool) { ready[setID] = ok }))
+	set, err := svc.CreateSet(context.Background(), newSet())
+	require.NoError(t, err)
+	require.True(t, ready[set.SetID], "a freshly created set is ready")
+
+	svc.sourceChecker = &sourceCheckerFake{}
+	svc.recalc = &recalcFake{db: db}
+	addMember(t, svc, set.SetID, "momentum", domain.MemberStatusEnabled)
+	meta.sourceColumns = append(meta.sourceColumns, sourceColumn("momentum"))
+	require.Error(t, svc.ReconcileSet(context.Background(), set.SetID))
+	require.False(t, ready[set.SetID], "a failed reconciliation marks the set not ready")
+
+	meta.sourceColumns = meta.sourceColumns[:len(meta.sourceColumns)-1]
+	require.NoError(t, svc.ReconcileSet(context.Background(), set.SetID))
+	require.True(t, ready[set.SetID])
+}

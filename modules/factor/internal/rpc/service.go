@@ -57,35 +57,12 @@ type RecalcAPI interface {
 	Cancel(ctx context.Context, jobID string) (RecalcJob, error)
 }
 
-// FactorPeriodState is one factor's outcome for the most recent live period.
-type FactorPeriodState struct {
-	FactorID       string
-	Status         string
-	FailedSubjects []string
-	SourceHash     string
-}
-
-type SetRunSummary struct {
-	SetID          string
-	LastPeriodTime int64
-	LastStatus     string
-	LagSeconds     int64
-	Factors        []FactorPeriodState
-	FailedSubjects []string
-}
-
-type FactorLaneStatus struct {
-	SetID  string
-	Queued int32
-	Active bool
-}
-
 type RuntimeStatus struct {
 	ConsumerRunning bool
 	PythonWorkers   int32
 	PythonBusy      int32
-	Lanes           []FactorLaneStatus
-	RecentRuns      []SetRunSummary
+	Lanes           []domain.LaneStatus
+	RecentRuns      []domain.SetRunSummary
 }
 
 // StatusAPI supplies runtime state collected outside the catalog.
@@ -95,7 +72,7 @@ type StatusAPI interface {
 
 // RunSummaryAPI supplies the most recent published period for set summaries.
 type RunSummaryAPI interface {
-	LatestRun(ctx context.Context, setID string) (SetRunSummary, error)
+	LatestRun(ctx context.Context, setID string) (domain.SetRunSummary, error)
 }
 
 type ServiceOption func(*Service)
@@ -435,13 +412,13 @@ func (s *Service) GetStatus(ctx context.Context, _ *factorpb.GetStatusReq) (*fac
 	}, nil
 }
 
-func (s *Service) latestRun(ctx context.Context, setID string) (SetRunSummary, error) {
+func (s *Service) latestRun(ctx context.Context, setID string) (domain.SetRunSummary, error) {
 	if s.summaries == nil {
-		return SetRunSummary{SetID: setID}, nil
+		return domain.SetRunSummary{SetID: setID}, nil
 	}
 	summary, err := s.summaries.LatestRun(ctx, setID)
 	if err != nil {
-		return SetRunSummary{}, err
+		return domain.SetRunSummary{}, err
 	}
 	if summary.SetID == "" {
 		summary.SetID = setID

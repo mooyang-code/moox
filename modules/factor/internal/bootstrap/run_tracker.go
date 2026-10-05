@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	factorrpc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 )
 
 // runTracker keeps the latest live period per factor set in memory. The period
@@ -20,7 +20,7 @@ type runTracker struct {
 type trackedRun struct {
 	periodTime     time.Time
 	status         string
-	factors        []factorrpc.FactorPeriodState
+	factors        []domain.FactorPeriodState
 	failedSubjects []string
 }
 
@@ -35,9 +35,9 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 	if current, ok := t.runs[setID]; ok && current.periodTime.After(periodTime) {
 		return
 	}
-	factors := make([]factorrpc.FactorPeriodState, 0, len(outcome.Factors))
+	factors := make([]domain.FactorPeriodState, 0, len(outcome.Factors))
 	for _, factor := range outcome.Factors {
-		factors = append(factors, factorrpc.FactorPeriodState{
+		factors = append(factors, domain.FactorPeriodState{
 			FactorID:       factor.FactorID,
 			Status:         factor.Status,
 			FailedSubjects: factor.FailedSubjects,
@@ -50,26 +50,26 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 	}
 }
 
-func (t *runTracker) latest(setID string, now time.Time) factorrpc.SetRunSummary {
+func (t *runTracker) latest(setID string, now time.Time) domain.SetRunSummary {
 	if t == nil {
-		return factorrpc.SetRunSummary{SetID: setID}
+		return domain.SetRunSummary{SetID: setID}
 	}
 	t.mu.RLock()
 	run, ok := t.runs[setID]
 	t.mu.RUnlock()
 	if !ok {
-		return factorrpc.SetRunSummary{SetID: setID}
+		return domain.SetRunSummary{SetID: setID}
 	}
 	return summaryOf(setID, run, now)
 }
 
-func (t *runTracker) all(now time.Time) []factorrpc.SetRunSummary {
+func (t *runTracker) all(now time.Time) []domain.SetRunSummary {
 	if t == nil {
 		return nil
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	out := make([]factorrpc.SetRunSummary, 0, len(t.runs))
+	out := make([]domain.SetRunSummary, 0, len(t.runs))
 	for setID, run := range t.runs {
 		out = append(out, summaryOf(setID, run, now))
 	}
@@ -77,12 +77,12 @@ func (t *runTracker) all(now time.Time) []factorrpc.SetRunSummary {
 	return out
 }
 
-func summaryOf(setID string, run trackedRun, now time.Time) factorrpc.SetRunSummary {
+func summaryOf(setID string, run trackedRun, now time.Time) domain.SetRunSummary {
 	lag := int64(now.Sub(run.periodTime).Seconds())
 	if lag < 0 {
 		lag = 0
 	}
-	return factorrpc.SetRunSummary{
+	return domain.SetRunSummary{
 		SetID: setID, LastPeriodTime: run.periodTime.Unix(), LastStatus: run.status, LagSeconds: lag,
 		Factors: run.factors, FailedSubjects: run.failedSubjects,
 	}

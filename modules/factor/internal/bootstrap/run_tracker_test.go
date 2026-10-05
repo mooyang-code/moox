@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	factorrpc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +36,7 @@ func TestRunTrackerKeepsNewestPeriodAndComputesLag(t *testing.T) {
 
 	degraded := tracker.latest("fset_b", t1)
 	require.Equal(t, []string{"ETHUSDT"}, degraded.FailedSubjects)
-	require.Equal(t, []factorrpc.FactorPeriodState{
+	require.Equal(t, []domain.FactorPeriodState{
 		{FactorID: "momentum", Status: "complete", SourceHash: "abc"},
 		{FactorID: "rank", Status: "degraded", FailedSubjects: []string{"ETHUSDT"}},
 	}, degraded.Factors)
