@@ -18,21 +18,18 @@
 import MenuItem from "@/layout/components/Menu/menu-item.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
-import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { computed } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { resolveSelectedKeys } from "@/layout/components/Menu/menu-selected";
 
 const router = useRouter();
-const routerStore = useRoutesConfigStore();
-const { currentRoute } = storeToRefs(routerStore);
+const route = useRoute();
 const themeStore = useThemeConfig();
 const { collapsed, isAccordion, layoutType, asideDark } = storeToRefs(themeStore);
 
 // 计算菜单选中的keys
-const selectedKeys = computed(() => {
-  return [currentRoute.value.name];
-});
+const selectedKeys = computed(() => resolveSelectedKeys(route));
 
 interface Props {
   routeTree: Menu.MenuOptions[];

@@ -57,10 +57,34 @@ export const staticRoutes = [
         meta: { title: "data-fields" }
       },
       {
-        path: "/factor/workbench",
-        name: "factor-workbench",
-        component: () => import("@/views/factor/workbench/index.vue"),
-        meta: { title: "factor-workbench" }
+        path: "/factor/overview",
+        name: "factor-overview",
+        component: () => import("@/views/factor/overview/index.vue"),
+        meta: { title: "factor-overview" }
+      },
+      {
+        path: "/factor/definitions",
+        name: "factor-definitions",
+        component: () => import("@/views/factor/definitions/index.vue"),
+        meta: { title: "factor-definitions" }
+      },
+      {
+        path: "/factor/tasks",
+        name: "factor-tasks",
+        component: () => import("@/views/factor/task-management/index.vue"),
+        meta: { title: "factor-tasks" }
+      },
+      {
+        path: "/factor/definitions/new",
+        name: "factor-definition-new",
+        component: () => import("@/views/factor/editor/index.vue"),
+        meta: { title: "factor-definition-new", hide: true, activeMenu: "factor-definitions" }
+      },
+      {
+        path: "/factor/definitions/:factorId/edit",
+        name: "factor-definition-edit",
+        component: () => import("@/views/factor/editor/index.vue"),
+        meta: { title: "factor-definition-edit", hide: true, activeMenu: "factor-definitions" }
       },
       {
         path: "/strategy/overview",

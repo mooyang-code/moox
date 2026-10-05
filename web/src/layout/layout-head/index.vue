@@ -9,7 +9,7 @@
           <a-menu
             v-if="drawing"
             mode="horizontal"
-            :selected-keys="[currentRoute.name]"
+            :selected-keys="selectedKeys"
             @menu-item-click="onMenuItem"
             :popup-max-height="600"
           >
@@ -94,6 +94,7 @@ import MenuItem from "@/layout/components/Menu/menu-item.vue";
 import MenuItemIcon from "@/layout/components/Menu/menu-item-icon.vue";
 import ButtonCollapsed from "@/layout/components/Header/components/button-collapsed/index.vue";
 import { storeToRefs } from "pinia";
+import { resolveSelectedKeys } from "@/layout/components/Menu/menu-selected";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { useThemeConfig } from "@/store/modules/theme-config";
@@ -104,10 +105,12 @@ import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { Message } from "@arco-design/web-vue";
 defineOptions({ name: "LayoutHead" });
 const router = useRouter();
+const route = useRoute();
 const routerStore = useRoutesConfigStore();
 const themeStore = useThemeConfig();
 const spaceStore = useSpaceStore();
-const { routeTree, currentRoute } = storeToRefs(routerStore);
+const { routeTree } = storeToRefs(routerStore);
+const selectedKeys = computed(() => resolveSelectedKeys(route));
 const { isFooter, language } = storeToRefs(themeStore);
 const { spaces, selectedSpaceId, loading: spaceLoading } = storeToRefs(spaceStore);
 const { isMobile } = useDevicesSize();

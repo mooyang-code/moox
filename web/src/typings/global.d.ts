@@ -24,6 +24,8 @@ declare namespace Menu {
     svgIcon?: string;
     sort?: number;
     type?: number;
+    /** 隐藏路由进入时侧栏高亮的菜单 name */
+    activeMenu?: string;
   }
 }
 /* tabs菜单 */

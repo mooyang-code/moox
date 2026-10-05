@@ -51,6 +51,7 @@ import Breadcrumb from "@/layout/components/Header/components/Breadcrumb/index.v
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { storeToRefs } from "pinia";
+import { resolveSelectedKeys } from "@/layout/components/Menu/menu-selected";
 import { useThemeConfig } from "@/store/modules/theme-config";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
 defineOptions({ name: "LayoutMixing" });
@@ -72,8 +73,9 @@ watch(language, () => {
 // 混合布局的横向菜单为顶层路由下的一级菜单
 // 这里通过当前路由信息直接获取
 const aciveRoute = computed(() => {
-  getAsideMenu(route.matched[1].name as string);
-  return route.matched[1].name;
+  const key = (resolveSelectedKeys(route)[0] ?? route.matched[1].name) as string;
+  getAsideMenu(key);
+  return key;
 });
 
 // 横向菜单点击事件

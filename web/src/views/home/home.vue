@@ -347,8 +347,8 @@ const pipeline = [
   { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
   { key: "rules", stage: "02", label: "采集任务", color: "#0d9488", path: "/collector/tasks" },
   { key: "datasets", stage: "03", label: "采集结果", color: "#059669", path: "/collector/tasks?tab=results" },
-  { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/workbench?tab=factors" },
-  { key: "factorSets", stage: "05", label: "因子集", color: "#ea580c", path: "/factor/workbench" },
+  { key: "factors", stage: "04", label: "因子定义", color: "#c026d3", path: "/factor/definitions" },
+  { key: "factorSets", stage: "05", label: "计算任务", color: "#ea580c", path: "/factor/tasks" },
   { key: "accounts", stage: "06", label: "执行账户", color: "#b45309", path: "/trading/accounts" }
 ];
 
@@ -384,7 +384,7 @@ const workflowLinks = [
   {
     title: "因子结果",
     description: "查看因子计算写回结果",
-    path: "/factor/workbench?tab=results",
+    path: "/factor/tasks?tab=results",
     icon: "F",
     tint: "rgba(192, 38, 211, 12%)"
   },
@@ -500,7 +500,7 @@ const incidentItems = [
     title: "factor.momentum 今日未刷新",
     meta: "因子结果延迟 48m",
     action: "打开结果",
-    path: "/factor/workbench?tab=results",
+    path: "/factor/tasks?tab=results",
     tone: "danger"
   },
   {
