@@ -40,6 +40,11 @@ export function findOutputColumn(columns: ViewColumn[], factorId: string, output
   return columns.find(column => column.attributes?.origin_factor_id === factorId && column.attributes?.factor_output === output) ?? null;
 }
 
+/** 因子集里「已启用」成员对应的定义；策略只能绑定已启用成员。 */
+export function enabledFactors(info: FactorSetInfo | undefined): FactorDef[] {
+  return (info?.members ?? []).filter(member => member.status === "enabled").map(member => member.factor);
+}
+
 export function validFactorSets(sets: FactorSetInfo[], sourceView: View, frequency: string): FactorSetInfo[] {
   const normalizedFrequency = normalizeFrequency(frequency);
   return sets.filter(({ factor_set: set }) =>

@@ -1,6 +1,6 @@
 import type { Page, PageResult, RetInfo } from "@/api/storage/types";
 
-export type FactorStatus = "enabled" | "disabled";
+export type MemberStatus = "enabled" | "disabled";
 export type FactorSetStatus = "pending" | "enabled" | "disabled" | "deleting";
 export type PeriodFactorStatus = "complete" | "degraded" | "skipped";
 export type RecalcJobStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
@@ -22,19 +22,44 @@ export interface FactorSet {
 
 export interface FactorDef {
   factor_id: string;
-  set_id: string;
-  factor_type: FactorType;
   name: string;
-  source_code: string;
-  source_hash?: string;
+  factor_type: FactorType;
+  /** 列表类响应默认缺省（D24）；GetFactor 始终带。 */
+  source_code?: string;
+  source_hash: string;
   input_columns: string[];
   outputs: string[];
   params_json: string;
   lookback_periods: number;
-  allow_partial_universe?: boolean;
-  status: FactorStatus;
-  created_at?: string;
-  updated_at?: string;
+  allow_partial_universe: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** createFactor / updateFactor 的提交体：服务端生成 source_hash 与时间戳，定义不带 set_id 与状态。 */
+export type FactorInput = Pick<
+  FactorDef,
+  "factor_id" | "name" | "factor_type" | "input_columns" | "outputs" | "params_json" | "lookback_periods"
+> &
+  Partial<Pick<FactorDef, "allow_partial_universe">> & { source_code: string };
+
+export interface FactorUsage {
+  set_id: string;
+  status: MemberStatus;
+}
+
+export interface FactorInfo {
+  factor: FactorDef;
+  usages: FactorUsage[];
+}
+
+export interface FactorMember {
+  set_id: string;
+  factor_id: string;
+  status: MemberStatus;
+  factor: FactorDef;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface FactorPeriodState {
@@ -55,7 +80,7 @@ export interface SetRunSummary {
 
 export interface FactorSetInfo {
   factor_set: FactorSet;
-  factors: FactorDef[];
+  members: FactorMember[];
   last_run?: SetRunSummary;
 }
 
@@ -111,13 +136,14 @@ export interface ListFactorSetsRsp {
 }
 
 export interface ListFactorsReq {
-  set_id: string;
-  status?: FactorStatus;
+  set_id?: string;
+  status?: MemberStatus;
+  include_source?: boolean;
   page?: Page;
 }
 
 export interface ListFactorsRsp {
-  factors: FactorDef[];
+  factors: FactorInfo[];
   page_result: PageResult;
 }
 
@@ -132,7 +158,12 @@ export interface ListRecalcJobsRsp {
   page_result: PageResult;
 }
 
-export interface SetFactorStatusResult {
+export interface GetFactorRsp {
   factor: FactorDef;
+  usages: FactorUsage[];
+}
+
+export interface SetFactorMemberStatusResult {
+  member: FactorMember;
   backfill_job?: RecalcJob;
 }

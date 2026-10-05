@@ -626,7 +626,7 @@ async function loadSpaceScoped() {
       if (!isCurrent()) return;
       const sets = (rsp.factor_sets ?? []).filter(item => item.factor_set.space_id === spaceId);
       counts.factorSets = sets.length;
-      counts.factors = sets.reduce((total, item) => total + (item.factors?.length ?? 0), 0);
+      counts.factors = sets.reduce((total, item) => total + (item.members ?? []).filter(member => member.status === "enabled").length, 0);
     }),
     listSubjects({ space_id: spaceId, page }).then(rsp => {
       if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);

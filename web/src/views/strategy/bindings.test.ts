@@ -1,17 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { FactorDef, FactorSet, FactorSetInfo } from "@/api/factor/types";
 import type { View, ViewColumn } from "@/api/storage/types";
-import { buildInputBindings, canCombineSelections, findOutputColumn, normalizeFrequency, validFactorSets, validateAliasConflicts } from "./bindings";
+import { buildInputBindings, enabledFactors, canCombineSelections, findOutputColumn, normalizeFrequency, validFactorSets, validateAliasConflicts } from "./bindings";
 
 const source = { space_id: "s", view_id: "price", name: "价格", dataset_id: "prices", status: "active" } as View;
-const factor = { factor_id: "ma", set_id: "set-1", name: "MA", source_code: "", input_columns: ["close"], outputs: ["ma20"], params_json: "{}", lookback_periods: 20, status: "enabled" } as FactorDef;
+const factor = { factor_id: "ma", name: "MA", input_columns: ["close"], outputs: ["ma20"], params_json: "{}", lookback_periods: 20 } as FactorDef;
 const set: FactorSet = { set_id: "set-1", space_id: "s", source_dataset_id: "prices", freq: "1h", subject_mode: "all", subjects: [], result_dataset_id: "result", status: "enabled" };
-const info: FactorSetInfo = { factor_set: set, factors: [factor] };
+const member = { set_id: "set-1", factor_id: "ma", status: "enabled" as const, factor, created_at: "", updated_at: "" };
+const info: FactorSetInfo = { factor_set: set, members: [member] };
 
 describe("strategy factor-set bindings", () => {
   it("maps factor output to the metadata column instead of guessing the name", () => {
     const column = { view_id: "factor_result", column_name: "ma_20_value", attributes: { origin_factor_id: "ma", factor_output: "ma20" } } as ViewColumn;
     expect(findOutputColumn([column], "ma", "ma20")?.column_name).toBe("ma_20_value");
+  });
+
+  it("lists the factors of a set from its enabled members only", () => {
+    const rsi = { ...factor, factor_id: "rsi" };
+    const withDisabled: FactorSetInfo = {
+      factor_set: set,
+      members: [member, { ...member, factor_id: "rsi", status: "disabled", factor: rsi }]
+    };
+    expect(enabledFactors(withDisabled).map(item => item.factor_id)).toEqual(["ma"]);
+    expect(enabledFactors(undefined)).toEqual([]);
   });
 
   it("only offers enabled sets matching source dataset and frequency", () => {

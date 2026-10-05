@@ -2,18 +2,20 @@ import { callFactor } from "./http";
 import type {
   EngineStatus,
   FactorDef,
+  FactorInput,
+  FactorMember,
   FactorRetRsp,
   FactorSet,
-  FactorSetInfo,
   ListFactorSetsReq,
   ListFactorSetsRsp,
   ListFactorsReq,
   ListFactorsRsp,
+  GetFactorRsp,
   ListRecalcJobsReq,
   ListRecalcJobsRsp,
   RecalcFactorsReq,
   RecalcJob,
-  SetFactorStatusResult
+  SetFactorMemberStatusResult
 } from "./types";
 
 export type CreateFactorSetInput = Pick<FactorSet, "space_id" | "source_dataset_id" | "freq" | "subject_mode" | "subjects"> &
@@ -45,37 +47,46 @@ export function deleteFactorSet(set_id: string, purge = false) {
   return callFactor<{ set_id: string; purge: boolean }, FactorRetRsp>("DeleteFactorSet", { set_id, purge });
 }
 
-export function getFactorSet(set_id: string) {
-  return callFactor<{ set_id: string }, FactorRetRsp<{ factor_set: FactorSet; factors: FactorDef[]; last_run?: FactorSetInfo["last_run"] }>>(
-    "GetFactorSet",
-    { set_id }
-  );
-}
-
 export function listFactorSets(params: ListFactorSetsReq = {}) {
   return callFactor<ListFactorSetsReq, FactorRetRsp<ListFactorSetsRsp>>("ListFactorSets", params);
 }
 
-export async function createFactor(factor: FactorDef) {
-  const rsp = await callFactor<{ factor: FactorDef }, FactorRetRsp<{ factor: FactorDef }>>("CreateFactor", { factor });
+export async function createFactor(factor: FactorInput) {
+  const rsp = await callFactor<{ factor: FactorInput }, FactorRetRsp<{ factor: FactorDef }>>("CreateFactor", { factor });
   return rsp.factor;
 }
 
-export async function updateFactor(factor: FactorDef) {
-  const rsp = await callFactor<{ factor: FactorDef }, FactorRetRsp<{ factor: FactorDef }>>("UpdateFactor", { factor });
+export async function updateFactor(factor: FactorInput) {
+  const rsp = await callFactor<{ factor: FactorInput }, FactorRetRsp<{ factor: FactorDef }>>("UpdateFactor", { factor });
   return rsp.factor;
 }
 
-export function listFactors(params: ListFactorsReq) {
+export function listFactors(params: ListFactorsReq = {}) {
   return callFactor<ListFactorsReq, FactorRetRsp<ListFactorsRsp>>("ListFactors", params);
 }
 
-export async function setFactorStatus(factor_id: string, status: string): Promise<SetFactorStatusResult> {
-  const rsp = await callFactor<{ factor_id: string; status: string }, FactorRetRsp<SetFactorStatusResult>>("SetFactorStatus", {
-    factor_id,
-    status
+export async function addFactorToSet(set_id: string, factor_id: string) {
+  const rsp = await callFactor<{ set_id: string; factor_id: string }, FactorRetRsp<{ member: FactorMember }>>("AddFactorToSet", {
+    set_id,
+    factor_id
   });
-  return { factor: rsp.factor, backfill_job: rsp.backfill_job };
+  return rsp.member;
+}
+
+export function removeFactorFromSet(set_id: string, factor_id: string) {
+  return callFactor<{ set_id: string; factor_id: string }, FactorRetRsp>("RemoveFactorFromSet", { set_id, factor_id });
+}
+
+export async function setFactorMemberStatus(
+  set_id: string,
+  factor_id: string,
+  status: string
+): Promise<SetFactorMemberStatusResult> {
+  const rsp = await callFactor<{ set_id: string; factor_id: string; status: string }, FactorRetRsp<SetFactorMemberStatusResult>>(
+    "SetFactorMemberStatus",
+    { set_id, factor_id, status }
+  );
+  return { member: rsp.member, backfill_job: rsp.backfill_job };
 }
 
 export function deleteFactor(factor_id: string) {
@@ -83,7 +94,7 @@ export function deleteFactor(factor_id: string) {
 }
 
 export function getFactor(factor_id: string) {
-  return callFactor<{ factor_id: string }, FactorRetRsp<{ factor: FactorDef }>>("GetFactor", { factor_id });
+  return callFactor<{ factor_id: string }, FactorRetRsp<GetFactorRsp>>("GetFactor", { factor_id });
 }
 
 export async function recalcFactors(params: RecalcFactorsReq) {
@@ -98,11 +109,6 @@ export async function cancelRecalcJob(job_id: string) {
 
 export function listRecalcJobs(params: ListRecalcJobsReq) {
   return callFactor<ListRecalcJobsReq, FactorRetRsp<ListRecalcJobsRsp>>("ListRecalcJobs", params);
-}
-
-export async function getRecalcJob(job_id: string) {
-  const rsp = await callFactor<{ job_id: string }, FactorRetRsp<{ job: RecalcJob }>>("GetRecalcJob", { job_id });
-  return rsp.job;
 }
 
 export function getFactorStatus() {

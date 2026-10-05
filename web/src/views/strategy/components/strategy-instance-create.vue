@@ -110,7 +110,7 @@ import type { View, ViewColumn } from "@/api/storage/types";
 import { listLogicalAccounts } from "@/api/trade";
 import type { LogicalAccount } from "@/api/trade/types";
 import { parseDSL, requiredFactorFields } from "@/views/strategy/dsl";
-import { buildInputBindings, canCombineSelections, findOutputColumn, normalizeFrequency, validFactorSets, validateAliasConflicts, type BindingSelection } from "@/views/strategy/bindings";
+import { buildInputBindings, canCombineSelections, enabledFactors, findOutputColumn, normalizeFrequency, validFactorSets, validateAliasConflicts, type BindingSelection } from "@/views/strategy/bindings";
 import { freqFromViewFilterJSON } from "@/views/data/views/view-form-utils";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import type { Strategy } from "@/api/strategy-types";
@@ -239,7 +239,7 @@ function factorSetFor(id: string) {
 }
 
 function factorsForSet(id: string) {
-  return factorSets.value.find(info => info.factor_set.set_id === id)?.factors.filter(factor => factor.status === "enabled") || [];
+  return enabledFactors(factorSets.value.find(info => info.factor_set.set_id === id));
 }
 
 function factorFor(row: FactorRow) {

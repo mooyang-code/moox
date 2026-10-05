@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { EngineStatus, FactorDef, FactorSet, ListRecalcJobsReq, RecalcFactorsReq, RecalcJob, SetRunSummary } from "@/api/factor/types";
+import type { EngineStatus, FactorDef, FactorInfo, FactorMember, FactorSet, ListRecalcJobsReq, RecalcFactorsReq, RecalcJob, SetRunSummary } from "@/api/factor/types";
 import workbenchView from "@/views/factor/workbench/index.vue?raw";
 import factorEditor from "@/views/factor/workbench/factor-editor.vue?raw";
 import factorsTab from "@/views/factor/workbench/tabs/factors.vue?raw";
@@ -11,18 +11,32 @@ describe("factor API contract", () => {
   it("uses explicit generic time-series fields", () => {
     const factor: FactorDef = {
       factor_id: "Bias",
-      set_id: "factor_set_crypto_1m",
       factor_type: "timeseries",
       name: "Bias",
       source_code: "def compute(df, params): return {}",
+      source_hash: "hash",
       input_columns: ["nav", "benchmark_return"],
       outputs: ["excess_return", "rolling_rank"],
       params_json: `{"window":20}`,
       lookback_periods: 100,
-      status: "enabled"
+      allow_partial_universe: false,
+      created_at: "2026-10-04T00:00:00Z",
+      updated_at: "2026-10-04T00:00:00Z"
+    };
+    const info: FactorInfo = { factor, usages: [{ set_id: "factor_set_crypto_1m", status: "enabled" }] };
+    const member: FactorMember = {
+      set_id: "factor_set_crypto_1m",
+      factor_id: "Bias",
+      status: "enabled",
+      factor,
+      created_at: factor.created_at,
+      updated_at: factor.updated_at
     };
     expect(factor.input_columns).toEqual(["nav", "benchmark_return"]);
     expect(factor.lookback_periods).toBe(100);
+    expect(factor).not.toHaveProperty("set_id");
+    expect(factor).not.toHaveProperty("status");
+    expect(info.usages[0].status).toBe(member.status);
   });
 
   it("accepts set-scoped async recalc jobs with a request id", () => {
