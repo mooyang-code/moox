@@ -60,12 +60,13 @@ func TestFactorDefUsesDatasetPipelineFields(t *testing.T) {
 	_, hasSourcePath := typeOf.FieldByName("SourcePath")
 	require.False(t, hasSourcePath)
 
-	encoded, err := json.Marshal(FactorDef{FactorID: "f", SetID: "s", CreatedAt: time.Unix(1, 0).UTC()})
+	encoded, err := json.Marshal(FactorDef{FactorID: "f", CreatedAt: time.Unix(1, 0).UTC()})
 	require.NoError(t, err)
 	var fields map[string]any
 	require.NoError(t, json.Unmarshal(encoded, &fields))
 	require.Contains(t, fields, "factor_id")
-	require.Contains(t, fields, "set_id")
+	require.NotContains(t, fields, "set_id")
+	require.NotContains(t, fields, "status")
 	require.Contains(t, fields, "created_at")
 	require.NotContains(t, fields, "source_path")
 }
@@ -92,52 +93,97 @@ func TestValidateSetRequiresCanonicalIdentityAndScope(t *testing.T) {
 	require.ErrorContains(t, ValidateSet(set), "duplicate subject")
 }
 
-func TestValidateFactorRejectsReservedOutput(t *testing.T) {
-	factor := validFactor()
-	factor.Outputs = []string{"series_tag"}
-	require.ErrorContains(t, ValidateFactor(factor, []string{"close"}, nil), "reserved")
+func TestValidateDefinitionRejectsReservedOutput(t *testing.T) {
+	for _, name := range []string{"series_tag", "data_time", "subject_id", "freq"} {
+		factor := validFactor()
+		factor.Outputs = []string{name}
+		require.ErrorContains(t, ValidateDefinition(factor), "reserved", name)
+	}
 }
 
-func TestValidateFactorRejectsOutputCollidingWithSourceColumn(t *testing.T) {
+func TestValidateDefinitionRejectsDuplicateInputsAndOutputs(t *testing.T) {
 	factor := validFactor()
-	factor.Outputs = []string{"close"}
-	require.ErrorContains(t, ValidateFactor(factor, []string{"close"}, nil), "source column")
+	factor.InputColumns = []string{"close", "close"}
+	require.ErrorContains(t, ValidateDefinition(factor), "duplicate")
+	factor = validFactor()
+	factor.Outputs = []string{"value", "value"}
+	require.ErrorContains(t, ValidateDefinition(factor), "duplicate")
 }
 
-func TestValidateFactorRejectsDuplicateOutputInSet(t *testing.T) {
+func TestValidateDefinitionRequiresNonEmptyInputsAndOutputs(t *testing.T) {
 	factor := validFactor()
-	sibling := validFactor()
-	sibling.FactorID = "sibling"
-	sibling.Outputs = []string{"value"}
-	require.ErrorContains(t, ValidateFactor(factor, []string{"close"}, []FactorDef{sibling}), "duplicate output")
-
-	// Updating one factor must not conflict with its own previous definition.
-	require.NoError(t, ValidateFactor(factor, []string{"close"}, []FactorDef{factor}))
+	factor.InputColumns = nil
+	require.ErrorContains(t, ValidateDefinition(factor), "input_columns")
+	factor = validFactor()
+	factor.Outputs = nil
+	require.ErrorContains(t, ValidateDefinition(factor), "outputs")
 }
 
-func TestValidateFactorRejectsUnknownInput(t *testing.T) {
-	factor := validFactor()
-	factor.InputColumns = []string{"missing"}
-	require.ErrorContains(t, ValidateFactor(factor, []string{"close"}, nil), "unknown input")
-}
-
-func TestValidateFactorLookbackAtLeastOne(t *testing.T) {
-	factor := validFactor()
-	factor.LookbackPeriods = 0
-	require.ErrorContains(t, ValidateFactor(factor, []string{"close"}, nil), "lookback_periods")
-}
-
-func TestValidateFactorParamsMustBeJSONObject(t *testing.T) {
+func TestValidateDefinitionParamsMustBeJSONObject(t *testing.T) {
 	for _, raw := range []string{"", "[]", "null", `"text"`, "1", `{"window":`, `{} {}`} {
 		t.Run(raw, func(t *testing.T) {
 			factor := validFactor()
 			factor.ParamsJSON = raw
-			require.ErrorContains(t, ValidateFactor(factor, []string{"close"}, nil), "params_json")
+			require.ErrorContains(t, ValidateDefinition(factor), "params_json")
 		})
 	}
 	valid := validFactor()
 	valid.ParamsJSON = `{"window": 20}`
-	require.NoError(t, ValidateFactor(valid, []string{"close"}, nil))
+	require.NoError(t, ValidateDefinition(valid))
+}
+
+func TestValidateDefinitionLookbackAtLeastOne(t *testing.T) {
+	factor := validFactor()
+	factor.LookbackPeriods = 0
+	require.ErrorContains(t, ValidateDefinition(factor), "lookback_periods")
+}
+
+func TestValidateDefinitionPartialUniverseOnlyForCrossSection(t *testing.T) {
+	factor := validFactor()
+	factor.AllowPartialUniverse = true
+	require.ErrorContains(t, ValidateDefinition(factor), "allow_partial_universe")
+	factor.FactorType = FactorTypeCrossSection
+	require.NoError(t, ValidateDefinition(factor))
+}
+
+func TestValidateDefinitionDoesNotNeedSourceColumns(t *testing.T) {
+	factor := validFactor()
+	factor.InputColumns = []string{"any_column_name"}
+	require.NoError(t, ValidateDefinition(factor))
+}
+
+func TestValidateMembershipRejectsUnknownInput(t *testing.T) {
+	factor := validFactor()
+	factor.InputColumns = []string{"missing"}
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, nil, nil), "unknown input")
+}
+
+func TestValidateMembershipRejectsOutputCollidingWithSourceColumn(t *testing.T) {
+	factor := validFactor()
+	factor.Outputs = []string{"close"}
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, nil, nil), "source column")
+}
+
+func TestValidateMembershipRejectsDuplicateOutputInSetExcludingSelf(t *testing.T) {
+	factor := validFactor()
+	sibling := validFactor()
+	sibling.FactorID = "sibling"
+	sibling.Outputs = []string{"value"}
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, []FactorDef{sibling}, nil), "duplicate output")
+	// A definition never conflicts with itself.
+	require.NoError(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, []FactorDef{factor}, nil))
+}
+
+func TestValidateMembershipRejectsOutputOwnedByOtherFactor(t *testing.T) {
+	factor := validFactor()
+	err := ValidateMembership(FactorSet{}, factor, []string{"close"}, nil, map[string]string{"value": "Other"})
+	require.ErrorContains(t, err, "already owned")
+}
+
+func TestValidateMembershipAllowsReaddOfSameFactor(t *testing.T) {
+	factor := validFactor()
+	require.NoError(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, nil,
+		map[string]string{"value": factor.FactorID}))
 }
 
 func TestSetInScope(t *testing.T) {
@@ -154,7 +200,6 @@ func TestSetInScope(t *testing.T) {
 func validFactor() FactorDef {
 	return FactorDef{
 		FactorID:        "close_mean",
-		SetID:           "fset_binance_kline_1m",
 		Name:            "CloseMean",
 		FactorType:      FactorTypeTimeSeries,
 		SourceCode:      "def compute(df, params):\n    return df['close']",
@@ -163,6 +208,5 @@ func validFactor() FactorDef {
 		Outputs:         []string{"value"},
 		ParamsJSON:      `{}`,
 		LookbackPeriods: 1,
-		Status:          FactorStatusDisabled,
 	}
 }

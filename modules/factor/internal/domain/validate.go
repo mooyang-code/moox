@@ -67,13 +67,10 @@ func ValidateSet(set FactorSet) error {
 	}
 }
 
-// ValidateFactor checks a definition against source columns and sibling outputs.
-func ValidateFactor(def FactorDef, sourceColumns []string, siblings []FactorDef) error {
+// ValidateDefinition checks the static rules of a definition; it does not depend on any dataset.
+func ValidateDefinition(def FactorDef) error {
 	if !factorIDPattern.MatchString(def.FactorID) {
 		return fmt.Errorf("factor_id must match [A-Za-z_][A-Za-z0-9_]*")
-	}
-	if strings.TrimSpace(def.SetID) == "" || def.SetID != strings.TrimSpace(def.SetID) {
-		return fmt.Errorf("set_id is required and must not have surrounding whitespace")
 	}
 	if strings.TrimSpace(def.Name) == "" {
 		return fmt.Errorf("name is required")
@@ -87,11 +84,11 @@ func ValidateFactor(def FactorDef, sourceColumns []string, siblings []FactorDef)
 	if def.SourceHash != SourceHash(def.SourceCode) {
 		return fmt.Errorf("source_hash does not match source_code")
 	}
-	if def.Status != FactorStatusEnabled && def.Status != FactorStatusDisabled {
-		return fmt.Errorf("invalid factor status %q", def.Status)
-	}
 	if def.LookbackPeriods < 1 {
 		return fmt.Errorf("lookback_periods must be at least 1")
+	}
+	if def.AllowPartialUniverse && def.FactorType != FactorTypeCrossSection {
+		return fmt.Errorf("allow_partial_universe is only valid for %s factors", FactorTypeCrossSection)
 	}
 	if err := validateJSONObject(def.ParamsJSON); err != nil {
 		return err
@@ -102,11 +99,6 @@ func ValidateFactor(def FactorDef, sourceColumns []string, siblings []FactorDef)
 	if len(def.Outputs) == 0 {
 		return fmt.Errorf("outputs must contain at least one column")
 	}
-
-	sourceSet := make(map[string]struct{}, len(sourceColumns))
-	for _, column := range sourceColumns {
-		sourceSet[strings.TrimSpace(column)] = struct{}{}
-	}
 	seenInputs := make(map[string]struct{}, len(def.InputColumns))
 	for _, column := range def.InputColumns {
 		if err := validateColumn(column, "input_columns"); err != nil {
@@ -116,11 +108,7 @@ func ValidateFactor(def FactorDef, sourceColumns []string, siblings []FactorDef)
 			return fmt.Errorf("input_columns contains duplicate column %q", column)
 		}
 		seenInputs[column] = struct{}{}
-		if _, exists := sourceSet[column]; !exists {
-			return fmt.Errorf("unknown input column %q", column)
-		}
 	}
-
 	seenOutputs := make(map[string]struct{}, len(def.Outputs))
 	for _, column := range def.Outputs {
 		if err := validateColumn(column, "outputs"); err != nil {
@@ -133,17 +121,42 @@ func ValidateFactor(def FactorDef, sourceColumns []string, siblings []FactorDef)
 			return fmt.Errorf("outputs contains duplicate column %q", column)
 		}
 		seenOutputs[column] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateMembership checks a definition against one set's source columns, the
+// other members' outputs and the result dataset's existing column origins.
+// resultColumnOrigins maps a result column to the factor that owns it; a column
+// owned by the same factor is reused rather than reported as a conflict.
+func ValidateMembership(set FactorSet, def FactorDef, sourceColumns []string,
+	siblings []FactorDef, resultColumnOrigins map[string]string) error {
+	sourceSet := make(map[string]struct{}, len(sourceColumns))
+	for _, column := range sourceColumns {
+		sourceSet[strings.TrimSpace(column)] = struct{}{}
+	}
+	for _, column := range def.InputColumns {
+		if _, exists := sourceSet[column]; !exists {
+			return fmt.Errorf("unknown input column %q", column)
+		}
+	}
+	for _, column := range def.Outputs {
 		if _, collision := sourceSet[column]; collision {
 			return fmt.Errorf("output column %q collides with a source column", column)
 		}
+		if origin, owned := resultColumnOrigins[column]; owned && origin != def.FactorID {
+			return fmt.Errorf("output column %q is already owned by factor %q in result dataset", column, origin)
+		}
 	}
 	for _, sibling := range siblings {
-		if sibling.FactorID == def.FactorID || sibling.SetID != def.SetID {
+		if sibling.FactorID == def.FactorID {
 			continue
 		}
 		for _, output := range sibling.Outputs {
-			if _, duplicate := seenOutputs[output]; duplicate {
-				return fmt.Errorf("duplicate output %q in factor set", output)
+			for _, column := range def.Outputs {
+				if output == column {
+					return fmt.Errorf("duplicate output %q in factor set %s", output, set.SetID)
+				}
 			}
 		}
 	}

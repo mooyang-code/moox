@@ -18,15 +18,8 @@ func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
 	factor.Name = strings.TrimSpace(factor.Name)
 	factor.SourceCode = strings.TrimSpace(factor.SourceCode)
 	factor.SourceHash = strings.TrimSpace(factor.SourceHash)
-	factor.Status = strings.TrimSpace(factor.Status)
 	if factor.FactorID == "" || factor.Name == "" || factor.SourceCode == "" {
 		return FactorDef{}, fmt.Errorf("factor_id, name and source_code are required")
-	}
-	if factor.Status == "" {
-		factor.Status = FactorStatusDisabled
-	}
-	if factor.Status != FactorStatusEnabled && factor.Status != FactorStatusDisabled {
-		return FactorDef{}, fmt.Errorf("invalid factor status %q", factor.Status)
 	}
 	var err error
 	factor.InputColumns, err = normalizeColumns("input_columns", factor.InputColumns)

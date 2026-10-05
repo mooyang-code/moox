@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,6 @@ func TestNormalizeFactorDefinitionCanonicalizesGenericContract(t *testing.T) {
 	require.Equal(t, []string{"benchmark_return", "nav"}, got.InputColumns)
 	require.Equal(t, []string{"excess_return", "rolling_rank"}, got.Outputs)
 	require.Equal(t, `{"window":20}`, got.ParamsJSON)
-	require.Equal(t, FactorStatusDisabled, got.Status)
 }
 
 func TestNormalizeFactorDefinitionRejectsInvalidValues(t *testing.T) {
@@ -46,7 +46,6 @@ func TestNormalizeFactorDefinitionRejectsInvalidValues(t *testing.T) {
 		"string params":     func(f *FactorDef) { f.ParamsJSON = `"x"` },
 		"number params":     func(f *FactorDef) { f.ParamsJSON = `1` },
 		"trailing json":     func(f *FactorDef) { f.ParamsJSON = `{} {}` },
-		"invalid status":    func(f *FactorDef) { f.Status = "bad" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -66,4 +65,12 @@ func TestNormalizeFactorDefinitionDefaultsEmptyParamsObject(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, `{}`, got.ParamsJSON)
+}
+
+func TestNormalizeFactorDefinitionIgnoresStatusAndSet(t *testing.T) {
+	typeOf := reflect.TypeOf(FactorDef{})
+	_, hasStatus := typeOf.FieldByName("Status")
+	_, hasSetID := typeOf.FieldByName("SetID")
+	require.False(t, hasStatus)
+	require.False(t, hasSetID)
 }
