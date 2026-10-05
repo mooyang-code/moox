@@ -56,7 +56,7 @@ export function validFactorSets(sets: FactorSetInfo[], sourceView: View, frequen
 export function canCombineSelections(selections: BindingSelection[], sourceView: View): { ok: boolean; reason?: string } {
   if (!selections.length) return { ok: true };
   const resultDatasetIds = new Set(selections.map(selection => selection.factorSet.result_dataset_id));
-  if (resultDatasetIds.size !== 1) return { ok: false, reason: "所有因子必须属于同一个因子集" };
+  if (resultDatasetIds.size !== 1) return { ok: false, reason: "所有因子必须属于同一个计算任务" };
   if (resultDatasetIds.has(sourceView.dataset_id)) return { ok: false, reason: "因子结果数据集必须不同于源数据集" };
   return { ok: true };
 }

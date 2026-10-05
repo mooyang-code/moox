@@ -16,7 +16,7 @@ describe("strategy instance creation contract", () => {
     expect(source).toContain("loadAllFactorSets");
     expect(source).not.toContain("loadAllBindings");
     expect(source).toContain("findOutputColumn");
-    expect(source).toContain("每个因子都必须选择因子集、定义、输出和结果列");
+    expect(source).toContain("每个因子都必须选择计算任务、定义、输出和结果列");
     expect(source).toContain("buildInputBindings");
     expect(source).not.toContain("binding_id");
     expect(source).toContain("创建请求结果未知，但实例 ID 已存在");

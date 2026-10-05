@@ -90,7 +90,7 @@ export const useFactorStore = defineStore("factorStore", () => {
       }
     } catch (error) {
       if (!gate.isCurrent(token)) return;
-      loadError.value = error instanceof Error ? error.message : "因子集加载失败";
+      loadError.value = error instanceof Error ? error.message : "计算任务加载失败";
     } finally {
       if (gate.isCurrent(token)) loading.value = false;
     }

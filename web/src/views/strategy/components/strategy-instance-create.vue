@@ -43,7 +43,7 @@
         </a-button>
       </div>
       <div v-for="(row, index) in factors" :key="row.key" class="binding-row">
-        <a-select v-model="row.set_id" allow-search placeholder="因子集" @change="setChanged(row)">
+        <a-select v-model="row.set_id" allow-search placeholder="计算任务" @change="setChanged(row)">
           <a-option v-for="setInfo in compatibleSets" :key="setInfo.factor_set.set_id" :value="setInfo.factor_set.set_id">
             {{ setInfo.factor_set.set_id }} · {{ setInfo.factor_set.freq }}
           </a-option>
@@ -283,14 +283,14 @@ async function loadResultView(setId: string) {
       item.attributes?.owner_module === "factor" && item.attributes?.view_role === "factor_result"
     );
     if (!view) {
-      error.value = `因子集 ${setId} 的结果 View 尚未就绪`;
+      error.value = `计算任务 ${setId} 的结果 View 尚未就绪`;
       return;
     }
     const columns = await loadViewColumns(view.view_id, set.space_id);
     if (requestId === resultRequests[setId] && props.spaceId === set.space_id) resultViews[setId] = { view, columns };
   } catch (err) {
     if (requestId === resultRequests[setId] && props.spaceId === set.space_id) {
-      error.value = err instanceof Error ? err.message : `因子集 ${setId} 的结果 View 加载失败`;
+      error.value = err instanceof Error ? err.message : `计算任务 ${setId} 的结果 View 加载失败`;
     }
   }
 }
@@ -359,7 +359,7 @@ function validateStep() {
     return false;
   }
   const selections = completedSelections();
-  if (selections.length !== factors.value.length) { error.value = "每个因子都必须选择因子集、定义、输出和结果列"; return false; }
+  if (selections.length !== factors.value.length) { error.value = "每个因子都必须选择计算任务、定义、输出和结果列"; return false; }
   const selectedOutputs = new Set(selections.flatMap(selection => [selection.factor.factor_id, selection.output, selection.column_name, ...(selection.factor.input_columns || [])]));
   const missingFields = requiredFactorFields(selectedStrategy.value?.dsl_yaml || "").filter(field => !selectedOutputs.has(field));
   if (missingFields.length) { error.value = `DSL 需要因子输出 ${missingFields.join("、")}，请完成对应选择`; return false; }
@@ -368,7 +368,7 @@ function validateStep() {
   const selectedFactorIds = factors.value.map(row => row.factor_id).filter(Boolean);
   if (new Set(selectedFactorIds).size !== selectedFactorIds.length) { error.value = "同一个因子不能重复添加"; return false; }
   const result = canCombineSelections(selections, source);
-  if (!result.ok) { bindingReason.value = result.reason || "因子集不兼容"; error.value = bindingReason.value; return false; }
+  if (!result.ok) { bindingReason.value = result.reason || "计算任务不兼容"; error.value = bindingReason.value; return false; }
   if (selections.length && !["viewdataready", "view.data.ready", "ready", "event.storage.view.data.ready"].includes((dslPreview.value?.eventName || "").trim().toLowerCase())) {
     error.value = "绑定因子需要 DSL 配置 ViewDataReady 事件；纯定时触发不能运行因子策略";
     return false;
@@ -388,7 +388,7 @@ async function submit() {
   const source = sourceView.value;
   const selections = completedSelections();
   if (!source || source.space_id !== spaceId || selections.some(selection => selection.factorSet.space_id !== spaceId)) {
-    error.value = "空间已切换，请重新选择源 View 和因子集";
+    error.value = "空间已切换，请重新选择源 View 和计算任务";
     return;
   }
   saving.value = true;

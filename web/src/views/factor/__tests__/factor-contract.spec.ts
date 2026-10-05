@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { EngineStatus, FactorDef, FactorInfo, FactorMember, FactorSet, ListRecalcJobsReq, RecalcFactorsReq, RecalcJob, SetRunSummary } from "@/api/factor/types";
-import workbenchView from "@/views/factor/workbench/index.vue?raw";
-import factorEditor from "@/views/factor/workbench/factor-editor.vue?raw";
-import factorsTab from "@/views/factor/workbench/tabs/factors.vue?raw";
-import recalcTab from "@/views/factor/workbench/tabs/recalc.vue?raw";
-import resultsTab from "@/views/factor/workbench/tabs/results.vue?raw";
-import setHeader from "@/views/factor/workbench/set-header.vue?raw";
+import taskHost from "@/views/factor/task-management/index.vue?raw";
+import factorScope from "@/views/factor/shared/use-factor-scope.ts?raw";
+import computeTasks from "@/views/factor/compute-tasks/index.vue?raw";
+import memberSection from "@/views/factor/compute-tasks/member-section.vue?raw";
+import memberModel from "@/views/factor/compute-tasks/compute-tasks-model.ts?raw";
+import addFactorModal from "@/views/factor/compute-tasks/add-factor-modal.vue?raw";
+import definitionsPage from "@/views/factor/definitions/index.vue?raw";
+import factorEditor from "@/views/factor/editor/index.vue?raw";
+import recalcTab from "@/views/factor/recalc/index.vue?raw";
+import recalcModel from "@/views/factor/recalc/recalc-model.ts?raw";
+import resultsTab from "@/views/factor/results/index.vue?raw";
+import resultsModel from "@/views/factor/results/results-model.ts?raw";
+import overviewPage from "@/views/factor/overview/index.vue?raw";
 
 describe("factor API contract", () => {
   it("uses explicit generic time-series fields", () => {
@@ -98,44 +105,55 @@ describe("factor API contract", () => {
   });
 });
 
-describe("factor workbench contract", () => {
+describe("factor pages contract", () => {
   it("keeps the selected set and tab in the URL query", () => {
-    expect(workbenchView).toContain("route.query.set");
-    expect(workbenchView).toContain("route.query.tab");
-    expect(workbenchView).toContain("usePolling");
+    expect(taskHost).toContain("route.query.tab");
+    expect(taskHost).toContain("PageTitleTabs");
+    expect(factorScope).toContain("route.query.set");
+    expect(factorScope).toContain("usePolling");
+    expect(overviewPage).toContain("usePolling");
   });
 
-  it("changes status only through SetFactorStatus and surfaces the backfill job", () => {
-    expect(factorsTab).toContain('setFactorStatus(factor.factor_id, "enabled")');
-    expect(factorsTab).toContain("backfill_job");
-    expect(factorsTab).toContain("需要先停用");
-    expect(factorEditor).not.toContain("v-model=\"form.status\"");
+  it("changes member status only through setFactorMemberStatus and surfaces the backfill job", () => {
+    expect(memberSection).toContain("setFactorMemberStatus(member.set_id, member.factor_id, target)");
+    expect(memberSection).toContain("removeFactorFromSet");
+    expect(memberSection).toContain("backfill_job");
+    expect(memberModel).toContain("需要先停用");
+    expect(addFactorModal).toContain("addFactorToSet");
+    expect(addFactorModal).toContain("listDatasetColumns");
+    expect(definitionsPage).not.toContain("setFactorMemberStatus");
+    expect(factorEditor).not.toContain('v-model="form.status"');
   });
 
-  it("limits editor inputs to source dataset columns and shows partial universe only for cross sections", () => {
+  it("keeps editor inputs free-form and shows partial universe only for cross sections", () => {
     expect(factorEditor).toContain("listDatasetColumns");
     expect(factorEditor).toContain("form.factor_type === 'cross_section'");
     expect(factorEditor).toContain('value="timeseries"');
     expect(factorEditor).toContain('value="cross_section"');
+    expect(factorEditor).not.toContain("createFactorSet");
+    expect(factorEditor).toContain("onBeforeRouteLeave");
   });
 
   it("loads recalc jobs from the backend and renders degraded notes separately from errors", () => {
     expect(recalcTab).toContain("listRecalcJobs");
     expect(recalcTab).toContain("cancelRecalcJob");
-    expect(recalcTab).toContain("splitJobNote");
+    expect(recalcModel).toContain("splitJobNote");
     expect(recalcTab).toContain("部分降级");
     expect(recalcTab).not.toContain("getRecalcJob");
   });
 
-  it("offers lifecycle actions for sets including purge delete", () => {
-    expect(setHeader).toContain("updateFactorSet");
-    expect(setHeader).toContain("deleteFactorSet(current.set_id, purge.value)");
-    expect(setHeader).toContain("setFactorSetStatus");
+  it("offers lifecycle actions for compute tasks including purge delete", () => {
+    expect(computeTasks).toContain("updateFactorSet");
+    expect(computeTasks).toContain("deleteFactorSet(current.set_id, purge.value)");
+    expect(computeTasks).toContain("setFactorSetStatus");
   });
 
   it("scopes results to the factor result view of the selected set", () => {
-    expect(resultsTab).toContain('view.attributes?.view_role === "factor_result"');
-    expect(resultsTab).toContain("result_dataset_id");
+    expect(resultsModel).toContain('view.attributes?.view_role === "factor_result"');
+    expect(resultsModel).toContain("result_dataset_id");
     expect(resultsTab).not.toContain("ViewDefinitions");
+    expect(resultsTab).toContain("result-toolbar");
+    expect(resultsTab).toContain("#status-extra");
+    expect(resultsTab).not.toContain("status-strip");
   });
 });

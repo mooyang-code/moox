@@ -82,16 +82,25 @@ describe("page layout standards", () => {
     expectMargin(secrets, ".page-head", "margin-bottom", 5);
   });
 
-  it("keeps the factor workbench set list and tabs in one layout", () => {
-    const workbench = read("factor/workbench/index.vue");
-    const setList = read("factor/workbench/set-list.vue");
-    const factors = read("factor/workbench/tabs/factors.vue");
+  it("keeps the compute task host and its tabs in one layout", () => {
+    const host = read("factor/task-management/index.vue");
+    const computeTasks = read("factor/compute-tasks/index.vue");
+    const definitions = read("factor/definitions/index.vue");
 
-    expect(workbench).toContain('class="workbench__sets"');
-    expect(workbench).toContain("<a-tabs");
-    expect(setList).toContain("新建");
-    expect(factors).toContain("新增因子");
-    expect(factors).not.toContain('class="filters"');
+    expect(host).toContain("PageTitleTabs");
+    expect(host).toContain("<keep-alive>");
+    expect(computeTasks).toContain("新建计算任务");
+    expect(definitions).toContain("新增因子");
+    expect(definitions).not.toContain('class="filters"');
+  });
+
+  it("keeps factor tab explanations in info tips instead of rows under the tabs", () => {
+    for (const file of ["factor/compute-tasks/index.vue", "factor/recalc/index.vue", "factor/definitions/index.vue"]) {
+      const source = read(file);
+      expect(source).toContain("InfoTip");
+      expect(source).not.toContain('class="tab-hint"');
+    }
+    expect(read("factor/task-management/index.vue")).not.toContain("<a-alert");
   });
 
   it("uses the multi-tab spacing standard", () => {
@@ -146,7 +155,7 @@ describe("page layout standards", () => {
 
   it("normalizes special list workbenches", () => {
     const cloudNodes = read("collector/cloud-node/cloud-node.vue");
-    const factorResults = read("factor/workbench/tabs/results.vue");
+    const factorResults = read("factor/results/index.vue");
     const positions = read("trading/position-detail/position-detail.vue");
     const viewDefinitions = read("data/views/index.vue");
     const datasetDefinitions = read("data/datasets/index.vue");
@@ -203,8 +212,9 @@ describe("page layout standards", () => {
     expect(cloudNodes).not.toMatch(/\.cloud-node-toolbar\s*\{[^}]*justify-content:\s*flex-end;/);
     expect(cloudNodes).not.toMatch(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/);
 
-    expect(factorResults).toContain('class="status-strip"');
-    expect(factorResults).toContain("结果 View");
+    expect(factorResults).toContain('class="result-toolbar"');
+    expect(factorResults).toContain("#status-extra");
+    expect(factorResults).not.toContain("status-strip");
     expect(factorResults).toContain(':embedded="true"');
     expect(factorResults).not.toContain("ViewDefinitions");
 
