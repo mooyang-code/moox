@@ -40,45 +40,64 @@ type Invoker interface {
 }
 
 type Options struct {
-	InboundCredentials  gatewayauth.Credentials
-	UpstreamCredentials gatewayauth.Credentials
-	InboundTargetNode   string
-	UpstreamTargetNode  string
-	UpstreamTarget      string
-	AllowedCallers      []string
-	Nonces              NonceStore
-	NonceNamespace      string
-	MaxBodyBytes        int64
-	Timeout             time.Duration
-	Now                 func() time.Time
-	Invoker             Invoker
+	Principals         []Principal
+	InboundTargetNode  string
+	UpstreamTargetNode string
+	UpstreamTarget     string
+	Nonces             NonceStore
+	NonceNamespace     string
+	MaxBodyBytes       int64
+	Timeout            time.Duration
+	Now                func() time.Time
+	Invoker            Invoker
 }
 
 type Proxy struct {
-	inboundCredentials  gatewayauth.Credentials
-	upstreamCredentials gatewayauth.Credentials
-	inboundTargetNode   string
-	upstreamTargetNode  string
-	upstreamTarget      string
-	allowedCallers      map[string]struct{}
-	nonces              NonceStore
-	nonceNamespace      string
-	maxBodyBytes        int64
-	timeout             time.Duration
-	now                 func() time.Time
-	invoker             Invoker
+	principals         map[string]Principal
+	inbound            *gatewayauth.CredentialRegistry
+	inboundTargetNode  string
+	upstreamTargetNode string
+	upstreamTarget     string
+	nonces             NonceStore
+	nonceNamespace     string
+	maxBodyBytes       int64
+	timeout            time.Duration
+	now                func() time.Time
+	invoker            Invoker
 }
 
 func New(options Options) (*Proxy, error) {
-	if _, err := gatewayauth.Sign(options.InboundCredentials, gatewayauth.Request{
-		Method: http.MethodPost, Path: "/probe", TargetNode: strings.TrimSpace(options.InboundTargetNode),
-	}, time.Unix(1, 0)); err != nil {
-		return nil, fmt.Errorf("validate inbound credentials: %w", err)
+	if len(options.Principals) == 0 {
+		return nil, errors.New("at least one storage access principal is required")
 	}
-	if _, err := gatewayauth.Sign(options.UpstreamCredentials, gatewayauth.Request{
-		Method: http.MethodPost, Path: "/probe", TargetNode: strings.TrimSpace(options.UpstreamTargetNode),
-	}, time.Unix(1, 0)); err != nil {
-		return nil, fmt.Errorf("validate upstream credentials: %w", err)
+	principals := make(map[string]Principal, len(options.Principals))
+	inbound := make([]gatewayauth.Credentials, 0, len(options.Principals))
+	for _, principal := range options.Principals {
+		if principal.Inbound.Caller == "" || principal.Upstream.Caller == "" {
+			return nil, fmt.Errorf("principal %q requires inbound and upstream callers", principal.Name)
+		}
+		if _, err := gatewayauth.Sign(principal.Inbound, gatewayauth.Request{
+			Method: http.MethodPost, Path: "/probe", TargetNode: strings.TrimSpace(options.InboundTargetNode),
+		}, time.Unix(1, 0)); err != nil {
+			return nil, fmt.Errorf("validate principal %q inbound credentials: %w", principal.Name, err)
+		}
+		if _, err := gatewayauth.Sign(principal.Upstream, gatewayauth.Request{
+			Method: http.MethodPost, Path: "/probe", TargetNode: strings.TrimSpace(options.UpstreamTargetNode),
+		}, time.Unix(1, 0)); err != nil {
+			return nil, fmt.Errorf("validate principal %q upstream credentials: %w", principal.Name, err)
+		}
+		if _, duplicate := principals[principal.Inbound.KeyID]; duplicate {
+			return nil, fmt.Errorf("inbound key id %q is used by more than one principal", principal.Inbound.KeyID)
+		}
+		if len(principal.Methods) == 0 {
+			return nil, fmt.Errorf("principal %q allows no methods", principal.Name)
+		}
+		principals[principal.Inbound.KeyID] = principal
+		inbound = append(inbound, principal.Inbound)
+	}
+	registry, err := gatewayauth.NewCredentialRegistry(inbound)
+	if err != nil {
+		return nil, fmt.Errorf("build inbound credential registry: %w", err)
 	}
 	if err := validateTarget(options.UpstreamTarget); err != nil {
 		return nil, fmt.Errorf("validate upstream target: %w", err)
@@ -106,18 +125,11 @@ func New(options Options) (*Proxy, error) {
 	if invoker == nil {
 		invoker = client.New()
 	}
-	allowedCallers := make(map[string]struct{}, len(options.AllowedCallers))
-	for _, caller := range options.AllowedCallers {
-		caller = strings.TrimSpace(caller)
-		if caller != "" {
-			allowedCallers[caller] = struct{}{}
-		}
-	}
 	return &Proxy{
-		inboundCredentials: options.InboundCredentials, upstreamCredentials: options.UpstreamCredentials,
+		principals: principals, inbound: registry,
 		inboundTargetNode: strings.TrimSpace(options.InboundTargetNode), upstreamTargetNode: strings.TrimSpace(options.UpstreamTargetNode),
-		upstreamTarget: strings.TrimSpace(options.UpstreamTarget), allowedCallers: allowedCallers,
-		nonces: options.Nonces, nonceNamespace: nonceNamespace, maxBodyBytes: maxBodyBytes, timeout: timeout,
+		upstreamTarget: strings.TrimSpace(options.UpstreamTarget),
+		nonces:         options.Nonces, nonceNamespace: nonceNamespace, maxBodyBytes: maxBodyBytes, timeout: timeout,
 		now: now, invoker: invoker,
 	}, nil
 }
@@ -139,24 +151,23 @@ func (p *Proxy) Forward(ctx context.Context, reqbody *codec.Body) (*codec.Body, 
 	if !ok {
 		return nil, fmt.Errorf("storage access RPC name is invalid: %q", msg.ServerRPCName())
 	}
-	if !methodAllowed(servicePath, method) {
-		return nil, fmt.Errorf("storage access method is not allowed: %s/%s", servicePath, method)
-	}
 	if int64(len(reqbody.Data)) > p.maxBodyBytes {
 		return nil, fmt.Errorf("storage access request body exceeds %d bytes", p.maxBodyBytes)
 	}
 	metadata := metadataToHeader(msg.ServerMetaData())
-	claims, err := gatewayauth.Verify(p.inboundCredentials, gatewayauth.Request{
+	claims, err := p.inbound.Verify(gatewayauth.Request{
 		Method: http.MethodPost, Path: "/" + strings.TrimPrefix(msg.ServerRPCName(), "/"), TargetNode: p.inboundTargetNode,
 		Callee: servicePath, Func: method, Body: reqbody.Data,
 	}, metadata, p.now())
 	if err != nil {
 		return nil, fmt.Errorf("storage access inbound authentication failed: %w", err)
 	}
-	if len(p.allowedCallers) > 0 {
-		if _, ok := p.allowedCallers[claims.Caller]; !ok {
-			return nil, fmt.Errorf("storage access caller is not allowed: %s", claims.Caller)
-		}
+	principal, ok := p.principals[claims.KeyID]
+	if !ok || claims.Caller != principal.Inbound.Caller {
+		return nil, fmt.Errorf("storage access caller is not allowed: %s", claims.Caller)
+	}
+	if !principal.allows(servicePath, method) {
+		return nil, fmt.Errorf("storage access method is not allowed for %s: %s/%s", principal.Name, servicePath, method)
 	}
 	if p.nonces != nil {
 		consumed, err := p.nonces.Consume(ctx, p.nonceNamespace, claims.Nonce, claims.TTL)
@@ -179,7 +190,7 @@ func (p *Proxy) Forward(ctx context.Context, reqbody *codec.Body) (*codec.Body, 
 		client.WithTarget(p.upstreamTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"),
 		client.WithServiceName(servicePath), client.WithCalleeMethod(method),
 		client.WithSerializationType(msg.SerializationType()), client.WithCurrentSerializationType(codec.SerializationTypeNoop),
-		client.WithTimeout(p.timeout), client.WithFilter(rawGatewayClientFilter(p.upstreamCredentials, p.upstreamTargetNode, p.now)),
+		client.WithTimeout(p.timeout), client.WithFilter(rawGatewayClientFilter(principal.Upstream, p.upstreamTargetNode, p.now)),
 	}
 	for key, value := range msg.ServerMetaData() {
 		if strings.HasPrefix(strings.ToLower(key), "x-moox-") {
@@ -241,36 +252,6 @@ func metadataToHeader(metadata codec.MetaData) http.Header {
 		headers.Add(key, string(value))
 	}
 	return headers
-}
-
-func methodAllowed(servicePath, method string) bool {
-	methods, ok := map[string]map[string]struct{}{
-		PrimaryStoreName: {
-			"UpsertFields": {}, "ReadFields": {}, "ReadTimeSeriesRows": {}, "ReadRecordRows": {},
-			"ReportCollectorPeriodCompleted": {}, "WaitViewSyncPoint": {},
-			"EnsureDatasetPeriod": {}, "CommitTimeSeriesBatch": {},
-			"RecordDatasetPeriodFailures": {}, "GetDatasetPeriodStatus": {},
-		},
-		MetadataName: {
-			"GetSubject": {}, "ListSubjects": {},
-			"UpsertTag": {}, "GetTag": {}, "ListTags": {}, "DeleteTag": {}, "ListTagMembers": {},
-			"AddTagMembers": {}, "RemoveTagMembers": {}, "SetTagMemberStatus": {}, "ApplyTagSnapshot": {},
-			"ReportTagRunFailure": {}, "UpdateSubjectAttributes": {}, "ResolveSubjects": {},
-			"GetDataset": {}, "ListDatasets": {}, "CreateDataset": {}, "UpdateDataset": {}, "DeleteDataset": {},
-			"CheckDatasetActivation": {}, "ActivateDataset": {}, "ListDatasetSubjects": {},
-			"UpsertSubject": {}, "UpsertDatasetColumn": {}, "ListDatasetColumns": {},
-			"CreateView": {}, "GetView": {}, "ListViews": {}, "UpdateView": {}, "DeleteView": {},
-			"UpsertViewColumn": {}, "ListViewColumns": {}, "RequestViewRebuild": {},
-		},
-		DataViewName: {
-			"QueryTimeSeriesRows": {}, "SearchRecordRows": {},
-		},
-	}[servicePath]
-	if !ok {
-		return false
-	}
-	_, ok = methods[method]
-	return ok
 }
 
 func splitRPCName(rpcName string) (string, string, bool) {

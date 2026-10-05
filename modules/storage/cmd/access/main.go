@@ -14,7 +14,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/accessproxy"
 	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -39,21 +38,15 @@ func main() {
 	}
 	defer nonces.Close()
 
+	principals, err := accessproxy.LoadPrincipals(envOrDefault("MOOX_STORAGE_ACCESS_PRINCIPALS_FILE", "./secrets/storage-access-principals.yaml"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	proxy, err := accessproxy.New(accessproxy.Options{
-		InboundCredentials: gatewayauth.Credentials{
-			KeyID:  strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_KEY_ID")),
-			Caller: strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_CALLER")),
-			Secret: os.Getenv("MOOX_STORAGE_ACCESS_INBOUND_SECRET"),
-		},
-		UpstreamCredentials: gatewayauth.Credentials{
-			KeyID:  strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_UPSTREAM_KEY_ID")),
-			Caller: strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_UPSTREAM_CALLER")),
-			Secret: os.Getenv("MOOX_STORAGE_ACCESS_UPSTREAM_SECRET"),
-		},
+		Principals:         principals,
 		InboundTargetNode:  strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_TARGET_NODE")),
 		UpstreamTargetNode: strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_UPSTREAM_TARGET_NODE")),
 		UpstreamTarget:     strings.TrimSpace(os.Getenv("MOOX_STORAGE_ACCESS_UPSTREAM_TARGET")),
-		AllowedCallers:     splitCSV(envOrDefault("MOOX_STORAGE_ACCESS_ALLOWED_CALLERS", "collector")),
 		NonceNamespace:     envOrDefault("MOOX_STORAGE_ACCESS_NONCE_NAMESPACE", "storage-access"),
 		MaxBodyBytes:       envInt64("MOOX_STORAGE_ACCESS_MAX_BODY_BYTES", 32<<20),
 		Timeout:            envDuration("MOOX_STORAGE_ACCESS_TIMEOUT", 30*time.Second),
@@ -181,15 +174,4 @@ func envInt64(name string, fallback int64) int64 {
 		return fallback
 	}
 	return parsed
-}
-
-func splitCSV(value string) []string {
-	items := strings.Split(value, ",")
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		if item = strings.TrimSpace(item); item != "" {
-			result = append(result, item)
-		}
-	}
-	return result
 }

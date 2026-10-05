@@ -3,7 +3,6 @@ package accessproxy
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -42,19 +41,31 @@ func (c *captureInvoker) Invoke(_ context.Context, _ interface{}, rsp interface{
 	return nil
 }
 
+func testPrincipal(t *testing.T, name, preset, inboundCaller, upstreamCaller string) Principal {
+	t.Helper()
+	methods, err := presetMethods(preset)
+	require.NoError(t, err)
+	return Principal{
+		Name:     name,
+		Inbound:  gatewayauth.Credentials{KeyID: inboundCaller, Caller: inboundCaller, Secret: inboundCaller + "-inbound-secret"},
+		Upstream: gatewayauth.Credentials{KeyID: upstreamCaller, Caller: upstreamCaller, Secret: upstreamCaller + "-upstream-secret"},
+		Methods:  methods,
+	}
+}
+
 func testProxy(t *testing.T, invoker Invoker, nonces NonceStore) (*Proxy, gatewayauth.Credentials, gatewayauth.Credentials, time.Time) {
 	t.Helper()
 	now := time.Unix(1_800_000_000, 0)
-	inbound := gatewayauth.Credentials{KeyID: "collector", Caller: "collector", Secret: "inbound-secret"}
-	upstream := gatewayauth.Credentials{KeyID: "collector", Caller: "collector", Secret: "upstream-secret"}
+	collector := testPrincipal(t, "collector", "collector", "collector", "collector")
+	engine := testPrincipal(t, "factor-engine", "factor-engine", "factor-engine", "factor")
 	proxy, err := New(Options{
-		InboundCredentials: inbound, UpstreamCredentials: upstream,
+		Principals:        []Principal{collector, engine},
 		InboundTargetNode: "access-nj", UpstreamTargetNode: "gateway-nj",
-		UpstreamTarget: "ip://127.0.0.1:11003", AllowedCallers: []string{"collector"},
-		Nonces: nonces, Now: func() time.Time { return now }, Invoker: invoker,
+		UpstreamTarget: "ip://127.0.0.1:11003",
+		Nonces:         nonces, Now: func() time.Time { return now }, Invoker: invoker,
 	})
 	require.NoError(t, err)
-	return proxy, inbound, upstream, now
+	return proxy, collector.Inbound, engine.Inbound, now
 }
 
 func inboundContext(t *testing.T, credentials gatewayauth.Credentials, now time.Time, rpcName string, body []byte) context.Context {
@@ -62,9 +73,11 @@ func inboundContext(t *testing.T, credentials gatewayauth.Credentials, now time.
 	ctx, msg := codec.WithNewMessage(context.Background())
 	msg.WithServerRPCName(rpcName)
 	msg.WithSerializationType(codec.SerializationTypePB)
+	servicePath, method, ok := splitRPCName(rpcName)
+	require.True(t, ok)
 	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
 		Method: http.MethodPost, Path: rpcName, TargetNode: "access-nj",
-		Callee: PrimaryStoreName, Func: rpcName[strings.LastIndex(rpcName, "/")+1:], Body: body,
+		Callee: servicePath, Func: method, Body: body,
 	}, now)
 	require.NoError(t, err)
 	metadata := codec.MetaData{}
@@ -139,9 +152,96 @@ func TestProxyRejectsInvalidAuthAndReplay(t *testing.T) {
 }
 
 func TestMethodAllowedIncludesCollectorResampleMethods(t *testing.T) {
+	collector := testPrincipal(t, "collector", "collector", "collector", "collector")
 	for _, method := range []string{"ResolveSubjects", "UpdateView", "UpsertViewColumn", "RequestViewRebuild"} {
-		require.True(t, methodAllowed(MetadataName, method), method)
+		require.True(t, collector.allows(MetadataName, method), method)
 	}
+}
+
+func TestFactorEnginePrincipalAllowsSevenMethods(t *testing.T) {
+	for _, rpcName := range []string{
+		"/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows", "/trpc.moox.storage.PrimaryStore/WriteFactorRows",
+		"/trpc.moox.storage.PrimaryStore/ReportFactorPeriodComputed", "/trpc.moox.storage.PrimaryStore/GetFactorPeriodComputed",
+		"/trpc.moox.storage.Metadata/GetDataset", "/trpc.moox.storage.Metadata/ListDatasetColumns",
+		"/trpc.moox.storage.Metadata/ListDatasetSubjects",
+	} {
+		t.Run(rpcName, func(t *testing.T) {
+			invoker := &captureInvoker{}
+			proxy, _, engine, now := testProxy(t, invoker, &memoryNonces{})
+			body := []byte("protobuf-body")
+
+			_, err := proxy.Forward(inboundContext(t, engine, now, rpcName, body), &codec.Body{Data: body})
+
+			require.NoError(t, err)
+			require.True(t, invoker.called)
+		})
+	}
+}
+
+func TestFactorEnginePrincipalRejectsOtherMethods(t *testing.T) {
+	for _, rpcName := range []string{
+		"/trpc.moox.storage.PrimaryStore/DeleteDatasetRows", "/trpc.moox.storage.PrimaryStore/UpsertFields",
+		"/trpc.moox.storage.Metadata/DeleteDataset", "/trpc.moox.storage.Metadata/CreateDataset",
+	} {
+		invoker := &captureInvoker{}
+		proxy, _, engine, now := testProxy(t, invoker, &memoryNonces{})
+		body := []byte("protobuf-body")
+
+		_, err := proxy.Forward(inboundContext(t, engine, now, rpcName, body), &codec.Body{Data: body})
+
+		require.ErrorContains(t, err, "method is not allowed", rpcName)
+		require.False(t, invoker.called)
+	}
+}
+
+func TestCollectorPrincipalCannotWriteFactorRows(t *testing.T) {
+	invoker := &captureInvoker{}
+	proxy, collector, _, now := testProxy(t, invoker, &memoryNonces{})
+	body := []byte("protobuf-body")
+
+	_, err := proxy.Forward(inboundContext(t, collector, now, "/trpc.moox.storage.PrimaryStore/WriteFactorRows", body), &codec.Body{Data: body})
+
+	require.ErrorContains(t, err, "method is not allowed")
+}
+
+func TestUpstreamCredentialsSelectedByPrincipal(t *testing.T) {
+	var captured []string
+	invoker := &captureInvoker{}
+	proxy, _, engine, now := testProxy(t, invoker, &memoryNonces{})
+	body := []byte("protobuf-body")
+
+	_, err := proxy.Forward(inboundContext(t, engine, now, "/trpc.moox.storage.PrimaryStore/WriteFactorRows", body), &codec.Body{Data: body})
+	require.NoError(t, err)
+	require.Len(t, invoker.options.Filters, 1)
+	ctx, msg := codec.WithNewMessage(context.Background())
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/WriteFactorRows")
+	require.NoError(t, invoker.options.Filters[0](ctx, &codec.Body{Data: body}, &codec.Body{}, func(ctx context.Context, _, _ interface{}) error {
+		captured = append(captured, string(codec.Message(ctx).ClientMetaData()["X-Moox-Caller"]))
+		return nil
+	}))
+
+	require.Equal(t, []string{"factor"}, captured, "factor-engine is re-signed upstream as the factor caller")
+}
+
+func TestUnknownKeyRejected(t *testing.T) {
+	invoker := &captureInvoker{}
+	proxy, _, _, now := testProxy(t, invoker, &memoryNonces{})
+	body := []byte("protobuf-body")
+	stranger := gatewayauth.Credentials{KeyID: "stranger", Caller: "stranger", Secret: "stranger-secret"}
+
+	_, err := proxy.Forward(inboundContext(t, stranger, now, "/trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows", body), &codec.Body{Data: body})
+
+	require.ErrorContains(t, err, "authentication failed")
+	require.False(t, invoker.called)
+}
+
+func TestNewRejectsDuplicateInboundKeys(t *testing.T) {
+	collector := testPrincipal(t, "collector", "collector", "collector", "collector")
+	_, err := New(Options{
+		Principals: []Principal{collector, collector}, InboundTargetNode: "access-nj", UpstreamTargetNode: "gateway-nj",
+		UpstreamTarget: "ip://127.0.0.1:11003",
+	})
+	require.ErrorContains(t, err, "more than one principal")
 }
 
 func TestRawGatewayClientFilterSignsUpstreamBody(t *testing.T) {

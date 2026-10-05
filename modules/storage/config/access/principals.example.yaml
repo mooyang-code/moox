@@ -1,0 +1,15 @@
+# storage-access 主体清单（部署脚本生成到 secrets/storage-access-principals.yaml）。
+# methods 只能引用代码内置的预设（collector、factor-engine），配置无法放宽白名单；
+# secret_file 相对本文件所在目录，必须是 0600 的普通文件。
+version: 1
+principals:
+  # SCF 行情采集与重采样
+  - name: collector
+    methods: collector
+    inbound: {key_id: collector, caller: collector, secret_file: storage-access-collector.key}
+    upstream: {key_id: collector, caller: collector, secret_file: gateway-collector.key}
+  # 操作员本机的 moox-factor-engine：上游以 factor 调用方访问 Storage Gateway
+  - name: factor-engine
+    methods: factor-engine
+    inbound: {key_id: factor-engine, caller: factor-engine, secret_file: storage-access-factor-engine.key}
+    upstream: {key_id: factor, caller: factor, secret_file: gateway-factor.key}
