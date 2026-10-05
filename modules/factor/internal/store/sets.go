@@ -210,40 +210,6 @@ func (s *Store) DeleteSet(ctx context.Context, setID string) error {
 	return nil
 }
 
-// EnabledSetByDataset finds the enabled set for one source identity and returns
-// the definitions of its enabled members, sorted by factor id.
-func (s *Store) EnabledSetByDataset(ctx context.Context, spaceID, datasetID, freq string) (domain.FactorSet, []domain.FactorDef, bool, error) {
-	if s == nil || s.db == nil {
-		return domain.FactorSet{}, nil, false, fmt.Errorf("factor database is not open")
-	}
-	var row factorSetRow
-	result := s.db.WithContext(ctx).Raw(`
-		SELECT c_set_id, c_space_id, c_source_dataset_id, c_freq, c_subject_mode,
-		       c_subjects_json, c_result_dataset_id, c_status, c_ctime, c_mtime
-		FROM t_factor_sets
-		WHERE c_space_id = ? AND c_source_dataset_id = ? AND c_freq = ? AND c_status = ?
-	`, strings.TrimSpace(spaceID), strings.TrimSpace(datasetID), strings.TrimSpace(freq), domain.SetStatusEnabled).Scan(&row)
-	if result.Error != nil {
-		return domain.FactorSet{}, nil, false, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return domain.FactorSet{}, []domain.FactorDef{}, false, nil
-	}
-	set, err := row.domain()
-	if err != nil {
-		return domain.FactorSet{}, nil, false, err
-	}
-	members, err := s.ListMembers(ctx, set.SetID, domain.MemberStatusEnabled)
-	if err != nil {
-		return domain.FactorSet{}, nil, false, err
-	}
-	defs := make([]domain.FactorDef, 0, len(members))
-	for _, member := range members {
-		defs = append(defs, member.Factor)
-	}
-	return set, defs, true, nil
-}
-
 func marshalStringSlice(values []string) (string, error) {
 	if values == nil {
 		values = []string{}

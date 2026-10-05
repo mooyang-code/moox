@@ -20,8 +20,13 @@ const AppID = "moox-factor"
 // AuthInfo signs the factor AppID with MOOX_STORAGE_PRIMARY_AUTH_SECRET when
 // the secret is configured.
 func AuthInfo(requestID string) *commonpb.AuthInfo {
+	return NewAuthInfo(requestID, os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
+}
+
+// NewAuthInfo signs the factor AppID with an explicit Storage secret.
+func NewAuthInfo(requestID, secret string) *commonpb.AuthInfo {
 	auth := &commonpb.AuthInfo{AppId: AppID, Operator: AppID, RequestId: requestID}
-	if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
+	if secret = strings.TrimSpace(secret); secret != "" {
 		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
 	}
 	return auth

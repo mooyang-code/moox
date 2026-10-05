@@ -1,15 +1,17 @@
-package recalc
+package recalcexec
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
+	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/stretchr/testify/require"
 )
@@ -183,4 +185,150 @@ func (l *countingLocks) LockContext(_ context.Context, setID string) (func(), er
 	l.setIDs = append(l.setIDs, setID)
 	l.held = true
 	return func() { l.held = false }, nil
+}
+
+type recordingRunner struct {
+	mu    sync.Mutex
+	plans []pipeline.Plan
+	onRun func(context.Context, pipeline.Plan) (pipeline.Outcome, error)
+}
+
+func (r *recordingRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
+	r.mu.Lock()
+	r.plans = append(r.plans, plan)
+	r.mu.Unlock()
+	if r.onRun != nil {
+		return r.onRun(ctx, plan)
+	}
+	return pipeline.Outcome{Status: "complete"}, nil
+}
+
+func (r *recordingRunner) snapshot() []pipeline.Plan {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]pipeline.Plan(nil), r.plans...)
+}
+
+func pipelineSelection(factors ...recalcMember) Selection {
+	defs := make([]domain.FactorDef, 0, len(factors))
+	for _, factor := range factors {
+		defs = append(defs, factor.def)
+	}
+	return Selection{
+		Set: domain.FactorSet{
+			SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m", Freq: "1m",
+			SubjectMode: domain.SubjectModeInclude, Subjects: []string{"BTC"},
+			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
+		},
+		Factors: defs, Subjects: []string{"BTC"}, Columns: []string{"close"},
+	}
+}
+
+func TestChunkReadRangeIncludesLookback(t *testing.T) {
+	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	storage := &recalcPipelineStore{}
+	runner := pipeline.NewRunner(storage, &recalcExecutor{}, periodclock.Continuous{}, pipeline.Config{PythonWorkers: 1})
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(3))
+	selection := pipelineSelection(
+		testRecalcFactor("short", domain.MemberStatusEnabled, 2),
+		testRecalcFactor("long", domain.MemberStatusEnabled, 3),
+	)
+	var records []progressRecord
+
+	err := executor.Run(context.Background(), Window{Start: start, End: start.Add(3 * time.Minute)}, fixedSource(selection), recordProgress(&records, 0))
+
+	require.NoError(t, err)
+	require.Len(t, storage.readRequests, 1)
+	require.Equal(t, start.Add(-2*time.Minute), storage.readRequests[0].Start)
+	require.Equal(t, start.Add(3*time.Minute), storage.readRequests[0].End)
+	require.Len(t, storage.written, 3)
+	require.Equal(t, start, storage.written[0].DataTime)
+	require.Equal(t, 7.0, storage.written[0].Fields["long_value"])
+	require.Equal(t, 7.0, storage.written[0].Fields["short_value"])
+}
+
+func TestRecalcDoesNotReportMarker(t *testing.T) {
+	storage := &recalcPipelineStore{}
+	runner := pipeline.NewRunner(storage, &recalcExecutor{}, periodclock.Continuous{}, pipeline.Config{PythonWorkers: 1})
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
+	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+
+	_, err := executor.RunChunk(context.Background(), pipelineSelection(testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3)), period, period.Add(time.Minute))
+
+	require.NoError(t, err)
+	require.Equal(t, 0, storage.markerCalls)
+}
+
+type recalcPipelineStore struct {
+	readRequests []storageio.ReadRequest
+	markerCalls  int
+	written      []storageio.ResultRow
+}
+
+func (*recalcPipelineStore) DatasetColumns(context.Context, string, string) ([]string, error) {
+	return []string{"close"}, nil
+}
+
+func (s *recalcPipelineStore) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+	s.readRequests = append(s.readRequests, req)
+	frame := &storageio.Frame{SubjectID: "BTC", Columns: []string{"data_time", "series_tag", "close"}}
+	for at := req.Start; at.Before(req.End); at = at.Add(time.Minute) {
+		frame.Rows = append(frame.Rows, []any{at, "source", 7.0})
+	}
+	return map[string]*storageio.Frame{"BTC": frame}, nil
+}
+
+func (s *recalcPipelineStore) WriteRows(_ context.Context, _, _, _ string, rows []storageio.ResultRow) error {
+	s.written = append(s.written, rows...)
+	return nil
+}
+
+func (s *recalcPipelineStore) ReportComputed(context.Context, storageio.PeriodMarker) error {
+	s.markerCalls++
+	return nil
+}
+
+func (*recalcPipelineStore) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+	return false, nil
+}
+
+func (*recalcExecutor) Exec(_ context.Context, req pyexec.Request) ([]pyexec.ItemResult, error) {
+	targets, ok := req.Context["target_period_times"].([]string)
+	if !ok {
+		return nil, errors.New("recalc target periods are missing")
+	}
+	items := make([]pyexec.ItemResult, 0, len(req.Factors))
+	for _, factor := range req.Factors {
+		rows := make([][]any, 0, len(targets))
+		for _, raw := range targets {
+			at, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, []any{at, "source", 7.0})
+		}
+		items = append(items, pyexec.ItemResult{FactorID: factor.FactorID, Columns: []string{"data_time", "series_tag", factor.Outputs[0]}, Rows: rows})
+	}
+	return items, nil
+}
+
+type recalcExecutor struct{}
+
+func (*recalcExecutor) Busy() int { return 0 }
+
+func (*recalcExecutor) Close() error { return nil }
+
+// recalcMember is a test definition together with its member status.
+type recalcMember struct {
+	def    domain.FactorDef
+	status string
+}
+
+func testRecalcFactor(id, status string, lookback int) recalcMember {
+	return recalcMember{status: status, def: domain.FactorDef{
+		FactorID: id, Name: id, FactorType: domain.FactorTypeTimeSeries,
+		SourceCode: "def compute(df, params, context): return df", SourceHash: domain.SourceHash("def compute(df, params, context): return df"),
+		InputColumns: []string{"close"}, Outputs: []string{id + "_value"}, ParamsJSON: "{}",
+		LookbackPeriods: lookback,
+	}}
 }

@@ -1,4 +1,7 @@
-package recalc
+// Package recalcexec runs a recalc window in chunks through the factor
+// pipeline. It is store-free: moox-factor-engine persists progress through the
+// manager, the manager never executes jobs.
+package recalcexec
 
 import (
 	"context"
@@ -48,6 +51,25 @@ type Window struct {
 	Progress time.Time
 }
 
+const defaultChunkPeriods = 2000
+
+type config struct {
+	chunkPeriods int
+	chunkRetries int
+	retryBackoff time.Duration
+	clock        periodclock.Clock
+	locks        SetLocker
+}
+
+type Option func(*config)
+
+func WithChunkPeriods(n int) Option { return func(cfg *config) { cfg.chunkPeriods = n } }
+func WithChunkRetry(attempts int, backoff time.Duration) Option {
+	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
+}
+func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
+func WithLocks(locks SetLocker) Option         { return func(cfg *config) { cfg.locks = locks } }
+
 // Executor runs a recalc window in chunks without touching any job store; the
 // caller persists progress through ProgressFunc.
 type Executor struct {
@@ -60,7 +82,18 @@ type Executor struct {
 }
 
 func NewExecutor(runner Runner, options ...Option) *Executor {
-	cfg := defaultConfig(options)
+	cfg := config{chunkPeriods: defaultChunkPeriods, chunkRetries: 3, retryBackoff: 5 * time.Second}
+	for _, option := range options {
+		if option != nil {
+			option(&cfg)
+		}
+	}
+	if cfg.chunkPeriods <= 0 {
+		cfg.chunkPeriods = defaultChunkPeriods
+	}
+	if cfg.chunkRetries <= 0 {
+		cfg.chunkRetries = 1
+	}
 	return &Executor{
 		runner: runner, locks: cfg.locks, clock: cfg.clock,
 		chunkPeriods: cfg.chunkPeriods, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,

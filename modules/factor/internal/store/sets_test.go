@@ -72,26 +72,6 @@ func TestCreateSetRejectsDuplicateSourceFreq(t *testing.T) {
 	require.ErrorIs(t, err, ErrConflict)
 }
 
-func TestEnabledSetByDatasetReturnsOnlyEnabledMembers(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
-	addTestMember(t, s, "set_prices", "z_factor", domain.MemberStatusEnabled)
-	addTestMember(t, s, "set_prices", "a_factor", domain.MemberStatusEnabled)
-	addTestMember(t, s, "set_prices", "disabled_factor", domain.MemberStatusDisabled)
-
-	set, defs, found, err := s.EnabledSetByDataset(ctx, "crypto", "dataset_prices", "1m")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, "set_prices", set.SetID)
-	require.Equal(t, []string{"a_factor", "z_factor"}, []string{defs[0].FactorID, defs[1].FactorID})
-
-	_, defs, found, err = s.EnabledSetByDataset(ctx, "crypto", "dataset_prices", "5m")
-	require.NoError(t, err)
-	require.False(t, found)
-	require.Empty(t, defs)
-}
-
 func TestDeleteSetFailsWhenMembersExist(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

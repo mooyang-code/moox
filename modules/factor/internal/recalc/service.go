@@ -13,58 +13,37 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 )
 
-const defaultChunkPeriods = 2000
-
 type SubjectProvider interface {
 	ListDatasetSubjects(context.Context, string, string) ([]string, error)
 }
 
 type config struct {
-	chunkPeriods int
-	chunkRetries int
-	retryBackoff time.Duration
-	clock        periodclock.Clock
-	locks        SetLocker
-	subjects     SubjectProvider
+	clock    periodclock.Clock
+	subjects SubjectProvider
 }
 
 type Option func(*config)
 
-func WithChunkPeriods(n int) Option { return func(cfg *config) { cfg.chunkPeriods = n } }
-func WithChunkRetry(attempts int, backoff time.Duration) Option {
-	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
-}
 func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
-func WithLocks(locks SetLocker) Option         { return func(cfg *config) { cfg.locks = locks } }
 func WithSubjectProvider(provider SubjectProvider) Option {
 	return func(cfg *config) { cfg.subjects = provider }
 }
 
-func defaultConfig(options []Option) config {
-	cfg := config{chunkPeriods: defaultChunkPeriods, chunkRetries: 3, retryBackoff: 5 * time.Second}
-	for _, option := range options {
-		if option != nil {
-			option(&cfg)
-		}
-	}
-	if cfg.chunkPeriods <= 0 {
-		cfg.chunkPeriods = defaultChunkPeriods
-	}
-	if cfg.chunkRetries <= 0 {
-		cfg.chunkRetries = 1
-	}
-	return cfg
-}
-
 // Service owns durable request acceptance and inspection in moox-factor-mgr;
-// moox-factor-engine pulls the accepted jobs and runs them with an Executor.
+// moox-factor-engine pulls the accepted jobs and runs them with recalcexec.
 type Service struct {
 	db  *store.Store
 	cfg config
 }
 
 func NewService(db *store.Store, options ...Option) *Service {
-	return &Service{db: db, cfg: defaultConfig(options)}
+	cfg := config{}
+	for _, option := range options {
+		if option != nil {
+			option(&cfg)
+		}
+	}
+	return &Service{db: db, cfg: cfg}
 }
 
 func (s *Service) Submit(ctx context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (store.RecalcJob, error) {
