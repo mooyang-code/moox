@@ -21,7 +21,6 @@ message FactorSet {
 
 message FactorDef {
   string factor_id = 1;
-  string set_id = 2;
   string name = 3;
   string factor_type = 4;
   string source_code = 5;
@@ -31,9 +30,27 @@ message FactorDef {
   string params_json = 9;
   int32 lookback_periods = 10;
   bool allow_partial_universe = 11;
-  string status = 12;
   string created_at = 13;
   string updated_at = 14;
+}
+
+message FactorUsage {
+  string set_id = 1;
+  string status = 2;
+}
+
+message FactorInfo {
+  FactorDef factor = 1;
+  repeated FactorUsage usages = 2;
+}
+
+message FactorMember {
+  string set_id = 1;
+  string factor_id = 2;
+  string status = 3;
+  FactorDef factor = 4;
+  string created_at = 5;
+  string updated_at = 6;
 }
 
 message FactorPeriodState {
@@ -54,7 +71,7 @@ message SetRunSummary {
 
 message FactorSetInfo {
   FactorSet factor_set = 1;
-  repeated FactorDef factors = 2;
+  repeated FactorMember members = 2;
   SetRunSummary last_run = 3;
 }
 
@@ -108,7 +125,7 @@ message GetFactorSetReq { string set_id = 1; }
 message GetFactorSetRsp {
   common.RetInfo ret_info = 1;
   FactorSet factor_set = 2;
-  repeated FactorDef factors = 3;
+  repeated FactorMember members = 3;
   SetRunSummary last_run = 4;
 }
 
@@ -134,13 +151,29 @@ message UpdateFactorRsp {
   FactorDef factor = 2;
 }
 
-message SetFactorStatusReq {
-  string factor_id = 1;
-  string status = 2;
+message AddFactorToSetReq {
+  string set_id = 1;
+  string factor_id = 2;
 }
-message SetFactorStatusRsp {
+message AddFactorToSetRsp {
   common.RetInfo ret_info = 1;
-  FactorDef factor = 2;
+  FactorMember member = 2;
+}
+
+message RemoveFactorFromSetReq {
+  string set_id = 1;
+  string factor_id = 2;
+}
+message RemoveFactorFromSetRsp { common.RetInfo ret_info = 1; }
+
+message SetFactorMemberStatusReq {
+  string set_id = 1;
+  string factor_id = 2;
+  string status = 3;
+}
+message SetFactorMemberStatusRsp {
+  common.RetInfo ret_info = 1;
+  FactorMember member = 2;
   RecalcJob backfill_job = 3;
 }
 
@@ -151,16 +184,18 @@ message GetFactorReq { string factor_id = 1; }
 message GetFactorRsp {
   common.RetInfo ret_info = 1;
   FactorDef factor = 2;
+  repeated FactorUsage usages = 3;
 }
 
 message ListFactorsReq {
   string set_id = 1;
   string status = 2;
   common.Page page = 3;
+  bool include_source = 4;
 }
 message ListFactorsRsp {
   common.RetInfo ret_info = 1;
-  repeated FactorDef factors = 2;
+  repeated FactorInfo factors = 2;
   common.PageResult page_result = 3;
 }
 
@@ -225,9 +260,11 @@ service FactorMgr {
   rpc ListFactorSets(ListFactorSetsReq) returns (ListFactorSetsRsp);
   rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);
   rpc UpdateFactor(UpdateFactorReq) returns (UpdateFactorRsp);
-  rpc SetFactorStatus(SetFactorStatusReq) returns (SetFactorStatusRsp);
   rpc DeleteFactor(DeleteFactorReq) returns (DeleteFactorRsp);
   rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
+  rpc AddFactorToSet(AddFactorToSetReq) returns (AddFactorToSetRsp);
+  rpc RemoveFactorFromSet(RemoveFactorFromSetReq) returns (RemoveFactorFromSetRsp);
+  rpc SetFactorMemberStatus(SetFactorMemberStatusReq) returns (SetFactorMemberStatusRsp);
   rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
   rpc RecalcFactors(RecalcFactorsReq) returns (RecalcFactorsRsp);
   rpc ListRecalcJobs(ListRecalcJobsReq) returns (ListRecalcJobsRsp);
