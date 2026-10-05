@@ -1,7 +1,7 @@
 # 因子模块拆分设计：管理端（moox-factor-mgr）与计算引擎（moox-factor-engine）
 
 - 日期：2026-10-05
-- 状态：设计稿 v2（已按 2026-10-05 评审意见修订），待确认
+- 状态：已实施（2026-10-05，代码已提交；实施中的偏差见第 15 节）
 - 性质：对 [`2026-10-04-factor-dataset-period-pipeline-design.md`](./2026-10-04-factor-dataset-period-pipeline-design.md)（下称「流水线设计」）与 [`2026-10-04-factor-definition-set-membership-design.md`](./2026-10-04-factor-definition-set-membership-design.md)（下称「成员设计」）的**部署形态修订**。流水线语义（周期触发、窗口装配、Python 计算、结果写回、补算分块）不变，只改变「谁在哪个进程里做」。
 - 取代：[`2026-10-04-factor-definition-membership-and-multipage-frontend.md`](../plans/2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 D（单进程 factor 的部署与验收）由本设计配套计划的阶段 F 取代。
 
@@ -328,3 +328,17 @@ internal/engine/
 - storage-access：`factor-engine` 主体可调 7 个方法，调 `DeleteDatasetRows` 被拒；`collector` 主体行为不变；未知 `key_id` 被拒。
 - 契约：`FactorEngine` 4 个方法只出现在 `factor-engine` 调用方路由；引擎二进制依赖图中没有 `internal/store`。
 - 端到端（阶段 F）：本机引擎 + 控制机管理端 + Storage 机 storage-access；导入 11 个定义并启用，确认回填由引擎领取完成、实时周期产出 `FactorPeriodComputed`、前端总览显示引擎在线且目录已同步；停管理端期间实时计算不中断。
+
+## 15. 实施偏差（2026-10-05）
+
+| # | 设计 | 实际实现 | 原因 |
+| --- | --- | --- | --- |
+| 1 | FactorEngine 在 11405 以 tRPC 协议监听 | 以 **http** 协议监听 | 引擎只能走控制机的 HTTPS 入口（Caddy `:11001` → Gateway `:11002`），Gateway 的 HTTP 入口 `POST /api/service/factormgr/<Method>` 以 HTTP 转发到后端 |
+| 2 | 取消 `catalog.Locks` 的 `flock` 文件锁（D36） | 文件锁**保留**，`Locks` 移到共享包 `internal/setlock`；引擎只用进程内锁 | `moox-factor-mgr-cli` 在控制机上直接写管理端 SQLite，仍需与运行中的管理端互斥；"不共享磁盘"只对引擎成立 |
+| 3 | 补算分块逻辑拆为 `recalc.Executor` | 独立包 `internal/recalcexec`；`recalc` 只剩管理端的任务受理（Submit / PrepareEnableBackfill / Get / List / Cancel） | `recalc` 依赖 SQLite store，引擎若 import 会链入 store，违反依赖边界 |
+| 4 | 管理端启动后第一个 `lease_ttl` 内只接受首个心跳的 `engine_id`（§8） | 不设启动宽限期，只按租约规则：租约空闲时接受第一个心跳，其后另一个 `engine_id` 在租约有效期内被拒 | 租约规则本身已保证同一时刻只有一个引擎消费；宽限期没有额外收益 |
+| 5 | 引擎持有三类凭据（§10） | **四类**：另加 `storage-primary-auth.secret` | Storage 主存储会校验请求体中 AuthInfo 的 AppKey（AppId `moox-factor` 的 HMAC），引擎必须持有该密钥 |
+| 6 | — | 删除 `trigger.StoreSetLocator`、`Store.EnabledSetByDataset`、catalog 的 `Notifier` 与源码物化 | 拆分后管理端不再消费事件、不执行因子，这些代码没有调用方 |
+| 7 | 补算进度上报失败的处理未定义 | 上报失败（网络、管理端不可达）时引擎**放弃**该任务而不标记失败；任务租约过期后被重新领取并从 `progress_time` 续跑 | 管理端短暂不可达不应让补算失败 |
+| 8 | storage-access 方法白名单可在主体配置里写 | 方法集合是代码内置的预设（`collector`、`factor-engine`），配置只能引用预设名 | 配置无法放宽白名单，便于审查 |
+| 9 | 引擎 `GatewayNodeID`、`ca_file` 等由部署脚本渲染 | 由 `scripts/deploy/deploy-factor-engine.sh` 渲染；`factor-engine` 网关密钥与其他服务密钥一样由 gateway service secret 派生，每次发布不变 | 引擎机只需拷贝一次密钥 |
