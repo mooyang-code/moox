@@ -26,6 +26,12 @@ server:
       network: tcp
       protocol: http
       timeout: 120000
+    - name: trpc.moox.factor.FactorEngine
+      ip: 127.0.0.1
+      port: 11405
+      network: tcp
+      protocol: trpc
+      timeout: 60000
     - name: trpc.moox.factor.Health
       ip: 127.0.0.1
       port: 11414

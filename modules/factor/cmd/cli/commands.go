@@ -14,10 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/artifacts"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
@@ -25,10 +23,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorgen "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/factor/schema"
-	storagegen "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -72,9 +68,6 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if cfg.DBPath != "" {
 		runtime.DatabasePath = cfg.DBPath
 	}
-	if cfg.FactorsDir != "" {
-		runtime.FactorsDir = cfg.FactorsDir
-	}
 	db, err := store.Open(&store.Options{Path: runtime.DatabasePath})
 	if err != nil {
 		return err
@@ -110,9 +103,6 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			return fmt.Errorf("validate factor for set %s: %w", cfg.SetID, err)
 		}
 	}
-	if _, err := (artifacts.Artifacts{FactorsDir: runtime.FactorsDir}).Materialize(factor); err != nil {
-		return fmt.Errorf("materialize factor source: %w", err)
-	}
 	if err := db.CreateFactor(ctx, factor); err != nil {
 		return err
 	}
@@ -137,13 +127,7 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if cfg.DBPath != "" {
 		runtime.DatabasePath = cfg.DBPath
 	}
-	if cfg.FactorsDir != "" {
-		runtime.FactorsDir = cfg.FactorsDir
-	}
 	catalogDir := cfg.CatalogDir
-	if catalogDir == "" {
-		catalogDir = runtime.FactorsDir
-	}
 	catalogPath := filepath.Join(catalogDir, "catalog.json")
 	raw, err := os.ReadFile(catalogPath)
 	if err != nil {
@@ -229,11 +213,6 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		}
 		prepared = append(prepared, factor)
 	}
-	for _, factor := range prepared {
-		if _, err := (artifacts.Artifacts{FactorsDir: runtime.FactorsDir}).Materialize(factor); err != nil {
-			return fmt.Errorf("materialize factor %s: %w", factor.FactorID, err)
-		}
-	}
 	if err := db.CreateFactors(ctx, prepared); err != nil {
 		return fmt.Errorf("import factor catalog: %w", err)
 	}
@@ -263,7 +242,7 @@ type importTarget struct {
 }
 
 func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfig, setID string) (*importTarget, error) {
-	storage, _, err := newStorageClients(runtime)
+	storage, err := newStorageClient(runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -384,13 +363,13 @@ func runRecalc(ctx context.Context, cli cliConfig, out io.Writer) error {
 	}
 	options := []recalc.Option{recalc.WithClock(periodclock.Continuous{})}
 	if len(cli.Subjects) == 0 && set.SubjectMode == domain.SubjectModeAll {
-		_, subjects, clientErr := newStorageClients(config)
+		storage, clientErr := newStorageClient(config)
 		if clientErr != nil {
 			return clientErr
 		}
-		options = append(options, recalc.WithSubjectProvider(subjects))
+		options = append(options, recalc.WithSubjectProvider(storage))
 	}
-	svc := recalc.NewService(db, nil, options...)
+	svc := recalc.NewService(db, options...)
 	job, err := svc.Submit(ctx, cli.SetID, cli.FactorIDs, cli.Subjects, requestID, cli.StartTime, cli.EndTime)
 	if err != nil {
 		return err
@@ -400,53 +379,6 @@ func runRecalc(ctx context.Context, cli cliConfig, out io.Writer) error {
 		"set_id": job.SetID, "status": job.Status,
 		"start_time": time.Unix(job.StartTime, 0).UTC().Format(time.RFC3339),
 		"end_time":   time.Unix(job.EndTime, 0).UTC().Format(time.RFC3339),
-	})
-}
-
-func runOnce(ctx context.Context, cli cliConfig, out io.Writer) error {
-	config, err := loadRuntimeConfig(cli.ConfigPath)
-	if err != nil {
-		return err
-	}
-	if cli.DBPath != "" {
-		config.DatabasePath = cli.DBPath
-	}
-	if cli.FactorsDir != "" {
-		config.FactorsDir = cli.FactorsDir
-	}
-	db, err := store.Open(&store.Options{Path: config.DatabasePath})
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	storage, subjects, err := newStorageClients(config)
-	if err != nil {
-		return err
-	}
-	executor, err := pyexec.New(ctx, config.PythonWorkers, config.pythonProcess())
-	if err != nil {
-		return err
-	}
-	defer executor.Close()
-	runner := pipeline.NewRunner(storage, executor, periodclock.Continuous{}, pipeline.Config{
-		ReadWorkers: config.ReadWorkers, ReadTimeout: config.ReadTimeout,
-		WriteBatchRows: config.WriteBatchRows, PythonWorkers: config.PythonWorkers,
-		FactorsDir: config.FactorsDir,
-	})
-	worker := recalc.NewWorker(db, runner,
-		recalc.WithClock(periodclock.Continuous{}),
-		recalc.WithLocks(setlock.New(config.DatabasePath+".locks")),
-		recalc.WithChunkPeriods(1),
-		recalc.WithColumnProvider(storage),
-		recalc.WithSubjectProvider(subjects),
-	)
-	outcome, err := worker.RunOnce(ctx, cli.SetID, cli.FactorIDs, cli.Subjects, cli.Period)
-	if err != nil {
-		return err
-	}
-	return json.NewEncoder(out).Encode(map[string]any{
-		"ok": true, "set_id": cli.SetID, "period": cli.Period.UTC().Format(time.RFC3339Nano),
-		"status": outcome.Status, "rows_written": outcome.RowsWritten, "factors": outcome.Factors,
 	})
 }
 
@@ -483,70 +415,14 @@ func newRequestID() (string, error) {
 	return "cli-" + hex.EncodeToString(value[:]), nil
 }
 
-func cliAuthInfo() (*commonpb.AuthInfo, error) {
+func newStorageClient(cfg runtimeConfig) (*storageio.Client, error) {
+	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
+	if err != nil {
+		return nil, err
+	}
 	requestID, err := newRequestID()
 	if err != nil {
 		return nil, err
 	}
-	auth := &commonpb.AuthInfo{AppId: "moox-factor", Operator: "moox-factor", RequestId: requestID}
-	if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
-		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
-	}
-	return auth, nil
-}
-
-type cliSubjectProvider struct {
-	metadata storagegen.MetadataClientProxy
-	info     *commonpb.AuthInfo
-}
-
-func (p *cliSubjectProvider) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error) {
-	if p == nil || p.metadata == nil {
-		return nil, errors.New("Storage metadata client is required")
-	}
-	var subjects []string
-	for page := uint32(1); ; page++ {
-		rsp, err := p.metadata.ListDatasetSubjects(ctx, &storagegen.ListDatasetSubjectsReq{
-			AuthInfo: p.info, SpaceId: spaceID, DatasetId: datasetID,
-			Page: &commonpb.Page{Page: page, Size: 2000},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("list dataset subjects: %w", err)
-		}
-		if rsp == nil || rsp.GetRetInfo() == nil {
-			return nil, errors.New("list dataset subjects returned an empty response")
-		}
-		if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-			return nil, fmt.Errorf("list dataset subjects failed: %s", rsp.GetRetInfo().GetMsg())
-		}
-		for _, subject := range rsp.GetDatasetSubjects() {
-			if subject == nil || subject.GetSubjectId() == "" || (subject.GetStatus() != "" && subject.GetStatus() != "active") {
-				continue
-			}
-			subjects = append(subjects, subject.GetSubjectId())
-		}
-		result := rsp.GetPageResult()
-		if result == nil || !result.GetHasMore() {
-			break
-		}
-		if page >= 100000 {
-			return nil, errors.New("Storage dataset subject pagination exceeded the page limit")
-		}
-	}
-	return normalizeCLIList("Storage subjects", subjects)
-}
-
-func newStorageClients(cfg runtimeConfig) (*storageio.Client, *cliSubjectProvider, error) {
-	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
-	if err != nil {
-		return nil, nil, err
-	}
-	info, err := cliAuthInfo()
-	if err != nil {
-		return nil, nil, err
-	}
-	options := gatewayauth.NewTRPCClientOptions(cfg.GatewayTarget, cfg.GatewayNodeID, credentials)
-	primary := storagegen.NewPrimaryStoreClientProxy(options...)
-	metadata := storagegen.NewMetadataClientProxy(options...)
-	return storageio.NewClient(primary, metadata, info), &cliSubjectProvider{metadata: metadata, info: info}, nil
+	return storageio.NewClientWithCredentials(cfg.GatewayTarget, cfg.GatewayNodeID, credentials, storageio.AuthInfo(requestID)), nil
 }

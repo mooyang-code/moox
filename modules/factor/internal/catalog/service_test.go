@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -20,7 +19,7 @@ import (
 func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
-	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	svc := NewService(db, meta)
 
 	set, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
@@ -48,7 +47,7 @@ func TestCreateSetCanonicalizesUppercaseFrequency(t *testing.T) {
 	set := newSet()
 	set.Freq = "1H"
 
-	created, err := NewService(db, meta, WithFactorsDir(t.TempDir())).CreateSet(context.Background(), set)
+	created, err := NewService(db, meta).CreateSet(context.Background(), set)
 	require.NoError(t, err)
 	require.Equal(t, "1h", created.Freq)
 	require.Equal(t, "fset_prices_1h", created.SetID)
@@ -59,7 +58,7 @@ func TestCreateSetRetryResumesFromPending(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	meta.activateErrs = 1
-	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	svc := NewService(db, meta)
 
 	_, err := svc.CreateSet(context.Background(), newSet())
 	require.ErrorContains(t, err, "activate")
@@ -106,7 +105,7 @@ func TestDeleteSetKeepsResultDatasetUnlessPurging(t *testing.T) {
 		t.Run(fmt.Sprintf("purge_%t", purge), func(t *testing.T) {
 			db := openCatalogStore(t)
 			meta := newMetadataFake()
-			svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+			svc := NewService(db, meta)
 			set, err := svc.CreateSet(context.Background(), newSet())
 			require.NoError(t, err)
 			require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
@@ -128,7 +127,7 @@ func TestDeleteSetKeepsResultDatasetUnlessPurging(t *testing.T) {
 func TestReconcileResumesDurableResultDatasetPurge(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
-	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	svc := NewService(db, meta)
 	set, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
 	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
@@ -159,7 +158,7 @@ func TestReconcileResumesDurableResultDatasetPurge(t *testing.T) {
 func TestDeletingSetRejectsLifecycleMutation(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
-	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	svc := NewService(db, meta)
 	set, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
 	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
@@ -195,7 +194,7 @@ func TestDeletingSetRejectsLifecycleMutation(t *testing.T) {
 func TestReconcileFinishesPurgeAfterStorageMetadataWasAlreadyDeleted(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
-	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	svc := NewService(db, meta)
 	set, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
 	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
@@ -210,7 +209,7 @@ func TestReconcileFinishesPurgeAfterStorageMetadataWasAlreadyDeleted(t *testing.
 
 func TestCreateFactorDoesNotNeedSet(t *testing.T) {
 	db := openCatalogStore(t)
-	svc := NewService(db, newMetadataFake(), WithFactorsDir(t.TempDir()))
+	svc := NewService(db, newMetadataFake())
 	svc.sourceChecker = &sourceCheckerFake{}
 
 	factor := testFactor()
@@ -233,9 +232,6 @@ func TestCreateFactorRunsStaticValidationAndLoadsSource(t *testing.T) {
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.ErrorContains(t, err, "syntax error")
 	require.Equal(t, 1, checker.calls)
-	factorPath := filepath.Join(svc.artifacts.FactorsDir, testFactor().Name, domain.SourceHash(testFactor().SourceCode)+".py")
-	_, statErr := os.Stat(factorPath)
-	require.ErrorIs(t, statErr, os.ErrNotExist)
 	_, err = db.GetFactor(context.Background(), "momentum")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
@@ -641,21 +637,6 @@ func TestReconcileSetAddsNewSourceColumns(t *testing.T) {
 	require.ElementsMatch(t, []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume")}, meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))])
 }
 
-func TestReconcileRestoresMissingFactorArtifactsFromSQLite(t *testing.T) {
-	db := openCatalogStore(t)
-	meta := newMetadataFake()
-	svc := newReadyService(t, db, meta)
-	factor, err := svc.CreateFactor(context.Background(), testFactor())
-	require.NoError(t, err)
-	path := filepath.Join(svc.artifacts.FactorsDir, factor.Name, factor.SourceHash+".py")
-	require.NoError(t, os.Remove(path))
-
-	require.NoError(t, svc.Reconcile(context.Background()))
-	restored, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.Equal(t, factor.SourceCode, string(restored))
-}
-
 func TestReconcileRejectsSourceColumnCollisionWithEnabledMember(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
@@ -683,7 +664,7 @@ func TestReconcileContinuesAfterOneSetFailure(t *testing.T) {
 	meta.datasets[resultKey("crypto", "dataset_zzz")] = secondSource
 	meta.columns[resultKey("crypto", "dataset_zzz")] = []storageio.ColumnInfo{sourceColumn("close")}
 	meta.sourceColumnsByDataset = map[string][]storageio.ColumnInfo{"dataset_zzz": {sourceColumn("close")}}
-	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	svc := NewService(db, meta)
 	first, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
 	secondInput := newSet()
@@ -709,21 +690,6 @@ func TestReconcileContinuesAfterOneSetFailure(t *testing.T) {
 	columns, err := meta.ListColumns(context.Background(), "crypto", second.ResultDatasetID)
 	require.NoError(t, err)
 	require.Contains(t, metadataColumnNames(columns), "volume")
-}
-
-func TestMemberStatusChangesNotifyTrigger(t *testing.T) {
-	db := openCatalogStore(t)
-	meta := newMetadataFake()
-	svc := newReadyService(t, db, meta)
-	notifier := &notifierFake{}
-	svc.notifier = notifier
-	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusDisabled)
-	notifier.calls = 0
-	_, _, err := svc.SetFactorMemberStatus(context.Background(), testSetID(), "momentum", domain.MemberStatusEnabled)
-	require.NoError(t, err)
-	_, _, err = svc.SetFactorMemberStatus(context.Background(), testSetID(), "momentum", domain.MemberStatusDisabled)
-	require.NoError(t, err)
-	require.Equal(t, 2, notifier.calls)
 }
 
 func TestLifecycleOpsSerializeWithPeriodLock(t *testing.T) {
@@ -762,7 +728,7 @@ func openCatalogStore(t *testing.T) *store.Store {
 
 func newReadyService(t *testing.T, db *store.Store, meta *metadataFake) *Service {
 	t.Helper()
-	svc := NewService(db, meta, WithFactorsDir(t.TempDir()))
+	svc := NewService(db, meta)
 	_, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
 	svc.sourceChecker = &sourceCheckerFake{}
@@ -956,10 +922,6 @@ type sourceCheckerFake struct {
 	err   error
 }
 
-type notifierFake struct{ calls int }
-
-func (f *notifierFake) SetsChanged() { f.calls++ }
-
 func (f *sourceCheckerFake) CheckSource(context.Context, domain.FactorDef, string) error {
 	f.calls++
 	return f.err
@@ -1008,7 +970,7 @@ func TestReconcileRecordsResultReady(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	ready := map[string]bool{}
-	svc := NewService(db, meta, WithFactorsDir(t.TempDir()), WithReadyRecorder(func(setID string, ok bool) { ready[setID] = ok }))
+	svc := NewService(db, meta, WithReadyRecorder(func(setID string, ok bool) { ready[setID] = ok }))
 	set, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
 	require.True(t, ready[set.SetID], "a freshly created set is ready")

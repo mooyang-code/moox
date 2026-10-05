@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
-	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/stretchr/testify/require"
@@ -62,7 +61,7 @@ func TestSubmitIsIdempotentByRequestID(t *testing.T) {
 	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
-	svc := NewService(db, &recordingRunner{}, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	one, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-1", start, end)
@@ -78,7 +77,7 @@ func TestSubmitRetriesOmittedSelectorsAfterEnvironmentChanges(t *testing.T) {
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
 	subjects := &changingSubjects{values: []string{"BTC"}}
-	svc := NewService(db, &recordingRunner{}, WithClock(periodclock.Continuous{}), WithSubjectProvider(subjects))
+	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(subjects))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	accepted, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "stable-omitted", start, end)
@@ -107,15 +106,14 @@ func TestEnableBackfillAcceptsDisabledFactorWithAtomicVisibility(t *testing.T) {
 	factor := testRecalcFactor("new_factor", domain.MemberStatusDisabled, 2)
 	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"}, factor)
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	runner := &recordingRunner{}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}))
 	job, err := svc.PrepareEnableBackfill(context.Background(), "fset_bars_1m", "new_factor", "enable-new-factor", start, start.Add(3*time.Minute))
 	require.NoError(t, err)
+	require.Equal(t, []string{"new_factor"}, job.FactorIDs)
+	require.Equal(t, []string{"BTC"}, job.Subjects)
 	stored, err := db.EnableMemberWithRecalcJob(context.Background(), "fset_bars_1m", "new_factor", domain.MemberStatusDisabled, job)
 	require.NoError(t, err)
 	require.Equal(t, store.RecalcStatusAccepted, stored.Status)
-	require.NoError(t, svc.RunJob(context.Background(), stored.JobID))
-	require.Len(t, runner.snapshot(), 1)
 	active, err := db.GetMember(context.Background(), "fset_bars_1m", "new_factor")
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusEnabled, active.Status)
@@ -126,18 +124,13 @@ func TestEnableBackfillWithEmptyDatasetCompletesAsNoop(t *testing.T) {
 	factor := testRecalcFactor("new_factor", domain.MemberStatusDisabled, 2)
 	seedRecalcSet(t, db, domain.SubjectModeAll, nil, factor)
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	runner := &recordingRunner{}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithSubjectProvider(emptySubjects{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(emptySubjects{}))
 	job, err := svc.PrepareEnableBackfill(context.Background(), "fset_bars_1m", "new_factor", "enable-empty", start, start.Add(time.Minute))
 	require.NoError(t, err)
+	require.Empty(t, job.Subjects, "an empty source dataset yields a job the engine completes without computing")
 	stored, err := db.EnableMemberWithRecalcJob(context.Background(), "fset_bars_1m", "new_factor", domain.MemberStatusDisabled, job)
 	require.NoError(t, err)
-	require.NoError(t, svc.RunJob(context.Background(), stored.JobID))
-	completed, err := svc.Get(context.Background(), stored.JobID)
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusSucceeded, completed.Status)
-	require.Equal(t, completed.EndTime, completed.ProgressTime)
-	require.Empty(t, runner.snapshot())
+	require.Equal(t, store.RecalcStatusAccepted, stored.Status)
 }
 
 type emptySubjects struct{}
@@ -146,160 +139,48 @@ func (emptySubjects) ListDatasetSubjects(context.Context, string, string) ([]str
 	return nil, nil
 }
 
-func TestRunSplitsIntoChunksAndAdvancesProgress(t *testing.T) {
-	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
-		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
-	)
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	end := start.Add(5000 * time.Minute)
-	runner := &recordingRunner{db: db, jobID: "req-1"}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2000))
-	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-1", start, end)
-	require.NoError(t, err)
-	require.NoError(t, svc.RunJob(context.Background(), "req-1"))
-
-	plans := runner.snapshot()
-	require.Len(t, plans, 3)
-	require.Equal(t, start, plans[0].TargetStart)
-	require.Equal(t, start.Add(2000*time.Minute), plans[0].TargetEnd)
-	require.Equal(t, start.Add(2000*time.Minute), plans[1].TargetStart)
-	require.Equal(t, start.Add(4000*time.Minute), plans[2].TargetStart)
-	require.Equal(t, []int64{start.Unix(), start.Add(2000 * time.Minute).Unix(), start.Add(4000 * time.Minute).Unix()}, runner.progressSnapshot())
-	job, err := svc.Get(context.Background(), "req-1")
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusSucceeded, job.Status)
-	require.Equal(t, end.Unix(), job.ProgressTime)
-}
-
 func TestRecalcUsesSelectedFactorsOnly(t *testing.T) {
 	db := openRecalcStore(t)
 	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
 		testRecalcFactor("one", domain.MemberStatusEnabled, 2),
 		testRecalcFactor("two", domain.MemberStatusEnabled, 5),
 	)
-	runner := &recordingRunner{}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(10))
+	svc := NewService(db, WithClock(periodclock.Continuous{}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	_, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"two"}, nil, "req-1", start, start.Add(time.Minute))
+	job, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"two"}, nil, "req-1", start, start.Add(time.Minute))
 	require.NoError(t, err)
-	require.NoError(t, svc.RunJob(context.Background(), "req-1"))
-	plans := runner.snapshot()
-	require.Len(t, plans, 1)
-	require.Equal(t, []string{"two"}, []string{plans[0].Factors[0].FactorID})
-	require.Equal(t, pipeline.ModeRecalc, plans[0].Mode)
-	require.True(t, plans[0].WriteCarry)
+	require.Equal(t, []string{"two"}, job.FactorIDs)
+	require.Equal(t, []string{"BTC"}, job.Subjects)
 }
 
-func TestCancelStopsBeforeNextChunk(t *testing.T) {
-	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
-		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 1),
-	)
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	entered := make(chan struct{})
-	finish := make(chan struct{})
-	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
-		close(entered)
-		<-finish
-		return pipeline.Outcome{Status: "complete"}, nil
-	}}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(1))
-	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-1", start, start.Add(3*time.Minute))
-	require.NoError(t, err)
-	runDone := make(chan error, 1)
-	go func() { runDone <- svc.RunJob(context.Background(), "req-1") }()
-	<-entered
-	job, err := svc.Cancel(context.Background(), "req-1")
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusCancelled, job.Status)
-	close(finish)
-	require.NoError(t, <-runDone)
-	require.Len(t, runner.snapshot(), 1)
-}
-
-func TestChunkHoldsSetLock(t *testing.T) {
-	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
-		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 1),
-	)
-	locks := &setlock.Locks{}
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	entered := make(chan struct{})
-	finish := make(chan struct{})
-	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
-		close(entered)
-		<-finish
-		return pipeline.Outcome{Status: "complete"}, nil
-	}}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithLocks(locks))
-	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-1", start, start.Add(time.Minute))
-	require.NoError(t, err)
-	runDone := make(chan error, 1)
-	go func() { runDone <- svc.RunJob(context.Background(), "req-1") }()
-	<-entered
-	lockAcquired := make(chan struct{})
-	go func() {
-		unlock := locks.Lock("fset_bars_1m")
-		close(lockAcquired)
-		unlock()
-	}()
-	select {
-	case <-lockAcquired:
-		t.Fatal("set lock was released during chunk execution")
-	case <-time.After(25 * time.Millisecond):
+func pipelineSelection(factors ...recalcMember) Selection {
+	defs := make([]domain.FactorDef, 0, len(factors))
+	for _, factor := range factors {
+		defs = append(defs, factor.def)
 	}
-	close(finish)
-	require.NoError(t, <-runDone)
-	select {
-	case <-lockAcquired:
-	case <-time.After(time.Second):
-		t.Fatal("set lock was not released after chunk execution")
+	return Selection{
+		Set: domain.FactorSet{
+			SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m", Freq: "1m",
+			SubjectMode: domain.SubjectModeInclude, Subjects: []string{"BTC"},
+			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
+		},
+		Factors: defs, Subjects: []string{"BTC"}, Columns: []string{"close"},
 	}
-}
-
-func TestRunningJobsResumeAfterRestart(t *testing.T) {
-	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
-		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 4),
-	)
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	resumeAt := start.Add(2 * time.Minute)
-	_, err := db.CreateRecalcJob(context.Background(), store.RecalcJob{
-		JobID: "req-1", RequestID: "req-1", SetID: "fset_bars_1m", FactorIDs: []string{"close_factor"},
-		Subjects: []string{"BTC"}, StartTime: start.Unix(), EndTime: start.Add(4 * time.Minute).Unix(),
-		Status: store.RecalcStatusRunning, ProgressTime: resumeAt.Unix(),
-	})
-	require.NoError(t, err)
-	runner := &recordingRunner{}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(1))
-	require.NoError(t, svc.RunPending(context.Background()))
-	plans := runner.snapshot()
-	require.Len(t, plans, 2)
-	require.Equal(t, resumeAt, plans[0].TargetStart)
-	job, err := svc.Get(context.Background(), "req-1")
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusSucceeded, job.Status)
-	require.Equal(t, start.Add(4*time.Minute).Unix(), job.ProgressTime)
 }
 
 func TestChunkReadRangeIncludesLookback(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+	storage := &recalcPipelineStore{}
+	runner := pipeline.NewRunner(storage, &recalcExecutor{}, periodclock.Continuous{}, pipeline.Config{PythonWorkers: 1})
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(3))
+	selection := pipelineSelection(
 		testRecalcFactor("short", domain.MemberStatusEnabled, 2),
 		testRecalcFactor("long", domain.MemberStatusEnabled, 3),
 	)
-	storage := &recalcPipelineStore{}
-	runner := pipeline.NewRunner(storage, &recalcExecutor{}, periodclock.Continuous{}, pipeline.Config{PythonWorkers: 1})
-	service := NewService(db, runner,
-		WithClock(periodclock.Continuous{}),
-		WithColumnProvider(storage),
-		WithChunkPeriods(3),
-	)
-	_, err := service.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-1", start, start.Add(3*time.Minute))
-	require.NoError(t, err)
-	err = service.RunJob(context.Background(), "req-1")
+	var records []progressRecord
+
+	err := executor.Run(context.Background(), Window{Start: start, End: start.Add(3 * time.Minute)}, fixedSource(selection), recordProgress(&records, 0))
+
 	require.NoError(t, err)
 	require.Len(t, storage.readRequests, 1)
 	require.Equal(t, start.Add(-2*time.Minute), storage.readRequests[0].Start)
@@ -311,21 +192,15 @@ func TestChunkReadRangeIncludesLookback(t *testing.T) {
 }
 
 func TestRecalcDoesNotReportMarker(t *testing.T) {
-	worker, storage := recalcPipelineWorker(t)
-	_, err := worker.RunOnce(context.Background(), "fset_bars_1m", nil, nil, time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC))
-	require.NoError(t, err)
-	require.Equal(t, 0, storage.markerCalls)
-}
-
-func recalcPipelineWorker(t *testing.T) (*Worker, *recalcPipelineStore) {
-	t.Helper()
-	db := openRecalcStore(t)
-	factor := testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"}, factor)
 	storage := &recalcPipelineStore{}
 	runner := pipeline.NewRunner(storage, &recalcExecutor{}, periodclock.Continuous{}, pipeline.Config{PythonWorkers: 1})
-	worker := NewWorker(db, runner, WithClock(periodclock.Continuous{}), WithColumnProvider(storage))
-	return worker, storage
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
+	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+
+	_, err := executor.RunChunk(context.Background(), pipelineSelection(testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3)), period, period.Add(time.Minute))
+
+	require.NoError(t, err)
+	require.Equal(t, 0, storage.markerCalls)
 }
 
 type recalcPipelineStore struct {
@@ -433,73 +308,6 @@ func testRecalcFactor(id, status string, lookback int) recalcMember {
 	}}
 }
 
-func TestTransientChunkFailureIsRetriedWithoutFailingJob(t *testing.T) {
-	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
-		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
-	)
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	calls := 0
-	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
-		calls++
-		if calls == 1 {
-			return pipeline.Outcome{}, errors.Join(storageio.ErrInfra, errors.New("storage unavailable"))
-		}
-		return pipeline.Outcome{Status: "complete"}, nil
-	}}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2000), WithChunkRetry(3, time.Millisecond))
-	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-retry", start, start.Add(10*time.Minute))
-	require.NoError(t, err)
-	require.NoError(t, svc.RunJob(context.Background(), "req-retry"))
-	require.Equal(t, 2, calls)
-	job, err := svc.Get(context.Background(), "req-retry")
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusSucceeded, job.Status)
-}
-
-func TestPermanentChunkFailureFailsJobWithoutRetry(t *testing.T) {
-	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
-		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
-	)
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	calls := 0
-	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
-		calls++
-		return pipeline.Outcome{}, errors.New("column missing")
-	}}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}), WithChunkRetry(3, time.Millisecond))
-	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-perm", start, start.Add(10*time.Minute))
-	require.NoError(t, err)
-	require.Error(t, svc.RunJob(context.Background(), "req-perm"))
-	require.Equal(t, 1, calls)
-	job, err := svc.Get(context.Background(), "req-perm")
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusFailed, job.Status)
-}
-
-func TestDegradedChunkIsRecordedOnSucceededJob(t *testing.T) {
-	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
-		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
-	)
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
-		return pipeline.Outcome{
-			Status: "degraded", FailedSubjects: []string{"BTC"},
-			Factors: []storageio.FactorState{{FactorID: "close_factor", Status: "degraded"}},
-		}, nil
-	}}
-	svc := NewService(db, runner, WithClock(periodclock.Continuous{}))
-	_, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-deg", start, start.Add(10*time.Minute))
-	require.NoError(t, err)
-	require.NoError(t, svc.RunJob(context.Background(), "req-deg"))
-	job, err := svc.Get(context.Background(), "req-deg")
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusSucceeded, job.Status)
-	require.Equal(t, "degraded: failed_subjects=1 factors=close_factor", job.Error)
-}
-
 func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {
 	db := openRecalcStore(t)
 	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
@@ -507,7 +315,7 @@ func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {
 	)
 	// A definition that exists but was never added to this set.
 	require.NoError(t, db.CreateFactor(context.Background(), testRecalcFactor("outsider", "", 1).def))
-	svc := NewService(db, &recordingRunner{}, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"outsider"}, nil, "req-outsider", start, start.Add(time.Minute))
@@ -520,7 +328,7 @@ func TestRecalcRejectsDisabledMember(t *testing.T) {
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 		testRecalcFactor("parked", domain.MemberStatusDisabled, 3),
 	)
-	svc := NewService(db, &recordingRunner{}, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"parked"}, nil, "req-parked", start, start.Add(time.Minute))
@@ -534,7 +342,7 @@ func TestRecalcDefaultsToAllEnabledMembers(t *testing.T) {
 		testRecalcFactor("b_parked", domain.MemberStatusDisabled, 3),
 		testRecalcFactor("c_factor", domain.MemberStatusEnabled, 3),
 	)
-	svc := NewService(db, &recordingRunner{}, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	job, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-default", start, start.Add(time.Minute))

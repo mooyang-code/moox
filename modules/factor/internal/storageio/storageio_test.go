@@ -338,6 +338,15 @@ type metadataFake struct {
 	deleteRequests   []*storagepb.DeleteDatasetReq
 	deleteRsp        *storagepb.DeleteDatasetRsp
 	deleteRsps       []*storagepb.DeleteDatasetRsp
+	subjectPages     []*storagepb.ListDatasetSubjectsRsp
+}
+
+func (f *metadataFake) ListDatasetSubjects(_ context.Context, req *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
+	page := int(req.GetPage().GetPage()) - 1
+	if page < 0 || page >= len(f.subjectPages) {
+		return &storagepb.ListDatasetSubjectsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	}
+	return f.subjectPages[page], nil
 }
 
 func (f *metadataFake) GetDataset(_ context.Context, req *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {
@@ -480,4 +489,19 @@ func successRet() *commonpb.RetInfo {
 func shortHash(parts ...string) string {
 	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(hash[:16])
+}
+
+func TestListDatasetSubjectsPagesActiveSubjects(t *testing.T) {
+	ok := &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+	meta := &metadataFake{subjectPages: []*storagepb.ListDatasetSubjectsRsp{
+		{RetInfo: ok, DatasetSubjects: []*storagepb.DatasetSubject{{SubjectId: "ETH", Status: "active"}, {SubjectId: "OLD", Status: "inactive"}},
+			PageResult: &commonpb.PageResult{HasMore: true}},
+		{RetInfo: ok, DatasetSubjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}}},
+	}}
+	c := NewClient(nil, meta, AuthInfo("req"))
+
+	subjects, err := c.ListDatasetSubjects(context.Background(), "crypto", "dataset_bars")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"BTC", "ETH"}, subjects)
 }

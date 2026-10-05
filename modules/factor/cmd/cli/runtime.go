@@ -7,27 +7,20 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"gopkg.in/yaml.v3"
 )
 
+// runtimeConfig is the part of moox-factor-mgr's app.yaml the CLI needs: the
+// database it edits offline, the Storage Gateway for source columns and the
+// Python used to check factor sources.
 type runtimeConfig struct {
-	DatabasePath   string
-	GatewayTarget  string
-	GatewayNodeID  string
-	KeyID          string
-	HMACKeyFile    string
-	PythonBin      string
-	WorkerPath     string
-	FactorsDir     string
-	PythonWorkers  int
-	ReadWorkers    int
-	ReadTimeout    time.Duration
-	WriteBatchRows int
-	TaskTimeout    time.Duration
-	root           string
+	DatabasePath  string
+	GatewayTarget string
+	GatewayNodeID string
+	KeyID         string
+	HMACKeyFile   string
+	PythonBin     string
 }
 
 func loadRuntimeConfig(path string) (runtimeConfig, error) {
@@ -42,12 +35,7 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 	if filepath.Base(root) == "config" {
 		root = filepath.Dir(root)
 	}
-	config := runtimeConfig{
-		DatabasePath: "./data/factor/factor.db", GatewayTarget: "ip://127.0.0.1:11003",
-		PythonBin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./factors",
-		PythonWorkers: 1, ReadWorkers: 4, ReadTimeout: 20 * time.Second,
-		WriteBatchRows: 1000, TaskTimeout: 30 * time.Second, root: root,
-	}
+	config := runtimeConfig{DatabasePath: "./data/factor/factor.db", GatewayTarget: "ip://127.0.0.1:11003", PythonBin: "python3"}
 	raw, err := os.ReadFile(absolute)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -66,17 +54,8 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 			HMACKeyFile   string `yaml:"hmac_key_file"`
 		} `yaml:"storage"`
 		Python struct {
-			Bin         string        `yaml:"bin"`
-			WorkerPath  string        `yaml:"worker_path"`
-			FactorsDir  string        `yaml:"factors_dir"`
-			Workers     int           `yaml:"workers"`
-			TaskTimeout time.Duration `yaml:"task_timeout"`
+			Bin string `yaml:"bin"`
 		} `yaml:"python"`
-		Pipeline struct {
-			ReadWorkers    int           `yaml:"read_workers"`
-			ReadTimeout    time.Duration `yaml:"read_timeout"`
-			WriteBatchRows int           `yaml:"write_batch_rows"`
-		} `yaml:"pipeline"`
 	}
 	if err := yaml.Unmarshal(raw, &source); err != nil {
 		return runtimeConfig{}, fmt.Errorf("parse config %s: %w", path, err)
@@ -88,31 +67,10 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 		config.GatewayTarget = source.Storage.GatewayTarget
 	}
 	config.GatewayNodeID, config.KeyID, config.HMACKeyFile = source.Storage.GatewayNodeID, source.Storage.KeyID, source.Storage.HMACKeyFile
-	if source.Python.FactorsDir != "" {
-		config.FactorsDir = source.Python.FactorsDir
-	}
 	if source.Python.Bin != "" {
 		config.PythonBin = source.Python.Bin
 	}
-	if source.Python.WorkerPath != "" {
-		config.WorkerPath = source.Python.WorkerPath
-	}
-	if source.Python.Workers > 0 {
-		config.PythonWorkers = source.Python.Workers
-	}
-	if source.Pipeline.ReadWorkers > 0 {
-		config.ReadWorkers = source.Pipeline.ReadWorkers
-	}
-	if source.Pipeline.ReadTimeout > 0 {
-		config.ReadTimeout = source.Pipeline.ReadTimeout
-	}
-	if source.Pipeline.WriteBatchRows > 0 {
-		config.WriteBatchRows = source.Pipeline.WriteBatchRows
-	}
-	if source.Python.TaskTimeout > 0 {
-		config.TaskTimeout = source.Python.TaskTimeout
-	}
-	for _, path := range []*string{&config.DatabasePath, &config.WorkerPath, &config.FactorsDir, &config.HMACKeyFile} {
+	for _, path := range []*string{&config.DatabasePath, &config.HMACKeyFile} {
 		if *path != "" && !filepath.IsAbs(*path) {
 			*path = filepath.Clean(filepath.Join(root, *path))
 		}
@@ -135,21 +93,7 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_BIN")); value != "" {
 		config.PythonBin = value
 	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_WORKER_PATH")); value != "" {
-		config.WorkerPath = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_FACTORS_DIR")); value != "" {
-		config.FactorsDir = value
-	}
 	return config, nil
-}
-
-func (cfg runtimeConfig) pythonProcess() process.Config {
-	return process.Config{
-		PythonBin: cfg.PythonBin, WorkerPath: cfg.WorkerPath,
-		Args:        []string{"--factors-dir", cfg.FactorsDir},
-		TaskTimeout: cfg.TaskTimeout, Limits: process.DefaultLimits(),
-	}
 }
 
 func normalizeCLIList(name string, values []string) ([]string, error) {

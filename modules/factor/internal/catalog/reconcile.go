@@ -19,17 +19,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 	var reconcileErrors []error
-	// Definitions are content-addressed and immutable, so restoring their
-	// materialized sources needs no set lock.
-	factors, err := s.db.ListFactors(ctx)
-	if err != nil {
-		reconcileErrors = append(reconcileErrors, fmt.Errorf("list factors: %w", err))
-	}
-	for _, factor := range factors {
-		if _, err := s.artifacts.Materialize(factor); err != nil {
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("restore factor source %q: %w", factor.FactorID, err))
-		}
-	}
 	for _, set := range sets {
 		if set.Status == domain.SetStatusDeleting {
 			if err := s.DeleteSet(ctx, set.SetID, true); err != nil {

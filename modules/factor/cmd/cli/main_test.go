@@ -48,14 +48,12 @@ func TestParseImportCatalogUsesDirectoryAndSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "fset_bars_1m", cfg.SetID)
 	require.Equal(t, "/opt/factors", cfg.CatalogDir)
-	require.Empty(t, cfg.FactorsDir, "the catalog source directory must not double as the artifact directory")
 }
 
-func TestParseImportCatalogArtifactDirectoryIsSeparate(t *testing.T) {
-	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/src/factors", "--factors-dir", "/var/lib/moox/factors"})
+func TestParseImportCatalogDefaultsToFactorsDirectory(t *testing.T) {
+	cfg, err := parseArgs([]string{"import-catalog"})
 	require.NoError(t, err)
-	require.Equal(t, "/src/factors", cfg.CatalogDir)
-	require.Equal(t, "/var/lib/moox/factors", cfg.FactorsDir)
+	require.Equal(t, "./factors", cfg.CatalogDir)
 }
 
 func TestParseRecalcRangeAndSelectors(t *testing.T) {
@@ -71,14 +69,6 @@ func TestParseRecalcRangeAndSelectors(t *testing.T) {
 	require.Empty(t, cfg.DBPath)
 }
 
-func TestParseRunOncePeriod(t *testing.T) {
-	cfg, err := parseArgs([]string{"run-once", "--set", "fset_bars_1m", "--period", "2026-10-04T00:10:00Z"})
-	require.NoError(t, err)
-	require.Equal(t, time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC), cfg.Period)
-	require.Empty(t, cfg.DBPath)
-	require.Empty(t, cfg.FactorsDir)
-}
-
 func TestStatusRequiresFactorTarget(t *testing.T) {
 	_, err := parseArgs([]string{"status"})
 	require.NoError(t, err)
@@ -88,7 +78,7 @@ func TestStatusRequiresFactorTarget(t *testing.T) {
 }
 
 func TestLegacyCLICommandsAreRemoved(t *testing.T) {
-	for _, command := range []string{"recalc-cancel", "recalc-status", "clear-queue", "replay"} {
+	for _, command := range []string{"recalc-cancel", "recalc-status", "clear-queue", "replay", "run-once"} {
 		_, err := parseArgs([]string{command})
 		require.ErrorContains(t, err, "unknown command")
 	}

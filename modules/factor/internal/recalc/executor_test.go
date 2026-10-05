@@ -156,7 +156,7 @@ func TestExecutorPassesOutcomeToReport(t *testing.T) {
 
 	require.Len(t, records, 1)
 	require.Equal(t, degraded, records[0].outcome)
-	require.Equal(t, "degraded: failed_subjects=1", degradedNote(records[0].outcome))
+	require.Equal(t, "degraded: failed_subjects=1", DegradedNote(records[0].outcome))
 }
 
 func TestExecutorHoldsSetLockPerChunk(t *testing.T) {

@@ -6,24 +6,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 )
 
 const defaultChunkPeriods = 2000
-
-type Runner interface {
-	Run(context.Context, pipeline.Plan) (pipeline.Outcome, error)
-}
-
-type ColumnProvider interface {
-	DatasetColumns(context.Context, string, string) ([]string, error)
-}
 
 type SubjectProvider interface {
 	ListDatasetSubjects(context.Context, string, string) ([]string, error)
@@ -31,33 +21,27 @@ type SubjectProvider interface {
 
 type config struct {
 	chunkPeriods int
-	pollInterval time.Duration
 	chunkRetries int
 	retryBackoff time.Duration
 	clock        periodclock.Clock
 	locks        SetLocker
-	columns      ColumnProvider
 	subjects     SubjectProvider
 }
 
 type Option func(*config)
 
-func WithChunkPeriods(n int) Option           { return func(cfg *config) { cfg.chunkPeriods = n } }
-func WithPollInterval(d time.Duration) Option { return func(cfg *config) { cfg.pollInterval = d } }
+func WithChunkPeriods(n int) Option { return func(cfg *config) { cfg.chunkPeriods = n } }
 func WithChunkRetry(attempts int, backoff time.Duration) Option {
 	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
 }
 func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
 func WithLocks(locks SetLocker) Option         { return func(cfg *config) { cfg.locks = locks } }
-func WithColumnProvider(provider ColumnProvider) Option {
-	return func(cfg *config) { cfg.columns = provider }
-}
 func WithSubjectProvider(provider SubjectProvider) Option {
 	return func(cfg *config) { cfg.subjects = provider }
 }
 
 func defaultConfig(options []Option) config {
-	cfg := config{chunkPeriods: defaultChunkPeriods, pollInterval: time.Second, chunkRetries: 3, retryBackoff: 5 * time.Second}
+	cfg := config{chunkPeriods: defaultChunkPeriods, chunkRetries: 3, retryBackoff: 5 * time.Second}
 	for _, option := range options {
 		if option != nil {
 			option(&cfg)
@@ -69,25 +53,22 @@ func defaultConfig(options []Option) config {
 	if cfg.chunkRetries <= 0 {
 		cfg.chunkRetries = 1
 	}
-	if cfg.pollInterval <= 0 {
-		cfg.pollInterval = time.Second
-	}
 	return cfg
 }
 
-// Service owns durable request acceptance and inspection. A nil Runner still
-// permits a control-only process to submit jobs for a separate worker.
+// Service owns durable request acceptance and inspection in moox-factor-mgr;
+// moox-factor-engine pulls the accepted jobs and runs them with an Executor.
 type Service struct {
-	db     *store.Store
-	worker *Worker
+	db  *store.Store
+	cfg config
 }
 
-func NewService(db *store.Store, runner Runner, options ...Option) *Service {
-	return &Service{db: db, worker: NewWorker(db, runner, options...)}
+func NewService(db *store.Store, options ...Option) *Service {
+	return &Service{db: db, cfg: defaultConfig(options)}
 }
 
 func (s *Service) Submit(ctx context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (store.RecalcJob, error) {
-	if s == nil || s.db == nil || s.worker == nil {
+	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
 	}
 	requestID = strings.TrimSpace(requestID)
@@ -99,7 +80,7 @@ func (s *Service) Submit(ctx context.Context, setID string, factorIDs, subjects 
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	clock, err := s.worker.clockFor(set.SpaceID)
+	clock, err := s.clockFor(set.SpaceID)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -115,7 +96,7 @@ func (s *Service) Submit(ctx context.Context, setID string, factorIDs, subjects 
 		}
 		return existing, nil
 	}
-	set, selected, normalizedSubjects, clock, err := s.worker.selection(ctx, setID, factorIDs, subjects)
+	set, selected, normalizedSubjects, clock, err := s.selection(ctx, setID, factorIDs, subjects)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -165,7 +146,7 @@ func matchesSubmitRequest(job store.RecalcJob, setID string, factorIDs, subjects
 // PrepareEnableBackfill validates and builds the accepted job that must be
 // committed atomically with enabling a disabled set member in the catalog store.
 func (s *Service) PrepareEnableBackfill(ctx context.Context, setID, factorID, requestID string, start, end time.Time) (store.RecalcJob, error) {
-	if s == nil || s.db == nil || s.worker == nil {
+	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
 	}
 	setID = strings.TrimSpace(setID)
@@ -188,7 +169,7 @@ func (s *Service) PrepareEnableBackfill(ctx context.Context, setID, factorID, re
 	if member.Status != domain.MemberStatusDisabled {
 		return store.RecalcJob{}, fmt.Errorf("factor %q must be a disabled member of set %q before activation", factorID, setID)
 	}
-	clock, err := s.worker.clockFor(set.SpaceID)
+	clock, err := s.clockFor(set.SpaceID)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -196,7 +177,7 @@ func (s *Service) PrepareEnableBackfill(ctx context.Context, setID, factorID, re
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	subjects, err := s.worker.resolveSubjects(ctx, set, nil)
+	subjects, err := s.resolveSubjects(ctx, set, nil)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -236,80 +217,19 @@ func (s *Service) Cancel(ctx context.Context, jobID string) (store.RecalcJob, er
 	})
 }
 
-// RunJob executes one accepted or interrupted job synchronously. Progress is
-// advanced only after an entire chunk has returned successfully.
-func (s *Service) RunJob(ctx context.Context, jobID string) error {
-	if s == nil || s.worker == nil {
-		return errors.New("factor recalc worker is required")
-	}
-	return s.worker.Run(ctx, jobID)
-}
-
-func (s *Service) RunPending(ctx context.Context) error {
-	if s == nil || s.worker == nil {
-		return errors.New("factor recalc worker is required")
-	}
-	return s.worker.RunPending(ctx)
-}
-
-// Start resumes durable accepted/running jobs and polls for newly accepted
-// requests. The returned stop function joins the worker before returning.
-func (s *Service) Start(ctx context.Context) (func() error, error) {
-	if s == nil || s.worker == nil || s.worker.runner == nil {
-		return nil, errors.New("factor recalc worker runner is required")
-	}
-	if ctx == nil {
-		return nil, errors.New("factor recalc context is required")
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(s.worker.cfg.pollInterval)
-		defer ticker.Stop()
-		for {
-			_ = s.worker.RunPending(runCtx)
-			select {
-			case <-runCtx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	var once sync.Once
-	return func() error {
-		once.Do(func() {
-			cancel()
-			<-done
-		})
-		return nil
-	}, nil
-}
-
-type selection struct {
-	set      domain.FactorSet
-	factors  []domain.FactorDef
-	subjects []string
-	columns  []string
-	clock    periodclock.Clock
-}
-
-func (w *Worker) selection(ctx context.Context, setID string, factorIDs, subjects []string) (domain.FactorSet, []domain.FactorDef, []string, periodclock.Clock, error) {
-	if w == nil || w.db == nil {
-		return domain.FactorSet{}, nil, nil, nil, errors.New("factor store is required")
-	}
-	set, err := w.db.GetSet(ctx, setID)
+func (s *Service) selection(ctx context.Context, setID string, factorIDs, subjects []string) (domain.FactorSet, []domain.FactorDef, []string, periodclock.Clock, error) {
+	set, err := s.db.GetSet(ctx, setID)
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
 	if set.Status != domain.SetStatusEnabled {
 		return domain.FactorSet{}, nil, nil, nil, fmt.Errorf("factor set %q is not enabled", set.SetID)
 	}
-	clock, err := w.clockFor(set.SpaceID)
+	clock, err := s.clockFor(set.SpaceID)
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
-	members, err := w.db.ListMembers(ctx, set.SetID, "")
+	members, err := s.db.ListMembers(ctx, set.SetID, "")
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
@@ -317,23 +237,23 @@ func (w *Worker) selection(ctx context.Context, setID string, factorIDs, subject
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
-	resolved, err := w.resolveSubjects(ctx, set, subjects)
+	resolved, err := s.resolveSubjects(ctx, set, subjects)
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
 	return set, selected, resolved, clock, nil
 }
 
-func (w *Worker) resolveSubjects(ctx context.Context, set domain.FactorSet, requested []string) ([]string, error) {
+func (s *Service) resolveSubjects(ctx context.Context, set domain.FactorSet, requested []string) ([]string, error) {
 	if len(requested) == 0 {
 		if set.SubjectMode == domain.SubjectModeInclude {
 			requested = append([]string(nil), set.Subjects...)
 		} else {
-			if w.cfg.subjects == nil {
+			if s.cfg.subjects == nil {
 				return nil, errors.New("Storage subject provider is required for an all-subject factor set")
 			}
 			var err error
-			requested, err = w.cfg.subjects.ListDatasetSubjects(ctx, set.SpaceID, set.SourceDatasetID)
+			requested, err = s.cfg.subjects.ListDatasetSubjects(ctx, set.SpaceID, set.SourceDatasetID)
 			if err != nil {
 				return nil, fmt.Errorf("list source dataset subjects: %w", err)
 			}
@@ -351,24 +271,9 @@ func (w *Worker) resolveSubjects(ctx context.Context, set domain.FactorSet, requ
 	return resolved, nil
 }
 
-func (w *Worker) columns(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef) ([]string, error) {
-	if w.cfg.columns != nil {
-		columns, err := w.cfg.columns.DatasetColumns(ctx, set.SpaceID, set.SourceDatasetID)
-		if err != nil {
-			return nil, fmt.Errorf("list source dataset columns: %w", err)
-		}
-		return sortedUnique(columns), nil
-	}
-	columns := make([]string, 0)
-	for _, factor := range factors {
-		columns = append(columns, factor.InputColumns...)
-	}
-	return sortedUnique(columns), nil
-}
-
-func (w *Worker) clockFor(space string) (periodclock.Clock, error) {
-	if w.cfg.clock != nil {
-		return w.cfg.clock, nil
+func (s *Service) clockFor(space string) (periodclock.Clock, error) {
+	if s.cfg.clock != nil {
+		return s.cfg.clock, nil
 	}
 	return periodclock.ForSpace(space)
 }

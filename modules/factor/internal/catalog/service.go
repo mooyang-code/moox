@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/artifacts"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
@@ -33,15 +32,9 @@ type EarliestPeriodProvider interface {
 	EarliestDatasetPeriod(ctx context.Context, spaceID, datasetID, freq string) (time.Time, bool, error)
 }
 
-// Notifier refreshes the trigger's set filters after catalog changes.
-type Notifier interface {
-	SetsChanged()
-}
-
 type Option func(*Service)
 
-func WithFactorsDir(path string) Option { return func(s *Service) { s.artifacts.FactorsDir = path } }
-func WithLockDir(path string) Option    { return func(s *Service) { s.locks = setlock.New(path) } }
+func WithLockDir(path string) Option { return func(s *Service) { s.locks = setlock.New(path) } }
 func WithSourceChecker(checker SourceChecker) Option {
 	return func(s *Service) { s.sourceChecker = checker }
 }
@@ -51,7 +44,6 @@ func WithRecalcSubmitter(submitter RecalcSubmitter) Option {
 func WithEarliestPeriodProvider(provider EarliestPeriodProvider) Option {
 	return func(s *Service) { s.earliestPeriod = provider }
 }
-func WithNotifier(notifier Notifier) Option { return func(s *Service) { s.notifier = notifier } }
 
 // WithReadyRecorder receives whether each set's result dataset accepted its
 // columns; the compute engine only writes to ready sets.
@@ -73,9 +65,7 @@ type Service struct {
 	sourceChecker  SourceChecker
 	recalc         RecalcSubmitter
 	earliestPeriod EarliestPeriodProvider
-	notifier       Notifier
 	recordReady    func(setID string, ready bool)
-	artifacts      artifacts.Artifacts
 	locks          *setlock.Locks
 	now            func() time.Time
 }
@@ -166,7 +156,6 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 		return domain.FactorSet{}, fmt.Errorf("enable factor set after result dataset activation: %w", err)
 	}
 	s.markReady(in.SetID, true)
-	s.notify()
 	return s.db.GetSet(ctx, in.SetID)
 }
 
@@ -196,7 +185,6 @@ func (s *Service) UpdateSetSubjects(ctx context.Context, setID, mode string, sub
 	if err := s.db.UpdateSet(ctx, set); err != nil {
 		return domain.FactorSet{}, err
 	}
-	s.notify()
 	return s.db.GetSet(ctx, set.SetID)
 }
 
@@ -231,7 +219,6 @@ func (s *Service) SetSetStatus(ctx context.Context, setID, status string) (domai
 	if err := s.db.SetSetStatus(ctx, set.SetID, set.Status, status); err != nil {
 		return domain.FactorSet{}, err
 	}
-	s.notify()
 	return s.db.GetSet(ctx, set.SetID)
 }
 
@@ -272,7 +259,6 @@ func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error
 	if err := s.db.DeleteSet(ctx, setID); err != nil {
 		return err
 	}
-	s.notify()
 	return nil
 }
 
@@ -529,7 +515,6 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, st
 		if err := s.db.SetMemberStatus(ctx, setID, factorID, member.Status, status); err != nil {
 			return domain.SetMember{}, "", err
 		}
-		s.notify()
 		return s.reloadMember(ctx, setID, factorID, factor)
 	}
 	if set.Status == domain.SetStatusPending {
@@ -573,7 +558,6 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, st
 	if _, err := s.db.EnableMemberWithRecalcJob(ctx, setID, factorID, member.Status, job); err != nil {
 		return domain.SetMember{}, "", err
 	}
-	s.notify()
 	updated, _, err := s.reloadMember(ctx, setID, factorID, factor)
 	return updated, job.JobID, err
 }
@@ -665,9 +649,6 @@ func (s *Service) loadSource(ctx context.Context, factor domain.FactorDef) error
 	if err := s.sourceChecker.CheckSource(ctx, factor, tmpPath); err != nil {
 		return fmt.Errorf("load factor source: %w", err)
 	}
-	if _, err := s.artifacts.Materialize(factor); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -745,12 +726,6 @@ func floorPeriod(value time.Time, periodSeconds int64) time.Time {
 func (s *Service) markReady(setID string, ready bool) {
 	if s.recordReady != nil {
 		s.recordReady(setID, ready)
-	}
-}
-
-func (s *Service) notify() {
-	if s.notifier != nil {
-		s.notifier.SetsChanged()
 	}
 }
 

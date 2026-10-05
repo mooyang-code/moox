@@ -15,7 +15,6 @@ type cliConfig struct {
 	Command         string
 	ConfigPath      string
 	DBPath          string
-	FactorsDir      string
 	SetID           string
 	File            string
 	CatalogDir      string
@@ -27,7 +26,6 @@ type cliConfig struct {
 	LookbackPeriods int
 	StartTime       time.Time
 	EndTime         time.Time
-	Period          time.Time
 	FactorIDs       []string
 	Subjects        []string
 	RequestID       string
@@ -55,8 +53,6 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runImportCatalog(ctx, cfg, out)
 	case "recalc":
 		return runRecalc(ctx, cfg, out)
-	case "run-once":
-		return runOnce(ctx, cfg, out)
 	case "status":
 		return runStatus(ctx, cfg, out)
 	default:
@@ -70,20 +66,19 @@ func parseArgs(args []string) (cliConfig, error) {
 	}
 	cfg := cliConfig{
 		Command: args[0], DBPath: "./data/factor/factor.db",
-		FactorsDir: "./factors", ConfigPath: "./config/app.yaml",
+		CatalogDir: "./factors", ConfigPath: "./config/app.yaml",
 		FactorType: "timeseries", ParamsJSON: "{}",
 	}
 	fs := newFlagSet(cfg.Command)
 	var inputs, outputs string
-	var start, end, period string
+	var start, end string
 	switch cfg.Command {
 	case "init":
 		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "Factor SQLite database")
 	case "import":
-		cfg.DBPath, cfg.FactorsDir = "", ""
+		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "immutable factor artifact directory (overrides config)")
 		fs.StringVar(&cfg.SetID, "set", "", "also add the definition to this factor set as a disabled member")
 		fs.StringVar(&cfg.File, "file", "", "Python factor source file")
 		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
@@ -93,11 +88,10 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.IntVar(&cfg.LookbackPeriods, "lookback", 0, "input lookback periods")
 		fs.StringVar(&cfg.ParamsJSON, "params", cfg.ParamsJSON, "factor parameter JSON object")
 	case "import-catalog":
-		cfg.DBPath, cfg.FactorsDir = "", ""
+		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
-		fs.StringVar(&cfg.CatalogDir, "dir", "", "directory containing catalog.json and Python sources (defaults to the factors directory)")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "immutable factor artifact directory (overrides config)")
+		fs.StringVar(&cfg.CatalogDir, "dir", cfg.CatalogDir, "directory containing catalog.json and Python sources")
 		fs.StringVar(&cfg.SetID, "set", "", "also add the definitions to this factor set as disabled members")
 	case "recalc":
 		cfg.DBPath = ""
@@ -107,16 +101,6 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.RequestID, "request-id", "", "idempotent request id (generated when omitted)")
 		fs.StringVar(&start, "start", "", "inclusive start timestamp RFC3339")
 		fs.StringVar(&end, "end", "", "exclusive end timestamp RFC3339")
-		fs.Var((*listFlag)(&cfg.FactorIDs), "factor", "factor id (repeatable)")
-		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
-	case "run-once":
-		cfg.DBPath = ""
-		cfg.FactorsDir = ""
-		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
-		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "factor artifact directory (overrides config)")
-		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
-		fs.StringVar(&period, "period", "", "period start timestamp RFC3339")
 		fs.Var((*listFlag)(&cfg.FactorIDs), "factor", "factor id (repeatable)")
 		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
 	case "status":
@@ -156,16 +140,6 @@ func parseArgs(args []string) (cliConfig, error) {
 		}
 		if !cfg.StartTime.Before(cfg.EndTime) {
 			return cliConfig{}, errors.New("--start must be before --end")
-		}
-	}
-	if cfg.Command == "run-once" {
-		if strings.TrimSpace(cfg.SetID) == "" {
-			return cliConfig{}, errors.New("--set is required")
-		}
-		var err error
-		cfg.Period, err = parseTimeFlag("--period", period)
-		if err != nil {
-			return cliConfig{}, err
 		}
 	}
 	return cfg, nil

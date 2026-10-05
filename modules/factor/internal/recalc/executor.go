@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -12,6 +13,11 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
+
+// Runner computes one pipeline plan.
+type Runner interface {
+	Run(context.Context, pipeline.Plan) (pipeline.Outcome, error)
+}
 
 // SetLocker serializes recalc chunks with live periods of the same set.
 type SetLocker interface {
@@ -211,4 +217,25 @@ func plan(selection Selection, start, end time.Time) pipeline.Plan {
 		Available:    append([]string(nil), selection.Subjects...),
 		CarryColumns: selection.Columns, WriteCarry: true,
 	}
+}
+
+const degradedPrefix = "degraded:"
+
+// DegradedNote summarises partial failures of a chunk; the job still succeeds
+// because the factor values of unaffected subjects were written.
+func DegradedNote(outcome pipeline.Outcome) string {
+	if outcome.Status != "degraded" {
+		return ""
+	}
+	var factors []string
+	for _, factor := range outcome.Factors {
+		if factor.Status != "complete" {
+			factors = append(factors, factor.FactorID)
+		}
+	}
+	note := fmt.Sprintf("%s failed_subjects=%d", degradedPrefix, len(outcome.FailedSubjects))
+	if len(factors) > 0 {
+		note += " factors=" + strings.Join(factors, ",")
+	}
+	return note
 }

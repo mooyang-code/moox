@@ -7,26 +7,10 @@ storage:
   key_id: "factor"
   hmac_key_file: ""
 
-eventbus:
-  urls:
-    - nats://127.0.0.1:4222
-  credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml
-  fetch_max_wait: 10s
-
+# python 只用于创建、编辑因子定义时试加载源码，需要能 import pandas 与 numpy
 python:
   bin: python3
-  worker_path: ./pyworker/worker.py
-  factors_dir: ./data/factor/factors
-  workers: 8
-  task_timeout: 30s
 
-pipeline:
-  read_batch_subjects: 100
-  read_workers: 4
-  read_timeout: 20s
-  write_batch_rows: 1000
-  period_budget_min: 60s
-  period_budget_max: 15m
-
-recalc:
-  chunk_periods: 2000
+engine:
+  lease_ttl: 45s
+  job_lease_ttl: 15m
