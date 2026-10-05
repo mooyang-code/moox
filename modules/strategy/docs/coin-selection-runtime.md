@@ -10,8 +10,12 @@ The Strategy service is a declarative, Go-only runtime. A `moox.strategy/v2`
 Manifest is validated and compiled into an immutable dependency record before
 it is persisted. The record freezes the source View, FactorSet, result View,
 and concrete factor output columns; enabling a Runner re-verifies that each
-declared factor remains enabled in the FactorSet that owns the result View's
-dataset. It is not a persisted period-input snapshot and does not make the
+declared factor remains an enabled member of the FactorSet that owns the result
+View's dataset (a Factor definition has no run state of its own; it runs per
+FactorSet membership). The frozen factor binding includes the definition's
+`source_hash`, so editing a factor's source (which changes `source_hash`) makes
+every strategy instance bound to it fail dependency verification until the
+strategy is re-validated and recompiled against the new definition. It is not a persisted period-input snapshot and does not make the
 mutable Storage index replayable.
 
 `ViewDataReady` associated with `FactorPeriodComputed` is the runtime trigger.
@@ -43,7 +47,7 @@ row or required column records `last_error`. If a declared factor's ready state
 is already terminally degraded for the selected pool, the inbox is ACKed after recording the failure so
 an unrecoverable period cannot poison the unlimited-delivery consumer; a
 complete marker remains retryable until a matching ready marker is reissued.
-Permanent dependency responses such as a deleted Factor or View are classified
+Permanent dependency responses such as a Factor removed from the FactorSet, a deleted Factor or View are classified
 as dependency mismatches and ACKed after recording the Runner failure. The
 verification is performed only after the ready event matches that Runner, so an
 unrelated View event is not blocked by another Runner's dependency outage.

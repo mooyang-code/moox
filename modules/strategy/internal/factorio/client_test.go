@@ -36,15 +36,26 @@ func (f *factorMgrProxyFake) ListFactors(_ context.Context, req *factorpb.ListFa
 	f.factorRequests = append(f.factorRequests, req)
 	return &factorpb.ListFactorsRsp{
 		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-		Factors: []*factorpb.FactorDef{{
-			FactorId: "momentum", SetId: req.GetSetId(), Outputs: []string{"score"}, Status: "enabled",
-			SourceHash: "hash-1", InputColumns: []string{"close"}, ParamsJson: "{}", LookbackPeriods: 4,
-		}},
+		Factors: []*factorpb.FactorInfo{
+			{
+				Factor: &factorpb.FactorDef{
+					FactorId: "momentum", Outputs: []string{"score"},
+					SourceHash: "hash-1", InputColumns: []string{"close"}, ParamsJson: "{}", LookbackPeriods: 4,
+				},
+				// The same definition is used by another set too; only the requested set's usage counts.
+				Usages: []*factorpb.FactorUsage{{SetId: "other-set", Status: "disabled"}, {SetId: req.GetSetId(), Status: "enabled"}},
+			},
+			{
+				Factor: &factorpb.FactorDef{FactorId: "stray", Outputs: []string{"stray"}, SourceHash: "hash-2"},
+				Usages: []*factorpb.FactorUsage{{SetId: "other-set", Status: "enabled"}},
+			},
+			nil,
+		},
 		PageResult: &commonpb.PageResult{},
 	}, nil
 }
 
-func TestRPCClientListsFactorSetsAndFactors(t *testing.T) {
+func TestListFactorsUsesUsageStatusForRequestedSet(t *testing.T) {
 	proxy := &factorMgrProxyFake{}
 	client := &RPCClient{Proxy: proxy, PageSize: 1}
 
@@ -67,4 +78,16 @@ func TestRPCClientListsFactorSetsAndFactors(t *testing.T) {
 	}}, factors)
 	require.Len(t, proxy.factorRequests, 1)
 	require.Equal(t, "set-1", proxy.factorRequests[0].GetSetId())
+	// Strategy only needs hashes and column contracts, never the factor source.
+	require.False(t, proxy.factorRequests[0].GetIncludeSource())
+}
+
+func TestListFactorsIgnoresDefinitionsWithoutUsageInRequestedSet(t *testing.T) {
+	client := &RPCClient{Proxy: &factorMgrProxyFake{}, PageSize: 1}
+	factors, err := client.ListFactors(context.Background(), compiler.FactorSetDescriptor{SetID: "set-9", ResultDatasetID: "result-9"})
+	require.NoError(t, err)
+	require.Len(t, factors, 1)
+	require.Equal(t, "momentum", factors[0].FactorID)
+	require.Equal(t, "set-9", factors[0].SetID)
+	require.Equal(t, "enabled", factors[0].Status)
 }

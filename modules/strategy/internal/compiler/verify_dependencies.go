@@ -26,8 +26,8 @@ func DependencyMismatchError(err error) error {
 	return fmt.Errorf("%w: %w", ErrDependencyMismatch, err)
 }
 
-// VerifyDependencies confirms each strategy factor is enabled in the FactorSet
-// that owns the result View's dataset.
+// VerifyDependencies confirms each strategy factor is an enabled member of the
+// FactorSet that owns the result View's dataset.
 func (c Compiler) VerifyDependencies(ctx context.Context, compiled CompiledStrategy) error {
 	if len(compiled.Factors) == 0 && strings.TrimSpace(compiled.SourceView.ID) == "" {
 		return nil

@@ -78,13 +78,19 @@ func (c *RPCClient) ListFactors(ctx context.Context, set compiler.FactorSetDescr
 		if err := factorRPCReturnError(rsp.GetRetInfo()); err != nil {
 			return nil, err
 		}
-		for _, factor := range rsp.GetFactors() {
-			if factor == nil {
+		for _, info := range rsp.GetFactors() {
+			if info == nil || info.GetFactor() == nil {
+				continue
+			}
+			factor := info.GetFactor()
+			status, used := usageStatus(info.GetUsages(), setID)
+			if !used {
+				// The backend filters by set_id, so this is only a defensive guard.
 				continue
 			}
 			result = append(result, compiler.FactorDescriptor{
-				FactorID: factor.GetFactorId(), SetID: factor.GetSetId(), Outputs: append([]string(nil), factor.GetOutputs()...),
-				Status: factor.GetStatus(), ResultDatasetID: set.ResultDatasetID,
+				FactorID: factor.GetFactorId(), SetID: setID, Outputs: append([]string(nil), factor.GetOutputs()...),
+				Status: status, ResultDatasetID: set.ResultDatasetID,
 				SourceHash: factor.GetSourceHash(), InputColumns: append([]string(nil), factor.GetInputColumns()...),
 				ParamsJSON: factor.GetParamsJson(), LookbackPeriods: int(factor.GetLookbackPeriods()),
 			})
@@ -94,6 +100,16 @@ func (c *RPCClient) ListFactors(ctx context.Context, set compiler.FactorSetDescr
 		}
 	}
 	return result, nil
+}
+
+// usageStatus returns the member status of a definition inside one set.
+func usageStatus(usages []*factorpb.FactorUsage, setID string) (string, bool) {
+	for _, usage := range usages {
+		if usage.GetSetId() == setID {
+			return usage.GetStatus(), true
+		}
+	}
+	return "", false
 }
 
 func (c *RPCClient) pageSize() uint32 {
