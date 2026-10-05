@@ -461,10 +461,15 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 		require.Equal(t, []any{"admin-gateway", "moox-cli"}, item.ExtraConfig["gateway_callers"])
 		routes, ok := item.ExtraConfig["gateway_routes"].([]any)
 		require.True(t, ok)
-		require.Len(t, routes, 1)
+		require.Len(t, routes, 2)
 		readRoute := routes[0].(map[string]any)
 		require.Equal(t, []any{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "ListRecalcJobs", "GetStatus"}, readRoute["gateway_methods"])
 		require.Equal(t, []any{"admin-gateway", "moox-cli", "strategy"}, readRoute["gateway_callers"])
+		engineRoute := routes[1].(map[string]any)
+		require.Equal(t, "trpc.moox.factor.FactorEngine", engineRoute["service_path"])
+		require.EqualValues(t, 11405, engineRoute["port"])
+		require.Equal(t, []any{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}, engineRoute["gateway_methods"])
+		require.Equal(t, []any{"factor-engine"}, engineRoute["gateway_callers"])
 		return
 	}
 	t.Fatal("moox_factor_mgr deployment is missing")

@@ -44,7 +44,7 @@ assert_contains "${DEPLOY}" 'gateway-control.env'
 assert_contains "${DEPLOY}" 'gateway-service.env'
 assert_absent "${DEPLOY}" 'gateway-merge.key'
 assert_absent "${DEPLOY}" '"key_id":"merge"'
-assert_contains "${DEPLOY}" 'for caller in collector factor monitor archive storage-view storage-primary strategy trade cloudnode moox-cli moox-skill'
+assert_contains "${DEPLOY}" 'for caller in collector factor factor-engine monitor archive storage-view storage-primary strategy trade cloudnode moox-cli moox-skill'
 assert_contains "${DEPLOY}" 'chmod 0600'
 assert_contains "${DEPLOY}" 'certs/gateway/peers.pem'
 assert_contains "${DEPLOY}" 'start_gateway'
@@ -299,6 +299,9 @@ grep -Fq '"key_id":"moox-skill","caller":"moox-skill","secret_file":"gateway-moo
 [[ "$(grep -o '"key_id":"moox-skill"' "${DEPLOYED}/secrets/gateway-credentials.json" | wc -l | tr -d '[:space:]')" == 1 ]] || \
   fail 'moox-skill Gateway identity was not registered exactly once'
 [[ -s "${DEPLOYED}/secrets/gateway-moox-skill.key" ]] || fail 'moox-skill Gateway key was not staged'
+grep -Fq '"key_id":"factor-engine","caller":"factor-engine","secret_file":"gateway-factor-engine.key"' \
+  "${DEPLOYED}/secrets/gateway-credentials.json" || fail 'factor-engine Gateway identity was not registered'
+[[ -s "${DEPLOYED}/secrets/gateway-factor-engine.key" ]] || fail 'factor-engine Gateway key was not staged'
 [[ "$(file_mode "${DEPLOYED}/secrets/gateway-moox-skill.key")" == 600 ]] || fail 'moox-skill Gateway key mode is not 600'
 ! cmp -s "${TMP}/service.key" "${DEPLOYED}/secrets/gateway-moox-skill.key" || fail 'moox-skill Gateway key reused the root service secret'
 cmp -s "${TMP}/peers.pem" "${DEPLOYED}/certs/gateway/peers.pem" || fail 'public peer CA was not installed'

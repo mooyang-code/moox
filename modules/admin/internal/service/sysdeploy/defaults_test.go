@@ -414,6 +414,8 @@ func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 			GatewayMethods []string `json:"gateway_methods"`
 			GatewayCallers []string `json:"gateway_callers"`
 			GatewayRoutes  []struct {
+				ServicePath    string   `json:"service_path"`
+				Port           int      `json:"port"`
 				GatewayMethods []string `json:"gateway_methods"`
 				GatewayCallers []string `json:"gateway_callers"`
 			} `json:"gateway_routes"`
@@ -430,9 +432,27 @@ func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 			!reflect.DeepEqual(extra.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
 			t.Fatalf("moox_factor_mgr gateway contract = methods %v callers %v", extra.GatewayMethods, extra.GatewayCallers)
 		}
-		if len(extra.GatewayRoutes) != 1 || !reflect.DeepEqual(extra.GatewayRoutes[0].GatewayMethods, []string{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "ListRecalcJobs", "GetStatus"}) ||
+		if len(extra.GatewayRoutes) != 2 || !reflect.DeepEqual(extra.GatewayRoutes[0].GatewayMethods, []string{"GetFactorSet", "ListFactorSets", "GetFactor", "ListFactors", "ListRecalcJobs", "GetStatus"}) ||
 			!reflect.DeepEqual(extra.GatewayRoutes[0].GatewayCallers, []string{"admin-gateway", "moox-cli", "strategy"}) {
 			t.Fatalf("moox_factor_mgr read gateway contract = %+v", extra.GatewayRoutes)
+		}
+		engine := extra.GatewayRoutes[1]
+		if engine.ServicePath != "trpc.moox.factor.FactorEngine" || engine.Port != 11405 ||
+			!reflect.DeepEqual(engine.GatewayMethods, []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}) ||
+			!reflect.DeepEqual(engine.GatewayCallers, []string{"factor-engine"}) {
+			t.Fatalf("moox_factor_mgr engine gateway contract = %+v", engine)
+		}
+		for _, method := range append(extra.GatewayMethods, extra.GatewayRoutes[0].GatewayMethods...) {
+			if strings.Contains(strings.Join(engine.GatewayMethods, ","), method) {
+				t.Fatalf("FactorMgr method %s must not be reachable through the engine route", method)
+			}
+		}
+		for _, callers := range [][]string{extra.GatewayCallers, extra.GatewayRoutes[0].GatewayCallers} {
+			for _, caller := range callers {
+				if caller == "factor-engine" {
+					t.Fatal("factor-engine must not call FactorMgr")
+				}
+			}
 		}
 		return
 	}
