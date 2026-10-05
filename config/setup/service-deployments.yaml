@@ -282,7 +282,7 @@ services:
       health_kind: readiness
       monitor_enabled: true
       timeout_ms: 120000
-      gateway_methods: [CreateFactorSet, UpdateFactorSet, SetFactorSetStatus, DeleteFactorSet, CreateFactor, UpdateFactor, SetFactorStatus, DeleteFactor, RecalcFactors, GetRecalcJob, CancelRecalcJob]
+      gateway_methods: [CreateFactorSet, UpdateFactorSet, SetFactorSetStatus, DeleteFactorSet, CreateFactor, UpdateFactor, DeleteFactor, AddFactorToSet, RemoveFactorFromSet, SetFactorMemberStatus, RecalcFactors, GetRecalcJob, CancelRecalcJob]
       gateway_callers: [admin-gateway, moox-cli]
       gateway_routes:
         - service_path: trpc.moox.factor.FactorMgr

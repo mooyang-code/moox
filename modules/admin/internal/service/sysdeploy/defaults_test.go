@@ -423,7 +423,8 @@ func TestDefaultFactorGatewayRoutesSeparateReadAccess(t *testing.T) {
 		}
 		wantMethods := []string{
 			"CreateFactorSet", "UpdateFactorSet", "SetFactorSetStatus", "DeleteFactorSet",
-			"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor", "RecalcFactors", "GetRecalcJob", "CancelRecalcJob",
+			"CreateFactor", "UpdateFactor", "DeleteFactor", "AddFactorToSet", "RemoveFactorFromSet", "SetFactorMemberStatus",
+			"RecalcFactors", "GetRecalcJob", "CancelRecalcJob",
 		}
 		if !reflect.DeepEqual(extra.GatewayMethods, wantMethods) ||
 			!reflect.DeepEqual(extra.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
