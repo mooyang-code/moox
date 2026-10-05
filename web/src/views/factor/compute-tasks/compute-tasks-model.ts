@@ -7,6 +7,11 @@ import type {
   MemberStatus
 } from "@/api/factor/types";
 
+/**
+ * 计算引擎每分钟同步一次目录：启用后约 1 分钟才开始实时计算，期间完成的周期不会自动补算。
+ */
+export const ENABLE_ENGINE_HINT = "计算引擎约 1 分钟内生效，期间的周期不会自动补算，如需补齐可手动提交补算。确认启用？";
+
 export interface TaskFilters {
   keyword: string;
   status: "" | FactorSetStatus;

@@ -90,16 +90,13 @@
                   >
                     <a-button size="mini" type="text" status="danger" :loading="busy">停用</a-button>
                   </a-popconfirm>
-                  <a-button
+                  <a-popconfirm
                     v-if="record.action === 'enable'"
-                    size="mini"
-                    type="text"
-                    status="success"
-                    :loading="busy"
-                    @click="toggleStatus(record.info.factor_set, 'enabled')"
+                    :content="ENABLE_ENGINE_HINT"
+                    @ok="toggleStatus(record.info.factor_set, 'enabled')"
                   >
-                    启用
-                  </a-button>
+                    <a-button size="mini" type="text" status="success" :loading="busy">启用</a-button>
+                  </a-popconfirm>
                   <a-tooltip :content="record.remove.reason" :disabled="!record.remove.disabled">
                     <span>
                       <a-button
@@ -170,7 +167,15 @@ import HealthTag from "@/views/factor/shared/health-tag.vue";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { setStatusTag } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
-import { deleteState, filterSets, memberCountText, scopeText, setActionKind, type TaskFilters } from "./compute-tasks-model";
+import {
+  deleteState,
+  ENABLE_ENGINE_HINT,
+  filterSets,
+  memberCountText,
+  scopeText,
+  setActionKind,
+  type TaskFilters
+} from "./compute-tasks-model";
 import SetCreateModal from "./set-create-modal.vue";
 import SubjectScopeFields from "./subject-scope-fields.vue";
 import TaskDetailDrawer from "./task-detail-drawer.vue";

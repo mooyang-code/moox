@@ -90,6 +90,18 @@ export interface FactorLaneStatus {
   active: boolean;
 }
 
+/** moox-factor-engine as last seen by moox-factor-mgr through its heartbeat. */
+export interface EngineInfo {
+  engine_id: string;
+  boot_id: string;
+  version: string;
+  online: boolean;
+  last_heartbeat_at: string;
+  catalog_hash: string;
+  catalog_synced_at: string;
+  catalog_in_sync: boolean;
+}
+
 export interface EngineStatus {
   ret_info: RetInfo;
   consumer_running: boolean;
@@ -97,6 +109,7 @@ export interface EngineStatus {
   python_busy: number;
   lanes: FactorLaneStatus[];
   recent_runs: SetRunSummary[];
+  engine?: EngineInfo;
 }
 
 export interface RecalcFactorsReq {
@@ -119,6 +132,8 @@ export interface RecalcJob {
   status: RecalcJobStatus;
   progress_time: string;
   error: string;
+  /** 领取并执行该任务的计算引擎；尚未被领取时为空。 */
+  engine_id?: string;
   created_at: string;
   updated_at: string;
 }

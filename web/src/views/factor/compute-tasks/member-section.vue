@@ -53,16 +53,21 @@
           </a-popconfirm>
           <a-tooltip v-else :content="row.actions.toggle.reason" :disabled="!row.actions.toggle.disabled">
             <span>
-              <a-button
-                size="mini"
-                type="text"
-                status="success"
+              <a-popconfirm
+                :content="ENABLE_ENGINE_HINT"
                 :disabled="row.actions.toggle.disabled"
-                :loading="pending === row.member.factor_id"
-                @click="toggle(row.member, row.actions.toggleTarget)"
+                @ok="toggle(row.member, row.actions.toggleTarget)"
               >
-                {{ row.actions.toggleLabel }}
-              </a-button>
+                <a-button
+                  size="mini"
+                  type="text"
+                  status="success"
+                  :disabled="row.actions.toggle.disabled"
+                  :loading="pending === row.member.factor_id"
+                >
+                  {{ row.actions.toggleLabel }}
+                </a-button>
+              </a-popconfirm>
             </span>
           </a-tooltip>
           <a-tooltip :content="row.actions.remove.reason" :disabled="!row.actions.remove.disabled">
@@ -95,7 +100,7 @@ import { useFactorStore } from "@/store/modules/factor";
 import { formatLag, formatPeriod } from "@/views/factor/shared/health";
 import { factorTypeLabel, memberStatusTag, periodStatusTag } from "@/views/factor/shared/status";
 import AddFactorModal from "./add-factor-modal.vue";
-import { addFactorState, memberActions, memberCounts, memberPeriodState } from "./compute-tasks-model";
+import { addFactorState, ENABLE_ENGINE_HINT, memberActions, memberCounts, memberPeriodState } from "./compute-tasks-model";
 
 defineOptions({ name: "FactorMemberSection" });
 

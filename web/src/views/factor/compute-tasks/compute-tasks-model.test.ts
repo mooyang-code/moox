@@ -116,3 +116,11 @@ describe("compute task list model", () => {
     expect(memberPeriodState(value, "b")).toBeUndefined();
   });
 });
+
+describe("enable hint", () => {
+  it("tells the operator the engine applies an enable within a minute without backfilling the gap", async () => {
+    const { ENABLE_ENGINE_HINT } = await import("./compute-tasks-model");
+    expect(ENABLE_ENGINE_HINT).toContain("约 1 分钟内生效");
+    expect(ENABLE_ENGINE_HINT).toContain("不会自动补算");
+  });
+});

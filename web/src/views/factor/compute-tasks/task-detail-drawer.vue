@@ -24,16 +24,9 @@
           >
             <a-button size="small" status="danger" :loading="props.busy">停用</a-button>
           </a-popconfirm>
-          <a-button
-            v-if="actionKind === 'enable'"
-            size="small"
-            type="primary"
-            status="success"
-            :loading="props.busy"
-            @click="emit('toggleStatus', set, 'enabled')"
-          >
-            启用
-          </a-button>
+          <a-popconfirm v-if="actionKind === 'enable'" :content="ENABLE_ENGINE_HINT" @ok="emit('toggleStatus', set, 'enabled')">
+            <a-button size="small" type="primary" status="success" :loading="props.busy">启用</a-button>
+          </a-popconfirm>
         </a-space>
       </div>
 
@@ -89,7 +82,7 @@ import { RequestGate } from "@/utils/request-gate";
 import { setHealth } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import { setStatusTag } from "@/views/factor/shared/status";
-import { deleteState, scopeText, setActionKind } from "./compute-tasks-model";
+import { deleteState, ENABLE_ENGINE_HINT, scopeText, setActionKind } from "./compute-tasks-model";
 import MemberSection from "./member-section.vue";
 
 defineOptions({ name: "FactorTaskDetailDrawer" });

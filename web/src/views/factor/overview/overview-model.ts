@@ -22,7 +22,7 @@ export function cardLinks(setId: string) {
 }
 
 export interface StatItem {
-  key: "consumer" | "workers" | "queue" | "recalc";
+  key: "engine" | "consumer" | "workers" | "queue" | "recalc";
   label: string;
   value: string;
   hint: string;
@@ -34,6 +34,7 @@ export function statsStrip(engine: EngineStatus | null | undefined, runningRecal
   const queued = lanes.reduce((total, lane) => total + lane.queued, 0);
   const active = lanes.filter(lane => lane.active).length;
   return [
+    engineStat(engine),
     {
       key: "consumer",
       label: "实时消费",
@@ -63,6 +64,24 @@ export function statsStrip(engine: EngineStatus | null | undefined, runningRecal
       tone: runningRecalc ? "info" : "muted"
     }
   ];
+}
+
+/** 计算引擎卡片：引擎跑在操作员本机，管理端只能通过心跳知道它的状态。 */
+function engineStat(status: EngineStatus | null | undefined): StatItem {
+  const engine = status?.engine;
+  if (!engine?.engine_id) {
+    return { key: "engine", label: "计算引擎", value: "未连接", hint: "尚未收到引擎心跳", tone: status ? "danger" : "muted" };
+  }
+  if (!engine.online) {
+    return { key: "engine", label: "计算引擎", value: "离线", hint: `${engine.engine_id} · 心跳已中断`, tone: "danger" };
+  }
+  return {
+    key: "engine",
+    label: "计算引擎",
+    value: "在线",
+    hint: engine.catalog_in_sync ? engine.engine_id : `${engine.engine_id} · 引擎目录未同步`,
+    tone: engine.catalog_in_sync ? "ok" : "info"
+  };
 }
 
 export interface MemberChip {

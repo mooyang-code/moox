@@ -164,7 +164,7 @@ watch(
 
 .stats-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--moox-space-3);
   margin-bottom: var(--moox-space-4);
 }

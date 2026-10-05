@@ -71,14 +71,36 @@ describe("overview model", () => {
       ]
     } as EngineStatus;
     const stats = statsStrip(engine, 2);
-    expect(stats.map(item => item.key)).toEqual(["consumer", "workers", "queue", "recalc"]);
-    expect(stats[0]).toMatchObject({ value: "运行中", tone: "ok" });
-    expect(stats[1].value).toBe("1 / 4");
-    expect(stats[2].value).toBe("5");
-    expect(stats[2].hint).toContain("1");
-    expect(stats[3].value).toBe("2");
-    expect(statsStrip(null, 0)[0]).toMatchObject({ value: "-", tone: "muted" });
-    expect(statsStrip({ ...engine, consumer_running: false }, 0)[0]).toMatchObject({ value: "已停止", tone: "danger" });
+    expect(stats.map(item => item.key)).toEqual(["engine", "consumer", "workers", "queue", "recalc"]);
+    expect(stats[0]).toMatchObject({ value: "未连接", tone: "danger" });
+    expect(stats[1]).toMatchObject({ value: "运行中", tone: "ok" });
+    expect(stats[2].value).toBe("1 / 4");
+    expect(stats[3].value).toBe("5");
+    expect(stats[3].hint).toContain("1");
+    expect(stats[4].value).toBe("2");
+    expect(statsStrip(null, 0)[1]).toMatchObject({ value: "-", tone: "muted" });
+    expect(statsStrip(null, 0)[0]).toMatchObject({ value: "未连接", tone: "muted" });
+    expect(statsStrip({ ...engine, consumer_running: false }, 0)[1]).toMatchObject({ value: "已停止", tone: "danger" });
+  });
+
+  it("engine card follows the heartbeat", () => {
+    const base = { consumer_running: true, python_workers: 8, python_busy: 0, lanes: [] } as unknown as EngineStatus;
+    const engine = {
+      engine_id: "factor-engine@mac",
+      boot_id: "b",
+      version: "v1",
+      online: true,
+      last_heartbeat_at: "",
+      catalog_hash: "h",
+      catalog_synced_at: "",
+      catalog_in_sync: true
+    };
+    expect(statsStrip({ ...base, engine }, 0)[0]).toMatchObject({ value: "在线", tone: "ok", hint: "factor-engine@mac" });
+    expect(statsStrip({ ...base, engine: { ...engine, catalog_in_sync: false } }, 0)[0]).toMatchObject({
+      value: "在线",
+      hint: "factor-engine@mac · 引擎目录未同步"
+    });
+    expect(statsStrip({ ...base, engine: { ...engine, online: false } }, 0)[0]).toMatchObject({ value: "离线", tone: "danger" });
   });
 
   it("task cards list member chips from last_run.factors", () => {

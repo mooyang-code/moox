@@ -86,6 +86,9 @@
                   <a-progress :percent="record.progress / 100" :status="record.job.status === 'failed' ? 'danger' : undefined" />
                 </template>
               </a-table-column>
+              <a-table-column title="执行引擎" :width="180" :ellipsis="true" :tooltip="true">
+                <template #cell="{ record }">{{ record.job.engine_id || "待领取" }}</template>
+              </a-table-column>
               <a-table-column title="创建时间" :width="180">
                 <template #cell="{ record }">{{ formatTime(record.job.created_at) }}</template>
               </a-table-column>
