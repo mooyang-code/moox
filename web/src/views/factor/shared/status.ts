@@ -1,4 +1,4 @@
-import type { FactorSetStatus, FactorStatus, PeriodFactorStatus, RecalcJob, RecalcJobStatus } from "@/api/factor/types";
+import type { FactorSetStatus, MemberStatus, PeriodFactorStatus, RecalcJob, RecalcJobStatus } from "@/api/factor/types";
 
 export interface StatusTag {
   label: string;
@@ -12,7 +12,7 @@ const setStatusTags: Record<FactorSetStatus, StatusTag> = {
   deleting: { label: "清理中", color: "gray" }
 };
 
-const factorStatusTags: Record<FactorStatus, StatusTag> = {
+const memberStatusTags: Record<MemberStatus, StatusTag> = {
   enabled: { label: "已启用", color: "green" },
   disabled: { label: "已停用", color: "orange" }
 };
@@ -34,7 +34,7 @@ const jobStatusTags: Record<RecalcJobStatus, StatusTag> = {
 const unknownTag = (value: string): StatusTag => ({ label: value || "-", color: "gray" });
 
 export const setStatusTag = (status: string) => setStatusTags[status as FactorSetStatus] ?? unknownTag(status);
-export const factorStatusTag = (status: string) => factorStatusTags[status as FactorStatus] ?? unknownTag(status);
+export const memberStatusTag = (status: string) => memberStatusTags[status as MemberStatus] ?? unknownTag(status);
 export const periodStatusTag = (status: string) => periodStatusTags[status as PeriodFactorStatus] ?? unknownTag(status);
 export const jobStatusTag = (status: string) => jobStatusTags[status as RecalcJobStatus] ?? unknownTag(status);
 
