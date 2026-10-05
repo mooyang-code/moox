@@ -4,24 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 )
 
 type Worker struct {
-	db     *store.Store
-	runner Runner
-	cfg    config
-	serial chan struct{}
+	db       *store.Store
+	runner   Runner
+	cfg      config
+	executor *Executor
+	serial   chan struct{}
 }
 
 func NewWorker(db *store.Store, runner Runner, options ...Option) *Worker {
-	return &Worker{db: db, runner: runner, cfg: defaultConfig(options), serial: make(chan struct{}, 1)}
+	return &Worker{db: db, runner: runner, cfg: defaultConfig(options), executor: NewExecutor(runner, options...), serial: make(chan struct{}, 1)}
 }
 
 func (w *Worker) RunPending(ctx context.Context) error {
@@ -78,76 +77,49 @@ func (w *Worker) Run(ctx context.Context, jobID string) error {
 	if job.Status == store.RecalcStatusCancelled {
 		return nil
 	}
+	window := Window{
+		Start: time.Unix(job.StartTime, 0).UTC(), End: time.Unix(job.EndTime, 0).UTC(),
+		Progress: time.Unix(job.ProgressTime, 0).UTC(),
+	}
+	err = w.executor.Run(ctx, window, w.jobSelection(job), w.jobProgress(job.JobID))
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	current, getErr := w.db.GetRecalcJob(ctx, job.JobID)
+	if getErr == nil && current.Status == store.RecalcStatusCancelled {
+		return nil
+	}
+	return w.fail(ctx, job.JobID, err)
+}
 
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		job, err = w.db.GetRecalcJob(ctx, job.JobID)
+// jobSelection re-reads the job and the set membership before every chunk, so
+// a cancellation or a disabled member takes effect at the next chunk boundary.
+func (w *Worker) jobSelection(job store.RecalcJob) SelectionSource {
+	return func(ctx context.Context) (Selection, error) {
+		current, err := w.db.GetRecalcJob(ctx, job.JobID)
 		if err != nil {
-			return err
+			return Selection{}, err
 		}
-		if job.Status == store.RecalcStatusCancelled {
-			return nil
+		if current.Status == store.RecalcStatusCancelled {
+			return Selection{}, context.Canceled
 		}
-		if job.Status != store.RecalcStatusRunning {
-			return fmt.Errorf("recalc job %q is not runnable: %s", job.JobID, job.Status)
+		if current.Status != store.RecalcStatusRunning {
+			return Selection{}, fmt.Errorf("recalc job %q is not running", job.JobID)
 		}
-		start := job.ProgressTime
-		if start < job.StartTime {
-			start = job.StartTime
-		}
-		if start >= job.EndTime {
-			_, err := w.db.UpdateRecalcJob(ctx, job.JobID, func(current *store.RecalcJob) error {
-				current.ProgressTime = current.EndTime
-				current.Status = store.RecalcStatusSucceeded
-				current.Error = ""
-				return nil
-			})
-			return err
-		}
-		set, _, subjects, clock, err := w.selection(ctx, job.SetID, job.FactorIDs, job.Subjects)
-		if err != nil {
-			return w.fail(ctx, job.JobID, err)
-		}
-		if len(subjects) == 0 {
-			_, err := w.db.UpdateRecalcJob(ctx, job.JobID, func(current *store.RecalcJob) error {
-				current.ProgressTime = current.EndTime
-				current.Status = store.RecalcStatusSucceeded
-				current.Error = ""
-				return nil
-			})
-			return err
-		}
-		duration, err := clock.Duration(set.Freq)
-		if err != nil {
-			return w.fail(ctx, job.JobID, err)
-		}
-		if int64(w.cfg.chunkPeriods) > math.MaxInt64/int64(duration) {
-			return w.fail(ctx, job.JobID, errors.New("recalc chunk duration overflows"))
-		}
-		chunkEnd := time.Unix(start, 0).UTC().Add(time.Duration(w.cfg.chunkPeriods) * duration)
-		end := time.Unix(job.EndTime, 0).UTC()
-		if chunkEnd.After(end) {
-			chunkEnd = end
-		}
-		chunkStart := time.Unix(start, 0).UTC()
-		outcome, err := w.runChunkWithRetry(ctx, job.JobID, job.SetID, job.FactorIDs, job.Subjects, chunkStart, chunkEnd)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			current, getErr := w.db.GetRecalcJob(ctx, job.JobID)
-			if getErr == nil && current.Status == store.RecalcStatusCancelled {
-				return nil
-			}
-			return w.fail(ctx, job.JobID, err)
-		}
-		job, err = w.db.UpdateRecalcJob(ctx, job.JobID, func(current *store.RecalcJob) error {
+		return w.load(ctx, job.SetID, job.FactorIDs, job.Subjects)
+	}
+}
+
+func (w *Worker) jobProgress(jobID string) ProgressFunc {
+	return func(ctx context.Context, progress time.Time, outcome pipeline.Outcome) (bool, error) {
+		job, err := w.db.UpdateRecalcJob(ctx, jobID, func(current *store.RecalcJob) error {
 			if current.Status == store.RecalcStatusCancelled {
 				return nil
 			}
-			current.ProgressTime = chunkEnd.Unix()
+			current.ProgressTime = progress.Unix()
 			if note := degradedNote(outcome); note != "" {
 				current.Error = note
 			} else if !strings.HasPrefix(current.Error, degradedPrefix) {
@@ -161,11 +133,9 @@ func (w *Worker) Run(ctx context.Context, jobID string) error {
 			return nil
 		})
 		if err != nil {
-			return err
+			return true, err
 		}
-		if job.Status == store.RecalcStatusCancelled || job.Status == store.RecalcStatusSucceeded {
-			return nil
-		}
+		return job.Status == store.RecalcStatusCancelled || job.Status == store.RecalcStatusSucceeded, nil
 	}
 }
 
@@ -180,57 +150,37 @@ func (w *Worker) RunOnce(ctx context.Context, setID string, factorIDs, subjects 
 		return pipeline.Outcome{}, err
 	}
 	defer w.release()
-	set, _, _, clock, err := w.selection(ctx, strings.TrimSpace(setID), factorIDs, subjects)
+	selection, err := w.load(ctx, strings.TrimSpace(setID), factorIDs, subjects)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	start, err := clock.Align(period, set.Freq)
+	clock, err := w.clockFor(selection.Set.SpaceID)
+	if err != nil {
+		return pipeline.Outcome{}, err
+	}
+	start, err := clock.Align(period, selection.Set.Freq)
 	if err != nil {
 		return pipeline.Outcome{}, fmt.Errorf("align recalc period: %w", err)
 	}
-	duration, err := clock.Duration(set.Freq)
+	duration, err := clock.Duration(selection.Set.Freq)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	return w.runChunk(ctx, "", set.SetID, factorIDs, subjects, start, start.Add(duration))
+	return w.executor.RunChunk(ctx, selection, start, start.Add(duration))
 }
 
-func (w *Worker) runChunk(ctx context.Context, jobID, setID string, factorIDs, subjects []string, start, end time.Time) (pipeline.Outcome, error) {
-	unlock, err := w.cfg.locks.LockContext(ctx, setID)
-	if err != nil {
-		return pipeline.Outcome{}, err
-	}
-	defer unlock()
-	if err := ctx.Err(); err != nil {
-		return pipeline.Outcome{}, err
-	}
-	if jobID != "" {
-		job, err := w.db.GetRecalcJob(ctx, jobID)
-		if err != nil {
-			return pipeline.Outcome{}, err
-		}
-		if job.Status == store.RecalcStatusCancelled {
-			return pipeline.Outcome{}, context.Canceled
-		}
-		if job.Status != store.RecalcStatusRunning {
-			return pipeline.Outcome{}, fmt.Errorf("recalc job %q is not running", jobID)
-		}
-	}
+// load resolves the chunk input from the store: enabled set, selected enabled
+// members, scoped subjects and the source columns carried into the result.
+func (w *Worker) load(ctx context.Context, setID string, factorIDs, subjects []string) (Selection, error) {
 	set, factors, selectedSubjects, _, err := w.selection(ctx, setID, factorIDs, subjects)
 	if err != nil {
-		return pipeline.Outcome{}, err
+		return Selection{}, err
 	}
 	columns, err := w.columns(ctx, set, factors)
 	if err != nil {
-		return pipeline.Outcome{}, err
+		return Selection{}, err
 	}
-	return w.runner.Run(ctx, pipeline.Plan{
-		Mode: pipeline.ModeRecalc, Set: set, Factors: factors,
-		TargetStart: start, TargetEnd: end,
-		Expected:     append([]string(nil), selectedSubjects...),
-		Available:    append([]string(nil), selectedSubjects...),
-		CarryColumns: columns, WriteCarry: true,
-	})
+	return Selection{Set: set, Factors: factors, Subjects: selectedSubjects, Columns: columns}, nil
 }
 
 func (w *Worker) fail(ctx context.Context, jobID string, cause error) error {
@@ -260,31 +210,6 @@ func terminal(status string) bool {
 }
 
 const degradedPrefix = "degraded:"
-
-// runChunkWithRetry retries a chunk only for transient Storage failures. Progress
-// is committed after a successful chunk, so a final failure still leaves the job
-// resumable from the last completed chunk by a new request.
-func (w *Worker) runChunkWithRetry(ctx context.Context, jobID, setID string, factorIDs, subjects []string, start, end time.Time) (pipeline.Outcome, error) {
-	var lastErr error
-	for attempt := 1; attempt <= w.cfg.chunkRetries; attempt++ {
-		outcome, err := w.runChunk(ctx, jobID, setID, factorIDs, subjects, start, end)
-		if err == nil {
-			return outcome, nil
-		}
-		lastErr = err
-		if !errors.Is(err, storageio.ErrInfra) || attempt == w.cfg.chunkRetries {
-			break
-		}
-		timer := time.NewTimer(time.Duration(attempt) * w.cfg.retryBackoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return pipeline.Outcome{}, ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return pipeline.Outcome{}, lastErr
-}
 
 // degradedNote summarises partial failures of a chunk; the job still succeeds
 // because the factor values of unaffected subjects were written.

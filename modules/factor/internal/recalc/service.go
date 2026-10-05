@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
@@ -36,7 +35,7 @@ type config struct {
 	chunkRetries int
 	retryBackoff time.Duration
 	clock        periodclock.Clock
-	locks        *catalog.Locks
+	locks        SetLocker
 	columns      ColumnProvider
 	subjects     SubjectProvider
 }
@@ -49,7 +48,7 @@ func WithChunkRetry(attempts int, backoff time.Duration) Option {
 	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
 }
 func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
-func WithLocks(locks *catalog.Locks) Option    { return func(cfg *config) { cfg.locks = locks } }
+func WithLocks(locks SetLocker) Option         { return func(cfg *config) { cfg.locks = locks } }
 func WithColumnProvider(provider ColumnProvider) Option {
 	return func(cfg *config) { cfg.columns = provider }
 }
