@@ -10,6 +10,11 @@
 
 **设计基线：** [因子计算模块重构设计](../specs/2026-10-04-factor-dataset-period-pipeline-design.md)。本计划中的“设计 §N”均指该文档章节。
 
+> **修订说明（2026-10-04）：** 本计划之后，因子定义与因子集已决定解耦（`FactorDef` 不再带 `set_id` 与启停状态，新增成员关系 `FactorSetMember`，见 [后端规格](../specs/2026-10-04-factor-definition-set-membership-design.md)），Web 因子页面也已重新设计为 3 个菜单页（见 [前端设计](../specs/2026-10-04-factor-multi-page-frontend-design.md)）。后续工作按 [因子定义解耦与多页面前端执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 执行，其中：
+>
+> - 本计划 **Task 23（Web 因子页面）已被取代**，以新计划的阶段 C 为准；
+> - 本计划中凡涉及「因子属于单一因子集 / 因子自带 `status` / `SetFactorStatus`」的部分（接口约定、Task 9、10、12、13、20、22、24、25、27）已被新计划的阶段 A、B 修订；这些 Task 保留为历史记录，不要再按原文实现。
+
 ---
 
 ## 当前基线与执行约束
@@ -868,6 +873,8 @@ find modules/factor -name '*.go' ! -name '*_test.go' ! -path '*/factorgen/*' | x
 - [ ] **Step 4：验证并提交** `refactor(strategy): consume factor set results and per-factor period states`。
 
 ### Task 23：Web 因子页面
+
+> **已被取代：** 本 Task 的页面设计已由 [多页面前端设计](../specs/2026-10-04-factor-multi-page-frontend-design.md) 与 [执行计划](./2026-10-04-factor-definition-membership-and-multipage-frontend.md) 的阶段 C 取代，下列内容仅作历史记录。
 
 **Files:**
 - Modify: `web/src/api/factor/{index.ts,types.ts}`
