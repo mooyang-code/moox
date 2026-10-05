@@ -164,7 +164,7 @@ func matchesSubmitRequest(job store.RecalcJob, setID string, factorIDs, subjects
 }
 
 // PrepareEnableBackfill validates and builds the accepted job that must be
-// committed atomically with enabling a disabled factor in the catalog store.
+// committed atomically with enabling a disabled set member in the catalog store.
 func (s *Service) PrepareEnableBackfill(ctx context.Context, setID, factorID, requestID string, start, end time.Time) (store.RecalcJob, error) {
 	if s == nil || s.db == nil || s.worker == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
@@ -182,12 +182,12 @@ func (s *Service) PrepareEnableBackfill(ctx context.Context, setID, factorID, re
 	if set.Status != domain.SetStatusEnabled {
 		return store.RecalcJob{}, fmt.Errorf("factor set %q is not enabled", set.SetID)
 	}
-	factor, err := s.db.GetFactor(ctx, factorID)
+	member, err := s.db.GetMember(ctx, setID, factorID)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	if factor.SetID != setID || factor.Status != domain.FactorStatusDisabled {
-		return store.RecalcJob{}, fmt.Errorf("factor %q must be disabled in set %q before activation", factorID, setID)
+	if member.Status != domain.MemberStatusDisabled {
+		return store.RecalcJob{}, fmt.Errorf("factor %q must be a disabled member of set %q before activation", factorID, setID)
 	}
 	clock, err := s.worker.clockFor(set.SpaceID)
 	if err != nil {
@@ -310,11 +310,11 @@ func (w *Worker) selection(ctx context.Context, setID string, factorIDs, subject
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
-	all, err := w.db.ListFactors(ctx, set.SetID, domain.FactorStatusEnabled)
+	members, err := w.db.ListMembers(ctx, set.SetID, "")
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
-	selected, err := selectFactors(all, factorIDs)
+	selected, err := selectFactors(members, factorIDs)
 	if err != nil {
 		return domain.FactorSet{}, nil, nil, nil, err
 	}
@@ -352,10 +352,20 @@ func (w *Worker) resolveSubjects(ctx context.Context, set domain.FactorSet, requ
 	return resolved, nil
 }
 
-func selectFactors(enabled []domain.FactorDef, factorIDs []string) ([]domain.FactorDef, error) {
+// selectFactors resolves a recalc request against the set's members: no ids
+// means every enabled member, explicit ids must all be enabled members.
+func selectFactors(members []domain.SetMember, factorIDs []string) ([]domain.FactorDef, error) {
+	byID := make(map[string]domain.SetMember, len(members))
+	enabled := make([]domain.FactorDef, 0, len(members))
+	for _, member := range members {
+		byID[member.FactorID] = member
+		if member.Status == domain.MemberStatusEnabled {
+			enabled = append(enabled, member.Factor)
+		}
+	}
 	if len(factorIDs) == 0 {
 		if len(enabled) == 0 {
-			return nil, errors.New("factor set has no enabled factors")
+			return nil, errors.New("factor set has no enabled members")
 		}
 		return enabled, nil
 	}
@@ -363,17 +373,16 @@ func selectFactors(enabled []domain.FactorDef, factorIDs []string) ([]domain.Fac
 	if err != nil {
 		return nil, err
 	}
-	byID := make(map[string]domain.FactorDef, len(enabled))
-	for _, factor := range enabled {
-		byID[factor.FactorID] = factor
-	}
 	selected := make([]domain.FactorDef, 0, len(requested))
 	for _, id := range requested {
-		factor, ok := byID[id]
+		member, ok := byID[id]
 		if !ok {
+			return nil, fmt.Errorf("factor %q is not a member of set", id)
+		}
+		if member.Status != domain.MemberStatusEnabled {
 			return nil, fmt.Errorf("factor %q is not enabled in set", id)
 		}
-		selected = append(selected, factor)
+		selected = append(selected, member.Factor)
 	}
 	return selected, nil
 }

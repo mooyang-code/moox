@@ -20,8 +20,8 @@ func TestLoadUsesMaxLookbackRange(t *testing.T) {
 	plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
 		Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll},
 		Factors: []domain.FactorDef{
-			{FactorID: "short", LookbackPeriods: 5, Status: domain.FactorStatusEnabled},
-			{FactorID: "long", LookbackPeriods: 20, Status: domain.FactorStatusEnabled},
+			{FactorID: "short", LookbackPeriods: 5},
+			{FactorID: "long", LookbackPeriods: 20},
 		},
 		PeriodTime: target, Universe: []string{"BTC"}, CarryColumns: []string{"close", "volume"},
 	})
@@ -40,8 +40,8 @@ func TestLoadUsesMaxLookbackRange(t *testing.T) {
 func TestLoadRecalcExtendsReadRangeByLookback(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	factors := []domain.FactorDef{
-		{FactorID: "short", LookbackPeriods: 5, Status: domain.FactorStatusEnabled},
-		{FactorID: "long", LookbackPeriods: 20, Status: domain.FactorStatusEnabled},
+		{FactorID: "short", LookbackPeriods: 5},
+		{FactorID: "long", LookbackPeriods: 20},
 	}
 	plan := Plan{Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"}, Factors: factors,
 		TargetStart: start, TargetEnd: start.Add(3 * time.Minute), Expected: []string{"BTC"}, Available: []string{"BTC"}, CarryColumns: []string{"close"}}

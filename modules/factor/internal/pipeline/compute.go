@@ -101,9 +101,6 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	var timeFactors []domain.FactorDef
 	var crossFactors []domain.FactorDef
 	for _, factor := range plan.Factors {
-		if factor.Status != domain.FactorStatusEnabled {
-			continue
-		}
 		switch factor.FactorType {
 		case domain.FactorTypeTimeSeries:
 			timeFactors = append(timeFactors, factor)

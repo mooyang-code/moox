@@ -42,9 +42,6 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 	factors := make([]domain.FactorDef, 0, len(input.Factors))
 	maxLookback := 1
 	for _, factor := range input.Factors {
-		if factor.Status != domain.FactorStatusEnabled {
-			continue
-		}
 		factor.InputColumns = append([]string(nil), factor.InputColumns...)
 		factor.Outputs = append([]string(nil), factor.Outputs...)
 		factors = append(factors, factor)

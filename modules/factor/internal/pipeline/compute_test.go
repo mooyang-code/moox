@@ -103,7 +103,7 @@ func testPipelineFactor(id, factorType string, lookback int, partial bool) domai
 	return domain.FactorDef{
 		FactorID: id, Name: id, FactorType: factorType, SourceCode: code, SourceHash: domain.SourceHash(code),
 		InputColumns: []string{"close"}, Outputs: []string{id + "_value"}, ParamsJSON: "{}",
-		LookbackPeriods: lookback, AllowPartialUniverse: partial, Status: domain.FactorStatusEnabled,
+		LookbackPeriods: lookback, AllowPartialUniverse: partial,
 	}
 }
 

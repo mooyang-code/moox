@@ -18,9 +18,8 @@ func TestBuildLivePlanIntersectsUniverseAndScope(t *testing.T) {
 	plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
 		Set: set,
 		Factors: []domain.FactorDef{
-			{FactorID: "short", LookbackPeriods: 5, Status: domain.FactorStatusEnabled},
-			{FactorID: "disabled", LookbackPeriods: 200, Status: domain.FactorStatusDisabled},
-			{FactorID: "long", LookbackPeriods: 20, Status: domain.FactorStatusEnabled},
+			{FactorID: "short", LookbackPeriods: 5},
+			{FactorID: "long", LookbackPeriods: 20},
 		},
 		PeriodTime: target, Universe: []string{"SOL", "ETH", "BTC", "BTC"},
 		UpstreamFailed: []string{"ETH", "SOL"}, CarryColumns: []string{"volume", "close"}, TriggerEventID: "evt-1",

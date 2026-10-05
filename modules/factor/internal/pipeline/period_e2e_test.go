@@ -40,12 +40,15 @@ type memoryStorage struct {
 	commits map[string][]storageio.ResultRow
 	result  map[string]storageio.ResultRow
 	markers []storageio.PeriodMarker
+	// commitDatasets records which result dataset each commit was written to.
+	commitDatasets map[string]string
 }
 
 func newMemoryStorage(subjects []string, target time.Time, periods int) *memoryStorage {
 	store := &memoryStorage{
 		source: map[string][]time.Time{}, closes: map[string]float64{},
 		commits: map[string][]storageio.ResultRow{}, result: map[string]storageio.ResultRow{},
+		commitDatasets: map[string]string{},
 	}
 	for index, subject := range subjects {
 		for offset := periods - 1; offset >= 0; offset-- {
@@ -76,9 +79,10 @@ func (s *memoryStorage) ReadWindow(_ context.Context, req storageio.ReadRequest)
 	return frames, nil
 }
 
-func (s *memoryStorage) WriteRows(_ context.Context, _, _, commitID string, rows []storageio.ResultRow) error {
+func (s *memoryStorage) WriteRows(_ context.Context, _, datasetID, commitID string, rows []storageio.ResultRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.commitDatasets[commitID] = datasetID
 	if previous, ok := s.commits[commitID]; ok {
 		if len(previous) != len(rows) {
 			return errCommitConflict
@@ -125,7 +129,7 @@ func e2eFactor(t *testing.T, factorsDir, id, source string) domain.FactorDef {
 	factor := domain.FactorDef{
 		FactorID: id, Name: id, FactorType: domain.FactorTypeTimeSeries, SourceCode: source,
 		SourceHash: domain.SourceHash(source), InputColumns: []string{"close"}, Outputs: []string{id + "_out"},
-		ParamsJSON: "{}", LookbackPeriods: 3, Status: domain.FactorStatusEnabled,
+		ParamsJSON: "{}", LookbackPeriods: 3,
 	}
 	if id == "mean" {
 		factor.Outputs = []string{"mean3"}
@@ -251,18 +255,51 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 		}
 	})
 
-	t.Run("no enabled factor still reports the period", func(t *testing.T) {
+	t.Run("no enabled member still reports the period", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
 		runner := NewRunner(store, e2eExecutor(t, factorsDir), clock, Config{FactorsDir: factorsDir})
-		disabled := mean
-		disabled.Status = domain.FactorStatusDisabled
-		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{disabled}))
+		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{}))
 		require.NoError(t, err)
 
 		outcome, err := runner.Run(context.Background(), plan)
 		require.NoError(t, err)
 		require.Equal(t, "complete", outcome.Status)
-		require.Empty(t, store.result, "a disabled factor must not be computed or written")
+		require.Empty(t, store.result, "a set without enabled members must not compute or write rows")
 		require.Len(t, store.markers, 1)
 	})
+}
+
+// TestSameDefinitionInTwoSetsComputesIntoEachResultDataset verifies that one
+// definition used by two sets is written to each set's own result dataset with
+// its own commit id and marker.
+func TestSameDefinitionInTwoSetsComputesIntoEachResultDataset(t *testing.T) {
+	factorsDir := t.TempDir()
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	subjects := []string{"BTC", "ETH"}
+	mean := e2eFactor(t, factorsDir, "mean", e2eMeanSource)
+	clock := periodclock.Continuous{}
+	store := newMemoryStorage(subjects, target, 10)
+	runner := NewRunner(store, e2eExecutor(t, factorsDir), clock, Config{FactorsDir: factorsDir})
+
+	for _, set := range []domain.FactorSet{
+		{SetID: "set_1m", ResultDatasetID: "dataset_factor_bars_1m"},
+		{SetID: "set_other", ResultDatasetID: "dataset_factor_bars_other"},
+	} {
+		input := e2eLiveInput(target, subjects, []domain.FactorDef{mean})
+		input.Set.SetID, input.Set.ResultDatasetID = set.SetID, set.ResultDatasetID
+		plan, err := BuildLivePlan(clock, input)
+		require.NoError(t, err)
+		outcome, err := runner.Run(context.Background(), plan)
+		require.NoError(t, err)
+		require.Equal(t, "complete", outcome.Status)
+	}
+
+	require.Len(t, store.commitDatasets, 2, "each set owns a distinct commit id")
+	datasets := make([]string, 0, 2)
+	for _, datasetID := range store.commitDatasets {
+		datasets = append(datasets, datasetID)
+	}
+	require.ElementsMatch(t, []string{"dataset_factor_bars_1m", "dataset_factor_bars_other"}, datasets)
+	require.Len(t, store.markers, 2)
+	require.NotEqual(t, store.markers[0].ResultDatasetID, store.markers[1].ResultDatasetID)
 }
