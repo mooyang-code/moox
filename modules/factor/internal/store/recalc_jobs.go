@@ -35,9 +35,18 @@ type RecalcJob struct {
 	Status          string    `json:"status"`
 	ProgressTime    int64     `json:"progress_time"`
 	Error           string    `json:"error"`
+	EngineID        string    `json:"engine_id"`
+	LeaseToken      string    `json:"-"`
+	LeaseExpiresAt  int64     `json:"-"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
+
+// recalcJobColumns is the column list every recalc job read selects, in the
+// order of recalcJobRow.
+const recalcJobColumns = `c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
+	 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error,
+	 c_engine_id, c_lease_token, c_lease_expires_at, c_ctime, c_mtime`
 
 type recalcJobRow struct {
 	JobID           string    `gorm:"column:c_job_id"`
@@ -52,6 +61,9 @@ type recalcJobRow struct {
 	Status          string    `gorm:"column:c_status"`
 	ProgressTime    int64     `gorm:"column:c_progress_time"`
 	Error           string    `gorm:"column:c_error"`
+	EngineID        string    `gorm:"column:c_engine_id"`
+	LeaseToken      string    `gorm:"column:c_lease_token"`
+	LeaseExpiresAt  int64     `gorm:"column:c_lease_expires_at"`
 	CreatedAt       time.Time `gorm:"column:c_ctime"`
 	UpdatedAt       time.Time `gorm:"column:c_mtime"`
 }
@@ -70,7 +82,8 @@ func (r recalcJobRow) job() (RecalcJob, error) {
 		FactorIDs: factorIDs, Subjects: subjects,
 		FactorsOmitted: r.FactorsOmitted, SubjectsOmitted: r.SubjectsOmitted, StartTime: r.StartTime,
 		EndTime: r.EndTime, Status: r.Status, ProgressTime: r.ProgressTime,
-		Error: r.Error, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		Error: r.Error, EngineID: r.EngineID, LeaseToken: r.LeaseToken, LeaseExpiresAt: r.LeaseExpiresAt,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}, nil
 }
 
@@ -207,9 +220,7 @@ func insertRecalcJob(tx *gorm.DB, job RecalcJob, factorIDsJSON, subjectsJSON str
 	}
 	var existing recalcJobRow
 	lookup := tx.Raw(`
-		SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-		 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status,
-		 c_progress_time, c_error, c_ctime, c_mtime
+		SELECT `+recalcJobColumns+`
 		FROM t_factor_recalc_jobs WHERE c_request_id = ?
 	`, job.RequestID).Scan(&existing)
 	if lookup.Error != nil {
@@ -274,8 +285,7 @@ func (s *Store) UpdateRecalcJob(ctx context.Context, jobID string, mutate func(*
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row recalcJobRow
 		result := tx.Raw(`
-			SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-			 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
+			SELECT `+recalcJobColumns+`
 			FROM t_factor_recalc_jobs WHERE c_job_id = ?
 		`, jobID).Scan(&row)
 		if result.Error != nil {
@@ -315,8 +325,7 @@ func (s *Store) UpdateRecalcJob(ctx context.Context, jobID string, mutate func(*
 		}
 		var fresh recalcJobRow
 		result = tx.Raw(`
-			SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-			 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
+			SELECT `+recalcJobColumns+`
 			FROM t_factor_recalc_jobs WHERE c_job_id = ?
 		`, jobID).Scan(&fresh)
 		if result.Error != nil {
@@ -367,8 +376,7 @@ func (s *Store) ListRecalcJobs(ctx context.Context, filter RecalcJobFilter) ([]R
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
-	query := `SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-	 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
+	query := `SELECT ` + recalcJobColumns + `
 	 FROM t_factor_recalc_jobs`
 	var conditions []string
 	var args []any
@@ -413,8 +421,7 @@ func (s *Store) getRecalcJobRow(ctx context.Context, key, value string) (recalcJ
 	}
 	var row recalcJobRow
 	result := s.db.WithContext(ctx).Raw(`
-		SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-		 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
+		SELECT `+recalcJobColumns+`
 		FROM t_factor_recalc_jobs WHERE `+key+` = ?
 	`, value).Scan(&row)
 	if result.Error != nil {

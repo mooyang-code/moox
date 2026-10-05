@@ -23,6 +23,8 @@ func TestFactorSchemaContainsOnlySetsDefsMembersAndRecalcJobs(t *testing.T) {
 		"trg_t_factor_sets_mtime",
 		"trg_t_factor_defs_mtime",
 		"trg_t_factor_recalc_jobs_mtime",
+		"c_lease_expires_at INTEGER NOT NULL DEFAULT 0",
+		"idx_t_factor_recalc_jobs_pull",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("AllSQL() missing %q", want)

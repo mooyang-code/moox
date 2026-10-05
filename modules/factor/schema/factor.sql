@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_status TEXT NOT NULL DEFAULT 'accepted',
     c_progress_time INTEGER NOT NULL DEFAULT 0,
     c_error TEXT NOT NULL DEFAULT '',
+    -- 执行该任务的计算引擎与租约；租约过期后任务可被重新领取
+    c_engine_id TEXT NOT NULL DEFAULT '',
+    c_lease_token TEXT NOT NULL DEFAULT '',
+    c_lease_expires_at INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('accepted', 'running', 'succeeded', 'failed', 'cancelled')),
@@ -74,6 +78,8 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_status
 ON t_factor_recalc_jobs (c_status, c_mtime);
+CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_pull
+ON t_factor_recalc_jobs (c_status, c_lease_expires_at);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_sets_mtime
 AFTER UPDATE ON t_factor_sets

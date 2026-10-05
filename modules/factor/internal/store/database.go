@@ -104,7 +104,8 @@ func (s *Store) validateSchemaTables(tables []string) error {
 		"t_factor_recalc_jobs": {
 			"c_job_id", "c_request_id", "c_set_id", "c_factor_ids_json", "c_subjects_json",
 			"c_factors_omitted", "c_subjects_omitted",
-			"c_start_time", "c_end_time", "c_status", "c_progress_time", "c_error", "c_ctime", "c_mtime",
+			"c_start_time", "c_end_time", "c_status", "c_progress_time", "c_error",
+			"c_engine_id", "c_lease_token", "c_lease_expires_at", "c_ctime", "c_mtime",
 		},
 		"t_factor_sets": {
 			"c_set_id", "c_space_id", "c_source_dataset_id", "c_freq", "c_subject_mode",
