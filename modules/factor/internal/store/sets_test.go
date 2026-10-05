@@ -27,12 +27,26 @@ func testSet(setID, status string) domain.FactorSet {
 	}
 }
 
-func testFactorDef(factorID, status string) domain.FactorDef {
+func testFactorDef(factorID string) domain.FactorDef {
 	return domain.FactorDef{
-		SetID: "set_prices", FactorID: factorID, Name: factorID,
+		FactorID: factorID, Name: factorID,
 		FactorType: domain.FactorTypeTimeSeries, SourceCode: "def compute(): return 1",
 		SourceHash: "hash-" + factorID, InputColumns: []string{"close"}, Outputs: []string{factorID},
-		ParamsJSON: "{}", LookbackPeriods: 1, Status: status,
+		ParamsJSON: "{}", LookbackPeriods: 1,
+	}
+}
+
+// addTestMember creates the definition if needed and attaches it to the set with the given status.
+func addTestMember(t *testing.T, s *Store, setID, factorID, status string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := s.GetFactor(ctx, factorID); err != nil {
+		require.NoError(t, s.CreateFactor(ctx, testFactorDef(factorID)))
+	}
+	_, err := s.AddMember(ctx, setID, factorID)
+	require.NoError(t, err)
+	if status == domain.MemberStatusEnabled {
+		require.NoError(t, s.SetMemberStatus(ctx, setID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 	}
 }
 
@@ -40,7 +54,7 @@ func TestCreateFactorsRollsBackCatalogImportOnConflict(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
-	factor := testFactorDef("factor_close", domain.FactorStatusDisabled)
+	factor := testFactorDef("factor_close")
 	err := s.CreateFactors(ctx, []domain.FactorDef{factor, factor})
 	require.ErrorIs(t, err, ErrConflict)
 	_, err = s.GetFactor(ctx, factor.FactorID)
@@ -58,17 +72,13 @@ func TestCreateSetRejectsDuplicateSourceFreq(t *testing.T) {
 	require.ErrorIs(t, err, ErrConflict)
 }
 
-func TestEnabledSetByDatasetReturnsOnlyEnabledFactors(t *testing.T) {
+func TestEnabledSetByDatasetReturnsOnlyEnabledMembers(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
-	for _, def := range []domain.FactorDef{
-		testFactorDef("z_factor", domain.FactorStatusEnabled),
-		testFactorDef("a_factor", domain.FactorStatusEnabled),
-		testFactorDef("disabled_factor", domain.FactorStatusDisabled),
-	} {
-		require.NoError(t, s.CreateFactor(ctx, def))
-	}
+	addTestMember(t, s, "set_prices", "z_factor", domain.MemberStatusEnabled)
+	addTestMember(t, s, "set_prices", "a_factor", domain.MemberStatusEnabled)
+	addTestMember(t, s, "set_prices", "disabled_factor", domain.MemberStatusDisabled)
 
 	set, defs, found, err := s.EnabledSetByDataset(ctx, "crypto", "dataset_prices", "1m")
 	require.NoError(t, err)
@@ -76,19 +86,19 @@ func TestEnabledSetByDatasetReturnsOnlyEnabledFactors(t *testing.T) {
 	require.Equal(t, "set_prices", set.SetID)
 	require.Equal(t, []string{"a_factor", "z_factor"}, []string{defs[0].FactorID, defs[1].FactorID})
 
-	set, defs, found, err = s.EnabledSetByDataset(ctx, "crypto", "dataset_prices", "5m")
+	_, defs, found, err = s.EnabledSetByDataset(ctx, "crypto", "dataset_prices", "5m")
 	require.NoError(t, err)
 	require.False(t, found)
 	require.Empty(t, defs)
 }
 
-func TestDeleteSetFailsWhenFactorsExist(t *testing.T) {
+func TestDeleteSetFailsWhenMembersExist(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusDisabled)))
-	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close", domain.FactorStatusDisabled)))
+	addTestMember(t, s, "set_prices", "factor_close", domain.MemberStatusDisabled)
 
-	require.Error(t, s.DeleteSet(ctx, "set_prices"))
+	require.ErrorIs(t, s.DeleteSet(ctx, "set_prices"), ErrConflict)
 	_, err := s.GetSet(ctx, "set_prices")
 	require.NoError(t, err)
 }
@@ -116,11 +126,10 @@ func TestSetCRUDAndFactorCRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
 
-	def := testFactorDef("factor_close", domain.FactorStatusDisabled)
+	def := testFactorDef("factor_close")
 	require.NoError(t, s.CreateFactor(ctx, def))
 	def, err = s.GetFactor(ctx, def.FactorID)
 	require.NoError(t, err)
-	require.Equal(t, "set_prices", def.SetID)
 	require.NotZero(t, def.CreatedAt)
 	require.NotZero(t, def.UpdatedAt)
 	def.LookbackPeriods = 10
@@ -129,7 +138,7 @@ func TestSetCRUDAndFactorCRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 10, def.LookbackPeriods)
 
-	defs, err := s.ListFactors(ctx, "set_prices", domain.FactorStatusDisabled)
+	defs, err := s.ListFactors(ctx)
 	require.NoError(t, err)
 	require.Len(t, defs, 1)
 	require.NoError(t, s.DeleteFactor(ctx, def.FactorID))
@@ -147,26 +156,13 @@ func TestLifecycleStatusWritesUseExpectedStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.SetStatusEnabled, storedSet.Status)
 
-	factor := testFactorDef("factor_close", domain.FactorStatusDisabled)
+	factor := testFactorDef("factor_close")
 	require.NoError(t, s.CreateFactor(ctx, factor))
-	require.NoError(t, s.SetFactorStatus(ctx, factor.FactorID, domain.FactorStatusDisabled, domain.FactorStatusEnabled))
-	require.ErrorIs(t, s.SetFactorStatus(ctx, factor.FactorID, domain.FactorStatusDisabled, domain.FactorStatusDisabled), ErrConflict)
-	storedFactor, err := s.GetFactor(ctx, factor.FactorID)
+	_, err = s.AddMember(ctx, set.SetID, factor.FactorID)
 	require.NoError(t, err)
-	require.Equal(t, domain.FactorStatusEnabled, storedFactor.Status)
-}
-
-func TestUpdateAndDeleteFactorRequireDisabled(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
-	factor := testFactorDef("factor_close", domain.FactorStatusEnabled)
-	require.NoError(t, s.CreateFactor(ctx, factor))
-
-	factor.SourceCode = "changed"
-	require.ErrorContains(t, s.UpdateFactor(ctx, factor), "disabled")
-	require.ErrorContains(t, s.DeleteFactor(ctx, factor.FactorID), "disabled")
-	stored, err := s.GetFactor(ctx, factor.FactorID)
+	require.NoError(t, s.SetMemberStatus(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
+	require.ErrorIs(t, s.SetMemberStatus(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusDisabled), ErrConflict)
+	member, err := s.GetMember(ctx, set.SetID, factor.FactorID)
 	require.NoError(t, err)
-	require.NotEqual(t, "changed", stored.SourceCode)
+	require.Equal(t, domain.MemberStatusEnabled, member.Status)
 }

@@ -190,14 +190,18 @@ func (s *Store) ListSets(ctx context.Context) ([]domain.FactorSet, error) {
 	return sets, nil
 }
 
-// DeleteSet removes an empty factor set. SQLite's foreign key rejects deletion
-// while factor definitions still reference it.
+// DeleteSet removes a factor set without members. SQLite's foreign key rejects
+// deletion while members still reference it, which is reported as ErrConflict.
 func (s *Store) DeleteSet(ctx context.Context, setID string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
 	}
-	result := s.db.WithContext(ctx).Exec("DELETE FROM t_factor_sets WHERE c_set_id = ?", strings.TrimSpace(setID))
+	setID = strings.TrimSpace(setID)
+	result := s.db.WithContext(ctx).Exec("DELETE FROM t_factor_sets WHERE c_set_id = ?", setID)
 	if result.Error != nil {
+		if isForeignKeyConstraint(result.Error) {
+			return fmt.Errorf("%w: factor set %q still has members", ErrConflict, setID)
+		}
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
@@ -207,7 +211,7 @@ func (s *Store) DeleteSet(ctx context.Context, setID string) error {
 }
 
 // EnabledSetByDataset finds the enabled set for one source identity and returns
-// only enabled factor definitions, sorted by factor id.
+// the definitions of its enabled members, sorted by factor id.
 func (s *Store) EnabledSetByDataset(ctx context.Context, spaceID, datasetID, freq string) (domain.FactorSet, []domain.FactorDef, bool, error) {
 	if s == nil || s.db == nil {
 		return domain.FactorSet{}, nil, false, fmt.Errorf("factor database is not open")
@@ -229,9 +233,13 @@ func (s *Store) EnabledSetByDataset(ctx context.Context, spaceID, datasetID, fre
 	if err != nil {
 		return domain.FactorSet{}, nil, false, err
 	}
-	defs, err := s.ListFactors(ctx, set.SetID, domain.FactorStatusEnabled)
+	members, err := s.ListMembers(ctx, set.SetID, domain.MemberStatusEnabled)
 	if err != nil {
 		return domain.FactorSet{}, nil, false, err
+	}
+	defs := make([]domain.FactorDef, 0, len(members))
+	for _, member := range members {
+		defs = append(defs, member.Factor)
 	}
 	return set, defs, true, nil
 }
@@ -257,6 +265,10 @@ func unmarshalStringSlice(raw string) ([]string, error) {
 
 func isUniqueConstraint(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique constraint failed")
+}
+
+func isForeignKeyConstraint(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "foreign key constraint failed")
 }
 
 func validSetStatus(status string) bool {

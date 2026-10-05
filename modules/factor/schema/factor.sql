@@ -17,9 +17,9 @@ CREATE TABLE IF NOT EXISTS t_factor_sets (
     UNIQUE (c_result_dataset_id)
 );
 
+-- 因子定义：只描述算法，与因子集无关，无运行状态
 CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_factor_id TEXT NOT NULL PRIMARY KEY,
-    c_set_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_factor_type TEXT NOT NULL,
     c_source_code TEXT NOT NULL,
@@ -29,18 +29,28 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_params_json TEXT NOT NULL DEFAULT '{}',
     c_lookback_periods INTEGER NOT NULL,
     c_allow_partial_universe INTEGER NOT NULL DEFAULT 0,
-    c_status TEXT NOT NULL DEFAULT 'disabled',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_factor_type IN ('timeseries', 'cross_section')),
     CHECK (c_lookback_periods >= 1),
-    CHECK (c_allow_partial_universe IN (0, 1)),
-    CHECK (c_status IN ('enabled', 'disabled')),
-    FOREIGN KEY (c_set_id) REFERENCES t_factor_sets (c_set_id)
+    CHECK (c_allow_partial_universe IN (0, 1))
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_factor_defs_set
-ON t_factor_defs (c_set_id, c_status);
+-- 因子集成员：定义在某个因子集中的运行实例，启停状态属于成员
+CREATE TABLE IF NOT EXISTS t_factor_set_members (
+    c_set_id TEXT NOT NULL,
+    c_factor_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'disabled',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_set_id, c_factor_id),
+    CHECK (c_status IN ('enabled', 'disabled')),
+    FOREIGN KEY (c_set_id) REFERENCES t_factor_sets (c_set_id),
+    FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_factor_set_members_set ON t_factor_set_members (c_set_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_factor_set_members_factor ON t_factor_set_members (c_factor_id);
 
 CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_job_id TEXT NOT NULL PRIMARY KEY,
@@ -79,6 +89,15 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE c_factor_id = OLD.c_factor_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_set_members_mtime
+AFTER UPDATE ON t_factor_set_members
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_set_members SET c_mtime = CURRENT_TIMESTAMP
+    WHERE c_set_id = OLD.c_set_id AND c_factor_id = OLD.c_factor_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_recalc_jobs_mtime

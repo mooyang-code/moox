@@ -100,14 +100,16 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 	return stored, nil
 }
 
-// EnableFactorWithRecalcJob atomically accepts a factor's initial backfill and
-// makes the factor visible to live trigger selection.
-func (s *Store) EnableFactorWithRecalcJob(ctx context.Context, factorID, expectedStatus string, job RecalcJob) (RecalcJob, error) {
+// EnableMemberWithRecalcJob atomically accepts a member's initial backfill and
+// makes the member visible to live trigger selection.
+func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, expectedStatus string, job RecalcJob) (RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
 	}
+	setID = strings.TrimSpace(setID)
 	factorID = strings.TrimSpace(factorID)
-	if factorID == "" || expectedStatus != domain.FactorStatusDisabled || job.Status != RecalcStatusAccepted {
+	if setID == "" || factorID == "" || setID != strings.TrimSpace(job.SetID) ||
+		expectedStatus != domain.MemberStatusDisabled || job.Status != RecalcStatusAccepted {
 		return RecalcJob{}, fmt.Errorf("factor activation request is invalid")
 	}
 	job, factorIDsJSON, subjectsJSON, err := normalizeRecalcJob(job)
@@ -129,9 +131,9 @@ func (s *Store) EnableFactorWithRecalcJob(ctx context.Context, factorID, expecte
 			return fmt.Errorf("%w: request_id %q belongs to a different recalc request", ErrConflict, job.RequestID)
 		}
 		result := tx.Exec(`
-			UPDATE t_factor_defs SET c_status = ?, c_mtime = ?
-			WHERE c_factor_id = ? AND c_set_id = ? AND c_status = ?
-		`, domain.FactorStatusEnabled, time.Now().UTC(), factorID, job.SetID, expectedStatus)
+			UPDATE t_factor_set_members SET c_status = ?, c_mtime = ?
+			WHERE c_set_id = ? AND c_factor_id = ? AND c_status = ?
+		`, domain.MemberStatusEnabled, time.Now().UTC(), setID, factorID, expectedStatus)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -140,19 +142,18 @@ func (s *Store) EnableFactorWithRecalcJob(ctx context.Context, factorID, expecte
 		}
 		var current struct {
 			Status string `gorm:"column:c_status"`
-			SetID  string `gorm:"column:c_set_id"`
 		}
-		lookup := tx.Raw(`SELECT c_status, c_set_id FROM t_factor_defs WHERE c_factor_id = ?`, factorID).Scan(&current)
+		lookup := tx.Raw(`SELECT c_status FROM t_factor_set_members WHERE c_set_id = ? AND c_factor_id = ?`, setID, factorID).Scan(&current)
 		if lookup.Error != nil {
 			return lookup.Error
 		}
 		if lookup.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
-		if !created && current.SetID == job.SetID && current.Status == domain.FactorStatusEnabled {
+		if !created && current.Status == domain.MemberStatusEnabled {
 			return nil
 		}
-		return fmt.Errorf("%w: factor %q status is %q, expected %q", ErrConflict, factorID, current.Status, expectedStatus)
+		return fmt.Errorf("%w: member %q of set %q status is %q, expected %q", ErrConflict, factorID, setID, current.Status, expectedStatus)
 	})
 	if err != nil {
 		return RecalcJob{}, err

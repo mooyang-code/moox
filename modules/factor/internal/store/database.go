@@ -94,9 +94,12 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
 		"t_factor_defs": {
-			"c_factor_id", "c_set_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash",
+			"c_factor_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash",
 			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
-			"c_allow_partial_universe", "c_status", "c_ctime", "c_mtime",
+			"c_allow_partial_universe", "c_ctime", "c_mtime",
+		},
+		"t_factor_set_members": {
+			"c_set_id", "c_factor_id", "c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_recalc_jobs": {
 			"c_job_id", "c_request_id", "c_set_id", "c_factor_ids_json", "c_subjects_json",
@@ -109,7 +112,7 @@ func (s *Store) validateSchemaTables(tables []string) error {
 		},
 	}
 	if len(tables) != len(expected) {
-		return fmt.Errorf("factor database must contain only factor sets, definitions, and recalc jobs; create a fresh database")
+		return fmt.Errorf("factor database must contain only factor sets, definitions, set members, and recalc jobs; create a fresh database")
 	}
 	for _, table := range tables {
 		want, ok := expected[table]

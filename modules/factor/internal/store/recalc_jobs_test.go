@@ -10,33 +10,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEnableFactorWithRecalcJobIsAtomicAndIdempotent(t *testing.T) {
+func TestEnableMemberWithRecalcJobIsAtomicAndIdempotent(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	set := testSet("set_prices", domain.SetStatusEnabled)
 	require.NoError(t, s.CreateSet(ctx, set))
-	factor := testFactorDef("momentum", domain.FactorStatusDisabled)
-	require.NoError(t, s.CreateFactor(ctx, factor))
+	factor := testFactorDef("momentum")
+	addTestMember(t, s, set.SetID, factor.FactorID, domain.MemberStatusDisabled)
 	job := RecalcJob{
 		JobID: "enable-request", RequestID: "enable-request", SetID: set.SetID,
 		FactorIDs: []string{factor.FactorID}, Subjects: []string{"BTC"},
 		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
 	}
 
-	accepted, err := s.EnableFactorWithRecalcJob(ctx, factor.FactorID, domain.FactorStatusDisabled, job)
+	accepted, err := s.EnableMemberWithRecalcJob(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, job)
 	require.NoError(t, err)
 	require.Equal(t, job.JobID, accepted.JobID)
-	storedFactor, err := s.GetFactor(ctx, factor.FactorID)
+	member, err := s.GetMember(ctx, set.SetID, factor.FactorID)
 	require.NoError(t, err)
-	require.Equal(t, domain.FactorStatusEnabled, storedFactor.Status)
+	require.Equal(t, domain.MemberStatusEnabled, member.Status)
 
-	acceptedAgain, err := s.EnableFactorWithRecalcJob(ctx, factor.FactorID, domain.FactorStatusDisabled, job)
+	acceptedAgain, err := s.EnableMemberWithRecalcJob(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, job)
 	require.NoError(t, err)
 	require.Equal(t, accepted, acceptedAgain)
 
 	conflict := job
 	conflict.EndTime++
-	_, err = s.EnableFactorWithRecalcJob(ctx, factor.FactorID, domain.FactorStatusDisabled, conflict)
+	_, err = s.EnableMemberWithRecalcJob(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, conflict)
 	require.ErrorIs(t, err, ErrConflict)
 }
 
