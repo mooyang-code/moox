@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/stretchr/testify/require"
@@ -223,7 +223,7 @@ func TestChunkHoldsSetLock(t *testing.T) {
 	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 1),
 	)
-	locks := &catalog.Locks{}
+	locks := &setlock.Locks{}
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	entered := make(chan struct{})
 	finish := make(chan struct{})

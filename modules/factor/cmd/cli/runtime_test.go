@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,7 +64,7 @@ func TestImportLockUsesServiceDatabaseLockDirectory(t *testing.T) {
 	unlock, err := lockImport(context.Background(), databasePath, []string{"momentum", "bias", "momentum"}, "set_prices")
 	require.NoError(t, err)
 	defer unlock()
-	locks := catalog.NewLocks(databasePath + ".locks")
+	locks := setlock.New(databasePath + ".locks")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	_, err = locks.LockContext(ctx, "set_prices")

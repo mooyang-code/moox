@@ -1,4 +1,4 @@
-package catalog
+package setlock
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 
 func TestLocksCoordinateAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
-	first := NewLocks(dir)
-	second := NewLocks(dir)
+	first := New(dir)
+	second := New(dir)
 	unlock, err := first.LockContext(context.Background(), "fset_prices_1m")
 	require.NoError(t, err)
 	defer unlock()
@@ -31,13 +31,13 @@ func TestLocksCoordinateAcrossInstances(t *testing.T) {
 }
 
 func TestLockContextRejectsEmptySet(t *testing.T) {
-	_, err := NewLocks("").LockContext(context.Background(), " ")
+	_, err := New("").LockContext(context.Background(), " ")
 	require.Error(t, err)
 	require.False(t, errors.Is(err, context.Canceled))
 }
 
 func TestLocksServeWaitersInArrivalOrder(t *testing.T) {
-	locks := NewLocks("")
+	locks := New("")
 	unlock, err := locks.LockContext(context.Background(), "fset_prices_1m")
 	require.NoError(t, err)
 
@@ -64,7 +64,7 @@ func TestLocksServeWaitersInArrivalOrder(t *testing.T) {
 }
 
 func TestFactorLockKeysDoNotCollideWithSetKeys(t *testing.T) {
-	locks := NewLocks(t.TempDir())
+	locks := New(t.TempDir())
 	unlockFactor, err := locks.LockFactorContext(context.Background(), "fset_prices_1m")
 	require.NoError(t, err)
 	defer unlockFactor()
@@ -77,7 +77,7 @@ func TestFactorLockKeysDoNotCollideWithSetKeys(t *testing.T) {
 
 	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	_, err = NewLocks(locks.dir).LockFactorContext(ctx, "fset_prices_1m")
+	_, err = New(locks.dir).LockFactorContext(ctx, "fset_prices_1m")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	_, err = locks.LockFactorContext(context.Background(), " ")
 	require.Error(t, err)

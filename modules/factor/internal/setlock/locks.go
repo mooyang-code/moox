@@ -1,4 +1,4 @@
-package catalog
+package setlock
 
 import (
 	"context"
@@ -27,7 +27,9 @@ type Locks struct {
 	dir   string
 }
 
-func NewLocks(lockDir string) *Locks { return &Locks{dir: lockDir} }
+// New returns set locks; a non-empty lockDir adds filesystem locks shared with
+// other processes (moox-factor-mgr and its CLI) that open the same database.
+func New(lockDir string) *Locks { return &Locks{dir: lockDir} }
 
 // Lock acquires the stable mutex for setID and returns its unlock function.
 func (l *Locks) Lock(setID string) func() {

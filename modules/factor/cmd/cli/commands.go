@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/artifacts"
-	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
+	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorgen "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
@@ -310,7 +310,7 @@ func validateImportableSet(set domain.FactorSet) error {
 // lockImport takes the definition locks (ascending) and then the optional set
 // lock, the same order the catalog service uses.
 func lockImport(ctx context.Context, databasePath string, factorIDs []string, setID string) (func(), error) {
-	locks := catalog.NewLocks(databasePath + ".locks")
+	locks := setlock.New(databasePath + ".locks")
 	ids := append([]string(nil), factorIDs...)
 	sort.Strings(ids)
 	var unlocks []func()
@@ -435,7 +435,7 @@ func runOnce(ctx context.Context, cli cliConfig, out io.Writer) error {
 	})
 	worker := recalc.NewWorker(db, runner,
 		recalc.WithClock(periodclock.Continuous{}),
-		recalc.WithLocks(catalog.NewLocks(config.DatabasePath+".locks")),
+		recalc.WithLocks(setlock.New(config.DatabasePath+".locks")),
 		recalc.WithChunkPeriods(1),
 		recalc.WithColumnProvider(storage),
 		recalc.WithSubjectProvider(subjects),

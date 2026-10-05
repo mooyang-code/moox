@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/artifacts"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
+	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"gorm.io/gorm"
@@ -40,7 +41,7 @@ type Notifier interface {
 type Option func(*Service)
 
 func WithFactorsDir(path string) Option { return func(s *Service) { s.artifacts.FactorsDir = path } }
-func WithLockDir(path string) Option    { return func(s *Service) { s.locks = NewLocks(path) } }
+func WithLockDir(path string) Option    { return func(s *Service) { s.locks = setlock.New(path) } }
 func WithSourceChecker(checker SourceChecker) Option {
 	return func(s *Service) { s.sourceChecker = checker }
 }
@@ -68,12 +69,12 @@ type Service struct {
 	earliestPeriod EarliestPeriodProvider
 	notifier       Notifier
 	artifacts      artifacts.Artifacts
-	locks          *Locks
+	locks          *setlock.Locks
 	now            func() time.Time
 }
 
 func NewService(db *store.Store, metadata storageio.Metadata, options ...Option) *Service {
-	s := &Service{db: db, metadata: metadata, now: time.Now, locks: NewLocks("")}
+	s := &Service{db: db, metadata: metadata, now: time.Now, locks: setlock.New("")}
 	for _, option := range options {
 		if option != nil {
 			option(s)
@@ -83,7 +84,7 @@ func NewService(db *store.Store, metadata storageio.Metadata, options ...Option)
 }
 
 // Locks exposes the per-set locks shared with live pipeline and recalculation.
-func (s *Service) Locks() *Locks { return s.locks }
+func (s *Service) Locks() *setlock.Locks { return s.locks }
 
 func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.FactorSet, error) {
 	if s == nil || s.db == nil || s.metadata == nil {
