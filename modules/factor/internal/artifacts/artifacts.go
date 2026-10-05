@@ -1,4 +1,4 @@
-package catalog
+package artifacts
 
 import (
 	"crypto/rand"

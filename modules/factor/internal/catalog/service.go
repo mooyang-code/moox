@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/artifacts"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
@@ -66,7 +67,7 @@ type Service struct {
 	recalc         RecalcSubmitter
 	earliestPeriod EarliestPeriodProvider
 	notifier       Notifier
-	artifacts      Artifacts
+	artifacts      artifacts.Artifacts
 	locks          *Locks
 	now            func() time.Time
 }

@@ -1,4 +1,4 @@
-package catalog
+package artifacts
 
 import (
 	"os"
@@ -41,4 +41,17 @@ func TestMaterializeNeverReplacesConflictingHashFile(t *testing.T) {
 	content, readErr := os.ReadFile(target)
 	require.NoError(t, readErr)
 	require.Equal(t, "not the hashed source", string(content))
+}
+
+func TestArtifactsMaterializeImmutableSource(t *testing.T) {
+	root := t.TempDir()
+	artifacts := Artifacts{FactorsDir: root}
+	factor := domain.FactorDef{Name: "momentum", SourceCode: "def compute(frame, context): return frame['close']"}
+	factor.SourceHash = domain.SourceHash(factor.SourceCode)
+	path, err := artifacts.Materialize(factor)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(root, factor.Name, factor.SourceHash+".py"), path)
+	factor.SourceCode = "different source"
+	_, err = artifacts.Materialize(factor)
+	require.ErrorContains(t, err, "source hash")
 }

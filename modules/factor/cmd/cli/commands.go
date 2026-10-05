@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/artifacts"
 	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
@@ -109,7 +110,7 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			return fmt.Errorf("validate factor for set %s: %w", cfg.SetID, err)
 		}
 	}
-	if _, err := (catalog.Artifacts{FactorsDir: runtime.FactorsDir}).Materialize(factor); err != nil {
+	if _, err := (artifacts.Artifacts{FactorsDir: runtime.FactorsDir}).Materialize(factor); err != nil {
 		return fmt.Errorf("materialize factor source: %w", err)
 	}
 	if err := db.CreateFactor(ctx, factor); err != nil {
@@ -229,7 +230,7 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		prepared = append(prepared, factor)
 	}
 	for _, factor := range prepared {
-		if _, err := (catalog.Artifacts{FactorsDir: runtime.FactorsDir}).Materialize(factor); err != nil {
+		if _, err := (artifacts.Artifacts{FactorsDir: runtime.FactorsDir}).Materialize(factor); err != nil {
 			return fmt.Errorf("materialize factor %s: %w", factor.FactorID, err)
 		}
 	}

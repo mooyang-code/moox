@@ -752,19 +752,6 @@ func TestLifecycleOpsSerializeWithPeriodLock(t *testing.T) {
 	}
 }
 
-func TestArtifactsMaterializeImmutableSource(t *testing.T) {
-	root := t.TempDir()
-	artifacts := Artifacts{FactorsDir: root}
-	factor := testFactor()
-	factor.SourceHash = domain.SourceHash(factor.SourceCode)
-	path, err := artifacts.Materialize(factor)
-	require.NoError(t, err)
-	require.Equal(t, filepath.Join(root, factor.Name, factor.SourceHash+".py"), path)
-	factor.SourceCode = "different source"
-	_, err = artifacts.Materialize(factor)
-	require.ErrorContains(t, err, "source hash")
-}
-
 func openCatalogStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
