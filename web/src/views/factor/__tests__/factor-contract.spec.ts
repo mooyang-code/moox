@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { EngineStatus, FactorDef, FactorInfo, FactorMember, FactorSet, ListRecalcJobsReq, RecalcFactorsReq, RecalcJob, SetRunSummary } from "@/api/factor/types";
+import type {
+  EngineStatus,
+  FactorDef,
+  FactorInfo,
+  FactorMember,
+  FactorSet,
+  ListRecalcJobsReq,
+  RecalcFactorsReq,
+  RecalcJob,
+  SetRunSummary
+} from "@/api/factor/types";
 import taskHost from "@/views/factor/task-management/index.vue?raw";
 import factorScope from "@/views/factor/shared/use-factor-scope.ts?raw";
 import computeTasks from "@/views/factor/compute-tasks/index.vue?raw";
