@@ -195,7 +195,7 @@ apply_profile() {
       WITH_EVENTBUS=1
       WITH_CLOUDNODE=1
       WITH_COLLECTOR=1
-      WITH_FACTOR_MGR=0
+      WITH_FACTOR_MGR=1
       WITH_STRATEGY=1
       WITH_TRADE=1
       WITH_MONITOR=1
@@ -1398,14 +1398,12 @@ PY
   if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
     [[ "${WITH_ARCHIVE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml#' "${STAGE_DIR}/archive/config/app.yaml"
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
-    [[ "${WITH_FACTOR_MGR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor-mgr/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/strategy-eventbus.yaml#' "${STAGE_DIR}/strategy/config/app.yaml"
     [[ "${WITH_TRADE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/trade-eventbus.yaml#' "${STAGE_DIR}/trade/config/app.yaml"
     [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/monitor-observability.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
   else
     [[ "${WITH_ARCHIVE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/archive/config/app.yaml"
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/cloudnode/config/app.yaml"
-    [[ "${WITH_FACTOR_MGR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/factor-mgr/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/strategy/config/app.yaml"
     [[ "${WITH_TRADE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/trade/config/app.yaml"
     if [[ "${WITH_MONITOR}" -eq 1 && "${COMPONENT_OVERLAY:-0}" -eq 0 ]]; then
@@ -1932,30 +1930,16 @@ COLLECTOR_ENV=(
   "MOOX_EVENTBUS_CREDENTIAL_FILE=${MOOX_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/collector-market-fetch-consumer.yaml}"
 )
 
-if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
-	FACTOR_EVENTBUS_URL_ENV="tls://127.0.0.1:${MOOX_EVENTBUS_PORT:-4222}"
-else
-	FACTOR_EVENTBUS_URL_ENV="nats://127.0.0.1:${MOOX_EVENTBUS_PORT:-4222}"
-fi
+# moox-factor-mgr keeps the factor catalog; it neither consumes EventBus nor
+# runs factor code (moox-factor-engine does, on the operator machine).
 FACTOR_ENV=(
   "MOOX_FACTOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"
   "MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor-mgr/factor.db}"
-  "MOOX_FACTOR_PYTHON_WORKER_PATH=${MOOX_FACTOR_PYTHON_WORKER_PATH:-${ROOT}/factor-mgr/pyworker/worker.py}"
-  "MOOX_FACTOR_PYTHON_FACTORS_DIR=${MOOX_FACTOR_PYTHON_FACTORS_DIR:-${ROOT}/data/factor-mgr/factors}"
-  "MOOX_EVENTBUS_NATS_URL=${MOOX_FACTOR_EVENTBUS_URL:-${FACTOR_EVENTBUS_URL_ENV}}"
-  "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
+  "MOOX_FACTOR_PYTHON_BIN=${MOOX_FACTOR_PYTHON_BIN:-python3}"
   "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
   "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
 )
-if [[ -n "${MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE:-}" ]]; then
-  FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE}")
-elif [[ -r "${HOME}/.config/moox/eventbus/factor-eventbus.yaml" ]]; then
-  # Do not let the process-wide collector credential leak into Factor. The
-  # factor consumer has its own JetStream permissions and must be explicit
-  # even when the shared EventBus URL is configured without TLS.
-  FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/factor-eventbus.yaml")
-fi
 
 MONITOR_ENV=(
   "MOOX_OBSERVABILITY_DELIVER_POLICY=${MOOX_OBSERVABILITY_DELIVER_POLICY}"
@@ -2012,10 +1996,6 @@ wait_nats() {
   done
   echo "${label} NATS ${host}:${port} not ready after ${attempts}s" >&2
   return 1
-}
-
-wait_factor_nats() {
-  wait_nats factor "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_FACTOR_NATS_SECONDS:-60}"
 }
 
 wait_tcp() {
@@ -2781,7 +2761,12 @@ start_factor_mgr() {
   }
   local factor_db="${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor-mgr/factor.db}"
   mkdir -p "$(dirname "${factor_db}")"
-  wait_factor_nats
+  # Creating or editing a definition test-loads its source, which imports
+  # pandas and numpy (modules/factor/pyworker/runtime-requirements.txt).
+  "${MOOX_FACTOR_PYTHON_BIN:-python3}" -c 'import pandas, numpy' >/dev/null 2>&1 || {
+    echo "moox-factor-mgr requires ${MOOX_FACTOR_PYTHON_BIN:-python3} with pandas and numpy; install modules/factor/pyworker/runtime-requirements.txt" >&2
+    exit 1
+  }
   gateway_service_env_for factor
   runtime_identity_env moox_factor_mgr "${ROOT}/factor-mgr/config/app.yaml"
   start_service "factor-mgr" "${ROOT}/factor-mgr" \
@@ -4358,10 +4343,10 @@ EOF
     cp -R "${ROOT}/modules/collector/configs/." "${STAGE_DIR}/collector/configs/"
   fi
   if [[ "${WITH_FACTOR_MGR}" -eq 1 ]]; then
-    cp -R "${ROOT}/modules/factor/config/." "${STAGE_DIR}/factor-mgr/config/"
+    cp "${ROOT}/modules/factor/config/app.yaml" "${ROOT}/modules/factor/config/trpc_go.yaml" "${STAGE_DIR}/factor-mgr/config/"
+    # Catalog sources for moox-factor-mgr-cli import-catalog.
     cp -R "${ROOT}/modules/factor/factors/." "${STAGE_DIR}/factor-mgr/factors/"
-    cp -R "${ROOT}/modules/factor/pyworker" "${STAGE_DIR}/factor-mgr/pyworker"
-    find "${STAGE_DIR}/factor-mgr/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
+    find "${STAGE_DIR}/factor-mgr/factors" -type d -name __pycache__ -prune -exec rm -rf {} +
   fi
   if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/strategy/config/." "${STAGE_DIR}/strategy/config/"
@@ -4394,7 +4379,7 @@ EOF
     (cd "${ROOT}" && "${runtime_config_cli[@]}" setup render-runtime-config "${render_args[@]}") \
       >"${STAGE_DIR}/config/render-runtime-config.json"
   fi
-  if [[ "${WITH_FACTOR_MGR}" -eq 1 || "${WITH_STRATEGY}" -eq 1 ]]; then
+  if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
     cp -R "${ROOT}/packages/pyruntime/python/." "${STAGE_DIR}/python-runtime/"
     find "${STAGE_DIR}/python-runtime" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
     find "${STAGE_DIR}/python-runtime" -type f -name '*.pyc' -delete

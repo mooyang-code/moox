@@ -30,7 +30,7 @@ server:
       ip: 127.0.0.1
       port: 11405
       network: tcp
-      protocol: trpc
+      protocol: http
       timeout: 60000
     - name: trpc.moox.factor.Health
       ip: 127.0.0.1

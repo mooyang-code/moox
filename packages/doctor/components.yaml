@@ -153,11 +153,11 @@ components:
   - component_id: moox_factor_mgr
     service_name: moox_factor_mgr
     role: factor
-    description: Factor calculation scheduler and runtime
-    duties: [calculate and persist factor results]
+    description: Factor catalog manager serving definitions, sets and recalc jobs to the compute engine
+    duties: [manage factor definitions, sets and recalc jobs]
     inputs: [factor inputs]
     outputs: [factor results]
-    dependencies: [storage_primary, eventbus]
+    dependencies: [storage_primary]
     transport: reporter
     functional_observability: active
     health_path: /readyz

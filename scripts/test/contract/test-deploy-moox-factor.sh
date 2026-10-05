@@ -69,11 +69,7 @@ for path in \
   bin/moox-factor-mgr-cli \
   factor-mgr/config/app.yaml \
   factor-mgr/config/trpc_go.yaml \
-  factor-mgr/pyworker/worker.py \
-  factor-mgr/pyworker/requirements.txt \
-  factor-mgr/pyworker/runtime-requirements.txt \
   factor-mgr/factors/Bias.py \
-  python-runtime/moox_pyruntime/protocol.py \
   secrets/gateway-factor.key \
   secrets/gateway-service.env \
   secrets/storage-internal-auth.env \
@@ -99,19 +95,24 @@ storage_view_secret="$(
 grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-service.env"
 grep -Fq 'MOOX_FACTOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}' "${UNPACKED}/start.sh"
-grep -Fq 'FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=' "${UNPACKED}/start.sh"
-grep -Fq 'FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/factor-eventbus.yaml")' "${UNPACKED}/start.sh"
-grep -Fq 'FACTOR_EVENTBUS_URL_ENV="tls://127.0.0.1:${MOOX_EVENTBUS_PORT:-4222}"' "${UNPACKED}/start.sh"
-grep -Fq 'MOOX_EVENTBUS_NATS_URL=${MOOX_FACTOR_EVENTBUS_URL:-${FACTOR_EVENTBUS_URL_ENV}}' "${UNPACKED}/start.sh"
-grep -Fq 'MOOX_FACTOR_PYTHON_FACTORS_DIR=${MOOX_FACTOR_PYTHON_FACTORS_DIR:-${ROOT}/data/factor-mgr/factors}' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor-mgr/factor.db}' "${UNPACKED}/start.sh"
+grep -Fq "import pandas, numpy" "${UNPACKED}/start.sh"
+for removed in factor-mgr/pyworker python-runtime/moox_pyruntime bin/moox-factor-engine factor-mgr/config/engine.yaml; do
+  [[ ! -e "${UNPACKED}/${removed}" ]] || { echo "the manager package must not ship ${removed}" >&2; exit 1; }
+done
+if awk '/^start_factor_mgr\(\)/,/^start_strategy\(\)/' "${UNPACKED}/start.sh" | grep -Eq 'wait_nats|EVENTBUS'; then
+  echo "moox-factor-mgr must not wait for or consume EventBus" >&2
+  exit 1
+fi
 if awk '/^start_factor_mgr\(\)/,/^start_strategy\(\)/' "${UNPACKED}/start.sh" | grep -q ensure_factor_python; then
   echo "control start_factor_mgr still installs Python compute dependencies" >&2
   exit 1
 fi
 grep -Fq 'MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target}' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"
 
-grep -Fq 'factors_dir: ./data/factor/factors' "${UNPACKED}/factor-mgr/config/app.yaml"
-grep -Fq 'workers: 8' "${UNPACKED}/factor-mgr/config/app.yaml"
-! grep -Fq 'scheduler:' "${UNPACKED}/factor-mgr/config/app.yaml"
+grep -Fq 'path: ../data/factor-mgr/factor.db' "${UNPACKED}/factor-mgr/config/app.yaml"
+grep -Fq 'lease_ttl: 45s' "${UNPACKED}/factor-mgr/config/app.yaml"
+! grep -Eq '^(eventbus|pipeline|recalc):' "${UNPACKED}/factor-mgr/config/app.yaml"
+grep -Fq 'name: trpc.moox.factor.FactorEngine' "${UNPACKED}/factor-mgr/config/trpc_go.yaml"
 
 echo 'Factor deployment contract passed'

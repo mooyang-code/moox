@@ -65,6 +65,7 @@ ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/modules/eventbus" "${FIXTURE_ROOT}/modules/eventbus"
 ln -s "${ROOT}/modules/cloudnode" "${FIXTURE_ROOT}/modules/cloudnode"
 ln -s "${ROOT}/modules/collector" "${FIXTURE_ROOT}/modules/collector"
+ln -s "${ROOT}/modules/factor" "${FIXTURE_ROOT}/modules/factor"
 ln -s "${ROOT}/modules/monitor" "${FIXTURE_ROOT}/modules/monitor"
 ln -s "${ROOT}/modules/hostagent" "${FIXTURE_ROOT}/modules/hostagent"
 ln -s "${ROOT}/modules/strategy" "${FIXTURE_ROOT}/modules/strategy"
@@ -77,6 +78,7 @@ for binary in \
   moox-admin moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
   moox-collector moox-collector-cli moox-collector-subject \
+  moox-factor-mgr moox-factor-mgr-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli moox-host-agent; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
@@ -127,15 +129,19 @@ done
 grep -Fxq 'MOOX_LOCAL_LOG_MAX_SIZE_MB=50' "${TMP_ROOT}/unpacked/config/log-rotation.env"
 grep -Fxq 'MOOX_LOCAL_LOG_BACKUP_COUNT=5' "${TMP_ROOT}/unpacked/config/log-rotation.env"
 grep -Fq 'moox-log-rotate' "${TMP_ROOT}/unpacked/healthcheck.sh"
-for binary in moox-storage moox-archive moox-factor-mgr; do
+for binary in moox-storage moox-archive moox-factor-engine; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected control binary: ${binary}" >&2; exit 1; }
 done
+for binary in moox-factor-mgr moox-factor-mgr-cli; do
+  [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing factor manager binary: ${binary}" >&2; exit 1; }
+done
+[[ -s "${TMP_ROOT}/unpacked/factor-mgr/config/app.yaml" && ! -e "${TMP_ROOT}/unpacked/factor-mgr/pyworker" ]]
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]
 [[ -s "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env" ]]
 [[ -s "${TMP_ROOT}/unpacked/config/components.env" ]]
-grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR_MGR=0' "${TMP_ROOT}/unpacked/config/components.env"
+grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR_MGR=1' "${TMP_ROOT}/unpacked/config/components.env"
 grep -Fxq 'MOOX_INSTALLED_WITH_ADMIN=1' "${TMP_ROOT}/unpacked/config/components.env"
-MOOX_WITH_FACTOR_MGR=1 bash -c 'source "$1"; [[ "${MOOX_WITH_FACTOR_MGR}" == 1 ]]' _ "${TMP_ROOT}/unpacked/config/components.env"
+MOOX_WITH_FACTOR_MGR=0 bash -c 'source "$1"; [[ "${MOOX_WITH_FACTOR_MGR}" == 0 ]]' _ "${TMP_ROOT}/unpacked/config/components.env"
 MOOX_WITH_ADMIN=0 bash -c 'source "$1"; [[ "${MOOX_WITH_ADMIN}" == 0 ]]' _ "${TMP_ROOT}/unpacked/config/components.env"
 grep -Eq '^MOOX_STORAGE_PRIMARY_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
 grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
