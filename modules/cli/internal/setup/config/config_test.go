@@ -1069,7 +1069,93 @@ capacity_check_interval = "30m"
 	require.Equal(t, "30m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
 }
 
-func TestLoadFactorSetupDefaultsAndItems(t *testing.T) {
+func TestFactorSetupParsesDefinitionsAndMembers(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "./examples/factors"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+
+[[factors.definitions]]
+factor_id = "bias"
+factor_type = "timeseries"
+file = "timeseries/bias.py"
+input_columns = ["close"]
+outputs = ["bias_5"]
+params_json = '{"windows":[5]}'
+lookback_periods = 5
+
+[[factors.members]]
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+factor_id = "bias"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.Factors.Enabled)
+	assert.Equal(t, "examples/factors", snapshot.Manifest.Factors.SourceDir)
+	require.Len(t, snapshot.Manifest.Factors.Definitions, 1)
+	require.Len(t, snapshot.Manifest.Factors.Sets, 1)
+	require.Len(t, snapshot.Manifest.Factors.Members, 1)
+	assert.Equal(t, "bias", snapshot.Manifest.Factors.Definitions[0].FactorID)
+	assert.Equal(t, "all", snapshot.Manifest.Factors.Sets[0].SubjectMode)
+	assert.Equal(t, "enabled", snapshot.Manifest.Factors.Members[0].Status)
+}
+
+func TestFactorSetupRejectsMemberWithUnknownFactor(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "./examples/factors"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+
+[[factors.members]]
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+factor_id = "ghost"
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "unknown factor_id")
+}
+
+func TestFactorSetupRejectsMemberWithUnknownSet(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "./examples/factors"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+
+[[factors.definitions]]
+factor_id = "Bias"
+factor_type = "timeseries"
+file = "Bias.py"
+lookback_periods = 20
+
+[[factors.members]]
+source_dataset_id = "dataset_other"
+freq = "1m"
+factor_id = "Bias"
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "no matching factor set")
+}
+
+func TestFactorSetupRejectsLegacyItemsKeyWithMigrationHint(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 [factors]
@@ -1082,25 +1168,49 @@ source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
 
 [[factors.items]]
-factor_id = "bias"
+factor_id = "Bias"
 factor_type = "timeseries"
-file = "timeseries/bias.py"
-input_columns = ["close"]
-outputs = ["bias_5"]
-params_json = '{"windows":[5]}'
-lookback_periods = 5
+file = "Bias.py"
 source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
+lookback_periods = 20
 `
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	assert.True(t, snapshot.Manifest.Factors.Enabled)
-	assert.Equal(t, "examples/factors", snapshot.Manifest.Factors.SourceDir)
-	require.Len(t, snapshot.Manifest.Factors.Items, 1)
-	require.Len(t, snapshot.Manifest.Factors.Sets, 1)
-	assert.Equal(t, "bias", snapshot.Manifest.Factors.Items[0].FactorID)
-	assert.Equal(t, "all", snapshot.Manifest.Factors.Sets[0].SubjectMode)
-	assert.Equal(t, "enabled", snapshot.Manifest.Factors.Items[0].Status)
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "factors.items is no longer supported")
+	require.ErrorContains(t, err, "[[factors.members]]")
+}
+
+func TestFactorSetupRejectsDuplicateMember(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "./examples/factors"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+
+[[factors.definitions]]
+factor_id = "Bias"
+factor_type = "timeseries"
+file = "Bias.py"
+lookback_periods = 20
+
+[[factors.members]]
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+factor_id = "Bias"
+
+[[factors.members]]
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+factor_id = "Bias"
+status = "disabled"
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "more than once")
 }
 
 func TestLoadDefaultsDisableFactors(t *testing.T) {
@@ -1117,38 +1227,14 @@ func TestLoadRejectsInvalidFactorTypeBeforeSetup(t *testing.T) {
 [factors]
 enabled = true
 source_dir = "examples/factors"
-[[factors.sets]]
-space_id = "crypto"
-source_dataset_id = "dataset_prices"
-freq = "1m"
-[[factors.items]]
+[[factors.definitions]]
 factor_id = "Bias"
 file = "Bias.py"
-source_dataset_id = "dataset_prices"
-freq = "1m"
 lookback_periods = 20
 ` + declaration + "\n"
 		_, err := Load(writeManifest(t, root, body, 0o600), root)
 		require.ErrorContains(t, err, "factor_type")
 	}
-}
-
-func TestLoadRejectsFactorWithoutMatchingSet(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[factors]
-enabled = true
-source_dir = "examples/factors"
-[[factors.items]]
-factor_id = "Bias"
-factor_type = "timeseries"
-file = "Bias.py"
-source_dataset_id = "dataset_prices"
-freq = "1m"
-lookback_periods = 20
-`
-	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.ErrorContains(t, err, "no matching factor set")
 }
 
 func TestLoadNotificationWebhook(t *testing.T) {

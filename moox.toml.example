@@ -68,7 +68,9 @@ period_snapshot_retention = "720h"
 channel_type = "wecom"
 webhook_url = ""
 
-# setup init 导入本地 Python 因子，并按源数据集与频率建立因子集。
+# setup init 导入本地 Python 因子：先按源数据集与频率建立因子集，再导入因子定义，
+# 最后把定义加入因子集并按 status 启用。定义（factors.definitions）是全局的，不含数据集、
+# 频率和状态；成员（factors.members）用 source_dataset_id + freq 指向因子集，一个定义可加入多个因子集。
 # outputs 同时作为结果列的 display_name，例如 bias_20、ma_20。
 # 关闭默认因子导入请设置 factors.enabled = false；也可以复制条目改成自己的数据集、频率和参数。
 [factors]
@@ -81,7 +83,7 @@ source_dataset_id = "dataset_binance_kline_1m"
 freq = "1m"
 subject_mode = "all"
 
-[[factors.items]]
+[[factors.definitions]]
 factor_id = "Bias"
 factor_type = "timeseries"
 file = "Bias.py"
@@ -90,11 +92,8 @@ input_columns = ["close"]
 outputs = ["bias_5", "bias_20"]
 params_json = '{"windows":[5,20]}'
 lookback_periods = 20
-source_dataset_id = "dataset_binance_kline_1m"
-freq = "1m"
-status = "enabled"
 
-[[factors.items]]
+[[factors.definitions]]
 factor_id = "Cci"
 factor_type = "timeseries"
 file = "Cci.py"
@@ -103,11 +102,8 @@ input_columns = ["high", "low", "close"]
 outputs = ["cci"]
 params_json = '{"window":20}'
 lookback_periods = 20
-source_dataset_id = "dataset_binance_kline_1m"
-freq = "1m"
-status = "enabled"
 
-[[factors.items]]
+[[factors.definitions]]
 factor_id = "MinMax"
 factor_type = "timeseries"
 file = "MinMax.py"
@@ -116,11 +112,8 @@ input_columns = ["high", "low", "close"]
 outputs = ["minmax_20"]
 params_json = '{"window":20}'
 lookback_periods = 20
-source_dataset_id = "dataset_binance_kline_1m"
-freq = "1m"
-status = "enabled"
 
-[[factors.items]]
+[[factors.definitions]]
 factor_id = "QuoteVolumeMean"
 factor_type = "timeseries"
 file = "QuoteVolumeMean.py"
@@ -129,12 +122,34 @@ input_columns = ["quote_volume"]
 outputs = ["quote_volume_mean_20"]
 params_json = '{"window":20}'
 lookback_periods = 20
-source_dataset_id = "dataset_binance_kline_1m"
-freq = "1m"
-status = "enabled"
 
 # 短时行情 SCF 按 Space 独立发布、独立消费任务。所有市场复用通用
 # market_data 包目录，但每个 Space 必须声明自己的 Market/Instrument/Source 身份。
+
+[[factors.members]]
+source_dataset_id = "dataset_binance_kline_1m"
+freq = "1m"
+factor_id = "Bias"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_binance_kline_1m"
+freq = "1m"
+factor_id = "Cci"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_binance_kline_1m"
+freq = "1m"
+factor_id = "MinMax"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_binance_kline_1m"
+freq = "1m"
+factor_id = "QuoteVolumeMean"
+status = "enabled"
+
 [scf_fetcher]
 enabled = false
 

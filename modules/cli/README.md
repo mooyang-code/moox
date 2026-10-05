@@ -279,10 +279,12 @@ moox-cli setup factors --file ./moox.toml
 Crypto 与 StockCN 发布会先在 reservation 专属的临时 Invoke 函数上验证候选包，之后才更新生产 Invoke/Timer fleet；激活 StockCN 时必须逐地域提供发布结果中的精确 package ID，版本字符串相同但包 ID 不同也会拒绝。
 
 如果 `moox.toml` 启用了 `[factors]`，同一个 `setup init` 还会从
-`factors.source_dir` 读取 Python 因子，先创建对应的 FactorSet，再导入定义并按配置启用。
+`factors.source_dir` 读取 Python 因子，依次创建 FactorSet、导入因子定义、把定义加入因子集并按配置启用。
 `[[factors.sets]]` 用 `space_id`、`source_dataset_id`、`freq` 和 subject scope 描述因子集；
-`[[factors.items]]` 通过相同的 `source_dataset_id` 与 `freq` 关联到因子集。
-仓库的 `moox.toml.example` 展示了 `dataset_binance_kline_1m` 上的示例。
+`[[factors.definitions]]` 声明全局因子定义（不含数据集、频率和状态）；
+`[[factors.members]]` 用 `source_dataset_id`、`freq`、`factor_id`、`status` 把定义加入因子集，
+一个定义可加入多个因子集。旧的 `[[factors.items]]` 已移除，出现时会报错并提示拆分为 definitions 和 members。
+重复执行只补缺，不会删除配置里没有列出的定义或成员。仓库的 `moox.toml.example` 展示了 `dataset_binance_kline_1m` 上的示例。
 重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，
 命令会停止而不会静默覆盖已有因子。
 
@@ -294,7 +296,7 @@ Crypto 与 StockCN 发布会先在 reservation 专属的临时 Invoke 函数上�
 Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。
 
 如果 Storage 已经初始化过且当前 seed 与线上元数据不同，`setup init` 会按设计停止；此时使用
-`setup factors` 可以只补齐因子集和因子定义，不会触碰现有 Storage 元数据。
+`setup factors` 可以只补齐因子集、因子定义和因子集成员，不会触碰现有 Storage 元数据。
 
 `deploy-storage` 成功启动 Storage 后会自动安装并启用每 10 秒检查一次的
 `systemd` watchdog；如需只补装或更新 watchdog，可执行：

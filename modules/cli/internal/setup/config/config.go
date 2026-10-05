@@ -640,17 +640,19 @@ type SCFFetcher struct {
 	Spaces        []SCFFetcherSpace      `toml:"spaces"`
 }
 
-// FactorSetup describes the local Python factors and their dataset-backed sets
-// imported by `moox-cli setup init` or `setup factors`.
+// FactorSetup describes the local Python factors, the dataset-backed sets and
+// which sets each factor joins, imported by `moox-cli setup init` or
+// `setup factors`. Definitions are global; members bind a definition to a set.
 type FactorSetup struct {
-	Enabled   bool              `toml:"enabled"`
-	SourceDir string            `toml:"source_dir"`
-	Sets      []FactorSetupSet  `toml:"sets"`
-	Items     []FactorSetupItem `toml:"items"`
+	Enabled     bool                    `toml:"enabled"`
+	SourceDir   string                  `toml:"source_dir"`
+	Sets        []FactorSetupSet        `toml:"sets"`
+	Definitions []FactorSetupDefinition `toml:"definitions"`
+	Members     []FactorSetupMember     `toml:"members"`
 }
 
 // FactorSetupSet identifies the source Dataset and subject scope shared by a
-// group of factor definitions.
+// group of factor members.
 type FactorSetupSet struct {
 	SpaceID         string   `toml:"space_id"`
 	SourceDatasetID string   `toml:"source_dataset_id"`
@@ -659,10 +661,10 @@ type FactorSetupSet struct {
 	Subjects        []string `toml:"subjects"`
 }
 
-// FactorSetupItem is intentionally declarative: the source file remains the
-// source of truth while this block supplies the runtime contract required by
-// FactorMgr. Items associate with a set by source_dataset_id and freq.
-type FactorSetupItem struct {
+// FactorSetupDefinition is intentionally declarative: the source file remains
+// the source of truth while this block supplies the runtime contract required
+// by FactorMgr. A definition carries no dataset, frequency or status.
+type FactorSetupDefinition struct {
 	FactorType      string   `toml:"factor_type"`
 	FactorID        string   `toml:"factor_id"`
 	File            string   `toml:"file"`
@@ -671,9 +673,15 @@ type FactorSetupItem struct {
 	Outputs         []string `toml:"outputs"`
 	ParamsJSON      string   `toml:"params_json"`
 	LookbackPeriods int      `toml:"lookback_periods"`
-	SourceDatasetID string   `toml:"source_dataset_id"`
-	Freq            string   `toml:"freq"`
-	Status          string   `toml:"status"`
+}
+
+// FactorSetupMember adds one definition to one set (identified by
+// source_dataset_id and freq) with the target run status.
+type FactorSetupMember struct {
+	SourceDatasetID string `toml:"source_dataset_id"`
+	Freq            string `toml:"freq"`
+	FactorID        string `toml:"factor_id"`
+	Status          string `toml:"status"`
 }
 
 // SCFFetcherSpace describes one separately packaged and deployed source
@@ -946,6 +954,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		return fmt.Errorf("config_invalid: decode moox.toml")
 	}
 	if keys := md.Undecoded(); len(keys) != 0 {
+		if first := keys[0].String(); first == "factors.items" || strings.HasPrefix(first, "factors.items.") {
+			return fmt.Errorf("config_invalid: factors.items is no longer supported; split it into [[factors.definitions]] (factor contract) and [[factors.members]] (source_dataset_id, freq, factor_id, status)")
+		}
 		return fmt.Errorf("config_invalid: unknown field %s", keys[0].String())
 	}
 	if !md.IsDefined("eventbus", "port") {
@@ -1546,10 +1557,10 @@ func validateFactorSetup(cfg *FactorSetup) error {
 			return fmt.Errorf("config_invalid: %s.subjects must be empty when subject_mode is all", path)
 		}
 	}
-	seen := make(map[string]struct{}, len(cfg.Items))
-	for index := range cfg.Items {
-		item := &cfg.Items[index]
-		path := fmt.Sprintf("factors.items[%d]", index)
+	seen := make(map[string]struct{}, len(cfg.Definitions))
+	for index := range cfg.Definitions {
+		item := &cfg.Definitions[index]
+		path := fmt.Sprintf("factors.definitions[%d]", index)
 		item.FactorType = strings.TrimSpace(item.FactorType)
 		if item.FactorType != "timeseries" && item.FactorType != "cross_section" {
 			return fmt.Errorf("config_invalid: %s.factor_type must be timeseries or cross_section", path)
@@ -1557,20 +1568,14 @@ func validateFactorSetup(cfg *FactorSetup) error {
 		item.FactorID = strings.TrimSpace(item.FactorID)
 		item.File = filepath.ToSlash(filepath.Clean(strings.TrimSpace(item.File)))
 		item.Name = strings.TrimSpace(item.Name)
-		item.SourceDatasetID = strings.TrimSpace(item.SourceDatasetID)
-		item.Freq = strings.TrimSpace(item.Freq)
-		item.Status = strings.TrimSpace(item.Status)
-		if item.FactorID == "" || item.File == "" || item.SourceDatasetID == "" || item.Freq == "" {
-			return fmt.Errorf("config_invalid: %s requires factor_id, file, source_dataset_id and freq", path)
-		}
-		if _, ok := setKeys[factorSetupSetKey(item.SourceDatasetID, item.Freq)]; !ok {
-			return fmt.Errorf("config_invalid: %s has no matching factor set for source_dataset_id %q and freq %q", path, item.SourceDatasetID, item.Freq)
+		if item.FactorID == "" || item.File == "" {
+			return fmt.Errorf("config_invalid: %s requires factor_id and file", path)
 		}
 		if filepath.IsAbs(item.File) || item.File == ".." || strings.HasPrefix(item.File, "../") {
 			return fmt.Errorf("config_invalid: %s.file must stay under factors.source_dir", path)
 		}
 		if _, ok := seen[item.FactorID]; ok {
-			return fmt.Errorf("config_invalid: factors item %q is duplicated", item.FactorID)
+			return fmt.Errorf("config_invalid: factors definition %q is duplicated", item.FactorID)
 		}
 		seen[item.FactorID] = struct{}{}
 		if item.Name == "" {
@@ -1582,10 +1587,33 @@ func validateFactorSetup(cfg *FactorSetup) error {
 		if item.LookbackPeriods < 1 {
 			return fmt.Errorf("config_invalid: %s.lookback_periods must be at least 1", path)
 		}
-		if item.Status == "" {
-			item.Status = "enabled"
+	}
+	memberKeys := make(map[string]struct{}, len(cfg.Members))
+	for index := range cfg.Members {
+		member := &cfg.Members[index]
+		path := fmt.Sprintf("factors.members[%d]", index)
+		member.SourceDatasetID = strings.TrimSpace(member.SourceDatasetID)
+		member.Freq = strings.TrimSpace(member.Freq)
+		member.FactorID = strings.TrimSpace(member.FactorID)
+		member.Status = strings.TrimSpace(member.Status)
+		if member.FactorID == "" || member.SourceDatasetID == "" || member.Freq == "" {
+			return fmt.Errorf("config_invalid: %s requires factor_id, source_dataset_id and freq", path)
 		}
-		if item.Status != "enabled" && item.Status != "disabled" {
+		if _, ok := setKeys[factorSetupSetKey(member.SourceDatasetID, member.Freq)]; !ok {
+			return fmt.Errorf("config_invalid: %s has no matching factor set for source_dataset_id %q and freq %q", path, member.SourceDatasetID, member.Freq)
+		}
+		if _, ok := seen[member.FactorID]; !ok {
+			return fmt.Errorf("config_invalid: %s references unknown factor_id %q; declare it in [[factors.definitions]]", path, member.FactorID)
+		}
+		key := factorSetupSetKey(member.SourceDatasetID, member.Freq) + "\x00" + member.FactorID
+		if _, ok := memberKeys[key]; ok {
+			return fmt.Errorf("config_invalid: factor %q is a member of set (%s, %s) more than once", member.FactorID, member.SourceDatasetID, member.Freq)
+		}
+		memberKeys[key] = struct{}{}
+		if member.Status == "" {
+			member.Status = "enabled"
+		}
+		if member.Status != "enabled" && member.Status != "disabled" {
 			return fmt.Errorf("config_invalid: %s.status must be enabled or disabled", path)
 		}
 	}

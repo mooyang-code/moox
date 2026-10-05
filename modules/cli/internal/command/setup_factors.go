@@ -22,7 +22,19 @@ import (
 
 var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-type setupFactorItem struct {
+// setupFactorSet is one factor set to create; sets are keyed by SetID.
+type setupFactorSet struct {
+	SetID           string
+	SpaceID         string
+	SourceDatasetID string
+	Freq            string
+	SubjectMode     string
+	Subjects        []string
+}
+
+// setupFactorDefinition is the global factor contract. It carries no set or
+// status: those belong to a membership.
+type setupFactorDefinition struct {
 	FactorType      string
 	FactorID        string
 	Name            string
@@ -32,143 +44,171 @@ type setupFactorItem struct {
 	Outputs         []string
 	ParamsJSON      string
 	LookbackPeriods int
-	SetID           string
-	SpaceID         string
-	SourceDatasetID string
-	Freq            string
-	SubjectMode     string
-	Subjects        []string
-	Status          string
+}
+
+type setupFactorMember struct {
+	SetID    string
+	FactorID string
+	Status   string
+}
+
+// setupFactorPlan is what a setup run applies: sets first, then definitions,
+// then memberships.
+type setupFactorPlan struct {
+	Sets        []setupFactorSet
+	Definitions []setupFactorDefinition
+	Members     []setupFactorMember
+}
+
+func (p setupFactorPlan) empty() bool {
+	return len(p.Sets) == 0 && len(p.Definitions) == 0 && len(p.Members) == 0
 }
 
 type setupFactorSummary struct {
-	Enabled     bool `json:"enabled"`
-	Planned     int  `json:"planned"`
-	SetsCreated int  `json:"sets_created"`
-	Imported    int  `json:"imported"`
-	Associated  int  `json:"associated"`
-	Unchanged   int  `json:"unchanged"`
+	Enabled          bool `json:"enabled"`
+	Definitions      int  `json:"definitions"`
+	Members          int  `json:"members"`
+	SetsCreated      int  `json:"sets_created"`
+	Imported         int  `json:"imported"`
+	Unchanged        int  `json:"unchanged"`
+	MembersAdded     int  `json:"members_added"`
+	MembersEnabled   int  `json:"members_enabled"`
+	MembersUnchanged int  `json:"members_unchanged"`
 }
 
 type setupInitFactor interface {
-	Apply(context.Context, []setupFactorItem) (setupFactorSummary, error)
+	Apply(context.Context, setupFactorPlan) (setupFactorSummary, error)
 	Close() error
 }
 
-// These defaults define the initial factor set for a fresh installation.
-func defaultSetupFactorItems() []setupconfig.FactorSetupItem {
-	return []setupconfig.FactorSetupItem{
+// These defaults define the initial factor definitions and set memberships for
+// a fresh installation.
+func defaultSetupFactorDefinitions() []setupconfig.FactorSetupDefinition {
+	return []setupconfig.FactorSetupDefinition{
 		{
 			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", Name: "Bias",
 			InputColumns: []string{"close"}, Outputs: []string{"bias_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "Cci", File: "Cci.py", Name: "Cci",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"cci"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "MinMax", File: "MinMax.py", Name: "MinMax",
 			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"minmax_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", Status: "enabled",
 		},
 		{
 			FactorType: "timeseries", FactorID: "QuoteVolumeMean", File: "QuoteVolumeMean.py", Name: "QuoteVolumeMean",
 			InputColumns: []string{"quote_volume"}, Outputs: []string{"quote_volume_mean_20"},
 			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", Status: "enabled",
 		},
 	}
 }
 
-func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFactorItem, error) {
+func defaultSetupFactorMembers(definitions []setupconfig.FactorSetupDefinition) []setupconfig.FactorSetupMember {
+	members := make([]setupconfig.FactorSetupMember, 0, len(definitions))
+	for _, def := range definitions {
+		members = append(members, setupconfig.FactorSetupMember{
+			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: def.FactorID, Status: "enabled",
+		})
+	}
+	return members
+}
+
+func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFactorPlan, error) {
+	var plan setupFactorPlan
 	if !manifest.Factors.Enabled {
-		return nil, nil
+		return plan, nil
 	}
 	if strings.TrimSpace(manifest.Factors.SourceDir) == "" {
 		manifest.Factors.SourceDir = "modules/factor/factors"
 	}
-	items := manifest.Factors.Items
-	if len(items) == 0 && len(manifest.Factors.Sets) == 0 {
+	definitions, members := manifest.Factors.Definitions, manifest.Factors.Members
+	if len(definitions) == 0 && len(members) == 0 && len(manifest.Factors.Sets) == 0 {
 		defaultRoot := filepath.Join(repoRoot, filepath.FromSlash(manifest.Factors.SourceDir))
 		if _, err := os.Stat(defaultRoot); err != nil {
 			if os.IsNotExist(err) {
-				return nil, nil
+				return plan, nil
 			}
-			return nil, fmt.Errorf("stat factors directory: %w", err)
+			return plan, fmt.Errorf("stat factors directory: %w", err)
 		}
-		items = defaultSetupFactorItems()
+		definitions = defaultSetupFactorDefinitions()
+		members = defaultSetupFactorMembers(definitions)
 		manifest.Factors.Sets = []setupconfig.FactorSetupSet{{
 			SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", SubjectMode: "all",
 		}}
-	} else if len(items) == 0 {
-		return nil, fmt.Errorf("factors.items must be configured when factors.sets is specified")
+	} else if len(definitions) == 0 {
+		return plan, fmt.Errorf("factors.definitions must be configured when factors.sets or factors.members is specified")
 	}
 	sets := make(map[string]setupconfig.FactorSetupSet, len(manifest.Factors.Sets))
 	for _, set := range manifest.Factors.Sets {
 		key := factorSetupIdentity(set.SourceDatasetID, set.Freq)
 		if key == "\x00" {
-			return nil, fmt.Errorf("factor set requires source_dataset_id and freq")
+			return plan, fmt.Errorf("factor set requires source_dataset_id and freq")
 		}
 		if _, exists := sets[key]; exists {
-			return nil, fmt.Errorf("factor set for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
+			return plan, fmt.Errorf("factor set for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
 		}
 		sets[key] = set
+		plan.Sets = append(plan.Sets, setupFactorSet{
+			SetID: factorSetID(set.SourceDatasetID, set.Freq), SpaceID: strings.TrimSpace(set.SpaceID),
+			SourceDatasetID: strings.TrimSpace(set.SourceDatasetID), Freq: strings.TrimSpace(set.Freq),
+			SubjectMode: defaultString(strings.TrimSpace(set.SubjectMode), "all"), Subjects: cleanStrings(set.Subjects),
+		})
 	}
+	sort.Slice(plan.Sets, func(i, j int) bool { return plan.Sets[i].SetID < plan.Sets[j].SetID })
 	root := filepath.Join(repoRoot, filepath.FromSlash(manifest.Factors.SourceDir))
-	result := make([]setupFactorItem, 0, len(items))
-	seen := make(map[string]struct{}, len(items))
-	for index, item := range items {
+	seen := make(map[string]struct{}, len(definitions))
+	for index, item := range definitions {
 		if item.FactorType != "timeseries" && item.FactorType != "cross_section" {
-			return nil, fmt.Errorf("factors.items[%d].factor_type must be timeseries or cross_section", index)
+			return plan, fmt.Errorf("factors.definitions[%d].factor_type must be timeseries or cross_section", index)
 		}
 		factorID := strings.TrimSpace(item.FactorID)
 		if !factorIDPattern.MatchString(factorID) {
-			return nil, fmt.Errorf("factors.items[%d].factor_id is invalid", index)
+			return plan, fmt.Errorf("factors.definitions[%d].factor_id is invalid", index)
 		}
 		if _, exists := seen[factorID]; exists {
-			return nil, fmt.Errorf("factor %q is configured more than once", factorID)
+			return plan, fmt.Errorf("factor %q is configured more than once", factorID)
 		}
 		seen[factorID] = struct{}{}
 		path := filepath.Join(root, filepath.FromSlash(item.File))
 		resolvedRoot, err := filepath.Abs(root)
 		if err != nil {
-			return nil, fmt.Errorf("resolve factors directory: %w", err)
+			return plan, fmt.Errorf("resolve factors directory: %w", err)
 		}
 		resolvedRoot, err = filepath.EvalSymlinks(resolvedRoot)
 		if err != nil {
-			return nil, fmt.Errorf("resolve factors directory: %w", err)
+			return plan, fmt.Errorf("resolve factors directory: %w", err)
 		}
 		resolvedPath, err := filepath.Abs(path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve factor %q path: %w", factorID, err)
+			return plan, fmt.Errorf("resolve factor %q path: %w", factorID, err)
 		}
 		resolvedPath, err = filepath.EvalSymlinks(resolvedPath)
 		if err != nil || !pathWithin(resolvedRoot, resolvedPath) {
-			return nil, fmt.Errorf("factor %q file must stay under factors.source_dir", factorID)
+			return plan, fmt.Errorf("factor %q file must stay under factors.source_dir", factorID)
 		}
 		source, err := os.ReadFile(resolvedPath)
 		if err != nil {
-			return nil, fmt.Errorf("read factor %q source: %w", factorID, err)
+			return plan, fmt.Errorf("read factor %q source: %w", factorID, err)
 		}
 		sourceCode := strings.TrimSpace(string(source))
 		factorName := strings.TrimSuffix(filepath.Base(resolvedPath), filepath.Ext(resolvedPath))
 		if factorID != factorName {
-			return nil, fmt.Errorf("factor_id %q must match factor file name %q", factorID, factorName)
+			return plan, fmt.Errorf("factor_id %q must match factor file name %q", factorID, factorName)
 		}
 		name := strings.TrimSpace(item.Name)
 		if name == "" {
 			name = factorName
 		}
 		if name != factorName {
-			return nil, fmt.Errorf("factor %q name must match factor file name %q", factorID, factorName)
+			return plan, fmt.Errorf("factor %q name must match factor file name %q", factorID, factorName)
 		}
 		if !factorIDPattern.MatchString(name) {
-			return nil, fmt.Errorf("factor %q name is invalid", factorID)
+			return plan, fmt.Errorf("factor %q name is invalid", factorID)
 		}
 		params := strings.TrimSpace(item.ParamsJSON)
 		if params == "" {
@@ -176,35 +216,52 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) ([]setupFa
 		}
 		var paramsValue map[string]any
 		if err := json.Unmarshal([]byte(params), &paramsValue); err != nil || paramsValue == nil {
-			return nil, fmt.Errorf("factor %q params_json must be a JSON object", factorID)
+			return plan, fmt.Errorf("factor %q params_json must be a JSON object", factorID)
 		}
 		inputColumns := cleanStrings(item.InputColumns)
 		outputs := cleanStrings(item.Outputs)
 		sort.Strings(inputColumns)
 		sort.Strings(outputs)
 		if len(inputColumns) == 0 || len(outputs) == 0 {
-			return nil, fmt.Errorf("factor %q must declare input_columns and outputs", factorID)
+			return plan, fmt.Errorf("factor %q must declare input_columns and outputs", factorID)
 		}
-		status := strings.TrimSpace(item.Status)
-		if status == "" {
-			status = "enabled"
-		}
-		datasetID, freq := strings.TrimSpace(item.SourceDatasetID), strings.TrimSpace(item.Freq)
-		set, ok := sets[factorSetupIdentity(datasetID, freq)]
-		if !ok {
-			return nil, fmt.Errorf("factor %q has no matching set for source_dataset_id %q and freq %q", factorID, datasetID, freq)
-		}
-		setID := factorSetID(datasetID, freq)
 		hash := sha256.Sum256([]byte(sourceCode))
-		result = append(result, setupFactorItem{
+		plan.Definitions = append(plan.Definitions, setupFactorDefinition{
 			FactorType: item.FactorType,
 			FactorID:   factorID, Name: name, SourceCode: sourceCode, SourceHash: "sha256:" + hex.EncodeToString(hash[:]),
 			InputColumns: inputColumns, Outputs: outputs, ParamsJSON: params, LookbackPeriods: item.LookbackPeriods,
-			SetID: setID, SpaceID: strings.TrimSpace(set.SpaceID), SourceDatasetID: datasetID, Freq: freq,
-			SubjectMode: defaultString(strings.TrimSpace(set.SubjectMode), "all"), Subjects: cleanStrings(set.Subjects), Status: status,
 		})
 	}
-	return result, nil
+	sort.Slice(plan.Definitions, func(i, j int) bool { return plan.Definitions[i].FactorID < plan.Definitions[j].FactorID })
+	memberSeen := make(map[string]struct{}, len(members))
+	for index, member := range members {
+		datasetID, freq := strings.TrimSpace(member.SourceDatasetID), strings.TrimSpace(member.Freq)
+		if _, ok := sets[factorSetupIdentity(datasetID, freq)]; !ok {
+			return plan, fmt.Errorf("factors.members[%d] has no matching set for source_dataset_id %q and freq %q", index, datasetID, freq)
+		}
+		factorID := strings.TrimSpace(member.FactorID)
+		if _, ok := seen[factorID]; !ok {
+			return plan, fmt.Errorf("factors.members[%d] references unknown factor_id %q", index, factorID)
+		}
+		status := defaultString(strings.TrimSpace(member.Status), "enabled")
+		if status != "enabled" && status != "disabled" {
+			return plan, fmt.Errorf("factors.members[%d].status must be enabled or disabled", index)
+		}
+		setID := factorSetID(datasetID, freq)
+		key := setID + "\x00" + factorID
+		if _, dup := memberSeen[key]; dup {
+			return plan, fmt.Errorf("factor %q is a member of set %q more than once", factorID, setID)
+		}
+		memberSeen[key] = struct{}{}
+		plan.Members = append(plan.Members, setupFactorMember{SetID: setID, FactorID: factorID, Status: status})
+	}
+	sort.Slice(plan.Members, func(i, j int) bool {
+		if plan.Members[i].SetID != plan.Members[j].SetID {
+			return plan.Members[i].SetID < plan.Members[j].SetID
+		}
+		return plan.Members[i].FactorID < plan.Members[j].FactorID
+	})
+	return plan, nil
 }
 
 func factorSetupIdentity(sourceDatasetID, freq string) string {
@@ -326,21 +383,37 @@ type factorAPIRetInfo struct {
 	Msg  string `json:"msg"`
 }
 
+// factorAPIDef mirrors the FactorDef proto JSON: a definition has no set or
+// status, those live in the usages beside it.
+type factorAPIDef struct {
+	FactorType      string   `json:"factor_type"`
+	FactorID        string   `json:"factor_id"`
+	Name            string   `json:"name"`
+	SourceCode      string   `json:"source_code"`
+	SourceHash      string   `json:"source_hash"`
+	InputColumns    []string `json:"input_columns"`
+	Outputs         []string `json:"outputs"`
+	ParamsJSON      string   `json:"params_json"`
+	LookbackPeriods int      `json:"lookback_periods"`
+}
+
+// factorAPIUsage mirrors the FactorUsage proto JSON.
+type factorAPIUsage struct {
+	SetID  string `json:"set_id"`
+	Status string `json:"status"`
+}
+
+// factorAPIInfo mirrors the FactorInfo proto JSON (ListFactors element).
+type factorAPIInfo struct {
+	Factor factorAPIDef     `json:"factor"`
+	Usages []factorAPIUsage `json:"usages"`
+}
+
 type factorAPIResponse struct {
-	RetInfo factorAPIRetInfo `json:"ret_info"`
-	Factor  struct {
-		FactorType      string   `json:"factor_type"`
-		FactorID        string   `json:"factor_id"`
-		SetID           string   `json:"set_id"`
-		Name            string   `json:"name"`
-		SourceCode      string   `json:"source_code"`
-		SourceHash      string   `json:"source_hash"`
-		InputColumns    []string `json:"input_columns"`
-		Outputs         []string `json:"outputs"`
-		ParamsJSON      string   `json:"params_json"`
-		LookbackPeriods int      `json:"lookback_periods"`
-		Status          string   `json:"status"`
-	} `json:"factor"`
+	RetInfo   factorAPIRetInfo `json:"ret_info"`
+	Factor    factorAPIDef     `json:"factor"`
+	Usages    []factorAPIUsage `json:"usages"`
+	Factors   []factorAPIInfo  `json:"factors"`
 	FactorSet struct {
 		SetID           string   `json:"set_id"`
 		SpaceID         string   `json:"space_id"`
@@ -373,88 +446,97 @@ func (r *remoteSetupFactor) call(ctx context.Context, method string, body any, r
 	return response.err(method)
 }
 
-func (r *remoteSetupFactor) Apply(ctx context.Context, items []setupFactorItem) (setupFactorSummary, error) {
-	summary := setupFactorSummary{Enabled: len(items) > 0, Planned: len(items)}
-	sets := make(map[string]setupFactorItem, len(items))
-	for _, item := range items {
-		if previous, ok := sets[item.SetID]; ok &&
-			(previous.SpaceID != item.SpaceID || previous.SourceDatasetID != item.SourceDatasetID || previous.Freq != item.Freq || previous.SubjectMode != item.SubjectMode || !slices.Equal(previous.Subjects, item.Subjects)) {
-			return summary, fmt.Errorf("factor set %q has conflicting configuration", item.SetID)
-		}
-		sets[item.SetID] = item
-	}
-	setIDs := make([]string, 0, len(sets))
-	for setID := range sets {
-		setIDs = append(setIDs, setID)
-	}
-	sort.Strings(setIDs)
-	for _, setID := range setIDs {
-		item := sets[setID]
+// Apply is idempotent and additive: it creates what is missing and never
+// prunes definitions or members that moox.toml does not mention.
+func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (setupFactorSummary, error) {
+	summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Members: len(plan.Members)}
+	for _, set := range plan.Sets {
 		get := factorAPIResponse{}
-		err := r.call(ctx, "GetFactorSet", map[string]any{"set_id": setID}, &get)
+		err := r.call(ctx, "GetFactorSet", map[string]any{"set_id": set.SetID}, &get)
 		if err != nil && !factorAPINotFound(get) {
 			return summary, err
 		}
 		if err != nil {
 			create := factorAPIResponse{}
 			if createErr := r.call(ctx, "CreateFactorSet", map[string]any{"factor_set": map[string]any{
-				"set_id": setID, "space_id": item.SpaceID, "source_dataset_id": item.SourceDatasetID,
-				"freq": item.Freq, "subject_mode": item.SubjectMode, "subjects": item.Subjects, "status": "pending",
+				"set_id": set.SetID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
+				"freq": set.Freq, "subject_mode": set.SubjectMode, "subjects": set.Subjects, "status": "pending",
 			}}, &create); createErr != nil {
 				return summary, createErr
 			}
 			summary.SetsCreated++
 			continue
 		}
-		if get.FactorSet.SpaceID != item.SpaceID || get.FactorSet.SourceDatasetID != item.SourceDatasetID || get.FactorSet.Freq != item.Freq {
-			return summary, fmt.Errorf("factor set %q already exists with a different source identity", setID)
+		if get.FactorSet.SpaceID != set.SpaceID || get.FactorSet.SourceDatasetID != set.SourceDatasetID || get.FactorSet.Freq != set.Freq {
+			return summary, fmt.Errorf("factor set %q already exists with a different source identity", set.SetID)
 		}
-		if get.FactorSet.SubjectMode != item.SubjectMode || !slices.Equal(cleanStrings(get.FactorSet.Subjects), item.Subjects) {
+		if get.FactorSet.SubjectMode != set.SubjectMode || !slices.Equal(cleanStrings(get.FactorSet.Subjects), set.Subjects) {
 			updated := factorAPIResponse{}
 			if updateErr := r.call(ctx, "UpdateFactorSet", map[string]any{
-				"set_id": setID, "subject_mode": item.SubjectMode, "subjects": item.Subjects,
+				"set_id": set.SetID, "subject_mode": set.SubjectMode, "subjects": set.Subjects,
 			}, &updated); updateErr != nil {
 				return summary, updateErr
 			}
 		}
-		summary.Unchanged++
 	}
-	for _, item := range items {
+	// usages[factor_id][set_id] is the current membership status, kept in step
+	// with the calls below so one GetFactor per definition is enough.
+	usages := make(map[string]map[string]string, len(plan.Definitions))
+	for _, def := range plan.Definitions {
 		get := factorAPIResponse{}
-		err := r.call(ctx, "GetFactor", map[string]any{"factor_id": item.FactorID}, &get)
+		err := r.call(ctx, "GetFactor", map[string]any{"factor_id": def.FactorID}, &get)
 		if err != nil && !factorAPINotFound(get) {
 			return summary, err
 		}
-		created := false
+		usages[def.FactorID] = map[string]string{}
 		if err != nil {
 			create := factorAPIResponse{}
 			if createErr := r.call(ctx, "CreateFactor", map[string]any{"factor": map[string]any{
-				"factor_type": item.FactorType, "factor_id": item.FactorID, "set_id": item.SetID,
-				"name": item.Name, "source_code": item.SourceCode, "source_hash": item.SourceHash,
-				"input_columns": item.InputColumns, "outputs": item.Outputs, "params_json": item.ParamsJSON,
-				"lookback_periods": item.LookbackPeriods, "status": "disabled",
+				"factor_type": def.FactorType, "factor_id": def.FactorID,
+				"name": def.Name, "source_code": def.SourceCode, "source_hash": def.SourceHash,
+				"input_columns": def.InputColumns, "outputs": def.Outputs, "params_json": def.ParamsJSON,
+				"lookback_periods": def.LookbackPeriods,
 			}}, &create); createErr != nil {
 				return summary, createErr
 			}
 			summary.Imported++
-			created = true
-		} else {
-			if !sameFactorContract(get.Factor, item) {
-				return summary, fmt.Errorf("factor %q already exists with a different definition; update moox.toml or replace it explicitly", item.FactorID)
-			}
-			summary.Unchanged++
+			continue
 		}
-		currentStatus := "disabled"
-		if !created {
-			currentStatus = get.Factor.Status
+		if !sameFactorContract(get.Factor, def) {
+			return summary, fmt.Errorf("factor %q already exists with a different definition; update moox.toml or replace it explicitly", def.FactorID)
 		}
-		if currentStatus != item.Status {
-			status := factorAPIResponse{}
-			if err := r.call(ctx, "SetFactorStatus", map[string]any{"factor_id": item.FactorID, "status": item.Status}, &status); err != nil {
-				return summary, err
-			}
+		for _, usage := range get.Usages {
+			usages[def.FactorID][usage.SetID] = usage.Status
 		}
-		summary.Associated++
+		summary.Unchanged++
+	}
+	for _, member := range plan.Members {
+		if _, known := usages[member.FactorID]; !known {
+			return summary, fmt.Errorf("member references factor %q that is not defined", member.FactorID)
+		}
+		if _, exists := usages[member.FactorID][member.SetID]; exists {
+			continue
+		}
+		added := factorAPIResponse{}
+		if err := r.call(ctx, "AddFactorToSet", map[string]any{"set_id": member.SetID, "factor_id": member.FactorID}, &added); err != nil {
+			return summary, err
+		}
+		usages[member.FactorID][member.SetID] = "disabled"
+		summary.MembersAdded++
+	}
+	for _, member := range plan.Members {
+		if usages[member.FactorID][member.SetID] == member.Status {
+			summary.MembersUnchanged++
+			continue
+		}
+		status := factorAPIResponse{}
+		if err := r.call(ctx, "SetFactorMemberStatus", map[string]any{
+			"set_id": member.SetID, "factor_id": member.FactorID, "status": member.Status,
+		}, &status); err != nil {
+			return summary, err
+		}
+		usages[member.FactorID][member.SetID] = member.Status
+		summary.MembersEnabled++
 	}
 	return summary, nil
 }
@@ -464,23 +546,11 @@ func factorAPINotFound(response factorAPIResponse) bool {
 		(response.RetInfo.Code == 4 && strings.Contains(strings.ToLower(response.RetInfo.Msg), "not found"))
 }
 
-func sameFactorContract(got struct {
-	FactorType      string   `json:"factor_type"`
-	FactorID        string   `json:"factor_id"`
-	SetID           string   `json:"set_id"`
-	Name            string   `json:"name"`
-	SourceCode      string   `json:"source_code"`
-	SourceHash      string   `json:"source_hash"`
-	InputColumns    []string `json:"input_columns"`
-	Outputs         []string `json:"outputs"`
-	ParamsJSON      string   `json:"params_json"`
-	LookbackPeriods int      `json:"lookback_periods"`
-	Status          string   `json:"status"`
-}, want setupFactorItem) bool {
+func sameFactorContract(got factorAPIDef, want setupFactorDefinition) bool {
 	if got.FactorType != want.FactorType {
 		return false
 	}
-	if got.SetID != want.SetID || got.SourceHash != want.SourceHash || got.Name != want.Name || got.LookbackPeriods != want.LookbackPeriods || !slicesEqual(got.InputColumns, want.InputColumns) || !slicesEqual(got.Outputs, want.Outputs) {
+	if got.SourceHash != want.SourceHash || got.Name != want.Name || got.LookbackPeriods != want.LookbackPeriods || !slicesEqual(got.InputColumns, want.InputColumns) || !slicesEqual(got.Outputs, want.Outputs) {
 		return false
 	}
 	return canonicalJSON(got.ParamsJSON) == canonicalJSON(want.ParamsJSON)
@@ -526,10 +596,4 @@ func (r *remoteSetupFactor) Close() error {
 		return r.transport.Close()
 	}
 	return nil
-}
-
-func sortedFactorItems(items []setupFactorItem) []setupFactorItem {
-	result := append([]setupFactorItem(nil), items...)
-	sort.Slice(result, func(i, j int) bool { return result[i].FactorID < result[j].FactorID })
-	return result
 }

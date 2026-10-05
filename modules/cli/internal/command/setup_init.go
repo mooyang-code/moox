@@ -173,17 +173,17 @@ func runSetupInit(
 	if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
 		return setupInitSummary{}, fmt.Errorf("metadata_verification_failed")
 	}
-	factorItems, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
+	factorPlan, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
 	if err != nil {
 		return setupInitSummary{}, err
 	}
 	var factorSummary *setupFactorSummary
-	if len(factorItems) > 0 {
+	if !factorPlan.empty() {
 		factorService, openErr := deps.openInitFactor(ctx, snapshot)
 		if openErr != nil {
 			return setupInitSummary{}, openErr
 		}
-		appliedSummary, applyErr := factorService.Apply(ctx, sortedFactorItems(factorItems))
+		appliedSummary, applyErr := factorService.Apply(ctx, factorPlan)
 		closeErr := factorService.Close()
 		if applyErr != nil {
 			return setupInitSummary{}, applyErr
@@ -316,17 +316,17 @@ func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			items, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
+			plan, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
 			if err != nil {
 				return err
 			}
-			summary := setupFactorSummary{Enabled: len(items) > 0, Planned: len(items)}
-			if len(items) > 0 {
+			summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Members: len(plan.Members)}
+			if !plan.empty() {
 				service, openErr := deps.openInitFactor(cmd.Context(), snapshot)
 				if openErr != nil {
 					return openErr
 				}
-				summary, err = service.Apply(cmd.Context(), sortedFactorItems(items))
+				summary, err = service.Apply(cmd.Context(), plan)
 				closeErr := service.Close()
 				if err != nil {
 					return err

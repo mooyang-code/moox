@@ -19,12 +19,12 @@ type fakeSetupInitStorage struct {
 }
 
 type fakeSetupInitFactor struct {
-	items []setupFactorItem
+	plan setupFactorPlan
 }
 
-func (f *fakeSetupInitFactor) Apply(_ context.Context, items []setupFactorItem) (setupFactorSummary, error) {
-	f.items = append([]setupFactorItem(nil), items...)
-	return setupFactorSummary{Enabled: true, Planned: len(items), Imported: len(items), Associated: len(items)}, nil
+func (f *fakeSetupInitFactor) Apply(_ context.Context, plan setupFactorPlan) (setupFactorSummary, error) {
+	f.plan = plan
+	return setupFactorSummary{Enabled: true, Definitions: len(plan.Definitions), Members: len(plan.Members), Imported: len(plan.Definitions), MembersAdded: len(plan.Members)}, nil
 }
 
 func (f *fakeSetupInitFactor) Close() error { return nil }
@@ -63,11 +63,13 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	snapshot.Manifest.Factors.Enabled = true
 	snapshot.Manifest.Factors.SourceDir = "../../../../examples/factors"
-	snapshot.Manifest.Factors.Items = []setupconfig.FactorSetupItem{{
+	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{
 		FactorType: "timeseries",
 		FactorID:   "bias", File: "timeseries/bias.py", InputColumns: []string{"close"},
 		Outputs: []string{"bias_5"}, ParamsJSON: `{"windows":[5]}`, LookbackPeriods: 5,
-		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m",
+	}}
+	snapshot.Manifest.Factors.Members = []setupconfig.FactorSetupMember{{
+		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "bias",
 	}}
 	snapshot.Manifest.Factors.Sets = []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m"}}
 	factor := &fakeSetupInitFactor{}
@@ -79,8 +81,10 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"factors", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
-	require.Len(t, factor.items, 1)
-	assert.Equal(t, "bias", factor.items[0].FactorID)
+	require.Len(t, factor.plan.Definitions, 1)
+	require.Len(t, factor.plan.Members, 1)
+	assert.Equal(t, "bias", factor.plan.Definitions[0].FactorID)
+	assert.Equal(t, "fset_binance_kline_1m", factor.plan.Members[0].SetID)
 	assert.Contains(t, output.String(), `"status":"ready"`)
 }
 
