@@ -14,6 +14,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Lock order: a definition lock (LockFactorContext) is always taken before any
+// set lock, and several set locks are taken in ascending set_id order.
+
 // Locks serializes catalog changes with live and recalculation work for a set.
 // The in-process lock is a one-slot channel: blocked acquirers are served in
 // arrival order, so a recalc job that releases and immediately re-acquires
@@ -100,6 +103,18 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 		})
 	}, nil
 }
+
+// LockFactorContext acquires the lock for one definition. Its key carries a
+// "factor:" prefix so it never collides with a set lock.
+func (l *Locks) LockFactorContext(ctx context.Context, factorID string) (func(), error) {
+	factorID = strings.TrimSpace(factorID)
+	if factorID == "" {
+		return nil, errors.New("factor id is required for locking")
+	}
+	return l.LockContext(ctx, factorLockPrefix+factorID)
+}
+
+const factorLockPrefix = "factor:"
 
 func (l *Locks) openFileLock(setID string) (int, error) {
 	if err := os.MkdirAll(l.dir, 0o700); err != nil {

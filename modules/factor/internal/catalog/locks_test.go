@@ -62,3 +62,23 @@ func TestLocksServeWaitersInArrivalOrder(t *testing.T) {
 	<-acquired
 	require.Equal(t, "live", <-order)
 }
+
+func TestFactorLockKeysDoNotCollideWithSetKeys(t *testing.T) {
+	locks := NewLocks(t.TempDir())
+	unlockFactor, err := locks.LockFactorContext(context.Background(), "fset_prices_1m")
+	require.NoError(t, err)
+	defer unlockFactor()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	unlockSet, err := locks.LockContext(ctx, "fset_prices_1m")
+	require.NoError(t, err, "a factor lock must not block the set lock with the same name")
+	unlockSet()
+
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, err = NewLocks(locks.dir).LockFactorContext(ctx, "fset_prices_1m")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	_, err = locks.LockFactorContext(context.Background(), " ")
+	require.Error(t, err)
+}

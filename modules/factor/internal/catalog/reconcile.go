@@ -19,23 +19,18 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 	var reconcileErrors []error
-	for _, set := range sets {
-		factors, err := s.db.ListFactors(ctx, set.SetID, "")
-		if err != nil {
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("list factors for set %q: %w", set.SetID, err))
-		} else {
-			unlock, lockErr := s.locks.LockContext(ctx, set.SetID)
-			if lockErr != nil {
-				reconcileErrors = append(reconcileErrors, fmt.Errorf("lock factor set %q: %w", set.SetID, lockErr))
-				continue
-			}
-			for _, factor := range factors {
-				if _, err := s.artifacts.Materialize(factor); err != nil {
-					reconcileErrors = append(reconcileErrors, fmt.Errorf("restore factor source %q: %w", factor.FactorID, err))
-				}
-			}
-			unlock()
+	// Definitions are content-addressed and immutable, so restoring their
+	// materialized sources needs no set lock.
+	factors, err := s.db.ListFactors(ctx)
+	if err != nil {
+		reconcileErrors = append(reconcileErrors, fmt.Errorf("list factors: %w", err))
+	}
+	for _, factor := range factors {
+		if _, err := s.artifacts.Materialize(factor); err != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("restore factor source %q: %w", factor.FactorID, err))
 		}
+	}
+	for _, set := range sets {
 		if set.Status == domain.SetStatusDeleting {
 			if err := s.DeleteSet(ctx, set.SetID, true); err != nil {
 				reconcileErrors = append(reconcileErrors, fmt.Errorf("resume factor set purge %q: %w", set.SetID, err))
@@ -73,9 +68,13 @@ func (s *Service) reconcileSetUnlocked(ctx context.Context, set domain.FactorSet
 	if err != nil {
 		return err
 	}
-	factors, err := s.db.ListFactors(ctx, set.SetID, domain.FactorStatusEnabled)
+	members, err := s.db.ListMembers(ctx, set.SetID, domain.MemberStatusEnabled)
 	if err != nil {
-		return fmt.Errorf("list enabled factors: %w", err)
+		return fmt.Errorf("list enabled members: %w", err)
+	}
+	factors := make([]domain.FactorDef, 0, len(members))
+	for _, member := range members {
+		factors = append(factors, member.Factor)
 	}
 	return s.ensureResultColumns(ctx, set, source, columns, factors...)
 }

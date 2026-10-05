@@ -239,12 +239,12 @@ func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error
 	if set.Status != domain.SetStatusDisabled && !(purge && set.Status == domain.SetStatusDeleting) {
 		return errors.New("factor set must be disabled before deletion")
 	}
-	factors, err := s.db.ListFactors(ctx, setID, "")
+	memberCount, err := s.db.CountMembers(ctx, setID)
 	if err != nil {
 		return err
 	}
-	if len(factors) != 0 {
-		return errors.New("factor set must not contain factors before deletion")
+	if memberCount != 0 {
+		return errors.New("factor set must not contain members before deletion")
 	}
 	if purge {
 		if s.metadata == nil {
@@ -266,58 +266,35 @@ func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error
 	return nil
 }
 
-func (s *Service) GetSet(ctx context.Context, setID string) (domain.FactorSet, []domain.FactorDef, error) {
+// GetSet returns a factor set with all of its members (any status) and their definitions.
+func (s *Service) GetSet(ctx context.Context, setID string) (domain.FactorSet, []domain.SetMember, error) {
 	set, err := s.db.GetSet(ctx, setID)
 	if err != nil {
 		return domain.FactorSet{}, nil, err
 	}
-	factors, err := s.db.ListFactors(ctx, setID, "")
-	return set, factors, err
+	members, err := s.db.ListMembers(ctx, setID, "")
+	return set, members, err
 }
 
 func (s *Service) ListSets(ctx context.Context) ([]domain.FactorSet, error) {
 	return s.db.ListSets(ctx)
 }
 
+// CreateFactor registers a standalone definition. It only runs the static
+// checks and a trial load of the source; dataset checks wait for AddFactorToSet.
 func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
-	set, err := s.db.GetSet(ctx, in.SetID)
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	unlock, err := s.locks.LockContext(ctx, set.SetID)
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	defer unlock()
-	set, err = s.db.GetSet(ctx, set.SetID)
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	if set.Status == domain.SetStatusPending {
-		return domain.FactorDef{}, errors.New("factor set is not ready")
-	}
-	if set.Status == domain.SetStatusDeleting {
-		return domain.FactorDef{}, errors.New("factor set purge is pending")
-	}
-	if in.Status != "" && in.Status != domain.FactorStatusDisabled {
-		return domain.FactorDef{}, errors.New("new factor definitions must be disabled")
-	}
-	in.Status = domain.FactorStatusDisabled
 	factor, err := normalizeFactor(in)
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	_, columns, err := s.sourceDataset(ctx, set)
+	if err := domain.ValidateDefinition(factor); err != nil {
+		return domain.FactorDef{}, err
+	}
+	unlock, err := s.locks.LockFactorContext(ctx, factor.FactorID)
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	siblings, err := s.db.ListFactors(ctx, set.SetID, "")
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	if err := domain.ValidateFactor(factor, columnNames(columns), siblings); err != nil {
-		return domain.FactorDef{}, err
-	}
+	defer unlock()
 	if err := s.loadSource(ctx, factor); err != nil {
 		return domain.FactorDef{}, err
 	}
@@ -327,57 +304,58 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 	return s.db.GetFactor(ctx, factor.FactorID)
 }
 
+// UpdateFactor rewrites a definition. It is rejected while any member is
+// enabled; otherwise the new definition is re-validated against every set that
+// references it and any failure rejects the whole update.
 func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
-	initial, err := s.db.GetFactor(ctx, in.FactorID)
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	unlock, err := s.locks.LockContext(ctx, initial.SetID)
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	defer unlock()
-	existing, err := s.db.GetFactor(ctx, in.FactorID)
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	if existing.SetID != initial.SetID {
-		return domain.FactorDef{}, errors.New("factor set changed while waiting for its lifecycle lock")
-	}
-	if existing.Status != domain.FactorStatusDisabled {
-		return domain.FactorDef{}, errors.New("factor must be disabled before updating its definition")
-	}
-	if in.SetID != existing.SetID {
-		return domain.FactorDef{}, errors.New("factor set_id is immutable")
-	}
-	if in.Status != "" && in.Status != domain.FactorStatusDisabled {
-		return domain.FactorDef{}, errors.New("factor must remain disabled while updating its definition")
-	}
-	in.Status = domain.FactorStatusDisabled
 	factor, err := normalizeFactor(in)
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	set, err := s.db.GetSet(ctx, existing.SetID)
+	if err := domain.ValidateDefinition(factor); err != nil {
+		return domain.FactorDef{}, err
+	}
+	unlockFactor, err := s.locks.LockFactorContext(ctx, factor.FactorID)
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	if set.Status == domain.SetStatusDeleting {
-		return domain.FactorDef{}, errors.New("factor set purge is pending")
+	defer unlockFactor()
+	if _, err := s.db.GetFactor(ctx, factor.FactorID); err != nil {
+		return domain.FactorDef{}, err
 	}
-	if set.Status == domain.SetStatusPending {
-		return domain.FactorDef{}, errors.New("factor set is not ready")
-	}
-	_, columns, err := s.sourceDataset(ctx, set)
+	// Every member operation takes the definition lock first, so the usage list
+	// read here cannot change until this update finishes.
+	usages, err := s.db.ListUsages(ctx, factor.FactorID)
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	siblings, err := s.db.ListFactors(ctx, set.SetID, "")
-	if err != nil {
-		return domain.FactorDef{}, err
+	referencing := usages[factor.FactorID]
+	for _, usage := range referencing {
+		if usage.Status == domain.MemberStatusEnabled {
+			return domain.FactorDef{}, fmt.Errorf("%w: factor %q is enabled in set %q; disable it before updating its definition",
+				store.ErrConflict, factor.FactorID, usage.SetID)
+		}
 	}
-	if err := domain.ValidateFactor(factor, columnNames(columns), siblings); err != nil {
-		return domain.FactorDef{}, err
+	setIDs := make([]string, 0, len(referencing))
+	for _, usage := range referencing {
+		setIDs = append(setIDs, usage.SetID)
+	}
+	sort.Strings(setIDs)
+	for _, setID := range setIDs {
+		unlockSet, err := s.locks.LockContext(ctx, setID)
+		if err != nil {
+			return domain.FactorDef{}, err
+		}
+		defer unlockSet()
+	}
+	for _, setID := range setIDs {
+		set, err := s.db.GetSet(ctx, setID)
+		if err != nil {
+			return domain.FactorDef{}, err
+		}
+		if _, err := s.validateMembership(ctx, set, factor); err != nil {
+			return domain.FactorDef{}, fmt.Errorf("factor set %q: %w", setID, err)
+		}
 	}
 	if err := s.loadSource(ctx, factor); err != nil {
 		return domain.FactorDef{}, err
@@ -388,132 +366,272 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 	return s.db.GetFactor(ctx, factor.FactorID)
 }
 
-// SetFactorStatus 变更因子状态；启用时返回自动提交的回填任务 ID，其余情况为空。
-func (s *Service) SetFactorStatus(ctx context.Context, factorID, status string) (domain.FactorDef, string, error) {
-	initial, err := s.db.GetFactor(ctx, factorID)
+// DeleteFactor removes a definition that no set references.
+func (s *Service) DeleteFactor(ctx context.Context, factorID string) error {
+	factorID = strings.TrimSpace(factorID)
+	unlock, err := s.locks.LockFactorContext(ctx, factorID)
 	if err != nil {
-		return domain.FactorDef{}, "", err
-	}
-	unlock, err := s.locks.LockContext(ctx, initial.SetID)
-	if err != nil {
-		return domain.FactorDef{}, "", err
+		return err
 	}
 	defer unlock()
-	factor, err := s.db.GetFactor(ctx, factorID)
+	if _, err := s.db.GetFactor(ctx, factorID); err != nil {
+		return err
+	}
+	usages, err := s.db.ListUsages(ctx, factorID)
 	if err != nil {
-		return domain.FactorDef{}, "", err
+		return err
 	}
-	if factor.SetID != initial.SetID {
-		return domain.FactorDef{}, "", errors.New("factor set changed while waiting for its lifecycle lock")
+	if used := usages[factorID]; len(used) > 0 {
+		return fmt.Errorf("%w: factor %q is still used by factor set %q", store.ErrConflict, factorID, used[0].SetID)
 	}
-	set, err := s.db.GetSet(ctx, factor.SetID)
-	if err != nil {
-		return domain.FactorDef{}, "", err
-	}
-	if set.Status == domain.SetStatusDeleting {
-		return domain.FactorDef{}, "", errors.New("factor set purge is pending")
-	}
-	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
-		return domain.FactorDef{}, "", fmt.Errorf("status must be %q or %q", domain.FactorStatusEnabled, domain.FactorStatusDisabled)
-	}
-	if status == domain.FactorStatusEnabled && factor.Status == domain.FactorStatusEnabled {
-		return factor, "", nil
-	}
-	if status == domain.FactorStatusDisabled {
-		if factor.Status == domain.FactorStatusDisabled {
-			return factor, "", nil
-		}
-		if err := s.db.SetFactorStatus(ctx, factor.FactorID, factor.Status, status); err != nil {
-			return domain.FactorDef{}, "", err
-		}
-		s.notify()
-		updated, err := s.db.GetFactor(ctx, factor.FactorID)
-		return updated, "", err
-	}
-	if set.Status == domain.SetStatusPending {
-		return domain.FactorDef{}, "", errors.New("factor set is not ready")
-	}
-	if s.recalc == nil {
-		return domain.FactorDef{}, "", errors.New("recalc submitter is required to enable a factor")
-	}
-	source, columns, err := s.sourceDataset(ctx, set)
-	if err != nil {
-		return domain.FactorDef{}, "", err
-	}
-	factors, err := s.db.ListFactors(ctx, set.SetID, "")
-	if err != nil {
-		return domain.FactorDef{}, "", err
-	}
-	if err := domain.ValidateFactor(factor, columnNames(columns), factors); err != nil {
-		return domain.FactorDef{}, "", err
-	}
-	start, end, err := s.backfillWindow(ctx, set)
-	if err != nil {
-		return domain.FactorDef{}, "", err
-	}
-	activeFactors := make([]domain.FactorDef, 0, len(factors)+1)
-	for _, candidate := range factors {
-		if candidate.Status == domain.FactorStatusEnabled {
-			activeFactors = append(activeFactors, candidate)
-		}
-	}
-	activeFactors = replaceFactor(activeFactors, factor)
-	if err := s.ensureResultColumns(ctx, set, source, columns, activeFactors...); err != nil {
-		return domain.FactorDef{}, "", err
-	}
-	// Persist the accepted backfill and expose the factor in one SQLite
-	// transaction so neither the worker nor live triggers can observe half of
-	// the activation.
-	job, err := s.recalc.PrepareEnableBackfill(ctx, set, factor, start, end)
-	if err != nil {
-		return domain.FactorDef{}, "", fmt.Errorf("prepare factor backfill: %w", err)
-	}
-	if factor.Status != domain.FactorStatusEnabled {
-		if _, err := s.db.EnableFactorWithRecalcJob(ctx, factor.FactorID, factor.Status, job); err != nil {
-			return domain.FactorDef{}, "", err
-		}
-		factor.Status = domain.FactorStatusEnabled
-		s.notify()
-	}
-	return factor, job.JobID, nil
+	return s.db.DeleteFactor(ctx, factorID)
 }
 
-func (s *Service) DeleteFactor(ctx context.Context, factorID string) error {
-	initial, err := s.db.GetFactor(ctx, factorID)
+func (s *Service) GetFactor(ctx context.Context, factorID string) (domain.FactorInfo, error) {
+	factor, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
-		return err
+		return domain.FactorInfo{}, err
 	}
-	unlock, err := s.locks.LockContext(ctx, initial.SetID)
+	usages, err := s.db.ListUsages(ctx, factor.FactorID)
+	if err != nil {
+		return domain.FactorInfo{}, err
+	}
+	return domain.FactorInfo{Factor: factor, Usages: usages[factor.FactorID]}, nil
+}
+
+// ListFactors returns every definition, or only one set's members' definitions
+// (optionally filtered by member status) when setID is given. Each entry carries
+// all of its usages.
+func (s *Service) ListFactors(ctx context.Context, setID, status string) ([]domain.FactorInfo, error) {
+	var factors []domain.FactorDef
+	if strings.TrimSpace(setID) == "" {
+		all, err := s.db.ListFactors(ctx)
+		if err != nil {
+			return nil, err
+		}
+		factors = all
+	} else {
+		if _, err := s.db.GetSet(ctx, setID); err != nil {
+			return nil, err
+		}
+		members, err := s.db.ListMembers(ctx, setID, status)
+		if err != nil {
+			return nil, err
+		}
+		for _, member := range members {
+			factors = append(factors, member.Factor)
+		}
+	}
+	usages, err := s.db.ListUsages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]domain.FactorInfo, 0, len(factors))
+	for _, factor := range factors {
+		infos = append(infos, domain.FactorInfo{Factor: factor, Usages: usages[factor.FactorID]})
+	}
+	return infos, nil
+}
+
+// AddFactorToSet attaches a definition to a set as a disabled member after
+// validating it against the set's source dataset. It neither adds result
+// columns nor submits a backfill.
+func (s *Service) AddFactorToSet(ctx context.Context, setID, factorID string) (domain.SetMember, error) {
+	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
+	unlock, err := s.lockMemberContext(ctx, setID, factorID)
+	if err != nil {
+		return domain.SetMember{}, err
+	}
+	defer unlock()
+	set, err := s.db.GetSet(ctx, setID)
+	if err != nil {
+		return domain.SetMember{}, err
+	}
+	if err := requireSetOpen(set); err != nil {
+		return domain.SetMember{}, err
+	}
+	// Re-read the definition under the locks so a concurrent update cannot interleave.
+	factor, err := s.db.GetFactor(ctx, factorID)
+	if err != nil {
+		return domain.SetMember{}, err
+	}
+	if _, err := s.validateMembership(ctx, set, factor); err != nil {
+		return domain.SetMember{}, err
+	}
+	member, err := s.db.AddMember(ctx, setID, factorID)
+	if err != nil {
+		return domain.SetMember{}, err
+	}
+	return domain.SetMember{FactorSetMember: member, Factor: factor}, nil
+}
+
+// RemoveFactorFromSet detaches a disabled member; result columns are kept.
+func (s *Service) RemoveFactorFromSet(ctx context.Context, setID, factorID string) error {
+	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
+	unlock, err := s.lockMemberContext(ctx, setID, factorID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	factor, err := s.db.GetFactor(ctx, factorID)
-	if err != nil {
-		return err
-	}
-	if factor.SetID != initial.SetID {
-		return errors.New("factor set changed while waiting for its lifecycle lock")
-	}
-	set, err := s.db.GetSet(ctx, factor.SetID)
+	set, err := s.db.GetSet(ctx, setID)
 	if err != nil {
 		return err
 	}
 	if set.Status == domain.SetStatusDeleting {
 		return errors.New("factor set purge is pending")
 	}
-	if factor.Status != domain.FactorStatusDisabled {
-		return errors.New("factor must be disabled before deletion")
+	return s.db.RemoveMember(ctx, setID, factorID)
+}
+
+// SetFactorMemberStatus enables or disables one member. Enabling re-validates,
+// adds result columns, accepts a backfill and returns its job id; disabling only
+// stops writes and keeps the columns.
+func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, status string) (domain.SetMember, string, error) {
+	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
+	unlock, err := s.lockMemberContext(ctx, setID, factorID)
+	if err != nil {
+		return domain.SetMember{}, "", err
 	}
-	return s.db.DeleteFactor(ctx, factor.FactorID)
+	defer unlock()
+	set, err := s.db.GetSet(ctx, setID)
+	if err != nil {
+		return domain.SetMember{}, "", err
+	}
+	if set.Status == domain.SetStatusDeleting {
+		return domain.SetMember{}, "", errors.New("factor set purge is pending")
+	}
+	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
+		return domain.SetMember{}, "", fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled)
+	}
+	member, err := s.db.GetMember(ctx, setID, factorID)
+	if err != nil {
+		return domain.SetMember{}, "", err
+	}
+	factor, err := s.db.GetFactor(ctx, factorID)
+	if err != nil {
+		return domain.SetMember{}, "", err
+	}
+	result := domain.SetMember{FactorSetMember: member, Factor: factor}
+	if member.Status == status {
+		return result, "", nil
+	}
+	if status == domain.MemberStatusDisabled {
+		if err := s.db.SetMemberStatus(ctx, setID, factorID, member.Status, status); err != nil {
+			return domain.SetMember{}, "", err
+		}
+		s.notify()
+		return s.reloadMember(ctx, setID, factorID, factor)
+	}
+	if set.Status == domain.SetStatusPending {
+		return domain.SetMember{}, "", errors.New("factor set is not ready")
+	}
+	if s.recalc == nil {
+		return domain.SetMember{}, "", errors.New("recalc submitter is required to enable a factor")
+	}
+	// Definitions may have been edited and source columns may have changed while
+	// the member was disabled, so enabling repeats the full membership checks.
+	members, err := s.validateMembership(ctx, set, factor)
+	if err != nil {
+		return domain.SetMember{}, "", err
+	}
+	source, columns, err := s.sourceDataset(ctx, set)
+	if err != nil {
+		return domain.SetMember{}, "", err
+	}
+	start, end, err := s.backfillWindow(ctx, set)
+	if err != nil {
+		return domain.SetMember{}, "", err
+	}
+	activeFactors := make([]domain.FactorDef, 0, len(members)+1)
+	for _, candidate := range members {
+		if candidate.Status == domain.MemberStatusEnabled {
+			activeFactors = append(activeFactors, candidate.Factor)
+		}
+	}
+	activeFactors = replaceFactor(activeFactors, factor)
+	if err := s.ensureResultColumns(ctx, set, source, columns, activeFactors...); err != nil {
+		return domain.SetMember{}, "", err
+	}
+	// Persist the accepted backfill and expose the member in one SQLite
+	// transaction so neither the worker nor live triggers can observe half of
+	// the activation.
+	job, err := s.recalc.PrepareEnableBackfill(ctx, set, factor, start, end)
+	if err != nil {
+		return domain.SetMember{}, "", fmt.Errorf("prepare factor backfill: %w", err)
+	}
+	if _, err := s.db.EnableMemberWithRecalcJob(ctx, setID, factorID, member.Status, job); err != nil {
+		return domain.SetMember{}, "", err
+	}
+	s.notify()
+	updated, _, err := s.reloadMember(ctx, setID, factorID, factor)
+	return updated, job.JobID, err
 }
 
-func (s *Service) GetFactor(ctx context.Context, factorID string) (domain.FactorDef, error) {
-	return s.db.GetFactor(ctx, factorID)
+func (s *Service) reloadMember(ctx context.Context, setID, factorID string, factor domain.FactorDef) (domain.SetMember, string, error) {
+	member, err := s.db.GetMember(ctx, setID, factorID)
+	if err != nil {
+		return domain.SetMember{}, "", err
+	}
+	return domain.SetMember{FactorSetMember: member, Factor: factor}, "", nil
 }
 
-func (s *Service) ListFactors(ctx context.Context, setID, status string) ([]domain.FactorDef, error) {
-	return s.db.ListFactors(ctx, setID, status)
+// lockMemberContext takes the definition lock and then the set lock, the fixed
+// order for every operation that touches one (set, factor) pair.
+func (s *Service) lockMemberContext(ctx context.Context, setID, factorID string) (func(), error) {
+	unlockFactor, err := s.locks.LockFactorContext(ctx, factorID)
+	if err != nil {
+		return nil, err
+	}
+	unlockSet, err := s.locks.LockContext(ctx, setID)
+	if err != nil {
+		unlockFactor()
+		return nil, err
+	}
+	return func() {
+		unlockSet()
+		unlockFactor()
+	}, nil
+}
+
+// validateMembership runs the dataset-dependent checks of one definition
+// against one set and returns the set's current members.
+func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, factor domain.FactorDef) ([]domain.SetMember, error) {
+	_, columns, err := s.sourceDataset(ctx, set)
+	if err != nil {
+		return nil, err
+	}
+	members, err := s.db.ListMembers(ctx, set.SetID, "")
+	if err != nil {
+		return nil, err
+	}
+	siblings := make([]domain.FactorDef, 0, len(members))
+	for _, member := range members {
+		siblings = append(siblings, member.Factor)
+	}
+	resultColumns, err := s.metadata.ListColumns(ctx, set.SpaceID, set.ResultDatasetID)
+	if err != nil {
+		return nil, fmt.Errorf("list factor result columns: %w", err)
+	}
+	origins := make(map[string]string)
+	for _, column := range resultColumns {
+		if column.OriginType == storageio.ColumnOriginFactor {
+			origins[column.ColumnName] = column.OriginID
+		}
+	}
+	if err := domain.ValidateMembership(set, factor, columnNames(columns), siblings, origins); err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+func requireSetOpen(set domain.FactorSet) error {
+	switch set.Status {
+	case domain.SetStatusPending:
+		return errors.New("factor set is not ready")
+	case domain.SetStatusDeleting:
+		return errors.New("factor set purge is pending")
+	}
+	return nil
 }
 
 func (s *Service) loadSource(ctx context.Context, factor domain.FactorDef) error {
