@@ -285,6 +285,20 @@ func TestActivateDatasetUsesCurrentRevision(t *testing.T) {
 	require.Equal(t, uint64(12), metadata.activateRequests[0].GetExpectedRevision())
 }
 
+func TestSetDatasetSubjectTagsKeepsOtherFieldsAndRevision(t *testing.T) {
+	metadata := &metadataFake{dataset: &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "factor_result", Name: "因子结果", Revision: 7, Status: "active",
+		Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}}
+	require.NoError(t, NewClient(nil, metadata, nil).SetDatasetSubjectTags(context.Background(), "crypto", "factor_result", []string{"binance_spot"}))
+	require.Len(t, metadata.updateRequests, 1)
+	updated := metadata.updateRequests[0].GetDataset()
+	require.Equal(t, []string{"binance_spot"}, updated.GetSubjectTags())
+	require.Equal(t, uint64(7), updated.GetRevision(), "the update carries the revision it read")
+	require.Equal(t, "因子结果", updated.GetName())
+	require.Empty(t, metadata.dataset.GetSubjectTags(), "the read dataset is not mutated in place")
+}
+
 func TestActivateFactorResultClearsDeletionTombstone(t *testing.T) {
 	metadata := &metadataFake{dataset: &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: "factor_result", Revision: 12, Status: "disabled",
@@ -339,6 +353,12 @@ type metadataFake struct {
 	deleteRsp        *storagepb.DeleteDatasetRsp
 	deleteRsps       []*storagepb.DeleteDatasetRsp
 	subjectPages     []*storagepb.ListDatasetSubjectsRsp
+	updateRequests   []*storagepb.UpdateDatasetReq
+}
+
+func (f *metadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
+	f.updateRequests = append(f.updateRequests, req)
+	return &storagepb.UpdateDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
 }
 
 func (f *metadataFake) ListDatasetSubjects(_ context.Context, req *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {

@@ -93,10 +93,17 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 	if result.SpaceID != set.SpaceID || result.DatasetID != set.ResultDatasetID ||
 		result.DataSourceID != source.DataSourceID || result.DataNodeID != source.DataNodeID ||
 		result.KeepDuration != source.KeepDuration || result.DataKind != storageio.DataKindTimeSeries ||
-		!equalStrings(result.Freqs, []string{set.Freq}) || !equalStrings(result.SubjectTags, source.SubjectTags) ||
+		!equalStrings(result.Freqs, []string{set.Freq}) ||
 		result.Attributes["owner_module"] != "factor" || result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
 		result.Attributes["source_dataset_id"] != set.SourceDatasetID || result.Attributes["write_owner"] != "factor" {
 		return fmt.Errorf("result dataset %q does not match the factor result contract", set.ResultDatasetID)
+	}
+	// The result dataset mirrors its source's subject scope; follow a source
+	// tag change instead of halting the set.
+	if !equalStrings(result.SubjectTags, source.SubjectTags) {
+		if err := s.metadata.SetDatasetSubjectTags(ctx, set.SpaceID, set.ResultDatasetID, source.SubjectTags); err != nil {
+			return fmt.Errorf("sync factor result subject tags: %w", err)
+		}
 	}
 	if result.Status != storageio.DatasetStatusActive {
 		return fmt.Errorf("factor result dataset %q is not active", set.ResultDatasetID)

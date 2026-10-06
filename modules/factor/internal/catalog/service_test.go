@@ -874,6 +874,17 @@ func (f *metadataFake) CreateResultDataset(_ context.Context, spec storageio.Res
 	return nil
 }
 
+func (f *metadataFake) SetDatasetSubjectTags(_ context.Context, spaceID, datasetID string, tags []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.writeOps = append(f.writeOps, "subject_tags")
+	key := resultKey(spaceID, datasetID)
+	dataset := f.datasets[key]
+	dataset.SubjectTags = append([]string(nil), tags...)
+	f.datasets[key] = dataset
+	return nil
+}
+
 func (f *metadataFake) UpsertColumns(_ context.Context, spaceID, datasetID string, cols []storageio.ColumnInfo) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1004,4 +1015,23 @@ func TestReconcileKeepsReadinessOnStorageOutage(t *testing.T) {
 	require.Error(t, svc.ReconcileSet(context.Background(), set.SetID))
 
 	require.True(t, ready[set.SetID], "a transient Storage failure keeps the set ready")
+}
+
+func TestReconcileFollowsSourceSubjectTags(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	ready := map[string]bool{}
+	svc := NewService(db, meta, WithReadyRecorder(func(setID string, ok bool) { ready[setID] = ok }))
+	set, err := svc.CreateSet(context.Background(), newSet())
+	require.NoError(t, err)
+	source := meta.datasets[resultKey("crypto", "dataset_prices")]
+	source.SubjectTags = []string{"binance_spot", "binance_swap"}
+	meta.datasets[resultKey("crypto", "dataset_prices")] = source
+	meta.writeOps = nil
+
+	require.NoError(t, svc.ReconcileSet(context.Background(), set.SetID))
+
+	require.True(t, ready[set.SetID], "a source subject-tag change must not halt the set")
+	require.Equal(t, []string{"subject_tags"}, meta.writeOps)
+	require.Equal(t, []string{"binance_spot", "binance_swap"}, meta.datasets[resultKey("crypto", set.ResultDatasetID)].SubjectTags)
 }

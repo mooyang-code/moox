@@ -10,6 +10,7 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -81,6 +82,7 @@ type Metadata interface {
 	UpsertColumns(ctx context.Context, spaceID, datasetID string, cols []ColumnInfo) error
 	ActivateDataset(ctx context.Context, spaceID, datasetID string) error
 	DeleteDataset(ctx context.Context, spaceID, datasetID string) error
+	SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error
 }
 
 func (c *Client) GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error) {
@@ -220,6 +222,35 @@ func (c *Client) CreateResultDataset(ctx context.Context, spec ResultDatasetSpec
 		return err
 	}
 	return c.UpsertColumns(ctx, spec.SpaceID, spec.DatasetID, spec.Columns)
+}
+
+// SetDatasetSubjectTags replaces a dataset's subject tags and keeps every other
+// field; the update carries the revision it read, so a concurrent edit fails
+// instead of being overwritten.
+func (c *Client) SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error {
+	if err := c.metadataReady("set dataset subject tags"); err != nil {
+		return err
+	}
+	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return rpcError("read dataset before setting subject tags", err)
+	}
+	if current == nil {
+		return fmt.Errorf("%w: read dataset before setting subject tags returned an empty response", ErrInfra)
+	}
+	if err := responseError("read dataset before setting subject tags", current.GetRetInfo()); err != nil {
+		return err
+	}
+	dataset := proto.Clone(current.GetDataset()).(*storagepb.Dataset)
+	dataset.SubjectTags = append([]string(nil), tags...)
+	updated, err := c.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: c.auth, Dataset: dataset})
+	if err != nil {
+		return rpcError("set dataset subject tags", err)
+	}
+	if updated == nil {
+		return fmt.Errorf("%w: set dataset subject tags returned an empty response", ErrInfra)
+	}
+	return responseError("set dataset subject tags", updated.GetRetInfo())
 }
 
 func (c *Client) UpsertColumns(ctx context.Context, spaceID, datasetID string, columns []ColumnInfo) error {
