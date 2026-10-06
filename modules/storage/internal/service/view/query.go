@@ -58,7 +58,9 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if len(req.GetSelectors()) == 0 && req.GetTimeRange() == nil && req.GetFilter() == nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
 	}
+	queryStarted := time.Now()
 	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetViewId())
+	resolvedAt := time.Now()
 	if expected := strings.TrimSpace(req.GetExpectedActiveIndexId()); expected != "" && expected != indexID {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index changed: expected=%s actual=%s", expected, indexID))}, nil
 	}
@@ -66,6 +68,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if revisionErr != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(revisionErr), revisionErr)}, nil
 	}
+	startRevisionAt := time.Now()
 	if expected := req.GetExpectedActiveIndexRevision(); expected != 0 && expected != startRevision {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index revision changed: expected=%d actual=%d", expected, startRevision))}, nil
 	}
@@ -87,11 +90,19 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		offset = 0
 	}
 	spec := viewindex.QuerySpec{Selectors: selectors, TimeRange: req.GetTimeRange(), Groups: filterGroups(req.GetFilter()), GroupLogical: filterLogical(req.GetFilter()), Sorts: req.GetSorts(), Includes: req.GetColumnNames(), Offset: offset, Limit: limit, TotalMode: req.GetTotalMode()}
+	engineStarted := time.Now()
 	rows, total, err := engine.Query(ctx, indexID, spec)
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
 	}
+	engineDone := time.Now()
 	currentRevision, revisionErr := s.readIndexRevision(ctx, indexID, nil)
+	if elapsed := time.Since(queryStarted); elapsed > time.Second {
+		log.Printf("storage view slow query space=%s view=%s index=%s total=%s resolve=%s start_revision=%s prepare=%s engine=%s end_revision=%s",
+			req.GetSpaceId(), req.GetViewId(), indexID, elapsed.Round(time.Millisecond), resolvedAt.Sub(queryStarted).Round(time.Millisecond),
+			startRevisionAt.Sub(resolvedAt).Round(time.Millisecond), engineStarted.Sub(startRevisionAt).Round(time.Millisecond),
+			engineDone.Sub(engineStarted).Round(time.Millisecond), time.Since(engineDone).Round(time.Millisecond))
+	}
 	if revisionErr != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(revisionErr), revisionErr)}, nil
 	}
