@@ -4690,6 +4690,9 @@ sync_local_stage() {
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
       MOOX_WITH_EVENTBUS="${WITH_EVENTBUS}" MOOX_WITH_ARCHIVE="${WITH_ARCHIVE}" "${deploy_dir}/stop.sh" || true
     else
+      if [[ "${WITH_STORAGE_ACCESS}" -eq 1 ]]; then
+        "${deploy_dir}/stop.sh" storage-access || true
+      fi
       if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" collector || true
       fi
@@ -4940,6 +4943,9 @@ sync_local_stage() {
     install -m 0600 "${STAGE_DIR}/secrets/storage-access.env" "${deploy_dir}/secrets/storage-access.env"
     install -m 0600 "${STAGE_DIR}/secrets/storage-access-principals.yaml" "${deploy_dir}/secrets/storage-access-principals.yaml"
     install -m 0600 "${STAGE_DIR}/secrets/storage-access-factor-engine.key" "${deploy_dir}/secrets/storage-access-factor-engine.key"
+    # Lifecycle scripts kept by a component overlay predate the principals
+    # file; they all source storage-access.env, so pin its absolute path here.
+    printf 'MOOX_STORAGE_ACCESS_PRINCIPALS_FILE=%q\n' "${deploy_dir}/secrets/storage-access-principals.yaml" >>"${deploy_dir}/secrets/storage-access.env"
   elif [[ "${component_overlay}" -eq 0 ]]; then
     rm -f "${deploy_dir}/secrets/storage-access.env" "${deploy_dir}/secrets/storage-access-principals.yaml" \
       "${deploy_dir}/secrets/storage-access-factor-engine.key"
@@ -5050,6 +5056,7 @@ sync_local_stage() {
     fi
     if [[ "${component_overlay}" -eq 1 ]]; then
       [[ "${WITH_GATEWAY}" -eq 0 ]] || MOOX_WITH_GATEWAY=1 "${deploy_dir}/start.sh" gateway 8>&-
+      [[ "${WITH_STORAGE_ACCESS}" -eq 0 ]] || "${deploy_dir}/start.sh" storage-access 8>&-
       [[ "${WITH_EVENTBUS}" -eq 0 ]] || "${deploy_dir}/start.sh" eventbus 8>&-
       [[ "${WITH_HOSTAGENT}" -eq 0 ]] || "${deploy_dir}/start.sh" hostagent 8>&-
       [[ "${WITH_ARCHIVE}" -eq 0 ]] || "${deploy_dir}/start.sh" archive 8>&-
@@ -5463,6 +5470,7 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   if [[ "${WITH_STORAGE}" == "1" ]]; then
     MOOX_WITH_EVENTBUS="${WITH_EVENTBUS}" MOOX_WITH_ARCHIVE="${WITH_ARCHIVE}" "${DEPLOY_DIR}/stop.sh" || true
   else
+    [[ "${WITH_STORAGE_ACCESS}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" storage-access || true
     [[ "${WITH_ARCHIVE}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" archive || true
     [[ "${WITH_COLLECTOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" collector || true
     [[ "${WITH_FACTOR_MGR}" == "1" ]] && { "${DEPLOY_DIR}/stop.sh" factor >/dev/null 2>&1 || true; "${DEPLOY_DIR}/stop.sh" factor-mgr || true; }
@@ -5682,6 +5690,12 @@ if [[ -f "${DEPLOY_DIR}/secrets/notification.env.next" ]]; then
 fi
 chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh" "${DEPLOY_DIR}/bin/"*
 mkdir -p "${DEPLOY_DIR}/secrets"
+if [[ "${WITH_STORAGE_ACCESS}" == "1" && -f "${DEPLOY_DIR}/secrets/storage-access.env" ]] &&
+  ! grep -q '^MOOX_STORAGE_ACCESS_PRINCIPALS_FILE=' "${DEPLOY_DIR}/secrets/storage-access.env"; then
+  # Lifecycle scripts kept by a component overlay predate the principals
+  # file; they all source storage-access.env, so pin its absolute path here.
+  printf 'MOOX_STORAGE_ACCESS_PRINCIPALS_FILE=%q\n' "${DEPLOY_DIR}/secrets/storage-access-principals.yaml" >>"${DEPLOY_DIR}/secrets/storage-access.env"
+fi
 if [[ ! -s "${DEPLOY_DIR}/secrets/health-auth.env" ]]; then
   secret=$(generate_secret health)
   umask 077
@@ -5716,6 +5730,7 @@ fi
   fi
   if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
     [[ "${WITH_GATEWAY}" == "0" ]] || MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/start.sh" gateway 8>&-
+    [[ "${WITH_STORAGE_ACCESS}" == "0" ]] || "${DEPLOY_DIR}/start.sh" storage-access 8>&-
     [[ "${WITH_EVENTBUS}" == "0" ]] || "${DEPLOY_DIR}/start.sh" eventbus 8>&-
     [[ "${WITH_HOSTAGENT}" == "0" ]] || "${DEPLOY_DIR}/start.sh" hostagent 8>&-
     [[ "${WITH_ARCHIVE}" == "0" ]] || "${DEPLOY_DIR}/start.sh" archive 8>&-
