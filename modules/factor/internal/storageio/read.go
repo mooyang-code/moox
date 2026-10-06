@@ -122,12 +122,17 @@ func (c *Client) ReadWindow(ctx context.Context, req ReadRequest) (map[string]*F
 	}
 	var afterKey []byte
 	for page := 1; ; page++ {
-		rsp, callErr := c.primary.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+		pageCtx, cancel := ctx, context.CancelFunc(func() {})
+		if req.PageTimeout > 0 {
+			pageCtx, cancel = context.WithTimeout(ctx, req.PageTimeout)
+		}
+		rsp, callErr := c.primary.ReadTimeSeriesRows(pageCtx, &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo: c.auth, SpaceId: req.SpaceID, DatasetId: req.DatasetID,
 			Selectors: selectors, TimeRange: timeRange, Order: storagepb.SortOrder_SORT_ORDER_ASC,
 			ColumnNames: columns, Page: &commonpb.Page{Page: 1, Size: readPageSize},
 			AfterKey: append([]byte(nil), afterKey...),
 		})
+		cancel()
 		if callErr != nil {
 			return nil, rpcError("read time-series window", callErr)
 		}

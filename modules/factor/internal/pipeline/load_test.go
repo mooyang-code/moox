@@ -147,14 +147,18 @@ func (*fakeStore) ComputedExists(context.Context, string, string, string, int64)
 	return false, nil
 }
 
-func TestRecalcReadUsesLongerTimeoutThanLive(t *testing.T) {
-	deadlines := map[Mode]time.Duration{}
+func TestReadDeadlinesDifferForLiveAndRecalc(t *testing.T) {
+	type observed struct {
+		hasDeadline bool
+		deadline    time.Duration
+		pageTimeout time.Duration
+	}
+	got := map[Mode]observed{}
 	for _, mode := range []Mode{ModeLive, ModeRecalc} {
-		var got time.Duration
+		var seen observed
 		store := &fakeStore{read: func(ctx context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
 			deadline, ok := ctx.Deadline()
-			require.True(t, ok)
-			got = time.Until(deadline)
+			seen = observed{hasDeadline: ok, deadline: time.Until(deadline), pageTimeout: req.PageTimeout}
 			return emptyFrames(req), nil
 		}}
 		runner := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadTimeout: 10 * time.Second})
@@ -163,8 +167,13 @@ func TestRecalcReadUsesLongerTimeoutThanLive(t *testing.T) {
 		plan.Mode = mode
 		_, err := runner.Load(context.Background(), plan)
 		require.NoError(t, err)
-		deadlines[mode] = got
+		got[mode] = seen
 	}
-	require.Greater(t, deadlines[ModeRecalc], 30*time.Second)
-	require.LessOrEqual(t, deadlines[ModeLive], 10*time.Second)
+	// A live period fails fast as a whole batch.
+	require.True(t, got[ModeLive].hasDeadline)
+	require.LessOrEqual(t, got[ModeLive].deadline, 10*time.Second)
+	require.Zero(t, got[ModeLive].pageTimeout)
+	// A backfill batch is bounded per page, never as a whole.
+	require.False(t, got[ModeRecalc].hasDeadline)
+	require.Equal(t, 10*time.Second, got[ModeRecalc].pageTimeout)
 }

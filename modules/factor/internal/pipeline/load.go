@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
@@ -136,19 +137,27 @@ func (r *Runner) readBatch(ctx context.Context, plan Plan, start time.Time, subj
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
-	if plan.Mode == ModeRecalc && r.cfg.RecalcReadTimeout > 0 {
-		timeout = r.cfg.RecalcReadTimeout
-	}
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		readCtx, cancel := context.WithTimeout(ctx, timeout)
+		// A live period reads a few pages and must fail fast, so the whole
+		// batch shares one deadline. A backfill batch reads tens of pages over
+		// a link the read workers share; it is bounded per page instead, so a
+		// slow but progressing read is not abandoned mid-way and retried.
+		readCtx, cancel := ctx, context.CancelFunc(func() {})
+		pageTimeout := time.Duration(0)
+		if plan.Mode == ModeRecalc {
+			pageTimeout = timeout
+		} else {
+			readCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
+		attemptStart := time.Now()
 		frames, err := r.store.ReadWindow(readCtx, storageio.ReadRequest{
 			SpaceID: plan.Set.SpaceID, DatasetID: plan.Set.SourceDatasetID, Freq: plan.Set.Freq,
 			Subjects: append([]string(nil), subjects...), Start: start, End: plan.TargetEnd,
-			Columns: append([]string(nil), plan.CarryColumns...),
+			Columns: append([]string(nil), plan.CarryColumns...), PageTimeout: pageTimeout,
 		})
 		cancel()
 		if err == nil {
@@ -158,6 +167,10 @@ func (r *Runner) readBatch(ctx context.Context, plan Plan, start time.Time, subj
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		// A failed batch only surfaces as degraded subjects in the outcome;
+		// log each attempt so the cause (timeout, Storage error) is visible.
+		log.Warnf("factor_read_batch_failed set_id=%s subjects=%d first=%s attempt=%d/%d after=%s timeout=%s error=%v",
+			plan.Set.SetID, len(subjects), subjects[0], attempt+1, retries+1, time.Since(attemptStart).Round(time.Millisecond), timeout, err)
 	}
 	return nil, lastErr
 }

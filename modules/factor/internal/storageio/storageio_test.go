@@ -46,6 +46,24 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 	require.Equal(t, []any{base, "", float64(3)}, got["ETH"].Rows[0])
 }
 
+func TestReadWindowBoundsEachPageWithPageTimeout(t *testing.T) {
+	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
+		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true}},
+		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base.Add(time.Minute), "", map[string]*storagepb.TypedValue{"close": double(2)})}, PageResult: &commonpb.PageResult{HasMore: false}},
+	}}
+	_, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
+		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: []string{"BTC"},
+		Start: base, End: base.Add(2 * time.Minute), Columns: []string{"close"}, PageTimeout: 7 * time.Second,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, primary.readDeadlines, 2, "every page carries its own deadline")
+	for _, remaining := range primary.readDeadlines {
+		require.InDelta(t, float64(7*time.Second), float64(remaining), float64(time.Second))
+	}
+}
+
 func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
 	earlier := time.Date(2025, 2, 3, 4, 5, 0, 0, time.UTC)
 	later := earlier.Add(time.Hour)
@@ -338,6 +356,7 @@ type primaryFake struct {
 	computedReq         *storagepb.GetFactorPeriodComputedReq
 	deleteRowsRequests  []*storagepb.PrimaryDeleteDatasetRowsReq
 	restoreRowsRequests []*storagepb.PrimaryRestoreDatasetRowsReq
+	readDeadlines       []time.Duration
 }
 
 type metadataFake struct {
@@ -428,8 +447,11 @@ func (f *metadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDat
 	return &storagepb.DeleteDatasetRsp{RetInfo: successRet()}, nil
 }
 
-func (f *primaryFake) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+func (f *primaryFake) ReadTimeSeriesRows(ctx context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	f.readRequests = append(f.readRequests, proto.Clone(req).(*storagepb.ReadTimeSeriesRowsReq))
+	if deadline, ok := ctx.Deadline(); ok {
+		f.readDeadlines = append(f.readDeadlines, time.Until(deadline))
+	}
 	if f.readErr != nil {
 		return nil, f.readErr
 	}

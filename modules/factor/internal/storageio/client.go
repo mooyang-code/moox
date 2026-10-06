@@ -100,6 +100,11 @@ type ReadRequest struct {
 	Start     time.Time
 	End       time.Time
 	Columns   []string
+	// PageTimeout bounds each page request separately when positive. A
+	// backfill window spans many pages over a narrow link, so a total
+	// deadline fails slow-but-progressing reads; a page deadline still
+	// catches a stalled one.
+	PageTimeout time.Duration
 }
 
 func (c *Client) primaryReady(action string) error {
