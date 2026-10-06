@@ -124,16 +124,19 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		client: r.manager, cache: r.catalog, interval: cfg.CatalogSync.Interval, offset: cfg.CatalogSync.Offset,
 		onChange: r.reconcileConsumer, now: time.Now,
 	}
-	syncCtx, cancelSync := context.WithTimeout(appCtx, cfg.Manager.Timeout)
-	_ = r.syncer.SyncOnce(syncCtx)
-	cancelSync()
 	beat := &heartbeater{
 		client: r.manager, lease: r.lease, status: r.engineStatus, interval: cfg.Engine.HeartbeatInterval,
 		onChange: r.reconcileConsumer, now: time.Now,
 	}
+	// Heartbeat before the first catalog sync: the sync's onChange reconciles
+	// the consumer, and an engine that does not hold the lease must learn so
+	// before that, or it briefly consumes periods beside the lease holder.
 	beatCtx, cancelBeat := context.WithTimeout(appCtx, cfg.Manager.Timeout)
 	_ = beat.BeatOnce(beatCtx)
 	cancelBeat()
+	syncCtx, cancelSync := context.WithTimeout(appCtx, cfg.Manager.Timeout)
+	_ = r.syncer.SyncOnce(syncCtx)
+	cancelSync()
 	r.reconcileConsumer()
 
 	executor := recalcexec.NewExecutor(r.runner,
