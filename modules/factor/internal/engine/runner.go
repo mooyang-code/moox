@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
@@ -74,9 +76,23 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		r.metrics.Failures.WithLabelValues(setID, periodFailureFactor, periodFailureReason(err)).Inc()
 		log.ErrorContextf(ctx, "factor_period_failed set_id=%s period_time=%s error=%v", setID, periodTime.UTC().Format(time.RFC3339), err)
 	} else {
-		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d duration=%s", setID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, time.Since(started))
+		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d duration=%s %s", setID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, time.Since(started), stageSummary(outcome.StageDurations))
 	}
 	return outcome, err
+}
+
+// pipelineStages is the order a period runs through; the log line lists the
+// per-stage time so slow reads, Python and writes can be told apart.
+var pipelineStages = []string{"plan", "load", "compute", "assemble", "write", "report"}
+
+func stageSummary(durations map[string]time.Duration) string {
+	parts := make([]string, 0, len(pipelineStages))
+	for _, stage := range pipelineStages {
+		if d, ok := durations[stage]; ok {
+			parts = append(parts, fmt.Sprintf("%s=%s", stage, d.Round(time.Millisecond)))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // periodFailureFactor labels failures that abort a whole period before any
