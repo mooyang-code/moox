@@ -92,6 +92,12 @@ var obsoleteDefaultDeploymentNames = []string{
 	"trade_logical_account",
 }
 
+// ObsoleteDefaultDeploymentNames returns the retired default service names so
+// other seed paths (the admin CLI import) retire them the same way.
+func ObsoleteDefaultDeploymentNames() []string {
+	return append([]string(nil), obsoleteDefaultDeploymentNames...)
+}
+
 func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {
 	pageNo, offset, limit := normalizePage(req.GetPage())
 	rows, total, err := s.dao.List(ctx, ListFilter{

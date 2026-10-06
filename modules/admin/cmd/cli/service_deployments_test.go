@@ -529,3 +529,26 @@ func TestImportWithOptionalStorageShardCompilesOnlyIndependentDataShardRoute(t *
 	}
 	require.True(t, found)
 }
+
+func TestImportRetiresLegacyFactorDeploymentBeforeCreatingManager(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "admin.db")
+	require.NoError(t, ensureAdminSchema(dbPath))
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&sysdeploy.GatewayNode{NodeID: "control", Name: "control", PublicAddress: "https://203.0.113.10", Status: "enabled"}).Error)
+	require.NoError(t, db.Create(&sysdeploy.Deployment{
+		NodeID: "control", ServiceName: "moox_factor", ServiceKind: "factor", Protocol: "http", Host: "127.0.0.1", Port: 11404,
+		GatewayPath: "trpc.moox.factor.FactorMgr", GatewayServiceID: "factormgr", GatewayEnabled: true, Scope: "internal", Status: "active", ExtraConfig: "{}",
+	}).Error)
+	seedPath := filepath.Join("..", "..", "..", "..", "config", "setup", "service-deployments.yaml")
+
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "control", "--public-host", "203.0.113.10", "--eventbus-nats-url", "tls://127.0.0.1:4222",
+	}, &bytes.Buffer{}, &bytes.Buffer{}))
+
+	var names []string
+	require.NoError(t, db.Model(&sysdeploy.Deployment{}).Where("c_node_id = ? AND c_gateway_service_id = ?", "control", "factormgr").Pluck("c_service_name", &names).Error)
+	require.Equal(t, []string{"moox_factor_mgr"}, names)
+}

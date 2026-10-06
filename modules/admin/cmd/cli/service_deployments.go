@@ -856,6 +856,13 @@ func importServiceDeploymentSeed(db *gorm.DB, seed serviceDeploymentSeed, preser
 			}
 		}
 
+		// Retired defaults (moox_factor became moox_factor_mgr) share the
+		// gateway service id of their successor; drop them before creating
+		// the new rows so the node/gateway-service unique index holds.
+		if err := tx.Where("c_node_id = ? AND c_service_name IN ?", seed.Node.ID, sysdeploy.ObsoleteDefaultDeploymentNames()).
+			Delete(&sysdeploy.Deployment{}).Error; err != nil {
+			return fmt.Errorf("retire obsolete service deployments: %w", err)
+		}
 		for _, item := range seed.Services {
 			extraConfig := item.ExtraConfig
 			if extraConfig == nil {
