@@ -370,10 +370,7 @@ func runtimeCoverageComplete(runtime *viewRuntime, rng *pb.TimeRange, stats view
 	if runtime == nil {
 		return false
 	}
-	runtime.mu.Lock()
-	active := runtime.active != ""
-	runtime.mu.Unlock()
-	return active && queryCoverageComplete(rng, stats)
+	return runtime.queryState().active != "" && queryCoverageComplete(rng, stats)
 }
 
 func (s *Service) timeSeriesSelectors(indexID string, req *pb.QueryTimeSeriesRowsReq) ([]viewindex.TimeSeriesSelector, error) {

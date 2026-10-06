@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
@@ -117,6 +118,35 @@ type viewRuntime struct {
 	buildContext                   context.Context
 	lastCapacityMaintenanceBuildAt time.Time
 	applied                        map[appliedKey]uint64
+	// readState is a lock-free copy of what queries need. A delivery holds mu
+	// for its whole index write (seconds for a large factor batch), so queries
+	// that took mu to read the active index waited behind every write.
+	readState atomic.Pointer[runtimeReadState]
+}
+
+// runtimeReadState is the query-path view of a runtime: the readable index
+// and the stats cached for it.
+type runtimeReadState struct {
+	active       string
+	statsIndexID string
+	stats        viewindex.ViewIndexStats
+}
+
+// publishReadStateLocked republishes the query-path copy; call it with mu held
+// after changing active, statsIndexID or stats.
+func (r *viewRuntime) publishReadStateLocked() {
+	r.readState.Store(&runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats})
+}
+
+// queryState returns the query-path copy without waiting for mu. A runtime
+// that never published one (built directly in tests) falls back to mu.
+func (r *viewRuntime) queryState() runtimeReadState {
+	if state := r.readState.Load(); state != nil {
+		return *state
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats}
 }
 
 const (
@@ -648,12 +678,15 @@ func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexRe
 	}
 	s.mu.Unlock()
 	if runtime != nil {
+		runtime.mu.Lock()
 		if runtime.active == req.GetIndexId() {
 			runtime.active = ""
+			runtime.publishReadStateLocked()
 		}
 		if runtime.next == req.GetIndexId() {
 			runtime.next = ""
 		}
+		runtime.mu.Unlock()
 	}
 	return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Success("success")}, nil
 }
@@ -868,10 +901,7 @@ func (s *Service) activeIndex(spaceID, viewID string) (string, *viewRuntime) {
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
 	if runtime != nil {
-		runtime.mu.Lock()
-		indexID := runtime.active
-		runtime.mu.Unlock()
-		return indexID, runtime
+		return runtime.queryState().active, runtime
 	}
 	return viewID, nil
 }
@@ -887,18 +917,18 @@ func (s *Service) cacheActiveIndexStats(runtime *viewRuntime, indexID string, st
 	}
 	runtime.statsIndexID = indexID
 	runtime.stats = stats
+	runtime.publishReadStateLocked()
 }
 
 func cachedActiveIndexStats(runtime *viewRuntime, indexID string) (viewindex.ViewIndexStats, bool) {
 	if runtime == nil || indexID == "" {
 		return viewindex.ViewIndexStats{}, false
 	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.active != indexID || runtime.statsIndexID != indexID {
+	state := runtime.queryState()
+	if state.active != indexID || state.statsIndexID != indexID {
 		return viewindex.ViewIndexStats{}, false
 	}
-	return runtime.stats, true
+	return state.stats, true
 }
 
 func (s *Service) removeIndexMappingsLocked(id string) {

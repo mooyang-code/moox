@@ -1114,6 +1114,7 @@ func (s *Service) switchViewLocked(ctx context.Context, runtime *viewRuntime) (s
 	runtime.activeDatasetSet = true
 	runtime.statsIndexID = ""
 	runtime.stats = viewindex.ViewIndexStats{}
+	runtime.publishReadStateLocked()
 	runtime.next = ""
 	runtime.nextDatasetIDs = nil
 	runtime.nextPrimaryDatasetID = ""
@@ -1275,6 +1276,7 @@ func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, sc
 		runtime.stats = viewindex.ViewIndexStats{}
 	}
 	runtime.active = view.GetActiveIndexId()
+	runtime.publishReadStateLocked()
 	// Only initialize the active contract when attaching an index for the first
 	// time. During a desired-metadata refresh the same physical active index is
 	// re-attached with the new desired DatasetIds; replacing the snapshot here

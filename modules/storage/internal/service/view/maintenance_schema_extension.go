@@ -118,6 +118,7 @@ func (s *Service) extendFactorResultSchema(ctx context.Context, opts Maintenance
 	s.attachActiveViewLocked(committed, runtime, next, desiredColumns, activePrimary, "duckdb")
 	runtime.statsIndexID = view.GetActiveIndexId()
 	runtime.stats = stats
+	runtime.publishReadStateLocked()
 	return true, nil
 }
 
