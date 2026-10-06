@@ -2392,6 +2392,7 @@ start_storage_access() {
     env "${RUNTIME_IDENTITY_ENV[@]}" \
       "MOOX_OTEL_SERVICE_NAME=moox-storage-access" \
       "MOOX_STORAGE_ACCESS_NONCE_PATH=${ROOT}/data/storage-access/nonces.db" \
+      "MOOX_STORAGE_ACCESS_PRINCIPALS_FILE=${ROOT}/secrets/storage-access-principals.yaml" \
       "${ROOT}/bin/moox-storage-access" \
       -conf=config/trpc_go.yaml
   wait_tcp 127.0.0.1 11004 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
@@ -4109,17 +4110,17 @@ PY
       fi
     fi
     # The factor-engine principal's inbound key is copied to the operator
-    # machine that runs moox-factor-engine. Pass a stable key file to keep it;
-    # otherwise a generated key is only installed when the target has none.
+    # machine that runs moox-factor-engine, so it must survive redeploys: it is
+    # derived from the cluster service secret like the Gateway service keys,
+    # unless an explicit key file is supplied.
     local engine_key="${STAGE_DIR}/secrets/storage-access-factor-engine.key"
-    rm -f "${engine_key}" "${engine_key}.generated"
     if [[ -n "${MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE:-}" ]]; then
       [[ -f "${MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE}" && ! -L "${MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE}" ]] || \
         fail "MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE must be a regular file"
       (umask 077; tr -d '\r\n' <"${MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE}" >"${engine_key}")
     else
-      (umask 077; openssl rand -hex 32 >"${engine_key}")
-      : >"${engine_key}.generated"
+      (umask 077; printf 'moox-storage-access-v1:factor-engine' | \
+        openssl dgst -sha256 -hmac "${gateway_service_secret}" -r | awk '{print $1}' >"${engine_key}")
     fi
     [[ -s "${engine_key}" ]] || fail "Storage Access factor-engine key cannot be empty"
     chmod 0600 "${engine_key}"
@@ -4140,7 +4141,6 @@ principals:
 PRINCIPALS
     )
     (umask 077; {
-      printf 'MOOX_STORAGE_ACCESS_PRINCIPALS_FILE=%q\n' "${DEPLOY_DIR}/secrets/storage-access-principals.yaml"
       printf 'MOOX_STORAGE_ACCESS_TARGET_NODE=%q\n' "${access_target_node}"
       printf 'MOOX_STORAGE_ACCESS_UPSTREAM_TARGET_NODE=%q\n' "${access_upstream_target_node}"
       printf 'MOOX_STORAGE_ACCESS_UPSTREAM_TARGET=%q\n' "${access_upstream_target}"
@@ -4694,6 +4694,9 @@ sync_local_stage() {
         "${deploy_dir}/stop.sh" collector || true
       fi
       if [[ "${WITH_FACTOR_MGR}" -eq 1 ]]; then
+        # Installs older than the manager/engine split run the single-process
+        # factor service; its stop.sh still knows it by that name.
+        "${deploy_dir}/stop.sh" factor >/dev/null 2>&1 || true
         "${deploy_dir}/stop.sh" factor-mgr || true
       fi
       if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
@@ -4936,11 +4939,7 @@ sync_local_stage() {
   if [[ "${WITH_STORAGE_ACCESS}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-access.env" "${deploy_dir}/secrets/storage-access.env"
     install -m 0600 "${STAGE_DIR}/secrets/storage-access-principals.yaml" "${deploy_dir}/secrets/storage-access-principals.yaml"
-    if [[ -f "${STAGE_DIR}/secrets/storage-access-factor-engine.key.generated" && -s "${deploy_dir}/secrets/storage-access-factor-engine.key" ]]; then
-      chmod 0600 "${deploy_dir}/secrets/storage-access-factor-engine.key"
-    else
-      install -m 0600 "${STAGE_DIR}/secrets/storage-access-factor-engine.key" "${deploy_dir}/secrets/storage-access-factor-engine.key"
-    fi
+    install -m 0600 "${STAGE_DIR}/secrets/storage-access-factor-engine.key" "${deploy_dir}/secrets/storage-access-factor-engine.key"
   elif [[ "${component_overlay}" -eq 0 ]]; then
     rm -f "${deploy_dir}/secrets/storage-access.env" "${deploy_dir}/secrets/storage-access-principals.yaml" \
       "${deploy_dir}/secrets/storage-access-factor-engine.key"
@@ -5466,7 +5465,7 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   else
     [[ "${WITH_ARCHIVE}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" archive || true
     [[ "${WITH_COLLECTOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" collector || true
-    [[ "${WITH_FACTOR_MGR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" factor-mgr || true
+    [[ "${WITH_FACTOR_MGR}" == "1" ]] && { "${DEPLOY_DIR}/stop.sh" factor >/dev/null 2>&1 || true; "${DEPLOY_DIR}/stop.sh" factor-mgr || true; }
     [[ "${WITH_STRATEGY}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" strategy || true
     [[ "${WITH_TRADE}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" trade || true
     [[ "${WITH_MONITOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" monitor || true

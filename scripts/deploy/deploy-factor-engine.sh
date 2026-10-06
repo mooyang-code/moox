@@ -212,7 +212,7 @@ health_secret="$(sed -n 's/^MOOX_HEALTH_AUTH_SECRET_KEY=//p' "${health_env}")"
 [[ -n "${health_access}" && -n "${health_secret}" ]] || fail "invalid ${health_env}"
 
 render_template() {
-  sed -e "s#__ROOT__#${DEPLOY_DIR}#g" -e "s#__HEALTH_ACCESS_KEY__#${health_access}#g" \
+  sed -e "s#__ROOT__#${DEPLOY_DIR}#g" -e "s#__SECRETS__#${SECRETS_DIR}#g" -e "s#__HEALTH_ACCESS_KEY__#${health_access}#g" \
     -e "s#__HEALTH_SECRET_KEY__#${health_secret}#g" "$1"
 }
 
@@ -228,6 +228,9 @@ if [[ "${OS}" == Darwin ]]; then
 else
   mkdir -p "${SYSTEMD_USER_DIR}"
   render_template "${ROOT}/deploy/systemd/user/moox-factor-engine.service.tmpl" >"${SYSTEMD_USER_DIR}/moox-factor-engine.service"
+  if command -v loginctl >/dev/null 2>&1 && [[ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" != yes ]]; then
+    log "warning: user lingering is off; the engine stops at logout (enable with: loginctl enable-linger $(id -un))"
+  fi
   if [[ "${NO_START}" -eq 0 ]]; then
     systemctl --user daemon-reload
     systemctl --user enable moox-factor-engine.service

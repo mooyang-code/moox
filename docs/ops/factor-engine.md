@@ -27,8 +27,8 @@
 | `control-caddy-root.crt` | 控制机 Caddy 根证书（`--manager-ca` 拷入） | 校验 `:11001` 的 TLS |
 | `health-auth.env` | 安装脚本首次生成 | `/readyz` 签名密钥 |
 
-Storage 机发布时可用 `MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE` 指定入站密钥；未指定时自动生成，
-且目标机已有该密钥时保留旧值，避免每次发布都要重新拷贝到引擎机。
+Storage 机的 `storage-access-factor-engine.key` 与网关服务密钥一样由 gateway service secret 派生，
+每次发布保持不变；也可用 `MOOX_STORAGE_ACCESS_FACTOR_ENGINE_SECRET_FILE` 显式指定。
 
 ## 安装与更新
 

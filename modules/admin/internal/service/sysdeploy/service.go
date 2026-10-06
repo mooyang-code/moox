@@ -81,10 +81,12 @@ func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
 	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID), nodeID, obsoleteDefaultDeploymentNames)
 }
 
-// obsoleteDefaultDeploymentNames is intentionally destructive for the
-// unified Trade cutover: the old split endpoints must not remain as active
-// browser targets after Admin restarts.
+// obsoleteDefaultDeploymentNames is intentionally destructive: the old split
+// Trade endpoints must not remain as active browser targets after Admin
+// restarts, and moox_factor became moox_factor_mgr (same gateway service id,
+// so the old row would block the new one's unique gateway route).
 var obsoleteDefaultDeploymentNames = []string{
+	"moox_factor",
 	"trade_exchange_account",
 	"trade_execution",
 	"trade_logical_account",

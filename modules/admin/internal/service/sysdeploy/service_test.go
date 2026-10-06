@@ -719,3 +719,22 @@ func TestValidateDeployment_AllowsGatewayHTTPPath(t *testing.T) {
 		ExtraConfig: "{}",
 	}))
 }
+
+func TestServiceImpl_SeedDefaults_ReplacesFactorWithFactorManager(t *testing.T) {
+	db := setupSysDeployTestDB(t)
+	svc := NewService(&database.Manager{}, testAdminNodeID)
+	svc.dao = NewDAO(db)
+	ctx := context.Background()
+	require.NoError(t, svc.dao.Create(ctx, &Deployment{
+		NodeID: testAdminNodeID, ServiceName: "moox_factor", Host: "127.0.0.1", Port: 11404, Status: "active",
+		Protocol: "http", GatewayPath: "trpc.moox.factor.FactorMgr", GatewayServiceID: "factormgr", GatewayEnabled: true,
+	}))
+
+	require.NoError(t, svc.SeedDefaults(ctx))
+
+	_, err := svc.dao.Get(ctx, testAdminNodeID, "moox_factor")
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	row, err := svc.dao.Get(ctx, testAdminNodeID, "moox_factor_mgr")
+	require.NoError(t, err)
+	assert.Equal(t, "factormgr", row.GatewayServiceID)
+}
