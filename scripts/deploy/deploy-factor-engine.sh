@@ -7,11 +7,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 OS="$(uname -s)"
-if [[ "${OS}" == Darwin ]]; then
-  DEPLOY_DIR="${HOME}/Documents/moox-deploy"
-else
-  DEPLOY_DIR="${HOME}/moox-factor-engine"
-fi
+# Not under ~/Documents: macOS privacy protection blocks a launchd job from
+# opening a rebuilt binary there until the user approves an invisible prompt.
+DEPLOY_DIR="${HOME}/moox/factor-engine"
 SECRETS_DIR=""
 ENGINE_ID=""
 MANAGER_URL=""
@@ -32,7 +30,7 @@ Usage:
     --storage-target ip://HOST:PORT --storage-node-id ID --eventbus-url URL [options]
 
 Options:
-  --dir <path>              Install directory. Default: ~/Documents/moox-deploy (macOS), ~/moox-factor-engine (Linux).
+  --dir <path>              Install directory. Default: ~/moox/factor-engine. On macOS keep it out of ~/Documents.
   --secrets-dir <path>      Directory holding the engine credentials. Default: <dir>/secrets.
   --engine-id <id>          Stable engine id. Default: factor-engine@<short hostname>.
   --manager-url <url>       Control host service HTTPS entry, e.g. https://106.53.107.122:11001.

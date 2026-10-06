@@ -224,7 +224,7 @@ func NextSyncAt(now time.Time, interval, offset time.Duration) time.Time  // UTC
 
 ### Task E3：引擎部署脚本
 
-- [ ] **Step 1：** 新 `scripts/deploy/deploy-factor-engine.sh`：参数 `--dir`（macOS 默认 `~/Documents/moox-deploy`，Linux 默认 `~/moox-factor-engine`）、`--manager-url`（如 `https://<控制机>:11001`）、`--manager-node-id`、`--manager-ca`、`--storage-target`、`--storage-node-id`、`--eventbus-url`、`--secrets-dir`、`--skip-build`、`--no-start`。行为：编译 `moox-factor-engine`（本机架构）→ 拷贝 `pyworker/{worker.py,codec.py}` → 用 `uv`（优先）或 `python3 -m venv` 建 / 复用 `factor-engine/venv` 并安装 `runtime-requirements.txt` → 校验凭据文件均为 0600 → 渲染 `factor-engine/config/engine.yaml` → macOS 安装 `~/Library/LaunchAgents/com.moox.factor-engine.plist`（`launchctl bootstrap gui/$UID`），Linux 安装 systemd user unit；服务环境**不注入** `HTTP(S)_PROXY` → 用 `moox-factor-engine health` 等待就绪。
+- [ ] **Step 1：** 新 `scripts/deploy/deploy-factor-engine.sh`：参数 `--dir`（默认 `~/moox/factor-engine`，验收时由 `~/Documents/moox-deploy` 迁来）、`--manager-url`（如 `https://<控制机>:11001`）、`--manager-node-id`、`--manager-ca`、`--storage-target`、`--storage-node-id`、`--eventbus-url`、`--secrets-dir`、`--skip-build`、`--no-start`。行为：编译 `moox-factor-engine`（本机架构）→ 拷贝 `pyworker/{worker.py,codec.py}` → 用 `uv`（优先）或 `python3 -m venv` 建 / 复用 `factor-engine/venv` 并安装 `runtime-requirements.txt` → 校验凭据文件均为 0600 → 渲染 `factor-engine/config/engine.yaml` → macOS 安装 `~/Library/LaunchAgents/com.moox.factor-engine.plist`（`launchctl bootstrap gui/$UID`），Linux 安装 systemd user unit；服务环境**不注入** `HTTP(S)_PROXY` → 用 `moox-factor-engine health` 等待就绪。
 - [ ] **Step 2：** 新 `deploy/launchd/com.moox.factor-engine.plist.tmpl`、`deploy/systemd/user/moox-factor-engine.service.tmpl`。
 - [ ] **Step 3：** 脚本契约测试（`scripts/test/contract/`）：渲染出的配置不含 `database` 段、凭据权限校验生效、`--no-start` 不触碰 launchd、模板中无代理变量。提交 `feat(deploy): add a standalone factor engine installer`。
 
@@ -258,8 +258,8 @@ func NextSyncAt(now time.Time, interval, offset time.Duration) time.Time  // UTC
 
 ### Task F2：本机引擎安装
 
-- [ ] **Step 1：** 三份凭据放到 `~/Documents/moox-deploy/secrets/`（0600）：`factor-engine` Gateway 服务密钥、`factor-eventbus.yaml`（含 `ca_file`）、storage-access `factor-engine` 入站密钥；以及控制机 Caddy 根证书。
-- [ ] **Step 2：** `scripts/deploy/deploy-factor-engine.sh --dir ~/Documents/moox-deploy --manager-url https://<控制机>:11001 --storage-target ip://<Storage 机>:11004 --eventbus-url tls://<控制机>:4222 ...`。
+- [ ] **Step 1：** 三份凭据放到 `~/moox/factor-engine/secrets/`（0600）：`factor-engine` Gateway 服务密钥、`factor-eventbus.yaml`（含 `ca_file`）、storage-access `factor-engine` 入站密钥；以及控制机 Caddy 根证书。
+- [ ] **Step 2：** `scripts/deploy/deploy-factor-engine.sh --dir ~/moox/factor-engine --manager-url https://<控制机>:11001 --storage-target ip://<Storage 机>:11004 --eventbus-url tls://<控制机>:4222 ...`。
 - [ ] **Step 3：** 核对：引擎 `/readyz` 200；管理端 `GetStatus.engine.online=true`、`engine_id=factor-engine@<本机 hostname>`、`catalog_in_sync=true`；`launchctl print gui/$UID/com.moox.factor-engine` 状态 running；`data/engine/catalog.json` 已生成。
 
 ### Task F3：导入与启用

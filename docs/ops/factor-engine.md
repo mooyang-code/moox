@@ -34,7 +34,7 @@ Storage 机的 `storage-access-factor-engine.key` 与网关服务密钥一样由
 
 ```bash
 scripts/deploy/deploy-factor-engine.sh \
-  --dir ~/Documents/moox-deploy \
+  --dir ~/moox/factor-engine \
   --manager-url https://<控制机>:11001 --manager-node-id <控制机网关节点> \
   --manager-ca /path/to/control-caddy-root.crt \
   --storage-target ip://<Storage 机>:11004 --storage-node-id storage-access-<storage 节点> \
@@ -52,9 +52,9 @@ HTTP 客户端本身也忽略代理环境变量。
 launchctl print gui/$(id -u)/com.moox.factor-engine      # macOS 状态
 launchctl kickstart -k gui/$(id -u)/com.moox.factor-engine # 重启
 launchctl bootout gui/$(id -u)/com.moox.factor-engine      # 停止
-set -a; source ~/Documents/moox-deploy/secrets/health-auth.env; set +a
-~/Documents/moox-deploy/bin/moox-factor-engine health      # 打印 /readyz 详情
-tail -f ~/Documents/moox-deploy/logs/factor-engine.log
+set -a; source ~/moox/factor-engine/secrets/health-auth.env; set +a
+~/moox/factor-engine/bin/moox-factor-engine health      # 打印 /readyz 详情
+tail -f ~/moox/factor-engine/logs/factor-engine.log
 ```
 
 管理端视角：前端「因子总览」的计算引擎卡片，或 `FactorMgr.GetStatus` 的 `engine` 字段
@@ -70,4 +70,5 @@ tail -f ~/Documents/moox-deploy/logs/factor-engine.log
 | 新启用的成员前 1～2 个周期没有结果 | 设计如此：启用到引擎下次同步之间的周期不自动补算，需要时手动提交补算 |
 | 事件反复 `factor_period_retry` | 结果数据集未就绪（管理端对账失败）或 storage-access 不可达；查管理端日志与 `nc -zv <Storage 机> 11004` |
 | 补算任务 `running` 但不前进 | 执行它的引擎已停止；任务租约（默认 15 分钟）过期后会被重新领取并从 `progress_time` 续跑 |
+| launchd 显示 running，但日志无输出、端口未监听 | 安装目录在 `~/Documents` 等受隐私保护的目录下，进程卡在打开自身可执行文件处（`sample <pid>` 可见 `dyld … __open`）。改装到 `~/moox/factor-engine` |
 | Go 构建或模块下载极慢 | 本机 `HTTPS_PROXY` 拖慢 goproxy.cn；安装脚本已绕开代理，手动构建时先 `unset HTTPS_PROXY HTTP_PROXY` |

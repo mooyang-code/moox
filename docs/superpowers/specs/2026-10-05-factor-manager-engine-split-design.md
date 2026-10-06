@@ -119,7 +119,7 @@
 
   `collector` 主体保持现有方法集合不变。`DeleteDatasetRows`、`RestoreDatasetRows`、`CreateDataset`、`UpsertDatasetColumn`、`ActivateDataset`、`DeleteDataset` 只有管理端使用，走控制机本地 Gateway，**不**进 storage-access 白名单。
 - **D42 引擎配置**：`storage.gateway_target` 指向 `ip://<Storage 机>:11004`，`gateway_node_id` 填 storage-access 的入站目标节点 ID；新增 `manager` 段（`url`、`node_id`、`ca_file`、`key_id`、`hmac_key_file`）与 `catalog_sync` 段（`interval`、`offset`、`state_file`）；`eventbus` 段指向控制机 TLS 地址与角色凭据。引擎配置**没有** `database` 段。引擎访问管理端的 HTTP 客户端**显式禁用环境代理**（`Transport.Proxy = nil`）：操作员本机常设 `HTTPS_PROXY`（本机实测为 `127.0.0.1:7897`），走代理会改变出口与证书链。
-- **D43 部署归属**：控制机部署配置（`--profile control`）包含 `moox-factor-mgr`；引擎用独立的轻量部署脚本安装到本机目录（macOS 默认 `~/Documents/moox-deploy`），macOS 用 `launchd`、Linux 用 systemd user unit 保活。`deploy-moox.sh` 不负责引擎。
+- **D43 部署归属**：控制机部署配置（`--profile control`）包含 `moox-factor-mgr`；引擎用独立的轻量部署脚本安装到本机目录（默认 `~/moox/factor-engine`；macOS 不能放在 `~/Documents` 等受隐私保护的目录，见 §15 #12），macOS 用 `launchd`、Linux 用 systemd user unit 保活。`deploy-moox.sh` 不负责引擎。
 - **D44 启用成员的首次同步缺口不补**：成员启用时生成的回填任务覆盖到「启用时刻向下对齐的周期」；引擎要到下一次目录同步（最长约 1 个 `interval`）后才开始实时计算该成员，中间约 1～2 个周期没有结果。个人量化系统接受这一缺口，不做自动补算；前端在启用成员（以及启用因子集）的确认框中提示「计算引擎约 1 分钟内生效，期间的周期不会自动补算，如需补齐可手动提交补算」。
 
 ## 5. 进程职责划分
@@ -344,3 +344,5 @@ internal/engine/
 | 9 | 引擎 `GatewayNodeID`、`ca_file` 等由部署脚本渲染 | 由 `scripts/deploy/deploy-factor-engine.sh` 渲染；`factor-engine` 网关密钥与其他服务密钥一样由 gateway service secret 派生，每次发布不变 | 引擎机只需拷贝一次密钥 |
 | 10 | — | 已知限制：补算任务领取时固定了所选成员，执行中途停用某成员，该成员的结果列仍会写到任务结束 | 与「停用后多算若干周期」同类，可接受；需要立即生效时取消任务后重新提交 |
 | 11 | 管理端租约只看 `engine_id` | 同时比较 `boot_id`；只有持有引擎租约的引擎能上报补算进度，引擎失去租约后在块边界停止 | 代码审查发现：复制配置的第二个进程、断线后被接管的旧引擎都不能继续写入 |
+| 12 | macOS 默认安装到 `~/Documents/moox-deploy`（D43） | 默认 `~/moox/factor-engine` | 阶段 F 实测：`~/Documents` 受 macOS 隐私保护，每次重编译的 ad-hoc 签名二进制被视为新程序，launchd 启动时 dyld 卡在打开可执行文件处，等待一个后台进程看不到的授权 |
+| 13 | 引擎启动先同步目录再发心跳 | 先发心跳、再首次同步目录 | 阶段 F 演练：第二个引擎在得知租约冲突前，目录同步的回调先启动了事件消费（约 13 ms） |
