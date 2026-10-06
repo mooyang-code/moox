@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -135,13 +136,26 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 		if err := client.New().Invoke(upstreamCtx, req, response,
 			invokeOptions...,
 		); err != nil {
-			return nil, err
+			return nil, upstreamError(route, method, err)
 		}
 		if route.MaxBodyBytes > 0 && int64(len(response.Data)) > route.MaxBodyBytes {
 			return nil, errors.New("native gateway response body exceeds route limit")
 		}
 		return response, nil
 	})
+}
+
+// upstreamError keeps an upstream timeout answerable. The route deadline
+// makes tRPC report it as a full-link timeout, and the tRPC server drops the
+// reply for any framework timeout except RetClientTimeout, so the caller would
+// wait for its own, longer deadline instead of learning the upstream timed out.
+func upstreamError(route gatewayproxy.Route, method string, err error) error {
+	var frameErr *errs.Error
+	if errors.As(err, &frameErr) && frameErr.IsTimeout(errs.ErrorTypeFramework) {
+		return errs.NewFrameError(errs.RetClientTimeout, fmt.Sprintf(
+			"native gateway upstream %s/%s timed out after %dms: %s", route.ServicePath, method, route.TimeoutMS, frameErr.Msg))
+	}
+	return err
 }
 
 func splitRPCName(rpcName string) (string, string, bool) {
