@@ -54,7 +54,15 @@ func (s *Service) ReconcileSet(ctx context.Context, setID string) error {
 
 func (s *Service) reconcileSetUnlocked(ctx context.Context, set domain.FactorSet) error {
 	err := s.reconcileResultColumns(ctx, set)
-	s.markReady(set.SetID, err == nil)
+	switch {
+	case err == nil:
+		s.markReady(set.SetID, true)
+	case errors.Is(err, storageio.ErrInfra):
+		// A transient Storage failure says nothing about the result dataset;
+		// keep the engine computing with the last known readiness.
+	default:
+		s.markReady(set.SetID, false)
+	}
 	return err
 }
 

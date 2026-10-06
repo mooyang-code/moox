@@ -45,8 +45,14 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 }
 
 // Report records a chunk of a leased job and returns the job's current state.
-func (h *Hub) Report(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string) (store.RecalcJob, error) {
-	return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), status, errText, h.now().UTC(), h.jobTTL)
+// Only the engine holding the engine lease may report, so an engine that lost
+// the lease cannot keep a long job alive next to the new lease holder.
+func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string) (store.RecalcJob, error) {
+	now := h.now().UTC()
+	if !h.holdsLease(id.EngineID, now) {
+		return store.RecalcJob{}, ErrLeaseConflict
+	}
+	return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), status, errText, now, h.jobTTL)
 }
 
 func (h *Hub) runnableSet(ctx context.Context, job store.RecalcJob) (domain.EngineSet, error) {

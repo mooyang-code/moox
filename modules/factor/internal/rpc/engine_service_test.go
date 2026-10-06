@@ -44,7 +44,7 @@ func (f *hubFake) Pull(context.Context, domain.EngineIdentity) (store.RecalcJob,
 	return f.job, f.pulledSet, f.found, f.err
 }
 
-func (f *hubFake) Report(_ context.Context, _, _ string, progress time.Time, status, errText string) (store.RecalcJob, error) {
+func (f *hubFake) Report(_ context.Context, _ domain.EngineIdentity, _, _ string, progress time.Time, status, errText string) (store.RecalcJob, error) {
 	f.progress, f.reportedErr = progress, errText
 	job := f.job
 	job.Status = status

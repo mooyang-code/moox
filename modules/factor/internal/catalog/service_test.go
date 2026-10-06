@@ -806,6 +806,7 @@ type metadataFake struct {
 	createdDatasets        int
 	activateErrs           int
 	deleteErrs             int
+	getDatasetErr          error
 	writeOps               []string
 }
 
@@ -828,6 +829,9 @@ func newMetadataFake() *metadataFake {
 func (f *metadataFake) GetDataset(_ context.Context, spaceID, datasetID string) (storageio.DatasetInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getDatasetErr != nil {
+		return storageio.DatasetInfo{}, f.getDatasetErr
+	}
 	dataset, ok := f.datasets[resultKey(spaceID, datasetID)]
 	if !ok {
 		return storageio.DatasetInfo{}, errors.New("dataset not found")
@@ -985,4 +989,19 @@ func TestReconcileRecordsResultReady(t *testing.T) {
 	meta.sourceColumns = meta.sourceColumns[:len(meta.sourceColumns)-1]
 	require.NoError(t, svc.ReconcileSet(context.Background(), set.SetID))
 	require.True(t, ready[set.SetID])
+}
+
+func TestReconcileKeepsReadinessOnStorageOutage(t *testing.T) {
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	ready := map[string]bool{}
+	svc := NewService(db, meta, WithReadyRecorder(func(setID string, ok bool) { ready[setID] = ok }))
+	set, err := svc.CreateSet(context.Background(), newSet())
+	require.NoError(t, err)
+	require.True(t, ready[set.SetID])
+
+	meta.getDatasetErr = fmt.Errorf("%w: connection refused", storageio.ErrInfra)
+	require.Error(t, svc.ReconcileSet(context.Background(), set.SetID))
+
+	require.True(t, ready[set.SetID], "a transient Storage failure keeps the set ready")
 }

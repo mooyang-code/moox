@@ -79,8 +79,11 @@ func (h *Hub) Heartbeat(_ context.Context, id domain.EngineIdentity, status doma
 	now := h.now().UTC()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.engine != nil && h.engine.identity.EngineID != id.EngineID && now.Before(h.engine.lastSeen.Add(h.engineTTL)) {
-		return 0, fmt.Errorf("%w: %s", ErrLeaseConflict, h.engine.identity.EngineID)
+	// A live lease is held by one process: another engine id, or the same id
+	// from another boot (a copied config), is rejected until the lease lapses.
+	if h.engine != nil && now.Before(h.engine.lastSeen.Add(h.engineTTL)) &&
+		(h.engine.identity.EngineID != id.EngineID || h.engine.identity.BootID != id.BootID) {
+		return 0, fmt.Errorf("%w: %s (boot %s)", ErrLeaseConflict, h.engine.identity.EngineID, h.engine.identity.BootID)
 	}
 	h.engine = &engineState{identity: id, status: status, lastSeen: now}
 	return h.engineTTL, nil

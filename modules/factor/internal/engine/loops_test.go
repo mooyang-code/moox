@@ -233,3 +233,49 @@ func TestRecalcLoopPausesWhileInactive(t *testing.T) {
 	require.False(t, found)
 	require.Zero(t, client.pulled)
 }
+
+func TestRecalcLoopReportsFailedWithLatestProgress(t *testing.T) {
+	calls := 0
+	runner := &planRecorder{}
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	loop.executor = recalcexec.NewExecutor(runnerFunc(func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
+		calls++
+		if calls > 1 {
+			return pipeline.Outcome{}, errors.New("python factor raised")
+		}
+		return pipeline.Outcome{Status: "complete"}, nil
+	}), recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, client.reports, 2)
+	require.Equal(t, jobStatusFailed, client.reports[1].status)
+	require.Equal(t, client.reports[0].progress, client.reports[1].progress, "the failure carries the progress already reported")
+}
+
+func TestRecalcLoopStopsWhenLeaseLost(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	pulled := false
+	loop.active = func() bool {
+		if !pulled {
+			pulled = true
+			return true
+		}
+		return false
+	}
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, runner.plans, 1, "the job stops at the first chunk boundary after losing the lease")
+}
+
+type runnerFunc func(context.Context, pipeline.Plan) (pipeline.Outcome, error)
+
+func (f runnerFunc) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
+	return f(ctx, plan)
+}

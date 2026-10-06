@@ -59,7 +59,7 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	}
 	log.InfoContextf(ctx, "factor_recalc_start job_id=%s set_id=%s start=%s end=%s progress=%s", job.JobID, job.Set.Set.SetID,
 		job.Window.Start.Format(time.RFC3339), job.Window.End.Format(time.RFC3339), job.Window.Progress.Format(time.RFC3339))
-	err = l.runJob(ctx, job)
+	err = l.runJob(ctx, &job)
 	switch {
 	case err == nil:
 		log.InfoContextf(ctx, "factor_recalc_done job_id=%s", job.JobID)
@@ -76,7 +76,9 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (l *recalcLoop) runJob(ctx context.Context, job PulledJob) error {
+// runJob advances job.Window.Progress as chunks are reported, so a failure
+// report carries the progress the manager already holds.
+func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 	set := job.Set
 	lastNote := ""
 	report := func(ctx context.Context, progress time.Time, outcome pipeline.Outcome) (bool, error) {
@@ -92,6 +94,11 @@ func (l *recalcLoop) runJob(ctx context.Context, job PulledJob) error {
 			return true, fmt.Errorf("%w: %w", errReportFailed, err)
 		}
 		job.Window.Progress = progress
+		if l.active != nil && !l.active() {
+			// Another engine took the lease: stop at this chunk boundary and let
+			// the job lease expire so the lease holder resumes it.
+			return true, nil
+		}
 		return current != jobStatusRunning, nil
 	}
 	source := func(ctx context.Context) (recalcexec.Selection, error) {

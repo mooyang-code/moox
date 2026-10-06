@@ -48,8 +48,11 @@ type Runtime struct {
 	syncer   *catalogSyncer
 	health   *factorhealth.State
 
-	consumerMu sync.Mutex
-	consumer   *eventconsumer.Consumer
+	// reconcileMu serializes consumer start/stop; consumerMu only guards the
+	// pointer so status and health reads never wait on EventBus I/O.
+	reconcileMu sync.Mutex
+	consumerMu  sync.Mutex
+	consumer    *eventconsumer.Consumer
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -160,10 +163,11 @@ func (r *Runtime) active() bool { return r.catalog.Loaded() && !r.lease.Conflict
 // reconcileConsumer starts the period consumer when the engine becomes active,
 // stops it on a lease conflict and refreshes its set filters otherwise.
 func (r *Runtime) reconcileConsumer() {
-	r.consumerMu.Lock()
-	defer r.consumerMu.Unlock()
+	r.reconcileMu.Lock()
+	defer r.reconcileMu.Unlock()
+	current := r.currentConsumer()
 	switch {
-	case r.active() && r.consumer == nil:
+	case r.active() && current == nil:
 		consumer, err := eventconsumer.NewConsumer(context.Background(), eventconsumer.ConsumerConfig{
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
@@ -173,16 +177,16 @@ func (r *Runtime) reconcileConsumer() {
 			log.ErrorContextf(context.Background(), "factor_engine_consumer_start_failed error=%v", err)
 			return
 		}
-		r.consumer = consumer
+		r.setConsumer(consumer)
 		log.InfoContextf(context.Background(), "factor_engine_consumer_started filters=%v", consumer.CurrentFilterSubjects())
-	case !r.active() && r.consumer != nil:
-		if err := r.consumer.Close(); err != nil {
+	case !r.active() && current != nil:
+		r.setConsumer(nil)
+		if err := current.Close(); err != nil {
 			log.ErrorContextf(context.Background(), "factor_engine_consumer_stop_failed error=%v", err)
 		}
-		r.consumer = nil
 		log.WarnContextf(context.Background(), "factor_engine_consumer_stopped lease_conflict=%t", r.lease.Conflict())
-	case r.consumer != nil:
-		r.consumer.SetsChanged()
+	case current != nil:
+		current.SetsChanged()
 	}
 }
 
@@ -195,14 +199,17 @@ func (r *Runtime) superviseConsumer(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			r.consumerMu.Lock()
-			missing := r.consumer == nil
-			r.consumerMu.Unlock()
-			if missing && r.active() {
+			if r.currentConsumer() == nil && r.active() {
 				r.reconcileConsumer()
 			}
 		}
 	}
+}
+
+func (r *Runtime) setConsumer(consumer *eventconsumer.Consumer) {
+	r.consumerMu.Lock()
+	r.consumer = consumer
+	r.consumerMu.Unlock()
 }
 
 func (r *Runtime) currentConsumer() *eventconsumer.Consumer {
@@ -315,12 +322,12 @@ func (r *Runtime) Close() error {
 			r.cancel()
 		}
 		r.wg.Wait()
-		r.consumerMu.Lock()
-		if r.consumer != nil {
-			r.err = errors.Join(r.err, r.consumer.Close())
-			r.consumer = nil
+		r.reconcileMu.Lock()
+		if consumer := r.currentConsumer(); consumer != nil {
+			r.setConsumer(nil)
+			r.err = errors.Join(r.err, consumer.Close())
 		}
-		r.consumerMu.Unlock()
+		r.reconcileMu.Unlock()
 		if r.python != nil {
 			r.err = errors.Join(r.err, r.python.Close())
 		}

@@ -137,3 +137,18 @@ func TestLatestRunRecomputesLag(t *testing.T) {
 	require.Equal(t, int64(180), run.LagSeconds)
 	require.Equal(t, "set_b", hub.LatestRun("set_b").SetID)
 }
+
+func TestHeartbeatRejectsSameEngineFromAnotherBoot(t *testing.T) {
+	hub, _, clock := newTestHub(t)
+	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{})
+	require.NoError(t, err)
+	copied := engineA
+	copied.BootID = "boot-copy"
+
+	_, err = hub.Heartbeat(context.Background(), copied, domain.EngineStatus{})
+	require.ErrorIs(t, err, ErrLeaseConflict)
+
+	clock.Advance(46 * time.Second)
+	_, err = hub.Heartbeat(context.Background(), copied, domain.EngineStatus{})
+	require.NoError(t, err, "a restarted engine takes over once the old boot's lease lapses")
+}

@@ -132,10 +132,28 @@ func TestReportRenewsJobLease(t *testing.T) {
 	job, _, _, err := hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)
 	clock.Advance(50 * time.Second)
+	leaseEngineA(t, hub)
 
-	updated, err := hub.Report(context.Background(), job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+	updated, err := hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
 
 	require.NoError(t, err)
 	require.Equal(t, int64(300), updated.ProgressTime)
 	require.Equal(t, clock.now.Add(time.Minute).Unix(), updated.LeaseExpiresAt)
+}
+
+func TestReportRejectsEngineWithoutLease(t *testing.T) {
+	hub, db, clock := newTestHub(t)
+	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("set_a", true)
+	seedJob(t, db, "job-1", "set_a")
+	leaseEngineA(t, hub)
+	job, _, _, err := hub.Pull(context.Background(), engineA)
+	require.NoError(t, err)
+	clock.Advance(time.Minute)
+	_, err = hub.Heartbeat(context.Background(), engineB, domain.EngineStatus{})
+	require.NoError(t, err)
+
+	_, err = hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+
+	require.ErrorIs(t, err, ErrLeaseConflict)
 }

@@ -22,7 +22,7 @@ type EngineHub interface {
 	Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineSet, error)
 	Heartbeat(ctx context.Context, id domain.EngineIdentity, status domain.EngineStatus) (time.Duration, error)
 	Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJob, domain.EngineSet, bool, error)
-	Report(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string) (store.RecalcJob, error)
+	Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string) (store.RecalcJob, error)
 }
 
 // EngineService implements the internal FactorEngine contract used only by
@@ -90,7 +90,7 @@ func (s *EngineService) ReportRecalcProgress(ctx context.Context, req *factorpb.
 	if err != nil || progress.IsZero() {
 		return &factorpb.ReportRecalcProgressRsp{RetInfo: invalid(fmt.Errorf("progress_time must be an RFC3339 timestamp"))}, nil
 	}
-	job, err := s.hub.Report(ctx, req.GetJobId(), req.GetLeaseToken(), progress, req.GetStatus(), req.GetError())
+	job, err := s.hub.Report(ctx, factorwire.EngineIdentityFromPB(req.GetEngine()), req.GetJobId(), req.GetLeaseToken(), progress, req.GetStatus(), req.GetError())
 	if err != nil {
 		return &factorpb.ReportRecalcProgressRsp{RetInfo: engineError(err)}, nil
 	}
