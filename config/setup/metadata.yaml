@@ -339,6 +339,10 @@ datasets:
   freqs:
   - 1m
   status: active
+  # 币安现货与永续两个采集任务的标的范围；按数据集全部标的计算的因子集据此取标的。
+  subject_tags:
+  - binance_spot
+  - binance_swap
   attributes:
     market_id: crypto
     storage_model: wide_common_metrics
