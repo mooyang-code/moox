@@ -193,3 +193,35 @@ func metricMessageStoreFromDatabaseForTest(t *testing.T, mgr *store.Store) *Metr
 	require.NoError(t, err)
 	return result
 }
+
+func TestKlineFreshnessRulesMergeTasksSharingResultView(t *testing.T) {
+	now := time.Date(2026, 10, 6, 14, 30, 0, 0, time.UTC)
+	entry := func(taskID string, enabled bool, status string, completed time.Time) TaskResultInventoryEntry {
+		return TaskResultInventoryEntry{
+			SpaceID: "crypto", TaskID: taskID, DatasetID: "dataset_binance_kline_1m", ViewID: "view_binance_kline_1m",
+			Frequency: "1m", MarketID: "crypto", Enabled: enabled, OwnershipVerified: true, ResultStatus: status,
+			LatestCompletedPeriod: completed, LatestCompletedStatus: "complete", ViewLastDataTime: completed, ObservedAt: now,
+		}
+	}
+	spot := entry("spot", true, "ready", now.Add(-2*time.Minute))
+	swap := entry("swap", true, "ready", now.Add(-time.Minute))
+	snapshot := TaskResultInventorySnapshot{ID: "snap", ObservedAt: now, Entries: []TaskResultInventoryEntry{spot, swap}}
+	require.NoError(t, validateTaskResultInventorySnapshot(snapshot, 10))
+
+	rules := klineFreshnessRulesFromInventory(snapshot, 5*time.Minute)
+	require.Len(t, rules, 1)
+	require.True(t, rules[0].Enabled)
+	require.Equal(t, "ready", rules[0].ResultStatus)
+	require.Equal(t, swap.LatestCompletedPeriod, rules[0].LatestCompletedPeriod)
+	require.Equal(t, swap.ViewLastDataTime, rules[0].ViewLastDataTime)
+
+	swap.ResultStatus = "error"
+	rules = klineFreshnessRulesFromInventory(TaskResultInventorySnapshot{Entries: []TaskResultInventoryEntry{spot, swap}}, 5*time.Minute)
+	require.Len(t, rules, 1)
+	require.Equal(t, "error", rules[0].ResultStatus)
+
+	disabled := entry("swap", false, "ready", now)
+	rules = klineFreshnessRulesFromInventory(TaskResultInventorySnapshot{Entries: []TaskResultInventoryEntry{disabled, spot}}, 5*time.Minute)
+	require.Len(t, rules, 1)
+	require.True(t, rules[0].Enabled, "a disabled task must not retire a check another task still feeds")
+}

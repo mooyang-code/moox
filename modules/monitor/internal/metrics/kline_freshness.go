@@ -361,30 +361,55 @@ func KlineFreshnessCheckID(rule KlineFreshnessRule) string {
 	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.ViewID), strings.TrimSpace(rule.Frequency))
 }
 
+// klineFreshnessRulesFromInventory yields one rule per freshness check. Several
+// Collector tasks may feed the same result View (Binance spot and swap share
+// view_binance_kline_1m, separated by subject tags), so their entries merge
+// into a single rule instead of producing colliding checks.
 func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, staleAfter time.Duration) []KlineFreshnessRule {
 	rules := make([]KlineFreshnessRule, 0, len(snapshot.Entries))
+	index := make(map[string]int, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
-		if !entry.Enabled {
-			rules = append(rules, inventoryRule(entry, false, staleAfter))
+		rule := inventoryRule(entry, entry.Enabled, staleAfter)
+		if entry.Enabled && entry.ResultStatus != "error" && entry.ResultStatus != "pending" &&
+			(!entry.OwnershipVerified || entry.ResultStatus != "ready") {
+			rule.ResultStatus = "unverified"
+		}
+		key := KlineFreshnessCheckID(rule)
+		if i, ok := index[key]; ok {
+			rules[i] = mergeKlineFreshnessRules(rules[i], rule)
 			continue
 		}
-		if entry.ResultStatus == "error" {
-			rules = append(rules, inventoryRule(entry, true, staleAfter))
-			continue
-		}
-		if entry.ResultStatus == "pending" {
-			rules = append(rules, inventoryRule(entry, true, staleAfter))
-			continue
-		}
-		if !entry.OwnershipVerified || entry.ResultStatus != "ready" {
-			unverified := inventoryRule(entry, true, staleAfter)
-			unverified.ResultStatus = "unverified"
-			rules = append(rules, unverified)
-			continue
-		}
-		rules = append(rules, inventoryRule(entry, true, staleAfter))
+		index[key] = len(rules)
+		rules = append(rules, rule)
 	}
 	return rules
+}
+
+// klineResultStatusRank orders statuses so the merged rule reports the most
+// actionable state: an error on any feeding task, then a task not yet ready.
+var klineResultStatusRank = map[string]int{"error": 3, "unverified": 2, "pending": 1}
+
+func mergeKlineFreshnessRules(current, next KlineFreshnessRule) KlineFreshnessRule {
+	if current.Enabled != next.Enabled {
+		// A disabled task must not retire a check another task still feeds.
+		if next.Enabled {
+			return next
+		}
+		return current
+	}
+	if klineResultStatusRank[next.ResultStatus] > klineResultStatusRank[current.ResultStatus] {
+		current.ResultStatus = next.ResultStatus
+	}
+	if next.LatestCompletedPeriod.After(current.LatestCompletedPeriod) {
+		current.LatestCompletedPeriod, current.LatestCompletedStatus = next.LatestCompletedPeriod, next.LatestCompletedStatus
+	}
+	if next.ViewLastDataTime.After(current.ViewLastDataTime) {
+		current.ViewLastDataTime = next.ViewLastDataTime
+	}
+	if !next.InventoryObservedAt.IsZero() && (current.InventoryObservedAt.IsZero() || next.InventoryObservedAt.Before(current.InventoryObservedAt)) {
+		current.InventoryObservedAt = next.InventoryObservedAt
+	}
+	return current
 }
 
 func inventoryRule(entry TaskResultInventoryEntry, enabled bool, staleAfter time.Duration) KlineFreshnessRule {

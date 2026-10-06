@@ -414,7 +414,6 @@ func validateTaskResultInventorySnapshot(snapshot TaskResultInventorySnapshot, m
 		return fmt.Errorf("task-result inventory has %d entries, exceeds limit %d", len(snapshot.Entries), maxItems)
 	}
 	seenTasks := make(map[string]struct{}, len(snapshot.Entries))
-	seenResults := make(map[string]struct{}, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		if strings.TrimSpace(entry.SpaceID) == "" || strings.TrimSpace(entry.TaskID) == "" ||
 			strings.TrimSpace(entry.DatasetID) == "" || strings.TrimSpace(entry.ViewID) == "" ||
@@ -426,13 +425,6 @@ func validateTaskResultInventorySnapshot(snapshot TaskResultInventorySnapshot, m
 			return fmt.Errorf("duplicate task-result inventory task %s/%s", entry.SpaceID, entry.TaskID)
 		}
 		seenTasks[taskKey] = struct{}{}
-		if entry.Enabled && entry.OwnershipVerified {
-			resultKey := strings.Join([]string{entry.SpaceID, entry.DatasetID, entry.ViewID, entry.Frequency}, "\x00")
-			if _, exists := seenResults[resultKey]; exists {
-				return fmt.Errorf("duplicate task-result inventory result %s/%s", entry.SpaceID, entry.ViewID)
-			}
-			seenResults[resultKey] = struct{}{}
-		}
 	}
 	return nil
 }
