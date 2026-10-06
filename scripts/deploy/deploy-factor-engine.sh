@@ -228,8 +228,23 @@ if [[ "${OS}" == Darwin ]]; then
   (umask 077; render_template "${ROOT}/deploy/launchd/com.moox.factor-engine.plist.tmpl" >"${plist}")
   plutil -lint "${plist}" >/dev/null || fail "rendered launchd plist is invalid"
   if [[ "${NO_START}" -eq 0 ]]; then
-    launchctl bootout "gui/$(id -u)/com.moox.factor-engine" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$(id -u)" "${plist}"
+    service="gui/$(id -u)/com.moox.factor-engine"
+    launchctl bootout "${service}" >/dev/null 2>&1 || true
+    # bootout returns before the old job is gone; bootstrapping over it fails
+    # with "Input/output error", so wait for the unload and retry briefly.
+    for _ in $(seq 1 20); do
+      launchctl print "${service}" >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    bootstrapped=0
+    for _ in 1 2 3 4 5; do
+      if launchctl bootstrap "gui/$(id -u)" "${plist}" 2>/dev/null; then
+        bootstrapped=1
+        break
+      fi
+      sleep 1
+    done
+    [[ "${bootstrapped}" -eq 1 ]] || fail "launchctl bootstrap ${plist} failed"
   fi
 else
   mkdir -p "${SYSTEMD_USER_DIR}"
