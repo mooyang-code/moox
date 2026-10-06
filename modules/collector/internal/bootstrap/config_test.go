@@ -185,7 +185,8 @@ func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, "collector_retention:\n  max_rows_per_pass: 25000\n  terminal_retry_retention: 336h\n"))
 	require.NoError(t, err)
 	assert.Equal(t, "1m", cfg.CollectorRetention.MaintenanceInterval)
-	assert.Equal(t, "45s", cfg.CollectorRetention.MaintenanceTimeout)
+	assert.Equal(t, "35s", cfg.CollectorRetention.MaintenanceOffset)
+	assert.Equal(t, "20s", cfg.CollectorRetention.MaintenanceTimeout)
 	assert.Equal(t, 25000, cfg.CollectorRetention.MaxRowsPerPass)
 	assert.Equal(t, "24h", cfg.CollectorRetention.ExecutionDetailRetention)
 	assert.Equal(t, "720h", cfg.CollectorRetention.ScheduledRunSummaryRetention)
@@ -199,6 +200,10 @@ func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {
 		"collector_retention:\n  max_rows_per_pass: 8\n",
 		"collector_retention:\n  max_rows_per_pass: 50001\n",
 		"collector_retention:\n  maintenance_interval: 1m\n  maintenance_timeout: 2m\n",
+		// A pass must end before the next minute boundary owned by the market tick.
+		"collector_retention:\n  maintenance_offset: 35s\n  maintenance_timeout: 30s\n",
+		"collector_retention:\n  maintenance_offset: 1m\n",
+		"collector_retention:\n  maintenance_offset: -1s\n",
 		"collector_retention:\n  execution_detail_retention: 9000h\n",
 	} {
 		_, err := Load(writeCollectorConfig(t, body))

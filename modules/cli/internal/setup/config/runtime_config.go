@@ -88,6 +88,7 @@ func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]by
 	retention := snapshot.Manifest.CollectorRetention
 	rendered, err = replaceYAMLMapping(rendered, "collector_retention", orderedMapping(
 		mappingField{"maintenance_interval", retention.MaintenanceInterval},
+		mappingField{"maintenance_offset", retention.MaintenanceOffset},
 		mappingField{"maintenance_timeout", retention.MaintenanceTimeout},
 		mappingField{"max_rows_per_pass", retention.MaxRowsPerPass},
 		mappingField{"execution_detail_retention", retention.ExecutionDetailRetention},

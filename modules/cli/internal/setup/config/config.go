@@ -178,6 +178,7 @@ type StorageViewPolicyOverride struct {
 // execution-history retention windows rendered into the Collector config.
 type CollectorRetention struct {
 	MaintenanceInterval          string `toml:"maintenance_interval" json:"maintenance_interval"`
+	MaintenanceOffset            string `toml:"maintenance_offset" json:"maintenance_offset"`
 	MaintenanceTimeout           string `toml:"maintenance_timeout" json:"maintenance_timeout"`
 	MaxRowsPerPass               int    `toml:"max_rows_per_pass" json:"max_rows_per_pass"`
 	ExecutionDetailRetention     string `toml:"execution_detail_retention" json:"execution_detail_retention"`
@@ -1002,8 +1003,11 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("collector_retention", "maintenance_interval") {
 		out.CollectorRetention.MaintenanceInterval = "1m"
 	}
+	if !md.IsDefined("collector_retention", "maintenance_offset") {
+		out.CollectorRetention.MaintenanceOffset = "35s"
+	}
 	if !md.IsDefined("collector_retention", "maintenance_timeout") {
-		out.CollectorRetention.MaintenanceTimeout = "45s"
+		out.CollectorRetention.MaintenanceTimeout = "20s"
 	}
 	if !md.IsDefined("collector_retention", "max_rows_per_pass") {
 		out.CollectorRetention.MaxRowsPerPass = 50000
@@ -1414,9 +1418,15 @@ func validateCollectorRetention(cfg *CollectorRetention) error {
 	if err != nil || interval <= 0 || interval > 24*time.Hour {
 		return fmt.Errorf("config_invalid: collector_retention.maintenance_interval must be greater than 0 and at most 24h")
 	}
+	offset, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceOffset))
+	if err != nil || offset < 0 || offset >= interval {
+		return fmt.Errorf("config_invalid: collector_retention.maintenance_offset must be at least 0 and less than maintenance_interval")
+	}
 	timeout, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceTimeout))
-	if err != nil || timeout <= 0 || timeout > interval {
-		return fmt.Errorf("config_invalid: collector_retention.maintenance_timeout must be positive and not exceed maintenance_interval")
+	if err != nil || timeout <= 0 || offset+timeout > interval {
+		// Each pass must end before the next interval boundary, where the
+		// Collector market tick owns its single SQLite connection.
+		return fmt.Errorf("config_invalid: collector_retention.maintenance_timeout must be positive and maintenance_offset + maintenance_timeout must not exceed maintenance_interval")
 	}
 	if cfg.MaxRowsPerPass < 9 || cfg.MaxRowsPerPass > 50000 {
 		return fmt.Errorf("config_invalid: collector_retention.max_rows_per_pass must be between 9 and 50000")

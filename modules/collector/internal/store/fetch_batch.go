@@ -15,6 +15,12 @@ import (
 
 var ErrInvalidCompletionScope = errors.New("completion effects violate batch scope")
 
+// Terminal batch cleanup includes timed-out batches that never received a
+// late completion: c_completed_at < terminalBefore (the execution-detail
+// retention) bounds how long a late receipt is waited for. Without that bound
+// such batches, their items, and every row they reference were kept forever.
+// A batch still bound to a Timer period manifest keeps its completion scope;
+// the manifest lifecycle decides when that late completion can no longer come.
 const (
 	maxFetchBatchCleanupItemRows = 12000
 	maxFetchBatchCleanupBatches  = 500
@@ -23,7 +29,10 @@ const (
 		FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_items_cleanup
 		CROSS JOIN t_collector_fetch_batch_items AS items
 		WHERE batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ? AND batches.c_items_cleaned = 0
-		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0 AND EXISTS (
+			SELECT 1 FROM t_collector_timer_period_batches AS manifests
+			WHERE manifests.c_space_id = batches.c_space_id AND manifests.c_batch_id = batches.c_batch_id
+		  ))
 		  AND items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
 		ORDER BY batches.c_completed_at, batches.c_id
 		LIMIT ?`
@@ -31,7 +40,10 @@ const (
 		FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_items_cleanup_space
 		CROSS JOIN t_collector_fetch_batch_items AS items
 		WHERE batches.c_space_id = ? AND batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ? AND batches.c_items_cleaned = 0
-		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0 AND EXISTS (
+			SELECT 1 FROM t_collector_timer_period_batches AS manifests
+			WHERE manifests.c_space_id = batches.c_space_id AND manifests.c_batch_id = batches.c_batch_id
+		  ))
 		  AND items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
 		ORDER BY batches.c_completed_at, batches.c_id
 		LIMIT ?`
@@ -39,7 +51,6 @@ const (
 		FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_parent_cleanup
 		WHERE batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ?
 		  AND batches.c_items_cleaned = 1
-		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
 		  AND NOT EXISTS (
 			SELECT 1 FROM t_collector_fetch_batch_items AS items
 			WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
@@ -54,7 +65,6 @@ const (
 		FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_parent_cleanup_space
 		WHERE batches.c_space_id = ? AND batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ?
 		  AND batches.c_items_cleaned = 1
-		  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
 		  AND NOT EXISTS (
 			SELECT 1 FROM t_collector_fetch_batch_items AS items
 			WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
@@ -1009,7 +1019,10 @@ func markItemlessTerminalBatchesCleaned(tx *gorm.DB, statuses []struct {
 			FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_items_cleanup
 			WHERE batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ?
 			  AND batches.c_items_cleaned = 0
-			  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+			  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0 AND EXISTS (
+				SELECT 1 FROM t_collector_timer_period_batches AS manifests
+				WHERE manifests.c_space_id = batches.c_space_id AND manifests.c_batch_id = batches.c_batch_id
+			  ))
 			  AND NOT EXISTS (
 				SELECT 1 FROM t_collector_fetch_batch_items AS items
 				WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
@@ -1024,7 +1037,10 @@ func markItemlessTerminalBatchesCleaned(tx *gorm.DB, statuses []struct {
 			FROM t_collector_fetch_batches AS batches INDEXED BY idx_collector_fetch_batch_terminal_items_cleanup_space
 			WHERE batches.c_space_id = ? AND batches.c_status = ? AND batches.c_completed_at IS NOT NULL AND batches.c_completed_at < ?
 			  AND batches.c_items_cleaned = 0
-			  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0)
+			  AND NOT (batches.c_status = 'timed_out' AND batches.c_late_completion = 0 AND EXISTS (
+				SELECT 1 FROM t_collector_timer_period_batches AS manifests
+				WHERE manifests.c_space_id = batches.c_space_id AND manifests.c_batch_id = batches.c_batch_id
+			  ))
 			  AND NOT EXISTS (
 				SELECT 1 FROM t_collector_fetch_batch_items AS items
 				WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id

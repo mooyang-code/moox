@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gopkg.in/yaml.v3"
 )
@@ -79,6 +80,7 @@ type CollectorRuntimeConfig struct {
 // CollectorRetentionConfig bounds the process-level execution-history cleanup.
 type CollectorRetentionConfig struct {
 	MaintenanceInterval          string `yaml:"maintenance_interval"`
+	MaintenanceOffset            string `yaml:"maintenance_offset"`
 	MaintenanceTimeout           string `yaml:"maintenance_timeout"`
 	MaxRowsPerPass               int    `yaml:"max_rows_per_pass"`
 	ExecutionDetailRetention     string `yaml:"execution_detail_retention"`
@@ -89,6 +91,11 @@ type CollectorRetentionConfig struct {
 
 func (c CollectorRetentionConfig) interval() time.Duration {
 	value, _ := time.ParseDuration(c.MaintenanceInterval)
+	return value
+}
+
+func (c CollectorRetentionConfig) offset() time.Duration {
+	value, _ := time.ParseDuration(c.MaintenanceOffset)
 	return value
 }
 
@@ -379,9 +386,10 @@ func (c *Config) validateCollectorRetention() error {
 	if err != nil || interval <= 0 || interval > 24*time.Hour {
 		return fmt.Errorf("collector_retention.maintenance_interval must be greater than 0 and at most 24h")
 	}
-	timeout, err := time.ParseDuration(strings.TrimSpace(retention.MaintenanceTimeout))
-	if err != nil || timeout <= 0 || timeout > interval {
-		return fmt.Errorf("collector_retention.maintenance_timeout must be positive and not exceed maintenance_interval")
+	offset, offsetErr := time.ParseDuration(strings.TrimSpace(retention.MaintenanceOffset))
+	timeout, timeoutErr := time.ParseDuration(strings.TrimSpace(retention.MaintenanceTimeout))
+	if offsetErr != nil || timeoutErr != nil || marketfetch.ValidateMaintenanceSchedule(interval, offset, timeout) != nil {
+		return fmt.Errorf("collector_retention.maintenance_offset and maintenance_timeout must keep each pass inside one interval: 0 <= offset < interval and offset + timeout <= interval")
 	}
 	if retention.MaxRowsPerPass < 9 || retention.MaxRowsPerPass > 50000 {
 		return fmt.Errorf("collector_retention.max_rows_per_pass must be between 9 and 50000")
@@ -483,7 +491,7 @@ func Default() *Config {
 			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
 		},
 		CollectorRetention: CollectorRetentionConfig{
-			MaintenanceInterval: "1m", MaintenanceTimeout: "45s", MaxRowsPerPass: 50000,
+			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
 			ExecutionDetailRetention: "24h", ScheduledRunSummaryRetention: "720h",
 			TerminalRetryRetention: "168h", PeriodSnapshotRetention: "720h",
 		},

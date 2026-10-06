@@ -206,8 +206,8 @@ func TestScheduledExecutionRetentionPrunesSupersededDetailsOnly(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, created)
-	targetsDeleted, instancesDeleted, err := s.TaskInstances().CleanupScheduledExecutionDetailsSpace(ctx, "crypto", cutoff, 100, 100)
-	require.NoError(t, err)
+	// One-row windows force the keyset cursor past every protected row.
+	targetsDeleted, instancesDeleted := sweepExecutionCleanup(t, s, cutoff, 1)
 	require.EqualValues(t, 2, targetsDeleted, "superseded targets should be removed for enabled and disabled tasks")
 	require.EqualValues(t, 2, instancesDeleted, "superseded instances become removable after their targets are deleted")
 
@@ -238,22 +238,69 @@ func TestScheduledExecutionRetentionPrunesSupersededDetailsOnly(t *testing.T) {
 	require.Zero(t, runsDeleted, "the old summary remains referenced by the protected missing-state execution")
 }
 
-func TestScheduledExecutionCleanupPagesUseBoundedIndexes(t *testing.T) {
+// sweepExecutionCleanup runs complete keyset sweeps: write targets first, then
+// the instances they released.
+func sweepExecutionCleanup(t *testing.T, s *Store, cutoff time.Time, window int) (targets, instances int64) {
+	t.Helper()
+	ctx := context.Background()
+	for _, step := range []struct {
+		deleted *int64
+		run     func(RetentionCursor) (int64, RetentionCursor, error)
+	}{
+		{&targets, func(after RetentionCursor) (int64, RetentionCursor, error) {
+			return s.TaskInstances().CleanupScheduledWriteTargetsWindow(ctx, "crypto", cutoff, after, window)
+		}},
+		{&instances, func(after RetentionCursor) (int64, RetentionCursor, error) {
+			return s.TaskInstances().CleanupScheduledInstancesWindow(ctx, "crypto", cutoff, after, window)
+		}},
+	} {
+		cursor := RetentionCursor{}
+		for windows := 0; ; windows++ {
+			require.Less(t, windows, 1000, "keyset sweep must terminate")
+			n, next, err := step.run(cursor)
+			require.NoError(t, err)
+			*step.deleted += n
+			if next.IsZero() {
+				break
+			}
+			require.NotEqual(t, cursor, next, "every window must advance the cursor")
+			cursor = next
+		}
+	}
+	return targets, instances
+}
+
+func TestScheduledExecutionCleanupWindowsUseBoundedIndexes(t *testing.T) {
 	s := newCollectorStore(t)
 	cutoff := time.Now().UTC()
-	var plan []struct {
-		Detail string `gorm:"column:detail"`
+	explain := func(query string, args ...any) string {
+		var plan []struct {
+			Detail string `gorm:"column:detail"`
+		}
+		require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+query, args...).Scan(&plan).Error)
+		return fmt.Sprint(plan)
 	}
-	require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+scheduledWriteTargetCleanupPageSpaceSQL,
-		"crypto", cutoff, cutoff, cutoff, 100).Scan(&plan).Error)
-	planText := fmt.Sprint(plan)
+	for _, windowEnd := range []struct{ query, index string }{
+		{scheduledWriteTargetWindowEndSQL, "idx_collector_write_targets_retention_space"},
+		{scheduledInstanceWindowEndSQL, "idx_collector_instances_terminal_cleanup_space"},
+	} {
+		planText := explain(windowEnd.query, "crypto", cutoff, "", 0, 99)
+		require.Contains(t, planText, windowEnd.index)
+		require.NotContains(t, planText, "TEMP B-TREE")
+	}
+
+	upper := "AND (targets.c_mtime, targets.c_id) <= (?, ?)"
+	planText := explain(fmt.Sprintf(scheduledWriteTargetCleanupWindowSQL, upper), "crypto", cutoff, "", 0, "z", 1, cutoff, cutoff)
 	require.Contains(t, planText, "idx_collector_write_targets_retention_space")
+	// A space-only batch scan per candidate made production cleanup take
+	// ~70ms per row; references must be resolved through their own indexes.
+	require.Contains(t, planText, "idx_collector_fetch_batch_target_ref (c_space_id=? AND c_write_target_id=?)")
+	require.Contains(t, planText, "idx_collector_fetch_batch_instance_ref (c_space_id=? AND c_instance_id=?)")
+	require.Contains(t, planText, "idx_collector_instances_storage_write (c_space_id=? AND c_subject_id=? AND c_frequency=? AND c_series_tag=?)")
 	require.NotContains(t, planText, "TEMP B-TREE")
 
-	plan = nil
-	require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+scheduledInstanceCleanupPageSpaceSQL,
-		"crypto", cutoff, cutoff, 100).Scan(&plan).Error)
-	planText = fmt.Sprint(plan)
+	upper = "AND (instances.c_mtime, instances.c_id) <= (?, ?)"
+	planText = explain(fmt.Sprintf(scheduledInstanceCleanupWindowSQL, upper), "crypto", "", 0, "z", 1, cutoff, cutoff)
 	require.Contains(t, planText, "idx_collector_instances_terminal_cleanup_space")
 	require.NotContains(t, planText, "TEMP B-TREE")
 }

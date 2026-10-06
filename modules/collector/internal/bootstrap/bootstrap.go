@@ -668,8 +668,9 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 		runtimes = append(runtimes, marketFetchRuntime{spaceID: spaceID, timerOwned: stockCNTimerOwned, reconciler: reconciler, scheduler: invokeScheduler})
 	}
 	maintenanceSpaceCursor := 0
+	executionSweeps := make(map[string]*executionSweep, len(runtimes))
 	retentionConfig := cfg.CollectorRetention
-	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.timeout(), func(passCtx context.Context) error {
+	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
 		var passErrors []error
 		for index := range runtimes {
@@ -698,22 +699,33 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 				if passCtx.Err() != nil {
 					break
 				}
-				itemsDeleted, batchesDeleted, err := dbm.FetchBatches().CleanupSpaceWithCounts(passCtx, runtime.spaceID,
-					now.Add(-retentionConfig.duration(retentionConfig.ExecutionDetailRetention)),
-					maintenanceBudget(budgets.batchItems, len(runtimes), offset), maintenanceBudget(budgets.batches, len(runtimes), offset))
+				executionCutoff := now.Add(-retentionConfig.duration(retentionConfig.ExecutionDetailRetention))
+				itemsDeleted, batchesDeleted, err := drainMaintenancePagePairs(passCtx,
+					maintenanceBudget(budgets.batchItems, len(runtimes), offset), maintenanceBudget(budgets.batches, len(runtimes), offset),
+					maintenancePageRows, maintenanceBatchPageRows,
+					func(ctx context.Context, items, batches int) (int64, int64, error) {
+						return dbm.FetchBatches().CleanupSpaceWithCounts(ctx, runtime.spaceID, executionCutoff, items, batches)
+					})
 				if err != nil {
 					passErrors = append(passErrors, fmt.Errorf("cleanup terminal FetchBatches for space %s: %w", runtime.spaceID, err))
 				}
 				deletedRows["batch_items"], deletedRows["batches"] = itemsDeleted, batchesDeleted
-				retriesDeleted, err := dbm.FetchRetries().CleanupSpaceWithCount(passCtx, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.TerminalRetryRetention)), maintenanceBudget(budgets.retries, len(runtimes), offset))
+				retriesDeleted, err := drainMaintenancePages(passCtx, maintenanceBudget(budgets.retries, len(runtimes), offset), maintenancePageRows,
+					func(ctx context.Context, limit int) (int64, error) {
+						return dbm.FetchRetries().CleanupSpaceWithCount(ctx, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.TerminalRetryRetention)), limit)
+					})
 				if err != nil {
 					passErrors = append(passErrors, fmt.Errorf("cleanup terminal FetchRetries for space %s: %w", runtime.spaceID, err))
 				}
 				deletedRows["retry"] = retriesDeleted
-				targetsDeleted, instancesDeleted, err := dbm.TaskInstances().CleanupScheduledExecutionDetailsSpace(
-					passCtx, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.ExecutionDetailRetention)),
-					writeTargetBudget, maintenanceBudget(budgets.instances, len(runtimes), offset),
-				)
+				sweep := executionSweeps[runtime.spaceID]
+				if sweep == nil {
+					sweep = &executionSweep{}
+					executionSweeps[runtime.spaceID] = sweep
+				}
+				targetsDeleted, instancesDeleted, err := sweepScheduledExecutionDetails(passCtx, dbm.TaskInstances(), sweep, runtime.spaceID,
+					executionCutoff, executionSweepDeadline(passCtx, time.Now(), retentionConfig.timeout()/4, len(runtimes)-offset),
+					writeTargetBudget, maintenanceBudget(budgets.instances, len(runtimes), offset))
 				if err != nil {
 					passErrors = append(passErrors, fmt.Errorf("cleanup scheduled execution details for space %s: %w", runtime.spaceID, err))
 				} else {
@@ -723,8 +735,10 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 						log.Infof("cleaned scheduled execution details space=%s write_targets=%d task_instances=%d", runtime.spaceID, targetsDeleted, instancesDeleted)
 					}
 				}
-				if runsDeleted, err := dbm.Runs().CleanupScheduledTerminalSpace(passCtx, runtime.spaceID,
-					now.Add(-retentionConfig.duration(retentionConfig.ScheduledRunSummaryRetention)), maintenanceBudget(budgets.runs, len(runtimes), offset)); err != nil {
+				if runsDeleted, err := drainMaintenancePages(passCtx, maintenanceBudget(budgets.runs, len(runtimes), offset), maintenancePageRows,
+					func(ctx context.Context, limit int) (int64, error) {
+						return dbm.Runs().CleanupScheduledTerminalSpace(ctx, runtime.spaceID, now.Add(-retentionConfig.duration(retentionConfig.ScheduledRunSummaryRetention)), limit)
+					}); err != nil {
 					passErrors = append(passErrors, fmt.Errorf("cleanup terminal scheduled Runs for space %s: %w", runtime.spaceID, err))
 				} else {
 					deletedRows["runs"] = runsDeleted
@@ -843,7 +857,6 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 	if err := maintenanceRunner.Start(ctx); err != nil {
 		return
 	}
-	maintenanceRunner.Wake()
 	if service == nil {
 		return
 	}
@@ -876,7 +889,6 @@ func registerMarketFetchSchedule(ctx context.Context, s *server.Server, cfg *Con
 				scheduleCancel()
 			}(runtime)
 		}
-		maintenanceRunner.Wake()
 		return nil
 	})
 }
@@ -886,6 +898,21 @@ func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metr
 	statsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	return metrics.RefreshOperationalStats(statsCtx, db, spaceID, before, now)
+}
+
+// executionSweepDeadline gives one Space an equal share of the pass time that
+// is left, keeping `reserve` for the steps after the sweep (Runs, readiness,
+// and Storage period reconciliation).
+func executionSweepDeadline(ctx context.Context, now time.Time, reserve time.Duration, spacesLeft int) time.Time {
+	passDeadline, ok := ctx.Deadline()
+	if !ok || spacesLeft <= 0 {
+		return now
+	}
+	available := passDeadline.Sub(now) - reserve
+	if available <= 0 {
+		return now
+	}
+	return now.Add(available / time.Duration(spacesLeft))
 }
 
 func maintenanceBudget(total, spaces, index int) int {

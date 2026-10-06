@@ -11,31 +11,45 @@ import (
 
 const (
 	DefaultMaintenanceInterval = time.Minute
-	DefaultMaintenanceTimeout  = 45 * time.Second
+	DefaultMaintenanceOffset   = 35 * time.Second
+	DefaultMaintenanceTimeout  = 20 * time.Second
 )
 
 // MaintenanceRunner serializes process-level cleanup and reconciliation work.
-// Wakeups are coalesced so scheduler ticks never queue an unbounded backlog.
+// Passes start at a fixed phase inside each interval (offset after the
+// interval boundary) and must finish before the next boundary, so cleanup
+// never shares the minute-boundary window with the market fetch tick that
+// owns Collector's single SQLite connection at that moment.
 type MaintenanceRunner struct {
 	Metrics  *Metrics
 	interval time.Duration
+	offset   time.Duration
 	timeout  time.Duration
 	pass     func(context.Context) error
-	wake     chan struct{}
+	now      func() time.Time
 	startMu  sync.Mutex
 	started  bool
 }
 
-func NewMaintenanceRunner(interval, timeout time.Duration, pass func(context.Context) error) *MaintenanceRunner {
-	return &MaintenanceRunner{interval: interval, timeout: timeout, pass: pass, wake: make(chan struct{}, 1)}
+func NewMaintenanceRunner(interval, offset, timeout time.Duration, pass func(context.Context) error) *MaintenanceRunner {
+	return &MaintenanceRunner{interval: interval, offset: offset, timeout: timeout, pass: pass, now: time.Now}
+}
+
+// ValidateMaintenanceSchedule keeps every pass inside one interval: it starts
+// offset after the boundary and its timeout ends before the next boundary.
+func ValidateMaintenanceSchedule(interval, offset, timeout time.Duration) error {
+	if interval <= 0 || timeout <= 0 || offset < 0 || offset >= interval || offset+timeout > interval {
+		return fmt.Errorf("Collector maintenance requires positive interval and timeout, 0 <= offset < interval, and offset + timeout <= interval")
+	}
+	return nil
 }
 
 func (r *MaintenanceRunner) Start(ctx context.Context) error {
 	if r == nil || r.pass == nil {
 		return fmt.Errorf("Collector maintenance runner is not initialized")
 	}
-	if r.interval <= 0 || r.timeout <= 0 || r.timeout > r.interval {
-		return fmt.Errorf("Collector maintenance interval and timeout must be positive and timeout must not exceed interval")
+	if err := ValidateMaintenanceSchedule(r.interval, r.offset, r.timeout); err != nil {
+		return err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -50,31 +64,25 @@ func (r *MaintenanceRunner) Start(ctx context.Context) error {
 	return nil
 }
 
-func (r *MaintenanceRunner) Wake() {
-	if r == nil || r.wake == nil {
-		return
+// nextRun returns the first phase-aligned start strictly after now.
+func (r *MaintenanceRunner) nextRun(now time.Time) time.Time {
+	next := now.Truncate(r.interval).Add(r.offset)
+	if !next.After(now) {
+		next = next.Add(r.interval)
 	}
-	select {
-	case r.wake <- struct{}{}:
-	default:
-	}
+	return next
 }
 
 func (r *MaintenanceRunner) run(ctx context.Context) {
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
-	var lastRun time.Time
 	for {
+		now := r.now()
+		timer := time.NewTimer(r.nextRun(now).Sub(now))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
-		case <-r.wake:
+		case <-timer.C:
 		}
-		if !lastRun.IsZero() && time.Since(lastRun) < r.interval {
-			continue
-		}
-		lastRun = time.Now()
 		r.runPass(ctx)
 	}
 }

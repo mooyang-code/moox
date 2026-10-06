@@ -937,7 +937,8 @@ func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
 	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, "1m", snapshot.Manifest.CollectorRetention.MaintenanceInterval)
-	assert.Equal(t, "45s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
+	assert.Equal(t, "35s", snapshot.Manifest.CollectorRetention.MaintenanceOffset)
+	assert.Equal(t, "20s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
 	assert.Equal(t, 50000, snapshot.Manifest.CollectorRetention.MaxRowsPerPass)
 	assert.Equal(t, "24h", snapshot.Manifest.CollectorRetention.ExecutionDetailRetention)
 	assert.Equal(t, "720h", snapshot.Manifest.CollectorRetention.ScheduledRunSummaryRetention)
@@ -948,6 +949,7 @@ func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
 	body := validManifest + `
 [collector_retention]
 maintenance_interval = "2m"
+maintenance_offset = "10s"
 maintenance_timeout = "30s"
 max_rows_per_pass = 25000
 terminal_retry_retention = "336h"
@@ -955,6 +957,7 @@ terminal_retry_retention = "336h"
 	snapshot, err = Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	assert.Equal(t, "2m", snapshot.Manifest.CollectorRetention.MaintenanceInterval)
+	assert.Equal(t, "10s", snapshot.Manifest.CollectorRetention.MaintenanceOffset)
 	assert.Equal(t, "30s", snapshot.Manifest.CollectorRetention.MaintenanceTimeout)
 	assert.Equal(t, 25000, snapshot.Manifest.CollectorRetention.MaxRowsPerPass)
 	assert.Equal(t, "336h", snapshot.Manifest.CollectorRetention.TerminalRetryRetention)
@@ -971,6 +974,9 @@ func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {
 		{name: "excessive row budget", body: "max_rows_per_pass = 50001", want: "max_rows_per_pass"},
 		{name: "timeout exceeds interval", body: `maintenance_interval = "1m"
 maintenance_timeout = "2m"`, want: "maintenance_timeout"},
+		{name: "pass crosses the next interval boundary", body: `maintenance_offset = "35s"
+maintenance_timeout = "30s"`, want: "maintenance_timeout"},
+		{name: "offset outside interval", body: `maintenance_offset = "1m"`, want: "maintenance_offset"},
 		{name: "retention over one year", body: `execution_detail_retention = "9000h"`, want: "execution_detail_retention"},
 	}
 	for _, tt := range tests {

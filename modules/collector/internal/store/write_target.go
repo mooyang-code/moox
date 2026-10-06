@@ -132,7 +132,7 @@ func (r *TaskInstanceRepository) PruneDisabledWriteTargets(ctx context.Context, 
 	if spaceID == "" || limit <= 0 {
 		return 0, nil
 	}
-	limit = min(limit, maxScheduledWriteTargetCleanupRows)
+	limit = min(limit, MaxRetentionWindowRows)
 	// The expensive safety query joins every WriteTarget against batch state.
 	// Most scheduler ticks have no disabled CollectionTask at all, so avoid
 	// scanning the growing runtime tables unless there is actually something
@@ -154,18 +154,27 @@ func (r *TaskInstanceRepository) PruneDisabledWriteTargets(ctx context.Context, 
 			WHERE targets.c_space_id = ? AND tasks.c_enabled = 0
 			AND NOT EXISTS (
 				SELECT 1 FROM t_collector_fetch_batches batches
-				WHERE batches.c_space_id = targets.c_space_id
-				AND (batches.c_write_target_id = targets.c_write_target_id OR batches.c_instance_id = targets.c_instance_id OR EXISTS (
-					SELECT 1 FROM t_collector_fetch_batch_items items
-					WHERE items.c_space_id = batches.c_space_id AND items.c_batch_id = batches.c_batch_id
-					AND items.c_instance_id = targets.c_instance_id
-				))
+				WHERE batches.c_space_id = targets.c_space_id AND batches.c_write_target_id = targets.c_write_target_id
+				AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM t_collector_fetch_batches batches
+				WHERE batches.c_space_id = targets.c_space_id AND batches.c_instance_id = targets.c_instance_id
+				AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM t_collector_fetch_batch_items items
+				JOIN t_collector_fetch_batches batches ON batches.c_space_id = items.c_space_id AND batches.c_batch_id = items.c_batch_id
+				WHERE items.c_space_id = targets.c_space_id AND items.c_instance_id = targets.c_instance_id
 				AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
 			)
 			AND NOT EXISTS (
 				SELECT 1 FROM t_collector_fetch_retry_items retries
-				WHERE retries.c_space_id = targets.c_space_id
-				AND (retries.c_write_target_id = targets.c_write_target_id OR retries.c_instance_id = targets.c_instance_id)
+				WHERE retries.c_space_id = targets.c_space_id AND retries.c_write_target_id = targets.c_write_target_id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM t_collector_fetch_retry_items retries
+				WHERE retries.c_space_id = targets.c_space_id AND retries.c_instance_id = targets.c_instance_id
 			)
 			AND NOT EXISTS (
 				SELECT 1 FROM t_period_readiness_items items

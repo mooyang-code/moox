@@ -14,7 +14,7 @@ import (
 
 func TestMaintenanceRunnerObservesFailedAndSuccessfulPasses(t *testing.T) {
 	m := NewMetrics(prometheus.NewRegistry())
-	runner := NewMaintenanceRunner(time.Hour, time.Minute, func(context.Context) error { return errors.New("test failure") })
+	runner := NewMaintenanceRunner(time.Hour, 0, time.Minute, func(context.Context) error { return errors.New("test failure") })
 	runner.Metrics = m
 	runner.runPass(context.Background())
 	require.Equal(t, 1.0, testutil.ToFloat64(m.maintenancePasses.WithLabelValues("error")))
@@ -25,13 +25,19 @@ func TestMaintenanceRunnerObservesFailedAndSuccessfulPasses(t *testing.T) {
 	require.Positive(t, testutil.ToFloat64(m.maintenanceLastSuccess.WithLabelValues()))
 }
 
-func TestMaintenanceRunnerCoalescesWakeupsAndSerializesPasses(t *testing.T) {
-	started := make(chan struct{}, 4)
-	release := make(chan struct{})
-	var active atomic.Int32
-	var maxActive atomic.Int32
-	var passes atomic.Int32
-	runner := NewMaintenanceRunner(200*time.Millisecond, 150*time.Millisecond, func(ctx context.Context) error {
+func TestMaintenanceRunnerStartsAtOffsetInsideInterval(t *testing.T) {
+	runner := NewMaintenanceRunner(time.Minute, 35*time.Second, 20*time.Second, func(context.Context) error { return nil })
+	at := func(minute, second int) time.Time { return time.Date(2026, 10, 6, 15, minute, second, 0, time.UTC) }
+	require.Equal(t, at(0, 35), runner.nextRun(at(0, 0)), "the minute-boundary market tick must not share its window with cleanup")
+	require.Equal(t, at(0, 35), runner.nextRun(at(0, 34)))
+	require.Equal(t, at(1, 35), runner.nextRun(at(0, 35)))
+	require.Equal(t, at(1, 35), runner.nextRun(at(0, 59)))
+}
+
+func TestMaintenanceRunnerRunsPassesSerially(t *testing.T) {
+	var active, maxActive, passes atomic.Int32
+	done := make(chan struct{})
+	runner := NewMaintenanceRunner(40*time.Millisecond, 10*time.Millisecond, 25*time.Millisecond, func(ctx context.Context) error {
 		current := active.Add(1)
 		for {
 			previous := maxActive.Load()
@@ -39,36 +45,20 @@ func TestMaintenanceRunnerCoalescesWakeupsAndSerializesPasses(t *testing.T) {
 				break
 			}
 		}
-		passes.Add(1)
-		started <- struct{}{}
-		select {
-		case <-ctx.Done():
-		case <-release:
-		}
+		<-ctx.Done()
 		active.Add(-1)
+		if passes.Add(1) == 3 {
+			close(done)
+		}
 		return nil
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	require.NoError(t, runner.Start(ctx))
-	for range 8 {
-		runner.Wake()
-	}
 	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("maintenance pass did not start")
-	}
-	for range 8 {
-		runner.Wake()
-	}
-	time.Sleep(50 * time.Millisecond)
-	require.EqualValues(t, 1, passes.Load(), "wakeups during a pass must coalesce")
-	release <- struct{}{}
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("coalesced maintenance wake did not run after the active pass")
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintenance passes did not run on schedule")
 	}
 	require.EqualValues(t, 1, maxActive.Load(), "only one maintenance pass may run at a time")
 }
@@ -76,16 +66,18 @@ func TestMaintenanceRunnerCoalescesWakeupsAndSerializesPasses(t *testing.T) {
 func TestMaintenanceRunnerValidatesScheduleAndSingleStart(t *testing.T) {
 	pass := func(context.Context) error { return nil }
 	for _, test := range []struct {
-		interval time.Duration
-		timeout  time.Duration
+		interval, offset, timeout time.Duration
 	}{
 		{interval: 0, timeout: time.Second},
 		{interval: time.Minute, timeout: 0},
 		{interval: time.Second, timeout: time.Minute},
+		{interval: time.Minute, offset: -time.Second, timeout: time.Second},
+		{interval: time.Minute, offset: time.Minute, timeout: time.Second},
+		{interval: time.Minute, offset: 35 * time.Second, timeout: 30 * time.Second},
 	} {
-		require.Error(t, NewMaintenanceRunner(test.interval, test.timeout, pass).Start(context.Background()))
+		require.Error(t, NewMaintenanceRunner(test.interval, test.offset, test.timeout, pass).Start(context.Background()))
 	}
-	runner := NewMaintenanceRunner(time.Hour, time.Minute, pass)
+	runner := NewMaintenanceRunner(time.Hour, 0, time.Minute, pass)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	require.NoError(t, runner.Start(ctx))

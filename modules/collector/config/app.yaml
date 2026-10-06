@@ -29,7 +29,9 @@ period_readiness:
 
 collector_retention:
   maintenance_interval: 1m
-  maintenance_timeout: 45s
+  # 每分钟整点由 K 线调度占用唯一的 SQLite 连接；清理从第 35 秒开始，并在下一个整点前结束。
+  maintenance_offset: 35s
+  maintenance_timeout: 20s
   max_rows_per_pass: 50000
   execution_detail_retention: 24h
   scheduled_run_summary_retention: 720h

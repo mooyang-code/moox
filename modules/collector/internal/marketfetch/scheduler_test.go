@@ -461,15 +461,14 @@ func TestTickSharesOneFetchAcrossTaskWriteTargets(t *testing.T) {
 func TestSchedulerTickDoesNotWaitForBlockedMaintenancePass(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	cleanupStarted := make(chan struct{})
-	maintenance := NewMaintenanceRunner(time.Hour, time.Minute, func(ctx context.Context) error {
+	maintenance := NewMaintenanceRunner(time.Hour, 0, time.Minute, func(ctx context.Context) error {
 		close(cleanupStarted)
 		<-ctx.Done()
 		return ctx.Err()
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, maintenance.Start(ctx))
-	maintenance.Wake()
+	go maintenance.runPass(ctx)
 	select {
 	case <-cleanupStarted:
 	case <-time.After(time.Second):
@@ -482,9 +481,7 @@ func TestSchedulerTickDoesNotWaitForBlockedMaintenancePass(t *testing.T) {
 	}
 	tickDone := make(chan error, 1)
 	go func() {
-		err := scheduler.Tick(ctx, "crypto")
-		maintenance.Wake()
-		tickDone <- err
+		tickDone <- scheduler.Tick(ctx, "crypto")
 	}()
 	select {
 	case err := <-tickDone:

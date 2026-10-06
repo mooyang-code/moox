@@ -155,38 +155,51 @@ func TestFetchBatchCleanupUsesOneRetentionForEveryTerminalStatus(t *testing.T) {
 	}
 }
 
-func TestFetchBatchCleanupRetainsTimedOutScopeUntilLateCompletion(t *testing.T) {
+func TestFetchBatchCleanupWaitsForLateCompletionOnlyWithinRetention(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	completedAt := now.Add(-25 * time.Hour)
-	batch := &domain.BatchInvocation{
-		SpaceID: "crypto", BatchID: "late-scope", ScheduleID: "late-scope",
-		BatchKind: domain.BatchKindRealtime, Frequency: "1m", Status: domain.BatchStatusPlanned,
-		RequestJSON: `{"items":[{"instance_id":"late-instance","source_event_id":"late-retry"}]}`,
+	createTimedOut := func(batchID, instanceID string, completedAt time.Time) *domain.BatchInvocation {
+		batch := &domain.BatchInvocation{
+			SpaceID: "crypto", BatchID: batchID, ScheduleID: batchID,
+			BatchKind: domain.BatchKindRealtime, Frequency: "1m", Status: domain.BatchStatusPlanned,
+			RequestJSON: `{"items":[{"instance_id":"` + instanceID + `","source_event_id":"` + batchID + `-retry"}]}`,
+		}
+		created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+		require.NoError(t, err)
+		require.True(t, created)
+		require.NoError(t, s.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{instanceID}))
+		batch.Status = domain.BatchStatusTimedOut
+		batch.CompletedAt = &completedAt
+		updated, err := s.FetchBatches().Complete(ctx, batch)
+		require.NoError(t, err)
+		require.True(t, updated)
+		return batch
 	}
-	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
-	require.NoError(t, err)
-	require.True(t, created)
-	require.NoError(t, s.FetchBatches().UpsertItems(ctx, "crypto", batch.BatchID, []string{"late-instance"}))
-	batch.Status = domain.BatchStatusTimedOut
-	batch.CompletedAt = &completedAt
-	updated, err := s.FetchBatches().Complete(ctx, batch)
-	require.NoError(t, err)
-	require.True(t, updated)
+	itemCount := func(batchID string) int64 {
+		var count int64
+		require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", "crypto", batchID).Count(&count).Error)
+		return count
+	}
+	recent := createTimedOut("late-scope", "late-instance", now.Add(-23*time.Hour))
+	expired := createTimedOut("expired-scope", "expired-instance", now.Add(-25*time.Hour))
 
-	require.NoError(t, s.FetchBatches().Cleanup(ctx, now.Add(-24*time.Hour)))
-	_, err = s.FetchBatches().Get(ctx, "crypto", batch.BatchID)
-	require.NoError(t, err, "a timed-out batch remains eligible for its first late completion")
-	var itemCount int64
-	require.NoError(t, s.db.Table("t_collector_fetch_batch_items").Where("c_space_id = ? AND c_batch_id = ?", "crypto", batch.BatchID).Count(&itemCount).Error)
-	require.EqualValues(t, 1, itemCount, "completion scope membership must survive as long as late completion is accepted")
+	// Two cleanup calls: the first clears items, the second their parents.
+	for range 2 {
+		require.NoError(t, s.FetchBatches().Cleanup(ctx, now.Add(-24*time.Hour)))
+	}
+	_, err := s.FetchBatches().Get(ctx, "crypto", recent.BatchID)
+	require.NoError(t, err, "a timed-out batch inside the retention window remains eligible for its first late completion")
+	require.EqualValues(t, 1, itemCount(recent.BatchID), "completion scope membership must survive while a late completion is accepted")
+	_, err = s.FetchBatches().Get(ctx, "crypto", expired.BatchID)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "retention bounds the wait for a late completion")
+	require.Zero(t, itemCount(expired.BatchID))
 
-	batch.LateCompletion = true
-	batch.CompletedAt = &now
-	updated, err = s.FetchBatches().CompleteWithEffects(ctx, batch, FetchCompletionEffects{
+	recent.LateCompletion = true
+	recent.CompletedAt = &now
+	updated, err := s.FetchBatches().CompleteWithEffects(ctx, recent, FetchCompletionEffects{
 		Retries: []*domain.RetryItem{{
-			SpaceID: "crypto", RetryKey: "late-retry", SourceBatchID: batch.BatchID,
+			SpaceID: "crypto", RetryKey: "late-retry", SourceBatchID: recent.BatchID,
 			InstanceID: "late-instance", Status: "pending", Attempt: 1,
 			TargetDataTime: now, CreateTime: now, ModifyTime: now,
 		}},
