@@ -9,6 +9,7 @@ Type=simple
 WorkingDirectory=__ROOT__
 EnvironmentFile=__SECRETS__/health-auth.env
 UnsetEnvironment=HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+Environment=MOOX_PYTHON_RUNTIME_PATH=__ROOT__/python-runtime
 ExecStart=__ROOT__/bin/moox-factor-engine serve -config __ROOT__/config/engine.yaml -conf __ROOT__/config/trpc_go.engine.yaml
 Restart=always
 RestartSec=10

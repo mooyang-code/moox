@@ -42,6 +42,9 @@ else
 fi
 [[ -s "${service}" ]]
 grep -Fq "${DIR}/bin/moox-factor-engine" "${service}"
+# The worker imports moox_pyruntime from the shipped runtime directory.
+[[ -s "${DIR}/python-runtime/moox_pyruntime/protocol.py" ]]
+grep -Fq "${DIR}/python-runtime" "${service}"
 if grep -Eq '(HTTPS?_PROXY|https?_proxy)[^ ]*=|<key>HTTPS?_PROXY' "${service}"; then
   echo "the engine service must not carry proxy variables" >&2
   exit 1

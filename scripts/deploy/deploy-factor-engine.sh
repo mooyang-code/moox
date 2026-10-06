@@ -126,6 +126,12 @@ fi
 [[ -x "${DEPLOY_DIR}/bin/moox-factor-engine" ]] || fail "missing ${DEPLOY_DIR}/bin/moox-factor-engine"
 
 install -m 0644 "${ROOT}/modules/factor/pyworker/worker.py" "${ROOT}/modules/factor/pyworker/codec.py" "${DEPLOY_DIR}/pyworker/"
+# The worker imports the shared moox_pyruntime package; MOOX_PYTHON_RUNTIME_PATH
+# in the service definition points it here.
+rm -rf "${DEPLOY_DIR}/python-runtime"
+mkdir -p "${DEPLOY_DIR}/python-runtime"
+cp -R "${ROOT}/packages/pyruntime/python/." "${DEPLOY_DIR}/python-runtime/"
+find "${DEPLOY_DIR}/python-runtime" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
 install -m 0644 "${ROOT}/modules/factor/config/trpc_go.engine.yaml" "${DEPLOY_DIR}/config/trpc_go.engine.yaml"
 
 python_bin="${DEPLOY_DIR}/venv/bin/python"
