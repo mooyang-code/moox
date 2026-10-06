@@ -283,7 +283,7 @@ func NextSyncAt(now time.Time, interval, offset time.Duration) time.Time  // UTC
 
 - [x] **Step 1：** 本计划末尾追加「验收记录」（F1–F5 结果、实测数字、调参）。
 - [x] **Step 2：** 旧计划阶段 D 标注「已由本计划阶段 F 完成」；两份旧设计文档的状态字段指向本设计。
-- [ ] **Step 3：** `git status` 确认全部提交；`git push`。
+- [x] **Step 3：** `git status` 确认全部提交；`git push`。
 
 ---
 
