@@ -147,6 +147,8 @@ services:
       health_url: http://127.0.0.1:20211/readyz
       health_kind: readiness
       monitor_enabled: true
+      # 冷查询一天的因子结果要 6~11s，超过路由默认的 5s；25s 仍小于 Admin 转发的 30s。
+      timeout_ms: 25000
       gateway_methods: [QueryTimeSeriesRows, SearchRecordRows]
       gateway_callers: [admin-gateway, collector, factor, monitor, strategy]
   - name: eventbus

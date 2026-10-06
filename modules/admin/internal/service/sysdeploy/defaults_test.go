@@ -759,3 +759,24 @@ func monitorEnabled(raw string) bool {
 	_ = json.Unmarshal([]byte(raw), &extra)
 	return extra.Enabled
 }
+
+func TestDefaultStorageViewRouteCoversColdQueries(t *testing.T) {
+	for _, item := range DefaultDeployments(testAdminNodeID) {
+		if item.ServiceName != "storage-view" {
+			continue
+		}
+		extra, err := parseRouteExtraConfig(item.ExtraConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		routes, err := deploymentGatewayRoutes(item, extra)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(routes) != 1 || routes[0].ServicePath != "trpc.moox.storage.DataView" || routes[0].TimeoutMS != 25000 {
+			t.Fatalf("storage-view routes = %+v, want one DataView route with a 25s timeout", routes)
+		}
+		return
+	}
+	t.Fatal("storage-view default deployment is missing")
+}
