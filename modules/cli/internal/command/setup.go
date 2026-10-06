@@ -1689,8 +1689,11 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 	}
 	opts := controlDeployOptions(snapshot, root)
 	opts.ResetControlData = resetData
-	if err := setupdeploy.Control(ctx, transport, opts, setupdeploy.Dependencies{}); err != nil {
-		return err
+	// A browser CA trust failure is reported only after the remote deployment
+	// is finalized; the control-plane follow-ups below still have to run.
+	deployErr := setupdeploy.Control(ctx, transport, opts, setupdeploy.Dependencies{})
+	if deployErr != nil && !errors.Is(deployErr, setupdeploy.ErrBrowserCATrust) {
+		return deployErr
 	}
 	// The control profile deliberately does not run Trade. When Trade is
 	// placed on the dedicated node selected by moox.toml, update the
@@ -1704,6 +1707,28 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 		}
 		if err := setupclient.New(transport).ApplyTradeConsolePlacementForNode(ctx, tradeHost.Address, tradeHost.Name); err != nil {
 			return err
+		}
+	}
+	if err := refreshSetupStoragePlacements(ctx, snapshot, setupclient.New(transport)); err != nil {
+		return err
+	}
+	return deployErr
+}
+
+// refreshSetupStoragePlacements re-syncs the Storage routes cloned onto Storage
+// hosts that run their own Gateway. Admin reseeds only the control node on a
+// control deploy, so without this a changed Storage default (for example the
+// View route timeout) would never reach the Storage host's Gateway.
+func refreshSetupStoragePlacements(ctx context.Context, snapshot *setupconfig.Snapshot, client *setupclient.Client) error {
+	seen := map[string]bool{}
+	for _, host := range []setupconfig.Host{snapshot.Manifest.StorageHost, snapshot.Manifest.ViewHost} {
+		name := strings.TrimSpace(host.Name)
+		if name == "" || seen[name] || sameHostEndpoint(host, snapshot.Manifest.ControlHost) {
+			continue
+		}
+		seen[name] = true
+		if _, err := client.RefreshStoragePlacement(ctx, name); err != nil {
+			return fmt.Errorf("refresh Storage placement on %s: %w", name, err)
 		}
 	}
 	return nil

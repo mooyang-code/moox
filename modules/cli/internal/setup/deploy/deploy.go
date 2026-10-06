@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1168,6 +1169,11 @@ func (FileCAStore) Save(publicHost string, raw []byte) error {
 	return nil
 }
 
+// ErrBrowserCATrust marks a failure to trust the control CA on the operator
+// machine. It happens after the control deployment is finalized, so callers
+// can still complete their control-plane follow-ups before reporting it.
+var ErrBrowserCATrust = errors.New("browser_ca_trust_failed")
+
 // EnsureLocalCATrust checks and, when needed, installs the public Caddy root
 // certificate into the operator machine's trust store. The repository script
 // owns the platform-specific trust-store details and prompts for elevation
@@ -1176,21 +1182,21 @@ func EnsureLocalCATrust(ctx context.Context, repositoryRoot, caPath string) erro
 	repositoryRoot = strings.TrimSpace(repositoryRoot)
 	caPath = strings.TrimSpace(caPath)
 	if repositoryRoot == "" || caPath == "" {
-		return fmt.Errorf("browser_ca_trust_failed: installer or CA path is empty")
+		return fmt.Errorf("%w: installer or CA path is empty", ErrBrowserCATrust)
 	}
 	script := filepath.Join(repositoryRoot, "scripts", "deploy", "install-caddy-ca.sh")
 	info, err := os.Stat(script)
 	if err != nil || !info.Mode().IsRegular() {
-		return fmt.Errorf("browser_ca_trust_failed: installer not found at %s", script)
+		return fmt.Errorf("%w: installer not found at %s", ErrBrowserCATrust, script)
 	}
 	if err := runLocalCACommand(ctx, script, caPath, true); err == nil {
 		return nil
 	}
 	if err := runLocalCACommand(ctx, script, caPath, false); err != nil {
-		return fmt.Errorf("browser_ca_trust_failed: install %s --ca-file %s: %w", script, caPath, err)
+		return fmt.Errorf("%w: install %s --ca-file %s: %w", ErrBrowserCATrust, script, caPath, err)
 	}
 	if err := runLocalCACommand(ctx, script, caPath, true); err != nil {
-		return fmt.Errorf("browser_ca_trust_failed: trust store rejected %s after installation: %w", caPath, err)
+		return fmt.Errorf("%w: trust store rejected %s after installation: %w", ErrBrowserCATrust, caPath, err)
 	}
 	return nil
 }

@@ -418,3 +418,74 @@ func TestApplyDetectsManifestMutationBeforeRequest(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config_changed")
 }
+
+func TestRefreshStoragePlacementFollowsControlAndKeepsPlacement(t *testing.T) {
+	updated := map[string]*pb.ServiceDeployment{}
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
+			var input pb.GetServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			deployment := &pb.ServiceDeployment{NodeId: "control", ServiceName: input.GetServiceName(), Host: "127.0.0.1", Port: 20202,
+				Status: "disabled", GatewayEnabled: false, ExtraConfig: `{"timeout_ms":25000}`}
+			if input.GetNodeId() == "storage" {
+				if input.GetServiceName() == "storage-primary" {
+					// Already current: no update expected.
+					deployment = &pb.ServiceDeployment{Id: 7, NodeId: "storage", ServiceName: "storage-primary", Host: "127.0.0.1", Port: 20202,
+						Status: "active", GatewayEnabled: true, ExtraConfig: `{"timeout_ms":25000}`}
+				} else {
+					deployment = &pb.ServiceDeployment{Id: 9, NodeId: "storage", ServiceName: input.GetServiceName(), Host: "127.0.0.1", Port: 20202,
+						Status: "active", GatewayEnabled: true, ExtraConfig: `{}`, CreatedAt: "2026-10-04T00:00:00Z"}
+				}
+			}
+			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: deployment})
+			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
+			var input pb.UpdateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			updated[input.GetServiceName()] = input.GetDeployment()
+			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
+			_, _ = w.Write(response)
+		default:
+			http.NotFound(w, request)
+		}
+	})}
+
+	result, err := New(forwarder).RefreshStoragePlacement(context.Background(), "storage")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Deployments)
+	require.Len(t, updated, 1)
+	view := updated["storage-view"]
+	require.Equal(t, `{"timeout_ms":25000}`, view.GetExtraConfig(), "the control definition is copied")
+	require.Equal(t, "storage", view.GetNodeId())
+	require.Equal(t, int64(9), view.GetId())
+	require.Equal(t, "active", view.GetStatus(), "the placed row keeps its activation")
+	require.True(t, view.GetGatewayEnabled())
+}
+
+func TestRefreshStoragePlacementSkipsUnplacedNodes(t *testing.T) {
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var input pb.GetServiceDeploymentReq
+		body, _ := io.ReadAll(request.Body)
+		_ = protojson.Unmarshal(body, &input)
+		if request.URL.Path != "/trpc.moox.ops.SysDeploy/GetServiceDeployment" {
+			t.Errorf("unexpected call %s", request.URL.Path)
+			http.NotFound(w, request)
+			return
+		}
+		rsp := &pb.GetServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: &pb.ServiceDeployment{NodeId: "control", ServiceName: input.GetServiceName()}}
+		if input.GetNodeId() != "control" {
+			rsp = &pb.GetServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND}}
+		}
+		response, _ := protojson.Marshal(rsp)
+		_, _ = w.Write(response)
+	})}
+
+	result, err := New(forwarder).RefreshStoragePlacement(context.Background(), "storage")
+
+	require.NoError(t, err)
+	require.Zero(t, result.Deployments)
+}

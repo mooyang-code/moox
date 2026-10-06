@@ -496,6 +496,50 @@ func (c *Client) ActivateStoragePlacement(ctx context.Context, nodeID string) (S
 	return StoragePlacementResult{Deployments: len(storageDeploymentNames)}, nil
 }
 
+// RefreshStoragePlacement brings the Storage routes cloned onto a remote
+// Gateway node back in line with the control-plane definitions. Placement
+// copies the control rows once, so a later default change (a route timeout,
+// a new method) would otherwise never reach the remote node. The remote row
+// keeps its own identity, loopback host, status and gateway switch; nodes
+// without a placed row are left alone.
+func (c *Client) RefreshStoragePlacement(ctx context.Context, nodeID string) (StoragePlacementResult, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if c == nil || c.forwarder == nil || nodeID == "" || nodeID == "control" {
+		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
+	}
+	refreshed := 0
+	for _, serviceName := range storageDeploymentNames {
+		control := &pb.GetServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+			&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: serviceName}, control); err != nil ||
+			checkRetInfo(control.GetRetInfo()) != nil || control.GetDeployment() == nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		placed := &pb.GetServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+			&pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: serviceName}, placed); err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		if checkRetInfo(placed.GetRetInfo()) != nil || placed.GetDeployment() == nil {
+			continue
+		}
+		current := placed.GetDeployment()
+		next := proto.Clone(control.GetDeployment()).(*pb.ServiceDeployment)
+		next.Id, next.NodeId, next.Host = current.GetId(), current.GetNodeId(), current.GetHost()
+		next.BaseUrl, next.RpcAddress = current.GetBaseUrl(), current.GetRpcAddress()
+		next.Status, next.GatewayEnabled = current.GetStatus(), current.GetGatewayEnabled()
+		next.CreatedAt, next.UpdatedAt = current.GetCreatedAt(), current.GetUpdatedAt()
+		if proto.Equal(next, current) {
+			continue
+		}
+		if err := c.upsertDeployment(ctx, next); err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		refreshed++
+	}
+	return StoragePlacementResult{Deployments: refreshed}, nil
+}
+
 // PrepareStoragePlacement creates the remote Gateway node and its local
 // routes before the Gateway starts. It deliberately leaves SCF discovery on
 // the current native endpoint until Storage readiness has succeeded.
