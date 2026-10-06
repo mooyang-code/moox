@@ -23,8 +23,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
 	}
-	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://127.0.0.1:11003" {
-		t.Fatalf("collector gateway target default = %q", cfg.KlineFreshness.CollectorGatewayTarget)
+	if cfg.KlineFreshness.CollectorGatewayURL != "http://127.0.0.1:11002" {
+		t.Fatalf("collector gateway url default = %q", cfg.KlineFreshness.CollectorGatewayURL)
 	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
@@ -157,15 +157,15 @@ func TestMonitorStorageGatewayEnvironmentOverridesMetricsOnly(t *testing.T) {
 
 func TestMonitorCollectorGatewayEnvironmentIsIndependentFromStorageRoute(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector-gateway:11003")
+	t.Setenv("MOOX_MONITOR_COLLECTOR_GATEWAY_URL", "https://collector-gateway:11002")
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://storage-gateway:11003")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "storage-node")
 	cfg := Default()
 	cfg.applyEnv()
 
-	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://collector-gateway:11003" || cfg.KlineFreshness.CollectorGatewayNodeID != "collector-node" {
-		t.Fatalf("collector route = %q/%q", cfg.KlineFreshness.CollectorGatewayTarget, cfg.KlineFreshness.CollectorGatewayNodeID)
+	if cfg.KlineFreshness.CollectorGatewayURL != "https://collector-gateway:11002" || cfg.KlineFreshness.CollectorGatewayNodeID != "collector-node" {
+		t.Fatalf("collector route = %q/%q", cfg.KlineFreshness.CollectorGatewayURL, cfg.KlineFreshness.CollectorGatewayNodeID)
 	}
 	if cfg.Metrics.Storage.GatewayTarget != "ip://storage-gateway:11003" || cfg.Metrics.Storage.GatewayNodeID != "storage-node" {
 		t.Fatalf("storage route = %q/%q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.Storage.GatewayNodeID)
@@ -271,11 +271,11 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
 	}
 	freshness, ok := app["kline_freshness"].(map[string]any)
-	if !ok || freshness["collector_gateway_target"] != "ip://127.0.0.1:11003" {
-		t.Fatalf("kline freshness Collector gateway target = %v", freshness["collector_gateway_target"])
+	if !ok || freshness["collector_gateway_url"] != "http://127.0.0.1:11002" {
+		t.Fatalf("kline freshness Collector gateway url = %v", freshness["collector_gateway_url"])
 	}
-	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://127.0.0.1:11003" {
-		t.Fatalf("loaded collector gateway target = %q", cfg.KlineFreshness.CollectorGatewayTarget)
+	if cfg.KlineFreshness.CollectorGatewayURL != "http://127.0.0.1:11002" {
+		t.Fatalf("loaded collector gateway url = %q", cfg.KlineFreshness.CollectorGatewayURL)
 	}
 	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute {

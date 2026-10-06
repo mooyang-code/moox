@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -21,7 +20,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
@@ -78,22 +76,11 @@ func TestNormalizeHostStorageTarget(t *testing.T) {
 	}
 }
 
-func TestBuildKlineFreshnessInventoryUsesTypedCollectorClientConfig(t *testing.T) {
-	oldFactory := collectorpb.NewCollectMgrClientProxy
-	var capturedTarget string
-	collectorpb.NewCollectMgrClientProxy = func(opts ...client.Option) collectorpb.CollectMgrClientProxy {
-		clientOptions := &client.Options{}
-		for _, option := range opts {
-			option(clientOptions)
-		}
-		capturedTarget = clientOptions.Target
-		return collectorInventoryClientStub{}
-	}
-	t.Cleanup(func() { collectorpb.NewCollectMgrClientProxy = oldFactory })
-
+func TestBuildKlineFreshnessInventoryUsesCollectorGatewayHTTPEntry(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
 	cfg := config.Default()
 	cfg.KlineFreshness.Enabled = true
-	cfg.KlineFreshness.CollectorGatewayTarget = "ip://collector-gateway:19091"
+	cfg.KlineFreshness.CollectorGatewayURL = "http://collector-gateway:11002"
 	cfg.Metrics.Storage.GatewayTarget = "ip://storage-gateway:19091"
 	cfg.Metrics.Storage.GatewayNodeID = "gateway-test-node"
 	cfg.Metrics.Storage.KeyID = "monitor"
@@ -106,7 +93,11 @@ func TestBuildKlineFreshnessInventoryUsesTypedCollectorClientConfig(t *testing.T
 	cache, err := buildKlineFreshnessInventory(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, cache)
-	require.Equal(t, "ip://collector-gateway:19091", capturedTarget)
+
+	missingURL := *cfg
+	missingURL.KlineFreshness.CollectorGatewayURL = ""
+	_, err = buildKlineFreshnessInventory(&missingURL)
+	require.ErrorContains(t, err, "gateway URL")
 
 	disabled := *cfg
 	disabled.KlineFreshness.Enabled = false
@@ -120,20 +111,16 @@ func TestBuildKlineFreshnessInventoryUsesTypedCollectorClientConfig(t *testing.T
 	require.ErrorContains(t, err, "page size")
 }
 
-type collectorInventoryClientStub struct {
-	collectorpb.CollectMgrClientProxy
-}
-
 func TestKlineFreshnessCollectorRouteDoesNotReuseMetricsStorageRoute(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "gateway-default")
 	cfg := config.Default()
-	cfg.KlineFreshness.CollectorGatewayTarget = "ip://collector-gateway:11003"
+	cfg.KlineFreshness.CollectorGatewayURL = "http://collector-gateway:11002"
 	cfg.KlineFreshness.CollectorGatewayNodeID = "collector-node"
 	cfg.Metrics.Storage.GatewayTarget = "ip://storage-gateway:11003"
 	cfg.Metrics.Storage.GatewayNodeID = "storage-node"
 
 	target, nodeID := klineFreshnessCollectorRoute(cfg)
-	require.Equal(t, "ip://collector-gateway:11003", target)
+	require.Equal(t, "http://collector-gateway:11002", target)
 	require.Equal(t, "collector-node", nodeID)
 
 	cfg.KlineFreshness.CollectorGatewayNodeID = ""

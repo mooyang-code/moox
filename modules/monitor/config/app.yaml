@@ -74,7 +74,7 @@ kline_freshness:
   space_ids:
     - crypto
     - stockcn
-  collector_gateway_target: ip://127.0.0.1:11003
+  collector_gateway_url: http://127.0.0.1:11002
   collector_gateway_node_id: ""
   evaluation_interval: 30s
   inventory_refresh_interval: 1m

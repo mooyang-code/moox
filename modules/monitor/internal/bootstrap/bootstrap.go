@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -312,13 +311,12 @@ func buildKlineFreshnessInventory(cfg *config.Config) (*monmetrics.TaskResultInv
 	if err != nil {
 		return nil, fmt.Errorf("monitor collector inventory credentials: %w", err)
 	}
-	target, targetNode := klineFreshnessCollectorRoute(cfg)
-	options := gatewayauth.NewTRPCClientOptions(
-		target,
-		targetNode,
-		credentials,
-	)
-	client := collectorpb.NewCollectMgrClientProxy(options...)
+	gatewayURL, targetNode := klineFreshnessCollectorRoute(cfg)
+	client, err := monmetrics.NewCollectorInventoryHTTPClient(gatewayURL, targetNode, credentials,
+		os.Getenv("MOOX_SERVICE_GATEWAY_CA_FILE"), 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	source, err := monmetrics.NewCollectorTaskResultInventorySource(client, cfg.KlineFreshness.SpaceIDs, cfg.KlineFreshness.InventoryPageSize, cfg.KlineFreshness.InventoryMaxEntries)
 	if err != nil {
 		return nil, fmt.Errorf("monitor collector inventory source: %w", err)
@@ -331,7 +329,7 @@ func buildKlineFreshnessInventory(cfg *config.Config) (*monmetrics.TaskResultInv
 }
 
 func klineFreshnessCollectorRoute(cfg *config.Config) (string, string) {
-	return cfg.KlineFreshness.CollectorGatewayTarget,
+	return cfg.KlineFreshness.CollectorGatewayURL,
 		firstNonEmptyString(cfg.KlineFreshness.CollectorGatewayNodeID, gatewayauth.ServiceGatewayNodeID())
 }
 
