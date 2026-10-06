@@ -1,7 +1,7 @@
 # 因子计算前端多页面重设计
 
 - 日期：2026-10-04
-- 状态：设计已确认（v3.2；v3.1 经用户回复「ok」确认，v3.2 为对照代码勘察后的实现细节修订；代码已于 2026-10-05 实施，执行计划见 [`../plans/2026-10-04-factor-definition-membership-and-multipage-frontend.md`](../plans/2026-10-04-factor-definition-membership-and-multipage-frontend.md)）
+- 状态：设计已确认（v3.2；v3.1 经用户回复「ok」确认，v3.2 为对照代码勘察后的实现细节修订；代码已于 2026-10-05 实施，执行计划见 [`../plans/2026-10-04-factor-definition-membership-and-multipage-frontend.md`](../plans/2026-10-04-factor-definition-membership-and-multipage-frontend.md)）。部署与线上验收按 [`2026-10-05-factor-manager-engine-split-design.md`](./2026-10-05-factor-manager-engine-split-design.md) 完成（2026-10-06）
 - 交互原型：<https://claude.ai/artifact/QZm1nnnEHcXAnVDNnMZxzZ>（7 个画板：总览 / 因子定义 / 新建因子 / 计算任务 Tab ×3 / 计算任务详情抽屉，示例数据）
 - 关系：
   - **取代** [`2026-10-04-factor-workbench-frontend-design.md`](./2026-10-04-factor-workbench-frontend-design.md) 中的信息架构部分（单入口「因子工作台」、左侧因子集列表 + 四个内部 Tab）；该文档中的状态派生规则、补算语义**继续有效**，本文只在需要时引用，不重复。

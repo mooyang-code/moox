@@ -645,7 +645,7 @@ cd .. && make test-web check-format check-lint
 
 ## 阶段 D：联调、部署与收尾
 
-> **已被取代（2026-10-05）：** factor 改为「管理端（控制机）+ 计算引擎（本机）」两进程部署，本阶段的单体部署与验收不再执行，改由 [`2026-10-05-factor-manager-engine-split.md`](./2026-10-05-factor-manager-engine-split.md) 阶段 F 完成。迁移相关步骤（D1 Step 4、D2 Step 1 的备份、D3 Step 1）随「删库重建、不备份」一并作废。
+> **已由新计划阶段 F 完成（2026-10-06），验收记录见该计划末尾。** **已被取代（2026-10-05）：** factor 改为「管理端（控制机）+ 计算引擎（本机）」两进程部署，本阶段的单体部署与验收不再执行，改由 [`2026-10-05-factor-manager-engine-split.md`](./2026-10-05-factor-manager-engine-split.md) 阶段 F 完成。迁移相关步骤（D1 Step 4、D2 Step 1 的备份、D3 Step 1）随「删库重建、不备份」一并作废。
 
 ### Task D1：本地联调验收
 

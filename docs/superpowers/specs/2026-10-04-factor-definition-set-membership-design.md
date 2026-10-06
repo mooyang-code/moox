@@ -1,7 +1,7 @@
 # 因子定义与因子集解耦设计：FactorDef / FactorSetMember
 
 - 日期：2026-10-04
-- 状态：已实施（2026-10-05，代码已提交；正式环境发布待执行）
+- 状态：已实施；部署形态已被 [`2026-10-05-factor-manager-engine-split-design.md`](./2026-10-05-factor-manager-engine-split-design.md) 取代（管理端 + 本机计算引擎），2026-10-06 按该设计完成正式环境发布与验收
 - 性质：对 [`2026-10-04-factor-dataset-period-pipeline-design.md`](./2026-10-04-factor-dataset-period-pipeline-design.md)（下称「流水线设计」）的**增量修订**。评审通过后，把第 8 节列出的修订点合并回流水线设计与执行计划，本文随之归档。
 - 前端配套：[`2026-10-04-factor-multi-page-frontend-design.md`](./2026-10-04-factor-multi-page-frontend-design.md)（界面上「因子集」叫「计算任务」，本文沿用后端名称 FactorSet / `set_id`）。
 
