@@ -1275,11 +1275,12 @@ chmod 600 "$dir/internal-admin.yaml"`}, bytes.NewReader(storageAdminEventBusCred
 			return err
 		}
 	}
-	// Storage may be deployed in its own root while Admin/Gateway remains in
-	// the control root. Persist the placement decision so a later Admin
-	// restart does not re-import the control profile with Storage routes
-	// disabled. The update is atomic and guarded by a per-config lock.
-	if err := persistControlStorageRoutePolicy(ctx, control, paths.ControlRoot, true); err != nil {
+	// Persist where Storage runs. On the control host (its own root beside
+	// Admin/Gateway) the control routes must survive the next Admin restart;
+	// on a separate host they must not, or every control deploy re-enables
+	// local Storage routes and health checks for processes that are not there.
+	// The update is atomic and guarded by a per-config lock.
+	if err := persistControlStorageRoutePolicy(ctx, control, paths.ControlRoot, useControlGateway); err != nil {
 		return err
 	}
 	return restartStorageClients(ctx, control, paths.ControlRoot)
