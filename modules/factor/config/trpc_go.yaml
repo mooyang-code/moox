@@ -38,6 +38,11 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
+    - name: trpc.moox.factor.metrics.timer
+      port: 11407
+      network: "*/30 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 10000
 
 client:
   filter:
