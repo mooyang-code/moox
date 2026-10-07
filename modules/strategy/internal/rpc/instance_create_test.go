@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -10,8 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
-	"github.com/mooyang-code/moox/modules/strategy/internal/config"
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -276,42 +273,5 @@ WHEN NEW.session_id IS NULL BEGIN SELECT RAISE(ABORT, 'cleanup unavailable'); EN
 	rsp, err := svc.CreateStrategyInstance(ctx, req)
 	if err != nil || rsp.GetRetInfo().GetCode() == 0 || !strings.Contains(rsp.GetRetInfo().GetMsg(), "cleanup unavailable") || rsp.GetInstance().GetSessionId() == "" {
 		t.Fatalf("cleanup failure lost error or recovery evidence: %+v, %v", rsp, err)
-	}
-}
-
-func TestCreateInstanceClaimRejectsConcurrentLegacyUpdateRunner(t *testing.T) {
-	svc, ctx, req, owner := newCreateInstanceService(t)
-	compiled, err := json.Marshal(compiler.CompiledStrategy{
-		APIVersion: config.APIVersion, Kind: config.Kind, SpaceID: "space",
-		SourceView: compiler.CompiledView{ID: "other-source", Status: "active", Frequency: "1m"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.Repo.SaveStrategy(ctx, domain.Strategy{ID: "legacy-replacement", Name: "replacement", Kind: config.Kind, CompiledJSON: compiled, CreatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	var update *strategypb.UpdateRunnerRsp
-	owner.onClaim = func() {
-		var err error
-		update, err = svc.UpdateRunner(ctx, &strategypb.UpdateRunnerReq{Runner: &strategypb.StrategyRunner{
-			RunnerId: req.Instance.InstanceId, StrategyId: "legacy-replacement", SpaceId: "space", LogicalAccountId: "logical-b",
-		}})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	rsp, err := svc.CreateStrategyInstance(ctx, req)
-	if err != nil || rsp.GetRetInfo().GetCode() != 0 {
-		t.Fatalf("create failed: %+v, %v", rsp, err)
-	}
-	if update == nil || update.GetRetInfo().GetCode() == 0 {
-		t.Fatalf("legacy update mutated modern pending claim: %+v", update)
-	}
-	if rsp.GetInstance().GetStrategyId() != req.Instance.StrategyId || rsp.GetInstance().GetLogicalAccountId() != req.Instance.LogicalAccountId || rsp.GetInstance().GetSessionId() != owner.sessions[0] {
-		t.Fatalf("modern claim enabled a changed identity: %+v", rsp)
-	}
-	if len(owner.released) != 0 {
-		t.Fatalf("rejected legacy update released modern ownership: %+v", owner.released)
 	}
 }

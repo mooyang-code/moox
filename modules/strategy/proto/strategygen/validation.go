@@ -26,37 +26,6 @@ func (r *GetStrategyReq) Validate() error {
 	return required(r.StrategyId, "strategy_id")
 }
 
-func (r *CreateRunnerReq) Validate() error {
-	if r == nil || r.Runner == nil {
-		return fmt.Errorf("runner is required")
-	}
-	return required(r.Runner.RunnerId, "runner_id")
-}
-
-func (r *GetRunnerReq) Validate() error {
-	if r == nil {
-		return fmt.Errorf("request is required")
-	}
-	return required(r.RunnerId, "runner_id")
-}
-
-func (r *UpdateRunnerReq) Validate() error {
-	if r == nil || r.Runner == nil {
-		return fmt.Errorf("runner is required")
-	}
-	return required(r.Runner.RunnerId, "runner_id")
-}
-
-func (r *SetRunnerStatusReq) Validate() error {
-	if r == nil {
-		return fmt.Errorf("request is required")
-	}
-	if err := required(r.RunnerId, "runner_id"); err != nil {
-		return err
-	}
-	return required(r.Status, "status")
-}
-
 func (r *GetStrategyResultReq) Validate() error {
 	if r == nil {
 		return fmt.Errorf("request is required")
@@ -68,5 +37,5 @@ func (r *ListStrategyTargetsReq) Validate() error {
 	if r == nil {
 		return fmt.Errorf("request is required")
 	}
-	return required(r.RunnerId, "runner_id")
+	return required(r.InstanceId, "instance_id")
 }

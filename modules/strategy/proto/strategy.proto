@@ -39,39 +39,11 @@ message StrategyInstance {
   string updated_at = 9;
 }
 
-message StrategyRunner {
-  string runner_id = 1;
-  string strategy_id = 2;
-  string space_id = 3;
-  string view_id = 4;
-  string frequency = 5;
-  string params_json = 6;
-  string logical_account_id = 7;
-  string status = 8;
-  repeated InstrumentTarget current_targets = 9;
-  int64 command_sequence = 10;
-  string last_result_id = 11;
-  string last_success_at = 12;
-  string last_error = 13;
-  string created_at = 14;
-  string updated_at = 15;
-  string source_view_id = 16;
-}
-
 message StrategyResult {
   string result_id = 1;
-  string runner_id = 2;
-  string strategy_id = 3;
-  string trigger_bar_time = 4;
-  string namespace = 5;
-  string input_hash = 6;
-  string action = 7;
-  string output_json = 8;
-  optional int64 command_sequence = 9;
   string created_at = 10;
   string period_time = 11;
   repeated InstrumentTarget targets = 12;
-  string debug_info_json = 13;
   string instance_id = 14;
   string session_id = 15;
   string valid_until = 16;
@@ -124,61 +96,8 @@ message ListStrategiesRsp {
   int32 page_size = 5;
 }
 
-message CreateRunnerReq {
-  StrategyRunner runner = 1;
-}
-
-message CreateRunnerRsp {
-  common.RetInfo ret_info = 1;
-  StrategyRunner runner = 2;
-}
-
-message GetRunnerReq {
-  string runner_id = 1;
-}
-
-message GetRunnerRsp {
-  common.RetInfo ret_info = 1;
-  StrategyRunner runner = 2;
-}
-
-message ListRunnersReq {
-  PageRequest page = 1;
-  string strategy_id = 2;
-  string space_id = 3;
-  string status = 4;
-}
-
-message ListRunnersRsp {
-  common.RetInfo ret_info = 1;
-  repeated StrategyRunner runners = 2;
-  int64 total = 3;
-  int32 page = 4;
-  int32 page_size = 5;
-}
-
-message UpdateRunnerReq {
-  StrategyRunner runner = 1;
-}
-
-message UpdateRunnerRsp {
-  common.RetInfo ret_info = 1;
-  StrategyRunner runner = 2;
-}
-
-message SetRunnerStatusReq {
-  string runner_id = 1;
-  string status = 2;
-}
-
-message SetRunnerStatusRsp {
-  common.RetInfo ret_info = 1;
-  StrategyRunner runner = 2;
-}
-
 message ListStrategyResultsReq {
   PageRequest page = 1;
-  string runner_id = 2;
   string instance_id = 3;
   string session_id = 4;
 }
@@ -201,14 +120,12 @@ message GetStrategyResultRsp {
 }
 
 message ListStrategyTargetsReq {
-  string runner_id = 1;
   string instance_id = 2;
 }
 
 message ListStrategyTargetsRsp {
   common.RetInfo ret_info = 1;
   repeated InstrumentTarget targets = 2;
-  int64 command_sequence = 3;
   string session_id = 4;
   string bar_end_time = 5;
   string valid_until = 6;
@@ -228,11 +145,6 @@ service StrategyMgr {
   rpc UpdateStrategy(UpdateStrategyReq) returns (UpdateStrategyRsp);
   rpc GetStrategy(GetStrategyReq) returns (GetStrategyRsp);
   rpc ListStrategies(ListStrategiesReq) returns (ListStrategiesRsp);
-  rpc CreateRunner(CreateRunnerReq) returns (CreateRunnerRsp);
-  rpc GetRunner(GetRunnerReq) returns (GetRunnerRsp);
-  rpc ListRunners(ListRunnersReq) returns (ListRunnersRsp);
-  rpc UpdateRunner(UpdateRunnerReq) returns (UpdateRunnerRsp);
-  rpc SetRunnerStatus(SetRunnerStatusReq) returns (SetRunnerStatusRsp);
   rpc ListStrategyResults(ListStrategyResultsReq) returns (ListStrategyResultsRsp);
   rpc GetStrategyResult(GetStrategyResultReq) returns (GetStrategyResultRsp);
   rpc ListStrategyTargets(ListStrategyTargetsReq) returns (ListStrategyTargetsRsp);

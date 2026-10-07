@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
@@ -58,45 +57,6 @@ rules: {r: {pool: {udf: missing_udf}, weight: 1}}
 	}
 	if err := (&Service{PoolRegistry: input.NewUDFRegistry()}).validatePoolUDFs(dsl); err == nil {
 		t.Fatal("unregistered pool UDF should be rejected before enable")
-	}
-}
-
-func TestSetRunnerStatusRejectsModernStrategyInstance(t *testing.T) {
-	repo := openRPCStore(t)
-	definition := store.StrategyDefinition{
-		StrategyID: "modern-strategy", StrategyName: "modern", DSLYaml: `name: modern
-triggers: {event: {name: ViewDataReady}}
-data: {bar: 1m, calendar: crypto_24x7}
-rules: {r: {pool: [BTC], score: close, weight: 1}}
-`, CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
-	}
-	if err := repo.SaveStrategyDefinition(context.Background(), definition); err != nil {
-		t.Fatal(err)
-	}
-	session := "session-modern"
-	if err := repo.CreateInstance(context.Background(), store.StrategyInstance{
-		InstanceID: "modern-instance", StrategyID: definition.StrategyID, SpaceID: "space",
-		InputBindingsJSON: json.RawMessage(`{"source_view_id":"source"}`), Enabled: true, SessionID: &session,
-		CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	service := &Service{Repo: repo}
-	ctx := trpc.BackgroundContext()
-	trpc.SetMetaData(ctx, "X-Space-Id", []byte("space"))
-	response, err := service.SetRunnerStatus(ctx, &strategypb.SetRunnerStatusReq{RunnerId: "modern-instance", Status: string(domain.RunnerStatusDisabled)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.GetRetInfo().GetCode() == 0 {
-		t.Fatal("legacy runner RPC unexpectedly mutated a modern instance")
-	}
-	instance, err := repo.GetInstance(context.Background(), "modern-instance")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !instance.Enabled || instance.SessionID == nil || *instance.SessionID != session {
-		t.Fatalf("modern instance lifecycle changed: %+v", instance)
 	}
 }
 

@@ -3,8 +3,6 @@ package trigger
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
@@ -28,60 +25,6 @@ type fakeInputLoader struct {
 
 func (f fakeInputLoader) Load(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time) (input.EvaluationInput, error) {
 	return f.value, f.err
-}
-
-type legacyRunnerProbeLoader struct{ calls int }
-
-func (l *legacyRunnerProbeLoader) Load(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time) (input.EvaluationInput, error) {
-	l.calls++
-	return input.EvaluationInput{}, errors.New("legacy runner execution must be disabled")
-}
-
-func TestProcessorDoesNotExecuteLegacyRunner(t *testing.T) {
-	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
-	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
-		t.Fatal(err)
-	}
-	compiled := compiler.CompiledStrategy{
-		APIVersion: config.APIVersion,
-		Kind:       config.Kind,
-		SpaceID:    "space",
-		SourceView: compiler.CompiledView{ID: "source", Status: "active", Frequency: "1m"},
-		Schedule:   compiler.CompiledSchedule{Every: "1m"},
-	}
-	raw, err := json.Marshal(compiled)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SaveStrategy(context.Background(), domain.Strategy{ID: "legacy-strategy", Name: "legacy", Kind: config.Kind, CompiledJSON: raw, CreatedAt: time.UnixMilli(1)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{
-		ID: "legacy-runner", StrategyID: "legacy-strategy", SpaceID: "space", SourceViewID: "source", Frequency: "1m", Status: domain.RunnerStatusEnabled,
-		CreatedAt: time.UnixMilli(1), UpdatedAt: time.UnixMilli(1),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	loader := &legacyRunnerProbeLoader{}
-	processor := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return time.UnixMilli(2_000) }}
-	event := PeriodReady{MessageID: "legacy-runner-ready", EventName: "event.storage.view.data.ready", SpaceID: "space", ViewID: "source", PeriodTime: time.UnixMilli(60_000)}
-	if err := processor.Handle(context.Background(), event); err != nil {
-		t.Fatalf("legacy runner event should be acknowledged without execution: %v", err)
-	}
-	if loader.calls != 0 {
-		t.Fatalf("legacy runner entered the evaluator %d times", loader.calls)
-	}
-	processed, err := repo.IsProcessed(context.Background(), event.MessageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !processed {
-		t.Fatal("legacy runner event was not acknowledged")
-	}
 }
 
 func TestIndexProvenanceIsPartial(t *testing.T) {

@@ -17,27 +17,11 @@ func instanceProto(value store.StrategyInstance) *strategypb.StrategyInstance {
 	return &strategypb.StrategyInstance{InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, InputBindingsJson: string(value.InputBindingsJSON), LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID), CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt)}
 }
 
-func runnerProto(value domain.StrategyRunner) *strategypb.StrategyRunner {
-	targets, _ := decodeTargets(value.CurrentTargetsJSON)
-	return &strategypb.StrategyRunner{RunnerId: value.ID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, ViewId: value.SourceViewID, SourceViewId: value.SourceViewID, Frequency: value.Frequency, LogicalAccountId: dereference(value.LogicalAccountID), Status: string(value.Status), CurrentTargets: targets, CommandSequence: value.CommandSequence, LastResultId: dereference(value.LastResultID), LastSuccessAt: formatOptionalTime(value.LastSuccessAt), LastError: dereference(value.LastError), CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt)}
-}
-
-func resultProto(value domain.StrategyResult) *strategypb.StrategyResult {
-	period := formatTime(value.PeriodTime)
-	return &strategypb.StrategyResult{
-		ResultId: value.ID, RunnerId: value.RunnerID, StrategyId: value.StrategyID,
-		TriggerBarTime: period, InputHash: value.InputHash, Action: string(value.Action),
-		OutputJson: string(value.TargetsJSON), CommandSequence: value.CommandSequence, CreatedAt: formatTime(value.CreatedAt),
-		PeriodTime: period, Targets: decodeTargetProto(value.TargetsJSON), DebugInfoJson: string(value.DebugInfoJSON),
-	}
-}
-
-func modernResultProto(value store.StrategyResult) *strategypb.StrategyResult {
+func resultProto(value store.StrategyResult) *strategypb.StrategyResult {
 	return &strategypb.StrategyResult{
 		ResultId: value.ResultID, InstanceId: value.InstanceID, SessionId: value.SessionID,
-		PeriodTime: formatTime(value.BarEndTime), TriggerBarTime: formatTime(value.BarEndTime),
-		ValidUntil: formatTime(value.ValidUntil), Targets: decodeTargetProto(value.TargetsJSON),
-		OutputJson:     string(value.TargetsJSON),
+		PeriodTime: formatTime(value.BarEndTime), ValidUntil: formatTime(value.ValidUntil),
+		Targets:        decodeTargetProto(value.TargetsJSON),
 		RuleStatesJson: string(value.RuleStatesJSON), PublishStatus: string(value.PublishStatus),
 		CreatedAt: formatTime(value.CreatedAt),
 	}
@@ -92,13 +76,6 @@ func dereference(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func formatOptionalTime(value *time.Time) string {
-	if value == nil {
-		return ""
-	}
-	return formatTime(*value)
 }
 
 func formatTime(value time.Time) string {

@@ -55,8 +55,8 @@ type Service struct {
 	PoolRegistry    *input.UDFRegistry
 	LogicalAccounts LogicalAccountOwner
 	Now             func() time.Time
-	runnerLocks     sync.Map
-	strategyLocks   sync.Map
+
+	strategyLocks sync.Map
 }
 
 // ReconcileDisabledInstances finishes modern disable/enable handshakes left
@@ -171,13 +171,6 @@ func isPermanentOwnerClaimError(err error) bool {
 	}
 }
 
-func (s *Service) lockRunner(runnerID string) func() {
-	value, _ := s.runnerLocks.LoadOrStore(runnerID, &sync.Mutex{})
-	lock := value.(*sync.Mutex)
-	lock.Lock()
-	return lock.Unlock
-}
-
 // lockStrategy serializes edits to a shared DSL with instance enablement. A
 // definition update is allowed only while all referencing instances are
 // disabled, so both RPCs must observe that state atomically.
@@ -257,52 +250,6 @@ func (s *Service) UpdateStrategy(ctx context.Context, req *strategypb.UpdateStra
 	return &strategypb.UpdateStrategyRsp{RetInfo: success(), Strategy: strategyProto(domain.Strategy{ID: updated.StrategyID, Name: updated.StrategyName, ManifestYAML: updated.DSLYaml, CreatedAt: updated.UpdatedAt})}, nil
 }
 
-func (s *Service) CreateRunner(ctx context.Context, req *strategypb.CreateRunnerReq) (*strategypb.CreateRunnerRsp, error) {
-	if req == nil || req.GetRunner() == nil || s.Repo == nil {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(errors.New("runner is required"))}, nil
-	}
-	value := req.GetRunner()
-	if err := validateRunnerIdentity(value); err != nil {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	scoped, scopeErr := requireSpaceID(ctx)
-	if scopeErr != nil {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(scopeErr)}, nil
-	}
-	if scoped != value.GetSpaceId() {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(errors.New("runner is outside the current space"))}, nil
-	}
-	strategy, err := s.Repo.GetStrategy(ctx, value.GetStrategyId())
-	if err != nil {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(fmt.Errorf("get strategy: %w", err))}, nil
-	}
-	compiled, err := decodeCompiled(strategy)
-	if err != nil {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	if compiled.SpaceID != value.GetSpaceId() {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(errors.New("runner space_id does not match compiled strategy"))}, nil
-	}
-	if value.GetLogicalAccountId() != "" {
-		if s.LogicalAccounts == nil {
-			return &strategypb.CreateRunnerRsp{RetInfo: invalid(errors.New("logical account owner client is unavailable"))}, nil
-		}
-		if err := s.LogicalAccounts.Validate(ctx, value.GetSpaceId(), value.GetLogicalAccountId()); err != nil {
-			return &strategypb.CreateRunnerRsp{RetInfo: invalid(err)}, nil
-		}
-	}
-	now := s.nowTime()
-	runner := domain.StrategyRunner{ID: value.GetRunnerId(), StrategyID: value.GetStrategyId(), SpaceID: value.GetSpaceId(), SourceViewID: compiled.SourceView.ID, Frequency: compiled.SourceView.Frequency, LogicalAccountID: optionalString(value.GetLogicalAccountId()), Status: domain.RunnerStatusDisabled, CreatedAt: now, UpdatedAt: now}
-	if err := s.Repo.CreateRunner(ctx, runner); err != nil {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	created, err := s.Repo.GetRunner(ctx, runner.ID)
-	if err != nil {
-		return &strategypb.CreateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.CreateRunnerRsp{RetInfo: success(), Runner: runnerProto(created)}, nil
-}
-
 func (s *Service) GetStrategy(ctx context.Context, req *strategypb.GetStrategyReq) (*strategypb.GetStrategyRsp, error) {
 	if req == nil || req.GetStrategyId() == "" || s.Repo == nil {
 		return &strategypb.GetStrategyRsp{RetInfo: invalid(errors.New("strategy_id is required"))}, nil
@@ -348,157 +295,24 @@ func (s *Service) ListStrategies(ctx context.Context, req *strategypb.ListStrate
 	return &strategypb.ListStrategiesRsp{RetInfo: success(), Strategies: items, Total: int64(len(scopedValues)), Page: int32(page), PageSize: int32(size)}, nil
 }
 
-func (s *Service) GetRunner(ctx context.Context, req *strategypb.GetRunnerReq) (*strategypb.GetRunnerRsp, error) {
-	if req == nil || req.GetRunnerId() == "" || s.Repo == nil {
-		return &strategypb.GetRunnerRsp{RetInfo: invalid(errors.New("runner_id is required"))}, nil
-	}
-	if _, err := requireSpaceID(ctx); err != nil {
-		return &strategypb.GetRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	value, err := s.Repo.GetRunner(ctx, req.GetRunnerId())
-	if err != nil {
-		return &strategypb.GetRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := ensureRunnerScope(ctx, value); err != nil {
-		return &strategypb.GetRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.GetRunnerRsp{RetInfo: success(), Runner: runnerProto(value)}, nil
-}
-
-func (s *Service) ListRunners(ctx context.Context, req *strategypb.ListRunnersReq) (*strategypb.ListRunnersRsp, error) {
-	if s.Repo == nil {
-		return &strategypb.ListRunnersRsp{RetInfo: invalid(errors.New("strategy repository is unavailable"))}, nil
-	}
-	scoped, scopeErr := requireSpaceID(ctx)
-	if scopeErr != nil {
-		return &strategypb.ListRunnersRsp{RetInfo: invalid(scopeErr)}, nil
-	}
-	filter := store.RunnerFilter{}
-	if req != nil {
-		filter.StrategyID, filter.SpaceID, filter.Status = req.GetStrategyId(), req.GetSpaceId(), domain.RunnerStatus(req.GetStatus())
-	}
-	filter.SpaceID = scoped
-	values, err := s.Repo.ListRunners(ctx, filter)
-	if err != nil {
-		return &strategypb.ListRunnersRsp{RetInfo: invalid(err)}, nil
-	}
-	page, size, start, end := pageBounds(req.GetPage(), len(values))
-	items := make([]*strategypb.StrategyRunner, 0, end-start)
-	for _, value := range values[start:end] {
-		items = append(items, runnerProto(value))
-	}
-	return &strategypb.ListRunnersRsp{RetInfo: success(), Runners: items, Total: int64(len(values)), Page: int32(page), PageSize: int32(size)}, nil
-}
-
-func (s *Service) UpdateRunner(ctx context.Context, req *strategypb.UpdateRunnerReq) (*strategypb.UpdateRunnerRsp, error) {
-	if req == nil || req.GetRunner() == nil || s.Repo == nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(errors.New("runner is required"))}, nil
-	}
-	if _, err := requireSpaceID(ctx); err != nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	value := req.GetRunner()
-	unlock := s.lockRunner(value.GetRunnerId())
-	defer unlock()
-	if err := validateRunnerIdentity(value); err != nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	current, err := s.Repo.GetRunner(ctx, value.GetRunnerId())
-	if err != nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := ensureRunnerScope(ctx, current); err != nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := s.ensureLegacyRunner(ctx, current); err != nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	if current.Status != domain.RunnerStatusDisabled {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(store.ErrRunnerEnabled)}, nil
-	}
-	if value.GetSpaceId() != current.SpaceID {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(errors.New("runner space_id is immutable"))}, nil
-	}
-	strategy, err := s.Repo.GetStrategy(ctx, value.GetStrategyId())
-	if err != nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	compiled, err := decodeCompiled(strategy)
-	if err != nil || compiled.SpaceID != current.SpaceID {
-		if err == nil {
-			err = errors.New("compiled strategy space_id does not match runner")
-		}
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	if value.GetLogicalAccountId() != "" {
-		if s.LogicalAccounts == nil {
-			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(errors.New("logical account owner client is unavailable"))}, nil
-		}
-		if err := s.LogicalAccounts.Validate(ctx, current.SpaceID, value.GetLogicalAccountId()); err != nil {
-			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-		}
-	}
-	if current.LogicalAccountID != nil && dereference(current.LogicalAccountID) != value.GetLogicalAccountId() {
-		if err := s.releaseRunner(ctx, current); err != nil {
-			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-		}
-	}
-	updated := domain.StrategyRunner{ID: current.ID, StrategyID: value.GetStrategyId(), SpaceID: current.SpaceID, SourceViewID: compiled.SourceView.ID, Frequency: compiled.SourceView.Frequency, LogicalAccountID: optionalString(value.GetLogicalAccountId()), UpdatedAt: s.nowTime()}
-	if err := s.Repo.UpdateRunner(ctx, updated); err != nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	result, err := s.Repo.GetRunner(ctx, current.ID)
-	if err != nil {
-		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.UpdateRunnerRsp{RetInfo: success(), Runner: runnerProto(result)}, nil
-}
-
-func (s *Service) SetRunnerStatus(ctx context.Context, req *strategypb.SetRunnerStatusReq) (*strategypb.SetRunnerStatusRsp, error) {
-	if req == nil || req.GetRunnerId() == "" {
-		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(errors.New("runner_id and status are required"))}, nil
-	}
-	return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(errors.New("legacy runner status API is retired; use SetStrategyInstanceEnabled"))}, nil
-}
-
 func (s *Service) ListStrategyResults(ctx context.Context, req *strategypb.ListStrategyResultsReq) (*strategypb.ListStrategyResultsRsp, error) {
 	if s.Repo == nil {
 		return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(errors.New("strategy repository is unavailable"))}, nil
 	}
-	if req == nil || (strings.TrimSpace(req.GetRunnerId()) == "" && strings.TrimSpace(req.GetInstanceId()) == "") {
-		return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(errors.New("runner_id or instance_id is required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetInstanceId()) == "" {
+		return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(errors.New("instance_id is required"))}, nil
 	}
 	if _, err := requireSpaceID(ctx); err != nil {
 		return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
 	}
-	if req.GetInstanceId() != "" {
-		instance, err := s.Repo.GetInstance(ctx, req.GetInstanceId())
-		if err != nil {
-			return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
-		}
-		if err := ensureInstanceScope(ctx, instance); err != nil {
-			return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
-		}
-		values, err := s.Repo.ListStrategyResults(ctx, instance.InstanceID, req.GetSessionId())
-		if err != nil {
-			return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
-		}
-		page, size, start, end := pageBounds(req.GetPage(), len(values))
-		items := make([]*strategypb.StrategyResult, 0, end-start)
-		for _, value := range values[start:end] {
-			items = append(items, modernResultProto(value))
-		}
-		return &strategypb.ListStrategyResultsRsp{RetInfo: success(), Results: items, Total: int64(len(values)), Page: int32(page), PageSize: int32(size)}, nil
-	}
-	filter := store.ResultFilter{RunnerID: req.GetRunnerId()}
-	runner, err := s.Repo.GetRunner(ctx, filter.RunnerID)
+	instance, err := s.Repo.GetInstance(ctx, req.GetInstanceId())
 	if err != nil {
 		return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := ensureRunnerScope(ctx, runner); err != nil {
+	if err := ensureInstanceScope(ctx, instance); err != nil {
 		return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
 	}
-	values, err := s.Repo.ListResults(ctx, filter)
+	values, err := s.Repo.ListStrategyResults(ctx, instance.InstanceID, req.GetSessionId())
 	if err != nil {
 		return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
 	}
@@ -517,70 +331,45 @@ func (s *Service) GetStrategyResult(ctx context.Context, req *strategypb.GetStra
 	if _, err := requireSpaceID(ctx); err != nil {
 		return &strategypb.GetStrategyResultRsp{RetInfo: invalid(err)}, nil
 	}
-	modern, modernErr := s.Repo.GetStrategyResult(ctx, req.GetResultId())
-	if modernErr == nil && modern.InstanceID != "" {
-		instance, instanceErr := s.Repo.GetInstance(ctx, modern.InstanceID)
-		if instanceErr != nil {
-			return &strategypb.GetStrategyResultRsp{RetInfo: invalid(instanceErr)}, nil
-		}
-		if scopeErr := ensureInstanceScope(ctx, instance); scopeErr != nil {
-			return &strategypb.GetStrategyResultRsp{RetInfo: invalid(scopeErr)}, nil
-		}
-		return &strategypb.GetStrategyResultRsp{RetInfo: success(), Result: modernResultProto(modern)}, nil
-	}
-	value, err := s.Repo.GetResult(ctx, req.GetResultId())
+	result, err := s.Repo.GetStrategyResult(ctx, req.GetResultId())
 	if err != nil {
 		return &strategypb.GetStrategyResultRsp{RetInfo: invalid(err)}, nil
 	}
-	runner, err := s.Repo.GetRunner(ctx, value.RunnerID)
+	instance, err := s.Repo.GetInstance(ctx, result.InstanceID)
 	if err != nil {
 		return &strategypb.GetStrategyResultRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := ensureRunnerScope(ctx, runner); err != nil {
+	if err := ensureInstanceScope(ctx, instance); err != nil {
 		return &strategypb.GetStrategyResultRsp{RetInfo: invalid(err)}, nil
 	}
-	return &strategypb.GetStrategyResultRsp{RetInfo: success(), Result: resultProto(value)}, nil
+	return &strategypb.GetStrategyResultRsp{RetInfo: success(), Result: resultProto(result)}, nil
 }
 
 func (s *Service) ListStrategyTargets(ctx context.Context, req *strategypb.ListStrategyTargetsReq) (*strategypb.ListStrategyTargetsRsp, error) {
-	if req == nil || (req.GetRunnerId() == "" && req.GetInstanceId() == "") || s.Repo == nil {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(errors.New("runner_id or instance_id is required"))}, nil
+	if req == nil || req.GetInstanceId() == "" || s.Repo == nil {
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(errors.New("instance_id is required"))}, nil
 	}
 	if _, err := requireSpaceID(ctx); err != nil {
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
 	}
-	if req.GetInstanceId() != "" {
-		instance, err := s.Repo.GetInstance(ctx, req.GetInstanceId())
-		if err != nil {
-			return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-		}
-		if err := ensureInstanceScope(ctx, instance); err != nil {
-			return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-		}
-		if instance.SessionID == nil {
+	instance, err := s.Repo.GetInstance(ctx, req.GetInstanceId())
+	if err != nil {
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := ensureInstanceScope(ctx, instance); err != nil {
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
+	}
+	if instance.SessionID == nil {
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: []*strategypb.InstrumentTarget{}}, nil
+	}
+	result, err := s.Repo.LatestResult(ctx, instance.InstanceID, *instance.SessionID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: []*strategypb.InstrumentTarget{}}, nil
 		}
-		result, err := s.Repo.LatestResult(ctx, instance.InstanceID, *instance.SessionID)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: []*strategypb.InstrumentTarget{}}, nil
-			}
-			return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-		}
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: decodeTargetProto(result.TargetsJSON), SessionId: result.SessionID, BarEndTime: formatTime(result.BarEndTime), ValidUntil: formatTime(result.ValidUntil)}, nil
-	}
-	runner, err := s.Repo.GetRunner(ctx, req.GetRunnerId())
-	if err != nil {
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := ensureRunnerScope(ctx, runner); err != nil {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-	}
-	targets, err := decodeTargets(runner.CurrentTargetsJSON)
-	if err != nil {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: targets, CommandSequence: runner.CommandSequence}, nil
+	return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: decodeTargetProto(result.TargetsJSON), SessionId: result.SessionID, BarEndTime: formatTime(result.BarEndTime), ValidUntil: formatTime(result.ValidUntil)}, nil
 }
 
 func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.CreateStrategyInstanceReq) (*strategypb.CreateStrategyInstanceRsp, error) {
@@ -1012,41 +801,6 @@ func decodeCompiled(strategy domain.Strategy) (compiler.CompiledStrategy, error)
 	return compiled, nil
 }
 
-func validateRunnerIdentity(value *strategypb.StrategyRunner) error {
-	if strings.TrimSpace(value.GetRunnerId()) == "" || strings.TrimSpace(value.GetStrategyId()) == "" || strings.TrimSpace(value.GetSpaceId()) == "" {
-		return errors.New("runner_id, strategy_id and space_id are required")
-	}
-	return nil
-}
-
-// ensureLegacyRunner keeps the source-compatible runner RPCs from mutating a
-// modern strategy instance. The legacy adapter has no session-aware release
-// handshake, so allowing it to operate on a modern row could clear ownership
-// without releasing the exact Trade session.
-func (s *Service) ensureLegacyRunner(ctx context.Context, runner domain.StrategyRunner) error {
-	if s == nil || s.Repo == nil {
-		return errors.New("strategy repository is unavailable")
-	}
-	strategy, err := s.Repo.GetStrategy(ctx, runner.StrategyID)
-	if err != nil {
-		return err
-	}
-	if len(strategy.CompiledJSON) == 0 {
-		return errors.New("legacy runner API cannot mutate a modern strategy instance")
-	}
-	return nil
-}
-
-func (s *Service) releaseRunner(ctx context.Context, runner domain.StrategyRunner) error {
-	if runner.LogicalAccountID == nil {
-		return nil
-	}
-	if s.LogicalAccounts == nil {
-		return errors.New("logical account owner client is unavailable")
-	}
-	return s.LogicalAccounts.Release(ctx, runner.SpaceID, *runner.LogicalAccountID, runner.ID)
-}
-
 func requestSpaceID(ctx context.Context) string {
 	for _, key := range []string{"space_id", "X-Space-Id", "x-space-id"} {
 		if value := string(trpc.GetMetaData(ctx, key)); value != "" {
@@ -1061,13 +815,6 @@ func requireSpaceID(ctx context.Context) (string, error) {
 		return value, nil
 	}
 	return "", errors.New("space_id metadata is required")
-}
-
-func ensureRunnerScope(ctx context.Context, runner domain.StrategyRunner) error {
-	if scoped := requestSpaceID(ctx); scoped != "" && scoped != runner.SpaceID {
-		return fmt.Errorf("runner %q is outside the current space", runner.ID)
-	}
-	return nil
 }
 
 func ensureInstanceScope(ctx context.Context, instance store.StrategyInstance) error {

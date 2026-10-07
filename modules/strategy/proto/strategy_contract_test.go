@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestStrategyProtoUsesRunnerAndResultVocabulary(t *testing.T) {
+func TestStrategyProtoUsesInstanceAndResultVocabulary(t *testing.T) {
 	raw, err := os.ReadFile("strategy.proto")
 	if err != nil {
 		t.Fatal(err)
@@ -15,18 +15,14 @@ func TestStrategyProtoUsesRunnerAndResultVocabulary(t *testing.T) {
 	source := string(raw)
 	for _, required := range []string{
 		"message Strategy ",
-		"message StrategyRunner ",
 		"message StrategyResult ",
 		"message InstrumentTarget ",
-		"optional int64 command_sequence",
 		"rpc CreateStrategy",
 		"rpc GetStrategy",
 		"rpc ListStrategies",
-		"rpc CreateRunner",
-		"rpc GetRunner",
-		"rpc ListRunners",
-		"rpc UpdateRunner",
-		"rpc SetRunnerStatus",
+		"message StrategyInstance ",
+		"rpc CreateStrategyInstance",
+		"rpc SetStrategyInstanceEnabled",
 		"rpc ListStrategyResults",
 		"rpc GetStrategyResult",
 		"rpc ListStrategyTargets",
