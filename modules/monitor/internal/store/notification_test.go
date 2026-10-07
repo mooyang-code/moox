@@ -55,26 +55,6 @@ func TestNotificationChannelRejectsNonGlobalAndUnknownType(t *testing.T) {
 	}
 }
 
-func TestResetLegacyMonitorTablesRebuildsWebhookAlertSchema(t *testing.T) {
-	mgr := openNotificationTestDB(t)
-	if err := mgr.db.Exec("DROP TABLE t_monitor_alert_rules").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.db.Exec(`CREATE TABLE t_monitor_alert_rules (c_id INTEGER PRIMARY KEY, c_space_id TEXT, c_rule_id TEXT, c_check_id TEXT, c_webhook_id TEXT NOT NULL)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	reset, err := mgr.ResetLegacyMonitorTables()
-	if err != nil || !reset {
-		t.Fatalf("reset = %v, err = %v", reset, err)
-	}
-	if err := mgr.ApplySchema(schema.SQL()); err != nil {
-		t.Fatal(err)
-	}
-	if mgr.db.Migrator().HasColumn(&domain.AlertRule{}, "c_webhook_id") {
-		t.Fatal("legacy webhook column still exists")
-	}
-}
-
 func TestListEnabledFiringStatesFiltersBeforeLimit(t *testing.T) {
 	repos := openNotificationTestDB(t).Repositories()
 	ctx := t.Context()

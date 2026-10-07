@@ -240,42 +240,6 @@ func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int)
 	return checks, nil
 }
 
-// PurgeRetiredChecks removes user-defined checks from a pre-greenfield database.
-// Only SysDeploy and code-owned observability checks are executable now.
-func (r *CheckRepository) PurgeRetiredChecks(ctx context.Context) (int64, error) {
-	if r == nil || r.db == nil {
-		return 0, gorm.ErrInvalidDB
-	}
-	var deleted int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var checks []domain.Check
-		if err := tx.Where("c_source NOT IN ? OR c_source IS NULL OR c_source = ''", []string{domain.CheckSourceSysDeploy, domain.CheckSourceObservability}).Find(&checks).Error; err != nil {
-			return err
-		}
-		for _, check := range checks {
-			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertState{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertEvent{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertRule{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.CheckResult{}).Error; err != nil {
-				return err
-			}
-			result := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.Check{})
-			if result.Error != nil {
-				return result.Error
-			}
-			deleted += result.RowsAffected
-		}
-		return nil
-	})
-	return deleted, err
-}
-
 func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID string, checkedAt, nextAt time.Time) error {
 	return r.db.WithContext(ctx).
 		Model(&domain.Check{}).

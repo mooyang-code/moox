@@ -127,35 +127,6 @@ func (r *AlertRepository) ListEnabledRulesForCheck(ctx context.Context, spaceID,
 	return rules, err
 }
 
-// PurgeRetiredRules removes user-created rules from a pre-greenfield database.
-func (r *AlertRepository) PurgeRetiredRules(ctx context.Context) (int64, error) {
-	if r == nil || r.db == nil {
-		return 0, gorm.ErrInvalidDB
-	}
-	var deleted int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var rules []domain.AlertRule
-		if err := tx.Where("c_rule_id NOT LIKE ?", "default:%").Find(&rules).Error; err != nil {
-			return err
-		}
-		for _, rule := range rules {
-			if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_check_id = ?", rule.SpaceID, rule.RuleID, rule.CheckID).Delete(&domain.AlertState{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_check_id = ?", rule.SpaceID, rule.RuleID, rule.CheckID).Delete(&domain.AlertEvent{}).Error; err != nil {
-				return err
-			}
-			result := tx.Where("c_space_id = ? AND c_rule_id = ?", rule.SpaceID, rule.RuleID).Delete(&domain.AlertRule{})
-			if result.Error != nil {
-				return result.Error
-			}
-			deleted += result.RowsAffected
-		}
-		return nil
-	})
-	return deleted, err
-}
-
 func (r *AlertRepository) DeleteRule(ctx context.Context, spaceID, ruleID string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rule domain.AlertRule

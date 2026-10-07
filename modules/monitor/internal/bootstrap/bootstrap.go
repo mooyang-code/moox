@@ -52,31 +52,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
 	}
-	if reset, err := mgr.ResetLegacyMonitorTables(); err != nil {
-		_ = mgr.Close()
-		return nil, fmt.Errorf("检查旧 monitor schema 失败: %w", err)
-	} else if reset {
-		if err := mgr.ApplySchema(schema.SQL()); err != nil {
-			_ = mgr.Close()
-			return nil, fmt.Errorf("重建 monitor schema 失败: %w", err)
-		}
-	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
-	// This project has not shipped a compatibility migration. Remove retired
-	// custom-check/metric storage and rows before seeding the code-owned model.
-	if err := mgr.DropRetiredTables(); err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("drop retired monitor tables: %w", err)
-	}
-	if _, err := runtime.Repositories.Alerts.PurgeRetiredRules(runtimeCtx); err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("purge retired alert rules: %w", err)
-	}
-	if _, err := runtime.Repositories.Checks.PurgeRetiredChecks(runtimeCtx); err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("purge retired monitor checks: %w", err)
-	}
 	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	if err != nil {
 		_ = runtime.Close()
