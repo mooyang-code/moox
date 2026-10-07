@@ -68,9 +68,12 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 	case "task_result_error":
 		return "采集任务的结果状态异常，请检查采集任务"
 	case "view_behind_latest_completed_period":
-		latest := report.Rule.LatestCompletedPeriod.Add(-report.StaleAge)
+		if report.OldestDataTime.IsZero() {
+			return fmt.Sprintf("采集已完成到 %s 这一期，但还没有看到该结果的数据（已等待 %s）",
+				alerttext.Time(report.Rule.LatestCompletedPeriod), alerttext.Duration(report.StaleAge))
+		}
 		return fmt.Sprintf("采集已完成到 %s 这一期，但结果只更新到 %s，落后 %s",
-			alerttext.Time(report.Rule.LatestCompletedPeriod), alerttext.Time(latest), alerttext.Duration(report.StaleAge))
+			alerttext.Time(report.Rule.LatestCompletedPeriod), alerttext.Time(report.OldestDataTime), alerttext.Duration(report.StaleAge))
 	case "business_data_stale":
 		if report.ViewStale {
 			return fmt.Sprintf("整体停止更新：最新数据停在 %s，下一根K线已逾期 %s", alerttext.Time(report.OldestDataTime), alerttext.Duration(report.StaleAge))

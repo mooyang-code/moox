@@ -61,3 +61,12 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 	require.True(t, byID["module:trade-rebalance"].success)
 	require.True(t, byID["module:factor-calculation"].success)
 }
+
+func TestKlineReasonTextForViewBehindCompletedPeriod(t *testing.T) {
+	completed := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	report := monmetrics.KlineFreshnessReport{Reason: "view_behind_latest_completed_period", StaleAge: time.Hour,
+		Rule: monmetrics.KlineFreshnessRule{LatestCompletedPeriod: completed}}
+	require.Equal(t, "采集已完成到 10-07 20:00 这一期，但还没有看到该结果的数据（已等待 1 小时）", klineReasonText(report, completed.Add(time.Hour)))
+	report.OldestDataTime = completed.Add(-time.Hour)
+	require.Equal(t, "采集已完成到 10-07 20:00 这一期，但结果只更新到 10-07 19:00，落后 1 小时", klineReasonText(report, completed.Add(time.Hour)))
+}

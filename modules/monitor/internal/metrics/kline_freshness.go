@@ -172,6 +172,11 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			report.Success = false
 			report.Reason = "view_behind_latest_completed_period"
 			report.StaleAge = lag
+			// The View's latest bar; zero when it has produced nothing yet.
+			report.OldestDataTime = summary.latest
+			if rule.ViewLastDataTime.After(report.OldestDataTime) {
+				report.OldestDataTime = rule.ViewLastDataTime
+			}
 			report.ObservedCount = summary.subjects
 			report.Diagnostic = formatKlineDiagnostic(report)
 			reports = append(reports, report)
