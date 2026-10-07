@@ -40,23 +40,6 @@ func TestSessionManager_Count_MultipleSessions_ShouldMatch(t *testing.T) {
 	assert.Equal(t, 2, mgr.Count())
 }
 
-func TestSessionManager_GetAllSessions_ShouldReturnInfo(t *testing.T) {
-	mgr := NewSessionManager()
-	now := time.Now()
-	mgr.Store("s3", &SSHConn{
-		SessionID:      "s3",
-		ClientIP:       "127.0.0.1",
-		StartTime:      now,
-		LastActiveTime: now,
-		Host:           &model.SSHHost{ID: 3, Name: "web", Address: "10.0.0.3", Port: 22, User: "ops"},
-	})
-
-	sessions := mgr.GetAllSessions()
-	require.Len(t, sessions, 1)
-	assert.Equal(t, "s3", sessions[0].SessionID)
-	assert.Equal(t, "web", sessions[0].HostName)
-}
-
 func TestSSHConn_RefreshActiveTime_ShouldUpdateTimestamp(t *testing.T) {
 	conn := &SSHConn{LastActiveTime: time.Now().Add(-time.Hour)}
 	before := conn.LastActiveTime

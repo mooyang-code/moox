@@ -169,36 +169,6 @@ message SftpDeleteRsp {
   common.RetInfo ret_info = 1;
 }
 
-// ========== SSH 会话管理 ==========
-
-// SessionInfo 在线会话信息。
-message SessionInfo {
-  string session_id = 1;
-  int32 host_id = 2;
-  string host_name = 3;
-  string address = 4;
-  int32 port = 5;
-  string user = 6;
-  string client_ip = 7;
-  string start_time = 8;
-  string last_active_time = 9;
-}
-
-message GetOnlineSessionsReq {}
-
-message GetOnlineSessionsRsp {
-  common.RetInfo ret_info = 1;
-  repeated SessionInfo sessions = 2;
-}
-
-message ForceDisconnectReq {
-  string session_id = 1;
-}
-
-message ForceDisconnectRsp {
-  common.RetInfo ret_info = 1;
-}
-
 // ========== Services ==========
 
 service Ssh {
@@ -218,8 +188,4 @@ service Ssh {
   rpc SftpList(SftpListReq) returns (SftpListRsp);
   rpc SftpMkdir(SftpMkdirReq) returns (SftpMkdirRsp);
   rpc SftpDelete(SftpDeleteReq) returns (SftpDeleteRsp);
-
-  // 会话管理
-  rpc GetOnlineSessions(GetOnlineSessionsReq) returns (GetOnlineSessionsRsp);
-  rpc ForceDisconnect(ForceDisconnectReq) returns (ForceDisconnectRsp);
 }

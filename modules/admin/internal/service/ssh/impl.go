@@ -282,16 +282,6 @@ func (s *ServiceImpl) SftpMkdir(ctx context.Context, sessionID, dirPath string) 
 	return sftpClient.MkdirAll(dirPath)
 }
 
-// ========== 会话管理 ==========
-
-func (s *ServiceImpl) GetOnlineSessions(ctx context.Context) []conn.SessionInfo {
-	return s.sessionMgr.GetAllSessions()
-}
-
-func (s *ServiceImpl) ForceDisconnect(ctx context.Context, sessionID string) error {
-	return s.DisconnectSession(ctx, sessionID)
-}
-
 // ========== 内部工具 ==========
 
 func parsePaths(dirPath string) []map[string]string {

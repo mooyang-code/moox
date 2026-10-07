@@ -63,9 +63,7 @@ func (f *fakeSSHService) SftpDownload(ctx context.Context, sessionID, filePath s
 func (f *fakeSSHService) SftpDelete(ctx context.Context, sessionID, path string) error { return nil }
 func (f *fakeSSHService) SftpMkdir(ctx context.Context, sessionID, path string) error  { return nil }
 
-func (f *fakeSSHService) GetOnlineSessions(ctx context.Context) []conn.SessionInfo    { return nil }
-func (f *fakeSSHService) ForceDisconnect(ctx context.Context, sessionID string) error { return nil }
-func (f *fakeSSHService) GetSessionManager() *conn.SessionManager                     { return conn.NewSessionManager() }
+func (f *fakeSSHService) GetSessionManager() *conn.SessionManager { return conn.NewSessionManager() }
 
 func newMockSSHService(t *testing.T) ssh.Service {
 	t.Helper()
@@ -151,13 +149,6 @@ func TestService_SftpList_MissingParams_ShouldReturnInvalidParam(t *testing.T) {
 func TestService_SftpMkdir_MissingParams_ShouldReturnInvalidParam(t *testing.T) {
 	svc := NewService(&fakeSSHService{})
 	rsp, err := svc.SftpMkdir(context.Background(), &pb.SftpMkdirReq{})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
-func TestService_ForceDisconnect_EmptySessionID_ShouldReturnInvalidParam(t *testing.T) {
-	svc := NewService(&fakeSSHService{})
-	rsp, err := svc.ForceDisconnect(context.Background(), &pb.ForceDisconnectReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }

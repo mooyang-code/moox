@@ -79,39 +79,6 @@ func (m *SessionManager) Count() int {
 	return count
 }
 
-// SessionInfo 会话简要信息（用于列表展示）
-type SessionInfo struct {
-	SessionID      string `json:"session_id"`
-	HostID         int    `json:"host_id"`
-	HostName       string `json:"host_name"`
-	Address        string `json:"address"`
-	Port           int    `json:"port"`
-	User           string `json:"user"`
-	ClientIP       string `json:"client_ip"`
-	StartTime      string `json:"start_time"`
-	LastActiveTime string `json:"last_active_time"`
-}
-
-// GetAllSessions 获取所有在线会话信息
-func (m *SessionManager) GetAllSessions() []SessionInfo {
-	var sessions []SessionInfo
-	m.Range(func(sessionID string, conn *SSHConn) bool {
-		sessions = append(sessions, SessionInfo{
-			SessionID:      conn.SessionID,
-			HostID:         conn.Host.ID,
-			HostName:       conn.Host.Name,
-			Address:        conn.Host.Address,
-			Port:           conn.Host.Port,
-			User:           conn.Host.User,
-			ClientIP:       conn.ClientIP,
-			StartTime:      conn.StartTime.Format("2006-01-02 15:04:05"),
-			LastActiveTime: conn.LastActiveTime.Format("2006-01-02 15:04:05"),
-		})
-		return true
-	})
-	return sessions
-}
-
 // StartCleanupTimer 启动定时清理不活跃会话
 func (m *SessionManager) StartCleanupTimer(interval, maxIdle time.Duration) {
 	go func() {

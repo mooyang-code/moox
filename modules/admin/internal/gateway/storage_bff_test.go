@@ -72,21 +72,18 @@ func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *test
 		service string
 		allowed bool
 	}{
-		{method: "GetDataSource", service: "storage-primary", allowed: true},
-		{method: "GetFieldGroup", service: "storage-primary", allowed: true},
 		{method: "ListTags", service: "storage-primary", allowed: true},
 		{method: "ListTagMembers", service: "storage-primary", allowed: true},
-		{method: "GetDataNode", service: "storage-primary", allowed: true},
 		{method: "ListDataNodes", service: "storage-primary", allowed: true},
 		{method: "ListViewRebuildLogs", service: "storage-primary", allowed: true},
 		{method: "RequestViewRebuild", service: "storage-primary", allowed: true},
 		{method: "UpdateDataNode", service: "storage-primary", allowed: true},
 		{method: "DeleteDataNode", service: "storage-primary", allowed: true},
-		{method: "CheckDatasetActivation", service: "storage-primary", allowed: true},
-		{method: "ActivateDataset", service: "storage-primary", allowed: true},
-		{method: "RebindDatasetDataNode", service: "storage-primary", allowed: true},
 		{method: "UpsertFields", service: "storage-primary", allowed: true},
 		{method: "SearchRecordRows", service: "storage-view", allowed: true},
+		{method: "ListDataSources", service: "storage-primary", allowed: true},
+		{method: "ActivateDataset", allowed: false},
+		{method: "ReadTimeSeriesRows", allowed: false},
 		{method: "CreateFactor", allowed: false},
 		{method: "UpdateFactor", allowed: false},
 		{method: "GetFactor", allowed: false},
@@ -117,7 +114,7 @@ func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *test
 func TestAdminRouterStorageBFFRequiresNativeGatewayConfiguration(t *testing.T) {
 	SetConfig(&Config{
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/GetDataSource"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/ListDataSources"}},
 	})
 	t.Setenv("MOOX_NODE_GATEWAY_URL", "")
 	t.Setenv("MOOX_NODE_GATEWAY_NATIVE_URL", "")
@@ -127,7 +124,7 @@ func TestAdminRouterStorageBFFRequiresNativeGatewayConfiguration(t *testing.T) {
 	provider := &fakeGatewayControlProvider{}
 	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/storage/GetDataSource", bytes.NewBufferString(`{"space_id":"space-1","data_source_id":"source-1"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/storage/ListDataSources", bytes.NewBufferString(`{"space_id":"space-1"}`))
 
 	router.ServeHTTP(recorder, req)
 
@@ -139,7 +136,7 @@ func TestAdminRouterStorageBFFRequiresNativeGatewayConfiguration(t *testing.T) {
 func TestAdminRouterStorageBFFDoesNotUseHTTPServiceDetail(t *testing.T) {
 	SetConfig(&Config{
 		CORS:    CORSConfig{AllowedOrigins: []string{"*"}},
-		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/GetDataSource"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/ListDataSources"}},
 	})
 	t.Setenv("MOOX_NODE_GATEWAY_URL", "http://127.0.0.1:1")
 	t.Setenv("MOOX_NODE_GATEWAY_NATIVE_URL", "ip://127.0.0.1:1")
@@ -149,7 +146,7 @@ func TestAdminRouterStorageBFFDoesNotUseHTTPServiceDetail(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	router := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{}, "admin-node-test").buildControlRouter()
 	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/admin/storage/GetDataSource", bytes.NewBufferString(`{"space_id":"space-1"}`)))
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/admin/storage/ListDataSources", bytes.NewBufferString(`{"space_id":"space-1"}`)))
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.NotContains(t, recorder.Body.String(), `"ret_info":{"code":0}`)
 }
