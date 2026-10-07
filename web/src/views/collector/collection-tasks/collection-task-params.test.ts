@@ -6,6 +6,8 @@ import {
   collectionSourceMatches,
   collectionTaskNameError,
   collectionTaskResultLabel,
+  inspectCollectionTaskResults,
+  tasksNeedingResultInspection,
   normalizeCollectionTask,
   parseCollectionTaskInput,
   taskFrequency
@@ -200,5 +202,37 @@ describe("collection task result label", () => {
     expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("error") })).toBe("结果异常");
     expect(collectionTaskResultLabel({ prepare_state: "error", result: result("unknown") })).toBe("结果异常");
     expect(collectionTaskResultLabel({ prepare_state: "ready", last_error: "boom", result: result("unknown") })).toBe("结果异常");
+  });
+});
+
+describe("collection task live result inspection", () => {
+  const task = (taskId: string, status: string, viewId = `view_${taskId}`) =>
+    ({ task_id: taskId, prepare_state: "ready", result: { view_id: viewId, status } }) as unknown as Parameters<typeof collectionTaskResultLabel>[0] & { task_id: string };
+
+  it("inspects only rows the list left uninspected", () => {
+    const rows = [task("a", "unknown"), task("b", "ready"), task("c", "unknown", "")];
+    expect(tasksNeedingResultInspection(rows as never).map(row => row.task_id)).toEqual(["a"]);
+  });
+
+  it("applies each live result with bounded concurrency and keeps failed rows", async () => {
+    const rows = ["a", "b", "c", "d", "e"].map(id => task(id, "unknown"));
+    let active = 0;
+    let peak = 0;
+    const applied: string[] = [];
+    await inspectCollectionTaskResults(
+      rows as never,
+      async row => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active--;
+        if (row.task_id === "c") throw new Error("Storage unavailable");
+        return { ...row, result: { view_id: row.result?.view_id, status: "ready" } } as never;
+      },
+      detail => applied.push(detail.task_id),
+      2
+    );
+    expect(peak).toBe(2);
+    expect(applied.sort()).toEqual(["a", "b", "d", "e"]);
   });
 });

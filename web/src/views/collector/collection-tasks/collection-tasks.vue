@@ -318,6 +318,7 @@ import {
   DisableTask,
   GetDataTypeConfigs,
   GetDataTypeConfigWithFields,
+  GetTaskDetail,
   GetTaskList,
   UpdateTask,
   getKlineResampleBackfillStatus,
@@ -333,6 +334,7 @@ import {
   buildCollectionTaskPayload,
   collectionSourceMatches,
   collectionTaskResultLabel,
+  inspectCollectionTaskResults,
   collectionTaskNameError,
   normalizeCollectionTask,
   parseCollectionTaskInput,
@@ -845,7 +847,30 @@ async function handleOk(): Promise<boolean> {
   }
 }
 
+// Identifies the list request whose rows the live result inspection updates;
+// answers for a page the user already left are discarded.
+let taskListGeneration = 0;
+
+async function inspectTaskListResults(spaceId: string, generation: number) {
+  await inspectCollectionTaskResults(
+    taskList.value,
+    async task => {
+      const response = await GetTaskDetail({ space_id: spaceId, task_id: task.task_id });
+      return response.task ? normalizeCollectionTask(response.task) : undefined;
+    },
+    detail => {
+      if (generation !== taskListGeneration) return;
+      const row = taskList.value.find(task => task.task_id === detail.task_id);
+      if (!row) return;
+      row.result = detail.result;
+      row.last_error = detail.last_error;
+      row.prepare_state = detail.prepare_state;
+    }
+  );
+}
+
 async function getTaskList() {
+  const generation = ++taskListGeneration;
   const spaceId = selectedSpaceId.value;
   if (!spaceId) {
     taskList.value = [];
@@ -861,8 +886,10 @@ async function getTaskList() {
       ...(filters.dataType ? { data_type: filters.dataType } : {}),
       ...(selectEnabledFilter() === undefined ? {} : { enabled: selectEnabledFilter() })
     });
+    if (generation !== taskListGeneration) return;
     taskList.value = (response.tasks || []).map(normalizeCollectionTask);
     pagination.total = Number(response.page?.total ?? taskList.value.length);
+    void inspectTaskListResults(spaceId, generation);
     const requestedTaskID = typeof route.query.taskId === "string" ? route.query.taskId : "";
     if (requestedTaskID) {
       const requestedTask = taskList.value.find(task => task.task_id === requestedTaskID);

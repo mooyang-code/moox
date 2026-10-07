@@ -350,3 +350,33 @@ export function collectionTaskResultLabel(
   if (status === "unknown" && prepareState === "ready") return "结果可用";
   return "结果准备中";
 }
+
+/** Rows whose result status the list left uninspected. */
+export function tasksNeedingResultInspection(tasks: CollectionTaskRecord[]): CollectionTaskRecord[] {
+  return tasks.filter(task => task.result?.view_id && String(task.result.status || "").toLowerCase() === "unknown");
+}
+
+/**
+ * Inspects the live result status of a page of tasks with bounded
+ * concurrency. Each detail is applied as soon as it arrives; a failed lookup
+ * leaves that row unchanged.
+ */
+export async function inspectCollectionTaskResults(
+  tasks: CollectionTaskRecord[],
+  fetchDetail: (task: CollectionTaskRecord) => Promise<CollectionTaskRecord | undefined>,
+  apply: (detail: CollectionTaskRecord) => void,
+  concurrency = 4
+): Promise<void> {
+  const queue = tasksNeedingResultInspection(tasks);
+  const worker = async () => {
+    for (let task = queue.shift(); task; task = queue.shift()) {
+      try {
+        const detail = await fetchDetail(task);
+        if (detail) apply(detail);
+      } catch {
+        // Keep the preparation-state label for this row.
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(concurrency, 1), queue.length) }, worker));
+}
