@@ -180,73 +180,6 @@ func RegisterAuthService(s server.Service, svr AuthService) {
 	}
 }
 
-// DnsService defines service.
-type DnsService interface {
-	// ListDNSRecords 列出所有 DNS 解析记录
-	ListDNSRecords(ctx context.Context, req *ListDNSRecordsReq) (*ListDNSRecordsRsp, error)
-	// GetDNSRecord 获取指定域名的 DNS 解析记录详情
-	GetDNSRecord(ctx context.Context, req *GetDNSRecordReq) (*GetDNSRecordRsp, error)
-}
-
-func DnsService_ListDNSRecords_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListDNSRecordsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DnsService).ListDNSRecords(ctx, reqbody.(*ListDNSRecordsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func DnsService_GetDNSRecord_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetDNSRecordReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DnsService).GetDNSRecord(ctx, reqbody.(*GetDNSRecordReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-// DnsServer_ServiceDesc descriptor for server.RegisterService.
-var DnsServer_ServiceDesc = server.ServiceDesc{
-	ServiceName: "trpc.moox.infra.Dns",
-	HandlerType: ((*DnsService)(nil)),
-	Methods: []server.Method{
-		{
-			Name: "/trpc.moox.infra.Dns/ListDNSRecords",
-			Func: DnsService_ListDNSRecords_Handler,
-		},
-		{
-			Name: "/trpc.moox.infra.Dns/GetDNSRecord",
-			Func: DnsService_GetDNSRecord_Handler,
-		},
-	},
-}
-
-// RegisterDnsService registers service.
-func RegisterDnsService(s server.Service, svr DnsService) {
-	if err := s.Register(&DnsServer_ServiceDesc, svr); err != nil {
-		panic(fmt.Sprintf("Dns register error:%v", err))
-	}
-}
-
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedAuth struct{}
@@ -275,18 +208,6 @@ func (s *UnimplementedAuth) GetUserInfo(ctx context.Context, req *GetUserInfoReq
 // UpdateUserInfo 更新用户信息
 func (s *UnimplementedAuth) UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq) (*UpdateUserInfoRsp, error) {
 	return nil, errors.New("rpc UpdateUserInfo of service Auth is not implemented")
-}
-
-type UnimplementedDns struct{}
-
-// ListDNSRecords 列出所有 DNS 解析记录
-func (s *UnimplementedDns) ListDNSRecords(ctx context.Context, req *ListDNSRecordsReq) (*ListDNSRecordsRsp, error) {
-	return nil, errors.New("rpc ListDNSRecords of service Dns is not implemented")
-}
-
-// GetDNSRecord 获取指定域名的 DNS 解析记录详情
-func (s *UnimplementedDns) GetDNSRecord(ctx context.Context, req *GetDNSRecordReq) (*GetDNSRecordRsp, error) {
-	return nil, errors.New("rpc GetDNSRecord of service Dns is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -434,63 +355,6 @@ func (c *AuthClientProxyImpl) UpdateUserInfo(ctx context.Context, req *UpdateUse
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateUserInfoRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-// DnsClientProxy defines service client proxy
-type DnsClientProxy interface {
-	// ListDNSRecords 列出所有 DNS 解析记录
-	ListDNSRecords(ctx context.Context, req *ListDNSRecordsReq, opts ...client.Option) (rsp *ListDNSRecordsRsp, err error)
-	// GetDNSRecord 获取指定域名的 DNS 解析记录详情
-	GetDNSRecord(ctx context.Context, req *GetDNSRecordReq, opts ...client.Option) (rsp *GetDNSRecordRsp, err error)
-}
-
-type DnsClientProxyImpl struct {
-	client client.Client
-	opts   []client.Option
-}
-
-var NewDnsClientProxy = func(opts ...client.Option) DnsClientProxy {
-	return &DnsClientProxyImpl{client: client.DefaultClient, opts: opts}
-}
-
-func (c *DnsClientProxyImpl) ListDNSRecords(ctx context.Context, req *ListDNSRecordsReq, opts ...client.Option) (*ListDNSRecordsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.Dns/ListDNSRecords")
-	msg.WithCalleeServiceName(DnsServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("infra")
-	msg.WithCalleeService("Dns")
-	msg.WithCalleeMethod("ListDNSRecords")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListDNSRecordsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DnsClientProxyImpl) GetDNSRecord(ctx context.Context, req *GetDNSRecordReq, opts ...client.Option) (*GetDNSRecordRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.Dns/GetDNSRecord")
-	msg.WithCalleeServiceName(DnsServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("infra")
-	msg.WithCalleeService("Dns")
-	msg.WithCalleeMethod("GetDNSRecord")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetDNSRecordRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

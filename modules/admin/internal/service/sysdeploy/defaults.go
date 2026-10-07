@@ -34,7 +34,6 @@ func DefaultDeployments(nodeID string) []Deployment {
 		withExtra(deployment("storage-primary", "storage", "http", defaultPublicHost, 20200, "trpc.moox.storage.Metadata", "public", "moox-storage PrimaryStore + Metadata 服务"), storagePrimaryExtraConfig()),
 		withExtra(deployment("storage-view", "storage", "http", defaultPublicHost, 20202, "trpc.moox.storage.DataView", "public", "moox-storage DataView + ViewBuilder 服务"), storageViewExtraConfig()),
 		deployment("admin_auth", "admin_rpc", "http", "127.0.0.1", 11100, "trpc.moox.infra.Auth", "internal", "认证 RPC 服务"),
-		deployment("dnsproxy", "admin_rpc", "http", "127.0.0.1", 11101, "trpc.moox.infra.Dns", "internal", "DNS 代理 RPC 服务"),
 		withExtra(deployment("moox_monitor", "monitor", "http", "127.0.0.1", 11410, "trpc.moox.monitor.MonitorMgr", "internal", "独立服务监控模块，承载 HTTP/TCP 探测和告警"), `{"health_url":"http://127.0.0.1:11409/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("eventbus", "eventbus", "http", "127.0.0.1", 11420, "trpc.moox.eventbus.EventBusMgr", "internal", "MooX 统一 NATS JetStream EventBus 服务"), `{"health_url":"http://127.0.0.1:11419/readyz","health_kind":"readiness","monitor_enabled":true,"nats_url":"tls://127.0.0.1:4222"}`),
 		withExtra(deployment("moox_gateway", "gateway", "http", "127.0.0.1", 11002, "", "internal", "节点服务网关，承载服务路由与路由表刷新"), `{"health_url":"http://127.0.0.1:11012/readyz","health_kind":"readiness","health_body_contains":"ready","monitor_enabled":true}`),

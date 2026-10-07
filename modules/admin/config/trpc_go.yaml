@@ -39,12 +39,6 @@ server:
       network: tcp
       protocol: http
       timeout: 10000
-    - name: trpc.moox.infra.Dns
-      ip: 127.0.0.1
-      port: 11101
-      network: tcp
-      protocol: http
-      timeout: 10000
     - name: trpc.moox.ops.Ssh
       ip: 127.0.0.1
       port: 11106
@@ -81,16 +75,6 @@ server:
       network: tcp
       protocol: http
       timeout: 10000
-    - name: trpc.dnsproxy.timer
-      port: 11301
-      network: "0 */5 * * * *?scheduler=dnsproxySchedule"
-      protocol: timer
-      timeout: 60000
-    - name: trpc.dnsprobe.timer
-      port: 11302
-      network: "0 */5 * * * *?scheduler=dnsProbeSchedule"
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.admin.metrics.timer
       port: 11305
       network: "*/30 * * * * *"

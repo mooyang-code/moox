@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	authcfg "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -66,15 +65,6 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 		return nil, err
 	}
 	log.Info("网关配置加载成功")
-
-	// 4. 加载并注入DNSProxy配置
-	// DNSProxy配置加载并直接注入，不保存在Config结构中
-	dnsProxyCfg, err := dnsproxy.LoadConfig()
-	if err != nil {
-		return nil, err
-	}
-	dnsproxy.SetConfig(dnsProxyCfg)
-	log.Info("DNSProxy配置加载成功")
 
 	// 5. 创建配置对象
 	cfg := &Config{

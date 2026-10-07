@@ -4,7 +4,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
-	dnsproxyrpc "github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy/rpc"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
@@ -12,6 +11,7 @@ import (
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
 	"time"
+
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -44,10 +44,6 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	// 3.1 云节点/采集管理已拆为独立服务；admin 仅通过 gateway 转发
 	// /api/admin/cloudnode/* -> moox-cloudnode
 	// /api/admin/collectmgr/* -> moox-collector
-
-	// 3.4 DNS 代理服务
-	dnsSvc := dnsproxyrpc.NewService()
-	adminpb.RegisterDnsService(s.Service("trpc.moox.infra.Dns"), dnsSvc)
 
 	// 3.5 SSH 管理服务（直连端点走 rawhandler）
 	sshSvc := sshrpc.NewService(services.SSHService)

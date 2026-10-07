@@ -2,12 +2,13 @@ package bootstrap
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
@@ -131,9 +132,6 @@ cors:
   allowed_origins:
     - "*"
 `), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "dnsproxy.yaml"), []byte(`dns:
-  local_resolve_enabled: false
-`), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "trpc_go.yaml"), []byte(`server:
   service:
     - name: trpc.moox.admin.Setup
@@ -188,9 +186,6 @@ gateway:
 cors:
   allowed_origins:
     - "*"
-`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "dnsproxy.yaml"), []byte(`dns:
-  local_resolve_enabled: false
 `), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "trpc_go.yaml"), []byte(`server:
   service:

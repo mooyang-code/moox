@@ -6,7 +6,6 @@ import (
 	"time"
 
 	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -51,20 +50,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 
 	// 4. 注册定时器
-	// DNS探测定时器（本地DNS解析）
-	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})
-	if service := s.Service("trpc.dnsproxy.timer"); service != nil {
-		timer.RegisterHandlerService(service, func(ctx context.Context) error {
-			return dnsproxy.HandleSchedule(ctx, "")
-		})
-	}
-	// DNS探测定时器（合并终端+本地DNS并探测）
-	timer.RegisterScheduler("dnsProbeSchedule", &timer.DefaultScheduler{})
-	if service := s.Service("trpc.dnsprobe.timer"); service != nil {
-		timer.RegisterHandlerService(service, func(ctx context.Context) error {
-			return dnsproxy.HandleDNSProbeSchedule(ctx, "")
-		})
-	}
+
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "应用初始化完成")

@@ -6,7 +6,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/publishlease"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
@@ -98,10 +97,6 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 		return nil, err
 	}
 	db := dbManager.GetDB()
-
-	// 初始化DNSProxy实例（全局单例，供定时器使用）
-	log.Info("[Bootstrap] 正在初始化DNSProxy实例...")
-	dnsproxy.InitDNSProxyInstance()
 
 	// 创建 SSH 服务
 	log.Info("[Bootstrap] 正在创建 SSH 服务...")

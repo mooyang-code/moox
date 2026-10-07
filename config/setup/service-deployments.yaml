@@ -373,18 +373,6 @@ services:
     status: active
     description: 认证 RPC 服务
     extra_config: {}
-  - name: dnsproxy
-    kind: admin_rpc
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11101
-    gateway_path: trpc.moox.infra.Dns
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: DNS 代理 RPC 服务
-    extra_config: {}
   - name: ssh
     kind: admin_rpc
     deployment_mode: endpoint

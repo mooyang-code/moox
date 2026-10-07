@@ -170,8 +170,6 @@ if [[ -d packages/doctor ]]; then
 fi
 
 required_timer_services=(
-	"modules/admin/config/trpc_go.yaml:trpc.dnsproxy.timer"
-	"modules/admin/config/trpc_go.yaml:trpc.dnsprobe.timer"
 	"modules/collector/config/trpc_go.yaml:trpc.moox.collector.schedule.timer"
 )
 for required in "${required_timer_services[@]}"; do

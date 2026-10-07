@@ -7,7 +7,7 @@ import "moox_common.proto";
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
 // Infra 域合并认证（Auth）与 DNS 代理（Dns）。
-// 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/{auth|dnsproxy}/{method}）调度。
+// 纯 RPC 服务，由统一 HTTP 转发层（/api/admin/auth/{method}）调度。
 //
 // 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
@@ -120,43 +120,6 @@ message UpdateUserInfoRsp {
   UserInfo user_info = 2;
 }
 
-// ========== DNS 代理（Dns）==========
-
-// IPInfo IP 地址及其延迟信息。
-message IPInfo {
-  string ip = 1;        // IP 地址
-  int64 latency = 2;    // 网络延迟（微秒）
-  bool available = 3;   // 是否可用
-}
-
-// DNSRecord DNS 解析记录。
-message DNSRecord {
-  string domain = 1;           // 解析的域名
-  repeated IPInfo ip_list = 2;  // IP 列表（按延迟排序）
-  string resolve_at = 3;       // 解析时间（RFC3339）
-  bool success = 4;            // 是否解析成功
-  string best_ips = 5;         // 所有有效 IP 按延迟排序后用 + 号连接
-}
-
-message ListDNSRecordsReq {}
-
-// ListDNSRecordsRsp 列出所有 DNS 解析记录响应。
-message ListDNSRecordsRsp {
-  common.RetInfo ret_info = 1;
-  repeated DNSRecord records = 2;
-  common.PageResult page_result = 3;
-}
-
-message GetDNSRecordReq {
-  string domain = 1;
-}
-
-// GetDNSRecordRsp 获取指定域名 DNS 解析记录详情响应。
-message GetDNSRecordRsp {
-  common.RetInfo ret_info = 1;
-  DNSRecord record = 2;
-}
-
 // ========== Services ==========
 
 service Auth {
@@ -170,11 +133,4 @@ service Auth {
   rpc GetUserInfo(GetUserInfoReq) returns (GetUserInfoRsp);
   // 更新用户信息
   rpc UpdateUserInfo(UpdateUserInfoReq) returns (UpdateUserInfoRsp);
-}
-
-service Dns {
-  // 列出所有 DNS 解析记录
-  rpc ListDNSRecords(ListDNSRecordsReq) returns (ListDNSRecordsRsp);
-  // 获取指定域名的 DNS 解析记录详情
-  rpc GetDNSRecord(GetDNSRecordReq) returns (GetDNSRecordRsp);
 }
