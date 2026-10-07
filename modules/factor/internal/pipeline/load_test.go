@@ -258,3 +258,68 @@ func TestLoadLiveOlderPeriodKeepsNewerWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, t0.Add(time.Minute), start)
 }
+
+func TestLoadLiveWarmsUpInBackground(t *testing.T) {
+	set := domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll}
+	livePlan := func(target time.Time) Plan {
+		plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
+			Set: set, Factors: []domain.FactorDef{{FactorID: "f", LookbackPeriods: 3}},
+			PeriodTime: target, Universe: []string{"BTC", "ETH"}, CarryColumns: []string{"close"},
+		})
+		require.NoError(t, err)
+		return plan
+	}
+	var mu sync.Mutex
+	var reads []storageio.ReadRequest
+	store := &fakeStore{read: func(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+		frames := emptyFrames(req)
+		for _, subject := range req.Subjects {
+			for at := req.Start; at.Before(req.End); at = at.Add(time.Minute) {
+				frames[subject].Rows = append(frames[subject].Rows, []any{at, "", 1.0})
+			}
+		}
+		mu.Lock()
+		reads = append(reads, req)
+		mu.Unlock()
+		return frames, nil
+	}}
+	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{BackgroundWarmup: true})
+	t0 := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+
+	loaded, err := runner.Load(context.Background(), livePlan(t0))
+	require.NoError(t, err)
+	require.Empty(t, loaded.Available)
+	require.Equal(t, []string{"BTC", "ETH"}, loaded.WarmingSubjects)
+	require.Equal(t, []string{"BTC", "ETH"}, loaded.FailedSubjects)
+	require.Empty(t, reads, "a warming subject is not read inside the period")
+	require.Equal(t, []WarmupStatus{{SetID: "fset", State: WarmupWarming, WarmSubjects: 0, ExpectedSubjects: 2}}, runner.WarmupStatuses())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runner.RunWarmup(ctx)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(reads) == 1
+	}, time.Second, 5*time.Millisecond)
+	require.Equal(t, t0.Add(-2*time.Minute), reads[0].Start)
+	require.Equal(t, []string{"BTC", "ETH"}, reads[0].Subjects)
+
+	t1 := t0.Add(time.Minute)
+	require.Eventually(t, func() bool {
+		loaded, err = runner.Load(context.Background(), livePlan(t1))
+		return err == nil && len(loaded.WarmingSubjects) == 0
+	}, time.Second, 5*time.Millisecond)
+	require.Equal(t, []string{"BTC", "ETH"}, loaded.Available)
+	mu.Lock()
+	last := reads[len(reads)-1]
+	mu.Unlock()
+	require.Equal(t, t1, last.Start, "a warm period reads only its own bar")
+	require.Len(t, loaded.Frames["BTC"].Rows, 3)
+	require.Equal(t, WarmupReady, runner.WarmupStatuses()[0].State)
+
+	far := t1.Add(time.Duration(liveCatchUpBars+1) * time.Minute)
+	loaded, err = runner.Load(context.Background(), livePlan(far))
+	require.NoError(t, err)
+	require.Equal(t, []string{"BTC", "ETH"}, loaded.WarmingSubjects, "a subject too far behind warms up again")
+}

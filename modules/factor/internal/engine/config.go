@@ -137,7 +137,7 @@ func Default() *Config {
 			Workers: 8, TaskTimeout: 30 * time.Second,
 		},
 		Pipeline: PipelineConfig{
-			ReadBatchSubjects: 100, ReadWorkers: 4, ReadTimeout: 20 * time.Second,
+			ReadBatchSubjects: 100, ReadWorkers: 4, ReadTimeout: 60 * time.Second,
 			WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute,
 		},
 		Recalc: RecalcConfig{ChunkPeriods: 500, PollInterval: 5 * time.Second},

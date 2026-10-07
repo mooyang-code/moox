@@ -71,16 +71,33 @@ describe("overview model", () => {
       ]
     } as EngineStatus;
     const stats = statsStrip(engine, 2);
-    expect(stats.map(item => item.key)).toEqual(["engine", "consumer", "workers", "queue", "recalc"]);
+    expect(stats.map(item => item.key)).toEqual(["engine", "consumer", "workers", "queue", "warmup", "recalc"]);
     expect(stats[0]).toMatchObject({ value: "未连接", tone: "danger" });
     expect(stats[1]).toMatchObject({ value: "运行中", tone: "ok" });
     expect(stats[2].value).toBe("1 / 4");
     expect(stats[3].value).toBe("5");
     expect(stats[3].hint).toContain("1");
-    expect(stats[4].value).toBe("2");
+    expect(stats[4]).toMatchObject({ value: "已就绪", tone: "ok" });
+    expect(stats[5].value).toBe("2");
     expect(statsStrip(null, 0)[1]).toMatchObject({ value: "-", tone: "muted" });
     expect(statsStrip(null, 0)[0]).toMatchObject({ value: "未连接", tone: "muted" });
     expect(statsStrip({ ...engine, consumer_running: false }, 0)[1]).toMatchObject({ value: "已停止", tone: "danger" });
+  });
+
+  it("warm-up card summarizes warming sets", () => {
+    const engine = {
+      consumer_running: true,
+      python_workers: 4,
+      python_busy: 0,
+      lanes: [
+        { set_id: "a", queued: 0, active: false, warmup_state: "warming", warm_subjects: 120, expected_subjects: 500 },
+        { set_id: "b", queued: 0, active: false, warmup_state: "ready", warm_subjects: 500, expected_subjects: 500 },
+        { set_id: "c", queued: 0, active: false, warmup_state: "warming" }
+      ]
+    } as EngineStatus;
+    const warmup = statsStrip(engine, 0).find(item => item.key === "warmup");
+    expect(warmup).toMatchObject({ value: "预热中", tone: "info", hint: "2 个计算任务 · 120 / 500 个对象就绪" });
+    expect(statsStrip(null, 0).find(item => item.key === "warmup")).toMatchObject({ value: "-", tone: "muted" });
   });
 
   it("engine card follows the heartbeat", () => {

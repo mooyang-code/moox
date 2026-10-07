@@ -22,7 +22,7 @@ export function cardLinks(setId: string) {
 }
 
 export interface StatItem {
-  key: "engine" | "consumer" | "workers" | "queue" | "recalc";
+  key: "engine" | "consumer" | "workers" | "queue" | "warmup" | "recalc";
   label: string;
   value: string;
   hint: string;
@@ -56,6 +56,7 @@ export function statsStrip(engine: EngineStatus | null | undefined, runningRecal
       hint: `${active} 个计算任务计算中`,
       tone: engine ? "info" : "muted"
     },
+    warmupStat(engine),
     {
       key: "recalc",
       label: "进行中补算",
@@ -64,6 +65,25 @@ export function statsStrip(engine: EngineStatus | null | undefined, runningRecal
       tone: runningRecalc ? "info" : "muted"
     }
   ];
+}
+
+/** 数据预热：引擎启动或计算任务变更后，对象载入回看窗口前的结果不对外提供。 */
+function warmupStat(engine: EngineStatus | null | undefined): StatItem {
+  const base = { key: "warmup" as const, label: "数据预热" };
+  if (!engine) return { ...base, value: "-", hint: "引擎载入回看窗口", tone: "muted" };
+  const lanes = engine.lanes ?? [];
+  const warming = lanes.filter(lane => lane.warmup_state === "warming");
+  if (!warming.length) return { ...base, value: "已就绪", hint: "因子结果正式对外提供", tone: "ok" };
+  const warm = warming.reduce((total, lane) => total + (lane.warm_subjects ?? 0), 0);
+  const expected = warming.reduce((total, lane) => total + (lane.expected_subjects ?? 0), 0);
+  return {
+    ...base,
+    value: "预热中",
+    hint: expected
+      ? `${warming.length} 个计算任务 · ${warm} / ${expected} 个对象就绪`
+      : `${warming.length} 个计算任务等待首个周期`,
+    tone: "info"
+  };
 }
 
 /** 计算引擎卡片：引擎跑在操作员本机，管理端只能通过心跳知道它的状态。 */

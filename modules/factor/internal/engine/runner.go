@@ -76,7 +76,7 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		r.metrics.Failures.WithLabelValues(setID, periodFailureFactor, periodFailureReason(err)).Inc()
 		log.ErrorContextf(ctx, "factor_period_failed set_id=%s period_time=%s error=%v", setID, periodTime.UTC().Format(time.RFC3339), err)
 	} else {
-		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d duration=%s %s", setID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, time.Since(started), stageSummary(outcome.StageDurations))
+		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d warming=%d duration=%s %s", setID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, outcome.Warming, time.Since(started), stageSummary(outcome.StageDurations))
 	}
 	return outcome, err
 }

@@ -135,6 +135,17 @@ func (c *CatalogCache) Status() CatalogStatus {
 	}
 }
 
+// SetIDs lists the enabled sets of the snapshot.
+func (c *CatalogCache) SetIDs() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	ids := make([]string, 0, len(c.sets))
+	for _, set := range c.sets {
+		ids = append(ids, set.Set.SetID)
+	}
+	return ids
+}
+
 // EnabledSetByDataset implements trigger.SetLocator from the snapshot. A set
 // whose result dataset is not ready, or a missing snapshot, is a transient
 // infrastructure condition so the event is retried rather than dropped.

@@ -128,6 +128,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	}
 	outcome = mergeOutcomeDurations(outcomeFor(plan, loaded, computation), outcome)
 	outcome.RowsWritten = rowsWritten
+	outcome.Warming = len(loaded.WarmingSubjects)
 	stage := time.Now()
 	if err := r.Report(ctx, plan, outcome); err != nil {
 		return outcome, err

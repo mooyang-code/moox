@@ -37,6 +37,7 @@ type Outcome struct {
 	FailedSubjects []string
 	Factors        []storageio.FactorState
 	RowsWritten    int
+	Warming        int
 	StageDurations map[string]time.Duration
 }
 
@@ -50,6 +51,10 @@ type Config struct {
 	WriteRetryBackoff time.Duration
 	PythonWorkers     int
 	FactorsDir        string
+	// BackgroundWarmup leaves live subjects without a loaded lookback window
+	// out of their period and loads it in RunWarmup; without it such a subject
+	// is read in full inside the period.
+	BackgroundWarmup bool
 }
 
 type Runner struct {
@@ -71,7 +76,7 @@ func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Cl
 		cfg.ReadRetries = 2
 	}
 	if cfg.ReadTimeout <= 0 {
-		cfg.ReadTimeout = 20 * time.Second
+		cfg.ReadTimeout = 60 * time.Second
 	}
 	if cfg.WriteBatchRows <= 0 {
 		cfg.WriteBatchRows = 1000
@@ -82,13 +87,16 @@ func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Cl
 	if cfg.PythonWorkers <= 0 {
 		cfg.PythonWorkers = 1
 	}
-	return &Runner{store: store, exec: exec, clock: clock, cfg: cfg, windows: newLiveWindowCache()}
+	return &Runner{store: store, exec: exec, clock: clock, cfg: cfg, windows: newLiveWindowCache(cfg.BackgroundWarmup)}
 }
 
 type LoadResult struct {
 	Frames         map[string]*storageio.Frame
 	Available      []string
 	FailedSubjects []string
+	// WarmingSubjects are left out of the period until their lookback window
+	// is loaded; they are also listed in FailedSubjects.
+	WarmingSubjects []string
 }
 
 type Computation struct {

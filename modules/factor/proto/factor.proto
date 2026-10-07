@@ -240,6 +240,12 @@ message FactorLaneStatus {
   string set_id = 1;
   int32 queued = 2;
   bool active = 3;
+  // warmup_state is warming while some subjects lack a loaded lookback window
+  // (after the engine starts or the set changes); their period results are
+  // reported as failed subjects and are not consumed by strategies.
+  string warmup_state = 4; // warming | ready
+  int32 warm_subjects = 5;
+  int32 expected_subjects = 6;
 }
 
 // EngineInfo describes the compute engine as last seen by moox-factor-mgr.

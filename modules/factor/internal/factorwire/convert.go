@@ -133,7 +133,10 @@ func RunSummaryFromPB(pb *factorpb.SetRunSummary) domain.SetRunSummary {
 func LanesToPB(lanes []domain.LaneStatus) []*factorpb.FactorLaneStatus {
 	out := make([]*factorpb.FactorLaneStatus, 0, len(lanes))
 	for _, lane := range lanes {
-		out = append(out, &factorpb.FactorLaneStatus{SetId: lane.SetID, Queued: lane.Queued, Active: lane.Active})
+		out = append(out, &factorpb.FactorLaneStatus{
+			SetId: lane.SetID, Queued: lane.Queued, Active: lane.Active,
+			WarmupState: lane.WarmupState, WarmSubjects: lane.WarmSubjects, ExpectedSubjects: lane.ExpectedSubjects,
+		})
 	}
 	return out
 }
@@ -141,7 +144,10 @@ func LanesToPB(lanes []domain.LaneStatus) []*factorpb.FactorLaneStatus {
 func LanesFromPB(lanes []*factorpb.FactorLaneStatus) []domain.LaneStatus {
 	out := make([]domain.LaneStatus, 0, len(lanes))
 	for _, lane := range lanes {
-		out = append(out, domain.LaneStatus{SetID: lane.GetSetId(), Queued: lane.GetQueued(), Active: lane.GetActive()})
+		out = append(out, domain.LaneStatus{
+			SetID: lane.GetSetId(), Queued: lane.GetQueued(), Active: lane.GetActive(),
+			WarmupState: lane.GetWarmupState(), WarmSubjects: lane.GetWarmSubjects(), ExpectedSubjects: lane.GetExpectedSubjects(),
+		})
 	}
 	return out
 }

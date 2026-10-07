@@ -88,6 +88,10 @@ export interface FactorLaneStatus {
   set_id: string;
   queued: number;
   active: boolean;
+  /** warming：部分对象尚未载入回看窗口，其结果不作为正式数据（不触发策略）。 */
+  warmup_state?: "warming" | "ready" | "";
+  warm_subjects?: number;
+  expected_subjects?: number;
 }
 
 /** moox-factor-engine as last seen by moox-factor-mgr through its heartbeat. */

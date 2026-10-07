@@ -21,11 +21,15 @@ type SetRunSummary struct {
 	FailedSubjects []string
 }
 
-// LaneStatus is the backlog of one factor set's serial lane in the engine.
+// LaneStatus is the backlog of one factor set's serial lane in the engine and
+// how much of the set's universe has its lookback window loaded.
 type LaneStatus struct {
-	SetID  string
-	Queued int32
-	Active bool
+	SetID            string
+	Queued           int32
+	Active           bool
+	WarmupState      string
+	WarmSubjects     int32
+	ExpectedSubjects int32
 }
 
 // EngineIdentity names one running moox-factor-engine process.

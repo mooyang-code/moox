@@ -39,6 +39,7 @@ type Runtime struct {
 	manager  *ManagerClient
 	catalog  *CatalogCache
 	python   *pyexec.Pool
+	pipeline *pipeline.Runner
 	runner   *measuredRunner
 	runs     *runTracker
 	monitor  *Health
@@ -117,7 +118,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
 		ReadTimeout: cfg.Pipeline.ReadTimeout, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
 		WriteRetryBackoff: 300 * time.Millisecond, PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
+		BackgroundWarmup: true,
 	})
+	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
 
 	r.syncer = &catalogSyncer{
@@ -148,6 +151,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, recalc.Run)
 	r.goRun(appCtx, r.superviseConsumer)
 	r.goRun(appCtx, r.reportMetrics)
+	r.goRun(appCtx, r.pipeline.RunWarmup)
 
 	r.health.SnapshotFunc = r.healthSnapshot
 	if err := factorhealth.Register(s.Service(healthService), r.health); err != nil {
@@ -236,6 +240,7 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 			status.Lanes = append(status.Lanes, domain.LaneStatus{SetID: lane.SetID, Queued: int32(lane.Queued), Active: lane.Active})
 		}
 	}
+	status.Lanes = withWarmup(status.Lanes, r.catalog.SetIDs(), r.pipeline.WarmupStatuses())
 	return status
 }
 
@@ -365,4 +370,35 @@ func randomHex(n int) (string, error) {
 		return "", fmt.Errorf("generate random id: %w", err)
 	}
 	return hex.EncodeToString(raw), nil
+}
+
+// withWarmup adds each enabled set's warm-up state to its lane. A set no live
+// period has reached since the engine started has nothing loaded yet, so it is
+// warming.
+func withWarmup(lanes []domain.LaneStatus, setIDs []string, warmups []pipeline.WarmupStatus) []domain.LaneStatus {
+	bySet := make(map[string]pipeline.WarmupStatus, len(warmups))
+	for _, warmup := range warmups {
+		bySet[warmup.SetID] = warmup
+	}
+	index := make(map[string]int, len(lanes))
+	for i, lane := range lanes {
+		index[lane.SetID] = i
+	}
+	for _, setID := range setIDs {
+		if _, ok := index[setID]; !ok {
+			index[setID] = len(lanes)
+			lanes = append(lanes, domain.LaneStatus{SetID: setID})
+		}
+	}
+	for setID, i := range index {
+		warmup, ok := bySet[setID]
+		if !ok {
+			lanes[i].WarmupState = pipeline.WarmupWarming
+			continue
+		}
+		lanes[i].WarmupState = warmup.State
+		lanes[i].WarmSubjects = int32(warmup.WarmSubjects)
+		lanes[i].ExpectedSubjects = int32(warmup.ExpectedSubjects)
+	}
+	return lanes
 }
