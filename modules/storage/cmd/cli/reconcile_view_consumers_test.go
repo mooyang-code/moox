@@ -9,14 +9,14 @@ import (
 
 func TestViewConsumerFilterDriftOnlyResetsChangedConsumers(t *testing.T) {
 	desired := map[string][]string{
-		"storage_view_unchanged":   {"rows.crypto.kline", "period.crypto.kline"},
-		"storage_view_factor":  {"rows.crypto.factor"},
-		"storage_view_metrics": {"rows.mooxsys.metrics"},
+		"storage_view_unchanged": {"rows.crypto.kline", "period.crypto.kline"},
+		"storage_view_factor":    {"rows.crypto.factor"},
+		"storage_view_metrics":   {"rows.mooxsys.metrics"},
 	}
 	actual := map[string]viewConsumerFilterState{
-		"storage_view_unchanged":   {Exists: true, Filters: []string{"rows.crypto.kline", "period.crypto.kline"}},
-		"storage_view_factor":  {Exists: true, Filters: []string{"rows.crypto.old-factor"}},
-		"storage_view_metrics": {},
+		"storage_view_unchanged": {Exists: true, Filters: []string{"rows.crypto.kline", "period.crypto.kline"}},
+		"storage_view_factor":    {Exists: true, Filters: []string{"rows.crypto.old-factor"}},
+		"storage_view_metrics":   {},
 	}
 
 	got := viewConsumerFilterDrift(desired, actual)

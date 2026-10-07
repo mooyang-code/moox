@@ -26,15 +26,14 @@ type RuntimeConfig struct {
 
 // StorageConfig 保存 storage.yaml 中的业务配置。
 type StorageConfig struct {
-	Root        string             `yaml:"root"`
-	Roles       []string           `yaml:"roles"`
-	Metadata    StorageMetadata    `yaml:"metadata"`
-	Devices     StorageDevices     `yaml:"devices"`
-	Primary     StoragePrimary     `yaml:"primary"`
-	EventBus    StorageEventBus    `yaml:"eventbus"`
-	View        StorageView        `yaml:"view"`
-	Maintenance StorageMaintenance `yaml:"maintenance"`
-	Health      StorageHealth      `yaml:"health"`
+	Root     string          `yaml:"root"`
+	Roles    []string        `yaml:"roles"`
+	Metadata StorageMetadata `yaml:"metadata"`
+	Devices  StorageDevices  `yaml:"devices"`
+	Primary  StoragePrimary  `yaml:"primary"`
+	EventBus StorageEventBus `yaml:"eventbus"`
+	View     StorageView     `yaml:"view"`
+	Health   StorageHealth   `yaml:"health"`
 }
 
 // StorageMetadata 保存元数据存储与种子数据配置。
@@ -477,53 +476,6 @@ type StorageRPCConfig struct {
 	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
-// StorageMaintenance owns maintenance that applies to authoritative Storage facts.
-type StorageMaintenance struct {
-	HostMetricsCleanup HostMetricsCleanupConfig `yaml:"host_metrics_cleanup"`
-}
-
-// HostMetricsCleanupConfig controls bounded deletion of expired host metric facts.
-type HostMetricsCleanupConfig struct {
-	Enabled          *bool    `yaml:"enabled"`
-	DatasetIDs       []string `yaml:"dataset_ids"`
-	MaxAge           string   `yaml:"max_age"`
-	BatchSize        uint32   `yaml:"batch_size"`
-	MaxBatchesPerRun int      `yaml:"max_batches_per_run"`
-}
-
-func (c HostMetricsCleanupConfig) IsEnabled() bool {
-	return c.Enabled == nil || *c.Enabled
-}
-
-// Validate checks cleanup bounds before the timer is registered.
-func (c HostMetricsCleanupConfig) Validate() error {
-	maxAge, err := time.ParseDuration(c.MaxAge)
-	if err != nil || maxAge <= 0 {
-		return fmt.Errorf("storage maintenance.host_metrics_cleanup.max_age must be a positive duration")
-	}
-	if c.BatchSize < 1 || c.BatchSize > 1000 {
-		return fmt.Errorf("storage maintenance.host_metrics_cleanup.batch_size must be between 1 and 1000")
-	}
-	if c.MaxBatchesPerRun <= 0 {
-		return fmt.Errorf("storage maintenance.host_metrics_cleanup.max_batches_per_run must be positive")
-	}
-	if len(c.DatasetIDs) == 0 {
-		return fmt.Errorf("storage maintenance.host_metrics_cleanup.dataset_ids must not be empty")
-	}
-	seen := make(map[string]struct{}, len(c.DatasetIDs))
-	for _, datasetID := range c.DatasetIDs {
-		datasetID = strings.TrimSpace(datasetID)
-		if datasetID == "" {
-			return fmt.Errorf("storage maintenance.host_metrics_cleanup.dataset_ids must not contain blanks")
-		}
-		if _, ok := seen[datasetID]; ok {
-			return fmt.Errorf("storage maintenance.host_metrics_cleanup.dataset_ids contains duplicate %q", datasetID)
-		}
-		seen[datasetID] = struct{}{}
-	}
-	return nil
-}
-
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string        `yaml:"service_name"`
@@ -575,23 +527,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Devices.ViewIndexRoot == "" {
 		c.Devices.ViewIndexRoot = filepath.Join(c.Root, "view-indexes")
-	}
-	cleanup := &c.Maintenance.HostMetricsCleanup
-	if cleanup.Enabled == nil {
-		enabled := true
-		cleanup.Enabled = &enabled
-	}
-	if len(cleanup.DatasetIDs) == 0 {
-		cleanup.DatasetIDs = []string{"dataset_mooxsys_host_resource", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_disk", "dataset_mooxsys_host_network"}
-	}
-	if cleanup.MaxAge == "" {
-		cleanup.MaxAge = "48h"
-	}
-	if cleanup.BatchSize == 0 {
-		cleanup.BatchSize = 1000
-	}
-	if cleanup.MaxBatchesPerRun == 0 {
-		cleanup.MaxBatchesPerRun = 10
 	}
 	if c.EventBus.MaxAckPending == 0 {
 		c.EventBus.MaxAckPending = StorageDefaultMaxAckPending

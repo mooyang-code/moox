@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	defaultRepairJSName   = events.StorageViewConsumerStream
+	defaultRepairJSName = events.StorageViewConsumerStream
 	// Each View has its own durable, so the consumer to reset is named
 	// explicitly with --consumer.
 	defaultRepairConsumer = ""

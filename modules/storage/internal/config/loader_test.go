@@ -561,53 +561,6 @@ func TestStorageViewRebuildConfigDefaults(t *testing.T) {
 	if cfg.View.MaintenanceCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 {
 		t.Fatalf("rebuild config defaults = %q/%d", cfg.View.MaintenanceCheckInterval, cfg.View.MaxViewFileBytes)
 	}
-	cleanup := cfg.Maintenance.HostMetricsCleanup
-	if !cleanup.IsEnabled() || cleanup.MaxAge != "48h" || cleanup.BatchSize != 1000 || cleanup.MaxBatchesPerRun != 10 || len(cleanup.DatasetIDs) != 4 {
-		t.Fatalf("host metrics cleanup defaults = %+v", cleanup)
-	}
-}
-
-func TestHostMetricsCleanupValidation(t *testing.T) {
-	enabled := true
-	valid := HostMetricsCleanupConfig{
-		Enabled: &enabled, DatasetIDs: []string{"dataset_mooxsys_host_resource"}, MaxAge: "48h", BatchSize: 1000, MaxBatchesPerRun: 10,
-	}
-	tests := []struct {
-		name    string
-		mutate  func(*HostMetricsCleanupConfig)
-		wantErr string
-	}{
-		{name: "valid"},
-		{name: "invalid duration", mutate: func(c *HostMetricsCleanupConfig) { c.MaxAge = "bad" }, wantErr: "max_age"},
-		{name: "non-positive duration", mutate: func(c *HostMetricsCleanupConfig) { c.MaxAge = "0s" }, wantErr: "max_age"},
-		{name: "zero batch", mutate: func(c *HostMetricsCleanupConfig) { c.BatchSize = 0 }, wantErr: "batch_size"},
-		{name: "oversized batch", mutate: func(c *HostMetricsCleanupConfig) { c.BatchSize = 1001 }, wantErr: "batch_size"},
-		{name: "zero max batches", mutate: func(c *HostMetricsCleanupConfig) { c.MaxBatchesPerRun = 0 }, wantErr: "max_batches_per_run"},
-		{name: "empty datasets", mutate: func(c *HostMetricsCleanupConfig) { c.DatasetIDs = nil }, wantErr: "dataset_ids"},
-		{name: "blank dataset", mutate: func(c *HostMetricsCleanupConfig) { c.DatasetIDs = []string{" "} }, wantErr: "dataset_ids"},
-		{name: "duplicate dataset", mutate: func(c *HostMetricsCleanupConfig) {
-			c.DatasetIDs = []string{"dataset_mooxsys_host_resource", "dataset_mooxsys_host_resource"}
-		}, wantErr: "duplicate"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := valid
-			cfg.DatasetIDs = append([]string(nil), valid.DatasetIDs...)
-			if tt.mutate != nil {
-				tt.mutate(&cfg)
-			}
-			err := cfg.Validate()
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("Validate() error = %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Validate() error = %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
 }
 
 func TestStorageViewRebuildYAMLOverrides(t *testing.T) {

@@ -20,12 +20,5 @@ storage:
     maintenance_check_interval: 1m
     rebuild_lookback: 72h
     max_view_file_bytes: 1073741824
-  maintenance:
-    host_metrics_cleanup:
-      enabled: true
-      dataset_ids: [dataset_mooxsys_host_resource, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_disk, dataset_mooxsys_host_network]
-      max_age: 48h
-      batch_size: 1000
-      max_batches_per_run: 10
   health:
     addr: ":20210"
