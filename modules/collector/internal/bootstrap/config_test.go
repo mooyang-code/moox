@@ -188,7 +188,7 @@ func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
 	assert.Equal(t, "35s", cfg.CollectorRetention.MaintenanceOffset)
 	assert.Equal(t, "20s", cfg.CollectorRetention.MaintenanceTimeout)
 	assert.Equal(t, 25000, cfg.CollectorRetention.MaxRowsPerPass)
-	assert.Equal(t, "24h", cfg.CollectorRetention.ExecutionDetailRetention)
+	assert.Equal(t, "6h", cfg.CollectorRetention.ExecutionDetailRetention)
 	assert.Equal(t, "720h", cfg.CollectorRetention.ScheduledRunSummaryRetention)
 	assert.Equal(t, "336h", cfg.CollectorRetention.TerminalRetryRetention)
 	assert.Equal(t, "720h", cfg.CollectorRetention.PeriodSnapshotRetention)

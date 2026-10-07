@@ -96,7 +96,7 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_binance_kline_1m \
+  --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
   --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
@@ -284,7 +284,7 @@ Crypto 与 StockCN 发布会先在 reservation 专属的临时 Invoke 函数上�
 `[[factors.definitions]]` 声明全局因子定义（不含数据集、频率和状态）；
 `[[factors.members]]` 用 `source_dataset_id`、`freq`、`factor_id`、`status` 把定义加入因子集，
 一个定义可加入多个因子集。旧的 `[[factors.items]]` 已移除，出现时会报错并提示拆分为 definitions 和 members。
-重复执行只补缺，不会删除配置里没有列出的定义或成员。仓库的 `moox.toml.example` 展示了 `dataset_binance_kline_1m` 上的示例。
+重复执行只补缺，不会删除配置里没有列出的定义或成员。仓库的 `moox.toml.example` 展示了币安现货、合约 1m 采集任务结果上的示例。
 重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，
 命令会停止而不会静默覆盖已有因子。
 

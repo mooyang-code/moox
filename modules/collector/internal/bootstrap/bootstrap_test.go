@@ -8,11 +8,8 @@ import (
 	"time"
 
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
-	"github.com/mooyang-code/moox/modules/collector/internal/ruleseed"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/prometheus/client_golang/prometheus"
@@ -49,66 +46,6 @@ func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *te
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.Error(t, observeCollectorMaintenanceSpace(ctx, db, m, "crypto", now, now, nil))
-}
-
-func TestEnsureTaskResultMetadataPreservesAllowlistedBinanceSharedTarget(t *testing.T) {
-	dbm, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = dbm.Close() })
-	require.NoError(t, dbm.ApplySchema(schema.AllSQL()))
-
-	tasks, err := ruleseed.LoadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
-	require.NoError(t, err)
-	sharedTasks := make([]domain.CollectionTask, 0, 2)
-	for _, task := range tasks {
-		if task.TaskID == taskresult.BinanceSpotKline1mTaskID || task.TaskID == taskresult.BinanceSwapKline1mTaskID {
-			sharedTasks = append(sharedTasks, task)
-		}
-	}
-	require.Len(t, sharedTasks, 2)
-	_, err = ruleseed.SeedMissing(context.Background(), dbm.Tasks(), sharedTasks)
-	require.NoError(t, err)
-
-	// Shared metadata belongs to setup's catalog, so startup must not call the
-	// task-result manager to create or mutate it.
-	require.NoError(t, ensureTaskResultMetadata(context.Background(), dbm.Tasks(), &taskresult.Manager{}, "storage-node-0"))
-	for _, seeded := range sharedTasks {
-		got, err := dbm.Tasks().GetByTaskID(context.Background(), seeded.SpaceID, seeded.TaskID)
-		require.NoError(t, err)
-		require.Equal(t, taskresult.BinanceKline1mDatasetID, got.ResultDatasetID)
-		require.Equal(t, taskresult.BinanceKline1mViewID, got.ResultViewID)
-		params, err := domain.ParseCollectParams(got.CollectParams, "", "", got.DataType)
-		require.NoError(t, err)
-		require.Equal(t, taskresult.BinanceKline1mDatasetID, params.TargetDatasetID)
-		require.Equal(t, "binance", params.Provider)
-		if got.TaskID == taskresult.BinanceSpotKline1mTaskID {
-			require.Equal(t, "spot", params.MarketType)
-		} else {
-			require.Equal(t, "swap", params.MarketType)
-		}
-	}
-
-}
-
-func TestBootstrapSharedTaskTargetRequiresReservedProviderAndMarketType(t *testing.T) {
-	task := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: taskresult.BinanceSpotKline1mTaskID, DataType: "kline", TagIDs: []string{"binance_spot"},
-		ResultDatasetID: taskresult.BinanceKline1mDatasetID, ResultViewID: taskresult.BinanceKline1mViewID,
-	}
-	params, err := domain.ParseCollectParams(`{"provider":"binance","market_type":"spot","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`, "", "", "kline")
-	require.NoError(t, err)
-	ids, shared, err := builtinSharedTaskResultTarget(task, params)
-	require.NoError(t, err)
-	require.True(t, shared)
-	require.Equal(t, taskresult.IDs{DatasetID: taskresult.BinanceKline1mDatasetID, ViewID: taskresult.BinanceKline1mViewID}, ids)
-
-	params.MarketType = "swap"
-	_, _, err = builtinSharedTaskResultTarget(task, params)
-	require.ErrorContains(t, err, "provider, market_type")
-	params.MarketType = "spot"
-	params.Provider = "kraken"
-	_, _, err = builtinSharedTaskResultTarget(task, params)
-	require.ErrorContains(t, err, "provider, market_type")
 }
 
 type inventoryReconcilerStub struct {

@@ -50,8 +50,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.MarketCanary.ClosedBarMinCoverage != 0.99 {
 		t.Fatalf("closed bar minimum coverage = %v", cfg.MarketCanary.ClosedBarMinCoverage)
 	}
-	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].SeriesTag == nil || *cfg.MarketCanary.Subjects[0].SeriesTag != "venue:binance|market:spot|source:spot_http" {
-		t.Fatalf("market canary default series tag = %+v", cfg.MarketCanary.Subjects)
+	if cfg.MarketCanary.Enabled || len(cfg.MarketCanary.Subjects) != 0 {
+		t.Fatalf("market canary must come from deployment config, defaults = %+v", cfg.MarketCanary)
 	}
 	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
 		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute ||
@@ -331,7 +331,8 @@ func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	cfg := Default()
 	cfg.SysDeploy.Enabled = false
-	cfg.MarketCanary.Subjects[0].SeriesTag = nil
+	cfg.MarketCanary.Enabled = true
+	cfg.MarketCanary.Subjects = []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_task", Symbol: "BTC-USDT", Frequency: "1m"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires series_tag") {
 		t.Fatalf("Validate() error = %v, want missing series_tag error", err)
 	}
@@ -393,6 +394,7 @@ func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
 func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	cfg := Default()
 	cfg.SysDeploy.Enabled = false
+	cfg.MarketCanary.Enabled = true
 	cfg.MarketCanary.ClosedBarMinCoverage = 1.01
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "closed_bar_min_coverage") {
 		t.Fatalf("Validate() error = %v, want closed_bar_min_coverage error", err)

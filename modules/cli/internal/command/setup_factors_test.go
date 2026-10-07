@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -137,41 +136,11 @@ func TestLoadSetupFactorsMatchesFrequencyExactly(t *testing.T) {
 	require.ErrorContains(t, err, "no matching set")
 }
 
-func TestLoadSetupFactorsUsesRepositoryDefaultsWhenItemsAreOmitted(t *testing.T) {
-	_, sourceFile, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	root := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../.."))
-	plan, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
+func TestLoadSetupFactorsRequiresExplicitSetup(t *testing.T) {
+	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "modules/factor/factors",
-	}}, root)
-	require.NoError(t, err)
-	require.Len(t, plan.Definitions, 4)
-	require.Equal(t, []string{"Bias", "Cci", "MinMax", "QuoteVolumeMean"}, []string{plan.Definitions[0].FactorID, plan.Definitions[1].FactorID, plan.Definitions[2].FactorID, plan.Definitions[3].FactorID})
-	require.Len(t, plan.Sets, 1)
-	require.Equal(t, "dataset_binance_kline_1m", plan.Sets[0].SourceDatasetID)
-	require.Equal(t, "fset_binance_kline_1m", plan.Sets[0].SetID)
-	require.Len(t, plan.Members, 4)
-	for _, member := range plan.Members {
-		require.Equal(t, "fset_binance_kline_1m", member.SetID)
-		require.Equal(t, "enabled", member.Status)
-	}
-}
-
-func TestDefaultSetupFactorDefinitionsMatchFactorFiles(t *testing.T) {
-	items := defaultSetupFactorDefinitions()
-	byID := make(map[string]setupconfig.FactorSetupDefinition, len(items))
-	for _, item := range items {
-		byID[item.FactorID] = item
-	}
-	ma := byID["MinMax"]
-	require.Equal(t, "MinMax.py", ma.File)
-	require.Equal(t, []string{"minmax_20"}, ma.Outputs)
-	require.Equal(t, 20, ma.LookbackPeriods)
-	sma := byID["QuoteVolumeMean"]
-	require.Equal(t, "QuoteVolumeMean.py", sma.File)
-	require.Equal(t, []string{"quote_volume_mean_20"}, sma.Outputs)
-	require.JSONEq(t, `{"window":20}`, sma.ParamsJSON)
-	require.Equal(t, 20, sma.LookbackPeriods)
+	}}, t.TempDir())
+	require.ErrorContains(t, err, "factors.enabled requires")
 }
 
 func TestLoadSetupFactorsRejectsSourcePathEscape(t *testing.T) {

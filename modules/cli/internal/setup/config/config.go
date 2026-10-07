@@ -1013,7 +1013,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.CollectorRetention.MaxRowsPerPass = 50000
 	}
 	if !md.IsDefined("collector_retention", "execution_detail_retention") {
-		out.CollectorRetention.ExecutionDetailRetention = "24h"
+		out.CollectorRetention.ExecutionDetailRetention = "6h"
 	}
 	if !md.IsDefined("collector_retention", "scheduled_run_summary_retention") {
 		out.CollectorRetention.ScheduledRunSummaryRetention = "720h"

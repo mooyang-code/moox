@@ -216,8 +216,10 @@ func Default() *Config {
 			SendTimeoutSeconds: 10,
 		},
 		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
-		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance|market:spot|source:spot_http")}}},
-		MarketHealth:  MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
+		// Canary subjects name concrete collection results, so they come only
+		// from deployment config; without subjects the canary stays disabled.
+		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
+		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
 		KlineFreshness: KlineFreshnessConfig{
 			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, CollectorGatewayURL: "http://127.0.0.1:11002", EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
@@ -288,9 +290,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MarketCanary.PostCloseDelay == 0 {
 		c.MarketCanary.PostCloseDelay = canaryDefaults.PostCloseDelay
-	}
-	if len(c.MarketCanary.Subjects) == 0 {
-		c.MarketCanary.Subjects = canaryDefaults.Subjects
 	}
 	if c.MarketCanary.ClosedBarMinCoverage == 0 {
 		c.MarketCanary.ClosedBarMinCoverage = canaryDefaults.ClosedBarMinCoverage
@@ -611,10 +610,6 @@ func (c *Config) validateKlineFreshness() error {
 		return fmt.Errorf("kline_freshness.max_subjects_per_alert must be between 1 and 100")
 	}
 	return nil
-}
-
-func stringPointer(value string) *string {
-	return &value
 }
 
 func defaultInstanceID() string {

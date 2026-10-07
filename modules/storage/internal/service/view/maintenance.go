@@ -697,10 +697,12 @@ func viewMaintenancePriority(view *pb.View) int {
 	if view == nil {
 		return 100
 	}
-	switch view.GetViewId() {
-	case "view_binance_kline_1m":
+	// Collection results feed factor computation, so they are maintained
+	// before factor results, and both before everything else.
+	switch {
+	case strings.EqualFold(strings.TrimSpace(view.GetAttributes()["view_role"]), "collection_browse"):
 		return 0
-	case "view_factor_binance_kline_1m":
+	case isFactorResultView(view):
 		return 10
 	default:
 		return 50

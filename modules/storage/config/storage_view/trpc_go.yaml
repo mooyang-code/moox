@@ -131,7 +131,6 @@ storage:
         routes:
           - space_id: crypto
             dataset_ids:
-              - dataset_binance_kline_1m
               - dataset_spot_kline_1h
               - dataset_perpetual_kline_1h
         # Full-market 1m streams need more than one worker per Dataset so
@@ -161,9 +160,8 @@ storage:
         max_retry_attempts: -1
       - id: factor
         durable: storage_view_factor
-        routes:
-          - space_id: crypto
-            dataset_ids: [dataset_factor_binance_kline_1m]
+        # Factor result Datasets are bound dynamically, one durable per result;
+        # this partition has no static routes and only supplies the template.
         # Keep delivery serialized across process restarts so an unacked row
         # cannot be overtaken by its FactorPeriodComputed marker.
         fetch_batch: 1

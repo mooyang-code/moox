@@ -58,7 +58,6 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		"view_stockcn_equity_kline_1m", "view_stockcn_index_kline_1d", "view_stockcn_bond_kline_1m",
 	}, stockCNViews)
 	require.ElementsMatch(t, []string{
-		"dataset_binance_kline_1m",
 		"dataset_spot_kline_1h",
 		"dataset_perpetual_kline_1h",
 	}, datasetIDs)
@@ -74,7 +73,6 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	require.True(t, foundStockKline)
 	require.Equal(t, []string{"1m"}, stockKline.Freqs)
 	require.ElementsMatch(t, []string{
-		"view_binance_kline_1m",
 		"view_crypto_spot_kline_1h",
 		"view_crypto_swap_kline_1h",
 	}, viewIDs)

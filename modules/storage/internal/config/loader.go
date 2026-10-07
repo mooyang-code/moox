@@ -278,11 +278,12 @@ func (v *StorageView) applyConsumerPartitionDefaults() {
 	if len(v.ConsumerPartitions) == 0 {
 		v.ConsumerPartitions = []StorageViewConsumerPartition{
 			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{
-				"dataset_binance_kline_1m",
 				"dataset_spot_kline_1h",
 				"dataset_perpetual_kline_1h",
 			}}}, FetchBatch: 32, MaxWorkers: 8, MaxAckPending: 256},
-			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_factor_binance_kline_1m"}}}, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1},
+			// Factor result Datasets are bound dynamically, one durable per result;
+			// this partition only supplies their serialized delivery template.
+			{ID: "factor", Durable: events.StorageViewFactorConsumer, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1},
 			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
 			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
 				{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_disk", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_network", "dataset_mooxsys_host_resource"}},
@@ -372,7 +373,7 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 			return fmt.Errorf("storage view consumer partition %q max_retry_attempts must be -1 or positive", id)
 		}
 		datasets := partition.Datasets()
-		if len(datasets) == 0 {
+		if len(datasets) == 0 && durable != events.StorageViewFactorConsumer {
 			return fmt.Errorf("storage view consumer partition %q has no Dataset routes", id)
 		}
 		for _, dataset := range datasets {
@@ -417,10 +418,8 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		space   string
 		dataset string
 	}{
-		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_binance_kline_1m"},
 		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_spot_kline_1h"},
 		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_perpetual_kline_1h"},
-		{name: "factor", durable: events.StorageViewFactorConsumer, space: "crypto", dataset: "dataset_factor_binance_kline_1m"},
 		{name: "metrics", durable: events.StorageViewMetricsConsumer, space: "mooxsys", dataset: "dataset_mooxsys_service_metrics"},
 	}
 	for _, required := range requiredRoutes {

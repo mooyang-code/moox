@@ -21,7 +21,7 @@ Factor 的实时入口是 durable `factor_collector_period_v1`。积压时查看
 来丢弃尚未处理的周期；恢复服务后由 JetStream 重投，历史修正通过显式 Recalc job 完成。
 
 ```bash
-moox-factor-mgr-cli recalc --set fset_binance_kline_1m \
+moox-factor-mgr-cli recalc --set fset_dasftksvjhj2jom4vhd0_1m \
   --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
 ```
 
@@ -43,7 +43,7 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_binance_kline_1m \
+  --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
@@ -69,7 +69,7 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_binance_kline_1m \
+  --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \
@@ -155,7 +155,7 @@ moox-cli storage force-rebuild-view \
 /home/<user>/moox/storage/bin/moox-storage-cli retain-views \
   --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
   --package-root /home/<user>/moox/storage \
-  --keep-view crypto/view_binance_kline_1m \
+  --keep-view crypto/view_dasftksvjhj2jom4vhd0_kline_1m \
   --keep-view crypto/view_crypto_swap_kline_1h \
   --keep-view crypto/view_crypto_spot_kline_1h \
   --keep-view mooxsys/view_mooxsys_host_resource \

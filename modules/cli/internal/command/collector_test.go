@@ -541,34 +541,6 @@ func TestCollectorEgressProbeReportKeepsOnlyDiagnosticCounts(t *testing.T) {
 	assert.Equal(t, 1, report.DistinctCount)
 }
 
-func TestCollectorSCFCanaryEventUsesSpaceSpecificMarketContract(t *testing.T) {
-	t.Setenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON", `{"data-api.binance.vision":{"ips":["203.0.113.10"]}}`)
-	stock := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "stockcn"}, Region: "ap-shanghai", StorageRPCGatewayTarget: "ip://storage:11003"}, "stock-node", "batch-stock")
-	stockData := stock["data"].(map[string]any)
-	assert.Equal(t, "dataset_stockcn_equity_kline", stockData["dataset_id"])
-	assert.Equal(t, "tencent", stockData["provider"])
-	assert.Equal(t, "stockcn_http", stockData["source_id"])
-	assert.Equal(t, "equity", stockData["market_type"])
-	assert.Equal(t, "backfill", stockData["batch_kind"])
-	stockItem := stockData["items"].([]map[string]any)[0]
-	assert.Equal(t, "600000.XSHG", stockItem["subject_id"])
-	assert.Equal(t, "sh600000", stockItem["symbol"])
-	assert.Equal(t, 1000, stockItem["bar_limit"])
-	assert.Equal(t, true, stockItem["canary"])
-	assert.NotEmpty(t, stockItem["start_time"], "the stock canary must exercise a bounded historical request")
-	start, err := time.Parse(time.RFC3339Nano, stockItem["start_time"].(string))
-	require.NoError(t, err)
-	assert.InDelta(t, float64(23*time.Hour/time.Second), time.Since(start).Seconds(), 90)
-
-	crypto := collectorSCFCanaryEvent(collectorPublishOptions{collectorPackageOptions: collectorPackageOptions{SpaceID: "crypto"}}, "crypto-node", "batch-crypto")
-	cryptoData := crypto["data"].(map[string]any)
-	assert.Equal(t, "dataset_binance_kline_1m", cryptoData["dataset_id"])
-	assert.Equal(t, "binance", cryptoData["provider"])
-	assert.Equal(t, "spot", cryptoData["market_type"])
-	assert.Equal(t, "realtime", cryptoData["batch_kind"])
-	assert.Equal(t, map[string]any{"data-api.binance.vision": map[string]any{"ips": []any{"203.0.113.10"}}}, cryptoData["dns_routes"])
-}
-
 func TestDefaultCryptoCollectorTasksSelectOnlyKlineFields(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
 	require.NoError(t, err)

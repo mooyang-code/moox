@@ -153,52 +153,6 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	require.Equal(t, uint32(2), updated.GetPage().GetTotal())
 }
 
-func TestGetTaskResultInventoryIncludesAllowlistedSharedBinanceTasks(t *testing.T) {
-	ctx := context.Background()
-	db := openCollectorTestStore(t)
-	sharedIDs := taskresult.IDs{DatasetID: taskresult.BinanceKline1mDatasetID, ViewID: taskresult.BinanceKline1mViewID}
-	for _, spec := range []struct {
-		taskID     string
-		tagID      string
-		marketType string
-	}{
-		{taskID: taskresult.BinanceSpotKline1mTaskID, tagID: "binance_spot", marketType: "spot"},
-		{taskID: taskresult.BinanceSwapKline1mTaskID, tagID: "binance_swap", marketType: "swap"},
-	} {
-		task := domain.CollectionTask{
-			SpaceID: "crypto", TaskID: spec.taskID, TaskName: spec.taskID, DataType: "kline", TagIDs: []string{spec.tagID},
-			PrepareState: domain.PrepareStateReady, Enabled: true,
-			CollectParams:   fmt.Sprintf(`{"provider":"binance","market_type":%q,"target_dataset_id":"dataset_binance_kline_1m","frequency":"1m","market_id":"crypto","output_fields":["open"]}`, spec.marketType),
-			ResultDatasetID: sharedIDs.DatasetID, ResultViewID: sharedIDs.ViewID,
-		}
-		require.NoError(t, db.Tasks().Create(ctx, task))
-	}
-	baseMetadata := &taskResultMetadataFake{
-		datasets: map[string]*storagepb.Dataset{
-			sharedIDs.DatasetID: {SpaceId: "crypto", DatasetId: sharedIDs.DatasetID, Status: "active", Attributes: map[string]string{"dataset_role": "raw_collection"}},
-		},
-		views: map[string]*storagepb.View{
-			sharedIDs.ViewID: {SpaceId: "crypto", ViewId: sharedIDs.ViewID, DatasetId: sharedIDs.DatasetID, Status: "active"},
-		},
-	}
-	metadata := &taskResultInventoryConcurrentMetadataFake{taskResultMetadataFake: baseMetadata}
-	service := &Service{
-		persistence: db, taskRepo: db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-	}
-
-	response, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10}})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
-	require.Len(t, response.GetEntries(), 2)
-	for _, entry := range response.GetEntries() {
-		require.Equal(t, sharedIDs.DatasetID, entry.GetDatasetId())
-		require.Equal(t, sharedIDs.ViewID, entry.GetViewId())
-		require.Equal(t, "ready", entry.GetResultStatus())
-		require.True(t, entry.GetOwnershipVerified(), "allowlisted shared metadata is verified by canonical identity and raw_collection role")
-	}
-}
-
 func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)

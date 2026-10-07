@@ -69,7 +69,7 @@
     <a-modal v-model:visible="visible" width="820px" :title="modalTitle" @ok="submit">
       <a-form :model="form" auto-label-width>
         <a-form-item field="view_id" label="视图ID" required>
-          <a-input v-model="form.view_id" :disabled="editing" placeholder="例如 view_binance_kline_1m" />
+          <a-input v-model="form.view_id" :disabled="editing" placeholder="例如 view_stockcn_equity_kline_1m" />
         </a-form-item>
         <a-form-item field="name" label="中文名" required>
           <a-input v-model="form.name" :max-length="10" show-word-limit placeholder="例如 K线视图" />

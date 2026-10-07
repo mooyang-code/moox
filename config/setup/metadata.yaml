@@ -330,25 +330,6 @@ datasets:
     dataset_role: raw_collection
 
 - space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  data_source_id: binance
-  name: 币安一分钟行情
-  data_kind: time_series
-  data_node_id: storage-node-0
-  keep_duration: 720h
-  freqs:
-  - 1m
-  status: active
-  # 币安现货与永续两个采集任务的标的范围；按数据集全部标的计算的因子集据此取标的。
-  subject_tags:
-  - binance_spot
-  - binance_swap
-  attributes:
-    market_id: crypto
-    storage_model: wide_common_metrics
-    owner_module: collector
-    dataset_role: raw_collection
-- space_id: crypto
   dataset_id: dataset_spot_kline_1h
   data_source_id: crypto
   name: 加密货币现货小时行情
@@ -1325,92 +1306,6 @@ fields:
   status: active
 
 dataset_columns:
-
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: open
-  origin_type: field
-  origin_id: open
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: high
-  origin_type: field
-  origin_id: high
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: low
-  origin_type: field
-  origin_id: low
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: close
-  origin_type: field
-  origin_id: close
-  value_type: double
-  required: true
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: volume
-  origin_type: field
-  origin_id: volume
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: amount
-  origin_type: field
-  origin_id: amount
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: quote_volume
-  origin_type: field
-  origin_id: quote_volume
-  value_type: double
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: trade_num
-  origin_type: field
-  origin_id: trade_num
-  value_type: int
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: raw_payload
-  origin_type: field
-  origin_id: raw_payload
-  value_type: json
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: provider_id
-  origin_type: field
-  origin_id: provider_id
-  value_type: string
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: source_id
-  origin_type: field
-  origin_id: source_id
-  value_type: string
-  status: active
-- space_id: crypto
-  dataset_id: dataset_binance_kline_1m
-  column_name: provider_symbol
-  origin_type: field
-  origin_id: provider_symbol
-  value_type: string
-  status: active
 
 - space_id: stockhk
   dataset_id: dataset_stockhk_equity_kline
@@ -2488,19 +2383,6 @@ devices:
   status: active
   
 views:
-- space_id: crypto
-  view_id: view_binance_kline_1m
-  name: 币安分钟K线
-  dataset_id: dataset_binance_kline_1m
-  grain_keys:
-  - subject_id
-  - freq
-  - data_time
-  - series_tag
-  filter_json: '{"freq":"1m"}'
-  engine: duckdb
-  keep_duration: 24h
-  status: active
 - space_id: stockcn
   view_id: view_stockcn_equity_kline_1m
   name: A股分钟行情
@@ -3018,69 +2900,6 @@ view_columns:
   sort_order: 60
   attributes:
     display_name: 成交额
-- space_id: crypto
-  view_id: view_binance_kline_1m
-  column_name: dataset_binance_kline_1m.open
-  origin_type: dataset_column
-  origin_id: dataset_binance_kline_1m.open
-  value_type: double
-  sort_order: 10
-  attributes:
-    display_name: 开盘价
-- space_id: crypto
-  view_id: view_binance_kline_1m
-  column_name: dataset_binance_kline_1m.high
-  origin_type: dataset_column
-  origin_id: dataset_binance_kline_1m.high
-  value_type: double
-  sort_order: 20
-  attributes:
-    display_name: 最高价
-- space_id: crypto
-  view_id: view_binance_kline_1m
-  column_name: dataset_binance_kline_1m.low
-  origin_type: dataset_column
-  origin_id: dataset_binance_kline_1m.low
-  value_type: double
-  sort_order: 30
-  attributes:
-    display_name: 最低价
-- space_id: crypto
-  view_id: view_binance_kline_1m
-  column_name: dataset_binance_kline_1m.close
-  origin_type: dataset_column
-  origin_id: dataset_binance_kline_1m.close
-  value_type: double
-  sort_order: 40
-  attributes:
-    display_name: 收盘价
-- space_id: crypto
-  view_id: view_binance_kline_1m
-  column_name: dataset_binance_kline_1m.volume
-  origin_type: dataset_column
-  origin_id: dataset_binance_kline_1m.volume
-  value_type: double
-  sort_order: 50
-  attributes:
-    display_name: 成交量
-- space_id: crypto
-  view_id: view_binance_kline_1m
-  column_name: dataset_binance_kline_1m.quote_volume
-  origin_type: dataset_column
-  origin_id: dataset_binance_kline_1m.quote_volume
-  value_type: double
-  sort_order: 60
-  attributes:
-    display_name: 报价量
-- space_id: crypto
-  view_id: view_binance_kline_1m
-  column_name: dataset_binance_kline_1m.trade_num
-  origin_type: dataset_column
-  origin_id: dataset_binance_kline_1m.trade_num
-  value_type: int
-  sort_order: 70
-  attributes:
-    display_name: 成交笔数
 - space_id: crypto
   view_id: view_crypto_spot_kline_1h
   column_name: dataset_spot_kline_1h.open

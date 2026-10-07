@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
@@ -30,12 +31,15 @@ func main() {
 	}
 	start := now.Add(-lookback).Format(time.RFC3339Nano)
 	end := now.Format(time.RFC3339Nano)
-	datasetID := envDefault("MOOX_SMOKE_DATASET_ID", "dataset_binance_kline_1m")
-	viewID := envDefault("MOOX_SMOKE_VIEW_ID", "view_binance_kline_1m")
+	datasetID := os.Getenv("MOOX_SMOKE_DATASET_ID")
+	viewID := os.Getenv("MOOX_SMOKE_VIEW_ID")
+	if datasetID == "" || viewID == "" {
+		panic("MOOX_SMOKE_DATASET_ID and MOOX_SMOKE_VIEW_ID are required")
+	}
 	subjectID := envDefault("MOOX_SMOKE_SUBJECT_ID", "BTC-USDT")
 	frequency := envDefault("MOOX_SMOKE_FREQUENCY", "1m")
 	spaceID := envDefault("MOOX_SMOKE_SPACE_ID", "crypto")
-	targets := smokeSeriesTargets(datasetID, frequency)
+	targets := smokeSeriesTargets(os.Getenv("MOOX_SMOKE_SERIES_TAG"))
 	primaryRows := make(map[string][]*pb.TimeSeriesRow, len(targets))
 	viewRows := make(map[string][]*pb.TimeSeriesRow, len(targets))
 	viewResponses := make(map[string]*pb.QueryTimeSeriesRowsRsp, len(targets))
@@ -103,12 +107,11 @@ type smokeSeriesTarget struct {
 	seriesTag string
 }
 
-func smokeSeriesTargets(datasetID, frequency string) []smokeSeriesTarget {
-	if datasetID == "dataset_binance_kline_1m" && frequency == "1m" {
-		return []smokeSeriesTarget{
-			{name: "spot", seriesTag: "venue:binance|market:spot|source:spot_http"},
-			{name: "swap", seriesTag: "venue:binance|market:swap|source:swap_http"},
-		}
+// smokeSeriesTargets checks one exact series when MOOX_SMOKE_SERIES_TAG is set
+// and the unscoped subject otherwise.
+func smokeSeriesTargets(seriesTag string) []smokeSeriesTarget {
+	if seriesTag = strings.TrimSpace(seriesTag); seriesTag != "" {
+		return []smokeSeriesTarget{{name: seriesTag, seriesTag: seriesTag}}
 	}
 	return []smokeSeriesTarget{{name: "unscoped"}}
 }

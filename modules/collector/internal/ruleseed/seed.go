@@ -22,17 +22,15 @@ type taskSeed struct {
 }
 
 type taskSeedItem struct {
-	SpaceID         string         `yaml:"space_id"`
-	TaskID          string         `yaml:"task_id"`
-	TaskName        string         `yaml:"task_name"`
-	Description     string         `yaml:"description"`
-	DataType        string         `yaml:"data_type"`
-	TagIDs          []string       `yaml:"tag_ids"`
-	Enabled         bool           `yaml:"enabled"`
-	Creator         string         `yaml:"creator"`
-	ResultDatasetID string         `yaml:"result_dataset_id"`
-	ResultViewID    string         `yaml:"result_view_id"`
-	CollectParams   map[string]any `yaml:"collect_params"`
+	SpaceID       string         `yaml:"space_id"`
+	TaskID        string         `yaml:"task_id"`
+	TaskName      string         `yaml:"task_name"`
+	Description   string         `yaml:"description"`
+	DataType      string         `yaml:"data_type"`
+	TagIDs        []string       `yaml:"tag_ids"`
+	Enabled       bool           `yaml:"enabled"`
+	Creator       string         `yaml:"creator"`
+	CollectParams map[string]any `yaml:"collect_params"`
 }
 
 // SeedSummary reports missing-only task application results.
@@ -135,22 +133,6 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 		frequency = params.TargetFrequency
 	}
 	resultIDs := taskresult.ResultIDsForTask(spaceID, taskID, "", dataType, frequency)
-	sharedIDs, sharedAllowed := taskresult.BuiltinSharedResultIDsForRoute(spaceID, taskID, dataType, frequency, params.Provider, params.MarketType, tagIDs)
-	configuredDatasetID := strings.TrimSpace(item.ResultDatasetID)
-	configuredViewID := strings.TrimSpace(item.ResultViewID)
-	hasConfiguredResult := configuredDatasetID != "" || configuredViewID != ""
-	switch {
-	case taskresult.IsBuiltinSharedResultTask(spaceID, taskID) && !sharedAllowed:
-		return domain.CollectionTask{}, fmt.Errorf("shared result target is only allowed for the seeded Binance kline 1m task and matching tag")
-	case sharedAllowed && !hasConfiguredResult:
-		return domain.CollectionTask{}, fmt.Errorf("result_dataset_id and result_view_id are required for the seeded Binance kline 1m task")
-	case hasConfiguredResult && !sharedAllowed:
-		return domain.CollectionTask{}, fmt.Errorf("shared result target is not allowed for task %s/%s", spaceID, taskID)
-	case sharedAllowed && (configuredDatasetID != sharedIDs.DatasetID || configuredViewID != sharedIDs.ViewID):
-		return domain.CollectionTask{}, fmt.Errorf("shared result target must be %s/%s", sharedIDs.DatasetID, sharedIDs.ViewID)
-	case sharedAllowed:
-		resultIDs = sharedIDs
-	}
 	collectParams["target_dataset_id"] = resultIDs.DatasetID
 	rawParams, err = json.Marshal(collectParams)
 	if err != nil {
@@ -166,7 +148,7 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 		}
 	} else {
 		if params.SourceID != "" || params.InstrumentType != "" || params.SeriesTag != "" || len(params.SubjectTags) > 0 ||
-			((params.Provider != "" || params.MarketType != "") && !sharedAllowed) {
+			params.Provider != "" || params.MarketType != "" {
 			return domain.CollectionTask{}, fmt.Errorf("direct collection routing and subject scope must come from tag_ids")
 		}
 		if err := params.ValidateTaskDefinition(); err != nil {

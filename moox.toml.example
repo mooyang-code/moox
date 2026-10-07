@@ -48,7 +48,7 @@ max_periods_per_series = 6000
 # 单个 View 覆盖优先级最高；省略字段继承 system_monitor 或全局值。
 [[storage_view.views]]
 space_id = "crypto"
-view_id = "view_binance_kline_1m"
+view_id = "view_dasftksvjhj2jom4vhd0_kline_1m"
 rebuild_lookback_periods = 5000
 max_periods_per_series = 6000
 
@@ -61,7 +61,7 @@ maintenance_interval = "1m"
 maintenance_offset = "35s"
 maintenance_timeout = "20s"
 max_rows_per_pass = 50000
-execution_detail_retention = "24h"
+execution_detail_retention = "6h"
 scheduled_run_summary_retention = "720h"
 terminal_retry_retention = "168h"
 period_snapshot_retention = "720h"
@@ -80,9 +80,17 @@ webhook_url = ""
 enabled = false
 source_dir = "./modules/factor/factors"
 
+# 每个采集任务独占一个结果数据集，ID 由任务 ID 派生为 dataset_<task_id>
+# （见 config/setup/collection-tasks.yaml）：下面两个分别是币安现货、合约 1m 任务的结果。
 [[factors.sets]]
 space_id = "crypto"
-source_dataset_id = "dataset_binance_kline_1m"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+subject_mode = "all"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
 subject_mode = "all"
 
@@ -130,25 +138,49 @@ lookback_periods = 20
 # market_data 包目录，但每个 Space 必须声明自己的 Market/Instrument/Source 身份。
 
 [[factors.members]]
-source_dataset_id = "dataset_binance_kline_1m"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
 factor_id = "Bias"
 status = "enabled"
 
 [[factors.members]]
-source_dataset_id = "dataset_binance_kline_1m"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
 factor_id = "Cci"
 status = "enabled"
 
 [[factors.members]]
-source_dataset_id = "dataset_binance_kline_1m"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
 factor_id = "MinMax"
 status = "enabled"
 
 [[factors.members]]
-source_dataset_id = "dataset_binance_kline_1m"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+factor_id = "QuoteVolumeMean"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+factor_id = "Bias"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+factor_id = "Cci"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+factor_id = "MinMax"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
 factor_id = "QuoteVolumeMean"
 status = "enabled"

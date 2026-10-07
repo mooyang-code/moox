@@ -33,7 +33,7 @@ collector_retention:
   maintenance_offset: 35s
   maintenance_timeout: 20s
   max_rows_per_pass: 50000
-  execution_detail_retention: 24h
+  execution_detail_retention: 6h
   scheduled_run_summary_retention: 720h
   terminal_retry_retention: 168h
   period_snapshot_retention: 720h

@@ -128,10 +128,10 @@ Token 是可逆的小写无 Padding Base32。View 使用相互独立的 durable�
 `storage_view_factor`、`storage_view_metrics`、`storage_view_misc`。每个 durable 的
 `FetchBatch`、`MaxAckPending`、worker 和精确 Dataset subject 都在
 `storage.view.consumer_partitions` 中配置；K 线分区包含
-`crypto/dataset_binance_kline_1m`、`crypto/dataset_spot_kline_1h` 和
-`crypto/dataset_perpetual_kline_1h`，因子分区包含
-`crypto/dataset_factor_binance_kline_1m`。结果 Dataset 采用 `factor_result` 角色，激活时
-自动维护默认 View。因子分区只消费结果 Dataset 的行和周期 Marker，以单并发保证写入行先于
+`crypto/dataset_spot_kline_1h` 和 `crypto/dataset_perpetual_kline_1h`。未静态路由的 Dataset
+（每个采集任务的结果、每个因子集的结果）由 View 清单协调器按 Dataset 建立独立的动态 durable：
+`dataset_factor_*` 使用因子分区的投递模板，其余使用 misc 模板；因子分区不配置静态路由，只提供模板。
+结果 Dataset 采用 `factor_result` 角色，激活时自动维护默认 View。因子结果按单并发投递，保证写入行先于
 `FactorPeriodComputed`。同一 Dataset 的 rows、Marker 和 SyncPoint
 进入同一个 Dataset 队列（队列键为 `space_id + dataset_id`），不同分区和 Dataset 可并行；同一 Dataset
 仍按事件顺序消费，避免 rows 越过 Marker。连续 rows delivery 会在不跨越 Marker 的前提下合并为一次索引写入，

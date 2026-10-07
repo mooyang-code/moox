@@ -81,43 +81,6 @@ type setupInitFactor interface {
 	Close() error
 }
 
-// These defaults define the initial factor definitions and set memberships for
-// a fresh installation.
-func defaultSetupFactorDefinitions() []setupconfig.FactorSetupDefinition {
-	return []setupconfig.FactorSetupDefinition{
-		{
-			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", Name: "Bias",
-			InputColumns: []string{"close"}, Outputs: []string{"bias_20"},
-			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-		},
-		{
-			FactorType: "timeseries", FactorID: "Cci", File: "Cci.py", Name: "Cci",
-			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"cci"},
-			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-		},
-		{
-			FactorType: "timeseries", FactorID: "MinMax", File: "MinMax.py", Name: "MinMax",
-			InputColumns: []string{"high", "low", "close"}, Outputs: []string{"minmax_20"},
-			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-		},
-		{
-			FactorType: "timeseries", FactorID: "QuoteVolumeMean", File: "QuoteVolumeMean.py", Name: "QuoteVolumeMean",
-			InputColumns: []string{"quote_volume"}, Outputs: []string{"quote_volume_mean_20"},
-			ParamsJSON: `{"window":20}`, LookbackPeriods: 20,
-		},
-	}
-}
-
-func defaultSetupFactorMembers(definitions []setupconfig.FactorSetupDefinition) []setupconfig.FactorSetupMember {
-	members := make([]setupconfig.FactorSetupMember, 0, len(definitions))
-	for _, def := range definitions {
-		members = append(members, setupconfig.FactorSetupMember{
-			SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: def.FactorID, Status: "enabled",
-		})
-	}
-	return members
-}
-
 func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFactorPlan, error) {
 	var plan setupFactorPlan
 	if !manifest.Factors.Enabled {
@@ -127,20 +90,12 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 		manifest.Factors.SourceDir = "modules/factor/factors"
 	}
 	definitions, members := manifest.Factors.Definitions, manifest.Factors.Members
+	// Factor sets name concrete source Datasets, so an enabled factor setup must
+	// declare its sets, definitions and members explicitly.
 	if len(definitions) == 0 && len(members) == 0 && len(manifest.Factors.Sets) == 0 {
-		defaultRoot := filepath.Join(repoRoot, filepath.FromSlash(manifest.Factors.SourceDir))
-		if _, err := os.Stat(defaultRoot); err != nil {
-			if os.IsNotExist(err) {
-				return plan, nil
-			}
-			return plan, fmt.Errorf("stat factors directory: %w", err)
-		}
-		definitions = defaultSetupFactorDefinitions()
-		members = defaultSetupFactorMembers(definitions)
-		manifest.Factors.Sets = []setupconfig.FactorSetupSet{{
-			SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", SubjectMode: "all",
-		}}
-	} else if len(definitions) == 0 {
+		return plan, fmt.Errorf("factors.enabled requires [[factors.sets]], [[factors.definitions]] and [[factors.members]]")
+	}
+	if len(definitions) == 0 {
 		return plan, fmt.Errorf("factors.definitions must be configured when factors.sets or factors.members is specified")
 	}
 	sets := make(map[string]setupconfig.FactorSetupSet, len(manifest.Factors.Sets))

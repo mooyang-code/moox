@@ -16,7 +16,7 @@
 
 `c_period_time` 是 unix 秒。`t_views.c_mtime` 不是 K 线水位。
 
-初始化的 Binance 1m 行情使用 `dataset_binance_kline_1m` 与 `view_binance_kline_1m`；Spot/Swap 通过 `series_tag` 区分。一个因子集的结果 View 由 Storage 按结果 Dataset 自动维护。
+每个采集任务独占一个结果 Dataset/View：初始化的 Binance 现货 1m 任务写 `dataset_dasftksvjhj2jom4vhd0` 与 `view_dasftksvjhj2jom4vhd0_kline_1m`，合约 1m 任务写 `dataset_dasftksvjhj2jom4vhdg` 与 `view_dasftksvjhj2jom4vhdg_kline_1m`。一个因子集的结果 View 由 Storage 按结果 Dataset 自动维护。
 
 ## 生产路径（不要混用）
 
@@ -54,7 +54,7 @@
 - ACK 计数不涨，但 `in_progress` 仍在增加
 - misc / metrics 分区仍在刷 `mooxsys`。分区隔离挡不住同进程的 `pending-subjects` fsync；旧二进制 from-scratch 重建 metrics 时会把 kline ACK 窗口一起占满
 
-这是 durable 被未完成投递占满，不是“没数据”。三个 crypto kline View **共用** `storage_view_kline`；Binance 现货与永续 1m 共用 `view_binance_kline_1m`。
+这是 durable 被未完成投递占满，不是“没数据”。静态路由的 crypto kline View 共用 `storage_view_kline`；采集任务结果各自使用动态的按 Dataset durable。
 
 在 Storage 主机、用**该机同版本** `moox-cli`：
 
@@ -64,7 +64,7 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_binance_kline_1m \
+  --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer storage_view_kline \
   --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
   --eventbus-url tls://<EventBus公网IP>:4222 \

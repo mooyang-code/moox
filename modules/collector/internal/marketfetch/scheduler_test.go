@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -3045,68 +3044,6 @@ func assertSchedulerRetryFailureKeepsFrequencyIdentity(t *testing.T, frequency s
 	require.NoError(t, reporter.RunOnce(ctx, "crypto"))
 	require.Len(t, storage.expectations, 1)
 	require.Equal(t, frequency, storage.expectations[0].GetFrequency(), "failure RPC identity must use the Dataset's canonical Storage frequency")
-}
-
-func TestTaskPeriodDefinitionUsesAllowlistedBinanceSharedDataset(t *testing.T) {
-	task := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "dasftksvjhj2jom4vhd0", DataType: "kline",
-		TagIDs: []string{"binance_spot"}, ResultDatasetID: "dataset_binance_kline_1m", ResultViewID: "view_binance_kline_1m",
-		CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`,
-	}
-	_, datasetID, frequencies, err := (*Scheduler)(nil).taskPeriodDefinition(task)
-	require.NoError(t, err)
-	require.Equal(t, "dataset_binance_kline_1m", datasetID)
-	require.Equal(t, []string{"1m"}, frequencies)
-
-	for name, mutate := range map[string]func(*domain.CollectionTask){
-		"target dataset": func(task *domain.CollectionTask) {
-			task.CollectParams = `{"target_dataset_id":"dataset_unapproved","frequency":"1m"}`
-		},
-		"result dataset": func(task *domain.CollectionTask) { task.ResultDatasetID = "dataset_unapproved" },
-		"result view":    func(task *domain.CollectionTask) { task.ResultViewID = "view_unapproved" },
-		"tag scope":      func(task *domain.CollectionTask) { task.TagIDs = []string{"binance_swap"} },
-		"provider": func(task *domain.CollectionTask) {
-			task.CollectParams = `{"provider":"kraken","market_type":"spot","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`
-		},
-		"market type": func(task *domain.CollectionTask) {
-			task.CollectParams = `{"provider":"binance","market_type":"swap","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`
-		},
-		"missing route": func(task *domain.CollectionTask) {
-			task.CollectParams = `{"target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`
-		},
-		"frequency": func(task *domain.CollectionTask) {
-			task.CollectParams = `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset_binance_kline_1m","frequency":"1h"}`
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			invalid := task
-			mutate(&invalid)
-			_, _, _, err := (*Scheduler)(nil).taskPeriodDefinition(invalid)
-			require.Error(t, err)
-		})
-	}
-}
-
-func TestExpandSharedTaskRejectsTagRouteThatDisagreesWithTaskIdentity(t *testing.T) {
-	scheduler := &Scheduler{
-		SpaceID:         "crypto",
-		ResolveSourceID: testSourceID,
-		Symbols: tagAwareDatasetSourceStub{
-			tags: map[string]*storagepb.Tag{
-				"binance_spot": {Source: "binance", MarketType: "swap"},
-			},
-			subjects: map[string][]domain.Subject{
-				"binance_spot": {{SubjectID: "BTC-USDT", Status: "active"}},
-			},
-		},
-	}
-	task := domain.CollectionTask{
-		SpaceID: "crypto", TaskID: taskresult.BinanceSpotKline1mTaskID, DataType: "kline", TagIDs: []string{"binance_spot"},
-		ResultDatasetID: taskresult.BinanceKline1mDatasetID, ResultViewID: taskresult.BinanceKline1mViewID,
-		CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`,
-	}
-	_, _, err := scheduler.expandTask(t.Context(), task)
-	require.ErrorContains(t, err, "tag route does not match")
 }
 
 func TestTaskPeriodDefinitionKeepsNonSharedTaskTarget(t *testing.T) {

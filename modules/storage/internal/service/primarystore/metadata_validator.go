@@ -25,6 +25,12 @@ func NewMetadataValidator(reader metadataReader) *MetadataValidator {
 	return &MetadataValidator{reader: reader}
 }
 
+// Dataset reads one Dataset definition from the same metadata view used to
+// validate writes.
+func (v *MetadataValidator) Dataset(ctx context.Context, spaceID, datasetID string) (*pb.Dataset, error) {
+	return v.snapshotReader(ctx).GetDataset(ctx, spaceID, datasetID)
+}
+
 func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUpsert) error {
 	return v.validateRow(ctx, row, v.snapshotReader(ctx))
 }

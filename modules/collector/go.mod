@@ -81,7 +81,6 @@ replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/ma
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 
-replace github.com/mooyang-code/moox/packages/marketmanifest => ../../packages/marketmanifest
 
 replace github.com/mooyang-code/moox/packages/routeprobe => ../../packages/routeprobe
 

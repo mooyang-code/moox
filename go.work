@@ -39,7 +39,6 @@ use (
 	./packages/jetstream
 	./packages/marketcalendar
 	./packages/marketfetchpb
-	./packages/marketmanifest
 	./packages/metricspb
 	./packages/notification
 	./packages/observabilitypb

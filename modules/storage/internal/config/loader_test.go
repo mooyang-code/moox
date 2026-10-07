@@ -262,7 +262,7 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 		t.Fatalf("ValidateConsumerPartitions() error = %v", err)
 	}
 	klineDatasets := partitions[0].Datasets()
-	wantKlineDatasets := []string{"dataset_binance_kline_1m", "dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}
+	wantKlineDatasets := []string{"dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}
 	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline" || len(klineDatasets) != len(wantKlineDatasets) || partitions[0].FetchBatch != 32 || partitions[0].MaxWorkers != 8 || partitions[0].MaxAckPending != 256 {
 		t.Fatalf("kline partition = %+v", partitions[0])
 	}
@@ -274,8 +274,8 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	if partitions[1].ID != "factor" || partitions[1].Durable != "storage_view_factor" || partitions[1].FetchBatch != 1 || partitions[1].MaxWorkers != 1 || partitions[1].MaxAckPending != 1 {
 		t.Fatalf("factor partition = %+v", partitions[1])
 	}
-	if got := partitions[1].Datasets(); len(got) != 1 || got[0] != (StorageViewConsumerDataset{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}) {
-		t.Fatalf("factor default routes = %+v, want crypto/dataset_factor_binance_kline_1m", got)
+	if got := partitions[1].Datasets(); len(got) != 0 {
+		t.Fatalf("factor results bind dynamically; default static routes = %+v", got)
 	}
 	if partitions[2].ID != "system_metrics" || partitions[2].Durable != "storage_view_metrics" || partitions[2].FetchBatch != 16 || partitions[2].MaxWorkers != 4 || partitions[2].MaxAckPending != 64 {
 		t.Fatalf("metrics partition = %+v", partitions[2])
@@ -325,7 +325,7 @@ func TestStorageViewConsumerPartitionsRequireSerialFactorDelivery(t *testing.T) 
 	}
 }
 
-func TestCheckedInFactorViewConsumerProfilesSerializeCanonicalRoute(t *testing.T) {
+func TestCheckedInFactorViewConsumerProfilesAreSerializedTemplates(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join("..", "..", "config", "storage.yaml"),
 		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
@@ -346,8 +346,8 @@ func TestCheckedInFactorViewConsumerProfilesSerializeCanonicalRoute(t *testing.T
 				if partition.FetchBatch != 1 || partition.MaxAckPending != 1 || partition.MaxWorkers != 1 {
 					t.Fatalf("factor broker delivery budget = fetch_batch:%d max_ack_pending:%d max_workers:%d, want all 1", partition.FetchBatch, partition.MaxAckPending, partition.MaxWorkers)
 				}
-				if got := partition.Datasets(); len(got) != 1 || got[0] != (StorageViewConsumerDataset{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}) {
-					t.Fatalf("factor routes = %+v, want crypto/dataset_factor_binance_kline_1m", got)
+				if got := partition.Datasets(); len(got) != 0 {
+					t.Fatalf("factor results bind dynamically; static routes = %+v", got)
 				}
 				return
 			}
@@ -360,28 +360,9 @@ func TestStorageViewConsumerPartitionsRequireAllCryptoKlineRoutes(t *testing.T) 
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
 	kline := &cfg.Storage.View.ConsumerPartitions[0]
-	kline.Routes[0].DatasetIDs = []string{
-		"dataset_binance_kline_1m",
-		"dataset_perpetual_kline_1h",
-	}
+	kline.Routes[0].DatasetIDs = []string{"dataset_perpetual_kline_1h"}
 	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err == nil || !strings.Contains(err.Error(), "dataset_spot_kline_1h") {
 		t.Fatalf("missing hourly kline route was accepted or wrong error: %v", err)
-	}
-}
-
-func TestStorageViewConsumerPartitionsRequireSharedBinanceKlineRoute(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.ApplyDefaults()
-	kline := &cfg.Storage.View.ConsumerPartitions[0]
-	ids := make([]string, 0, len(kline.Routes[0].DatasetIDs))
-	for _, id := range kline.Routes[0].DatasetIDs {
-		if id != "dataset_binance_kline_1m" {
-			ids = append(ids, id)
-		}
-	}
-	kline.Routes[0].DatasetIDs = ids
-	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err == nil || !strings.Contains(err.Error(), "dataset_binance_kline_1m") {
-		t.Fatalf("missing shared Binance kline route was accepted or wrong error: %v", err)
 	}
 }
 

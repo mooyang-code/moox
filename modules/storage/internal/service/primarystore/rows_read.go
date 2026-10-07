@@ -20,7 +20,7 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	if strings.EqualFold(strings.TrimSpace(req.GetAuthInfo().GetAppId()), mooxSkillAppID) {
-		if err := validateMooxSkillReadRequest(req); err != nil {
+		if err := s.validateMooxSkillReadRequest(ctx, req); err != nil {
 			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 		}
 	}
@@ -94,8 +94,22 @@ func validateFactorHistoryRead(req *pb.ReadTimeSeriesRowsReq) error {
 	return nil
 }
 
-func validateMooxSkillReadRequest(req *pb.ReadTimeSeriesRowsReq) error {
-	if !isMooxSkillKlineDataset(req.GetSpaceId(), req.GetDatasetId()) {
+// datasetMetadataReader is implemented by MetadataValidator.
+type datasetMetadataReader interface {
+	Dataset(context.Context, string, string) (*pb.Dataset, error)
+}
+
+// validateMooxSkillReadRequest limits the moox-skill principal to bounded
+// newest-first reads of Collector collection results. The scope comes from
+// Dataset metadata, so every collection task result is readable without
+// naming individual Datasets.
+func (s *Service) validateMooxSkillReadRequest(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) error {
+	reader, ok := s.validate.(datasetMetadataReader)
+	if !ok {
+		return errors.New("moox-skill read scope cannot be verified")
+	}
+	dataset, err := reader.Dataset(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil || !isCollectionResultDataset(dataset) {
 		return errors.New("moox-skill read scope is invalid")
 	}
 	if len(req.GetKeys()) > 0 || req.GetOrder() != pb.SortOrder_SORT_ORDER_DESC {
@@ -108,25 +122,19 @@ func validateMooxSkillReadRequest(req *pb.ReadTimeSeriesRowsReq) error {
 		return errors.New("moox-skill selectors are required")
 	}
 	for _, selector := range req.GetSelectors() {
-		if selector == nil || selector.GetSpaceId() != req.GetSpaceId() || selector.GetDatasetId() != req.GetDatasetId() || !isMooxSkillKlineSelector(selector) {
+		if selector == nil || strings.TrimSpace(selector.GetSeriesTag()) == "" || selector.GetSpaceId() != req.GetSpaceId() || selector.GetDatasetId() != req.GetDatasetId() {
 			return errors.New("moox-skill selector scope is invalid")
 		}
 	}
 	return nil
 }
 
-func isMooxSkillKlineDataset(spaceID, datasetID string) bool {
-	return spaceID == "crypto" && datasetID == "dataset_binance_kline_1m" ||
-		spaceID == "stockcn" && datasetID == "dataset_stockcn_equity_kline"
-}
-
-func isMooxSkillKlineSelector(selector *pb.TimeSeriesSelector) bool {
-	if selector.SeriesTag == nil || selector.GetFreq() != "1m" {
+func isCollectionResultDataset(dataset *pb.Dataset) bool {
+	if dataset == nil {
 		return false
 	}
-	return selector.GetSpaceId() == "crypto" && selector.GetDatasetId() == "dataset_binance_kline_1m" &&
-		(selector.GetSeriesTag() == "venue:binance|market:spot|source:spot_http" || selector.GetSeriesTag() == "venue:binance|market:swap|source:swap_http") ||
-		selector.GetSpaceId() == "stockcn" && selector.GetDatasetId() == "dataset_stockcn_equity_kline" && selector.GetSeriesTag() == stockCNDefaultSeriesTag
+	attrs := dataset.GetAttributes()
+	return strings.TrimSpace(attrs["owner_module"]) == "collector" && strings.TrimSpace(attrs["dataset_role"]) == "raw_collection"
 }
 
 func (s *Service) readHistoricalTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {

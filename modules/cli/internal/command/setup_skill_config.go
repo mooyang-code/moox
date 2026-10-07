@@ -133,7 +133,11 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 		}
 		return readRemoteSkillGatewaySnapshot(ctx, transport, root)
 	}
-	return buildSkillDataAccessConfig(ctx, snapshot, space, readGateway, read)
+	klineDatasets, err := loadSkillKlineDatasets(filepath.Join(defaultSetupConfigDir, "collection-tasks.yaml"))
+	if err != nil {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
+	}
+	return buildSkillDataAccessConfig(ctx, snapshot, space, readGateway, read, klineDatasets)
 }
 
 func buildSkillDataAccessConfig(
@@ -142,8 +146,9 @@ func buildSkillDataAccessConfig(
 	spaceID string,
 	readGateway skillGatewaySnapshotReader,
 	read skillSecretReader,
+	klineDatasets skillKlineDatasets,
 ) (dataAccessConfig, error) {
-	if snapshot == nil || readGateway == nil || read == nil {
+	if snapshot == nil || readGateway == nil || read == nil || klineDatasets == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
@@ -216,6 +221,17 @@ func buildSkillDataAccessConfig(
 	storageAppKey := security.HMACSHA256Hex(primarySecret, []byte(skillConfigIdentity))
 	primarySecret = ""
 	storageRaw = nil
+	binanceKline, err := klineDatasets("crypto", "binance_spot")
+	if err != nil {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
+	}
+	if len(binanceKline) == 0 {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: no Binance spot kline collection task is configured")
+	}
+	stockKline, err := klineDatasets("stockcn", "cn_a_share")
+	if err != nil {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
+	}
 
 	return dataAccessConfig{
 		Version: 1,
@@ -230,7 +246,7 @@ func buildSkillDataAccessConfig(
 				Exchanges: map[string]exchangeConfig{
 					"binance": {
 						SpaceID: "crypto", SeriesTag: "venue:binance|market:spot|source:spot_http",
-						KlineDatasets: map[string]string{"1m": "dataset_binance_kline_1m"},
+						KlineDatasets: binanceKline,
 					},
 				},
 			},
@@ -239,7 +255,7 @@ func buildSkillDataAccessConfig(
 				Exchanges: map[string]exchangeConfig{
 					"stockcn": {
 						SpaceID: "stockcn", SeriesTag: "default",
-						KlineDatasets: map[string]string{"1m": "dataset_stockcn_equity_kline"},
+						KlineDatasets: stockKline,
 					},
 				},
 			},

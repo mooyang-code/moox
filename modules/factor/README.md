@@ -44,7 +44,7 @@ numpy. It is deployed by `scripts/deploy/deploy-moox.sh --profile control`.
 
 ```bash
 moox-factor-engine serve -config config/engine.yaml -conf config/trpc_go.engine.yaml
-moox-factor-engine run-once --set fset_binance_kline_1m --period 2026-10-04T00:10:00Z
+moox-factor-engine run-once --set fset_dasftksvjhj2jom4vhd0_1m --period 2026-10-04T00:10:00Z
 moox-factor-engine health            # signed /readyz with MOOX_HEALTH_AUTH_*
 ```
 
@@ -57,7 +57,7 @@ moox-factor-engine health            # signed /readyz with MOOX_HEALTH_AUTH_*
   --file ./factors/Bias.py --factor-id bias \
   --inputs close --outputs bias_20 --params '{"window":20}' --lookback 20
 ./bin/moox-factor-mgr-cli import-catalog --dir ./factors
-./bin/moox-factor-mgr-cli recalc --set fset_binance_kline_1m \
+./bin/moox-factor-mgr-cli recalc --set fset_dasftksvjhj2jom4vhd0_1m \
   --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
 ./bin/moox-factor-mgr-cli status --target ip://127.0.0.1:11403
 ```

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,74 +58,6 @@ func TestCollectionTaskRepository_CRUD(t *testing.T) {
 	enabled, err := repo.ListEnabled(ctx, "crypto")
 	require.NoError(t, err)
 	assert.Len(t, enabled, 0)
-}
-
-func TestCollectionTaskRepositoryAllowsOnlyAllowlistedSharedResultIdentity(t *testing.T) {
-	s := newCollectorStore(t)
-	repo := s.Tasks()
-	ctx := context.Background()
-	sharedTask := func(taskID, name, tagID string) domain.CollectionTask {
-		marketType := "spot"
-		if tagID == "binance_swap" {
-			marketType = "swap"
-		}
-		return domain.CollectionTask{
-			SpaceID: "crypto", TaskID: taskID, TaskName: name, DataType: "kline", TagIDs: []string{tagID},
-			CollectParams:   fmt.Sprintf(`{"provider":"binance","market_type":%q,"target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`, marketType),
-			ResultDatasetID: taskresult.BinanceKline1mDatasetID, ResultViewID: taskresult.BinanceKline1mViewID,
-			Enabled: true,
-		}
-	}
-	require.NoError(t, repo.Create(ctx, sharedTask(taskresult.BinanceSpotKline1mTaskID, "Binance spot 1m", "binance_spot")))
-	require.NoError(t, repo.Create(ctx, sharedTask(taskresult.BinanceSwapKline1mTaskID, "Binance swap 1m", "binance_swap")))
-
-	tests := map[string]domain.CollectionTask{
-		"custom task reuses shared result": {
-			SpaceID: "crypto", TaskID: "custom-task", TaskName: "Custom task", DataType: "kline", TagIDs: []string{"binance_spot"},
-			CollectParams:   `{"target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`,
-			ResultDatasetID: taskresult.BinanceKline1mDatasetID, ResultViewID: taskresult.BinanceKline1mViewID, Enabled: true,
-		},
-		"custom dataset reuses shared view": {
-			SpaceID: "crypto", TaskID: "custom-view", TaskName: "Custom view", DataType: "kline", TagIDs: []string{"binance_spot"},
-			CollectParams:   `{"target_dataset_id":"dataset_custom_view","frequency":"1m"}`,
-			ResultDatasetID: "dataset_custom_view", ResultViewID: taskresult.BinanceKline1mViewID, Enabled: true,
-		},
-		"custom view reuses shared dataset": {
-			SpaceID: "crypto", TaskID: "custom-dataset", TaskName: "Custom dataset", DataType: "kline", TagIDs: []string{"binance_spot"},
-			CollectParams:   `{"target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`,
-			ResultDatasetID: taskresult.BinanceKline1mDatasetID, ResultViewID: "view_custom_dataset", Enabled: true,
-		},
-	}
-	for name, task := range tests {
-		t.Run(name, func(t *testing.T) {
-			require.ErrorContains(t, repo.Create(ctx, task), "conflicts with task")
-		})
-	}
-}
-
-func TestCollectionTaskRepositoryRejectsMismatchedRouteForReservedSharedTask(t *testing.T) {
-	ctx := context.Background()
-	t.Run("create", func(t *testing.T) {
-		repo := newCollectorStore(t).Tasks()
-		task := domain.CollectionTask{
-			SpaceID: "crypto", TaskID: taskresult.BinanceSpotKline1mTaskID, TaskName: "Binance spot 1m", DataType: "kline",
-			TagIDs: []string{"binance_spot"}, CollectParams: `{"provider":"binance","market_type":"swap","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`,
-			ResultDatasetID: taskresult.BinanceKline1mDatasetID, ResultViewID: taskresult.BinanceKline1mViewID, Enabled: true,
-		}
-		require.ErrorContains(t, repo.Create(ctx, task), "invalid provider, market_type")
-	})
-	t.Run("update", func(t *testing.T) {
-		repo := newCollectorStore(t).Tasks()
-		task := domain.CollectionTask{
-			SpaceID: "crypto", TaskID: taskresult.BinanceSpotKline1mTaskID, TaskName: "Binance spot 1m", DataType: "kline",
-			TagIDs: []string{"binance_spot"}, CollectParams: `{"provider":"binance","market_type":"spot","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`,
-			ResultDatasetID: taskresult.BinanceKline1mDatasetID, ResultViewID: taskresult.BinanceKline1mViewID, Enabled: true,
-		}
-		require.NoError(t, repo.Create(ctx, task))
-		task.CollectParams = `{"provider":"binance","market_type":"swap","target_dataset_id":"dataset_binance_kline_1m","frequency":"1m"}`
-		_, err := repo.UpdateByTaskID(ctx, "crypto", taskresult.BinanceSpotKline1mTaskID, task)
-		require.ErrorContains(t, err, "invalid provider, market_type")
-	})
 }
 
 func TestCollectionTaskRepository_TaskNameLookupIsScopedAndTrimmed(t *testing.T) {

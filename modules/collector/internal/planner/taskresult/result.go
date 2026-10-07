@@ -29,67 +29,6 @@ type IDs struct {
 	ViewID    string
 }
 
-const (
-	BinanceSpotKline1mTaskID = "dasftksvjhj2jom4vhd0"
-	BinanceSwapKline1mTaskID = "dasftksvjhj2jom4vhdg"
-	BinanceKline1mDatasetID  = "dataset_binance_kline_1m"
-	BinanceKline1mViewID     = "view_binance_kline_1m"
-)
-
-// IsBuiltinSharedResultTask reports whether taskID is reserved for one of the
-// built-in Binance 1m market collection tasks. The task IDs are fixed setup
-// identities, not a general mechanism for assigning shared task results.
-func IsBuiltinSharedResultTask(spaceID, taskID string) bool {
-	return strings.TrimSpace(spaceID) == "crypto" &&
-		(strings.TrimSpace(taskID) == BinanceSpotKline1mTaskID || strings.TrimSpace(taskID) == BinanceSwapKline1mTaskID)
-}
-
-// BuiltinSharedResultIDs returns the only task-scoped identity override
-// allowed to share a Dataset: the seeded Binance spot and swap 1m tasks.
-// Requiring the exact scope, data type, frequency, and tag prevents arbitrary
-// task YAML from routing writes into another task's Dataset.
-func BuiltinSharedResultIDs(spaceID, taskID, taskType, frequency string, tagIDs []string) (IDs, bool) {
-	if !IsBuiltinSharedResultTask(spaceID, taskID) ||
-		!strings.EqualFold(strings.TrimSpace(taskType), "kline") ||
-		!strings.EqualFold(strings.TrimSpace(frequency), "1m") || len(tagIDs) != 1 {
-		return IDs{}, false
-	}
-	expectedTag := "binance_spot"
-	if strings.TrimSpace(taskID) == BinanceSwapKline1mTaskID {
-		expectedTag = "binance_swap"
-	}
-	if strings.TrimSpace(tagIDs[0]) != expectedTag {
-		return IDs{}, false
-	}
-	return IDs{DatasetID: BinanceKline1mDatasetID, ViewID: BinanceKline1mViewID}, true
-}
-
-// BuiltinSharedResultIDsForRoute additionally binds a shared result task to
-// its immutable Binance provider and market route. Call this before creating,
-// updating, bootstrapping, or scheduling a shared-result task; read-only
-// metadata inspection may use BuiltinSharedResultIDs when route details are
-// not part of the read contract.
-func BuiltinSharedResultIDsForRoute(spaceID, taskID, taskType, frequency, provider, marketType string, tagIDs []string) (IDs, bool) {
-	ids, allowed := BuiltinSharedResultIDs(spaceID, taskID, taskType, frequency, tagIDs)
-	if !allowed || !BuiltinSharedResultRouteMatches(spaceID, taskID, provider, marketType) {
-		return IDs{}, false
-	}
-	return ids, true
-}
-
-// BuiltinSharedResultRouteMatches reports whether provider and marketType are
-// the fixed route represented by a reserved shared-result task ID.
-func BuiltinSharedResultRouteMatches(spaceID, taskID, provider, marketType string) bool {
-	if !IsBuiltinSharedResultTask(spaceID, taskID) || !strings.EqualFold(strings.TrimSpace(provider), "binance") {
-		return false
-	}
-	wantMarket := "spot"
-	if strings.TrimSpace(taskID) == BinanceSwapKline1mTaskID {
-		wantMarket = "swap"
-	}
-	return strings.EqualFold(strings.TrimSpace(marketType), wantMarket)
-}
-
 func resultIDs(_ string, taskID string) IDs {
 	slug := resultSlug(taskID)
 	return IDs{DatasetID: "dataset_" + slug, ViewID: "view_" + slug}
@@ -348,25 +287,6 @@ const (
 	ResultStatusUnknown = "unknown"
 )
 
-// ValidateBuiltinSharedOutputFields validates projections without changing
-// the setup-owned shared Dataset/View schema.
-func ValidateBuiltinSharedOutputFields(outputFields []string) error {
-	if len(outputFields) == 0 {
-		return fmt.Errorf("at least one output field is required")
-	}
-	allowed := map[string]struct{}{
-		"open": {}, "high": {}, "low": {}, "close": {}, "volume": {},
-		"amount": {}, "quote_volume": {}, "trade_num": {},
-	}
-	for _, field := range outputFields {
-		field = strings.ToLower(strings.TrimSpace(field))
-		if _, ok := allowed[field]; !ok {
-			return fmt.Errorf("%w: %q", ErrUnsupportedOutputFields, field)
-		}
-	}
-	return nil
-}
-
 // Inspection is the read-only result metadata snapshot for one task.
 // LastDataTime is empty when Storage does not expose an authoritative indexed
 // upper bound.
@@ -392,23 +312,6 @@ func (m *Manager) Inspect(ctx context.Context, spaceID, taskID string) (Inspecti
 // InspectIDs inspects an explicitly persisted result identity while keeping
 // its metadata ownership tied to the collector task.
 func (m *Manager) InspectIDs(ctx context.Context, spaceID, taskID string, ids IDs) (Inspection, error) {
-	return m.inspectIDs(ctx, spaceID, taskID, ids, true)
-}
-
-// InspectBuiltinSharedIDs reads the setup-owned Binance raw Dataset/View for
-// one of its two allowlisted 1m collection tasks. It intentionally skips
-// collector_task_id ownership and instead requires the canonical task scope
-// and raw_collection role.
-func (m *Manager) InspectBuiltinSharedIDs(ctx context.Context, spaceID, taskID, taskType, frequency string, tagIDs []string, ids IDs) (Inspection, error) {
-	inspection := Inspection{IDs: ids, Status: ResultStatusPending}
-	expected, allowed := BuiltinSharedResultIDs(spaceID, taskID, taskType, frequency, tagIDs)
-	if !allowed || ids != expected {
-		return inspectionWithError(inspection, fmt.Errorf("%w: task is not allowed to inspect the shared Binance result", ErrResultContract))
-	}
-	return m.inspectIDs(ctx, spaceID, taskID, expected, false)
-}
-
-func (m *Manager) inspectIDs(ctx context.Context, spaceID, taskID string, ids IDs, requireTaskOwner bool) (Inspection, error) {
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	inspection := Inspection{IDs: ids, Status: ResultStatusPending}
 	if m == nil || m.metadata == nil || m.auth == nil {
@@ -438,11 +341,8 @@ func (m *Manager) inspectIDs(ctx context.Context, spaceID, taskID string, ids ID
 		if dataset.GetSpaceId() != spaceID || dataset.GetDatasetId() != inspection.IDs.DatasetID {
 			return inspectionWithError(inspection, fmt.Errorf("%w: result dataset identity does not match requested space/dataset", ErrResultContract))
 		}
-		if requireTaskOwner && !ownedByTask(dataset.GetAttributes(), taskID) {
+		if !ownedByTask(dataset.GetAttributes(), taskID) {
 			return inspectionWithError(inspection, fmt.Errorf("%w: result dataset %s is owned by another task", ErrResultContract, inspection.IDs.DatasetID))
-		}
-		if !requireTaskOwner && strings.TrimSpace(dataset.GetAttributes()["dataset_role"]) != "raw_collection" {
-			return inspectionWithError(inspection, fmt.Errorf("%w: shared result dataset %s is not a raw_collection Dataset", ErrResultContract, inspection.IDs.DatasetID))
 		}
 		inspection.Dataset = dataset
 		datasetExists = true
@@ -471,7 +371,7 @@ func (m *Manager) inspectIDs(ctx context.Context, spaceID, taskID string, ids ID
 		if view.GetSpaceId() != spaceID || view.GetViewId() != inspection.IDs.ViewID {
 			return inspectionWithError(inspection, fmt.Errorf("%w: result view identity does not match requested space/view", ErrResultContract))
 		}
-		if requireTaskOwner && !ownedByTask(view.GetAttributes(), taskID) {
+		if !ownedByTask(view.GetAttributes(), taskID) {
 			return inspectionWithError(inspection, fmt.Errorf("%w: result view %s is owned by another task", ErrResultContract, inspection.IDs.ViewID))
 		}
 		if view.GetDatasetId() != inspection.IDs.DatasetID {

@@ -492,7 +492,7 @@ func Default() *Config {
 		},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
-			ExecutionDetailRetention: "24h", ScheduledRunSummaryRetention: "720h",
+			ExecutionDetailRetention: "6h", ScheduledRunSummaryRetention: "720h",
 			TerminalRetryRetention: "168h", PeriodSnapshotRetention: "720h",
 		},
 		KlineResample: KlineResampleConfig{

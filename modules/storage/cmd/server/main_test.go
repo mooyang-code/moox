@@ -260,10 +260,10 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	if len(opts.PartitionConfigs) != 4 {
 		t.Fatalf("consumer partitions = %+v", opts.PartitionConfigs)
 	}
-	if opts.PartitionConfigs[0].PartitionID != "kline" || opts.PartitionConfigs[0].Consumer != "storage_view_kline" || len(opts.PartitionConfigs[0].FilterSubjects) != 12 || len(opts.PartitionConfigs[0].DatasetRoutes) != 3 || opts.PartitionConfigs[0].FetchBatch != 32 || opts.PartitionConfigs[0].MaxWorkers != 8 || opts.PartitionConfigs[0].MaxAckPending != 256 || opts.PartitionConfigs[0].AckWaitMS != 120000 || opts.PartitionConfigs[0].Ordering != "dataset" || opts.PartitionConfigs[0].DeliverPolicy != "new" {
+	if opts.PartitionConfigs[0].PartitionID != "kline" || opts.PartitionConfigs[0].Consumer != "storage_view_kline" || len(opts.PartitionConfigs[0].FilterSubjects) != 8 || len(opts.PartitionConfigs[0].DatasetRoutes) != 2 || opts.PartitionConfigs[0].FetchBatch != 32 || opts.PartitionConfigs[0].MaxWorkers != 8 || opts.PartitionConfigs[0].MaxAckPending != 256 || opts.PartitionConfigs[0].AckWaitMS != 120000 || opts.PartitionConfigs[0].Ordering != "dataset" || opts.PartitionConfigs[0].DeliverPolicy != "new" {
 		t.Fatalf("kline consumer options = %+v", opts.PartitionConfigs[0])
 	}
-	if opts.PartitionConfigs[1].PartitionID != "factor" || opts.PartitionConfigs[1].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[1].FilterSubjects) != 4 || opts.PartitionConfigs[1].FetchBatch != 1 || opts.PartitionConfigs[1].MaxWorkers != 1 || opts.PartitionConfigs[1].MaxAckPending != 1 || len(opts.PartitionConfigs[1].DatasetRoutes) != 1 || opts.PartitionConfigs[1].DatasetRoutes[0] != (viewservice.DatasetRoute{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}) {
+	if opts.PartitionConfigs[1].PartitionID != "factor" || opts.PartitionConfigs[1].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[1].FilterSubjects) != 0 || opts.PartitionConfigs[1].FetchBatch != 1 || opts.PartitionConfigs[1].MaxWorkers != 1 || opts.PartitionConfigs[1].MaxAckPending != 1 || len(opts.PartitionConfigs[1].DatasetRoutes) != 0 {
 		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[1])
 	}
 }
@@ -285,7 +285,7 @@ func TestStorageViewConsumerOptionsAllowExplicitDynamicSpaces(t *testing.T) {
 	}
 }
 
-func TestStorageViewConfigFilesRouteFactorAndStockCNDatasets(t *testing.T) {
+func TestStorageViewConfigFilesBindFactorResultsDynamically(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join("..", "..", "config", "storage.yaml"),
 		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
@@ -298,15 +298,14 @@ func TestStorageViewConfigFilesRouteFactorAndStockCNDatasets(t *testing.T) {
 			}
 
 			stockRoutes := make(map[string]bool)
-			factorRouteFound := false
 			for _, partition := range opts.PartitionConfigs {
 				for _, route := range partition.DatasetRoutes {
 					if route.SpaceID == "stockcn" {
 						stockRoutes[route.DatasetID] = true
 					}
-					if partition.PartitionID == "factor" && route == (viewservice.DatasetRoute{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}) {
-						factorRouteFound = true
-					}
+				}
+				if partition.PartitionID == "factor" && len(partition.DatasetRoutes) != 0 {
+					t.Fatalf("factor results bind dynamically; static routes = %+v", partition.DatasetRoutes)
 				}
 				if partition.PartitionID == "factor" && (partition.FetchBatch != 1 || partition.MaxWorkers != 1 || partition.MaxAckPending != 1) {
 					t.Fatalf("factor delivery budget = %+v, want serialized 1/1/1", partition)
@@ -314,9 +313,6 @@ func TestStorageViewConfigFilesRouteFactorAndStockCNDatasets(t *testing.T) {
 			}
 			if stockRoutes["stock_kline"] || !stockRoutes["dataset_stockcn_equity_kline"] {
 				t.Fatalf("stockcn routes = %+v", stockRoutes)
-			}
-			if !factorRouteFound {
-				t.Fatal("canonical Factor result route is missing from factor partition")
 			}
 		})
 	}

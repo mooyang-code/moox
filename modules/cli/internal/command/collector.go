@@ -2869,68 +2869,6 @@ func appendCollectorBatchIDs(jobIDs []string, value string) []string {
 	return jobIDs
 }
 
-func collectorSCFCanaryEvent(opts collectorPublishOptions, nodeID, batchID string) map[string]any {
-	spaceID := firstNonEmpty(opts.SpaceID, opts.collectorPackageOptions.SpaceID)
-	datasetID, provider, marketType := "dataset_binance_kline_1m", "binance", "spot"
-	sourceID := "spot_http"
-	subjectID, symbol, barLimit := "BTC-USDT", "BTCUSDT", 2
-	batchKind := "realtime"
-	startTime := ""
-	if strings.EqualFold(spaceID, "stockcn") {
-		datasetID, provider, marketType, sourceID = "dataset_stockcn_equity_kline", "tencent", "equity", "stockcn_http"
-		subjectID, symbol, barLimit = "600000.XSHG", "sh600000", 1000
-		batchKind = "backfill"
-		// Historical requests must carry an explicit bounded start. Keep a
-		// small margin below the providers' 24-hour capability because the
-		// event is created before the SCF invocation reaches the feed guard.
-		// The stock runtime marks this item as a canary and replaces the
-		// placeholder with the latest closed calendar session, so a weekend or
-		// holiday can still replay a real historical page safely.
-		startTime = time.Now().UTC().Add(-23 * time.Hour).Truncate(time.Minute).Format(time.RFC3339Nano)
-	}
-	data := map[string]any{
-		"action":                     "market_fetch",
-		"storage_rpc_gateway_target": collectorStorageRPCGatewayTarget(opts),
-		"data": map[string]any{
-			"batch_id": batchID,
-			// Completion events are validated against the scheduler's batch
-			// identity. Keep a stable schedule fence on the canary as well;
-			// omitting it makes the canary fail after Storage has already
-			// succeeded, defeating the deployment gate.
-			"schedule_id":     "deploy-canary-schedule",
-			"batch_kind":      batchKind,
-			"space_id":        spaceID,
-			"market_id":       spaceID,
-			"instrument_type": marketType,
-			"dataset_id":      datasetID,
-			"frequency":       "1m",
-			"provider":        provider,
-			"source_id":       sourceID,
-			"market_type":     marketType,
-			"region":          opts.Region,
-			"node_id":         nodeID,
-			"items": []map[string]any{{
-				"subject_id": subjectID, "symbol": symbol, "provider": provider, "source_id": sourceID, "market_type": marketType,
-				// The exchange response includes the currently-open candle. A
-				// one-bar request therefore has no closed bar to persist; request
-				// enough bars for the selected market to validate an actual write.
-				"data_type": "kline", "dataset_id": datasetID, "frequency": "1m", "bar_limit": barLimit, "start_time": startTime, "canary": strings.EqualFold(spaceID, "stockcn"),
-			}},
-		},
-	}
-	// Invoke canaries do not receive the Timer reconciler's managed
-	// environment. When the operator has a current control-plane DNS snapshot,
-	// carry it in the canary payload so the release gate exercises the same
-	// resolved-IP path as production Timer requests.
-	if rawRoutes := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON")); rawRoutes != "" {
-		var routes map[string]any
-		if err := json.Unmarshal([]byte(rawRoutes), &routes); err == nil && len(routes) > 0 {
-			data["data"].(map[string]any)["dns_routes"] = routes
-		}
-	}
-	return data
-}
-
 func collectorSCFCanaryEventForProof(opts collectorPublishOptions, nodeID, batchID string, proof *collectorSCFCanaryProof) map[string]any {
 	if proof == nil || proof.entry == nil {
 		return nil

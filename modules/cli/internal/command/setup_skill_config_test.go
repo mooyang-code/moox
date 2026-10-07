@@ -143,8 +143,8 @@ func TestBuildSkillDataAccessConfigSelectsExactSpaceAndValidatesMaterial(t *test
 	require.Equal(t, testSkillGatewaySecret, got.Gateway.Secret)
 	require.Equal(t, security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill")), got.Storage.AppKey)
 	require.Equal(t, "venue:binance|market:spot|source:spot_http", got.DataTypes["crypto"].Exchanges["binance"].SeriesTag)
-	require.Equal(t, "dataset_binance_kline_1m", got.DataTypes["crypto"].Exchanges["binance"].KlineDatasets["1m"])
-	require.Equal(t, "dataset_stockcn_equity_kline", got.DataTypes["stockcn"].Exchanges["stockcn"].KlineDatasets["1m"])
+	require.Equal(t, map[string]string{"1m": "dataset_dasftksvjhj2jom4vhd0", "1H": "dataset_dasftksvjhj2jom4vhe0"}, got.DataTypes["crypto"].Exchanges["binance"].KlineDatasets)
+	require.Equal(t, map[string]string{"1m": "dataset_dasftksvjhj2jom4vhf0"}, got.DataTypes["stockcn"].Exchanges["stockcn"].KlineDatasets)
 	require.Equal(t, "default", got.DataTypes["stockcn"].Exchanges["stockcn"].SeriesTag)
 
 	_, err = buildSkillDataAccessConfigFromLegacyReader(context.Background(), snapshot, "stockus", read)
@@ -244,7 +244,7 @@ func TestBuildSkillDataAccessConfigRejectsUnknownStorageRootBeforeReadingSecrets
 		func(context.Context, setupconfig.Host, string) ([]byte, error) {
 			readCalled = true
 			return nil, errors.New("must not read")
-		})
+		}, repoSkillKlineDatasets(t))
 	require.ErrorContains(t, err, "Storage deployment placement")
 	require.False(t, readCalled)
 }
@@ -392,7 +392,7 @@ func TestBuildSkillDataAccessConfigFailsClosedOnGatewaySnapshotRotation(t *testi
 		func(context.Context, setupconfig.Host, string) ([]byte, error) {
 			storageRead = true
 			return nil, errors.New("must not read")
-		})
+		}, repoSkillKlineDatasets(t))
 	require.ErrorContains(t, err, "snapshot")
 	require.False(t, storageRead)
 	require.Equal(t, 1, transport.calls)
@@ -704,7 +704,7 @@ func buildSkillDataAccessConfigFromLegacyReader(
 		}
 		return skillGatewaySnapshot{Secret: secret, NodeID: string(node), Registry: registry}, nil
 	}
-	return buildSkillDataAccessConfig(ctx, snapshot, space, readGateway, read)
+	return buildSkillDataAccessConfig(ctx, snapshot, space, readGateway, read, mustRepoSkillKlineDatasets())
 }
 
 func setupSkillSnapshot(t *testing.T, space, target, node string) *setupconfig.Snapshot {
@@ -725,4 +725,19 @@ func setupSkillSnapshotWithPath(t *testing.T, space, target, node string) (*setu
 		SpaceID: space, StorageRPCGatewayTarget: target, StorageGatewayNodeID: node,
 	}}
 	return snapshot, path
+}
+
+// repoSkillKlineDatasets resolves Skill kline Datasets from the checked-in
+// collection task seed.
+func repoSkillKlineDatasets(t *testing.T) skillKlineDatasets {
+	t.Helper()
+	return mustRepoSkillKlineDatasets()
+}
+
+func mustRepoSkillKlineDatasets() skillKlineDatasets {
+	resolver, err := loadSkillKlineDatasets(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
+	if err != nil {
+		panic(err)
+	}
+	return resolver
 }

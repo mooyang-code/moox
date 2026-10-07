@@ -52,7 +52,8 @@ market_canary:
   closed_bar_min_coverage: 0.99
   subjects:
     - space_id: crypto
-      dataset_id: dataset_binance_kline_1m
+      # Result Dataset of the Binance spot 1m collection task (dataset_<task_id>).
+      dataset_id: dataset_dasftksvjhj2jom4vhd0
       # Use a liquid, currently listed spot subject. The catalog may still
       # store the unsuffixed identity; the canary resolver maps either form.
       symbol: BTC-USDT

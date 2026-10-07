@@ -39,66 +39,6 @@ type metadataSeedGrainContract struct {
 	} `yaml:"devices"`
 }
 
-func TestBinanceOneMinuteTaskOutputFieldsExistInSeededDatasetAndView(t *testing.T) {
-	root := filepath.Join("..", "..", "..")
-	metadataPath := filepath.Join(root, "config", "setup", "metadata.yaml")
-	metadataRaw, err := os.ReadFile(metadataPath)
-	require.NoError(t, err)
-	var metadata metadataSeedGrainContract
-	require.NoError(t, yaml.Unmarshal(metadataRaw, &metadata))
-
-	var datasetFields, viewFields = map[string]struct{}{}, map[string]struct{}{}
-	for _, column := range metadata.DatasetColumns {
-		if column.SpaceID == "crypto" && column.DatasetID == "dataset_binance_kline_1m" {
-			datasetFields[column.ColumnName] = struct{}{}
-		}
-	}
-	for _, column := range metadata.ViewColumns {
-		if column.SpaceID == "crypto" && column.ViewID == "view_binance_kline_1m" {
-			viewFields[column.ColumnName] = struct{}{}
-		}
-	}
-
-	tasksPath := filepath.Join(root, "config", "setup", "collection-tasks.yaml")
-	tasksRaw, err := os.ReadFile(tasksPath)
-	require.NoError(t, err)
-	var tasks struct {
-		Tasks []struct {
-			SpaceID       string `yaml:"space_id"`
-			DataType      string `yaml:"data_type"`
-			ResultDataset string `yaml:"result_dataset_id"`
-			ResultView    string `yaml:"result_view_id"`
-			CollectParams struct {
-				Provider     string   `yaml:"provider"`
-				MarketType   string   `yaml:"market_type"`
-				Frequency    string   `yaml:"frequency"`
-				OutputFields []string `yaml:"output_fields"`
-			} `yaml:"collect_params"`
-		} `yaml:"tasks"`
-	}
-	require.NoError(t, yaml.Unmarshal(tasksRaw, &tasks))
-
-	seenMarkets := make(map[string]struct{})
-	for _, task := range tasks.Tasks {
-		params := task.CollectParams
-		if task.SpaceID != "crypto" || task.DataType != "kline" || params.Provider != "binance" || params.Frequency != "1m" {
-			continue
-		}
-		if params.MarketType != "spot" && params.MarketType != "swap" {
-			continue
-		}
-		seenMarkets[params.MarketType] = struct{}{}
-		require.Equal(t, "dataset_binance_kline_1m", task.ResultDataset, "%s task Dataset", params.MarketType)
-		require.Equal(t, "view_binance_kline_1m", task.ResultView, "%s task View", params.MarketType)
-		require.NotEmpty(t, params.OutputFields, "%s task output_fields", params.MarketType)
-		for _, field := range params.OutputFields {
-			require.Contains(t, datasetFields, field, "%s output field missing from Dataset", field)
-			require.Contains(t, viewFields, task.ResultDataset+"."+field, "%s output field missing from View", field)
-		}
-	}
-	require.Equal(t, map[string]struct{}{"spot": {}, "swap": {}}, seenMarkets, "1m tasks must share the canonical Dataset and View")
-}
-
 func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
 	wantGrain := []string{"subject_id", "freq", "data_time", "series_tag"}
 	root := filepath.Join("..", "..", "..")
@@ -161,7 +101,6 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		"stockcn/dataset_stockcn_bond_kline":   {"1m", "1d"},
 		"stockhk/dataset_stockhk_equity_kline": {"1m", "1d", "1w", "1M"},
 		"stockus/dataset_stockus_equity_kline": {"1m", "1d", "1w", "1M"},
-		"crypto/dataset_binance_kline_1m":      {"1m"},
 		"crypto/dataset_spot_kline_1h":         {"1H"},
 		"crypto/dataset_perpetual_kline_1h":    {"1H"},
 	}

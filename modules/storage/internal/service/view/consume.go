@@ -110,6 +110,12 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	for _, partition := range partitionConfigs {
 		partition := partition
 		partitionID := partition.PartitionID
+		if len(opts.PartitionConfigs) > 0 && len(partition.FilterSubjects) == 0 {
+			// A partition without static routes only supplies the delivery
+			// template for dynamic per-Dataset consumers. Starting it without
+			// filter subjects would subscribe to every Dataset event.
+			continue
+		}
 		state := &boundState{}
 		bounds[partitionID] = state
 		partition.BoundReporter = func(bound bool) {
