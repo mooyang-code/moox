@@ -298,19 +298,13 @@ func klineViewMetricScopes(inventory *monmetrics.TaskResultInventoryCache, now t
 		return nil
 	}
 	scopes := make([]monmetrics.ViewMetricScope, 0, len(snapshot.Entries))
-	seen := make(map[monmetrics.ViewMetricScope]struct{}, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		if !entry.Enabled || !entry.OwnershipVerified || (entry.ResultStatus != "ready" && entry.ResultStatus != "error") {
 			continue
 		}
-		scope := monmetrics.ViewMetricScope{
+		scopes = append(scopes, monmetrics.ViewMetricScope{
 			SpaceID: entry.SpaceID, ViewID: entry.ViewID, DatasetID: entry.DatasetID, Frequency: entry.Frequency,
-		}
-		if _, ok := seen[scope]; ok {
-			continue
-		}
-		seen[scope] = struct{}{}
-		scopes = append(scopes, scope)
+		})
 	}
 	return scopes
 }
