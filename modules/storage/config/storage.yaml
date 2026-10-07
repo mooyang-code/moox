@@ -39,22 +39,6 @@ storage:
     max_workers: 1
     ordering: dataset
     consumer_partitions:
-      - id: kline
-        durable: storage_view_kline
-        routes:
-          - space_id: crypto
-            dataset_ids:
-              - dataset_spot_kline_1h
-              - dataset_perpetual_kline_1h
-        # Full-market 1m streams need more than one worker per Dataset so
-        # live upserts do not sit behind a 64-message ack window.
-        fetch_batch: 32
-        max_workers: 8
-        max_ack_pending: 256
-        ack_wait_ms: 120000
-        ordering: dataset
-        deliver_policy: new
-        max_retry_attempts: -1
       - id: system_metrics
         durable: storage_view_metrics
         routes:

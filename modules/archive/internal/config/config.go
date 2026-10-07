@@ -91,7 +91,6 @@ func Default() *Config {
 			Sources: map[string]SourceConfig{
 				"stockcn": {Datasets: []string{"dataset_stockcn_equity_kline", "dataset_stockcn_index_kline", "dataset_stockcn_bond_kline"}},
 				"stockus": {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
-				"crypto":  {Datasets: []string{"dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}},
 			},
 			EventBus: EventBusConfig{
 				URLs:     []string{"nats://127.0.0.1:4222"},

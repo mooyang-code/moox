@@ -77,9 +77,23 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	if _, err := js.Publish("moox.event.observability.host.snapshot.reported.v1", []byte("metric")); err != nil {
 		t.Fatal(err)
 	}
+	kept := append([]string(nil), c.Streams[1].Subjects...)
 	c.Streams[1].Subjects = []string{"moox.event.observability.other.>"}
 	if _, err := r.Reconcile(ctx); err == nil {
-		t.Fatal("subject removal was accepted")
+		t.Fatal("removal of a subject with stored messages was accepted")
+	}
+	// A subject without stored messages can be removed even though the stream
+	// keeps messages under its other subjects.
+	c.Streams[1].Subjects = append(append([]string(nil), kept...), "moox.legacy.observability.>")
+	if _, err := r.Reconcile(ctx); err != nil {
+		t.Fatalf("add subject: %v", err)
+	}
+	c.Streams[1].Subjects = kept
+	if _, err := r.Reconcile(ctx); err != nil {
+		t.Fatalf("removal of an empty subject was rejected: %v", err)
+	}
+	if info, err := js.StreamInfo(c.Streams[1].Name); err != nil || len(info.Config.Subjects) != len(kept) {
+		t.Fatalf("stream subjects after removal = %+v err=%v", info, err)
 	}
 }
 
@@ -157,8 +171,8 @@ func TestEnabledTopics(t *testing.T) {
 }
 
 func TestSubjectRemoved(t *testing.T) {
-	assert.True(t, subjectRemoved([]string{"a", "b"}, []string{"a"}))
-	assert.False(t, subjectRemoved([]string{"a"}, []string{"a", "b"}))
+	assert.Equal(t, []string{"b"}, removedSubjects([]string{"a", "b"}, []string{"a"}))
+	assert.Empty(t, removedSubjects([]string{"a"}, []string{"a", "b"}))
 }
 
 func TestSameStrings(t *testing.T) {

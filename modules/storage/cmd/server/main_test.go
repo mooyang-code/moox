@@ -257,14 +257,14 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(opts.PartitionConfigs) != 4 {
+	if len(opts.PartitionConfigs) != 3 {
 		t.Fatalf("consumer partitions = %+v", opts.PartitionConfigs)
 	}
-	if opts.PartitionConfigs[0].PartitionID != "kline" || opts.PartitionConfigs[0].Consumer != "storage_view_kline" || len(opts.PartitionConfigs[0].FilterSubjects) != 8 || len(opts.PartitionConfigs[0].DatasetRoutes) != 2 || opts.PartitionConfigs[0].FetchBatch != 32 || opts.PartitionConfigs[0].MaxWorkers != 8 || opts.PartitionConfigs[0].MaxAckPending != 256 || opts.PartitionConfigs[0].AckWaitMS != 120000 || opts.PartitionConfigs[0].Ordering != "dataset" || opts.PartitionConfigs[0].DeliverPolicy != "new" {
-		t.Fatalf("kline consumer options = %+v", opts.PartitionConfigs[0])
+	if opts.PartitionConfigs[0].PartitionID != "factor" || opts.PartitionConfigs[0].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[0].FilterSubjects) != 0 || opts.PartitionConfigs[0].FetchBatch != 1 || opts.PartitionConfigs[0].MaxWorkers != 1 || opts.PartitionConfigs[0].MaxAckPending != 1 || len(opts.PartitionConfigs[0].DatasetRoutes) != 0 {
+		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[0])
 	}
-	if opts.PartitionConfigs[1].PartitionID != "factor" || opts.PartitionConfigs[1].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[1].FilterSubjects) != 0 || opts.PartitionConfigs[1].FetchBatch != 1 || opts.PartitionConfigs[1].MaxWorkers != 1 || opts.PartitionConfigs[1].MaxAckPending != 1 || len(opts.PartitionConfigs[1].DatasetRoutes) != 0 {
-		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[1])
+	if opts.PartitionConfigs[1].PartitionID != "system_metrics" || opts.PartitionConfigs[1].Consumer != "storage_view_metrics" || len(opts.PartitionConfigs[1].FilterSubjects) != 4 || opts.PartitionConfigs[1].AckWaitMS != 120000 || opts.PartitionConfigs[1].Ordering != "dataset" || opts.PartitionConfigs[1].DeliverPolicy != "new" {
+		t.Fatalf("metrics consumer options = %+v", opts.PartitionConfigs[1])
 	}
 }
 
@@ -333,11 +333,11 @@ func TestStripWildcardConsumerRoutesKeepsStaticMiscDurableStable(t *testing.T) {
 
 func TestStripMiscConsumerPartitionLeavesExactConsumers(t *testing.T) {
 	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
-		{PartitionID: "kline", Consumer: "storage_view_kline"},
+		{PartitionID: "system_metrics", Consumer: "storage_view_metrics"},
 		{PartitionID: "misc", Consumer: "storage_view_misc"},
 	}}
 	stripMiscConsumerPartition(&opts)
-	if len(opts.PartitionConfigs) != 1 || opts.PartitionConfigs[0].Consumer != "storage_view_kline" {
+	if len(opts.PartitionConfigs) != 1 || opts.PartitionConfigs[0].Consumer != "storage_view_metrics" {
 		t.Fatalf("static partitions = %+v, want misc removed", opts.PartitionConfigs)
 	}
 }

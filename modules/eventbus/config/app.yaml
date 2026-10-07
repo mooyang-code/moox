@@ -51,12 +51,8 @@ streams:
     # retention guardrail.
     max_bytes: 8589934592
   - name: MOOX_OBSERVABILITY
-    # Keep the legacy subject while upgrading an existing JetStream store.
-    # NATS refuses to remove a subject that still has persisted messages;
-    # retaining it lets the broker start and expire the old data naturally.
     subjects:
       - "moox.event.observability.>"
-      - "moox.observability.>"
     retention: limits
     discard: old
     storage: file

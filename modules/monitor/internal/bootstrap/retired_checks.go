@@ -10,21 +10,8 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 )
 
-func retiredDatasetCheckID(checkID string) bool {
-	checkID = strings.TrimSpace(checkID)
-	if !strings.HasPrefix(checkID, "dataset:") {
-		return false
-	}
-	if strings.HasSuffix(checkID, ":1H") {
-		return true
-	}
-	return strings.Contains(checkID, ":dataset_collector_") ||
-		strings.Contains(checkID, ":view_collector_") ||
-		strings.Contains(checkID, ":view_crypto_") ||
-		strings.Contains(checkID, ":dataset_perpetual_") ||
-		strings.Contains(checkID, ":dataset_spot_kline_1h")
-}
-
+// retireObsoleteBusinessChecks disables K-line checks when K-line freshness is
+// turned off and removes alert rules left on disabled checks.
 func retireObsoleteBusinessChecks(ctx context.Context, repositories *store.Repositories, cfg *config.Config) error {
 	if repositories == nil {
 		return fmt.Errorf("retire obsolete checks requires repositories")
@@ -35,7 +22,7 @@ func retireObsoleteBusinessChecks(ctx context.Context, repositories *store.Repos
 	}
 	for index := range checks {
 		check := &checks[index]
-		retire := retiredDatasetCheckID(check.CheckID)
+		retire := false
 		if strings.HasPrefix(check.CheckID, "kline_freshness:") {
 			// K-line checks are task-owned and discovered dynamically. Keep prior
 			// identities until a successful inventory evaluation can resolve them.

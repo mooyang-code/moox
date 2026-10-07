@@ -9,12 +9,12 @@ import (
 
 func TestViewConsumerFilterDriftOnlyResetsChangedConsumers(t *testing.T) {
 	desired := map[string][]string{
-		"storage_view_kline":   {"rows.crypto.kline", "period.crypto.kline"},
+		"storage_view_unchanged":   {"rows.crypto.kline", "period.crypto.kline"},
 		"storage_view_factor":  {"rows.crypto.factor"},
 		"storage_view_metrics": {"rows.mooxsys.metrics"},
 	}
 	actual := map[string]viewConsumerFilterState{
-		"storage_view_kline":   {Exists: true, Filters: []string{"rows.crypto.kline", "period.crypto.kline"}},
+		"storage_view_unchanged":   {Exists: true, Filters: []string{"rows.crypto.kline", "period.crypto.kline"}},
 		"storage_view_factor":  {Exists: true, Filters: []string{"rows.crypto.old-factor"}},
 		"storage_view_metrics": {},
 	}
@@ -26,27 +26,27 @@ func TestViewConsumerFilterDriftOnlyResetsChangedConsumers(t *testing.T) {
 	if !got["storage_view_factor"] || !got["storage_view_metrics"] {
 		t.Fatalf("drift = %v, want changed and missing consumers", got)
 	}
-	if got["storage_view_kline"] {
+	if got["storage_view_unchanged"] {
 		t.Fatal("unchanged consumer must not be reset")
 	}
 }
 
 func TestViewConsumerFilterDriftTreatsSingleFilterAsDifferentRepresentation(t *testing.T) {
-	desired := map[string][]string{"storage_view_kline": {"rows.crypto.kline"}}
+	desired := map[string][]string{"storage_view_unchanged": {"rows.crypto.kline"}}
 	actual := map[string]viewConsumerFilterState{
-		"storage_view_kline": {Exists: true, SingleFilter: "rows.crypto.kline"},
+		"storage_view_unchanged": {Exists: true, SingleFilter: "rows.crypto.kline"},
 	}
 
 	got := viewConsumerFilterDrift(desired, actual)
-	if !got["storage_view_kline"] {
+	if !got["storage_view_unchanged"] {
 		t.Fatal("single-filter consumer must be recreated for the multi-filter contract")
 	}
 }
 
 func TestViewConsumerFilterDriftIgnoresSubjectOrder(t *testing.T) {
-	desired := map[string][]string{"storage_view_kline": {"rows.crypto.kline", "period.crypto.kline"}}
+	desired := map[string][]string{"storage_view_unchanged": {"rows.crypto.kline", "period.crypto.kline"}}
 	actual := map[string]viewConsumerFilterState{
-		"storage_view_kline": {Exists: true, Filters: []string{"period.crypto.kline", "rows.crypto.kline"}},
+		"storage_view_unchanged": {Exists: true, Filters: []string{"period.crypto.kline", "rows.crypto.kline"}},
 	}
 
 	if got := viewConsumerFilterDrift(desired, actual); len(got) != 0 {
@@ -57,7 +57,6 @@ func TestViewConsumerFilterDriftIgnoresSubjectOrder(t *testing.T) {
 func TestDesiredStaticViewConsumerFiltersMatchServerContract(t *testing.T) {
 	storage := storageconfig.StorageConfig{
 		View: storageconfig.StorageView{ConsumerPartitions: []storageconfig.StorageViewConsumerPartition{
-			{Durable: events.StorageViewKlineConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}}}},
 			{Durable: events.StorageViewFactorConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"dataset_factor_binance_kline_1m"}}}},
 			{Durable: events.StorageViewMetricsConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}},
 			{Durable: events.StorageViewMiscConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "stockcn", DatasetIDs: []string{"*"}}}},
@@ -76,7 +75,6 @@ func TestDesiredStaticViewConsumerFiltersMatchServerContract(t *testing.T) {
 		space    string
 		dataset  string
 	}{
-		{events.StorageViewKlineConsumer, "crypto", "dataset_binance_kline_1m"},
 		{events.StorageViewFactorConsumer, "crypto", "dataset_factor_binance_kline_1m"},
 		{events.StorageViewMetricsConsumer, "mooxsys", "dataset_mooxsys_service_metrics"},
 	} {

@@ -159,8 +159,16 @@ func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config
 	if got.Config.Storage != want.Storage {
 		return fmt.Errorf("stream %q storage change is forbidden", spec.Name)
 	}
-	if subjectRemoved(got.Config.Subjects, want.Subjects) && got.State.Msgs > 0 {
-		return fmt.Errorf("stream %q subject removal with stored messages is forbidden", spec.Name)
+	if removed := removedSubjects(got.Config.Subjects, want.Subjects); len(removed) > 0 {
+		// Removing a subject strands the messages stored under it, so it is
+		// allowed only once none remain; other subjects' messages are kept.
+		stored, err := storedSubjectMessages(ctx, js, spec.Name, removed)
+		if err != nil {
+			return fmt.Errorf("count stored messages of removed subjects of stream %q: %w", spec.Name, err)
+		}
+		if stored > 0 {
+			return fmt.Errorf("stream %q subject removal of %v with %d stored messages is forbidden", spec.Name, removed, stored)
+		}
 	}
 	if equalStreamConfig(&got.Config, want) {
 		return nil
@@ -235,7 +243,9 @@ func sameStrings(a, b []string) bool {
 	}
 	return true
 }
-func subjectRemoved(old, next []string) bool {
+// removedSubjects lists the subjects in old that next no longer has.
+func removedSubjects(old, next []string) []string {
+	var removed []string
 	for _, value := range old {
 		found := false
 		for _, candidate := range next {
@@ -245,10 +255,25 @@ func subjectRemoved(old, next []string) bool {
 			}
 		}
 		if !found {
-			return true
+			removed = append(removed, value)
 		}
 	}
-	return false
+	return removed
+}
+
+// storedSubjectMessages counts a stream's messages stored under subjects.
+func storedSubjectMessages(ctx context.Context, js nats.JetStreamContext, stream string, subjects []string) (uint64, error) {
+	var total uint64
+	for _, subject := range subjects {
+		info, err := js.StreamInfo(stream, &nats.StreamInfoRequest{SubjectsFilter: subject}, nats.Context(ctx))
+		if err != nil {
+			return 0, err
+		}
+		for _, count := range info.State.Subjects {
+			total += count
+		}
+	}
+	return total, nil
 }
 
 type Topic struct {

@@ -26,12 +26,11 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	if cfg.Archive.EventBus.CredentialFile != "" {
 		t.Fatalf("default eventbus credential file = %q, want empty for development", cfg.Archive.EventBus.CredentialFile)
 	}
-	want := []string{"crypto", "stockcn", "stockus"}
+	want := []string{"stockcn", "stockus"}
 	got := cfg.SourceSpaceIDs()
 	if len(got) != len(want) {
 		t.Fatalf("SourceSpaceIDs() = %v, want %v", got, want)
 	}
-	assert.Equal(t, []string{"dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}, cfg.Archive.Sources["crypto"].Datasets)
 	assert.Equal(t, []string{"dataset_stockcn_equity_kline", "dataset_stockcn_index_kline", "dataset_stockcn_bond_kline"}, cfg.Archive.Sources["stockcn"].Datasets)
 	for i := range want {
 		if got[i] != want[i] {
@@ -95,7 +94,7 @@ func TestCheckedInAppConfigLoadsWithV2Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Archive.EventBus.Consumer != ArchiveConsumer || len(cfg.Archive.Sources["crypto"].Datasets) != 2 {
+	if cfg.Archive.EventBus.Consumer != ArchiveConsumer || len(cfg.Archive.Sources["stockcn"].Datasets) != 3 {
 		t.Fatalf("checked-in config is not v2-ready: %#v", cfg.Archive)
 	}
 }

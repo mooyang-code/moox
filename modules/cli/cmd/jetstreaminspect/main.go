@@ -113,7 +113,7 @@ func main() {
 		fmt.Println()
 		inspectStorageRows(&nats.Msg{Subject: message.Subject, Data: message.Data, Header: message.Header})
 	}
-	for _, name := range []string{"collector-storage-write-v2-crypto", "collector-market-fetch-crypto", "storage_view_kline", "storage_view_factor", "storage_view_metrics", "storage_view_misc"} {
+	for _, name := range []string{"collector-storage-write-v2-crypto", "collector-market-fetch-crypto", "storage_view_factor", "storage_view_metrics", "storage_view_misc"} {
 		info, err := js.ConsumerInfo("MOOX_STORAGE", name, nats.Context(ctx))
 		if err != nil {
 			fmt.Printf("consumer %s error=%v\n", name, err)

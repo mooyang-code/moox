@@ -62,26 +62,6 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 			require.Equal(t, []string{"1m"}, dataset.Freqs)
 			require.Equal(t, "stockcn", dataset.DataSourceID)
 		}
-		if dataset.SpaceID == "crypto" {
-			switch dataset.DatasetID {
-			case "dataset_binance_kline_1m":
-				require.Equal(t, []string{"1m"}, dataset.Freqs, dataset.DatasetID)
-			default:
-				require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
-			}
-		}
-		if dataset.SpaceID == "crypto" {
-			switch dataset.DatasetID {
-			case "dataset_spot_kline_1h":
-				require.Equal(t, "spot", dataset.Attributes["market_type"], dataset.DatasetID)
-			case "dataset_perpetual_kline_1h":
-				require.Equal(t, "swap", dataset.Attributes["market_type"], dataset.DatasetID)
-			case "dataset_binance_kline_1m":
-				require.Equal(t, "raw_collection", dataset.Attributes["dataset_role"], dataset.DatasetID)
-				require.Equal(t, "storage-node-0", dataset.DataNodeID, dataset.DatasetID)
-				require.Equal(t, "720h", dataset.KeepDuration, dataset.DatasetID)
-			}
-		}
 	}
 	for _, column := range seed.DatasetColumns {
 		columnCount[column.SpaceID+"/"+column.DatasetID]++
@@ -89,14 +69,6 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, view := range seed.Views {
 		require.LessOrEqual(t, utf8.RuneCountInString(view.Name), 10, view.SpaceID+"/"+view.ViewID)
 		viewCount[view.SpaceID+"/"+view.PrimaryDatasetID]++
-		if view.SpaceID == "crypto" {
-			switch view.ViewID {
-			case "view_binance_kline_1m":
-				require.Contains(t, view.FilterJSON, `"freq":"1m"`, view.ViewID)
-			default:
-				require.Contains(t, view.FilterJSON, `"freq":"1H"`, view.ViewID)
-			}
-		}
 	}
 	for _, column := range seed.ViewColumns {
 		viewColumnCount[column.SpaceID+"/"+column.ViewID]++
@@ -122,7 +94,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"dataset_stockcn_financial_summary",
 		"dataset_stockcn_index_kline",
 	}, datasetsBySpace["stockcn"])
-	require.Equal(t, []string{"dataset_perpetual_kline_1h", "dataset_spot_kline_1h"}, datasetsBySpace["crypto"])
+	require.Empty(t, datasetsBySpace["crypto"], "crypto results are task-owned Datasets that Collector creates")
 }
 
 func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {

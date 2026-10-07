@@ -29,7 +29,9 @@ import (
 
 const (
 	defaultRepairJSName   = events.StorageViewConsumerStream
-	defaultRepairConsumer = events.StorageViewKlineConsumer
+	// Each View has its own durable, so the consumer to reset is named
+	// explicitly with --consumer.
+	defaultRepairConsumer = ""
 	defaultRepairTimeout  = 2 * time.Minute
 )
 

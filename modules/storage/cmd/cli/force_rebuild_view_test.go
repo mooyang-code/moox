@@ -6,7 +6,7 @@ import (
 )
 
 func TestValidateForceRebuildViewOptionsRequiresDestructiveConfirmationAndLookback(t *testing.T) {
-	opts := forceRebuildViewOptions{spaceID: "space", viewID: "view", stream: defaultRepairJSName, consumer: defaultRepairConsumer, timeout: time.Minute, lookback: time.Hour}
+	opts := forceRebuildViewOptions{spaceID: "space", viewID: "view", stream: defaultRepairJSName, consumer: "storage_view_misc_0123456789ab", timeout: time.Minute, lookback: time.Hour}
 	if err := validateForceRebuildViewOptions(opts); err == nil {
 		t.Fatal("force rebuild must require --yes")
 	}

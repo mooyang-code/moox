@@ -69,7 +69,7 @@ func listDefaultAlertChecks(ctx context.Context, repositories *store.Repositorie
 	}
 	checks := make([]domain.Check, 0, len(all))
 	for _, check := range all {
-		if !check.Enabled || retiredDatasetCheckID(check.CheckID) {
+		if !check.Enabled {
 			continue
 		}
 		checks = append(checks, check)

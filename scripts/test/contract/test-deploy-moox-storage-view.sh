@@ -234,7 +234,7 @@ assert_grep 'name: trpc.moox.storage.view.cleanup.timer' "${DEPLOY_DIR}/storage-
 assert_grep 'port: 20308' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'network: "\*/30 \* \* \* \* \*"' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'timeout: 20000' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-for durable in storage_view_kline storage_view_factor storage_view_metrics storage_view_misc; do
+for durable in storage_view_factor storage_view_metrics storage_view_misc; do
   assert_grep "durable: ${durable}" "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 done
 assert_grep 'fetch_batch: 16' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"

@@ -31,7 +31,7 @@ for config in \
   fi
 done
 
-for durable in storage_view_kline storage_view_factor storage_view_metrics storage_view_misc factor_collector_period_v1; do
+for durable in storage_view_factor storage_view_metrics storage_view_misc factor_collector_period_v1; do
   grep -Fq "${durable}" "${repo_root}/modules/admin/cmd/cli/eventbus_credentials.go" || {
     echo "storage consistency contract failed: generated EventBus ACL is missing durable ${durable}" >&2
     exit 1

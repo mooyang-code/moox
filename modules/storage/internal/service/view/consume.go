@@ -147,9 +147,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		}
 		stops = append(stops, stop)
 		durable := strings.TrimSpace(partition.Consumer)
-		if durable == "" {
-			durable = events.StorageViewKlineConsumer
-		}
 		states[partitionID] = func(stateCtx context.Context) (jetstream.ConsumerState, error) {
 			return partitionClient.ConsumerState(stateCtx, events.DatasetRowsUpserted.Stream(), durable)
 		}

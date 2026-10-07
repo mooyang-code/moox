@@ -255,32 +255,22 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
 	partitions := cfg.Storage.View.ConsumerPartitions
-	if len(partitions) != 4 {
-		t.Fatalf("consumer partitions = %+v, want kline/factor/metrics/misc", partitions)
+	if len(partitions) != 3 {
+		t.Fatalf("consumer partitions = %+v, want factor/metrics/misc", partitions)
 	}
 	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err != nil {
 		t.Fatalf("ValidateConsumerPartitions() error = %v", err)
 	}
-	klineDatasets := partitions[0].Datasets()
-	wantKlineDatasets := []string{"dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}
-	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline" || len(klineDatasets) != len(wantKlineDatasets) || partitions[0].FetchBatch != 32 || partitions[0].MaxWorkers != 8 || partitions[0].MaxAckPending != 256 {
-		t.Fatalf("kline partition = %+v", partitions[0])
+	if partitions[0].ID != "factor" || partitions[0].Durable != "storage_view_factor" || partitions[0].FetchBatch != 1 || partitions[0].MaxWorkers != 1 || partitions[0].MaxAckPending != 1 {
+		t.Fatalf("factor partition = %+v", partitions[0])
 	}
-	for i, datasetID := range wantKlineDatasets {
-		if klineDatasets[i].SpaceID != "crypto" || klineDatasets[i].DatasetID != datasetID {
-			t.Fatalf("kline dataset[%d] = %+v, want crypto/%s", i, klineDatasets[i], datasetID)
-		}
-	}
-	if partitions[1].ID != "factor" || partitions[1].Durable != "storage_view_factor" || partitions[1].FetchBatch != 1 || partitions[1].MaxWorkers != 1 || partitions[1].MaxAckPending != 1 {
-		t.Fatalf("factor partition = %+v", partitions[1])
-	}
-	if got := partitions[1].Datasets(); len(got) != 0 {
+	if got := partitions[0].Datasets(); len(got) != 0 {
 		t.Fatalf("factor results bind dynamically; default static routes = %+v", got)
 	}
-	if partitions[2].ID != "system_metrics" || partitions[2].Durable != "storage_view_metrics" || partitions[2].FetchBatch != 16 || partitions[2].MaxWorkers != 4 || partitions[2].MaxAckPending != 64 {
-		t.Fatalf("metrics partition = %+v", partitions[2])
+	if partitions[1].ID != "system_metrics" || partitions[1].Durable != "storage_view_metrics" || partitions[1].FetchBatch != 16 || partitions[1].MaxWorkers != 4 || partitions[1].MaxAckPending != 64 {
+		t.Fatalf("metrics partition = %+v", partitions[1])
 	}
-	miscDatasets := partitions[3].Datasets()
+	miscDatasets := partitions[2].Datasets()
 	wantStockRoutes := map[string]bool{
 		"dataset_stockcn_financial_statement_metric": false,
 		"dataset_stockcn_financial_summary":          false,
@@ -316,7 +306,7 @@ func TestStorageViewConsumerPartitionsRequireSerialFactorDelivery(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			var cfg RuntimeConfig
 			cfg.ApplyDefaults()
-			factor := &cfg.Storage.View.ConsumerPartitions[1]
+			factor := &cfg.Storage.View.ConsumerPartitions[0]
 			tt.mutate(factor)
 			if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err == nil || !strings.Contains(err.Error(), "1/1/1") || !strings.Contains(err.Error(), factor.Durable) {
 				t.Fatalf("ValidateConsumerPartitions() error = %v, want factor durable 1/1/1 constraint", err)
@@ -356,19 +346,9 @@ func TestCheckedInFactorViewConsumerProfilesAreSerializedTemplates(t *testing.T)
 	}
 }
 
-func TestStorageViewConsumerPartitionsRequireAllCryptoKlineRoutes(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.ApplyDefaults()
-	kline := &cfg.Storage.View.ConsumerPartitions[0]
-	kline.Routes[0].DatasetIDs = []string{"dataset_perpetual_kline_1h"}
-	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err == nil || !strings.Contains(err.Error(), "dataset_spot_kline_1h") {
-		t.Fatalf("missing hourly kline route was accepted or wrong error: %v", err)
-	}
-}
-
 func TestStorageViewConsumerPartitionsRejectOverlapAndInvalidLimits(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "a", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "a", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "b", Durable: "storage_view_metrics", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
@@ -393,10 +373,9 @@ func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
 
 func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m", "dataset_spot_kline_1h", "dataset_perpetual_kline_1h", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_factor_binance_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m", "future_dataset", "other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	managed := []StorageViewConsumerDataset{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m"}}
 	if err := view.ValidateConsumerPartitions(managed); err != nil {
@@ -406,7 +385,7 @@ func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T
 
 func TestStorageViewConsumerPartitionsRequireAllManagedDurables(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
 		t.Fatal("partial consumer topology was accepted")

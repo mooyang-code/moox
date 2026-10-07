@@ -134,7 +134,7 @@ func TestStartEventConsumerDiscardsLegacyPendingSubjectsWithoutPublishing(t *tes
 	}))
 	filter, err := registry.RenderSubject(events.DatasetRowsUpserted, "space", "market_prices")
 	require.NoError(t, err)
-	stop, err := svc.StartEventConsumer(ctx, client, EventConsumerOptions{Consumer: events.StorageViewKlineConsumer, FilterSubjects: []string{filter}, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1})
+	stop, err := svc.StartEventConsumer(ctx, client, EventConsumerOptions{Consumer: events.StorageViewMiscConsumer, FilterSubjects: []string{filter}, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1})
 	require.NoError(t, err)
 	defer stop()
 	_, err = sub.NextMsg(300 * time.Millisecond)

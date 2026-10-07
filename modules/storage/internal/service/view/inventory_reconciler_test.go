@@ -284,7 +284,7 @@ func TestInventoryReconcilerKeepsExactRouteOutsideWildcardSpace(t *testing.T) {
 
 func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 	opts := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{
-		{PartitionID: "kline", Consumer: "storage_view_kline", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m"}}},
+		{PartitionID: "system_metrics", Consumer: "storage_view_metrics", DatasetRoutes: []DatasetRoute{{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics"}}},
 		{PartitionID: "factor", Consumer: "storage_view_factor", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}}},
 		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}, {SpaceID: "crypto", DatasetID: "*"}}},
 	}}
@@ -292,8 +292,8 @@ func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := exact[datasetRef{spaceID: "crypto", datasetID: "dataset_binance_kline_1m"}]; !ok {
-		t.Fatalf("static kline route missing from exact set: %#v", exact)
+	if _, ok := exact[datasetRef{spaceID: "mooxsys", datasetID: "dataset_mooxsys_service_metrics"}]; !ok {
+		t.Fatalf("static metrics route missing from exact set: %#v", exact)
 	}
 	if _, ok := exact[datasetRef{spaceID: "stockcn", datasetID: "stock_kline"}]; ok {
 		t.Fatalf("misc exact route incorrectly excluded from dynamic set: %#v", exact)

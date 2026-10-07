@@ -60,7 +60,6 @@ type StorageEventBus struct {
 }
 
 const (
-	StorageViewConsumer         = events.StorageViewKlineConsumer
 	StorageDefaultMaxAckPending = 8
 	StorageViewMaxAckPending    = 256
 	StorageViewAckWaitMS        = 120000
@@ -277,10 +276,6 @@ func (p StorageViewConsumerPartition) Datasets() []StorageViewConsumerDataset {
 func (v *StorageView) applyConsumerPartitionDefaults() {
 	if len(v.ConsumerPartitions) == 0 {
 		v.ConsumerPartitions = []StorageViewConsumerPartition{
-			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{
-				"dataset_spot_kline_1h",
-				"dataset_perpetual_kline_1h",
-			}}}, FetchBatch: 32, MaxWorkers: 8, MaxAckPending: 256},
 			// Factor result Datasets are bound dynamically, one durable per result;
 			// this partition only supplies their serialized delivery template.
 			{ID: "factor", Durable: events.StorageViewFactorConsumer, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1},
@@ -342,7 +337,7 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		if !validConsumerName(id) || !validConsumerName(durable) {
 			return fmt.Errorf("storage view consumer partition %q has an invalid id or durable name", id)
 		}
-		if durable != events.StorageViewKlineConsumer && durable != events.StorageViewFactorConsumer && durable != events.StorageViewMetricsConsumer && durable != events.StorageViewMiscConsumer {
+		if durable != events.StorageViewFactorConsumer && durable != events.StorageViewMetricsConsumer && durable != events.StorageViewMiscConsumer {
 			return fmt.Errorf("storage view durable %q is not one of the managed partition durables", durable)
 		}
 		if _, exists := partitionIDs[id]; exists {
@@ -409,8 +404,8 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 	// The four durable consumers are an intentional topology contract, not
 	// optional tuning knobs. A partial or overlapping config would silently put
 	// Kline back behind system metrics, defeating the partitioning guarantee.
-	if len(durables) != 4 {
-		return fmt.Errorf("storage view consumer topology must define exactly four durables (kline, factor, metrics, misc); got %d", len(durables))
+	if len(durables) != 3 {
+		return fmt.Errorf("storage view consumer topology must define exactly three durables (factor, metrics, misc); got %d", len(durables))
 	}
 	requiredRoutes := []struct {
 		name    string
@@ -418,8 +413,6 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		space   string
 		dataset string
 	}{
-		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_spot_kline_1h"},
-		{name: "kline", durable: events.StorageViewKlineConsumer, space: "crypto", dataset: "dataset_perpetual_kline_1h"},
 		{name: "metrics", durable: events.StorageViewMetricsConsumer, space: "mooxsys", dataset: "dataset_mooxsys_service_metrics"},
 	}
 	for _, required := range requiredRoutes {
@@ -599,9 +592,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if cleanup.MaxBatchesPerRun == 0 {
 		cleanup.MaxBatchesPerRun = 10
-	}
-	if c.EventBus.Consumer == "" {
-		c.EventBus.Consumer = StorageViewConsumer
 	}
 	if c.EventBus.MaxAckPending == 0 {
 		c.EventBus.MaxAckPending = StorageDefaultMaxAckPending

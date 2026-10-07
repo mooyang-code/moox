@@ -76,7 +76,7 @@ func TestArchiveConsumerRetriesTransientRunnerFailure(t *testing.T) {
 func TestSourceLists(t *testing.T) {
 	cfg := testConfig()
 	got := sourceLists(cfg)
-	if len(got["crypto"]) != 2 || got["crypto"][0] != "dataset_spot_kline_1h" {
+	if len(got["stockcn"]) != 3 || got["stockcn"][0] != "dataset_stockcn_equity_kline" {
 		t.Fatalf("source lists=%v", got)
 	}
 }

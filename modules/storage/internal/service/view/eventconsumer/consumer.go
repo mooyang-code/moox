@@ -66,7 +66,7 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	c.FilterSubjects = filters
 	if strings.TrimSpace(c.Consumer) == "" {
-		c.Consumer = events.StorageViewKlineConsumer
+		return c, fmt.Errorf("storage view consumer durable is required")
 	}
 	if c.AckWaitMS == 0 {
 		c.AckWaitMS = 120000

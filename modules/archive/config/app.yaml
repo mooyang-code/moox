@@ -5,7 +5,6 @@ archive:
   sources:
     stockcn: {datasets: [dataset_stockcn_equity_kline, dataset_stockcn_index_kline, dataset_stockcn_bond_kline]}
     stockus: {datasets: [equity_kline, etf_kline, index_kline]}
-    crypto: {datasets: [dataset_spot_kline_1h, dataset_perpetual_kline_1h]}
   eventbus:
     urls: [nats://127.0.0.1:4222]
     credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml

@@ -101,8 +101,6 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		"stockcn/dataset_stockcn_bond_kline":   {"1m", "1d"},
 		"stockhk/dataset_stockhk_equity_kline": {"1m", "1d", "1w", "1M"},
 		"stockus/dataset_stockus_equity_kline": {"1m", "1d", "1w", "1M"},
-		"crypto/dataset_spot_kline_1h":         {"1H"},
-		"crypto/dataset_perpetual_kline_1h":    {"1H"},
 	}
 	for key, freqs := range owners {
 		t.Run(key, func(t *testing.T) {

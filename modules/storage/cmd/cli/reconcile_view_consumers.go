@@ -156,7 +156,6 @@ func desiredStaticViewConsumerFilters(storage storageconfig.StorageConfig) (map[
 		return nil, err
 	}
 	static := map[string]bool{
-		events.StorageViewKlineConsumer:   true,
 		events.StorageViewFactorConsumer:  true,
 		events.StorageViewMetricsConsumer: true,
 	}
@@ -218,7 +217,7 @@ func inspectViewConsumerFilters(ctx context.Context, opts reconcileViewConsumers
 		return nil, err
 	}
 	result := make(map[string]viewConsumerFilterState)
-	for _, consumer := range []string{events.StorageViewKlineConsumer, events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer} {
+	for _, consumer := range []string{events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer} {
 		info, err := js.ConsumerInfo(opts.stream, consumer, nats.Context(ctx))
 		if errors.Is(err, nats.ErrConsumerNotFound) {
 			result[consumer] = viewConsumerFilterState{}
