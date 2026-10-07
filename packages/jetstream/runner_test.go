@@ -3,6 +3,7 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -554,18 +555,51 @@ func TestRunnerDoesNotHideDecodeAndTransportError(t *testing.T) {
 	}
 }
 
-func TestRunnerCancellationDoesNotStartNextDelivery(t *testing.T) {
+func TestRunnerCancellationReleasesUnstartedDeliveries(t *testing.T) {
 	var actions []string
 	first := runnerDelivery(&actions, nil)
 	second := runnerDelivery(&actions, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	consumer := &runnerFakeConsumer{batches: [][]*Delivery{{first, second}}}
 	consumer.onFetch = func() { cancel() }
-	if err := NewRunner(consumer, &runnerFakeHandler{result: HandlerResult{Decision: ACK}}, RunnerConfig{}).Run(ctx); err != nil {
+	handler := &runnerFakeHandler{result: HandlerResult{Decision: ACK}}
+	if err := NewRunner(consumer, handler, RunnerConfig{}).Run(ctx); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(actions) != 0 {
-		t.Fatalf("actions = %v, want no delivery started after cancellation", actions)
+	if handler.seen != 0 || strings.Join(actions, ",") != "nak,nak" {
+		t.Fatalf("seen=%d actions=%v, want both deliveries released unhandled", handler.seen, actions)
+	}
+}
+
+func TestRunnerCancellationReleasesInterruptedDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result HandlerResult
+		want   string
+	}{
+		{name: "interrupted retry is returned at once", result: HandlerResult{Decision: RETRY, Delay: time.Minute}, want: "nak:0s"},
+		{name: "finished ack is kept", result: HandlerResult{Decision: ACK}, want: "ack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var actions []string
+			delivery := runnerDelivery(&actions, nil)
+			delivery.nakFn = func(ctx context.Context, delay time.Duration) error {
+				if ctx.Err() != nil {
+					t.Fatalf("release used a cancelled context")
+				}
+				actions = append(actions, "nak:"+delay.String())
+				return nil
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			consumer := &runnerFakeConsumer{batches: [][]*Delivery{{delivery}}}
+			handler := &runnerFakeHandler{result: tc.result, onHandle: cancel}
+			if err := NewRunner(consumer, handler, RunnerConfig{IndependentBatch: true}).Run(ctx); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if strings.Join(actions, ",") != tc.want {
+				t.Fatalf("actions = %v, want %s", actions, tc.want)
+			}
+		})
 	}
 }
 

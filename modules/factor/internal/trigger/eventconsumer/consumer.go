@@ -29,6 +29,10 @@ type ConsumerConfig struct {
 	ReadColumnTimeout  time.Duration
 }
 
+// ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
+// delivery is handed out again.
+const ackWaitHeartbeats = 4
+
 func (cfg *ConsumerConfig) applyDefaults() {
 	if len(cfg.URLs) == 0 {
 		cfg.URLs = []string{"nats://127.0.0.1:4222"}
@@ -112,7 +116,11 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 	if err != nil {
 		return nil, err
 	}
-	ackWait := cfg.PeriodBudgetMax + time.Minute
+	// The runner reports InProgress every InProgressInterval while a period is
+	// queued or computing, which keeps extending the ack deadline however long
+	// the period takes. AckWait therefore only bounds how long a delivery held
+	// by a process that died without releasing it stays stuck.
+	ackWait := ackWaitHeartbeats * cfg.InProgressInterval
 	consumer, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
 		Name: ConsumerName, Event: events.CollectorPeriodCompleted,
 		AckWait: ackWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending,

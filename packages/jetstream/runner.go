@@ -175,6 +175,9 @@ func (r *Runner) handleSequentialBatch(ctx context.Context, deliveries []*Delive
 	var batchErr error
 	for index, delivery := range deliveries {
 		if ctx.Err() != nil {
+			for _, pending := range deliveries[index:] {
+				r.releaseOnStop(ctx, pending, HandlerResult{})
+			}
 			return batchErr
 		}
 		result, inProgressErr, actionErr := r.handle(ctx, delivery)
@@ -266,6 +269,7 @@ func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult,
 
 heartbeatDone:
 	if ctx.Err() != nil {
+		r.releaseOnStop(ctx, delivery, result)
 		return result, inProgressErr, nil
 	}
 	if delivery == nil {
@@ -279,6 +283,25 @@ heartbeatDone:
 		actionErr = fmt.Errorf("apply handler result: %w", actionErr)
 	}
 	return result, inProgressErr, actionErr
+}
+
+// releaseOnStop settles a delivery the stopping runner did not finish: it is
+// returned to the stream at once rather than left to wait out AckWait before
+// another process may take it. A decision the handler did reach (ACK or TERM)
+// is still applied. The action uses a context detached from the stopping one.
+func (r *Runner) releaseOnStop(ctx context.Context, delivery *Delivery, result HandlerResult) {
+	if delivery == nil {
+		return
+	}
+	if result.Decision != ACK && result.Decision != TERM {
+		result = HandlerResult{Decision: RETRY, Err: result.Err}
+	}
+	stopCtx := context.WithoutCancel(ctx)
+	err := ApplyHandlerResult(stopCtx, delivery, result)
+	r.reportAction(stopCtx, delivery, result, err)
+	if err != nil {
+		r.report(fmt.Errorf("release delivery on stop: %w", err))
+	}
 }
 
 func (r *Runner) heartbeat(ctx context.Context, delivery *Delivery, stop <-chan struct{}, errs chan<- error, wg *sync.WaitGroup) {
