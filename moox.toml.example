@@ -462,6 +462,8 @@ function_count = 0
   host = "203.0.113.11"
   tls_mode = "auto"
 
+# Storage、factor-mgr 等 CGO 组件在 compile_host 上编译（Linux amd64，glibc 不高于生产机）。
+# 不要使用运行中的生产机：编译 DuckDB 会占满 CPU/内存，拖慢同机的调度、网关与 SCF 调用。
 [compile_host]
   name = "compile"
   host = "203.0.113.10"
