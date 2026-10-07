@@ -1,7 +1,7 @@
 <template>
   <div class="moox-page factor-definitions-page">
     <div class="moox-inner">
-      <div class="page-head">
+      <div class="page-head definitions-head">
         <div class="page-head__title">
           <h2>因子定义</h2>
           <InfoTip
@@ -17,25 +17,27 @@
           <template #action><a-button size="mini" @click="load">重试</a-button></template>
         </a-alert>
 
-        <div class="definitions-filters">
-          <a-radio-group v-model="filters.usage" type="button" aria-label="使用情况筛选">
-            <a-radio value="all">全部 {{ counts.all }}</a-radio>
-            <a-radio value="using">使用中 {{ counts.using }}</a-radio>
-            <a-radio value="idle">未使用 {{ counts.idle }}</a-radio>
-          </a-radio-group>
-          <div class="definitions-filters__right">
-            <a-select v-model="filters.type" class="filter-type" placeholder="全部类型">
-              <a-option value="">全部类型</a-option>
-              <a-option value="timeseries">时序</a-option>
-              <a-option value="cross_section">横截面</a-option>
-            </a-select>
-            <a-input-search v-model="filters.keyword" allow-clear placeholder="搜索因子 ID 或模块名" class="filter-search" />
-            <a-button type="primary" status="success" @click="createFactor">
-              <template #icon><icon-plus /></template>
-              新增因子
-            </a-button>
-          </div>
-        </div>
+        <a-space class="task-toolbar" wrap>
+          <a-button type="primary" status="success" @click="createFactor">
+            <template #icon><icon-plus /></template>
+            新增因子
+          </a-button>
+          <a-input v-model="filters.keyword" placeholder="按因子 ID 或模块名筛选" allow-clear style="width: 200px" @press-enter="search" />
+          <a-select v-model="filters.type" placeholder="因子类型" style="width: 120px">
+            <a-option value="">全部类型</a-option>
+            <a-option value="timeseries">时序</a-option>
+            <a-option value="cross_section">横截面</a-option>
+          </a-select>
+          <a-select v-model="filters.usage" placeholder="使用情况" style="width: 140px">
+            <a-option value="all">全部（{{ counts.all }}）</a-option>
+            <a-option value="using">使用中（{{ counts.using }}）</a-option>
+            <a-option value="idle">未使用（{{ counts.idle }}）</a-option>
+          </a-select>
+          <a-button type="primary" @click="search">
+            <template #icon><icon-search /></template>
+            查询
+          </a-button>
+        </a-space>
 
         <a-table
           row-key="factor_id"
@@ -146,7 +148,9 @@ const PAGE_SIZE = 500;
 const router = useRouter();
 const { store, spaceId } = useFactorScope({ poll: false });
 
+// filters 是表单里的草稿，applied 是点「查询」后生效的条件，与采集任务页一致。
 const filters = reactive<DefinitionFilters>({ type: "", usage: "all", keyword: "" });
+const applied = reactive<DefinitionFilters>({ ...filters });
 const items = ref<FactorInfo[]>([]);
 const loading = ref(false);
 const loadError = ref("");
@@ -161,13 +165,18 @@ function setLabelOf(setId: string) {
 }
 
 const rows = computed(() =>
-  filterDefinitions(items.value, filters).map(item => ({
+  filterDefinitions(items.value, applied).map(item => ({
     factor: item.factor,
     chips: usageChips(item.usages, setLabelOf),
     edit: definitionEditState(item),
     remove: definitionDeleteState(item)
   }))
 );
+
+function search() {
+  Object.assign(applied, filters);
+  void load();
+}
 
 /** 列表默认不带源码（D24）；详情抽屉再按需 GetFactor。 */
 async function load() {
@@ -232,32 +241,16 @@ onActivated(() => {
 <style scoped lang="scss">
 @use "../shared/factor-page.scss";
 
+.definitions-head {
+  margin-bottom: var(--moox-space-3);
+}
+
 .definitions-alert {
   margin-bottom: var(--moox-space-3);
 }
 
-.definitions-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--moox-space-3);
-  margin-bottom: var(--moox-space-3);
-}
-
-.definitions-filters__right {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--moox-space-2);
-}
-
-.filter-type {
-  width: 104px;
-}
-
-.filter-search {
-  width: 240px;
+.task-toolbar {
+  margin-bottom: var(--moox-space-toolbar-table);
 }
 
 .cell-sub {
