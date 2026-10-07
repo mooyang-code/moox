@@ -171,7 +171,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if cfg.DNSResolver.Enabled {
 		dnsPersistencePath = filepath.Join(filepath.Dir(cfg.Database.Path), "dns_resolver_snapshot.json")
 	}
-	dnsSnapshot := collectordns.NewCoordinatorWithMetricsAndPersistence(localDNS, remoteDNS, dnsDomains, refreshInterval, cacheTTL, dnsMetrics, dnsPersistencePath)
+	dnsSnapshot := collectordns.NewCoordinator(collectordns.CoordinatorConfig{Local: localDNS, Remote: remoteDNS, Domains: dnsDomains, Interval: refreshInterval, CacheTTL: cacheTTL, Metrics: dnsMetrics, PersistencePath: dnsPersistencePath})
 	if err := dnsSnapshot.RestoreLastGoodSnapshot(); err != nil {
 		log.WarnContextf(ctx, "restore collector DNS last-good snapshot failed: %v", err)
 	}

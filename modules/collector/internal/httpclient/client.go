@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -272,13 +271,13 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
+		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, time.Since(started).Milliseconds())
 		return &StatusError{StatusCode: resp.StatusCode}
 	}
 	if err := consume(resp.Body); err != nil {
 		return fmt.Errorf("JSON 解析失败: %w", err)
 	}
-	log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
+	log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, time.Since(started).Milliseconds())
 	return nil
 }
 

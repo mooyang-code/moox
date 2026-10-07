@@ -72,10 +72,6 @@ func NewHandler() *Handler {
 	}, Publish: publishCompletion}
 }
 
-func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
-	return h.handleWithFunctionName(ctx, event, true, "")
-}
-
 // HandleWithFunctionName binds an Invoke request to the function identity
 // supplied by the Tencent runtime. Payload function_name is only a hint.
 func (h *Handler) HandleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, functionName string) (*model.Response, error) {
@@ -86,15 +82,6 @@ func (h *Handler) HandleWithFunctionName(ctx context.Context, event model.CloudF
 // diagnostic invocation without publishing a scheduler completion event.
 func (h *Handler) HandleWithFunctionNameWithoutCompletion(ctx context.Context, event model.CloudFunctionEvent, functionName string) (*model.Response, error) {
 	return h.handleWithFunctionName(ctx, event, false, functionName)
-}
-
-// HandleTimer executes one durable batch claimed from the Collector runtime.
-func (h *Handler) HandleTimer(ctx context.Context, requestID, nodeID string) (*model.Response, error) {
-	now := time.Now().UTC()
-	if h != nil && h.Now != nil {
-		now = h.Now().UTC()
-	}
-	return h.HandleTimerAt(ctx, requestID, nodeID, now)
 }
 
 func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, now time.Time) (*model.Response, error) {

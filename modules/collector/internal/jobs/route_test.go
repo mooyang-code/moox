@@ -13,39 +13,6 @@ func TestJobRouteForNormalizesExchangeAndDataType(t *testing.T) {
 	}
 }
 
-func TestJobRouteByJobTypeTrimsButRequiresExactCase(t *testing.T) {
-	route, ok := JobRouteByJobType(" collect.binance.kline ")
-	if !ok || route.JobType != JobTypeCollectBinanceKline {
-		t.Fatalf("route = %#v, ok = %v", route, ok)
-	}
-	if _, ok := JobRouteByJobType("COLLECT.BINANCE.SYMBOL"); ok {
-		t.Fatal("JobRouteByJobType() accepted a case variant")
-	}
-	if _, ok := JobRouteByJobType("collect.symbol"); ok {
-		t.Fatal("JobRouteByJobType() retained obsolete generic alias")
-	}
-}
-
-func TestSupportedJobTypesReturnsProviderSpecificStableCopy(t *testing.T) {
-	got := SupportedJobTypes()
-	if len(got) != 1 || got[0] != JobTypeCollectBinanceKline {
-		t.Fatalf("SupportedJobTypes() = %#v", got)
-	}
-	got[0] = "modified"
-	if next := SupportedJobTypes(); next[0] != JobTypeCollectBinanceKline {
-		t.Fatalf("SupportedJobTypes() returned shared storage: %#v", next)
-	}
-}
-
-func TestValidateJobTypesRejectsUnknownRoute(t *testing.T) {
-	if err := ValidateJobTypes([]string{JobTypeCollectBinanceKline}); err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateJobTypes([]string{"collect.kline"}); err == nil {
-		t.Fatal("ValidateJobTypes() accepted legacy job type")
-	}
-}
-
 func TestJobRoutesRejectDuplicateIdentity(t *testing.T) {
 	routes := []JobRoute{
 		{Exchange: "binance", DataType: "kline", JobType: "collect.binance.kline"},

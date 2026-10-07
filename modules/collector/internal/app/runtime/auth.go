@@ -24,19 +24,6 @@ type AuthConfig struct {
 	ExpireSec   int64
 }
 
-func DefaultAuthConfig() AuthConfig {
-	cfg := GetServiceAuthConfig()
-	return AuthConfig{
-		AccessKey:   cfg.AccessKey,
-		SecretKey:   cfg.SecretKey,
-		Caller:      cfg.Caller,
-		TargetNode:  cfg.TargetNode,
-		CAFile:      cfg.CAFile,
-		CAPEMBase64: cfg.CAPEMBase64,
-		ExpireSec:   cfg.ExpireSec,
-	}
-}
-
 func NewGatewayHTTPClient(timeout time.Duration, cfg AuthConfig) (*http.Client, error) {
 	return gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: cfg.CAFile, CAPEMBase64: cfg.CAPEMBase64})
 }

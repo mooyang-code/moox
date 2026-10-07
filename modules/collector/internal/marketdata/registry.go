@@ -94,27 +94,3 @@ func (r *Registry) KlineFetcherBySource(key SourceKey) (KlineFetcher, error) {
 	}
 	return fetcher, nil
 }
-
-func (r *Registry) InstrumentFetcher(id string) (InstrumentFetcher, error) {
-	provider, err := r.Provider(id)
-	if err != nil {
-		return nil, err
-	}
-	fetcher, ok := provider.(InstrumentFetcher)
-	if !ok {
-		return nil, ErrFetcherNotSupported
-	}
-	return fetcher, nil
-}
-
-func (r *Registry) InstrumentFetcherBySource(key SourceKey) (InstrumentFetcher, error) {
-	provider, err := r.Source(key)
-	if err != nil {
-		return nil, err
-	}
-	fetcher, ok := provider.(InstrumentFetcher)
-	if !ok {
-		return nil, ErrFetcherNotSupported
-	}
-	return fetcher, nil
-}

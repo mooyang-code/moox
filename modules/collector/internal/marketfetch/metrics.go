@@ -50,10 +50,6 @@ type Metrics struct {
 	feedResults                    *prometheus.CounterVec
 	configuredGroups               *prometheus.GaugeVec
 	configuredGroupIDs             *prometheus.GaugeVec
-	egressFunctions                *prometheus.GaugeVec
-	instrumentActive               *prometheus.GaugeVec
-	instrumentExchange             *prometheus.GaugeVec
-	instrumentLastSnapshot         *prometheus.GaugeVec
 	feedObservations               *prometheus.CounterVec
 }
 
@@ -109,10 +105,6 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		feedResults:                    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_results_total", Help: "Bounded market feed outcomes; subject, function, IP, and candidate chain are intentionally excluded."}, []string{"market_id", "route_id", "provider_id", "feed_kind", "group_id", "batch_kind", "result"}),
 		configuredGroups:               prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_configured_groups", Help: "Expected and actual Timer group counts."}, []string{"market_id", "route_id", "kind"}),
 		configuredGroupIDs:             prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_configured_group_id", Help: "Configured Timer Group identity counts; a value other than one means missing or duplicate identity."}, []string{"market_id", "route_id", "group_id"}),
-		egressFunctions:                prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "route_id", "kind"}),
-		instrumentActive:               prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_active", Help: "Active instruments in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
-		instrumentExchange:             prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_exchange", Help: "Instrument count by bounded exchange in the latest complete snapshot."}, []string{"market_id", "route_id", "provider_id", "exchange"}),
-		instrumentLastSnapshot:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_instrument_last_snapshot_timestamp_seconds", Help: "Fetch timestamp of the latest complete instrument snapshot."}, []string{"market_id", "route_id", "provider_id", "result"}),
 		feedObservations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_feed_observations_total", Help: "Bounded market feed observations with source, route, and egress dimensions."}, []string{
 			"market_id", "instrument_type", "provider_id", "source_id", "frequency", "source_kind", "transport",
 			"remote_host", "remote_port", "scf_region", "egress_scope", "egress_ip", "connection_attempt",
@@ -154,10 +146,6 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics.feedResults = registerCounterVec(reg, metrics.feedResults)
 	metrics.configuredGroups = registerGaugeVec(reg, metrics.configuredGroups)
 	metrics.configuredGroupIDs = registerGaugeVec(reg, metrics.configuredGroupIDs)
-	metrics.egressFunctions = registerGaugeVec(reg, metrics.egressFunctions)
-	metrics.instrumentActive = registerGaugeVec(reg, metrics.instrumentActive)
-	metrics.instrumentExchange = registerGaugeVec(reg, metrics.instrumentExchange)
-	metrics.instrumentLastSnapshot = registerGaugeVec(reg, metrics.instrumentLastSnapshot)
 	metrics.feedObservations = registerCounterVec(reg, metrics.feedObservations)
 	return metrics
 }
@@ -280,12 +268,6 @@ func registerGaugeVec(reg prometheus.Registerer, collector *prometheus.GaugeVec)
 		}
 	}
 	return collector
-}
-
-// ObserveAssignment records the desired and currently assigned Timer shards.
-func (m *Metrics) ObserveAssignment(spaceID, frequency string, required, active int, reconciledAt int64) {
-	m.ObserveAssignmentDesired(spaceID, frequency, required, active)
-	m.ObserveAssignmentSuccess(spaceID, reconciledAt)
 }
 
 // ObserveAssignmentDesired records the state requested from CloudNode. It is
@@ -627,35 +609,6 @@ func (m *Metrics) ObserveConfiguredGroupID(marketID, routeID string, groupID int
 	m.configuredGroupIDs.WithLabelValues(marketID, routeID, strconv.Itoa(groupID)).Add(1)
 }
 
-// ObserveEgressDiagnostic records optional probe facts. These values are
-// informational and must never be interpreted as a release or activation gate.
-func (m *Metrics) ObserveEgressDiagnostic(marketID, routeID string, expected, results, nonEmpty, distinct int) {
-	if m == nil {
-		return
-	}
-	marketID, routeID = boundedMarketRoute(marketID, routeID)
-	for kind, value := range map[string]int{"expected": expected, "result": results, "non_empty_ip": nonEmpty, "distinct_ip": distinct} {
-		m.egressFunctions.WithLabelValues(marketID, routeID, kind).Set(float64(max(value, 0)))
-	}
-}
-
-func (m *Metrics) ObserveInstrumentSnapshot(marketID, routeID, providerID, result string, active int, exchanges map[string]int, fetchedAt time.Time) {
-	if m == nil {
-		return
-	}
-	marketID, routeID = boundedMarketRoute(marketID, routeID)
-	providerID = boundedValue(providerID, []string{"sina", "eastmoney", "baidu", "binance", "tencent", "storage_cache", "none"}, "unknown")
-	result = boundedValue(result, []string{"success", "fallback", "incomplete", "stale", "invalid"}, "unknown")
-	m.instrumentActive.WithLabelValues(marketID, routeID, providerID, result).Set(float64(max(active, 0)))
-	if !fetchedAt.IsZero() {
-		m.instrumentLastSnapshot.WithLabelValues(marketID, routeID, providerID, result).Set(float64(fetchedAt.UTC().Unix()))
-	}
-	for exchange, count := range exchanges {
-		exchange = boundedValue(exchange, []string{"XSHG", "XSHE", "XBSE", "SPOT", "SWAP"}, "unknown")
-		m.instrumentExchange.WithLabelValues(marketID, routeID, providerID, exchange).Set(float64(max(count, 0)))
-	}
-}
-
 func boundedMarketRoute(marketID, routeID string) (string, string) {
 	marketID = boundedValue(marketID, []string{"stockcn", "crypto"}, "unknown")
 	routeID = strings.TrimSpace(routeID)
@@ -691,5 +644,4 @@ func boundedValue(value string, allowed []string, fallback string) string {
 // Observe and SetRetryPending remain no-ops for the retired completion-based
 // realtime scheduler. They keep the manual catchup package boundary source
 // compatible without registering legacy high-cardinality metrics.
-func (m *Metrics) Observe(string, any)                         {}
-func (m *Metrics) SetRetryPending(string, string, string, int) {}
+func (m *Metrics) Observe(string, any) {}

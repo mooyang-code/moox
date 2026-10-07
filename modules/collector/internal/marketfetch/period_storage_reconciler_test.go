@@ -571,3 +571,15 @@ func reconcilerStateForSnapshot(snapshot domain.PeriodSeriesSnapshot, status str
 		DeadlineAt: snapshot.Key.PeriodTime.Add(time.Minute), Status: status, ConfirmedAt: snapshot.Key.PeriodTime.Add(time.Hour),
 	}
 }
+
+func (r *PeriodStorageReconciler) ReconcileWithLimits(ctx context.Context, now time.Time, retention time.Duration, cleanupRowBudget, manifestLimit int) (int64, error) {
+	counts, err := r.ReconcileWithCleanupCounts(ctx, now, retention, cleanupRowBudget, manifestLimit)
+	return counts.SnapshotRows + counts.StateRows, err
+}
+
+// Reconcile probes a bounded page of expired snapshot periods in stable keyset
+// order, then deletes confirmed terminal snapshots. Failed probes advance the
+// cursor and are retried after the scan wraps on a later round.
+func (r *PeriodStorageReconciler) Reconcile(ctx context.Context, now time.Time) (int64, error) {
+	return r.ReconcileWithLimits(ctx, now, periodStorageRetention, periodStorageCleanupRowLimit, periodStorageCleanupManifestLimit)
+}

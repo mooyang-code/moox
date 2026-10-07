@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"gopkg.in/yaml.v3"
 )
 
@@ -94,17 +93,10 @@ func decodeBinanceSourceConfig(reader io.Reader) (*binanceSourceConfig, error) {
 	return &source, nil
 }
 
+// resolveBinanceSourceConfigPath finds the Binance source file: the SCF
+// package root first, then the repository layout used by local runs.
 func resolveBinanceSourceConfigPath() (string, error) {
-	for _, candidate := range binanceSourceConfigCandidates() {
-		if candidate == "" {
-			continue
-		}
-		if filepath.IsAbs(candidate) {
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, nil
-			}
-			continue
-		}
+	for _, candidate := range []string{"sources/market/binance.yaml", "configs/sources/market/binance.yaml"} {
 		for _, full := range relativeConfigCandidates(candidate) {
 			if _, err := os.Stat(full); err == nil {
 				return full, nil
@@ -112,27 +104,6 @@ func resolveBinanceSourceConfigPath() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("未找到 Binance 数据源配置")
-}
-
-func binanceSourceConfigCandidates() []string {
-	candidates := []string{}
-	if runtimeapp.LocalAppConfig != nil && runtimeapp.LocalAppConfig.Sources != nil {
-		candidates = append(candidates, binanceConfigPaths(runtimeapp.LocalAppConfig.Sources.Market)...)
-	}
-
-	if data, err := os.ReadFile("modules/collector/configs/config.yaml"); err == nil {
-		cfg := runtimeapp.DefaultConfig()
-		if err := yaml.Unmarshal(data, cfg); err == nil && cfg.Sources != nil {
-			candidates = append(candidates, binanceConfigPaths(cfg.Sources.Market)...)
-		}
-	}
-
-	defaultCfg := runtimeapp.DefaultConfig()
-	if defaultCfg.Sources != nil {
-		candidates = append(candidates, binanceConfigPaths(defaultCfg.Sources.Market)...)
-	}
-	candidates = append(candidates, "modules/collector/configs/sources/market/binance.yaml")
-	return dedupeStrings(candidates)
 }
 
 func relativeConfigCandidates(candidate string) []string {
@@ -151,16 +122,6 @@ func relativeConfigCandidates(candidate string) []string {
 		}
 	}
 	return dedupeStrings(out)
-}
-
-func binanceConfigPaths(sources []runtimeapp.SourceConfig) []string {
-	out := make([]string, 0, len(sources))
-	for _, source := range sources {
-		if strings.EqualFold(source.Name, "binance") {
-			out = append(out, source.Config)
-		}
-	}
-	return out
 }
 
 func dedupeStrings(values []string) []string {

@@ -281,17 +281,6 @@ func TestKlineResampleParamsRejectInvalidPairAndIdentity(t *testing.T) {
 	}
 }
 
-func TestKlineResampleImmutableIdentityIgnoresSettleDelay(t *testing.T) {
-	left, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"60m","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"240m","alignment":"epoch_utc","settle_delay_ms":10000}`, "", "", "kline_resample")
-	require.NoError(t, err)
-	right, err := ParseCollectParams(`{"provider":"MOOX","market_type":"SPOT","source_dataset_id":"source","source_frequency":"1H","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4H","alignment":"EPOCH_UTC","settle_delay_ms":20000}`, "", "", "kline_resample")
-	require.NoError(t, err)
-	assert.NoError(t, ValidateSameResampleIdentity(left, right))
-
-	right.SourceSeriesTag = "venue:okx"
-	require.ErrorContains(t, ValidateSameResampleIdentity(left, right), "source_series_tag")
-}
-
 func TestKlineResampleCanonicalJSONOmitsRuntimeRepairPolicy(t *testing.T) {
 	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"60m","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"240m","alignment":"epoch_utc"}`, "", "", "kline_resample")
 	require.NoError(t, err)

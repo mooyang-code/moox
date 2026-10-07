@@ -62,24 +62,3 @@ func TestNewSignedRequestWithContextAndHeaders_PreservesSpaceHeader(t *testing.T
 	}, req.Header, now)
 	require.NoError(t, err)
 }
-
-func TestDefaultAuthConfig_UsesGlobalConfig(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "env-ak")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "env-sk")
-	cfg := DefaultAuthConfig()
-	assert.Equal(t, "env-ak", cfg.AccessKey)
-	assert.Equal(t, "env-sk", cfg.SecretKey)
-	assert.Equal(t, "gateway-gz-122", cfg.TargetNode)
-}
-
-func TestDefaultAuthConfig_PrefersServiceGatewayCA(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_CA_FILE", "/gateway/peers.pem")
-	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "gateway-ca")
-	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "service-ca")
-
-	cfg := DefaultAuthConfig()
-
-	assert.Empty(t, cfg.CAFile)
-	assert.Equal(t, "service-ca", cfg.CAPEMBase64)
-}

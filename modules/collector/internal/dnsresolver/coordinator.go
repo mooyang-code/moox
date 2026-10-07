@@ -51,42 +51,31 @@ type Status struct {
 	LastErrorCategory string
 }
 
-func NewCoordinator(local *dnscache.Cache, remote DomainResolver, domains []string, interval time.Duration) *Coordinator {
-	// Legacy/local-only callers retain the dnscache contract: a last-good
-	// snapshot is kept until a newer refresh replaces it.
-	return NewCoordinatorWithTTL(local, remote, domains, interval, 0)
+// CoordinatorConfig wires a Coordinator. A non-positive CacheTTL keeps the
+// last-good route until a newer refresh replaces it; deployments with a remote
+// resolver pass a positive TTL so failed refreshes cannot keep an expired
+// address alive. PersistencePath stores the last-known-good snapshot used only
+// as a fallback across restarts; it is never sent to the resolver or exposed in
+// the SCF payload directly.
+type CoordinatorConfig struct {
+	Local           *dnscache.Cache
+	Remote          DomainResolver
+	Domains         []string
+	Interval        time.Duration
+	CacheTTL        time.Duration
+	Metrics         *Metrics
+	PersistencePath string
 }
 
-// NewCoordinatorWithTTL keeps refresh cadence separate from route freshness.
-// A non-positive cacheTTL disables expiry, which is useful for the legacy
-// local-DNS fallback. Enabled remote resolver deployments always pass a
-// positive TTL so failed refreshes cannot keep an expired address alive.
-func NewCoordinatorWithTTL(local *dnscache.Cache, remote DomainResolver, domains []string, interval, cacheTTL time.Duration) *Coordinator {
-	if interval <= 0 {
-		interval = 5 * time.Minute
+func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
+	if cfg.Interval <= 0 {
+		cfg.Interval = 5 * time.Minute
 	}
 	return &Coordinator{
-		Local: local, Remote: remote, Domains: normalizeDomains(domains),
-		Interval: interval, CacheTTL: cacheTTL, routes: make(map[string]sources.DNSResolution), routeSource: make(map[string]string),
+		Local: cfg.Local, Remote: cfg.Remote, Domains: normalizeDomains(cfg.Domains),
+		Interval: cfg.Interval, CacheTTL: cfg.CacheTTL, routes: make(map[string]sources.DNSResolution), routeSource: make(map[string]string),
+		metrics: cfg.Metrics, persistencePath: strings.TrimSpace(cfg.PersistencePath),
 	}
-}
-
-// NewCoordinatorWithMetrics is the bootstrap constructor for the production
-// coordinator. The legacy constructors remain useful for small tests and
-// callers that do not need Prometheus instrumentation.
-func NewCoordinatorWithMetrics(local *dnscache.Cache, remote DomainResolver, domains []string, interval, cacheTTL time.Duration, metrics *Metrics) *Coordinator {
-	coordinator := NewCoordinatorWithTTL(local, remote, domains, interval, cacheTTL)
-	coordinator.metrics = metrics
-	return coordinator
-}
-
-// NewCoordinatorWithMetricsAndPersistence is the production constructor. The
-// persisted snapshot is only a last-known-good fallback for process restarts;
-// it is never sent to the resolver or exposed in the SCF payload directly.
-func NewCoordinatorWithMetricsAndPersistence(local *dnscache.Cache, remote DomainResolver, domains []string, interval, cacheTTL time.Duration, metrics *Metrics, persistencePath string) *Coordinator {
-	coordinator := NewCoordinatorWithMetrics(local, remote, domains, interval, cacheTTL, metrics)
-	coordinator.persistencePath = strings.TrimSpace(persistencePath)
-	return coordinator
 }
 
 // RestoreLastGoodSnapshot loads the last successful Trade snapshot, if one is

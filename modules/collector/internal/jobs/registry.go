@@ -2,11 +2,8 @@
 package jobs
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/kline"
 	resamplejob "github.com/mooyang-code/moox/modules/collector/internal/jobs/resample"
@@ -46,17 +43,4 @@ func JobDefinitionByDataType(dataType string) (JobDefinition, bool) {
 		}
 	}
 	return JobDefinition{}, false
-}
-
-// BuildTaskSpecs dispatches atomic task planning to the matching job definition.
-func BuildTaskSpecs(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
-	if params == nil {
-		return nil, fmt.Errorf("collect params are required")
-	}
-	for _, definition := range jobDefinitions {
-		if definition.Matches(params) {
-			return definition.Planner(ctx, rule, params, subjects)
-		}
-	}
-	return nil, fmt.Errorf("collector planner not found: %s:%s:%s", params.Collector.Exchange, params.Collector.Market, params.Collector.DataType)
 }

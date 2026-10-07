@@ -18,7 +18,7 @@ func TestCoordinatorPrefersTradeAndRetainsLastGoodSnapshot(t *testing.T) {
 	remote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"203.0.113.2", "203.0.113.3"}, LatencyMS: map[string]uint32{"203.0.113.2": 8, "203.0.113.3": 12}},
 	}}
-	coordinator := NewCoordinator(nil, remote, []string{"fapi.binance.com"}, time.Minute)
+	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com"}, Interval: time.Minute})
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	snapshot := coordinator.Snapshot()
 	require.Equal(t, []string{"203.0.113.2", "203.0.113.3"}, snapshot["fapi.binance.com"].IPs)
@@ -31,13 +31,13 @@ func TestCoordinatorPrefersTradeAndRetainsLastGoodSnapshot(t *testing.T) {
 	require.Error(t, coordinator.LastError())
 }
 
-func TestCoordinatorLocalOnlyRollbackKeepsLegacyDNSPath(t *testing.T) {
+func TestCoordinatorLocalOnlyUsesLocalDNS(t *testing.T) {
 	local := dnscache.New(dnscache.Config{
 		Domains:         []string{"localhost"},
 		RefreshInterval: time.Hour,
 		ResolveTimeout:  time.Second,
 	})
-	coordinator := NewCoordinator(local, nil, []string{"localhost"}, time.Minute)
+	coordinator := NewCoordinator(CoordinatorConfig{Local: local, Domains: []string{"localhost"}, Interval: time.Minute})
 
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	snapshot := coordinator.Snapshot()
@@ -50,7 +50,7 @@ func TestCoordinatorMergesPartialRemoteWithLocalSnapshot(t *testing.T) {
 	remote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"203.0.113.2"}},
 	}}
-	coordinator := NewCoordinator(nil, remote, []string{"fapi.binance.com", "api.binance.com"}, 0)
+	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com", "api.binance.com"}})
 	coordinator.routes = map[string]sources.DNSResolution{
 		"api.binance.com": {IPs: []string{"203.0.113.4"}},
 	}
@@ -64,7 +64,7 @@ func TestCoordinatorFallsBackWhenRemoteOmitsARequestedDomain(t *testing.T) {
 	remote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"1.1.1.1"}},
 	}}
-	coordinator := NewCoordinator(nil, remote, []string{"fapi.binance.com", "api.binance.com"}, time.Nanosecond)
+	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com", "api.binance.com"}, Interval: time.Nanosecond})
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	require.NotEmpty(t, coordinator.Snapshot()["fapi.binance.com"])
 	_, exists := coordinator.Snapshot()["api.binance.com"]
@@ -76,7 +76,7 @@ func TestCoordinatorRecordsReceiptTimeAfterRemoteResponse(t *testing.T) {
 		"fapi.binance.com": {IPs: []string{"1.1.1.1"}},
 	}, delay: 20 * time.Millisecond}
 	started := time.Now().UTC()
-	coordinator := NewCoordinator(nil, remote, []string{"fapi.binance.com"}, time.Nanosecond)
+	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com"}, Interval: time.Nanosecond})
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	received := coordinator.Snapshot()["fapi.binance.com"].ResolvedAt
 	require.GreaterOrEqual(t, received, started.Add(15*time.Millisecond))
@@ -84,7 +84,7 @@ func TestCoordinatorRecordsReceiptTimeAfterRemoteResponse(t *testing.T) {
 
 func TestCoordinatorRefreshIsDueAndSerializesCalls(t *testing.T) {
 	remote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{"fapi.binance.com": {IPs: []string{"203.0.113.2"}}}}
-	coordinator := NewCoordinator(nil, remote, []string{"fapi.binance.com"}, time.Hour)
+	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com"}, Interval: time.Hour})
 	require.True(t, coordinator.Due(time.Now()))
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	require.False(t, coordinator.Due(time.Now()))
@@ -97,7 +97,7 @@ func TestCoordinatorExpiresPreviousRouteAndAllowsLocalTakeover(t *testing.T) {
 	remote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"1.1.1.1"}, ResolvedAt: time.Now().UTC()},
 	}}
-	coordinator := NewCoordinatorWithTTL(nil, remote, []string{"fapi.binance.com"}, time.Nanosecond, time.Minute)
+	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com"}, Interval: time.Nanosecond, CacheTTL: time.Minute})
 	coordinator.routes = map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"8.8.8.8"}, ResolvedAt: old},
 	}
@@ -109,7 +109,7 @@ func TestCoordinatorStatusIncludesSourceHashAgeAndErrorCategory(t *testing.T) {
 	remote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"1.1.1.1"}},
 	}}
-	coordinator := NewCoordinator(nil, remote, []string{"fapi.binance.com"}, time.Nanosecond)
+	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com"}, Interval: time.Nanosecond})
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	status := coordinator.Status()
 	require.Equal(t, "trade", status.Source)
@@ -135,12 +135,12 @@ func TestCoordinatorRestoresLastGoodTradeSnapshotAcrossRestart(t *testing.T) {
 	firstRemote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{
 		"fapi.binance.com": {IPs: []string{"1.1.1.1"}},
 	}}
-	first := NewCoordinatorWithMetricsAndPersistence(nil, firstRemote, []string{"fapi.binance.com"}, time.Nanosecond, time.Minute, nil, path)
+	first := NewCoordinator(CoordinatorConfig{Remote: firstRemote, Domains: []string{"fapi.binance.com"}, Interval: time.Nanosecond, CacheTTL: time.Minute, PersistencePath: path})
 	require.NoError(t, first.Refresh(context.Background()))
 	require.FileExists(t, path)
 
 	secondRemote := &fakeDomainResolver{err: errors.New("trade unavailable")}
-	second := NewCoordinatorWithMetricsAndPersistence(nil, secondRemote, []string{"fapi.binance.com"}, time.Nanosecond, time.Minute, nil, path)
+	second := NewCoordinator(CoordinatorConfig{Remote: secondRemote, Domains: []string{"fapi.binance.com"}, Interval: time.Nanosecond, CacheTTL: time.Minute, PersistencePath: path})
 	require.NoError(t, second.RestoreLastGoodSnapshot())
 	require.NoError(t, second.Refresh(context.Background()))
 	require.Equal(t, []string{"1.1.1.1"}, second.Snapshot()["fapi.binance.com"].IPs)
@@ -157,7 +157,7 @@ func TestCoordinatorRestoreFiltersExpiredAndRemovedDomains(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
-	coordinator := NewCoordinatorWithMetricsAndPersistence(nil, nil, []string{"fapi.binance.com"}, time.Minute, time.Hour, nil, path)
+	coordinator := NewCoordinator(CoordinatorConfig{Domains: []string{"fapi.binance.com"}, Interval: time.Minute, CacheTTL: time.Hour, PersistencePath: path})
 	require.NoError(t, coordinator.RestoreLastGoodSnapshot())
 	_, ok := coordinator.Snapshot()["fapi.binance.com"]
 	require.False(t, ok, "an expired persisted route must not be restored")
@@ -169,7 +169,7 @@ func TestCoordinatorReportsSnapshotPersistenceFailure(t *testing.T) {
 	path := t.TempDir() + "/not-a-directory/snapshot.json"
 	require.NoError(t, os.WriteFile(filepath.Dir(path), []byte("file"), 0o600))
 	remote := &fakeDomainResolver{routes: map[string]sources.DNSResolution{"fapi.binance.com": {IPs: []string{"1.1.1.1"}}}}
-	coordinator := NewCoordinatorWithMetricsAndPersistence(nil, remote, []string{"fapi.binance.com"}, time.Nanosecond, time.Minute, nil, path)
+	coordinator := NewCoordinator(CoordinatorConfig{Remote: remote, Domains: []string{"fapi.binance.com"}, Interval: time.Nanosecond, CacheTTL: time.Minute, PersistencePath: path})
 	err := coordinator.Refresh(context.Background())
 	require.Error(t, err)
 	require.Equal(t, "snapshot_persist", coordinator.Status().LastErrorCategory)

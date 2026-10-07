@@ -46,34 +46,6 @@ func TestValidateNormalizedKline(t *testing.T) {
 	}
 }
 
-func TestSourceSpecValidationRequiresConcreteTransportAndStatus(t *testing.T) {
-	spec := SourceSpec{
-		Key:             SourceKey{ProviderID: "sina", SourceID: "stockcn_minute_http"},
-		Status:          SourceEnabled,
-		ProtocolVariant: "http",
-		Transport:       "https",
-		Host:            "quotes.sina.cn",
-		Port:            443,
-		Markets:         []MarketID{"stockcn"},
-		Instruments:     []InstrumentType{InstrumentEquity},
-		Frequencies:     []string{"1m"},
-		TimestampMode:   TimestampModeClose,
-		CompleteOHLCV:   true,
-		HasAmount:       true,
-	}
-	require.NoError(t, spec.Validate())
-
-	invalid := spec
-	invalid.Status = SourceStatus("unknown")
-	require.Error(t, invalid.Validate())
-	invalid = spec
-	invalid.Key.SourceID = ""
-	require.Error(t, invalid.Validate())
-	invalid = spec
-	invalid.Port = 0
-	require.Error(t, invalid.Validate())
-}
-
 func TestParseFrequencyDistinguishesMinuteAndCalendarMonth(t *testing.T) {
 	minute, err := ParseFrequency("1m")
 	require.NoError(t, err)

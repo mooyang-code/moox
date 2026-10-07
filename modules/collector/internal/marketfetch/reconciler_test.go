@@ -1159,3 +1159,11 @@ func TestReconcilerLongSubjectsDoNotConsumeRuntimeEnvironment(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func (r *Reconciler) pendingRuntimeJobState() (string, time.Time) {
+	jobs, since := r.pendingRuntimeJobsState()
+	if len(jobs) == 0 {
+		return "", since
+	}
+	return jobs[0], since
+}

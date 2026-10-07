@@ -109,24 +109,6 @@ func (c *Calendar) Location() *time.Location {
 	return c.location
 }
 
-func (c *Calendar) IsOpen(at time.Time) bool {
-	if c == nil || c.location == nil {
-		return false
-	}
-	local := at.In(c.location)
-	date := local.Format("2006-01-02")
-	if !c.isTradingDay(date, local.Weekday()) {
-		return false
-	}
-	minute := local.Format("15:04")
-	for _, current := range c.sessions {
-		if minute >= current.Start && minute < current.End {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *Calendar) ValidateHorizon(now time.Time, minDays int) error {
 	err := c.CheckHorizon(now, minDays)
 	if errors.Is(err, ErrCalendarExpiringSoon) {
@@ -163,38 +145,6 @@ func (c *Calendar) CheckHorizon(now time.Time, minDays int) error {
 		return fmt.Errorf("%w: coverage ends on %s", ErrCalendarExpiringSoon, c.end.Format("2006-01-02"))
 	}
 	return nil
-}
-
-func (c *Calendar) TradingDays(start, end time.Time) ([]TradingDay, error) {
-	if c == nil || c.location == nil {
-		return nil, fmt.Errorf("calendar is not initialized")
-	}
-	if !end.After(start) {
-		return nil, fmt.Errorf("end must be after start")
-	}
-	day := time.Date(start.In(c.location).Year(), start.In(c.location).Month(), start.In(c.location).Day(), 0, 0, 0, 0, c.location)
-	last := end.In(c.location)
-	days := make([]TradingDay, 0)
-	for day.Before(last) {
-		date := day.Format("2006-01-02")
-		if c.isTradingDay(date, day.Weekday()) {
-			sessions := make([]Session, 0, len(c.sessions))
-			for _, value := range c.sessions {
-				openTime, err := time.ParseInLocation("2006-01-02 15:04", date+" "+value.Start, c.location)
-				if err != nil {
-					return nil, err
-				}
-				closeTime, err := time.ParseInLocation("2006-01-02 15:04", date+" "+value.End, c.location)
-				if err != nil {
-					return nil, err
-				}
-				sessions = append(sessions, Session{Open: openTime.UTC(), Close: closeTime.UTC()})
-			}
-			days = append(days, TradingDay{TradeDate: date, Sessions: sessions})
-		}
-		day = day.AddDate(0, 0, 1)
-	}
-	return days, nil
 }
 
 func (c *Calendar) ExpectedMinuteBars(tradeDate string) ([]time.Time, error) {

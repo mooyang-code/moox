@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRegistryExposesBinanceThroughBothTypedFetcherContracts(t *testing.T) {
+func TestRegistryExposesBinanceAsKlineFetcher(t *testing.T) {
 	registry := marketdata.NewRegistry()
 	provider := binance.NewMarketDataAdapter(binance.AdapterConfig{})
 	require.NoError(t, registry.Register(provider))
@@ -21,8 +21,4 @@ func TestRegistryExposesBinanceThroughBothTypedFetcherContracts(t *testing.T) {
 	klineFetcher, err := registry.KlineFetcher("binance")
 	require.NoError(t, err)
 	assert.Same(t, provider, klineFetcher)
-
-	instrumentFetcher, err := registry.InstrumentFetcher("binance")
-	require.NoError(t, err)
-	assert.Same(t, provider, instrumentFetcher)
 }

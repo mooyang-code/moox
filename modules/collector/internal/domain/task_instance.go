@@ -108,27 +108,6 @@ func (i *TaskInstance) TableName() string {
 	return "t_collector_task_instances"
 }
 
-// StableTaskID creates an idempotent execution instance ID for a parent task,
-// object, and interval.
-func StableTaskID(spaceID string, collectionTaskID string, spec TaskSpec) string {
-	routeID := strings.TrimSpace(spec.RouteID)
-	if routeID == "" {
-		routeID = strings.Join([]string{spec.MarketType, spec.DataType, spec.DatasetID, spec.Frequency}, ":")
-	}
-	parts := []string{
-		spaceID,
-		collectionTaskID,
-		routeID,
-		spec.MarketType,
-		spec.DataType,
-		spec.DatasetID,
-		spec.SubjectID,
-		spec.Frequency,
-	}
-	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
-	return hex.EncodeToString(sum[:])[:32]
-}
-
 // StableResampleTaskID includes the selected source series because a target
 // subject can otherwise be backed by multiple venue streams.
 func StableResampleTaskID(spaceID string, collectionTaskID string, spec TaskSpec, sourceSeriesTag string) string {

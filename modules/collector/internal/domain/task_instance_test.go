@@ -25,42 +25,6 @@ func TestTaskInstanceStatusValuesAreCompact(t *testing.T) {
 	assert.Equal(t, 3, InstanceStatusFailed)
 }
 
-func TestTaskInstance_StableTaskID_SameInput_ShouldReturnDeterministicID(t *testing.T) {
-	spec := TaskSpec{
-		Exchange:  "binance",
-		Market:    "spot",
-		DataType:  "kline",
-		DatasetID: "dataset_spot_kline_1h",
-		SubjectID: "btc-usdt",
-		Interval:  "1m",
-	}
-	first := StableTaskID("crypto", "rule-1", spec)
-	second := StableTaskID("crypto", "rule-1", spec)
-	assert.Equal(t, first, second)
-	assert.Len(t, first, 32)
-}
-
-func TestTaskInstance_StableTaskID_DifferentSpace_ShouldReturnDifferentID(t *testing.T) {
-	spec := TaskSpec{
-		Exchange:  "binance",
-		Market:    "spot",
-		DataType:  "kline",
-		DatasetID: "dataset_spot_kline_1h",
-		SubjectID: "btc-usdt",
-		Interval:  "1m",
-	}
-	left := StableTaskID("crypto", "rule-1", spec)
-	right := StableTaskID("equity", "rule-1", spec)
-	assert.NotEqual(t, left, right)
-}
-
-func TestStableTaskIDDoesNotChangeWhenProviderRouteChanges(t *testing.T) {
-	left := TaskSpec{RouteID: "stockcn_equity_kline_1m_v4", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: "dataset_stockcn_equity_kline", SubjectID: "600000.XSHG", Frequency: "1m"}
-	right := left
-	right.Provider = "tencent"
-	assert.Equal(t, StableTaskID("stockcn", "rule-1", left), StableTaskID("stockcn", "rule-1", right))
-}
-
 func TestResampleStableTaskIDIncludesSourceSeriesTag(t *testing.T) {
 	spec := TaskSpec{Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: "derived", SubjectID: "BTC-USDT", Frequency: "4H"}
 	left := StableResampleTaskID("crypto", "rule-1", spec, "venue:binance")

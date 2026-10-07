@@ -1,10 +1,7 @@
 package jobs
 
 import (
-	"context"
 	"testing"
-
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 )
 
 func TestListJobDefinitionsReturnsStableDataTypes(t *testing.T) {
@@ -53,26 +50,5 @@ func TestJobDefinitionByDataTypeReturnsKlineFields(t *testing.T) {
 	defaults, ok := def.Fields[1].DefaultValue.([]any)
 	if !ok || len(defaults) != 1 || defaults[0] != "1m" {
 		t.Fatalf("kline interval default = %#v, want [1m]", def.Fields[1].DefaultValue)
-	}
-}
-
-func TestBuildTaskSpecsDispatchesByCollectorParams(t *testing.T) {
-	params := &domain.CollectParams{}
-	params.Normalize("binance", "spot", "kline")
-	params.Source.Kind = "dataset"
-	params.Collector.Market = "spot"
-	params.Collector.Intervals = []string{"1m"}
-	params.Target.DatasetID = "ds-1"
-	subjects := []domain.DatasetSubject{{SubjectID: "BTC-USDT"}}
-
-	specs, err := BuildTaskSpecs(context.Background(), &domain.CollectionTask{TaskID: "r1"}, params, subjects)
-	if err != nil {
-		t.Fatalf("BuildTaskSpecs() error = %v", err)
-	}
-	if len(specs) != 1 {
-		t.Fatalf("len(specs) = %d, want 1", len(specs))
-	}
-	if _, exists := specs[0].Params["job_type"]; exists {
-		t.Fatalf("job_type must not be duplicated in task params: %#v", specs[0].Params)
 	}
 }

@@ -117,12 +117,12 @@ done
 
 symlink_config="${TMP_ROOT}/config-symlink"
 cp -R "${ROOT}/modules/collector/configs/scf/market_data" "${symlink_config}"
-printf 'runtime: symlink-source\n' >"${TMP_ROOT}/outside-config.yaml"
-rm "${symlink_config}/config.yaml"
-ln -s "${TMP_ROOT}/outside-config.yaml" "${symlink_config}/config.yaml"
+cp "${symlink_config}/sources/market/binance.yaml" "${TMP_ROOT}/outside-binance.yaml"
+rm "${symlink_config}/sources/market/binance.yaml"
+ln -s "${TMP_ROOT}/outside-binance.yaml" "${symlink_config}/sources/market/binance.yaml"
 if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${symlink_config}" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/symlink-config.zip" \
   bash "${ROOT}/scripts/build/build-collector-scf-package.sh" --eventbus-ca-file "${TMP_ROOT}/ca.pem"; then
-  echo "expected packaging to reject a symlinked top-level config.yaml" >&2
+  echo "expected packaging to reject a symlinked source config" >&2
   exit 1
 fi
 [[ ! -e "${TMP_ROOT}/symlink-config.zip" ]]
@@ -148,7 +148,7 @@ fi
 symlink_parent_base="${TMP_ROOT}/symlink-parent-base"
 symlink_target="${TMP_ROOT}/symlink-target"
 mkdir -p "${symlink_parent_base}" "${symlink_target}/child" "${symlink_target}/config"
-cp "${ROOT}/modules/collector/configs/scf/market_data/config.yaml" "${symlink_target}/config/config.yaml"
+cp -R "${ROOT}/modules/collector/configs/scf/market_data/sources" "${symlink_target}/config/sources"
 ln -s "${symlink_target}/child" "${symlink_parent_base}/link"
 if PATH="${FAKE_BIN}:${PATH}" SCF_CONFIG_DIR="${symlink_parent_base}/link/../config" SCF_SPACE_ID="market_data" OUT_PATH="${TMP_ROOT}/symlink-parent-escape.zip" \
   bash "${ROOT}/scripts/build/build-collector-scf-package.sh" --eventbus-ca-file "${TMP_ROOT}/ca.pem"; then

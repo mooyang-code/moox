@@ -3,7 +3,6 @@ package stockcn
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 	"time"
@@ -101,22 +100,6 @@ type ProbeReport struct {
 	GeneratedAt string       `json:"generated_at"`
 	Subjects    []string     `json:"subjects"`
 	Entries     []ProbeEntry `json:"entries"`
-}
-
-func DecodeProbeReport(reader io.Reader) (ProbeReport, error) {
-	var report ProbeReport
-	decoder := json.NewDecoder(reader)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&report); err != nil {
-		return ProbeReport{}, err
-	}
-	if decoder.More() {
-		return ProbeReport{}, fmt.Errorf("probe report must contain a single JSON document")
-	}
-	if err := report.Validate(); err != nil {
-		return ProbeReport{}, err
-	}
-	return report, nil
 }
 
 func (r ProbeReport) Validate() error {

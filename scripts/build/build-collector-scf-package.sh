@@ -53,19 +53,13 @@ CONFIG_DIR="$(python3 -c 'import os,sys; print(os.path.normpath(sys.argv[1]))' "
   exit 1
 }
 [[ ! -L "${CONFIG_DIR}" ]] || { echo "SCF config directory symlinks are not permitted" >&2; exit 1; }
-[[ -f "${CONFIG_DIR}/config.yaml" && ! -L "${CONFIG_DIR}/config.yaml" ]] || {
-  echo "SCF config.yaml must be a regular non-symlink file" >&2
+[[ -d "${CONFIG_DIR}/sources" && ! -L "${CONFIG_DIR}/sources" ]] || {
+  echo "SCF sources must be a regular non-symlink directory" >&2
   exit 1
 }
-if [[ -e "${CONFIG_DIR}/sources" ]]; then
-  [[ -d "${CONFIG_DIR}/sources" && ! -L "${CONFIG_DIR}/sources" ]] || {
-    echo "SCF sources must be a regular non-symlink directory" >&2
-    exit 1
-  }
-  if find "${CONFIG_DIR}/sources" -type l -print -quit | grep -q .; then
-    echo "SCF source symlinks are not permitted" >&2
-    exit 1
-  fi
+if find "${CONFIG_DIR}/sources" -type l -print -quit | grep -q .; then
+  echo "SCF source symlinks are not permitted" >&2
+  exit 1
 fi
 if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
   for source in "${ROOT}/modules/collector/config/markets/stockcn/calendar.yaml" "${ROOT}/modules/collector/config/markets/stockcn/route.yaml"; do
@@ -93,16 +87,12 @@ echo "==> build moox-collector-scf for linux/amd64"
 )
 
 echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
-cp "${CONFIG_DIR}/config.yaml" "${BUILD_DIR}/package/config.yaml"
-if [[ -d "${CONFIG_DIR}/sources" ]]; then
-  cp -R "${CONFIG_DIR}/sources" "${BUILD_DIR}/package/sources"
-fi
+cp -R "${CONFIG_DIR}/sources" "${BUILD_DIR}/package/sources"
 if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
   mkdir -p "${BUILD_DIR}/package/markets/stockcn"
   cp "${ROOT}/modules/collector/config/markets/stockcn/calendar.yaml" "${BUILD_DIR}/package/markets/stockcn/calendar.yaml"
   cp "${ROOT}/modules/collector/config/markets/stockcn/route.yaml" "${BUILD_DIR}/package/markets/stockcn/route.yaml"
 fi
-rm -f "${BUILD_DIR}/package/trpc_go.yaml" "${BUILD_DIR}/package/example_trpc_go.yaml"
 
 python3 - "${BUILD_DIR}/package" "${EVENTBUS_CA_FILE}" <<'PY'
 import pathlib

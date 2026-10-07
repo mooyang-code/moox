@@ -35,15 +35,6 @@ type TimerPeriodPlanner struct {
 	Now                 func() time.Time
 }
 
-// Plan freezes the period snapshot before Storage Ensure, then creates the
-// initial claimable batch only after Storage confirms the same snapshot and
-// its canonical deadline. A duplicate period returns without mutating owner
-// membership, even when a later Run supplies different instances or targets.
-func (p *TimerPeriodPlanner) Plan(ctx context.Context, plan TimerPeriodPlan) (bool, error) {
-	created, err := p.PlanMany(ctx, []TimerPeriodPlan{plan})
-	return created > 0, err
-}
-
 // PlanMany commits one complete period's group set. Validation and persisted
 // request sizing happen before storage side effects; the repository then
 // writes every manifest, owner, target, batch, and item in one transaction.

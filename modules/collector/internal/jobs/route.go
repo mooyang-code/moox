@@ -40,36 +40,6 @@ func JobRouteFor(exchange, dataType string) (JobRoute, bool) {
 	return JobRoute{}, false
 }
 
-// JobRouteByJobType returns the route for an exact queue job type.
-func JobRouteByJobType(jobType string) (JobRoute, bool) {
-	jobType = strings.TrimSpace(jobType)
-	for _, route := range jobRoutes {
-		if route.JobType == jobType {
-			return route, true
-		}
-	}
-	return JobRoute{}, false
-}
-
-// SupportedJobTypes returns the registered queue job types in stable order.
-func SupportedJobTypes() []string {
-	out := make([]string, 0, len(jobRoutes))
-	for _, route := range jobRoutes {
-		out = append(out, route.JobType)
-	}
-	return out
-}
-
-// ValidateJobTypes rejects queue identities that are not compiled into this worker.
-func ValidateJobTypes(jobTypes []string) error {
-	for _, jobType := range jobTypes {
-		if _, ok := JobRouteByJobType(jobType); !ok {
-			return fmt.Errorf("unsupported collector job type: %s", strings.TrimSpace(jobType))
-		}
-	}
-	return nil
-}
-
 func validateJobRoutes(routes []JobRoute) error {
 	identities := make(map[string]struct{}, len(routes))
 	jobTypes := make(map[string]struct{}, len(routes))

@@ -56,39 +56,6 @@ func (p *CollectParams) CanonicalJSON() (string, error) {
 	return string(raw), nil
 }
 
-// ValidateSameResampleIdentity allows operational changes such as settle delay
-// while locking every field that determines the source or target row identity.
-func ValidateSameResampleIdentity(existing, desired *CollectParams) error {
-	if existing == nil || desired == nil {
-		return fmt.Errorf("resample collect params are required")
-	}
-	fields := []struct {
-		name      string
-		existing  string
-		desired   string
-		equalFold bool
-	}{
-		{name: "provider", existing: existing.Provider, desired: desired.Provider, equalFold: true},
-		{name: "market_type", existing: existing.MarketType, desired: desired.MarketType, equalFold: true},
-		{name: "source_dataset_id", existing: existing.SourceDatasetID, desired: desired.SourceDatasetID},
-		{name: "source_frequency", existing: existing.SourceFrequency, desired: desired.SourceFrequency},
-		{name: "source_series_tag", existing: existing.SourceSeriesTag, desired: desired.SourceSeriesTag},
-		{name: "target_dataset_id", existing: existing.TargetDatasetID, desired: desired.TargetDatasetID},
-		{name: "target_frequency", existing: existing.TargetFrequency, desired: desired.TargetFrequency},
-		{name: "alignment", existing: existing.Alignment, desired: desired.Alignment},
-	}
-	for _, field := range fields {
-		equal := field.existing == field.desired
-		if field.equalFold {
-			equal = strings.EqualFold(field.existing, field.desired)
-		}
-		if !equal {
-			return fmt.Errorf("immutable resample field %s cannot change", field.name)
-		}
-	}
-	return nil
-}
-
 // ValidateKlineResample validates the immutable resample task contract.
 func (p *CollectParams) ValidateKlineResample() error {
 	if p.SourceDatasetID == "" {

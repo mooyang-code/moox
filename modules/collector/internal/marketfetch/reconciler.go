@@ -831,14 +831,6 @@ func currentDNSHash(nodeID string, nodes []scfinvoker.Node) string {
 	return ""
 }
 
-func (r *Reconciler) pendingRuntimeJobState() (string, time.Time) {
-	jobs, since := r.pendingRuntimeJobsState()
-	if len(jobs) == 0 {
-		return "", since
-	}
-	return jobs[0], since
-}
-
 func (r *Reconciler) pendingRuntimeJobsState() ([]string, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -101,13 +101,6 @@ func stockCNAssignmentRoute() (string, []stockCNSource, error) {
 	return route.RouteID, sources, nil
 }
 
-// BuildStockCNAssignments maps the published Timer fleet one-to-one to stable
-// rendezvous groups. The fleet size and measured group-size safety limit are
-// release configuration; neither is inferred from the nodes visible today.
-func BuildStockCNAssignments(group TaskGroup, nodes []scfinvoker.Node, measuredSafeGroupSize int, tradingDate string, expectedCounts ...int) ([]NodeAssignment, error) {
-	return BuildStockCNAssignmentsWithStagger(group, nodes, measuredSafeGroupSize, tradingDate, DefaultStockCNStaggerConfig(), expectedCounts...)
-}
-
 // BuildStockCNAssignmentsWithStagger is the configurable form used by the
 // Collector reconciler. The legacy wrapper above keeps direct callers on the
 // conservative default while production receives the rendered release value.

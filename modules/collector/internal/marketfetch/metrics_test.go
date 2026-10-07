@@ -63,59 +63,6 @@ func TestOperationalMetricsZeroResetBoundedLabelsAndFailedRefresh(t *testing.T) 
 	}
 }
 
-func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	metrics := NewMetrics(registry)
-	metrics.ObserveAssignment("crypto", "1m", 16, 16, 1722652200)
-	metrics.ObserveAssignmentPending("crypto", true, time.Unix(1722652200, 0))
-	metrics.ObserveTimerState("crypto", "timer-1", "true", 1)
-	metrics.ObserveTimerCapacity("crypto", 45, 52, 0)
-	metrics.ObserveAssignmentError("crypto", "capacity")
-	metrics.ObserveAssignmentFailure("crypto", "submit_timeout")
-	metrics.ObservePeriodPendingSnapshot("crypto", map[string]int{"1m": 2})
-	metrics.ObservePeriodReportRetry("crypto", "1m")
-	metrics.ObservePeriodFailurePending("crypto", "1m", 2)
-	metrics.ObservePeriodFailureMissedDeadline("crypto", "1m")
-	metrics.ObservePeriodFailureReportRetry("crypto", "1m", "timeout")
-	families, err := registry.Gather()
-	require.NoError(t, err)
-
-	got := make(map[string]struct{}, len(families))
-	for _, family := range families {
-		got[family.GetName()] = struct{}{}
-	}
-	want := map[string]struct{}{
-		"moox_collector_market_fetch_assignment_required":                          {},
-		"moox_collector_market_fetch_assignment_active":                            {},
-		"moox_collector_market_fetch_assignment_last_success_timestamp_seconds":    {},
-		"moox_collector_market_fetch_coordination_healthy":                         {},
-		"moox_collector_market_fetch_coordination_failure":                         {},
-		"moox_collector_market_fetch_coordination_pending":                         {},
-		"moox_collector_market_fetch_coordination_pending_since_timestamp_seconds": {},
-		"moox_collector_market_fetch_timer_available":                              {},
-		"moox_collector_market_fetch_timer_capacity_total":                         {},
-		"moox_collector_market_fetch_timer_capacity_required":                      {},
-		"moox_collector_market_fetch_timer_capacity_active":                        {},
-		"moox_collector_market_fetch_timer_capacity_headroom":                      {},
-		"moox_collector_market_fetch_assignment_errors_total":                      {},
-		"moox_collector_period_pending_total":                                      {},
-		"moox_collector_period_report_retry_total":                                 {},
-		"moox_collector_period_failure_pending":                                    {},
-		"moox_collector_period_failure_missed_deadline_total":                      {},
-		"moox_collector_period_failure_report_retries_total":                       {},
-	}
-	for name := range want {
-		if _, ok := got[name]; !ok {
-			t.Fatalf("metric %q is missing; got %v", name, got)
-		}
-	}
-	for name := range got {
-		if name == "moox_collector_market_fetch_batches_total" || name == "moox_collector_market_fetch_retry_pending" {
-			t.Fatalf("legacy completion metric %q should not be registered", name)
-		}
-	}
-}
-
 func TestPeriodPendingMetricsUseBoundedSpaceAndFrequencyLabels(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
@@ -449,19 +396,6 @@ func TestMetricsRejectFeedGroupOutsideConfiguredRange(t *testing.T) {
 	for _, family := range families {
 		require.NotEqual(t, "moox_collector_market_feed_results_total", family.GetName())
 	}
-}
-
-func TestMetricsExposeConfiguredGroupsEgressAndInstrumentSnapshot(t *testing.T) {
-	metrics := NewMetrics(prometheus.NewRegistry())
-	metrics.ObserveConfiguredGroups("stockcn", StockCNRouteID, 200, 199)
-	metrics.ObserveEgressDiagnostic("stockcn", StockCNRouteID, 200, 200, 199, 198)
-	metrics.ObserveInstrumentSnapshot("stockcn", StockCNRouteID, "sina", "success", 5180, map[string]int{"XSHG": 2200, "XSHE": 2800, "XBSE": 180}, time.Unix(1722772800, 0))
-
-	require.Equal(t, 200.0, testutil.ToFloat64(metrics.configuredGroups.WithLabelValues("stockcn", StockCNRouteID, "expected")))
-	require.Equal(t, 199.0, testutil.ToFloat64(metrics.configuredGroups.WithLabelValues("stockcn", StockCNRouteID, "actual")))
-	require.Equal(t, 198.0, testutil.ToFloat64(metrics.egressFunctions.WithLabelValues("stockcn", StockCNRouteID, "distinct_ip")))
-	require.Equal(t, 5180.0, testutil.ToFloat64(metrics.instrumentActive.WithLabelValues("stockcn", StockCNRouteID, "sina", "success")))
-	require.Equal(t, 180.0, testutil.ToFloat64(metrics.instrumentExchange.WithLabelValues("stockcn", StockCNRouteID, "sina", "XBSE")))
 }
 
 func metricFamily(t *testing.T, families []*dto.MetricFamily, name string) *dto.MetricFamily {

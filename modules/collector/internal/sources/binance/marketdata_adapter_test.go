@@ -98,7 +98,7 @@ func TestMarketDataAdapterSupportsSwapHourlyRequestThroughRouter(t *testing.T) {
 	require.NoError(t, registry.Register(adapter))
 	router, err := marketdata.NewRouter(registry, 2, nil, nil)
 	require.NoError(t, err)
-	rows, err := router.FetchKlines(context.Background(), marketdata.KlineRequest{
+	rows, err := router.NewSession().FetchKlines(context.Background(), marketdata.KlineRequest{
 		MarketID: "crypto", ExchangeID: "binance", InstrumentType: marketdata.InstrumentSwap,
 		SubjectID: "1000BONK-USDT-SWAP", ProviderSymbol: "1000BONKUSDT", SourceID: "swap_http", Frequency: "1H", Limit: 1, RequestID: "req-binance-swap-hour",
 	}, []string{"binance"})

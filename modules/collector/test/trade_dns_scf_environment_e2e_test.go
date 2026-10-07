@@ -48,7 +48,7 @@ func TestTradeDNSCollectorEnvironmentProductionE2E(t *testing.T) {
 	require.NotEmpty(t, credentials.Secret)
 
 	remote := dnsresolver.NewTradeClient(target, nodeID, credentials, 15*time.Second)
-	coordinator := dnsresolver.NewCoordinator(nil, remote, domains, time.Nanosecond)
+	coordinator := dnsresolver.NewCoordinator(dnsresolver.CoordinatorConfig{Remote: remote, Domains: domains, Interval: time.Nanosecond})
 	require.NoError(t, coordinator.Refresh(context.Background()))
 	snapshot := coordinator.Snapshot()
 	require.NotEmpty(t, snapshot)

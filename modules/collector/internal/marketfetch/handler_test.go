@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -169,4 +170,17 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, response.Success, "%+v", response)
 	require.Len(t, storage.rows, 1)
+}
+
+// HandleTimer executes one durable batch claimed from the Collector runtime.
+func (h *Handler) HandleTimer(ctx context.Context, requestID, nodeID string) (*model.Response, error) {
+	now := time.Now().UTC()
+	if h != nil && h.Now != nil {
+		now = h.Now().UTC()
+	}
+	return h.HandleTimerAt(ctx, requestID, nodeID, now)
+}
+
+func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
+	return h.handleWithFunctionName(ctx, event, true, "")
 }
