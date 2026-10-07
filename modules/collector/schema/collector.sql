@@ -127,6 +127,9 @@ CREATE INDEX IF NOT EXISTS idx_collector_period_storage_waiting_cursor
 ON t_collector_period_storage_states (c_space_id, c_dataset_id, c_frequency, c_period_time)
 WHERE c_status = 'waiting';
 
+CREATE INDEX IF NOT EXISTS idx_collector_period_operational_oldest
+ON t_collector_period_storage_states (c_space_id, c_status, c_period_time);
+
 -- A Timer period batch is the immutable claimable owner of one period shard.
 -- Claim columns are populated only by the planned-to-dispatched claim CAS.
 CREATE TABLE IF NOT EXISTS t_collector_timer_period_batches (
@@ -457,6 +460,9 @@ ON t_collector_fetch_retry_items (c_mtime, c_status, c_period_failure_report_sta
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_cleanup_succeeded
 ON t_collector_fetch_retry_items (c_mtime, c_id)
 WHERE c_status IN ('succeeded', 'superseded');
+
+CREATE INDEX IF NOT EXISTS idx_collector_retry_operational_oldest
+ON t_collector_fetch_retry_items (c_space_id, c_status, c_ctime);
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_cleanup_succeeded_space
 ON t_collector_fetch_retry_items (c_space_id, c_mtime, c_id)

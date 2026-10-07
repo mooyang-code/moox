@@ -132,7 +132,7 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 	if strings.EqualFold(dataType, "kline_resample") {
 		frequency = params.TargetFrequency
 	}
-	resultIDs := taskresult.ResultIDsForTask(spaceID, taskID, "", dataType, frequency)
+	resultIDs := taskresult.ResultIDsForTask(spaceID, taskID, dataType, frequency)
 	collectParams["target_dataset_id"] = resultIDs.DatasetID
 	rawParams, err = json.Marshal(collectParams)
 	if err != nil {

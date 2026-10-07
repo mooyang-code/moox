@@ -29,8 +29,8 @@ func TestBuildTaskSpecs_MultipleIntervals_ShouldExpandSubjects(t *testing.T) {
 
 	specs := BuildTaskSpecs(params, subjects)
 	require.Len(t, specs, 4)
-	assert.Equal(t, "BTC-USDT", specs[0].Symbol)
-	assert.Equal(t, "1m", specs[0].Interval)
+	assert.Equal(t, "BTC-USDT", specs[0].SubjectID)
+	assert.Equal(t, "1m", specs[0].Params["interval"])
 }
 
 func TestBuildTaskSpecs_EmptyInterval_ShouldDefaultToOneMinute(t *testing.T) {
@@ -41,7 +41,7 @@ func TestBuildTaskSpecs_EmptyInterval_ShouldDefaultToOneMinute(t *testing.T) {
 
 	specs := BuildTaskSpecs(params, subjects)
 	require.Len(t, specs, 1)
-	assert.Equal(t, "1m", specs[0].Interval)
+	assert.Equal(t, "1m", specs[0].Params["interval"])
 }
 
 func TestNewJobDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing.T) {

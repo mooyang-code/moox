@@ -1076,16 +1076,11 @@ func assignGeneratedCollectionTaskResult(task domain.CollectionTask, params *dom
 	if params == nil {
 		return task, taskresult.IDs{}, fmt.Errorf("collect params are required")
 	}
-	var ids taskresult.IDs
 	frequency := params.Frequency
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
 		frequency = params.TargetFrequency
 	}
-	tagID := ""
-	if len(params.SubjectTags) > 0 {
-		tagID = params.SubjectTags[0]
-	}
-	ids = taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, tagID, task.DataType, frequency)
+	ids := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, task.DataType, frequency)
 	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
 	task.CollectParams = setTaskResultDatasetID(task.CollectParams, ids.DatasetID)
 	return task, ids, nil
@@ -1143,11 +1138,7 @@ func collectionTaskResultIDs(task domain.CollectionTask) (taskresult.IDs, error)
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
 		frequency = params.TargetFrequency
 	}
-	tagID := ""
-	if len(params.SubjectTags) > 0 {
-		tagID = params.SubjectTags[0]
-	}
-	return taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, tagID, task.DataType, frequency), nil
+	return taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, task.DataType, frequency), nil
 }
 
 func setTaskResultDatasetID(raw, datasetID string) string {

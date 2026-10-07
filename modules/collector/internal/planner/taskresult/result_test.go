@@ -25,12 +25,12 @@ func TestResultIDsUseReadableTaskSlug(t *testing.T) {
 }
 
 func TestResultIDsUseTagTaskTypeFrequencyViewIdentity(t *testing.T) {
-	ids := ResultIDsForTask("crypto", "task-one", "binance_spot", "kline", "1m")
+	ids := ResultIDsForTask("crypto", "task-one", "kline", "1m")
 	require.Equal(t, "dataset_task_one", ids.DatasetID)
 	require.Equal(t, "view_task_one_kline_1m", ids.ViewID)
-	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "binance_spot", "kline", "1m").ViewID)
-	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "binance_spot", "kline", "5m").ViewID)
-	require.Equal(t, "view_task_one_kline_1m", ResultIDsForTask("crypto", "task-one", "", "kline", "1m").ViewID)
+	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "kline", "1m").ViewID)
+	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "kline", "5m").ViewID)
+	require.Equal(t, "view_task_one_kline_1m", ResultIDsForTask("crypto", "task-one", "kline", "1m").ViewID)
 }
 
 func TestBuiltinResultIDsRemainTaskOwnedAndDoNotReuseCatalogIDs(t *testing.T) {
@@ -50,11 +50,6 @@ func TestResultDisplayNameUsesShortChinese(t *testing.T) {
 	require.Equal(t, "采集结果", resultDisplayName(Config{Name: "too long english name"}, "custom-task"))
 	require.True(t, isChineseDisplayName("现货分钟K线"))
 	require.False(t, isChineseDisplayName("Binance 现货 K 线 1m"))
-}
-
-func TestIsLegacyHashedIDs(t *testing.T) {
-	require.True(t, IsLegacyHashedIDs(IDs{DatasetID: "dataset_collector_df4b3afb3ff5547c", ViewID: "view_collector_df4b3afb3ff5547c"}))
-	require.False(t, IsLegacyHashedIDs(ResultIDs("crypto", "builtin-binance-spot-kline-1m")))
 }
 
 type resultMetadataFake struct {

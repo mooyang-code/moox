@@ -27,8 +27,8 @@ func TestKlinePlannerUsesSourceDatasetSubjectsAndTargetDatasetID(t *testing.T) {
 		assert.Equal(t, "kline_1m", spec.DatasetID)
 		assert.Equal(t, "kline_1m", spec.Params["dataset_id"])
 		assert.Equal(t, subjects[i].SubjectID, spec.SubjectID)
-		assert.Equal(t, subjects[i].SubjectID, spec.Symbol)
-		assert.Equal(t, "1m", spec.Interval)
+		assert.Equal(t, subjects[i].SubjectID, spec.SubjectID)
+		assert.Equal(t, "1m", spec.Params["interval"])
 	}
 }
 

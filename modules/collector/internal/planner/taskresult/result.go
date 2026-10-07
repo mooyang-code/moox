@@ -35,14 +35,11 @@ func resultIDs(_ string, taskID string) IDs {
 }
 
 // ResultIDsForTask derives both result identities exclusively from the task.
-// tagID is retained in the call signature for planner compatibility but never
-// participates in Dataset/View identity.
-func ResultIDsForTask(spaceID, taskID, tagID, taskType, frequency string) IDs {
+func ResultIDsForTask(spaceID, taskID, taskType, frequency string) IDs {
 	ids := resultIDs(spaceID, taskID)
 	if strings.TrimSpace(taskType) == "" {
 		return ids
 	}
-	_ = tagID // retained in the call signature for planner compatibility
 	viewSlug := resultSlugForFields(taskID, taskType, frequency)
 	ids.ViewID = "view_" + viewSlug
 	return ids
@@ -56,7 +53,7 @@ func resultIDsForConfig(spaceID, taskID, taskType string, cfg Config) IDs {
 	if strings.TrimSpace(taskType) == "" {
 		return resultIDs(spaceID, taskID)
 	}
-	return ResultIDsForTask(spaceID, taskID, "", taskType, frequency)
+	return ResultIDsForTask(spaceID, taskID, taskType, frequency)
 }
 
 func resultSlug(taskID string) string {
@@ -100,30 +97,11 @@ func resultSlugForFields(parts ...string) string {
 	return resultSlug(strings.Join(values, "_"))
 }
 
-// IsLegacyHashedIDs reports the previous hash-suffixed collector result identity.
-func IsLegacyHashedIDs(ids IDs) bool {
-	return isLegacyHashedID(ids.DatasetID, "dataset_collector_") &&
-		(strings.TrimSpace(ids.ViewID) == "" || isLegacyHashedID(ids.ViewID, "view_collector_"))
-}
-
-func isLegacyHashedID(id, prefix string) bool {
-	rest := strings.TrimPrefix(strings.TrimSpace(id), prefix)
-	if rest == strings.TrimSpace(id) || len(rest) != 16 {
-		return false
-	}
-	for _, char := range rest {
-		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // ResultIDs returns the stable metadata identities for a task result.
 func ResultIDs(spaceID, taskID string) IDs { return resultIDs(spaceID, taskID) }
 
 // PersistedResultIDs prefers identities already committed to a Collector task
-// row and falls back to the legacy task-derived identity for old callers.
+// row and falls back to the task-derived identity before the first commit.
 func PersistedResultIDs(spaceID, taskID, datasetID, viewID string) IDs {
 	if strings.TrimSpace(datasetID) != "" && strings.TrimSpace(viewID) != "" {
 		return IDs{DatasetID: strings.TrimSpace(datasetID), ViewID: strings.TrimSpace(viewID)}

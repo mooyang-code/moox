@@ -230,128 +230,70 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 			return fmt.Errorf("list collector tasks: %w", err)
 		}
 		for _, task := range tasks {
-			// Resample targets have a stricter immutable lineage contract and are
-			// provisioned by resample.Preparer after it has resolved the source
-			// Dataset. The generic result manager must not claim that Dataset as a
-			// raw collection result.
-			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-				_, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-				if parseErr != nil {
-					if isLegacySubjectSelectionError(parseErr) {
-						log.WarnContextf(ctx, "skip legacy collection task=%s/%s result provisioning: %v; edit the task to select subject tags", task.SpaceID, task.TaskID, parseErr)
-						continue
-					}
-					return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
-				}
-				ids := collectorresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
-				needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
-				// Only retire a previous result when the Dataset identity itself
-				// changed. A missing or mismatched View ID must not delete the
-				// current task-owned Dataset during startup.
-				if needsUpdate && strings.TrimSpace(task.ResultDatasetID) != "" && task.ResultDatasetID != ids.DatasetID {
-					oldIDs := collectorresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
-					if strings.TrimSpace(oldIDs.ViewID) == "" {
-						oldIDs.ViewID = "view_" + strings.TrimPrefix(oldIDs.DatasetID, "dataset_")
-					}
-					if err := manager.DeleteForTask(ctx, task.SpaceID, task.TaskID, oldIDs); err != nil {
-						return fmt.Errorf("retire old task %s/%s result: %w", task.SpaceID, task.TaskID, err)
-					}
-				}
-				task.ResultDatasetID = ids.DatasetID
-				task.ResultViewID = ids.ViewID
-				rawParams := map[string]any{}
-				if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
-					return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
-				}
-				if rawParams["target_dataset_id"] != ids.DatasetID {
-					rawParams["target_dataset_id"] = ids.DatasetID
-					needsUpdate = true
-				}
-				if needsUpdate {
-					encoded, err := json.Marshal(rawParams)
-					if err != nil {
-						return fmt.Errorf("encode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
-					}
-					task.CollectParams = string(encoded)
-					if _, err := repo.UpdateByTaskID(ctx, task.SpaceID, task.TaskID, task); err != nil {
-						return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
-					}
-				}
-				continue
-			}
-			params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-			if parseErr != nil {
-				if isLegacySubjectSelectionError(parseErr) {
-					log.WarnContextf(ctx, "skip legacy collection task=%s/%s result provisioning: %v; edit the task to select subject tags", task.SpaceID, task.TaskID, parseErr)
-					continue
-				}
-				return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, parseErr)
-			}
-			originalParams := task.CollectParams
-			cleanParams, _, splitErr := domain.SplitSubjectTags(originalParams)
-			if splitErr != nil {
-				return fmt.Errorf("split task %s/%s subject tags: %w", task.SpaceID, task.TaskID, splitErr)
-			}
-			paramsHadSubjectTags := cleanParams != originalParams
-			if paramsHadSubjectTags {
-				// task_tags is the sole acquisition scope. Remove any stale embedded
-				// copy if one exists, but never use it as the authoritative source.
-				task.CollectParams = cleanParams
-			}
-			subjectTags := append([]string(nil), task.TagIDs...)
-			if len(subjectTags) == 0 {
-				return fmt.Errorf("task %s/%s has no bound tags", task.SpaceID, task.TaskID)
-			}
-			oldIDs := collectorresult.IDs{DatasetID: task.ResultDatasetID, ViewID: task.ResultViewID}
-			frequency := params.Frequency
-			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-				frequency = params.TargetFrequency
-			}
-			logicalIDs := collectorresult.ResultIDsForTask(task.SpaceID, task.TaskID, "", task.DataType, frequency)
-			ids, ensureErr := manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, "", collectorresult.Config{
-				ViewID:      firstNonEmptyResultID(task.ResultViewID, logicalIDs.ViewID),
-				DataNodeID:  dataNodeID,
-				Name:        task.TaskName,
-				Description: task.Description,
-
-				Frequency:    taskResultFrequency(*params),
-				Frequencies:  append([]string(nil), params.Collector.Intervals...),
-				SubjectTags:  subjectTags,
-				OutputFields: params.OutputFields,
-			})
-			if ensureErr != nil {
-				return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, ensureErr)
-			}
-			if collectorresult.IsLegacyHashedIDs(oldIDs) && oldIDs.DatasetID != ids.DatasetID {
-				if err := manager.Delete(ctx, task.SpaceID, oldIDs); err != nil {
-					return fmt.Errorf("retire hashed task %s/%s result: %w", task.SpaceID, task.TaskID, err)
-				}
-			}
-			needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID || paramsHadSubjectTags
-			task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
-			rawParams := map[string]any{}
-			if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
-				return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
-			}
-			if rawParams["target_dataset_id"] != ids.DatasetID {
-				rawParams["target_dataset_id"] = ids.DatasetID
-				needsUpdate = true
-			}
-			if !needsUpdate {
-				continue
-			}
-			encoded, err := json.Marshal(rawParams)
+			params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 			if err != nil {
-				return fmt.Errorf("encode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+				return fmt.Errorf("parse task %s/%s result config: %w", task.SpaceID, task.TaskID, err)
 			}
-			task.CollectParams = string(encoded)
-			if _, err := repo.UpdateByTaskID(ctx, task.SpaceID, task.TaskID, task); err != nil {
-				return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
+			var ids collectorresult.IDs
+			if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
+				// Resample targets have a stricter immutable lineage contract and are
+				// provisioned by resample.Preparer after it has resolved the source
+				// Dataset. The generic result manager must not claim that Dataset as a
+				// raw collection result.
+				ids = collectorresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
+			} else {
+				if len(task.TagIDs) == 0 {
+					return fmt.Errorf("task %s/%s has no bound tags", task.SpaceID, task.TaskID)
+				}
+				logicalIDs := collectorresult.ResultIDsForTask(task.SpaceID, task.TaskID, task.DataType, params.Frequency)
+				ids, err = manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, "", collectorresult.Config{
+					ViewID:       firstNonEmptyResultID(task.ResultViewID, logicalIDs.ViewID),
+					DataNodeID:   dataNodeID,
+					Name:         task.TaskName,
+					Description:  task.Description,
+					Frequency:    taskResultFrequency(*params),
+					Frequencies:  append([]string(nil), params.Collector.Intervals...),
+					SubjectTags:  append([]string(nil), task.TagIDs...),
+					OutputFields: params.OutputFields,
+				})
+				if err != nil {
+					return fmt.Errorf("ensure task %s/%s result: %w", task.SpaceID, task.TaskID, err)
+				}
+			}
+			if err := persistTaskResultIDs(ctx, repo, &task, ids); err != nil {
+				return err
 			}
 		}
 		if int64(page*store.MaxEnabledTasks) >= total || len(tasks) == 0 {
 			break
 		}
+	}
+	return nil
+}
+
+// persistTaskResultIDs records the result identities on the task row and in
+// its collect params when either differs from what is stored.
+func persistTaskResultIDs(ctx context.Context, repo *store.TaskRepository, task *domain.CollectionTask, ids collectorresult.IDs) error {
+	needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
+	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+	rawParams := map[string]any{}
+	if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
+		return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+	}
+	if rawParams["target_dataset_id"] != ids.DatasetID {
+		rawParams["target_dataset_id"] = ids.DatasetID
+		needsUpdate = true
+	}
+	if !needsUpdate {
+		return nil
+	}
+	encoded, err := json.Marshal(rawParams)
+	if err != nil {
+		return fmt.Errorf("encode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
+	}
+	task.CollectParams = string(encoded)
+	if _, err := repo.UpdateByTaskID(ctx, task.SpaceID, task.TaskID, *task); err != nil {
+		return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
 	}
 	return nil
 }
@@ -363,14 +305,6 @@ func firstNonEmptyResultID(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func isLegacySubjectSelectionError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	return strings.Contains(message, "symbol_source") || strings.Contains(message, "symbol_dataset_id")
 }
 
 func taskResultFrequency(params domain.CollectParams) string {

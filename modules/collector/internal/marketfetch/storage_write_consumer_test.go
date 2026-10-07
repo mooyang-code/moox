@@ -19,7 +19,7 @@ func TestHandleStorageWriteUpdatesAssignedTaskInstances(t *testing.T) {
 	db := newTestMarketFetchStore(t)
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "rule", TaskName: "Rule", DataType: "kline", Enabled: true}))
-	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", Provider: "binance", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`}
 	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
 	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{ID: "target-btc", SpaceID: "crypto", InstanceID: instance.InstanceID, TaskID: "rule", DatasetID: "bars", Status: "pending"}}))
 	require.NoError(t, db.TaskInstances().AssignMarketFetchFunction(ctx, "crypto", "binance", "spot", "bars", "1m", "fetcher-1", []string{"BTC-USDT"}))
@@ -45,8 +45,8 @@ func TestStorageWriteOnlyUpdatesLatestScheduledRun(t *testing.T) {
 	newRun, err := db.Runs().GetOrCreateScheduled(ctx, "crypto", "scheduled:new", "scheduled", "1m", time.Date(2026, 8, 5, 2, 3, 0, 0, time.UTC))
 	require.NoError(t, err)
 	instances := []domain.TaskInstance{
-		{SpaceID: "crypto", InstanceID: "old-btc", RunID: oldRun.RunID, RequestKey: "same-request", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
-		{SpaceID: "crypto", InstanceID: "new-btc", RunID: newRun.RunID, RequestKey: "same-request", CollectionTaskID: "rule", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: "crypto", InstanceID: "old-btc", RunID: oldRun.RunID, RequestKey: "same-request", Provider: "binance", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: "crypto", InstanceID: "new-btc", RunID: newRun.RunID, RequestKey: "same-request", Provider: "binance", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
 	}
 	require.NoError(t, db.TaskInstances().UpsertMany(ctx, instances))
 	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{

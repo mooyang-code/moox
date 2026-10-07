@@ -38,7 +38,7 @@ func TestLoadTaskSeed(t *testing.T) {
 	assert.Equal(t, []string{"binance_spot"}, task.TagIDs)
 	assert.Equal(t, "moox-setup", task.Creator)
 	assert.True(t, task.Enabled)
-	ids := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "binance_spot", "kline", "1m")
+	ids := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "kline", "1m")
 	assert.Equal(t, ids.DatasetID, task.ResultDatasetID)
 	assert.Equal(t, ids.ViewID, task.ResultViewID)
 	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
@@ -54,7 +54,7 @@ func TestSeededTasksEachOwnTheirResultDataset(t *testing.T) {
 	require.NotEmpty(t, tasks)
 	owners := make(map[string]string, len(tasks))
 	for _, task := range tasks {
-		ids := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "", task.DataType, taskResultFrequency(t, task))
+		ids := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, task.DataType, taskResultFrequency(t, task))
 		assert.Equal(t, ids.DatasetID, task.ResultDatasetID, "task %s", task.TaskID)
 		assert.Equal(t, ids.ViewID, task.ResultViewID, "task %s", task.TaskID)
 		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)

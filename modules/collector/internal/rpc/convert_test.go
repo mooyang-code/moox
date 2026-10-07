@@ -78,7 +78,7 @@ func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
 func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 	now := time.Now().UTC()
 	instance := toPBInstance(domain.TaskInstance{
-		SpaceID: "crypto", InstanceID: "task-1", CollectionTaskID: "rule-1", DataType: "kline", LastExecStatus: domain.InstanceStatusSuccess,
+		SpaceID: "crypto", InstanceID: "task-1", DataType: "kline", LastExecStatus: domain.InstanceStatusSuccess,
 		CreateTime: now, ModifyTime: now,
 	})
 	assert.Equal(t, "task-1", instance.GetInstanceId())

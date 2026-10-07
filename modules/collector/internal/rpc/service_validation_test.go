@@ -260,7 +260,7 @@ func TestAssignGeneratedCollectionTaskResultUsesOneIdentityForEveryResampleFrequ
 
 	assigned, ids, err := assignGeneratedCollectionTaskResult(task, params)
 	require.NoError(t, err)
-	expected := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "", "kline_resample", "5m")
+	expected := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "kline_resample", "5m")
 	require.Equal(t, expected, ids)
 	require.Equal(t, expected.DatasetID, assigned.ResultDatasetID)
 	require.Equal(t, expected.ViewID, assigned.ResultViewID)
@@ -290,7 +290,7 @@ func TestCollectionTaskResultIDsIgnoreUserTargetAndFrequency(t *testing.T) {
 	}
 	ids, err := collectionTaskResultIDs(task)
 	require.NoError(t, err)
-	require.Equal(t, taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "", "kline_resample", "4h"), ids)
+	require.Equal(t, taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "kline_resample", "4h"), ids)
 }
 
 func TestCanonicalizeResampleTaskStartsInWaitingViewState(t *testing.T) {
@@ -546,7 +546,7 @@ func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
 		require.NotEmpty(t, taskID)
 		stored, err := db.Tasks().GetByTaskID(ctx, "crypto", taskID)
 		require.NoError(t, err)
-		require.Equal(t, taskresult.ResultIDsForTask("crypto", taskID, "binance_spot", "kline", "1m").DatasetID, stored.ResultDatasetID)
+		require.Equal(t, taskresult.ResultIDsForTask("crypto", taskID, "kline", "1m").DatasetID, stored.ResultDatasetID)
 		require.Equal(t, stored.ResultDatasetID, mustParseCollectParams(t, *stored).TargetDatasetID)
 		require.Equal(t, taskID, metadata.datasets[stored.ResultDatasetID].GetAttributes()["collector_task_id"])
 		datasets = append(datasets, stored.ResultDatasetID)
@@ -693,7 +693,7 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	stored, getErr := db.Tasks().GetByTaskID(context.Background(), "crypto", rsp.GetTaskId())
 	require.NoError(t, getErr)
 	require.Equal(t, "Binance 现货 K 线", stored.TaskName)
-	expected := taskresult.ResultIDsForTask("crypto", rsp.GetTaskId(), "binance_spot", "kline", "1m")
+	expected := taskresult.ResultIDsForTask("crypto", rsp.GetTaskId(), "kline", "1m")
 	require.Equal(t, expected.DatasetID, stored.ResultDatasetID)
 	require.Equal(t, expected.ViewID, stored.ResultViewID)
 	require.Contains(t, metadata.datasets, expected.DatasetID)
@@ -982,7 +982,7 @@ func TestGetKlineResampleBackfillKeepsMixedActiveRequestCancelable(t *testing.T)
 		result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: start, End: start.Add(time.Hour), NextBucket: start, State: state}
 		encoded, marshalErr := result.Marshal()
 		require.NoError(t, marshalErr)
-		return domain.TaskInstance{SpaceID: "crypto", InstanceID: taskID, CollectionTaskID: "rule-5m", DataType: "kline_resample", Result: encoded}
+		return domain.TaskInstance{SpaceID: "crypto", InstanceID: taskID, DataType: "kline_resample", Result: encoded}
 	}
 	instances := []domain.TaskInstance{makeInstance("failed", domain.ResampleBackfillFailed), makeInstance("syncing", domain.ResampleBackfillSyncing)}
 	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", TaskName: "rule-5m", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady}))

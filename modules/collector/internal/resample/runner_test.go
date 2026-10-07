@@ -97,7 +97,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	encoded, err := result.Marshal()
 	require.NoError(t, err)
 	resultIDs := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
-	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: rule.TaskID, Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: resultIDs.DatasetID, SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", Provider: "moox", MarketType: "spot", DataType: "kline_resample", SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
 	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{instance}))
 	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{{ID: "wt-task-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: rule.TaskID, DatasetID: resultIDs.DatasetID, ViewID: resultIDs.ViewID, Status: "pending"}}))
 	stored, err := db.TaskInstances().Get(context.Background(), "crypto", "task-btc")
@@ -158,7 +158,7 @@ func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
 	encoded, err := result.Marshal()
 	require.NoError(t, err)
 	resultIDs := taskresult.ResultIDs("crypto", "rule-5m")
-	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: "rule-5m", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: resultIDs.DatasetID, SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
+	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-btc", Provider: "moox", MarketType: "spot", DataType: "kline_resample", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
 	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{{ID: "wt-task-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule-5m", DatasetID: resultIDs.DatasetID, ViewID: resultIDs.ViewID, Status: "pending"}}))
 	primary := &syncPointPrimary{}
 	runner := &Runner{Instances: db.TaskInstances(), Primary: primary}

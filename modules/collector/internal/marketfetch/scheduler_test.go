@@ -1230,7 +1230,7 @@ func TestDispatchDueRetriesReservesCapacityForHistoricalGroups(t *testing.T) {
 	} {
 		require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: fixture.taskID, DataType: "kline", Enabled: true, CollectParams: `{}`}))
 		require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-			SpaceID: "crypto", InstanceID: fixture.instanceID, CollectionTaskID: fixture.taskID,
+			SpaceID: "crypto", InstanceID: fixture.instanceID,
 			Provider: "binance", ProviderSymbol: fixture.symbol, SourceID: "spot_http", MarketType: "spot",
 			DataType: "kline", SubjectID: fixture.symbol, Frequency: "1m", TaskParams: `{}`,
 		}}))

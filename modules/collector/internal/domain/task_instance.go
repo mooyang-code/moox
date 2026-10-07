@@ -20,9 +20,9 @@ type Subject struct {
 	Status    string
 }
 
-// DatasetSubject is the small compatibility projection used by the legacy job
-// registry. Provider symbols are derived from SubjectID by the selected source
-// adapter and are deliberately not persisted in this type.
+// DatasetSubject is the subject projection consumed by job planners. Provider
+// symbols are derived from SubjectID by the selected source adapter and are
+// deliberately not persisted in this type.
 type DatasetSubject struct {
 	SubjectID   string
 	SubjectName string
@@ -40,12 +40,6 @@ type TaskSpec struct {
 	SubjectID  string
 	Frequency  string
 	Params     map[string]any
-	// Legacy planner-only aliases remain outside persistence while the static
-	// rule metadata package is reduced independently.
-	Exchange string
-	Market   string
-	Symbol   string
-	Interval string
 }
 
 // TaskInstance is one provider request execution. Task/Dataset ownership lives in WriteTarget.
@@ -53,31 +47,27 @@ type TaskInstance struct {
 	ID      int    `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID string `gorm:"column:c_space_id"`
 	// InstanceID is the stable executable identity for one subject/frequency.
-	InstanceID string `gorm:"column:c_instance_id"`
-	RunID      string `gorm:"column:c_run_id"`
-	RequestKey string `gorm:"column:c_request_key"`
-	// CollectionTaskID and DatasetID are deprecated compatibility projections.
-	// Ownership lives exclusively in WriteTarget and these fields are never persisted.
-	CollectionTaskID string     `gorm:"-"`
-	Provider         string     `gorm:"column:c_provider"`
-	ProviderSymbol   string     `gorm:"column:c_provider_symbol"`
-	MarketType       string     `gorm:"column:c_market_type"`
-	DataType         string     `gorm:"column:c_data_type"`
-	DatasetID        string     `gorm:"-"`
-	SubjectID        string     `gorm:"column:c_subject_id"`
-	Frequency        string     `gorm:"column:c_frequency"`
-	TargetDataTime   *time.Time `gorm:"column:c_target_data_time"`
-	SourceID         string     `gorm:"column:c_source_id"`
-	SeriesTag        string     `gorm:"column:c_series_tag"`
-	FunctionName     string     `gorm:"column:c_function_name"`
-	LastExecStatus   int        `gorm:"column:c_last_exec_status"`
-	TaskParams       string     `gorm:"column:c_task_params"`
-	ExecuteAt        time.Time  `gorm:"-"`
-	LastExecTime     *time.Time `gorm:"column:c_last_exec_time"`
-	Result           string     `gorm:"column:c_result"`
-	IsDeleted        bool       `gorm:"column:c_is_deleted"`
-	CreateTime       time.Time  `gorm:"column:c_ctime"`
-	ModifyTime       time.Time  `gorm:"column:c_mtime"`
+	InstanceID     string     `gorm:"column:c_instance_id"`
+	RunID          string     `gorm:"column:c_run_id"`
+	RequestKey     string     `gorm:"column:c_request_key"`
+	Provider       string     `gorm:"column:c_provider"`
+	ProviderSymbol string     `gorm:"column:c_provider_symbol"`
+	MarketType     string     `gorm:"column:c_market_type"`
+	DataType       string     `gorm:"column:c_data_type"`
+	SubjectID      string     `gorm:"column:c_subject_id"`
+	Frequency      string     `gorm:"column:c_frequency"`
+	TargetDataTime *time.Time `gorm:"column:c_target_data_time"`
+	SourceID       string     `gorm:"column:c_source_id"`
+	SeriesTag      string     `gorm:"column:c_series_tag"`
+	FunctionName   string     `gorm:"column:c_function_name"`
+	LastExecStatus int        `gorm:"column:c_last_exec_status"`
+	TaskParams     string     `gorm:"column:c_task_params"`
+	ExecuteAt      time.Time  `gorm:"-"`
+	LastExecTime   *time.Time `gorm:"column:c_last_exec_time"`
+	Result         string     `gorm:"column:c_result"`
+	IsDeleted      bool       `gorm:"column:c_is_deleted"`
+	CreateTime     time.Time  `gorm:"column:c_ctime"`
+	ModifyTime     time.Time  `gorm:"column:c_mtime"`
 }
 
 // WriteTarget is the task-specific destination of a shared TaskInstance.

@@ -170,7 +170,7 @@ func addMetricFailureTask(t *testing.T, db *store.Store, taskID, datasetID, targ
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true}))
 	instanceID := "instance-" + taskID
 	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{
-		SpaceID: "crypto", InstanceID: instanceID, CollectionTaskID: taskID, DataType: "kline", DatasetID: datasetID,
+		SpaceID: "crypto", InstanceID: instanceID, DataType: "kline",
 		SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`,
 	}}))
 	target := domain.WriteTarget{ID: targetID, SpaceID: "crypto", InstanceID: instanceID, TaskID: taskID, DatasetID: datasetID, SeriesIndex: 0, SeriesHash: "hash-" + taskID, ExpectedCount: 1, Status: "failed"}
