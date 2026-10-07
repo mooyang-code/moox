@@ -207,7 +207,7 @@ func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
 	familyCount, sampleCount := 0, 0
 	for _, family := range families {
 		name := family.GetName()
-		if !strings.HasPrefix(name, "moox_") {
+		if !IsMonitoredMetric(name) {
 			continue
 		}
 		familyCount++
