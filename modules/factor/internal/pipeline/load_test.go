@@ -232,3 +232,29 @@ func TestLoadLiveReusesPreviousWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, t9.Add(-2*time.Minute), starts["BTC"], "a window past the cache is read in full")
 }
+
+func TestLoadLiveOlderPeriodKeepsNewerWindow(t *testing.T) {
+	set := domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll}
+	livePlan := func(target time.Time) Plan {
+		plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
+			Set: set, Factors: []domain.FactorDef{{FactorID: "f", LookbackPeriods: 3}},
+			PeriodTime: target, Universe: []string{"BTC"}, CarryColumns: []string{"close"},
+		})
+		require.NoError(t, err)
+		return plan
+	}
+	var start time.Time
+	store := &fakeStore{read: func(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+		start = req.Start
+		return emptyFrames(req), nil
+	}}
+	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
+	t0 := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	for _, target := range []time.Time{t0, t0.Add(-time.Minute)} {
+		_, err := runner.Load(context.Background(), livePlan(target))
+		require.NoError(t, err)
+	}
+	_, err := runner.Load(context.Background(), livePlan(t0.Add(time.Minute)))
+	require.NoError(t, err)
+	require.Equal(t, t0.Add(time.Minute), start)
+}

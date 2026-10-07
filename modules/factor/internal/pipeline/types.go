@@ -53,10 +53,10 @@ type Config struct {
 }
 
 type Runner struct {
-	store storageio.Store
-	exec  pyexec.Executor
-	clock periodclock.Clock
-	cfg   Config
+	store   storageio.Store
+	exec    pyexec.Executor
+	clock   periodclock.Clock
+	cfg     Config
 	windows *liveWindowCache
 }
 

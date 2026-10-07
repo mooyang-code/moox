@@ -66,21 +66,28 @@ func (c *liveWindowCache) readStarts(plan Plan, subjects []string) (map[string]t
 	return starts, prefixes
 }
 
-// store records the loaded windows; subjects that failed keep their previous
-// window and subjects that left the plan are dropped.
+// store records the loaded windows. Subjects that failed keep their previous
+// window, subjects that left the plan are dropped, and since periods may finish
+// out of order an older period never replaces a newer window.
 func (c *liveWindowCache) store(plan Plan, frames map[string]*storageio.Frame, failed map[string]struct{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	source := windowSource(plan)
-	next := &cachedSetWindow{source: source, subjects: make(map[string]cachedSubjectWindow, len(plan.Available))}
-	if previous := c.sets[plan.Set.SetID]; previous != nil && previous.source == source {
-		for subject := range failed {
-			if cached, ok := previous.subjects[subject]; ok {
-				next.subjects[subject] = cached
-			}
+	previous := map[string]cachedSubjectWindow{}
+	if set := c.sets[plan.Set.SetID]; set != nil && set.source == source {
+		previous = set.subjects
+	}
+	next := &cachedSetWindow{source: source, subjects: make(map[string]cachedSubjectWindow, len(frames)+len(failed))}
+	for subject := range failed {
+		if cached, ok := previous[subject]; ok {
+			next.subjects[subject] = cached
 		}
 	}
 	for subject, frame := range frames {
+		if cached, ok := previous[subject]; ok && cached.end.After(plan.TargetEnd) {
+			next.subjects[subject] = cached
+			continue
+		}
 		next.subjects[subject] = cachedSubjectWindow{
 			start: plan.TargetStart, end: plan.TargetEnd,
 			rows: rowsBetween(frame.Rows, plan.TargetStart, plan.TargetEnd),
