@@ -193,3 +193,26 @@ func metricMessageStoreFromDatabaseForTest(t *testing.T, mgr *store.Store) *Metr
 	require.NoError(t, err)
 	return result
 }
+
+// Collector names hourly results 1H; their View output must be observed.
+func TestKlineFreshnessEvaluatorObservesCollectorHourlyFrequency(t *testing.T) {
+	now := time.Date(2026, 10, 7, 7, 20, 0, 0, time.UTC)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1H", MarketID: "crypto", StaleAfter: 2 * time.Hour}
+	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
+		RawLabels: `{"space_id":"crypto","view_id":"view_task_kline_1h","dataset_id":"dataset_task","subject_id":"BTC-USDT","freq":"1H","series_tag":"venue:binance|market:spot|source:spot_http"}`,
+		Output:    now.Add(-80 * time.Minute), Commit: now,
+	}})
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, 1, reports[0].ObservedCount)
+	require.True(t, reports[0].Success, "reason=%s", reports[0].Reason)
+}
+
+func TestKlineFrequencyUnitsAreCaseInsensitiveExceptMonth(t *testing.T) {
+	require.True(t, isValidKlineFrequency("1H"))
+	require.True(t, isValidKlineFrequency("1h"))
+	require.True(t, isValidKlineFrequency("1M"))
+	require.Equal(t, klineFrequencyUnit("H"), klineFrequencyUnit("h"))
+	require.NotEqual(t, klineFrequencyUnit("M"), klineFrequencyUnit("m"), "M is month, m is minute")
+}

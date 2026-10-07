@@ -476,6 +476,16 @@ func viewRuleMatches(rule KlineFreshnessRule, identity viewObservationIdentity) 
 		strings.TrimSpace(rule.Frequency) == identity.Frequency
 }
 
+// klineFrequencyUnit normalizes a frequency unit the way Collector does: units
+// are case-insensitive (Collector names hourly bars 1H) except M, which means
+// month as opposed to m for minute.
+func klineFrequencyUnit(unit string) string {
+	if unit == "M" {
+		return unit
+	}
+	return strings.ToLower(unit)
+}
+
 func isValidKlineFrequency(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -492,7 +502,7 @@ func isValidKlineFrequency(value string) bool {
 	if err != nil || amount <= 0 {
 		return false
 	}
-	switch value[index:] {
+	switch klineFrequencyUnit(value[index:]) {
 	case "s", "m", "h", "d", "w", "M":
 		return true
 	default:
@@ -603,7 +613,7 @@ func klineFrequencyDuration(value string) time.Duration {
 		return 0
 	}
 	unit := time.Duration(amount)
-	switch value[index:] {
+	switch klineFrequencyUnit(value[index:]) {
 	case "s":
 		return unit * time.Second
 	case "m":
