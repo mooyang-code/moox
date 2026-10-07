@@ -160,15 +160,8 @@ storage:
         routes:
           - space_id: crypto
             dataset_ids: ["*"]
-          # Keep legacy crypto_market Views on isolated dynamic durables while
-          # the canonical crypto datasets remain on the static partitions.
-          - space_id: crypto_market
-            dataset_ids: ["*"]
           - space_id: mooxsys
             dataset_ids: [dataset_mooxsys_host_disk, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_network, dataset_mooxsys_host_resource]
-          # Older installations used moox_system for the same host datasets.
-          - space_id: moox_system
-            dataset_ids: ["*"]
           - space_id: stockcn
             dataset_ids: ["*"]
           - space_id: stockcn
