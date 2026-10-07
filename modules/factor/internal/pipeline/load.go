@@ -36,17 +36,44 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	if err != nil {
 		return LoadResult{}, err
 	}
+	live := plan.Mode == ModeLive && r.windows != nil
+	starts := map[string]time.Time{}
+	var prefixes map[string][][]any
+	if live {
+		starts, prefixes = r.windows.readStarts(plan, subjects)
+	}
 	batchSize := r.cfg.ReadBatchSubjects
 	if batchSize < 1 {
 		batchSize = 100
 	}
-	batches := make([][]string, 0, (len(subjects)+batchSize-1)/batchSize)
-	for start := 0; start < len(subjects); start += batchSize {
-		end := start + batchSize
-		if end > len(subjects) {
-			end = len(subjects)
+	// Subjects sharing a read start share batches, so a warm live set reads
+	// only its recent bars while a cold subject still reads the whole window.
+	type readJob struct {
+		start    time.Time
+		subjects []string
+	}
+	groups := make(map[time.Time][]string)
+	var groupOrder []time.Time
+	for _, subject := range subjects {
+		start, ok := starts[subject]
+		if !ok {
+			start = readStart
 		}
-		batches = append(batches, append([]string(nil), subjects[start:end]...))
+		if _, seen := groups[start]; !seen {
+			groupOrder = append(groupOrder, start)
+		}
+		groups[start] = append(groups[start], subject)
+	}
+	var batches []readJob
+	for _, start := range groupOrder {
+		group := groups[start]
+		for from := 0; from < len(group); from += batchSize {
+			to := from + batchSize
+			if to > len(group) {
+				to = len(group)
+			}
+			batches = append(batches, readJob{start: start, subjects: append([]string(nil), group[from:to]...)})
+		}
 	}
 	workers := r.cfg.ReadWorkers
 	if workers < 1 {
@@ -60,16 +87,16 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 		frames   map[string]*storageio.Frame
 		err      error
 	}
-	jobs := make(chan []string)
+	jobs := make(chan readJob)
 	results := make(chan batchResult, len(batches))
 	var workersDone sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		workersDone.Add(1)
 		go func() {
 			defer workersDone.Done()
-			for batch := range jobs {
-				frames, err := r.readBatch(ctx, plan, readStart, batch)
-				results <- batchResult{subjects: batch, frames: frames, err: err}
+			for job := range jobs {
+				frames, err := r.readBatch(ctx, plan, job.start, job.subjects)
+				results <- batchResult{subjects: job.subjects, frames: frames, err: err}
 			}
 		}()
 	}
@@ -107,6 +134,9 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 			if frame == nil {
 				frame = &storageio.Frame{SubjectID: subject, Columns: append([]string{"data_time", "series_tag"}, plan.CarryColumns...), Rows: [][]any{}}
 			}
+			if prefix := prefixes[subject]; len(prefix) > 0 {
+				frame.Rows = append(append(make([][]any, 0, len(prefix)+len(frame.Rows)), prefix...), frame.Rows...)
+			}
 			result.Frames[subject] = frame
 		}
 	}
@@ -115,6 +145,9 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	}
 	if failedBatches == len(batches) {
 		return LoadResult{}, fmt.Errorf("%w: all %d factor read batches failed: %v", storageio.ErrInfra, failedBatches, firstErr)
+	}
+	if live {
+		r.windows.store(plan, result.Frames, failedSet)
 	}
 	for _, subject := range subjects {
 		if _, failed := failedSet[subject]; !failed {

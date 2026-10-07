@@ -57,6 +57,7 @@ type Runner struct {
 	exec  pyexec.Executor
 	clock periodclock.Clock
 	cfg   Config
+	windows *liveWindowCache
 }
 
 func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Clock, cfg Config) *Runner {
@@ -81,7 +82,7 @@ func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Cl
 	if cfg.PythonWorkers <= 0 {
 		cfg.PythonWorkers = 1
 	}
-	return &Runner{store: store, exec: exec, clock: clock, cfg: cfg}
+	return &Runner{store: store, exec: exec, clock: clock, cfg: cfg, windows: newLiveWindowCache()}
 }
 
 type LoadResult struct {

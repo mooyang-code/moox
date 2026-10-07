@@ -177,3 +177,58 @@ func TestReadDeadlinesDifferForLiveAndRecalc(t *testing.T) {
 	require.False(t, got[ModeRecalc].hasDeadline)
 	require.Equal(t, 10*time.Second, got[ModeRecalc].pageTimeout)
 }
+
+func TestLoadLiveReusesPreviousWindow(t *testing.T) {
+	set := domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll}
+	livePlan := func(target time.Time, universe ...string) Plan {
+		plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
+			Set: set, Factors: []domain.FactorDef{{FactorID: "f", LookbackPeriods: 3}},
+			PeriodTime: target, Universe: universe, CarryColumns: []string{"close"},
+		})
+		require.NoError(t, err)
+		return plan
+	}
+	var mu sync.Mutex
+	starts := map[string]time.Time{}
+	store := &fakeStore{read: func(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+		frames := emptyFrames(req)
+		mu.Lock()
+		defer mu.Unlock()
+		for _, subject := range req.Subjects {
+			starts[subject] = req.Start
+			for at := req.Start; at.Before(req.End); at = at.Add(time.Minute) {
+				frames[subject].Rows = append(frames[subject].Rows, []any{at, "", float64(at.Minute())})
+			}
+		}
+		return frames, nil
+	}}
+	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
+	t0 := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+
+	_, err := runner.Load(context.Background(), livePlan(t0, "BTC"))
+	require.NoError(t, err)
+	require.Equal(t, t0.Add(-2*time.Minute), starts["BTC"])
+
+	t1 := t0.Add(time.Minute)
+	loaded, err := runner.Load(context.Background(), livePlan(t1, "BTC", "ETH"))
+	require.NoError(t, err)
+	require.Equal(t, t1, starts["BTC"], "a warm subject reads only the target bar")
+	require.Equal(t, t1.Add(-2*time.Minute), starts["ETH"], "a cold subject reads the whole window")
+	for _, subject := range []string{"BTC", "ETH"} {
+		rows := loaded.Frames[subject].Rows
+		require.Len(t, rows, 3, subject)
+		require.Equal(t, t1.Add(-2*time.Minute), rows[0][0])
+		require.Equal(t, t1, rows[2][0])
+	}
+
+	t3 := t1.Add(2 * time.Minute)
+	loaded, err = runner.Load(context.Background(), livePlan(t3, "BTC"))
+	require.NoError(t, err)
+	require.Equal(t, t1.Add(time.Minute), starts["BTC"], "a skipped period reads from the end of the cached window")
+	require.Len(t, loaded.Frames["BTC"].Rows, 3)
+
+	t9 := t3.Add(6 * time.Minute)
+	_, err = runner.Load(context.Background(), livePlan(t9, "BTC"))
+	require.NoError(t, err)
+	require.Equal(t, t9.Add(-2*time.Minute), starts["BTC"], "a window past the cache is read in full")
+}
