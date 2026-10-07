@@ -28,9 +28,13 @@ func TestRunMonitorDataCleanupAttemptsEveryStore(t *testing.T) {
 			calls = append(calls, "dedupe")
 			return nil
 		},
+		pruneSeries: func(context.Context, time.Time) error {
+			calls = append(calls, "series")
+			return nil
+		},
 	})
 	require.ErrorIs(t, err, wantErr)
-	assert.Equal(t, []string{"results", "alerts", "dedupe"}, calls)
+	assert.Equal(t, []string{"results", "alerts", "dedupe", "series"}, calls)
 }
 
 func TestRunMonitorDataCleanupAllowsUnavailableStores(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"gorm.io/gorm"
@@ -78,53 +79,93 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 		if serviceName == "" {
 			return errors.New("producer.service_name is required")
 		}
-		service := &MetricService{ServiceName: serviceName, InstanceID: instanceID, BootID: bootID, NodeID: nodeID, Version: version, LastSeenAt: now, IsStale: false}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_boot_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_node_id", "c_version", "c_last_seen_at", "c_is_stale", "c_mtime"})}).Create(service).Error; err != nil {
+		service := &MetricService{ServiceName: serviceName, InstanceID: instanceID, BootID: bootID, NodeID: nodeID, Version: version, LastSeenAt: now}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_boot_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_node_id", "c_version", "c_last_seen_at", "c_mtime"})}).Create(service).Error; err != nil {
 			return err
 		}
-		for _, sample := range samples {
-			series := &MetricSeries{ServiceName: sample.ServiceName, InstanceID: sample.InstanceID, SeriesID: sample.SeriesID, MetricName: sample.MetricName, MetricType: sample.MetricType, LabelsJSON: sample.LabelsJSON, LastSeenAt: sample.ObservedAt, IsStale: false}
-			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_series_id"}}, DoUpdates: clause.Assignments(map[string]interface{}{
-				"c_metric_name":  gorm.Expr("excluded.c_metric_name"),
-				"c_metric_type":  gorm.Expr("excluded.c_metric_type"),
-				"c_labels_json":  gorm.Expr("excluded.c_labels_json"),
-				"c_last_seen_at": gorm.Expr("MAX(c_last_seen_at, excluded.c_last_seen_at)"),
-				"c_is_stale":     gorm.Expr("CASE WHEN excluded.c_last_seen_at > c_last_seen_at THEN excluded.c_is_stale ELSE c_is_stale END"),
-				"c_mtime":        gorm.Expr("CURRENT_TIMESTAMP"),
-			})}).Create(series).Error; err != nil {
-				return err
-			}
-			var latest MetricLatest
-			find := tx.Where("c_series_id = ?", sample.SeriesID).First(&latest)
-			if errors.Is(find.Error, gorm.ErrRecordNotFound) {
-				latest = MetricLatest{SeriesID: sample.SeriesID}
-			} else if find.Error != nil {
-				return find.Error
-			}
-			if latest.ID != 0 && !sample.ObservedAt.After(latest.ObservedAt) {
-				continue
-			}
-			if latest.ID != 0 && monotonicMetric(sample.MetricName) && sample.Value < latest.Value {
-				// Reporter 重启后内存水位可能为空。此时保留已提交的最新值，
-				// 避免较新的抓取结果携带旧业务水位并造成数值倒退。
-				continue
-			}
-			latest.ServiceName, latest.InstanceID, latest.MetricName, latest.MetricType, latest.LabelsJSON = sample.ServiceName, sample.InstanceID, sample.MetricName, sample.MetricType, sample.LabelsJSON
-			latest.Value, latest.ObservedAt, latest.IntervalSeconds, latest.MessageID, latest.ProducerNodeID, latest.ProducerVersion = sample.Value, sample.ObservedAt, int(sample.Interval/time.Second), sample.MessageID, sample.ProducerNodeID, sample.ProducerVersion
-			if latest.ID == 0 {
-				if err := tx.Create(&latest).Error; err != nil {
-					return err
-				}
-			} else if err := tx.Save(&latest).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return upsertSamples(tx, samples)
 	})
 	if err != nil {
 		return false, fmt.Errorf("commit metrics ingest: %w", err)
 	}
 	return duplicate, nil
+}
+
+// ingestBatchRows bounds the rows of one multi-row upsert. A report carries
+// thousands of per-subject samples and monitor's SQLite has one connection, so
+// the ingest transaction must be a handful of statements, not three per sample.
+const ingestBatchRows = 500
+
+// upsertSamples records the series catalog and the latest value of every
+// sample with batched upserts. The latest value only advances to a newer
+// observation, and a monotonic metric never moves back to a smaller value.
+func upsertSamples(tx *gorm.DB, samples []Sample) error {
+	if len(samples) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	series := make([]MetricSeries, 0, len(samples))
+	var plain, monotonic []MetricLatest
+	for _, sample := range samples {
+		observedAt := sample.ObservedAt.UTC()
+		series = append(series, MetricSeries{
+			ServiceName: sample.ServiceName, InstanceID: sample.InstanceID, SeriesID: sample.SeriesID,
+			MetricName: sample.MetricName, MetricType: sample.MetricType, LabelsJSON: sample.LabelsJSON,
+			LastSeenAt: observedAt, CreatedAt: now, UpdatedAt: now,
+		})
+		latest := MetricLatest{
+			SeriesID: sample.SeriesID, ServiceName: sample.ServiceName, InstanceID: sample.InstanceID,
+			MetricName: sample.MetricName, MetricType: sample.MetricType, LabelsJSON: sample.LabelsJSON,
+			Value: sample.Value, ObservedAt: observedAt, IntervalSeconds: int(sample.Interval / time.Second),
+			MessageID: sample.MessageID, ProducerNodeID: sample.ProducerNodeID, ProducerVersion: sample.ProducerVersion,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if monotonicMetric(sample.MetricName) {
+			monotonic = append(monotonic, latest)
+		} else {
+			plain = append(plain, latest)
+		}
+	}
+	seriesUpsert := clause.OnConflict{
+		Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_series_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"c_metric_name":  gorm.Expr("excluded.c_metric_name"),
+			"c_metric_type":  gorm.Expr("excluded.c_metric_type"),
+			"c_labels_json":  gorm.Expr("excluded.c_labels_json"),
+			"c_last_seen_at": gorm.Expr("MAX(c_last_seen_at, excluded.c_last_seen_at)"),
+			"c_mtime":        gorm.Expr("CURRENT_TIMESTAMP"),
+		}),
+	}
+	if err := tx.Clauses(seriesUpsert).CreateInBatches(&series, ingestBatchRows).Error; err != nil {
+		return err
+	}
+	newer := clause.Expr{SQL: "excluded.c_observed_at > t_monitor_metric_latest.c_observed_at"}
+	notSmaller := clause.Expr{SQL: "excluded.c_value >= t_monitor_metric_latest.c_value"}
+	for _, group := range []struct {
+		rows  []MetricLatest
+		where []clause.Expression
+	}{
+		{rows: plain, where: []clause.Expression{newer}},
+		// Reporter 重启后内存水位可能为空。此时保留已提交的最新值，
+		// 避免较新的抓取结果携带旧业务水位并造成数值倒退。
+		{rows: monotonic, where: []clause.Expression{newer, notSmaller}},
+	} {
+		if len(group.rows) == 0 {
+			continue
+		}
+		latestUpsert := clause.OnConflict{
+			Columns: []clause.Column{{Name: "c_series_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"c_service_name", "c_instance_id", "c_metric_name", "c_metric_type", "c_labels_json", "c_value",
+				"c_observed_at", "c_interval_seconds", "c_message_id", "c_producer_node_id", "c_producer_version", "c_mtime",
+			}),
+			Where: clause.Where{Exprs: group.where},
+		}
+		if err := tx.Clauses(latestUpsert).CreateInBatches(&group.rows, ingestBatchRows).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func monotonicMetric(name string) bool {
@@ -146,8 +187,32 @@ func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (in
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	q := r.db.WithContext(ctx).Where("c_expires_at < ?", now).Delete(&MetricIngestMessage{})
-	return q.RowsAffected, q.Error
+	return store.DeleteBefore(ctx, r.db, "t_monitor_metric_ingest_messages", "c_expires_at", now)
+}
+
+// RetiredSeriesAfter is how long a series may go unreported before it is
+// dropped with its latest value: the View, subject or reporter behind it is
+// gone. A series that is reported again is simply recreated.
+const RetiredSeriesAfter = 24 * time.Hour
+
+// PruneRetiredSeries removes the series not reported since RetiredSeriesAfter
+// before now, together with their latest values.
+func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("message store is not initialized")
+	}
+	cutoff := now.UTC().Add(-RetiredSeriesAfter)
+	var pruned int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`DELETE FROM t_monitor_metric_latest WHERE c_series_id IN
+			(SELECT c_series_id FROM t_monitor_metric_series WHERE c_last_seen_at < ?)`, cutoff).Error; err != nil {
+			return err
+		}
+		result := tx.Where("c_last_seen_at < ?", cutoff).Delete(&MetricSeries{})
+		pruned = result.RowsAffected
+		return result.Error
+	})
+	return pruned, err
 }
 
 func (r *MetricMessageStore) GetLatest(ctx context.Context, seriesID string) (*MetricLatest, error) {
@@ -265,7 +330,7 @@ func (r *MetricMessageStore) ListSeries(ctx context.Context, serviceName, metric
 		limit = 500
 	}
 	var rows []MetricSeries
-	q := r.db.WithContext(ctx).Where("c_is_stale = 0")
+	q := r.db.WithContext(ctx)
 	if serviceName != "" {
 		q = q.Where("c_service_name = ?", serviceName)
 	}

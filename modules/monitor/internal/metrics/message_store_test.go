@@ -152,3 +152,78 @@ func metricMessageStoreForTest(t *testing.T, db *store.Store) *MetricMessageStor
 	}
 	return result
 }
+
+func TestMetricMessageStoreCommitsLargeReportInBatches(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	report := &metricspb.MetricReport{ServiceName: "storage-view", InstanceId: "storage-view@a", BootId: "b"}
+	at := time.Unix(1000, 0).UTC()
+	samples := func(message string, observed time.Time, value float64) []Sample {
+		out := make([]Sample, 0, 2*ingestBatchRows+3)
+		for i := 0; i < 2*ingestBatchRows+3; i++ {
+			name := "moox_storage_view_rows_total"
+			if i%2 == 0 {
+				name = ViewDatasetOutputLastDataTimeMetric
+			}
+			out = append(out, Sample{
+				SeriesID: fmt.Sprintf("s-%04d", i), ServiceName: report.ServiceName, InstanceID: report.InstanceId,
+				MetricName: name, MetricType: "gauge", Value: value, ObservedAt: observed, MessageID: message,
+			})
+		}
+		return out
+	}
+	_, err = r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m1"}, report, samples("m1", at, 50))
+	require.NoError(t, err)
+	// A newer report with smaller values: plain gauges follow it, monotonic
+	// watermarks keep their committed value.
+	_, err = r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m2"}, report, samples("m2", at.Add(time.Second), 40))
+	require.NoError(t, err)
+
+	var seriesCount, latestCount int64
+	require.NoError(t, r.db.Model(&MetricSeries{}).Count(&seriesCount).Error)
+	require.NoError(t, r.db.Model(&MetricLatest{}).Count(&latestCount).Error)
+	require.EqualValues(t, 2*ingestBatchRows+3, seriesCount)
+	require.EqualValues(t, 2*ingestBatchRows+3, latestCount)
+	monotonic, err := r.GetLatest(context.Background(), "s-1002")
+	require.NoError(t, err)
+	require.Equal(t, float64(50), monotonic.Value)
+	plain, err := r.GetLatest(context.Background(), "s-1001")
+	require.NoError(t, err)
+	require.Equal(t, float64(40), plain.Value)
+	require.Equal(t, "m2", plain.MessageID)
+	require.True(t, plain.ObservedAt.Equal(at.Add(time.Second)))
+}
+
+func TestMetricMessageStorePrunesRetiredSeriesWithLatest(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	report := &metricspb.MetricReport{ServiceName: "storage-view", InstanceId: "storage-view@a", BootId: "b"}
+	for _, item := range []struct {
+		id string
+		at time.Time
+	}{{"retired", now.Add(-RetiredSeriesAfter - time.Minute)}, {"live", now.Add(-time.Minute)}} {
+		_, err := r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: item.id}, report, []Sample{{
+			SeriesID: item.id, ServiceName: report.ServiceName, InstanceID: report.InstanceId,
+			MetricName: "g", MetricType: "gauge", Value: 1, ObservedAt: item.at, MessageID: item.id,
+		}})
+		require.NoError(t, err)
+	}
+	pruned, err := r.PruneRetiredSeries(context.Background(), now)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, pruned)
+	_, err = r.GetLatest(context.Background(), "retired")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = r.GetLatest(context.Background(), "live")
+	require.NoError(t, err)
+	series, err := r.ListSeries(context.Background(), report.ServiceName, "g", 10)
+	require.NoError(t, err)
+	require.Len(t, series, 1)
+	require.Equal(t, "live", series[0].SeriesID)
+}

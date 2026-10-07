@@ -280,8 +280,5 @@ func (r *AlertRepository) ListRecentEvents(ctx context.Context, limit int) ([]do
 }
 
 func (r *AlertRepository) DeleteEventsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	tx := r.db.WithContext(ctx).
-		Where("c_created_at < ?", cutoff).
-		Delete(&domain.AlertEvent{})
-	return tx.RowsAffected, tx.Error
+	return DeleteBefore(ctx, r.db, "t_monitor_alert_events", "c_created_at", cutoff)
 }

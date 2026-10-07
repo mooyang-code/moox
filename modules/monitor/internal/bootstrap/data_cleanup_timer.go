@@ -20,6 +20,7 @@ type monitorDataCleanupOps struct {
 	deleteResults func(context.Context, time.Time) error
 	deleteAlerts  func(context.Context, time.Time) error
 	pruneDedupe   func(context.Context, time.Time) error
+	pruneSeries   func(context.Context, time.Time) error
 }
 
 func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error {
@@ -42,6 +43,11 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 	if ops.pruneDedupe != nil {
 		if err := ops.pruneDedupe(ctx, now); err != nil {
 			errs = append(errs, fmt.Errorf("prune metric message dedupe: %w", err))
+		}
+	}
+	if ops.pruneSeries != nil {
+		if err := ops.pruneSeries(ctx, now); err != nil {
+			errs = append(errs, fmt.Errorf("prune retired metric series: %w", err))
 		}
 	}
 	return errors.Join(errs...)
@@ -74,6 +80,10 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if runtime != nil && runtime.MetricStores != nil && runtime.MetricStores.Messages != nil {
 		ops.pruneDedupe = func(ctx context.Context, now time.Time) error {
 			_, err := runtime.MetricStores.Messages.PruneDedupe(ctx, now)
+			return err
+		}
+		ops.pruneSeries = func(ctx context.Context, now time.Time) error {
+			_, err := runtime.MetricStores.Messages.PruneRetiredSeries(ctx, now)
 			return err
 		}
 	}

@@ -10,9 +10,10 @@ type MetricService struct {
 	NodeID      string    `gorm:"column:c_node_id"`
 	Version     string    `gorm:"column:c_version"`
 	LastSeenAt  time.Time `gorm:"column:c_last_seen_at"`
-	IsStale     bool      `gorm:"column:c_is_stale"`
-	CreatedAt   time.Time `gorm:"column:c_ctime"`
-	UpdatedAt   time.Time `gorm:"column:c_mtime"`
+	// IsStale is derived on read from LastSeenAt; it is not stored.
+	IsStale   bool      `gorm:"-"`
+	CreatedAt time.Time `gorm:"column:c_ctime"`
+	UpdatedAt time.Time `gorm:"column:c_mtime"`
 }
 
 func (MetricService) TableName() string { return "t_monitor_metric_services" }
@@ -26,9 +27,10 @@ type MetricSeries struct {
 	MetricType  string    `gorm:"column:c_metric_type"`
 	LabelsJSON  string    `gorm:"column:c_labels_json"`
 	LastSeenAt  time.Time `gorm:"column:c_last_seen_at"`
-	IsStale     bool      `gorm:"column:c_is_stale"`
-	CreatedAt   time.Time `gorm:"column:c_ctime"`
-	UpdatedAt   time.Time `gorm:"column:c_mtime"`
+	// IsStale is derived on read from LastSeenAt; it is not stored.
+	IsStale   bool      `gorm:"-"`
+	CreatedAt time.Time `gorm:"column:c_ctime"`
+	UpdatedAt time.Time `gorm:"column:c_mtime"`
 }
 
 func (MetricSeries) TableName() string { return "t_monitor_metric_series" }

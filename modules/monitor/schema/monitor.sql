@@ -52,6 +52,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_results_id
 ON t_monitor_check_results (c_result_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_results_recent
 ON t_monitor_check_results (c_space_id, c_check_id, c_checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at ON t_monitor_check_results (c_checked_at);
 
 CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_agent_id TEXT PRIMARY KEY,
@@ -139,6 +140,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_alert_events_id
 ON t_monitor_alert_events (c_event_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_alert_events_recent
 ON t_monitor_alert_events (c_space_id, c_created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_alert_events_created_at ON t_monitor_alert_events (c_created_at);
 
 CREATE TRIGGER IF NOT EXISTS trg_monitor_checks_mtime
 AFTER UPDATE ON t_monitor_checks
@@ -174,7 +176,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_services (
     c_node_id TEXT NOT NULL DEFAULT '',
     c_version TEXT NOT NULL DEFAULT '',
     c_last_seen_at DATETIME NOT NULL,
-    c_is_stale INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -191,7 +192,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_series (
     c_metric_type TEXT NOT NULL,
     c_labels_json TEXT NOT NULL DEFAULT '{}',
     c_last_seen_at DATETIME NOT NULL,
-    c_is_stale INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_series (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_series_key
 ON t_monitor_metric_series (c_service_name, c_instance_id, c_series_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_name
-ON t_monitor_metric_series (c_service_name, c_metric_name, c_is_stale);
+ON t_monitor_metric_series (c_service_name, c_metric_name);
 
 CREATE TABLE IF NOT EXISTS t_monitor_metric_latest (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,

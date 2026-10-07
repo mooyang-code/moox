@@ -806,7 +806,7 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 	if _, err := store.WithDatabase(manager, func(db *gorm.DB) struct{} {
 		if err := db.Model(&monmetrics.MetricService{}).
 			Where("c_service_name = ? AND c_instance_id = ?", "moox_collector", "collector@node-a").
-			Updates(map[string]any{"c_last_seen_at": now, "c_is_stale": false}).Error; err != nil {
+			Updates(map[string]any{"c_last_seen_at": now}).Error; err != nil {
 			t.Fatal(err)
 		}
 		return struct{}{}

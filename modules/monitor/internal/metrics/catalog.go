@@ -56,7 +56,7 @@ func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset
 	var rows []MetricService
 	listSQL := rankedSQL + `
 		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
-			c_last_seen_at, c_is_stale, c_ctime, c_mtime
+			c_last_seen_at, c_ctime, c_mtime
 		FROM ranked_services
 		WHERE logical_rank = 1
 		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
@@ -112,7 +112,7 @@ func (c *MetricCatalog) ListServicesForAt(ctx context.Context, serviceNames []st
 	var rows []MetricService
 	listSQL := rankedSQL + `
 		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
-			c_last_seen_at, c_is_stale, c_ctime, c_mtime
+			c_last_seen_at, c_ctime, c_mtime
 		FROM ranked_services
 		WHERE logical_rank = 1
 		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC

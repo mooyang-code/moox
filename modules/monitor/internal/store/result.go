@@ -98,8 +98,5 @@ func (r *ResultRepository) Stats(ctx context.Context, spaceID string, since time
 }
 
 func (r *ResultRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	tx := r.db.WithContext(ctx).
-		Where("c_checked_at < ?", cutoff).
-		Delete(&domain.CheckResult{})
-	return tx.RowsAffected, tx.Error
+	return DeleteBefore(ctx, r.db, "t_monitor_check_results", "c_checked_at", cutoff)
 }
