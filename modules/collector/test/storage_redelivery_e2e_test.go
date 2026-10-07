@@ -101,10 +101,11 @@ func TestStorageRedeliveryE2EKeepsOneRowAfterLostAck(t *testing.T) {
 				if err := store.upsert(rowKey, 118_250.5); err != nil {
 					return jetstream.HandlerResult{Decision: jetstream.RETRY, Err: err}
 				}
-				// Model an ACK transport loss: the process context ends after Storage
-				// commits but before Runner can send the ACK.
+				// Model a delivery that comes back after Storage committed, as a lost
+				// ACK does: the process stops before acknowledging, and a stopping
+				// Runner returns the unacknowledged delivery to the stream.
 				cancelFirst()
-				return jetstream.HandlerResult{Decision: jetstream.ACK}
+				return jetstream.HandlerResult{Decision: jetstream.RETRY}
 			},
 		), jetstream.RunnerConfig{BatchSize: 10, IndependentBatch: true}).Run(firstCtx)
 	}()
