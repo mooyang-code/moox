@@ -108,7 +108,7 @@ func RunSummaryToPB(summary domain.SetRunSummary) *factorpb.SetRunSummary {
 	}
 	return &factorpb.SetRunSummary{
 		SetId:          summary.SetID,
-		LastPeriodTime: summary.LastPeriodTime,
+		LastPeriodTime: summary.LastPeriodTime, WarmingSubjects: summary.WarmingSubjects,
 		LastStatus:     summary.LastStatus,
 		LagSeconds:     summary.LagSeconds,
 		Factors:        factors,
@@ -127,6 +127,7 @@ func RunSummaryFromPB(pb *factorpb.SetRunSummary) domain.SetRunSummary {
 	return domain.SetRunSummary{
 		SetID: pb.GetSetId(), LastPeriodTime: pb.GetLastPeriodTime(), LastStatus: pb.GetLastStatus(),
 		LagSeconds: pb.GetLagSeconds(), Factors: factors, FailedSubjects: CloneStrings(pb.GetFailedSubjects()),
+		WarmingSubjects: pb.GetWarmingSubjects(),
 	}
 }
 

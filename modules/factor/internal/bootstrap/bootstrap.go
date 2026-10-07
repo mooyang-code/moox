@@ -111,7 +111,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub))
 
 	runtime.health.SnapshotFunc = runtime.healthSnapshot(db)
-	if err := registerMetricsReporter(s); err != nil {
+	if err := registerMetricsReporter(s, hub); err != nil {
 		return nil, err
 	}
 	if err := factorhealth.Register(s.Service(factorHealthService), runtime.health); err != nil {

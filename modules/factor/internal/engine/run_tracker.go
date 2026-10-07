@@ -22,6 +22,7 @@ type trackedRun struct {
 	status         string
 	factors        []domain.FactorPeriodState
 	failedSubjects []string
+	warming        int
 }
 
 func newRunTracker() *runTracker { return &runTracker{runs: make(map[string]trackedRun)} }
@@ -46,7 +47,7 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 	}
 	t.runs[setID] = trackedRun{
 		periodTime: periodTime, status: status, factors: factors,
-		failedSubjects: outcome.FailedSubjects,
+		failedSubjects: outcome.FailedSubjects, warming: outcome.Warming,
 	}
 }
 
@@ -84,6 +85,6 @@ func summaryOf(setID string, run trackedRun, now time.Time) domain.SetRunSummary
 	}
 	return domain.SetRunSummary{
 		SetID: setID, LastPeriodTime: run.periodTime.Unix(), LastStatus: run.status, LagSeconds: lag,
-		Factors: run.factors, FailedSubjects: run.failedSubjects,
+		Factors: run.factors, FailedSubjects: run.failedSubjects, WarmingSubjects: int32(run.warming),
 	}
 }

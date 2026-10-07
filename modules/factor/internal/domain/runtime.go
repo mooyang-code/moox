@@ -19,6 +19,9 @@ type SetRunSummary struct {
 	LagSeconds     int64
 	Factors        []FactorPeriodState
 	FailedSubjects []string
+	// WarmingSubjects were left out of the period while their lookback
+	// window loads; their results are not formal.
+	WarmingSubjects int32
 }
 
 // LaneStatus is the backlog of one factor set's serial lane in the engine and

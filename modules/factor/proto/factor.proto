@@ -67,6 +67,9 @@ message SetRunSummary {
   int64 lag_seconds = 4;
   repeated FactorPeriodState factors = 5;
   repeated string failed_subjects = 6;
+  // warming_subjects were left out of the period while their lookback window
+  // loads; their results are not formal.
+  int32 warming_subjects = 7;
 }
 
 message FactorSetInfo {

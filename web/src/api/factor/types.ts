@@ -76,6 +76,8 @@ export interface SetRunSummary {
   lag_seconds: number;
   factors?: FactorPeriodState[];
   failed_subjects?: string[];
+  /** 预热中、未计入正式结果的对象数。 */
+  warming_subjects?: number;
 }
 
 export interface FactorSetInfo {
