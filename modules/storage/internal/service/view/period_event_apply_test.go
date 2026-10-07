@@ -44,9 +44,6 @@ func (m *periodMetadataFake) UpsertViewPeriodDatasetState(_ context.Context, req
 	state := req.GetState()
 	key := periodStateKey{state.GetSpaceId(), state.GetViewId(), state.GetDatasetId(), state.GetFrequency(), state.GetPeriodTime()}
 	if existing := m.states[key]; existing != nil {
-		if !proto.Equal(existing, state) {
-			return nil, errors.New("view period dataset state conflict")
-		}
 		return &pb.UpsertViewPeriodDatasetStateRsp{RetInfo: successRetInfo(), State: proto.Clone(existing).(*pb.ViewPeriodDatasetState)}, nil
 	}
 	m.states[key] = proto.Clone(state).(*pb.ViewPeriodDatasetState)
@@ -189,6 +186,32 @@ func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *tes
 		if got[i] != want[i] {
 			t.Fatalf("universe_subject_ids=%v", ready.GetUniverseSubjectIds())
 		}
+	}
+}
+
+// Collector may report the same period again (for example after a restart)
+// with a new event ID. The first report decided the period; the re-report must
+// succeed without republishing so the Dataset's ordered lane keeps moving.
+func TestHandleCollectorPeriodCompletedAcceptsReReportedPeriod(t *testing.T) {
+	metadata := newPeriodMetadataFake()
+	publisher := newReadyPublisherFake()
+	service := newPeriodTestService(metadata, publisher, &pb.View{
+		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
+	})
+	periodTime := int64(1786032000)
+	firstAt := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
+	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 1)
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready", firstAt),
+		collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, firstAt, periodTime)); err != nil {
+		t.Fatal(err)
+	}
+	reportedAt := firstAt.Add(11 * time.Minute)
+	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-again", reportedAt),
+		collectorCompleted("prices", "degraded", []string{"BTC-USDT", "ETH-USDT"}, []string{"ETH-USDT"}, reportedAt, periodTime)); err != nil {
+		t.Fatalf("re-reported period must not fail: %v", err)
+	}
+	if len(metadata.states) != 1 || len(publisher.attempts) != 1 {
+		t.Fatalf("states=%d publish attempts=%d, want the first report only", len(metadata.states), len(publisher.attempts))
 	}
 }
 

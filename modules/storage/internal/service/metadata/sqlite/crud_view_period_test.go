@@ -119,10 +119,17 @@ func TestViewPeriodDatasetStateInsertIdempotencyAndConflict(t *testing.T) {
 		t.Fatalf("idempotent state changed: first=%v second=%v", created, idempotent)
 	}
 
-	conflict := cloneViewPeriodDatasetState(item)
-	conflict.EventId = "period-prices-2"
-	if _, err := store.UpsertViewPeriodDatasetState(ctx, conflict); err == nil || !strings.Contains(err.Error(), "conflict") {
-		t.Fatalf("conflicting upsert error = %v", err)
+	// A later report for the same period keeps the first decision instead of
+	// failing forever: Collector re-reports periods after restarts.
+	reReport := cloneViewPeriodDatasetState(item)
+	reReport.EventId = "period-prices-2"
+	reReport.Status = "degraded"
+	recorded, err := store.UpsertViewPeriodDatasetState(ctx, reReport)
+	if err != nil {
+		t.Fatalf("re-reported period: %v", err)
+	}
+	if recorded.GetEventId() != created.GetEventId() || recorded.GetStatus() != created.GetStatus() {
+		t.Fatalf("re-report replaced the first decision: %v", recorded)
 	}
 }
 

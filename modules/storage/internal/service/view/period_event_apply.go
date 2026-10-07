@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,6 +88,13 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 		}
 		if err := requireStorageSuccess("upsert view period dataset state", rsp.GetRetInfo()); err != nil {
 			return err
+		}
+		if recorded := rsp.GetState(); recorded != nil && recorded.GetEventId() != message.GetEventId() {
+			// The period was already decided by an earlier report, which also
+			// published its readiness; this re-report changes nothing.
+			log.Printf("storage view ignored duplicate period report space=%s view=%s dataset=%s freq=%s period=%d event=%s recorded_event=%s",
+				message.GetSpaceId(), view.GetViewId(), completion.datasetID, completion.frequency, completion.periodTime, message.GetEventId(), recorded.GetEventId())
+			continue
 		}
 		statesRsp, err := metadata.ListViewPeriodDatasetStates(ctx, &pb.ListViewPeriodDatasetStatesReq{
 			AuthInfo: s.internalAuth(), SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), Frequency: completion.frequency, PeriodTime: completion.periodTime,
