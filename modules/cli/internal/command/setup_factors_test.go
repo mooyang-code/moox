@@ -22,6 +22,7 @@ type fakeFactorJSONClient struct {
 	existing      *setupFactorDefinition
 	usages        []factorAPIUsage
 	existingSet   *setupFactorSet
+	setStatus     string
 }
 
 func (f *fakeFactorJSONClient) CallJSON(_ context.Context, _ string, path string, body, response any) error {
@@ -47,6 +48,7 @@ func (f *fakeFactorJSONClient) CallJSON(_ context.Context, _ string, path string
 			result.FactorSet.Freq = f.existingSet.Freq
 			result.FactorSet.SubjectMode = f.existingSet.SubjectMode
 			result.FactorSet.Subjects = append([]string(nil), f.existingSet.Subjects...)
+			result.FactorSet.Status = f.setStatus
 		}
 	case "/api/admin/factormgr/CreateFactorSet":
 		set := request["factor_set"].(map[string]any)
@@ -236,6 +238,18 @@ func TestApplyIsIdempotentWhenNothingChanged(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, setupFactorSummary{Enabled: true, Definitions: 1, Members: 1, Unchanged: 1, MembersUnchanged: 1}, result)
 	require.Equal(t, []string{"/api/admin/factormgr/GetFactorSet", "/api/admin/factormgr/GetFactor"}, client.calls)
+}
+
+func TestApplyResumesPendingFactorSet(t *testing.T) {
+	plan := testSetupPlan()
+	client := &fakeFactorJSONClient{
+		existingSet: &plan.Sets[0], setStatus: "pending", existing: &plan.Definitions[0],
+		usages: []factorAPIUsage{{SetID: "fset_prices_1m", Status: "enabled"}},
+	}
+	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
+	require.NoError(t, err)
+	require.Equal(t, []string{"/api/admin/factormgr/GetFactorSet", "/api/admin/factormgr/CreateFactorSet", "/api/admin/factormgr/GetFactor"}, client.calls,
+		"a set left pending by an interrupted creation must be resumed before members are added")
 }
 
 func TestApplySkipsIdenticalDefinition(t *testing.T) {

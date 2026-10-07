@@ -411,12 +411,15 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 		if err != nil && !factorAPINotFound(get) {
 			return summary, err
 		}
-		if err != nil {
+		createSet := func() error {
 			create := factorAPIResponse{}
-			if createErr := r.call(ctx, "CreateFactorSet", map[string]any{"factor_set": map[string]any{
+			return r.call(ctx, "CreateFactorSet", map[string]any{"factor_set": map[string]any{
 				"set_id": set.SetID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
 				"freq": set.Freq, "subject_mode": set.SubjectMode, "subjects": set.Subjects, "status": "pending",
-			}}, &create); createErr != nil {
+			}}, &create)
+		}
+		if err != nil {
+			if createErr := createSet(); createErr != nil {
 				return summary, createErr
 			}
 			summary.SetsCreated++
@@ -424,6 +427,13 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 		}
 		if get.FactorSet.SpaceID != set.SpaceID || get.FactorSet.SourceDatasetID != set.SourceDatasetID || get.FactorSet.Freq != set.Freq {
 			return summary, fmt.Errorf("factor set %q already exists with a different source identity", set.SetID)
+		}
+		if get.FactorSet.Status == "pending" {
+			// An interrupted creation left the set pending; CreateFactorSet
+			// resumes provisioning its result Dataset.
+			if createErr := createSet(); createErr != nil {
+				return summary, createErr
+			}
 		}
 		if get.FactorSet.SubjectMode != set.SubjectMode || !slices.Equal(cleanStrings(get.FactorSet.Subjects), set.Subjects) {
 			updated := factorAPIResponse{}
