@@ -44,7 +44,7 @@ type ViewMetrics struct {
 	outboxReconnectAttempts          *prometheus.CounterVec
 	periodWaitingDatasets            *prometheus.GaugeVec
 	viewOutputWatermark              *prometheus.GaugeVec
-	datasetOutputLastDataTime        *prometheus.GaugeVec
+	viewSubjects                     *viewSubjectTracker
 	readyPublishRetry                *prometheus.CounterVec
 	restoreDuration                  prometheus.Gauge
 	restoreReady                     prometheus.Gauge
@@ -61,8 +61,6 @@ type ViewMetrics struct {
 	partitionStates                  map[string]ConsumerPartitionSnapshot
 	viewWatermarkMu                  sync.Mutex
 	viewWatermarks                   map[string]int64
-	datasetObservationMu             sync.Mutex
-	datasetObservations              map[string]viewDatasetObservationWatermark
 	outboxObservedSnapshot           atomic.Bool
 	outboxDynamicAge                 atomic.Bool
 	outboxOldestEventAt              atomic.Int64
@@ -93,31 +91,6 @@ type ViewMetrics struct {
 	pendingMu                        sync.Mutex
 	pendingDeliveries                map[*jetstream.Delivery]time.Time
 }
-
-// ViewDatasetObservation identifies the data watermark observed after a View
-// successfully applies rows. Storage records this generic contract; Monitor
-// decides whether a given View represents a K-line business stream.
-type ViewDatasetObservation struct {
-	SpaceID   string
-	ViewID    string
-	DatasetID string
-	SubjectID string
-	Frequency string
-	SeriesTag string
-	DataTime  time.Time
-}
-
-type viewDatasetObservationWatermark struct {
-	outputDataTime float64
-}
-
-const (
-	// Bound per-subject output identity cardinality so a malformed or runaway
-	// View cannot exhaust the reporter's sample budget. Monitor further scopes
-	// which View identities are persisted for freshness checks.
-	maxViewDatasetObservationSeries = 20000
-	maxViewDatasetMetricLabelBytes  = 256
-)
 
 // ViewMetricsSnapshot is the aggregate runtime state exported by the view and
 // outbox instrumentation. It intentionally has no subject, symbol, or message
@@ -267,10 +240,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "output_watermark_timestamp_seconds",
 			Help: "Latest business timestamp successfully committed to an active Storage View.",
 		}, []string{"space_id", "view_id", "dataset_id", "freq"}),
-		datasetOutputLastDataTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "dataset_output_last_data_time_seconds",
-			Help: "Latest business data time successfully committed to an active View index.",
-		}, []string{"space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag"}),
+		viewSubjects: newViewSubjectTracker(),
 		readyPublishRetry: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
 			Help: "View source/result ready event publishes that need retry.",
@@ -308,10 +278,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "permanent_view_capacity_over_limit",
 			Help: "Number of active permanent Views at or above the file capacity threshold; these Views require operator action and are not automatically truncated.",
 		}),
-		pendingDeliveries:   make(map[*jetstream.Delivery]time.Time),
-		partitionStates:     make(map[string]ConsumerPartitionSnapshot),
-		viewWatermarks:      make(map[string]int64),
-		datasetObservations: make(map[string]viewDatasetObservationWatermark),
+		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
+		partitionStates:   make(map[string]ConsumerPartitionSnapshot),
+		viewWatermarks:    make(map[string]int64),
 	}
 	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
@@ -426,7 +395,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.viewOutputWatermark, err = registerOrReuse(registerer, metrics.viewOutputWatermark); err != nil {
 		return nil, err
 	}
-	if metrics.datasetOutputLastDataTime, err = registerOrReuse(registerer, metrics.datasetOutputLastDataTime); err != nil {
+	if metrics.viewSubjects, err = registerOrReuse(registerer, metrics.viewSubjects); err != nil {
 		return nil, err
 	}
 	if metrics.readyPublishRetry, err = registerOrReuse(registerer, metrics.readyPublishRetry); err != nil {
@@ -491,56 +460,7 @@ func (m *ViewMetrics) SetPermanentViewCapacityOverLimitCount(count int64) {
 
 // ObserveViewDatasetOutput records a successful active View index commit.
 func (m *ViewMetrics) ObserveViewDatasetOutput(observation ViewDatasetObservation) error {
-	labels, err := canonicalViewDatasetLabels(observation)
-	if err != nil {
-		return err
-	}
-	m.datasetObservationMu.Lock()
-	defer m.datasetObservationMu.Unlock()
-	key := strings.Join(labels, "\x00")
-	if _, exists := m.datasetObservations[key]; !exists && len(m.datasetObservations) >= maxViewDatasetObservationSeries {
-		return fmt.Errorf("storage view dataset observation series limit exceeded: %d", maxViewDatasetObservationSeries)
-	}
-	state := m.datasetObservations[key]
-	dataTime := timestampSeconds(observation.DataTime)
-	if dataTime > state.outputDataTime {
-		state.outputDataTime = dataTime
-		m.datasetOutputLastDataTime.WithLabelValues(labels...).Set(dataTime)
-	}
-	m.datasetObservations[key] = state
-	return nil
-}
-
-func canonicalViewDatasetLabels(observation ViewDatasetObservation) ([]string, error) {
-	values := []string{
-		strings.TrimSpace(observation.SpaceID), strings.TrimSpace(observation.ViewID),
-		strings.TrimSpace(observation.DatasetID), strings.TrimSpace(observation.SubjectID),
-		strings.TrimSpace(observation.Frequency), strings.TrimSpace(observation.SeriesTag),
-	}
-	if values[5] == "" {
-		values[5] = "default"
-	}
-	for _, value := range values[:5] {
-		if value == "" {
-			return nil, fmt.Errorf("storage view dataset observation requires space_id, view_id, dataset_id, subject_id, and freq")
-		}
-	}
-	for _, value := range values {
-		if len(value) > maxViewDatasetMetricLabelBytes {
-			return nil, fmt.Errorf("storage view dataset observation label exceeds %d bytes", maxViewDatasetMetricLabelBytes)
-		}
-	}
-	if _, err := parseDatasetFrequency(values[4]); err != nil {
-		return nil, fmt.Errorf("storage view dataset observation freq %q is invalid", values[4])
-	}
-	if observation.DataTime.IsZero() {
-		return nil, fmt.Errorf("storage view dataset observation data_time is required")
-	}
-	return values, nil
-}
-
-func timestampSeconds(value time.Time) float64 {
-	return float64(value.UnixNano()) / float64(time.Second)
+	return m.viewSubjects.observe(observation)
 }
 
 // ObserveViewOutputWatermark advances the committed watermark for one active

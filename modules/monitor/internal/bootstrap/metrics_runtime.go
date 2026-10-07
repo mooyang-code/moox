@@ -146,9 +146,7 @@ func startObservabilityConsumer(
 				"storage-node": {},
 				"moox_gateway": {},
 			},
-		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled, func() []monmetrics.ViewMetricScope {
-			return klineViewMetricScopes(klineInventory, time.Now().UTC())
-		}),
+		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
 		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 	}
 	runtime.Go(func() {
@@ -226,7 +224,6 @@ func metricsObservabilityRoute(
 	moduleMetrics *report.ModuleMetrics,
 	runtime *Runtime,
 	enabled bool,
-	klineScopes func() []monmetrics.ViewMetricScope,
 ) func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error {
 	return func(ctx context.Context, message *eventpb.EventMessage, metricReport *metricspb.MetricReport) error {
 		if !enabled {
@@ -257,11 +254,7 @@ func metricsObservabilityRoute(
 			monmetrics.RecordIngest(moduleMetrics, "rejected", time.Time{})
 			return observabilityconsumer.Permanent(err)
 		}
-		var activeKlineScopes []monmetrics.ViewMetricScope
-		if klineScopes != nil {
-			activeKlineScopes = klineScopes()
-		}
-		samples = monmetrics.FilterHealthSamplesForKlineViews(samples, activeKlineScopes)
+		samples = monmetrics.FilterHealthSamples(samples)
 		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
 		if err != nil || duplicate {
 			return err
@@ -282,23 +275,6 @@ func metricsObservabilityRoute(
 		monmetrics.RecordIngest(moduleMetrics, "success", observed)
 		return nil
 	}
-}
-
-func klineViewMetricScopes(inventory *monmetrics.TaskResultInventoryCache, now time.Time) []monmetrics.ViewMetricScope {
-	snapshot, ok := inventory.Current(now)
-	if !ok {
-		return nil
-	}
-	scopes := make([]monmetrics.ViewMetricScope, 0, len(snapshot.Entries))
-	for _, entry := range snapshot.Entries {
-		if !entry.Enabled || !entry.OwnershipVerified || (entry.ResultStatus != "ready" && entry.ResultStatus != "error") {
-			continue
-		}
-		scopes = append(scopes, monmetrics.ViewMetricScope{
-			SpaceID: entry.SpaceID, ViewID: entry.ViewID, DatasetID: entry.DatasetID, Frequency: entry.Frequency,
-		})
-	}
-	return scopes
 }
 
 func hostObservabilityRoute(store *hostmetrics.Store, runtime *Runtime, enabled bool) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {

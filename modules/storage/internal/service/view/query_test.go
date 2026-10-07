@@ -202,18 +202,21 @@ func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T
 	rows := []*pb.RowFieldUpsert{
 		viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:04:00Z"),
 		viewFreshnessRow("BTC-USDT", "1m", "venue:binance", newer),
+		viewFreshnessRow("SOL-USDT", "1m", "venue:binance", "2026-09-08T09:50:00Z"),
 		viewFreshnessRow("ETH-USDT", "5m", "", newer),
 	}
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", rows); err != nil {
 		t.Fatal(err)
 	}
-	assertViewDatasetMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
-	assertViewDatasetMetric(t, registry, "ETH-USDT", "5m", "default", newer)
+	// SOL trails the View's latest 1m bar by more than one bar plus the lag
+	// tolerance; BTC is current.
+	assertViewSubjects(t, registry, "1m", 2, map[string]string{"SOL-USDT": "2026-09-08T09:50:00Z"})
+	assertViewSubjects(t, registry, "5m", 1, map[string]string{})
 
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")}); err != nil {
 		t.Fatal(err)
 	}
-	assertViewDatasetMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
+	assertViewSubjects(t, registry, "1m", 2, map[string]string{"SOL-USDT": "2026-09-08T09:50:00Z"})
 }
 
 func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *testing.T) {
@@ -228,24 +231,21 @@ func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *tes
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("replacement write unexpectedly succeeded")
 	}
-	assertNoViewDatasetMetric(t, registry)
-	assertNoViewDatasetOutputMetric(t, registry)
+	assertNoViewSubjects(t, registry)
 
-	engine.writeErrs = nil
 	engine.writeErrs = map[string]error{"prices-index": errors.New("active failed")}
 	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("active write unexpectedly succeeded")
 	}
-	assertNoViewDatasetMetric(t, registry)
-	assertNoViewDatasetOutputMetric(t, registry)
+	assertNoViewSubjects(t, registry)
 
 	engine.writeErrs = nil
 	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err != nil {
 		t.Fatal(err)
 	}
-	assertNoEmptySubjectDatasetMetric(t, registry)
+	assertNoViewSubjects(t, registry)
 }
 
 func configureDatasetFreshnessView(svc *Service, metrics *observability.ViewMetrics, indexID, nextID string) {
@@ -270,68 +270,44 @@ func viewFreshnessRow(subject, frequency, seriesTag, dataTime string) *pb.RowFie
 	}
 }
 
-func assertViewDatasetMetric(t *testing.T, registry *prometheus.Registry, subject, frequency, seriesTag, dataTime string) {
+// assertViewSubjects checks the prices_view summary for one frequency: the
+// tracked subject count and the named lagging subjects with their last bar.
+func assertViewSubjects(t *testing.T, registry *prometheus.Registry, frequency string, subjects int, lagging map[string]string) {
 	t.Helper()
-	want := map[string]string{"space_id": "space", "view_id": "prices_view", "dataset_id": "market_prices", "subject_id": subject, "freq": frequency, "series_tag": seriesTag}
-	families, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, family := range families {
-		if family.GetName() != "moox_storage_view_dataset_output_last_data_time_seconds" {
-			continue
-		}
+	scope := map[string]string{"space_id": "space", "view_id": "prices_view", "dataset_id": "market_prices", "freq": frequency}
+	gotSubjects, gotLagging := -1.0, -1.0
+	gotNames := map[string]string{}
+	for _, family := range mustGather(t, registry) {
 		for _, metric := range family.GetMetric() {
 			labels := make(map[string]string, len(metric.GetLabel()))
 			for _, label := range metric.GetLabel() {
 				labels[label.GetName()] = label.GetValue()
 			}
-			if reflect.DeepEqual(labels, want) {
-				got := time.Unix(int64(metric.GetGauge().GetValue()), 0).UTC().Format(time.RFC3339)
-				if got != dataTime {
-					t.Fatalf("subject=%s freshness=%s, want %s", subject, got, dataTime)
-				}
-				return
+			subject := labels["subject_id"]
+			delete(labels, "subject_id")
+			if !reflect.DeepEqual(labels, scope) {
+				continue
+			}
+			switch family.GetName() {
+			case "moox_storage_view_output_subjects":
+				gotSubjects = metric.GetGauge().GetValue()
+			case "moox_storage_view_output_lagging_subjects":
+				gotLagging = metric.GetGauge().GetValue()
+			case "moox_storage_view_output_lagging_subject_data_time_seconds":
+				gotNames[subject] = time.Unix(int64(metric.GetGauge().GetValue()), 0).UTC().Format(time.RFC3339)
 			}
 		}
 	}
-	t.Fatalf("view dataset metric labels=%v not found", want)
-}
-
-func assertNoViewDatasetMetric(t *testing.T, registry *prometheus.Registry) {
-	t.Helper()
-	families, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, family := range families {
-		if family.GetName() == "moox_storage_view_dataset_output_last_data_time_seconds" && len(family.GetMetric()) != 0 {
-			t.Fatalf("unexpected view dataset metrics: %v", family)
-		}
+	if gotSubjects != float64(subjects) || gotLagging != float64(len(lagging)) || !reflect.DeepEqual(gotNames, lagging) {
+		t.Fatalf("freq=%s subjects=%v lagging=%v names=%v, want %d %d %v", frequency, gotSubjects, gotLagging, gotNames, subjects, len(lagging), lagging)
 	}
 }
 
-func assertNoViewDatasetOutputMetric(t *testing.T, registry *prometheus.Registry) {
+func assertNoViewSubjects(t *testing.T, registry *prometheus.Registry) {
 	t.Helper()
 	for _, family := range mustGather(t, registry) {
-		if family.GetName() == "moox_storage_view_dataset_output_last_data_time_seconds" && len(family.GetMetric()) != 0 {
-			t.Fatalf("unexpected view dataset output metrics: %v", family)
-		}
-	}
-}
-
-func assertNoEmptySubjectDatasetMetric(t *testing.T, registry *prometheus.Registry) {
-	t.Helper()
-	for _, family := range mustGather(t, registry) {
-		if family.GetName() != "moox_storage_view_dataset_output_last_data_time_seconds" {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			for _, label := range metric.GetLabel() {
-				if label.GetName() == "subject_id" && label.GetValue() == "" {
-					t.Fatalf("unexpected empty subject metric: %v", family)
-				}
-			}
+		if family.GetName() == "moox_storage_view_output_subjects" && len(family.GetMetric()) != 0 {
+			t.Fatalf("unexpected view subject summary: %v", family)
 		}
 	}
 }

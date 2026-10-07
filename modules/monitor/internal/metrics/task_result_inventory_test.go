@@ -342,11 +342,11 @@ func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *te
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
-		SpaceID: "crypto", ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subject: "BTC-USDT",
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
 		// After the 1m bar starting five minutes ago, the next bar was due three
 		// minutes ago.
-		Output: now.Add(-5 * time.Minute), Commit: now,
+		Latest: now.Add(-5 * time.Minute),
 	}})
 	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
 	reports, err := evaluator.Evaluate(context.Background(), now)
@@ -382,9 +382,9 @@ func TestKlineFreshnessEvaluatorDetectsViewBehindCompletedPeriodWithinStaleWindo
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
-		SpaceID: "crypto", ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subject: "BTC-USDT",
-		Output: now.Add(-2 * time.Minute), Commit: now,
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
+		Latest: now.Add(-2 * time.Minute),
 	}})
 	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, 10*time.Minute, 20)
 	reports, err := evaluator.Evaluate(context.Background(), now)
@@ -414,7 +414,7 @@ func TestKlineFreshnessEvaluatorIgnoresShortPendingTaskBacklog(t *testing.T) {
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	query := newViewDatasetQuery(t, nil)
+	query := newViewSummaryQuery(t, nil)
 	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 2)
@@ -433,7 +433,7 @@ func TestKlineFreshnessEvaluatorPreservesUnownedErrorAndPendingTaskStates(t *tes
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	query := newViewDatasetQuery(t, nil)
+	query := newViewSummaryQuery(t, nil)
 	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 3)

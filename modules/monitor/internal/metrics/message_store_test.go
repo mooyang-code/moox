@@ -43,7 +43,7 @@ func TestMonotonicMetricRecognizesCanonicalModuleNames(t *testing.T) {
 		"moox_strategy_input_watermark_timestamp_seconds",
 		"moox_trade_metrics_errors_total",
 		"moox_archive_metrics_last_error_timestamp_seconds",
-		ViewDatasetOutputLastDataTimeMetric,
+		ViewOutputLatestMetric,
 	} {
 		require.True(t, monotonicMetric(name), name)
 	}
@@ -58,7 +58,7 @@ func TestMetricMessageStoreViewDatasetTimestampsIgnoreOutOfOrderSnapshot(t *test
 	r := metricMessageStoreForTest(t, mgr)
 	newer := time.Unix(200, 0).UTC()
 	report := &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage@node-a", BootId: "boot-a"}
-	for index, name := range []string{ViewDatasetOutputLastDataTimeMetric} {
+	for index, name := range []string{ViewOutputLatestMetric} {
 		seriesID := fmt.Sprintf("kline-series-%d", index)
 		_, err := r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: fmt.Sprintf("new-%d", index)}, report, []Sample{{
 			SeriesID: seriesID, ServiceName: report.ServiceName, InstanceID: report.InstanceId, MetricName: name,
@@ -85,7 +85,7 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 		rows := make([]MetricLatest, 0, 5003)
 		for index := 0; index < 5000; index++ {
 			rows = append(rows, MetricLatest{
-				SeriesID: fmt.Sprintf("view-%05d", index), MetricName: ViewDatasetOutputLastDataTimeMetric,
+				SeriesID: fmt.Sprintf("view-%05d", index), MetricName: ViewOutputLaggingSubjectMetric,
 				LabelsJSON: fmt.Sprintf(`{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m","series_tag":"default","subject_id":"%05d"}`, index),
 				Value:      float64(index + 1), ObservedAt: time.Unix(int64(index+1), 0).UTC(),
 			})
@@ -98,7 +98,7 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 	require.NoError(t, err)
 	r := metricMessageStoreForTest(t, mgr)
 	rows, err := r.ListLatestByMetricNames(context.Background(), []string{
-		ViewDatasetOutputLastDataTimeMetric,
+		ViewOutputLaggingSubjectMetric,
 	}, 0)
 	require.NoError(t, err)
 	require.Len(t, rows, 5000)
@@ -115,11 +115,11 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 	}
 	_, err = r.ListLatestByMetricNames(context.Background(), []string{"not_a_view_dataset_metric"}, 1)
 	require.Error(t, err)
-	_, err = r.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 500001)
+	_, err = r.ListLatestByMetricNames(context.Background(), []string{ViewOutputLaggingSubjectMetric}, 500001)
 	require.Error(t, err)
 
 	query := NewQueryService(r, nil)
-	rows, err = query.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 1)
+	rows, err = query.ListLatestByMetricNames(context.Background(), []string{ViewOutputLaggingSubjectMetric}, 1)
 	require.Error(t, err)
 }
 
@@ -130,13 +130,13 @@ func TestMetricMessageStoreListLatestByViewScopesFiltersBeforeRead(t *testing.T)
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	_, err = store.WithDatabase(mgr, func(db *gorm.DB) error {
 		return db.Create([]MetricLatest{
-			{SeriesID: "configured", MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: `{"space_id":"crypto","view_id":"kline","dataset_id":"binance","subject_id":"BTC","freq":"1m","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
-			{SeriesID: "unconfigured", MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: `{"space_id":"mooxsys","view_id":"service","dataset_id":"metrics","subject_id":"cpu","freq":"30s","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
+			{SeriesID: "configured", MetricName: ViewOutputLaggingSubjectMetric, LabelsJSON: `{"space_id":"crypto","view_id":"kline","dataset_id":"binance","subject_id":"BTC","freq":"1m","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
+			{SeriesID: "unconfigured", MetricName: ViewOutputLaggingSubjectMetric, LabelsJSON: `{"space_id":"mooxsys","view_id":"service","dataset_id":"metrics","subject_id":"cpu","freq":"30s","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
 		}).Error
 	})
 	require.NoError(t, err)
 	r := metricMessageStoreForTest(t, mgr)
-	rows, err := r.ListLatestByViewScopes(context.Background(), ViewDatasetOutputLastDataTimeMetric, []ViewMetricScope{{
+	rows, err := r.ListLatestByViewScopes(context.Background(), ViewOutputLaggingSubjectMetric, []ViewMetricScope{{
 		SpaceID: "crypto", ViewID: "kline", DatasetID: "binance", Frequency: "1m",
 	}}, 0)
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestMetricMessageStoreCommitsLargeReportInBatches(t *testing.T) {
 		for i := 0; i < 2*ingestBatchRows+3; i++ {
 			name := "moox_storage_view_rows_total"
 			if i%2 == 0 {
-				name = ViewDatasetOutputLastDataTimeMetric
+				name = ViewOutputLatestMetric
 			}
 			out = append(out, Sample{
 				SeriesID: fmt.Sprintf("s-%04d", i), ServiceName: report.ServiceName, InstanceID: report.InstanceId,

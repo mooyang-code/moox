@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -54,22 +55,38 @@ func TestViewMetricsObserveCapacityScanQueueAndPermanentViewOverflow(t *testing.
 	}
 }
 
-func TestViewMetricsExposeCoreDatasetOutputOnly(t *testing.T) {
+func TestViewMetricsSummarizeSubjectsPerView(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewViewMetrics(registry)
 	require.NoError(t, err)
-	dataTime := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
-	observation := ViewDatasetObservation{
-		SpaceID: "crypto", ViewID: "prices-view", DatasetID: "market-prices", SubjectID: "BTC-USDT", Frequency: "1m", SeriesTag: "venue:binance",
-		DataTime: dataTime,
+	latest := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	observe := func(subject string, at time.Time) {
+		require.NoError(t, metrics.ObserveViewDatasetOutput(ViewDatasetObservation{
+			SpaceID: "crypto", ViewID: "prices-view", DatasetID: "market-prices", SubjectID: subject, Frequency: "1m", DataTime: at,
+		}))
 	}
-	require.NoError(t, metrics.ObserveViewDatasetOutput(observation))
-	labels := map[string]string{
-		"space_id": "crypto", "view_id": "prices-view", "dataset_id": "market-prices", "subject_id": "BTC-USDT", "freq": "1m", "series_tag": "venue:binance",
+	observe("BTC-USDT", latest)
+	// One bar plus the lag tolerance behind is still current.
+	observe("ETH-USDT", latest.Add(-time.Minute-viewSubjectLagTolerance))
+	for i := 0; i < ViewLaggingSubjectsReported+5; i++ {
+		observe(fmt.Sprintf("L%02d-USDT", i), latest.Add(-time.Hour+time.Duration(i)*time.Minute))
 	}
-	assertViewDatasetMetric(t, registry, "moox_storage_view_dataset_output_last_data_time_seconds", labels, float64(dataTime.Unix()))
-	assertNoMetricFamily(t, registry, "moox_storage_view_dataset_input_last_data_time_seconds")
-	assertNoMetricFamily(t, registry, "moox_storage_view_dataset_output_last_commit_timestamp_seconds")
+	scope := map[string]string{"space_id": "crypto", "view_id": "prices-view", "dataset_id": "market-prices", "freq": "1m"}
+	assertViewDatasetMetric(t, registry, "moox_storage_view_output_latest_data_time_seconds", scope, float64(latest.Unix()))
+	assertViewDatasetMetric(t, registry, "moox_storage_view_output_tracked_since_data_time_seconds", scope, float64(latest.Unix()))
+	assertViewDatasetMetric(t, registry, "moox_storage_view_output_subjects", scope, float64(2+ViewLaggingSubjectsReported+5))
+	assertViewDatasetMetric(t, registry, "moox_storage_view_output_lagging_subjects", scope, float64(ViewLaggingSubjectsReported+5))
+	oldest := map[string]string{"space_id": "crypto", "view_id": "prices-view", "dataset_id": "market-prices", "freq": "1m", "subject_id": "L00-USDT"}
+	assertViewDatasetMetric(t, registry, "moox_storage_view_output_lagging_subject_data_time_seconds", oldest, float64(latest.Add(-time.Hour).Unix()))
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() == "moox_storage_view_output_lagging_subject_data_time_seconds" {
+			require.Len(t, family.GetMetric(), ViewLaggingSubjectsReported, "only the most lagging subjects are named")
+		}
+	}
+	assertNoMetricFamily(t, registry, "moox_storage_view_dataset_output_last_data_time_seconds")
 }
 
 func assertNoMetricFamily(t *testing.T, registry *prometheus.Registry, name string) {

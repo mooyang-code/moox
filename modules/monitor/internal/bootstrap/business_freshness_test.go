@@ -107,10 +107,11 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
-	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","subject_id":"BTC","freq":"1m","series_tag":"default"}`
+	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		for _, row := range []monmetrics.MetricLatest{
-			{SeriesID: "data", MetricName: monmetrics.ViewDatasetOutputLastDataTimeMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
+			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
+			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
 		} {
 			if err := db.Create(&row).Error; err != nil {
 				t.Fatal(err)

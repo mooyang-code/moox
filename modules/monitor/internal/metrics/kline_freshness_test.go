@@ -16,85 +16,100 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestKlineFreshnessEvaluatorUsesActiveViewOutput(t *testing.T) {
+func TestKlineFreshnessEvaluatorFlagsStaleView(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{
-		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Input: now.Add(-30 * time.Second), Output: now.Add(-10 * time.Minute), Commit: now.Add(-time.Second)},
-	})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: now.Add(-10 * time.Minute), Subjects: 3, ObservedAt: now}})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.False(t, reports[0].Success)
 	require.Equal(t, "business_data_stale", reports[0].Reason)
-	require.Equal(t, 1, reports[0].StaleCount)
+	require.Equal(t, 3, reports[0].StaleCount, "a stale View makes every subject stale")
 }
 
 func TestKlineFreshnessEvaluatorDoesNotAlertTransientHole(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Input: now.Add(-30 * time.Second), Output: now.Add(-90 * time.Second), Commit: now}})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: now.Add(-90 * time.Second), Subjects: 1, ObservedAt: now}})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.True(t, reports[0].Success)
 	require.Equal(t, "fresh", reports[0].Reason)
+	require.Equal(t, 1, reports[0].ObservedCount)
 }
 
-func TestKlineFreshnessEvaluatorSkipsMalformedAndFutureSeries(t *testing.T) {
+func TestKlineFreshnessEvaluatorSkipsMalformedAndFutureSummaries(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{
-		{RawLabels: `{"space_id":"crypto"}`, Output: now.Add(-time.Minute), Commit: now},
-		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "future", Output: now.Add(11 * time.Minute), Commit: now},
-		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "valid", Output: now.Add(-time.Minute), Commit: now},
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{
+		{RawLabels: `{"space_id":"crypto"}`, Latest: now.Add(-time.Minute), Subjects: 1, ObservedAt: now},
+		{Latest: now.Add(11 * time.Minute), Subjects: 1, ObservedAt: now},
 	})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
-	require.Equal(t, 1, reports[0].ObservedCount)
-	require.Equal(t, []string{"valid"}, reports[0].ObservedSubjects)
+	require.Equal(t, "no_observation", reports[0].Reason)
 }
 
-func TestKlineFreshnessEvaluatorPrefersNewestProducerObservation(t *testing.T) {
+func TestKlineFreshnessEvaluatorNamesLaggingSubjectsFromLatestSnapshotOnly(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{
-		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Output: now.Add(-10 * time.Minute), Commit: now.Add(-2 * time.Minute), ObservedAt: now.Add(-2 * time.Minute)},
-		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Output: now.Add(-30 * time.Second), Commit: now, ObservedAt: now},
-	})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), Subjects: 3, Lagging: 1, ObservedAt: now,
+		LaggingSubjects: []viewSummaryLaggingSample{
+			{Subject: "SOL", DataTime: now.Add(-20 * time.Minute), ObservedAt: now},
+			{Subject: "ETH", DataTime: now.Add(-30 * time.Minute), ObservedAt: now.Add(-time.Minute)},
+		},
+	}})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
-	require.True(t, reports[0].Success)
-	require.Equal(t, 1, reports[0].ObservedCount)
+	require.False(t, reports[0].Success)
+	require.Equal(t, 1, reports[0].StaleCount)
+	require.Equal(t, []string{"SOL"}, reports[0].StaleSubjects, "ETH was named by an older snapshot and has caught up")
+	require.Equal(t, now.Add(-20*time.Minute), reports[0].OldestDataTime)
 }
 
-func TestKlineFreshnessEvaluatorIgnoresRetiredSubjects(t *testing.T) {
+func TestKlineFreshnessEvaluatorIgnoresRetiredSubjectsAndCountsMissing(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{
-		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "BTC", Output: now.Add(-time.Minute), Commit: now},
-		{SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "OLD", Output: now.Add(-10 * time.Minute), Commit: now},
-	})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
+		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OLD", DataTime: now.Add(-10 * time.Minute), ObservedAt: now}},
+	}})
 	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}, {SubjectId: "OLD", Status: "archived"}}}
 	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.False(t, reports[0].Success)
-	require.Equal(t, 1, reports[0].ObservedCount)
-	require.Equal(t, []string{"BTC"}, reports[0].ObservedSubjects)
+	require.Equal(t, 1, reports[0].MissingCount, "ETH is active but has produced no output")
 	require.Equal(t, 1, reports[0].StaleCount)
-	require.Equal(t, []string{"ETH"}, reports[0].StaleSubjects)
+	require.Empty(t, reports[0].StaleSubjects, "the retired OLD subject is not reported")
+}
+
+func TestKlineFreshnessEvaluatorWaitsOneBarBeforeCountingMissing(t *testing.T) {
+	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
+	// Storage View just restarted: it has seen one subject in its first bar.
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Minute), Subjects: 1, ObservedAt: now}})
+	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}}}
+	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.True(t, reports[0].Success, "ETH may simply not have written since the restart")
+	require.Zero(t, reports[0].MissingCount)
 }
 
 func TestKlineFreshnessEvaluatorMatchesMarketSuffixDuringSubjectMigration(t *testing.T) {
 	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
-		SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "OPG-USDT-SPOT",
-		Output: now.Add(-time.Minute), Commit: now,
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
+		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT-SPOT", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
 	}})
 	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
 		{SubjectId: "OPG-USDT", Status: "active"},
@@ -106,18 +121,17 @@ func TestKlineFreshnessEvaluatorMatchesMarketSuffixDuringSubjectMigration(t *tes
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.False(t, reports[0].Success)
-	require.Equal(t, "business_data_stale", reports[0].Reason)
-	require.Equal(t, 1, reports[0].ObservedCount)
-	require.Equal(t, []string{"OPG-USDT-SPOT"}, reports[0].ObservedSubjects)
-	require.Equal(t, []string{"ETH-USDT"}, reports[0].StaleSubjects)
+	require.Equal(t, []string{"OPG-USDT"}, reports[0].StaleSubjects)
+	require.Equal(t, 1, reports[0].StaleCount)
+	require.Zero(t, reports[0].MissingCount)
 }
 
 func TestKlineFreshnessEvaluatorRejectsAmbiguousMarketSuffix(t *testing.T) {
 	now := time.Date(2026, 9, 10, 11, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 2 * time.Minute}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
-		SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Subject: "OPG-USDT",
-		Output: now.Add(-time.Minute), Commit: now,
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 1, Lagging: 1, ObservedAt: now,
+		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OPG-USDT", DataTime: now.Add(-20 * time.Minute), ObservedAt: now}},
 	}})
 	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
 		{SubjectId: "OPG-USDT-SPOT", Status: "active"},
@@ -129,12 +143,13 @@ func TestKlineFreshnessEvaluatorRejectsAmbiguousMarketSuffix(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
 	require.False(t, reports[0].Success)
-	require.Equal(t, "no_observation", reports[0].Reason)
+	require.Empty(t, reports[0].StaleSubjects, "an ambiguous alias is not attributed to either catalog subject")
+	require.Equal(t, 2, reports[0].MissingCount)
 }
 
 func TestKlineFreshnessEvaluatorSkipsStockClosedAndWarmup(t *testing.T) {
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{SpaceID: "stockcn", ViewID: "view", DatasetID: "dataset", Subject: "600000", Output: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC), Commit: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC)}})
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{SpaceID: "stockcn", Latest: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC), Subjects: 1, ObservedAt: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC)}})
 	for now, reason := range map[time.Time]string{
 		time.Date(2026, 9, 8, 4, 0, 0, 0, time.UTC):   "skipped_market_closed",
 		time.Date(2026, 9, 8, 1, 30, 30, 0, time.UTC): "skipped_session_warmup",
@@ -147,41 +162,74 @@ func TestKlineFreshnessEvaluatorSkipsStockClosedAndWarmup(t *testing.T) {
 	}
 }
 
-type viewDatasetTestSample struct {
-	SpaceID, ViewID, DatasetID, Subject string
-	Input, Output, Commit               time.Time
-	ObservedAt                          time.Time
-	RawLabels                           string
+type viewSummaryLaggingSample struct {
+	Subject              string
+	DataTime, ObservedAt time.Time
 }
 
-func newViewDatasetQuery(t *testing.T, samples []viewDatasetTestSample) *QueryService {
+// viewSummaryTestSample is one View's summary as Storage View reports it;
+// identity fields default to crypto/view/dataset/1m.
+type viewSummaryTestSample struct {
+	SpaceID, ViewID, DatasetID, Freq string
+	RawLabels                        string
+	Latest, TrackedSince, ObservedAt time.Time
+	Subjects, Lagging                int
+	LaggingSubjects                  []viewSummaryLaggingSample
+}
+
+func newViewSummaryQuery(t *testing.T, samples []viewSummaryTestSample) *QueryService {
 	t.Helper()
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	or := func(value, fallback string) string {
+		if value == "" {
+			return fallback
+		}
+		return value
+	}
 	_, err = store.WithDatabase(mgr, func(db *gorm.DB) error {
+		var rows []MetricLatest
 		for index, sample := range samples {
-			labels := sample.RawLabels
-			if labels == "" {
-				labelsMap := map[string]string{"space_id": sample.SpaceID, "view_id": sample.ViewID, "dataset_id": sample.DatasetID, "subject_id": sample.Subject, "freq": "1m", "series_tag": "default"}
-				raw, marshalErr := json.Marshal(labelsMap)
+			scope := map[string]string{
+				"space_id": or(sample.SpaceID, "crypto"), "view_id": or(sample.ViewID, "view"),
+				"dataset_id": or(sample.DatasetID, "dataset"), "freq": or(sample.Freq, "1m"),
+			}
+			labels := func(subject string) string {
+				if sample.RawLabels != "" {
+					return sample.RawLabels
+				}
+				values := map[string]string{}
+				for key, value := range scope {
+					values[key] = value
+				}
+				if subject != "" {
+					values["subject_id"] = subject
+				}
+				raw, marshalErr := json.Marshal(values)
 				require.NoError(t, marshalErr)
-				labels = string(raw)
+				return string(raw)
 			}
-			observedAt := sample.ObservedAt
-			if observedAt.IsZero() {
-				observedAt = sample.Commit
+			trackedSince := sample.TrackedSince
+			if trackedSince.IsZero() {
+				trackedSince = sample.Latest
 			}
-			rows := make([]MetricLatest, 0, 3)
-			if !sample.Output.IsZero() {
-				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("output-%d", index), MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: labels, Value: float64(sample.Output.Unix()), ObservedAt: observedAt})
+			add := func(name, subject string, value float64, observedAt time.Time) {
+				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("%d-%s-%s", index, name, subject), MetricName: name, LabelsJSON: labels(subject), Value: value, ObservedAt: observedAt})
 			}
-			if err := db.Create(&rows).Error; err != nil {
-				return err
+			add(ViewOutputLatestMetric, "", float64(sample.Latest.Unix()), sample.ObservedAt)
+			add(ViewOutputTrackedSinceMetric, "", float64(trackedSince.Unix()), sample.ObservedAt)
+			add(ViewOutputSubjectsMetric, "", float64(sample.Subjects), sample.ObservedAt)
+			add(ViewOutputLaggingMetric, "", float64(sample.Lagging), sample.ObservedAt)
+			for _, item := range sample.LaggingSubjects {
+				add(ViewOutputLaggingSubjectMetric, item.Subject, float64(item.DataTime.Unix()), item.ObservedAt)
 			}
 		}
-		return nil
+		if len(rows) == 0 {
+			return nil
+		}
+		return db.Create(&rows).Error
 	})
 	require.NoError(t, err)
 	return NewQueryService(metricMessageStoreFromDatabaseForTest(t, mgr), nil)
@@ -198,9 +246,9 @@ func metricMessageStoreFromDatabaseForTest(t *testing.T, mgr *store.Store) *Metr
 func TestKlineFreshnessEvaluatorObservesCollectorHourlyFrequency(t *testing.T) {
 	now := time.Date(2026, 10, 7, 7, 20, 0, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1H", MarketID: "crypto", StaleAfter: 2 * time.Hour}
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
-		RawLabels: `{"space_id":"crypto","view_id":"view_task_kline_1h","dataset_id":"dataset_task","subject_id":"BTC-USDT","freq":"1H","series_tag":"venue:binance|market:spot|source:spot_http"}`,
-		Output:    now.Add(-80 * time.Minute), Commit: now,
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Freq: "1H",
+		Latest: now.Add(-80 * time.Minute), Subjects: 1, ObservedAt: now,
 	}})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
@@ -223,9 +271,9 @@ func TestKlineFreshnessMeasuresStalenessFromBarClose(t *testing.T) {
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1H", MarketID: "crypto", StaleAfter: 5 * time.Minute}
 	barStart := time.Date(2026, 10, 7, 6, 0, 0, 0, time.UTC)
 	evaluate := func(now time.Time) KlineFreshnessReport {
-		query := newViewDatasetQuery(t, []viewDatasetTestSample{{
-			RawLabels: `{"space_id":"crypto","view_id":"view_task_kline_1h","dataset_id":"dataset_task","subject_id":"BTC-USDT","freq":"1H","series_tag":"venue:binance|market:spot|source:spot_http"}`,
-			Output:    barStart, Commit: now,
+		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+			ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Freq: "1H",
+			Latest: barStart, Subjects: 1, ObservedAt: now,
 		}})
 		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 		require.NoError(t, err)

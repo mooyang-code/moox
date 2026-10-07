@@ -136,26 +136,6 @@ func (p bootstrapInventoryProvider) FetchTaskResultInventory(context.Context) (m
 	return p.snapshot, nil
 }
 
-func TestKlineViewMetricScopesFollowFreshOwnedInventoryOnly(t *testing.T) {
-	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
-	cache, err := monmetrics.NewTaskResultInventoryCache(bootstrapInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
-		ID: "snapshot-1", ObservedAt: now,
-		Entries: []monmetrics.TaskResultInventoryEntry{
-			{SpaceID: "crypto", TaskID: "active", DatasetID: "dataset-a", ViewID: "view-a", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
-			{SpaceID: "crypto", TaskID: "disabled", DatasetID: "dataset-b", ViewID: "view-b", Frequency: "1m", Enabled: false, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
-			{SpaceID: "crypto", TaskID: "unowned", DatasetID: "dataset-c", ViewID: "view-c", Frequency: "1m", Enabled: true, OwnershipVerified: false, ResultStatus: "ready", ObservedAt: now},
-			{SpaceID: "crypto", TaskID: "pending", DatasetID: "dataset-d", ViewID: "view-d", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "pending", ObservedAt: now},
-		},
-	}}, time.Minute, 10)
-	require.NoError(t, err)
-	_, err = cache.Get(t.Context(), now)
-	require.NoError(t, err)
-
-	scopes := klineViewMetricScopes(cache, now)
-	require.Equal(t, []monmetrics.ViewMetricScope{{SpaceID: "crypto", ViewID: "view-a", DatasetID: "dataset-a", Frequency: "1m"}}, scopes)
-	require.Nil(t, klineViewMetricScopes(cache, now.Add(time.Minute)))
-}
-
 func TestMaxInt(t *testing.T) {
 	if maxInt(3, 7) != 7 || maxInt(9, 2) != 9 {
 		t.Fatal("maxInt returned wrong value")

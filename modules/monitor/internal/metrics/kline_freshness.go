@@ -14,7 +14,13 @@ import (
 )
 
 const (
-	ViewDatasetOutputLastDataTimeMetric = "moox_storage_view_dataset_output_last_data_time_seconds"
+	// Storage View publishes these per-View subject summaries; see
+	// modules/storage/internal/observability/view_subject_tracker.go.
+	ViewOutputLatestMetric         = "moox_storage_view_output_latest_data_time_seconds"
+	ViewOutputTrackedSinceMetric   = "moox_storage_view_output_tracked_since_data_time_seconds"
+	ViewOutputSubjectsMetric       = "moox_storage_view_output_subjects"
+	ViewOutputLaggingMetric        = "moox_storage_view_output_lagging_subjects"
+	ViewOutputLaggingSubjectMetric = "moox_storage_view_output_lagging_subject_data_time_seconds"
 	KlineDefaultSeriesTag               = "default"
 	TaskResultInventoryCheckID          = "kline_freshness:task_result_inventory"
 	klineFutureTolerance                = 10 * time.Minute
@@ -45,12 +51,12 @@ type KlineFreshnessReport struct {
 	Skipped          bool
 	Reason           string
 	Diagnostic       string
-	StaleCount       int
-	ObservedCount    int
-	OldestDataTime   time.Time
-	StaleAge         time.Duration
-	StaleSubjects    []string
-	ObservedSubjects []string
+	StaleCount     int
+	MissingCount   int
+	ObservedCount  int
+	OldestDataTime time.Time
+	StaleAge       time.Duration
+	StaleSubjects  []string
 }
 
 type KlineFreshnessEvaluator struct {
@@ -107,29 +113,9 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		}
 		filters = append(filters, ViewMetricScope{SpaceID: rule.SpaceID, ViewID: rule.ViewID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
 	}
-	rows, err := e.query.ListLatestByViewScopes(ctx, ViewDatasetOutputLastDataTimeMetric, filters, 0)
+	summaries, err := e.loadViewSummaries(ctx, filters, now)
 	if err != nil {
 		return nil, err
-	}
-
-	observations := make(map[viewObservationIdentity]*viewObservation)
-	for _, row := range rows {
-		identity, err := parseViewDatasetMetric(row.MetricName, row.LabelsJSON)
-		if err != nil || !isValidKlineFrequency(identity.Frequency) {
-			continue
-		}
-		value, err := klineUnixTime(row.Value)
-		if err != nil || value.After(now.Add(klineFutureTolerance)) {
-			continue
-		}
-		item := observations[identity]
-		if item == nil {
-			item = &viewObservation{identity: identity}
-			observations[identity] = item
-		}
-		if preferMetricSample(item.outputObservedAt, row.ObservedAt, item.outputTime, value) {
-			item.outputTime, item.outputObservedAt, item.hasOutput = value, row.ObservedAt, true
-		}
 	}
 
 	reports := make([]KlineFreshnessReport, 0, len(rules)+1)
@@ -167,15 +153,8 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			reports = append(reports, report)
 			continue
 		}
-		observed := make([]viewObservation, 0)
-		for identity, item := range observations {
-			if !item.hasOutput || !viewRuleMatches(rule, identity) {
-				continue
-			}
-			observed = append(observed, *item)
-		}
-		activeSubjects := map[string]struct{}(nil)
-		activeObservedSubjects := map[string]struct{}(nil)
+		summary := summaries.find(rule)
+		var activeSubjects map[string]struct{}
 		if strings.TrimSpace(rule.DatasetID) != "" {
 			var catalogErr error
 			activeSubjects, catalogErr = e.query.ActiveDatasetSubjects(ctx, rule.SpaceID, rule.DatasetID)
@@ -185,88 +164,40 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 				reports = append(reports, report)
 				continue
 			}
-			if activeSubjects != nil {
-				observed, activeObservedSubjects = filterObservedByActiveSubjects(observed, activeSubjects, expectedKlineSubjectSuffix(rule.DatasetID))
-			}
 		}
-		if lag, behind := completedPeriodViewLag(rule, observed, now); behind {
+		if lag, behind := completedPeriodViewLag(rule, summary.latest, now); behind {
 			report.Success = false
 			report.Reason = "view_behind_latest_completed_period"
 			report.StaleAge = lag
-			report.ObservedCount = len(observed)
+			report.ObservedCount = summary.subjects
 			report.Diagnostic = formatKlineDiagnostic(report)
 			reports = append(reports, report)
 			continue
 		}
-		if len(observed) == 0 {
-			// An enabled rule with no output watermark is a real failure: a
-			// misrouted View or an unbound consumer must not remain silent.
+		if summary.latest.IsZero() {
+			// An enabled rule with no output is a real failure: a misrouted
+			// View or an unbound consumer must not remain silent.
 			report.Success, report.Reason = false, "no_observation"
 			report.StaleAge = inventoryDataAge(now, rule.ViewLastDataTime)
 			report.Diagnostic = formatKlineDiagnostic(report)
 			reports = append(reports, report)
 			continue
 		}
-
-		staleSubjects := make(map[string]struct{})
-		observedSubjects := make(map[string]struct{})
-		// A bar is stamped with its period start and exists only once the period
-		// closes, so the newest bar is always one period behind. Data is stale
-		// once the bar after it is overdue: that bar closes two periods after
-		// the latest bar's start, plus stale_after.
-		barLength := klineFrequencyDuration(rule.Frequency)
-		for _, item := range observed {
-			report.ObservedCount++
-			observedSubjects[item.identity.SubjectID] = struct{}{}
-			if report.OldestDataTime.IsZero() || item.outputTime.Before(report.OldestDataTime) {
-				report.OldestDataTime = item.outputTime
-			}
-			nextBarDue := item.outputTime.Add(2 * barLength)
-			if age := inventoryDataAge(now, nextBarDue); age > report.StaleAge {
-				report.StaleAge = age
-			}
-			if now.Sub(nextBarDue) > rule.StaleAfter {
-				report.StaleCount++
-				staleSubjects[item.identity.SubjectID] = struct{}{}
-			}
-		}
-		// Once at least one active subject has produced output, an active
-		// subject with no output at all is also stale. Keep the all-missing case
-		// as no_observation above so a brand-new View remains distinguishable.
-		if activeSubjects != nil {
-			for subjectID := range activeSubjects {
-				if _, ok := activeObservedSubjects[subjectID]; !ok {
-					report.StaleCount++
-					staleSubjects[subjectID] = struct{}{}
-				}
-			}
-		}
-		report.ObservedSubjects = sortedLimitedSubjects(observedSubjects, len(observedSubjects))
-		report.StaleSubjects = sortedLimitedSubjects(staleSubjects, e.maxSubjects)
-		report.Success = report.StaleCount == 0
-		switch {
-		case report.Success:
-			report.Reason = "fresh"
-		default:
-			report.Reason = "business_data_stale"
-		}
-		report.Diagnostic = formatKlineDiagnostic(report)
+		e.evaluateViewSummary(&report, rule, summary, activeSubjects, now)
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].CheckID < reports[j].CheckID })
 	return reports, nil
 }
 
-func completedPeriodViewLag(rule KlineFreshnessRule, observed []viewObservation, now time.Time) (time.Duration, bool) {
+func completedPeriodViewLag(rule KlineFreshnessRule, viewLatest time.Time, now time.Time) (time.Duration, bool) {
 	status := strings.ToLower(strings.TrimSpace(rule.LatestCompletedStatus))
 	if rule.LatestCompletedPeriod.IsZero() || (status != "complete" && status != "degraded") {
 		return 0, false
 	}
 	latestViewTime := rule.ViewLastDataTime
-	for _, item := range observed {
-		if item.outputTime.After(latestViewTime) {
-			latestViewTime = item.outputTime
-		}
+	if viewLatest.After(latestViewTime) {
+		latestViewTime = viewLatest
 	}
 	if !latestViewTime.IsZero() && !latestViewTime.Before(rule.LatestCompletedPeriod) {
 		return 0, false
@@ -277,49 +208,33 @@ func completedPeriodViewLag(rule KlineFreshnessRule, observed []viewObservation,
 	return rule.LatestCompletedPeriod.Sub(latestViewTime), true
 }
 
-// filterObservedByActiveSubjects keeps the metadata catalog authoritative while
-// tolerating a subject identity migration that only adds a market suffix to the
-// View output (for example, OPG-USDT -> OPG-USDT-SPOT). A suffix match is used
-// only when it resolves to one active catalog subject; ambiguous aliases are
-// rejected so a real catalog/data mismatch still raises no_observation.
-func filterObservedByActiveSubjects(observed []viewObservation, active map[string]struct{}, expectedSuffix string) ([]viewObservation, map[string]struct{}) {
-	activeObserved := make(map[string]struct{})
+// activeSubjectName maps a View subject onto the active metadata catalog. It
+// tolerates a subject identity migration that only adds a market suffix to the
+// View output (for example, OPG-USDT -> OPG-USDT-SPOT): a suffix match is used
+// only when it resolves to one active catalog subject. Without a catalog every
+// subject counts as active.
+func activeSubjectName(subjectID string, active map[string]struct{}, aliases map[string][]string, expectedSuffix string) (string, bool) {
+	subjectID = strings.TrimSpace(subjectID)
+	if active == nil {
+		return subjectID, true
+	}
+	if _, ok := active[subjectID]; ok {
+		return subjectID, subjectSuffixCompatible(subjectID, expectedSuffix)
+	}
+	candidates := aliases[canonicalKlineSubjectID(subjectID)]
+	if len(candidates) != 1 || !subjectSuffixCompatible(subjectID, expectedSuffix) || !subjectSuffixCompatible(candidates[0], expectedSuffix) {
+		return "", false
+	}
+	return candidates[0], true
+}
+
+func activeSubjectAliases(active map[string]struct{}) map[string][]string {
 	aliases := make(map[string][]string, len(active))
 	for subjectID := range active {
 		canonical := canonicalKlineSubjectID(subjectID)
 		aliases[canonical] = append(aliases[canonical], subjectID)
 	}
-
-	selected := make(map[string]viewObservation, len(active))
-	for _, item := range observed {
-		subjectID := strings.TrimSpace(item.identity.SubjectID)
-		if _, ok := active[subjectID]; ok {
-			if !subjectSuffixCompatible(subjectID, expectedSuffix) {
-				continue
-			}
-			if current, exists := selected[subjectID]; !exists || preferMetricSample(current.outputObservedAt, item.outputObservedAt, current.outputTime, item.outputTime) {
-				selected[subjectID] = item
-			}
-			continue
-		}
-		candidates := aliases[canonicalKlineSubjectID(subjectID)]
-		if len(candidates) != 1 {
-			continue
-		}
-		if !subjectSuffixCompatible(subjectID, expectedSuffix) || !subjectSuffixCompatible(candidates[0], expectedSuffix) {
-			continue
-		}
-		canonical := candidates[0]
-		if current, exists := selected[canonical]; !exists || preferMetricSample(current.outputObservedAt, item.outputObservedAt, current.outputTime, item.outputTime) {
-			selected[canonical] = item
-		}
-	}
-	filtered := make([]viewObservation, 0, len(selected))
-	for activeID, item := range selected {
-		filtered = append(filtered, item)
-		activeObserved[activeID] = struct{}{}
-	}
-	return filtered, activeObserved
+	return aliases
 }
 
 func expectedKlineSubjectSuffix(datasetID string) string {
@@ -411,56 +326,178 @@ func inventoryDataAge(now, dataTime time.Time) time.Duration {
 	return now.Sub(dataTime)
 }
 
-type viewObservationIdentity struct {
-	SpaceID, ViewID, DatasetID, SubjectID, Frequency, SeriesTag string
+type viewSummaryIdentity struct {
+	SpaceID, ViewID, DatasetID, Frequency string
 }
 
-type viewObservation struct {
-	identity                     viewObservationIdentity
-	outputTime, outputObservedAt time.Time
-	hasOutput                    bool
+type laggingSubject struct {
+	subjectID string
+	dataTime  time.Time
 }
 
-func preferMetricSample(currentObservedAt, candidateObservedAt, currentValue, candidateValue time.Time) bool {
-	if currentObservedAt.IsZero() || candidateValue.After(currentValue) {
-		return true
-	}
-	if candidateValue.Before(currentValue) {
-		return false
-	}
-	return candidateObservedAt.After(currentObservedAt)
+// viewSummary is a View's subject summary from the latest Storage View
+// snapshot: its latest bar, the bar it was first tracked at, and its tracked,
+// lagging and most-lagging subjects.
+type viewSummary struct {
+	latest, trackedSince time.Time
+	subjects, lagging    int
+	snapshotAt           time.Time
+	laggingSubjects      []laggingSubject
 }
 
-func parseViewDatasetMetric(metricName, rawLabels string) (viewObservationIdentity, error) {
-	var labels map[string]string
-	if err := json.Unmarshal([]byte(rawLabels), &labels); err != nil {
-		return viewObservationIdentity{}, err
-	}
-	if labels == nil {
-		return viewObservationIdentity{}, fmt.Errorf("labels must be an object")
-	}
-	for key := range labels {
-		switch key {
-		case "space_id", "view_id", "dataset_id", "subject_id", "freq", "series_tag":
-		default:
-			return viewObservationIdentity{}, fmt.Errorf("unknown label %q", key)
+type viewSummaries map[viewSummaryIdentity]*viewSummary
+
+// find returns the summary of the View a rule watches; with several matches
+// (a rule without a dataset) the most recent View wins.
+func (s viewSummaries) find(rule KlineFreshnessRule) viewSummary {
+	var best *viewSummary
+	for identity, summary := range s {
+		if !viewRuleMatches(rule, identity) {
+			continue
+		}
+		if best == nil || summary.latest.After(best.latest) {
+			best = summary
 		}
 	}
-	if metricName != ViewDatasetOutputLastDataTimeMetric {
-		return viewObservationIdentity{}, fmt.Errorf("unsupported metric %q", metricName)
+	if best == nil {
+		return viewSummary{}
 	}
-	identity := viewObservationIdentity{
+	return *best
+}
+
+var viewSummaryMetrics = []string{ViewOutputLatestMetric, ViewOutputTrackedSinceMetric, ViewOutputSubjectsMetric, ViewOutputLaggingMetric, ViewOutputLaggingSubjectMetric}
+
+func (e *KlineFreshnessEvaluator) loadViewSummaries(ctx context.Context, filters []ViewMetricScope, now time.Time) (viewSummaries, error) {
+	rowsByMetric := make(map[string][]MetricLatest, len(viewSummaryMetrics))
+	for _, name := range viewSummaryMetrics {
+		rows, err := e.query.ListLatestByViewScopes(ctx, name, filters, 0)
+		if err != nil {
+			return nil, err
+		}
+		rowsByMetric[name] = rows
+	}
+	summaries := make(viewSummaries)
+	at := func(identity viewSummaryIdentity) *viewSummary {
+		summary := summaries[identity]
+		if summary == nil {
+			summary = &viewSummary{}
+			summaries[identity] = summary
+		}
+		return summary
+	}
+	for _, name := range viewSummaryMetrics[:4] {
+		for _, row := range rowsByMetric[name] {
+			identity, _, err := parseViewSummaryLabels(row.LabelsJSON, false)
+			if err != nil || !isValidKlineFrequency(identity.Frequency) {
+				continue
+			}
+			summary := at(identity)
+			switch name {
+			case ViewOutputLatestMetric, ViewOutputTrackedSinceMetric:
+				value, err := klineUnixTime(row.Value)
+				if err != nil || value.After(now.Add(klineFutureTolerance)) {
+					continue
+				}
+				if name == ViewOutputLatestMetric {
+					summary.latest = value
+				} else {
+					summary.trackedSince = value
+				}
+			case ViewOutputSubjectsMetric:
+				summary.subjects, summary.snapshotAt = int(row.Value), row.ObservedAt
+			case ViewOutputLaggingMetric:
+				summary.lagging = int(row.Value)
+			}
+		}
+	}
+	for _, row := range rowsByMetric[ViewOutputLaggingSubjectMetric] {
+		identity, subjectID, err := parseViewSummaryLabels(row.LabelsJSON, true)
+		if err != nil {
+			continue
+		}
+		summary := summaries[identity]
+		// A subject named in an older snapshot may have caught up since; only
+		// names from the View's latest snapshot count.
+		if summary == nil || row.ObservedAt.Before(summary.snapshotAt) {
+			continue
+		}
+		value, err := klineUnixTime(row.Value)
+		if err != nil {
+			continue
+		}
+		summary.laggingSubjects = append(summary.laggingSubjects, laggingSubject{subjectID: subjectID, dataTime: value})
+	}
+	return summaries, nil
+}
+
+func parseViewSummaryLabels(rawLabels string, withSubject bool) (viewSummaryIdentity, string, error) {
+	var labels map[string]string
+	if err := json.Unmarshal([]byte(rawLabels), &labels); err != nil {
+		return viewSummaryIdentity{}, "", err
+	}
+	identity := viewSummaryIdentity{
 		SpaceID: strings.TrimSpace(labels["space_id"]), ViewID: strings.TrimSpace(labels["view_id"]),
-		DatasetID: strings.TrimSpace(labels["dataset_id"]), SubjectID: strings.TrimSpace(labels["subject_id"]),
-		Frequency: strings.TrimSpace(labels["freq"]), SeriesTag: strings.TrimSpace(labels["series_tag"]),
+		DatasetID: strings.TrimSpace(labels["dataset_id"]), Frequency: strings.TrimSpace(labels["freq"]),
 	}
-	if identity.SeriesTag == "" {
-		identity.SeriesTag = KlineDefaultSeriesTag
+	subjectID := strings.TrimSpace(labels["subject_id"])
+	if identity.SpaceID == "" || identity.ViewID == "" || identity.DatasetID == "" || identity.Frequency == "" || (withSubject && subjectID == "") {
+		return viewSummaryIdentity{}, "", fmt.Errorf("required view summary label is empty")
 	}
-	if identity.SpaceID == "" || identity.ViewID == "" || identity.DatasetID == "" || identity.SubjectID == "" || identity.Frequency == "" {
-		return viewObservationIdentity{}, fmt.Errorf("required view dataset label is empty")
+	return identity, subjectID, nil
+}
+
+// evaluateViewSummary judges a View that has output. The View is stale as a
+// whole once the bar after its latest bar is overdue. Otherwise its lagging
+// subjects, and active subjects with no output once the View has moved a bar
+// past the start of tracking, are stale.
+func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, summary viewSummary, active map[string]struct{}, now time.Time) {
+	bar := klineFrequencyDuration(rule.Frequency)
+	report.ObservedCount = summary.subjects
+	report.OldestDataTime = summary.latest
+	// A bar is stamped with its period start and exists only once the period
+	// closes, so the newest bar is always one period behind. Data is stale
+	// once the bar after it is overdue: that bar closes two periods after the
+	// latest bar's start, plus stale_after.
+	nextBarDue := summary.latest.Add(2 * bar)
+	report.StaleAge = inventoryDataAge(now, nextBarDue)
+	if now.Sub(nextBarDue) > rule.StaleAfter {
+		report.StaleCount = max(summary.subjects, len(active))
+		report.Reason = "business_data_stale"
+		report.Diagnostic = formatKlineDiagnostic(*report)
+		return
 	}
-	return identity, nil
+	report.StaleAge = 0
+	aliases := activeSubjectAliases(active)
+	suffix := expectedKlineSubjectSuffix(rule.DatasetID)
+	stale := make(map[string]struct{})
+	inactive := 0
+	for _, item := range summary.laggingSubjects {
+		name, ok := activeSubjectName(item.subjectID, active, aliases, suffix)
+		if !ok {
+			inactive++
+			continue
+		}
+		stale[name] = struct{}{}
+		if item.dataTime.Before(report.OldestDataTime) {
+			report.OldestDataTime = item.dataTime
+		}
+		if age := inventoryDataAge(now, item.dataTime.Add(2*bar)); age > report.StaleAge {
+			report.StaleAge = age
+		}
+	}
+	report.StaleCount = max(summary.lagging-inactive, 0)
+	if active != nil && !summary.trackedSince.IsZero() && !summary.latest.Before(summary.trackedSince.Add(bar)) {
+		report.MissingCount = max(len(active)-(summary.subjects-inactive), 0)
+		report.StaleCount += report.MissingCount
+	}
+	report.StaleSubjects = sortedLimitedSubjects(stale, e.maxSubjects)
+	report.Success = report.StaleCount == 0
+	if report.Success {
+		report.Reason = "fresh"
+	} else {
+		report.Reason = "business_data_stale"
+	}
+	report.Diagnostic = formatKlineDiagnostic(*report)
 }
 
 func klineUnixTime(value float64) (time.Time, error) {
@@ -476,7 +513,7 @@ func klineUnixTime(value float64) (time.Time, error) {
 	return result, nil
 }
 
-func viewRuleMatches(rule KlineFreshnessRule, identity viewObservationIdentity) bool {
+func viewRuleMatches(rule KlineFreshnessRule, identity viewSummaryIdentity) bool {
 	return strings.TrimSpace(rule.ViewID) == identity.ViewID && strings.TrimSpace(rule.SpaceID) == identity.SpaceID &&
 		(strings.TrimSpace(rule.DatasetID) == "" || strings.TrimSpace(rule.DatasetID) == identity.DatasetID) &&
 		strings.TrimSpace(rule.Frequency) == identity.Frequency
@@ -535,8 +572,8 @@ func formatKlineDiagnostic(report KlineFreshnessReport) string {
 		}
 		return value.UTC().Format(time.RFC3339)
 	}
-	return fmt.Sprintf("stale_count=%d observed_count=%d oldest_output_data_time=%s stale_age=%s latest_completed_period=%s latest_completed_status=%s view_last_data_time=%s inventory_observed_at=%s stale_subjects=%s",
-		report.StaleCount, report.ObservedCount, format(report.OldestDataTime), report.StaleAge,
+	return fmt.Sprintf("stale_count=%d missing_count=%d observed_count=%d oldest_output_data_time=%s stale_age=%s latest_completed_period=%s latest_completed_status=%s view_last_data_time=%s inventory_observed_at=%s stale_subjects=%s",
+		report.StaleCount, report.MissingCount, report.ObservedCount, format(report.OldestDataTime), report.StaleAge,
 		format(report.Rule.LatestCompletedPeriod), report.Rule.LatestCompletedStatus,
 		format(report.Rule.ViewLastDataTime), format(report.Rule.InventoryObservedAt), strings.Join(report.StaleSubjects, ","))
 }
