@@ -6,7 +6,9 @@ import (
 	"time"
 )
 
-const DefaultHostStaleAfter = 90 * time.Second
+// DefaultHostStaleAfter marks a host unreachable after three missed samples
+// of the host agent's one-minute cadence.
+const DefaultHostStaleAfter = 3 * time.Minute
 
 type PresenceTransitionSink interface {
 	HandlePresenceTransition(context.Context, PresenceTransition) error

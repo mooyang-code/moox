@@ -153,6 +153,11 @@ func buildBusinessFreshnessReporterWithInterval(
 					continue
 				}
 			}
+			if hostMonitoringDataset(dataset) {
+				// Host samples land in these datasets; host presence and the host
+				// threshold rules already alert when a host stops reporting.
+				continue
+			}
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			if retiredDatasetCheckID(checkID) {
 				continue
@@ -459,3 +464,13 @@ func reporterDeploymentExpected(
 
 // noLongerExpected resolves a check whose subject was disabled or removed.
 const noLongerExpected = "已停用或移除，不再检查"
+
+func hostMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
+	for _, id := range []string{dataset.DatasetID, dataset.PrimaryDatasetID} {
+		id = strings.ToLower(strings.TrimSpace(id))
+		if strings.HasPrefix(id, "dataset_mooxsys_host_") || strings.HasPrefix(id, "view_mooxsys_host_") {
+			return true
+		}
+	}
+	return false
+}
