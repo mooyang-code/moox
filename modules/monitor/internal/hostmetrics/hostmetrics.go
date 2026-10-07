@@ -102,7 +102,7 @@ func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error
 	if occurred.Before(now.Add(-15*time.Minute)) || occurred.After(now.Add(2*time.Minute)) {
 		return nil, errors.New("host metric occurred_at is outside the accepted clock-skew window")
 	}
-	if !hostmetricpb.IsCompatibleAgentID(msg.GetSubjectId()) {
+	if !hostmetricpb.IsAgentID(msg.GetSubjectId()) {
 		return nil, errors.New("host metric producer identity is invalid")
 	}
 	metric := new(hostmetricpb.HostMetric)

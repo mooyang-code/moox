@@ -2,10 +2,8 @@ package hostmetricpb
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // AgentIDLength is the fixed display and routing identity size for a host.
@@ -49,53 +47,10 @@ func IsAgentID(id string) bool {
 	return true
 }
 
-// IsLegacyAgentID accepts the UUID identities written by older HostAgent
-// releases during the rollout window. New identities must use IsAgentID.
-func IsLegacyAgentID(id string) bool {
-	if len(id) != 36 || strings.Count(id, "-") != 4 {
-		return false
-	}
-	for i, char := range id {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if char != '-' {
-				return false
-			}
-			continue
-		}
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
-			return false
-		}
-	}
-	return true
-}
-
-// IsCompatibleAgentID accepts current IDs and legacy UUIDs while queued old
-// EventBus messages drain. The registry canonicalizes them to a compact ID.
-func IsCompatibleAgentID(id string) bool { return IsAgentID(id) || IsLegacyAgentID(id) }
-
-// CompactAgentIDForLegacy deterministically maps a UUID-era identity to the
-// compact value used by both HostAgent and Monitor during migration. New
-// hosts still use NewAgentID; this mapping only prevents the two processes
-// from independently assigning different IDs to the same existing host.
-func CompactAgentIDForLegacy(id string) (string, error) {
-	if IsAgentID(id) {
-		return id, nil
-	}
-	if !IsLegacyAgentID(id) {
-		return "", errInvalidAgentID
-	}
-	hash := sha256.Sum256([]byte("moox-host-agent:" + strings.ToLower(id)))
-	compact := make([]byte, AgentIDLength)
-	for i := range compact {
-		compact[i] = agentIDAlphabet[int(hash[i])%len(agentIDAlphabet)]
-	}
-	return string(compact), nil
-}
-
 var errInvalidAgentID = errors.New("invalid host agent id")
 
 func ValidateAgentID(id string) error {
-	if !IsCompatibleAgentID(id) {
+	if !IsAgentID(id) {
 		return errInvalidAgentID
 	}
 	return nil

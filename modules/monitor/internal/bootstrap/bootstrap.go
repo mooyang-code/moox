@@ -59,10 +59,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := hostRegistry.MigrateLegacyIDs(runtimeCtx); err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("migrate host agent identities: %w", err)
-	}
+
 	var presenceFailureMu sync.Mutex
 	presenceFailures := make(map[string]struct{})
 	presenceNotificationFailure := func(_ context.Context, transition hostmetrics.PresenceTransition, sendErr error) {
@@ -121,7 +118,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		hostMetadata := storagepb.NewMetadataClientProxy(options...)
 		hostWriter := hostmetrics.NewStorageWriter(hostAccess, cfg.Metrics.HostStorage)
 		hostReader = hostmetrics.NewStorageReader(hostAccess, cfg.Metrics.HostStorage)
-		hostReader.SetAgentAliases(hostRegistry.Aliases)
 		hostGate = hostmetrics.NewStorageGate(hostMetadata, cfg.Metrics.HostStorage)
 		hostStore = hostmetrics.NewStore(hostWriter, hostReader)
 		hostStore.SetStorageReady(hostGate.Ready)

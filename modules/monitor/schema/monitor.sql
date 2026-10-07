@@ -67,14 +67,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
 
 -- Legacy UUID subjects are retained as aliases so existing Storage history
 -- remains queryable after HostAgent rotates to a compact four-character ID.
-CREATE TABLE IF NOT EXISTS t_monitor_host_agent_aliases (
-    c_alias_id TEXT PRIMARY KEY,
-    c_agent_id TEXT NOT NULL,
-    c_created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_monitor_host_agent_aliases_agent
-ON t_monitor_host_agent_aliases (c_agent_id);
-
 CREATE TABLE IF NOT EXISTS t_monitor_notification_channels (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_channel_id TEXT NOT NULL UNIQUE CHECK (c_channel_id = 'global'),

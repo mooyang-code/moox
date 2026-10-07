@@ -228,7 +228,7 @@ func noopRoutes() Routes {
 func publishAllObservabilityEvents(t *testing.T, ctx context.Context, publisher *events.Publisher) {
 	t.Helper()
 	publishMetric(t, ctx, publisher, "metric-route")
-	agentID := uuid.Must(uuid.NewV7()).String()
+	agentID := "aB3x"
 	_, err := publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, &hostmetricpb.HostMetric{
 		AgentId: agentID, Hostname: "host-a", Snapshot: &hostmetricpb.HostSnapshot{},
 	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: agentID})

@@ -24,32 +24,3 @@ func TestNewAgentIDUsesCompactAlphaNumericShape(t *testing.T) {
 		t.Fatalf("two allocations unexpectedly collided: %q", first)
 	}
 }
-
-func TestAgentIDCompatibility(t *testing.T) {
-	if !IsLegacyAgentID("550e8400-e29b-41d4-a716-446655440000") {
-		t.Fatal("legacy UUID was rejected")
-	}
-	if !IsCompatibleAgentID("aB3x") || !IsAgentID("aB3x") {
-		t.Fatal("compact ID was rejected")
-	}
-	for _, value := range []string{"", "abc", "a-b1", "host-1", "550e8400-e29b-41d4-a716-44665544000z"} {
-		if IsCompatibleAgentID(value) {
-			t.Fatalf("invalid ID accepted: %q", value)
-		}
-	}
-}
-
-func TestCompactAgentIDForLegacyIsDeterministic(t *testing.T) {
-	legacy := "550e8400-e29b-41d4-a716-446655440000"
-	first, err := CompactAgentIDForLegacy(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := CompactAgentIDForLegacy(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != second || !IsAgentID(first) {
-		t.Fatalf("legacy mapping is not stable compact id: %q vs %q", first, second)
-	}
-}
