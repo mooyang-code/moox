@@ -23,8 +23,6 @@ ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/modules/strategy" "${FIXTURE_ROOT}/modules/strategy"
 ln -s "${ROOT}/modules/admin" "${FIXTURE_ROOT}/modules/admin"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
-mkdir -p "${FIXTURE_ROOT}/packages/pyruntime"
-ln -s "${ROOT}/packages/pyruntime/python" "${FIXTURE_ROOT}/packages/pyruntime/python"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 ln -s "${ROOT}/config" "${FIXTURE_ROOT}/config"
 
@@ -59,8 +57,7 @@ for path in \
   bin/moox-strategy \
   bin/moox-strategy-cli \
   strategy/config/app.yaml \
-  strategy/config/trpc_go.yaml \
-  python-runtime/moox_pyruntime/protocol.py
+  strategy/config/trpc_go.yaml
 do
   [[ -e "${TMP_ROOT}/unpacked/${path}" ]] || { echo "missing Strategy deployment artifact: ${path}" >&2; exit 1; }
 done
@@ -118,11 +115,11 @@ grep -Fq 'MOOX_TRADE_GATEWAY_URL=' "${TMP_ROOT}/unpacked/start.sh"
 grep -q '^  credential_file: ""$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"
 grep -Fq 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-1}}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'start_strategy' "${TMP_ROOT}/unpacked/start.sh"
-grep -q 'MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'strategy) url=http://127.0.0.1:11431/healthz' "${TMP_ROOT}/unpacked/healthcheck.sh"
 grep -q 'stop_service "strategy"' "${TMP_ROOT}/unpacked/stop.sh"
 ! test -e "${TMP_ROOT}/unpacked/strategy/pyworker"
 ! test -e "${TMP_ROOT}/unpacked/strategy/pysdk"
+! test -e "${TMP_ROOT}/unpacked/python-runtime"
 ! find "${TMP_ROOT}/unpacked/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -print -quit | grep -q .
 
 # The synchronous Strategy owner reconciliation requires Trade to be serving

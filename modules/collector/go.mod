@@ -60,7 +60,6 @@ replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ../trade/pr
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
-replace github.com/mooyang-code/moox/packages/cloudruntime => ../../packages/cloudruntime
 
 replace github.com/mooyang-code/moox/packages/cloudjobpb => ../../packages/cloudjobpb
 

@@ -14,7 +14,6 @@ require (
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/pyruntime v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
 	github.com/prometheus/client_golang v1.23.2
@@ -106,7 +105,6 @@ require (
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
 
-replace github.com/mooyang-code/moox/packages/pyruntime => ../../packages/pyruntime
 
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 

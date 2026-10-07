@@ -76,8 +76,6 @@ seed_disabled_component storage moox-storage moox-storage-cli
 printf 'keep-storage-provenance\n' >"${DEPLOY_DIR}/build-provenance.json"
 printf '#!/usr/bin/env bash\necho keep-storage-reset\n' >"${DEPLOY_DIR}/reset-storage-view-indexes.sh"
 chmod +x "${DEPLOY_DIR}/reset-storage-view-indexes.sh"
-mkdir -p "${DEPLOY_DIR}/python-runtime/moox_pyruntime"
-printf 'keep-runtime\n' >"${DEPLOY_DIR}/python-runtime/moox_pyruntime/keep.txt"
 
 printf 'control-secret' >"${TMP_ROOT}/control.key"
 printf 'service-secret' >"${TMP_ROOT}/service.key"
@@ -114,7 +112,6 @@ for path in \
   strategy/config/keep.txt \
 	  trade/config/keep.txt \
 	  hostagent/config/keep.txt \
-  python-runtime/moox_pyruntime/keep.txt \
   storage/config/keep.txt \
   build-provenance.json \
   reset-storage-view-indexes.sh \

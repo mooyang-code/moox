@@ -27,7 +27,6 @@ use (
 	./packages/cloudjobpb
 	./packages/cloudjobqueue
 	./packages/cloudprovider
-	./packages/cloudruntime
 	./packages/clsreporter
 	./packages/commonpb
 	./packages/doctor

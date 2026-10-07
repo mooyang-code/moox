@@ -3971,7 +3971,6 @@ prepare_stage() {
     "${STAGE_DIR}/factor-mgr/factors" \
     "${STAGE_DIR}/strategy/config" \
     "${STAGE_DIR}/trade/config" \
-    "${STAGE_DIR}/python-runtime" \
     "${STAGE_DIR}/monitor/config" \
     "${STAGE_DIR}/examples" \
     "${STAGE_DIR}/config/setup" \
@@ -4378,11 +4377,6 @@ EOF
     fi
     (cd "${ROOT}" && "${runtime_config_cli[@]}" setup render-runtime-config "${render_args[@]}") \
       >"${STAGE_DIR}/config/render-runtime-config.json"
-  fi
-  if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
-    cp -R "${ROOT}/packages/pyruntime/python/." "${STAGE_DIR}/python-runtime/"
-    find "${STAGE_DIR}/python-runtime" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
-    find "${STAGE_DIR}/python-runtime" -type f -name '*.pyc' -delete
   fi
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/monitor/config/." "${STAGE_DIR}/monitor/config/"
@@ -4794,9 +4788,6 @@ sync_local_stage() {
     fi
     if [[ "${WITH_TRADE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/trade/' --exclude '/bin/moox-trade' --exclude '/bin/moox-trade-cli')
-    fi
-    if [[ "${WITH_FACTOR_MGR}" -eq 0 && "${WITH_STRATEGY}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/python-runtime/')
     fi
 	    if [[ "${WITH_MONITOR}" -eq 0 ]]; then
 	      rsync_excludes+=(--exclude '/monitor/' --exclude '/bin/moox-monitor' --exclude '/bin/moox-monitor-cli')
