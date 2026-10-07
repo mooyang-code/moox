@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,17 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+// gormLogger keeps GORM's slow-query and error logging but drops
+// ErrRecordNotFound, which the repositories return as an ordinary miss, and
+// the terminal colors that clutter the log file.
+var gormLogger = logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
+	SlowThreshold:             200 * time.Millisecond,
+	LogLevel:                  logger.Warn,
+	IgnoreRecordNotFoundError: true,
+})
 
 type Store struct {
 	db *gorm.DB
@@ -28,7 +39,7 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("create database directory: %w", err)
 		}
 	}
-	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: gormLogger})
 	if err != nil {
 		return nil, fmt.Errorf("open monitor database: %w", err)
 	}
