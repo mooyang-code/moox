@@ -42,12 +42,20 @@ type StorageAdapter struct {
 	subjectMu        sync.Mutex
 	subjectRefreshMu sync.Mutex
 	subjects         map[string]cachedSubjectCatalog
+	nameMu           sync.Mutex
+	datasetNames     map[string]cachedDatasetName
+}
+
+type cachedDatasetName struct {
+	loadedAt time.Time
+	name     string
 }
 
 const (
 	datasetSubjectPageSize = 1000
 	maxDatasetSubjects     = 100000
 	subjectCatalogTTL      = time.Minute
+	datasetNameTTL         = 10 * time.Minute
 )
 
 type cachedSubjectCatalog struct {
@@ -56,7 +64,7 @@ type cachedSubjectCatalog struct {
 }
 
 func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog)}
+	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName)}
 }
 func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
 	// Monitor's Storage target is a dedicated dependency setting. Do not let the
@@ -425,6 +433,32 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 	a.subjects[key] = cachedSubjectCatalog{loadedAt: now, ids: cloneSubjectSet(ids)}
 	a.subjectMu.Unlock()
 	return ids, nil
+}
+
+// DatasetDisplayName returns the name people gave a dataset, such as
+// "现货小时K线", for alert text. It returns "" when the name is unknown, and
+// caches names for datasetNameTTL.
+func (a *StorageAdapter) DatasetDisplayName(ctx context.Context, spaceID, datasetID string) string {
+	if a == nil || a.metadata == nil || strings.TrimSpace(datasetID) == "" {
+		return ""
+	}
+	key := strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(datasetID)
+	now := time.Now()
+	a.nameMu.Lock()
+	cached, ok := a.datasetNames[key]
+	a.nameMu.Unlock()
+	if ok && now.Sub(cached.loadedAt) < datasetNameTTL {
+		return cached.name
+	}
+	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID}, client.WithFilter(trpcretry.ReadOnly()))
+	if err != nil || storageOK("get dataset name", rsp.GetRetInfo()) != nil {
+		return cached.name
+	}
+	name := strings.TrimSpace(rsp.GetDataset().GetName())
+	a.nameMu.Lock()
+	a.datasetNames[key] = cachedDatasetName{loadedAt: now, name: name}
+	a.nameMu.Unlock()
+	return name
 }
 
 // ListTags returns the tag definitions and live member counters used by the

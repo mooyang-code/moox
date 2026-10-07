@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/report"
 )
@@ -56,10 +57,10 @@ func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, chec
 		if lastError.After(lastSuccess) && now.Sub(lastSuccess) > check.MaxLag {
 			item.success = false
 			if lastSuccess.IsZero() {
-				item.reason = fmt.Sprintf("最近一次运行失败（%s），且从未成功过", formatAlertTime(lastError))
+				item.reason = fmt.Sprintf("最近一次运行失败（%s），且从未成功过", alerttext.Time(lastError))
 			} else {
 				item.reason = fmt.Sprintf("最近一次运行失败（%s），已 %s没有成功运行（上次成功 %s）",
-					formatAlertTime(lastError), formatAlertDuration(now.Sub(lastSuccess)), formatAlertTime(lastSuccess))
+					alerttext.Time(lastError), alerttext.Duration(now.Sub(lastSuccess)), alerttext.Time(lastSuccess))
 			}
 		}
 		items = append(items, item)

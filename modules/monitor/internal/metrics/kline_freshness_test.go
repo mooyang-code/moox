@@ -26,6 +26,7 @@ func TestKlineFreshnessEvaluatorFlagsStaleView(t *testing.T) {
 	require.False(t, reports[0].Success)
 	require.Equal(t, "business_data_stale", reports[0].Reason)
 	require.Equal(t, 3, reports[0].StaleCount, "a stale View makes every subject stale")
+	require.True(t, reports[0].ViewStale)
 }
 
 func TestKlineFreshnessEvaluatorDoesNotAlertTransientHole(t *testing.T) {

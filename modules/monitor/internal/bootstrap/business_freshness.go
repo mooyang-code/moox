@@ -78,29 +78,28 @@ func buildBusinessFreshnessReporterWithInterval(
 				diagnostic := fmt.Sprintf("cache_available=%t cache_age_seconds=%.0f last_success_timestamp_seconds=%.0f error=%s", state.Available, state.Age.Seconds(), unixSeconds(state.LastSuccess), inventoryErr.Cause)
 				items[monmetrics.InternalMetricSpaceID+"\x00"+monmetrics.TaskResultInventoryCheckID] = businessFreshnessItem{
 					spaceID: monmetrics.InternalMetricSpaceID, checkID: monmetrics.TaskResultInventoryCheckID,
-					name: "Collector task-result inventory", success: false,
-					reason: "inventory_refresh_failed", diagnostic: diagnostic,
+					name: "采集任务清单", success: false,
+					reason: "无法获取采集任务清单：采集服务接口异常，K线结果检查暂停", diagnostic: diagnostic,
 				}
 			} else {
 				for _, report := range reports {
 					klineEvaluated[report.CheckID] = struct{}{}
+					name := "采集任务清单"
+					if report.CheckID != monmetrics.TaskResultInventoryCheckID {
+						name = klineCheckName(datasetSubject(builder.Metrics.DatasetDisplayName(ctx, report.Rule.SpaceID, report.Rule.DatasetID), report.Rule.ViewID, report.Rule.Frequency))
+					}
 					if report.Skipped {
 						if report.Reason == "disabled" {
 							items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
-								spaceID: report.Rule.SpaceID, checkID: report.CheckID,
-								name:    fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency),
-								success: true, reason: "no_longer_expected",
+								spaceID: report.Rule.SpaceID, checkID: report.CheckID, name: name,
+								success: true, reason: noLongerExpected,
 							}
 						}
 						continue
 					}
-					reason := report.Reason
-					if report.Diagnostic != "" {
-						reason += "; " + report.Diagnostic
-					}
-					name := fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency)
+					reason := klineReasonText(report, overview.GeneratedAt)
 					if report.CheckID == monmetrics.TaskResultInventoryCheckID {
-						name = "Collector task-result inventory"
+						reason = "采集任务清单正常"
 					}
 					items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
 						spaceID: report.Rule.SpaceID, checkID: report.CheckID, name: name,
@@ -126,9 +125,9 @@ func buildBusinessFreshnessReporterWithInterval(
 			item := businessFreshnessItem{
 				spaceID: monmetrics.InternalMetricSpaceID,
 				checkID: checkID,
-				name:    strings.Join([]string{"Reporter", service.ServiceName, service.NodeID, service.InstanceID}, " "),
+				name:    reporterCheckName(service.ServiceName, service.NodeID),
 				success: service.ReporterStatus == "healthy",
-				reason:  serviceReporterReason(service.ReporterStatus),
+				reason:  reporterReasonText(service.ReporterStatus),
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
@@ -174,12 +173,16 @@ func buildBusinessFreshnessReporterWithInterval(
 				suppressed[dataset.SpaceID+"\x00"+checkID] = struct{}{}
 				continue
 			}
+			nameDatasetID := dataset.DatasetID
+			if dataset.Producer == "storage_view" && dataset.PrimaryDatasetID != "" {
+				nameDatasetID = dataset.PrimaryDatasetID
+			}
 			item := businessFreshnessItem{
 				spaceID: dataset.SpaceID,
 				checkID: checkID,
-				name:    strings.Join([]string{"Dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, " "),
+				name:    datasetCheckName(dataset.Producer, datasetSubject(builder.Metrics.DatasetDisplayName(ctx, dataset.SpaceID, nameDatasetID), dataset.DatasetID, dataset.Freq)),
 				success: dataset.Status == "healthy",
-				reason:  dataset.Reason,
+				reason:  datasetReasonText(dataset, overview.GeneratedAt),
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
@@ -191,7 +194,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			if spaceID == "" {
 				spaceID = "crypto"
 			}
-			checkID, name := "balance:"+business.Module, "Balance freshness "+business.Module
+			checkID, name := "balance:"+business.Module, "账户余额同步 "+business.Module
 			if business.Kind == "market_fetch" {
 				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
 			} else if business.Kind == "data_delivery" {
@@ -252,7 +255,7 @@ func buildBusinessFreshnessReporterWithInterval(
 					key := check.SpaceID + "\x00" + check.CheckID
 					items[key] = businessFreshnessItem{
 						spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
-						success: true, reason: "no_longer_expected",
+						success: true, reason: noLongerExpected,
 					}
 				}
 				continue
@@ -264,14 +267,14 @@ func buildBusinessFreshnessReporterWithInterval(
 				// state can resolve instead of remaining permanently firing.
 				items[key] = businessFreshnessItem{
 					spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
-					success: true, reason: "no_longer_expected",
+					success: true, reason: noLongerExpected,
 				}
 				continue
 			}
 			if _, ok := items[key]; !ok {
 				items[key] = businessFreshnessItem{
 					spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
-					success: true, reason: "no_longer_expected",
+					success: true, reason: noLongerExpected,
 				}
 			}
 		}
@@ -287,6 +290,12 @@ func buildBusinessFreshnessReporterWithInterval(
 				if !check.Enabled {
 					delete(items, key)
 					continue
+				}
+				if item.name != "" && check.Name != item.name {
+					check.Name = item.name
+					if err := repositories.Checks.Update(ctx, check); err != nil {
+						return err
+					}
 				}
 				checks[key] = *check
 			case errors.Is(err, gorm.ErrRecordNotFound):
@@ -448,15 +457,5 @@ func reporterDeploymentExpected(
 	}
 }
 
-func serviceReporterReason(status string) string {
-	switch status {
-	case "healthy":
-		return "reporter fresh"
-	case "stale":
-		return "producer stale"
-	case "missing":
-		return "reporter missing"
-	default:
-		return "reporter has not reported"
-	}
-}
+// noLongerExpected resolves a check whose subject was disabled or removed.
+const noLongerExpected = "已停用或移除，不再检查"

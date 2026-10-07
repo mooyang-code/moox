@@ -166,9 +166,6 @@ func renderMarkdown(message Message) string {
 	if message.Title != "" {
 		fmt.Fprintf(&content, "**[%s] %s**", localizedSeverity(message.Severity), message.Title)
 	}
-	if message.Key != "" {
-		appendLine(&content, "> 告警标识："+message.Key)
-	}
 	if message.Body != "" {
 		appendLine(&content, message.Body)
 	}
@@ -179,6 +176,11 @@ func renderMarkdown(message Message) string {
 	sort.Strings(keys)
 	for _, key := range keys {
 		appendLine(&content, fmt.Sprintf("> %s: %s", key, message.Labels[key]))
+	}
+	// The key identifies the alert for people searching events; it is not
+	// what they need to read first.
+	if message.Key != "" {
+		appendLine(&content, `<font color="comment">告警标识：`+message.Key+`</font>`)
 	}
 	return content.String()
 }

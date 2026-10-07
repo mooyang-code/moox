@@ -80,6 +80,14 @@ func (q *QueryService) ActiveDatasetSubjects(ctx context.Context, spaceID, datas
 	return q.storage.ListActiveDatasetSubjects(ctx, spaceID, datasetID)
 }
 
+// DatasetDisplayName returns a dataset's human name, or "" when unknown.
+func (q *QueryService) DatasetDisplayName(ctx context.Context, spaceID, datasetID string) string {
+	if q == nil || q.storage == nil {
+		return ""
+	}
+	return q.storage.DatasetDisplayName(ctx, spaceID, datasetID)
+}
+
 func parseTimeValue(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

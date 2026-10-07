@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +30,7 @@ type AlertEvaluator struct {
 	seen         map[string]struct{}
 }
 
-func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, messageID string, snapshot *hostmetricpb.HostSnapshot, observedAt time.Time) error {
+func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, hostname, messageID string, snapshot *hostmetricpb.HostSnapshot, observedAt time.Time) error {
 	if e == nil || e.Cache == nil || e.Repository == nil || snapshot == nil {
 		return nil
 	}
@@ -47,7 +48,8 @@ func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, messageID string
 			if !value.available {
 				continue
 			}
-			if err := e.transition(ctx, rule, agentID, messageID, value.value >= threshold, recovery, now, value.value); err != nil {
+			sample := hostSample{agentID: agentID, hostname: hostname, metric: metric, value: value.value, threshold: threshold}
+			if err := e.transition(ctx, rule, sample, messageID, value.value >= threshold, recovery, now); err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}
@@ -144,7 +146,13 @@ func hostThresholds(rule domain.AlertRule, metric string) (float64, float64) {
 	return threshold, recovery
 }
 
-func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, agentID, messageID string, failing bool, recovery float64, now time.Time, value float64) error {
+// hostSample is one host metric value as an alert describes it.
+type hostSample struct {
+	agentID, hostname, metric string
+	value, threshold          float64
+}
+
+func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, sample hostSample, messageID string, failing bool, recovery float64, now time.Time) error {
 	state, err := e.Repository.GetState(ctx, SpaceID, rule.RuleID, rule.CheckID)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
@@ -162,19 +170,19 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 			state.TriggeredAt = &now
 			state.ResolvedAt = nil
 			state.LastReminderAt = &now
-			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventTriggered, now, true)
+			return e.record(ctx, rule, sample, messageID, state, domain.AlertEventTriggered, now, true)
 		} else if state.Status == domain.AlertStatusFiring &&
 			reminderDue(state.LastReminderAt, now, rule.MinimumReminderIntervalSeconds) {
 			state.LastReminderAt = &now
-			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventReminder, now, true)
+			return e.record(ctx, rule, sample, messageID, state, domain.AlertEventReminder, now, true)
 		}
 	} else {
 		state.SuccessCount++
 		state.FailureCount = 0
-		if state.Status == domain.AlertStatusFiring && state.SuccessCount >= positive(rule.SuccessThreshold) && value <= recovery {
+		if state.Status == domain.AlertStatusFiring && state.SuccessCount >= positive(rule.SuccessThreshold) && sample.value <= recovery {
 			state.Status = domain.AlertStatusResolved
 			state.ResolvedAt = &now
-			if err := e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventResolved, now, false); err != nil {
+			if err := e.record(ctx, rule, sample, messageID, state, domain.AlertEventResolved, now, false); err != nil {
 				state.Status = domain.AlertStatusFiring
 				state.ResolvedAt = nil
 				state.SuccessCount = 0
@@ -197,8 +205,9 @@ func reminderDue(last *time.Time, now time.Time, intervalSeconds int) bool {
 	return now.Sub(*last) >= time.Duration(intervalSeconds)*time.Second
 }
 
-func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agentID, messageID string, state *domain.AlertState, value float64, eventType string, now time.Time, persistBeforeSend bool) error {
-	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "value": value, "metric": strings.TrimPrefix(rule.CheckID, HostRulePrefix)})
+func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, sample hostSample, messageID string, state *domain.AlertState, eventType string, now time.Time, persistBeforeSend bool) error {
+	agentID := sample.agentID
+	payload, _ := json.Marshal(map[string]any{"agent_id": agentID, "value": sample.value, "metric": strings.TrimPrefix(rule.CheckID, HostRulePrefix)})
 	if err := e.Repository.CreateEventIdempotent(ctx, &domain.AlertEvent{EventID: deterministicEventID(messageID, rule.RuleID, eventType), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: eventType, Status: state.Status, Payload: string(payload), CreatedAt: now}); err != nil {
 		return err
 	}
@@ -207,8 +216,7 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agen
 			return err
 		}
 	}
-	metric := strings.TrimPrefix(rule.CheckID, HostRulePrefix)
-	message := fmt.Sprintf("%s 主机指标 %s=%v", agentID, metric, value)
+	title, message := hostAlertText(sample, eventType, now)
 	if e.Notification != nil {
 		channel, err := e.Notification(ctx)
 		if err != nil {
@@ -237,7 +245,7 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agen
 		} else if eventType == domain.AlertEventReminder {
 			severity = notification.SeverityWarning
 		}
-		if err := sender.Send(ctx, notification.Message{Key: rule.RuleID + ":" + rule.CheckID, Severity: severity, Title: fmt.Sprintf("主机 %s 的 %s 指标", agentID, metric), Body: message}); err != nil {
+		if err := sender.Send(ctx, notification.Message{Key: rule.RuleID + ":" + rule.CheckID, Severity: severity, Title: title, Body: message}); err != nil {
 			if persistBeforeSend {
 				state.LastReminderAt = nil
 				_ = e.Repository.UpsertState(ctx, state)
@@ -260,4 +268,42 @@ func positive(value int) int {
 		return value
 	}
 	return 1
+}
+
+var hostMetricLabels = map[string]string{
+	HostMetricCPU:             "CPU 使用率",
+	HostMetricMemory:          "内存使用率",
+	HostMetricFilesystemUsage: "磁盘空间使用率",
+	HostMetricDiskUtilization: "磁盘繁忙度",
+	HostMetricNetworkErrors:   "网络错误包",
+}
+
+// hostAlertText renders a host threshold alert for people: the host and
+// metric as the title, the value against its threshold in the body.
+func hostAlertText(sample hostSample, eventType string, now time.Time) (string, string) {
+	host := strings.TrimSpace(sample.hostname)
+	if host == "" {
+		host = sample.agentID
+	}
+	label := hostMetricLabels[sample.metric]
+	if label == "" {
+		label = sample.metric
+	}
+	value := func(v float64) string {
+		if sample.metric == HostMetricNetworkErrors {
+			return fmt.Sprintf("每秒 %.1f 个", v)
+		}
+		return fmt.Sprintf("%.1f%%", v)
+	}
+	var lines []string
+	switch eventType {
+	case domain.AlertEventResolved:
+		lines = append(lines, "状态：已恢复", fmt.Sprintf("当前：%s %s", label, value(sample.value)))
+	case domain.AlertEventReminder:
+		lines = append(lines, "状态：仍未恢复", fmt.Sprintf("问题：%s %s，超过阈值 %s", label, value(sample.value), value(sample.threshold)))
+	default:
+		lines = append(lines, "状态：新告警", fmt.Sprintf("问题：%s %s，超过阈值 %s", label, value(sample.value), value(sample.threshold)))
+	}
+	lines = append(lines, "时间："+alerttext.Time(now)+"（北京时间）")
+	return "主机 " + host + " · " + label, strings.Join(lines, "\n")
 }

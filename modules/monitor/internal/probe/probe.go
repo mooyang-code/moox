@@ -4,7 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -62,6 +66,22 @@ func newResultID() string {
 		return fmt.Sprintf("result-%d", time.Now().UnixNano())
 	}
 	return "result-" + hex.EncodeToString(b[:])
+}
+
+// connectFailureText explains a failed connection to people, keeping the
+// underlying error for whoever investigates.
+func connectFailureText(err error, timeout time.Duration) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()):
+		return fmt.Sprintf("请求超时：%s 内没有响应，服务可能卡住或网络不通", timeout)
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "连接被拒绝：服务没有在监听该端口，可能已停止"
+	case strings.Contains(err.Error(), "no such host"):
+		return "域名无法解析：" + err.Error()
+	default:
+		return "无法连接：" + err.Error()
+	}
 }
 
 func failResult(check domain.Check, latency time.Duration, msg string) domain.CheckResult {

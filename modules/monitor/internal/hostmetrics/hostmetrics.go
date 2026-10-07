@@ -288,7 +288,7 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	}
 	s.mu.Unlock()
 	if s.alert != nil {
-		_ = s.alert.Evaluate(ctx, canonicalAgentID, msg.GetEventId(), metric.GetSnapshot(), occurredAt)
+		_ = s.alert.Evaluate(ctx, canonicalAgentID, metric.GetHostname(), msg.GetEventId(), metric.GetSnapshot(), occurredAt)
 	}
 	return nil
 }

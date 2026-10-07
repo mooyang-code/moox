@@ -2,7 +2,8 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -25,17 +26,23 @@ func hostPresenceTransitionSinkProviderWithFailure(provider func(context.Context
 		if provider == nil {
 			return nil
 		}
+		host := strings.TrimSpace(transition.Hostname)
+		if host == "" {
+			host = transition.AgentID
+		}
 		severity := notification.SeverityCritical
-		title := "MooX host unreachable"
+		title := "主机 " + host + " · 失联"
+		body := "状态：新告警\n问题：主机采集代理停止上报，主机可能宕机、断网，或采集代理已停止"
 		if transition.To == hostmetrics.PresenceReachable {
 			severity = notification.SeverityInfo
-			title = "MooX host recovered"
+			title = "主机 " + host + " · 已恢复在线"
+			body = "状态：已恢复\n当前：主机重新开始上报"
 		}
 		message := notification.Message{
 			Key:      "host-presence:" + transition.AgentID,
 			Severity: severity,
 			Title:    title,
-			Body:     fmt.Sprintf("HostAgent %s changed from %s to %s", transition.AgentID, transition.From, transition.To),
+			Body:     body + "\n时间：" + alerttext.Time(transition.ObservedAt) + "（北京时间）",
 			Labels: map[string]string{
 				"agent_id": transition.AgentID,
 				"from":     string(transition.From),

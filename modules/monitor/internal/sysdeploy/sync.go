@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -223,7 +224,7 @@ func checkFromDeployment(deployment *adminpb.ServiceDeployment, nodeHosts map[st
 	})
 	check := &domain.Check{
 		CheckID:         sysDeployCheckID(nodeID, serviceName),
-		Name:            serviceName + "@" + nodeID,
+		Name:            alerttext.Service(serviceName) + "（" + alerttext.Node(nodeID) + "）· 健康检查",
 		GroupName:       "mooxsys",
 		IntervalSeconds: 30,
 		TimeoutMS:       3000,

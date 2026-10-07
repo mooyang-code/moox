@@ -59,7 +59,7 @@ func TestBusinessFreshnessReporterResolvesDatasetNoLongerExpected(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != "no_longer_expected" {
+	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != noLongerExpected {
 		t.Fatalf("results = %+v", results)
 	}
 }
@@ -136,14 +136,14 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.Name != "K线新鲜度 crypto view 1m" {
+	if check.Name != "view（1分钟） · K线结果" {
 		t.Fatalf("check = %+v", check)
 	}
 	results, err := repositories.Results.Recent(t.Context(), "crypto", check.CheckID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Success || !strings.HasPrefix(results[0].ErrorMessage, "business_data_stale") || !strings.Contains(results[0].BodyExcerpt, "stale_count=1") {
+	if len(results) != 1 || results[0].Success || !strings.HasPrefix(results[0].ErrorMessage, "整体停止更新") || !strings.Contains(results[0].BodyExcerpt, "stale_count=1") {
 		t.Fatalf("results = %+v", results)
 	}
 }
@@ -182,7 +182,7 @@ func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Success || !strings.HasPrefix(results[0].ErrorMessage, "no_observation") {
+	if len(results) != 1 || results[0].Success || !strings.HasPrefix(results[0].ErrorMessage, "还没有收到任何结果数据") {
 		t.Fatalf("no-observation kline check result = %+v", results)
 	}
 }
@@ -229,7 +229,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(klineResults) != 1 || klineResults[0].Success || !strings.HasPrefix(klineResults[0].ErrorMessage, "no_observation") {
+	if len(klineResults) != 1 || klineResults[0].Success || !strings.HasPrefix(klineResults[0].ErrorMessage, "还没有收到任何结果数据") {
 		t.Fatalf("initial Kline result = %+v", klineResults)
 	}
 
@@ -242,7 +242,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inventoryResults) != 2 || inventoryResults[0].Success || inventoryResults[0].ErrorMessage != "inventory_refresh_failed" ||
+	if len(inventoryResults) != 2 || inventoryResults[0].Success || !strings.HasPrefix(inventoryResults[0].ErrorMessage, "无法获取采集任务清单") ||
 		!strings.Contains(inventoryResults[0].BodyExcerpt, "collector inventory endpoint unavailable") {
 		t.Fatalf("inventory refresh result = %+v", inventoryResults)
 	}
@@ -315,7 +315,7 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(klineResults) != 2 || klineResults[0].Success || !strings.HasPrefix(klineResults[0].ErrorMessage, "task_result_error") {
+	if len(klineResults) != 2 || klineResults[0].Success || !strings.HasPrefix(klineResults[0].ErrorMessage, "采集任务的结果状态异常") {
 		t.Fatalf("unowned task prepare error must remain a Kline failure: %+v", klineResults)
 	}
 
@@ -388,7 +388,7 @@ func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Success || results[0].ErrorMessage != "尚未上报" {
+	if len(results) != 1 || results[0].Success || results[0].ErrorMessage != "还没有收到任何运行记录" {
 		t.Fatalf("results = %+v", results)
 	}
 }
@@ -623,7 +623,7 @@ func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != "no_longer_expected" {
+	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != noLongerExpected {
 		t.Fatalf("results = %+v", results)
 	}
 }
@@ -688,7 +688,7 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != "no_longer_expected" {
+	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != noLongerExpected {
 		t.Fatalf("results = %+v", results)
 	}
 }
@@ -800,7 +800,7 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Success || results[0].ErrorMessage != "producer stale" {
+	if len(results) != 1 || results[0].Success || results[0].ErrorMessage != reporterReasonText("stale") {
 		t.Fatalf("results = %+v", results)
 	}
 
@@ -821,7 +821,7 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != "reporter fresh" {
+	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != reporterReasonText("healthy") {
 		t.Fatalf("recovery results = %+v", results)
 	}
 }

@@ -75,7 +75,7 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	resp, err := client.Do(req)
 	latency := time.Since(start)
 	if err != nil {
-		return failResult(check, latency, err.Error())
+		return failResult(check, latency, connectFailureText(err, timeout))
 	}
 	defer resp.Body.Close()
 
@@ -92,7 +92,7 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	if !matchStatus(resp.StatusCode) {
 		result.Success = false
 		result.Status = domain.CheckStatusDown
-		result.ErrorMessage = fmt.Sprintf("unexpected HTTP status %d", resp.StatusCode)
+		result.ErrorMessage = fmt.Sprintf("健康接口返回异常状态码 %d：服务未就绪或出错", resp.StatusCode)
 		if reason := healthFailureReason(req.URL, excerpt); reason != "" {
 			result.ErrorMessage = reason
 		}
@@ -101,13 +101,13 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	if check.MaxResponseMS > 0 && latency.Milliseconds() > int64(check.MaxResponseMS) {
 		result.Success = false
 		result.Status = domain.CheckStatusDegraded
-		result.ErrorMessage = fmt.Sprintf("response time %dms exceeds %dms", latency.Milliseconds(), check.MaxResponseMS)
+		result.ErrorMessage = fmt.Sprintf("响应过慢：%dms，超过阈值 %dms", latency.Milliseconds(), check.MaxResponseMS)
 		return result
 	}
 	if check.BodyContains != "" && !strings.Contains(excerpt, check.BodyContains) {
 		result.Success = false
 		result.Status = domain.CheckStatusDown
-		result.ErrorMessage = "response body does not contain expected text"
+		result.ErrorMessage = "健康接口返回内容表明服务未就绪"
 		return result
 	}
 	result.Success = true

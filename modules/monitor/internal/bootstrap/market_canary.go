@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"strings"
 	"time"
 
@@ -114,7 +115,7 @@ func buildMonitorMarketCanary(
 		}
 		check := domain.Check{
 			SpaceID: canaryConfig.SpaceID, CheckID: watchdog.MarketCanaryCheckID(canaryConfig),
-			Name:      "Market canary " + watchdog.MarketCanaryTarget(canaryConfig),
+			Name:      "行情探针 · " + canaryConfig.SubjectID + " " + alerttext.Frequency(canaryConfig.Frequency) + "K线",
 			GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability,
 			Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000,
 		}
@@ -227,7 +228,7 @@ func buildMonitorMarketCanary(
 					checkID := subjectTagCheckID(spaceID, tag.GetTagId())
 					check, getErr := runtime.Repositories.Checks.Get(runCtx, spaceID, checkID)
 					if errors.Is(getErr, gorm.ErrRecordNotFound) {
-						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "Subject tag " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
+						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "采集对象标签 · " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
 						getErr = runtime.Repositories.Checks.Create(runCtx, check)
 					} else if getErr == nil && check.Name != "Subject tag "+tag.GetTagName() {
 						check.Name = "Subject tag " + tag.GetTagName()
@@ -238,7 +239,7 @@ func buildMonitorMarketCanary(
 						continue
 					}
 					reasons := checkTag(tag, now)
-					result := domain.CheckResult{ResultID: fmt.Sprintf("%s-%d", checkID, now.UnixNano()), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: strings.Join(reasons, ","), CheckedAt: now, CreatedAt: now}
+					result := domain.CheckResult{ResultID: fmt.Sprintf("%s-%d", checkID, now.UnixNano()), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: tagReasonText(reasons), CheckedAt: now, CreatedAt: now}
 					if !result.Success {
 						result.Status = domain.CheckStatusDown
 					}
@@ -270,4 +271,23 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// tagReasonText explains a subject tag's problems to people.
+func tagReasonText(reasons []string) string {
+	text := map[string]string{
+		"missing":           "标签不存在",
+		"failed":            "最近一次刷新失败",
+		"no_active_members": "标签下没有可用的采集对象",
+		"stale":             "标签长时间没有刷新",
+	}
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if value := text[reason]; value != "" {
+			parts = append(parts, value)
+		} else {
+			parts = append(parts, reason)
+		}
+	}
+	return strings.Join(parts, "；")
 }

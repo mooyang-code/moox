@@ -21,9 +21,9 @@ const (
 	ViewOutputSubjectsMetric       = "moox_storage_view_output_subjects"
 	ViewOutputLaggingMetric        = "moox_storage_view_output_lagging_subjects"
 	ViewOutputLaggingSubjectMetric = "moox_storage_view_output_lagging_subject_data_time_seconds"
-	KlineDefaultSeriesTag               = "default"
-	TaskResultInventoryCheckID          = "kline_freshness:task_result_inventory"
-	klineFutureTolerance                = 10 * time.Minute
+	KlineDefaultSeriesTag          = "default"
+	TaskResultInventoryCheckID     = "kline_freshness:task_result_inventory"
+	klineFutureTolerance           = 10 * time.Minute
 )
 
 type KlineFreshnessRule struct {
@@ -45,12 +45,15 @@ type KlineFreshnessRule struct {
 }
 
 type KlineFreshnessReport struct {
-	Rule             KlineFreshnessRule
-	CheckID          string
-	Success          bool
-	Skipped          bool
-	Reason           string
-	Diagnostic       string
+	Rule       KlineFreshnessRule
+	CheckID    string
+	Success    bool
+	Skipped    bool
+	Reason     string
+	Diagnostic string
+	// ViewStale means the View as a whole stopped updating, as opposed to
+	// some of its subjects lagging.
+	ViewStale      bool
 	StaleCount     int
 	MissingCount   int
 	ObservedCount  int
@@ -461,6 +464,7 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 	nextBarDue := summary.latest.Add(2 * bar)
 	report.StaleAge = inventoryDataAge(now, nextBarDue)
 	if now.Sub(nextBarDue) > rule.StaleAfter {
+		report.ViewStale = true
 		report.StaleCount = max(summary.subjects, len(active))
 		report.Reason = "business_data_stale"
 		report.Diagnostic = formatKlineDiagnostic(*report)

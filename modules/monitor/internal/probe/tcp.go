@@ -21,7 +21,7 @@ func (r TCPRunner) Run(ctx context.Context, check domain.Check) domain.CheckResu
 	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(reqCtx, "tcp", addr)
 	latency := time.Since(start)
 	if err != nil {
-		return failResult(check, latency, err.Error())
+		return failResult(check, latency, connectFailureText(err, timeout))
 	}
 	_ = conn.Close()
 
@@ -30,7 +30,7 @@ func (r TCPRunner) Run(ctx context.Context, check domain.Check) domain.CheckResu
 	if check.MaxResponseMS > 0 && latency.Milliseconds() > int64(check.MaxResponseMS) {
 		result.Success = false
 		result.Status = domain.CheckStatusDegraded
-		result.ErrorMessage = fmt.Sprintf("connect time %dms exceeds %dms", latency.Milliseconds(), check.MaxResponseMS)
+		result.ErrorMessage = fmt.Sprintf("连接过慢：%dms，超过阈值 %dms", latency.Milliseconds(), check.MaxResponseMS)
 		return result
 	}
 	result.Success = true

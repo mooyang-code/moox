@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"strings"
 	"time"
 
@@ -151,7 +152,7 @@ func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, resul
 		EventID:   newEventID(),
 		EventType: eventType,
 		Status:    state.Status,
-		Message:   eventMessage(eventType, check, result),
+		Message:   eventMessage(eventType, check, result, state),
 		Check:     check,
 		Result:    result,
 		Rule:      rule,
@@ -204,7 +205,7 @@ func notificationSeverity(eventType string) notification.Severity {
 
 func (e *Evaluator) recordEvent(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, state *domain.AlertState, eventType, message string) error {
 	if message == "" {
-		message = eventMessage(eventType, check, result)
+		message = eventMessage(eventType, check, result, state)
 	}
 	return e.recordEventObject(ctx, Event{
 		EventID:   newEventID(),
@@ -246,31 +247,57 @@ func dedupeKey(rule domain.AlertRule, check domain.Check) string {
 	return rule.RuleID + ":" + check.CheckID
 }
 
-func eventMessage(eventType string, check domain.Check, result domain.CheckResult) string {
-	name := strings.TrimSpace(check.Name)
-	if name == "" {
-		name = check.CheckID
-	}
-	status := map[string]string{
-		domain.AlertEventTriggered:  "触发告警",
-		domain.AlertEventReminder:   "告警提醒",
-		domain.AlertEventResolved:   "告警恢复",
-		domain.AlertEventSendFailed: "通知发送失败",
-	}[eventType]
-	if status == "" {
-		status = eventType
-	}
-	parts := []string{fmt.Sprintf("监控项：%s", name), fmt.Sprintf("状态：%s", status)}
-	if result.ErrorMessage != "" {
-		parts = append(parts, "原因："+result.ErrorMessage)
+// eventMessage is the notification body: one short line per fact, in the
+// order people need them. The check's name is the title.
+func eventMessage(eventType string, check domain.Check, result domain.CheckResult, state *domain.AlertState) string {
+	reason := alerttext.Reason(strings.TrimSpace(result.ErrorMessage))
+	var lines []string
+	switch eventType {
+	case domain.AlertEventResolved:
+		line := "状态：已恢复"
+		if since := alertDuration(state, result.CheckedAt); since != "" {
+			line += "（持续了 " + since + "）"
+		}
+		lines = append(lines, line)
+		if reason != "" {
+			lines = append(lines, "当前："+reason)
+		}
+	case domain.AlertEventReminder:
+		line := "状态：仍未恢复"
+		if since := alertDuration(state, result.CheckedAt); since != "" {
+			line += "（已持续 " + since + "）"
+		}
+		lines = append(lines, line)
+		if reason != "" {
+			lines = append(lines, "问题："+reason)
+		}
+	case domain.AlertEventSendFailed:
+		lines = append(lines, "状态：告警通知发送失败")
+		if reason != "" {
+			lines = append(lines, "问题："+reason)
+		}
+	default:
+		lines = append(lines, "状态：新告警")
+		if reason != "" {
+			lines = append(lines, "问题："+reason)
+		}
 	}
 	if !result.CheckedAt.IsZero() {
-		parts = append(parts, "检查时间："+result.CheckedAt.UTC().Format(time.RFC3339))
+		lines = append(lines, "时间："+alerttext.Time(result.CheckedAt)+"（北京时间）")
 	}
-	if check.Description != "" {
-		parts = append(parts, "建议："+strings.TrimSpace(check.Description))
+	if description := strings.TrimSpace(check.Description); description != "" && eventType != domain.AlertEventResolved {
+		lines = append(lines, "建议："+description)
 	}
-	return strings.Join(parts, "；")
+	return strings.Join(lines, "\n")
+}
+
+// alertDuration renders how long an alert has been firing, such as
+// "1 小时 5 分钟"; empty when it is not known.
+func alertDuration(state *domain.AlertState, now time.Time) string {
+	if state == nil || state.TriggeredAt == nil || now.IsZero() || now.Before(*state.TriggeredAt) {
+		return ""
+	}
+	return alerttext.Duration(now.Sub(*state.TriggeredAt))
 }
 
 func newEventID() string { return uuid.NewString() }
