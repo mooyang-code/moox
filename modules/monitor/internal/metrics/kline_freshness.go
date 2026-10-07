@@ -210,9 +210,10 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 
 		staleSubjects := make(map[string]struct{})
 		observedSubjects := make(map[string]struct{})
-		// A bar is stamped with its period start and can exist only once the
-		// period closes, so staleness is measured from the close: a 1H bar is
-		// an hour old the moment it becomes available.
+		// A bar is stamped with its period start and exists only once the period
+		// closes, so the newest bar is always one period behind. Data is stale
+		// once the bar after it is overdue: that bar closes two periods after
+		// the latest bar's start, plus stale_after.
 		barLength := klineFrequencyDuration(rule.Frequency)
 		for _, item := range observed {
 			report.ObservedCount++
@@ -220,11 +221,11 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			if report.OldestDataTime.IsZero() || item.outputTime.Before(report.OldestDataTime) {
 				report.OldestDataTime = item.outputTime
 			}
-			closedAt := item.outputTime.Add(barLength)
-			if age := inventoryDataAge(now, closedAt); age > report.StaleAge {
+			nextBarDue := item.outputTime.Add(2 * barLength)
+			if age := inventoryDataAge(now, nextBarDue); age > report.StaleAge {
 				report.StaleAge = age
 			}
-			if now.Sub(closedAt) > rule.StaleAfter {
+			if now.Sub(nextBarDue) > rule.StaleAfter {
 				report.StaleCount++
 				staleSubjects[item.identity.SubjectID] = struct{}{}
 			}

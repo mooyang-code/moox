@@ -217,8 +217,8 @@ func TestKlineFrequencyUnitsAreCaseInsensitiveExceptMonth(t *testing.T) {
 	require.NotEqual(t, klineFrequencyUnit("M"), klineFrequencyUnit("m"), "M is month, m is minute")
 }
 
-// An hourly bar is stamped with its period start; it is fresh until
-// stale_after has passed since the period closed.
+// An hourly bar is stamped with its period start and the next bar closes two
+// periods later; data is fresh until that next bar is stale_after overdue.
 func TestKlineFreshnessMeasuresStalenessFromBarClose(t *testing.T) {
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1H", MarketID: "crypto", StaleAfter: 5 * time.Minute}
 	barStart := time.Date(2026, 10, 7, 6, 0, 0, 0, time.UTC)
@@ -232,9 +232,11 @@ func TestKlineFreshnessMeasuresStalenessFromBarClose(t *testing.T) {
 		require.Len(t, reports, 1)
 		return reports[0]
 	}
-	fresh := evaluate(barStart.Add(time.Hour + 4*time.Minute))
-	require.True(t, fresh.Success, "a bar closed four minutes ago is fresh: %s", fresh.Diagnostic)
-	stale := evaluate(barStart.Add(time.Hour + 6*time.Minute))
-	require.False(t, stale.Success, "a bar closed six minutes ago is stale with stale_after=5m")
+	current := evaluate(barStart.Add(time.Hour + 29*time.Minute))
+	require.True(t, current.Success, "the 06:00 bar is the newest possible at 07:29: %s", current.Diagnostic)
+	due := evaluate(barStart.Add(2*time.Hour + 4*time.Minute))
+	require.True(t, due.Success, "the 07:00 bar is only four minutes overdue: %s", due.Diagnostic)
+	stale := evaluate(barStart.Add(2*time.Hour + 6*time.Minute))
+	require.False(t, stale.Success, "the 07:00 bar is six minutes overdue with stale_after=5m")
 	require.Equal(t, 6*time.Minute, stale.StaleAge)
 }
