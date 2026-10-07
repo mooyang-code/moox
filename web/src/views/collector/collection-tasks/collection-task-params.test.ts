@@ -5,6 +5,7 @@ import {
   parseKlineResampleParams,
   collectionSourceMatches,
   collectionTaskNameError,
+  collectionTaskResultLabel,
   normalizeCollectionTask,
   parseCollectionTaskInput,
   taskFrequency
@@ -177,5 +178,27 @@ describe("collection task params", () => {
     expect(collectionSourceMatches(source, "binance", "kline", "swap", "1h")).toBe(false);
     expect(collectionSourceMatches(source, "binance", "kline", "spot", "4h")).toBe(false);
     expect(collectionSourceMatches(source, "binance", "kline_resample", "spot", "1h")).toBe(true);
+  });
+});
+
+describe("collection task result label", () => {
+  const result = (status: string) => ({ view_id: "view_task_kline_1m", status });
+
+  it("treats an uninspected list entry of a prepared task as available", () => {
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("unknown") })).toBe("结果可用");
+  });
+
+  it("keeps tasks that are still preparing in the preparing state", () => {
+    expect(collectionTaskResultLabel({ prepare_state: "pending", result: result("unknown") })).toBe("结果准备中");
+    expect(collectionTaskResultLabel({ prepare_state: "waiting_view", result: result("pending") })).toBe("结果准备中");
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: { status: "unknown" } })).toBe("结果准备中");
+  });
+
+  it("follows the inspected Storage status from task details", () => {
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("ready") })).toBe("结果可用");
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("pending") })).toBe("结果准备中");
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("error") })).toBe("结果异常");
+    expect(collectionTaskResultLabel({ prepare_state: "error", result: result("unknown") })).toBe("结果异常");
+    expect(collectionTaskResultLabel({ prepare_state: "ready", last_error: "boom", result: result("unknown") })).toBe("结果异常");
   });
 });

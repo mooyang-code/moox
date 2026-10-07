@@ -330,3 +330,23 @@ function normalizeSubjectTags(tags?: string[]): string[] {
 function stringArrayValue(value: unknown): string[] {
   return Array.isArray(value) ? value.map(item => stringValue(item)).filter(Boolean) : [];
 }
+
+export type CollectionTaskResultLabel = "结果可用" | "结果准备中" | "结果异常";
+
+/**
+ * Result label for a task. The task list does not inspect Storage per task, so
+ * it reports result status "unknown"; the label then follows the Collector's
+ * own preparation state, where "ready" means the result is provisioned and
+ * active. Task details carry the inspected Storage status.
+ */
+export function collectionTaskResultLabel(
+  task: Pick<CollectionTaskRecord, "prepare_state" | "last_error" | "result">
+): CollectionTaskResultLabel {
+  const status = String(task.result?.status || "").toLowerCase();
+  const prepareState = String(task.prepare_state || "").toLowerCase();
+  if (status === "error" || prepareState === "error" || task.last_error) return "结果异常";
+  if (!task.result?.view_id) return "结果准备中";
+  if (["active", "ready", "succeeded"].includes(status)) return "结果可用";
+  if (status === "unknown" && prepareState === "ready") return "结果可用";
+  return "结果准备中";
+}

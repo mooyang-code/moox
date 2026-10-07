@@ -332,6 +332,7 @@ import {
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
   collectionSourceMatches,
+  collectionTaskResultLabel,
   collectionTaskNameError,
   normalizeCollectionTask,
   parseCollectionTaskInput,
@@ -556,11 +557,7 @@ function formatDateTime(value?: string) {
 }
 
 function resultStatusLabel(task: CollectionTaskRecord) {
-  const status = String(task.result?.status || "").toLowerCase();
-  const prepareState = String(task.prepare_state || "").toLowerCase();
-  if (status === "error" || prepareState === "error" || task.last_error) return "结果异常";
-  if (task.result?.view_id && ["active", "ready", "succeeded"].includes(status)) return "结果可用";
-  return "结果准备中";
+  return collectionTaskResultLabel(task);
 }
 
 function resultStatusColor(task: CollectionTaskRecord) {
