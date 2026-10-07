@@ -809,61 +809,6 @@ func TestCollectorPeriodInventoryProjectsFetchScopeFailureTargets(t *testing.T) 
 	require.NotContains(t, collectorPeriodInventoryJSON(t, report), "private-subject-marker")
 }
 
-func TestCollectorPeriodInventorySupportsLegacyProductionSchema(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	db := openCollectorPeriodInventoryFixture(t, dbPath)
-	require.NoError(t, db.Exec(`DROP TABLE t_collector_period_storage_states`).Error)
-	require.NoError(t, db.Exec(`DROP TABLE t_collector_timer_period_batches`).Error)
-	require.NoError(t, db.Exec(`DROP TABLE t_collector_fetch_retry_items`).Error)
-	require.NoError(t, db.Exec(`CREATE TABLE t_collector_fetch_retry_items (
-		c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-		c_space_id TEXT NOT NULL,
-		c_retry_key TEXT NOT NULL,
-		c_source_batch_id TEXT NOT NULL DEFAULT '',
-		c_batch_kind TEXT NOT NULL DEFAULT 'realtime',
-		c_instance_id TEXT NOT NULL DEFAULT '',
-		c_write_target_id TEXT NOT NULL DEFAULT '',
-		c_retry_scope TEXT NOT NULL DEFAULT '',
-		c_subject_id TEXT NOT NULL,
-		c_frequency TEXT NOT NULL,
-		c_target_data_time DATETIME NOT NULL,
-		c_task_json TEXT NOT NULL DEFAULT '{}',
-		c_failure_targets_json TEXT NOT NULL DEFAULT '[]',
-		c_attempt INTEGER NOT NULL DEFAULT 1,
-		c_status TEXT NOT NULL,
-		c_period_failure_reported INTEGER NOT NULL DEFAULT 0,
-		c_next_retry_at DATETIME,
-		c_last_error_type TEXT NOT NULL DEFAULT '',
-		c_last_error_summary TEXT NOT NULL DEFAULT '',
-		c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-		c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`).Error)
-	targets := `[{"write_target_id":"legacy-target","space_id":"crypto","dataset_id":"bars-1m","frequency":"1m","series_hash":"series-hash","expected_count":2,"series_index":0}]`
-	require.NoError(t, db.Exec(`INSERT INTO t_collector_fetch_retry_items
-		(c_space_id,c_retry_key,c_source_batch_id,c_instance_id,c_retry_scope,c_subject_id,c_frequency,c_target_data_time,c_task_json,c_failure_targets_json,c_status,c_period_failure_reported)
-		VALUES ('crypto','legacy-unreported','batch-a','instance-a','fetch','private-subject-marker','1m','2026-10-01 00:00:00',?,?,'permanent_failed',0)`, inventoryFailureTaskJSON(), targets).Error)
-	require.NoError(t, db.Exec(`INSERT INTO t_collector_fetch_retry_items
-		(c_space_id,c_retry_key,c_source_batch_id,c_instance_id,c_retry_scope,c_subject_id,c_frequency,c_target_data_time,c_task_json,c_failure_targets_json,c_status,c_period_failure_reported)
-		VALUES ('crypto','legacy-reported','batch-a','instance-a','fetch','private-subject-marker','1m','2026-10-01 00:00:00',?,?,'permanent_failed',1)`, inventoryFailureTaskJSON(), targets).Error)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Close())
-
-	report, err := runCollectorPeriodInventory(context.Background(), collectorPeriodInventoryFlags{
-		DBPath:  dbPath,
-		SpaceID: "crypto",
-	})
-	require.NoError(t, err)
-	require.True(t, report.Complete)
-	require.True(t, report.Schema.Complete)
-	require.Len(t, report.PendingRetries, 1)
-	require.NotEmpty(t, report.PendingRetries[0].RetryRef)
-	require.NotEqual(t, "legacy-unreported", report.PendingRetries[0].RetryRef)
-	require.Equal(t, "pending", report.PendingRetries[0].FailureReportState)
-	require.EqualValues(t, 2, report.PeriodKeys[0].SnapshotSeriesRows)
-	require.NotContains(t, collectorPeriodInventoryJSON(t, report), "private-subject-marker")
-}
-
 func TestCollectorPeriodInventoryParsesGoSQLiteTimestampValues(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	db := openCollectorPeriodInventoryFixture(t, dbPath)

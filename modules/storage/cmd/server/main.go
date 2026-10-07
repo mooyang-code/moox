@@ -452,11 +452,10 @@ func runViewRole() error {
 	}
 	staticConsumerOptions := cloneViewConsumerOptions(consumerOptions)
 	stripWildcardConsumerRoutes(&staticConsumerOptions)
-	// The legacy misc durable previously held an inventory-expanded wildcard
-	// filter. Reusing that durable with a newly discovered View would violate
-	// JetStream's immutable filter contract. Static consumers therefore keep
-	// only the exact, latency-sensitive partitions; the reconciler owns every
-	// misc Dataset with a stable per-Dataset durable instead.
+	// A durable's filter is immutable in JetStream, so a wildcard partition
+	// cannot follow newly discovered Datasets. Static consumers keep only the
+	// exact, latency-sensitive partitions; the reconciler owns every misc
+	// Dataset with a stable per-Dataset durable instead.
 	stripMiscConsumerPartition(&staticConsumerOptions)
 	dynamicConsumerOptions := cloneViewConsumerOptions(consumerOptions)
 	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient, staticConsumerOptions)
@@ -470,10 +469,7 @@ func runViewRole() error {
 	if err != nil {
 		return fmt.Errorf("create storage view dynamic inventory reconciler: %w", err)
 	}
-	// Bind the current inventory before starting the periodic reconciler. The
-	// legacy catch-all durable is intentionally retained during this rollout;
-	// its pending sequence is a rollback/replay safety net and must not be
-	// deleted until operators have verified the per-Dataset consumers.
+	// Bind the current inventory before starting the periodic reconciler.
 	if err := dynamicReconciler.Reconcile(trpc.BackgroundContext()); err != nil {
 		return fmt.Errorf("initial storage view dynamic inventory reconcile: %w", err)
 	}

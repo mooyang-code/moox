@@ -435,36 +435,26 @@ func inspectCollectorPeriodInventorySchema(tx *gorm.DB, report *collectorPeriodI
 		available[table.name] = complete
 	}
 	receiptColumns := columnSets["t_collector_fetch_retry_items"]
-	_, hasLegacyReceipt := receiptColumns["c_period_failure_reported"]
-	currentReceiptColumns := []string{
-		"c_period_failure_report_state", "c_period_failure_results_json",
-		"c_period_failure_last_error", "c_period_failure_deadline_exceeded_at",
-	}
-	currentReceiptCount := 0
-	for _, column := range currentReceiptColumns {
-		if _, ok := receiptColumns[column]; ok {
-			currentReceiptCount++
-		}
-	}
-	hasCurrentReceipt := currentReceiptCount == len(currentReceiptColumns)
 	if available["t_collector_fetch_retry_items"] {
-		switch {
-		case hasLegacyReceipt && currentReceiptCount == 0:
-			available["retry_receipt_legacy"] = true
-		case hasCurrentReceipt && !hasLegacyReceipt:
+		receiptCurrent := true
+		for _, column := range []string{
+			"c_period_failure_report_state", "c_period_failure_results_json",
+			"c_period_failure_last_error", "c_period_failure_deadline_exceeded_at",
+		} {
+			if _, ok := receiptColumns[column]; !ok {
+				report.Schema.MissingColumns = append(report.Schema.MissingColumns, "t_collector_fetch_retry_items."+column)
+				receiptCurrent = false
+			}
+		}
+		if receiptCurrent {
 			available["retry_receipt_current"] = true
-		case !hasLegacyReceipt && currentReceiptCount == 0:
-			report.Schema.MissingColumns = append(report.Schema.MissingColumns, "t_collector_fetch_retry_items.c_period_failure_report_state")
+		} else {
 			report.Schema.Incompatible = append(report.Schema.Incompatible, "retry failure receipt columns are missing")
-		default:
-			report.Schema.Incompatible = append(report.Schema.Incompatible, "retry failure receipt columns are mixed or partial")
 		}
 	}
 	storageAvailable := available["t_collector_period_storage_states"]
 	timerAvailable := available["t_collector_timer_period_batches"]
 	switch {
-	case available["retry_receipt_legacy"] && !storageAvailable && !timerAvailable:
-		report.Schema.Profile = "pre_remediation"
 	case available["retry_receipt_current"] && storageAvailable && timerAvailable:
 		report.Schema.Profile = "current"
 	case !available["t_collector_fetch_retry_items"]:
@@ -553,7 +543,7 @@ WHERE i.c_space_id = ? AND b.c_id IS NULL`
 		if metric.joinReadiness && !available["t_period_readiness"] {
 			continue
 		}
-		if metric.name == "fetch_retries.failure_report_state" && !available["retry_receipt_legacy"] && !available["retry_receipt_current"] {
+		if metric.name == "fetch_retries.failure_report_state" && !available["retry_receipt_current"] {
 			continue
 		}
 		query := "SELECT " + metric.column + " AS state, count(*) AS row_count FROM " + metric.table + " WHERE c_space_id = ? GROUP BY " + metric.column
@@ -564,11 +554,6 @@ count(*) AS row_count FROM t_collector_tasks WHERE c_space_id = ? GROUP BY state
 		if metric.name == "timer_period_batches.claim" {
 			query = `SELECT CASE WHEN c_claim_request_id = '' THEN 'unclaimed' ELSE 'claimed' END AS state,
 count(*) AS row_count FROM t_collector_timer_period_batches WHERE c_space_id = ? GROUP BY state`
-		}
-		if metric.name == "fetch_retries.failure_report_state" && available["retry_receipt_legacy"] {
-			query = `SELECT CASE WHEN c_period_failure_reported = 0 THEN 'pending'
-WHEN c_period_failure_reported = 1 THEN 'acknowledged' ELSE 'unknown' END AS state,
-count(*) AS row_count FROM t_collector_fetch_retry_items WHERE c_space_id = ? GROUP BY state`
 		}
 		if metric.joinReadiness {
 			query = `SELECT i.c_state AS state, count(*) AS row_count FROM t_period_readiness_items i
@@ -648,8 +633,7 @@ ORDER BY c_deadline_at, c_batch_id LIMIT ?`
 			})
 		}
 	}
-	if available["t_collector_fetch_retry_items"] && available["t_collector_instance_write_targets"] &&
-		(available["retry_receipt_legacy"] || available["retry_receipt_current"]) {
+	if available["t_collector_fetch_retry_items"] && available["t_collector_instance_write_targets"] && available["retry_receipt_current"] {
 		var rows []struct {
 			RetryKey           string `gorm:"column:retry_key"`
 			SourceBatchID      string `gorm:"column:source_batch_id"`
@@ -666,11 +650,6 @@ ORDER BY c_deadline_at, c_batch_id LIMIT ?`
 		reportStateExpr := "r.c_period_failure_report_state"
 		deadlineExpr := "CASE WHEN r.c_period_failure_deadline_exceeded_at IS NULL THEN 0 ELSE 1 END"
 		resultsExpr := "coalesce(r.c_period_failure_results_json, '[]')"
-		if available["retry_receipt_legacy"] {
-			reportStateExpr = "CASE WHEN r.c_period_failure_reported = 0 THEN 'pending' WHEN r.c_period_failure_reported = 1 THEN 'acknowledged' ELSE 'unknown' END"
-			deadlineExpr = "0"
-			resultsExpr = "'[]'"
-		}
 		query := fmt.Sprintf(`SELECT r.c_retry_key AS retry_key, r.c_source_batch_id AS source_batch_id,
   coalesce(w.c_dataset_id, '') AS dataset_id, r.c_frequency AS frequency,
   r.c_target_data_time AS target_data_time, r.c_task_json AS task_json, r.c_status AS status,
