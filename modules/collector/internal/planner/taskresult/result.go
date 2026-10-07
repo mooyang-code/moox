@@ -148,6 +148,10 @@ type metadataAPI interface {
 
 type metadataProxy struct{ client storagepb.MetadataClientProxy }
 
+func (p metadataProxy) GetTag(ctx context.Context, req *storagepb.GetTagReq) (*storagepb.GetTagRsp, error) {
+	return p.client.GetTag(ctx, req)
+}
+
 func (p metadataProxy) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	return p.client.GetDataset(ctx, req)
 }
@@ -286,6 +290,38 @@ const (
 	ResultStatusError   = "error"
 	ResultStatusUnknown = "unknown"
 )
+
+type tagReader interface {
+	GetTag(context.Context, *storagepb.GetTagReq) (*storagepb.GetTagRsp, error)
+}
+
+// resultDataSource returns the data source shared by all of a task's tags.
+// A result whose tags span several sources stays without one, which Storage
+// allows for Collector-owned Datasets.
+func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectTags []string) (string, error) {
+	reader, ok := m.metadata.(tagReader)
+	if !ok || len(subjectTags) == 0 {
+		return "", nil
+	}
+	source := ""
+	for _, tagID := range subjectTags {
+		rsp, err := reader.GetTag(ctx, &storagepb.GetTagReq{AuthInfo: m.auth, SpaceId: spaceID, TagId: tagID})
+		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || rsp.GetTag() == nil {
+			return "", metadataError("get result subject tag", err, func() *storagepb.RetInfo {
+				if rsp == nil {
+					return nil
+				}
+				return rsp.GetRetInfo()
+			}())
+		}
+		tagSource := strings.TrimSpace(rsp.GetTag().GetSource())
+		if source != "" && tagSource != source {
+			return "", nil
+		}
+		source = tagSource
+	}
+	return source, nil
+}
 
 // Inspection is the read-only result metadata snapshot for one task.
 // LastDataTime is empty when Storage does not expose an authoritative indexed
@@ -516,6 +552,10 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		attrs["market_type"] = marketType
 	}
 	subjectTags := normalizeSubjectTags(cfg.SubjectTags)
+	dataSourceID, err := m.resultDataSource(ctx, spaceID, subjectTags)
+	if err != nil {
+		return IDs{}, err
+	}
 	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
 		return IDs{}, fmt.Errorf("get result dataset: %w", err)
@@ -526,7 +566,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	}
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
-			SpaceId: spaceID, DatasetId: ids.DatasetID, DataNodeId: cfg.DataNodeID,
+			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID, DataNodeId: cfg.DataNodeID,
 			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freqs: nonEmptyFrequency(kind, cfg.Frequency, cfg.Frequencies), Attributes: attrs, SubjectTags: subjectTags,
 		}})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
@@ -544,12 +584,16 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		if len(subjectTags) == 0 {
 			subjectTags = normalizeSubjectTags(get.GetDataset().GetSubjectTags())
 		}
-		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) {
+		assignSource := dataSourceID != "" && get.GetDataset().GetDataSourceId() == ""
+		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) || assignSource {
 			updated := proto.Clone(get.GetDataset()).(*storagepb.Dataset)
 			updated.SubjectTags = subjectTags
+			if assignSource {
+				updated.DataSourceId = dataSourceID
+			}
 			response, updateErr := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
 			if updateErr != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-				return IDs{}, metadataError("update result dataset subject tags", updateErr, func() *storagepb.RetInfo {
+				return IDs{}, metadataError("update result dataset subject tags or data source", updateErr, func() *storagepb.RetInfo {
 					if response == nil {
 						return nil
 					}

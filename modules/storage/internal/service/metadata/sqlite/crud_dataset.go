@@ -107,8 +107,14 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if item.GetDataNodeId() != "" && strings.TrimSpace(item.GetDataNodeId()) != existing.GetDataNodeId() {
 		return nil, errors.New("dataset data_node_id is immutable; use rebind")
 	}
-	if item.GetDataSourceId() != "" && item.GetDataSourceId() != existing.GetDataSourceId() {
-		return nil, errors.New("dataset data_source_id is immutable")
+	// data_source_id is immutable once set; a Dataset created without one may
+	// have it assigned later.
+	dataSourceID := existing.GetDataSourceId()
+	if candidate := strings.TrimSpace(item.GetDataSourceId()); candidate != "" && candidate != dataSourceID {
+		if dataSourceID != "" {
+			return nil, errors.New("dataset data_source_id is immutable")
+		}
+		dataSourceID = candidate
 	}
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_UNSPECIFIED && item.GetDataKind() != existing.GetDataKind() {
 		return nil, errors.New("dataset data_kind is immutable")
@@ -134,7 +140,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err := validateDatasetKeepDuration(ctx, tx, item.GetSpaceId(), item.GetDatasetId(), keepDuration); err != nil {
 		return nil, err
 	}
-	item.DataSourceId = existing.GetDataSourceId()
+	item.DataSourceId = dataSourceID
 	item.DataNodeId = existing.GetDataNodeId()
 	item.DataKind = existing.GetDataKind()
 	item.SubjectTags = normalizeSubjectTags(item.GetSubjectTags())
@@ -161,10 +167,10 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE t_datasets SET
-			c_name = ?, c_description = ?, c_freqs_json = ?, c_keep_duration = ?,
+			c_data_source_id = ?, c_name = ?, c_description = ?, c_freqs_json = ?, c_keep_duration = ?,
 			c_status = ?, c_attrs_json = ?, c_subject_tags_json = ?, c_revision = c_revision + 1, c_mtime = ?
 		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
-	`, item.GetName(), item.GetDescription(), freqs, item.GetKeepDuration(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
+	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetDescription(), freqs, item.GetKeepDuration(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
 	if err != nil {
 		return nil, err
 	}

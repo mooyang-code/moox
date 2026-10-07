@@ -445,3 +445,40 @@ func TestDeleteRemovesTaskOwnedDatasetAndView(t *testing.T) {
 	_, viewExists := fake.views[ids.ViewID]
 	require.False(t, viewExists)
 }
+
+// taggedResultMetadataFake also serves Tags, like the production proxy.
+type taggedResultMetadataFake struct {
+	*resultMetadataFake
+	tagSources map[string]string
+}
+
+func (f taggedResultMetadataFake) GetTag(_ context.Context, req *storagepb.GetTagReq) (*storagepb.GetTagRsp, error) {
+	source, ok := f.tagSources[req.GetTagId()]
+	if !ok {
+		return &storagepb.GetTagRsp{RetInfo: resultNotFound()}, nil
+	}
+	return &storagepb.GetTagRsp{RetInfo: resultOK(), Tag: &storagepb.Tag{SpaceId: req.GetSpaceId(), TagId: req.GetTagId(), Source: source}}, nil
+}
+
+func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {
+	fake := taggedResultMetadataFake{newResultMetadataFake(), map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_spot": "okx"}}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
+		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: tags})
+		require.NoError(t, err)
+		return fake.datasets[ResultIDs("crypto", taskID).DatasetID]
+	}
+	require.Equal(t, "binance", ensure("single-source", "binance_spot").GetDataSourceId())
+	require.Equal(t, "binance", ensure("same-source", "binance_spot", "binance_swap").GetDataSourceId())
+	require.Empty(t, ensure("mixed-source", "binance_spot", "okx_spot").GetDataSourceId(), "a result spanning sources has no single data source")
+
+	ids := ResultIDs("crypto", "unsourced")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", SubjectTags: []string{"binance_swap"},
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "unsourced"},
+	}
+	require.Equal(t, "binance", ensure("unsourced", "binance_swap").GetDataSourceId(), "an existing result without a data source gets it assigned")
+
+	_, err := manager.Ensure(context.Background(), "crypto", "missing-tag", "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: []string{"unknown"}})
+	require.Error(t, err)
+}
