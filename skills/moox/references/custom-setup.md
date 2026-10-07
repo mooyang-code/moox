@@ -73,8 +73,7 @@ host = "43.132.204.177"
 EventBus 与 SCF 的 Storage Gateway 地址也使用同一目录，避免在模块配置中复制 IP。
 
 `eventbus` 只包含公网连接事实：SCF 可访问的 IPv4 或 DNS 地址、监听端口和必须开启的
-TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时生成这些材料以及
-`cloudnode-worker.yaml`。
+TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时生成这些材料。
 
 `paths` 统一声明运行时根目录。默认布局使用云磁盘 `/data/moox`：控制面在
 `/data/moox/prod`，独立 Storage 在 `/data/moox/storage`；数据、日志、证书、密钥和

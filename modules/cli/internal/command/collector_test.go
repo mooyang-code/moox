@@ -662,9 +662,9 @@ func TestCollectorFunctionEnvironmentInjectsManagedEventBusCredential(t *testing
 	dir := t.TempDir()
 	ca := mustTestEventBusCAPEM(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ca.pem"), ca, 0o600))
-	credentialPath := filepath.Join(dir, "cloudnode-worker.yaml")
+	credentialPath := filepath.Join(dir, "market-fetch-publisher.yaml")
 	require.NoError(t, os.WriteFile(credentialPath, []byte(
-		"version: 1\nurls: [tls://203.0.113.10:4222]\nusername: cloudnode-worker\ntoken: worker-token\nca_file: ca.pem\n",
+		"version: 1\nurls: [tls://203.0.113.10:4222]\nusername: market-fetch-publisher\ntoken: worker-token\nca_file: ca.pem\n",
 	), 0o600))
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{
 		EventBusCredentialFile: credentialPath,
@@ -673,7 +673,7 @@ func TestCollectorFunctionEnvironmentInjectsManagedEventBusCredential(t *testing
 	}, "pkg-1")
 	require.NoError(t, err)
 	assert.Equal(t, "tls://203.0.113.10:4222", env["MOOX_EVENTBUS_NATS_URL"])
-	assert.Equal(t, "cloudnode-worker", env["MOOX_EVENTBUS_NATS_USERNAME"])
+	assert.Equal(t, "market-fetch-publisher", env["MOOX_EVENTBUS_NATS_USERNAME"])
 	assert.Equal(t, "worker-token", env["MOOX_EVENTBUS_NATS_PASSWORD"])
 	assert.Equal(t, "certs/eventbus-ca.pem", env["MOOX_EVENTBUS_NATS_TLS_CA_FILE"])
 	assert.Equal(t, "pkg-1", env["MOOX_CODE_PACKAGE_ID"])
@@ -1542,16 +1542,6 @@ func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
 	assert.Equal(t, "ap-shanghai", gotRegion)
 	assert.Equal(t, "shanghai-id", sink.SecretID)
 	assert.Equal(t, "shanghai-key", sink.SecretKey)
-}
-
-func TestBuildCollectorCreateNodeItemRejectsLegacyJobItemWorkloads(t *testing.T) {
-	setCollectorCLSTestCredentials(t)
-	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
-		CloudAccountID: "account-a",
-		Region:         "ap-guangzhou",
-		JobTypes:       []string{"kline_realtime"},
-	}, "moox-collector_dev")
-	require.ErrorContains(t, err, "does not consume CloudNode JobItem workloads")
 }
 
 func TestBuildCollectorCreateNodeItemDefaultsToGoRuntime(t *testing.T) {

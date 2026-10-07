@@ -1397,7 +1397,6 @@ PY
 
   if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
     [[ "${WITH_ARCHIVE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml#' "${STAGE_DIR}/archive/config/app.yaml"
-    [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/strategy-eventbus.yaml#' "${STAGE_DIR}/strategy/config/app.yaml"
     [[ "${WITH_TRADE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/trade-eventbus.yaml#' "${STAGE_DIR}/trade/config/app.yaml"
     [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/monitor-observability.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
@@ -1753,7 +1752,7 @@ if [[ "${WITH_ADMIN}" == "1" ]]; then
   MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-${MOOX_RUNTIME_NODE_ID}}"
 fi
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor-mgr" "${ROOT}/data/strategy" "${ROOT}/data/trade" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/gateway" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-primary" "${ROOT}/logs/storage-view" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor-mgr" "${ROOT}/logs/strategy" "${ROOT}/logs/trade" "${ROOT}/logs/monitor"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/collector" "${ROOT}/data/factor-mgr" "${ROOT}/data/strategy" "${ROOT}/data/trade" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/gateway" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-primary" "${ROOT}/logs/storage-view" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor-mgr" "${ROOT}/logs/strategy" "${ROOT}/logs/trade" "${ROOT}/logs/monitor"
 chmod 0700 "${ROOT}/data/gateway"
 
 source "${ROOT}/lib/loopback-listeners.sh"
@@ -2582,7 +2581,7 @@ PY
     local eventbus_credentials_dir="${HOME}/.config/moox/eventbus"
     local eventbus_credentials_complete=1 credential_name
     for credential_name in ca.pem server.pem server-key.pem users.yaml internal-admin.yaml \
-      archive-eventbus.yaml cloudnode-eventbus.yaml cloudnode-worker.yaml \
+      archive-eventbus.yaml \
       hostagent-publisher.yaml market-fetch-publisher.yaml metrics-publisher.yaml \
       collector-market-fetch-consumer.yaml factor-eventbus.yaml \
       monitor-observability.yaml \

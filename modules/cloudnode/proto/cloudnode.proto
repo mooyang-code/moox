@@ -4,11 +4,10 @@ package trpc.moox.cloudnode;
 
 import "moox_common.proto";
 import "google/protobuf/struct.proto";
-import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen;cloudnodepb";
 
-// CloudNodeMgr 管理云节点、云函数代码包、异步 JobItem 队列和同步调用。
+// CloudNodeMgr 管理云账号、云函数代码包、云函数节点及其批量变更和调用。
 // 纯 RPC 服务，由统一 HTTP 转发层调度：
 //   - /api/admin/cloudnode/{method}（JWT，面向前端；space_id 由网关 X-Space-Id 注入 ctx）
 //   - /api/service/cloudnode/{method}（HMAC，面向 collector/外部工具；space_id 在 body）
@@ -28,40 +27,6 @@ enum PackageType {
   PACKAGE_TYPE_COLLECTOR = 1;
   PACKAGE_TYPE_FACTOR = 2;
   PACKAGE_TYPE_CUSTOM = 3;
-}
-
-enum JobItemStatus {
-  JOB_ITEM_STATUS_UNSPECIFIED = 0;
-  JOB_ITEM_STATUS_PENDING = 1;
-  JOB_ITEM_STATUS_SUCCESS = 3;
-  JOB_ITEM_STATUS_FAILED = 4;
-  JOB_ITEM_STATUS_ENQUEUE_FAILED = 6;
-}
-
-enum JobItemAckStatus {
-  JOB_ITEM_ACK_STATUS_UNSPECIFIED = 0;
-  JOB_ITEM_ACK_STATUS_CREATED = 1;
-  JOB_ITEM_ACK_STATUS_DEDUPLICATED = 2;
-  JOB_ITEM_ACK_STATUS_REJECTED = 3;
-}
-
-enum JobItemReportStatus {
-  JOB_ITEM_REPORT_STATUS_UNSPECIFIED = 0;
-  JOB_ITEM_REPORT_STATUS_SUCCESS = 1;
-  JOB_ITEM_REPORT_STATUS_FAILED = 2;
-}
-
-enum JobItemErrorKind {
-  JOB_ITEM_ERROR_KIND_UNSPECIFIED = 0;
-  JOB_ITEM_ERROR_KIND_RETRYABLE = 1;
-  JOB_ITEM_ERROR_KIND_PERMANENT = 2;
-}
-
-enum InvocationStatus {
-  INVOCATION_STATUS_UNSPECIFIED = 0;
-  INVOCATION_STATUS_SUCCESS = 1;
-  INVOCATION_STATUS_PARTIAL_FAILED = 2;
-  INVOCATION_STATUS_FAILED = 3;
 }
 
 enum ScfInvokeType {
@@ -548,135 +513,6 @@ message CompletePackageUploadRsp {
   PackageDetail detail = 2;
 }
 
-message LocalDNSReportItem {
-  string domain = 1;
-  repeated string ip_list = 2;
-  string resolve_at = 3;
-}
-
-message JobItem {
-  string space_id = 1;
-  string job_id = 2;
-  string job_item_id = 3;
-  string job_type = 4;
-  google.protobuf.Struct params = 5;
-  int32 priority = 6;
-  google.protobuf.Timestamp execute_at = 7;
-}
-
-message SubmitJobItemsReq {
-  repeated JobItem items = 1;
-}
-
-message JobItemAck {
-  string job_item_id = 1;
-  JobItemAckStatus status = 2;
-  string reject_reason = 3;
-}
-
-message SubmitJobItemsRsp {
-  common.RetInfo ret_info = 1;
-  repeated JobItemAck acks = 2;
-  int32 created = 3;
-  int32 deduplicated = 4;
-  int32 rejected = 5;
-}
-
-message ReportJobItemStatusReq {
-  string space_id = 1;
-  string node_id = 2;
-  string job_item_id = 3;
-  JobItemReportStatus status = 4;
-  JobItemErrorKind error_kind = 5;
-  string error_code = 6;
-  string error_message = 7;
-  google.protobuf.Struct result_summary = 8;
-  int64 duration_ms = 9;
-}
-
-message ReportJobItemStatusRsp {
-  common.RetInfo ret_info = 1;
-}
-
-message GetJobItemReq {
-  string space_id = 1;
-  string job_item_id = 2;
-}
-
-message JobItemDetail {
-  string space_id = 1;
-  string job_id = 2;
-  string job_item_id = 3;
-  string job_type = 4;
-  google.protobuf.Struct params = 5;
-  int32 priority = 6;
-  JobItemStatus status = 7;
-  google.protobuf.Struct result_summary = 8;
-  JobItemErrorKind last_error_kind = 9;
-  string last_error_code = 10;
-  string last_error_message = 11;
-  int64 duration_ms = 12;
-  string execution_node = 13;
-  google.protobuf.Timestamp create_time = 14;
-  google.protobuf.Timestamp finish_time = 15;
-  google.protobuf.Timestamp execute_at = 16;
-}
-
-message GetJobItemRsp {
-  common.RetInfo ret_info = 1;
-  JobItemDetail item = 2;
-}
-
-message ListJobItemsReq {
-  string space_id = 1;
-  string job_id = 2;
-  string job_type = 3;
-  JobItemStatus status = 4;
-  common.Page page = 5;
-}
-
-message ListJobItemsRsp {
-  common.RetInfo ret_info = 1;
-  repeated JobItemDetail items = 2;
-  common.PageResult page = 3;
-}
-
-
-message InvokeSyncPayload {
-  string request_id = 1;
-  string payload = 2;
-}
-
-message InvokeSyncReq {
-  string space_id = 1;
-  string owner_service = 2;
-  string workload_type = 3;
-  string deployment_id = 4;
-  repeated InvokeSyncPayload payloads = 5;
-  int32 max_parallelism = 6;
-  int64 timeout_ms = 7;
-  bool record_detail = 8;
-}
-
-message InvokeSyncResult {
-  string request_id = 1;
-  InvocationStatus status = 2;
-  string payload = 3;
-  string error_message = 4;
-  int64 duration_ms = 5;
-}
-
-message InvokeSyncRsp {
-  common.RetInfo ret_info = 1;
-  string invocation_id = 2;
-  InvocationStatus status = 3;
-  int32 success_count = 4;
-  int32 failed_count = 5;
-  int32 timeout_count = 6;
-  int64 duration_ms = 7;
-  repeated InvokeSyncResult results = 8;
-}
-
 service CloudNodeMgr {
   rpc GetNodeList(GetNodeListReq) returns (GetNodeListRsp);
   rpc UpdateNode(UpdateNodeReq) returns (UpdateNodeRsp);
@@ -705,10 +541,4 @@ service CloudNodeMgr {
   rpc GetPackageDownloadURL(GetPackageDownloadURLReq) returns (GetPackageDownloadURLRsp);
   rpc InitPackageUpload(InitPackageUploadReq) returns (InitPackageUploadRsp);
   rpc CompletePackageUpload(CompletePackageUploadReq) returns (CompletePackageUploadRsp);
-
-  rpc SubmitJobItems(SubmitJobItemsReq) returns (SubmitJobItemsRsp);
-  rpc ReportJobItemStatus(ReportJobItemStatusReq) returns (ReportJobItemStatusRsp);
-  rpc GetJobItem(GetJobItemReq) returns (GetJobItemRsp);
-  rpc ListJobItems(ListJobItemsReq) returns (ListJobItemsRsp);
-  rpc InvokeSync(InvokeSyncReq) returns (InvokeSyncRsp);
 }

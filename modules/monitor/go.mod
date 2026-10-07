@@ -44,7 +44,6 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
@@ -147,7 +146,6 @@ replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/ma
 replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 
 
-replace github.com/mooyang-code/moox/packages/cloudjobpb => ../../packages/cloudjobpb
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
 

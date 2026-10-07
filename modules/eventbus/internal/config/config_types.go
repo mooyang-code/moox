@@ -8,7 +8,6 @@ type Config struct {
 	InternalClient InternalClientConfig `yaml:"internal_client"`
 	Health         HealthConfig         `yaml:"health"`
 	Streams        []StreamConfig       `yaml:"streams"`
-	KV             []KVConfig           `yaml:"kv"`
 }
 
 type BrokerConfig struct {
@@ -66,14 +65,5 @@ type StreamConfig struct {
 	Duplicates  time.Duration `yaml:"duplicates"`
 	MaxBytes    int64         `yaml:"max_bytes"`
 	MaxMsgs     int64         `yaml:"max_msgs"`
-	Description string        `yaml:"description"`
-}
-
-type KVConfig struct {
-	Bucket      string        `yaml:"bucket"`
-	MaxAge      time.Duration `yaml:"max_age"`
-	History     int           `yaml:"history"`
-	Storage     string        `yaml:"storage"`
-	Replicas    int           `yaml:"replicas"`
 	Description string        `yaml:"description"`
 }

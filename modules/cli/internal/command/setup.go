@@ -54,7 +54,6 @@ type setupDeps struct {
 	verifyStorage          func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
 	e2eStorage             func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
 	browserE2EStorage      func(context.Context, *setupconfig.Snapshot, string, string, bool) (storageBrowserResult, error)
-	e2eEventBus            func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error)
 	exportSkillConfig      func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
 	ensureFirewall         func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
 	ensurePrivateNetwork   func(context.Context, *setupconfig.Snapshot, privatenet.Options, io.Writer) (privatenet.Result, error)
@@ -99,7 +98,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupVerifyStorageCommand(deps),
 		newSetupE2EStorageCommand(deps),
 		newSetupBrowserE2EStorageCommand(deps),
-		newSetupE2EEventBusCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
 		newSetupPrivateNetworkCommand(deps),
@@ -1064,9 +1062,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.browserE2EStorage == nil {
 		deps.browserE2EStorage = defaults.browserE2EStorage
 	}
-	if deps.e2eEventBus == nil {
-		deps.e2eEventBus = defaults.e2eEventBus
-	}
 	if deps.exportSkillConfig == nil {
 		deps.exportSkillConfig = defaults.exportSkillConfig
 	}
@@ -1112,7 +1107,6 @@ func defaultSetupDeps() setupDeps {
 		verifyStorage:          defaultSetupVerifyStorage,
 		e2eStorage:             defaultSetupE2EStorage,
 		browserE2EStorage:      defaultSetupBrowserE2EStorage,
-		e2eEventBus:            defaultSetupE2EEventBus,
 		exportSkillConfig:      defaultSetupExportSkillConfig,
 		ensureFirewall:         defaultSetupEnsureFirewall,
 		ensurePrivateNetwork:   defaultEnsurePrivateNetwork,

@@ -114,7 +114,6 @@ type collectorPublishOptions struct {
 	StorageSubnetID                string
 	StorageRouteResolved           bool
 	SameRegionFirst                bool
-	JobTypes                       []string
 	Env                            []string
 	Config                         []string
 	EventBusCredentialFile         string
@@ -3557,9 +3556,6 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	}
 	packageName := defaultFlag(opts.PackageName, "moox-collector")
 	bizType := defaultFlag(opts.BizType, "market_fetcher")
-	if len(opts.JobTypes) > 0 {
-		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher does not consume CloudNode JobItem workloads")
-	}
 	// Timer and Invoke both publish durable Completion. Their public EventBus
 	// CA is packaged rather than consuming the SCF environment budget.
 	envOpts := opts
@@ -4064,9 +4060,6 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 }
 
 func collectorFunctionEnvironmentValues(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {
-	if len(opts.JobTypes) > 0 {
-		return nil, fmt.Errorf("market_fetcher does not consume CloudNode JobItem workloads")
-	}
 	packageID := ""
 	if len(packageIDs) > 0 {
 		packageID = packageIDs[0]
@@ -4687,4 +4680,21 @@ func parseCollectorOverrides(raw []string) map[string]string {
 		overrides[strings.TrimSpace(key)] = strings.TrimSpace(value)
 	}
 	return overrides
+}
+
+func decodeEventBusCredential(raw string) (jetstream.CredentialFile, error) {
+	var credential jetstream.CredentialFile
+	if err := yaml.Unmarshal([]byte(raw), &credential); err != nil {
+		return credential, fmt.Errorf("eventbus_credentials_invalid")
+	}
+	if credential.Password == "" {
+		credential.Password = credential.Token
+	}
+	if credential.Password == "" {
+		credential.Password = credential.EventBusToken
+	}
+	if strings.TrimSpace(credential.Username) == "" || credential.Password == "" {
+		return credential, fmt.Errorf("eventbus_credentials_invalid")
+	}
+	return credential, nil
 }

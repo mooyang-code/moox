@@ -15,54 +15,6 @@ func loadRepositoryConfig(t *testing.T) *Config {
 	return cfg
 }
 
-func TestDefaultProvidesOnlyProcessDefaults(t *testing.T) {
-	cfg := Default()
-	assert.Equal(t, 8*1024*1024, cfg.Broker.MaxPayloadBytes)
-	assert.Equal(t, 10*time.Second, cfg.Broker.StartupTimeout)
-	assert.Empty(t, cfg.Streams)
-	assert.Empty(t, cfg.KV)
-}
-
-func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
-	cfg := loadRepositoryConfig(t)
-	require.Len(t, cfg.Streams, 5)
-	require.Len(t, cfg.KV, 1)
-	want := map[string]string{
-		"MOOX_CLOUDNODE_EXEC": "work_queue",
-		"MOOX_OBSERVABILITY":  "limits",
-		"MOOX_STORAGE":        "limits",
-		"MOOX_MARKET_FETCH":   "limits",
-		"MOOX_TRADE":          "work_queue",
-	}
-	for _, stream := range cfg.Streams {
-		retention, ok := want[stream.Name]
-		if !ok {
-			t.Fatalf("unexpected stream %q", stream.Name)
-		}
-		assert.Equal(t, retention, stream.Retention, stream.Name)
-		if stream.Name == "MOOX_TRADE" {
-			assert.Equal(t, []string{"moox.event.trade.target.weight_requested.v1.>"}, stream.Subjects)
-		}
-		if stream.Name == "MOOX_STORAGE" {
-			assert.Equal(t, []string{
-				"moox.event.storage.dataset.rows.upserted.v2.>",
-				"moox.event.storage.collector.period.completed.v1.>",
-				"moox.event.storage.dataset.factor_period.computed.v1.>",
-				"moox.event.storage.view.data.ready.v1.>",
-				"moox.event.storage.dataset.sync_point.v1.>",
-			}, stream.Subjects)
-		}
-		delete(want, stream.Name)
-	}
-	assert.Empty(t, want, "missing streams")
-	for _, stream := range cfg.Streams {
-		assert.NotEqual(t, "MOOX_METRICS", stream.Name)
-		if stream.Name == "MOOX_OBSERVABILITY" {
-			assert.Equal(t, []string{"moox.event.observability.>"}, stream.Subjects)
-		}
-	}
-}
-
 func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("MOOX_EVENTBUS_PORT", "4333")
 	t.Setenv("MOOX_EVENTBUS_STORE_DIR", t.TempDir())
@@ -128,4 +80,49 @@ func TestUnsafeStoreDir(t *testing.T) {
 	assert.True(t, unsafeStoreDir("."))
 	assert.True(t, unsafeStoreDir("/"))
 	assert.False(t, unsafeStoreDir("./data/eventbus"))
+}
+
+func TestDefaultProvidesOnlyProcessDefaults(t *testing.T) {
+	cfg := Default()
+	assert.Equal(t, 8*1024*1024, cfg.Broker.MaxPayloadBytes)
+	assert.Equal(t, 10*time.Second, cfg.Broker.StartupTimeout)
+	assert.Empty(t, cfg.Streams)
+}
+
+func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
+	cfg := loadRepositoryConfig(t)
+	require.Len(t, cfg.Streams, 4)
+	want := map[string]string{
+		"MOOX_OBSERVABILITY": "limits",
+		"MOOX_STORAGE":       "limits",
+		"MOOX_MARKET_FETCH":  "limits",
+		"MOOX_TRADE":         "work_queue",
+	}
+	for _, stream := range cfg.Streams {
+		retention, ok := want[stream.Name]
+		if !ok {
+			t.Fatalf("unexpected stream %q", stream.Name)
+		}
+		assert.Equal(t, retention, stream.Retention, stream.Name)
+		if stream.Name == "MOOX_TRADE" {
+			assert.Equal(t, []string{"moox.event.trade.target.weight_requested.v1.>"}, stream.Subjects)
+		}
+		if stream.Name == "MOOX_STORAGE" {
+			assert.Equal(t, []string{
+				"moox.event.storage.dataset.rows.upserted.v2.>",
+				"moox.event.storage.collector.period.completed.v1.>",
+				"moox.event.storage.dataset.factor_period.computed.v1.>",
+				"moox.event.storage.view.data.ready.v1.>",
+				"moox.event.storage.dataset.sync_point.v1.>",
+			}, stream.Subjects)
+		}
+		delete(want, stream.Name)
+	}
+	assert.Empty(t, want, "missing streams")
+	for _, stream := range cfg.Streams {
+		assert.NotEqual(t, "MOOX_METRICS", stream.Name)
+		if stream.Name == "MOOX_OBSERVABILITY" {
+			assert.Equal(t, []string{"moox.event.observability.>"}, stream.Subjects)
+		}
+	}
 }

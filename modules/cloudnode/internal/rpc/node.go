@@ -876,9 +876,9 @@ func ensureSCFAsyncRetryConfig(ctx context.Context, client scfProvisioner, ref t
 	return nil
 }
 
-// ensureLocalPackage makes the local E2E/runtime profile independent of Tencent
-// credentials and COS. Local nodes execute through the durable JobItem queue,
-// so they only need an available package descriptor, not a remote SCF function.
+// ensureLocalPackage lets local-region nodes (used by E2E tests) run without
+// Tencent credentials or COS: they need only an available package descriptor,
+// not a remote SCF function.
 func (s *Service) ensureLocalPackage(ctx context.Context, node *store.CloudNode, item *pb.NodeCreateItem) error {
 	pkg, err := s.catalog.GetPackage(ctx, node.SpaceID, node.PackageID)
 	if err != nil {

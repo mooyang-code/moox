@@ -62,16 +62,6 @@ type CloudNodeMgrService interface {
 	InitPackageUpload(ctx context.Context, req *InitPackageUploadReq) (*InitPackageUploadRsp, error)
 
 	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error)
-
-	SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq) (*SubmitJobItemsRsp, error)
-
-	ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq) (*ReportJobItemStatusRsp, error)
-
-	GetJobItem(ctx context.Context, req *GetJobItemReq) (*GetJobItemRsp, error)
-
-	ListJobItems(ctx context.Context, req *ListJobItemsReq) (*ListJobItemsRsp, error)
-
-	InvokeSync(ctx context.Context, req *InvokeSyncReq) (*InvokeSyncRsp, error)
 }
 
 func CloudNodeMgrService_GetNodeList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -470,96 +460,6 @@ func CloudNodeMgrService_CompletePackageUpload_Handler(svr interface{}, ctx cont
 	return rsp, nil
 }
 
-func CloudNodeMgrService_SubmitJobItems_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SubmitJobItemsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).SubmitJobItems(ctx, reqbody.(*SubmitJobItemsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CloudNodeMgrService_ReportJobItemStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReportJobItemStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).ReportJobItemStatus(ctx, reqbody.(*ReportJobItemStatusReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CloudNodeMgrService_GetJobItem_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetJobItemReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).GetJobItem(ctx, reqbody.(*GetJobItemReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CloudNodeMgrService_ListJobItems_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListJobItemsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).ListJobItems(ctx, reqbody.(*ListJobItemsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CloudNodeMgrService_InvokeSync_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &InvokeSyncReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).InvokeSync(ctx, reqbody.(*InvokeSyncReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // CloudNodeMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.cloudnode.CloudNodeMgr",
@@ -653,26 +553,6 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/CompletePackageUpload",
 			Func: CloudNodeMgrService_CompletePackageUpload_Handler,
 		},
-		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitJobItems",
-			Func: CloudNodeMgrService_SubmitJobItems_Handler,
-		},
-		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ReportJobItemStatus",
-			Func: CloudNodeMgrService_ReportJobItemStatus_Handler,
-		},
-		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/GetJobItem",
-			Func: CloudNodeMgrService_GetJobItem_Handler,
-		},
-		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ListJobItems",
-			Func: CloudNodeMgrService_ListJobItems_Handler,
-		},
-		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/InvokeSync",
-			Func: CloudNodeMgrService_InvokeSync_Handler,
-		},
 	},
 }
 
@@ -753,21 +633,6 @@ func (s *UnimplementedCloudNodeMgr) InitPackageUpload(ctx context.Context, req *
 func (s *UnimplementedCloudNodeMgr) CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error) {
 	return nil, errors.New("rpc CompletePackageUpload of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq) (*SubmitJobItemsRsp, error) {
-	return nil, errors.New("rpc SubmitJobItems of service CloudNodeMgr is not implemented")
-}
-func (s *UnimplementedCloudNodeMgr) ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq) (*ReportJobItemStatusRsp, error) {
-	return nil, errors.New("rpc ReportJobItemStatus of service CloudNodeMgr is not implemented")
-}
-func (s *UnimplementedCloudNodeMgr) GetJobItem(ctx context.Context, req *GetJobItemReq) (*GetJobItemRsp, error) {
-	return nil, errors.New("rpc GetJobItem of service CloudNodeMgr is not implemented")
-}
-func (s *UnimplementedCloudNodeMgr) ListJobItems(ctx context.Context, req *ListJobItemsReq) (*ListJobItemsRsp, error) {
-	return nil, errors.New("rpc ListJobItems of service CloudNodeMgr is not implemented")
-}
-func (s *UnimplementedCloudNodeMgr) InvokeSync(ctx context.Context, req *InvokeSyncReq) (*InvokeSyncRsp, error) {
-	return nil, errors.New("rpc InvokeSync of service CloudNodeMgr is not implemented")
-}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -820,16 +685,6 @@ type CloudNodeMgrClientProxy interface {
 	InitPackageUpload(ctx context.Context, req *InitPackageUploadReq, opts ...client.Option) (rsp *InitPackageUploadRsp, err error)
 
 	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq, opts ...client.Option) (rsp *CompletePackageUploadRsp, err error)
-
-	SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq, opts ...client.Option) (rsp *SubmitJobItemsRsp, err error)
-
-	ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq, opts ...client.Option) (rsp *ReportJobItemStatusRsp, err error)
-
-	GetJobItem(ctx context.Context, req *GetJobItemReq, opts ...client.Option) (rsp *GetJobItemRsp, err error)
-
-	ListJobItems(ctx context.Context, req *ListJobItemsReq, opts ...client.Option) (rsp *ListJobItemsRsp, err error)
-
-	InvokeSync(ctx context.Context, req *InvokeSyncReq, opts ...client.Option) (rsp *InvokeSyncRsp, err error)
 }
 
 type CloudNodeMgrClientProxyImpl struct {
@@ -1275,106 +1130,6 @@ func (c *CloudNodeMgrClientProxyImpl) CompletePackageUpload(ctx context.Context,
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CompletePackageUploadRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq, opts ...client.Option) (*SubmitJobItemsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/SubmitJobItems")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("SubmitJobItems")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &SubmitJobItemsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq, opts ...client.Option) (*ReportJobItemStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/ReportJobItemStatus")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("ReportJobItemStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReportJobItemStatusRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) GetJobItem(ctx context.Context, req *GetJobItemReq, opts ...client.Option) (*GetJobItemRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/GetJobItem")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("GetJobItem")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetJobItemRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) ListJobItems(ctx context.Context, req *ListJobItemsReq, opts ...client.Option) (*ListJobItemsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/ListJobItems")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("ListJobItems")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListJobItemsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) InvokeSync(ctx context.Context, req *InvokeSyncReq, opts ...client.Option) (*InvokeSyncRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/InvokeSync")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("InvokeSync")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &InvokeSyncRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

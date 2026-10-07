@@ -12,15 +12,11 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/publishlease"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/cloudnode/schema"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -34,7 +30,6 @@ import (
 type Runtime struct {
 	StartedAt       time.Time
 	Store           *store.Store
-	JetStream       *jobqueue.Runtime
 	DebugServer     *http.Server
 	NodeBatchCancel context.CancelFunc
 }
@@ -50,11 +45,6 @@ func (r *Runtime) Close(ctx context.Context) error {
 		r.NodeBatchCancel()
 	}
 	var firstErr error
-	if r.JetStream != nil {
-		if err := r.JetStream.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
 	if r.DebugServer != nil {
 		if err := r.DebugServer.Shutdown(ctx); err != nil && firstErr == nil {
 			firstErr = err
@@ -101,12 +91,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 cloudnode schema 失败: %v", err)
 		return nil, err
 	}
-	historyStore := jobhistory.NewStore(jobhistory.StoreOptions{
-		Dir:           cfg.JobItem.HistoryDir,
-		RetentionDays: cfg.JobItem.HistoryRetentionDays,
-	})
-	cloudnoderpc.SetDefaultJobHistoryMaintainer(historyStore)
-	registerJobHistorySchedule(s)
 	moduleMetrics, err := registerMetricsReporter(s)
 	if err != nil {
 		return nil, err
@@ -116,38 +100,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		cloudnoderpc.WithModuleMetrics(moduleMetrics),
 		cloudnoderpc.WithCollectorPublishLeaseValidator(publishlease.NewFromEnv()),
 	}
-	if cfg.Queue.Backend == "jetstream" && cfg.JetStream.Enabled {
-		rt, err := jobqueue.Connect(ctx, cfg.JetStream)
-		if err != nil {
-			log.ErrorContextf(ctx, "初始化 cloudnode JetStream 失败: %v", err)
-			return nil, err
-		}
-		if err := rt.EnsureStreams(cfg.JetStream, cfg.JobItem); err != nil {
-			log.ErrorContextf(ctx, "初始化 cloudnode JetStream stream 失败: %v", err)
-			_ = rt.Close()
-			return nil, err
-		}
-		runtime.JetStream = rt
-		kv, err := rt.BindKV(ctx, cfg.JobItem.ActiveKVBucket)
-		if err != nil {
-			log.ErrorContextf(ctx, "打开 cloudnode JobItem active KV 失败: %v", err)
-			return nil, err
-		}
-		stateStore := jobstate.NewKVStore(kv, jobstate.Options{})
-		execQueue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
-			AckWait:       jobqueue.DefaultAckWait,
-			MaxDeliver:    cfg.JetStream.MaxDeliver,
-			MaxAckPending: cfg.JetStream.MaxAckPending,
-		})
-		opts = append(opts,
-			cloudnoderpc.WithExecutionQueue(execQueue),
-			cloudnoderpc.WithJobStateStore(stateStore),
-			cloudnoderpc.WithJobHistoryStore(historyStore),
-		)
-		log.InfoContextf(ctx, "cloudnode JetStream 已启用: event=%s active_kv=%s eventbus_urls=%s",
-			events.CloudJobExecutionRequested.Name(), cfg.JobItem.ActiveKVBucket, strings.Join(cfg.JetStream.URLs, ","))
-	}
-
 	credentialResolver, err := cloudcredential.NewFromEnv()
 	if err != nil {
 		return nil, err
@@ -228,24 +180,10 @@ func cloudnodeHealthSnapshot(cfg *config.Config, dbm *store.Store, state *health
 		state.SetReady(databaseReady)
 		rsp := healthz.Base("cloudnode", "cloudnode", "", "", state.StartedAt, databaseReady)
 		rsp.Details = map[string]any{
-			"database":          databaseReady,
-			"queue_backend":     cfg.Queue.Backend,
-			"jetstream_enabled": cfg.JetStream.Enabled,
+			"database": databaseReady,
 		}
 		return rsp
 	}
-}
-
-func registerJobHistorySchedule(s *server.Server) {
-	timer.RegisterScheduler("cloudnodeJobHistorySchedule", &timer.DefaultScheduler{})
-	service := s.Service("trpc.moox.cloudnode.jobhistory.timer")
-	if service == nil {
-		log.Warn("cloudnode job history timer service is not configured, skip register")
-		return
-	}
-	timer.RegisterHandlerService(service, func(ctx context.Context) error {
-		return cloudnoderpc.HandleJobHistorySchedule(ctx, "")
-	})
 }
 
 func startDebugServer(ctx context.Context, addr string) *http.Server {

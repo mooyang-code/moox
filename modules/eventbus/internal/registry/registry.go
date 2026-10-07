@@ -22,7 +22,6 @@ type Registry struct {
 
 type Result struct {
 	Streams int
-	KV      int
 	Topics  int
 }
 
@@ -51,12 +50,8 @@ func (r *Registry) Reconcile(ctx context.Context) (Result, error) {
 	if err := r.rejectOverlappingUnmanagedStreams(ctx); err != nil {
 		return Result{}, err
 	}
-	for i := range r.cfg.KV {
-		if err := reconcileKV(r.js, &r.cfg.KV[i], r.cfg); err != nil {
-			return Result{}, err
-		}
-	}
-	return Result{Streams: len(r.cfg.Streams), KV: len(r.cfg.KV), Topics: enabledTopics(r.cfg)}, nil
+
+	return Result{Streams: len(r.cfg.Streams), Topics: enabledTopics(r.cfg)}, nil
 }
 
 func (r *Registry) rejectOverlappingUnmanagedStreams(ctx context.Context) error {
@@ -65,7 +60,7 @@ func (r *Registry) rejectOverlappingUnmanagedStreams(ctx context.Context) error 
 		configured[stream.Name] = struct{}{}
 	}
 	for name := range r.js.StreamNames(nats.Context(ctx)) {
-		if _, ok := configured[name]; ok || strings.HasPrefix(name, "KV_") {
+		if _, ok := configured[name]; ok {
 			continue
 		}
 		info, err := r.js.StreamInfo(name, nats.Context(ctx))
@@ -179,50 +174,6 @@ func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config
 	return nil
 }
 
-func reconcileKV(js nats.JetStreamContext, spec *config.KVConfig, cfg *config.Config) error {
-	if spec.Replicas > 1 && (!cfg.Broker.Cluster.Enabled || spec.Replicas > len(cfg.Broker.Cluster.Routes)+1) {
-		return fmt.Errorf("kv %q replicas=%d exceed reachable cluster size", spec.Bucket, spec.Replicas)
-	}
-	want := &nats.KeyValueConfig{Bucket: spec.Bucket, History: uint8(spec.History), TTL: spec.MaxAge, Storage: storageType(spec.Storage), Replicas: spec.Replicas, Description: spec.Description}
-	if _, err := js.KeyValue(spec.Bucket); errors.Is(err, nats.ErrBucketNotFound) {
-		if _, err := js.CreateKeyValue(want); err != nil {
-			return fmt.Errorf("create kv %q: %w", spec.Bucket, err)
-		}
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("inspect kv %q: %w", spec.Bucket, err)
-	}
-	// The NATS KV API does not expose an atomic update operation. Inspect the
-	// backing stream and update only fields that are safe to reconcile.
-	streamName := "KV_" + spec.Bucket
-	info, err := js.StreamInfo(streamName)
-	if err != nil {
-		return fmt.Errorf("inspect kv backing stream %q: %w", spec.Bucket, err)
-	}
-	if info.Config.Retention != nats.LimitsPolicy || info.Config.MaxMsgsPerSubject < 1 {
-		return fmt.Errorf("kv %q backing stream is invalid", spec.Bucket)
-	}
-	if info.Config.Storage != storageType(spec.Storage) {
-		return fmt.Errorf("kv %q storage change is forbidden", spec.Bucket)
-	}
-	if info.Config.MaxMsgsPerSubject != int64(spec.History) {
-		return fmt.Errorf("kv %q history change is forbidden", spec.Bucket)
-	}
-	if info.Config.MaxAge != spec.MaxAge || info.Config.Replicas != spec.Replicas || info.Config.Description != spec.Description {
-		if _, err := js.UpdateStream(&nats.StreamConfig{Name: info.Config.Name, Subjects: info.Config.Subjects, Retention: info.Config.Retention, Storage: info.Config.Storage, Replicas: info.Config.Replicas, MaxAge: spec.MaxAge, MaxMsgsPerSubject: int64(spec.History), MaxBytes: info.Config.MaxBytes, MaxMsgs: info.Config.MaxMsgs, Discard: info.Config.Discard, DenyDelete: info.Config.DenyDelete, DenyPurge: info.Config.DenyPurge, AllowRollup: info.Config.AllowRollup, Description: spec.Description}); err != nil {
-			return fmt.Errorf("update kv %q: %w", spec.Bucket, err)
-		}
-	}
-	return nil
-}
-
-func storageType(value string) nats.StorageType {
-	if value == "memory" {
-		return nats.MemoryStorage
-	}
-	return nats.FileStorage
-}
-
 func equalStreamConfig(a, b *nats.StreamConfig) bool {
 	if a.Name != b.Name || a.Description != b.Description || a.Retention != b.Retention || a.Storage != b.Storage || a.Replicas != b.Replicas || a.MaxAge != b.MaxAge || a.MaxBytes != b.MaxBytes || a.MaxMsgs != b.MaxMsgs || a.Discard != b.Discard || a.Duplicates != b.Duplicates {
 		return false
@@ -243,6 +194,7 @@ func sameStrings(a, b []string) bool {
 	}
 	return true
 }
+
 // removedSubjects lists the subjects in old that next no longer has.
 func removedSubjects(old, next []string) []string {
 	var removed []string

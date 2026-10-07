@@ -2,13 +2,14 @@ package registry
 
 import (
 	"context"
+	"net"
+	"testing"
+	"time"
+
 	"github.com/mooyang-code/moox/modules/eventbus/internal/broker"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
-	"net"
-	"testing"
-	"time"
 )
 
 func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
@@ -45,35 +46,21 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Streams != len(c.Streams) || result.KV != len(c.KV) {
+	if result.Streams != len(c.Streams) {
 		t.Fatalf("result = %#v", result)
 	}
 	if _, err := r.Reconcile(ctx); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
-	if _, err := js.AddConsumer("MOOX_CLOUDNODE_EXEC", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.event.cloudnode.synthetic.obsolete.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
+	if _, err := js.AddConsumer("MOOX_TRADE", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.event.trade.synthetic.obsolete.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Reconcile(ctx); err != nil {
 		t.Fatalf("reconcile with consumer: %v", err)
 	}
-	if _, err := js.ConsumerInfo("MOOX_CLOUDNODE_EXEC", "keep"); err != nil {
+	if _, err := js.ConsumerInfo("MOOX_TRADE", "keep"); err != nil {
 		t.Fatalf("consumer state was not preserved: %v", err)
 	}
-	originalTTL := c.KV[0].MaxAge
-	c.KV[0].MaxAge = originalTTL / 2
-	if _, err := r.Reconcile(ctx); err != nil {
-		t.Fatalf("safe KV TTL update: %v", err)
-	}
-	if info, err := js.StreamInfo("KV_" + c.KV[0].Bucket); err != nil || info.Config.MaxAge != c.KV[0].MaxAge {
-		t.Fatalf("KV TTL was not reconciled: %v", err)
-	}
-	c.KV[0].History = 2
-	if _, err := r.Reconcile(ctx); err == nil {
-		t.Fatal("KV history change was accepted")
-	}
-	c.KV[0].History = 1
-	c.KV[0].MaxAge = originalTTL
 	if _, err := js.Publish("moox.event.observability.host.snapshot.reported.v1", []byte("metric")); err != nil {
 		t.Fatal(err)
 	}

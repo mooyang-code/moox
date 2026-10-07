@@ -8,7 +8,6 @@ const (
 	StorageViewFactorConsumer  = "storage_view_factor"
 	StorageViewMetricsConsumer = "storage_view_metrics"
 	StorageViewMiscConsumer    = "storage_view_misc"
-
 )
 
 var StorageViewConsumerDurables = []string{

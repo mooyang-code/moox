@@ -18,7 +18,6 @@ func TestBuiltInEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"event.cloudnode.job.execution.requested@1",
 		"event.market.fetch.batch.completed@1",
 		"event.observability.host.snapshot.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
@@ -30,7 +29,6 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
-		"event.cloudnode.job.execution.requested@1":       "cloudnode",
 		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.metrics.snapshot.reported@1": "service",
 		"event.market.fetch.batch.completed@1":            "collector",

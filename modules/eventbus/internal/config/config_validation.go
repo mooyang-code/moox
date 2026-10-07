@@ -102,23 +102,6 @@ func (c *Config) Validate() error {
 	if err := validateGovernedEventFamilies(c); err != nil {
 		return err
 	}
-	seenKV := map[string]struct{}{}
-	for i := range c.KV {
-		k := &c.KV[i]
-		if strings.TrimSpace(k.Bucket) == "" {
-			return fmt.Errorf("kv[%d].bucket is required", i)
-		}
-		if _, ok := seenKV[k.Bucket]; ok {
-			return fmt.Errorf("duplicate kv bucket %q", k.Bucket)
-		}
-		seenKV[k.Bucket] = struct{}{}
-		if k.Replicas < 1 || k.History < 1 {
-			return fmt.Errorf("kv %q replicas/history must be positive", k.Bucket)
-		}
-		if k.Replicas > 1 {
-			return fmt.Errorf("kv %q replicas=%d are not supported in V1 standalone mode", k.Bucket, k.Replicas)
-		}
-	}
 	return nil
 }
 

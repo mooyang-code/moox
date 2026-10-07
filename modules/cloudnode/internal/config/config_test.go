@@ -37,39 +37,6 @@ func TestValidateRejectsInvalidNodeBatchConfig(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsNonPositiveMaxDeliver(t *testing.T) {
-	cfg := Default()
-	cfg.JetStream.MaxDeliver = 0
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "max_deliver")
-}
-
-func TestValidateRejectsNonPositiveMaxAckPending(t *testing.T) {
-	cfg := Default()
-	cfg.JetStream.MaxAckPending = 0
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "max_ack_pending")
-}
-
-func TestDefaultQueueConfigIsValid(t *testing.T) {
-	cfg := Default()
-	require.NoError(t, cfg.Validate())
-	assert.Equal(t, 4, cfg.JetStream.MaxDeliver)
-	assert.Equal(t, 32, cfg.JetStream.MaxAckPending)
-}
-
-func TestLoadRejectsRemovedLeaseTiming(t *testing.T) {
-	path := writeCloudnodeConfig(t, `
-jetstream:
-  ack_wait_millis: 120000
-`)
-	_, err := Load(path)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ack_wait_millis")
-}
-
 func TestLoadAppliesPprofAddrFromEnv(t *testing.T) {
 	t.Setenv("MOOX_CLOUDNODE_PPROF_ADDR", "127.0.0.1:16001")
 
@@ -79,13 +46,6 @@ func TestLoadAppliesPprofAddrFromEnv(t *testing.T) {
 	if cfg.Debug.PprofAddr != "127.0.0.1:16001" {
 		t.Fatalf("PprofAddr = %q, want %q", cfg.Debug.PprofAddr, "127.0.0.1:16001")
 	}
-}
-
-func TestEventBusURLFromEnvReplacesCheckedInEndpoint(t *testing.T) {
-	t.Setenv("MOOX_EVENTBUS_NATS_URL", "tls://eventbus-a.example:4222, tls://eventbus-b.example:4222")
-	cfg := Default()
-	cfg.applyEnv()
-	require.Equal(t, []string{"tls://eventbus-a.example:4222", "tls://eventbus-b.example:4222"}, cfg.JetStream.URLs)
 }
 
 func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
@@ -100,43 +60,6 @@ func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
 	if cfg.Health.Addr != "127.0.0.1:16011" {
 		t.Fatalf("Health.Addr = %q, want %q", cfg.Health.Addr, "127.0.0.1:16011")
 	}
-}
-
-func TestDefaultJobItemActiveKVAndHistoryConfig(t *testing.T) {
-	cfg := Default()
-
-	if cfg.JobItem.ActiveKVBucket != "MOOX_CLOUDNODE_JOB_ACTIVE" {
-		t.Fatalf("ActiveKVBucket = %q, want %q", cfg.JobItem.ActiveKVBucket, "MOOX_CLOUDNODE_JOB_ACTIVE")
-	}
-	if cfg.JobItem.ActiveTTLHours != 48 {
-		t.Fatalf("ActiveTTLHours = %d, want 48", cfg.JobItem.ActiveTTLHours)
-	}
-	if cfg.JobItem.HistoryDir != "../data/cloudnode/jobs" {
-		t.Fatalf("HistoryDir = %q, want %q", cfg.JobItem.HistoryDir, "../data/cloudnode/jobs")
-	}
-	if cfg.JobItem.HistoryRetentionDays != 2 {
-		t.Fatalf("HistoryRetentionDays = %d, want 2", cfg.JobItem.HistoryRetentionDays)
-	}
-}
-
-func TestDefaultJetStreamCredentialPath(t *testing.T) {
-	cfg := Default()
-	if got := cfg.JetStream.CredentialFile; got != "~/.config/moox/eventbus/cloudnode-eventbus.yaml" {
-		t.Fatalf("credential file = %q", got)
-	}
-}
-
-func TestCheckedInConfigUsesCentralEventBusEndpoint(t *testing.T) {
-	cfg, err := Load("../../config/app.yaml")
-	require.NoError(t, err)
-	require.Equal(t, []string{"nats://127.0.0.1:4222"}, cfg.JetStream.URLs)
-}
-
-func TestLoadRejectsRemovedJetStreamFields(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("jetstream:\n  nats_url: nats://127.0.0.1:4322\n"), 0o600))
-	_, err := Load(path)
-	require.ErrorContains(t, err, "nats_url")
 }
 
 func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {

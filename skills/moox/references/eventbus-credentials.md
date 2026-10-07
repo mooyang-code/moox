@@ -21,7 +21,7 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 控制主机（默认 `/home/ubuntu/.config/moox/eventbus/`，mode `0600`/`0700`）：
 
 - `ca.pem`、`server.pem`、`server-key.pem`、`users.yaml`
-- 每个 role 一份 YAML：`hostagent-publisher.yaml`、`storage-eventbus.yaml`、`trade-eventbus.yaml`、`strategy-eventbus.yaml`、`factor-eventbus.yaml`、`monitor-observability.yaml`、`archive-eventbus.yaml`、`cloudnode-eventbus.yaml`、`cloudnode-worker.yaml`、`market-fetch-publisher.yaml`、`collector-market-fetch-consumer.yaml`、`metrics-publisher.yaml`、`internal-admin.yaml`
+- 每个 role 一份 YAML：`hostagent-publisher.yaml`、`storage-eventbus.yaml`、`trade-eventbus.yaml`、`strategy-eventbus.yaml`、`factor-eventbus.yaml`、`monitor-observability.yaml`、`archive-eventbus.yaml`、`cloudnode-worker.yaml`、`market-fetch-publisher.yaml`、`collector-market-fetch-consumer.yaml`、`metrics-publisher.yaml`、`internal-admin.yaml`
 
 生成与轮换只通过 `skills/moox/scripts/eventbus-credentials.sh`（Admin CLI）。
 不要把 token 或私钥打进 release archive、ZIP、命令行、聊天或 git。
@@ -56,7 +56,7 @@ Host Agent 在 compute 节点上是独立 rootless 安装。只发布 Storage/Tr
    ```
    二进制也要升级时用完整 archive 参数，不要省略 `--eventbus-file` / `--ca-file`。
 5. 对每台仍连 EventBus 的业务主机发布或重启对应服务。
-6. CA 或 `market-fetch-publisher` / `cloudnode-worker` token 变了：重发相关 SCF。
+6. CA 或 `market-fetch-publisher` token 变了：重发相关 SCF。
 7. 验收全部通过后，才删除本机临时 `0600` 导出文件。
 
 ## 验收（禁止凭“进程在跑”收工）

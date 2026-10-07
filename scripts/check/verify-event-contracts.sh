@@ -110,16 +110,6 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
   --glob '!modules/storage/config/storage_view/trpc_go.yaml' \
   modules/archive/config modules/monitor/config modules/trade/config modules/storage/config
 
-for permission in \
-  '$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>' \
-  '$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>' \
-  '$JS.ACK.MOOX_CLOUDNODE_EXEC.>'; do
-  rg -Fq "$permission" modules/admin/cmd/cli/eventbus_credentials.go || {
-    echo "cloudnode-worker ACL is missing ${permission}" >&2
-    exit 1
-  }
-done
-
 (cd packages/events && go test ./...)
 (cd packages/jetstream && go test ./...)
 (cd modules/eventbus && go test ./...)

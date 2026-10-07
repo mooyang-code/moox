@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
@@ -22,24 +21,6 @@ import (
 )
 
 type EventValidator func(*eventpb.EventMessage, proto.Message) error
-
-func validateCloudJobExecutionRequested(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*cloudjobpb.JobExecutionRequested)
-	if !ok {
-		return fmt.Errorf("cloud job payload has type %T", value)
-	}
-	if strings.TrimSpace(payload.GetJobItemId()) == "" ||
-		strings.TrimSpace(payload.GetJobType()) == "" {
-		return fmt.Errorf("cloud job identity is incomplete")
-	}
-	if payload.GetJobItemId() != message.GetEventId() {
-		return fmt.Errorf("cloud job item_id does not match event_id")
-	}
-	if message.GetSubjectId() != payload.GetJobType() {
-		return fmt.Errorf("cloud job route does not match subject_id")
-	}
-	return nil
-}
 
 func validateObservabilityHostSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*hostmetricpb.HostMetric)

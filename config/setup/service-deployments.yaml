@@ -258,7 +258,7 @@ services:
     gateway_enabled: true
     scope: internal
     status: active
-    description: 独立云节点执行平台，承载云节点、代码包、异步 JobItem 队列和同步调用
+    description: 云账号、代码包与云函数节点管理
     extra_config:
       health_url: http://127.0.0.1:11411/readyz
       health_kind: readiness

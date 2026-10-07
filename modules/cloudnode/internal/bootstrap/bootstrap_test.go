@@ -51,7 +51,4 @@ func TestCloudNodeHealthSnapshot(t *testing.T) {
 	if rsp.Module != "cloudnode" || !rsp.Ready || rsp.Status != "ok" {
 		t.Fatalf("health response = %+v", rsp)
 	}
-	if rsp.Details["queue_backend"] != "jetstream" {
-		t.Fatalf("queue_backend = %v", rsp.Details["queue_backend"])
-	}
 }

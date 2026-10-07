@@ -24,8 +24,6 @@ use (
 	./modules/strategy/proto/strategygen
 	./modules/trade
 	./modules/trade/proto/tradegen
-	./packages/cloudjobpb
-	./packages/cloudjobqueue
 	./packages/cloudprovider
 	./packages/clsreporter
 	./packages/commonpb

@@ -37,7 +37,6 @@ require (
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
-	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/routeprobe v0.0.0-00010101000000-000000000000 // indirect
@@ -61,9 +60,7 @@ replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ../trade/pr
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
 
-replace github.com/mooyang-code/moox/packages/cloudjobpb => ../../packages/cloudjobpb
 
-replace github.com/mooyang-code/moox/packages/cloudjobqueue => ../../packages/cloudjobqueue
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 

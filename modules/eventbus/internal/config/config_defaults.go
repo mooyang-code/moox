@@ -69,9 +69,6 @@ func (c *Config) applyDefaults() {
 	for i := range c.Streams {
 		normalizeStream(&c.Streams[i])
 	}
-	for i := range c.KV {
-		normalizeKV(&c.KV[i])
-	}
 }
 
 func normalizeStream(s *StreamConfig) {
@@ -86,18 +83,6 @@ func normalizeStream(s *StreamConfig) {
 	}
 	if s.Replicas == 0 {
 		s.Replicas = 1
-	}
-}
-
-func normalizeKV(k *KVConfig) {
-	if k.Storage == "" {
-		k.Storage = "file"
-	}
-	if k.History == 0 {
-		k.History = 1
-	}
-	if k.Replicas == 0 {
-		k.Replicas = 1
 	}
 }
 

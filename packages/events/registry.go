@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -66,9 +65,6 @@ func declareEvent(name string, version uint32, stream, owner string, newPayload 
 }
 
 var (
-	CloudJobExecutionRequested = declareEvent("event.cloudnode.job.execution.requested", 1, "MOOX_CLOUDNODE_EXEC", "cloudnode", func() proto.Message {
-		return &cloudjobpb.JobExecutionRequested{}
-	}, validateCloudJobExecutionRequested)
 	ObservabilityMetricsSnapshotReported = declareEvent("event.observability.metrics.snapshot.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
 		return &metricspb.MetricReport{}
 	}, validateObservabilityMetricsSnapshotReported)

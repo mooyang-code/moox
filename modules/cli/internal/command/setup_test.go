@@ -92,7 +92,7 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "deploy-control", "deploy-service", "build-linux", "apply", "status", "deploy-storage", "rebuild-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus", "export-skill-config", "firewall", "private-network"} {
+	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "deploy-control", "deploy-service", "build-linux", "apply", "status", "deploy-storage", "rebuild-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "export-skill-config", "firewall", "private-network"} {
 		require.Contains(t, output.String(), name)
 	}
 	require.Contains(t, output.String(), "render-runtime-config")
@@ -176,36 +176,6 @@ func TestSetupInstallStorageWatchdogCommand(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	require.Equal(t, "compute", selectedHost)
 	require.JSONEq(t, `{"host":"compute","status":"ready"}`, output.String())
-}
-
-func TestSetupE2EEventBusWritesOnlyBooleanProof(t *testing.T) {
-	t.Parallel()
-	snapshot := setupSnapshot(t)
-	cmd := newSetupCommand(setupDeps{
-		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		e2eEventBus: func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error) {
-			return eventBusE2EResult{
-				PublicTLS: true, WorkerBindFetchAck: true, WorkerCreateDenied: true, WorkerPublishDenied: true,
-			}, nil
-		},
-	})
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"e2e-eventbus", "--file", "moox.toml"})
-	require.NoError(t, cmd.Execute())
-	require.JSONEq(t, `{"public_tls":true,"worker_bind_fetch_ack":true,"worker_create_denied":true,"worker_publish_denied":true}`, output.String())
-	for _, secret := range []string{"admin-test-password", "control-ssh-password", "AKID-test-secret", "cloud-test-secret"} {
-		require.NotContains(t, output.String(), secret)
-	}
-}
-
-func TestEventBusE2ERequiresMatchingPermissionViolation(t *testing.T) {
-	errorsCh := make(chan error, 2)
-	errorsCh <- errors.New(`nats: permissions violation for publish to "$JS.API.CONSUMER.CREATE.MOOX"`)
-	assert.True(t, hasPermissionViolation(errorsCh, "$JS.API.CONSUMER.CREATE.MOOX"))
-
-	errorsCh <- errors.New("context deadline exceeded")
-	assert.False(t, hasPermissionViolation(errorsCh, "moox.event.cloudnode.job.execution.requested"))
 }
 
 func TestSetupDeployServicePassesPackageAndService(t *testing.T) {

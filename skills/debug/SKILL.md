@@ -1,6 +1,6 @@
 ---
 name: debug
-description: Use when diagnosing MooX end-to-end failures involving collector SCF build/package/publish, Tencent COS or SCF creation, CLS log analysis, remote MooX deployment, control-plane callbacks, heartbeat/task dispatch, or storage write verification.
+description: Use when diagnosing MooX end-to-end failures involving collector SCF build/package/publish, Tencent COS or SCF creation, Timer triggers and batch claims, CLS log analysis, remote MooX deployment, or storage write verification.
 ---
 
 # MooX Debug
@@ -28,29 +28,28 @@ Use this skill for MooX production-like debugging that crosses local code, remot
 
 Use this order unless evidence points elsewhere:
 
-1. Local build: binary/package generation succeeds and embeds the intended config.
-2. Package upload: COS object exists, region/bucket/key match the publish request.
-3. SCF creation/update: function name, namespace, region, runtime, handler, environment, and code source match the package.
-4. Keepalive: control plane invokes SCF and records heartbeat online.
-5. Task dispatch: the resident SCF taskrunner consumes the `space_id + job_type` JetStream durable.
-6. Execution: SCF logs show collector workload execution.
-7. Callback: SCF reports JobItem status to `/api/service/cloudnode/ReportJobItemStatus` and collector task-instance status to `/api/service/collectmgr/ReportTaskStatus`.
-8. Storage write: records appear in the target space, subject, dataset, freq, and view.
+1. Local build: the SCF package contains `main`, `sources/`, the EventBus CA and (for stockcn) market assets.
+2. Package upload: COS object exists and region/bucket/key match the publish request.
+3. SCF function: name, namespace, region, runtime, handler and environment match the CloudNode node.
+4. Timer: the trigger is enabled with the expected cron (`collector function timer-inventory`).
+5. Claim: the function claims its Timer batch through `ClaimTimerBatch`.
+6. Execution: CLS logs show per-subject provider results.
+7. Storage: `EnsureDatasetPeriod`/`CommitTimeSeriesBatch` succeed through storage-access, and the function publishes `MarketFetchBatchCompleted`.
+8. Result: rows appear in the task's result View for the space, subject and frequency.
 
 ## Evidence To Preserve
 
 - `git status --short` before edits.
 - Build/package command and resulting package path/version.
-- COS bucket, region, object key, and package ETag/version when available.
-- SCF function name, namespace, region, runtime, handler, environment variables.
-- CLS topic ID, query time range, request ID, task ID, and key log lines.
-- Control-plane logs around `ScheduleTasks`, `SubmitJobItems`, heartbeat, status reports, and storage callbacks.
+- COS bucket, region, object key, and package version.
+- SCF function name, namespace, region, runtime, handler, Timer cron and environment keys (not values).
+- CLS topic ID, query time range, request ID, batch ID and key log lines.
+- Collector logs around `ClaimTimerBatch`, completion handling and retries.
 - Storage query parameters and result counts, not full secrets or large payloads.
 
 ## Common Mistakes
 
-- Assuming a successful keepalive means task execution happened; trace the JetStream delivery and callbacks by `job_item_id`.
-- Rebuilding collector code from an old standalone collector checkout instead of `modules/collector`.
-- Looking only at TaskInstance rows without checking whether `ScheduleTasks` submitted the next JobItem.
-- Treating `-once` as the production execution model; future `execute_at` jobs require the resident taskrunner.
+- Assuming a Timer fired because the function exists; check the Timer state and the claimed batch.
+- Rebuilding collector code from an old standalone checkout instead of `modules/collector`.
+- Looking only at Storage rows without checking the period state (`complete`/`degraded`) and the completion consumer.
 - Debugging frontend 404s against service paths when the frontend must use `/api/admin`.

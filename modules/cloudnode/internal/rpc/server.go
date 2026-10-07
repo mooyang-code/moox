@@ -5,9 +5,6 @@ import (
 	"errors"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -18,9 +15,6 @@ import (
 // Service is the independent cloudnode service implementation.
 type Service struct {
 	pb.UnimplementedCloudNodeMgr
-	jobState           jobstate.Store
-	history            *jobhistory.Store
-	executionQueue     jobqueue.ExecutionQueue
 	catalog            *store.CatalogRepository
 	credentialResolver interface {
 		Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
@@ -46,18 +40,6 @@ type scfProvisioner interface {
 }
 
 type Option func(*Service)
-
-func WithExecutionQueue(queue jobqueue.ExecutionQueue) Option {
-	return func(s *Service) { s.executionQueue = queue }
-}
-
-func WithJobStateStore(store jobstate.Store) Option {
-	return func(s *Service) { s.jobState = store }
-}
-
-func WithJobHistoryStore(store *jobhistory.Store) Option {
-	return func(s *Service) { s.history = store }
-}
 
 func WithModuleMetrics(metrics *report.ModuleMetrics) Option {
 	return func(s *Service) { s.moduleMetrics = metrics }
@@ -101,12 +83,6 @@ func retFromError(err error) *pb.RetInfo {
 	switch {
 	case errors.Is(err, store.ErrPollingNodeNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "cloud node not found")
-	case errors.Is(err, jobstate.ErrConflict):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item state does not allow this operation")
-	case errors.Is(err, jobstate.ErrNotFound):
-		return retErr(pb.ErrorCode_NOT_FOUND, "job item not found")
-	case errors.Is(err, jobstate.ErrInvalid):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "invalid job item")
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "resource not found")
 	default:

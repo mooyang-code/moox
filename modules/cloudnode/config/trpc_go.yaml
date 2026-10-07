@@ -28,11 +28,6 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.cloudnode.jobhistory.timer
-      port: 11406
-      network: "0 5 0 * * *?scheduler=cloudnodeJobHistorySchedule"
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.cloudnode.metrics.timer
       port: 11413
       network: "*/30 * * * * *"

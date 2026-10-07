@@ -1,4 +1,4 @@
-// Package jobs contains collector JobItem definitions and handler registration constants.
+// Package jobs contains Collector job definitions used by planners and the control plane.
 package jobs
 
 import (

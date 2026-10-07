@@ -56,14 +56,10 @@ func newBatchE2EQueue(t *testing.T, ctx context.Context, spaceID, subjectID stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := events.SubjectConsumerConfig{
+	consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{
 		ConsumerConfig: events.ConsumerConfig{Name: "market-fetch-redelivery-e2e", Event: events.MarketFetchBatchCompleted, AckWait: 500 * time.Millisecond, MaxDeliver: 4, MaxAckPending: maxAckPending, FetchMaxWait: 100 * time.Millisecond, DeliverDecodeErrors: true},
-		SpaceID:        spaceID, SubjectID: subjectID,
-	}
-	if _, err := events.EnsureSubjectConsumer(ctx, client, registry, cfg); err != nil {
-		t.Fatal(err)
-	}
-	consumer, err := events.BindSubjectConsumer(ctx, client, registry, cfg)
+		SpaceID:        spaceID,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

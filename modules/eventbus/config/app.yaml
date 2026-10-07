@@ -60,15 +60,6 @@ streams:
     max_age: 24h
     duplicates: 2m
     max_bytes: 134217728
-  - name: MOOX_CLOUDNODE_EXEC
-    subjects: ["moox.event.cloudnode.job.execution.requested.v1.>"]
-    retention: work_queue
-    discard: old
-    storage: file
-    replicas: 1
-    max_age: 72h
-    duplicates: 2m
-    max_bytes: 134217728
   - name: MOOX_MARKET_FETCH
     subjects: ["moox.event.market.fetch.batch.completed.v1.>"]
     # Collector and Monitor both observe the completion; work_queue would let
@@ -92,10 +83,3 @@ streams:
     max_age: 168h
     duplicates: 2m
     max_bytes: 134217728
-
-kv:
-  - bucket: MOOX_CLOUDNODE_JOB_ACTIVE
-    max_age: 48h
-    history: 1
-    storage: file
-    replicas: 1

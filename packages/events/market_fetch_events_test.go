@@ -3,9 +3,10 @@ package events
 import (
 	"testing"
 
+	"time"
+
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"time"
 )
 
 func TestMarketFetchBatchCompletedValidationRequiresGovernedRoute(t *testing.T) {
