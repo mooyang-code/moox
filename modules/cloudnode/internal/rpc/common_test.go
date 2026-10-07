@@ -31,7 +31,6 @@ func TestMetadataHelpers_ShouldParseMixedTypes(t *testing.T) {
 		"tags":    []any{"collect.kline"},
 	}
 	assert.Equal(t, "node-a", metadataString(meta, "name"))
-	assert.Equal(t, int32(3), metadataInt32(meta, "count"))
 	assert.True(t, metadataBool(meta, "enabled"))
 }
 
@@ -58,9 +57,6 @@ func TestMetadataHelpers_ExtraBranches(t *testing.T) {
 		"snum": "12", "sbool": "true",
 	}
 	assert.Equal(t, "7", metadataString(meta, "i"))
-	assert.Equal(t, int32(8), metadataInt32(meta, "i32"))
-	assert.Equal(t, int32(9), metadataInt32(meta, "i64"))
-	assert.Equal(t, int32(12), metadataInt32(meta, "snum"))
 	assert.True(t, metadataBool(meta, "sbool"))
 	assert.Equal(t, map[string]any{}, parseJSONMap(""))
 	assert.Equal(t, map[string]any{}, parseJSONMap("{"))

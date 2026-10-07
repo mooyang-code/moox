@@ -2593,22 +2593,6 @@ const (
 	collectorStockCNFleetWaitTimeout = 30 * time.Minute
 )
 
-func collectorTimerRestorePatches(nodes []adminclient.CloudNode) []collectorRuntimeConfigPatch {
-	patches := make([]collectorRuntimeConfigPatch, 0, len(nodes))
-	for _, node := range nodes {
-		enabled, ok := collectorMetadataBool(node.Metadata, "timer_enabled")
-		if !ok || !enabled {
-			continue
-		}
-		cron := firstNonEmpty(metadataStringValue(node.Metadata, "timer_cron"), metadataStringValue(node.Metadata, "timer_actual_cron"))
-		if cron == "" {
-			continue
-		}
-		patches = append(patches, collectorRuntimeConfigPatch{NodeID: node.NodeID, TimerEnabled: true, TimerCron: cron})
-	}
-	return patches
-}
-
 // collectorTimerEnablePatches returns an enable patch for every newly
 // published Timer. New SCF nodes do not have timer metadata yet, so use the
 // same stable region/slot ordering as the Collector reconciler to give them a
@@ -3855,10 +3839,6 @@ func cloneCollectorStringMap(source map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
-}
-
-func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, bizType string, expected int) ([]adminclient.CloudNode, error) {
-	return selectCollectorFleetNodesForTrigger(nodes, prefix, bizType, expected, "", 0)
 }
 
 func selectCollectorFleetNodesForTrigger(nodes []adminclient.CloudNode, prefix string, bizType string, expected int, triggerType string, indexOffset int, namespace ...string) ([]adminclient.CloudNode, error) {

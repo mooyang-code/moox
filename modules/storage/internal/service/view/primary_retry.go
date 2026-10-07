@@ -17,13 +17,6 @@ const (
 	primaryHistoryRetryDelay   = 100 * time.Millisecond
 )
 
-// readPrimaryTimeSeriesRows retries only transport failures. A Primary
-// history request is idempotent, while validation and business errors should
-// fail immediately and preserve the original error for the rebuild log.
-func readPrimaryTimeSeriesRows(ctx context.Context, reader TimeSeriesRangeReader, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	return readPrimaryTimeSeriesRowsLimited(ctx, nil, reader, req)
-}
-
 // readPrimaryTimeSeriesRowsLimited applies the rebuild limiter to every
 // attempt, including transport retries. This prevents a retry storm from
 // bypassing the serial request spacing used by the normal page walk.

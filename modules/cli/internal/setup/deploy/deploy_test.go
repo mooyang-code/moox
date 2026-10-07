@@ -1290,3 +1290,7 @@ func (f *fakeProbe) Wait(_ context.Context, _ setupssh.Client, stage ReadinessSt
 	}
 	return nil
 }
+
+func probeCommand(stage ReadinessStage) string {
+	return probeCommandForOptions(stage, Options{})
+}

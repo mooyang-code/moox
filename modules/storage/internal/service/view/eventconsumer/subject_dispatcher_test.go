@@ -561,3 +561,11 @@ func TestSubjectDispatcherStartsHeartbeatWhenDeliveryIsQueuedAndStopsItOnClose(t
 	}
 	close(releaseFirst)
 }
+
+func newSubjectDispatcherWithKey(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, queueKey deliveryQueueKey, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
+	return newSubjectDispatcherWithKeyAndBatch(parent, maxWorkers, maxPending, handler, nil, 1, nil, reporter, queueKey, hooks...)
+}
+
+func newSubjectDispatcher(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
+	return newSubjectDispatcherWithKey(parent, maxWorkers, maxPending, handler, reporter, nil, hooks...)
+}

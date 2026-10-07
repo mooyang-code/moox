@@ -825,3 +825,12 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 		t.Fatalf("recovery results = %+v", results)
 	}
 }
+
+func buildBusinessFreshnessReporter(
+	builder *monitorobservability.Builder,
+	repositories *store.Repositories,
+	hook func(context.Context, domain.Check, domain.CheckResult),
+	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
+) func(context.Context) error {
+	return buildBusinessFreshnessReporterWithInterval(builder, repositories, hook, 30*time.Second, klineEvaluators...)
+}

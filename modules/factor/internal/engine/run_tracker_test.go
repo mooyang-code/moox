@@ -48,3 +48,16 @@ func TestPeriodFailureReasonClassifiesAbortedPeriods(t *testing.T) {
 	require.Equal(t, "timeout", periodFailureReason(context.Canceled))
 	require.Equal(t, "internal", periodFailureReason(errors.New("assemble failed")))
 }
+
+func (t *runTracker) latest(setID string, now time.Time) domain.SetRunSummary {
+	if t == nil {
+		return domain.SetRunSummary{SetID: setID}
+	}
+	t.mu.RLock()
+	run, ok := t.runs[setID]
+	t.mu.RUnlock()
+	if !ok {
+		return domain.SetRunSummary{SetID: setID}
+	}
+	return summaryOf(setID, run, now)
+}

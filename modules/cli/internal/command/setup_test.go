@@ -792,3 +792,10 @@ func TestRestartStorageClientsUsesBoundedRetries(t *testing.T) {
 	require.Contains(t, restartStorageClientsScript, "for attempt in 1 2 3")
 	require.Contains(t, restartStorageClientsScript, "sleep 2")
 }
+
+// setupCertificateSummary makes the certificate work performed by
+// deploy-control explicit without exposing any key material. The deployment
+// itself remains the source of truth for Caddy configuration and renewal.
+func setupCertificateSummary(publicHost string) map[string]any {
+	return setupCertificateSummaryWithMode(publicHost, "")
+}

@@ -1657,21 +1657,6 @@ func TestBuildCollectorCreateNodeItemRejectsConcurrentSCFInstances(t *testing.T)
 	require.ErrorContains(t, err, "max_instance_concurrency is fixed at 1")
 }
 
-func TestCollectorTimerRestorePatchesOnlyPreviouslyEnabledNodes(t *testing.T) {
-	nodes := []adminclient.CloudNode{
-		{NodeID: "enabled", Metadata: map[string]any{"timer_enabled": true, "timer_cron": "0 1 * * * * *"}},
-		{NodeID: "disabled", Metadata: map[string]any{"timer_enabled": false, "timer_cron": "0 2 * * * * *"}},
-		{NodeID: "new", Metadata: map[string]any{}},
-	}
-
-	patches := collectorTimerRestorePatches(nodes)
-
-	require.Len(t, patches, 1)
-	assert.Equal(t, "enabled", patches[0].NodeID)
-	assert.True(t, patches[0].TimerEnabled)
-	assert.Equal(t, "0 1 * * * * *", patches[0].TimerCron)
-}
-
 func TestCollectorTimerEnablePatchesIncludeFreshNodes(t *testing.T) {
 	nodes := []adminclient.CloudNode{
 		{NodeID: "sh-1", Region: "ap-shanghai", FunctionName: "stock-1", Metadata: map[string]any{"index": 1}},
@@ -2120,4 +2105,8 @@ func TestValidateCollectorPublishAuth(t *testing.T) {
 		ServiceAccessKey: "key",
 		ServiceSecretKey: "secret",
 	}))
+}
+
+func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, bizType string, expected int) ([]adminclient.CloudNode, error) {
+	return selectCollectorFleetNodesForTrigger(nodes, prefix, bizType, expected, "", 0)
 }

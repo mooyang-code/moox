@@ -124,28 +124,6 @@ func metadataString(metadata map[string]any, key string) string {
 	}
 }
 
-func metadataInt32(metadata map[string]any, key string) int32 {
-	value, ok := metadata[key]
-	if !ok || value == nil {
-		return 0
-	}
-	switch v := value.(type) {
-	case float64:
-		return int32(v)
-	case int:
-		return int32(v)
-	case int32:
-		return v
-	case int64:
-		return int32(v)
-	case string:
-		n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 32)
-		return int32(n)
-	default:
-		return 0
-	}
-}
-
 func metadataBool(metadata map[string]any, key string) bool {
 	value, ok := metadata[key]
 	if !ok || value == nil {

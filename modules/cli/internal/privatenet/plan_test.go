@@ -45,7 +45,6 @@ func TestCollectTencentHostsAndSCFTargets(t *testing.T) {
 	}
 	hosts := CollectTencentHosts(manifest)
 	require.Len(t, hosts, 3)
-	assert.Equal(t, "146.56.196.204", StoragePublicIP(hosts))
 	scf := CollectSCFTargets(manifest)
 	regions := map[string]SCFTarget{}
 	for _, item := range scf {

@@ -27,15 +27,6 @@ func unixSeconds(value time.Time) float64 {
 	return float64(value.Unix())
 }
 
-func buildBusinessFreshnessReporter(
-	builder *monitorobservability.Builder,
-	repositories *store.Repositories,
-	hook func(context.Context, domain.Check, domain.CheckResult),
-	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
-) func(context.Context) error {
-	return buildBusinessFreshnessReporterWithInterval(builder, repositories, hook, 30*time.Second, klineEvaluators...)
-}
-
 func buildBusinessFreshnessReporterWithInterval(
 	builder *monitorobservability.Builder,
 	repositories *store.Repositories,

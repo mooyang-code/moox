@@ -108,3 +108,10 @@ func TestIsPrimaryHistoryTimeout(t *testing.T) {
 		t.Fatal("business errors must not be treated as timeouts")
 	}
 }
+
+// readPrimaryTimeSeriesRows retries only transport failures. A Primary
+// history request is idempotent, while validation and business errors should
+// fail immediately and preserve the original error for the rebuild log.
+func readPrimaryTimeSeriesRows(ctx context.Context, reader TimeSeriesRangeReader, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	return readPrimaryTimeSeriesRowsLimited(ctx, nil, reader, req)
+}

@@ -1262,10 +1262,6 @@ func (p CommandProbe) Wait(ctx context.Context, transport setupssh.Client, stage
 	return fmt.Errorf("not_ready")
 }
 
-func probeCommand(stage ReadinessStage) string {
-	return probeCommandForOptions(stage, Options{})
-}
-
 func probeCommandForOptions(stage ReadinessStage, opts Options) string {
 	if err := normalizeDeployPaths(&opts); err != nil {
 		return "false"

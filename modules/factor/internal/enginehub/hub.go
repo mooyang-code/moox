@@ -41,8 +41,6 @@ func WithEngineLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.engi
 // progress report; it must exceed the duration of one recalc chunk.
 func WithJobLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.jobTTL = ttl } }
 
-func WithClock(now func() time.Time) Option { return func(h *Hub) { h.now = now } }
-
 type Hub struct {
 	store     Store
 	engineTTL time.Duration

@@ -2,22 +2,15 @@ package bootstrap
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/packages/notification"
 	"trpc.group/trpc-go/trpc-go/log"
 )
-
-func hostPresenceTransitionSink(sender notification.Sender) hostmetrics.PresenceTransitionFunc {
-	return hostPresenceTransitionSinkProvider(func(context.Context) (notification.Sender, error) { return sender, nil })
-}
-
-func hostPresenceTransitionSinkProvider(provider func(context.Context) (notification.Sender, error)) hostmetrics.PresenceTransitionFunc {
-	return hostPresenceTransitionSinkProviderWithFailure(provider, nil)
-}
 
 func hostPresenceTransitionSinkProviderWithFailure(provider func(context.Context) (notification.Sender, error), onFailure func(context.Context, hostmetrics.PresenceTransition, error)) hostmetrics.PresenceTransitionFunc {
 	return func(ctx context.Context, transition hostmetrics.PresenceTransition) error {

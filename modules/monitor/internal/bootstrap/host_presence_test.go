@@ -33,3 +33,11 @@ func TestHostPresenceTransitionSinkNotifiesFailureAndRecovery(t *testing.T) {
 		t.Fatalf("severities = %s, %s", sender.messages[0].Severity, sender.messages[1].Severity)
 	}
 }
+
+func hostPresenceTransitionSinkProvider(provider func(context.Context) (notification.Sender, error)) hostmetrics.PresenceTransitionFunc {
+	return hostPresenceTransitionSinkProviderWithFailure(provider, nil)
+}
+
+func hostPresenceTransitionSink(sender notification.Sender) hostmetrics.PresenceTransitionFunc {
+	return hostPresenceTransitionSinkProvider(func(context.Context) (notification.Sender, error) { return sender, nil })
+}

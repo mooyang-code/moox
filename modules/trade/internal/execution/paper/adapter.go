@@ -50,11 +50,6 @@ func paperOrderID(account, client string) string {
 	sum := sha256.Sum256([]byte(account + "\x00" + client))
 	return "paper-order-" + hex.EncodeToString(sum[:12])
 }
-func PaperIDs(account, client string) (string, string, string) {
-	sum := sha256.Sum256([]byte(account + "\x00" + client))
-	suffix := hex.EncodeToString(sum[:12])
-	return "paper-order-" + suffix, "paper-trade-" + suffix, "paper-fill-" + suffix
-}
 func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
 	if a.Store == nil {
 		return a.AccountSnapshot(), nil

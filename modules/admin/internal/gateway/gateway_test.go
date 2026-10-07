@@ -132,26 +132,26 @@ func TestHandleGatewayRequest_InvalidParams_ShouldReturnBadRequest(t *testing.T)
 	require.Error(t, err)
 }
 
-func TestHTTPRouterAuthorizeTradeConsoleRequestRequiresAuthenticatedSpace(t *testing.T) {
+func TestHTTPRouterAuthorizeSpaceRequestRequiresAuthenticatedSpace(t *testing.T) {
 	a := &fakeTradeSpaceAuthorizer{}
 	hr := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test", a)
 	ctx, msg := codec.WithNewMessage(context.WithValue(context.Background(), authmodel.CtxUserID, "user-1"))
 	msg.WithServerMetaData(map[string][]byte{authmodel.CtxUserRole: []byte("1")})
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/trade_console/ListOrders", nil)
-	assert.Error(t, hr.authorizeTradeConsoleRequest(ctx, req, "ListOrders"))
+	assert.Error(t, hr.authorizeSpaceRequest(ctx, req, "ListOrders"))
 	req.Header.Set("X-Space-Id", "crypto")
-	assert.NoError(t, hr.authorizeTradeConsoleRequest(ctx, req, "ListOrders"))
+	assert.NoError(t, hr.authorizeSpaceRequest(ctx, req, "ListOrders"))
 	assert.Equal(t, "user-1", a.userID)
 	assert.Equal(t, "crypto", a.spaceID)
 	assert.Equal(t, int32(1), a.globalRole)
 }
 
-func TestHTTPRouterAuthorizeTradeConsoleRequestFailsClosedWithoutAuthorizer(t *testing.T) {
+func TestHTTPRouterAuthorizeSpaceRequestFailsClosedWithoutAuthorizer(t *testing.T) {
 	hr := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
 	ctx := context.WithValue(context.Background(), authmodel.CtxUserID, "user-1")
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/trade_console/ListOrders", nil)
 	req.Header.Set("X-Space-Id", "crypto")
-	assert.Error(t, hr.authorizeTradeConsoleRequest(ctx, req, "ListOrders"))
+	assert.Error(t, hr.authorizeSpaceRequest(ctx, req, "ListOrders"))
 }
 
 func TestHTTPRouterAuthorizeCloudNodeRequestEnforcesSpaceMembership(t *testing.T) {

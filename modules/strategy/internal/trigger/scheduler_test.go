@@ -108,3 +108,24 @@ func (s *fixedSchedule) Next(time.Time) time.Time {
 	s.times = s.times[1:]
 	return next
 }
+
+func (s *Scheduler) Start(ctx context.Context, jobs []ScheduleJob) error {
+	if s == nil {
+		return errors.New("strategy scheduler is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cron != nil {
+		return errors.New("strategy scheduler is already started")
+	}
+	c, cancel := context.WithCancel(ctx)
+	cronRunner, err := buildCron(c, jobs, s.OnError, true)
+	if err != nil {
+		cancel()
+		return err
+	}
+	cronRunner.Start()
+	s.cron = cronRunner
+	s.cancel = cancel
+	return nil
+}

@@ -415,20 +415,3 @@ func TestPeriodSeriesIdentitySeparatesSeriesTags(t *testing.T) {
 		t.Fatal("different series tags shared one period budget key")
 	}
 }
-
-func TestFormatPeriodSeriesKeyUsesReadableIdentity(t *testing.T) {
-	if got := formatPeriodSeriesKey("BTC-USDT\x001m"); got != "BTC-USDT/1m" {
-		t.Fatalf("formatted series = %q, want BTC-USDT/1m", got)
-	}
-}
-
-func TestBuildPeriodHistorySelectorsLeavesEmptyDatasetBindingsUnfiltered(t *testing.T) {
-	selectors, expected := buildPeriodHistorySelectors("crypto", "dataset_binance_kline_1m", "1m", nil)
-	if len(selectors) != 0 || len(expected) != 0 {
-		t.Fatalf("empty bindings selectors=%v expected=%v, want unfiltered scan", selectors, expected)
-	}
-	selectors, expected = buildPeriodHistorySelectors("crypto", "dataset_binance_kline_1m", "1m", []string{"BTC-USDT"})
-	if len(selectors) != 1 || len(expected) != 1 || selectors[0].GetSubjectId() != "BTC-USDT" {
-		t.Fatalf("bound selectors=%v expected=%v, want one selector", selectors, expected)
-	}
-}

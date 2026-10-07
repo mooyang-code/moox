@@ -152,3 +152,5 @@ func TestHeartbeatRejectsSameEngineFromAnotherBoot(t *testing.T) {
 	_, err = hub.Heartbeat(context.Background(), copied, domain.EngineStatus{})
 	require.NoError(t, err, "a restarted engine takes over once the old boot's lease lapses")
 }
+
+func WithClock(now func() time.Time) Option { return func(h *Hub) { h.now = now } }

@@ -3,7 +3,6 @@ package metrics
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 )
 
@@ -87,15 +86,3 @@ func (q *QueryService) DatasetDisplayName(ctx context.Context, spaceID, datasetI
 	}
 	return q.storage.DatasetDisplayName(ctx, spaceID, datasetID)
 }
-
-func parseTimeValue(raw string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Time{}, nil
-	}
-	return time.Parse(time.RFC3339Nano, raw)
-}
-
-// ParseTime accepts the RFC3339 form used on the wire and is exported for RPC
-// handlers that need to keep parsing semantics identical to history queries.
-func ParseTime(raw string) (time.Time, error) { return parseTimeValue(raw) }

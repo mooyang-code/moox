@@ -1301,10 +1301,6 @@ func markCoverageRefresh(runtime *viewRuntime) {
 	runtime.mu.Unlock()
 }
 
-func (s *Service) capacityMaintenanceBuildIdle(ctx context.Context) bool {
-	return s.capacityMaintenanceBuildIdleFor(ctx, viewRef{}, capacityMaintenanceBuildBacklogThreshold, 1)
-}
-
 func (s *Service) capacityMaintenanceBuildIdleFor(ctx context.Context, ref viewRef, maxPending uint64, requiredChecks uint32) bool {
 	pending, ackPending, err := s.consumerBacklogForView(ctx, ref)
 	if err != nil {
@@ -1442,10 +1438,6 @@ func (s *Service) markCapacityMaintenanceBuild(spaceID, viewID string, now time.
 	runtime.mu.Lock()
 	runtime.lastCapacityMaintenanceBuildAt = now
 	runtime.mu.Unlock()
-}
-
-func shouldRetryFailedBuild(view *pb.View, failedBuild *pb.ViewIndexBuild, capacityMaintenanceExceeded bool, now time.Time) bool {
-	return shouldRetryFailedBuildWithCause(view, failedBuild, capacityMaintenanceExceeded, capacityMaintenanceExceeded, now)
 }
 
 func shouldRetryFailedBuildWithCause(view *pb.View, failedBuild *pb.ViewIndexBuild, rebuildNeeded, capacityMaintenanceOnly bool, now time.Time) bool {

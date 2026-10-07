@@ -184,17 +184,6 @@ func PrivateServicePorts(eventBusPort int) []string {
 	return out
 }
 
-func StoragePublicIP(hosts []HostTarget) string {
-	for _, host := range hosts {
-		for _, role := range host.Roles {
-			if role == "storage" {
-				return host.Address
-			}
-		}
-	}
-	return ""
-}
-
 func appendUnique(dst []string, value string) []string {
 	value = strings.TrimSpace(value)
 	if value == "" {

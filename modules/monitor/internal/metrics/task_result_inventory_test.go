@@ -171,18 +171,6 @@ type fakeTaskResultInventoryProvider struct {
 	calls    int
 }
 
-type blockingTaskResultInventoryProvider struct {
-	snapshot TaskResultInventorySnapshot
-	entered  chan struct{}
-	release  chan struct{}
-}
-
-func (p *blockingTaskResultInventoryProvider) FetchTaskResultInventory(context.Context) (TaskResultInventorySnapshot, error) {
-	close(p.entered)
-	<-p.release
-	return p.snapshot, nil
-}
-
 func (p *fakeTaskResultInventoryProvider) FetchTaskResultInventory(context.Context) (TaskResultInventorySnapshot, error) {
 	p.calls++
 	if p.err != nil {
@@ -295,38 +283,6 @@ func TestTaskResultInventoryRefreshMetricsExposeLowCardinalityOutcomes(t *testin
 	require.True(t, found["moox_monitor_task_result_inventory_last_success_timestamp_seconds"])
 	require.True(t, found["moox_monitor_task_result_inventory_cache_age_seconds"])
 	require.True(t, found["moox_monitor_task_result_inventory_cache_available"])
-}
-
-func TestTaskResultInventoryCurrentDoesNotWaitForRefreshNetworkCall(t *testing.T) {
-	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
-	provider := &blockingTaskResultInventoryProvider{
-		snapshot: TaskResultInventorySnapshot{ID: "snapshot-1", ObservedAt: now},
-		entered:  make(chan struct{}), release: make(chan struct{}),
-	}
-	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
-	require.NoError(t, err)
-	refreshDone := make(chan error, 1)
-	go func() {
-		_, err := cache.Get(context.Background(), now)
-		refreshDone <- err
-	}()
-	<-provider.entered
-
-	currentDone := make(chan bool, 1)
-	go func() {
-		_, ok := cache.Current(now.Add(time.Minute))
-		currentDone <- ok
-	}()
-	select {
-	case ok := <-currentDone:
-		require.False(t, ok)
-	case <-time.After(100 * time.Millisecond):
-		close(provider.release)
-		<-refreshDone
-		t.Fatal("Current blocked behind inventory network refresh")
-	}
-	close(provider.release)
-	require.NoError(t, <-refreshDone)
 }
 
 func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *testing.T) {

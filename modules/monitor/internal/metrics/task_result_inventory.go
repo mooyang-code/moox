@@ -387,25 +387,6 @@ func (c *TaskResultInventoryCache) freshSnapshot(now time.Time) (TaskResultInven
 	return cloneTaskResultInventorySnapshot(c.snapshot), true
 }
 
-// Current returns the latest complete cache snapshot only while it remains
-// within its configured TTL. Ingestion uses this non-blocking view to avoid
-// storing per-subject metrics before a Collector inventory has been verified.
-func (c *TaskResultInventoryCache) Current(now time.Time) (TaskResultInventorySnapshot, bool) {
-	if c == nil {
-		return TaskResultInventorySnapshot{}, false
-	}
-	if now.IsZero() {
-		now = c.now()
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	age := now.UTC().Sub(c.fetched)
-	if c.snapshot.ID == "" || age < 0 || age >= c.ttl {
-		return TaskResultInventorySnapshot{}, false
-	}
-	return cloneTaskResultInventorySnapshot(c.snapshot), true
-}
-
 func validateTaskResultInventorySnapshot(snapshot TaskResultInventorySnapshot, maxItems int) error {
 	if strings.TrimSpace(snapshot.ID) == "" || snapshot.ObservedAt.IsZero() {
 		return errors.New("task-result inventory snapshot identity and observation time are required")

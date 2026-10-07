@@ -199,3 +199,10 @@ func TestWriteRenderedRuntimeConfigPreservesModeAndReplacesAtomically(t *testing
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
+
+// RenderTradeDNSResolverConfig replaces only the Trade-owned dns_resolver
+// mapping. The caller supplies the existing app.yaml bytes so unrelated
+// runtime configuration remains untouched.
+func RenderTradeDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
+	return RenderTradeDNSResolverConfigForNode(snapshot, "", existing)
+}

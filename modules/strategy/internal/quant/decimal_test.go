@@ -17,12 +17,3 @@ func TestDecimalCanonicalArithmetic(t *testing.T) {
 		require.Error(t, err, raw)
 	}
 }
-
-func TestNormalizeStableAndDivideStablePreserveSum(t *testing.T) {
-	values, err := NormalizeStable([]Decimal{Must("1"), Must("1"), Must("1")})
-	require.NoError(t, err)
-	require.Equal(t, "1", values[0].Add(values[1]).Add(values[2]).String())
-	allocated := DivideStable(Must("1"), []string{"a", "b", "c"})
-	require.Equal(t, "1", allocated["a"].Add(allocated["b"]).Add(allocated["c"]).String())
-	require.Equal(t, "0.333333333333333334", allocated["a"].String())
-}

@@ -1512,3 +1512,27 @@ func TestSnapshotDetectsReplacement(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config_changed")
 }
+
+// resolveSCFTimerFunctionCountsWithCapacities allocates Timer functions while
+// reserving the publisher-created Invoke canary for each region.
+func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path string, maxFunctionsPerNamespace int, reservedByRegion map[string]int) error {
+	auxiliary := 1
+	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
+		return maxFunctionsPerNamespace - auxiliary - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
+	})
+}
+
+func resolveSCFTimerFunctionCountsWithLimit(cfg *SCFFetcherSpace, path string, maxFunctionsPerRegion int) error {
+	// Tests use a flat per-region limit; manifest validation uses the
+	// regional capacity-aware allocator instead.
+	return resolveSCFTimerFunctionCountsWithCapacities(cfg, path, maxFunctionsPerRegion+1, nil)
+}
+
+func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
+	return resolveSCFTimerFunctionCountsWithLimit(cfg, path, DefaultSCFMaxFunctionsPerNamespace)
+}
+
+func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
+	limits := defaultTencentSCFLimits()
+	return validateSCFFetcherSpaceWithLimits(cfg, path, limits)
+}

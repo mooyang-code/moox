@@ -553,40 +553,6 @@ func singleFactorSourceHash(compiled compiler.CompiledStrategy) bool {
 	return seen != ""
 }
 
-func requiredFactorsByInstrument(compiled compiler.CompiledStrategy, pool []input.PoolItem) map[string][]string {
-	result := make(map[string][]string, len(pool))
-	for _, item := range pool {
-		seen := map[string]struct{}{}
-		if len(compiled.Rules) == 0 {
-			for _, factor := range compiled.Factors {
-				if factorAppliesToItem(factor, item) {
-					seen[factor.FactorID] = struct{}{}
-					result[item.InstrumentID] = append(result[item.InstrumentID], factor.FactorID)
-				}
-			}
-			sort.Strings(result[item.InstrumentID])
-			continue
-		}
-		for _, rule := range compiled.Rules {
-			if !ruleAppliesToInstrument(compiled, rule.Definition.Pool, item.InstrumentID) {
-				continue
-			}
-			for _, factor := range compiled.Factors {
-				if !ruleReferencesFactor(rule, factor) || !factorAppliesToItem(factor, item) {
-					continue
-				}
-				if _, ok := seen[factor.FactorID]; ok {
-					continue
-				}
-				seen[factor.FactorID] = struct{}{}
-				result[item.InstrumentID] = append(result[item.InstrumentID], factor.FactorID)
-			}
-		}
-		sort.Strings(result[item.InstrumentID])
-	}
-	return result
-}
-
 func factorAppliesToItem(factor compiler.CompiledFactor, item input.PoolItem) bool {
 	if strings.EqualFold(strings.TrimSpace(factor.SubjectMode), "include") {
 		var subjects []string
@@ -622,33 +588,6 @@ func ruleFields(rule compiler.CompiledRule) (map[string]struct{}, map[string]str
 		}
 	}
 	return current, previous
-}
-
-func ruleReferencesFactor(rule compiler.CompiledRule, factor compiler.CompiledFactor) bool {
-	aliases := map[string]struct{}{}
-	for _, name := range []string{factor.FactorID, factor.Output, factor.ColumnName} {
-		if name != "" {
-			aliases[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
-		}
-	}
-	for _, expression := range []*compiler.CompiledExpression{rule.FilterBefore, rule.Score, rule.SelectWhere, rule.SignalEntry, rule.SignalExit, rule.FilterAfter} {
-		if expression == nil {
-			continue
-		}
-		for _, name := range expression.Dependencies.Fields {
-			if _, ok := aliases[strings.ToLower(strings.TrimSpace(name))]; ok {
-				return true
-			}
-		}
-		for _, fields := range expression.Dependencies.Bars {
-			for _, name := range fields {
-				if _, ok := aliases[strings.ToLower(strings.TrimSpace(name))]; ok {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 func ruleAppliesToInstrument(compiled compiler.CompiledStrategy, pool config.Pool, instrumentID string) bool {

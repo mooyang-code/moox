@@ -373,12 +373,6 @@ func (hr *HTTPRouter) authorizeSpaceRequest(ctx context.Context, r *http.Request
 	return hr.tradeAuthorizer.AuthorizeTradeRequest(ctx, userID, spaceID, method, int32(role))
 }
 
-// authorizeTradeConsoleRequest is kept as a narrow compatibility wrapper for
-// callers and tests that predate the Strategy BFF's Space boundary.
-func (hr *HTTPRouter) authorizeTradeConsoleRequest(ctx context.Context, r *http.Request, method string) error {
-	return hr.authorizeSpaceRequest(ctx, r, method)
-}
-
 func isMachineOnlyAdminMethod(serviceID, method string) bool {
 	switch canonicalAdminSegment(serviceID) {
 	case "secret", "secretmgr", "trpcmooxopssecretmgr":

@@ -795,13 +795,6 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-// setupCertificateSummary makes the certificate work performed by
-// deploy-control explicit without exposing any key material. The deployment
-// itself remains the source of truth for Caddy configuration and renewal.
-func setupCertificateSummary(publicHost string) map[string]any {
-	return setupCertificateSummaryWithMode(publicHost, "")
-}
-
 func setupCertificateSummaryWithMode(publicHost string, mode setupdeploy.TLSMode) map[string]any {
 	if setupdeploy.UsesPublicTLSMode(mode, publicHost) {
 		return map[string]any{

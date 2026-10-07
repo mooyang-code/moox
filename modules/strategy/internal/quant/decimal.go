@@ -128,46 +128,6 @@ func (d Decimal) String() string {
 	return result
 }
 
-func NormalizeStable(values []Decimal) ([]Decimal, error) {
-	if len(values) == 0 {
-		return nil, ErrInvalidDecimal
-	}
-	total := new(big.Int)
-	for _, value := range values {
-		if value.IsNegative() {
-			return nil, ErrInvalidDecimal
-		}
-		total.Add(total, value.normalized())
-	}
-	if total.Sign() <= 0 {
-		return nil, ErrInvalidDecimal
-	}
-	result := make([]Decimal, len(values))
-	remainders := make([]*big.Int, len(values))
-	allocated := new(big.Int)
-	for i, value := range values {
-		numerator := new(big.Int).Mul(value.normalized(), scale)
-		quotient, remainder := new(big.Int), new(big.Int)
-		quotient.QuoRem(numerator, total, remainder)
-		result[i] = Decimal{units: quotient}
-		remainders[i] = remainder
-		allocated.Add(allocated, quotient)
-	}
-	remaining := new(big.Int).Sub(scale, allocated).Int64()
-	for remaining > 0 {
-		best := 0
-		for i := 1; i < len(remainders); i++ {
-			if remainders[i].Cmp(remainders[best]) > 0 {
-				best = i
-			}
-		}
-		result[best].units.Add(result[best].units, big.NewInt(1))
-		remainders[best].SetInt64(-1)
-		remaining--
-	}
-	return result, nil
-}
-
 func DivideStable(total Decimal, orderedKeys []string) map[string]Decimal {
 	result := make(map[string]Decimal, len(orderedKeys))
 	if len(orderedKeys) == 0 {

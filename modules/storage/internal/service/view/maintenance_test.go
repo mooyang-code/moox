@@ -1266,3 +1266,11 @@ func TestMaintenanceRebuildsMissingPhysicalActiveIndex(t *testing.T) {
 		t.Fatalf("missing active unexpectedly claimed/activated replacement: claims=%d activated=%v", metadata.claims, metadata.activated)
 	}
 }
+
+func shouldRetryFailedBuild(view *pb.View, failedBuild *pb.ViewIndexBuild, capacityMaintenanceExceeded bool, now time.Time) bool {
+	return shouldRetryFailedBuildWithCause(view, failedBuild, capacityMaintenanceExceeded, capacityMaintenanceExceeded, now)
+}
+
+func (s *Service) capacityMaintenanceBuildIdle(ctx context.Context) bool {
+	return s.capacityMaintenanceBuildIdleFor(ctx, viewRef{}, capacityMaintenanceBuildBacklogThreshold, 1)
+}

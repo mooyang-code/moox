@@ -1890,11 +1890,6 @@ func ValidateSCFCapacities(cfg *SCFFetcher, limits TencentSCFLimits) error {
 	return nil
 }
 
-func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
-	limits := defaultTencentSCFLimits()
-	return validateSCFFetcherSpaceWithLimits(cfg, path, limits)
-}
-
 func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits TencentSCFLimits) error {
 	if cfg == nil {
 		return fmt.Errorf("config_invalid: %s is required", path)
@@ -2237,26 +2232,6 @@ func validateSCFFetcherSpaceWithLimits(cfg *SCFFetcherSpace, path string, limits
 		}
 	}
 	return nil
-}
-
-func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
-	return resolveSCFTimerFunctionCountsWithLimit(cfg, path, DefaultSCFMaxFunctionsPerNamespace)
-}
-
-func resolveSCFTimerFunctionCountsWithLimit(cfg *SCFFetcherSpace, path string, maxFunctionsPerRegion int) error {
-	// This helper is retained for package-level callers that only want the
-	// historical Timer allocator. Manifest validation uses the capacity-aware
-	// path below and reserves publisher auxiliaries explicitly.
-	return resolveSCFTimerFunctionCountsWithCapacities(cfg, path, maxFunctionsPerRegion+1, nil)
-}
-
-// resolveSCFTimerFunctionCountsWithCapacities allocates Timer functions while
-// reserving the publisher-created Invoke canary for each region.
-func resolveSCFTimerFunctionCountsWithCapacities(cfg *SCFFetcherSpace, path string, maxFunctionsPerNamespace int, reservedByRegion map[string]int) error {
-	auxiliary := 1
-	return resolveSCFTimerFunctionCountsWithCapacityFunc(cfg, path, func(region string) int {
-		return maxFunctionsPerNamespace - auxiliary - reservedByRegion[strings.ToLower(strings.TrimSpace(region))]
-	})
 }
 
 func resolveSCFTimerFunctionCountsWithRegionalCapacities(cfg *SCFFetcherSpace, path string, limits TencentSCFLimits, reservedByRegion map[string]int) error {

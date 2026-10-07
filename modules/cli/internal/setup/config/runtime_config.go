@@ -11,13 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RenderTradeDNSResolverConfig replaces only the Trade-owned dns_resolver
-// mapping. The caller supplies the existing app.yaml bytes so unrelated
-// runtime configuration remains untouched.
-func RenderTradeDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
-	return RenderTradeDNSResolverConfigForNode(snapshot, "", existing)
-}
-
 // RenderTradeDNSResolverConfigForNode disables the resolver on Trade nodes
 // other than the single node selected by moox.toml. This prevents a
 // control profile from advertising a second resolver endpoint.

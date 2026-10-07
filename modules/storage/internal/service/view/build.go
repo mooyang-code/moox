@@ -784,20 +784,6 @@ func backfillSubjectMatchesMarket(subject *pb.Subject, market string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(subject.GetSubjectId())), "-"+want)
 }
 
-func buildPeriodHistorySelectors(spaceID, datasetID, frequency string, subjects []string) ([]*pb.TimeSeriesSelector, map[string]struct{}) {
-	selectors := make([]*pb.TimeSeriesSelector, 0, len(subjects))
-	expected := make(map[string]struct{}, len(subjects))
-	for _, subjectID := range subjects {
-		selectors = append(selectors, &pb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Freq: frequency})
-		expected[periodSeriesKey(subjectID, frequency)] = struct{}{}
-	}
-	return selectors, expected
-}
-
-func periodSeriesKey(subjectID, frequency string) string {
-	return strings.TrimSpace(subjectID) + "\x00" + strings.ToLower(strings.TrimSpace(frequency))
-}
-
 func periodSeriesIdentity(subjectID, frequency, seriesTag string) string {
 	return strings.TrimSpace(subjectID) + "\x00" + strings.ToLower(strings.TrimSpace(frequency)) + "\x00" + strings.TrimSpace(seriesTag)
 }
@@ -818,18 +804,6 @@ func periodCoverageGaps(expected map[string]struct{}, counts map[string]uint64, 
 	sort.Strings(partial)
 	sort.Strings(empty)
 	return partial, empty
-}
-
-func formatPeriodSeriesKey(key string) string {
-	parts := strings.Split(key, "\x00")
-	if len(parts) >= 2 {
-		formatted := parts[0] + "/" + parts[1]
-		if len(parts) >= 3 && parts[2] != "" {
-			formatted += "/" + parts[2]
-		}
-		return formatted
-	}
-	return key
 }
 
 var errViewBuildFailed = errors.New("view build has been marked failed")

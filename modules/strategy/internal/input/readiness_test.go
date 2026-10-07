@@ -35,3 +35,20 @@ func TestReadinessCheckerRequiresCurrentSourceRow(t *testing.T) {
 		t.Fatalf("strict incomplete error lost resolved pool: %v", err)
 	}
 }
+
+// CheckWithPresence additionally verifies that the source View contained a
+// current-period row for every admitted instrument.  Keeping this separate
+// from Check preserves the small, map-based contract used by unit callers
+// while allowing the RPC loader to distinguish a missing source row from a
+// row that merely has no factor value yet.
+func (ReadinessChecker) CheckWithPresence(pool PoolResult, values map[string]InstrumentInput, present map[string]bool, requiredFactors []string) error {
+	requiredByInstrument := make(map[string][]string, len(pool.Items))
+	for _, item := range pool.Items {
+		requiredByInstrument[item.InstrumentID] = append([]string(nil), requiredFactors...)
+	}
+	return (ReadinessChecker{}).CheckWithPresenceByInstrument(pool, values, present, requiredByInstrument)
+}
+
+func (ReadinessChecker) Check(pool PoolResult, values map[string]InstrumentInput, requiredFactors []string) error {
+	return (ReadinessChecker{}).CheckWithPresence(pool, values, nil, requiredFactors)
+}

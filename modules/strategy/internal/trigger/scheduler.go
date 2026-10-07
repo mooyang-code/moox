@@ -26,27 +26,6 @@ type ScheduleJob struct {
 	Run      func(context.Context, time.Time) error
 }
 
-func (s *Scheduler) Start(ctx context.Context, jobs []ScheduleJob) error {
-	if s == nil {
-		return errors.New("strategy scheduler is nil")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cron != nil {
-		return errors.New("strategy scheduler is already started")
-	}
-	c, cancel := context.WithCancel(ctx)
-	cronRunner, err := buildCron(c, jobs, s.OnError, true)
-	if err != nil {
-		cancel()
-		return err
-	}
-	cronRunner.Start()
-	s.cron = cronRunner
-	s.cancel = cancel
-	return nil
-}
-
 // StartDynamic refreshes schedule jobs periodically. Definitions and
 // instances are editable while the process is running, so a static cron list
 // would require an unnecessary restart. The callback is expected to return

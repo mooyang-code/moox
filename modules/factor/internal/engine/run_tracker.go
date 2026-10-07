@@ -51,19 +51,6 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 	}
 }
 
-func (t *runTracker) latest(setID string, now time.Time) domain.SetRunSummary {
-	if t == nil {
-		return domain.SetRunSummary{SetID: setID}
-	}
-	t.mu.RLock()
-	run, ok := t.runs[setID]
-	t.mu.RUnlock()
-	if !ok {
-		return domain.SetRunSummary{SetID: setID}
-	}
-	return summaryOf(setID, run, now)
-}
-
 func (t *runTracker) all(now time.Time) []domain.SetRunSummary {
 	if t == nil {
 		return nil

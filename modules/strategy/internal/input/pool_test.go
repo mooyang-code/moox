@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/config"
-	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
 func TestBuildPoolFiltersHistoryAndChoosesPreferredVenue(t *testing.T) {
@@ -64,23 +63,5 @@ func TestBuildPoolAllowsMissingHistoricalInclude(t *testing.T) {
 	}
 	if len(got.Items) != 1 || got.Items[0].InstrumentID != "BTC" {
 		t.Fatalf("unexpected pool items: %+v", got.Items)
-	}
-}
-
-func TestEvaluationInputHashIsStableAcrossItemOrder(t *testing.T) {
-	a := InstrumentInput{PoolItem: PoolItem{InstrumentID: "A"}, Values: map[string]quant.Decimal{"x": quant.Must("1")}}
-	b := InstrumentInput{PoolItem: PoolItem{InstrumentID: "B"}, Values: map[string]quant.Decimal{"x": quant.Must("2")}}
-	left := EvaluationInput{SpaceID: "s", StrategyID: "st", PeriodEnd: "p", Items: []InstrumentInput{a, b}}
-	right := EvaluationInput{SpaceID: "s", StrategyID: "st", PeriodEnd: "p", Items: []InstrumentInput{b, a}}
-	h1, err := Hash(left)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h2, err := Hash(right)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h1 != h2 {
-		t.Fatalf("hash changed with order: %s != %s", h1, h2)
 	}
 }

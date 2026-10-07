@@ -514,36 +514,6 @@ exit 1`,
 	return skillGatewaySnapshot{Secret: secret, NodeID: lines[2], Registry: registry}, nil
 }
 
-func readRemoteGatewayNodeID(ctx context.Context, transport setupssh.Client, path string) (string, error) {
-	if transport == nil || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("Gateway node ID unavailable")
-	}
-	result, err := transport.Run(ctx, []string{
-		"sh", "-lc",
-		`set -eu
-path="$1"
-[ -f "$path" ]
-[ ! -L "$path" ]
-mode=$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")
-[ "$mode" = 600 ]
-size=$(wc -c <"$path")
-[ "$size" -gt 0 ]
-[ "$size" -le 4096 ]
-count=$(awk -F= '$1 == "MOOX_GATEWAY_NODE_ID" { count++ } END { print count + 0 }' "$path")
-[ "$count" -eq 1 ]
-value=$(sed -n 's/^MOOX_GATEWAY_NODE_ID=//p' "$path")
-case "$value" in
-  ''|*[!A-Za-z0-9._-]*) exit 1 ;;
-esac
-printf '%s' "$value"`,
-		"moox-read-gateway-target-node", path,
-	}, nil)
-	if err != nil || result.Stdout == "" || len(result.Stdout) > 256 || strings.ContainsAny(result.Stdout, "\r\n") {
-		return "", fmt.Errorf("Gateway node ID unavailable")
-	}
-	return result.Stdout, nil
-}
-
 func writeSkillConfigAtomic0600(path string, content []byte, rename func(string, string) error) (err error) {
 	if rename == nil {
 		return fmt.Errorf("rename dependency is required")

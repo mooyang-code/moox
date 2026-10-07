@@ -1,9 +1,6 @@
 package rpc
 
 import (
-	"fmt"
-	"time"
-
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
@@ -80,38 +77,4 @@ func recalcJobToPB(job RecalcJob) *factorpb.RecalcJob {
 		CreatedAt:    factorwire.FormatTime(job.CreatedAt),
 		UpdatedAt:    factorwire.FormatTime(job.UpdatedAt),
 	}
-}
-
-func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
-	if pb == nil {
-		return RecalcJob{}, fmt.Errorf("recalc job is required")
-	}
-	var job RecalcJob
-	job.JobID = pb.GetJobId()
-	job.RequestID = pb.GetRequestId()
-	job.SetID = pb.GetSetId()
-	job.FactorIDs = factorwire.CloneStrings(pb.GetFactorIds())
-	job.Subjects = factorwire.CloneStrings(pb.GetSubjects())
-	job.Status = pb.GetStatus()
-	job.Error = pb.GetError()
-	job.EngineID = pb.GetEngineId()
-	timeFields := []struct {
-		name   string
-		value  string
-		target *time.Time
-	}{
-		{name: "start_time", value: pb.GetStartTime(), target: &job.StartTime},
-		{name: "end_time", value: pb.GetEndTime(), target: &job.EndTime},
-		{name: "progress_time", value: pb.GetProgressTime(), target: &job.ProgressTime},
-		{name: "created_at", value: pb.GetCreatedAt(), target: &job.CreatedAt},
-		{name: "updated_at", value: pb.GetUpdatedAt(), target: &job.UpdatedAt},
-	}
-	for _, field := range timeFields {
-		parsed, err := factorwire.ParseTime(field.value)
-		if err != nil {
-			return RecalcJob{}, fmt.Errorf("%s: %w", field.name, err)
-		}
-		*field.target = parsed
-	}
-	return job, nil
 }

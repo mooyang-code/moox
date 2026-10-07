@@ -181,15 +181,6 @@ func (c *Client) RestoreTradeDeployments(ctx context.Context, nodeID string, sna
 	return restoreErr
 }
 
-// ApplyTradeConsolePlacement records the browser-facing TradeConsole endpoint
-// on the control node. Trade may run on a dedicated execution node, while the
-// Admin browser gateway still resolves the canonical trade_console row from
-// its own node. Keeping this placement explicit prevents a control deploy from
-// silently restoring the loopback seed (127.0.0.1:11200).
-func (c *Client) ApplyTradeConsolePlacement(ctx context.Context, host string) error {
-	return c.applyTradeConsolePlacement(ctx, host, "")
-}
-
 // ApplyTradeConsolePlacementForNode additionally records the authenticated
 // remote Gateway origin used by Admin's browser BFF. The direct TradeConsole
 // listener stays loopback-only on the execution node.

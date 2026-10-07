@@ -373,22 +373,6 @@ func (r *InventoryReconciler) stopAll() {
 	}
 }
 
-func (r *InventoryReconciler) bindingRefs() []datasetRef {
-	r.reconcileMu.Lock()
-	defer r.reconcileMu.Unlock()
-	refs := make([]datasetRef, 0, len(r.bindings))
-	for ref := range r.bindings {
-		refs = append(refs, ref)
-	}
-	sort.Slice(refs, func(i, j int) bool {
-		if refs[i].spaceID != refs[j].spaceID {
-			return refs[i].spaceID < refs[j].spaceID
-		}
-		return refs[i].datasetID < refs[j].datasetID
-	})
-	return refs
-}
-
 func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions, EventConsumerOptions, map[datasetRef]struct{}, map[datasetRef]struct{}, map[string]struct{}, error) {
 	if len(options.PartitionConfigs) == 0 {
 		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("storage view dynamic consumers require partition configuration")
@@ -447,22 +431,6 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("storage view factor consumer partition is required")
 	}
 	return factor, misc, exact, dynamicExact, allowedSpaces, nil
-}
-
-func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {
-	set := make(map[datasetRef]struct{}, len(routes))
-	for _, route := range routes {
-		spaceID := strings.TrimSpace(route.SpaceID)
-		datasetID := strings.TrimSpace(route.DatasetID)
-		if spaceID != "" && datasetID != "" && datasetID != "*" {
-			set[datasetRef{spaceID: spaceID, datasetID: datasetID}] = struct{}{}
-		}
-	}
-	return set
-}
-
-func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string, string) {
-	return dynamicDatasetConsumerIdentityForPartition("misc", miscDurable, ref)
 }
 
 func dynamicDatasetConsumerIdentityForPartition(partitionPrefix, durablePrefix string, ref datasetRef) (string, string) {
