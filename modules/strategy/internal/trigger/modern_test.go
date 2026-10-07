@@ -155,9 +155,13 @@ rules:
 	}
 	period := now.Add(-time.Minute).Truncate(time.Minute)
 	loader := fakeInputLoader{value: input.EvaluationInput{SpaceID: "space", StrategyID: "s1", PeriodEnd: period.Format(time.RFC3339Nano), SourceViewID: "source", DataFrequency: "1m", Items: []input.InstrumentInput{{PoolItem: input.PoolItem{InstrumentID: "BTC", SubjectID: "btc"}, Values: map[string]quant.Decimal{"bias": quant.Must("1")}}, {PoolItem: input.PoolItem{InstrumentID: "ETH", SubjectID: "eth"}, Values: map[string]quant.Decimal{"bias": quant.Must("2")}}}}}
-	p := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return now }}
+	var runs []string
+	p := &Processor{Store: repo, Loader: loader, Now: func() time.Time { return now }, ObserveRun: func(result string, _ time.Time) { runs = append(runs, result) }}
 	if err := p.Handle(context.Background(), PeriodReady{MessageID: "m1", EventName: "ViewDataReady", SpaceID: "space", ViewID: "factor", Frequency: "1m", PeriodTime: period, Status: "degraded", FactorStates: map[string]FactorPeriodState{"unrelated": {Status: "degraded"}}}); err != nil {
 		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0] != "success" {
+		t.Fatalf("observed runs=%v, want one success", runs)
 	}
 	result, err := repo.LatestResult(context.Background(), "i1", session)
 	if err != nil {

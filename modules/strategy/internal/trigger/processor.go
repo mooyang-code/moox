@@ -139,6 +139,11 @@ type Processor struct {
 	// It must validate instance_id and session_id together.
 	SessionGeneration func(context.Context, string, string, string, string) (int64, error)
 	Now               func() time.Time
+	// ObserveRun receives the outcome of each instance evaluation that got as
+	// far as evaluating rules ("success" once its targets are committed,
+	// "error" otherwise), so Monitor can tell a failing strategy from an idle
+	// one.
+	ObserveRun func(result string, at time.Time)
 }
 
 const (
@@ -146,6 +151,12 @@ const (
 	// publication after the source period closes.
 	strategyResultValidityBars = 4
 )
+
+func (p *Processor) observeRun(result string) {
+	if p.ObserveRun != nil {
+		p.ObserveRun(result, p.now())
+	}
+}
 
 func (p *Processor) reportDiagnostic(err error) {
 	if p != nil && err != nil && p.Diagnostic != nil {
@@ -484,6 +495,7 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 		}
 		evaluation, evalErr := selection.Evaluate(dsl, evaluated, previous)
 		if evalErr != nil {
+			p.observeRun("error")
 			p.reportDiagnostic(fmt.Errorf("instance %s evaluate: %w", instance.InstanceID, evalErr))
 			if retryErr == nil {
 				if retryableModernError(evalErr) || (event.TargetInstanceID != "" && errors.Is(evalErr, input.ErrStrictIncomplete)) {
@@ -565,10 +577,13 @@ func (p *Processor) handleInstances(ctx context.Context, event PeriodReady) erro
 			}
 		}
 		if _, _, commitErr := p.Store.CommitResult(ctx, store.CommitResultRequest{Result: result, ExpectedResultID: &expectedResultID, Now: p.now()}); commitErr != nil {
+			p.observeRun("error")
 			p.reportDiagnostic(fmt.Errorf("instance %s commit result %s: %w", instance.InstanceID, result.ResultID, commitErr))
 			if retryErr == nil && retryableCommitResultError(commitErr) {
 				retryErr = commitErr
 			}
+		} else {
+			p.observeRun("success")
 		}
 	}
 	if retryErr != nil {

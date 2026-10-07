@@ -30,6 +30,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -96,7 +97,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
-	readyConsumer, readyClient, readyProcessor, readyErr = newReadyConsumer(ctx, repo, cfg)
+	moduleMetrics, err := registerMetricsReporter(s)
+	if err != nil {
+		return nil, nil, err
+	}
+	readyConsumer, readyClient, readyProcessor, readyErr = newReadyConsumer(ctx, repo, cfg, moduleMetrics)
 	if readyErr != nil {
 		return nil, nil, readyErr
 	}
@@ -105,9 +110,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		if err := startScheduleTrigger(ctx, repo, readyProcessor, scheduler); err != nil {
 			return nil, nil, fmt.Errorf("start strategy scheduler: %w", err)
 		}
-	}
-	if _, err := registerMetricsReporter(s); err != nil {
-		return nil, nil, err
 	}
 	// Disable is committed locally before the Trade release RPC. Retry modern
 	// session/owner release on startup and periodically so a crash or temporary
@@ -203,7 +205,7 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 	})
 }
 
-func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*strategyeventconsumer.Consumer, *jetstream.Client, *strategytrigger.Processor, error) {
+func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config, moduleMetrics *report.ModuleMetrics) (*strategyeventconsumer.Consumer, *jetstream.Client, *strategytrigger.Processor, error) {
 	if strings.TrimSpace(cfg.Factor.Target) == "" || strings.TrimSpace(cfg.Storage.Target) == "" {
 		return nil, nil, nil, nil
 	}
@@ -216,6 +218,9 @@ func newReadyConsumer(ctx context.Context, repo *store.Store, cfg Config) (*stra
 	logicalOwner := newLogicalAccountOwnerClient(cfg.Trade)
 	poolRegistry := defaultPoolRegistry()
 	processor := &strategytrigger.Processor{
+		ObserveRun: func(result string, at time.Time) {
+			_ = moduleMetrics.ObserveRun("evaluate", result, "strategy-targets", at)
+		},
 		Inbox: repo, Store: repo, Loader: storageio.Loader{Reader: reader}, PoolRegistry: poolRegistry,
 		Compile: func(compileCtx context.Context, dsl config.DSL, spaceID string) (compiler.CompiledStrategy, error) {
 			selected := compilerFactory(spaceID)

@@ -11,6 +11,7 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
 
@@ -197,6 +198,13 @@ func buildBusinessFreshnessReporterWithInterval(
 				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
 			}
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
+			items[item.spaceID+"\x00"+item.checkID] = item
+		}
+		moduleItems, err := moduleHealthItems(ctx, builder.Metrics, report.BuiltInModuleHealthChecks(), overview.GeneratedAt)
+		if err != nil {
+			return err
+		}
+		for _, item := range moduleItems {
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		enabled := true
