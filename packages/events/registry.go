@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
@@ -76,9 +75,6 @@ var (
 	ObservabilityHostSnapshotReported = declareEvent("event.observability.host.snapshot.reported", 1, "MOOX_OBSERVABILITY", "hostagent", func() proto.Message {
 		return &hostmetricpb.HostMetric{}
 	}, validateObservabilityHostSnapshotReported)
-	ObservabilityHealthCheckReported = declareEvent("event.observability.health.check.reported", 1, "MOOX_OBSERVABILITY", "watchdog", func() proto.Message {
-		return &observabilitypb.HealthCheckReport{}
-	}, validateObservabilityHealthCheckReported)
 	DatasetRowsUpserted = declareEvent("event.storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)

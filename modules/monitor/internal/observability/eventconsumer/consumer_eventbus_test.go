@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
@@ -23,7 +22,7 @@ import (
 )
 
 func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
-	var metricCalls, hostCalls, healthCalls atomic.Int32
+	var metricCalls, hostCalls atomic.Int32
 	ctx, consumer, publisher, js := newObservabilityFixture(t, Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error {
 			metricCalls.Add(1)
@@ -33,15 +32,11 @@ func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
 			hostCalls.Add(1)
 			return nil
 		},
-		Health: func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error {
-			healthCalls.Add(1)
-			return nil
-		},
 	})
 	publishAllObservabilityEvents(t, ctx, publisher)
 
 	seen := map[string]bool{}
-	for len(seen) < 3 {
+	for len(seen) < 2 {
 		delivery := fetchDelivery(t, ctx, consumer)
 		result := consumer.Handle(ctx, delivery)
 		if result.Decision != jetstream.ACK {
@@ -52,11 +47,11 @@ func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
 		}
 		seen[routeFromSubject(delivery.Subject)] = true
 	}
-	if len(seen) != 3 {
+	if len(seen) != 2 {
 		t.Fatalf("routes = %v", seen)
 	}
-	if metricCalls.Load() != 1 || hostCalls.Load() != 1 || healthCalls.Load() != 1 {
-		t.Fatalf("route calls metrics=%d host=%d health=%d", metricCalls.Load(), hostCalls.Load(), healthCalls.Load())
+	if metricCalls.Load() != 1 || hostCalls.Load() != 1 {
+		t.Fatalf("route calls metrics=%d host=%d", metricCalls.Load(), hostCalls.Load())
 	}
 	info, err := js.ConsumerInfo(events.ObservabilityStreamName(), DefaultConsumer)
 	if err != nil {
@@ -70,9 +65,9 @@ func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
 func TestUnifiedObservabilityConsumerTermsInvalidAndUnknownEvents(t *testing.T) {
 	ctx, consumer, _, js := newObservabilityFixture(t, noopRoutes())
 	before := testutil.ToFloat64(rejectedEvents)
-	publishRawEvent(t, js, "moox.event.observability.health.check.reported.v1.mooxsys.bad", &eventpb.EventMessage{
-		EventId: "invalid-health", EventName: events.ObservabilityHealthCheckReported.Name(),
-		EventVersion: events.ObservabilityHealthCheckReported.Version(), SpaceId: "mooxsys",
+	publishRawEvent(t, js, "moox.event.observability.metrics.snapshot.reported.v1.mooxsys.bad", &eventpb.EventMessage{
+		EventId: "invalid-metrics", EventName: events.ObservabilityMetricsSnapshotReported.Name(),
+		EventVersion: events.ObservabilityMetricsSnapshotReported.Version(), SpaceId: "mooxsys",
 		SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte("not-protobuf"),
 	})
 	publishRawEvent(t, js, "moox.event.observability.unknown.reported.v1.mooxsys.bad", &eventpb.EventMessage{
@@ -99,7 +94,6 @@ func TestUnifiedObservabilityConsumerNaksTransientRouteFailure(t *testing.T) {
 	ctx, consumer, publisher, _ := newObservabilityFixture(t, Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error { return transient },
 		Host:    countHostRoute(t, "host"),
-		Health:  countHealthRoute(t, "health"),
 	})
 	publishMetric(t, ctx, publisher, "metric-transient")
 	delivery := fetchDelivery(t, ctx, consumer)
@@ -228,7 +222,6 @@ func noopRoutes() Routes {
 	return Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error { return nil },
 		Host:    func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
-		Health:  func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error { return nil },
 	}
 }
 
@@ -239,12 +232,6 @@ func publishAllObservabilityEvents(t *testing.T, ctx context.Context, publisher 
 	_, err := publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, &hostmetricpb.HostMetric{
 		AgentId: agentID, Hostname: "host-a", Snapshot: &hostmetricpb.HostSnapshot{},
 	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: agentID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = publisher.Publish(ctx, events.ObservabilityHealthCheckReported, &observabilitypb.HealthCheckReport{
-		ObserverId: "monitor", CheckId: "gateway-ready", Kind: "trpc", Success: true, CheckedAt: timestamppb.Now(),
-	}, events.PublishOptions{EventID: "health-route", OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "monitor/gateway-ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,19 +286,12 @@ func countHostRoute(t *testing.T, name string) func(context.Context, *eventpb.Ev
 	return func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil }
 }
 
-func countHealthRoute(t *testing.T, name string) func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error {
-	t.Helper()
-	return func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error { return nil }
-}
-
 func routeFromSubject(subject string) string {
 	switch {
 	case contains(subject, ".metrics."):
 		return "metrics"
 	case contains(subject, ".host."):
 		return "host"
-	case contains(subject, ".health."):
-		return "health"
 	default:
 		return fmt.Sprintf("unknown:%s", subject)
 	}

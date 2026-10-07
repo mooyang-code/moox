@@ -20,7 +20,6 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -101,8 +100,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 			_, commitErr := messageStore.CommitIngest(routeCtx, message, report, samples)
 			return commitErr
 		},
-		Host:   func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
-		Health: func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error { return nil },
+		Host: func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
 	}
 	consumer, err := observabilityconsumer.NewConsumer(ctx, eventClient, registry, observabilityconsumer.DefaultConfig(), routes)
 	if err != nil {

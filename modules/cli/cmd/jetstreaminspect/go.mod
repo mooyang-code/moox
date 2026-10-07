@@ -26,7 +26,6 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
@@ -62,7 +61,6 @@ replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../../../packa
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../../../packages/metricspb
 
-replace github.com/mooyang-code/moox/packages/observabilitypb => ../../../../packages/observabilitypb
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../../../packages/storagepb
 

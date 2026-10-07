@@ -8,7 +8,6 @@ require (
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.51.0
@@ -62,7 +61,6 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../metricspb
 
 replace github.com/mooyang-code/moox/packages/marketfetchpb => ../marketfetchpb
 
-replace github.com/mooyang-code/moox/packages/observabilitypb => ../observabilitypb
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../storagepb
 

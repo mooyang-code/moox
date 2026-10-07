@@ -19,7 +19,6 @@ require (
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
@@ -147,7 +146,6 @@ replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/ma
 
 replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 
-replace github.com/mooyang-code/moox/packages/observabilitypb => ../../packages/observabilitypb
 
 replace github.com/mooyang-code/moox/packages/cloudjobpb => ../../packages/cloudjobpb
 

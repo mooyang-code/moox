@@ -10,8 +10,6 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
@@ -40,7 +38,6 @@ type Runtime struct {
 	hostWriteOK              atomic.Int64
 	metricsReporterError     atomic.Value
 	ModuleMetrics            *report.ModuleMetrics
-	ObservabilityHealthRoute func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error
 }
 
 func (r *Runtime) recordObservabilityWriteFailure(err error) {

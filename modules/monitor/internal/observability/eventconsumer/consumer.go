@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -54,12 +53,11 @@ func DefaultConfig() Config {
 type Routes struct {
 	Metrics func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error
 	Host    func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error
-	Health  func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error
 }
 
 func (r Routes) validate() error {
-	if r.Metrics == nil || r.Host == nil || r.Health == nil {
-		return errors.New("observability metrics, host, and health routes are required")
+	if r.Metrics == nil || r.Host == nil {
+		return errors.New("observability metrics and host routes are required")
 	}
 	return nil
 }
@@ -220,14 +218,6 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 		}
 		if err := c.routes.Host(ctx, message, payload); err != nil {
 			return c.routeError(ctx, "host", err, delivery.DeliveryCount)
-		}
-	case matches(message, events.ObservabilityHealthCheckReported):
-		payload, ok := decoded.Payload.(*observabilitypb.HealthCheckReport)
-		if !ok {
-			return c.reject(fmt.Errorf("health route payload has type %T", decoded.Payload))
-		}
-		if err := c.routes.Health(ctx, message, payload); err != nil {
-			return c.routeError(ctx, "health", err, delivery.DeliveryCount)
 		}
 	default:
 		return c.reject(fmt.Errorf("unsupported observability event %s@%d", message.GetEventName(), message.GetEventVersion()))

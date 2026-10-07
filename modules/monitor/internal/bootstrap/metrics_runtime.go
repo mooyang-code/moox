@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -139,12 +138,11 @@ func startObservabilityConsumer(
 			Checks: runtime.Repositories.Checks,
 			ExternalProducers: map[string]struct{}{
 				"moox_collector_scf": {},
-				// Storage and gateway metrics are emitted by internal releases that
-				// may be deployed on a separate host. Their sysdeploy health checks
-				// can be intentionally absent (for example while a remote gateway
-				// is being migrated), but their EventBus credentials are still scoped
-				// to this control plane and must not be dropped from observability.
-				"storage-view": {},
+				// No sysdeploy check registers these producers on every node they
+				// run on: storage-node has no deployment, and moox_gateway also
+				// runs on nodes (such as Storage) without a deployment row of its
+				// own. Their EventBus credentials are still scoped to this control
+				// plane.
 				"storage-node": {},
 				"moox_gateway": {},
 			},
@@ -152,12 +150,6 @@ func startObservabilityConsumer(
 			return klineViewMetricScopes(klineInventory, time.Now().UTC())
 		}),
 		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
-		Health: func(routeCtx context.Context, message *eventpb.EventMessage, health *observabilitypb.HealthCheckReport) error {
-			if runtime.ObservabilityHealthRoute == nil {
-				return nil
-			}
-			return runtime.ObservabilityHealthRoute(routeCtx, message, health)
-		},
 	}
 	runtime.Go(func() {
 		for ctx.Err() == nil {

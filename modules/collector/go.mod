@@ -40,7 +40,6 @@ require (
 	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/routeprobe v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
@@ -86,7 +85,6 @@ replace github.com/mooyang-code/moox/packages/routeprobe => ../../packages/route
 
 replace github.com/mooyang-code/moox/packages/tdx => ../../packages/tdx
 
-replace github.com/mooyang-code/moox/packages/observabilitypb => ../../packages/observabilitypb
 
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 

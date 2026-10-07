@@ -150,7 +150,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
 	assert.Contains(t, yaml, "moox.event.observability.metrics.snapshot.reported.v1.>")
-	assert.Contains(t, yaml, "moox.event.observability.health.check.reported.v1.>")
+	assert.NotContains(t, yaml, "moox.event.observability.health.")
 	assert.Contains(t, yaml, "moox.event.observability.host.snapshot.reported.v1.>")
 	internalAdminACL := eventBusACLBlock(yaml, "eventbus-internal-admin")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "$JS.EVENT.ADVISORY.API"]}`, aclLine(internalAdminACL, "subscribe:"))
@@ -233,7 +233,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>")
 	workerACL := eventBusACLBlock(yaml, "cloudnode-worker")
 	assert.Contains(t, workerACL, "moox.event.observability.metrics.snapshot.reported.v1.>")
-	assert.Contains(t, workerACL, "moox.event.observability.health.check.reported.v1.>")
 	assert.NotContains(t, workerACL, "moox.event.observability.host.snapshot")
 	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.CREATE.MOOX_CLOUDNODE_EXEC.>")
 	assert.Contains(t, cloudnodeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>")
@@ -249,7 +248,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.API`)
 	assert.NotContains(t, cloudnodeACL, `subscribe: {allow: ["$JS.ACK`)
 	assert.Contains(t, cloudnodeACL, `subscribe: {allow: ["_INBOX.>"]}`)
-	assert.Equal(t, `publish: {allow: ["moox.event.observability.metrics.snapshot.reported.v1.>", "moox.event.observability.health.check.reported.v1.>", "$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>", "$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>", "$JS.ACK.MOOX_CLOUDNODE_EXEC.>"]}`, aclLine(workerACL, "publish:"))
+	assert.Equal(t, `publish: {allow: ["moox.event.observability.metrics.snapshot.reported.v1.>", "$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>", "$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>", "$JS.ACK.MOOX_CLOUDNODE_EXEC.>"]}`, aclLine(workerACL, "publish:"))
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(workerACL, "subscribe:"))
 	publisherACL := eventBusACLBlock(yaml, "market-fetch-publisher")
 	assert.Contains(t, publisherACL, "moox.event.market.fetch.batch.completed.v1.>")
@@ -533,7 +532,6 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		},
 		"metrics-publisher": {
 			"moox.event.observability.metrics.snapshot.reported.v1.mooxsys.trade/instance-1",
-			"moox.event.observability.health.check.reported.v1.mooxsys.trade/instance-1",
 		},
 	} {
 		publisher, connectErr := nats.Connect(

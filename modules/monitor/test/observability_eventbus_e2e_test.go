@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -41,7 +40,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var metricCalls, hostCalls, healthCalls, retryCalls int
+	var metricCalls, hostCalls, retryCalls int
 	routes := observabilityconsumer.Routes{
 		Metrics: func(_ context.Context, message *eventpb.EventMessage, _ *metricspb.MetricReport) error {
 			metricCalls++
@@ -55,10 +54,6 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 		},
 		Host: func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
 			hostCalls++
-			return nil
-		},
-		Health: func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error {
-			healthCalls++
 			return nil
 		},
 	}
@@ -82,9 +77,8 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	publishObservabilityHealth(t, ctx, publisher, "health-routed")
 
-	for range 3 {
+	for range 2 {
 		delivery := fetchObservabilityDelivery(t, ctx, consumer)
 		result := consumer.Handle(ctx, delivery)
 		if result.Decision != jetstream.ACK {
@@ -94,8 +88,8 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if metricCalls != 1 || hostCalls != 1 || healthCalls != 1 {
-		t.Fatalf("deduplicated route calls metrics=%d host=%d health=%d", metricCalls, hostCalls, healthCalls)
+	if metricCalls != 1 || hostCalls != 1 {
+		t.Fatalf("deduplicated route calls metrics=%d host=%d", metricCalls, hostCalls)
 	}
 
 	publishObservabilityMetric(t, ctx, publisher, "metrics-retry")
@@ -117,7 +111,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	publishMalformedObservabilityHealth(t, server.JetStream())
+	publishMalformedObservabilityMetric(t, server.JetStream())
 	malformed := fetchObservabilityDelivery(t, ctx, consumer)
 	term := consumer.Handle(ctx, malformed)
 	if term.Decision != jetstream.TERM {
@@ -130,7 +124,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 	if err := consumer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	publishObservabilityHealth(t, ctx, publisher, "health-after-restart")
+	publishObservabilityMetric(t, ctx, publisher, "metrics-after-restart")
 	restarted, err := observabilityconsumer.NewConsumer(ctx, client, registry, cfg, routes)
 	if err != nil {
 		t.Fatal(err)
@@ -164,24 +158,11 @@ func publishObservabilityMetric(t *testing.T, ctx context.Context, publisher *ev
 	}
 }
 
-func publishObservabilityHealth(t *testing.T, ctx context.Context, publisher *events.Publisher, eventID string) {
-	t.Helper()
-	if _, err := publisher.Publish(ctx, events.ObservabilityHealthCheckReported, &observabilitypb.HealthCheckReport{
-		ObserverId: "external-observer", CheckId: "monitor_ready", Kind: "http",
-		Success: true, CheckedAt: timestamppb.Now(),
-	}, events.PublishOptions{
-		EventID: eventID, OccurredAt: time.Now().UTC(),
-		SpaceID: "mooxsys", SubjectID: "external-observer/monitor_ready",
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func publishMalformedObservabilityHealth(t *testing.T, js nats.JetStreamContext) {
+func publishMalformedObservabilityMetric(t *testing.T, js nats.JetStreamContext) {
 	t.Helper()
 	message := &eventpb.EventMessage{
-		EventId: "health-malformed", EventName: events.ObservabilityHealthCheckReported.Name(),
-		EventVersion: events.ObservabilityHealthCheckReported.Version(),
+		EventId: "metrics-malformed", EventName: events.ObservabilityMetricsSnapshotReported.Name(),
+		EventVersion: events.ObservabilityMetricsSnapshotReported.Version(),
 		SpaceId:      "mooxsys", SubjectId: "bad", OccurredAt: timestamppb.Now(),
 		Payload: []byte("not-protobuf"),
 	}
@@ -189,7 +170,7 @@ func publishMalformedObservabilityHealth(t *testing.T, js nats.JetStreamContext)
 	if err != nil {
 		t.Fatal(err)
 	}
-	natsMessage := nats.NewMsg("moox.event.observability.health.check.reported.v1.mooxsys.bad")
+	natsMessage := nats.NewMsg("moox.event.observability.metrics.snapshot.reported.v1.mooxsys.bad")
 	natsMessage.Header.Set(nats.MsgIdHdr, message.GetEventId())
 	natsMessage.Header.Set("Content-Type", events.ContentType)
 	natsMessage.Data = raw

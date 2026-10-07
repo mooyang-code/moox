@@ -20,7 +20,6 @@ func TestBuiltInEvents(t *testing.T) {
 	want := []string{
 		"event.cloudnode.job.execution.requested@1",
 		"event.market.fetch.batch.completed@1",
-		"event.observability.health.check.reported@1",
 		"event.observability.host.snapshot.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
 		"event.storage.collector.period.completed@1",
@@ -32,7 +31,6 @@ func TestBuiltInEvents(t *testing.T) {
 	}
 	wantOwners := map[string]string{
 		"event.cloudnode.job.execution.requested@1":       "cloudnode",
-		"event.observability.health.check.reported@1":     "watchdog",
 		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.metrics.snapshot.reported@1": "service",
 		"event.market.fetch.batch.completed@1":            "collector",
@@ -145,7 +143,6 @@ func TestObservabilityEventsShareOneStream(t *testing.T) {
 	for _, event := range []Event{
 		ObservabilityMetricsSnapshotReported,
 		ObservabilityHostSnapshotReported,
-		ObservabilityHealthCheckReported,
 	} {
 		require.Equal(t, "MOOX_OBSERVABILITY", event.Stream())
 		family, err := registry.FamilyPattern(event)

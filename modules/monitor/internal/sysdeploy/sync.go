@@ -22,10 +22,13 @@ var errAdminUnavailable = errors.New("admin sysdeploy unavailable")
 
 type Source interface {
 	DesiredDeployments(context.Context) ([]*adminpb.ServiceDeployment, error)
+	// NodeHosts maps each node to the host monitor reaches it on.
+	NodeHosts(context.Context) (map[string]string, error)
 }
 
 type deploymentClient interface {
 	ListServiceDeployments(context.Context, *adminpb.ListServiceDeploymentsReq, ...client.Option) (*adminpb.ListServiceDeploymentsRsp, error)
+	ListGatewayNodes(context.Context, *adminpb.ListGatewayNodesReq, ...client.Option) (*adminpb.ListGatewayNodesRsp, error)
 }
 
 type ClientSource struct {
@@ -63,6 +66,48 @@ func (s *ClientSource) DesiredDeployments(ctx context.Context) ([]*adminpb.Servi
 	return nil, fmt.Errorf("sysdeploy returned more than %d deployments", maxDeployments)
 }
 
+// NodeHosts reads every node's public host from its gateway node record.
+func (s *ClientSource) NodeHosts(ctx context.Context) (map[string]string, error) {
+	const pageSize = 100
+	const maxNodes = 500
+	hosts := make(map[string]string)
+	for page := uint32(1); page <= maxNodes/pageSize; page++ {
+		rsp, err := s.client.ListGatewayNodes(ctx, &adminpb.ListGatewayNodesReq{Page: &commonpb.Page{Page: page, Size: pageSize}})
+		if err != nil {
+			return nil, err
+		}
+		if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+			return nil, fmt.Errorf("%w: %s", errAdminUnavailable, rsp.GetRetInfo().GetMsg())
+		}
+		for _, node := range rsp.GetNodes() {
+			if host := publicHost(node.GetPublicAddress()); host != "" {
+				hosts[strings.TrimSpace(node.GetNodeId())] = host
+			}
+		}
+		if !rsp.GetPageResult().GetHasMore() {
+			return hosts, nil
+		}
+	}
+	return nil, fmt.Errorf("sysdeploy returned more than %d gateway nodes", maxNodes)
+}
+
+// publicHost extracts the host of a gateway public address, which may be a
+// URL ("https://host:port") or a bare host.
+func publicHost(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return ""
+	}
+	if !strings.Contains(address, "://") {
+		address = "//" + address
+	}
+	parsed, err := url.Parse(address)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
+}
+
 type Syncer struct {
 	checks *store.CheckRepository
 	source Source
@@ -80,10 +125,16 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return s.SyncDeployments(ctx, deployments)
+	nodeHosts, err := s.source.NodeHosts(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return s.SyncDeployments(ctx, deployments, nodeHosts)
 }
 
-func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.ServiceDeployment) (int, error) {
+// SyncDeployments reconciles the sysdeploy checks. A health endpoint a remote
+// node exposes on loopback is probed on that node's host from nodeHosts.
+func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.ServiceDeployment, nodeHosts map[string]string) (int, error) {
 	manifest, err := doctor.LoadEmbeddedManifest()
 	if err != nil {
 		return 0, err
@@ -99,18 +150,17 @@ func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.Ser
 		if deployment == nil || !processes[deployment.GetServiceName()] {
 			continue
 		}
-		check, err := checkFromDeployment(deployment)
+		check, err := checkFromDeployment(deployment, nodeHosts)
 		if err != nil {
 			if deployment.GetStatus() == "active" && strings.TrimSpace(deployment.GetNodeId()) != "" && strings.TrimSpace(deployment.GetServiceName()) != "" {
 				// Keep a previously valid check from being auto-disabled merely
 				// because this deployment's current health metadata is invalid.
 				activeIDs[sysDeployCheckID(deployment.GetNodeId(), deployment.GetServiceName())] = struct{}{}
 			}
-			// A malformed or unreachable deployment must not prevent valid
-			// services from being registered in the monitor store.  This is
-			// particularly important for a remote Storage node whose health URL
-			// may intentionally be loopback to that node.  Keep the error for
-			// observability, but continue reconciling the remaining rows.
+			// A malformed deployment, or a remote one whose node has no known
+			// host, must not prevent valid services from being registered in
+			// the monitor store. Keep the error for observability, but continue
+			// reconciling the remaining rows.
 			definitionErrors = append(definitionErrors, err)
 			continue
 		}
@@ -155,7 +205,7 @@ type extraConfig struct {
 	MonitorEnabled     *bool  `json:"monitor_enabled"`
 }
 
-func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, error) {
+func checkFromDeployment(deployment *adminpb.ServiceDeployment, nodeHosts map[string]string) (*domain.Check, error) {
 	if deployment == nil || deployment.GetStatus() != "active" ||
 		strings.TrimSpace(deployment.GetNodeId()) == "" ||
 		strings.TrimSpace(deployment.GetServiceName()) == "" {
@@ -186,11 +236,12 @@ func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, 
 		Headers:         "{}",
 	}
 	if strings.TrimSpace(extra.HealthURL) != "" {
-		if err := validateHealthURL(extra.HealthURL, nodeID); err != nil {
+		healthURL, err := resolveHealthURL(extra.HealthURL, nodeID, nodeHosts)
+		if err != nil {
 			return nil, fmt.Errorf("sysdeploy %s@%s health URL: %w", serviceName, nodeID, err)
 		}
 		check.Kind = domain.CheckKindHTTP
-		check.URL = strings.TrimSpace(extra.HealthURL)
+		check.URL = healthURL
 		kind := strings.ToLower(strings.TrimSpace(extra.HealthKind))
 		if kind == "" {
 			if strings.HasSuffix(strings.TrimRight(check.URL, "/"), "/healthz") {
@@ -208,11 +259,12 @@ func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, 
 		return check, nil
 	}
 	if deployment.GetProtocol() == "http" && deployment.GetHost() != "" && deployment.GetPort() > 0 {
-		if nodeID != "control" && isLoopbackHost(deployment.GetHost()) {
-			return nil, fmt.Errorf("sysdeploy %s@%s TCP host is loopback", serviceName, nodeID)
+		host, err := resolveHost(deployment.GetHost(), nodeID, nodeHosts)
+		if err != nil {
+			return nil, fmt.Errorf("sysdeploy %s@%s TCP host: %w", serviceName, nodeID, err)
 		}
 		check.Kind = domain.CheckKindTCP
-		check.TCPHost = deployment.GetHost()
+		check.TCPHost = host
 		check.TCPPort = int(deployment.GetPort())
 		return check, nil
 	}
@@ -223,15 +275,35 @@ func sysDeployCheckID(nodeID, serviceName string) string {
 	return "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
 }
 
-func validateHealthURL(raw, nodeID string) error {
+// resolveHealthURL validates a health URL and points a remote node's loopback
+// endpoint at that node's host, keeping the port and path.
+func resolveHealthURL(raw, nodeID string, nodeHosts map[string]string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return errors.New("must be an absolute HTTP URL")
+		return "", errors.New("must be an absolute HTTP URL")
 	}
-	if nodeID != "control" && isLoopbackHost(parsed.Hostname()) {
-		return errors.New("loopback is only reachable for the control node")
+	host, err := resolveHost(parsed.Hostname(), nodeID, nodeHosts)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	if port := parsed.Port(); port != "" {
+		parsed.Host = net.JoinHostPort(host, port)
+	} else {
+		parsed.Host = host
+	}
+	return parsed.String(), nil
+}
+
+// resolveHost keeps a routable host, and replaces loopback on a remote node,
+// which monitor cannot reach, with that node's host.
+func resolveHost(host, nodeID string, nodeHosts map[string]string) (string, error) {
+	if nodeID == "control" || !isLoopbackHost(host) {
+		return host, nil
+	}
+	if resolved := nodeHosts[nodeID]; resolved != "" {
+		return resolved, nil
+	}
+	return "", fmt.Errorf("loopback on node %s, whose host is unknown", nodeID)
 }
 
 func isLoopbackHost(host string) bool {
