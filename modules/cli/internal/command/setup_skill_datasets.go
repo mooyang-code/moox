@@ -50,6 +50,12 @@ func loadSkillKlineDatasets(path string) (skillKlineDatasets, error) {
 			if frequency == "" || !canonicalCollectionTaskID.MatchString(taskID) || strings.Contains(taskID, "_symbols_") {
 				return nil, fmt.Errorf("collection task %s/%s has no frequency or a non-canonical task_id", spaceID, taskID)
 			}
+			if !isNormalizedCatalogKey(frequency) {
+				// Skill intervals are lowercase keys queried verbatim as the
+				// frequency, so case-significant frequencies such as 1H cannot
+				// be offered without a separate frequency field.
+				continue
+			}
 			if previous, exists := datasets[frequency]; exists {
 				return nil, fmt.Errorf("tag %s has several %s kline tasks (%s, %s)", tagID, frequency, previous, "dataset_"+taskID)
 			}

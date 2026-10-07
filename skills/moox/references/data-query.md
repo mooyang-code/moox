@@ -58,7 +58,7 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
   --start-time 2026-08-28T00:00:00Z --end-time 2026-08-28T01:00:00Z
 ```
 
-The CLI resolves `data-type + exchange + interval` by exact lookup in the packaged catalog. Never construct or guess a Space, Dataset, frequency, or series tag. For the initial catalog, `crypto/binance/1m` resolves to the Binance spot 1m collection task result `crypto/dataset_dasftksvjhj2jom4vhd0`, frequency `1m`, and series tag `venue:binance|market:spot|source:spot_http`; `crypto/binance/1H` resolves to `crypto/dataset_dasftksvjhj2jom4vhe0`. Report unsupported catalog combinations as errors rather than falling back to another dataset.
+The CLI resolves `data-type + exchange + interval` by exact lookup in the packaged catalog. Never construct or guess a Space, Dataset, frequency, or series tag. For the initial catalog, `crypto/binance/1m` resolves to the Binance spot 1m collection task result `crypto/dataset_dasftksvjhj2jom4vhd0`, frequency `1m`, and series tag `venue:binance|market:spot|source:spot_http`. Report unsupported catalog combinations as errors rather than falling back to another dataset.
 
 ## Handle the result
 
