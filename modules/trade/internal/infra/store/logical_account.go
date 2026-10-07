@@ -25,9 +25,6 @@ type LogicalAccountRecord struct {
 	OwnerSessionID  string
 	AuthFence       string
 	OwnerGeneration int64
-	// OwnerClaimedAt is retained as a source-compatibility alias for older
-	// callers. It now carries the monotonic lifecycle generation, not time.
-	OwnerClaimedAt  int64
 	ExecutionMode   string
 	MarketType      string
 	SettlementAsset string
@@ -102,9 +99,6 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 		owner = &value
 	}
 	ownerGeneration := record.OwnerGeneration
-	if ownerGeneration == 0 {
-		ownerGeneration = record.OwnerClaimedAt
-	}
 	instanceID := record.OwnerInstanceID
 	var ownerInstance *string
 	if !blank(instanceID) {
@@ -207,18 +201,6 @@ func (tx *Tx) SetLogicalAccountOwner(
 	spaceID string,
 	logicalAccountID string,
 	runnerID string,
-) error {
-	return tx.SetLogicalAccountOwnerGeneration(spaceID, logicalAccountID, runnerID)
-}
-
-// SetLogicalAccountOwnerAt is retained for source compatibility. Ownership
-// fencing uses a monotonic generation; wall-clock timestamps are deliberately
-// ignored so cross-process clock skew cannot reject valid targets.
-func (tx *Tx) SetLogicalAccountOwnerAt(
-	spaceID string,
-	logicalAccountID string,
-	runnerID string,
-	claimedAt time.Time,
 ) error {
 	return tx.SetLogicalAccountOwnerGeneration(spaceID, logicalAccountID, runnerID)
 }
@@ -538,13 +520,11 @@ func (tx *Tx) SetLogicalAccountAutomation(
 	}
 	result := tx.db.Exec(`
 		UPDATE t_logical_accounts
-		SET c_automation_state = ?, c_pause_reason = CASE
-			WHEN c_pause_reason = ? AND ? = 'PAUSED' THEN c_pause_reason
-			ELSE ? END,
+		SET c_automation_state = ?, c_pause_reason = ?,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND (? <> 'ACTIVE' OR c_control_mode = 'STRATEGY')
-	`, state, TargetPinMigrationPauseReason, state, reason, spaceID, logicalAccountID, state)
+	`, state, reason, spaceID, logicalAccountID, state)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
 }
 
@@ -713,8 +693,8 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 		SpaceID:     row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		Name: row.Name, OwnerRunnerID: owner, OwnerInstanceID: instanceID,
 		OwnerSessionID: sessionID, AuthFence: row.AuthFence,
-		OwnerGeneration: row.OwnerClaimedAt, OwnerClaimedAt: row.OwnerClaimedAt,
-		ExecutionMode: row.ExecutionMode, MarketType: row.MarketType,
+		OwnerGeneration: row.OwnerClaimedAt,
+		ExecutionMode:   row.ExecutionMode, MarketType: row.MarketType,
 		SettlementAsset: row.SettlementAsset,
 		AutomationState: row.AutomationState, PauseReason: row.PauseReason,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,

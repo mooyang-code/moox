@@ -152,11 +152,6 @@ func (e *Executor) Converge(
 		return Result{Status: StatusPaused}, err
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
-		// Reclaiming ownership and accepting a new target do not authorize
-		// cancellation of pre-upgrade orders while the cutover is still paused.
-		if logicalAccount.PauseReason == store.TargetPinMigrationPauseReason {
-			return Result{Status: StatusPaused}, nil
-		}
 		orders, _, listErr := e.Store.ListOrders(
 			ctx,
 			spaceID,

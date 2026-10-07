@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	tradestore "github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/schema"
 )
 
 const defaultInitDBPath = "./data/moox_trade.db"
@@ -46,7 +45,7 @@ func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected init arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	if err := applySchema(dbPath, schema.AllSQL()); err != nil {
+	if err := applySchema(dbPath); err != nil {
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(initResult{
@@ -67,17 +66,14 @@ func printInitError(stderr io.Writer, err error) {
 	})
 }
 
-func applySchema(dbPath string, rawSQL string) error {
+func applySchema(dbPath string) error {
 	if dbPath == "" {
 		return fmt.Errorf("db path is required")
 	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
 	}
-	// Use the same startup path as the Trade server. The previous CLI applied
-	// schema.AllSQL directly, which bypassed additive migrations and caused a
-	// production restart to fail on legacy logical-account tables.
-	_ = rawSQL
+	// Use the same startup path as the Trade server, including its schema guard.
 	store, err := tradestore.Open(dbPath)
 	if err != nil {
 		return fmt.Errorf("initialize trade store: %w", err)

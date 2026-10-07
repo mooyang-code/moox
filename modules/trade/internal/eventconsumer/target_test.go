@@ -164,7 +164,7 @@ func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	claimAt := time.Now().UTC()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountOwnerAt("space-1", "logical-1", "runner-1", claimAt)
+		return tx.SetLogicalAccountOwner("space-1", "logical-1", "runner-1")
 	}))
 	oldEventAt := claimAt.Add(-time.Second)
 	result := HandleTarget(context.Background(), logicalTargetDelivery(

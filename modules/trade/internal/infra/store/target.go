@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -352,7 +354,7 @@ func (s *Store) UpdateLogicalAccountTargetState(
 func logicalAccountTargetRecord(
 	row logicalAccountTargetRow,
 ) (LogicalAccountTargetRecord, error) {
-	targets, _, err := decodeCurrentTargets(row.TargetsJSON, false)
+	targets, err := decodeCurrentTargets(row.TargetsJSON)
 	if err != nil {
 		return LogicalAccountTargetRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
 	}
@@ -439,4 +441,59 @@ func encodeBlockedTargets(targets []BlockedTarget) (string, error) {
 		return "", fmt.Errorf("%w: encode blocked targets: %v", ErrInvalidRecord, err)
 	}
 	return string(data), nil
+}
+
+// Current executable targets are not receipts: unknown fields must never
+// silently disappear when a worker reads them.
+func decodeCurrentTargets(raw string) ([]InstrumentTarget, error) {
+	d := json.NewDecoder(strings.NewReader(raw))
+	tok, err := d.Token()
+	if err != nil || tok != json.Delim('[') {
+		return nil, fmt.Errorf("%w: target must be an array", ErrInvalidRecord)
+	}
+	targets := []InstrumentTarget{}
+	for d.More() {
+		tok, err = d.Token()
+		if err != nil || tok != json.Delim('{') {
+			return nil, fmt.Errorf("%w: target must be an object", ErrInvalidRecord)
+		}
+		fields := map[string]string{}
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				return nil, err
+			}
+			name, ok := key.(string)
+			if !ok {
+				return nil, ErrInvalidRecord
+			}
+			if _, duplicate := fields[name]; duplicate {
+				return nil, fmt.Errorf("%w: duplicate target field", ErrInvalidRecord)
+			}
+			switch name {
+			case "instrument_id", "quantity":
+			default:
+				return nil, fmt.Errorf("%w: unknown target field %s", ErrInvalidRecord, name)
+			}
+			var value string
+			if err := d.Decode(&value); err != nil || blank(value) {
+				return nil, fmt.Errorf("%w: invalid target field %s", ErrInvalidRecord, name)
+			}
+			fields[name] = value
+		}
+		if _, err := d.Token(); err != nil {
+			return nil, err
+		}
+		targets = append(targets, InstrumentTarget{InstrumentID: fields["instrument_id"], Quantity: fields["quantity"]})
+	}
+	if _, err := d.Token(); err != nil {
+		return nil, err
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return nil, fmt.Errorf("%w: trailing target JSON", ErrInvalidRecord)
+	}
+	if _, err := encodeInstrumentTargets(targets); err != nil {
+		return nil, err
+	}
+	return targets, nil
 }
