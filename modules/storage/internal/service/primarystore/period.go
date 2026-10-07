@@ -208,9 +208,6 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 }
 
 func rejectCollectorPeriodWriteCredential(auth *pb.AuthInfo) error {
-	if err := rejectMooxSkillWrite(auth); err != nil {
-		return err
-	}
 	if strings.EqualFold(strings.TrimSpace(auth.GetAppId()), "scf-market-canary") {
 		return errors.New("read-only primary credential")
 	}

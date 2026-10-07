@@ -21,9 +21,6 @@ type markerDataNodeClient interface {
 }
 
 func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.ReportCollectorPeriodCompletedReq) (*pb.ReportCollectorPeriodCompletedRsp, error) {
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "collector"); err != nil {
 		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -52,9 +49,6 @@ func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.Re
 }
 
 func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.ReportFactorPeriodComputedReq) (*pb.ReportFactorPeriodComputedRsp, error) {
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.ReportFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor"); err != nil {
 		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -83,9 +77,6 @@ func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.Report
 }
 
 func (s *Service) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendDatasetSyncPointReq) (*pb.AppendDatasetSyncPointRsp, error) {
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	marker := req.GetSyncPoint()
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), marker.GetDatasetId(), ""); err != nil {
 		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil

@@ -19,9 +19,6 @@ func (s *Service) WriteFactorRows(ctx context.Context, req *pb.PrimaryWriteFacto
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || strings.TrimSpace(req.GetCommitId()) == "" || len(req.GetRows()) == 0 {
 		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, commit_id and rows are required"))}, nil
 	}
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}

@@ -3,7 +3,6 @@ package primarystore
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
@@ -18,11 +17,6 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if strings.EqualFold(strings.TrimSpace(req.GetAuthInfo().GetAppId()), mooxSkillAppID) {
-		if err := s.validateMooxSkillReadRequest(ctx, req); err != nil {
-			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-		}
 	}
 	if req.GetAuthInfo().GetAppId() != "storage-view" {
 		if _, _, err := timeSeriesDataset(req); err != nil {
@@ -92,49 +86,6 @@ func validateFactorHistoryRead(req *pb.ReadTimeSeriesRowsReq) error {
 		return errors.New("factor history read end_time must be RFC3339 and after start_time")
 	}
 	return nil
-}
-
-// datasetMetadataReader is implemented by MetadataValidator.
-type datasetMetadataReader interface {
-	Dataset(context.Context, string, string) (*pb.Dataset, error)
-}
-
-// validateMooxSkillReadRequest limits the moox-skill principal to bounded
-// newest-first reads of Collector collection results. The scope comes from
-// Dataset metadata, so every collection task result is readable without
-// naming individual Datasets.
-func (s *Service) validateMooxSkillReadRequest(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) error {
-	reader, ok := s.validate.(datasetMetadataReader)
-	if !ok {
-		return errors.New("moox-skill read scope cannot be verified")
-	}
-	dataset, err := reader.Dataset(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil || !isCollectionResultDataset(dataset) {
-		return errors.New("moox-skill read scope is invalid")
-	}
-	if len(req.GetKeys()) > 0 || req.GetOrder() != pb.SortOrder_SORT_ORDER_DESC {
-		return errors.New("moox-skill read shape is invalid")
-	}
-	if page := req.GetPage(); page != nil && page.GetSize() > 1000 {
-		return errors.New("moox-skill page size is too large")
-	}
-	if len(req.GetSelectors()) == 0 {
-		return errors.New("moox-skill selectors are required")
-	}
-	for _, selector := range req.GetSelectors() {
-		if selector == nil || strings.TrimSpace(selector.GetSeriesTag()) == "" || selector.GetSpaceId() != req.GetSpaceId() || selector.GetDatasetId() != req.GetDatasetId() {
-			return errors.New("moox-skill selector scope is invalid")
-		}
-	}
-	return nil
-}
-
-func isCollectionResultDataset(dataset *pb.Dataset) bool {
-	if dataset == nil {
-		return false
-	}
-	attrs := dataset.GetAttributes()
-	return strings.TrimSpace(attrs["owner_module"]) == "collector" && strings.TrimSpace(attrs["dataset_role"]) == "raw_collection"
 }
 
 func (s *Service) readHistoricalTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
