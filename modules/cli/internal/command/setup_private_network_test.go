@@ -87,24 +87,6 @@ func TestSetupPrivateNetworkRestorePublicFlag(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 }
 
-func TestSetupPrivateNetworkDeprecatedUpdateGatewayRestoresPublic(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	snapshot.Manifest.ControlHost.Provider = "tencent"
-	snapshot.Manifest.StorageHost = setupconfig.Host{Name: "storage", Address: "203.0.113.9", Provider: "tencent"}
-	cmd := newSetupCommand(setupDeps{
-		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		ensurePrivateNetwork: func(_ context.Context, _ *setupconfig.Snapshot, opts privatenet.Options, _ io.Writer) (privatenet.Result, error) {
-			require.True(t, opts.RestoreSCFPublic)
-			require.True(t, opts.UnbindSCFVPC)
-			require.False(t, opts.SkipSCF)
-			return privatenet.Result{DryRun: true, Status: "dry_run"}, nil
-		},
-	})
-	cmd.SetOut(io.Discard)
-	cmd.SetArgs([]string{"private-network", "--file", "moox.toml", "--update-scf-gateway", "--dry-run"})
-	require.NoError(t, cmd.Execute())
-}
-
 func TestPrivateNetworkRewriteRunsWhenProbesSkipped(t *testing.T) {
 	opts := privatenet.Options{SkipProbe: true, RewriteRuntime: true}
 	require.False(t, shouldRunPrivateNetworkProbes(opts))

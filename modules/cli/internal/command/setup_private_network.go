@@ -19,7 +19,7 @@ func newSetupPrivateNetworkCommand(deps setupDeps) *cobra.Command {
 
 func newPrivateNetworkCommand(use string, deps setupDeps) *cobra.Command {
 	var file, ccnName, probeRegions string
-	var dryRun, skipSCF, skipHosts, skipProbe, probeOnly, rewriteRuntime, updateGateway, restorePublic bool
+	var dryRun, skipSCF, skipHosts, skipProbe, probeOnly, rewriteRuntime, restorePublic bool
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: "发现主机与 SCF 的分地域网络路径（不创建云联网）",
@@ -43,7 +43,7 @@ func newPrivateNetworkCommand(use string, deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			if restorePublic || updateGateway {
+			if restorePublic {
 				restorePublic = true
 				skipSCF = false
 				skipHosts = true
@@ -83,7 +83,6 @@ func newPrivateNetworkCommand(use string, deps setupDeps) *cobra.Command {
 	cmd.Flags().BoolVar(&skipProbe, "skip-probe", false, "跳过 SSH 公网端口探测")
 	cmd.Flags().BoolVar(&probeOnly, "probe-only", false, "只探测公网连通性，不调用写 API")
 	cmd.Flags().BoolVar(&rewriteRuntime, "rewrite-runtime", false, "把主机 runtime.env 中的 Storage RPC 改回公网 IP 并重启 Collector")
-	cmd.Flags().BoolVar(&updateGateway, "update-scf-gateway", false, "已废弃，等价于 --restore-scf-public")
 	cmd.Flags().BoolVar(&restorePublic, "restore-scf-public", false, "把 SCF Storage 网关改回公网 IP，并解除函数 VPC/CCN")
 	return cmd
 }
