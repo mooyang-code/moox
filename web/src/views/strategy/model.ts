@@ -30,12 +30,3 @@ export function formatStrategyTime(value?: string): string {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : "时间未知";
 }
-
-export function parseBindings(raw: string): Record<string, unknown> {
-  try {
-    const value = JSON.parse(raw || "{}");
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  } catch {
-    return {};
-  }
-}

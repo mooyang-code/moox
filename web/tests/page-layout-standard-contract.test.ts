@@ -157,9 +157,6 @@ describe("page layout standards", () => {
     const cloudNodes = read("collector/cloud-node/cloud-node.vue");
     const factorResults = read("factor/results/index.vue");
     const positions = read("trading/position-detail/position-detail.vue");
-    const viewDefinitions = read("data/views/index.vue");
-    const datasetDefinitions = read("data/datasets/index.vue");
-    const datasetBrowse = read("data/browse/index.vue");
     const viewBrowse = read("data/view-browse/index.vue");
 
     const cloudNodeActions = extractBlock(cloudNodes, '<a-space class="cloud-node-action-bar" wrap>', "</a-space>");
@@ -222,16 +219,13 @@ describe("page layout standards", () => {
     expect(positions).not.toContain('<a-button @click="loadPositions">');
     expect(positions).toMatch(/\.position-filter-bar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-tight\);/);
 
-    for (const source of [viewDefinitions, datasetDefinitions, datasetBrowse, viewBrowse]) {
-      expectMargin(source, ".page-head", "margin-bottom", 8);
-    }
+    expectMargin(viewBrowse, ".page-head", "margin-bottom", 8);
   });
 
   it("keeps dashboard page boundaries on the compact spacing rhythm", () => {
     const theme = readStyle("var/global-theme.scss");
     const globalStyle = readStyle("index.scss");
     const healthMonitor = read("ops/health-monitor/index.vue");
-    const resourceMonitor = read("container/resource-monitor/resource-monitor.vue");
     const dataImport = read("data/import/index.vue");
     const strategyOverview = read("strategy/overview/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
@@ -243,12 +237,6 @@ describe("page layout standards", () => {
     expect(globalStyle).toContain("--moox-space-4: #{$space-4};");
     expect(healthMonitor).toContain("健康监控");
     expect(healthMonitor).toMatch(/\.health-section\s*\{[\s\S]*?margin-top:\s*24px;/);
-
-    expect(resourceMonitor).toMatch(/\.resource-monitor-page\s*\{\s*padding:\s*var\(--moox-space-4\);\s*\}/);
-    expect(resourceMonitor).toMatch(/\.page-header\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
-    expect(resourceMonitor).toMatch(/\.page-header h2\s*\{[\s\S]*?font-size:\s*20px;/);
-    expect(resourceMonitor).toMatch(/\.summary-band\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
-    expect(resourceMonitor).toMatch(/\.page-alert,\s*\.history-alert\s*\{\s*margin-bottom:\s*var\(--moox-space-2\);\s*\}/);
 
     expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);

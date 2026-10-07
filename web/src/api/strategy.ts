@@ -167,13 +167,6 @@ export async function listStrategyResults(instance_id: string, params: PageReque
   };
 }
 
-export function getStrategyResult(result_id: string) {
-  return callControl<{ result_id: string }, { result: StrategyResult }>("strategy", "GetStrategyResult", { result_id }).then((response) => {
-    ensureResponse(response);
-    return { ...response, result: normalizeResult(response.result) };
-  });
-}
-
 export function listStrategyTargets(instance_id: string): Promise<StrategyTargetSnapshot> {
   return callControl<{ instance_id: string }, { targets?: InstrumentTarget[]; session_id?: string; bar_end_time?: string; valid_until?: string }>(
     "strategy",

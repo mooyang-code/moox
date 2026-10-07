@@ -1,87 +1,9 @@
 import { describe, expect, it } from "vitest";
+
 import type { DatasetColumn, ViewColumn } from "@/api/storage/types";
-import {
-  buildSubjectDataIdsFromRows,
-  buildTimeSeriesBrowseSelector,
-  rowsToColumnNames,
-  sortBrowseTableRows,
-  timeSeriesRowsToTableRows
-} from "./browse-utils";
-import {
-  buildKlineChartRecords,
-  buildViewColumnLabels,
-  buildViewFilterFieldOptions,
-  buildViewFilterExprs,
-  exactSeriesTagFromFilters,
-  viewBoundDatasetId,
-  viewModeFromPrimaryDataset
-} from "../view-browse/view-browse-utils";
 
-describe("timeSeriesRowsToTableRows", () => {
-  it("keeps rows with the same timestamp distinct by series tag", () => {
-    const rows = timeSeriesRowsToTableRows([
-      {
-        key: {
-          space_id: "crypto",
-          dataset_id: "dataset_spot_kline_1h",
-          subject_id: "BTC-USDT",
-          freq: "1H",
-          data_time: "2026-07-29T00:00:00Z",
-          series_tag: "venue:binance"
-        }
-      },
-      {
-        key: {
-          space_id: "crypto",
-          dataset_id: "dataset_spot_kline_1h",
-          subject_id: "BTC-USDT",
-          freq: "1H",
-          data_time: "2026-07-29T00:00:00Z",
-          series_tag: "venue:okx"
-        }
-      }
-    ]);
-
-    expect(rows[0].id).not.toBe(rows[1].id);
-    expect(rows[0].id).toContain("venue:binance");
-    expect(rows[1].id).toContain("venue:okx");
-    expect(rows.map(row => row.seriesTag)).toEqual(["venue:binance", "venue:okx"]);
-    expect(sortBrowseTableRows(rows, "series_tag", "desc").map(row => row.seriesTag)).toEqual(["venue:okx", "venue:binance"]);
-    expect(buildTimeSeriesBrowseSelector("crypto", "dataset_spot_kline_1h", "BTC-USDT", "1H", " venue:okx ", true)).toEqual({
-      space_id: "crypto",
-      dataset_id: "dataset_spot_kline_1h",
-      subject_id: "BTC-USDT",
-      freq: "1H",
-      series_tag: "venue:okx"
-    });
-    expect(buildTimeSeriesBrowseSelector("stockcn", "dataset_stockcn_equity_kline", "sh600000", "1D", "", true)).toEqual({
-      space_id: "stockcn",
-      dataset_id: "dataset_stockcn_equity_kline",
-      subject_id: "sh600000",
-      freq: "1D",
-      series_tag: "default"
-    });
-    expect(buildTimeSeriesBrowseSelector("crypto", "dataset_spot_kline_1h", "BTC-USDT", "1H", "", false)).not.toHaveProperty(
-      "series_tag"
-    );
-  });
-});
-
-describe("buildSubjectDataIdsFromRows", () => {
-  it("discovers real subject IDs when dataset bindings are unavailable", () => {
-    expect(
-      buildSubjectDataIdsFromRows([
-        { key: { subject_id: "BTC-USDT" } },
-        { key: { subject_id: "ETH-USDT" } },
-        { key: { subject_id: "BTC-USDT" } },
-        { key: { subject_id: "" } }
-      ])
-    ).toEqual([
-      { id: "BTC-USDT", name: "BTC-USDT", description: "" },
-      { id: "ETH-USDT", name: "ETH-USDT", description: "" }
-    ]);
-  });
-});
+import { rowsToColumnNames } from "./browse-utils";
+import { buildKlineChartRecords, buildViewColumnLabels, buildViewFilterFieldOptions, buildViewFilterExprs, exactSeriesTagFromFilters, viewModeFromPrimaryDataset } from "../view-browse/view-browse-utils";
 
 describe("Kline series tag isolation", () => {
   it("requires an exact tag and never overwrites another tag at the same timestamp", () => {
@@ -233,20 +155,6 @@ describe("view factor column labels", () => {
 });
 
 describe("viewBoundDatasetId", () => {
-  it("reads dataset_id from live storage JSON when primary_dataset_id is absent", () => {
-    const view = { dataset_id: "dataset_spot_kline_1h" };
-    expect(viewBoundDatasetId(view)).toBe("dataset_spot_kline_1h");
-    expect(
-      viewModeFromPrimaryDataset(
-        [{ dataset_id: "dataset_spot_kline_1h", data_kind: "DATA_KIND_TIME_SERIES" }],
-        viewBoundDatasetId(view)
-      )
-    ).toBe("time_series");
-  });
-
-  it("falls back to primary_dataset_id for older view payloads", () => {
-    expect(viewBoundDatasetId({ primary_dataset_id: "dataset_binance_kline_1m" })).toBe("dataset_binance_kline_1m");
-  });
 
   it("treats SQL time_series data_kind as a time-series dataset", () => {
     expect(

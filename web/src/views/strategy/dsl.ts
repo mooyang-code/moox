@@ -65,22 +65,9 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
   };
 }
 
-export function dslName(source: string): string {
-  return parseDSL(source).preview?.name || "未命名策略";
-}
-
 const builtinBarFields = new Set(["open", "high", "low", "close", "volume"]);
 const expressionFunctions = new Set(["abs", "ceil", "floor", "round", "min", "max", "sum", "avg", "mean", "std", "log", "sqrt", "pow", "rank", "zscore", "true", "false", "null", "and", "or", "not", "in"]);
 const expressionBuiltins = new Set([...builtinBarFields, "instrument_id", "score"]);
-
-export function requiredBarFields(source: string): string[] {
-  const fields = new Set<string>();
-  for (const match of source.matchAll(/\bbars\[-?\d+\]\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
-    const field = match[1];
-    if (!builtinBarFields.has(field)) fields.add(field);
-  }
-  return [...fields];
-}
 
 function expressionFields(expression: string): string[] {
   const fields = new Set<string>();

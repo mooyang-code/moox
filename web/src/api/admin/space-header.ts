@@ -16,11 +16,3 @@ export function readSelectedSpaceId(): string {
     return "";
   }
 }
-
-export function withSelectedSpaceHeader(headers: Record<string, string | undefined> = {}): Record<string, string | undefined> {
-  if (headers["X-Space-Id"]) {
-    return headers;
-  }
-  const spaceId = readSelectedSpaceId();
-  return spaceId ? { ...headers, "X-Space-Id": spaceId } : headers;
-}

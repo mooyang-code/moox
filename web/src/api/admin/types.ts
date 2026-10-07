@@ -30,13 +30,6 @@ export interface Space {
   updated_at?: string;
 }
 
-export interface SpaceMember {
-  space_id: string;
-  user_id: string;
-  role: string;
-  status: string;
-}
-
 export interface ServiceDeployment {
   id?: number;
   service_name: string;

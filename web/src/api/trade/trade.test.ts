@@ -47,11 +47,6 @@ describe("Trade public API", () => {
     });
   });
 
-  it("keeps Paper execution mode separate from AccountEnvironment", () => {
-    expect(trade.executionModeLabels).toEqual({ 0: "-", 1: "Paper", 2: "Live" });
-    expect(trade.environmentLabels).toEqual({ 0: "-", 1: "Testnet", 2: "Production" });
-  });
-
   it("preserves explicit account control mode in creation requests", async () => {
     const logical = { name: "manual", execution_mode: 1 as const, market_type: 1 as const, settlement_asset: "USDT", control_mode: 2 as const };
     await trade.createLogicalAccount(logical);

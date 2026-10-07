@@ -9,7 +9,7 @@ import {
   listStrategyTargets,
   setInstanceEnabled
 } from "@/api/strategy";
-import type { InstrumentTarget, Strategy, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
+import type { Strategy, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -230,5 +230,3 @@ export const useStrategyStore = defineStore("strategy", () => {
     clearDetail
   };
 });
-
-export type StrategyTarget = InstrumentTarget;

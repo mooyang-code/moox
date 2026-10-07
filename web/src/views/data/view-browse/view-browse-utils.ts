@@ -5,7 +5,6 @@ import type {
   FieldValueType,
   FilterCond,
   FilterSpec,
-  PageResult,
   SortSpec,
   TypedValue,
   View,
@@ -114,10 +113,6 @@ export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   return view.name || view.view_id || "";
 }
 
-export function viewBoundDatasetId(view?: { dataset_id?: string; primary_dataset_id?: string } | null) {
-  return (view?.dataset_id || view?.primary_dataset_id || "").trim();
-}
-
 export function viewModeFromPrimaryDataset(
   datasets: Array<Pick<Dataset, "dataset_id" | "data_kind">>,
   primaryDatasetId?: string
@@ -179,18 +174,6 @@ export function normalizeKlineLimit(value: unknown) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(parsed)) return DEFAULT_KLINE_LIMIT;
   return Math.min(MAX_KLINE_LIMIT, Math.max(MIN_KLINE_LIMIT, parsed));
-}
-
-export function isSkippedTotalState(value: unknown) {
-  return value === 2 || value === "SKIPPED" || value === "TOTAL_STATE_SKIPPED";
-}
-
-export function usesPreviewPager(pageResult?: Pick<PageResult, "total_state"> | null) {
-  return isSkippedTotalState(pageResult?.total_state);
-}
-
-export function previewPagerText(limit: number) {
-  return `仅展示前${limit}条数据`;
 }
 
 export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | undefined {

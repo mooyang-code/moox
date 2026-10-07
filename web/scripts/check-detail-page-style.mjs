@@ -12,9 +12,6 @@ const pageShellFiles = [
   "src/views/data/sources/index.vue",
   "src/views/data/subjects/index.vue",
   "src/views/data/fields/index.vue",
-  "src/views/data/datasets/index.vue",
-  "src/views/data/views/index.vue",
-  "src/views/data/browse/index.vue",
   "src/views/data/view-browse/index.vue",
   "src/views/data/import/index.vue",
   "src/views/factor/overview/index.vue",
@@ -39,8 +36,6 @@ const pageShellFiles = [
 
 const tableFiles = [
   ...pageShellFiles,
-  "src/views/data/datasets/components/dataset-column-panel.vue",
-  "src/views/data/views/components/view-column-panel.vue",
   "src/views/collector/cloud-account/cloud-account-manage.vue"
 ];
 

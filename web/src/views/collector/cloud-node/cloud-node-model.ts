@@ -83,11 +83,6 @@ export const getNodeTypeColor = (value: string) =>
   ({ "scf-event": "blue", "scf-web": "cyan", server: "orange" })[value] || "gray";
 export const getTriggerTypeLabel = (value: string) => ({ timer: "定时器", invoke: "手动调用" })[value] || (value || "-");
 
-export const getCollectorName = (value: string) =>
-  ({ kline: "K线", ticker: "行情", orderbook: "订单簿", trade: "逐笔", news: "资讯", symbol: "标的" })[value] || value;
-export const getCollectorColor = (value: string) =>
-  ({ kline: "blue", ticker: "green", orderbook: "orange", trade: "purple", news: "red", symbol: "cyan" })[value] || "gray";
-
 export function getPackageTypeColor(value: number | string) {
   return (
     (

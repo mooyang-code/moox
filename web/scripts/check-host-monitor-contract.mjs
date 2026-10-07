@@ -20,9 +20,9 @@ const required = [
   'aggregateNetworkRate',
   'storage_available',
   'data_gap',
-  "key: 'monitor'",
-  "label: '主机监控'",
-  'tab: "monitor"',
+  'key: "monitor"',
+  'label: "主机监控"',
+  'normalizeTab(route.query.tab)',
   'getCurrentMetrics',
   'listSSHHosts',
   '15_000',
@@ -45,8 +45,8 @@ const required = [
   'PageTitleTabs',
   'aria-label="主机工作台"',
   'detail-table',
-  'table-layout:fixed',
-  'overflow-x:hidden',
+  'table-layout: fixed',
+  'overflow-x: hidden',
 ];
 
 const missing = required.filter((token) => !sources.includes(token));

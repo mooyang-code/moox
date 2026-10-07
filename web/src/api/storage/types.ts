@@ -25,8 +25,6 @@ export type ColumnOriginType =
   | "COLUMN_ORIGIN_TYPE_EXPRESSION"
   | number;
 
-export type SortOrder = "SORT_ORDER_ASC" | "SORT_ORDER_DESC" | number;
-
 export type TotalMode = "AUTO" | "NONE" | "FORCE_EXACT" | number;
 
 export type TotalState = "UNKNOWN" | "EXACT" | "SKIPPED" | number;
@@ -203,15 +201,6 @@ export interface Dataset {
   attributes?: Record<string, string>;
 }
 
-export type DatasetMutation = Omit<Dataset, "status" | "data_node_id" | "binding_locked" | "revision"> & { status?: string };
-
-export interface DatasetSubject {
-  space_id: string;
-  dataset_id: string;
-  subject_id: string;
-  status: string;
-}
-
 export interface Field {
   space_id: string;
   group_id: string;
@@ -373,12 +362,6 @@ export interface DatasetSummary {
 export interface DataNodeListItem {
   node: DataNode;
   datasets: DatasetSummary[];
-}
-
-export interface DatasetActivationCheck {
-  check_id: string;
-  ready: boolean;
-  summary: string;
 }
 
 export interface ArchiveFile {

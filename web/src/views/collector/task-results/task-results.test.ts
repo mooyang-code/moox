@@ -1,16 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+
 import type { CollectorTask } from "@/api/collector";
-import {
-  buildResultsQuery,
-  buildTaskResultTabs,
-  getTaskResultState,
-  resultCoverage,
-  resolveActiveTask,
-  selectTaskIdFromQuery,
-  taskStateLabel
-} from "./task-results-model";
+
+import { buildResultsQuery, buildTaskResultTabs, getTaskResultState, resolveActiveTask, selectTaskIdFromQuery } from "./task-results-model";
 
 describe("collector result workflow", () => {
   const tasks: CollectorTask[] = [
@@ -52,18 +46,6 @@ describe("collector result workflow", () => {
     expect(results).toContain(':title="tab.title"');
     expect(tabs.map(tab => tab.taskId)).toEqual(["newer", "older"]);
     expect(tabs.map(tab => tab.title)).toEqual(["新任务", "旧任务"]);
-  });
-
-  it("shows preparation and invalid states without trying to browse a missing view", () => {
-    expect(getTaskResultState({ task_id: "pending", result: { status: "pending" } })).toBe("preparing");
-    expect(getTaskResultState({ task_id: "broken", result: { status: "error" }, last_error: "view failed" })).toBe("error");
-    expect(resultCoverage({ task_id: "pending", result: { status: "pending" } })).toEqual({ start: "-", end: "-" });
-    const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-    expect(results).toContain('description="结果准备中，请稍后刷新"');
-    expect(results).toContain('description="暂无采集任务"');
-    expect(results).toContain("新建采集任务");
-    expect(results).toContain('empty-rows-description="任务已准备，尚未产生数据"');
-    expect(taskStateLabel({ task_id: "disabled", enabled: false })).toBe("任务已停用");
   });
 
   it("keeps unknown list state stale until the selected task is inspected", () => {

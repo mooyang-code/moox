@@ -62,10 +62,6 @@ export function listSecrets(req: ListSecretsReq = {}) {
   return callControl<ListSecretsReq, ListSecretsRsp>("secret", "ListSecrets", req);
 }
 
-export function getSecret(secretId: string) {
-  return callControl<{ secret_id: string }, { secret: Secret }>("secret", "GetSecret", { secret_id: secretId });
-}
-
 export function createSecret(secret: Secret) {
   return callControl<CreateSecretReq, CreateSecretRsp>("secret", "CreateSecret", { secret });
 }

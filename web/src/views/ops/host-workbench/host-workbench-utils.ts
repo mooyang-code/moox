@@ -1,11 +1,10 @@
 import type { HostMetrics } from "@/api/modules/host-monitor";
-import type { SSHHost, SessionInfo } from "@/api/modules/ssh";
+import type { SSHHost } from "@/api/modules/ssh";
 
 export interface HostWorkbenchRow {
   key: string;
   monitor?: HostMetrics;
   ssh?: SSHHost;
-  sessions: SessionInfo[];
   match: "address" | "unique_name" | "unmatched";
 }
 
@@ -13,19 +12,9 @@ function normalize(value?: string) {
   return (value || "").trim().toLowerCase();
 }
 
-export function mergeHostWorkbenchRows(
-  monitors: HostMetrics[],
-  sshHosts: SSHHost[],
-  sessions: SessionInfo[] = []
-): HostWorkbenchRow[] {
+export function mergeHostWorkbenchRows(monitors: HostMetrics[], sshHosts: SSHHost[]): HostWorkbenchRow[] {
   const rows: HostWorkbenchRow[] = [];
   const usedSSH = new Set<number>();
-  const sessionsByHost = new Map<number, SessionInfo[]>();
-  for (const session of sessions) {
-    const current = sessionsByHost.get(session.host_id) || [];
-    current.push(session);
-    sessionsByHost.set(session.host_id, current);
-  }
 
   for (const monitor of monitors) {
     const address = normalize(monitor.address || monitor.host_id);
@@ -46,7 +35,6 @@ export function mergeHostWorkbenchRows(
       key: `monitor:${monitor.host_id}`,
       monitor,
       ssh,
-      sessions: ssh?.id !== undefined ? sessionsByHost.get(ssh.id) || [] : [],
       match
     });
   }
@@ -56,7 +44,6 @@ export function mergeHostWorkbenchRows(
     rows.push({
       key: `ssh:${host.id}`,
       ssh: host,
-      sessions: host.id !== undefined ? sessionsByHost.get(host.id) || [] : [],
       match: "unmatched"
     });
   }

@@ -1,22 +1,4 @@
-import type {
-  FieldValue,
-  Dataset,
-  DatasetColumn,
-  DatasetColumnOriginType,
-  Field,
-  RecordRow,
-  DatasetSubject,
-  Subject,
-  TimeSeriesSelector,
-  TimeSeriesRow,
-  TypedValue
-} from "@/api/storage/types";
-
-export interface BrowseDataId {
-  id: string;
-  name: string;
-  description: string;
-}
+import type { FieldValue, RecordRow, TimeSeriesRow, TypedValue } from "@/api/storage/types";
 
 export interface BrowseTableRow {
   id: string;
@@ -26,24 +8,8 @@ export interface BrowseTableRow {
   values: Record<string, string>;
 }
 
-export type BrowseSortDirection = "" | "asc" | "desc";
-
 const minAdaptiveColumnWidth = 112;
 const maxAdaptiveColumnWidth = 320;
-
-const systemColumnLabels: Record<string, string> = {
-  subject_id: "数据ID",
-  record_id: "记录ID",
-  freq: "频率",
-  data_time: "时间",
-  series_tag: "序列标签",
-  version: "版本"
-};
-
-export function datasetDisplayName(dataset?: Pick<Dataset, "dataset_id" | "name"> | null) {
-  if (!dataset) return "";
-  return dataset.name || dataset.dataset_id || "";
-}
 
 export function adaptiveColumnWidth(columnName: string, label: string, rows: Array<Pick<BrowseTableRow, "values">>) {
   const headerWidth = visualTextWidth(label || columnName);
@@ -53,69 +19,6 @@ export function adaptiveColumnWidth(columnName: string, label: string, rows: Arr
   }, 0);
   const rawWidth = Math.max(headerWidth, valueWidth) + 48;
   return clamp(roundUp(rawWidth, 8), minAdaptiveColumnWidth, maxAdaptiveColumnWidth);
-}
-
-export function buildSubjectDataIds(datasetSubjects: DatasetSubject[], subjects: Subject[]): BrowseDataId[] {
-  const subjectByID = new Map(subjects.map(item => [item.subject_id, item]));
-  return datasetSubjects
-    .filter(item => !item.status || item.status === "active")
-    .map(item => {
-      const subject = subjectByID.get(item.subject_id);
-      return {
-        id: item.subject_id,
-        name: subject?.name || item.subject_id,
-        description: [subject?.subject_type, subject?.market].filter(Boolean).join(" / ")
-      };
-    })
-    .sort((a, b) => a.id.localeCompare(b.id));
-}
-
-export function buildSubjectDataIdsFromRows(rows: TimeSeriesRow[]): BrowseDataId[] {
-  const subjectIDs = new Set<string>();
-  for (const row of rows) {
-    const subjectID = row.key?.subject_id?.trim();
-    if (subjectID) subjectIDs.add(subjectID);
-  }
-  return [...subjectIDs]
-    .sort((a, b) => a.localeCompare(b))
-    .map(id => ({ id, name: id, description: "" }));
-}
-
-export function displayDataIdText(item: BrowseDataId) {
-  return item.id;
-}
-
-export function buildColumnLabels(columns: DatasetColumn[], fields: Field[]) {
-  const fieldByID = new Map(fields.map(item => [item.field_id, item]));
-  const labels: Record<string, string> = {};
-  for (const column of columns) {
-    if (!column.column_name) continue;
-    labels[column.column_name] = resolveColumnLabel(column, fieldByID);
-  }
-  return labels;
-}
-
-function resolveColumnLabel(column: DatasetColumn, fieldByID: Map<string, Field>) {
-  const columnDisplayName = displayName(column.attributes);
-  if (columnDisplayName) return columnDisplayName;
-  if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FIELD", 1)) {
-    return readableColumnLabel(
-      column.column_name,
-      fieldByID.get(column.origin_id)?.name || fieldByID.get(column.column_name)?.name
-    );
-  }
-  if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FACTOR", 2)) {
-    return readableColumnLabel(column.column_name);
-  }
-  return systemColumnLabels[column.origin_id] || readableColumnLabel(column.column_name);
-}
-
-function readableColumnLabel(columnName: string, metadataName?: string) {
-  return metadataName || systemColumnLabels[columnName] || columnName;
-}
-
-function displayName(attributes?: Record<string, string>) {
-  return attributes?.display_name?.trim() || "";
 }
 
 function containsCJK(value: string) {
@@ -132,10 +35,6 @@ function roundUp(value: number, step: number) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function isOriginType(value: DatasetColumnOriginType, name: string, alias: number) {
-  return value === name || value === alias;
 }
 
 export function fieldValueText(field?: FieldValue) {
@@ -187,25 +86,6 @@ export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[]): BrowseTableRow
   }));
 }
 
-export function buildTimeSeriesBrowseSelector(
-  spaceId: string,
-  datasetId: string,
-  subjectId: string,
-  freq: string,
-  seriesTag: string,
-  exactSeriesTag: boolean
-): TimeSeriesSelector {
-  const normalizedSeriesTag =
-    spaceId === "stockcn" && datasetId === "dataset_stockcn_equity_kline" && !seriesTag.trim() ? "default" : seriesTag.trim();
-  return {
-    space_id: spaceId,
-    dataset_id: datasetId,
-    subject_id: subjectId,
-    freq,
-    ...(exactSeriesTag ? { series_tag: normalizedSeriesTag } : {})
-  };
-}
-
 export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
   return rows.map((row, index) => ({
     id: `record-${index}-${row.key?.record_id || ""}-${row.key?.version || ""}`,
@@ -213,23 +93,6 @@ export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
     version: row.key?.version || "-",
     values: fieldsToValueMap(row.fields || [])
   }));
-}
-
-export function sortBrowseTableRows(rows: BrowseTableRow[], fieldName: string, direction: BrowseSortDirection) {
-  if (!fieldName || !direction) return rows;
-  return [...rows].sort((left, right) => {
-    const leftValue = browseSortValue(left, fieldName);
-    const rightValue = browseSortValue(right, fieldName);
-    const comparison = leftValue.localeCompare(rightValue, undefined, { numeric: true, sensitivity: "base" });
-    return direction === "desc" ? -comparison : comparison;
-  });
-}
-
-function browseSortValue(row: BrowseTableRow, fieldName: string) {
-  if (fieldName === "subject_id" || fieldName === "record_id") return row.key;
-  if (fieldName === "data_time" || fieldName === "version") return row.version;
-  if (fieldName === "series_tag") return row.seriesTag || "";
-  return row.values[fieldName] || "";
 }
 
 function fieldsToValueMap(fields: FieldValue[]) {
