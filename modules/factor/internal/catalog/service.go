@@ -754,7 +754,7 @@ func sameSetIdentity(existing, requested domain.FactorSet) error {
 func resultDatasetSpec(set domain.FactorSet, source storageio.DatasetInfo, columns []storageio.ColumnInfo) storageio.ResultDatasetSpec {
 	return storageio.ResultDatasetSpec{
 		SpaceID: set.SpaceID, DatasetID: set.ResultDatasetID, SourceDatasetID: set.SourceDatasetID,
-		Name: "因子结果", Description: "Factor results for " + source.DatasetID,
+		Name: resultDatasetName(source.Name), Description: "Factor results for " + source.DatasetID,
 		DataSourceID: source.DataSourceID, DataNodeID: source.DataNodeID,
 		DataKind: storageio.DataKindTimeSeries, Frequency: set.Freq, KeepDuration: source.KeepDuration,
 		SubjectTags: append([]string(nil), source.SubjectTags...), Attributes: map[string]string{
@@ -762,6 +762,23 @@ func resultDatasetSpec(set domain.FactorSet, source storageio.DatasetInfo, colum
 		},
 		Columns: columns,
 	}
+}
+
+// maxResultDatasetNameRunes is Storage's display-name limit.
+const maxResultDatasetNameRunes = 10
+
+// resultDatasetName derives the result Dataset name from its source name,
+// which is unique in the Space, so several factor sets can coexist.
+func resultDatasetName(sourceName string) string {
+	const suffix = "因子"
+	source := []rune(strings.TrimSpace(sourceName))
+	if len(source) == 0 {
+		return "因子结果"
+	}
+	if keep := maxResultDatasetNameRunes - len([]rune(suffix)); len(source) > keep {
+		source = source[:keep]
+	}
+	return string(source) + suffix
 }
 
 func businessColumns(columns []storageio.ColumnInfo) []storageio.ColumnInfo {

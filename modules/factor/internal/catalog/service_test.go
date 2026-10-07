@@ -32,7 +32,7 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	require.Equal(t, "factor", meta.createdSpec.Attributes["owner_module"])
 	require.Equal(t, "factor", meta.createdSpec.Attributes["write_owner"])
 	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close")}, meta.createdSpec.Columns)
-	require.Equal(t, "因子结果", meta.createdSpec.Name)
+	require.Equal(t, "Prices因子", meta.createdSpec.Name)
 	require.LessOrEqual(t, len([]rune(meta.createdSpec.Name)), 10)
 	require.Equal(t, storageio.DatasetStatusActive, meta.datasets[resultKey("crypto", set.ResultDatasetID)].Status)
 	require.Equal(t, []string{"create", "activate"}, meta.writeOps)
@@ -1034,4 +1034,13 @@ func TestReconcileFollowsSourceSubjectTags(t *testing.T) {
 	require.True(t, ready[set.SetID], "a source subject-tag change must not halt the set")
 	require.Equal(t, []string{"subject_tags"}, meta.writeOps)
 	require.Equal(t, []string{"binance_spot", "binance_swap"}, meta.datasets[resultKey("crypto", set.ResultDatasetID)].SubjectTags)
+}
+
+func TestResultDatasetNameIsDerivedFromItsSource(t *testing.T) {
+	require.Equal(t, "现货分钟K线因子", resultDatasetName("现货分钟K线"))
+	require.NotEqual(t, resultDatasetName("现货分钟K线"), resultDatasetName("合约分钟K线"), "factor sets of different sources must not collide")
+	long := resultDatasetName("一二三四五六七八九十")
+	require.Equal(t, "一二三四五六七八因子", long)
+	require.LessOrEqual(t, len([]rune(long)), maxResultDatasetNameRunes)
+	require.Equal(t, "因子结果", resultDatasetName(" "))
 }
