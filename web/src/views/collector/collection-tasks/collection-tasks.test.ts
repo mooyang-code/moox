@@ -48,6 +48,11 @@ describe("collector task workbench", () => {
     expect(source).not.toContain(["数据集", "管理"].join(""));
   });
 
+  it("lets the wide task table fill the spin wrapper so the fixed action column is not clipped", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8").replace(/\s+/g, "");
+    expect(source).toContain(".moox-page:deep(.arco-spin){display:block;width:100%;min-width:0;}");
+  });
+
   it("keeps resample backfill in the task surface", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
     const backfill = fs.readFileSync(path.resolve(__dirname, "resample-backfill.vue"), "utf8");

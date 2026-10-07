@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import CollectionTasks from "@/views/collector/collection-tasks/collection-tasks.vue";
@@ -32,7 +32,9 @@ const tabs = [
 
 const route = useRoute();
 const router = useRouter();
-const activeTab = ref<CollectorTaskTab>(normalizeTab(route.query.tab));
+// 当前 Tab 只由 URL 决定：点击时只改 URL，不先切换本地状态，避免新 Tab 在跳转完成前
+// 按旧 query 写回 URL 而取消这次跳转。
+const activeTab = computed<CollectorTaskTab>(() => normalizeTab(route.query.tab));
 
 const activeComponent = computed(
   () =>
@@ -50,7 +52,6 @@ function normalizeTab(value: unknown): CollectorTaskTab {
 
 function onTabChange(value: string | number) {
   const tab = normalizeTab(value);
-  activeTab.value = tab;
   const resultTask = Array.isArray(route.query.resultTask) ? route.query.resultTask[0] : route.query.resultTask;
   void router.replace({
     path: "/collector/tasks",
@@ -60,14 +61,6 @@ function onTabChange(value: string | number) {
         : { ...route.query, tab: tab === "tasks" ? undefined : tab, resultTask: undefined }
   });
 }
-
-watch(
-  () => route.query.tab,
-  value => {
-    const tab = normalizeTab(value);
-    if (tab !== activeTab.value) activeTab.value = tab;
-  }
-);
 </script>
 
 <style scoped lang="scss">

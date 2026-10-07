@@ -1212,6 +1212,13 @@ onMounted(() => {
 .output-field-option__text small { color: var(--color-text-3); font-size: 11px; }
 .output-field-option--unsupported { cursor: not-allowed; opacity: 0.55; }
 .output-field-option__text small { color: var(--color-text-3); font-size: 11px; }
+/* a-spin 默认 inline-block，会被宽表格撑开，导致右侧（含固定的操作列）被外层裁掉。 */
+.moox-page :deep(.arco-spin) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
 .task-toolbar {
   margin-bottom: var(--moox-space-toolbar-table);
 }

@@ -66,4 +66,10 @@ describe("collector task management workbench", () => {
     expect(createPosition).toBeLessThan(firstToolbarEnd);
     expect(source.slice(firstToolbarEnd, tableStart)).not.toContain("新建采集任务");
   });
+
+  it("derives the active tab from the URL only", () => {
+    const normalized = normalizeSource(fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8"));
+    expect(normalized).toContain("constactiveTab=computed<CollectorTaskTab>(()=>normalizeTab(route.query.tab))");
+    expect(normalized).not.toContain("activeTab.value=");
+  });
 });

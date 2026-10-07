@@ -28,6 +28,11 @@ describe("compute task host", () => {
     expect(normalized).toContain('value==="results"||value==="recalc"?value:"tasks"');
     expect(normalized).toContain("router.replace");
     expect(normalized).toContain('path:"/factor/tasks"');
-    expect(normalized).toContain("buildTabQuery(route.query,tab)");
+    expect(normalized).toContain("buildTabQuery(route.query,normalizeTab(value))");
+  });
+
+  it("derives the active tab from the URL only, so a click cannot be undone by a stale query", () => {
+    expect(normalized).toContain("constactiveTab=computed<ComputeTaskTab>(()=>normalizeTab(route.query.tab))");
+    expect(normalized).not.toContain("activeTab.value=");
   });
 });

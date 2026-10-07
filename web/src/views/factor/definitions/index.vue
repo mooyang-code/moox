@@ -8,10 +8,6 @@
             text="因子定义只描述算法本身：代码、参数、输入输出列。它不属于任何计算任务；要让因子运行，请到「计算任务」里添加并启用。"
           />
         </div>
-        <a-button type="primary" status="success" @click="createFactor">
-          <template #icon><icon-plus /></template>
-          新增因子
-        </a-button>
       </div>
 
       <a-alert v-if="!spaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
@@ -22,17 +18,23 @@
         </a-alert>
 
         <div class="definitions-filters">
-          <a-select v-model="filters.type" class="filter-type" placeholder="全部类型">
-            <a-option value="">全部类型</a-option>
-            <a-option value="timeseries">时序</a-option>
-            <a-option value="cross_section">横截面</a-option>
-          </a-select>
           <a-radio-group v-model="filters.usage" type="button" aria-label="使用情况筛选">
             <a-radio value="all">全部 {{ counts.all }}</a-radio>
             <a-radio value="using">使用中 {{ counts.using }}</a-radio>
             <a-radio value="idle">未使用 {{ counts.idle }}</a-radio>
           </a-radio-group>
-          <a-input-search v-model="filters.keyword" allow-clear placeholder="搜索因子 ID 或模块名" class="filter-search" />
+          <div class="definitions-filters__right">
+            <a-select v-model="filters.type" class="filter-type" placeholder="全部类型">
+              <a-option value="">全部类型</a-option>
+              <a-option value="timeseries">时序</a-option>
+              <a-option value="cross_section">横截面</a-option>
+            </a-select>
+            <a-input-search v-model="filters.keyword" allow-clear placeholder="搜索因子 ID 或模块名" class="filter-search" />
+            <a-button type="primary" status="success" @click="createFactor">
+              <template #icon><icon-plus /></template>
+              新增因子
+            </a-button>
+          </div>
         </div>
 
         <a-table
@@ -238,12 +240,20 @@ onActivated(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: var(--moox-space-3);
   margin-bottom: var(--moox-space-3);
 }
 
+.definitions-filters__right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--moox-space-2);
+}
+
 .filter-type {
-  width: 130px;
+  width: 104px;
 }
 
 .filter-search {

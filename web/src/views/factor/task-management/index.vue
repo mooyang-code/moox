@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import ComputeTasks from "@/views/factor/compute-tasks/index.vue";
@@ -31,7 +31,9 @@ const tabs = [
 
 const route = useRoute();
 const router = useRouter();
-const activeTab = ref<ComputeTaskTab>(normalizeTab(route.query.tab));
+// 当前 Tab 只由 URL 决定：点击时只改 URL，不先切换本地状态。否则新 Tab 会在跳转完成前
+// 按旧 query 渲染并写回 URL，取消这次跳转，页面又回到默认 Tab。
+const activeTab = computed<ComputeTaskTab>(() => normalizeTab(route.query.tab));
 
 const activeComponent = computed(
   () =>
@@ -47,18 +49,8 @@ function normalizeTab(value: unknown): ComputeTaskTab {
 }
 
 function onTabChange(value: string | number) {
-  const tab = normalizeTab(value);
-  activeTab.value = tab;
-  void router.replace({ path: "/factor/tasks", query: buildTabQuery(route.query, tab) });
+  void router.replace({ path: "/factor/tasks", query: buildTabQuery(route.query, normalizeTab(value)) });
 }
-
-watch(
-  () => route.query.tab,
-  value => {
-    const tab = normalizeTab(value);
-    if (tab !== activeTab.value) activeTab.value = tab;
-  }
-);
 </script>
 
 <style scoped lang="scss">
