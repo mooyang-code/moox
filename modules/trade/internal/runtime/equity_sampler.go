@@ -98,4 +98,3 @@ func (s *EquitySampler) Run(ctx context.Context) error {
 		}
 	}
 }
-func (s *EquitySampler) Degraded() bool { return s != nil && s.degraded.Load() }

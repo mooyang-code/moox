@@ -2746,10 +2746,6 @@ func stableID(parts ...string) string {
 	return hex.EncodeToString(hash[:])[:32]
 }
 
-func stableRouteID(marketType, datasetID, frequency string) string {
-	return strings.Join([]string{strings.ToLower(strings.TrimSpace(marketType)), strings.TrimSpace(datasetID), strings.ToLower(strings.TrimSpace(frequency))}, ":")
-}
-
 func timePtr(value time.Time) *time.Time { return &value }
 
 func firstNonEmpty(values ...string) string {

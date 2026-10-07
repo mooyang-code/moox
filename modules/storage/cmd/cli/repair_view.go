@@ -839,10 +839,6 @@ func runStorageComponentLifecycle(ctx context.Context, packageRoot, action, serv
 	return runStorageComponentLifecycleWithOptions(ctx, packageRoot, action, serviceName, lookback, false, stderr)
 }
 
-func runStorageComponentLifecycleWithReplay(ctx context.Context, packageRoot, action, serviceName string, lookback time.Duration, stderr io.Writer) error {
-	return runStorageComponentLifecycleWithOptions(ctx, packageRoot, action, serviceName, lookback, true, stderr)
-}
-
 func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, action, serviceName string, lookback time.Duration, replayPending bool, stderr io.Writer) error {
 	packageRoot = strings.TrimSpace(packageRoot)
 	if packageRoot == "" {

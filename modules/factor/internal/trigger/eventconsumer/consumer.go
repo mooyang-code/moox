@@ -155,18 +155,6 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 
 func (c *Consumer) Ready() bool { return c != nil && c.ready.Load() }
 
-func (c *Consumer) Status() ConsumerStatus {
-	if c == nil {
-		return ConsumerStatus{}
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return ConsumerStatus{
-		Ready: c.ready.Load(), FilterSubjects: append([]string(nil), c.filters...),
-		FilterRefreshError: c.filterRefreshError,
-	}
-}
-
 func (c *Consumer) CurrentFilterSubjects() []string {
 	if c == nil {
 		return nil

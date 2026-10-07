@@ -6,14 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
+	"time"
+
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
-	"sort"
-	"sync"
-	"time"
 )
 
 type FactStore interface {
@@ -265,13 +266,6 @@ func (a *Adapter) GetReferencePrice(ctx context.Context, symbol string) (exchang
 	return exchange.ReferencePrice{Price: price, UpdatedAt: quote.SourceTime}, nil
 }
 
-func (a *Adapter) referencePrice(ctx context.Context, symbol string) (shared.Decimal, error) {
-	quote, err := a.GetReferencePrice(ctx, symbol)
-	if err != nil {
-		return shared.Zero(), err
-	}
-	return quote.Price, nil
-}
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
 	if a.Store == nil {
 		return nil, nil

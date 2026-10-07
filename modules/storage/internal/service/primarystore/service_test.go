@@ -626,10 +626,6 @@ func TestStockReadForwardsExactDefaultSeriesToView(t *testing.T) {
 	}
 }
 
-func stringPtr(value string) *string {
-	return &value
-}
-
 func TestPrimaryExactTimeSeriesReadOmitsMissingRows(t *testing.T) {
 	var existing *pb.RowKey
 	node := &recordingNode{

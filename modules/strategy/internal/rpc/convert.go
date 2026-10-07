@@ -13,10 +13,6 @@ func strategyProto(value domain.Strategy) *strategypb.Strategy {
 	return &strategypb.Strategy{StrategyId: value.ID, Name: value.Name, StrategyName: value.Name, Kind: value.Kind, ManifestYaml: value.ManifestYAML, DslYaml: value.ManifestYAML, CompiledJson: string(value.CompiledJSON), SourceHash: value.SourceHash, CreatedAt: formatTime(value.CreatedAt)}
 }
 
-func strategyDefinitionProto(value store.StrategyDefinition) *strategypb.Strategy {
-	return &strategypb.Strategy{StrategyId: value.StrategyID, Name: value.StrategyName, StrategyName: value.StrategyName, DslYaml: value.DSLYaml, ManifestYaml: value.DSLYaml, CreatedAt: formatTime(value.CreatedAt)}
-}
-
 func instanceProto(value store.StrategyInstance) *strategypb.StrategyInstance {
 	return &strategypb.StrategyInstance{InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, InputBindingsJson: string(value.InputBindingsJSON), LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID), CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt)}
 }

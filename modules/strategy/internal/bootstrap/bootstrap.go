@@ -387,14 +387,6 @@ func sourceViewID(raw json.RawMessage) string {
 	return strings.TrimSpace(binding.ViewID)
 }
 
-func scheduledBar(calendar, bar string, at time.Time) (time.Time, error) {
-	period, err := input.ClosedPeriod(calendar, bar, at)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return period.BarEnd, nil
-}
-
 func connectEventBus(ctx context.Context, cfg Config) (*jetstream.Client, error) {
 	jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-strategy-ready")
 	if strings.TrimSpace(cfg.EventBus.CredentialFile) != "" {

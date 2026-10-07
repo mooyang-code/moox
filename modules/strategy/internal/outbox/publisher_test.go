@@ -16,7 +16,6 @@ import (
 )
 
 type captureEventPublisher struct {
-	ready       bool
 	subject, id string
 	body        []byte
 }

@@ -2449,19 +2449,6 @@ func RebalanceSCFTimerFunctionCounts(cfg *SCFFetcherSpace, storageRegion string,
 	return nil
 }
 
-// allocateSCFAutoRegionCounts spreads automatically allocated Timer capacity
-// across enabled regions. Runtime publication may provide a Storage-region
-// preference; this manifest-only fallback keeps the historical crypto
-// overseas-first ordering when no live Storage route is available.
-// Every configured automatic region still receives at least one function.
-func allocateSCFAutoRegionCounts(cfg *SCFFetcherSpace, autoRegions []int, remaining int) {
-	allocateSCFAutoRegionCountsWithLimit(cfg, autoRegions, remaining, DefaultSCFMaxFunctionsPerNamespace)
-}
-
-func allocateSCFAutoRegionCountsWithLimit(cfg *SCFFetcherSpace, autoRegions []int, remaining, maxFunctionsPerRegion int) {
-	allocateSCFAutoRegionCountsWithCapacities(cfg, autoRegions, remaining, func(string) int { return maxFunctionsPerRegion })
-}
-
 func allocateSCFAutoRegionCountsWithCapacities(cfg *SCFFetcherSpace, autoRegions []int, remaining int, capacity func(string) int) {
 	groups := [][]int{autoRegions}
 	if strings.EqualFold(strings.TrimSpace(cfg.SpaceID), "crypto") {

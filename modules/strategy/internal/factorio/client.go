@@ -139,17 +139,3 @@ func pageDone(page *commonpb.PageResult, count int, pageSize uint32) bool {
 	}
 	return count < int(pageSize)
 }
-
-func (c Client) ListFactorSets(ctx context.Context) ([]compiler.FactorSetDescriptor, error) {
-	if c.ListFactorSetsFunc == nil {
-		return nil, context.Canceled
-	}
-	return c.ListFactorSetsFunc(ctx)
-}
-
-func (c Client) ListFactors(ctx context.Context, set compiler.FactorSetDescriptor) ([]compiler.FactorDescriptor, error) {
-	if c.ListFactorsFunc == nil {
-		return nil, context.Canceled
-	}
-	return c.ListFactorsFunc(ctx, set)
-}

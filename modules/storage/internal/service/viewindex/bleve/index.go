@@ -449,18 +449,6 @@ func schemaColumns(columns []*pb.ViewColumn) map[string]pb.FieldValueType {
 	return out
 }
 
-func documentRow(ctx context.Context, write viewindex.RowWrite, meta indexMeta, index blevelib.Index, mode viewindex.WriteMode) (map[string]any, error) {
-	key := write.Key.Key.GetRecord()
-	if key == nil {
-		return nil, errors.New("bleve only accepts record row keys")
-	}
-	doc, err := existingDocument(ctx, index, viewindex.RowKeyID(write.Key.Key), meta)
-	if err != nil {
-		return nil, err
-	}
-	return documentRowFromBase(ctx, write, meta, doc, mode)
-}
-
 func documentRowFromBase(ctx context.Context, write viewindex.RowWrite, meta indexMeta, doc map[string]any, mode viewindex.WriteMode) (map[string]any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

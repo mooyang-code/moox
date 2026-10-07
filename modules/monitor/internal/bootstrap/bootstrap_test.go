@@ -128,14 +128,6 @@ func TestKlineFreshnessCollectorRouteDoesNotReuseMetricsStorageRoute(t *testing.
 	require.Equal(t, "gateway-default", nodeID)
 }
 
-type bootstrapInventoryProvider struct {
-	snapshot monmetrics.TaskResultInventorySnapshot
-}
-
-func (p bootstrapInventoryProvider) FetchTaskResultInventory(context.Context) (monmetrics.TaskResultInventorySnapshot, error) {
-	return p.snapshot, nil
-}
-
 func TestMaxInt(t *testing.T) {
 	if maxInt(3, 7) != 7 || maxInt(9, 2) != 9 {
 		t.Fatal("maxInt returned wrong value")

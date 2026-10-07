@@ -577,10 +577,6 @@ func (c *Client) ensureGatewayNode(ctx context.Context, nodeID, host string) err
 	return c.ensureGatewayNodeAt(ctx, nodeID, host, TradeGatewayHTTPSPort)
 }
 
-func (c *Client) ensurePlaceholderGatewayNode(ctx context.Context, nodeID, host string, port int) error {
-	return c.writeGatewayNode(ctx, nodeID, host, port, false, "disabled")
-}
-
 func (c *Client) ensureGatewayNodeAt(ctx context.Context, nodeID, host string, port int) error {
 	return c.writeGatewayNode(ctx, nodeID, host, port, true, "enabled")
 }

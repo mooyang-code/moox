@@ -50,13 +50,6 @@ func WithEarliestPeriodProvider(provider EarliestPeriodProvider) Option {
 func WithReadyRecorder(record func(setID string, ready bool)) Option {
 	return func(s *Service) { s.recordReady = record }
 }
-func WithClock(now func() time.Time) Option {
-	return func(s *Service) {
-		if now != nil {
-			s.now = now
-		}
-	}
-}
 
 // Service coordinates local factor definitions with Storage metadata.
 type Service struct {
@@ -837,13 +830,4 @@ func replaceFactor(factors []domain.FactorDef, next domain.FactorDef) []domain.F
 		}
 	}
 	return append(factors, next)
-}
-
-func contains(values []string, value string) bool {
-	for _, item := range values {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }

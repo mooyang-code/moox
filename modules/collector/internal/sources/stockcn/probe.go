@@ -303,33 +303,6 @@ func displayValue(value, fallback string) string {
 	return trimmed
 }
 
-func NewInstrumentNotSupportedEntry(providerID string) ProbeEntry {
-	return ProbeEntry{
-		ProviderID:       strings.TrimSpace(providerID),
-		FeedKind:         ProbeFeedInstrument,
-		Exchange:         "ALL",
-		SubjectID:        "",
-		Symbol:           "",
-		HTTPStatus:       0,
-		LatencyMS:        0,
-		Result:           ProbeResultNotSupported,
-		ErrorKind:        "not_supported",
-		Error:            "instrument probe is not implemented",
-		BarCount:         0,
-		LatestBarStart:   "",
-		LatestBarEnd:     "",
-		EarliestBarStart: "",
-		SupportsRange:    false,
-		HasOHLCV:         false,
-		VolumeUnit:       "",
-		AmountUnit:       "",
-		PageCount:        0,
-		InstrumentCount:  0,
-		Complete:         false,
-		ExchangeCoverage: []string{},
-	}
-}
-
 func SortEntries(entries []ProbeEntry) {
 	slices.SortFunc(entries, func(left, right ProbeEntry) int {
 		if compare := strings.Compare(left.ProviderID, right.ProviderID); compare != 0 {

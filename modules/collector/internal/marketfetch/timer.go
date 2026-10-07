@@ -105,53 +105,8 @@ func timerGroupIdentity(spaceID string) (int, int, error) {
 	return groupID, groupCount, nil
 }
 
-func parseExternalSymbols(raw string, subjects []string, spaceID, marketID, marketType, provider string, resolver SymbolResolver) (map[string]string, error) {
-	result := make(map[string]string, len(subjects))
-	stockCN := strings.EqualFold(strings.TrimSpace(spaceID), StockCNSpaceID)
-	_ = raw
-	if strings.TrimSpace(raw) != "" {
-		if err := json.Unmarshal([]byte(raw), &result); err != nil {
-			return nil, fmt.Errorf("decode timer external symbol mapping: %w", err)
-		}
-	}
-	for _, subject := range subjects {
-		if stockCN {
-			resolved, err := stockProviderSymbol(subject)
-			if err != nil {
-				return nil, err
-			}
-			if explicit := strings.TrimSpace(result[subject]); explicit != "" && explicit != resolved {
-				return nil, fmt.Errorf("subject %s explicit symbol %q conflicts with strict symbol %q", subject, explicit, resolved)
-			}
-			result[subject] = resolved
-			continue
-		}
-		if explicit := strings.TrimSpace(result[subject]); explicit != "" {
-			continue
-		}
-		if resolver != nil {
-			resolved, err := resolveProviderSymbol(resolver, provider, marketID, marketType, subject)
-			if err != nil {
-				return nil, err
-			}
-			result[subject] = resolved
-			continue
-		}
-		resolved, err := marketProviderSymbolForMarket(marketID, marketType, subject)
-		if err != nil {
-			return nil, fmt.Errorf("timer subject %s has no provider symbol resolver: %w", subject, err)
-		}
-		result[subject] = resolved
-	}
-	return result, nil
-}
-
 func stockProviderSymbol(subjectID string) (string, error) {
 	return stocksource.ProviderSymbol(subjectID)
-}
-
-func marketProviderSymbol(marketType, subjectID string) (string, error) {
-	return marketProviderSymbolForMarket("", marketType, subjectID)
 }
 
 func marketProviderSymbolForMarket(marketID, marketType, subjectID string) (string, error) {

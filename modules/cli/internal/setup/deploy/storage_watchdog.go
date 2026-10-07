@@ -18,17 +18,6 @@ const (
 	storageViewWatchdogTimer      = "moox-storage-view-watchdog.timer"
 )
 
-// InstallStorageViewWatchdog installs and enables the host-level recovery loop
-// for the independently deployed Storage runtime. The files live in the
-// repository so the CLI can install the same checked-in version during setup.
-func InstallStorageViewWatchdog(ctx context.Context, transport setupssh.Client, repositoryRoot string, storageRoots ...string) error {
-	options := WatchdogOptions{}
-	if len(storageRoots) > 0 {
-		options.StorageRoot = storageRoots[0]
-	}
-	return InstallStorageViewWatchdogWithOptions(ctx, transport, repositoryRoot, options)
-}
-
 type WatchdogOptions struct {
 	StorageRoot   string
 	EventBusURL   string

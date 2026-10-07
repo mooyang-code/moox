@@ -65,18 +65,6 @@ func stockEgressIdentityProbeWithClient(ctx context.Context, client *http.Client
 	return nil, fmt.Errorf("public_ip reflectors unavailable: %s", strings.Join(failures, "; "))
 }
 
-// StockEgressProbe retains the provider-feed diagnostic used by focused
-// validation. It does not participate in release or Timer activation.
-func StockEgressProbe(ctx context.Context) (*model.Response, error) {
-	client := &http.Client{Timeout: 3 * time.Second}
-	return runStockEgressChecks(ctx, client, []stockEgressCheck{
-		{name: "public_ip", url: "https://api.ipify.org?format=text", validate: validatePublicIPAddress},
-		{name: "sina_kline", url: "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20moox_probe=/CN_MarketDataService.getKLineData?symbol=sh600000&scale=1&ma=no&datalen=1", validate: validateSinaKline},
-		{name: "tencent_kline", url: "https://ifzq.gtimg.cn/appstock/app/kline/mkline?_var=m1_today&param=sh600000,m1,,1", validate: validateTencentKline},
-		{name: "eastmoney_kline", url: "https://push2.eastmoney.com/api/qt/stock/kline/get?secid=1.600000&klt=1&fqt=0&beg=0&end=20500101&lmt=1&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57", validate: validateEastMoneyKline},
-	})
-}
-
 func stockEgressProbeWithClient(ctx context.Context, client *http.Client, publicIPURL, sinaKlineURL string) (*model.Response, error) {
 	return runStockEgressChecks(ctx, client, []stockEgressCheck{
 		{name: "public_ip", url: publicIPURL, validate: validatePublicIPAddress},

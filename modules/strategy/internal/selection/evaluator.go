@@ -1340,14 +1340,7 @@ func abs(value quant.Decimal) quant.Decimal {
 	}
 	return value
 }
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
+
 func containsInt(values []int, target int) bool {
 	for _, value := range values {
 		if value == target {

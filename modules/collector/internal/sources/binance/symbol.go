@@ -81,31 +81,6 @@ func (c *SymbolCollector) filterSymbols(symbols []*exchange.SymbolInfo) []*excha
 	return filtered
 }
 
-func normalizedSubjectID(symbol *exchange.SymbolInfo, _ ...string) string {
-	if symbol == nil {
-		return ""
-	}
-	base, quote := strings.ToUpper(strings.TrimSpace(symbol.BaseAsset)), strings.ToUpper(strings.TrimSpace(symbol.QuoteAsset))
-	if base == "" || quote == "" {
-		value := strings.ToUpper(strings.TrimSpace(symbol.Symbol))
-		parts := strings.Split(value, "-")
-		if len(parts) >= 2 {
-			base, quote = parts[0], parts[1]
-		}
-		if base == "" || quote == "" {
-			parsed := binanceapi.ParseSymbol(value, quote)
-			parts = strings.Split(parsed, "-")
-			if len(parts) >= 2 {
-				base, quote = parts[0], parts[1]
-			}
-		}
-	}
-	if base == "" || quote == "" {
-		return strings.ToUpper(strings.TrimSpace(symbol.Symbol))
-	}
-	return base + "-" + quote
-}
-
 func externalSymbol(symbol *exchange.SymbolInfo) string {
 	if symbol == nil {
 		return ""

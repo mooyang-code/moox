@@ -1,7 +1,6 @@
 package marketfetch
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -56,36 +55,4 @@ func invocationBootID(functionName string) string {
 	seed := functionName + "\x00" + time.Now().UTC().Format(time.RFC3339Nano)
 	digest := sha256.Sum256([]byte(seed))
 	return fmt.Sprintf("scf-%x", digest[:8])
-}
-
-// ReportNow is a small testable wrapper for one-shot reporting. Runtime
-// handlers normally call Handler.reportMetrics so the same deadline reserve is
-// applied to all market actions.
-func (m *InvocationMetrics) ReportNow(ctx context.Context) error {
-	if m == nil || m.Reporter == nil {
-		return nil
-	}
-	return m.Reporter.Handle(ctx)
-}
-
-// ReportInvocationMetrics is used by SCF actions that build an
-// the collection pipeline directly rather than going through Handler. Reporting is
-// best effort and leaves a small response reserve for the cloud runtime.
-func ReportInvocationMetrics(parent context.Context, metrics *InvocationMetrics) {
-	if metrics == nil || metrics.Reporter == nil {
-		return
-	}
-	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", 750)) * time.Millisecond
-	if deadline, ok := parent.Deadline(); ok {
-		remaining := time.Until(deadline) - metricsResponseReserve
-		if remaining <= 0 {
-			return
-		}
-		if remaining < timeout {
-			timeout = remaining
-		}
-	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
-	_ = metrics.ReportNow(ctx)
 }

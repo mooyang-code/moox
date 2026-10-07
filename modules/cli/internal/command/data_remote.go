@@ -15,8 +15,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const remoteWriteBatchSize = 1000
-
 // retInfoResponse 定义远端接口响应中读取 RetInfo 的公共能力。
 type retInfoResponse interface {
 	GetRetInfo() *pb.RetInfo

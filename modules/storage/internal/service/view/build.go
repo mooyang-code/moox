@@ -832,31 +832,6 @@ func formatPeriodSeriesKey(key string) string {
 	return key
 }
 
-func formatPeriodSeriesKeys(keys []string) string {
-	limit := minInt(len(keys), 3)
-	formatted := make([]string, 0, limit)
-	for _, key := range keys[:limit] {
-		formatted = append(formatted, formatPeriodSeriesKey(key))
-	}
-	return strings.Join(formatted, ",")
-}
-
-func formatPeriodCoverageCounts(keys []string, counts map[string]uint64) string {
-	limit := minInt(len(keys), 3)
-	formatted := make([]string, 0, limit)
-	for _, key := range keys[:limit] {
-		formatted = append(formatted, fmt.Sprintf("%s=%d", formatPeriodSeriesKey(key), counts[key]))
-	}
-	return strings.Join(formatted, ",")
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 var errViewBuildFailed = errors.New("view build has been marked failed")
 
 func (s *Service) backfillStillActive(spaceID, viewID, nextID string) error {

@@ -24,7 +24,6 @@ import (
 )
 
 type capturedStorage struct {
-	timerHandlerStorage
 	rows      []*storagepb.RowFieldUpsert
 	committed []*storagepb.TimeSeriesBatchRow
 }

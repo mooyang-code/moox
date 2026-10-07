@@ -66,10 +66,3 @@ func timeToString(t time.Time) string {
 	}
 	return t.UTC().Format(time.RFC3339Nano)
 }
-
-func timePtrToString(t *time.Time) string {
-	if t == nil {
-		return ""
-	}
-	return timeToString(*t)
-}

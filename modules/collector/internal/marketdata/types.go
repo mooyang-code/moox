@@ -39,14 +39,6 @@ func (key SourceKey) Validate() error {
 	return nil
 }
 
-func NewSourceKey(providerID, sourceID string) (SourceKey, error) {
-	key := SourceKey{ProviderID: strings.ToLower(strings.TrimSpace(providerID)), SourceID: strings.ToLower(strings.TrimSpace(sourceID))}
-	if err := key.Validate(); err != nil {
-		return SourceKey{}, err
-	}
-	return key, nil
-}
-
 type SourceStatus string
 
 const (

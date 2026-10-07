@@ -43,17 +43,6 @@ type sourceConfig struct {
 	} `yaml:"storage"`
 }
 
-func InstTypeForMarket(market string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(market)) {
-	case "spot", "现货":
-		return InstTypeSPOT, nil
-	case "swap", "futures", "future", "perpetual", "合约", "永续合约":
-		return InstTypeSWAP, nil
-	default:
-		return "", fmt.Errorf("unsupported market type %q", market)
-	}
-}
-
 func ResolveStorageBinding(instType string) (StorageBinding, error) {
 	key, defaultMarket, err := storageBindingKey(instType)
 	if err != nil {

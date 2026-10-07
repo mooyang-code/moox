@@ -1327,10 +1327,6 @@ func (s *Service) capacityMaintenanceBuildIdleFor(ctx context.Context, ref viewR
 	return checks >= requiredChecks
 }
 
-func (s *Service) consumerBacklog(ctx context.Context) (uint64, uint64, error) {
-	return s.consumerBacklogForView(ctx, viewRef{})
-}
-
 func (s *Service) consumerBacklogForView(ctx context.Context, ref viewRef) (uint64, uint64, error) {
 	s.mu.RLock()
 	stateReader := s.consumerState
@@ -1488,11 +1484,6 @@ func shouldRetryFailedBuildWithCause(view *pb.View, failedBuild *pb.ViewIndexBui
 	return !now.Before(updatedAt.Add(capacityMaintenanceRetryInterval))
 }
 
-type resumeBuildRetry struct{ cause error }
-
-func (e resumeBuildRetry) Error() string { return e.cause.Error() }
-func (e resumeBuildRetry) Unwrap() error { return e.cause }
-
 type activationRetry struct{ cause error }
 
 func (e activationRetry) Error() string { return e.cause.Error() }
@@ -1519,93 +1510,6 @@ func (s *Service) catchUpAndActivateViewBuild(
 		return err
 	}
 	return s.activateViewBuild(ctx, opts, auth, view, buildID, indexID, engine, revision, schemaHash, columns)
-}
-
-func (s *Service) resumeViewBuild(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, previous *pb.ViewIndexBuild) error {
-	lookbackPeriods := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods)
-	claim, err := opts.Metadata.ClaimViewIndexBuild(ctx, &pb.ClaimViewIndexBuildReq{
-		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: previous.GetBuildId(),
-		IndexId: previous.GetIndexId(), Engine: previous.GetEngine(), TargetViewVersion: previous.GetTargetViewVersion(),
-		OwnerId: opts.OwnerID, SchemaHash: previous.GetSchemaHash(), Columns: previous.GetColumns(),
-		ExpectedActiveIndexId: view.GetActiveIndexId(),
-	})
-	if err != nil {
-		return resumeBuildRetry{cause: err}
-	}
-	if err := requireSuccess(claim.GetRetInfo()); err != nil {
-		return resumeBuildRetry{cause: err}
-	}
-	build := claim.GetBuild()
-	if build == nil {
-		return errors.New("resumed view build metadata is missing")
-	}
-	if err := s.AttachPendingViewBuild(ctx, view); err != nil {
-		return err
-	}
-	if err := s.TrackViewBuild(ctx, view.GetSpaceId(), view.GetViewId(), build.GetBuildId(), opts.OwnerID, opts.Metadata, auth); err != nil {
-		return err
-	}
-	if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, build.GetEntriesWritten()); err != nil {
-		return err
-	}
-	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, build.GetBuildId(), nil, "backfill")
-	var entriesWritten uint64
-	activePhysicalExists := view.GetActiveIndexId() != ""
-	if activePhysicalExists {
-		activeEngine, err := s.engineFor(view.GetActiveIndexId())
-		if err != nil {
-			return err
-		}
-		activeStats, err := activeEngine.Stat(ctx, view.GetActiveIndexId())
-		if err != nil {
-			return err
-		}
-		activePhysicalExists = activeStats.Exists
-	}
-	needsPrimaryHistory := opts.PrimaryRange != nil || (lookbackPeriods > 0 && !strings.EqualFold(strings.TrimSpace(previous.GetEngine()), "bleve"))
-	if activePhysicalExists || needsPrimaryHistory {
-		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, entriesWritten); err != nil {
-			return err
-		}
-		buildCtx := ctx
-		s.mu.RLock()
-		runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
-		s.mu.RUnlock()
-		if runtime != nil {
-			runtime.mu.Lock()
-			if runtime.buildContext != nil {
-				buildCtx = runtime.buildContext
-			}
-			runtime.mu.Unlock()
-		}
-		var backfillErr error
-		backfillPageSize := int(opts.BackfillPageSize)
-		if backfillPageSize <= 0 {
-			backfillPageSize = viewBackfillBatchSize
-		}
-		backfillLimiter := newBackfillRequestLimiter(opts.BackfillRequestInterval)
-		entriesWritten, backfillErr = s.backfillViewWithReaderLimited(buildCtx, view.GetSpaceId(), view.GetViewId(), backfillPageSize, opts.Primary, opts.PrimaryRange, opts.RebuildLookback, lookbackPeriods, opts.MaxHistoryScanRows, backfillLimiter)
-		if backfillErr != nil {
-			return backfillErr
-		}
-		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, entriesWritten); err != nil {
-			return err
-		}
-	} else {
-		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, entriesWritten); err != nil {
-			return err
-		}
-	}
-	if opts.RebuildLookback > 0 {
-		if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
-			if !incompleteHistoryIsAllowed(err) {
-				return err
-			}
-			log.Printf("storage view resumed rebuild has partial history; activating available rows space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
-		}
-	}
-	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, build.GetBuildId(), nil, "activate")
-	return s.activateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns())
 }
 
 // activateViewBuild makes the metadata commit and the in-memory pointer switch

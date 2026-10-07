@@ -132,20 +132,6 @@ func DNSResolverRuntimeTarget(snapshot *Snapshot) (string, string, error) {
 	return strings.TrimSpace(host.Name), "ip://" + net.JoinHostPort(strings.TrimSpace(host.Address), "11003"), nil
 }
 
-// WriteTradeDNSResolverConfig atomically writes a rendered Trade app.yaml.
-func WriteTradeDNSResolverConfig(snapshot *Snapshot, path string) error {
-	return writeRenderedConfig(path, func(existing []byte) ([]byte, error) {
-		return RenderTradeDNSResolverConfig(snapshot, existing)
-	})
-}
-
-// WriteCollectorDNSResolverConfig atomically writes a rendered Collector app.yaml.
-func WriteCollectorDNSResolverConfig(snapshot *Snapshot, path string) error {
-	return writeRenderedConfig(path, func(existing []byte) ([]byte, error) {
-		return RenderCollectorDNSResolverConfig(snapshot, existing)
-	})
-}
-
 // WriteRenderedRuntimeConfig atomically writes already-rendered YAML. It is
 // used by the CLI after both Trade and Collector render operations have
 // succeeded, so neither service is restarted with a half-rendered snapshot.
@@ -243,22 +229,6 @@ func valueNode(value any) *yaml.Node {
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
 	}
 	return document.Content[0]
-}
-
-func writeRenderedConfig(path string, render func([]byte) ([]byte, error)) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return fmt.Errorf("runtime_config: output path is required")
-	}
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("runtime_config: read %s: %w", path, err)
-	}
-	rendered, err := render(existing)
-	if err != nil {
-		return err
-	}
-	return writeRenderedBytes(path, rendered)
 }
 
 func writeRenderedBytes(path string, rendered []byte) error {

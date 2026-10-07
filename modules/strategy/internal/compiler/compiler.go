@@ -79,10 +79,6 @@ func (c Compiler) Compile(_ context.Context, dsl config.DSL, spaceID string) (Co
 	return compiled, nil
 }
 
-func Compile(ctx context.Context, dsl config.DSL, spaceID string, deps Dependencies) (CompiledStrategy, error) {
-	return (Compiler{Factors: deps, Storage: deps}).Compile(ctx, dsl, spaceID)
-}
-
 func compileRule(name string, rule config.Rule, fields map[string]reflect.Type) (CompiledRule, error) {
 	result := CompiledRule{Name: name, Definition: rule}
 	var err error

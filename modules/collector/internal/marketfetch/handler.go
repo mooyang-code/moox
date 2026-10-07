@@ -130,10 +130,6 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 	return h.handleRequest(budgetCtx, req, invocation.StorageGatewayTarget, true)
 }
 
-func (h *Handler) handle(ctx context.Context, event model.CloudFunctionEvent, publish bool) (*model.Response, error) {
-	return h.handleWithFunctionName(ctx, event, publish, "")
-}
-
 func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, publish bool, runtimeFunctionName string) (*model.Response, error) {
 	if h == nil {
 		return nil, fmt.Errorf("market fetch handler is nil")
@@ -485,18 +481,6 @@ func envInt(name string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
-		return fallback
-	}
-	return parsed
-}
-
-func envIntAllowZero(name string, fallback int) int {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 0 {
 		return fallback
 	}
 	return parsed

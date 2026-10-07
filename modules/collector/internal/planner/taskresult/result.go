@@ -212,13 +212,6 @@ func (c primaryDatasetRowsCleaner) RestoreDatasetRows(ctx context.Context, req *
 	return c.client.RestoreDatasetRows(ctx, req)
 }
 
-func NewManager(client storagepb.MetadataClientProxy, auth *storagepb.AuthInfo) *Manager {
-	if client == nil || auth == nil {
-		return nil
-	}
-	return &Manager{metadata: metadataProxy{client: client}, auth: auth}
-}
-
 func NewManagerWithCleaner(client storagepb.MetadataClientProxy, cleaner storagepb.PrimaryStoreClientProxy, auth *storagepb.AuthInfo) *Manager {
 	if client == nil || cleaner == nil || auth == nil {
 		return nil

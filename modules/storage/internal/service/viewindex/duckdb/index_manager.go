@@ -727,22 +727,6 @@ func groupRowWrites(writes []viewindex.RowWrite) []rowWriteGroup {
 	return groups
 }
 
-func upsertColumnNames(columns map[string]pb.FieldValueType) []string {
-	names := []string{"subject_id", "freq", "data_time", "series_tag"}
-	for name := range columns {
-		if isSystemColumn(name) {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names[4:])
-	return names
-}
-
-func upsertSQL(names []string, mode viewindex.WriteMode) string {
-	return upsertSQLBatch(names, mode, 1)
-}
-
 func upsertSQLBatch(names []string, mode viewindex.WriteMode, rowCount int) string {
 	if rowCount < 1 {
 		rowCount = 1
@@ -1583,15 +1567,6 @@ func joinQuoted(names []string) string {
 		quoted[i] = quote(name)
 	}
 	return strings.Join(quoted, ", ")
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func valueString(value any) string {

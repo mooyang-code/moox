@@ -347,10 +347,3 @@ func managedEnvironmentMatches(current, desired map[string]string) bool {
 	}
 	return true
 }
-
-func boolToInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
-}

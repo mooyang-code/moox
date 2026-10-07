@@ -138,26 +138,6 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	waitForConcurrencyRows(t, ctx, service, auth, "prices_a")
 }
 
-func waitForEitherConcurrencyRows(t *testing.T, ctx context.Context, service *viewservice.Service, auth *pb.AuthInfo) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, dataset := range []string{"prices_a", "prices_b"} {
-			if concurrencyRowsReady(ctx, service, auth, dataset) {
-				return
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatal("the non-blocked dataset lane did not complete while another lane was blocked")
-}
-
-func concurrencyRowsReady(ctx context.Context, service *viewservice.Service, auth *pb.AuthInfo, dataset string) bool {
-	viewID := dataset + "-view"
-	result, err := service.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{AuthInfo: auth, SpaceId: "quant", ViewId: viewID, TimeRange: &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T00:01:00Z"}, Page: &pb.Page{Page: 1, Size: 10}})
-	return err == nil && result.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS && len(result.GetRows()) == 1
-}
-
 func waitForConcurrencyRows(t *testing.T, ctx context.Context, service *viewservice.Service, auth *pb.AuthInfo, dataset string) {
 	t.Helper()
 	viewID := dataset + "-view"

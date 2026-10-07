@@ -219,11 +219,6 @@ func setupconfigHostConfigured(host setupconfig.Host) bool {
 	return strings.TrimSpace(host.Name) != "" && strings.TrimSpace(host.Address) != ""
 }
 
-func isStorageFirewallTarget(manifest setupconfig.Manifest, host setupconfig.Host) bool {
-	return strings.EqualFold(strings.TrimSpace(host.Address), strings.TrimSpace(manifest.StorageHost.Address)) ||
-		strings.EqualFold(strings.TrimSpace(host.Address), strings.TrimSpace(manifest.ViewHost.Address))
-}
-
 func appendUniqueFirewallRules(dst []cloudtencent.CreateFirewallRulesOptions, rules ...cloudtencent.CreateFirewallRulesOptions) []cloudtencent.CreateFirewallRulesOptions {
 	for _, rule := range rules {
 		duplicate := false

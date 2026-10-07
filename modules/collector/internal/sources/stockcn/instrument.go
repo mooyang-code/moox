@@ -75,14 +75,6 @@ func (b *instrumentSnapshotBuilder) Snapshot() (marketdata.InstrumentSnapshot, e
 	return snapshot, nil
 }
 
-func DecodeJSONObject(body []byte) (map[string]any, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
-	}
-	return payload, nil
-}
-
 func valueAt(root any, path ...string) any {
 	current := root
 	for _, key := range path {

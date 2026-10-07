@@ -519,41 +519,6 @@ func compiledUsesPreviousBar(compiled compiler.CompiledStrategy) bool {
 	return false
 }
 
-func missingRequiredFields(compiled compiler.CompiledStrategy, rows map[string]input.InstrumentInput, pool []input.PoolItem) []string {
-	missing := map[string]struct{}{}
-	for _, item := range pool {
-		row := rows[item.InstrumentID]
-		for _, rule := range compiled.Rules {
-			if !ruleAppliesToInstrument(compiled, rule.Definition.Pool, item.InstrumentID) {
-				continue
-			}
-			currentFields, previousFields := ruleFields(rule)
-			for field := range currentFields {
-				if fieldRequiresScopedFactor(compiled, field, item) {
-					continue
-				}
-				if _, ok := row.Values[field]; !ok {
-					missing[item.InstrumentID+":current:"+field] = struct{}{}
-				}
-			}
-			for field := range previousFields {
-				if fieldRequiresScopedFactor(compiled, field, item) {
-					continue
-				}
-				if _, ok := row.PreviousValues[field]; !ok {
-					missing[item.InstrumentID+":previous:"+field] = struct{}{}
-				}
-			}
-		}
-	}
-	result := make([]string, 0, len(missing))
-	for key := range missing {
-		result = append(result, key)
-	}
-	sort.Strings(result)
-	return result
-}
-
 func uniqueStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
@@ -636,27 +601,6 @@ func factorAppliesToItem(factor compiler.CompiledFactor, item input.PoolItem) bo
 		return false
 	}
 	return true
-}
-
-// fieldRequiresScopedFactor reports whether a field belongs exclusively to a
-// factor selection that does not cover this instrument. Such a field is not a
-// missing value for this row; the corresponding rule cannot use it here.
-func fieldRequiresScopedFactor(compiled compiler.CompiledStrategy, field string, item input.PoolItem) bool {
-	name := strings.ToLower(strings.TrimSpace(field))
-	matched := false
-	for _, factor := range compiled.Factors {
-		aliases := []string{factor.FactorID, factor.Output, factor.ColumnName}
-		for _, alias := range aliases {
-			if strings.ToLower(strings.TrimSpace(alias)) != name {
-				continue
-			}
-			matched = true
-			if factorAppliesToItem(factor, item) {
-				return false
-			}
-		}
-	}
-	return matched
 }
 
 func ruleFields(rule compiler.CompiledRule) (map[string]struct{}, map[string]struct{}) {

@@ -87,19 +87,3 @@ func applySchema(dbPath string, rawSQL string) error {
 	}
 	return nil
 }
-
-func initSQLiteDSN(dbPath string) string {
-	pragmas := []string{
-		"_pragma=journal_mode(WAL)",
-		"_pragma=synchronous(OFF)",
-		"_pragma=busy_timeout(5000)",
-		"_pragma=temp_store(MEMORY)",
-		"_pragma=cache_size(-64000)",
-		"_pragma=wal_autocheckpoint(1000)",
-	}
-	sep := "?"
-	if strings.Contains(dbPath, "?") {
-		sep = "&"
-	}
-	return dbPath + sep + strings.Join(pragmas, "&")
-}

@@ -110,17 +110,6 @@ func resolveTLSMode(mode TLSMode, publicHost string) TLSMode {
 	return TLSModePublic
 }
 
-// ResolveTLSMode exposes the same deterministic host-based selection used by
-// the deployment and readiness paths to setup commands that need to choose the
-// matching CA verification workflow.
-func ResolveTLSMode(mode TLSMode, publicHost string) TLSMode {
-	return resolveTLSMode(mode, publicHost)
-}
-
-func UsesPublicTLS(publicHost string) bool {
-	return resolveTLSMode("", publicHost) == TLSModePublic
-}
-
 func UsesPublicTLSMode(mode TLSMode, publicHost string) bool {
 	return resolveTLSMode(mode, publicHost) == TLSModePublic
 }

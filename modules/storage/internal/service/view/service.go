@@ -155,17 +155,6 @@ const (
 	activePrimaryDatasetAttr = "moox.active_primary_dataset_id"
 )
 
-func cloneViewAttributes(attrs map[string]string) map[string]string {
-	if len(attrs) == 0 {
-		return nil
-	}
-	clone := make(map[string]string, len(attrs))
-	for key, value := range attrs {
-		clone[key] = value
-	}
-	return clone
-}
-
 func persistedActiveDatasetID(view *pb.View) string {
 	if view == nil {
 		return ""
@@ -361,13 +350,6 @@ func (s *Service) setMaintenanceReady(ready bool) {
 // server in that mode.
 func (s *Service) MarkMaintenanceReady() {
 	s.setMaintenanceReady(true)
-}
-
-func (s *Service) isMaintenanceReady() bool {
-	s.mu.RLock()
-	ready := s.maintenanceReady
-	s.mu.RUnlock()
-	return ready
 }
 
 func (s *Service) nextIndexGeneration(indexID string) uint64 {
@@ -820,10 +802,6 @@ func (s *Service) datasetHasActiveView(ctx context.Context, spaceID, datasetID s
 			return false, nil
 		}
 	}
-}
-
-func (s *Service) removeFailedBuild(ctx context.Context, id string) {
-	s.removeFailedBuildAtGeneration(ctx, id, s.indexGenerationOf(id))
 }
 
 // removeFailedBuildAtGeneration prevents cleanup from deleting a newer

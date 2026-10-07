@@ -21,20 +21,6 @@ type CatalogClient struct {
 	ListColumnsFunc func(context.Context, string) ([]compiler.ViewColumn, error)
 }
 
-func (c CatalogClient) GetView(ctx context.Context, id string) (compiler.ViewDescriptor, error) {
-	if c.GetViewFunc == nil {
-		return compiler.ViewDescriptor{}, context.Canceled
-	}
-	return c.GetViewFunc(ctx, id)
-}
-
-func (c CatalogClient) ListViewColumns(ctx context.Context, id string) ([]compiler.ViewColumn, error) {
-	if c.ListColumnsFunc == nil {
-		return nil, context.Canceled
-	}
-	return c.ListColumnsFunc(ctx, id)
-}
-
 type PeriodReader interface {
 	Load(context.Context, domain.StrategyRunner, compiler.CompiledStrategy, time.Time) (input.EvaluationInput, error)
 }

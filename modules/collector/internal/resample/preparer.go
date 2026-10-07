@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
@@ -67,42 +65,6 @@ func (p *Preparer) RunOnce(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// Retry marks an error task as pending for an explicit operator retry.
-func (p *Preparer) Retry(ctx context.Context, spaceID, taskID string) error {
-	if p == nil || p.Tasks == nil {
-		return fmt.Errorf("resample preparer is not initialized")
-	}
-	return p.Tasks.SetPrepareState(ctx, strings.TrimSpace(spaceID), strings.TrimSpace(taskID), domain.PrepareStatePending, "")
-}
-
-// Start launches the bounded preparation loop. A timer should still invoke
-// RunOnce; the loop is a liveness fallback for tasks created while no timer is
-// configured in a development environment.
-func (p *Preparer) Start(ctx context.Context, interval time.Duration) (func(), error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("resample preparer context is required")
-	}
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	loopCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-loopCtx.Done():
-				return
-			case <-ticker.C:
-				_ = p.RunOnce(loopCtx)
-			}
-		}
-	}()
-	return func() { cancel(); <-done }, nil
 }
 
 var _ subjectSource = (*storagesource.DatasetSource)(nil)

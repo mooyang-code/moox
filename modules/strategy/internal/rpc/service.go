@@ -1037,46 +1037,6 @@ func (s *Service) ensureLegacyRunner(ctx context.Context, runner domain.Strategy
 	return nil
 }
 
-func (s *Service) claimRunner(ctx context.Context, runner domain.StrategyRunner) error {
-	if runner.LogicalAccountID == nil {
-		return nil
-	}
-	_, err := s.claimRunnerWithGeneration(ctx, runner)
-	return err
-}
-
-func (s *Service) claimRunnerWithGeneration(ctx context.Context, runner domain.StrategyRunner) (int64, error) {
-	if runner.LogicalAccountID == nil {
-		return 0, nil
-	}
-	if s.LogicalAccounts == nil {
-		return 0, errors.New("logical account owner client is unavailable")
-	}
-	if claimer, ok := s.LogicalAccounts.(LogicalAccountOwnerClaimer); ok {
-		return claimer.ClaimWithGeneration(ctx, runner.SpaceID, *runner.LogicalAccountID, runner.ID)
-	}
-	return 0, s.LogicalAccounts.Claim(ctx, runner.SpaceID, *runner.LogicalAccountID, runner.ID)
-}
-
-func (s *Service) verifyRunnerDependencies(ctx context.Context, runner domain.StrategyRunner) error {
-	if s.Repo == nil {
-		return errors.New("strategy repository is unavailable")
-	}
-	strategy, err := s.Repo.GetStrategy(ctx, runner.StrategyID)
-	if err != nil {
-		return err
-	}
-	compiled, err := decodeCompiled(strategy)
-	if err != nil {
-		return err
-	}
-	selectedCompiler := s.compilerFor(runner.SpaceID)
-	if selectedCompiler == nil {
-		return errors.New("strategy compiler is unavailable")
-	}
-	return selectedCompiler.VerifyDependencies(ctx, compiled)
-}
-
 func (s *Service) releaseRunner(ctx context.Context, runner domain.StrategyRunner) error {
 	if runner.LogicalAccountID == nil {
 		return nil

@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
@@ -22,7 +21,6 @@ import (
 type Server struct {
 	cfg *config.Config
 	ns  *natsserver.Server
-	mu  sync.RWMutex
 }
 
 type usersFile struct {

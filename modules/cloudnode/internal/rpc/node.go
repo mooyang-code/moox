@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
@@ -1343,28 +1342,6 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 		Metadata:       jsonString(metadata),
 		IsDeleted:      false,
 	}
-}
-
-func sanitizeSCFFunctionToken(value string) string {
-	raw := strings.TrimSpace(value)
-	if raw == "" {
-		raw = "space"
-	}
-	var b strings.Builder
-	for _, r := range raw {
-		// Tencent SCF function names permit letters, digits, and hyphens only.
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' {
-			b.WriteRune(r)
-			continue
-		}
-		b.WriteByte('-')
-	}
-	token := strings.Trim(b.String(), "-_")
-	if token == "" {
-		token = "space"
-	}
-	sum := sha256.Sum256([]byte(raw))
-	return fmt.Sprintf("%s-%x", token, sum[:4])
 }
 
 func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNode {

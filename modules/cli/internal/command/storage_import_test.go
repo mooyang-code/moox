@@ -254,7 +254,6 @@ func TestRunStorageImportWritePath(t *testing.T) {
 type fakeStorageImportMetaFull struct {
 	fakeStorageImportMeta
 	subjects                 []*pb.DatasetSubject
-	bound                    bool
 	metadataCalls            int
 	listDatasetSubjectsCalls int
 	bindDatasetSubjectCalls  int

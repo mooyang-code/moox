@@ -855,15 +855,6 @@ func (r *Reconciler) pendingRuntimeSince() time.Time {
 	return r.pendingSince
 }
 
-func (r *Reconciler) markSubmitRetryPending() time.Time {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.pendingSince.IsZero() {
-		r.pendingSince = time.Now().UTC()
-	}
-	return r.pendingSince
-}
-
 func (r *Reconciler) clearSubmitRetryPending() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1063,38 +1054,6 @@ func (r *Reconciler) clearPendingRuntimeJobs() bool {
 	r.pending = make(map[string]string)
 	r.pendingAt = make(map[string]time.Time)
 	return fullySubmitted
-}
-
-func (r *Reconciler) clearPendingRuntimeJob(jobID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.pendingJob != jobID && !containsString(r.pendingJobs, jobID) {
-		return
-	}
-	remaining := r.pendingJobs[:0]
-	for _, pendingJob := range r.pendingJobs {
-		if pendingJob != jobID {
-			remaining = append(remaining, pendingJob)
-		}
-	}
-	r.pendingJobs = remaining
-	if len(r.pendingJobs) > 0 {
-		r.pendingJob = r.pendingJobs[0]
-		return
-	}
-	r.pendingJob = ""
-	r.pendingSince = time.Time{}
-	r.pending = make(map[string]string)
-	r.pendingAt = make(map[string]time.Time)
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func (r *Reconciler) observeAssignmentPending(spaceID string, pending bool, since time.Time) {

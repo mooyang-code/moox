@@ -28,8 +28,6 @@ type PeriodReporter struct {
 	storage   DatasetPeriodReporter
 	spaceID   string
 	batchSize int
-	nodeID    string
-	storeID   string
 	now       func() time.Time
 	metrics   *Metrics
 }

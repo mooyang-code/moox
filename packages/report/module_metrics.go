@@ -11,10 +11,6 @@ import (
 
 const MaxModuleMetricSeries = 256
 
-var allowedModules = stringSet(
-	"admin", "archive", "cloudnode", "collector", "eventbus", "factor",
-	"gateway", "hostagent", "monitor", "scf", "storage", "strategy", "trade",
-)
 var allowedStages = stringSet(
 	"collect", "dispatch", "calculate", "evaluate", "target_commit", "materialize",
 	"rebalance", "reconcile", "ingest", "route_refresh", "publish",

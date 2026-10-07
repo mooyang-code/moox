@@ -510,13 +510,3 @@ func serviceName(raw string) (string, string) {
 		return "核心服务", "检查服务是否在线并持续上报"
 	}
 }
-
-func latest(values ...time.Time) time.Time {
-	var out time.Time
-	for _, value := range values {
-		if value.After(out) {
-			out = value
-		}
-	}
-	return out
-}

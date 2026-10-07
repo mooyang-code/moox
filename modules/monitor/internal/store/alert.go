@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -181,37 +179,6 @@ func (r *AlertRepository) GetRuleByID(ctx context.Context, ruleID string) (*doma
 		return nil, err
 	}
 	return &rule, nil
-}
-
-func validateAlertRuleReferences(tx *gorm.DB, rule *domain.AlertRule) error {
-	if rule == nil {
-		return fmt.Errorf("alert rule is required")
-	}
-	if !isHostMetricRuleKey(rule.CheckID) {
-		var enabledChecks int64
-		if err := tx.Model(&domain.Check{}).
-			Where("c_space_id = ? AND c_check_id = ? AND c_enabled = 1", rule.SpaceID, rule.CheckID).
-			Count(&enabledChecks).Error; err != nil {
-			return err
-		}
-		if enabledChecks != 1 {
-			return fmt.Errorf("%w: check %q", ErrInvalidReference, rule.CheckID)
-		}
-	}
-	return nil
-}
-
-func isHostMetricRuleKey(checkID string) bool {
-	parts := strings.Split(checkID, ":")
-	if len(parts) != 3 || parts[0] != "host" || strings.TrimSpace(parts[1]) == "" {
-		return false
-	}
-	switch parts[2] {
-	case "cpu", "memory", "filesystem_usage", "disk_utilization", "network_errors":
-		return true
-	default:
-		return false
-	}
 }
 
 func (r *AlertRepository) UpsertState(ctx context.Context, state *domain.AlertState) error {

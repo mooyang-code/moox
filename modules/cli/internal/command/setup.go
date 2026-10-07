@@ -1771,24 +1771,6 @@ func isPublicFirewallIP(address string) bool {
 		!ip.IsLinkLocalUnicast() && !ip.IsMulticast()
 }
 
-func ensureSetupControlFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
-	rules := setupControlFirewallRulesForTLS(
-		setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode),
-		snapshot.Manifest.ControlHost.Address,
-	)
-	return ensureSetupFirewallRules(ctx, snapshot, snapshot.Manifest.ControlHost.Address, rules, "control_firewall_failed")
-}
-
-func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
-	return ensureSetupFirewallRules(
-		ctx,
-		snapshot,
-		snapshot.Manifest.EventBus.PublicAddress,
-		setupRuntimeFirewallRules(snapshot.Manifest.EventBus.Port),
-		"eventbus_firewall_failed",
-	)
-}
-
 func ensureSetupStorageGatewayFirewall(ctx context.Context, snapshot *setupconfig.Snapshot, address string) error {
 	if storageGatewayPortReachable(ctx, address, 11003) {
 		return nil
