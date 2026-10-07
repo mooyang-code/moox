@@ -24,9 +24,10 @@ const (
 )
 
 // StartStorageWriteConsumer consumes the durable Storage mutation stream and
-// projects successful writes into task-instance freshness. It is separate from
-// the Invoke completion consumer because Timer SCFs intentionally do not
-// publish market-fetch completion events.
+// projects committed rows into task-instance freshness, keyed by the writing
+// function (the rows' write source). It complements the market-fetch
+// completion consumer: completions report a batch's outcome, while this
+// records when each subject's data actually reached Storage.
 func StartStorageWriteConsumer(ctx context.Context, spaceID string, instances *store.TaskInstanceRepository) error {
 	if instances == nil {
 		return fmt.Errorf("task instance repository is required")
