@@ -19,7 +19,7 @@ Core concepts:
 - DataSet: a source-bound logical kind of data, such as kline, ticker, company profile, ranking, event, or factor values.
 - Field and Factor: Space-scoped reusable column definitions selected by DataSet columns.
 - View: a query-facing, asynchronously built wide view over one primary DataSet and selected columns from related DataSets.
-- StorageRoute: a policy that maps online primary facts to PrimaryStore nodes. DuckDB views, Bleve search, and Parquet archive are derived asynchronously from primary fact changes.
+- DataNode: the Storage node a fact Dataset is bound to at activation; it persists field-level facts in Pebble and publishes row changes through its outbox. DuckDB/Bleve views and Parquet archive are derived asynchronously from those changes.
 
 Host Agent deployment:
 
@@ -30,15 +30,17 @@ Host Agent deployment:
 
 ## Repository Layout
 
-- `modules/cli`: `moox-cli`.
-- `modules/admin`: control plane service and metadata orchestration.
-- `modules/storage`: storage service, protocol, access, primary store, view, search, archive, and device drivers.
-- `modules/collector`: independent collection service with CollectMgr APIs, planner, executor, cloudruntime, source adapters, and SCF runtime entrypoints.
-- `modules/cloudnode`: cloud node, cloud account, SCF package, async work_item, and sync invocation service.
-- `modules/factor`: factor calculation module.
-- `modules/trade`: trade module.
-- `docs`: architecture, concept, and protocol documents.
-- `scripts`: root build, release, deploy, collector SCF package, storage helper, quality checks, and contract/E2E test scripts.
+- `modules/cli`: `moox-cli` (setup, deploy, SCF publish, data import, doctor).
+- `modules/admin`: control plane (auth, spaces, service catalog, secrets, SSH, setup) and the browser API gateway.
+- `modules/gateway`: per-node service gateway.
+- `modules/eventbus`: embedded NATS JetStream broker.
+- `modules/storage`: metadata (primary), field-level facts and outbox (node), rebuildable views (view), external access proxy (access).
+- `modules/collector`: collection tasks, period batch planning, SCF Timer runtime and reconciliation.
+- `modules/cloudnode`: cloud accounts, SCF nodes, code packages and function publishing.
+- `modules/factor`: factor manager and the Python factor engine.
+- `modules/strategy`, `modules/trade`, `modules/monitor`, `modules/hostagent`, `modules/archive`.
+- `docs`: 总体设计、部署与运维和 `docs/模块/` 下的模块设计文档.
+- `scripts`: build, release, deploy, quality checks, and contract/E2E test scripts.
 
 ## Common Commands
 

@@ -1,118 +1,19 @@
 # moox-collector
 
-MooX 的行情采集控制面和短时 SCF 运行时。Collector 负责采集任务、完整 Symbol 数据来源、稳定
-Timer 分片、公共 DNS Environment 和数据新鲜度；SCF 只执行一批行情请求，不常驻等待任务。
+采集控制面与 SCF 运行时：采集任务、周期批次规划、Timer 领取与对账、失败重试、标的同步和 K 线重采样。
 
-实时 K 线的正式架构是 `node_type=scf-event, trigger_type=timer`：Collector 每分钟协调
-每个函数独立的任务环境，最多 60 个 A 股标的；Tencent Timer 到点触发 SCF，函数并发请求市场 Provider
-并聚合写 Storage。SCF 不请求 Collector/Admin，也不发布实时 Completion。Symbol 快照、缺口
-补采、出口探针和人工 E2E 才使用有界 `InvokeFunction`。常驻心跳、EventBus 消费和逐节点实时
-Invoke 会增加函数运行时长或控制面排队，不能重新引入。维护背景见
-[SCF 短时行情采集架构](../../docs/architecture/scf-short-lived-market-fetch.md)。
+设计文档：[采集](../../docs/模块/采集.md)
 
-配置驱动的标准发布会在每个启用地域自动补 1 个 `trigger_type=invoke` 辅助函数；它不计入
-`moox.toml` 的 Timer `function_count`，只用于 Symbol 快照、缺口补采、探针和人工 E2E。
-
-## 职责
-
-| 组件 | 职责 |
-| --- | --- |
-| `moox-collector` | CollectionTask、TaskInstance、Timer 分片、DNS 协调和有限 Invoke 补采 |
-| `moox-collector-scf` | 从 Timer Environment 读取任务，抓取、批量写入 Storage、逐标的 CLS |
-| `modules/cloudnode` | 云账户、代码包、函数节点、Timer Trigger 与受管 Environment |
-| `modules/storage` | 行情数据和最新时间水位真值 |
-| `modules/monitor` | Dataset freshness、部署状态和中文异常诊断 |
-
-### DNS 解析来源
-
-`moox.toml` 由 `moox-cli` 解析一次，并把脱敏的 Trade 配置和 Collector 连接配置分别渲染到
-运行时 `app.yaml`。Trade Resolver 固定部署在配置选择的 `compute-1` 节点（当前为
-`43.132.204.177`），通过 `ResolveDomains` 返回最多 4 个经过 Trade 节点 TCP 探测的 IPv4；
-Collector 每 5 分钟批量请求一次，保留 Trade 提供的延迟排序，并在请求失败或单域未解析时保留
-上次成功快照，再回退本地 DNS。Trade 不读取完整 `moox.toml`，Collector 也不把凭据写入 SCF
-Environment。SCF 仍使用原域名作为 Host/SNI，IP 只用于拨号，所有 IP 失败后继续尝试域名直连。
-
-实时主链：
-
-```text
-CollectionTask + Symbol 来源 -> Collector Reconciler
-         -> CloudNode Environment Patch -> Tencent Timer Trigger
-         -> SCF 64MB/15s (Kline) / dedicated daily Instrument Timer -> providers -> Storage
-         -> Dataset/K线 freshness + CLS
-```
-
-SCF 不启动 JetStream 任务消费者、驻留循环或后台 reporter。未被调用的富余函数关闭 Timer
-以避免空跑费用；Monitor 通过 Collector 协调状态、Timer 状态、Storage freshness 和 CLS 判断采集是否正常。
-
-## 采集任务
-
-Symbol 采集任务将手动配置的 Binance 标的写入内部 RECORD Dataset。K 线采集任务从关联 Symbol 来源
-读取 active subjects，写入内部 TimeSeries Dataset。一任务一结果：每个采集任务自动独占一个结果
-Dataset 和默认 View；Storage Dataset/View 是 Collector 的内部对象，用户在“采集结果”中按任务名称
-查看结果，不需要管理 Dataset ID。删除任务时由用户选择保留结果，或同时物理删除结果 Dataset、
-View 及其物理数据。
-实时 K 线批次每项只请求最近 3 根并过滤未收盘
-数据；长缺口由独立 CatchupBatch 分页恢复。
-
-每个启用任务按当前 Kline Timer 函数确定性分片；stockcn 单个函数最多 60 个标的，完整 Environment 还必须不超过 4KB。Kline 函数固定为 64MB、15 秒；独立 Instrument snapshot Timer 使用发布配置的全市场快照预算，Storage 请求预算为 5 秒，函数内 HTTP 并发由 Environment 配置；短暂失败由下一次 Timer 及独立缺口补采覆盖。
-
-Collector 同时上报 Space 级 Timer 容量指标：总节点数、当前分片需求、已分配节点数和容量余量。Monitor 会在需求超过节点数时立即告警，并在余量不超过 2 个节点时提前标记为降级，避免新增标的或频率后才发现容量不足。
-
-任务、运行态字段与接口说明见 [采集任务管理](../../docs/采集任务管理.md)。
-
-## 构建
+## 构建与测试
 
 ```bash
-make build
-make build-linux
-make build-scf
-make package-scf
-
-# 仓库根目录
 ./scripts/build/build.sh collector
+./scripts/build/build.sh collector-subject
 ./scripts/build/build.sh collector-scf
 ./scripts/build/build-collector-scf-package.sh
+go test -count=1 ./modules/collector/...
 ```
 
-SCF 包通过腾讯云 API 查询 `moox/moox-application` 资源并写入真实 Topic ID；没有资源或索引时
-构建失败，不能使用写死 ID。
+## 配置
 
-## 运行与配置
-
-- CollectMgr HTTP：`:11402`。
-- 管理台 Collection Task API：`/api/admin/collectmgr/{Method}`。
-- Collector 调 CloudNode：`GetNodeList(trigger_type=timer)`、受管 Runtime Config Batch；
-  `InvokeFunction` 只供缺口补采、探针和人工 E2E；stockcn 全市场标的快照由独立的每日 Instrument Timer SCF 执行。
-- EventBus：`moox.event.market.fetch.batch.completed.v1.*` 用于有界 Invoke 与实时 Timer 的 Completion；Timer 首先经 Collector Runtime `ClaimTimerBatch` 领取持久批次，再按其周期快照采集和写入。
-- Collector 数据库默认：`./data/moox_collector.db`。
-
-关键环境变量：
-
-- `MOOX_COLLECTOR_DB_PATH`：Collector SQLite 路径。
-- `MOOX_COLLECTOR_ADMIN_GATEWAY_URL`：通过 SysDeploy 发现依赖。
-- `MOOX_COLLECTOR_STORAGE_METADATA_TARGET` / `MOOX_COLLECTOR_STORAGE_ACCESS_TARGET`：Storage Gateway 覆盖。
-- `MOOX_GATEWAY_NODE_ID` / `MOOX_GATEWAY_SERVICE_KEY_ID` / `MOOX_GATEWAY_SERVICE_SECRET_KEY`：服务网关签名。
-- `MOOX_FETCH_MAX_INFLIGHT_REQUESTS`：SCF 内 HTTP 并发，范围 1 到 64。
-- `MOOX_FETCH_REQUEST_TIMEOUT_MS`：单次行情 HTTP 超时，默认 1000ms。
-
-短时函数由 CloudNode metadata 和环境变量共同回读；`moox.toml` 只提供初始化发布种子，不是
-第二份运行时真值。
-
-## 验证
-
-```bash
-cd modules/collector
-go test -race -count=1 ./internal/marketfetch ./internal/store ./internal/bootstrap ./internal/rpc ./test
-```
-
-真实验收先运行 `moox-cli collector function probe-egress`，随后回读 Timer Function Environment
-和 Trigger，用分片 Symbol 验证真实 Storage 数据连续三个周期。实时定位字段是函数名、Timer
-event 时间、Assignment/DNS hash、CLS 逐标的结果和 Storage watermark；有界补采另行保留
-`batch_id`、CloudNode `request_id`、Completion 和 RetryItem。旧 `cloud_job_item_id`、JobItem
-终态和常驻 SCF runner 不是实时 Timer 路径的验收条件。
-
-实时 Timer 通过 `ClaimTimerBatch` 使用 Collector 持久批次；Storage 首次 Ensure 固定该
-`space + dataset + frequency + target_data_time` 的 `PeriodSeriesSnapshot`。Timer 写入、Completion、
-最多三次 write-target retry 与失败上报都关联同一快照。Storage 在 canonical deadline 原子提交
-`complete`/`degraded` marker；失败回执必须由 Storage 确认，未确认请求保持 pending，首次迟到失败不会被误记为 marker 内容。
-SCF 发布包显式携带公开 EventBus CA (`certs/eventbus-ca.pem`)，不携带私钥或 Storage HMAC 凭据。
+`config/trpc_go.yaml`、`config/app.yaml`、`config/subject.yaml`、`config/markets/`；schema 在 `schema/collector.sql`。行情源参考见 [docs/行情接口目录.md](docs/行情接口目录.md)。

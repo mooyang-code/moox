@@ -21,7 +21,7 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 控制主机（默认 `/home/ubuntu/.config/moox/eventbus/`，mode `0600`/`0700`）：
 
 - `ca.pem`、`server.pem`、`server-key.pem`、`users.yaml`
-- 每个 role 一份 YAML：`hostagent-publisher.yaml`、`storage-eventbus.yaml`、`trade-eventbus.yaml`、`strategy-eventbus.yaml`、`factor-eventbus.yaml`、`monitor-observability.yaml`、`archive-eventbus.yaml`、`cloudnode-worker.yaml`、`market-fetch-publisher.yaml`、`collector-market-fetch-consumer.yaml`、`metrics-publisher.yaml`、`internal-admin.yaml`
+- 每个 role 一份 YAML：`hostagent-publisher.yaml`、`storage-eventbus.yaml`、`trade-eventbus.yaml`、`strategy-eventbus.yaml`、`factor-eventbus.yaml`、`monitor-observability.yaml`、`archive-eventbus.yaml`、`market-fetch-publisher.yaml`、`collector-market-fetch-consumer.yaml`、`metrics-publisher.yaml`、`internal-admin.yaml`
 
 生成与轮换只通过 `skills/moox/scripts/eventbus-credentials.sh`（Admin CLI）。
 不要把 token 或私钥打进 release archive、ZIP、命令行、聊天或 git。

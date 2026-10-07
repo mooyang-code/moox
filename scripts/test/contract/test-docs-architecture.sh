@@ -4,41 +4,61 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "${ROOT}"
 
-workspace_count=0
+overview=docs/总体设计.md
+
+# Every go.work module is listed in the overview's code-organization table.
 while IFS= read -r module_path; do
   [[ -n "${module_path}" ]] || continue
-  workspace_count=$((workspace_count + 1))
-  grep -Fq "| \`${module_path}\` |" docs/架构总览.md || {
-    echo "docs/架构总览.md missing go.work module: ${module_path}" >&2
+  grep -Fq "| \`${module_path}\` |" "${overview}" || {
+    echo "${overview} missing go.work module: ${module_path}" >&2
     exit 1
   }
 done < <(awk '/^use \(/ {on=1; next} on && /^\)/ {exit} on {gsub(/^[[:space:]]*\.\//, ""); if (length) print}' go.work)
 
-[[ "${workspace_count}" -eq 55 ]] || {
-  echo "unexpected go.work module count: ${workspace_count}" >&2
-  exit 1
-}
-
-grep -Fq '分布在 `modules/`、`packages/` 和仓库根级运行模块中' docs/架构总览.md
-! grep -Fq 'internal/services/' docs/架构总览.md
-! grep -Fq 'proto/gen/' docs/架构总览.md
-
-for module in gateway strategy archive merge; do
-  grep -Fq "[${module}](./${module}/)" modules/README.md
+# Every module design document is reachable from the overview and the site sidebar.
+for doc in docs/模块/*.md; do
+  name="$(basename "${doc}" .md)"
+  grep -Fq "(模块/${name}.md)" "${overview}" || {
+    echo "${overview} does not link ${doc}" >&2
+    exit 1
+  }
+  grep -Fq "/模块/${name}'" docs/.vitepress/config.ts || {
+    echo "docs/.vitepress/config.ts sidebar does not list ${doc}" >&2
+    exit 1
+  }
 done
-grep -Fq '因子定义、调度和 Python worker 计算' modules/README.md
-! grep -Fq '占位，待扩展' modules/README.md
-grep -Fq '每台服务器的 `moox-gateway`' modules/README.md
 
-grep -Fq 'strategy/strategy-cli' README.md
-grep -Fq 'Strategy、Monitor、Storage 和 Archive' README.md
+# Relative Markdown links inside docs/ and the READMEs resolve to existing files.
+python3 - <<'PY'
+import os, re, sys
 
-grep -Fq 'Strategy 只保留三张业务表' docs/策略模块架构设计.md
-grep -Fq '开放纯函数白名单' docs/策略模块架构设计.md
-grep -Fq 'LogicalAccountTargetWeightRequested' docs/策略模块架构设计.md
-! grep -Fq '建议 HTTP 端口 `11408`' docs/策略模块架构设计.md
+roots = ["docs", "README.md", "modules", "packages", "web/README.md", "web-host/README.md"]
+files = []
+for root in roots:
+    if os.path.isfile(root):
+        files.append(root)
+        continue
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in ("node_modules", ".vitepress", "public")]
+        files += [os.path.join(dirpath, f) for f in filenames if f.endswith(".md")]
 
-grep -Fq '全部 Active 写入成功后才 ACK' docs/存储引擎架构.md
-grep -Fq '永久无效消息执行 `Term`' docs/存储引擎架构.md
+link = re.compile(r"\]\(([^)\s]+)\)")
+broken = []
+for path in files:
+    with open(path, encoding="utf-8") as handle:
+        text = re.sub(r"```.*?```", "", handle.read(), flags=re.S)
+    for target in link.findall(text):
+        if re.match(r"^[a-z]+:", target) or target.startswith("#"):
+            continue
+        target = target.split("#", 1)[0]
+        if not target:
+            continue
+        resolved = os.path.normpath(os.path.join(os.path.dirname(path), target))
+        if not os.path.exists(resolved):
+            broken.append(f"{path} -> {target}")
+if broken:
+    print("broken documentation links:", *broken, sep="\n  ", file=sys.stderr)
+    sys.exit(1)
+PY
 
 echo 'architecture documentation contract passed'

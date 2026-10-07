@@ -63,8 +63,8 @@ assert_no_legacy_series_identity() {
   fi
 }
 
-[[ -f docs/存储层架构.md ]] || fail 'docs/存储层架构.md is missing'
-grep -Fq '[存储层架构](存储层架构.md)' docs/架构总览.md || fail 'architecture overview does not link storage layer architecture'
+[[ -f docs/模块/存储.md ]] || fail 'docs/模块/存储.md is missing'
+grep -Fq '(模块/存储.md)' docs/总体设计.md || fail 'overall design does not link the storage module design'
 
 [[ ! -d modules/storage/internal/core ]] || fail 'storage internal/core must be absent'
 [[ ! -d modules/storage/internal/infra ]] || fail 'storage internal/infra must be absent'

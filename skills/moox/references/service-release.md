@@ -29,9 +29,8 @@ healthcheck.sh
   --output ./release/moox-admin-linux-amd64.zip
 ```
 
-Factor 控制面与计算流水线由单个 `factor` 服务承载。构建目标为 `factor`；发布包使用
-通用 `package-service.sh` 和 `moox-cli setup deploy-service`，配置含 `python`、`pipeline`
-和 `eventbus` 段，不再单独发布计算引擎。
+Factor 管理端 `moox-factor-mgr`（构建目标 `factor-mgr`）按本文的服务包流程发布；计算引擎
+`moox-factor-engine` 运行在操作员机器上，使用 `scripts/deploy/deploy-factor-engine.sh` 安装和更新。
 
 ## 前置条件
 

@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'MooX',
-  description: '一站式量化金融数据平台',
+  description: '面向个人的一站式量化平台',
   lang: 'zh-CN',
   base: '/moox/',
   lastUpdated: true,
@@ -51,53 +51,46 @@ export default defineConfig({
 
     sidebar: [
       {
-        text: '开始',
+        text: '总体',
         items: [
-          { text: '前言', link: '/前言' },
-        ],
-      },
-      {
-        text: '第一部分：整体架构',
-        collapsed: false,
-        items: [
-          { text: '架构总览', link: '/架构总览' },
-          { text: '大仓架构', link: '/大仓架构' },
-          { text: '协议设计', link: '/协议设计' },
+          { text: '总体设计', link: '/总体设计' },
+          { text: '部署与运维', link: '/部署与运维' },
           { text: '元数据命名规范', link: '/元数据命名规范' },
         ],
       },
       {
-        text: '第二部分：存储引擎',
-        collapsed: false,
+        text: '控制面',
         items: [
-          { text: '量化金融数据概念', link: '/量化金融数据概念' },
-          { text: '存储概念与设计意图', link: '/存储概念与设计意图' },
-          { text: '存储目标架构与元数据', link: '/存储目标架构与元数据' },
-          { text: '存储引擎架构', link: '/存储引擎架构' },
-          { text: '性能基准报告', link: '/性能基准报告/存储基准测试-20260620' },
+          { text: '管理后台', link: '/模块/管理后台' },
+          { text: '节点网关', link: '/模块/节点网关' },
+          { text: '事件总线', link: '/模块/事件总线' },
         ],
       },
       {
-        text: '第三部分：管理服务',
-        collapsed: false,
+        text: '数据',
         items: [
-          { text: '认证鉴权', link: '/认证鉴权' },
-          { text: '数据库管理', link: '/数据库管理' },
-          { text: '异步任务', link: '/异步任务' },
-          { text: '云节点管理', link: '/云节点管理' },
-          { text: '云节点执行平台架构', link: '/云节点执行平台架构' },
-          { text: '代码包管理', link: '/代码包管理' },
-          { text: '采集任务管理', link: '/采集任务管理' },
-          { text: '采集与云节点拆分执行计划', link: '/采集与云节点拆分执行计划' },
-          { text: '监控配置', link: '/监控配置' },
+          { text: '存储', link: '/模块/存储' },
+          { text: '采集', link: '/模块/采集' },
+          { text: '云节点', link: '/模块/云节点' },
+          { text: '归档', link: '/模块/归档' },
         ],
       },
       {
-        text: '第五部分：交易系统',
-        collapsed: false,
+        text: '量化',
         items: [
-          { text: 'Trade 交易模块架构设计', link: '/交易模块架构设计' },
-          { text: 'Trade 模块重写执行计划', link: '/superpowers/plans/2026-07-11-trade-module-rewrite' },
+          { text: '因子', link: '/模块/因子' },
+          { text: '策略', link: '/模块/策略' },
+          { text: '交易', link: '/模块/交易' },
+        ],
+      },
+      {
+        text: '运维与工具',
+        items: [
+          { text: '监控', link: '/模块/监控' },
+          { text: '主机代理', link: '/模块/主机代理' },
+          { text: '命令行工具', link: '/模块/命令行工具' },
+          { text: '前端', link: '/模块/前端' },
+          { text: '共享包', link: '/模块/共享包' },
         ],
       },
     ],

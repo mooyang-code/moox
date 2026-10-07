@@ -1,75 +1,23 @@
 # modules
 
-MooX 后端 Go 模块目录，由仓库根目录 `go.work` 统一管理。各模块通过 `proto/` 生成代码包通信，不直接 import 对方 `internal/` 实现。
+MooX 的业务模块。每个模块是独立的 Go module（由仓库根目录 `go.work` 统一管理）和独立进程，
+模块之间只通过 RPC（经节点网关）和 EventBus 事件交互，不引用对方的 `internal/` 代码。
 
-## 模块一览
+| 模块 | 二进制 | 说明 | 设计文档 |
+| --- | --- | --- | --- |
+| [admin](./admin/) | `moox-admin`、`moox-admin-cli` | 控制面与管理台 API 入口 | [管理后台](../docs/模块/管理后台.md) |
+| [gateway](./gateway/) | `moox-gateway`、`moox-gateway-cli` | 每台机器的节点服务网关 | [节点网关](../docs/模块/节点网关.md) |
+| [eventbus](./eventbus/) | `moox-eventbus` | NATS JetStream 事件总线 | [事件总线](../docs/模块/事件总线.md) |
+| [storage](./storage/) | `moox-storage-{primary,node,view,access}`、`moox-storage-cli` | 元数据、事实存储、View、外部访问代理 | [存储](../docs/模块/存储.md) |
+| [collector](./collector/) | `moox-collector`、`moox-collector-subject`、`moox-collector-scf`、`moox-collector-cli` | 采集控制面与 SCF 运行时 | [采集](../docs/模块/采集.md) |
+| [cloudnode](./cloudnode/) | `moox-cloudnode`、`moox-cloudnode-cli` | 云账户、SCF 节点与代码包 | [云节点](../docs/模块/云节点.md) |
+| [factor](./factor/) | `moox-factor-mgr`、`moox-factor-engine`、`moox-factor-mgr-cli` | 因子管理与计算 | [因子](../docs/模块/因子.md) |
+| [strategy](./strategy/) | `moox-strategy`、`moox-strategy-cli` | 策略 DSL 与目标权重 | [策略](../docs/模块/策略.md) |
+| [trade](./trade/) | `moox-trade`、`moox-trade-cli` | 交易执行与交易事实 | [交易](../docs/模块/交易.md) |
+| [monitor](./monitor/) | `moox-monitor`、`moox-monitor-cli` | 健康检查与告警 | [监控](../docs/模块/监控.md) |
+| [hostagent](./hostagent/) | `moox-host-agent`、`moox-host-agent-cli` | 主机资源采集 | [主机代理](../docs/模块/主机代理.md) |
+| [archive](./archive/) | `moox-archive`、`moox-archive-cli` | 行变更归档为 Parquet | [归档](../docs/模块/归档.md) |
+| [cli](./cli/) | `moox-cli` | 运维命令行 | [命令行工具](../docs/模块/命令行工具.md) |
 
-| 模块 | 二进制 | 说明 |
-|------|--------|------|
-| [admin](./admin/) | `moox-admin` | 中央浏览器控制面、认证、Space、部署和节点路由管理 |
-| [gateway](./gateway/) | `moox-gateway` | 每台服务器的 Node Gateway，只代理本机 loopback 服务 |
-| [storage](./storage/) | `moox-storage` | 统一数据存储引擎（元数据 + 事实主存 + 派生视图） |
-| [collector](./collector/) | `moox-collector`、`moox-collector-scf` | 采集控制面与 SCF 运行时 |
-| [cloudnode](./cloudnode/) | `moox-cloudnode` | 云账户、代码包、异步 JobItem、SCF 唤醒/直调 |
-| [trade](./trade/) | `moox-trade` | 账户、订单、成交、持仓与交易所适配 |
-| [monitor](./monitor/) | `moox-monitor` | 单实例服务/指标事实存储、告警和有界 Doctor Context |
-| [eventbus](./eventbus/) | `moox-eventbus` | 统一 NATS JetStream broker、Stream/KV 拓扑与只读管理面 |
-| [hostagent](./hostagent/) | `moox-host-agent`、`moox-host-agent-cli` | Linux amd64/arm64 主机 CPU、内存、文件系统、磁盘和网络采集 |
-| [cli](./cli/) | `moox-cli` | 命令行工具（元数据/数据导入、Doctor 手工诊断、运维辅助） |
-| [factor](./factor/) | `moox-factor-mgr`、`moox-factor-engine` | 管理端：因子集、因子定义、成员与补算任务；计算引擎：周期流水线和 Python worker 计算，结果写回 Storage |
-| [strategy](./strategy/) | `moox-strategy` | 策略包、实时运行、回测、组合目标和绩效查询 |
-| [archive](./archive/) | `moox-archive` | Storage Journal、Parquet 月分区、COS 副本和恢复 |
-
-## 进程与网关关系
-
-浏览器控制面访问中央 `moox-admin` 的 `:11000 /api/admin/*`；机器服务调用访问每台服务器的 `moox-gateway` 的 `:11002 /api/service/*`。Admin 根据 `t_gateway_nodes` 和 `t_service_deployments` 为各节点编译路由快照，Gateway 拉取快照后只转发到本机 loopback 服务。Admin 不直接转发业务模块，也不在静态配置中维护业务服务地址。
-
-```text
-:11000  moox-admin 中央浏览器/控制面
-  ├─ /api/admin/*             → Admin 本地服务或按部署记录解析的业务服务
-  └─ /api/gateway-control/*   → 节点路由快照和状态上报
-
-:11002  每台服务器的 moox-gateway
-  └─ /api/service/*           → 本机 active、gateway-enabled 的 loopback 服务
-
-:20100-20202  moox-storage（Metadata / Access / DataView）
-:11401        moox-cloudnode
-:11402        moox-collector
-:11200-11208  moox-trade
-:11409/:11410 moox-monitor（/healthz + MonitorMgr）
-:11419/:11420 moox-eventbus（/readyz + EventBusMgr）
-:11433/:11431 moox-strategy（StrategyMgr HTTP + /readyz；native tRPC 11430）
-```
-
-SCF 采集运行时通过 `/api/service/*`（HMAC 签名）回调后台，不经 JWT 用户鉴权。
-
-## 构建与发布
-
-有独立 `Makefile` 的模块会代理到仓库根脚本；没有模块级 `Makefile` 时直接使用根脚本：
-
-```bash
-# 构建全部
-make build
-
-# 构建单个模块；build.sh 每次只接收一个 target
-./scripts/build/build.sh admin
-./scripts/build/build.sh storage
-./scripts/build/build.sh collector
-./scripts/build/build.sh cloudnode
-./scripts/build/build.sh trade
-./scripts/build/build.sh cli
-./scripts/build/build.sh factor
-./scripts/build/build.sh merge
-./scripts/build/build.sh strategy
-./scripts/build/build.sh archive
-./scripts/build/build.sh monitor
-./scripts/build/build.sh eventbus
-TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build/build.sh hostagent
-
-# 本机/远端一键发布
-make deploy ARGS="--target localhost --dir /data/moox/dev"
-```
-
-`scripts/deploy/deploy-moox.sh` 默认部署 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Strategy、Trade、Monitor、Storage 和 Archive；可用对应的 `--no-<module>` 关闭。`control` profile 会部署 Strategy 和 Trade；HostAgent 使用独立的 Linux rootless 部署流程。
-
-详细架构见仓库 [`docs/架构总览.md`](../docs/架构总览.md)。
+构建单个目标：`./scripts/build/build.sh <target>`（例如 `admin`、`storage`、`collector-scf`、`factor-engine`）；
+`make build` 构建全部。部署见[部署与运维](../docs/部署与运维.md)。

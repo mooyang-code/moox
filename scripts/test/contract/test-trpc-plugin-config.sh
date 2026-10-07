@@ -106,7 +106,7 @@ for module in admin trade; do
 done
 
 require_text packages/trpcretry/go.mod 'trpc.group/trpc-go/trpc-filter/slime v1.0.0' 'missing shared bounded read retry dependency'
-require_text modules/factor/internal/storageio/client.go 'client.WithFilter(trpcretry.ReadOnly())' 'factor retry must remain scoped to the read call'
+require_text modules/gateway/internal/router/native.go 'client.WithFilter(trpcretry.ReadOnly())' 'gateway retry must remain scoped to idempotent native reads'
 require_text modules/archive/internal/backfill/backfill.go 'client.WithFilter(trpcretry.ReadOnly())' 'archive retry must remain scoped to the read call'
 require_text modules/monitor/internal/hostmetrics/storage_reader.go 'client.WithFilter(trpcretry.ReadOnly())' 'host metrics retry must remain scoped to the read call'
 require_text modules/monitor/internal/metrics/storage.go 'client.WithFilter(trpcretry.ReadOnly())' 'metrics history retry must remain scoped to the read call'
@@ -154,12 +154,12 @@ require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET
 require_text skills/moox/scripts/cls-bootstrap.sh '*/factor-mgr/config/trpc_go*.yaml' 'Factor CLS rendering must cover the service config'
 require_text skills/moox/scripts/cls-bootstrap.sh 'level: " level' 'Factor CLS rendering must retain calculation info logs'
 bash skills/moox/scripts/test-cls-query.sh >/dev/null
-require_text 'docs/运维/tRPC插件运行基线.md' 'config/resources.env' 'operations baseline must document generated CLS resource metadata'
-require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_SECRET_ID}' 'operations baseline must name the CLS secret-id placeholder'
-require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_SECRET_KEY}' 'operations baseline must name the CLS secret-key placeholder'
-require_text 'docs/运维/tRPC插件运行基线.md' 'service_name' 'operations baseline must document the CLS service identity field'
-require_text 'docs/运维/tRPC插件运行基线.md' 'release archive sync or service shutdown' 'operations baseline must distinguish helper upload from release sync'
+require_text 'docs/部署与运维.md' 'config/resources.env' 'operations baseline must document generated CLS resource metadata'
+require_text 'docs/部署与运维.md' '${MOOX_CLS_SECRET_ID}' 'operations baseline must name the CLS secret-id placeholder'
+require_text 'docs/部署与运维.md' '${MOOX_CLS_SECRET_KEY}' 'operations baseline must name the CLS secret-key placeholder'
+require_text 'docs/部署与运维.md' 'service_name' 'operations baseline must document the CLS service identity field'
+require_text 'docs/部署与运维.md' '发布包同步和停服之前' 'operations baseline must distinguish helper upload from release sync'
 require_text skills/moox/SKILL.md 'architecture-matched `moox-cli` helper solely for preflight' 'MooX Skill must document temporary preflight helper cleanup'
-require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_TOPIC_ID}' 'operations baseline must document the generated Topic ID placeholder'
+require_text 'docs/部署与运维.md' '${MOOX_CLS_TOPIC_ID}' 'operations baseline must document the generated Topic ID placeholder'
 
 printf 'PASS: tRPC plugin configuration and registration matrix\n'

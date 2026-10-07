@@ -74,3 +74,16 @@ storage_private_gateway_host = "10.0.0.5"
 - `scf-network-plan` 输出的 Storage region/zone/VPC/subnet 和 routes；
 - `setup inspect-scf` 的函数 `vpc_id`、`subnet_id`、`public_net_status`、Storage target；
 - Invoke canary 的 SCF 日志、Provider HTTP 200、Storage 写入和读回结果。
+
+## setup private-network
+
+```bash
+./bin/moox-cli setup validate --file ./moox.toml
+moox-cli setup private-network --file ./moox.toml --dry-run                # 只读：发现拓扑并输出推荐路径
+moox-cli setup private-network --file ./moox.toml --probe-only             # 只探测公网连通性
+moox-cli setup private-network --file ./moox.toml --restore-scf-public --dry-run
+moox-cli setup private-network --file ./moox.toml --restore-scf-public     # 存量函数改回公网网关并解除函数 VPC/CCN
+moox-cli setup private-network --file ./moox.toml --rewrite-runtime --skip-probe
+```
+
+命令默认只读，不创建云联网，也不会调用 `ModifyInstancesVpcAttribute`。

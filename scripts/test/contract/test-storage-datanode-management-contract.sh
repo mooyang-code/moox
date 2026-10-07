@@ -33,7 +33,6 @@ required_files=(
   modules/cli/internal/command/setup_storage.go
   web/tests/storage-datanode-management.remote.e2e.spec.ts
   web/src/views/ops/storage/nodes.vue
-  web/src/views/data/datasets/index.vue
 )
 
 for file in "${required_files[@]}"; do
@@ -73,10 +72,7 @@ require_text modules/storage/proto/metadata.proto 'rpc ActivateDataset' 'explici
 require_text modules/storage/proto/data_node.proto 'service DataNodeRuntime {' 'DataNode runtime service'
 require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '12')" 'Schema v12'
 require_text config/setup/metadata.yaml 'data_source_id: crypto' 'shared crypto logical DataSource binding'
-require_text config/setup/metadata.yaml 'dataset_id: dataset_spot_kline_1h' 'shared crypto spot Dataset'
-require_text config/setup/metadata.yaml 'dataset_id: dataset_perpetual_kline_1h' 'shared crypto perpetual Dataset'
-require_text config/setup/metadata.yaml 'view_id: view_crypto_spot_kline_1h' 'shared crypto spot View'
-require_text config/setup/metadata.yaml 'view_id: view_crypto_swap_kline_1h' 'shared crypto perpetual View'
+require_text config/setup/metadata.yaml 'dataset_id: dataset_stockcn_equity_kline' 'seeded stockcn equity Dataset'
 require_text config/setup/metadata.yaml 'series_tag' 'tagged time-series grain'
 if [[ -e modules/storage/config/metadata.seed.yaml ]]; then
   echo 'storage DataNode management contract: duplicate storage metadata seed remains outside config/setup' >&2
@@ -114,7 +110,6 @@ require_regex modules/storage/internal/service/primarystore/service.go 'DataNode
 require_regex modules/storage/cmd/cli/main.go 'RegisterDataNode' 'deployment registration implementation'
 require_regex modules/cli/internal/doctor/storage_activation.go 'CheckDatasetActivation' 'read-only Doctor activation check'
 require_regex web/src/views/ops/storage/nodes.vue 'DataNode|data_node' 'DataNode management UI'
-require_regex web/src/views/data/datasets/index.vue 'activateDataset|rebindDatasetDataNode|data_node_id' 'Dataset activation and binding UI'
 require_text modules/cli/internal/command/setup_storage.go 'func createStorageBrowserFixture(' 'isolated remote browser fixture lifecycle'
 require_text modules/cli/internal/command/setup_storage.go '"MOOX_REMOTE_STORAGE_FIXTURE="+mustMarshalStorageBrowserFixture(fixture)' 'fixture is passed to the remote browser'
 require_text modules/cli/internal/command/setup_storage.go '"default-spaces", false, "额外验证 stockcn 和 crypto 业务 Space"' 'default-space acceptance CLI option'

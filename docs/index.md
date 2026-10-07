@@ -3,40 +3,33 @@ home: true
 title: MooX
 hero:
   name: MooX
-  text: 一站式量化金融数据平台
-  tagline: 从数据采集、存储、管理到策略回测的完整闭环
+  text: 面向个人的一站式量化平台
+  tagline: 行情采集、数据存储、因子计算、策略选股、交易执行与全链路监控
   image:
     src: /logo.svg
     alt: MooX
   actions:
     - theme: brand
-      text: 开始阅读
-      link: /前言
+      text: 总体设计
+      link: /总体设计
     - theme: alt
-      text: 架构总览
-      link: /架构总览
+      text: 部署与运维
+      link: /部署与运维
     - theme: alt
       text: GitHub
       link: https://github.com/mooyang-code/moox
 
 features:
-  - icon: 📥
-    title: 多源数据采集
-    details: 当前内置 Binance K 线、标的元数据采集，部署于腾讯云 SCF。采集器按独立 collector 服务组织，后续可扩展更多数据源。
-  - icon: 💾
-    title: 统一存储引擎
-    details: 时序数据与记录数据的统一存储与查询。Pebble 在线事实主存 + DuckDB OLAP 物化视图 + Bleve 全文索引 + Parquet 冷归档。
-  - icon: 🔄
-    title: 异步派生视图
-    details: CQRS 架构，写入主存后通过 MemoryBus/NATS 事件总线异步构建物化视图和全文索引。Blue-Green 模式管理视图版本切换。
-  - icon: 🖥️
-    title: 管理控制台
-    details: 中央 Admin 负责用户、鉴权、服务实例、网关节点和运维管理；每台服务器的独立 Gateway 只代理本机服务，支持一个控制面管理多节点。
-  - icon: 🌐
-    title: 前端工作台
-    details: Vue 3 + Arco Design + Pinia，三套 Axios 实例分层调用 Admin/Storage API。动态路由、Space 上下文切换、CodeMirror/xterm 富交互。
-  - icon: 📦
-    title: Go Monorepo
-    details: go.work 管理多个 Go Module，模块边界清晰，跨模块优先通过 proto 生成代码和网关/RPC 交互。统一 Makefile 构建入口。
-
+  - title: 云函数采集
+    details: Collector 规划周期批次，腾讯云 SCF Timer 按分片抓取加密货币与 A 股 K 线，逐序列提交到 Storage，失败序列自动重试。
+  - title: 字段级事实存储
+    details: DataNode 以 Pebble 保存字段级事实并通过 Outbox 发布变更；DuckDB / Bleve View 是可重建的查询索引。
+  - title: 因子与策略
+    details: Python 因子按采集周期增量计算并写回 Storage；策略用声明式 DSL 产出组合账户的目标权重。
+  - title: 交易执行
+    details: Trade 把目标权重换算成订单并逐步收敛，支持实盘、模拟盘和人工干预。
+  - title: 事件驱动
+    details: 内嵌 NATS JetStream 的 EventBus 连接各模块，事件由统一注册表声明，消费者自己拥有 Consumer。
+  - title: 监控与运维
+    details: Monitor 汇总进程、主机、数据新鲜度与行情健康，告警推送到企业微信和飞书；moox-cli 负责部署与诊断。
 ---

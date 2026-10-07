@@ -1,86 +1,16 @@
-# MooX Node Gateway
+# moox-gateway
 
-`moox-gateway` is the node-local service gateway. Each server runs one process,
-which accepts authenticated `/api/service/{service}/{method}` requests and
-forwards them only to loopback services listed by the Admin control plane.
+每台机器一个的节点服务网关：校验服务签名，只把请求转发到 Admin 为本节点登记的本机服务。
 
-The architecture deliberately separates two planes:
+设计文档：[节点网关](../../docs/模块/节点网关.md)
 
-- Admin owns the browser and route control plane: `/api/admin/*` and
-  `/api/gateway-control/*`.
-- Node Gateway owns the machine service data plane: `/api/service/*`.
-
-Admin stores gateway nodes and node-scoped service deployments. A Gateway pulls
-only the full snapshot for its stable `node_id`; it never reads the Admin
-database or proxies to another machine. See the canonical
-[节点服务网关架构](../../docs/节点服务网关架构.md).
-
-## Runtime
-
-- Service endpoint: `127.0.0.1:11002` (HTTP `/api/service/*`)
-- Native tRPC endpoint: `127.0.0.1:11003` by default; control deployments bind
-  `0.0.0.0:11003` for signed SCF-to-Storage calls.
-- Local diagnostics: `127.0.0.1:11012`
-- Control-plane refresh: every 15 seconds through `trpc.moox.gateway.route_refresh.timer`
-- Route cache: `<store.path>/routes.json`
-- Persistent replay store: `<store.path>/nonces`
-
-Startup loads the last valid route cache before pulling the current snapshot
-from Admin. A node without a valid cache must complete its initial pull. A
-cached route table may continue serving requests during a control-plane outage,
-but `/readyz` becomes unavailable when either the last successful route sync or
-the heartbeat acknowledgement is older than 90 seconds (configurable with
-`MOOX_GATEWAY_ROUTE_SYNC_STALE_AFTER_SECONDS`). This separates process liveness
-from control-plane health and prevents a stale Gateway from appearing online.
-
-The periodic `trpc.moox.gateway.route_refresh.timer` has a 10-second execution timeout, waits for `Refresh` to finish, and skips an overlapping local invocation. It deliberately omits `startAtOnce`: the cache-aware synchronous initialization above is the only startup pull. The 15-second frequency is static deployment configuration and does not hot reload. `DefaultScheduler` provides no cross-process exclusion, so each Gateway process refreshes only its own in-memory route table.
-
-An invalid new snapshot is rejected as a whole. Route changes are made in
-Service Management, not by editing `routes.json`; the cache exists only for
-recovery when Admin is temporarily unavailable.
-
-The service and control-plane HMAC secrets must be separate owner-only (`0600`)
-files. Do not put either secret in YAML or source control. The store directory
-and cache are also owner-only.
-
-The HMAC signature binds the method, path, body hash, timestamp, nonce, and
-target node. Nonces are persisted so a process restart does not reopen the
-replay window. HTTPS control-plane connections must validate the configured CA
-bundle.
-
-## Configuration
-
-Start from `config/app.yaml` and `config/trpc_go.yaml`. The node ID must match the Admin gateway-node
-record. Admin may use HTTPS, or plaintext HTTP only on a loopback address. The
-service and health listeners are deliberately fixed to loopback.
+## 构建与测试
 
 ```bash
-go run ./cmd/server -config=config/app.yaml -conf=config/trpc_go.yaml
+./scripts/build/build.sh gateway
+go test -count=1 ./modules/gateway/...
 ```
 
-Only these local diagnostic routes are served:
+## 配置
 
-- `GET /healthz`: process liveness
-- `GET /readyz`: a valid route table has been applied and both route sync and
-  control-plane heartbeat are fresh
-- `GET /metrics`: Prometheus text metrics, including
-  `gateway_route_sync_errors_total`, `gateway_route_report_errors_total`, and
-  `gateway_route_sync_stale`
-
-## Diagnostics CLI
-
-```bash
-go run ./cmd/cli check-config --config config/app.yaml
-go run ./cmd/cli routes --config config/app.yaml
-set -a; source ../../secrets/health-auth.env; set +a
-go run ./cmd/cli health --url http://127.0.0.1:11012/readyz
-```
-
-The commands return a nonzero exit code for invalid configuration, an unreadable
-or hash-invalid cache, and a non-ready health response.
-
-## Operations
-
-For deployment flags, route checks, key replacement, signed requests, and the
-two-node Monitor failure drill, see the
-[Node Gateway 运维手册](../../docs/ops/node-gateway.md).
+`config/app.yaml`（节点 ID、控制面地址、密钥文件、路由缓存目录）、`config/trpc_go.yaml`。

@@ -83,4 +83,4 @@ Web Host 只负责提供前端静态资源，不代理 API 请求。浏览器只
 MOOX_WEB_HOST_ADDR=127.0.0.1:9528 MOOX_WEB_HOST_HEALTH_ADDR=127.0.0.1:19527 ./bin/moox-web-host
 ```
 
-`/healthz`、`/readyz`、`/metrics` 不在静态监听上暴露；诊断监听缺少有效 `X-Moox-Health-Auth` 时返回 `401`。完整证书流程见 `docs/运维/管理台HTTPS与证书.md`。
+`/healthz`、`/readyz`、`/metrics` 不在静态监听上暴露；诊断监听缺少有效 `X-Moox-Health-Auth` 时返回 `401`。证书流程见[部署与运维](../docs/部署与运维.md)，前端说明见[前端](../docs/模块/前端.md)。

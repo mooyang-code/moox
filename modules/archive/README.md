@@ -1,23 +1,16 @@
 # moox-archive
 
-`moox-archive` 消费 Storage 行变更事件，把事实写入本地 Journal，并物化为按月分区的 Parquet 文件；启用 COS 时还会同步长期副本。Parquet 默认永久保留，COS 副本不会自动删除本地文件，部署者仍需规划本地容量。
+行情归档：消费 Storage 行变更，写本地 Journal 并按月物化为 Parquet，可选同步 COS。当前环境未部署。
 
-Archive 从本地配置读取 EventBus 地址、凭据和 `fetch_max_wait`，
-`internal/eventconsumer` 启动并持有固定身份的 Consumer。Stream、Consumer 名称、
-filter、ACK、DeliverPolicy 和投递限制由事件 Registry 与 Archive 代码声明。
+设计文档：[归档](../../docs/模块/归档.md)
 
-## 定时任务
-
-- `trpc.moox.archive.materialize.timer`：每 10 分钟物化 Journal、清理 7 天去重回执，启动时立即执行，单次超时 120 秒。
-- `trpc.moox.archive.cos_sync.timer`：每小时同步 COS，启动时立即执行，单次超时 300 秒；COS 未启用时安全空跑。
-
-两个 Handler 都 Clone tRPC Context、同步返回错误并跳过同进程重入。Timer 失败不会终止事件消费；退出时会停止消费并在有界超时内最后 flush 一次。默认 `DefaultScheduler` 只提供单进程调度，多副本部署必须指定单一 owner 或接入分布式 scheduler。
-
-## 运行
+## 构建与测试
 
 ```bash
-../../scripts/build/build.sh archive
-./bin/moox-archive -config=config/app.yaml -conf=config/trpc_go.yaml
+./scripts/build/build.sh archive
+go test -count=1 ./modules/archive/...
 ```
 
-数据保留和磁盘边界见[数据保留与磁盘空间](../../docs/运维/数据保留与磁盘空间.md)。
+## 配置
+
+`config/app.yaml`（归档的空间与数据集、EventBus、COS）、`config/trpc_go.yaml`。
