@@ -216,3 +216,25 @@ func TestKlineFrequencyUnitsAreCaseInsensitiveExceptMonth(t *testing.T) {
 	require.Equal(t, klineFrequencyUnit("H"), klineFrequencyUnit("h"))
 	require.NotEqual(t, klineFrequencyUnit("M"), klineFrequencyUnit("m"), "M is month, m is minute")
 }
+
+// An hourly bar is stamped with its period start; it is fresh until
+// stale_after has passed since the period closed.
+func TestKlineFreshnessMeasuresStalenessFromBarClose(t *testing.T) {
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view_task_kline_1h", DatasetID: "dataset_task", Frequency: "1H", MarketID: "crypto", StaleAfter: 5 * time.Minute}
+	barStart := time.Date(2026, 10, 7, 6, 0, 0, 0, time.UTC)
+	evaluate := func(now time.Time) KlineFreshnessReport {
+		query := newViewDatasetQuery(t, []viewDatasetTestSample{{
+			RawLabels: `{"space_id":"crypto","view_id":"view_task_kline_1h","dataset_id":"dataset_task","subject_id":"BTC-USDT","freq":"1H","series_tag":"venue:binance|market:spot|source:spot_http"}`,
+			Output:    barStart, Commit: now,
+		}})
+		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		require.Len(t, reports, 1)
+		return reports[0]
+	}
+	fresh := evaluate(barStart.Add(time.Hour + 4*time.Minute))
+	require.True(t, fresh.Success, "a bar closed four minutes ago is fresh: %s", fresh.Diagnostic)
+	stale := evaluate(barStart.Add(time.Hour + 6*time.Minute))
+	require.False(t, stale.Success, "a bar closed six minutes ago is stale with stale_after=5m")
+	require.Equal(t, 6*time.Minute, stale.StaleAge)
+}

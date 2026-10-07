@@ -210,16 +210,21 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 
 		staleSubjects := make(map[string]struct{})
 		observedSubjects := make(map[string]struct{})
+		// A bar is stamped with its period start and can exist only once the
+		// period closes, so staleness is measured from the close: a 1H bar is
+		// an hour old the moment it becomes available.
+		barLength := klineFrequencyDuration(rule.Frequency)
 		for _, item := range observed {
 			report.ObservedCount++
 			observedSubjects[item.identity.SubjectID] = struct{}{}
 			if report.OldestDataTime.IsZero() || item.outputTime.Before(report.OldestDataTime) {
 				report.OldestDataTime = item.outputTime
 			}
-			if age := inventoryDataAge(now, item.outputTime); age > report.StaleAge {
+			closedAt := item.outputTime.Add(barLength)
+			if age := inventoryDataAge(now, closedAt); age > report.StaleAge {
 				report.StaleAge = age
 			}
-			if now.Sub(item.outputTime) > rule.StaleAfter {
+			if now.Sub(closedAt) > rule.StaleAfter {
 				report.StaleCount++
 				staleSubjects[item.identity.SubjectID] = struct{}{}
 			}

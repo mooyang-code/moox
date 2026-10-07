@@ -344,7 +344,8 @@ func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *te
 	require.NoError(t, err)
 	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
 		SpaceID: "crypto", ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subject: "BTC-USDT",
-		Output: now.Add(-3 * time.Minute), Commit: now,
+		// The 1m bar starting four minutes ago closed three minutes ago.
+		Output: now.Add(-4 * time.Minute), Commit: now,
 	}})
 	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
 	reports, err := evaluator.Evaluate(context.Background(), now)
