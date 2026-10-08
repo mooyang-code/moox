@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -748,6 +749,34 @@ func TestPruneDisabledWriteTargetsWaitsForTimedOutLateCompletionFence(t *testing
 	deleted, err = s.TaskInstances().PruneDisabledWriteTargets(ctx, "crypto", 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted, "target can be detached after the first late completion fence is consumed")
+}
+
+// 停用任务的 WriteTarget 清理必须从停用任务出发：按 targets 的 mtime 索引扫描会让每个
+// 调度周期遍历空间内全部 WriteTarget，并在唯一的数据库连接上占用数秒。
+func TestPruneDisabledWriteTargetsQueriesStartFromDisabledTasks(t *testing.T) {
+	s := newCollectorStore(t)
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{
+		{disabledWriteTargetCandidatesSQL, []any{"crypto"}},
+		{safeDisabledWriteTargetsSQL, []any{"crypto", 10}},
+	} {
+		var plan []struct {
+			ID     int
+			Parent int
+			Detail string
+		}
+		require.NoError(t, s.db.Raw("EXPLAIN QUERY PLAN "+query.sql, query.args...).Scan(&plan).Error)
+		var details []string
+		for _, step := range plan {
+			details = append(details, step.Detail)
+		}
+		joined := strings.Join(details, "\n")
+		require.NotContains(t, joined, "idx_collector_write_targets_retention_space", joined)
+		require.NotContains(t, joined, "SCAN targets", joined)
+		require.Contains(t, joined, "idx_collector_write_targets_task", joined)
+	}
 }
 
 func TestPruneDisabledWriteTargetsSkipsEnabledOnlySpace(t *testing.T) {

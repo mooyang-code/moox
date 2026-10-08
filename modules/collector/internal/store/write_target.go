@@ -124,80 +124,90 @@ func (r *TaskInstanceRepository) DeleteWriteTargetsByTask(ctx context.Context, s
 	return r.db.WithContext(ctx).Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).Delete(&domain.WriteTarget{}).Error
 }
 
+// disabledWriteTargetCandidatesSQL 判断停用任务是否还有 WriteTarget。
+const disabledWriteTargetCandidatesSQL = `SELECT COUNT(1) FROM (SELECT 1
+	FROM t_collector_tasks tasks
+	CROSS JOIN t_collector_instance_write_targets targets
+		ON targets.c_space_id = tasks.c_space_id AND targets.c_task_id = tasks.c_task_id
+	WHERE tasks.c_space_id = ? AND tasks.c_enabled = 0
+	LIMIT 1)`
+
+// safeDisabledWriteTargetsSQL 选出一页可安全解除的停用任务 WriteTarget：没有进行中的
+// 批次、重试和等待中的周期就绪项，K 线目标的周期存储状态已终结。
+const safeDisabledWriteTargetsSQL = `SELECT targets.c_write_target_id
+	FROM t_collector_tasks tasks
+	CROSS JOIN t_collector_instance_write_targets targets
+		ON targets.c_space_id = tasks.c_space_id AND targets.c_task_id = tasks.c_task_id
+	JOIN t_collector_task_instances instances ON instances.c_space_id = targets.c_space_id AND instances.c_instance_id = targets.c_instance_id
+	WHERE tasks.c_space_id = ? AND tasks.c_enabled = 0
+	AND NOT EXISTS (
+		SELECT 1 FROM t_collector_fetch_batches batches
+		WHERE batches.c_space_id = targets.c_space_id AND batches.c_write_target_id = targets.c_write_target_id
+		AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM t_collector_fetch_batches batches
+		WHERE batches.c_space_id = targets.c_space_id AND batches.c_instance_id = targets.c_instance_id
+		AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM t_collector_fetch_batch_items items
+		JOIN t_collector_fetch_batches batches ON batches.c_space_id = items.c_space_id AND batches.c_batch_id = items.c_batch_id
+		WHERE items.c_space_id = targets.c_space_id AND items.c_instance_id = targets.c_instance_id
+		AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM t_collector_fetch_retry_items retries
+		WHERE retries.c_space_id = targets.c_space_id AND retries.c_write_target_id = targets.c_write_target_id
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM t_collector_fetch_retry_items retries
+		WHERE retries.c_space_id = targets.c_space_id AND retries.c_instance_id = targets.c_instance_id
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM t_period_readiness_items items
+		JOIN t_period_readiness readiness ON readiness.c_id = items.c_readiness_id
+		WHERE items.c_write_target_id = targets.c_write_target_id AND readiness.c_status = 'waiting'
+	)
+	AND (
+		instances.c_data_type <> 'kline'
+		OR EXISTS (
+			SELECT 1 FROM t_collector_period_storage_states states
+			WHERE states.c_space_id = targets.c_space_id
+			AND states.c_dataset_id = targets.c_dataset_id
+			AND states.c_frequency = instances.c_frequency
+			AND states.c_period_time = instances.c_target_data_time
+			AND states.c_series_hash = targets.c_series_hash
+			AND states.c_expected_count = targets.c_expected_count
+			AND states.c_status IN ('complete', 'degraded')
+		)
+	)
+	LIMIT ?`
+
 // PruneDisabledWriteTargets detaches a bounded page of disabled destinations
 // after all retry, period, and batch references have reached a safe terminal
 // point. Shared instances and enabled sibling targets are preserved.
+//
+// 查询从停用任务出发（CROSS JOIN 固定连接顺序），经 idx_collector_write_targets_task
+// 只访问停用任务的 WriteTarget；页内不排序，LIMIT 找够即停。若按 targets 的 mtime 排序，
+// SQLite 会按时间扫描空间内全部 WriteTarget 并逐行执行安全子查询，在唯一的连接上占用数秒。
 func (r *TaskInstanceRepository) PruneDisabledWriteTargets(ctx context.Context, spaceID string, limit int) (int64, error) {
 	spaceID = strings.TrimSpace(spaceID)
 	if spaceID == "" || limit <= 0 {
 		return 0, nil
 	}
 	limit = min(limit, MaxRetentionWindowRows)
-	// The expensive safety query joins every WriteTarget against batch state.
-	// Most scheduler ticks have no disabled CollectionTask at all, so avoid
-	// scanning the growing runtime tables unless there is actually something
-	// that could be pruned.
-	var disabledTasks int64
-	if err := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
-		Where("c_space_id = ? AND c_enabled = ?", spaceID, false).Count(&disabledTasks).Error; err != nil {
+	// 停用任务通常已没有 WriteTarget（如常驻停用的发布验证任务），此时不开写事务。
+	var candidates int64
+	if err := r.db.WithContext(ctx).Raw(disabledWriteTargetCandidatesSQL, spaceID).Scan(&candidates).Error; err != nil {
 		return 0, err
 	}
-	if disabledTasks == 0 {
+	if candidates == 0 {
 		return 0, nil
 	}
 	var deleted int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		safeTargets := `SELECT targets.c_write_target_id
-			FROM t_collector_instance_write_targets targets
-			JOIN t_collector_tasks tasks ON tasks.c_space_id = targets.c_space_id AND tasks.c_task_id = targets.c_task_id
-			JOIN t_collector_task_instances instances ON instances.c_space_id = targets.c_space_id AND instances.c_instance_id = targets.c_instance_id
-			WHERE targets.c_space_id = ? AND tasks.c_enabled = 0
-			AND NOT EXISTS (
-				SELECT 1 FROM t_collector_fetch_batches batches
-				WHERE batches.c_space_id = targets.c_space_id AND batches.c_write_target_id = targets.c_write_target_id
-				AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
-			)
-			AND NOT EXISTS (
-				SELECT 1 FROM t_collector_fetch_batches batches
-				WHERE batches.c_space_id = targets.c_space_id AND batches.c_instance_id = targets.c_instance_id
-				AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
-			)
-			AND NOT EXISTS (
-				SELECT 1 FROM t_collector_fetch_batch_items items
-				JOIN t_collector_fetch_batches batches ON batches.c_space_id = items.c_space_id AND batches.c_batch_id = items.c_batch_id
-				WHERE items.c_space_id = targets.c_space_id AND items.c_instance_id = targets.c_instance_id
-				AND (batches.c_status IN ('planned','dispatched') OR (batches.c_status = 'timed_out' AND batches.c_late_completion = 0))
-			)
-			AND NOT EXISTS (
-				SELECT 1 FROM t_collector_fetch_retry_items retries
-				WHERE retries.c_space_id = targets.c_space_id AND retries.c_write_target_id = targets.c_write_target_id
-			)
-			AND NOT EXISTS (
-				SELECT 1 FROM t_collector_fetch_retry_items retries
-				WHERE retries.c_space_id = targets.c_space_id AND retries.c_instance_id = targets.c_instance_id
-			)
-			AND NOT EXISTS (
-				SELECT 1 FROM t_period_readiness_items items
-				JOIN t_period_readiness readiness ON readiness.c_id = items.c_readiness_id
-				WHERE items.c_write_target_id = targets.c_write_target_id AND readiness.c_status = 'waiting'
-			)
-			AND (
-				instances.c_data_type <> 'kline'
-				OR EXISTS (
-					SELECT 1 FROM t_collector_period_storage_states states
-					WHERE states.c_space_id = targets.c_space_id
-					AND states.c_dataset_id = targets.c_dataset_id
-					AND states.c_frequency = instances.c_frequency
-					AND states.c_period_time = instances.c_target_data_time
-					AND states.c_series_hash = targets.c_series_hash
-					AND states.c_expected_count = targets.c_expected_count
-					AND states.c_status IN ('complete', 'degraded')
-				)
-				)
-				ORDER BY targets.c_mtime, targets.c_id
-				LIMIT ?
-				`
-		result := tx.Exec(`DELETE FROM t_collector_instance_write_targets WHERE c_write_target_id IN (`+safeTargets+`)`, spaceID, limit)
+		result := tx.Exec(`DELETE FROM t_collector_instance_write_targets WHERE c_write_target_id IN (`+safeDisabledWriteTargetsSQL+`)`, spaceID, limit)
 		if result.Error != nil {
 			return result.Error
 		}

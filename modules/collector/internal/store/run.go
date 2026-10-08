@@ -208,17 +208,18 @@ func (r *RunRepository) aggregate(ctx context.Context, spaceID, runID string) (r
 		Total  int64 `gorm:"column:batches"`
 		Active int64 `gorm:"column:batch_active"`
 	}
+	// 从本次运行的实例出发，按 (space, instance) 索引找批次明细；
+	// 嵌套 IN 会让 SQLite 扫描空间内全部批次明细。
 	if err := r.db.WithContext(ctx).Raw(`SELECT
 		COUNT(*) AS batches,
 		COALESCE(SUM(CASE WHEN batches.c_status NOT IN ('succeeded','partial_failed','failed','timed_out') THEN 1 ELSE 0 END), 0) AS batch_active
 		FROM t_collector_fetch_batches batches
 		WHERE batches.c_space_id = ? AND batches.c_batch_id IN (
-			SELECT DISTINCT items.c_batch_id FROM t_collector_fetch_batch_items items
-			WHERE items.c_space_id = ? AND items.c_instance_id IN (
-				SELECT instances.c_instance_id FROM t_collector_task_instances instances
-				WHERE instances.c_space_id = ? AND instances.c_run_id = ?
-			)
-		)`, spaceID, spaceID, spaceID, runID).Scan(&batches).Error; err != nil {
+			SELECT items.c_batch_id FROM t_collector_task_instances instances
+			CROSS JOIN t_collector_fetch_batch_items items
+				ON items.c_space_id = instances.c_space_id AND items.c_instance_id = instances.c_instance_id
+			WHERE instances.c_space_id = ? AND instances.c_run_id = ?
+		)`, spaceID, spaceID, runID).Scan(&batches).Error; err != nil {
 		return out, err
 	}
 	out.Batches, out.BatchActive = batches.Total, batches.Active

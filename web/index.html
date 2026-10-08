@@ -4,24 +4,8 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/src/assets/logo/snow.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    
-    <!-- DNS预解析 -->
-    <link rel="dns-prefetch" href="//unpkg.com" />
-    
-    <!-- 资源预连接 -->
-    <link rel="preconnect" href="https://unpkg.com" crossorigin />
-    
-    <!-- 关键CSS优先加载 -->
-    <link rel="preload" href="/css/loading.css" as="style" onload="this.onload=null;this.rel='stylesheet'" />
-    <noscript><link rel="stylesheet" href="/css/loading.css" /></noscript>
-    
-    <!-- CSP配置：开发环境允许unsafe-eval，生产环境更严格 -->
-    <% if (mode === 'development') { %>
-    <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-eval' 'unsafe-inline' https://unpkg.com; object-src 'none';" />
-    <% } else { %>
-    <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' https://unpkg.com; object-src 'none';" />
-    <% } %>
-    
+    <link rel="stylesheet" href="/css/loading.css" />
+    <!-- CSP 由 Caddy 响应头统一下发（deploy/caddy/Caddyfile），页面不使用内联脚本和事件处理器 -->
     <title><%= title %></title>
   </head>
   <body>
