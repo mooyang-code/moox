@@ -75,6 +75,10 @@ server/.claude/
 /modules/*/coverage/
 /modules/*/.cache/
 /modules/*/scf-build/
+# 在模块目录里直接 go build ./cmd/<名称> 时生成的二进制
+/modules/*/cli
+/modules/*/server
+/modules/*/e2e-helper
 /modules/storage/.deps/
 /scripts/node_exporter/build/
 cover.out
