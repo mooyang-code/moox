@@ -83,7 +83,7 @@ For View recovery, read
 [`references/cli-operations.md`](references/cli-operations.md) before operating. It documents
 the safe dry-run-first workflow and Storage `repair-view`; Factor recovery uses durable lag diagnosis and explicit Recalc, not consumer deletion,
 Storage `force-rebuild-view`, durable names, defaults, credential lookup, backups, the
-`storage.view.rebuild_lookback` coverage gate, and the high-risk full index reset.
+View bar budget (`[storage_retention] view_bars`), and the high-risk full index reset.
 Never delete a durable consumer or a View index by hand when the corresponding `moox-cli`
 operation is available.
 

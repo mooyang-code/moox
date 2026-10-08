@@ -104,6 +104,7 @@ func (s *Service) readHistoricalTimeSeriesRows(ctx context.Context, req *pb.Read
 	clone := &pb.ReadTimeSeriesRowsReq{
 		AuthInfo: auth, Selectors: req.GetSelectors(), TimeRange: req.GetTimeRange(), Order: req.GetOrder(),
 		ColumnNames: req.GetColumnNames(), Page: req.GetPage(), SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), AfterKey: req.GetAfterKey(),
+		LatestPerSeries: req.GetLatestPerSeries(),
 	}
 	return history.ReadTimeSeriesRows(ctx, clone)
 }

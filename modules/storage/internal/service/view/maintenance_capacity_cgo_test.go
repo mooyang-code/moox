@@ -116,7 +116,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	metadata := &capacityMaintenanceMetadata{maintenanceMetadata: maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", DatasetId: "prices",
 		Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
-		ActiveViewSchemaHash: schemaHash, ActiveColumns: columns, Columns: columns, Freq: "1m", KeepDuration: "365d", Status: "active",
+		ActiveViewSchemaHash: schemaHash, ActiveColumns: columns, Columns: columns, Freq: "1m", Status: "active",
 	}}}
 	primaryRows := make([]*pb.TimeSeriesRow, 0, 6002)
 	for index := 0; index < 4; index++ {
@@ -140,8 +140,8 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	checkNow := base.Add(24 * time.Hour)
 	maintainOpts := MaintenanceOptions{
 		Metadata: metadata, Primary: &primaryHistoryFieldReader{}, PrimaryRange: primary, OwnerID: "owner", Grace: 0,
-		BackfillPageSize:    10000,
-		MaxPeriodsPerSeries: 6000, RebuildLookbackPeriods: map[string]uint64{"default": 5000},
+		BackfillPageSize: 10000,
+		TrimBars:         6000, Bars: 5000,
 		CapacityCheckInterval: time.Hour, CapacityCheckJitter: time.Hour,
 		capacityCheckJitterSource:   func(time.Duration) time.Duration { return 30 * time.Minute },
 		capacityCheckNow:            func() time.Time { return checkNow },
@@ -160,7 +160,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	if metadata.created == nil || metadata.created.GetTriggerReason() != pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SERIES_CAPACITY {
 		t.Fatalf("audit log=%v, want SERIES_CAPACITY", metadata.created)
 	}
-	for _, want := range []string{`"subject_id":"A"`, `"frequency":"1m"`, `"series_tag":"venue:test"`, `"observed_periods":6001`, `"max_periods_per_series":6000`, `"rebuild_lookback_periods":5000`} {
+	for _, want := range []string{`"subject_id":"A"`, `"frequency":"1m"`, `"series_tag":"venue:test"`, `"observed_bars":6001`, `"trim_bars":6000`, `"bars":5000`} {
 		if !strings.Contains(metadata.created.GetDetailsJson(), want) {
 			t.Fatalf("capacity audit details missing %s: %s", want, metadata.created.GetDetailsJson())
 		}
@@ -231,6 +231,17 @@ func (r *capacitySubjectRangeReader) ReadTimeSeriesRows(_ context.Context, req *
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].GetKey().GetDataTime() > rows[j].GetKey().GetDataTime()
 	})
+	if perSeries := int(req.GetLatestPerSeries()); perSeries > 0 {
+		kept := make(map[string]int)
+		latest := rows[:0]
+		for _, row := range rows {
+			if kept[row.GetKey().GetSeriesTag()] < perSeries {
+				kept[row.GetKey().GetSeriesTag()]++
+				latest = append(latest, row)
+			}
+		}
+		rows = latest
+	}
 	limit := int(req.GetPage().GetSize())
 	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]

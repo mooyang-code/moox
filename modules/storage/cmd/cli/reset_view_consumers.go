@@ -33,7 +33,7 @@ const resetJetStreamRequestTimeout = 2 * time.Minute
 
 type resetViewConsumersOptions struct {
 	storageConf, packageRoot, stream, credentialFile, eventBusURL  string
-	timeout, lookback                                              time.Duration
+	timeout                                                        time.Duration
 	yes, dryRun, resetAllStorageData, restart, maintenanceLockHeld bool
 }
 
@@ -47,7 +47,6 @@ type resetViewConsumersSummary struct {
 	QueuePurged        bool     `json:"queue_purged"`
 	ViewMetadataReset  bool     `json:"view_metadata_reset"`
 	DryRun             bool     `json:"dry_run"`
-	Lookback           string   `json:"rebuild_lookback,omitempty"`
 }
 
 type resetViewRecord struct {
@@ -64,16 +63,12 @@ type resetIndexMove struct {
 func runResetViewConsumers(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("reset-view-consumers", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	// Keep destructive resets aligned with the bounded View rebuild window.
-	// Operators can still opt into a longer, explicit lookback when they have
-	// a deliberate historical-rebuild use case.
-	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream, lookback: 24 * time.Hour, timeout: 5 * time.Minute, restart: true}
+	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream, timeout: 5 * time.Minute, restart: true}
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml path")
 	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream to purge")
 	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential YAML")
 	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")
-	fs.DurationVar(&opts.lookback, "lookback", opts.lookback, "preferred history to backfill for every rebuilt View; shortage does not block activation")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "overall operation timeout")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent consumer, queue and View index deletion")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect the operation without mutating state")
@@ -100,8 +95,8 @@ func validateResetViewConsumersOptions(opts resetViewConsumersOptions) error {
 	if strings.TrimSpace(opts.stream) != events.StorageViewConsumerStream {
 		return fmt.Errorf("--stream must be %s for destructive reset", events.StorageViewConsumerStream)
 	}
-	if opts.lookback <= 0 || opts.timeout <= 0 {
-		return errors.New("--lookback and --timeout must be positive")
+	if opts.timeout <= 0 {
+		return errors.New("--timeout must be positive")
 	}
 	if !opts.dryRun && !opts.yes {
 		return errors.New("reset-view-consumers permanently deletes View indexes and the EventBus stream; re-run with --yes, or use --dry-run")
@@ -133,7 +128,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	}
 	summary := resetViewConsumersSummary{
 		Stream: opts.stream, Consumers: append([]string(nil), events.StorageViewConsumerDurables...),
-		Views: len(views), DryRun: opts.dryRun, Lookback: opts.lookback.String(),
+		Views: len(views), DryRun: opts.dryRun,
 	}
 	for _, view := range views {
 		if strings.EqualFold(strings.TrimSpace(view.Engine), "bleve") {
@@ -167,7 +162,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	// handle. This also serializes with the storage watchdog via the lifecycle
 	// maintenance lock acquired below.
 	lifecycleService := "storage"
-	if err := runStorageComponentLifecycle(ctx, packageRoot, "stop", lifecycleService, opts.lookback, stderr); err != nil {
+	if err := runStorageComponentLifecycle(ctx, packageRoot, "stop", lifecycleService, stderr); err != nil {
 		return fmt.Errorf("stop storage-view: %w", err)
 	}
 	stopped := true
@@ -183,7 +178,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 			}
 		}
 		if stopped && !started && !resetCommitted && recoveryOK {
-			_ = runStorageComponentLifecycle(context.Background(), packageRoot, "start", lifecycleService, opts.lookback, stderr)
+			_ = runStorageComponentLifecycle(context.Background(), packageRoot, "start", lifecycleService, stderr)
 		}
 	}()
 	backupPath, err = backupRepairDB(dbPath)
@@ -249,18 +244,14 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		summary.PrimaryDataRemoved = true
 	}
 	if opts.restart {
-		if err := runStorageComponentLifecycle(ctx, packageRoot, "start", lifecycleService, opts.lookback, stderr); err != nil {
+		if err := runStorageComponentLifecycle(ctx, packageRoot, "start", lifecycleService, stderr); err != nil {
 			return fmt.Errorf("start storage-view: %w", err)
 		}
 		started = true
-		readyLookback := opts.lookback
-		if opts.resetAllStorageData {
-			// A full Primary reset recreates metadata from an empty store; there
-			// is no pre-existing View coverage to validate yet.
-			readyLookback = 0
-		}
-		if err := waitResetViewReady(ctx, dbPath, readyLookback, packageRoot); err != nil {
-			return fmt.Errorf("wait storage-view lookback ready: %w", err)
+		// A full Primary reset recreates metadata from an empty store; there
+		// are no Views to wait for yet.
+		if err := waitResetViewReady(ctx, dbPath, !opts.resetAllStorageData, packageRoot); err != nil {
+			return fmt.Errorf("wait storage-view ready: %w", err)
 		}
 	}
 	stopped = false
@@ -430,7 +421,9 @@ func validateResetPrimaryPath(path, packageRoot string) (string, error) {
 	return cleanPath, nil
 }
 
-func waitResetViewReady(ctx context.Context, dbPath string, lookback time.Duration, packageRoot string) error {
+// waitResetViewReady waits for storage-view to be ready and, when
+// requireActive is set, for every active View to have an active index.
+func waitResetViewReady(ctx context.Context, dbPath string, requireActive bool, packageRoot string) error {
 	url := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_HEALTH_URL"))
 	if url == "" {
 		url = "http://127.0.0.1:20211/readyz"
@@ -452,10 +445,10 @@ func waitResetViewReady(ctx context.Context, dbPath string, lookback time.Durati
 		if requestErr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-				if lookback <= 0 {
+				if !requireActive {
 					return nil
 				}
-				ready, err := resetViewsLookbackReady(ctx, dbPath, lookback)
+				ready, err := resetViewsActive(ctx, dbPath)
 				if err == nil && ready {
 					return nil
 				}
@@ -514,41 +507,20 @@ func resetHealthAuthHeader(target *url.URL, packageRoot string) (string, error) 
 	return fmt.Sprintf("%s/%s/%d/%s/%s", values["MOOX_HEALTH_AUTH_VERSION"], values["MOOX_HEALTH_AUTH_ACCESS_KEY"], timestamp, nonce, signature), nil
 }
 
-func resetViewsLookbackReady(ctx context.Context, dbPath string, lookback time.Duration) (bool, error) {
+// resetViewsActive reports whether every active View has an active index.
+func resetViewsActive(ctx context.Context, dbPath string) (bool, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return false, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT c_engine, c_active_index_id, c_indexed_from FROM t_views WHERE c_status = 'active' OR c_status = ''`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	cutoff := time.Now().UTC().Add(-lookback).Truncate(time.Minute)
-	for rows.Next() {
-		var engine, activeID, indexedFrom string
-		if err := rows.Scan(&engine, &activeID, &indexedFrom); err != nil {
-			return false, err
-		}
-		if strings.TrimSpace(activeID) == "" {
-			return false, nil
-		}
-		if strings.EqualFold(strings.TrimSpace(engine), "bleve") || lookback <= 0 {
-			continue
-		}
-		from, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(indexedFrom))
-		if err != nil || from.After(cutoff) {
-			return false, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
+	var pending int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_views WHERE (c_status = 'active' OR c_status = '') AND c_active_index_id = ''`).Scan(&pending); err != nil {
 		return false, err
 	}
 	// A deployment may contain only disabled/archived Views. They do not need
-	// an active index before the reset command can complete; returning true
-	// here avoids waiting forever for a View that is intentionally not running.
-	return true, nil
+	// an active index before the reset command can complete.
+	return pending == 0, nil
 }
 
 func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord, error) {

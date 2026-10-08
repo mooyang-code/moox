@@ -63,7 +63,7 @@ func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
 	}
 	if _, err := store.CreateView(ctx, &pb.View{
 		SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result",
-		DatasetId: "dataset_factor_result", Engine: "duckdb", KeepDuration: "0", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+		DatasetId: "dataset_factor_result", Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
 		Freq: "1h", Attributes: map[string]string{
 			"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage", "primary_dataset_role": "factor_result",
 		},
@@ -125,7 +125,7 @@ func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *tes
 	for _, view := range []*pb.View{
 		{
 			SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result", DatasetId: dataset.GetDatasetId(),
-			Engine: "duckdb", KeepDuration: "0", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+			Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
 			Freq: "1h", Attributes: managedAttrs,
 		},
 		{SpaceId: "space", ViewId: "view_factor_extra", Name: "Extra view", DatasetId: dataset.GetDatasetId(), Engine: "duckdb"},
@@ -520,7 +520,7 @@ func TestViewTakesItsDatasetFreq(t *testing.T) {
 	seedDatasetParents(t, ctx, store)
 	registerActiveNode(t, ctx, store, "node-a")
 	createTestDataset(t, ctx, store, "dataset", "node-a")
-	view, err := store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb", KeepDuration: "24h"})
+	view, err := store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestViewTakesItsDatasetFreq(t *testing.T) {
 	if err != nil || stored.GetFreq() != "1m" {
 		t.Fatalf("stored view freq = %q, %v", stored.GetFreq(), err)
 	}
-	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb", KeepDuration: "24h", Freq: "1h"}); err == nil || !strings.Contains(err.Error(), "a View takes its Dataset's freq") {
+	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb", Freq: "1h"}); err == nil || !strings.Contains(err.Error(), "a View takes its Dataset's freq") {
 		t.Fatalf("mismatched view freq error = %v", err)
 	}
 }

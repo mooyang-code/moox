@@ -443,3 +443,66 @@ func TestWriteRejectsEventLargerThanPublisherLimitBeforeCommit(t *testing.T) {
 		t.Fatalf("fact committed despite oversized event: %v", rows)
 	}
 }
+
+func TestReadTimeSeriesRowsLatestPerSeriesReadsOnlyTheNewestBarsOfEveryTag(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	start := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	var rows []*pb.RowFieldUpsert
+	// Two days of 1m bars for two tags of one subject, plus a neighbour
+	// subject that must not leak into the result.
+	for minute := 0; minute < 2*24*60; minute += 7 {
+		at := start.Add(time.Duration(minute) * time.Minute).Format(time.RFC3339)
+		for _, series := range []struct{ subject, tag string }{{"BTC-USDT", "venue:a"}, {"BTC-USDT", "venue:b"}, {"ETH-USDT", "venue:a"}} {
+			rows = append(rows, &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: series.subject, Freq: "1m", DataTime: at, SeriesTag: series.tag,
+			}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(minute)}}}}})
+		}
+	}
+	if err := store.UpsertFields(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	rsp, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		SpaceId: "s", DatasetId: "d", Selectors: []*pb.TimeSeriesSelector{{SpaceId: "s", DatasetId: "d", SubjectId: "BTC-USDT", Freq: "1m"}},
+		Order: pb.SortOrder_SORT_ORDER_DESC, LatestPerSeries: 5, ColumnNames: []string{"close"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rsp.GetPageResult().GetHasMore() {
+		t.Fatal("a latest-per-series read is complete in one response")
+	}
+	latest := start.Add(2*24*time.Hour - time.Minute).Truncate(7 * time.Minute)
+	byTag := map[string][]string{}
+	for _, row := range rsp.GetRows() {
+		key := row.GetKey()
+		if key.GetSubjectId() != "BTC-USDT" || len(row.GetFields()) != 1 {
+			t.Fatalf("unexpected row %v", row)
+		}
+		byTag[key.GetSeriesTag()] = append(byTag[key.GetSeriesTag()], key.GetDataTime())
+	}
+	if len(byTag) != 2 || len(byTag["venue:a"]) != 5 || len(byTag["venue:b"]) != 5 {
+		t.Fatalf("rows per tag = %v, want 5 for each of two tags", byTag)
+	}
+	for _, times := range byTag {
+		newest, err := time.Parse(time.RFC3339Nano, times[0])
+		if err != nil || newest.Before(latest.Add(-7*time.Minute)) {
+			t.Fatalf("first row %s is not the newest bar (%s)", times[0], latest)
+		}
+		for i := 1; i < len(times); i++ {
+			if times[i] >= times[i-1] {
+				t.Fatalf("rows are not newest first: %v", times)
+			}
+		}
+	}
+	if _, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		SpaceId: "s", DatasetId: "d", LatestPerSeries: 5,
+		TimeRange: &pb.TimeRange{StartTime: "2026-08-14T00:00:00Z"},
+		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "s", DatasetId: "d", SubjectId: "BTC-USDT", Freq: "1m"}},
+	}); err == nil || !strings.Contains(err.Error(), "latest_per_series") {
+		t.Fatalf("latest_per_series with a time range error = %v", err)
+	}
+}

@@ -38,7 +38,7 @@ validate_default_metadata() {
   grep -q 'host_storage:' "${ROOT}/modules/monitor/config/app.yaml"
   grep -q 'result_retention_days: 14' "${ROOT}/modules/monitor/config/app.yaml"
   grep -q 'data_node_id: storage-node-0' "${seed}"
-  grep -q 'keep_duration:' "${seed}"
+  grep -q 'freq: 1m' "${seed}"
   for dataset in dataset_mooxsys_host_resource dataset_mooxsys_host_filesystem dataset_mooxsys_host_disk dataset_mooxsys_host_network; do
     grep -q "dataset_id: ${dataset}" "${seed}"
   done

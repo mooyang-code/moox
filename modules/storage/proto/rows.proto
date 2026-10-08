@@ -116,6 +116,13 @@ message ReadTimeSeriesRowsReq {
   // after_key is an opaque RowKey cursor used by internal history backfills.
   // It keeps paging streaming and avoids rescanning all earlier rows.
   bytes after_key = 10;
+  // latest_per_series, when positive, returns the latest N rows of every
+  // series (series_tag) of the one selected subject and frequency, newest
+  // first within a series, in a single complete response. It requires exactly
+  // one selector with subject_id and freq, and no time_range, after_key or
+  // page number. View rebuilds use it to read only the bars a View keeps, so
+  // the cost does not grow with the history length.
+  uint32 latest_per_series = 11;
 }
 
 message ReadTimeSeriesRowsRsp {

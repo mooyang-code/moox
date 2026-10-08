@@ -180,12 +180,6 @@ storage:
     # Serialize Primary requests during large View rebuilds.
     backfill_page_size: 2000
     backfill_request_interval: 100ms
-    rebuild_lookback: 24h
-    rebuild_lookback_periods:
-      1m: 5000
-      1h: 5000
-      1d: 5000
-      default: 5000
     rebuild_max_pending: 32
     rebuild_idle_checks: 3
   health:

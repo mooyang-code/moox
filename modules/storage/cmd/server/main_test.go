@@ -233,22 +233,19 @@ func TestStorageViewMaintenanceDisabled(t *testing.T) {
 
 func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_lookback: 48h\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_max_pending: 5\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	lookback, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lookback != 48*time.Hour {
-		t.Fatalf("lookback = %s, want 48h", lookback)
+	if maxPending != 5 || idleChecks != 3 {
+		t.Fatalf("gate settings = %d/%d", maxPending, idleChecks)
 	}
-	if maxPending != 32 || idleChecks != 3 {
-		t.Fatalf("gate defaults = %d/%d", maxPending, idleChecks)
-	}
-	if maxPendingConfigured || idleChecksConfigured {
-		t.Fatal("omitted gate values were marked configured")
+	if !maxPendingConfigured || idleChecksConfigured {
+		t.Fatal("configured flags do not match the file")
 	}
 }
 
@@ -258,13 +255,13 @@ func TestStorageViewRebuildSettingsAllowsExplicitZeroMaxPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, _, _, _, _, err := storageViewRebuildSettings(); err == nil {
+	if _, _, _, _, err := storageViewRebuildSettings(); err == nil {
 		t.Fatal("accepted explicit zero idle checks")
 	}
 	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil || maxPending != 0 || idleChecks != 3 || !maxPendingConfigured || !idleChecksConfigured {
 		t.Fatalf("explicit zero max pending settings = %d/%d configured=%v/%v err=%v", maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err)
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -76,11 +75,6 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 	next.Columns = nil
 	next.IndexBuild = nil
 	next.Status = defaultStatus(next.GetStatus())
-	keepDuration, err := normalizeViewKeepDuration(next.GetKeepDuration(), s.viewDataKind(ctx, next.GetSpaceId(), next.GetDatasetId()))
-	if err != nil {
-		return nil, err
-	}
-	next.KeepDuration = keepDuration
 	if strings.TrimSpace(next.Engine) == "" {
 		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetDatasetId())
 	} else {
@@ -127,8 +121,8 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		return nil, err
 	}
 	insertSQL := `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_engine, c_keep_duration, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_engine, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if !createOnly {
 		insertSQL += `
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
@@ -137,7 +131,6 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 			c_dataset_id = excluded.c_dataset_id,
 			c_grain_keys_json = excluded.c_grain_keys_json,
 			c_engine = excluded.c_engine,
-			c_keep_duration = excluded.c_keep_duration,
 			c_active_index_id = excluded.c_active_index_id,
 			c_desired_view_revision = excluded.c_desired_view_revision,
 			c_active_view_revision = excluded.c_active_view_revision,
@@ -149,7 +142,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json`
 	}
-	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
+	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, next.GetEngine(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
 	if err != nil {
 		var sqliteErr *sqlite.Error
 		if createOnly && errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555) {
@@ -245,32 +238,6 @@ func deriveViewFreq(ctx context.Context, tx *sql.Tx, view *pb.View) error {
 	}
 	view.Freq = freq
 	return nil
-}
-
-func normalizeViewKeepDuration(value string, kind pb.DataKind) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		value = "0"
-	}
-	if value == "0" {
-		return value, nil
-	}
-	if kind == pb.DataKind_DATA_KIND_RECORD {
-		return "", errors.New("record view keep_duration must be 0")
-	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 {
-		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", value)
-	}
-	return duration.String(), nil
-}
-
-func (s *Store) viewDataKind(ctx context.Context, spaceID, datasetID string) pb.DataKind {
-	dataset, err := s.GetDataset(ctx, spaceID, datasetID)
-	if err != nil {
-		return pb.DataKind_DATA_KIND_UNSPECIFIED
-	}
-	return dataset.GetDataKind()
 }
 
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {

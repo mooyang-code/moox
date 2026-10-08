@@ -96,12 +96,6 @@ storage:
     backfill_request_interval: 100ms
     # Time-series Views use the completed-bar targets below. Keep this global
     # duration only as a compatibility fallback for legacy Views without freq.
-    rebuild_lookback: 24h
-    rebuild_lookback_periods:
-      1m: 5000
-      1h: 5000
-      1d: 5000
-      default: 5000
     rebuild_max_pending: 32
     rebuild_idle_checks: 3
   health:

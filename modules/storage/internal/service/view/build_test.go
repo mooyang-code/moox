@@ -90,7 +90,7 @@ func TestPeriodBackfillUsesPrimaryInsteadOfCopyingActiveAndReportsRowsWritten(t 
 		{Key: &pb.TimeSeriesKey{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-18T00:00:00Z", SeriesTag: "venue:okx"}},
 	}}
 
-	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 0, 2, defaultMaxHistoryScanRows)
+	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 2, defaultMaxHistoryScanRows)
 	if err != nil {
 		t.Fatalf("period backfill: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestPeriodBackfillRequiresPrimaryReaderForNewTimeSeriesView(t *testing.T) {
 		views:        map[viewRef]*viewRuntime{{spaceID: "space", viewID: "prices"}: {next: "prices-b"}},
 		catalogViews: map[viewRef]*pb.View{{spaceID: "space", viewID: "prices"}: view},
 	}
-	if _, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, nil, nil, 0, 2, defaultMaxHistoryScanRows); err == nil {
+	if _, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, nil, nil, 2, defaultMaxHistoryScanRows); err == nil {
 		t.Fatal("new time-series View without Primary reader was accepted")
 	}
 }
@@ -195,7 +195,7 @@ func TestPeriodBackfillActivatesWithAvailableHistoryBelowTarget(t *testing.T) {
 	reader := &primaryHistoryRangeReader{rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
 		SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-18T00:00:00Z", SeriesTag: "venue:binance",
 	}}}}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 0, 1000, defaultMaxHistoryScanRows)
+	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 1000, defaultMaxHistoryScanRows)
 	if err != nil {
 		t.Fatalf("partial period backfill: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 		views:        map[viewRef]*viewRuntime{{spaceID: "space", viewID: view.ViewId}: runtime},
 		catalogViews: map[viewRef]*pb.View{{spaceID: "space", viewID: view.ViewId}: view},
 	}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, nil, 0, 2, defaultMaxHistoryScanRows)
+	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, nil, 2, defaultMaxHistoryScanRows)
 	if err != nil {
 		t.Fatalf("empty factor result backfill: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestFactorResultViewBackfillsExistingPrimaryOutput(t *testing.T) {
 		views:        map[viewRef]*viewRuntime{{spaceID: "space", viewID: view.ViewId}: runtime},
 		catalogViews: map[viewRef]*pb.View{{spaceID: "space", viewID: view.ViewId}: view},
 	}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, rangeReader, 0, 2, defaultMaxHistoryScanRows)
+	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, rangeReader, 2, defaultMaxHistoryScanRows)
 	if err != nil {
 		t.Fatalf("factor result history backfill: %v", err)
 	}
@@ -323,56 +323,6 @@ func TestProjectBackfillFieldsUsesNextSchemaShape(t *testing.T) {
 	got := projectBackfillFields(fields, active, next)
 	if len(got) != 1 || got[0].GetFieldId() != "close" {
 		t.Fatalf("projected fields=%v, want only unchanged close", got)
-	}
-}
-
-func TestBackfillTimeRangesUseViewRetention(t *testing.T) {
-	ranges := backfillTimeRanges(&pb.View{KeepDuration: "72h"}, 0)
-	if len(ranges) < 72*12 {
-		t.Fatalf("backfill ranges = %d, want at least %d", len(ranges), 72*12)
-	}
-	start, err := time.Parse(time.RFC3339Nano, ranges[0].GetStartTime())
-	if err != nil {
-		t.Fatalf("parse start time: %v", err)
-	}
-	startAfter := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Minute)
-	if start.Before(startAfter.Add(-time.Second)) || start.After(startAfter.Add(time.Second)) {
-		t.Fatalf("start time %s is not near the 72h retention boundary", start)
-	}
-	if ranges[0].GetEndTime() == "" {
-		t.Fatal("first range end time is empty")
-	}
-}
-
-func TestBackfillTimeRangeSkipsPermanentRetention(t *testing.T) {
-	got := backfillTimeRanges(&pb.View{KeepDuration: "0"}, 0)
-	if len(got) != 1 || got[0] != nil {
-		t.Fatalf("permanent retention ranges = %+v, want one nil range", got)
-	}
-}
-
-func TestBackfillTimeRangesHonorMinimumLookback(t *testing.T) {
-	ranges := backfillTimeRanges(&pb.View{KeepDuration: "1h"}, 2*time.Hour)
-	if len(ranges) < 2*12 {
-		t.Fatalf("backfill ranges = %d, want at least %d", len(ranges), 2*12)
-	}
-	start, err := time.Parse(time.RFC3339Nano, ranges[0].GetStartTime())
-	if err != nil {
-		t.Fatal(err)
-	}
-	boundary := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Minute)
-	if start.Before(boundary.Add(-time.Second)) || start.After(boundary.Add(time.Second)) {
-		t.Fatalf("start time %s is not near minimum lookback boundary", start)
-	}
-}
-
-func TestRebuildLookbackRequiresCoverageFromWallClock(t *testing.T) {
-	now := time.Now().UTC()
-	if err := validateRebuildLookback(viewindex.ViewIndexStats{Exists: true, IndexedFrom: now.Add(-3 * time.Hour).Format(time.RFC3339Nano), IndexedTo: now.Format(time.RFC3339Nano)}, time.Hour); err != nil {
-		t.Fatalf("coverage should satisfy lookback: %v", err)
-	}
-	if err := validateRebuildLookback(viewindex.ViewIndexStats{Exists: true, IndexedFrom: now.Add(-30 * time.Minute).Format(time.RFC3339Nano), IndexedTo: now.Format(time.RFC3339Nano)}, time.Hour); err == nil {
-		t.Fatal("insufficient coverage must not be activatable")
 	}
 }
 

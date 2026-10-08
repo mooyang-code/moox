@@ -136,168 +136,65 @@ func (m *maintenanceMetadata) FailViewIndexBuild(context.Context, *pb.FailViewIn
 
 func TestNeedsRebuildTriggers(t *testing.T) {
 	base := &pb.View{
-		SpaceId: "s", ViewId: "v", ActiveIndexId: "idx",
-		DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h",
+		SpaceId: "s", ViewId: "v", ActiveIndexId: "idx", Freq: "1m",
+		DesiredViewRevision: 1, ActiveViewRevision: 1,
 	}
-	if needsRebuild(base, viewindex.ViewIndexStats{Exists: true}) {
+	if needsActiveOrRevisionRebuild(base, viewindex.ViewIndexStats{Exists: true}) {
 		t.Fatal("stable view unexpectedly needs rebuild")
 	}
 	missing := proto.Clone(base).(*pb.View)
 	missing.ActiveIndexId = ""
-	if !needsRebuild(missing, viewindex.ViewIndexStats{Exists: true}) {
+	if !needsActiveOrRevisionRebuild(missing, viewindex.ViewIndexStats{Exists: true}) {
 		t.Fatal("missing active index did not trigger rebuild")
 	}
 	revision := proto.Clone(base).(*pb.View)
 	revision.DesiredViewRevision = 2
-	if !needsRebuild(revision, viewindex.ViewIndexStats{Exists: true}) {
+	if !needsActiveOrRevisionRebuild(revision, viewindex.ViewIndexStats{Exists: true}) {
 		t.Fatal("desired revision did not trigger rebuild")
 	}
-	wide := viewindex.ViewIndexStats{Exists: true, IndexedFrom: "2026-07-17T00:00:00Z", IndexedTo: "2026-07-20T00:00:00Z"}
-	if !needsRebuild(base, wide) {
-		t.Fatal("coverage wider than twice keep_duration did not trigger rebuild")
-	}
-	permanent := proto.Clone(base).(*pb.View)
-	permanent.KeepDuration = "0"
-	if needsRebuild(permanent, wide) {
-		t.Fatal("permanent view triggered time-based rebuild")
+	wide := viewindex.ViewIndexStats{Exists: true, IndexedFrom: "2026-01-01T00:00:00Z", IndexedTo: "2026-07-20T00:00:00Z"}
+	if needsCapacityMaintenanceRebuild(base, wide, MaintenanceOptions{MaxViewFileBytes: 1 << 30}) {
+		t.Fatal("a wide time span alone triggered a rebuild; Views keep bars, not a time window")
 	}
 	if !needsCapacityMaintenanceRebuild(base, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}, MaintenanceOptions{MaxViewFileBytes: 512}) {
 		t.Fatal("physical byte watermark did not trigger rebuild")
 	}
-	if needsCapacityMaintenanceRebuild(permanent, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 40}, MaintenanceOptions{MaxViewFileBytes: 1}) {
-		t.Fatal("permanent view triggered an unrecoverable physical rebuild")
+	record := proto.Clone(base).(*pb.View)
+	record.Freq, record.Engine = "", "bleve"
+	if needsCapacityMaintenanceRebuild(record, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 40}, MaintenanceOptions{MaxViewFileBytes: 1}) {
+		t.Fatal("a record View triggered an unrecoverable physical rebuild")
 	}
-	if !permanentViewFileCapacityExceeded(permanent, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1024}, MaintenanceOptions{MaxViewFileBytes: 512}) {
-		t.Fatal("permanent view over the file limit was not classified for alerting")
+	if !permanentViewFileCapacityExceeded(record, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1024}, MaintenanceOptions{MaxViewFileBytes: 512}) {
+		t.Fatal("record view over the file limit was not classified for alerting")
 	}
 	if permanentViewFileCapacityExceeded(base, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1024}, MaintenanceOptions{MaxViewFileBytes: 512}) {
-		t.Fatal("bounded-retention view was incorrectly classified as permanent")
-	}
-}
-
-func TestPeriodBoundedViewCanRebuildForFileCapacity(t *testing.T) {
-	view := &pb.View{ActiveIndexId: "idx", Freq: "1m", KeepDuration: "0"}
-	opts := MaintenanceOptions{MaxViewFileBytes: 512, RebuildLookbackPeriods: map[string]uint64{"default": 5000}}
-	stats := viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}
-	if !needsCapacityMaintenanceRebuild(view, stats, opts) {
-		t.Fatal("count-bounded time-series View did not rebuild for file capacity")
+		t.Fatal("bar-bounded view was incorrectly classified as permanent")
 	}
 }
 
 func TestRevisionRepairIsNotClassifiedAsOptionalCapacityMaintenance(t *testing.T) {
 	view := &pb.View{
-		SpaceId: "crypto", ViewId: "view_binance_kline_1m", ActiveIndexId: "active",
-		DesiredViewRevision: 2, ActiveViewRevision: 1, KeepDuration: "0",
+		SpaceId: "crypto", ViewId: "view_binance_kline_1m", ActiveIndexId: "active", Freq: "1m",
+		DesiredViewRevision: 2, ActiveViewRevision: 1,
 	}
 	stats := viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}
-	if needsActiveOrRevisionRebuild(view, stats) == false {
+	if !needsActiveOrRevisionRebuild(view, stats) {
 		t.Fatal("revision change did not require repair")
 	}
-	if isCapacityMaintenanceOnly(view, stats, MaintenanceOptions{MaxViewFileBytes: 512}, nil, false, false, true) {
+	if isCapacityMaintenanceOnly(view, stats, MaintenanceOptions{MaxViewFileBytes: 512}, nil, false, true) {
 		t.Fatal("revision repair was classified as optional capacity maintenance")
 	}
 }
 
-func TestPeriodCapacityPolicyIgnoresGlobalCoverageSpan(t *testing.T) {
-	view := &pb.View{
-		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
-		KeepDuration: "24h",
-		Freq:         "1m",
+func TestViewBarsComeFromThePolicyForTimeSeriesViews(t *testing.T) {
+	if got := viewBars(&pb.View{Freq: "1m"}, MaintenanceOptions{Bars: 4320}); got != 4320 {
+		t.Fatalf("time-series View bars = %d, want the policy 4320", got)
 	}
-	wide := viewindex.ViewIndexStats{
-		Exists: true, IndexedFrom: "2026-01-01T00:00:00Z", IndexedTo: "2026-01-10T00:00:00Z",
-		PhysicalBytes: 1 << 20,
+	if got := viewBars(&pb.View{Freq: "1h"}, MaintenanceOptions{}); got != defaultViewBars {
+		t.Fatalf("time-series View bars without a policy = %d, want %d", got, defaultViewBars)
 	}
-	periodPolicy := MaintenanceOptions{RebuildLookbackPeriods: map[string]uint64{"default": 1000}, MaxViewFileBytes: 1 << 30}
-	if needsCapacityMaintenanceRebuild(view, wide, periodPolicy) {
-		t.Fatal("period-based View must not rebuild repeatedly because global series timestamps span more than keep_duration")
-	}
-	if needsCapacityMaintenanceWatermark(view, wide, periodPolicy) {
-		t.Fatal("period-based View incorrectly crossed the byte watermark")
-	}
-}
-
-func TestDurationCapacityPolicyStillHonorsGlobalCoverageSpan(t *testing.T) {
-	view := &pb.View{
-		ActiveIndexId: "metrics-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
-		KeepDuration: "24h",
-	}
-	wide := viewindex.ViewIndexStats{
-		Exists: true, IndexedFrom: "2026-01-01T00:00:00Z", IndexedTo: "2026-01-10T00:00:00Z",
-		PhysicalBytes: 1 << 20,
-	}
-	policy := MaintenanceOptions{RebuildLookbackPeriods: map[string]uint64{"default": 1000}, MaxViewFileBytes: 1 << 30}
-	if !needsCapacityMaintenanceRebuild(view, wide, policy) {
-		t.Fatal("duration-based View must rebuild when global coverage exceeds retention span")
-	}
-}
-
-func TestRebuildLookbackUsesViewRetentionPerFrequency(t *testing.T) {
-	view := &pb.View{KeepDuration: "6h"}
-	if got := rebuildLookbackForView(view, 24*time.Hour); got != 6*time.Hour {
-		t.Fatalf("view-specific lookback = %s, want 6h", got)
-	}
-	if got := rebuildLookbackForView(&pb.View{KeepDuration: "0"}, 24*time.Hour); got != 24*time.Hour {
-		t.Fatalf("fallback lookback = %s, want 24h", got)
-	}
-	if got := rebuildLookbackForView(&pb.View{KeepDuration: "not-a-duration"}, 24*time.Hour); got != 24*time.Hour {
-		t.Fatalf("invalid view retention should use fallback, got %s", got)
-	}
-}
-
-func TestRebuildLookbackPeriodsSelectsFrequencyAndDefault(t *testing.T) {
-	configured := map[string]uint64{"1m": 4320, "1h": 2880, "1d": 360, "default": 2000}
-	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "1m"}, configured); got != 4320 {
-		t.Fatalf("1m periods = %d, want 4320", got)
-	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "1h"}, configured); got != 2880 {
-		t.Fatalf("1H periods = %d, want 2880", got)
-	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "1d"}, configured); got != 360 {
-		t.Fatalf("1d periods = %d, want 360", got)
-	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "30s"}, configured); got != 2000 {
-		t.Fatalf("default periods = %d, want 2000", got)
-	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{}, configured); got != 0 {
-		t.Fatalf("missing frequency periods = %d, want 0", got)
-	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{Freq: "1m"}, nil); got != defaultRebuildLookbackPeriods {
-		t.Fatalf("missing configured periods = %d, want default %d", got, defaultRebuildLookbackPeriods)
-	}
-	if got := rebuildLookbackPeriodsForView(&pb.View{Engine: "bleve"}, nil); got != 0 {
-		t.Fatalf("frequency-less View periods = %d, want 0", got)
-	}
-}
-
-func TestNeedsLookbackRepairDetectsShortTimeSeriesCoverage(t *testing.T) {
-	view := &pb.View{Engine: "duckdb", ActiveIndexId: "idx", KeepDuration: "24h"}
-	short := viewindex.ViewIndexStats{
-		Exists:      true,
-		IndexedFrom: time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339Nano),
-		IndexedTo:   time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	if !needsLookbackRepair(view, short, time.Hour) {
-		t.Fatal("short active coverage did not request Primary-backed repair")
-	}
-	bleve := proto.Clone(view).(*pb.View)
-	bleve.Engine = "bleve"
-	if needsLookbackRepair(bleve, short, time.Hour) {
-		t.Fatal("record View should not request time-series coverage repair")
-	}
-	complete := short
-	complete.IndexedFrom = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
-	if needsLookbackRepair(view, complete, time.Hour) {
-		t.Fatal("complete active coverage requested an unnecessary repair")
-	}
-}
-
-func TestIncompleteHistoryDoesNotBlockActivation(t *testing.T) {
-	if !incompleteHistoryIsAllowed(fmt.Errorf("wrapped: %w", errRebuildLookbackInsufficient)) {
-		t.Fatal("insufficient history was not classified as activatable")
-	}
-	if incompleteHistoryIsAllowed(errors.New("invalid rebuilt View coverage")) {
-		t.Fatal("invalid coverage was incorrectly classified as an expected shortage")
+	if got := viewBars(&pb.View{Engine: "bleve"}, MaintenanceOptions{Bars: 4320}); got != 0 {
+		t.Fatalf("record View bars = %d, want 0 (keeps every row)", got)
 	}
 }
 
@@ -401,7 +298,7 @@ func TestPermanentViewFileCapacityObserverPublishesAlertGauge(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := &Service{metrics: metrics}
-	view := &pb.View{SpaceId: "crypto", ViewId: "permanent", ActiveIndexId: "idx", KeepDuration: "0"}
+	view := &pb.View{SpaceId: "crypto", ViewId: "permanent", ActiveIndexId: "idx"}
 	opts := MaintenanceOptions{MaxViewFileBytes: 512}
 	svc.observePermanentViewCapacityLimit(view, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1024}, opts)
 	if got := gatheredGaugeValue(t, registry, "moox_storage_view_permanent_view_capacity_over_limit"); got != 1 {
@@ -426,8 +323,7 @@ func TestPermanentViewFileCapacityDoesNotClaimRebuild(t *testing.T) {
 	svc.engines["duckdb"] = engine
 	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "permanent", DatasetId: "metrics", Engine: "duckdb",
-		ActiveIndexId: "permanent-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
-		KeepDuration: "0", Status: "active",
+		ActiveIndexId: "permanent-a", ActiveViewRevision: 1, DesiredViewRevision: 1, Status: "active",
 	}}
 	opts := MaintenanceOptions{Metadata: metadata, OwnerID: "owner", MaxViewFileBytes: 1}
 	for range 2 {
@@ -661,12 +557,12 @@ func TestInactiveCapacityBuildFailureLeavesActiveSlotReadable(t *testing.T) {
 		SpaceId: spaceID, ViewId: viewID, DatasetId: "prices", Engine: "duckdb",
 		ActiveIndexId: activeID, ActiveViewRevision: 1, DesiredViewRevision: 1,
 		ActiveViewSchemaHash: "schema-v1", ActiveColumns: columns, Columns: columns,
-		Freq: "1m", KeepDuration: "8760h", Status: "active",
+		Freq: "1m", Status: "active",
 	}}
 	svc.consumerState = func(context.Context) (jetstream.ConsumerState, error) { return jetstream.ConsumerState{}, nil }
 	err := svc.maintainView(ctx, MaintenanceOptions{
 		Metadata: metadata, OwnerID: "owner", MaxViewFileBytes: 1,
-		RebuildLookbackPeriods:      map[string]uint64{"default": 5000},
+		Bars:                        5000,
 		RebuildMaxPendingConfigured: true, RebuildIdleChecksConfigured: true, RebuildIdleChecks: 1,
 	}, svc.internalAuth(), metadata.view)
 	if err == nil || !strings.Contains(err.Error(), "injected inactive index prepare failure") {
@@ -966,7 +862,7 @@ func TestCapacityMaintenanceBuildRequiresConsecutiveIdleChecks(t *testing.T) {
 func TestFailedMaintenanceBuildStopsWhenWatermarkIsCleared(t *testing.T) {
 	view := &pb.View{
 		SpaceId: "s", ViewId: "v", ActiveIndexId: "idx",
-		DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h",
+		DesiredViewRevision: 1, ActiveViewRevision: 1,
 	}
 	capacityMaintenanceExceeded := needsCapacityMaintenanceRebuild(view, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 20}, MaintenanceOptions{MaxViewFileBytes: 1 << 30})
 	if capacityMaintenanceExceeded {
@@ -989,7 +885,7 @@ func TestFailedMaintenanceBuildStopsWhenWatermarkIsCleared(t *testing.T) {
 }
 
 func TestFailedCapacityMaintenanceBuildWaitsForCooldown(t *testing.T) {
-	view := &pb.View{DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h"}
+	view := &pb.View{DesiredViewRevision: 1, ActiveViewRevision: 1}
 	failed := &pb.ViewIndexBuild{UpdatedAt: "2026-08-12T00:00:00Z"}
 	if shouldRetryFailedBuild(view, failed, true, time.Date(2026, 8, 12, 0, 29, 59, 0, time.UTC)) {
 		t.Fatal("size-limit rebuild retried before cooldown")
@@ -1000,7 +896,7 @@ func TestFailedCapacityMaintenanceBuildWaitsForCooldown(t *testing.T) {
 }
 
 func TestFailedBuildMissingActiveIsNotHeldBySizeCooldown(t *testing.T) {
-	view := &pb.View{ActiveIndexId: "idx", DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h"}
+	view := &pb.View{ActiveIndexId: "idx", DesiredViewRevision: 1, ActiveViewRevision: 1}
 	failed := &pb.ViewIndexBuild{UpdatedAt: "2026-08-12T00:00:00Z"}
 	stats := viewindex.ViewIndexStats{Exists: false, PhysicalBytes: 1 << 40}
 	if !needsCapacityMaintenanceRebuild(view, stats, MaintenanceOptions{MaxViewFileBytes: 1}) {

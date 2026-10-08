@@ -16,9 +16,8 @@ import (
 
 func TestValidateResetViewConsumersRequiresExplicitConfirmation(t *testing.T) {
 	opts := resetViewConsumersOptions{
-		stream:   events.StorageViewConsumerStream,
-		lookback: time.Hour,
-		timeout:  time.Minute,
+		stream:  events.StorageViewConsumerStream,
+		timeout: time.Minute,
 	}
 	if err := validateResetViewConsumersOptions(opts); err == nil || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("expected explicit confirmation error, got %v", err)
@@ -63,7 +62,7 @@ func TestStageResetViewIndexesRestoresBothSlots(t *testing.T) {
 	}
 }
 
-func TestResetViewsLookbackReadyRequiresActiveCoverage(t *testing.T) {
+func TestResetViewsActiveRequiresAnActiveIndex(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "metadata.db")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -79,9 +78,9 @@ func TestResetViewsLookbackReadyRequiresActiveCoverage(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ready, err := resetViewsLookbackReady(context.Background(), dbPath, time.Hour)
+	ready, err := resetViewsActive(context.Background(), dbPath)
 	if err != nil || !ready {
-		t.Fatalf("covered View ready=%v err=%v", ready, err)
+		t.Fatalf("active View ready=%v err=%v", ready, err)
 	}
 	db, err = sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -91,26 +90,25 @@ func TestResetViewsLookbackReadyRequiresActiveCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	ready, err = resetViewsLookbackReady(context.Background(), dbPath, time.Hour)
+	ready, err = resetViewsActive(context.Background(), dbPath)
 	if err != nil || ready {
 		t.Fatalf("missing active View ready=%v err=%v", ready, err)
 	}
 }
 
-func TestValidateResetViewConsumersRejectsWrongStreamAndLookback(t *testing.T) {
+func TestValidateResetViewConsumersRejectsWrongStreamAndTimeout(t *testing.T) {
 	opts := resetViewConsumersOptions{
-		stream:   "OTHER",
-		lookback: time.Hour,
-		timeout:  time.Minute,
-		yes:      true,
+		stream:  "OTHER",
+		timeout: time.Minute,
+		yes:     true,
 	}
 	if err := validateResetViewConsumersOptions(opts); err == nil || !strings.Contains(err.Error(), events.StorageViewConsumerStream) {
 		t.Fatalf("expected stream validation error, got %v", err)
 	}
 	opts.stream = events.StorageViewConsumerStream
-	opts.lookback = 0
-	if err := validateResetViewConsumersOptions(opts); err == nil || !strings.Contains(err.Error(), "lookback") {
-		t.Fatalf("expected lookback validation error, got %v", err)
+	opts.timeout = 0
+	if err := validateResetViewConsumersOptions(opts); err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("expected timeout validation error, got %v", err)
 	}
 }
 
@@ -126,7 +124,7 @@ func TestValidateResetPrimaryPathRequiresPackageDataChild(t *testing.T) {
 	}
 }
 
-func TestResetViewsLookbackReadyIgnoresDisabledViews(t *testing.T) {
+func TestResetViewsActiveIgnoresDisabledViews(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "metadata.db")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -141,7 +139,7 @@ func TestResetViewsLookbackReadyIgnoresDisabledViews(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ready, err := resetViewsLookbackReady(context.Background(), dbPath, time.Hour)
+	ready, err := resetViewsActive(context.Background(), dbPath)
 	if err != nil || !ready {
 		t.Fatalf("disabled-only View set should not block reset ready=%v err=%v", ready, err)
 	}

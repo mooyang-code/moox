@@ -77,18 +77,14 @@ type StorageView struct {
 	Ordering                string `yaml:"ordering"`
 	// BackfillPageSize bounds each Primary history page during a View rebuild.
 	// Smaller pages reduce the instantaneous point-read and index-write burst.
-	BackfillPageSize        uint32 `yaml:"backfill_page_size"`
-	BackfillRequestInterval string `yaml:"backfill_request_interval"`
-	// RebuildLookback is the wall-clock fallback for legacy Views without a
-	// frequency-specific completed-bar target.
-	RebuildLookback        string                         `yaml:"rebuild_lookback"`
-	RebuildLookbackPeriods map[string]uint64              `yaml:"rebuild_lookback_periods"`
-	RebuildMaxPending      uint64                         `yaml:"rebuild_max_pending"`
-	RebuildIdleChecks      uint32                         `yaml:"rebuild_idle_checks"`
-	ConsumerPartitions     []StorageViewConsumerPartition `yaml:"consumer_partitions"`
-	StorageRPC             StorageRPCConfig               `yaml:"storage_rpc"`
-	rebuildMaxPendingSet   bool
-	rebuildIdleChecksSet   bool
+	BackfillPageSize        uint32                         `yaml:"backfill_page_size"`
+	BackfillRequestInterval string                         `yaml:"backfill_request_interval"`
+	RebuildMaxPending       uint64                         `yaml:"rebuild_max_pending"`
+	RebuildIdleChecks       uint32                         `yaml:"rebuild_idle_checks"`
+	ConsumerPartitions      []StorageViewConsumerPartition `yaml:"consumer_partitions"`
+	StorageRPC              StorageRPCConfig               `yaml:"storage_rpc"`
+	rebuildMaxPendingSet    bool
+	rebuildIdleChecksSet    bool
 }
 
 // StorageViewConsumerRoute identifies the Dataset subjects owned by a
@@ -461,29 +457,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if strings.TrimSpace(c.View.BackfillRequestInterval) == "" {
 		c.View.BackfillRequestInterval = "100ms"
-	}
-	if strings.TrimSpace(c.View.RebuildLookback) == "" {
-		c.View.RebuildLookback = "24h"
-	}
-	if len(c.View.RebuildLookbackPeriods) == 0 {
-		c.View.RebuildLookbackPeriods = map[string]uint64{
-			"1m":      5000,
-			"1h":      5000,
-			"1d":      5000,
-			"default": 5000,
-		}
-	} else {
-		normalized := make(map[string]uint64, len(c.View.RebuildLookbackPeriods)+1)
-		for frequency, periods := range c.View.RebuildLookbackPeriods {
-			frequency = strings.ToLower(strings.TrimSpace(frequency))
-			if frequency != "" {
-				normalized[frequency] = periods
-			}
-		}
-		if normalized["default"] == 0 {
-			normalized["default"] = 5000
-		}
-		c.View.RebuildLookbackPeriods = normalized
 	}
 	if c.View.RebuildMaxPending == 0 && !c.View.rebuildMaxPendingSet {
 		c.View.RebuildMaxPending = 32

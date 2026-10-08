@@ -20,7 +20,7 @@ func TestCreateViewIsAtomicAndDoesNotReplaceExistingIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "替代视图", DatasetId: "fundamentals", Engine: "duckdb", KeepDuration: "24h"})
+	_, err = store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "替代视图", DatasetId: "fundamentals", Engine: "duckdb"})
 	if !errors.Is(err, metadatastore.ErrViewExists) {
 		t.Fatalf("CreateView error = %v, want ErrViewExists", err)
 	}
@@ -34,8 +34,8 @@ func TestCreateViewIsAtomicAndDoesNotReplaceExistingIdentity(t *testing.T) {
 }
 
 func TestViewKeepDurationChangeDoesNotRequireABRebuild(t *testing.T) {
-	existing := &pb.View{DatasetId: "prices", Engine: "duckdb", KeepDuration: "24h"}
-	next := &pb.View{DatasetId: "prices", Engine: "duckdb", KeepDuration: "168h"}
+	existing := &pb.View{DatasetId: "prices", Engine: "duckdb"}
+	next := &pb.View{DatasetId: "prices", Engine: "duckdb"}
 	if viewIndexShapeChanged(existing, next) {
 		t.Fatal("keep_duration-only change must not trigger an A/B rebuild")
 	}
@@ -373,7 +373,7 @@ func openViewPeriodTestStore(t *testing.T, ctx context.Context) *Store {
 	createTestDataset(t, ctx, store, "prices", "node")
 	createTestDataset(t, ctx, store, "fundamentals", "node")
 	if _, err := store.UpsertView(ctx, &pb.View{
-		SpaceId: "space", ViewId: "source-view", Name: "Source view", DatasetId: "prices", KeepDuration: "24h",
+		SpaceId: "space", ViewId: "source-view", Name: "Source view", DatasetId: "prices",
 	}); err != nil {
 		t.Fatal(err)
 	}

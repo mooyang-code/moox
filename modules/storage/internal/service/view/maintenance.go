@@ -20,16 +20,16 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-func seriesCapacityDetails(offender viewindex.SeriesCapacityResult, maxPeriods, lookbackPeriods, physicalBytes uint64) string {
+func seriesCapacityDetails(offender viewindex.SeriesCapacityResult, trimBars, bars, physicalBytes uint64) string {
 	details := map[string]any{
-		"trigger":                  "SERIES_CAPACITY",
-		"subject_id":               offender.SubjectID,
-		"frequency":                offender.Freq,
-		"series_tag":               offender.SeriesTag,
-		"observed_periods":         offender.Rows,
-		"max_periods_per_series":   maxPeriods,
-		"rebuild_lookback_periods": lookbackPeriods,
-		"physical_bytes":           physicalBytes,
+		"trigger":        "SERIES_CAPACITY",
+		"subject_id":     offender.SubjectID,
+		"frequency":      offender.Freq,
+		"series_tag":     offender.SeriesTag,
+		"observed_bars":  offender.Rows,
+		"trim_bars":      trimBars,
+		"bars":           bars,
+		"physical_bytes": physicalBytes,
 	}
 	encoded, err := json.Marshal(details)
 	if err != nil {
@@ -86,20 +86,16 @@ type MaintenanceOptions struct {
 	capacityCheckNow          func() time.Time
 	OwnerID                   string
 	Grace                     time.Duration
-	// MaxViewFileBytes triggers an A/B rebuild only when the View has bounded
-	// time- or period-based retention. Permanent Views report an over-limit
-	// alert instead of rebuilding into a truncated history.
-	MaxViewFileBytes    int64
-	MaxPeriodsPerSeries uint64
-	// RebuildLookback is the preferred wall-clock history to backfill for every
-	// newly built index. If Primary has less history, the available rows are
-	// still activated; zero keeps direct unit-test callers backwards compatible.
-	RebuildLookback time.Duration
-	// RebuildLookbackPeriods specifies the target number of completed bars for
-	// each time-series (subject, frequency, series tag) during Primary history
-	// backfill. A frequency-specific value wins over default; a shortage does
-	// not block activation.
-	RebuildLookbackPeriods map[string]uint64
+	// MaxViewFileBytes triggers an A/B rebuild of a time-series View, which
+	// keeps a bounded number of bars. A record View keeps every row, so an
+	// over-limit record View is reported instead of rebuilt.
+	MaxViewFileBytes int64
+	// Bars is the number of most recent bars a time-series View keeps for every
+	// (subject, frequency, series tag); a shortage in Primary does not block
+	// activation. TrimBars is the per-series count above which the View is
+	// rebuilt back to Bars.
+	Bars     uint64
+	TrimBars uint64
 	// RebuildMaxPending and RebuildIdleChecks gate optional capacity-limit
 	// rebuilds. Necessary repairs bypass this capacity gate.
 	RebuildMaxPending           uint64
@@ -176,7 +172,7 @@ const defaultCapacityCheckInterval = time.Hour
 const defaultCapacityCheckTimeout = time.Minute
 const defaultRebuildMaxPending uint64 = 32
 const defaultRebuildIdleChecks uint32 = 3
-const defaultRebuildLookbackPeriods uint64 = 5000
+const defaultViewBars uint64 = 5000
 const defaultMaxHistoryScanRows uint64 = 1_000_000
 const capacityMaintenanceBuildBacklogThreshold = defaultRebuildMaxPending
 
@@ -558,67 +554,8 @@ func restoreIndexStats(ctx context.Context, engine viewindex.Engine, indexID str
 	return engine.Stat(ctx, indexID)
 }
 
-func validateRebuildLookback(stats viewindex.ViewIndexStats, lookback time.Duration) error {
-	if lookback <= 0 {
-		return nil
-	}
-	if !stats.Exists {
-		return errors.New("rebuilt View index does not exist")
-	}
-	if strings.TrimSpace(stats.IndexedFrom) == "" || strings.TrimSpace(stats.IndexedTo) == "" {
-		return fmt.Errorf("%w: rebuilt View index has no coverage; minimum lookback is %s", errRebuildLookbackInsufficient, lookback)
-	}
-	from, err := time.Parse(time.RFC3339Nano, stats.IndexedFrom)
-	if err != nil {
-		return fmt.Errorf("invalid rebuilt View indexed_from %q: %w", stats.IndexedFrom, err)
-	}
-	to, err := time.Parse(time.RFC3339Nano, stats.IndexedTo)
-	if err != nil {
-		return fmt.Errorf("invalid rebuilt View indexed_to %q: %w", stats.IndexedTo, err)
-	}
-	// Compare against the same minute-aligned boundary used by backfill. A
-	// 1-minute bar at the boundary must count as covering the requested window,
-	// rather than failing because validation happened a few seconds later.
-	cutoff := time.Now().UTC().Add(-lookback).Truncate(time.Minute)
-	if from.After(cutoff) {
-		return fmt.Errorf("%w: rebuilt View coverage starts at %s, before %s is required", errRebuildLookbackInsufficient, from.Format(time.RFC3339Nano), lookback)
-	}
-	if to.Before(from) {
-		return fmt.Errorf("rebuilt View coverage is inverted: %s > %s", from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano))
-	}
-	return nil
-}
-
-var errRebuildLookbackInsufficient = errors.New("rebuilt View lookback is insufficient")
-
-// incompleteHistoryIsAllowed reports the expected shortage for a newly-built
-// index. A lookback is a best-effort target: a fresh dataset may not have that
-// many rows yet, but the available rows still form a valid replacement and
-// live events can continue filling it after activation.
-func incompleteHistoryIsAllowed(err error) bool {
-	return errors.Is(err, errRebuildLookbackInsufficient)
-}
-
 func isPrimaryHistoryIndexNotReady(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "primary history index is still being materialized")
-}
-
-func (s *Service) validatePendingBuildCoverage(ctx context.Context, indexID, engineName string, lookback time.Duration) error {
-	// Bleve indexes are record-oriented and do not expose a time-series
-	// coverage watermark. The rebuild lookback contract applies to temporal
-	// Views; record Views are complete when their schema/index is ready.
-	if strings.EqualFold(strings.TrimSpace(engineName), "bleve") {
-		return nil
-	}
-	engine := s.engines[strings.ToLower(strings.TrimSpace(engineName))]
-	if engine == nil {
-		return fmt.Errorf("view engine %q is unavailable", engineName)
-	}
-	stats, err := restoreIndexStats(ctx, engine, indexID)
-	if err != nil {
-		return fmt.Errorf("stat rebuilt View index %q coverage: %w", indexID, err)
-	}
-	return validateRebuildLookback(stats, lookback)
 }
 
 func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) error {
@@ -713,16 +650,9 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	if err != nil {
 		return err
 	}
-	// Time-series Views use a completed-bar budget rather than wall-clock
-	// retention. This keeps weekends/holidays from shortening the rebuild. The
-	// duration fallback remains for legacy Views whose frequency is unknown.
-	lookbackPeriods := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods)
-	if lookbackPeriods > 0 {
-		opts.RebuildLookback = 0
-	} else {
-		// A View without a frequency (a record View) is bounded by its retention.
-		opts.RebuildLookback = rebuildLookbackForView(view, opts.RebuildLookback)
-	}
+	// Time-series Views keep a number of completed bars rather than a
+	// wall-clock window, so weekends and holidays do not shorten them.
+	bars := viewBars(view, opts)
 	var stats viewindex.ViewIndexStats
 	var activeInvalidErr error
 	var capacityOffender viewindex.SeriesCapacityResult
@@ -777,7 +707,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 			}
 		}
 		if stats.Exists {
-			if lookbackPeriods > 0 && opts.MaxPeriodsPerSeries > 0 {
+			if bars > 0 && opts.TrimBars > 0 {
 				if reader, ok := engine.(viewindex.SeriesCapacityReader); ok {
 					capacityRef := capacityCheckRef{
 						viewRef: viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()},
@@ -796,7 +726,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 					)
 					capacityOffender = cached
 					if runCheck {
-						observed, scanErr := seriesCapacityWithTimeout(ctx, reader, view.GetActiveIndexId(), opts.MaxPeriodsPerSeries, defaultCapacityCheckTimeout, func(observed viewindex.SeriesCapacityResult, scanErr error) {
+						observed, scanErr := seriesCapacityWithTimeout(ctx, reader, view.GetActiveIndexId(), opts.TrimBars, defaultCapacityCheckTimeout, func(observed viewindex.SeriesCapacityResult, scanErr error) {
 							s.finishSeriesCapacityCheck(capacityRef, observed, scanErr)
 						})
 						if scanErr != nil {
@@ -806,7 +736,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 						}
 					}
 					if capacityOffender.Exceeded {
-						capacityDetails = seriesCapacityDetails(capacityOffender, opts.MaxPeriodsPerSeries, lookbackPeriods, stats.PhysicalBytes)
+						capacityDetails = seriesCapacityDetails(capacityOffender, opts.TrimBars, bars, stats.PhysicalBytes)
 					}
 				}
 			}
@@ -873,12 +803,6 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 			view.IndexBuild = nil
 		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP:
 			if view.GetActiveIndexId() == "" && build.GetState() != pb.ViewIndexBuild_PREPARING {
-				if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
-					if !incompleteHistoryIsAllowed(err) {
-						return err
-					}
-					log.Printf("storage view initial rebuild has partial history; activating available rows space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
-				}
 				if err := s.catchUpAndActivateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns(), build.GetEntriesWritten()); err != nil {
 					return err
 				}
@@ -897,15 +821,6 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 				s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), staleErr)
 				return nil
 			}
-			if opts.RebuildLookback > 0 {
-				if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
-					if !incompleteHistoryIsAllowed(err) {
-						s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
-						return err
-					}
-					log.Printf("storage view READY rebuild has partial history; activating available rows space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
-				}
-			}
 			if err := s.AttachPendingViewBuild(ctx, view); err != nil {
 				s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
 				return err
@@ -917,27 +832,20 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 			return err
 		}
 	}
-	coverageRepair := needsLookbackRepair(view, stats, opts.RebuildLookback)
 	seriesCapacityExceeded := capacityOffender.Exceeded
-	rebuildNeeded := needsCapacityMaintenanceRebuild(view, stats, opts) || coverageRepair || seriesCapacityExceeded
+	rebuildNeeded := needsCapacityMaintenanceRebuild(view, stats, opts) || seriesCapacityExceeded
 	if activeInvalidErr != nil {
 		rebuildNeeded = true
 	}
 	manualRequested := manualRebuildRequested(view)
-	// Coverage repair is mandatory: it must run even while an unrelated
-	// partition has backlog. The size watermark rebuild remains optional and
-	// continues to use the idle/backlog gate below.
 	// A desired revision change is a required definition repair, even when the
 	// active index also exceeds the per-series capacity. Do not let the
 	// optional capacity idle/backlog gate suppress the requested A/B rebuild.
-	capacityMaintenanceOnly := isCapacityMaintenanceOnly(view, stats, opts, activeInvalidErr, coverageRepair, manualRequested, seriesCapacityExceeded)
+	capacityMaintenanceOnly := isCapacityMaintenanceOnly(view, stats, opts, activeInvalidErr, manualRequested, seriesCapacityExceeded)
 	now := time.Now().UTC()
 	triggerReason := rebuildTriggerReason(view, stats, capacityMaintenanceOnly, seriesCapacityExceeded)
 	if seriesCapacityExceeded {
-		log.Printf("storage view series capacity exceeded space=%s view=%s subject=%s freq=%s series_tag=%s rows=%d limit=%d", view.GetSpaceId(), view.GetViewId(), capacityOffender.SubjectID, capacityOffender.Freq, capacityOffender.SeriesTag, capacityOffender.Rows, opts.MaxPeriodsPerSeries)
-	}
-	if coverageRepair && !manualRequested {
-		triggerReason = pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR
+		log.Printf("storage view series capacity exceeded space=%s view=%s subject=%s freq=%s series_tag=%s rows=%d limit=%d", view.GetSpaceId(), view.GetViewId(), capacityOffender.SubjectID, capacityOffender.Freq, capacityOffender.SeriesTag, capacityOffender.Rows, opts.TrimBars)
 	}
 	if activeInvalidErr != nil {
 		triggerReason = pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_INVALID
@@ -950,7 +858,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		s.mu.RLock()
 		runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
 		s.mu.RUnlock()
-		if runtime == nil && !canRebuildInvalidViewFromPrimary(view, opts, lookbackPeriods) {
+		if runtime == nil && !canRebuildInvalidViewFromPrimary(view, opts) {
 			s.recordFailedRebuild(ctx, opts, auth, view, triggerReason, activeInvalidErr, stats)
 			return activeInvalidErr
 		}
@@ -1119,7 +1027,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 		return err
 	}
-	primaryHistoryRequired := lookbackPeriods > 0 && !strings.EqualFold(strings.TrimSpace(schema.Engine), "bleve")
+	primaryHistoryRequired := bars > 0 && !strings.EqualFold(strings.TrimSpace(schema.Engine), "bleve")
 	if (view.GetActiveIndexId() != "" && stats.Exists) || opts.PrimaryRange != nil || primaryHistoryRequired {
 		s.updateRunningRebuildLogPhase(ctx, opts, auth, view, buildID, buildLog, "backfill")
 		buildCtx := ctx
@@ -1139,7 +1047,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 			backfillPageSize = viewBackfillBatchSize
 		}
 		backfillLimiter := newBackfillRequestLimiter(opts.BackfillRequestInterval)
-		entriesWritten, backfillErr = s.backfillViewWithReaderLimited(buildCtx, view.GetSpaceId(), view.GetViewId(), backfillPageSize, opts.Primary, opts.PrimaryRange, opts.RebuildLookback, lookbackPeriods, opts.MaxHistoryScanRows, backfillLimiter)
+		entriesWritten, backfillErr = s.backfillViewWithReaderLimited(buildCtx, view.GetSpaceId(), view.GetViewId(), backfillPageSize, opts.Primary, opts.PrimaryRange, bars, opts.MaxHistoryScanRows, backfillLimiter)
 		if backfillErr != nil {
 			s.failBuild(ctx, opts, auth, view, buildID, indexID, backfillErr)
 			if isPrimaryHistoryIndexNotReady(backfillErr) {
@@ -1153,16 +1061,6 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 			return backfillErr
 		}
 		s.updateRunningRebuildLogPhase(ctx, opts, auth, view, buildID, buildLog, "catch_up")
-	}
-	if opts.RebuildLookback > 0 {
-		if err := s.validatePendingBuildCoverage(ctx, indexID, schema.Engine, opts.RebuildLookback); err != nil {
-			if !incompleteHistoryIsAllowed(err) {
-				s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-				finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, entriesWritten, err)
-				return err
-			}
-			log.Printf("storage view rebuild has partial history; activating available rows space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
-		}
 	}
 	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, buildID, buildLog, "activate")
 	err = s.catchUpAndActivateViewBuild(ctx, opts, auth, view, buildID, indexID, schema.Engine, schema.ViewVersion, schema.SchemaHash, columns, entriesWritten)
@@ -1181,57 +1079,33 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	return err
 }
 
-func canRebuildInvalidViewFromPrimary(view *pb.View, opts MaintenanceOptions, lookbackPeriods uint64) bool {
-	if view == nil || opts.Primary == nil || opts.PrimaryRange == nil || view.GetFreq() == "" {
+func canRebuildInvalidViewFromPrimary(view *pb.View, opts MaintenanceOptions) bool {
+	if view == nil || opts.Primary == nil || opts.PrimaryRange == nil {
 		return false
 	}
 	if strings.EqualFold(strings.TrimSpace(view.GetEngine()), "bleve") {
 		return false
 	}
-	return lookbackPeriods > 0 || opts.RebuildLookback > 0
+	return viewBars(view, opts) > 0
 }
 
-func isCapacityMaintenanceOnly(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions, activeInvalidErr error, coverageRepair, manualRequested, seriesCapacityExceeded bool) bool {
+func isCapacityMaintenanceOnly(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions, activeInvalidErr error, manualRequested, seriesCapacityExceeded bool) bool {
 	// A desired revision change is a required definition repair, even when the
 	// active index also exceeds the per-series capacity. Do not let the
 	// optional capacity idle/backlog gate suppress the requested A/B rebuild.
-	return activeInvalidErr == nil && !needsActiveOrRevisionRebuild(view, stats) && !coverageRepair && !manualRequested && (seriesCapacityExceeded || needsCapacityMaintenanceWatermark(view, stats, opts))
+	return activeInvalidErr == nil && !needsActiveOrRevisionRebuild(view, stats) && !manualRequested && (seriesCapacityExceeded || needsCapacityMaintenanceWatermark(view, stats, opts))
 }
 
-func rebuildLookbackForView(view *pb.View, fallback time.Duration) time.Duration {
-	if view == nil {
-		return fallback
-	}
-	raw := strings.TrimSpace(view.GetKeepDuration())
-	if raw == "" || raw == "0" {
-		return fallback
-	}
-	lookback, err := time.ParseDuration(raw)
-	if err != nil || lookback <= 0 {
-		return fallback
-	}
-	return lookback
-}
-
-func rebuildLookbackPeriodsForView(view *pb.View, configured map[string]uint64) uint64 {
-	frequency := view.GetFreq()
-	if frequency == "" {
-		// A period budget is meaningful only for a frequency-bound time-series
-		// View. Record/metrics Views without a freq filter continue to use their
-		// wall-clock retention lookback; forcing the default 1,000 bars here
-		// would make every such rebuild fail with "frequency is required".
+// viewBars returns the number of bars a View keeps per series: the policy's
+// bars for a time-series View, zero for a record View that keeps every row.
+func viewBars(view *pb.View, opts MaintenanceOptions) uint64 {
+	if view.GetFreq() == "" {
 		return 0
 	}
-	if len(configured) == 0 {
-		return defaultRebuildLookbackPeriods
+	if opts.Bars > 0 {
+		return opts.Bars
 	}
-	if periods := configured[frequency]; periods > 0 {
-		return periods
-	}
-	if periods := configured["default"]; periods > 0 {
-		return periods
-	}
-	return defaultRebuildLookbackPeriods
+	return defaultViewBars
 }
 
 func maintainIndexStats(ctx context.Context, engine viewindex.Engine, indexID string) (viewindex.ViewIndexStats, bool, error) {
@@ -1788,25 +1662,6 @@ func (s *Service) discardFailedBuild(ctx context.Context, spaceID, viewID, index
 	s.removeFailedBuildAtGeneration(ctx, indexID, expectedGeneration, engineOverride...)
 }
 
-func needsRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
-	if view == nil {
-		return false
-	}
-	if needsActiveOrRevisionRebuild(view, stats) {
-		return true
-	}
-	keep, err := time.ParseDuration(view.GetKeepDuration())
-	if err != nil || keep <= 0 || stats.IndexedFrom == "" || stats.IndexedTo == "" {
-		return false
-	}
-	from, err := time.Parse(time.RFC3339Nano, stats.IndexedFrom)
-	if err != nil {
-		return false
-	}
-	to, err := time.Parse(time.RFC3339Nano, stats.IndexedTo)
-	return err == nil && to.Sub(from) > 2*keep
-}
-
 func needsActiveOrRevisionRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
 	if view == nil {
 		return false
@@ -1814,71 +1669,26 @@ func needsActiveOrRevisionRebuild(view *pb.View, stats viewindex.ViewIndexStats)
 	return view.GetActiveIndexId() == "" || view.GetDesiredViewRevision() > view.GetActiveViewRevision() || !stats.Exists
 }
 
-// needsLookbackRepair reports a known-short time-series active index. Empty
-// coverage is deliberately not treated as a repair here: it can mean that a
-// large index has not completed its periodic full Stat yet. Once persisted
-// bounds are available, a short active index must be rebuilt from Primary.
-func needsLookbackRepair(view *pb.View, stats viewindex.ViewIndexStats, lookback time.Duration) bool {
-	if view == nil || lookback <= 0 || !stats.Exists || stats.IndexedFrom == "" {
-		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(view.GetEngine()), "bleve") {
-		return false
-	}
-	return errors.Is(validateRebuildLookback(stats, lookback), errRebuildLookbackInsufficient)
-}
-
 func needsCapacityMaintenanceRebuild(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) bool {
-	// Period-based Views intentionally retain a fixed number of completed bars
-	// per series. Their global indexed_from/indexed_to span can legitimately
-	// exceed 2*keep_duration when symbols have different listing histories or
-	// trading gaps; treating that span as a retention watermark would launch a
-	// coverage rebuild on every maintenance tick. Keep missing/definition
-	// repairs, but leave the global span check to duration-based Views.
-	periodBased := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods) > 0
-	if needsActiveOrRevisionRebuild(view, stats) || (!periodBased && needsRebuild(view, stats)) {
-		return true
-	}
-	if opts.MaxViewFileBytes > 0 && stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) && hasBoundedViewRetention(view, opts) {
-		return true
-	}
-	return false
+	return needsActiveOrRevisionRebuild(view, stats) || needsCapacityMaintenanceWatermark(view, stats, opts)
 }
 
+// needsCapacityMaintenanceWatermark reports a time-series View whose file
+// reached the size limit. Rebuilding it keeps only the latest bars.
 func needsCapacityMaintenanceWatermark(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) bool {
-	if view == nil || !stats.Exists || !hasBoundedViewRetention(view, opts) {
-		return false
-	}
-	if opts.MaxViewFileBytes <= 0 {
+	if view == nil || !stats.Exists || viewBars(view, opts) == 0 || opts.MaxViewFileBytes <= 0 {
 		return false
 	}
 	if needsActiveOrRevisionRebuild(view, stats) {
 		return false
 	}
-	periodBased := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods) > 0
-	if !periodBased && needsRebuild(view, stats) {
-		return false
-	}
 	return stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes)
 }
 
-func hasBoundedViewRetention(view *pb.View, opts MaintenanceOptions) bool {
-	if view == nil {
-		return false
-	}
-	if rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods) > 0 {
-		return true
-	}
-	keepDuration := strings.TrimSpace(view.GetKeepDuration())
-	if keepDuration == "" || keepDuration == "0" {
-		return false
-	}
-	keep, err := time.ParseDuration(keepDuration)
-	return err == nil && keep > 0
-}
-
+// permanentViewFileCapacityExceeded reports a record View over the size
+// limit. It keeps every row, so it is only reported, never truncated.
 func permanentViewFileCapacityExceeded(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) bool {
-	return view != nil && stats.Exists && opts.MaxViewFileBytes > 0 && stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) && !hasBoundedViewRetention(view, opts)
+	return view != nil && stats.Exists && opts.MaxViewFileBytes > 0 && stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) && viewBars(view, opts) == 0
 }
 
 func (s *Service) internalAuth() *pb.AuthInfo {

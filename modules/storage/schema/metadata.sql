@@ -56,7 +56,6 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_dataset_id TEXT NOT NULL,
     c_grain_keys_json TEXT NOT NULL DEFAULT '[]',
     c_engine TEXT NOT NULL DEFAULT 'duckdb',
-    c_keep_duration TEXT NOT NULL DEFAULT '0',
     c_active_index_id TEXT NOT NULL DEFAULT '',
     c_desired_view_revision INTEGER NOT NULL DEFAULT 1,
     c_active_view_revision INTEGER NOT NULL DEFAULT 0,

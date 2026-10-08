@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -23,7 +22,6 @@ func TestValidateRepairViewRequiresExplicitReplayForFullReset(t *testing.T) {
 		stream:        defaultRepairJSName,
 		consumer:      "storage_view_misc_0123456789ab",
 		deliverPolicy: "new",
-		lookback:      time.Hour,
 		timeout:       defaultRepairTimeout,
 		yes:           true,
 		resetView:     true,

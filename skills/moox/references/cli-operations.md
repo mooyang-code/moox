@@ -137,14 +137,13 @@ moox-cli storage force-rebuild-view \
   --package-root /home/<user>/moox/storage \
   --space-id crypto \
 	--view-id view_factor_binance_kline_1m \
-  --lookback 72h \
   --dry-run
 ```
 
 确认目标后再执行同样命令并增加 `--yes`。该命令会停止整个 Storage 生命周期、备份 Metadata、
 删除 durable consumer、清空 View active/build/period/sync 状态、删除 A/B 物理索引，并以 `DeliverAll`
-重新消费 Source 事件；原 View 历史数据不可恢复。`--lookback` 是本次重建的最低历史覆盖要求，
-新索引未覆盖该时长前不会被激活。
+重新消费 Source 事件；原 View 历史数据不可恢复。重建按 `view_bars` 从 Primary 回填每个序列最近的
+K 线，历史不足时以现有数据激活。
 
 ## 收敛默认 View 集合
 
@@ -174,8 +173,9 @@ Storage 服务的时序 View 默认按所有频率回溯 `5000` 根；任一序�
 昂贵的序列容量扫描默认每个 Storage View 进程、View 和 active index 每小时至多执行一次，首次扫描
 在一小时范围内随机错峰；轻量 View Maintainer 仍按 `maintenance_check_interval` 默认每分钟运行。可在根目录
 `moox.toml` 的 `[storage_retention] view_bars` 统一调整，适用于自动 A/B、启动恢复和手动
-重建。无 frequency 的旧 View 才使用 `storage.view.rebuild_lookback`（默认 `24h`）兜底；若 Source
-历史不足配置根数，构建会保持未完成状态，不会发布一个短历史 View。
+重建。回填对每个标的只读一次：DataNode 在每个序列内倒序读到目标根数即跳到下一个序列，耗时只与
+「标的数 × 根数」有关、与历史长度无关。Primary 历史不足配置根数时以现有数据激活，之后由实时事件补齐。
+记录型 View（Bleve）不按根数，整体重建。
 
 ## Agent 处理顺序
 

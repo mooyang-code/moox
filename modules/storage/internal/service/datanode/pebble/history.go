@@ -95,6 +95,82 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 	if err := s.ensureHistoryIndex(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return nil, err
 	}
+	var selected []*pb.RowKey
+	hasMore := false
+	if perSeries := req.GetLatestPerSeries(); perSeries > 0 {
+		if len(selectors) != 1 || req.GetTimeRange() != nil || after != nil || pageNo > 1 {
+			return nil, errors.New("latest_per_series requires one subject/freq selector and no time_range, after_key or page")
+		}
+		selected, err = s.latestPerSeries(ctx, req.GetSpaceId(), req.GetDatasetId(), selectors[0], int(perSeries))
+	} else {
+		selected, hasMore, err = s.pageHistory(ctx, req, selectors, selectorSet, start, end, after, pageNo, pageSize)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var rows []*pb.RowFieldValues
+	existingSet := make(map[string]struct{}, len(selected))
+	if len(req.GetColumnNames()) == 0 {
+		rows = make([]*pb.RowFieldValues, 0, len(selected))
+		for _, key := range selected {
+			rows = append(rows, &pb.RowFieldValues{Key: key})
+			data, marshalErr := proto.Marshal(key)
+			if marshalErr == nil {
+				existingSet[string(data)] = struct{}{}
+			}
+		}
+	} else {
+		// ReadFieldsWithPresence caps key*field pairs at 100,000. A public
+		// history request may ask for a full page and a wide View schema, so
+		// split the enrichment read without changing the logical page.
+		fieldIDs := req.GetColumnNames()
+		chunkSize := len(selected)
+		if len(fieldIDs) > 0 && chunkSize > 100000/len(fieldIDs) {
+			chunkSize = 100000 / len(fieldIDs)
+			if chunkSize == 0 {
+				chunkSize = 1
+			}
+		}
+		rows = make([]*pb.RowFieldValues, 0, len(selected))
+		for start := 0; start < len(selected); start += chunkSize {
+			end := start + chunkSize
+			if end > len(selected) {
+				end = len(selected)
+			}
+			partRows, existing, readErr := s.ReadFieldsWithPresence(ctx, selected[start:end], fieldIDs, nil)
+			if readErr != nil {
+				return nil, readErr
+			}
+			rows = append(rows, partRows...)
+			for _, key := range existing {
+				data, marshalErr := proto.Marshal(key)
+				if marshalErr == nil {
+					existingSet[string(data)] = struct{}{}
+				}
+			}
+		}
+	}
+	result := make([]*pb.TimeSeriesRow, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		data, marshalErr := proto.Marshal(row.GetKey())
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		if _, ok := existingSet[string(data)]; !ok {
+			continue
+		}
+		key := row.GetKey().GetTimeSeries()
+		result = append(result, &pb.TimeSeriesRow{Key: &pb.TimeSeriesKey{SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}, Fields: row.GetFields()})
+	}
+	return &pb.ReadTimeSeriesRowsRsp{Rows: result, PageResult: &pb.PageResult{Page: pageNo, Size: pageSize, HasMore: hasMore}}, nil
+}
+
+// pageHistory returns one page of history keys in the API order (data_time,
+// subject, frequency, tag) and whether more keys follow.
+func (s *Store) pageHistory(ctx context.Context, req *pb.ReadTimeSeriesRowsReq, selectors []historySelector, selectorSet historySelectorSet, start, end time.Time, after *pb.RowKey, pageNo, pageSize uint32) ([]*pb.RowKey, bool, error) {
 	pageOffset := uint64(0)
 	if pageNo > 1 {
 		pageOffset = uint64(pageNo-1) * uint64(pageSize)
@@ -102,7 +178,7 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 		// window. Large offsets require retaining every preceding RowKey in
 		// memory; all internal rebuild callers use after_key and stay bounded.
 		if pageOffset > 10_000 {
-			return nil, errors.New("page offset exceeds history scan limit; use after_key pagination")
+			return nil, false, errors.New("page offset exceeds history scan limit; use after_key pagination")
 		}
 	}
 	desc := req.GetOrder() == pb.SortOrder_SORT_ORDER_DESC
@@ -184,7 +260,7 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 			afterKey, keyErr = encodeSeriesHistoryKey(after, s.bucketDuration)
 		}
 		if keyErr != nil {
-			return nil, fmt.Errorf("invalid after_key: %w", keyErr)
+			return nil, false, fmt.Errorf("invalid after_key: %w", keyErr)
 		}
 		if desc {
 			if upper == nil || bytes.Compare(afterKey, upper) < 0 {
@@ -195,11 +271,11 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 		}
 	}
 	if upper != nil && lower != nil && bytes.Compare(lower, upper) >= 0 {
-		return &pb.ReadTimeSeriesRowsRsp{Rows: nil, PageResult: &pb.PageResult{Page: pageNo, Size: pageSize, HasMore: false}}, nil
+		return nil, false, nil
 	}
 	iter, iterErr := s.db.NewIter(&cpebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if iterErr != nil {
-		return nil, iterErr
+		return nil, false, iterErr
 	}
 	valid := iter.First()
 	advance := iter.Next
@@ -210,7 +286,7 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 	for ; valid; valid = advance() {
 		if err := ctx.Err(); err != nil {
 			_ = iter.Close()
-			return nil, err
+			return nil, false, err
 		}
 		key, ok := parseHistoryKey(iter.Key())
 		if seriesIndexed {
@@ -226,10 +302,10 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 	}
 	if err := iter.Error(); err != nil {
 		_ = iter.Close()
-		return nil, err
+		return nil, false, err
 	}
 	if err := iter.Close(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	ordered := append([]*pb.RowKey(nil), candidates.items...)
 	sort.Slice(ordered, func(i, j int) bool {
@@ -249,66 +325,47 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 	if endAt > len(ordered) {
 		endAt = len(ordered)
 	}
-	selected := ordered[startAt:endAt]
-	hasMore := len(ordered) > endAt
-	var rows []*pb.RowFieldValues
-	existingSet := make(map[string]struct{}, len(selected))
-	if len(req.GetColumnNames()) == 0 {
-		rows = make([]*pb.RowFieldValues, 0, len(selected))
-		for _, key := range selected {
-			rows = append(rows, &pb.RowFieldValues{Key: key})
-			data, marshalErr := proto.Marshal(key)
-			if marshalErr == nil {
-				existingSet[string(data)] = struct{}{}
-			}
-		}
-	} else {
-		// ReadFieldsWithPresence caps key*field pairs at 100,000. A public
-		// history request may ask for a full page and a wide View schema, so
-		// split the enrichment read without changing the logical page.
-		fieldIDs := req.GetColumnNames()
-		chunkSize := len(selected)
-		if len(fieldIDs) > 0 && chunkSize > 100000/len(fieldIDs) {
-			chunkSize = 100000 / len(fieldIDs)
-			if chunkSize == 0 {
-				chunkSize = 1
-			}
-		}
-		rows = make([]*pb.RowFieldValues, 0, len(selected))
-		for start := 0; start < len(selected); start += chunkSize {
-			end := start + chunkSize
-			if end > len(selected) {
-				end = len(selected)
-			}
-			partRows, existing, readErr := s.ReadFieldsWithPresence(ctx, selected[start:end], fieldIDs, nil)
-			if readErr != nil {
-				return nil, readErr
-			}
-			rows = append(rows, partRows...)
-			for _, key := range existing {
-				data, marshalErr := proto.Marshal(key)
-				if marshalErr == nil {
-					existingSet[string(data)] = struct{}{}
-				}
-			}
-		}
+	return ordered[startAt:endAt], len(ordered) > endAt, nil
+}
+
+// latestPerSeries returns the latest perSeries keys of every series of one
+// subject and frequency, newest first within a series. It walks the
+// subject-first index backwards and, once a series has perSeries keys, seeks
+// past the rest of it, so the cost depends on the bars returned rather than
+// on the history length.
+func (s *Store) latestPerSeries(ctx context.Context, spaceID, datasetID string, selector historySelector, perSeries int) ([]*pb.RowKey, error) {
+	prefix := seriesHistoryPrefix(spaceID, datasetID, selector)
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
+	if err != nil {
+		return nil, err
 	}
-	result := make([]*pb.TimeSeriesRow, 0, len(rows))
-	for _, row := range rows {
-		if row == nil || row.GetKey() == nil {
+	defer iter.Close()
+	var keys []*pb.RowKey
+	for valid := iter.Last(); valid; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		key, ok := parseSeriesHistoryKey(iter.Key())
+		if !ok || key.GetTimeSeries() == nil {
+			valid = iter.Prev()
 			continue
 		}
-		data, marshalErr := proto.Marshal(row.GetKey())
-		if marshalErr != nil {
-			return nil, marshalErr
+		series := key.GetTimeSeries()
+		tagPrefix := seriesHistoryPrefix(spaceID, datasetID, historySelector{subject: series.GetSubjectId(), freq: series.GetFreq(), tag: series.GetSeriesTag(), hasTag: true})
+		for count := 0; valid && bytes.HasPrefix(iter.Key(), tagPrefix) && count < perSeries; valid = iter.Prev() {
+			if key, ok := parseSeriesHistoryKey(iter.Key()); ok && key.GetTimeSeries() != nil {
+				keys = append(keys, key)
+				count++
+			}
 		}
-		if _, ok := existingSet[string(data)]; !ok {
-			continue
+		if valid && bytes.HasPrefix(iter.Key(), tagPrefix) {
+			valid = iter.SeekLT(tagPrefix)
 		}
-		key := row.GetKey().GetTimeSeries()
-		result = append(result, &pb.TimeSeriesRow{Key: &pb.TimeSeriesKey{SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}, Fields: row.GetFields()})
 	}
-	return &pb.ReadTimeSeriesRowsRsp{Rows: result, PageResult: &pb.PageResult{Page: pageNo, Size: pageSize, HasMore: hasMore}}, nil
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 func (s *Store) ensureHistoryIndex(ctx context.Context, spaceID, datasetID string) error {

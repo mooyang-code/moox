@@ -386,7 +386,7 @@ func runViewRole() error {
 	)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
-	rebuildLookback, rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil {
 		return err
 	}
@@ -408,8 +408,8 @@ func runViewRole() error {
 		PrimaryRange:                primaryProxy,
 		OwnerID:                     "storage-view",
 		Interval:                    rebuildCheckInterval,
-		RebuildLookback:             rebuildLookback,
-		RebuildLookbackPeriods:      map[string]uint64{"default": policy.View.Bars},
+		Bars:                        policy.View.Bars,
+		TrimBars:                    policy.View.TrimBars,
 		Grace:                       time.Minute,
 		MaxViewFileBytes:            policy.View.MaxViewFileBytes,
 		CapacityCheckInterval:       capacityCheckInterval,
@@ -418,7 +418,6 @@ func runViewRole() error {
 		RebuildIdleChecks:           rebuildIdleChecks,
 		RebuildMaxPendingConfigured: maxPendingConfigured,
 		RebuildIdleChecksConfigured: idleChecksConfigured,
-		MaxPeriodsPerSeries:         policy.View.TrimBars,
 		BackfillPageSize:            backfillPageSize,
 		BackfillRequestInterval:     backfillRequestInterval,
 	}
@@ -862,26 +861,22 @@ func storageViewDeliverPolicy(configured string) string {
 	return configured
 }
 
-func storageViewRebuildSettings() (time.Duration, uint64, uint32, bool, bool, error) {
+func storageViewRebuildSettings() (uint64, uint32, bool, bool, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		return 24 * time.Hour, 32, 3, false, false, nil
+		return 32, 3, false, false, nil
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
 	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
 	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return 0, 0, 0, false, false, fmt.Errorf("load storage view rebuild config: %w", err)
-	}
-	lookback, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.RebuildLookback))
-	if err != nil || lookback <= 0 {
-		return 0, 0, 0, false, false, errors.New("storage view rebuild_lookback must be a positive duration")
+		return 0, 0, false, false, fmt.Errorf("load storage view rebuild config: %w", err)
 	}
 	maxPendingConfigured := runtimeConfig.Storage.View.HasRebuildMaxPendingSetting()
 	idleChecksConfigured := runtimeConfig.Storage.View.HasRebuildIdleChecksSetting()
 	if idleChecksConfigured && runtimeConfig.Storage.View.RebuildIdleChecks == 0 {
-		return 0, 0, 0, false, false, errors.New("storage view rebuild_idle_checks must be greater than zero")
+		return 0, 0, false, false, errors.New("storage view rebuild_idle_checks must be greater than zero")
 	}
-	return lookback, runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
+	return runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
 		maxPendingConfigured, idleChecksConfigured, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -75,15 +76,18 @@ func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batc
 }
 
 func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader) error {
-	_, err := s.backfillViewWithReader(ctx, spaceID, viewID, batchSize, reader, nil, 0, 0, defaultMaxHistoryScanRows)
+	_, err := s.backfillViewWithReader(ctx, spaceID, viewID, batchSize, reader, nil, 0, defaultMaxHistoryScanRows)
 	return err
 }
 
-func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64) (uint64, error) {
-	return s.backfillViewWithReaderLimited(ctx, spaceID, viewID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows, nil)
+func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64) (uint64, error) {
+	return s.backfillViewWithReaderLimited(ctx, spaceID, viewID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, nil)
 }
 
-func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
+// backfillViewWithReaderLimited fills the pending index. A time-series View
+// takes the latest bars of every series from Primary; a record View copies
+// its active index.
+func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if batchSize <= 0 {
 		batchSize = 100
 	}
@@ -101,7 +105,7 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 		return 0, errors.New("view has no pending build")
 	}
 
-	// Every time-series rebuild uses Primary for the configured lookback;
+	// Every time-series rebuild uses Primary for the configured bars;
 	// copying the active index can reproduce a short or stale View. Record
 	// Bleve Views retain the active-copy path because they have no time-series
 	// Primary history reader.
@@ -112,7 +116,7 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 	// is available, rebuild directly from that authoritative source instead of
 	// merging it with active rows under Backfill's non-overwrite semantics.
 	factorResultView := isFactorResultView(catalogView)
-	historyConfigured := minimumLookback > 0 || lookbackPeriods > 0
+	historyConfigured := bars > 0
 	primaryHistoryRebuild := historyConfigured && factorResultView && reader != nil && rangeReader != nil
 	if activeID != "" && historyConfigured && (!factorResultView || primaryHistoryRebuild) {
 		nextEngine, err := s.engineFor(nextID)
@@ -149,11 +153,11 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 		nextSchema := s.schemas[nextID]
 		activeSchema := s.schemas[activeID]
 		s.mu.RUnlock()
-		for _, timeRange := range backfillTimeRanges(catalogView, minimumLookback) {
+		{
 			var after *pb.RowKey
 			for {
 				rows, _, err := active.Query(ctx, activeID, viewindex.QuerySpec{
-					AfterKey: after, TimeRange: timeRange, Sorts: backfillSorts(active.Engine()), Limit: batchSize, TotalMode: pb.TotalMode_NONE,
+					AfterKey: after, Sorts: backfillSorts(active.Engine()), Limit: batchSize, TotalMode: pb.TotalMode_NONE,
 				})
 				if err != nil {
 					return written, fmt.Errorf("query active view %q for backfill: %w", activeID, err)
@@ -204,7 +208,7 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 		if strings.EqualFold(strings.TrimSpace(next.Engine()), "bleve") {
 			log.Printf("storage record View %s/%s starts empty: no Primary history reader", spaceID, viewID)
 		} else if factorResultView {
-			written, err = s.backfillFactorResultHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows, limiter)
+			written, err = s.backfillFactorResultHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
 			if err != nil {
 				return written, err
 			}
@@ -212,7 +216,7 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 			if reader == nil {
 				return 0, errors.New("Primary field reader is required for a time-series View rebuild")
 			}
-			written, err = s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows, limiter)
+			written, err = s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
 			if err != nil {
 				return written, err
 			}
@@ -228,12 +232,12 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 	return written, nil
 }
 
-func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
+func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if reader == nil || rangeReader == nil {
 		log.Printf("storage factor result View %s/%s starts empty; waiting for Factor output", spaceID, viewID)
 		return 0, nil
 	}
-	written, err := s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, minimumLookback, lookbackPeriods, maxHistoryScanRows, limiter)
+	written, err := s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
 	if err != nil {
 		return written, err
 	}
@@ -243,14 +247,14 @@ func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, view
 	return written, nil
 }
 
-func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, minimumLookback time.Duration, lookbackPeriods, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
-	if reader == nil && (minimumLookback > 0 || lookbackPeriods > 0) {
+func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
+	if bars == 0 {
+		return 0, nil
+	}
+	if reader == nil {
 		return 0, errors.New("Primary field reader is required for a time-series View history backfill")
 	}
 	if rangeReader == nil {
-		if minimumLookback <= 0 && lookbackPeriods == 0 {
-			return 0, nil
-		}
 		return 0, errors.New("Primary history range reader is required for a View without an active index")
 	}
 	s.mu.RLock()
@@ -264,84 +268,10 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 	if view == nil || view.GetDatasetId() == "" {
 		return 0, errors.New("primary dataset is required for View history backfill")
 	}
-	if lookbackPeriods > 0 {
-		frequency := view.GetFreq()
-		if frequency != "" {
-			return s.backfillPrimaryHistoryByPeriods(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, lookbackPeriods, maxHistoryScanRows, limiter)
-		}
-		return 0, errors.New("time-series View frequency is required for period-based Primary history backfill")
+	if view.GetFreq() == "" {
+		return 0, errors.New("time-series View frequency is required for Primary history backfill")
 	}
-	ranges := backfillTimeRanges(view, minimumLookback)
-	// The history runtime narrows scans by physical bucket. Use one logical
-	// range here instead of issuing one full Primary scan per five-minute build
-	// chunk; writes are still committed in small batches below.
-	if len(ranges) > 1 {
-		ranges = []*pb.TimeRange{{StartTime: ranges[0].GetStartTime(), EndTime: ranges[len(ranges)-1].GetEndTime()}}
-	}
-	var written uint64
-	for _, timeRange := range ranges {
-		var afterKey []byte
-		for {
-			if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
-				return written, err
-			}
-			rsp, err := readPrimaryTimeSeriesRowsLimited(ctx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(), TimeRange: timeRange,
-				Order: pb.SortOrder_SORT_ORDER_ASC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
-			})
-			if err != nil {
-				return written, fmt.Errorf("scan Primary history for %s/%s: %w", spaceID, view.GetDatasetId(), err)
-			}
-			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return written, fmt.Errorf("scan Primary history for %s/%s: %w", spaceID, view.GetDatasetId(), err)
-			}
-			writes := make([]viewindex.RowWrite, 0, len(rsp.GetRows()))
-			for _, row := range rsp.GetRows() {
-				if row == nil || row.GetKey() == nil {
-					continue
-				}
-				key := row.GetKey()
-				writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{
-					SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
-					Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}},
-				}}, Fields: nil})
-			}
-			if len(writes) > 0 && reader != nil {
-				if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes, limiter); err != nil {
-					return written, err
-				}
-			}
-			for offset := 0; offset < len(writes); offset += 256 {
-				end := offset + 256
-				if end > len(writes) {
-					end = len(writes)
-				}
-				if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
-					return written, err
-				}
-				engine, err := s.engineFor(nextID)
-				if err != nil {
-					return written, err
-				}
-				if err := s.writeIndex(ctx, nextID, engine, viewindex.ViewIndexWriteBatch{RowWrites: writes[offset:end], ViewRevision: nextSchema.ViewVersion, ViewSchemaHash: nextSchema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
-					return written, fmt.Errorf("write Primary history backfill %q: %w", nextID, err)
-				}
-				written += uint64(end - offset)
-			}
-			if len(rsp.GetRows()) == 0 || rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
-				break
-			}
-			last := rsp.GetRows()[len(rsp.GetRows())-1].GetKey()
-			if last == nil {
-				break
-			}
-			afterKey, err = proto.Marshal(&pb.RowKey{SpaceId: last.GetSpaceId(), DatasetId: last.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: last.GetSubjectId(), Freq: last.GetFreq(), DataTime: last.GetDataTime(), SeriesTag: last.GetSeriesTag()}}})
-			if err != nil {
-				return written, fmt.Errorf("encode Primary history cursor: %w", err)
-			}
-		}
-	}
-	return written, nil
+	return s.backfillPrimaryHistoryByPeriods(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, view.GetFreq(), bars, maxHistoryScanRows, limiter)
 }
 
 // backfillPrimaryHistoryByPeriods rebuilds the most recent completed bars for
@@ -552,68 +482,78 @@ func (s *Service) capacityMaintenanceCatalogReady(ctx context.Context, auth *pb.
 	return true, ""
 }
 
-// backfillPrimaryHistoryBySubjectCatalog uses the subject-first Primary
-// history index. It avoids rescanning a multi-million-row dataset for every
-// page while still walking each bound subject to EOF, so quiet subjects and
-// older series tags cannot be mistaken for complete coverage.
+// backfillPrimaryHistoryBySubjectCatalog reads the latest bars of every
+// bound subject from the subject-first Primary history index. One request per
+// subject returns at most `periods` rows of each series (series tag), so a
+// rebuild reads the bars the View keeps and never the older history.
 func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, subjects []string, periods uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if reader == nil || rangeReader == nil {
 		return 0, errors.New("Primary readers are required for subject-catalog history backfill")
 	}
+	perSeries := uint32(math.MaxUint32)
+	if periods < uint64(perSeries) {
+		perSeries = uint32(periods)
+	}
 	var written uint64
 	for _, subject := range subjects {
+		if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
+			return written, err
+		}
+		subjectCtx, cancel := context.WithTimeout(ctx, primaryHistorySubjectReadTimeout)
+		rsp, err := readPrimaryTimeSeriesRowsLimited(subjectCtx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
+			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
+			Selectors:       []*pb.TimeSeriesSelector{{SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(), SubjectId: subject, Freq: frequency}},
+			Order:           pb.SortOrder_SORT_ORDER_DESC,
+			LatestPerSeries: perSeries,
+		})
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return written, ctx.Err()
+			}
+			if isPrimaryHistoryTimeout(err) {
+				log.Printf("storage view history backfill skipped subject after Primary timeout space=%s view=%s subject=%s: %v", spaceID, viewID, subject, err)
+				continue
+			}
+			return written, fmt.Errorf("read Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return written, fmt.Errorf("read Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
+		}
 		counts := make(map[string]uint64)
-		var afterKey []byte
-		for {
-			if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
-				return written, err
+		writes := make([]viewindex.RowWrite, 0, len(rsp.GetRows()))
+		for _, row := range rsp.GetRows() {
+			key := row.GetKey()
+			if key == nil || key.GetFreq() != frequency {
+				continue
 			}
-			subjectCtx, cancel := context.WithTimeout(ctx, primaryHistorySubjectReadTimeout)
-			rsp, err := readPrimaryTimeSeriesRowsLimited(subjectCtx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
-				Selectors: []*pb.TimeSeriesSelector{{SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(), SubjectId: subject, Freq: frequency}},
-				Order:     pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
-			})
-			cancel()
-			if err != nil {
-				if ctx.Err() != nil {
-					return written, ctx.Err()
-				}
-				if isPrimaryHistoryTimeout(err) {
-					log.Printf("storage view history backfill skipped subject after Primary timeout space=%s view=%s subject=%s: %v", spaceID, viewID, subject, err)
-					break
-				}
-				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
+			// DataNode already limits every series; the cap keeps the View
+			// bounded even if a node returns more.
+			seriesKey := periodSeriesIdentity(key.GetSubjectId(), key.GetFreq(), key.GetSeriesTag())
+			if counts[seriesKey] >= periods {
+				continue
 			}
-			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
+			counts[seriesKey]++
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{
+				SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}},
+			}}})
+		}
+		// Enrich and write in pages so a wide schema stays below the
+		// PrimaryStore key/field limit.
+		for page := 0; page < len(writes); page += batchSize {
+			pageEnd := page + batchSize
+			if pageEnd > len(writes) {
+				pageEnd = len(writes)
 			}
-			rows := rsp.GetRows()
-			writes := make([]viewindex.RowWrite, 0, len(rows))
-			for _, row := range rows {
-				if row == nil || row.GetKey() == nil || !strings.EqualFold(strings.TrimSpace(row.GetKey().GetFreq()), strings.TrimSpace(frequency)) {
-					continue
-				}
-				key := row.GetKey()
-				seriesKey := periodSeriesIdentity(key.GetSubjectId(), key.GetFreq(), key.GetSeriesTag())
-				if counts[seriesKey] >= periods {
-					continue
-				}
-				counts[seriesKey]++
-				writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{
-					SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
-					Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}},
-				}}})
+			pageWrites := writes[page:pageEnd]
+			if err := s.enrichBackfillRows(ctx, reader, "", nextID, pageWrites, limiter); err != nil {
+				return written, fmt.Errorf("enrich Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
 			}
-			if len(writes) > 0 {
-				if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes, limiter); err != nil {
-					return written, fmt.Errorf("enrich Primary history for %s/%s subject %s: %w", spaceID, view.GetDatasetId(), subject, err)
-				}
-			}
-			for offset := 0; offset < len(writes); offset += 256 {
+			for offset := 0; offset < len(pageWrites); offset += 256 {
 				end := offset + 256
-				if end > len(writes) {
-					end = len(writes)
+				if end > len(pageWrites) {
+					end = len(pageWrites)
 				}
 				if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
 					return written, err
@@ -622,21 +562,10 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 				if err != nil {
 					return written, err
 				}
-				if err := s.writeIndex(ctx, nextID, engine, viewindex.ViewIndexWriteBatch{RowWrites: writes[offset:end], ViewRevision: nextSchema.ViewVersion, ViewSchemaHash: nextSchema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
+				if err := s.writeIndex(ctx, nextID, engine, viewindex.ViewIndexWriteBatch{RowWrites: pageWrites[offset:end], ViewRevision: nextSchema.ViewVersion, ViewSchemaHash: nextSchema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
 					return written, fmt.Errorf("write Primary period backfill %q: %w", nextID, err)
 				}
 				written += uint64(end - offset)
-			}
-			if len(rows) == 0 || rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
-				break
-			}
-			last := rows[len(rows)-1].GetKey()
-			if last == nil {
-				return written, errors.New("Primary subject history page ended without a cursor key")
-			}
-			afterKey, err = marshalTimeSeriesHistoryCursor(last)
-			if err != nil {
-				return written, fmt.Errorf("encode Primary subject history cursor: %w", err)
 			}
 		}
 		for seriesKey, count := range counts {
@@ -821,38 +750,6 @@ func (s *Service) backfillStillActive(spaceID, viewID, nextID string) error {
 		return errViewBuildFailed
 	}
 	return nil
-}
-
-func backfillTimeRanges(view *pb.View, minimumLookback time.Duration) []*pb.TimeRange {
-	var keep time.Duration
-	if view != nil && view.GetKeepDuration() != "" && view.GetKeepDuration() != "0" {
-		parsed, err := time.ParseDuration(view.GetKeepDuration())
-		if err == nil && parsed > 0 {
-			keep = parsed
-		}
-	}
-	if minimumLookback > keep {
-		keep = minimumLookback
-	}
-	if keep <= 0 {
-		return []*pb.TimeRange{nil}
-	}
-	now := time.Now().UTC()
-	// Market bars are minute/hour aligned. Align the lower boundary before
-	// paging so a rebuild does not miss the first bar merely because the wall
-	// clock included fractional seconds.
-	start := now.Add(-keep).Truncate(time.Minute)
-	const chunk = 5 * time.Minute
-	ranges := make([]*pb.TimeRange, 0, int(keep/chunk)+1)
-	for start.Before(now) {
-		end := start.Add(chunk)
-		if end.After(now) {
-			end = now
-		}
-		ranges = append(ranges, &pb.TimeRange{StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)})
-		start = end
-	}
-	return ranges
 }
 
 func backfillSorts(engine string) []*pb.SortSpec {

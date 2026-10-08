@@ -123,14 +123,14 @@ func reconcileViewConsumers(ctx context.Context, opts reconcileViewConsumersOpti
 		return fmt.Errorf("View consumer filter drift detected for %s; re-run with --yes or --dry-run", strings.Join(sortedConsumerNames(drift), ","))
 	}
 	packageRoot := resolveRepairPackageRoot(opts.packageRoot, opts.storageConf)
-	if err := runStorageViewLifecycle(ctx, packageRoot, "stop", "new", 0, stderr); err != nil {
+	if err := runStorageViewLifecycle(ctx, packageRoot, "stop", "new", stderr); err != nil {
 		return fmt.Errorf("stop storage-view: %w", err)
 	}
 	stopped := true
 	started := false
 	defer func() {
 		if stopped && opts.restart && !started {
-			_ = runStorageViewLifecycle(context.Background(), packageRoot, "start", "new", 0, stderr)
+			_ = runStorageViewLifecycle(context.Background(), packageRoot, "start", "new", stderr)
 		}
 	}()
 	for _, consumer := range sortedConsumerNames(drift) {
@@ -140,7 +140,7 @@ func reconcileViewConsumers(ctx context.Context, opts reconcileViewConsumersOpti
 		summary.ResetConsumers = append(summary.ResetConsumers, consumer)
 	}
 	if opts.restart {
-		if err := runStorageViewLifecycle(ctx, packageRoot, "start", "new", 0, stderr); err != nil {
+		if err := runStorageViewLifecycle(ctx, packageRoot, "start", "new", stderr); err != nil {
 			return fmt.Errorf("start storage-view: %w", err)
 		}
 		started = true

@@ -28,36 +28,8 @@ func TestStorageConfigRolesAreExplicit(t *testing.T) {
 func TestStorageViewRebuildDefaults(t *testing.T) {
 	cfg := StorageConfig{}
 	cfg.ApplyDefaults()
-	if cfg.View.BackfillPageSize != 2000 || cfg.View.BackfillRequestInterval != "100ms" || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "24h" {
-		t.Fatalf("view rebuild defaults = %d/%s/%d/%s", cfg.View.BackfillPageSize, cfg.View.BackfillRequestInterval, cfg.View.RebuildMaxPending, cfg.View.RebuildLookback)
-	}
-	want := map[string]uint64{"1m": 5000, "1h": 5000, "1d": 5000, "default": 5000}
-	for frequency, periods := range want {
-		if cfg.View.RebuildLookbackPeriods[frequency] != periods {
-			t.Fatalf("view rebuild periods[%q] = %d, want %d", frequency, cfg.View.RebuildLookbackPeriods[frequency], periods)
-		}
-	}
-}
-
-func TestStorageViewRebuildLookbackCanBeConfigured(t *testing.T) {
-	var cfg RuntimeConfig
-	if err := yaml.Unmarshal([]byte("storage:\n  view:\n    rebuild_lookback: 48h\n"), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	cfg.ApplyDefaults()
-	if cfg.Storage.View.RebuildLookback != "48h" {
-		t.Fatalf("rebuild lookback = %q, want 48h", cfg.Storage.View.RebuildLookback)
-	}
-}
-
-func TestStorageViewRebuildLookbackPeriodsNormalizeFrequency(t *testing.T) {
-	var cfg RuntimeConfig
-	if err := yaml.Unmarshal([]byte("storage:\n  view:\n    rebuild_lookback_periods:\n      1H: 123\n      30s: 456\n"), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	cfg.ApplyDefaults()
-	if cfg.Storage.View.RebuildLookbackPeriods["1h"] != 123 || cfg.Storage.View.RebuildLookbackPeriods["30s"] != 456 || cfg.Storage.View.RebuildLookbackPeriods["default"] != 5000 {
-		t.Fatalf("normalized rebuild periods = %#v", cfg.Storage.View.RebuildLookbackPeriods)
+	if cfg.View.BackfillPageSize != 2000 || cfg.View.BackfillRequestInterval != "100ms" || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 {
+		t.Fatalf("view rebuild defaults = %d/%s/%d", cfg.View.BackfillPageSize, cfg.View.BackfillRequestInterval, cfg.View.RebuildMaxPending)
 	}
 }
 
@@ -73,15 +45,6 @@ func TestCheckedInStorageRoleConfigsShareThePolicyFile(t *testing.T) {
 				t.Fatalf("%s policy_file = %q, want the shared ../config/storage-policy.json", file, got)
 			}
 		})
-	}
-	for _, frequency := range []string{"1m", "1h", "1d", "default"} {
-		var cfg RuntimeConfig
-		if err := loader.LoadConfigWithDefaults("storage.yaml", &cfg, cfg.ApplyDefaults); err != nil {
-			t.Fatal(err)
-		}
-		if got := cfg.Storage.View.RebuildLookbackPeriods[frequency]; got != 5000 {
-			t.Fatalf("rebuild_lookback_periods[%q] = %d, want 5000", frequency, got)
-		}
 	}
 }
 
@@ -422,8 +385,8 @@ storage:
 	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" || cfg.Storage.View.IndexServiceName != "custom.ViewIndex" {
 		t.Fatalf("owner config = %q/%q", cfg.Storage.Devices.ViewIndexRoot, cfg.Storage.View.IndexServiceName)
 	}
-	if cfg.Storage.View.RebuildMaxPending != 7 || cfg.Storage.View.RebuildIdleChecks != 3 || cfg.Storage.View.RebuildLookback != "24h" {
-		t.Fatalf("rebuild config = %d/%d/%s", cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks, cfg.Storage.View.RebuildLookback)
+	if cfg.Storage.View.RebuildMaxPending != 7 || cfg.Storage.View.RebuildIdleChecks != 3 {
+		t.Fatalf("rebuild config = %d/%d", cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks)
 	}
 }
 
