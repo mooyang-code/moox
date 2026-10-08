@@ -1,0 +1,495 @@
+# MooX 组件目录。组件定义、端口、tRPC 服务、ACL、健康检查和外部调用方白名单只写在这里；
+# 数据库只记录「哪个组件部署在哪台主机、是否启用」。
+#
+# - 组件 ID 为二进制名去掉 moox- 前缀；组件 ID 同时是该组件的调用方身份。
+# - rpcs 必须与 proto 中的方法完全一致（单测校验）；没有任何 ACL 放行的方法不经主机网关路由。
+# - ACL 的调用方 host-gateway 表示每台主机的 host-gateway@<主机>；外部调用方白名单里的方法自动放行 access。
+# - read_only 是幂等读方法，只有它们允许失败后重试。
+version: 1
+
+callers:
+  - id: console
+    description: 控制台转发浏览器请求
+  - id: moox-cli
+    description: 操作员机器上的命令行工具，经 SSH 隧道访问
+
+components:
+  - id: host-gateway
+    name: 主机网关
+    binary: moox-host-gateway
+    scope: host
+    replicas: per_host
+    protected: true
+    health: {kind: readyz, port: 11012}
+    ports:
+      - {name: 本机入口, port: 11002}
+      - {name: 跨主机入口, port: 11003}
+
+  - id: host-agent
+    name: 主机采集器
+    binary: moox-hostagent
+    scope: host
+    replicas: per_host
+    protected: false
+    health: {kind: readyz, port: 11425}
+    services:
+      - path: trpc.moox.hostagent.HostAgentMgr
+        port: 11426
+        console_name: host-agent
+        timeout_ms: 30000
+        rpcs: [GetStatus, GetSnapshot, RunOnce]
+        read_only: [GetStatus, GetSnapshot]
+        acl:
+          - methods: [GetStatus, GetSnapshot]
+            callers: [console, monitor, moox-cli]
+          - methods: [RunOnce]
+            callers: [moox-cli]
+
+  - id: console-proxy
+    name: 控制台代理
+    binary: caddy
+    scope: control
+    replicas: single
+    protected: true
+    health: {kind: https, port: 9527}
+
+  - id: web-host
+    name: 控制台前端
+    binary: moox-web-host
+    scope: control
+    replicas: single
+    protected: true
+    health: {kind: readyz, port: 19527}
+    ports:
+      - {name: 静态资源, port: 9528}
+
+  - id: admin
+    name: 管理后台
+    binary: moox-admin
+    scope: control
+    replicas: single
+    protected: true
+    health: {kind: readyz, port: 11010}
+    ports:
+      - {name: 控制台 API, port: 11000}
+    services:
+      - path: trpc.moox.infra.Auth
+        port: 11100
+        console_name: auth
+        rpcs: [GetLoginSalt, Login, Logout, IssueRawSessionTicket, GetUserInfo, UpdateUserInfo]
+        read_only: [GetLoginSalt, GetUserInfo]
+        acl:
+          - all: true
+            callers: [console]
+      - path: trpc.moox.ops.Ssh
+        port: 11106
+        console_name: ssh
+        timeout_ms: 30000
+        rpcs: [ListHosts, CreateHost, UpdateHost, DeleteHost, GetHost, CreateSession, DisconnectSession,
+               ResizeWindow, SftpList, SftpMkdir, SftpDelete]
+        read_only: [ListHosts, GetHost, SftpList]
+        acl:
+          - all: true
+            callers: [console]
+      - path: trpc.moox.admin.SpaceMgr
+        port: 11107
+        console_name: space
+        rpcs: [CreateSpace, UpdateSpace, DeleteSpace, ListSpaces, ListSpaceMembers]
+        read_only: [ListSpaces, ListSpaceMembers]
+        acl:
+          - all: true
+            callers: [console, moox-cli]
+      - path: trpc.moox.ops.SecretMgr
+        port: 11108
+        console_name: secret
+        rpcs: [ListSecrets, GetSecret, GetSecretValue, CreateSecret, UpdateSecret, DeleteSecret, ToggleSecretStatus]
+        read_only: [ListSecrets, GetSecret, GetSecretValue]
+        acl:
+          # 读取密钥明文只给内部调用方，浏览器调不到。
+          - all: true
+            except: [GetSecretValue]
+            callers: [console, moox-cli]
+          - methods: [ListSecrets, GetSecret, GetSecretValue]
+            callers: [cloudnode, trade, moox-cli]
+      - path: trpc.moox.ops.SysDeploy
+        port: 11109
+        console_name: sysdeploy
+        rpcs: [ListServiceDeployments, GetServiceDeployment, CreateServiceDeployment, UpdateServiceDeployment,
+               DeleteServiceDeployment, ListActiveServiceDeployments, ListGatewayNodes, CreateGatewayNode,
+               UpdateGatewayNode, DeleteGatewayNode, GetGatewayNodeRoutes]
+        read_only: [ListServiceDeployments, GetServiceDeployment, ListActiveServiceDeployments, ListGatewayNodes,
+                    GetGatewayNodeRoutes]
+        acl:
+          - all: true
+            callers: [console, moox-cli]
+          - methods: [ListServiceDeployments, ListActiveServiceDeployments, ListGatewayNodes]
+            callers: [collector, monitor]
+      - path: trpc.moox.admin.Setup
+        port: 11110
+        timeout_ms: 120000
+        rpcs: [ApplySetup, GetSetupStatus]
+        read_only: [GetSetupStatus]
+        acl:
+          - all: true
+            callers: [moox-cli]
+      - path: trpc.moox.admin.CollectorPublishLease
+        port: 11111
+        console_name: publishlease
+        rpcs: [AcquireCollectorPublishLease, RenewCollectorPublishLease, ReleaseCollectorPublishLease,
+               ValidateCollectorPublishLease, BeginCollectorPublishOperation, RenewCollectorPublishOperation,
+               EndCollectorPublishOperation]
+        read_only: [ValidateCollectorPublishLease]
+        acl:
+          - methods: [AcquireCollectorPublishLease, RenewCollectorPublishLease, ReleaseCollectorPublishLease]
+            callers: [console, cloudnode, collector, moox-cli]
+          # 发布操作的校验与认领只属于机器调用方。
+          - methods: [ValidateCollectorPublishLease, BeginCollectorPublishOperation, RenewCollectorPublishOperation,
+                      EndCollectorPublishOperation]
+            callers: [cloudnode]
+      - path: trpc.moox.admin.GatewayControl
+        port: 11112
+        rpcs: [PullSnapshot, ReportStatus]
+        acl:
+          - all: true
+            callers: [host-gateway]
+
+  - id: eventbus
+    name: 消息总线
+    binary: moox-eventbus
+    scope: control
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11419}
+    ports:
+      - {name: NATS, port: 4222}
+    services:
+      - path: trpc.moox.eventbus.EventBusMgr
+        port: 11420
+        console_name: eventbus
+        rpcs: [GetOverview, ListEvents, ListStreams, ListConsumers, GetConsumer]
+        read_only: [GetOverview, ListEvents, ListStreams, ListConsumers, GetConsumer]
+        acl:
+          - all: true
+            callers: [console, moox-cli]
+
+  - id: monitor
+    name: 监控服务
+    binary: moox-monitor
+    scope: control
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11409}
+    services:
+      - path: trpc.moox.monitor.MonitorMgr
+        port: 11410
+        console_name: monitor
+        timeout_ms: 15000
+        rpcs: [GetHealthOverview, GetNotificationChannel, UpdateNotificationChannel, ListHostAgents,
+               QueryHostMetricHistory, GetDoctorContext]
+        read_only: [GetHealthOverview, GetNotificationChannel, ListHostAgents, QueryHostMetricHistory, GetDoctorContext]
+        acl:
+          - all: true
+            except: [GetDoctorContext]
+            callers: [console, moox-cli]
+          - methods: [GetDoctorContext]
+            callers: [moox-cli]
+
+  - id: collector
+    name: 行情采集服务
+    binary: moox-collector
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11412}
+    services:
+      - path: trpc.moox.collector.CollectMgr
+        port: 11402
+        console_name: collector
+        rpcs: [GetTaskList, GetTaskDetail, GetTaskResultInventory, CreateTask, UpdateTask, DisableTask, DeleteTask,
+               GetTaskInstanceList, GetDataTypeConfigs, GetDataTypeConfigWithFields, StartKlineResampleBackfill,
+               CancelKlineResampleBackfill, GetKlineResampleBackfill]
+        read_only: [GetTaskList, GetTaskDetail, GetTaskResultInventory, GetTaskInstanceList, GetDataTypeConfigs,
+                    GetDataTypeConfigWithFields, GetKlineResampleBackfill]
+        acl:
+          - all: true
+            callers: [console, moox-cli]
+          - methods: [GetTaskList, GetTaskResultInventory]
+            callers: [monitor]
+      - path: trpc.moox.collector.MarketFetchRuntime
+        port: 11422
+        # 只给 SCF 采集函数领取 Timer 批次，经外部接入转发（见 principals）。
+        rpcs: [ClaimTimerBatch]
+
+  - id: cloudnode
+    name: 云节点服务
+    binary: moox-cloudnode
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11411}
+    services:
+      - path: trpc.moox.cloudnode.CloudNodeMgr
+        port: 11401
+        console_name: cloudnode
+        timeout_ms: 960000
+        max_body_bytes: 33554432
+        rpcs: [GetNodeList, UpdateNode, InvokeFunction, SubmitCreateNodes, SubmitDeployNodes, SubmitDeleteNodes,
+               GetNodeBatchChange, BatchDeleteNodes, SubmitUpdateNodeRuntimeConfigs, ListCloudAccounts,
+               CreateCloudAccount, UpdateCloudAccount, DeleteCloudAccount, ListCloudRegions, PreviewSCFFunctions,
+               ImportSCFFunctions, GetPackageList, GetPackageDetail, DeletePackage, GetPackageDownloadURL,
+               InitPackageUpload, CompletePackageUpload, CollectGarbage]
+        read_only: [GetNodeList, GetNodeBatchChange, ListCloudAccounts, ListCloudRegions, PreviewSCFFunctions,
+                    GetPackageList, GetPackageDetail, GetPackageDownloadURL]
+        acl:
+          - all: true
+            except: [CollectGarbage]
+            callers: [console, moox-cli]
+          - methods: [GetNodeList, GetNodeBatchChange, InvokeFunction, SubmitUpdateNodeRuntimeConfigs]
+            callers: [collector]
+          # 只给 Admin 的每日垃圾回收任务，浏览器调不到。
+          - methods: [CollectGarbage]
+            callers: [admin]
+
+  - id: factor-mgr
+    name: 因子管理服务
+    binary: moox-factor-mgr
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11414}
+    services:
+      - path: trpc.moox.factor.FactorMgr
+        port: 11403
+        console_name: factor-mgr
+        timeout_ms: 120000
+        rpcs: [CreateFactorSet, UpdateFactorSet, SetFactorSetStatus, DeleteFactorSet, GetFactorSet, ListFactorSets,
+               CreateFactor, UpdateFactor, DeleteFactor, GetFactor, AddFactorToSet, RemoveFactorFromSet,
+               SetFactorMemberStatus, ListFactors, RecalcFactors, ListRecalcJobs, GetRecalcJob, CancelRecalcJob, GetStatus]
+        read_only: [GetFactorSet, ListFactorSets, GetFactor, ListFactors, ListRecalcJobs, GetRecalcJob, GetStatus]
+        acl:
+          - all: true
+            callers: [console, moox-cli]
+          - methods: [GetFactorSet, ListFactorSets, GetFactor, ListFactors, ListRecalcJobs, GetStatus]
+            callers: [strategy]
+      - path: trpc.moox.factor.FactorEngine
+        port: 11405
+        # 只给操作员机器上的因子引擎，经外部接入转发（见 principals）。
+        rpcs: [SyncEngineCatalog, EngineHeartbeat, PullRecalcJob, ReportRecalcProgress]
+
+  - id: strategy
+    name: 策略服务
+    binary: moox-strategy
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11431}
+    services:
+      - path: trpc.moox.strategy.StrategyMgr
+        port: 11430
+        console_name: strategy
+        rpcs: [CreateStrategy, UpdateStrategy, GetStrategy, ListStrategies, ListStrategyResults, GetStrategyResult,
+               ListStrategyTargets, CreateStrategyInstance, GetStrategyInstance, ListStrategyInstances,
+               SetStrategyInstanceEnabled]
+        read_only: [GetStrategy, ListStrategies, ListStrategyResults, GetStrategyResult, ListStrategyTargets,
+                    GetStrategyInstance, ListStrategyInstances]
+        acl:
+          - all: true
+            callers: [console, moox-cli]
+
+  - id: archive
+    name: 归档服务
+    binary: moox-archive
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11416}
+
+  - id: storage-primary
+    name: 存储主服务
+    binary: moox-storage-primary
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 20210}
+    ports:
+      - {name: PrimaryStore 内部端口, port: 20101}
+      - {name: DataNode 内部端口, port: 20106}
+    services:
+      - path: trpc.moox.storage.Metadata
+        port: 20100
+        console_name: storage
+        max_body_bytes: 33554432
+        rpcs: [CreateSpace, UpdateSpace, DeleteSpace, GetSpace, ListSpaces, CreateView, UpdateView, DeleteView,
+               RequestViewRebuild, GetView, ListViews, UpsertViewColumn, ListViewColumns, ClaimViewIndexBuild,
+               UpdateViewIndexBuild, ActivateViewIndex, CommitViewSchemaExtension, FailViewIndexBuild,
+               ListViewRebuildLogs, CreateViewRebuildLog, UpdateViewRebuildLog, UpsertSkippedViewRebuildLog,
+               UpsertViewPeriodDatasetState, ListViewPeriodDatasetStates, RecordViewSyncPoint, CreateDataSource,
+               UpdateDataSource, DeleteDataSource, GetDataSource, ListDataSources, UpsertSubject, GetSubject,
+               ListSubjects, UpsertTag, GetTag, ListTags, DeleteTag, ListTagMembers, AddTagMembers, RemoveTagMembers,
+               SetTagMemberStatus, ApplyTagSnapshot, ReportTagRunFailure, UpdateSubjectAttributes, ResolveSubjects,
+               CreateDataset, UpdateDataset, DeleteDataset, GetDataset, ListDatasets, RebindDatasetDataNode,
+               CheckDatasetActivation, ActivateDataset, ListDatasetSubjects, CreateFieldGroup, UpdateFieldGroup,
+               GetFieldGroup, ListFieldGroups, CreateField, UpdateField, GetField, ListFields, BatchUpdateFields,
+               DeleteFieldGroup, UpsertDatasetColumn, ListDatasetColumns, RegisterDataNode, UpdateDataNode,
+               GetDataNode, ListDataNodes, DeleteDataNode, CreateDevice, UpdateDevice, GetDevice, ListDevices,
+               RegisterArchiveFile, ListArchiveFiles]
+        read_only: [GetSpace, ListSpaces, GetView, ListViews, ListViewColumns, ListViewRebuildLogs,
+                    ListViewPeriodDatasetStates, GetDataSource, ListDataSources, GetSubject, ListSubjects, GetTag,
+                    ListTags, ListTagMembers, ResolveSubjects, GetDataset, ListDatasets, CheckDatasetActivation,
+                    ListDatasetSubjects, GetFieldGroup, ListFieldGroups, GetField, ListFields, ListDatasetColumns,
+                    GetDataNode, ListDataNodes, GetDevice, ListDevices, ListArchiveFiles]
+        acl:
+          # 读：所有内部调用方。
+          - methods: [GetSpace, ListSpaces, GetView, ListViews, ListViewColumns, GetDataSource, ListDataSources,
+                      GetSubject, ListSubjects, GetTag, ListTags, ListTagMembers, ResolveSubjects, GetDataset,
+                      ListDatasets, ListDatasetSubjects, ListDatasetColumns, GetField, ListFields, GetFieldGroup,
+                      ListFieldGroups, GetDataNode, ListDataNodes, CheckDatasetActivation, ListArchiveFiles,
+                      ListViewRebuildLogs]
+            callers: [console, archive, collector, factor-mgr, monitor, moox-cli, storage-view, strategy]
+          # 目录维护：管理台、CLI 和管理数据集的内部组件。
+          - methods: [CreateSpace, UpdateSpace, CreateView, UpdateView, DeleteView, RequestViewRebuild,
+                      UpsertViewColumn, CreateDataSource, UpdateDataSource, UpsertSubject, CreateDataset,
+                      UpdateDataset, DeleteDataset, RebindDatasetDataNode, ActivateDataset, CreateFieldGroup,
+                      UpdateFieldGroup, CreateField, UpdateField, BatchUpdateFields, DeleteFieldGroup,
+                      UpsertDatasetColumn, UpdateDataNode, DeleteDataNode, RegisterArchiveFile]
+            callers: [console, archive, collector, factor-mgr, monitor, moox-cli, storage-view]
+          - methods: [DeleteSpace, UpsertTag, DeleteTag, AddTagMembers, RemoveTagMembers, SetTagMemberStatus]
+            callers: [console, moox-cli]
+          # 标签与属性同步只属于 Collector。
+          - methods: [ApplyTagSnapshot, ReportTagRunFailure, UpdateSubjectAttributes]
+            callers: [collector]
+          # 视图构建与周期状态只属于存储视图服务。
+          - methods: [ClaimViewIndexBuild, UpdateViewIndexBuild, ActivateViewIndex, FailViewIndexBuild,
+                      CommitViewSchemaExtension, CreateViewRebuildLog, UpdateViewRebuildLog,
+                      UpsertSkippedViewRebuildLog, UpsertViewPeriodDatasetState, ListViewPeriodDatasetStates,
+                      RecordViewSyncPoint]
+            callers: [storage-view]
+      - path: trpc.moox.storage.PrimaryStore
+        port: 20102
+        console_name: storage
+        max_body_bytes: 33554432
+        rpcs: [UpsertFields, EnsureDatasetPeriod, GetDatasetPeriodStatus, CommitTimeSeriesBatch,
+               RecordDatasetPeriodFailures, WriteFactorRows, ReadFields, DeleteDatasetRows, RestoreDatasetRows,
+               ReadTimeSeriesRows, ListHistorySubjects, ReadRecordRows, ReportCollectorPeriodCompleted,
+               ReportFactorPeriodComputed, AppendDatasetSyncPoint, GetFactorPeriodComputed, WaitViewSyncPoint]
+        read_only: [GetDatasetPeriodStatus, ReadFields, ReadTimeSeriesRows, ListHistorySubjects, ReadRecordRows,
+                    GetFactorPeriodComputed]
+        acl:
+          - methods: [ReadTimeSeriesRows]
+            callers: [console, archive, collector, factor-mgr, monitor, moox-cli, storage-view, strategy]
+          - methods: [ReadFields, ReadRecordRows, GetFactorPeriodComputed, WaitViewSyncPoint]
+            callers: [console, archive, collector, factor-mgr, monitor, moox-cli, storage-view]
+          - methods: [UpsertFields, DeleteDatasetRows, RestoreDatasetRows, AppendDatasetSyncPoint,
+                      ReportCollectorPeriodCompleted, ReportFactorPeriodComputed]
+            callers: [console, archive, collector, factor-mgr, monitor, storage-view]
+          - methods: [EnsureDatasetPeriod, GetDatasetPeriodStatus, CommitTimeSeriesBatch, RecordDatasetPeriodFailures]
+            callers: [collector, moox-cli]
+          - methods: [WriteFactorRows]
+            callers: [factor-mgr]
+          - methods: [ListHistorySubjects]
+            callers: [storage-view]
+
+  - id: storage-node
+    name: 存储数据节点
+    binary: moox-storage-node
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 20212}
+    ports:
+      - {name: DataNode 运行时端口, port: 20107}
+
+  - id: storage-view
+    name: 存储视图服务
+    binary: moox-storage-view
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 20211}
+    ports:
+      - {name: ViewIndex 内部端口, port: 20104}
+    services:
+      - path: trpc.moox.storage.DataView
+        port: 20103
+        console_name: storage
+        timeout_ms: 25000
+        rpcs: [QueryTimeSeriesRows, SearchRecordRows]
+        read_only: [QueryTimeSeriesRows, SearchRecordRows]
+        acl:
+          - all: true
+            callers: [console, collector, factor-mgr, monitor, moox-cli, storage-primary, strategy]
+
+  - id: access
+    name: 外部接入
+    binary: moox-access
+    scope: any
+    replicas: multi
+    protected: false
+    health: {kind: readyz, port: 11014}
+    ports:
+      - {name: 外部入口, port: 11004}
+
+  - id: egress-proxy
+    name: 出口代理
+    binary: moox-egress-proxy
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11441}
+
+  - id: trade
+    name: 交易服务
+    binary: moox-trade
+    scope: any
+    replicas: single
+    protected: false
+    health: {kind: readyz, port: 11210}
+    services:
+      - path: trpc.moox.trade.TradeConsoleService
+        port: 11200
+        console_name: trade
+        timeout_ms: 30000
+        rpcs: [CreateTradingAccount, UpdateTradingAccount, GetTradingAccount, ListTradingAccounts, SetLeverage,
+               SyncTradingAccount, CreateLogicalAccount, GetLogicalAccount, ListLogicalAccounts, UpdateLogicalAccount,
+               AddLogicalAccountMember, RemoveLogicalAccountMember, ClaimLogicalAccountOwner,
+               ReleaseLogicalAccountOwner, RebindLogicalAccountOwner, PauseLogicalAccount, ResumeLogicalAccount,
+               FlattenLogicalAccount, PlaceManualOrder, SubmitOrder, CancelOrder, GetOperatorAction,
+               GetLogicalAccountTarget, GetOrder, ListOrders, ListFills, ListPositions, CreatePaperSimulation,
+               ClosePaperSimulation, GetExecutionCapabilities, QueryEquityCurve, ListHoldings]
+        read_only: [GetTradingAccount, ListTradingAccounts, GetLogicalAccount, ListLogicalAccounts, GetOperatorAction,
+                    GetLogicalAccountTarget, GetOrder, ListOrders, ListFills, ListPositions, GetExecutionCapabilities,
+                    QueryEquityCurve, ListHoldings]
+        acl:
+          # 逻辑账户的归属认领是策略实例生命周期的机器契约，浏览器调不到。
+          - all: true
+            except: [ClaimLogicalAccountOwner, ReleaseLogicalAccountOwner, RebindLogicalAccountOwner]
+            callers: [console, moox-cli]
+          - methods: [GetLogicalAccount, ClaimLogicalAccountOwner, ReleaseLogicalAccountOwner, RebindLogicalAccountOwner]
+            callers: [strategy]
+
+# 外部调用方只能经外部接入访问白名单里的方法；外部接入以 access 身份转发。
+principals:
+  - id: scf-collector
+    description: SCF 采集函数
+    allow:
+      - service: trpc.moox.storage.PrimaryStore
+        methods: [EnsureDatasetPeriod, CommitTimeSeriesBatch, RecordDatasetPeriodFailures, GetDatasetPeriodStatus,
+                  UpsertFields]
+      - service: trpc.moox.storage.Metadata
+        methods: [ListSubjects]
+      - service: trpc.moox.collector.MarketFetchRuntime
+        methods: [ClaimTimerBatch]
+  - id: factor-engine
+    description: 操作员机器上的因子引擎
+    allow:
+      - service: trpc.moox.storage.PrimaryStore
+        methods: [ReadTimeSeriesRows, WriteFactorRows, ReportFactorPeriodComputed, GetFactorPeriodComputed]
+      - service: trpc.moox.storage.Metadata
+        methods: [GetDataset, ListDatasetColumns, ListDatasetSubjects]
+      - service: trpc.moox.factor.FactorEngine
+        methods: [SyncEngineCatalog, EngineHeartbeat, PullRecalcJob, ReportRecalcProgress]
+  - id: moox-skill
+    description: 操作员机器上的 moox-skill 数据查询
+    allow:
+      - service: trpc.moox.storage.PrimaryStore
+        methods: [ReadTimeSeriesRows]

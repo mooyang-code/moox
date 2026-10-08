@@ -212,12 +212,33 @@ func TestNormalizeAndHashRejectsWildcardOverlapForDuplicateServiceIDs(t *testing
 
 func TestNormalizeAndHashRejectsNonAdjacentMethodOverlapForDuplicateServiceIDs(t *testing.T) {
 	_, err := NormalizeAndHash("node-1", []Route{
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Bar", AllowedMethods: []string{"GetOther"}, AllowedCallers: []string{"admin-gateway"}},
 		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Foo", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"strategy"}},
-		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Zoo", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"operator"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Bar", AllowedMethods: []string{"GetOther"}, AllowedCallers: []string{"console"}},
+		{ServiceID: "trade", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.Foo", AllowedMethods: []string{"GetLogicalAccount"}, AllowedCallers: []string{"operator"}},
 	})
 	if err == nil {
 		t.Fatal("accepted non-adjacent method overlap for duplicate service IDs")
+	}
+}
+
+func TestNormalizeAndHashAllowsSameMethodInDifferentServicesOfOneComponent(t *testing.T) {
+	_, err := NormalizeAndHash("control", []Route{
+		{ServiceID: "admin", Address: "127.0.0.1:11106", ServicePath: "trpc.moox.ops.Ssh", AllowedMethods: []string{"ListHosts"}, AllowedCallers: []string{"console"}},
+		{ServiceID: "admin", Address: "127.0.0.1:11109", ServicePath: "trpc.moox.ops.SysDeploy", AllowedMethods: []string{"ListHosts"}, AllowedCallers: []string{"console"}},
+	})
+	if err != nil {
+		t.Fatalf("同一组件不同服务的同名方法应当允许: %v", err)
+	}
+}
+
+func TestValidateRouteAcceptsHostGatewayCaller(t *testing.T) {
+	route := Route{ServiceID: "admin", Address: "127.0.0.1:11112", ServicePath: "trpc.moox.admin.GatewayControl", AllowedMethods: []string{"PullSnapshot"}, AllowedCallers: []string{"host-gateway@compute-1"}}
+	if err := ValidateRoute(route); err != nil {
+		t.Fatal(err)
+	}
+	route.AllowedCallers = []string{"host-gateway@compute@1"}
+	if err := ValidateRoute(route); err == nil {
+		t.Fatal("accepted a caller with two host separators")
 	}
 }
 

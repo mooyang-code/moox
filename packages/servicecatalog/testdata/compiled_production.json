@@ -1,0 +1,1206 @@
+{
+  "Directory": {
+    "version": "f6de06b481cf659189c98562623fbb7bfe626925d8bdc2091e8cd17ae11f6779",
+    "services": [
+      {
+        "path": "trpc.moox.admin.CollectorPublishLease",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.admin.GatewayControl",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.admin.Setup",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.admin.SpaceMgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.cloudnode.CloudNodeMgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.collector.CollectMgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.collector.MarketFetchRuntime",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.eventbus.EventBusMgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.factor.FactorEngine",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.factor.FactorMgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.hostagent.HostAgentMgr",
+        "host_ids": [
+          "compute-1",
+          "control",
+          "storage"
+        ]
+      },
+      {
+        "path": "trpc.moox.infra.Auth",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.monitor.MonitorMgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.ops.SecretMgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.ops.Ssh",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.ops.SysDeploy",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.storage.DataView",
+        "host_ids": [
+          "storage"
+        ]
+      },
+      {
+        "path": "trpc.moox.storage.Metadata",
+        "host_ids": [
+          "storage"
+        ]
+      },
+      {
+        "path": "trpc.moox.storage.PrimaryStore",
+        "host_ids": [
+          "storage"
+        ]
+      },
+      {
+        "path": "trpc.moox.strategy.StrategyMgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "path": "trpc.moox.trade.TradeConsoleService",
+        "host_ids": [
+          "compute-1"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "component_id": "access",
+        "host_ids": [
+          "compute-1",
+          "storage"
+        ]
+      },
+      {
+        "component_id": "admin",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "component_id": "cloudnode",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "component_id": "collector",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "component_id": "console-proxy",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "component_id": "egress-proxy",
+        "host_ids": [
+          "compute-1"
+        ]
+      },
+      {
+        "component_id": "eventbus",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "component_id": "factor-mgr",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "component_id": "host-agent",
+        "host_ids": [
+          "compute-1",
+          "control",
+          "storage"
+        ]
+      },
+      {
+        "component_id": "host-gateway",
+        "host_ids": [
+          "compute-1",
+          "control",
+          "storage"
+        ]
+      },
+      {
+        "component_id": "monitor",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "component_id": "storage-node",
+        "host_ids": [
+          "storage"
+        ]
+      },
+      {
+        "component_id": "storage-primary",
+        "host_ids": [
+          "storage"
+        ]
+      },
+      {
+        "component_id": "storage-view",
+        "host_ids": [
+          "storage"
+        ]
+      },
+      {
+        "component_id": "strategy",
+        "host_ids": [
+          "control"
+        ]
+      },
+      {
+        "component_id": "trade",
+        "host_ids": [
+          "compute-1"
+        ]
+      },
+      {
+        "component_id": "web-host",
+        "host_ids": [
+          "control"
+        ]
+      }
+    ],
+    "hosts": [
+      {
+        "id": "compute-1",
+        "address": "43.132.204.177",
+        "private_address": "172.19.32.13",
+        "region": "ap-hongkong"
+      },
+      {
+        "id": "control",
+        "address": "106.53.107.122",
+        "private_address": "",
+        "region": ""
+      },
+      {
+        "id": "storage",
+        "address": "146.56.196.204",
+        "private_address": "10.206.0.5",
+        "region": "ap-nanjing"
+      }
+    ]
+  },
+  "Hosts": [
+    {
+      "HostID": "compute-1",
+      "Disabled": false,
+      "Routes": [
+        {
+          "service_id": "host-agent",
+          "address": "127.0.0.1:11426",
+          "service_path": "trpc.moox.hostagent.HostAgentMgr",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "GetSnapshot",
+            "GetStatus"
+          ],
+          "allowed_callers": [
+            "console",
+            "monitor",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "host-agent",
+          "address": "127.0.0.1:11426",
+          "service_path": "trpc.moox.hostagent.HostAgentMgr",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "RunOnce"
+          ],
+          "allowed_callers": [
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "trade",
+          "address": "127.0.0.1:11200",
+          "service_path": "trpc.moox.trade.TradeConsoleService",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "AddLogicalAccountMember",
+            "CancelOrder",
+            "ClosePaperSimulation",
+            "CreateLogicalAccount",
+            "CreatePaperSimulation",
+            "CreateTradingAccount",
+            "FlattenLogicalAccount",
+            "GetExecutionCapabilities",
+            "GetLogicalAccountTarget",
+            "GetOperatorAction",
+            "GetOrder",
+            "GetTradingAccount",
+            "ListFills",
+            "ListHoldings",
+            "ListLogicalAccounts",
+            "ListOrders",
+            "ListPositions",
+            "ListTradingAccounts",
+            "PauseLogicalAccount",
+            "PlaceManualOrder",
+            "QueryEquityCurve",
+            "RemoveLogicalAccountMember",
+            "ResumeLogicalAccount",
+            "SetLeverage",
+            "SubmitOrder",
+            "SyncTradingAccount",
+            "UpdateLogicalAccount",
+            "UpdateTradingAccount"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "trade",
+          "address": "127.0.0.1:11200",
+          "service_path": "trpc.moox.trade.TradeConsoleService",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "ClaimLogicalAccountOwner",
+            "RebindLogicalAccountOwner",
+            "ReleaseLogicalAccountOwner"
+          ],
+          "allowed_callers": [
+            "strategy"
+          ]
+        },
+        {
+          "service_id": "trade",
+          "address": "127.0.0.1:11200",
+          "service_path": "trpc.moox.trade.TradeConsoleService",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "GetLogicalAccount"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli",
+            "strategy"
+          ]
+        }
+      ],
+      "Callers": [
+        "console",
+        "monitor",
+        "moox-cli",
+        "strategy"
+      ]
+    },
+    {
+      "HostID": "control",
+      "Disabled": false,
+      "Routes": [
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11100",
+          "service_path": "trpc.moox.infra.Auth",
+          "allowed_methods": [
+            "GetLoginSalt",
+            "GetUserInfo",
+            "IssueRawSessionTicket",
+            "Login",
+            "Logout",
+            "UpdateUserInfo"
+          ],
+          "allowed_callers": [
+            "console"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11106",
+          "service_path": "trpc.moox.ops.Ssh",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "CreateHost",
+            "CreateSession",
+            "DeleteHost",
+            "DisconnectSession",
+            "GetHost",
+            "ListHosts",
+            "ResizeWindow",
+            "SftpDelete",
+            "SftpList",
+            "SftpMkdir",
+            "UpdateHost"
+          ],
+          "allowed_callers": [
+            "console"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11107",
+          "service_path": "trpc.moox.admin.SpaceMgr",
+          "allowed_methods": [
+            "CreateSpace",
+            "DeleteSpace",
+            "ListSpaceMembers",
+            "ListSpaces",
+            "UpdateSpace"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11108",
+          "service_path": "trpc.moox.ops.SecretMgr",
+          "allowed_methods": [
+            "CreateSecret",
+            "DeleteSecret",
+            "ToggleSecretStatus",
+            "UpdateSecret"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11108",
+          "service_path": "trpc.moox.ops.SecretMgr",
+          "allowed_methods": [
+            "GetSecret",
+            "ListSecrets"
+          ],
+          "allowed_callers": [
+            "cloudnode",
+            "console",
+            "moox-cli",
+            "trade"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11108",
+          "service_path": "trpc.moox.ops.SecretMgr",
+          "allowed_methods": [
+            "GetSecretValue"
+          ],
+          "allowed_callers": [
+            "cloudnode",
+            "moox-cli",
+            "trade"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11109",
+          "service_path": "trpc.moox.ops.SysDeploy",
+          "allowed_methods": [
+            "CreateGatewayNode",
+            "CreateServiceDeployment",
+            "DeleteGatewayNode",
+            "DeleteServiceDeployment",
+            "GetGatewayNodeRoutes",
+            "GetServiceDeployment",
+            "UpdateGatewayNode",
+            "UpdateServiceDeployment"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11109",
+          "service_path": "trpc.moox.ops.SysDeploy",
+          "allowed_methods": [
+            "ListActiveServiceDeployments",
+            "ListGatewayNodes",
+            "ListServiceDeployments"
+          ],
+          "allowed_callers": [
+            "collector",
+            "console",
+            "monitor",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11110",
+          "service_path": "trpc.moox.admin.Setup",
+          "timeout_ms": 120000,
+          "allowed_methods": [
+            "ApplySetup",
+            "GetSetupStatus"
+          ],
+          "allowed_callers": [
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11111",
+          "service_path": "trpc.moox.admin.CollectorPublishLease",
+          "allowed_methods": [
+            "AcquireCollectorPublishLease",
+            "ReleaseCollectorPublishLease",
+            "RenewCollectorPublishLease"
+          ],
+          "allowed_callers": [
+            "cloudnode",
+            "collector",
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11111",
+          "service_path": "trpc.moox.admin.CollectorPublishLease",
+          "allowed_methods": [
+            "BeginCollectorPublishOperation",
+            "EndCollectorPublishOperation",
+            "RenewCollectorPublishOperation",
+            "ValidateCollectorPublishLease"
+          ],
+          "allowed_callers": [
+            "cloudnode"
+          ]
+        },
+        {
+          "service_id": "admin",
+          "address": "127.0.0.1:11112",
+          "service_path": "trpc.moox.admin.GatewayControl",
+          "allowed_methods": [
+            "PullSnapshot",
+            "ReportStatus"
+          ],
+          "allowed_callers": [
+            "host-gateway@compute-1",
+            "host-gateway@control",
+            "host-gateway@storage"
+          ]
+        },
+        {
+          "service_id": "cloudnode",
+          "address": "127.0.0.1:11401",
+          "service_path": "trpc.moox.cloudnode.CloudNodeMgr",
+          "timeout_ms": 960000,
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "BatchDeleteNodes",
+            "CompletePackageUpload",
+            "CreateCloudAccount",
+            "DeleteCloudAccount",
+            "DeletePackage",
+            "GetPackageDetail",
+            "GetPackageDownloadURL",
+            "GetPackageList",
+            "ImportSCFFunctions",
+            "InitPackageUpload",
+            "ListCloudAccounts",
+            "ListCloudRegions",
+            "PreviewSCFFunctions",
+            "SubmitCreateNodes",
+            "SubmitDeleteNodes",
+            "SubmitDeployNodes",
+            "UpdateCloudAccount",
+            "UpdateNode"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "cloudnode",
+          "address": "127.0.0.1:11401",
+          "service_path": "trpc.moox.cloudnode.CloudNodeMgr",
+          "timeout_ms": 960000,
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "CollectGarbage"
+          ],
+          "allowed_callers": [
+            "admin"
+          ]
+        },
+        {
+          "service_id": "cloudnode",
+          "address": "127.0.0.1:11401",
+          "service_path": "trpc.moox.cloudnode.CloudNodeMgr",
+          "timeout_ms": 960000,
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "GetNodeBatchChange",
+            "GetNodeList",
+            "InvokeFunction",
+            "SubmitUpdateNodeRuntimeConfigs"
+          ],
+          "allowed_callers": [
+            "collector",
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "collector",
+          "address": "127.0.0.1:11402",
+          "service_path": "trpc.moox.collector.CollectMgr",
+          "allowed_methods": [
+            "CancelKlineResampleBackfill",
+            "CreateTask",
+            "DeleteTask",
+            "DisableTask",
+            "GetDataTypeConfigWithFields",
+            "GetDataTypeConfigs",
+            "GetKlineResampleBackfill",
+            "GetTaskDetail",
+            "GetTaskInstanceList",
+            "StartKlineResampleBackfill",
+            "UpdateTask"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "collector",
+          "address": "127.0.0.1:11402",
+          "service_path": "trpc.moox.collector.CollectMgr",
+          "allowed_methods": [
+            "GetTaskList",
+            "GetTaskResultInventory"
+          ],
+          "allowed_callers": [
+            "console",
+            "monitor",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "collector",
+          "address": "127.0.0.1:11422",
+          "service_path": "trpc.moox.collector.MarketFetchRuntime",
+          "allowed_methods": [
+            "ClaimTimerBatch"
+          ],
+          "allowed_callers": [
+            "access"
+          ]
+        },
+        {
+          "service_id": "eventbus",
+          "address": "127.0.0.1:11420",
+          "service_path": "trpc.moox.eventbus.EventBusMgr",
+          "allowed_methods": [
+            "GetConsumer",
+            "GetOverview",
+            "ListConsumers",
+            "ListEvents",
+            "ListStreams"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "factor-mgr",
+          "address": "127.0.0.1:11403",
+          "service_path": "trpc.moox.factor.FactorMgr",
+          "timeout_ms": 120000,
+          "allowed_methods": [
+            "AddFactorToSet",
+            "CancelRecalcJob",
+            "CreateFactor",
+            "CreateFactorSet",
+            "DeleteFactor",
+            "DeleteFactorSet",
+            "GetRecalcJob",
+            "RecalcFactors",
+            "RemoveFactorFromSet",
+            "SetFactorMemberStatus",
+            "SetFactorSetStatus",
+            "UpdateFactor",
+            "UpdateFactorSet"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "factor-mgr",
+          "address": "127.0.0.1:11403",
+          "service_path": "trpc.moox.factor.FactorMgr",
+          "timeout_ms": 120000,
+          "allowed_methods": [
+            "GetFactor",
+            "GetFactorSet",
+            "GetStatus",
+            "ListFactorSets",
+            "ListFactors",
+            "ListRecalcJobs"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli",
+            "strategy"
+          ]
+        },
+        {
+          "service_id": "factor-mgr",
+          "address": "127.0.0.1:11405",
+          "service_path": "trpc.moox.factor.FactorEngine",
+          "allowed_methods": [
+            "EngineHeartbeat",
+            "PullRecalcJob",
+            "ReportRecalcProgress",
+            "SyncEngineCatalog"
+          ],
+          "allowed_callers": [
+            "access"
+          ]
+        },
+        {
+          "service_id": "host-agent",
+          "address": "127.0.0.1:11426",
+          "service_path": "trpc.moox.hostagent.HostAgentMgr",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "GetSnapshot",
+            "GetStatus"
+          ],
+          "allowed_callers": [
+            "console",
+            "monitor",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "host-agent",
+          "address": "127.0.0.1:11426",
+          "service_path": "trpc.moox.hostagent.HostAgentMgr",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "RunOnce"
+          ],
+          "allowed_callers": [
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "monitor",
+          "address": "127.0.0.1:11410",
+          "service_path": "trpc.moox.monitor.MonitorMgr",
+          "timeout_ms": 15000,
+          "allowed_methods": [
+            "GetDoctorContext"
+          ],
+          "allowed_callers": [
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "monitor",
+          "address": "127.0.0.1:11410",
+          "service_path": "trpc.moox.monitor.MonitorMgr",
+          "timeout_ms": 15000,
+          "allowed_methods": [
+            "GetHealthOverview",
+            "GetNotificationChannel",
+            "ListHostAgents",
+            "QueryHostMetricHistory",
+            "UpdateNotificationChannel"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "strategy",
+          "address": "127.0.0.1:11430",
+          "service_path": "trpc.moox.strategy.StrategyMgr",
+          "allowed_methods": [
+            "CreateStrategy",
+            "CreateStrategyInstance",
+            "GetStrategy",
+            "GetStrategyInstance",
+            "GetStrategyResult",
+            "ListStrategies",
+            "ListStrategyInstances",
+            "ListStrategyResults",
+            "ListStrategyTargets",
+            "SetStrategyInstanceEnabled",
+            "UpdateStrategy"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        }
+      ],
+      "Callers": [
+        "access",
+        "admin",
+        "cloudnode",
+        "collector",
+        "console",
+        "host-gateway@compute-1",
+        "host-gateway@control",
+        "host-gateway@storage",
+        "monitor",
+        "moox-cli",
+        "strategy",
+        "trade"
+      ]
+    },
+    {
+      "HostID": "storage",
+      "Disabled": false,
+      "Routes": [
+        {
+          "service_id": "host-agent",
+          "address": "127.0.0.1:11426",
+          "service_path": "trpc.moox.hostagent.HostAgentMgr",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "GetSnapshot",
+            "GetStatus"
+          ],
+          "allowed_callers": [
+            "console",
+            "monitor",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "host-agent",
+          "address": "127.0.0.1:11426",
+          "service_path": "trpc.moox.hostagent.HostAgentMgr",
+          "timeout_ms": 30000,
+          "allowed_methods": [
+            "RunOnce"
+          ],
+          "allowed_callers": [
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20100",
+          "service_path": "trpc.moox.storage.Metadata",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "ActivateDataset",
+            "BatchUpdateFields",
+            "CreateDataSource",
+            "CreateDataset",
+            "CreateField",
+            "CreateFieldGroup",
+            "CreateSpace",
+            "CreateView",
+            "DeleteDataNode",
+            "DeleteDataset",
+            "DeleteFieldGroup",
+            "DeleteView",
+            "RebindDatasetDataNode",
+            "RegisterArchiveFile",
+            "RequestViewRebuild",
+            "UpdateDataNode",
+            "UpdateDataSource",
+            "UpdateDataset",
+            "UpdateField",
+            "UpdateFieldGroup",
+            "UpdateSpace",
+            "UpdateView",
+            "UpsertDatasetColumn",
+            "UpsertSubject",
+            "UpsertViewColumn"
+          ],
+          "allowed_callers": [
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "moox-cli",
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20100",
+          "service_path": "trpc.moox.storage.Metadata",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "ActivateViewIndex",
+            "ClaimViewIndexBuild",
+            "CommitViewSchemaExtension",
+            "CreateViewRebuildLog",
+            "FailViewIndexBuild",
+            "ListViewPeriodDatasetStates",
+            "RecordViewSyncPoint",
+            "UpdateViewIndexBuild",
+            "UpdateViewRebuildLog",
+            "UpsertSkippedViewRebuildLog",
+            "UpsertViewPeriodDatasetState"
+          ],
+          "allowed_callers": [
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20100",
+          "service_path": "trpc.moox.storage.Metadata",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "AddTagMembers",
+            "DeleteSpace",
+            "DeleteTag",
+            "RemoveTagMembers",
+            "SetTagMemberStatus",
+            "UpsertTag"
+          ],
+          "allowed_callers": [
+            "console",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20100",
+          "service_path": "trpc.moox.storage.Metadata",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "ApplyTagSnapshot",
+            "ReportTagRunFailure",
+            "UpdateSubjectAttributes"
+          ],
+          "allowed_callers": [
+            "collector"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20100",
+          "service_path": "trpc.moox.storage.Metadata",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "CheckDatasetActivation",
+            "GetDataNode",
+            "GetDataSource",
+            "GetField",
+            "GetFieldGroup",
+            "GetSpace",
+            "GetSubject",
+            "GetTag",
+            "GetView",
+            "ListArchiveFiles",
+            "ListDataNodes",
+            "ListDataSources",
+            "ListDatasets",
+            "ListFieldGroups",
+            "ListFields",
+            "ListSpaces",
+            "ListTagMembers",
+            "ListTags",
+            "ListViewColumns",
+            "ListViewRebuildLogs",
+            "ListViews",
+            "ResolveSubjects"
+          ],
+          "allowed_callers": [
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "moox-cli",
+            "storage-view",
+            "strategy"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20100",
+          "service_path": "trpc.moox.storage.Metadata",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "GetDataset",
+            "ListDatasetColumns",
+            "ListDatasetSubjects",
+            "ListSubjects"
+          ],
+          "allowed_callers": [
+            "access",
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "moox-cli",
+            "storage-view",
+            "strategy"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "AppendDatasetSyncPoint",
+            "DeleteDatasetRows",
+            "ReportCollectorPeriodCompleted",
+            "RestoreDatasetRows"
+          ],
+          "allowed_callers": [
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "CommitTimeSeriesBatch",
+            "EnsureDatasetPeriod",
+            "GetDatasetPeriodStatus",
+            "RecordDatasetPeriodFailures"
+          ],
+          "allowed_callers": [
+            "access",
+            "collector",
+            "moox-cli"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "GetFactorPeriodComputed"
+          ],
+          "allowed_callers": [
+            "access",
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "moox-cli",
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "ListHistorySubjects"
+          ],
+          "allowed_callers": [
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "ReadFields",
+            "ReadRecordRows",
+            "WaitViewSyncPoint"
+          ],
+          "allowed_callers": [
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "moox-cli",
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "ReadTimeSeriesRows"
+          ],
+          "allowed_callers": [
+            "access",
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "moox-cli",
+            "storage-view",
+            "strategy"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "ReportFactorPeriodComputed",
+            "UpsertFields"
+          ],
+          "allowed_callers": [
+            "access",
+            "archive",
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "storage-view"
+          ]
+        },
+        {
+          "service_id": "storage-primary",
+          "address": "127.0.0.1:20102",
+          "service_path": "trpc.moox.storage.PrimaryStore",
+          "max_body_bytes": 33554432,
+          "allowed_methods": [
+            "WriteFactorRows"
+          ],
+          "allowed_callers": [
+            "access",
+            "factor-mgr"
+          ]
+        },
+        {
+          "service_id": "storage-view",
+          "address": "127.0.0.1:20103",
+          "service_path": "trpc.moox.storage.DataView",
+          "timeout_ms": 25000,
+          "allowed_methods": [
+            "QueryTimeSeriesRows",
+            "SearchRecordRows"
+          ],
+          "allowed_callers": [
+            "collector",
+            "console",
+            "factor-mgr",
+            "monitor",
+            "moox-cli",
+            "storage-primary",
+            "strategy"
+          ]
+        }
+      ],
+      "Callers": [
+        "access",
+        "archive",
+        "collector",
+        "console",
+        "factor-mgr",
+        "monitor",
+        "moox-cli",
+        "storage-primary",
+        "storage-view",
+        "strategy"
+      ]
+    }
+  ]
+}

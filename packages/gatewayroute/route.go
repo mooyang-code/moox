@@ -24,7 +24,9 @@ const (
 )
 
 var (
-	serviceIDPattern   = regexp.MustCompile(`^[a-z0-9_-]+$`)
+	serviceIDPattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
+	// callerPattern 允许 host-gateway@<主机> 形式的主机网关身份。
+	callerPattern      = regexp.MustCompile(`^[a-z0-9_-]+(@[a-z0-9_-]+)?$`)
 	servicePathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 )
 
@@ -173,7 +175,7 @@ func ValidateRoute(route Route) error {
 		if isStoragePath && caller == "*" {
 			return fmt.Errorf("storage routes cannot use wildcard allowed_callers")
 		}
-		if caller != "*" && !serviceIDPattern.MatchString(caller) {
+		if caller != "*" && !callerPattern.MatchString(caller) {
 			return fmt.Errorf("allowed caller %q must be a lowercase URL-safe identifier", caller)
 		}
 	}
@@ -263,7 +265,8 @@ func NormalizeAndHashState(nodeID string, disabled bool, routes []Route) (Snapsh
 	})
 	for i := range normalized {
 		for j := i + 1; j < len(normalized); j++ {
-			if normalized[i].ServiceID != normalized[j].ServiceID {
+			// 路由键是 service path 加方法名：同一组件的不同服务可以有同名方法。
+			if normalized[i].ServiceID != normalized[j].ServiceID || normalized[i].ServicePath != normalized[j].ServicePath {
 				continue
 			}
 			left, right := normalized[i], normalized[j]
