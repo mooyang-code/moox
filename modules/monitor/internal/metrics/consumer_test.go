@@ -131,3 +131,37 @@ func requireNoError(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+func TestTouchServiceRecordsProducerBeforeCommitAndNeverMovesBackwards(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	requireNoError(t, err)
+	defer mgr.Close()
+	requireNoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	report := &metricspb.MetricReport{ServiceName: "eventbus", InstanceId: "eventbus@control", BootId: "boot-a", NodeId: "control"}
+	lastSeen := func() time.Time {
+		t.Helper()
+		var service MetricService
+		var queryErr error
+		_, err := store.WithDatabase(mgr, func(db *gorm.DB) struct{} {
+			queryErr = db.Where("c_service_name = ?", "eventbus").First(&service).Error
+			return struct{}{}
+		})
+		requireNoError(t, err)
+		requireNoError(t, queryErr)
+		return service.LastSeenAt.UTC()
+	}
+
+	// 报告到达但历史尚未写入（例如 Storage 不可用）时，上报方已记为在线。
+	recent := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Millisecond)
+	requireNoError(t, r.TouchService(context.Background(), &eventpb.EventMessage{EventId: "m1", OccurredAt: timestamppb.New(recent)}, report))
+	if got := lastSeen(); !got.Equal(recent) {
+		t.Fatalf("last_seen_at=%s, want the report time %s", got, recent)
+	}
+
+	// 重投递的旧报告不能把 last_seen 往回拨。
+	requireNoError(t, r.TouchService(context.Background(), &eventpb.EventMessage{EventId: "m0", OccurredAt: timestamppb.New(recent.Add(-time.Hour))}, report))
+	if got := lastSeen(); !got.Equal(recent) {
+		t.Fatalf("an older report moved last_seen_at back to %s", got)
+	}
+}

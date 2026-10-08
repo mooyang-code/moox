@@ -145,11 +145,14 @@ func TestCollectorDatasetCoverageNormalizesFrequency(t *testing.T) {
 
 func TestChineseReasonTranslatesTechnicalResults(t *testing.T) {
 	for raw, want := range map[string]string{
-		"reporter fresh":                     "监控上报正常",
-		"reporter fresh; health check ok":    "监控上报正常；健康检查正常",
-		"health check failed":                "健康检查失败",
-		"balance difference 0.2 exceeds 0.1": "账户余额差异超过阈值（当前值 0.2，阈值 0.1）",
-		"unexpected timeout":                 "监控检查失败，请查看日志详情",
+		"reporter fresh":                                                     "监控上报正常",
+		"reporter fresh; health check ok":                                    "监控上报正常；健康检查正常",
+		"health check failed":                                                "健康检查失败",
+		"balance difference 0.2 exceeds 0.1":                                 "账户余额差异超过阈值（当前值 0.2，阈值 0.1）",
+		"unexpected timeout":                                                 "监控检查失败，请查看日志详情",
+		"metrics history write to Storage failed":                            "指标历史写入存储服务失败",
+		"eventbus connection unavailable: authentication failed":             "无法连接消息总线（认证失败）",
+		"metrics history write to Storage failed; host metrics write failed": "指标历史写入存储服务失败；主机指标写入失败",
 	} {
 		if got := ChineseReason(raw); got != want {
 			t.Fatalf("ChineseReason(%q) = %q, want %q", raw, got, want)

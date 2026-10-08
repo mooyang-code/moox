@@ -79,12 +79,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 			duplicate = true
 			return nil
 		}
-		serviceName, instanceID, bootID, nodeID, version := report.GetServiceName(), report.GetInstanceId(), report.GetBootId(), report.GetNodeId(), report.GetServiceVersion()
-		if serviceName == "" {
-			return errors.New("producer.service_name is required")
-		}
-		service := &MetricService{ServiceName: serviceName, InstanceID: instanceID, BootID: bootID, NodeID: nodeID, Version: version, LastSeenAt: now}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_boot_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_node_id", "c_version", "c_last_seen_at", "c_mtime"})}).Create(service).Error; err != nil {
+		if err := upsertMetricService(tx, report, now); err != nil {
 			return err
 		}
 		return upsertSamples(tx, samples)
@@ -93,6 +88,42 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 		return false, fmt.Errorf("commit metrics ingest: %w", err)
 	}
 	return duplicate, nil
+}
+
+// TouchService 在写 Storage 历史之前记录上报方仍然在线。Storage 不可用时只延迟指标历史，
+// 不会让上报方看起来已停止上报。last_seen 取报告的产生时间且只向前推进，
+// 重投递的旧报告不会让已停止的上报方显得仍在线。
+func (r *MetricMessageStore) TouchService(ctx context.Context, msg *eventpb.EventMessage, report *metricspb.MetricReport) error {
+	if r == nil || r.db == nil {
+		return errors.New("metrics store is not initialized")
+	}
+	if msg == nil || report == nil {
+		return errors.New("metric report is required")
+	}
+	seenAt := time.Now().UTC()
+	if at := msg.GetOccurredAt(); at != nil && at.AsTime().Before(seenAt) {
+		seenAt = at.AsTime().UTC()
+	}
+	return upsertMetricService(r.db.WithContext(ctx), report, seenAt)
+}
+
+func upsertMetricService(tx *gorm.DB, report *metricspb.MetricReport, seenAt time.Time) error {
+	if report.GetServiceName() == "" {
+		return errors.New("producer.service_name is required")
+	}
+	service := &MetricService{
+		ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), BootID: report.GetBootId(),
+		NodeID: report.GetNodeId(), Version: report.GetServiceVersion(), LastSeenAt: seenAt,
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "c_service_name"}, {Name: "c_instance_id"}, {Name: "c_boot_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"c_node_id":      gorm.Expr("excluded.c_node_id"),
+			"c_version":      gorm.Expr("excluded.c_version"),
+			"c_last_seen_at": gorm.Expr("MAX(c_last_seen_at, excluded.c_last_seen_at)"),
+			"c_mtime":        gorm.Expr("excluded.c_mtime"),
+		}),
+	}).Create(service).Error
 }
 
 // ingestBatchRows bounds the rows of one multi-row upsert. A report carries
