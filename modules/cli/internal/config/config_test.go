@@ -19,10 +19,9 @@ func TestConfig_getConfigPaths_WithEnvOverride_ShouldPreferEnvPath(t *testing.T)
 func TestConfig_LoadConfig_ValidYAML_ShouldParseFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cli.yaml")
-	content := `storage:
-  target: storage.local:8001
-moox:
-  auth_target: 127.0.0.1:9001
+	content := `doctor:
+  node_id: node-from-file
+  release_root: /opt/moox
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
@@ -33,9 +32,8 @@ moox:
 
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
-	require.NotNil(t, cfg.MooX)
-	assert.Equal(t, "storage.local:8001", cfg.Storage.Target)
-	assert.Equal(t, "127.0.0.1:9001", cfg.MooX.AuthTarget)
+	assert.Equal(t, "node-from-file", cfg.Doctor.NodeID)
+	assert.Equal(t, "/opt/moox", cfg.Doctor.ReleaseRoot)
 }
 
 func TestConfig_LoadConfig_MissingFile_ShouldReturnError(t *testing.T) {
@@ -51,10 +49,10 @@ func TestConfig_LoadConfig_MissingFile_ShouldReturnError(t *testing.T) {
 
 func TestEffectiveDoctorUsesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("MOOX_NODE_ID", "node-a")
-	t.Setenv("MOOX_DOCTOR_MONITOR_TARGET", "ip://monitor:11410")
+	t.Setenv("MOOX_RELEASE_ROOT", "/opt/moox")
 	got := (&Config{}).EffectiveDoctor()
 	assert.Equal(t, "node-a", got.NodeID)
-	assert.Equal(t, "ip://monitor:11410", got.MonitorTarget)
+	assert.Equal(t, "/opt/moox", got.ReleaseRoot)
 	assert.Equal(t, "config/setup/service-deployments.yaml", got.SeedPath)
 	assert.Equal(t, "config/setup/dataset-health-policy.yaml", got.DatasetHealthPolicyPath)
 }

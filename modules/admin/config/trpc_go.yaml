@@ -37,43 +37,43 @@ server:
       ip: 127.0.0.1
       port: 11100
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 10000
     - name: trpc.moox.ops.Ssh
       ip: 127.0.0.1
       port: 11106
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 30000
     - name: trpc.moox.admin.SpaceMgr
       ip: 127.0.0.1
       port: 11107
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 10000
     - name: trpc.moox.ops.SecretMgr
       ip: 127.0.0.1
       port: 11108
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 10000
     - name: trpc.moox.ops.SysDeploy
       ip: 127.0.0.1
       port: 11109
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 10000
     - name: trpc.moox.admin.Setup
       ip: 127.0.0.1
       port: 11110
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 30000
     - name: trpc.moox.admin.CollectorPublishLease
       ip: 127.0.0.1
       port: 11111
       network: tcp
-      protocol: http
+      protocol: trpc
       timeout: 10000
     - name: trpc.moox.admin.GatewayControl
       ip: 127.0.0.1

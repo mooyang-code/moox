@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -68,7 +69,7 @@ func TestInspectCollectorTimerInventoryRequiresFreshScopedReadback(t *testing.T)
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := admintest.Client(server.URL)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -112,7 +113,7 @@ func TestInspectCollectorTimerInventoryRejectsCachedReadbackFromBeforeStart(t *t
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := admintest.Client(server.URL)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -157,7 +158,7 @@ func TestInspectCollectorTimerInventoryRejectsDesiredActualDrift(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := admintest.Client(server.URL)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -199,7 +200,7 @@ func TestInspectCollectorTimerInventoryRejectsTriggerContractDrift(t *testing.T)
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := admintest.Client(server.URL)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -253,7 +254,7 @@ func TestReadCollectorTimerNodesBoundsConcurrentFuzzyPagination(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := admintest.Client(server.URL)
 	client.SpaceID = "crypto"
 	results := readCollectorTimerNodes(context.Background(), client, collectorTimerInventoryOptions{
 		CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -296,7 +297,7 @@ func TestInspectCollectorTimerInventoryRejectsEmptyScope(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := admintest.Client(server.URL)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",
@@ -332,7 +333,7 @@ func TestInspectCollectorTimerInventoryFailsClosedOnScopeMismatch(t *testing.T) 
 	}))
 	defer server.Close()
 
-	client := adminclient.New(server.URL)
+	client := admintest.Client(server.URL)
 	client.SpaceID = "crypto"
 	got, err := inspectCollectorTimerInventory(context.Background(), client, collectorTimerInventoryOptions{
 		SpaceID: "crypto", CloudAccountID: "account-a", Namespace: "default", Region: "ap-singapore",

@@ -194,7 +194,7 @@ func (c *Client) CreateTask(ctx context.Context, spaceID, taskName, dataType, cr
 	if resultConfig != nil {
 		request["result_config"] = resultConfig
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/CreateTask", request, &response); err != nil {
+	if err := c.CallJSON(ctx, ServiceCollectMgr, "CreateTask", request, &response); err != nil {
 		return "", fmt.Errorf("CreateTask: %w", err)
 	}
 	if !isRetInfoSuccess(response.RetInfo.Code) {
@@ -215,7 +215,7 @@ func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, taskID strin
 		RetInfo retInfo        `json:"ret_info"`
 		Task    map[string]any `json:"task"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskDetail", map[string]any{
+	if err := c.CallJSON(ctx, ServiceCollectMgr, "GetTaskDetail", map[string]any{
 		"space_id": spaceID, "task_id": taskID,
 	}, &detail); err != nil {
 		return fmt.Errorf("GetTaskDetail: %w", err)
@@ -232,7 +232,7 @@ func (c *Client) EnableCollectionTask(ctx context.Context, spaceID, taskID strin
 	var updated struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/UpdateTask", map[string]any{
+	if err := c.CallJSON(ctx, ServiceCollectMgr, "UpdateTask", map[string]any{
 		"space_id": spaceID, "task_id": taskID, "task": detail.Task,
 	}, &updated); err != nil {
 		return fmt.Errorf("UpdateTask: %w", err)
@@ -250,7 +250,7 @@ func (c *Client) DisableTask(ctx context.Context, spaceID, taskID string) error 
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DisableTask", map[string]any{
+	if err := c.CallJSON(ctx, ServiceCollectMgr, "DisableTask", map[string]any{
 		"space_id": spaceID, "task_id": taskID,
 	}, &response); err != nil {
 		return fmt.Errorf("DisableTask: %w", err)
@@ -268,7 +268,7 @@ func (c *Client) DeleteTask(ctx context.Context, spaceID, taskID string, deleteR
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`
 	}
-	if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/DeleteTask", map[string]any{
+	if err := c.CallJSON(ctx, ServiceCollectMgr, "DeleteTask", map[string]any{
 		"space_id": spaceID, "task_id": taskID, "delete_result_data": deleteResultData,
 	}, &response); err != nil {
 		return fmt.Errorf("DeleteTask: %w", err)
@@ -305,7 +305,7 @@ func (c *Client) ListTasks(ctx context.Context, spaceID, dataType string, enable
 		if enabled != nil {
 			request["enabled"] = *enabled
 		}
-		if err := c.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskList", request, &response); err != nil {
+		if err := c.CallJSON(ctx, ServiceCollectMgr, "GetTaskList", request, &response); err != nil {
 			return nil, fmt.Errorf("GetTaskList: %w", err)
 		}
 		if !isRetInfoSuccess(response.RetInfo.Code) {
@@ -479,7 +479,7 @@ func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter)
 	}
 	var nodes []CloudNode
 	for page := 1; ; page++ {
-		raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", map[string]any{
+		raw, err := c.call(ctx, ServiceCloudNodeMgr, "GetNodeList", map[string]any{
 			"cloud_account_id": filter.CloudAccountID,
 			"namespace":        filter.Namespace,
 			"region":           filter.Region,
@@ -519,7 +519,7 @@ func (c *Client) InvokeFunction(ctx context.Context, nodeID string, event map[st
 	if strings.TrimSpace(nodeID) == "" {
 		return nil, fmt.Errorf("node_id is required")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/InvokeFunction", map[string]any{
+	raw, err := c.call(ctx, ServiceCloudNodeMgr, "InvokeFunction", map[string]any{
 		"node_id": nodeID, "event_data": event, "scf_invoke_type": "SCF_INVOKE_TYPE_REQUEST_RESPONSE",
 	})
 	if err != nil {
@@ -563,7 +563,7 @@ func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]Clou
 	if provider != "" {
 		body["provider"] = provider
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/ListCloudAccounts", body)
+	raw, err := c.call(ctx, ServiceCloudNodeMgr, "ListCloudAccounts", body)
 	if err != nil {
 		return nil, err
 	}
@@ -583,7 +583,7 @@ func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]Clou
 // CreateCloudAccount registers a cloud account before a fleet publish. COS
 // bucket creation remains CloudNode's responsibility during package upload.
 func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput) (*CloudAccount, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CreateCloudAccount", map[string]CloudAccountInput{"account": input})
+	raw, err := c.call(ctx, ServiceCloudNodeMgr, "CreateCloudAccount", map[string]CloudAccountInput{"account": input})
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +605,7 @@ func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput
 
 // UploadPackage 两阶段上传：InitPackageUpload -> COS PUT -> CompletePackageUpload。
 func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, data []byte) (*UploadPackageResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/InitPackageUpload", req)
+	raw, err := c.call(ctx, ServiceCloudNodeMgr, "InitPackageUpload", req)
 	if err != nil {
 		return nil, err
 	}
@@ -644,7 +644,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 		"file_md5":   hex.EncodeToString(sum[:]),
 		"file_size":  len(data),
 	}
-	raw, err = c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CompletePackageUpload", completeBody)
+	raw, err = c.call(ctx, ServiceCloudNodeMgr, "CompletePackageUpload", completeBody)
 	if err != nil {
 		return nil, err
 	}
@@ -662,7 +662,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 
 func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*SubmitNodeBatchResponse, error) {
 	nodes = c.withPublishFenceToCreateItems(nodes)
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitCreateNodes", map[string]any{"nodes": nodes})
+	raw, err := c.call(ctx, ServiceCloudNodeMgr, "SubmitCreateNodes", map[string]any{"nodes": nodes})
 	if err != nil {
 		return nil, err
 	}
@@ -671,7 +671,7 @@ func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) 
 
 func (c *Client) SubmitDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*SubmitNodeBatchResponse, error) {
 	deployments = c.withPublishFenceToDeployItems(deployments)
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeployNodes", map[string]any{"deployments": deployments})
+	raw, err := c.call(ctx, ServiceCloudNodeMgr, "SubmitDeployNodes", map[string]any{"deployments": deployments})
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +685,7 @@ func (c *Client) SubmitDeleteNodes(ctx context.Context, nodeIDs []string) (*Subm
 		body["collector_publish_lease_id"] = fence.LeaseID
 		body["collector_publish_fencing_token"] = fence.FencingToken
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeleteNodes", body)
+	raw, err := c.call(ctx, ServiceCloudNodeMgr, "SubmitDeleteNodes", body)
 	if err != nil {
 		return nil, err
 	}
@@ -696,7 +696,7 @@ func (c *Client) GetNodeBatchChange(ctx context.Context, jobID string) (*NodeBat
 	if strings.TrimSpace(jobID) == "" {
 		return nil, fmt.Errorf("GetNodeBatchChange: job_id is required")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeBatchChange", map[string]any{"job_id": jobID})
+	raw, err := c.call(ctx, ServiceCloudNodeMgr, "GetNodeBatchChange", map[string]any{"job_id": jobID})
 	if err != nil {
 		return nil, err
 	}

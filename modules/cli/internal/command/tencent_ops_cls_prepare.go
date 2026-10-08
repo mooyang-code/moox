@@ -7,16 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
 
 type clsPrepareOptions struct {
-	ControlURL        string
+	File              string
 	CloudAccountID    string
-	ServiceAccessKey  string
-	ServiceSecretKey  string
 	CredentialsOutput string
 }
 
@@ -43,6 +42,11 @@ func (e trustedCLSPrepareError) Unwrap() error { return e.err }
 
 var clsPrepareRunner prepareRunner = realPrepareRunner{}
 
+// clsPrepareOpenControl 打开访问控制面的客户端，测试替换它。
+var clsPrepareOpenControl = func(manifestFile string) (*adminclient.Client, func(), error) {
+	return useControlClient(nil, nil, manifestFile, "")
+}
+
 func newCLSPrepareCommand() *cobra.Command {
 	var opts clsPrepareOptions
 	cmd := &cobra.Command{
@@ -53,28 +57,25 @@ func newCLSPrepareCommand() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&opts.ControlURL, "control-url", "", "目标机 Admin service gateway 地址")
+	f.StringVar(&opts.File, "file", "", "moox.toml；访问控制面所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml")
 	f.StringVar(&opts.CloudAccountID, "cloud-account-id", "", "腾讯云账户 ID；缺省选择列表第一项")
-	f.StringVar(&opts.ServiceAccessKey, "service-access-key", "", "后台服务鉴权 AccessKey")
-	f.StringVar(&opts.ServiceSecretKey, "service-secret-key", "", "后台服务鉴权 SecretKey")
 	f.StringVar(&opts.CredentialsOutput, "credentials-output", "", "写入 0600 cls.env 的路径")
-	_ = cmd.MarkFlagRequired("control-url")
 	_ = cmd.MarkFlagRequired("credentials-output")
 	return cmd
 }
 
 func runCLSPrepare(cmd *cobra.Command, opts clsPrepareOptions) error {
-	opts.ControlURL = strings.TrimSpace(opts.ControlURL)
 	opts.CloudAccountID = strings.TrimSpace(opts.CloudAccountID)
 	opts.CredentialsOutput = strings.TrimSpace(opts.CredentialsOutput)
-	if opts.ControlURL == "" || opts.CredentialsOutput == "" {
-		return fmt.Errorf("--control-url and --credentials-output are required")
+	if opts.CredentialsOutput == "" {
+		return fmt.Errorf("--credentials-output is required")
 	}
 
-	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, "")
-	if client.ServiceAuth == nil {
-		return fmt.Errorf("service authentication is required for CLS account reveal")
+	client, closeControl, err := clsPrepareOpenControl(opts.File)
+	if err != nil {
+		return err
 	}
+	defer closeControl()
 	factory := func(secretID, secretKey string) (tencent.CLSAPI, error) {
 		return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
 			SecretID:  secretID,

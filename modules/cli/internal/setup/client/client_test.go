@@ -1,39 +1,45 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
-type fakeForwarder struct {
+// fakeGateway 把 Invoke 转成对 handler 的 POST /<服务名>/<方法>（protojson 编码），沿用各测试的 HTTP 处理函数。
+type fakeGateway struct {
 	handler http.Handler
-	remote  string
+	service string
 }
 
-func (f *fakeForwarder) ForwardLocal(ctx context.Context, remote string) (net.Listener, error) {
-	f.remote = remote
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func (f *fakeGateway) Invoke(ctx context.Context, servicePath, method string, req, rsp any, _ ...gatewayclient.CallOption) error {
+	f.service = servicePath
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req.(proto.Message))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	server := &http.Server{Handler: f.handler}
-	go func() { _ = server.Serve(listener) }()
-	go func() {
-		<-ctx.Done()
-		_ = server.Close()
-	}()
-	return listener, nil
+	request := httptest.NewRequest(http.MethodPost, "/"+servicePath+"/"+method, bytes.NewReader(raw)).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	f.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		return fmt.Errorf("HTTP %d", recorder.Code)
+	}
+	return protojson.Unmarshal(recorder.Body.Bytes(), rsp.(proto.Message))
 }
 
 func clientSnapshot(t *testing.T) *setupconfig.Snapshot {
@@ -76,10 +82,10 @@ host = "192.0.2.11"
 	return snapshot, path
 }
 
-func TestApplyUsesForwardedPrivateSetupEndpoint(t *testing.T) {
+func TestApplyCallsSetupService(t *testing.T) {
 	var capturedPath string
 	var capturedRequest pb.ApplySetupReq
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		capturedPath = request.URL.Path
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
@@ -89,11 +95,11 @@ func TestApplyUsesForwardedPrivateSetupEndpoint(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).Apply(context.Background(), clientSnapshot(t))
+	result, err := New(gateway).Apply(context.Background(), clientSnapshot(t))
 	require.NoError(t, err)
 	assert.Equal(t, "created", result.Action)
 	assert.Equal(t, 2, result.Hosts)
-	assert.Equal(t, "127.0.0.1:11110", forwarder.remote)
+	assert.Equal(t, "trpc.moox.admin.Setup", gateway.service)
 	assert.Equal(t, "/trpc.moox.admin.Setup/ApplySetup", capturedPath)
 	assert.Equal(t, "recognizable-secret-key", capturedRequest.GetTencentCloud().GetSecretKey())
 	assert.Empty(t, capturedRequest.GetSpaces())
@@ -101,7 +107,7 @@ func TestApplyUsesForwardedPrivateSetupEndpoint(t *testing.T) {
 
 func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 	var capturedRequest pb.ApplySetupReq
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.ApplySetupRsp{
@@ -116,7 +122,7 @@ func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 		Status: "active", AttributesJSON: `{"managed_by":"moox-cli"}`,
 	}}
 
-	result, err := New(forwarder).ApplyWithSpaces(context.Background(), clientSnapshot(t), spaces)
+	result, err := New(gateway).ApplyWithSpaces(context.Background(), clientSnapshot(t), spaces)
 	require.NoError(t, err)
 	require.Len(t, capturedRequest.GetSpaces(), 1)
 	assert.Equal(t, "stockcn", capturedRequest.GetSpaces()[0].GetSpaceId())
@@ -130,7 +136,7 @@ func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 
 func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 	var capturedRequest pb.GetSetupStatusReq
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.GetSetupStatusRsp{
@@ -139,7 +145,7 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).Status(context.Background(), clientSnapshot(t))
+	result, err := New(gateway).Status(context.Background(), clientSnapshot(t))
 	require.NoError(t, err)
 	assert.Equal(t, "completed", result.State)
 	assert.Equal(t, "recognizable-admin-password", capturedRequest.GetAdmin().GetPassword())
@@ -148,7 +154,7 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 
 func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
 	var capturedRequest pb.GetSetupStatusReq
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.GetSetupStatusRsp{
@@ -158,7 +164,7 @@ func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).StatusWithSpaces(context.Background(), clientSnapshot(t), []Space{{
+	result, err := New(gateway).StatusWithSpaces(context.Background(), clientSnapshot(t), []Space{{
 		SpaceID: "crypto", Name: "加密货币市场", Market: "crypto",
 		Timezone: "UTC", Status: "active", AttributesJSON: "{}",
 	}})
@@ -173,7 +179,7 @@ func TestApplyStoragePlacementCreatesRemoteLoopbackRoutesAndPublishesGatewayEndp
 	updated := map[string]*pb.ServiceDeployment{}
 	created := map[string]*pb.ServiceDeployment{}
 	var gatewayNode *pb.GatewayNode
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/trpc.moox.ops.SysDeploy/ListGatewayNodes":
 			response, _ := protojson.Marshal(&pb.ListGatewayNodesRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
@@ -218,10 +224,10 @@ func TestApplyStoragePlacementCreatesRemoteLoopbackRoutesAndPublishesGatewayEndp
 		}
 	})}
 
-	result, err := New(forwarder).ApplyStoragePlacement(context.Background(), "compute-1", "203.0.113.9")
+	result, err := New(gateway).ApplyStoragePlacement(context.Background(), "compute-1", "203.0.113.9")
 	require.NoError(t, err)
 	require.Equal(t, len(storageDeploymentNames), result.Deployments)
-	require.Equal(t, "127.0.0.1:11109", forwarder.remote)
+	require.Equal(t, "trpc.moox.ops.SysDeploy", gateway.service)
 	require.Equal(t, "compute-1", gatewayNode.GetNodeId())
 	require.Equal(t, "https://203.0.113.9:11001", gatewayNode.GetPublicAddress())
 	for _, name := range storageDeploymentNames {
@@ -233,7 +239,7 @@ func TestApplyStoragePlacementCreatesRemoteLoopbackRoutesAndPublishesGatewayEndp
 
 func TestActivateStoragePlacementEnablesLocalStorageRoutes(t *testing.T) {
 	updated := map[string]*pb.ServiceDeployment{}
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
 			var input pb.GetServiceDeploymentReq
@@ -256,7 +262,7 @@ func TestActivateStoragePlacementEnablesLocalStorageRoutes(t *testing.T) {
 		}
 	})}
 
-	result, err := New(forwarder).ActivateStoragePlacement(context.Background(), "control")
+	result, err := New(gateway).ActivateStoragePlacement(context.Background(), "control")
 	require.NoError(t, err)
 	require.Equal(t, len(storageDeploymentNames), result.Deployments)
 	for _, name := range storageDeploymentNames {
@@ -267,7 +273,7 @@ func TestActivateStoragePlacementEnablesLocalStorageRoutes(t *testing.T) {
 
 func TestApplyTradeConsolePlacementUpdatesControlRoute(t *testing.T) {
 	var updated *pb.ServiceDeployment
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
 			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
@@ -292,7 +298,7 @@ func TestApplyTradeConsolePlacementUpdatesControlRoute(t *testing.T) {
 		}
 	})}
 
-	require.NoError(t, New(forwarder).ApplyTradeConsolePlacement(context.Background(), "43.132.204.177"))
+	require.NoError(t, New(gateway).ApplyTradeConsolePlacement(context.Background(), "43.132.204.177"))
 	require.NotNil(t, updated)
 	assert.Equal(t, "control", updated.GetNodeId())
 	assert.Equal(t, "trade_console", updated.GetServiceName())
@@ -303,15 +309,15 @@ func TestApplyTradeConsolePlacementUpdatesControlRoute(t *testing.T) {
 }
 
 func TestApplyTradeConsolePlacementRejectsLoopback(t *testing.T) {
-	forwarder := &fakeForwarder{handler: http.NotFoundHandler()}
-	err := New(forwarder).ApplyTradeConsolePlacement(context.Background(), "127.0.0.1")
+	gateway := &fakeGateway{handler: http.NotFoundHandler()}
+	err := New(gateway).ApplyTradeConsolePlacement(context.Background(), "127.0.0.1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "trade_placement_invalid")
 }
 
 func TestDisableServiceDeploymentMarksExistingRowDisabled(t *testing.T) {
 	var updated *pb.ServiceDeployment
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"},"deployment":{"node_id":"compute","service_name":"moox_trade","service_kind":"trade","protocol":"http","host":"127.0.0.1","port":11210,"status":"active"}}`))
@@ -325,7 +331,7 @@ func TestDisableServiceDeploymentMarksExistingRowDisabled(t *testing.T) {
 			http.NotFound(w, request)
 		}
 	})}
-	require.NoError(t, New(forwarder).DisableServiceDeployment(context.Background(), "compute", "trade"))
+	require.NoError(t, New(gateway).DisableServiceDeployment(context.Background(), "compute", "trade"))
 	require.NotNil(t, updated)
 	assert.Equal(t, "moox_trade", updated.GetServiceName())
 	assert.Equal(t, "disabled", updated.GetStatus())
@@ -333,7 +339,7 @@ func TestDisableServiceDeploymentMarksExistingRowDisabled(t *testing.T) {
 
 func TestRegisterServiceDeploymentCreatesCanonicalMonitorRow(t *testing.T) {
 	var created *pb.ServiceDeployment
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":"NOT_FOUND"}}`))
@@ -349,7 +355,7 @@ func TestRegisterServiceDeploymentCreatesCanonicalMonitorRow(t *testing.T) {
 		}
 	})}
 
-	require.NoError(t, New(forwarder).RegisterServiceDeployment(context.Background(), "compute-1", "monitor", "203.0.113.10"))
+	require.NoError(t, New(gateway).RegisterServiceDeployment(context.Background(), "compute-1", "monitor", "203.0.113.10"))
 	require.NotNil(t, created)
 	assert.Equal(t, "compute-1", created.GetNodeId())
 	assert.Equal(t, "moox_monitor", created.GetServiceName())
@@ -360,7 +366,7 @@ func TestRegisterServiceDeploymentCreatesCanonicalMonitorRow(t *testing.T) {
 
 func TestRegisterServiceDeploymentPreservesExistingDefinition(t *testing.T) {
 	var updated *pb.ServiceDeployment
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
 			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
@@ -380,7 +386,7 @@ func TestRegisterServiceDeploymentPreservesExistingDefinition(t *testing.T) {
 		}
 	})}
 
-	require.NoError(t, New(forwarder).RegisterServiceDeployment(context.Background(), "control", "monitor", "192.0.2.99"))
+	require.NoError(t, New(gateway).RegisterServiceDeployment(context.Background(), "control", "monitor", "192.0.2.99"))
 	require.NotNil(t, updated)
 	assert.Equal(t, "active", updated.GetStatus())
 	assert.Equal(t, "127.0.0.1", updated.GetHost())
@@ -395,13 +401,13 @@ func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 		want string
 	}{
 		{name: "conflict", body: `{"ret_info":{"code":1,"msg":"setup_conflict"}}`, want: "setup_conflict"},
-		{name: "unexpected remote text", body: `recognizable-secret-key`, want: "setup_response_invalid"},
+		{name: "unexpected remote text", body: `recognizable-secret-key`, want: "setup_remote_failed"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, tt.body)
 			})}
-			_, err := New(forwarder).Apply(context.Background(), clientSnapshot(t))
+			_, err := New(gateway).Apply(context.Background(), clientSnapshot(t))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 			assert.NotContains(t, err.Error(), "recognizable-secret-key")
@@ -413,15 +419,15 @@ func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 func TestApplyDetectsManifestMutationBeforeRequest(t *testing.T) {
 	snapshot, path := clientSnapshotWithPath(t)
 	require.NoError(t, os.WriteFile(path, []byte("changed"), 0o600))
-	forwarder := &fakeForwarder{handler: http.NotFoundHandler()}
-	_, err := New(forwarder).Apply(context.Background(), snapshot)
+	gateway := &fakeGateway{handler: http.NotFoundHandler()}
+	_, err := New(gateway).Apply(context.Background(), snapshot)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config_changed")
 }
 
 func TestRefreshStoragePlacementFollowsControlAndKeepsPlacement(t *testing.T) {
 	updated := map[string]*pb.ServiceDeployment{}
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
 			var input pb.GetServiceDeploymentReq
@@ -453,7 +459,7 @@ func TestRefreshStoragePlacementFollowsControlAndKeepsPlacement(t *testing.T) {
 		}
 	})}
 
-	result, err := New(forwarder).RefreshStoragePlacement(context.Background(), "storage")
+	result, err := New(gateway).RefreshStoragePlacement(context.Background(), "storage")
 
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Deployments)
@@ -467,7 +473,7 @@ func TestRefreshStoragePlacementFollowsControlAndKeepsPlacement(t *testing.T) {
 }
 
 func TestRefreshStoragePlacementSkipsUnplacedNodes(t *testing.T) {
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	gateway := &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		var input pb.GetServiceDeploymentReq
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &input)
@@ -484,7 +490,7 @@ func TestRefreshStoragePlacementSkipsUnplacedNodes(t *testing.T) {
 		_, _ = w.Write(response)
 	})}
 
-	result, err := New(forwarder).RefreshStoragePlacement(context.Background(), "storage")
+	result, err := New(gateway).RefreshStoragePlacement(context.Background(), "storage")
 
 	require.NoError(t, err)
 	require.Zero(t, result.Deployments)

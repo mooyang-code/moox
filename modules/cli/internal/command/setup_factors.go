@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,7 +15,6 @@ import (
 
 	adminclient "github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 )
 
 var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -261,76 +258,25 @@ func pathWithin(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
+// remoteSetupFactor 经 SSH 隧道以 moox-cli 身份调用 FactorMgr。
 type remoteSetupFactor struct {
-	transport        setupssh.Client
-	listener         net.Listener
-	client           factorJSONClient
-	fallbackListener net.Listener
-	fallback         factorJSONClient
+	client factorJSONClient
+	close  func()
 }
 
 type factorJSONClient interface {
-	CallJSON(context.Context, string, string, any, any) error
+	CallJSON(ctx context.Context, servicePath, method string, body, response any) error
 }
 
-func defaultOpenSetupFactor(ctx context.Context, snapshot *setupconfig.Snapshot) (setupInitFactor, error) {
+func defaultOpenSetupFactor(_ context.Context, snapshot *setupconfig.Snapshot) (setupInitFactor, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("factor_setup_invalid")
 	}
-	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	client, closeControl, err := useControlClient(nil, snapshot, "", "")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("factor_gateway_unavailable: %w", err)
 	}
-	listener, err := transport.ForwardLocal(ctx, "127.0.0.1:11002")
-	if err != nil {
-		_ = transport.Close()
-		return nil, fmt.Errorf("factor_gateway_unavailable")
-	}
-	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
-	secretRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/gateway-moox-cli.key"))
-	if err != nil {
-		_ = listener.Close()
-		_ = transport.Close()
-		return nil, fmt.Errorf("factor_gateway_credentials_unavailable")
-	}
-	envRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/gateway-service.env"))
-	if err != nil {
-		_ = listener.Close()
-		_ = transport.Close()
-		return nil, fmt.Errorf("factor_gateway_credentials_unavailable")
-	}
-	nodeID := envValue(string(envRaw), "MOOX_GATEWAY_NODE_ID")
-	if nodeID == "" {
-		_ = listener.Close()
-		_ = transport.Close()
-		return nil, fmt.Errorf("factor_gateway_credentials_unavailable")
-	}
-	client := adminclient.New("http://" + listener.Addr().String())
-	client.ServiceAuth = &adminclient.ServiceAuthConfig{
-		AccessKey: "moox-cli", SecretKey: strings.TrimSpace(string(secretRaw)), Caller: "moox-cli", TargetNode: nodeID, ExpireSecs: 60,
-	}
-	// A stale gateway route cache can still point at the old tRPC port while
-	// Factor's HTTP service is healthy. Keep a loopback-only SSH fallback so a
-	// setup run can repair definitions without weakening the normal gateway
-	// authentication path. The fallback is never exposed outside the SSH
-	// tunnel and is only used for a gateway 502.
-	var fallbackListener net.Listener
-	var fallback factorJSONClient
-	if direct, directErr := transport.ForwardLocal(ctx, "127.0.0.1:11404"); directErr == nil {
-		fallbackListener = direct
-		fallback = adminclient.New("http://" + direct.Addr().String())
-	}
-	return &remoteSetupFactor{transport: transport, listener: listener, client: client, fallbackListener: fallbackListener, fallback: fallback}, nil
-}
-
-func envValue(raw, key string) string {
-	for _, line := range strings.Split(raw, "\n") {
-		name, value, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if ok && name == key {
-			return strings.Trim(strings.TrimSpace(value), "\"'")
-		}
-	}
-	return ""
+	return &remoteSetupFactor{client: client, close: closeControl}, nil
 }
 
 type factorAPIRetInfo struct {
@@ -388,15 +334,8 @@ func (r factorAPIResponse) err(method string) error {
 }
 
 func (r *remoteSetupFactor) call(ctx context.Context, method string, body any, response *factorAPIResponse) error {
-	path := "/api/admin/factormgr/" + method
-	if err := r.client.CallJSON(ctx, http.MethodPost, path, body, response); err != nil {
-		if r.fallback == nil || !strings.Contains(err.Error(), "HTTP 502") {
-			return err
-		}
-		if fallbackErr := r.fallback.CallJSON(ctx, http.MethodPost, "/trpc.moox.factor.FactorMgr/"+method, body, response); fallbackErr != nil {
-			return fallbackErr
-		}
-		return response.err(method)
+	if err := r.client.CallJSON(ctx, adminclient.ServiceFactorMgr, method, body, response); err != nil {
+		return err
 	}
 	return response.err(method)
 }
@@ -548,17 +487,8 @@ func canonicalJSON(raw string) string {
 }
 
 func (r *remoteSetupFactor) Close() error {
-	if r == nil {
-		return nil
-	}
-	if r.listener != nil {
-		_ = r.listener.Close()
-	}
-	if r.fallbackListener != nil {
-		_ = r.fallbackListener.Close()
-	}
-	if r.transport != nil {
-		return r.transport.Close()
+	if r != nil && r.close != nil {
+		r.close()
 	}
 	return nil
 }

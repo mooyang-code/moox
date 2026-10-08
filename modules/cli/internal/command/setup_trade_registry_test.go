@@ -1,22 +1,27 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestSyncTradeRegistryRequiresOwnerRouteBeforeSuccess(t *testing.T) {
@@ -24,7 +29,7 @@ func TestSyncTradeRegistryRequiresOwnerRouteBeforeSuccess(t *testing.T) {
 		for _, remote := range []bool{false, true} {
 			t.Run(strings.Join([]string{map[bool]string{true: "failure", false: "success"}[fail], map[bool]string{true: "remote", false: "local"}[remote]}, "/"), func(t *testing.T) {
 				ssh := &tradeRegistrySSH{t: t, rows: make(map[string]*pb.ServiceDeployment), failOwner: fail}
-				result, err := syncSetupServiceRegistry(context.Background(), ssh, ssh,
+				result, err := syncSetupServiceRegistry(context.Background(), ssh, ssh, setupclient.New(ssh),
 					setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", remote,
 					setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 				ssh.mu.Lock()
@@ -55,7 +60,7 @@ func TestSyncTradeRegistryCleansUpAfterRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ssh := &tradeRegistrySSH{t: t, rows: make(map[string]*pb.ServiceDeployment), cancelOwner: cancel}
-	result, err := syncSetupServiceRegistry(ctx, ssh, ssh,
+	result, err := syncSetupServiceRegistry(ctx, ssh, ssh, setupclient.New(ssh),
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", true,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.Error(t, err)
@@ -71,7 +76,7 @@ func TestSyncTradeRegistryCleansUpAfterRequestCancellation(t *testing.T) {
 
 func TestSyncTradeRegistryReportsCleanupFailure(t *testing.T) {
 	ssh := &tradeRegistrySSH{t: t, rows: make(map[string]*pb.ServiceDeployment), failOwner: true, stopError: errors.New("stop unavailable")}
-	_, err := syncSetupServiceRegistry(context.Background(), ssh, ssh,
+	_, err := syncSetupServiceRegistry(context.Background(), ssh, ssh, setupclient.New(ssh),
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", false,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.ErrorContains(t, err, "trade_owner_registry_failed")
@@ -80,7 +85,7 @@ func TestSyncTradeRegistryReportsCleanupFailure(t *testing.T) {
 
 func TestSyncTradeRegistryReportsDisableFailure(t *testing.T) {
 	ssh := &tradeRegistrySSH{t: t, rows: make(map[string]*pb.ServiceDeployment), failOwner: true, failDisable: true}
-	result, err := syncSetupServiceRegistry(context.Background(), ssh, ssh,
+	result, err := syncSetupServiceRegistry(context.Background(), ssh, ssh, setupclient.New(ssh),
 		setupconfig.Host{Name: "trade-node", Address: "203.0.113.9"}, "trade", false,
 		setupdeploy.ServiceResult{DeployDir: "/isolated/deployment"})
 	require.False(t, result.RegistrySynced)
@@ -116,116 +121,121 @@ func (s *tradeRegistrySSH) Run(ctx context.Context, argv []string, _ io.Reader) 
 	return setupssh.Result{}, nil
 }
 
-func (s *tradeRegistrySSH) ForwardLocal(ctx context.Context, _ string) (net.Listener, error) {
+// Invoke 把 setup client 的调用转成对 serveControl 的 HTTP 请求（protojson 编码）。
+func (s *tradeRegistrySSH) Invoke(ctx context.Context, servicePath, method string, req, rsp any, _ ...gatewayclient.CallOption) error {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	raw, err := protojson.Marshal(req.(proto.Message))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		raw, _ := io.ReadAll(r.Body)
-		if strings.HasSuffix(r.URL.Path, "/GetServiceDeployment") {
-			var req pb.GetServiceDeploymentReq
+	recorder := httptest.NewRecorder()
+	s.serveControl(recorder, httptest.NewRequest(http.MethodPost, "/"+servicePath+"/"+method, bytes.NewReader(raw)))
+	if recorder.Code != http.StatusOK {
+		return fmt.Errorf("HTTP %d", recorder.Code)
+	}
+	return protojson.Unmarshal(recorder.Body.Bytes(), rsp.(proto.Message))
+}
+
+func (s *tradeRegistrySSH) serveControl(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw, _ := io.ReadAll(r.Body)
+	if strings.HasSuffix(r.URL.Path, "/GetServiceDeployment") {
+		var req pb.GetServiceDeploymentReq
+		if protojson.Unmarshal(raw, &req) != nil {
+			http.Error(w, "invalid", 400)
+			return
+		}
+		row := s.rows[req.GetNodeId()+"/"+req.GetServiceName()]
+		if row == nil && req.GetServiceName() == "trade_console" {
+			row = &pb.ServiceDeployment{NodeId: "control", ServiceName: "trade_console", GatewayEnabled: true}
+		}
+		code := pb.ErrorCode_SUCCESS
+		if row == nil {
+			code = pb.ErrorCode_NOT_FOUND
+		}
+		encoded, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: code}, Deployment: row})
+		_, _ = w.Write(encoded)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/ListGatewayNodes") {
+		var req pb.ListGatewayNodesReq
+		if protojson.Unmarshal(raw, &req) != nil {
+			http.Error(w, "invalid", 400)
+			return
+		}
+		encoded, _ := protojson.Marshal(&pb.ListGatewayNodesRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Nodes: []*pb.GatewayNode{{NodeId: req.GetNodeId(), Name: req.GetNodeId(), Status: "enabled", AppliedRouteHash: "route-hash", LastSeenAt: time.Now().UTC().Format(time.RFC3339Nano)}}})
+		_, _ = w.Write(encoded)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/CreateGatewayNode") || strings.HasSuffix(r.URL.Path, "/UpdateGatewayNode") {
+		if strings.HasSuffix(r.URL.Path, "/CreateGatewayNode") {
+			var req pb.CreateGatewayNodeReq
 			if protojson.Unmarshal(raw, &req) != nil {
 				http.Error(w, "invalid", 400)
 				return
 			}
-			row := s.rows[req.GetNodeId()+"/"+req.GetServiceName()]
-			if row == nil && req.GetServiceName() == "trade_console" {
-				row = &pb.ServiceDeployment{NodeId: "control", ServiceName: "trade_console", GatewayEnabled: true}
-			}
-			code := pb.ErrorCode_SUCCESS
-			if row == nil {
-				code = pb.ErrorCode_NOT_FOUND
-			}
-			encoded, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: code}, Deployment: row})
+			encoded, _ := protojson.Marshal(&pb.CreateGatewayNodeRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Node: req.GetNode()})
 			_, _ = w.Write(encoded)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/ListGatewayNodes") {
-			var req pb.ListGatewayNodesReq
-			if protojson.Unmarshal(raw, &req) != nil {
-				http.Error(w, "invalid", 400)
-				return
-			}
-			encoded, _ := protojson.Marshal(&pb.ListGatewayNodesRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Nodes: []*pb.GatewayNode{{NodeId: req.GetNodeId(), Name: req.GetNodeId(), Status: "enabled", AppliedRouteHash: "route-hash", LastSeenAt: time.Now().UTC().Format(time.RFC3339Nano)}}})
-			_, _ = w.Write(encoded)
+		var req pb.UpdateGatewayNodeReq
+		if protojson.Unmarshal(raw, &req) != nil {
+			http.Error(w, "invalid", 400)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/CreateGatewayNode") || strings.HasSuffix(r.URL.Path, "/UpdateGatewayNode") {
-			if strings.HasSuffix(r.URL.Path, "/CreateGatewayNode") {
-				var req pb.CreateGatewayNodeReq
-				if protojson.Unmarshal(raw, &req) != nil {
-					http.Error(w, "invalid", 400)
-					return
-				}
-				encoded, _ := protojson.Marshal(&pb.CreateGatewayNodeRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Node: req.GetNode()})
-				_, _ = w.Write(encoded)
-				return
-			}
-			var req pb.UpdateGatewayNodeReq
-			if protojson.Unmarshal(raw, &req) != nil {
-				http.Error(w, "invalid", 400)
-				return
-			}
-			encoded, _ := protojson.Marshal(&pb.UpdateGatewayNodeRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Node: req.GetNode()})
-			_, _ = w.Write(encoded)
+		encoded, _ := protojson.Marshal(&pb.UpdateGatewayNodeRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Node: req.GetNode()})
+		_, _ = w.Write(encoded)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/GetGatewayNodeRoutes") {
+		var req pb.GetGatewayNodeRoutesReq
+		if protojson.Unmarshal(raw, &req) != nil {
+			http.Error(w, "invalid", 400)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/GetGatewayNodeRoutes") {
-			var req pb.GetGatewayNodeRoutesReq
-			if protojson.Unmarshal(raw, &req) != nil {
-				http.Error(w, "invalid", 400)
-				return
-			}
-			if req.GetNodeId() == "" {
-				http.Error(w, "invalid", 400)
-				return
-			}
-			encoded, _ := protojson.Marshal(&pb.GetGatewayNodeRoutesRsp{
-				RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, NodeId: req.GetNodeId(), RouteHash: "route-hash",
-				Routes: []*pb.GatewayRoute{
-					{ServiceId: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, AllowedCallers: []string{"strategy"}},
-					{ServiceId: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleAdminService", AllowedMethods: []string{"CreateTradingAccount", "UpdateTradingAccount", "GetTradingAccount", "ListTradingAccounts", "SetLeverage", "SyncTradingAccount", "CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts", "UpdateLogicalAccount", "AddLogicalAccountMember", "RemoveLogicalAccountMember", "PauseLogicalAccount", "ResumeLogicalAccount", "FlattenLogicalAccount", "PlaceManualOrder", "SubmitOrder", "CancelOrder", "GetOperatorAction", "GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills", "ListPositions", "CreatePaperSimulation", "ClosePaperSimulation", "GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings"}, AllowedCallers: []string{"admin-gateway"}},
-				},
-			})
-			_, _ = w.Write(encoded)
+		if req.GetNodeId() == "" {
+			http.Error(w, "invalid", 400)
 			return
 		}
-		var row *pb.ServiceDeployment
-		if strings.HasSuffix(r.URL.Path, "/CreateServiceDeployment") {
-			var req pb.CreateServiceDeploymentReq
-			if protojson.Unmarshal(raw, &req) != nil {
-				http.Error(w, "invalid", 400)
-				return
-			}
-			row = req.GetDeployment()
-		} else if strings.HasSuffix(r.URL.Path, "/UpdateServiceDeployment") {
-			var req pb.UpdateServiceDeploymentReq
-			if protojson.Unmarshal(raw, &req) != nil {
-				http.Error(w, "invalid", 400)
-				return
-			}
-			row = req.GetDeployment()
-		} else {
-			http.NotFound(w, r)
+		encoded, _ := protojson.Marshal(&pb.GetGatewayNodeRoutesRsp{
+			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, NodeId: req.GetNodeId(), RouteHash: "route-hash",
+			Routes: []*pb.GatewayRoute{
+				{ServiceId: "trade_owner", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleService", AllowedMethods: []string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, AllowedCallers: []string{"strategy"}},
+				{ServiceId: "trade_console", Address: "127.0.0.1:11200", ServicePath: "trpc.moox.trade.TradeConsoleAdminService", AllowedMethods: []string{"CreateTradingAccount", "UpdateTradingAccount", "GetTradingAccount", "ListTradingAccounts", "SetLeverage", "SyncTradingAccount", "CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts", "UpdateLogicalAccount", "AddLogicalAccountMember", "RemoveLogicalAccountMember", "PauseLogicalAccount", "ResumeLogicalAccount", "FlattenLogicalAccount", "PlaceManualOrder", "SubmitOrder", "CancelOrder", "GetOperatorAction", "GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills", "ListPositions", "CreatePaperSimulation", "ClosePaperSimulation", "GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings"}, AllowedCallers: []string{"admin-gateway"}},
+			},
+		})
+		_, _ = w.Write(encoded)
+		return
+	}
+	var row *pb.ServiceDeployment
+	if strings.HasSuffix(r.URL.Path, "/CreateServiceDeployment") {
+		var req pb.CreateServiceDeploymentReq
+		if protojson.Unmarshal(raw, &req) != nil {
+			http.Error(w, "invalid", 400)
 			return
 		}
-		if s.failOwner && row.GetServiceName() == "trade_owner" || s.failDisable && row.GetStatus() == "disabled" {
-			http.Error(w, "unavailable", 503)
+		row = req.GetDeployment()
+	} else if strings.HasSuffix(r.URL.Path, "/UpdateServiceDeployment") {
+		var req pb.UpdateServiceDeploymentReq
+		if protojson.Unmarshal(raw, &req) != nil {
+			http.Error(w, "invalid", 400)
 			return
 		}
-		s.rows[row.GetNodeId()+"/"+row.GetServiceName()] = row
-		if s.cancelOwner != nil && row.GetServiceName() == "trade_owner" && row.GetStatus() == "active" {
-			s.cancelOwner()
-		}
-		_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"}}`))
-	})}
-	s.t.Cleanup(func() { _ = server.Close() })
-	go func() { _ = server.Serve(listener) }()
-	return listener, nil
+		row = req.GetDeployment()
+	} else {
+		http.NotFound(w, r)
+		return
+	}
+	if s.failOwner && row.GetServiceName() == "trade_owner" || s.failDisable && row.GetStatus() == "disabled" {
+		http.Error(w, "unavailable", 503)
+		return
+	}
+	s.rows[row.GetNodeId()+"/"+row.GetServiceName()] = row
+	if s.cancelOwner != nil && row.GetServiceName() == "trade_owner" && row.GetStatus() == "active" {
+		s.cancelOwner()
+	}
+	_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"}}`))
 }

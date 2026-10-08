@@ -13,16 +13,18 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 // AppConfig Trade 应用配置。
 type AppConfig struct {
-	Database    DatabaseConfig    `yaml:"database"`
-	Admin       AdminConfig       `yaml:"admin"`
-	EventBus    EventBusConfig    `yaml:"eventbus"`
-	Runtime     RuntimeConfig     `yaml:"runtime"`
-	DNSResolver DNSResolverConfig `yaml:"dns_resolver"`
+	Database DatabaseConfig `yaml:"database"`
+	// GatewayClient 是 Trade 调用 Admin SecretMgr 使用的 gatewayclient 配置（trade 身份）。
+	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
+	EventBus      EventBusConfig       `yaml:"eventbus"`
+	Runtime       RuntimeConfig        `yaml:"runtime"`
+	DNSResolver   DNSResolverConfig    `yaml:"dns_resolver"`
 }
 
 // DNSResolverConfig is rendered from the sanitized dns_resolver section in
@@ -47,21 +49,6 @@ type RuntimeConfig struct {
 	LiveTradingEnabled bool `yaml:"live_trading_enabled"`
 }
 
-// AdminConfig configures Trade access to Admin secrets.
-type AdminConfig struct {
-	BaseURL     string            `yaml:"base_url"`
-	ServiceAuth ServiceAuthConfig `yaml:"service_auth"`
-}
-
-// ServiceAuthConfig 与 admin gateway.service_auth 保持一致。
-type ServiceAuthConfig struct {
-	AccessKey     string `yaml:"access_key"`
-	SecretKey     string `yaml:"secret_key"`
-	TargetNode    string `yaml:"target_node"`
-	CAFile        string `yaml:"ca_file"`
-	ExpireSeconds int64  `yaml:"expire_seconds"`
-}
-
 type EventBusConfig struct {
 	Enabled        bool     `yaml:"enabled"`
 	URLs           []string `yaml:"urls"`
@@ -78,13 +65,10 @@ func DefaultConfig() *AppConfig {
 			Path: "./data/moox_trade.db",
 		},
 		Runtime: RuntimeConfig{},
-		Admin: AdminConfig{
-			BaseURL: "https://106.53.107.122:11001",
-			ServiceAuth: ServiceAuthConfig{
-				AccessKey:     "moox-service",
-				SecretKey:     "",
-				ExpireSeconds: 60,
-			},
+		// 与部署布局一致：密钥和 CA 在安装根目录，目录缓存在组件的数据目录。
+		GatewayClient: gatewayclient.Config{
+			Mode: gatewayclient.ModeLocal, Caller: "trade", KeyFile: "../secrets/caller-trade.key",
+			CAFile: "../certs/moox-ca.crt", CacheDir: "./data/gatewayclient",
 		},
 		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
 		DNSResolver: DNSResolverConfig{
@@ -137,21 +121,6 @@ func (c *AppConfig) applyEnv() error {
 		}
 		c.Runtime.LiveTradingEnabled = enabled
 	}
-	if v := os.Getenv("MOOX_TRADE_ADMIN_URL"); v != "" {
-		c.Admin.BaseURL = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
-		c.Admin.ServiceAuth.AccessKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
-		c.Admin.ServiceAuth.SecretKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
-		c.Admin.ServiceAuth.TargetNode = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
-		c.Admin.ServiceAuth.CAFile = v
-	}
 	return nil
 }
 
@@ -175,7 +144,7 @@ func (c *AppConfig) Validate() error {
 	if err := c.DNSResolver.Validate(); err != nil {
 		return err
 	}
-	return nil
+	return c.GatewayClient.Validate()
 }
 
 func (c DNSResolverConfig) Validate() error {

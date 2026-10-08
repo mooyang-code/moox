@@ -6,22 +6,42 @@ package garbage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gorm.io/gorm"
-	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // historyRetention bounds the login and SSH session audit history.
 const historyRetention = 90 * 24 * time.Hour
 
-// CloudNodeGarbage 是 CloudNode 的垃圾回收接口；Admin 以 admin 身份经 gatewayclient 调用。
+// cloudNodeMgrService 是 CloudNode 管理服务的 tRPC 服务名。
+const cloudNodeMgrService = "trpc.moox.cloudnode.CloudNodeMgr"
+
+// CloudNodeGarbage 是 Admin 用到的 gatewayclient 能力：以 admin 身份转发 CloudNodeMgr.CollectGarbage。
+// 请求和响应都用 JSON 序列化，Admin 因此不必引用 CloudNode 的协议包。
 type CloudNodeGarbage interface {
-	CollectGarbage(context.Context, *cloudnodepb.CollectGarbageReq, ...client.Option) (*cloudnodepb.CollectGarbageRsp, error)
+	Forward(ctx context.Context, servicePath, method string, serialization int, body []byte, opts ...gatewayclient.CallOption) ([]byte, error)
+}
+
+// collectGarbageRsp 是 CollectGarbage 响应中用到的字段。tRPC 的 JSON 序列化输出 proto 字段名、枚举数值，
+// 64 位整数输出为字符串。
+type collectGarbageRsp struct {
+	RetInfo *struct {
+		Code *int   `json:"code"`
+		Msg  string `json:"msg"`
+	} `json:"ret_info"`
+	Packages     uint32      `json:"packages"`
+	CosObjects   uint32      `json:"cos_objects"`
+	CosBytes     json.Number `json:"cos_bytes"`
+	DeletedNodes uint32      `json:"deleted_nodes"`
+	NodeBatches  uint32      `json:"node_batches"`
+	Skipped      []string    `json:"skipped"`
 }
 
 // Collector removes system garbage once per timer invocation.
@@ -66,14 +86,21 @@ func (c *Collector) collectCloudNode(ctx context.Context) error {
 	if c.cloudNode == nil {
 		return errors.New("collect CloudNode garbage: admin 身份的 gateway_client 没有配置")
 	}
-	rsp, err := c.cloudNode.CollectGarbage(ctx, &cloudnodepb.CollectGarbageReq{})
+	raw, err := c.cloudNode.Forward(ctx, cloudNodeMgrService, "CollectGarbage", codec.SerializationTypeJSON, []byte("{}"))
 	if err != nil {
 		return fmt.Errorf("collect CloudNode garbage: %w", err)
 	}
-	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
-		return fmt.Errorf("collect CloudNode garbage: %s", rsp.GetRetInfo().GetMsg())
+	var rsp collectGarbageRsp
+	if err := json.Unmarshal(raw, &rsp); err != nil {
+		return fmt.Errorf("collect CloudNode garbage: 解析响应: %w", err)
 	}
-	log.InfoContextf(ctx, "[Garbage] cloudnode packages=%d cos_objects=%d cos_bytes=%d deleted_nodes=%d",
-		rsp.GetPackages(), rsp.GetCosObjects(), rsp.GetCosBytes(), rsp.GetDeletedNodes())
+	if rsp.RetInfo == nil || rsp.RetInfo.Code == nil {
+		return errors.New("collect CloudNode garbage: 响应缺少返回码")
+	}
+	if *rsp.RetInfo.Code != 0 {
+		return fmt.Errorf("collect CloudNode garbage: %s", rsp.RetInfo.Msg)
+	}
+	log.InfoContextf(ctx, "[Garbage] cloudnode packages=%d cos_objects=%d cos_bytes=%s deleted_nodes=%d node_batches=%d skipped=%v",
+		rsp.Packages, rsp.CosObjects, rsp.CosBytes, rsp.DeletedNodes, rsp.NodeBatches, rsp.Skipped)
 	return nil
 }

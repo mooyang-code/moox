@@ -1140,6 +1140,12 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return err
 	}
 	defer control.Close()
+	controlGateway, err := openControlGateway(snapshot.Manifest)
+	if err != nil {
+		return err
+	}
+	defer controlGateway.Close()
+	placements := setupclient.New(controlGateway)
 	paths := snapshot.Manifest.Paths.Resolved()
 	useControlGateway := sameHostEndpoint(host, snapshot.Manifest.ControlHost)
 	primarySecret, viewSecret, err := controlStorageInternalAuth(ctx, control, paths.ControlRoot)
@@ -1175,7 +1181,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		}
 	}
 	if !useControlGateway {
-		if _, err = setupclient.New(control).PrepareStoragePlacement(ctx, host.Name, host.Address); err != nil {
+		if _, err = placements.PrepareStoragePlacement(ctx, host.Name, host.Address); err != nil {
 			return err
 		}
 	}
@@ -1229,7 +1235,7 @@ chmod 600 "$dir/internal-admin.yaml"`}, bytes.NewReader(storageAdminEventBusCred
 		}
 	}
 	if !useControlGateway {
-		if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Name, host.Address); err != nil {
+		if _, err = placements.ApplyStoragePlacement(ctx, host.Name, host.Address); err != nil {
 			return err
 		}
 		// PrepareStoragePlacement clones the control-plane Storage deployment
@@ -1237,7 +1243,7 @@ chmod 600 "$dir/internal-admin.yaml"`}, bytes.NewReader(storageAdminEventBusCred
 		// disabled while Storage is absent; after this package has passed its
 		// readiness probe, explicitly activate the remote rows as well so the
 		// remote Gateway publishes DataView and PrimaryStore routes.
-		if _, err = setupclient.New(control).ActivateStoragePlacement(ctx, host.Name); err != nil {
+		if _, err = placements.ActivateStoragePlacement(ctx, host.Name); err != nil {
 			return err
 		}
 		if err = configureRemoteCollectorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
@@ -1246,7 +1252,7 @@ chmod 600 "$dir/internal-admin.yaml"`}, bytes.NewReader(storageAdminEventBusCred
 		if err = configureRemoteMonitorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
 			return err
 		}
-		if err = setupclient.New(control).DisableServiceDeployment(ctx, "control", "storage-view"); err != nil {
+		if err = placements.DisableServiceDeployment(ctx, "control", "storage-view"); err != nil {
 			return err
 		}
 		if err = ensureSetupStorageGatewayFirewall(ctx, snapshot, host.Address); err != nil {
@@ -1258,7 +1264,7 @@ chmod 600 "$dir/internal-admin.yaml"`}, bytes.NewReader(storageAdminEventBusCred
 		// gateway can resolve PrimaryStore and Metadata calls.
 		// Control-plane service deployments use the stable node id "control";
 		// the manifest host name is only an SSH/config alias.
-		if _, err = setupclient.New(control).ActivateStoragePlacement(ctx, "control"); err != nil {
+		if _, err = placements.ActivateStoragePlacement(ctx, "control"); err != nil {
 			return err
 		}
 	}
@@ -1683,6 +1689,12 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 	if deployErr != nil && !errors.Is(deployErr, setupdeploy.ErrBrowserCATrust) {
 		return deployErr
 	}
+	controlGateway, err := openControlGateway(snapshot.Manifest)
+	if err != nil {
+		return err
+	}
+	defer controlGateway.Close()
+	placements := setupclient.New(controlGateway)
 	// The control profile deliberately does not run Trade. When Trade is
 	// placed on the dedicated node selected by moox.toml, update the
 	// browser-facing control route after Admin has seeded its defaults; doing
@@ -1693,11 +1705,11 @@ func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, res
 		if resolveErr != nil {
 			return resolveErr
 		}
-		if err := setupclient.New(transport).ApplyTradeConsolePlacementForNode(ctx, tradeHost.Address, tradeHost.Name); err != nil {
+		if err := placements.ApplyTradeConsolePlacementForNode(ctx, tradeHost.Address, tradeHost.Name); err != nil {
 			return err
 		}
 	}
-	if err := refreshSetupStoragePlacements(ctx, snapshot, setupclient.New(transport)); err != nil {
+	if err := refreshSetupStoragePlacements(ctx, snapshot, placements); err != nil {
 		return err
 	}
 	return deployErr
@@ -1987,6 +1999,16 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 	if closeControl {
 		defer control.Close()
 	}
+	controlGateway, err := openControlGateway(snapshot.Manifest)
+	if err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if rollbackErr := setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service); rollbackErr != nil {
+			return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w; rollback: %v", err, rollbackErr)
+		}
+		return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+	}
+	defer controlGateway.Close()
 	var previousTradeCA []byte
 	var previousTradeCAExists bool
 	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
@@ -2023,7 +2045,7 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 			return setupdeploy.ServiceResult{}, fmt.Errorf("trade_gateway_ca_sync_failed: %w", err)
 		}
 	}
-	result, err = syncSetupServiceRegistry(ctx, transport, control, host, service, tradeConsoleBindAddress != "", result, snapshot.Manifest.Paths.Resolved().ControlRoot)
+	result, err = syncSetupServiceRegistry(ctx, transport, control, setupclient.New(controlGateway), host, service, tradeConsoleBindAddress != "", result, snapshot.Manifest.Paths.Resolved().ControlRoot)
 	if err != nil {
 		if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2141,9 +2163,8 @@ func probeTradeGatewayFromControl(ctx context.Context, control setupssh.Client, 
 	return nil
 }
 
-func syncSetupServiceRegistry(ctx context.Context, transport, control setupssh.Client, host setupconfig.Host, service string, remoteTrade bool, result setupdeploy.ServiceResult, controlRoots ...string) (setupdeploy.ServiceResult, error) {
+func syncSetupServiceRegistry(ctx context.Context, transport, control setupssh.Client, controlClient *setupclient.Client, host setupconfig.Host, service string, remoteTrade bool, result setupdeploy.ServiceResult, controlRoots ...string) (setupdeploy.ServiceResult, error) {
 	isTrade := strings.EqualFold(strings.TrimSpace(service), "trade") || strings.EqualFold(strings.TrimSpace(service), "moox_trade")
-	controlClient := setupclient.New(control)
 	var tradeSnapshot setupclient.TradeDeploymentSnapshot
 	failRegistration := func(cause error, stage string) (setupdeploy.ServiceResult, error) {
 		// Registration may have committed before the caller timed out. Cleanup
@@ -2259,21 +2280,21 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 }
 
 func defaultSetupApply(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
-	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	controlGateway, err := openControlGateway(snapshot.Manifest)
 	if err != nil {
 		return setupclient.ApplyResult{}, err
 	}
-	defer transport.Close()
-	return setupclient.New(transport).Apply(ctx, snapshot)
+	defer controlGateway.Close()
+	return setupclient.New(controlGateway).Apply(ctx, snapshot)
 }
 
 func defaultSetupStatus(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.StatusResult, error) {
-	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	controlGateway, err := openControlGateway(snapshot.Manifest)
 	if err != nil {
 		return setupclient.StatusResult{}, err
 	}
-	defer transport.Close()
-	return setupclient.New(transport).Status(ctx, snapshot)
+	defer controlGateway.Close()
+	return setupclient.New(controlGateway).Status(ctx, snapshot)
 }
 
 func defaultSetupApplyWithSpaces(
@@ -2281,12 +2302,12 @@ func defaultSetupApplyWithSpaces(
 	snapshot *setupconfig.Snapshot,
 	spaces []setupclient.Space,
 ) (setupclient.ApplyResult, error) {
-	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	controlGateway, err := openControlGateway(snapshot.Manifest)
 	if err != nil {
 		return setupclient.ApplyResult{}, err
 	}
-	defer transport.Close()
-	return setupclient.New(transport).ApplyWithSpaces(ctx, snapshot, spaces)
+	defer controlGateway.Close()
+	return setupclient.New(controlGateway).ApplyWithSpaces(ctx, snapshot, spaces)
 }
 
 func defaultSetupStatusWithSpaces(
@@ -2294,12 +2315,12 @@ func defaultSetupStatusWithSpaces(
 	snapshot *setupconfig.Snapshot,
 	spaces []setupclient.Space,
 ) (setupclient.StatusResult, error) {
-	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	controlGateway, err := openControlGateway(snapshot.Manifest)
 	if err != nil {
 		return setupclient.StatusResult{}, err
 	}
-	defer transport.Close()
-	return setupclient.New(transport).StatusWithSpaces(ctx, snapshot, spaces)
+	defer controlGateway.Close()
+	return setupclient.New(controlGateway).StatusWithSpaces(ctx, snapshot, spaces)
 }
 
 func dialSetupHost(ctx context.Context, host setupconfig.Host) (setupssh.Client, error) {

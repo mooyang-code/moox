@@ -7,16 +7,19 @@ import (
 	"os"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 // Config is the root moox-cloudnode configuration.
 type Config struct {
-	Database   DatabaseConfig   `yaml:"database"`
-	NodeBatch  NodeBatchConfig  `yaml:"node_batch"`
-	TencentSCF TencentSCFConfig `yaml:"tencent_scf"`
-	Debug      DebugConfig      `yaml:"debug"`
-	Health     HealthConfig     `yaml:"health"`
+	// GatewayClient 是 CloudNode 调用 Admin（发布租约、SecretMgr）使用的 gatewayclient 配置（cloudnode 身份）。
+	GatewayClient gatewayclient.Config `yaml:"gateway_client"`
+	Database      DatabaseConfig       `yaml:"database"`
+	NodeBatch     NodeBatchConfig      `yaml:"node_batch"`
+	TencentSCF    TencentSCFConfig     `yaml:"tencent_scf"`
+	Debug         DebugConfig          `yaml:"debug"`
+	Health        HealthConfig         `yaml:"health"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -81,7 +84,7 @@ func (c *Config) Validate() error {
 	if c.NodeBatch.PollInterval < 100*time.Millisecond || c.NodeBatch.PollInterval > 10*time.Second {
 		return fmt.Errorf("node_batch.poll_interval must be between 100ms and 10s")
 	}
-	return nil
+	return c.GatewayClient.Validate()
 }
 
 func (c *Config) applyEnv() {
@@ -99,6 +102,11 @@ func (c *Config) applyEnv() {
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
+		// 与部署布局一致：密钥和 CA 在安装根目录，目录缓存在组件的数据目录。
+		GatewayClient: gatewayclient.Config{
+			Mode: gatewayclient.ModeLocal, Caller: "cloudnode", KeyFile: "../secrets/caller-cloudnode.key",
+			CAFile: "../certs/moox-ca.crt", CacheDir: "./data/gatewayclient",
+		},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox_cloudnode.db",

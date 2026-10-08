@@ -1,19 +1,13 @@
 package cloudcredential
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"strings"
-	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"google.golang.org/protobuf/encoding/protojson"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type TencentCredential struct {
@@ -26,80 +20,13 @@ type Resolver struct {
 	getValue func(context.Context, *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error)
 }
 
-func NewFromEnv() (*Resolver, error) {
-	targetNode := gatewayauth.ServiceGatewayNodeID()
-	credentials := gatewayauth.CredentialsFromEnv()
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_HTTP_URL")), "/")
-	if baseURL == "" {
-		baseURL = "http://127.0.0.1:11002"
-	}
-	if targetNode == "" || credentials.KeyID == "" || credentials.Secret == "" || credentials.Caller == "" {
-		return nil, fmt.Errorf("cloud credential resolver requires gateway HTTP URL, target node, key id, caller and service secret")
-	}
-	client, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: 10 * time.Second})
-	if err != nil {
-		return nil, fmt.Errorf("create cloud credential gateway client: %w", err)
-	}
+// New 用给定的 tRPC 客户端选项（gatewayclient，cloudnode 身份）经 SecretMgr 读取云账号凭据。
+// GetSecretValue 是只读方法，连接中断时 gatewayclient 会重试一次。
+func New(options []client.Option) *Resolver {
+	secrets := adminpb.NewSecretMgrClientProxy(options...)
 	return &Resolver{getValue: func(ctx context.Context, req *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error) {
-		return getSecretValue(ctx, client, baseURL, targetNode, credentials, req)
-	}}, nil
-}
-
-func getSecretValue(
-	ctx context.Context,
-	client *http.Client,
-	baseURL string,
-	targetNode string,
-	credentials gatewayauth.Credentials,
-	req *adminpb.GetSecretValueReq,
-) (*adminpb.GetSecretValueRsp, error) {
-	body, err := protojson.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal getValue secret request: %w", err)
-	}
-	const path = "/api/service/secret/GetSecretValue"
-	for attempt := 0; attempt < 2; attempt++ {
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
-		if err != nil {
-			return nil, fmt.Errorf("create getValue secret request: %w", err)
-		}
-		headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
-			Method: http.MethodPost, Path: path, Body: body,
-			TargetNode: targetNode, Caller: credentials.Caller,
-		}, time.Now())
-		if err != nil {
-			return nil, fmt.Errorf("sign getValue secret request: %w", err)
-		}
-		httpReq.Header = headers
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpRsp, err := client.Do(httpReq)
-		if err != nil {
-			if attempt == 0 && ctx.Err() == nil {
-				// GetSecretValue is an idempotent read. Re-sign the request after
-				// dropping stale keep-alive sockets so a gateway-side idle close
-				// does not make the CloudNode Tencent credentials unavailable.
-				gatewayauth.CloseIdleConnections(client)
-				continue
-			}
-			return nil, fmt.Errorf("send getValue secret request: %w", err)
-		}
-		if httpRsp.StatusCode < 200 || httpRsp.StatusCode >= 300 {
-			_, _ = io.Copy(io.Discard, io.LimitReader(httpRsp.Body, 4096))
-			_ = httpRsp.Body.Close()
-			return nil, fmt.Errorf("getValue secret HTTP %d", httpRsp.StatusCode)
-		}
-		var rsp adminpb.GetSecretValueRsp
-		raw, err := io.ReadAll(io.LimitReader(httpRsp.Body, 1<<20))
-		_ = httpRsp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("read getValue secret response: %w", err)
-		}
-		if err := protojson.Unmarshal(raw, &rsp); err != nil {
-			return nil, fmt.Errorf("decode getValue secret response: %w", err)
-		}
-		return &rsp, nil
-	}
-	return nil, fmt.Errorf("send getValue secret request: retry exhausted")
+		return secrets.GetSecretValue(ctx, req)
+	}}
 }
 
 func (r *Resolver) Resolve(ctx context.Context, account store.CloudAccount) (TencentCredential, error) {

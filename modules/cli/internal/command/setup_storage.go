@@ -22,6 +22,7 @@ import (
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -30,7 +31,6 @@ import (
 const (
 	storageMetadataRemoteAddress = "127.0.0.1:20200"
 	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
-	adminSpaceRemoteAddress      = "127.0.0.1:11107"
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
 	storageLocalProvenanceFile   = "release/storage-artifacts/build-provenance.json"
 	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
@@ -1441,13 +1441,12 @@ root="$1"
 curl -kfsS https://127.0.0.1:9527/ >/dev/null`, "moox-browser-e2e", controlRoot}, nil); err != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
 	}
-	adminListener, err := controlTransport.ForwardLocal(ctx, adminSpaceRemoteAddress)
+	controlGateway, err := openControlGateway(snapshot.Manifest)
 	if err != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
 	}
-	defer adminListener.Close()
-	adminOptions := []client.Option{client.WithTarget("ip://" + adminListener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("http")}
-	adminSpaces := &storageAdminSpaceProxy{proxy: adminpb.NewSpaceMgrClientProxy(adminOptions...), options: adminOptions}
+	defer controlGateway.Close()
+	adminSpaces := &storageAdminSpaceProxy{proxy: adminpb.NewSpaceMgrClientProxy(controlGateway.ClientOptions(gatewayclient.WithTimeout(30 * time.Second))...)}
 	fixture, cleanup, err := createStorageBrowserFixture(ctx, storageSession, adminSpaces)
 	if err != nil {
 		return storageBrowserResult{}, err

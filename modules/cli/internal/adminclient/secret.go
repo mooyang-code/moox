@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 )
 
 type SecretMaterial struct {
@@ -17,10 +16,7 @@ type SecretMaterial struct {
 }
 
 func (c *Client) GetSecretValue(ctx context.Context, secretID string) (*SecretMaterial, error) {
-	if c.ServiceAuth == nil {
-		return nil, fmt.Errorf("service authentication is required to reveal secrets")
-	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/secret/GetSecretValue", map[string]any{"secret_id": secretID})
+	raw, err := c.call(ctx, ServiceSecretMgr, "GetSecretValue", map[string]any{"secret_id": secretID})
 	if err != nil {
 		return nil, err
 	}

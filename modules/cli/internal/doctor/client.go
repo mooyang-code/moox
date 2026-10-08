@@ -10,15 +10,17 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
+// Client 读取 Monitor 的诊断上下文和 SysDeploy 的部署记录。
 type Client struct {
 	monitor   monitorpb.MonitorMgrClientProxy
 	sysdeploy adminpb.SysDeployClientProxy
 }
 
-func New(monitorTarget, sysdeployTarget string) *Client {
+// New 用给定的 tRPC 客户端选项（gatewayclient 的 ClientOptions）创建客户端。
+func New(options []client.Option) *Client {
 	return &Client{
-		monitor:   monitorpb.NewMonitorMgrClientProxy(client.WithTarget(monitorTarget), client.WithProtocol("http"), client.WithNetwork("tcp")),
-		sysdeploy: adminpb.NewSysDeployClientProxy(client.WithTarget(sysdeployTarget), client.WithProtocol("http"), client.WithNetwork("tcp")),
+		monitor:   monitorpb.NewMonitorMgrClientProxy(options...),
+		sysdeploy: adminpb.NewSysDeployClientProxy(options...),
 	}
 }
 

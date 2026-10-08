@@ -90,12 +90,7 @@ type collectorPackageOptions struct {
 
 type collectorPublishOptions struct {
 	collectorPackageOptions
-	ControlURL  string
-	AccessToken string
-	SpaceID     string
-	// 后台服务签名鉴权（推荐，取代登录态 AccessToken）
-	ServiceAccessKey               string
-	ServiceSecretKey               string
+	SpaceID                        string
 	CloudAccountID                 string
 	Namespace                      string
 	Runtime                        string
@@ -144,6 +139,8 @@ type collectorPublishOptions struct {
 	RuntimeServiceSecretKey  string
 	canaryProof              *collectorSCFCanaryProof
 	canaryRegion             string
+	// control 是测试注入的控制面客户端；为空时经 SSH 隧道创建。
+	control *adminclient.Client
 }
 
 type collectorSCFTrustMaterial struct {
@@ -153,38 +150,29 @@ type collectorSCFTrustMaterial struct {
 	ServiceGatewayCAPEM      []byte
 	StoragePrimaryAuthSecret string
 	StorageViewAuthSecret    string
-	CLIServiceKey            string
 	CollectorServiceKey      string
 }
 
 type collectorPublishStatusOptions struct {
-	ControlURL       string
-	AccessToken      string
-	ServiceAccessKey string
-	ServiceSecretKey string
-	File             string
-	SpaceID          string
-	JobID            string
+	File    string
+	SpaceID string
+	JobID   string
+	control *adminclient.Client
 }
 
 type collectorStockCNActivateOptions struct {
-	ControlURL       string
-	AccessToken      string
-	ServiceAccessKey string
-	ServiceSecretKey string
 	SpaceID          string
 	File             string
 	Version          string
 	RegionPackageIDs []string
+	control          *adminclient.Client
 }
 
 type collectorDeployOptions struct {
 	collectorPackageOptions
 	StoragePrimaryAuthSecret string
 	EventBusCredentialFile   string
-	ControlURL               string
-	ServiceAccessKey         string
-	ServiceSecretKey         string
+	File                     string
 	SpaceID                  string
 	CloudAccountID           string
 	NodeID                   string
@@ -193,30 +181,25 @@ type collectorDeployOptions struct {
 	PackageType              string
 	BizType                  string
 	Runtime                  string
+	control                  *adminclient.Client
 }
 
 type collectorDeleteOptions struct {
-	ControlURL       string
-	AccessToken      string
-	ServiceAccessKey string
-	ServiceSecretKey string
-	File             string
-	SpaceID          string
-	Namespace        string
-	Region           string
-	Confirm          bool
-	DryRun           bool
-	Wait             bool
+	File      string
+	SpaceID   string
+	Namespace string
+	Region    string
+	Confirm   bool
+	DryRun    bool
+	Wait      bool
+	control   *adminclient.Client
 }
 
 type collectorProbeOptions struct {
-	ControlURL       string
-	AccessToken      string
-	ServiceAccessKey string
-	ServiceSecretKey string
-	SpaceID          string
-	Region           string
-	File             string
+	SpaceID string
+	Region  string
+	File    string
+	control *adminclient.Client
 }
 
 var collectorDeployFlags collectorDeployOptions
@@ -427,9 +410,7 @@ func init() {
 	addCollectorPackageFlags(collectorFunctionPublishSubmitCmd, &collectorPublishFlags.collectorPackageOptions)
 	addCollectorPackageFlags(collectorFunctionDeployCmd, &collectorDeployFlags.collectorPackageOptions)
 
-	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ControlURL, "control-url", "", "Control service base URL")
-	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 access_key")
-	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.File, "file", "", "moox.toml；访问控制面所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	collectorFunctionPackageCmd.Flags().StringVar(&collectorPackageFlags.SpaceID, "space-id", "", "space id; selects the matching SCF config directory")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
@@ -442,11 +423,7 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.Runtime, "runtime", "Go1", "SCF runtime")
 
 	deleteFlags := collectorFunctionDeleteCmd.Flags()
-	deleteFlags.StringVar(&collectorDeleteFlags.ControlURL, "control-url", "", "Control service base URL")
-	deleteFlags.StringVar(&collectorDeleteFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
-	deleteFlags.StringVar(&collectorDeleteFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
-	deleteFlags.StringVar(&collectorDeleteFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
-	deleteFlags.StringVar(&collectorDeleteFlags.File, "file", "", "optional moox.toml; enables manifest-backed service auth/CA")
+	deleteFlags.StringVar(&collectorDeleteFlags.File, "file", "", "moox.toml；访问控制面所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml")
 	deleteFlags.StringVar(&collectorDeleteFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	deleteFlags.StringVar(&collectorDeleteFlags.Namespace, "namespace", "", "只删除指定 SCF 命名空间中的节点")
 	deleteFlags.StringVar(&collectorDeleteFlags.Region, "region", "", "只删除指定地域的 SCF 节点")
@@ -454,28 +431,16 @@ func init() {
 	deleteFlags.BoolVar(&collectorDeleteFlags.DryRun, "dry-run", false, "只列出目标，不提交删除任务")
 	deleteFlags.BoolVar(&collectorDeleteFlags.Wait, "wait", true, "提交后等待异步任务完成")
 	probeFlags := collectorFunctionProbeCmd.Flags()
-	probeFlags.StringVar(&collectorProbeFlags.ControlURL, "control-url", "", "Control service base URL")
-	probeFlags.StringVar(&collectorProbeFlags.AccessToken, "access-token", "", "Control access token")
-	probeFlags.StringVar(&collectorProbeFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名 access key")
-	probeFlags.StringVar(&collectorProbeFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret key")
 	probeFlags.StringVar(&collectorProbeFlags.SpaceID, "space-id", "", "space id")
 	probeFlags.StringVar(&collectorProbeFlags.Region, "region", "", "只探测指定地域")
-	probeFlags.StringVar(&collectorProbeFlags.File, "file", "", "optional moox.toml; stockcn uses it only to report the configured Timer count")
+	probeFlags.StringVar(&collectorProbeFlags.File, "file", "", "moox.toml；访问控制面所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml；stockcn 还从中读取配置的 Timer 数量")
 	activateFlags := collectorFunctionActivateStockCNCmd.Flags()
-	activateFlags.StringVar(&collectorStockCNActivateFlags.ControlURL, "control-url", "", "Control service base URL")
-	activateFlags.StringVar(&collectorStockCNActivateFlags.AccessToken, "access-token", "", "Control access token")
-	activateFlags.StringVar(&collectorStockCNActivateFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名 access key")
-	activateFlags.StringVar(&collectorStockCNActivateFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret key")
 	activateFlags.StringVar(&collectorStockCNActivateFlags.SpaceID, "space-id", "stockcn", "space id")
 	activateFlags.StringVar(&collectorStockCNActivateFlags.File, "file", "", "moox.toml manifest")
 	activateFlags.StringVar(&collectorStockCNActivateFlags.Version, "version", "", "expected deployed package version")
 	activateFlags.StringArrayVar(&collectorStockCNActivateFlags.RegionPackageIDs, "region-package-id", nil, "exact package identity as REGION=PACKAGE_ID; repeat for every enabled stockcn region")
 
 	submitFlags := collectorFunctionPublishSubmitCmd.Flags()
-	submitFlags.StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
-	submitFlags.StringVar(&collectorPublishFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN (登录态, 不推荐)")
-	submitFlags.StringVar(&collectorPublishFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
-	submitFlags.StringVar(&collectorPublishFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	submitFlags.StringVar(&collectorPublishFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	submitFlags.StringVar(&collectorPublishFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
 	submitFlags.StringVar(&collectorPublishFlags.Runtime, "runtime", "", "SCF runtime (defaults to Go1)")
@@ -498,14 +463,10 @@ func init() {
 	submitFlags.StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/market-fetch-publisher.yaml", "0600 market-fetch-publisher EventBus credential YAML")
 	submitFlags.IntVar(&collectorPublishFlags.NodeCount, "node-count", 50, "number of SCF nodes in the collector fleet")
 	submitFlags.StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "", "stable function name prefix used to identify the fleet")
-	submitFlags.StringVar(&collectorPublishFlags.File, "file", "", "moox.toml; when scf_fetcher is enabled, regions and function counts are read from it")
+	submitFlags.StringVar(&collectorPublishFlags.File, "file", "", "moox.toml；启用 scf_fetcher 时从中读取地域和函数数量。未指定时按单次 zip 发布，访问控制面仍读当前目录的 moox.toml")
 
 	statusFlags := collectorFunctionPublishStatusCmd.Flags()
-	statusFlags.StringVar(&collectorPublishStatusFlags.ControlURL, "control-url", "", "Control service base URL")
-	statusFlags.StringVar(&collectorPublishStatusFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
-	statusFlags.StringVar(&collectorPublishStatusFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id")
-	statusFlags.StringVar(&collectorPublishStatusFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key")
-	statusFlags.StringVar(&collectorPublishStatusFlags.File, "file", "", "optional moox.toml; enables manifest-backed service auth/CA")
+	statusFlags.StringVar(&collectorPublishStatusFlags.File, "file", "", "moox.toml；访问控制面所需的 SSH 连接信息取自此文件，默认读当前目录的 moox.toml")
 	statusFlags.StringVar(&collectorPublishStatusFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	statusFlags.StringVar(&collectorPublishStatusFlags.JobID, "job-id", "", "node batch job id")
 }
@@ -631,9 +592,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, err
 		}
 	}
-	if opts.ControlURL == "" {
-		return collectorPublishSummary{}, fmt.Errorf("--control-url is required")
-	}
 	if opts.CloudAccountID == "" && strings.TrimSpace(opts.File) == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--cloud-account-id is required")
 	}
@@ -703,11 +661,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if fetcherConfig != nil && strings.TrimSpace(opts.ZipPath) != "" {
 		return collectorPublishSummary{}, fmt.Errorf("--zip is not allowed with --file manifest deployments; rebuild the package from control-plane trust material")
 	}
-	if fetcherConfig == nil {
-		if err := validateCollectorPublishAuth(opts); err != nil {
-			return collectorPublishSummary{}, err
-		}
-	} else {
+	if fetcherConfig != nil {
 		limits := setupconfig.TencentSCFLimits{}
 		if manifest != nil {
 			limits = manifest.Manifest.SCFFetcher.TencentLimits
@@ -738,8 +692,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return collectorPublishSummary{}, err
 	}
-	serviceGatewayCAFile := ""
-	manifestServiceAuth := false
 	var collectorCanaryTrust collectorSCFTrustMaterial
 	if fetcherConfig != nil {
 		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
@@ -747,33 +699,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, trustErr
 		}
 		collectorCanaryTrust = trustMaterial
-		if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
-			opts.ServiceAccessKey = "moox-cli"
-			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
-			manifestServiceAuth = true
-		}
-		if err := validateCollectorPublishAuth(opts); err != nil {
-			return collectorPublishSummary{}, err
-		}
-		if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
-			file, writeErr := os.CreateTemp("", "moox-collector-service-ca-")
-			if writeErr != nil {
-				return collectorPublishSummary{}, fmt.Errorf("create control service CA file: %w", writeErr)
-			}
-			serviceGatewayCAFile = file.Name()
-			if writeErr = file.Chmod(0o600); writeErr == nil {
-				_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
-			}
-			closeErr := file.Close()
-			if writeErr == nil {
-				writeErr = closeErr
-			}
-			if writeErr != nil {
-				_ = os.Remove(serviceGatewayCAFile)
-				return collectorPublishSummary{}, fmt.Errorf("write control service CA file: %w", writeErr)
-			}
-			defer os.Remove(serviceGatewayCAFile)
-		}
 		// The credential file on the control host is intentionally an internal
 		// publisher credential and commonly contains a loopback NATS URL. SCF
 		// must never receive that URL: replace only the endpoint with the
@@ -838,14 +763,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if leaseSpaceID == "" {
 		return collectorPublishSummary{}, fmt.Errorf("collector publish requires a target space for the control-plane lease")
 	}
-	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, leaseSpaceID)
-	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
-		client.ServiceAuth.CAFile = serviceGatewayCAFile
+	client, closeControl, err := useControlClient(opts.control, manifest, opts.File, leaseSpaceID)
+	if err != nil {
+		return collectorPublishSummary{}, err
 	}
-	if manifestServiceAuth && client.ServiceAuth != nil {
-		client.ServiceAuth.Caller = "moox-cli"
-		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
-	}
+	defer closeControl()
 	publishBaseCtx := ctx
 	var leaseGuard *collectorPublishLeaseGuard
 	defer func() {
@@ -1437,9 +1359,6 @@ type collectorStockCNActivationSummary struct {
 // diagnostic only.
 func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivateOptions) (summary collectorStockCNActivationSummary, resultErr error) {
 	summary = collectorStockCNActivationSummary{SpaceID: opts.SpaceID, PackageVersion: opts.Version}
-	if strings.TrimSpace(opts.ControlURL) == "" {
-		return summary, fmt.Errorf("--control-url is required")
-	}
 	if strings.TrimSpace(opts.File) == "" {
 		return summary, fmt.Errorf("--file is required")
 	}
@@ -1479,44 +1398,15 @@ func activateStockCNCollection(ctx context.Context, opts collectorStockCNActivat
 	if err := preflightCollectorBlacklistRuntime(ctx, manifest, fetcherConfig); err != nil {
 		return summary, err
 	}
-	serviceGatewayCAFile := ""
-	manifestServiceAuth := false
 	trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
 	if trustErr != nil {
 		return summary, trustErr
 	}
-	if strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
-		opts.ServiceAccessKey = "moox-cli"
-		opts.ServiceSecretKey = trustMaterial.CLIServiceKey
-		manifestServiceAuth = true
-		if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
-			file, writeErr := os.CreateTemp("", "moox-collector-activate-service-ca-")
-			if writeErr != nil {
-				return summary, fmt.Errorf("create control service CA: %w", writeErr)
-			}
-			serviceGatewayCAFile = file.Name()
-			if writeErr = file.Chmod(0o600); writeErr == nil {
-				_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
-			}
-			closeErr := file.Close()
-			if writeErr == nil {
-				writeErr = closeErr
-			}
-			if writeErr != nil {
-				_ = os.Remove(serviceGatewayCAFile)
-				return summary, fmt.Errorf("write control service CA: %w", writeErr)
-			}
-			defer os.Remove(serviceGatewayCAFile)
-		}
+	client, closeControl, err := useControlClient(opts.control, manifest, opts.File, fetcherConfig.SpaceID)
+	if err != nil {
+		return summary, err
 	}
-	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, fetcherConfig.SpaceID)
-	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
-		client.ServiceAuth.CAFile = serviceGatewayCAFile
-	}
-	if manifestServiceAuth && client.ServiceAuth != nil {
-		client.ServiceAuth.Caller = "moox-cli"
-		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
-	}
+	defer closeControl()
 	canaryRegion, selectErr := selectCollectorSCFCanaryRegion(fetcherConfig, activateLimits, "", "")
 	if selectErr != nil {
 		return summary, selectErr
@@ -1933,14 +1823,6 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 	// fleet.  Keep the material when an internal CA is present for other
 	// trigger types, but treat it as optional here.
 	serviceGatewayCA, _ := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "certs/caddy/root.crt"))
-	collectorServiceKeyRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/gateway-moox-cli.key"))
-	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("read control CLI service credential: %w", err)
-	}
-	collectorServiceKey, err := normalizeCollectorServiceKey(collectorServiceKeyRaw)
-	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("validate control CLI service credential: %w", err)
-	}
 	runtimeServiceKeyRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/gateway-collector.key"))
 	if err != nil {
 		return collectorSCFTrustMaterial{}, fmt.Errorf("read control Collector runtime credential: %w", err)
@@ -1956,7 +1838,6 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 		ServiceGatewayCAPEM:      serviceGatewayCA,
 		StoragePrimaryAuthSecret: storagePrimaryAuthSecret,
 		StorageViewAuthSecret:    storageViewAuthSecret,
-		CLIServiceKey:            collectorServiceKey,
 		CollectorServiceKey:      runtimeServiceKey,
 	}, nil
 }
@@ -2135,22 +2016,6 @@ func readCollectorZipEntry(zipPath, name string) ([]byte, error) {
 		return io.ReadAll(io.LimitReader(reader, 4*1024*1024))
 	}
 	return nil, fmt.Errorf("SCF package requires %s", name)
-}
-
-func validateCollectorPublishAuth(opts collectorPublishOptions) error {
-	accessToken := defaultFlag(opts.AccessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
-	accessKey := defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
-	secretKey := defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
-	if strings.TrimSpace(accessToken) != "" {
-		return nil
-	}
-	if strings.TrimSpace(accessKey) == "" || strings.TrimSpace(secretKey) == "" {
-		return fmt.Errorf(
-			"control authentication is required; set MOOX_ACCESS_TOKEN or both " +
-				"MOOX_GATEWAY_SERVICE_KEY_ID and MOOX_GATEWAY_SERVICE_SECRET_KEY",
-		)
-	}
-	return nil
 }
 
 func inspectCollectorFleet(
@@ -2819,7 +2684,7 @@ func submitCollectorTimerRuntimeConfigs(ctx context.Context, client *adminclient
 			} `json:"ret_info"`
 			JobID string `json:"job_id"`
 		}
-		if err := client.CallJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs", map[string]any{"nodes": patches[start:end]}, &response); err != nil {
+		if err := client.CallJSON(ctx, adminclient.ServiceCloudNodeMgr, "SubmitUpdateNodeRuntimeConfigs", map[string]any{"nodes": patches[start:end]}, &response); err != nil {
 			return settleOnError(classifyCollectorSubmitError("submit Timer runtime-config batch", err))
 		}
 		if response.RetInfo == nil || response.RetInfo.Code != 0 && response.RetInfo.Code != 200 {
@@ -2909,59 +2774,15 @@ func collectorSCFCanaryEventForProof(opts collectorPublishOptions, nodeID, batch
 }
 
 func publishCollectorFunctionStatus(ctx context.Context, opts collectorPublishStatusOptions) (*adminclient.NodeBatchChangeResponse, error) {
-	if strings.TrimSpace(opts.ControlURL) == "" {
-		return nil, fmt.Errorf("--control-url is required")
-	}
 	if strings.TrimSpace(opts.JobID) == "" {
 		return nil, fmt.Errorf("--job-id is required")
 	}
-	serviceGatewayCAFile := ""
-	manifestServiceAuth := false
-	var manifest *setupconfig.Snapshot
 	spaceID := strings.TrimSpace(defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
-	if strings.TrimSpace(opts.File) != "" {
-		_, loadedManifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, spaceID)
-		if err != nil {
-			return nil, err
-		}
-		manifest = loadedManifest
-		if manifest != nil && strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
-			trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
-			if trustErr != nil {
-				return nil, trustErr
-			}
-			opts.ServiceAccessKey = "moox-cli"
-			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
-			manifestServiceAuth = true
-			if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
-				file, writeErr := os.CreateTemp("", "moox-collector-status-service-ca-")
-				if writeErr != nil {
-					return nil, fmt.Errorf("create control service CA: %w", writeErr)
-				}
-				serviceGatewayCAFile = file.Name()
-				if writeErr = file.Chmod(0o600); writeErr == nil {
-					_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
-				}
-				closeErr := file.Close()
-				if writeErr == nil {
-					writeErr = closeErr
-				}
-				if writeErr != nil {
-					_ = os.Remove(serviceGatewayCAFile)
-					return nil, fmt.Errorf("write control service CA: %w", writeErr)
-				}
-				defer os.Remove(serviceGatewayCAFile)
-			}
-		}
+	client, closeControl, err := useControlClient(opts.control, nil, opts.File, spaceID)
+	if err != nil {
+		return nil, err
 	}
-	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
-	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
-		client.ServiceAuth.CAFile = serviceGatewayCAFile
-	}
-	if manifestServiceAuth && client.ServiceAuth != nil && manifest != nil {
-		client.ServiceAuth.Caller = "moox-cli"
-		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
-	}
+	defer closeControl()
 	jobIDs := splitJobIDs(opts.JobID)
 	if len(jobIDs) == 1 {
 		return client.GetNodeBatchChange(ctx, jobIDs[0])
@@ -3026,10 +2847,6 @@ func mergeBatchStatus(current, next string) string {
 }
 
 func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) (summaryResult *collectorDeleteSummary, retErr error) {
-	controlURL := strings.TrimSpace(opts.ControlURL)
-	if controlURL == "" {
-		return nil, fmt.Errorf("--control-url is required")
-	}
 	spaceID := strings.TrimSpace(defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
 	if spaceID == "" {
 		return nil, fmt.Errorf("--space-id is required")
@@ -3041,52 +2858,11 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		return nil, fmt.Errorf("market_fetcher deletion requires --wait so the publish lease covers the asynchronous CloudNode batch")
 	}
 
-	serviceGatewayCAFile := ""
-	manifestServiceAuth := false
-	var manifest *setupconfig.Snapshot
-	if strings.TrimSpace(opts.File) != "" {
-		_, loadedManifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, spaceID)
-		if err != nil {
-			return nil, err
-		}
-		manifest = loadedManifest
-		if manifest != nil && strings.TrimSpace(opts.AccessToken) == "" && strings.TrimSpace(opts.ServiceAccessKey) == "" {
-			trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
-			if trustErr != nil {
-				return nil, trustErr
-			}
-			opts.ServiceAccessKey = "moox-cli"
-			opts.ServiceSecretKey = trustMaterial.CLIServiceKey
-			manifestServiceAuth = true
-			if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
-				file, writeErr := os.CreateTemp("", "moox-collector-delete-service-ca-")
-				if writeErr != nil {
-					return nil, fmt.Errorf("create control service CA: %w", writeErr)
-				}
-				serviceGatewayCAFile = file.Name()
-				if writeErr = file.Chmod(0o600); writeErr == nil {
-					_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
-				}
-				closeErr := file.Close()
-				if writeErr == nil {
-					writeErr = closeErr
-				}
-				if writeErr != nil {
-					_ = os.Remove(serviceGatewayCAFile)
-					return nil, fmt.Errorf("write control service CA: %w", writeErr)
-				}
-				defer os.Remove(serviceGatewayCAFile)
-			}
-		}
+	client, closeControl, err := useControlClient(opts.control, nil, opts.File, spaceID)
+	if err != nil {
+		return nil, err
 	}
-	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
-	if serviceGatewayCAFile != "" && client.ServiceAuth != nil {
-		client.ServiceAuth.CAFile = serviceGatewayCAFile
-	}
-	if manifestServiceAuth && client.ServiceAuth != nil && manifest != nil {
-		client.ServiceAuth.Caller = "moox-cli"
-		client.ServiceAuth.TargetNode = manifest.Manifest.ControlHost.Name
-	}
+	defer closeControl()
 	namespace := strings.TrimSpace(opts.Namespace)
 	region := strings.TrimSpace(opts.Region)
 	if opts.DryRun {
@@ -3253,18 +3029,15 @@ type collectorProbeReport struct {
 }
 
 func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*collectorProbeReport, error) {
-	controlURL := strings.TrimSpace(opts.ControlURL)
-	if controlURL == "" {
-		if strings.TrimSpace(opts.File) == "" {
-			return nil, fmt.Errorf("--control-url is required")
-		}
-		return probeCollectorEgressViaControlHost(ctx, opts)
-	}
 	spaceID := defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID"))
 	if spaceID == "" {
 		return nil, fmt.Errorf("--space-id is required")
 	}
-	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
+	client, closeControl, err := useControlClient(opts.control, nil, opts.File, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer closeControl()
 	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{Region: opts.Region, NodeType: "scf-event", BizType: "market_fetcher"})
 	if err != nil {
 		return nil, err
@@ -3286,70 +3059,6 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 		return nil, fmt.Errorf("no active market_fetcher SCF nodes are available for egress probe")
 	}
 	return probeCollectorEgressNodes(ctx, client, eligible, stockCN, expectedCount)
-}
-
-func probeCollectorEgressViaControlHost(ctx context.Context, opts collectorProbeOptions) (*collectorProbeReport, error) {
-	spaceID := defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID"))
-	if spaceID == "" {
-		return nil, fmt.Errorf("--space-id is required")
-	}
-	absFile, err := filepath.Abs(strings.TrimSpace(opts.File))
-	if err != nil {
-		return nil, fmt.Errorf("config_invalid: resolve moox.toml path")
-	}
-	snapshot, err := setupconfig.Load(absFile, filepath.Dir(absFile))
-	if err != nil {
-		return nil, err
-	}
-	defer clearSetupSecrets(snapshot)
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
-	if err != nil {
-		return nil, err
-	}
-	defer control.Close()
-	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
-	region := strings.TrimSpace(opts.Region)
-	result, runErr := control.Run(ctx, []string{"bash", "-lc", `set -euo pipefail
-control_root="$1"
-space_id="$2"
-region="$3"
-set -a
-. "${control_root}/secrets/gateway-moox-cli.env"
-set +a
-cli="${control_root}/bin/moox-cli"
-if [[ -n "${region}" ]]; then
-  exec "${cli}" collector function probe-egress --control-url http://127.0.0.1:11002 --space-id "${space_id}" --region "${region}"
-fi
-exec "${cli}" collector function probe-egress --control-url http://127.0.0.1:11002 --space-id "${space_id}"
-`, "moox-probe-egress", controlRoot, spaceID, region}, nil)
-	stdout := strings.TrimSpace(result.Stdout)
-	report := &collectorProbeReport{}
-	if stdout != "" {
-		if err := json.Unmarshal([]byte(stdout), report); err != nil {
-			start := strings.LastIndex(stdout, "{")
-			end := strings.LastIndex(stdout, "}")
-			if start >= 0 && end > start {
-				_ = json.Unmarshal([]byte(stdout[start:end+1]), report)
-			}
-		}
-	}
-	if runErr != nil {
-		detail := strings.TrimSpace(result.Stderr)
-		if detail == "" {
-			detail = strings.TrimSpace(result.Stdout)
-		}
-		if len(detail) > 400 {
-			detail = detail[:400]
-		}
-		if report != nil && len(report.Results) > 0 {
-			return report, fmt.Errorf("control host probe-egress failed: %s", detail)
-		}
-		if detail == "" {
-			return report, fmt.Errorf("control host probe-egress failed")
-		}
-		return report, fmt.Errorf("control host probe-egress failed: %s", detail)
-	}
-	return report, nil
 }
 
 func probeCollectorEgressNodes(ctx context.Context, client *adminclient.Client, eligible []adminclient.CloudNode, stockCN bool, expectedCount int) (*collectorProbeReport, error) {
@@ -4532,9 +4241,6 @@ func collectorRuntimeConfigInt(values map[string]string, key string, fallback, m
 }
 
 func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (collectorDeploySummary, error) {
-	if opts.ControlURL == "" {
-		return collectorDeploySummary{}, fmt.Errorf("--control-url is required")
-	}
 	if opts.CloudAccountID == "" {
 		return collectorDeploySummary{}, fmt.Errorf("--cloud-account-id is required")
 	}
@@ -4579,7 +4285,11 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		return collectorDeploySummary{}, err
 	}
 
-	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
+	client, closeControl, err := useControlClient(opts.control, nil, opts.File, opts.SpaceID)
+	if err != nil {
+		return collectorDeploySummary{}, err
+	}
+	defer closeControl()
 	uploadResp, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
 		PackageName:      defaultFlag(opts.PackageName, "moox-collector"),
 		Version:          defaultFlag(opts.Version, "dev"),
@@ -4614,29 +4324,6 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 	summary.Operation = "deploy_nodes"
 	summary.TotalCount = deployResp.TotalCount
 	return summary, nil
-}
-
-func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKey string, spaceID string) *adminclient.Client {
-	client := adminclient.New(controlURL)
-	// A full stock Instrument snapshot can take longer than the ordinary
-	// control-plane request budget while the SCF invokes public providers.
-	// Keep the client bounded, but do not cancel a healthy invocation at 45s.
-	client.HTTPClient = &http.Client{Timeout: 2 * time.Minute}
-	client.AccessToken = defaultFlag(accessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
-	client.SpaceID = defaultFlag(spaceID, os.Getenv("MOOX_SPACE_ID"))
-	accessKey := defaultFlag(serviceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
-	secretKey := defaultFlag(serviceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
-	if accessKey != "" && secretKey != "" {
-		client.ServiceAuth = &adminclient.ServiceAuthConfig{
-			AccessKey:  accessKey,
-			SecretKey:  secretKey,
-			Caller:     defaultFlag(os.Getenv("MOOX_GATEWAY_CALLER"), "moox-cli"),
-			TargetNode: defaultFlag(os.Getenv("MOOX_GATEWAY_TARGET_NODE"), os.Getenv("MOOX_GATEWAY_NODE_ID")),
-			CAFile:     os.Getenv("MOOX_GATEWAY_CA_FILE"),
-			ExpireSecs: 60,
-		}
-	}
-	return client
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {

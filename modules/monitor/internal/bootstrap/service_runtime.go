@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -14,6 +15,7 @@ import (
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -57,6 +59,14 @@ func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, dom
 	}
 }
 
+// newSysDeploySource 返回经 gatewayclient 读取 SysDeploy 的来源；运行时没有 gatewayclient 时返回 nil。
+func newSysDeploySource(runtime *Runtime) monitorsysdeploy.Source {
+	if runtime == nil || runtime.Gateway == nil {
+		return nil
+	}
+	return monitorsysdeploy.NewClientSource(runtime.Gateway.ClientOptions(gatewayclient.WithTimeout(10 * time.Second)))
+}
+
 func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime) func(context.Context) (int, error) {
 	if cfg == nil || runtime == nil {
 		return nil
@@ -65,7 +75,7 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
+	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, newSysDeploySource(runtime))
 	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
 		count, err := syncer.Sync(syncCtx)
 		if err != nil {

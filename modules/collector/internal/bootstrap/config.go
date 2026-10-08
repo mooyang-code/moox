@@ -27,7 +27,6 @@ type Config struct {
 	StockCN             StockCNConfig            `yaml:"stockcn"`
 	PeriodReadiness     PeriodReadinessConfig    `yaml:"period_readiness"`
 	KlineResample       KlineResampleConfig      `yaml:"kline_resample"`
-	SysDeploy           SysDeployConfig          `yaml:"sysdeploy"`
 	Health              HealthConfig             `yaml:"health"`
 	DNS                 DNSConfig                `yaml:"dns"`
 	DNSResolver         DNSResolverConfig        `yaml:"dns_resolver"`
@@ -74,6 +73,24 @@ type StorageConfig struct {
 type CollectorRuntimeConfig struct {
 	GatewayTarget string `yaml:"gateway_target"`
 	NodeID        string `yaml:"node_id"`
+}
+
+// Dependencies 是写入 SCF 调用载荷的网关地址，取自配置。Collector 自己调用其他组件都走 gatewayclient。
+type Dependencies struct {
+	// CollectorRuntimeGatewayTarget、CollectorRuntimeGatewayNodeID 是 SCF 领取 Timer 批次时访问的网关。
+	CollectorRuntimeGatewayTarget string
+	CollectorRuntimeGatewayNodeID string
+	// InvokeStorageRPCGatewayTarget 是 SCF 写入 Storage 时访问的网关。
+	InvokeStorageRPCGatewayTarget string
+}
+
+// SCFTargets 返回写入 SCF 调用载荷的网关地址。
+func (c *Config) SCFTargets() Dependencies {
+	return Dependencies{
+		CollectorRuntimeGatewayTarget: strings.TrimSpace(c.CollectorRuntime.GatewayTarget),
+		CollectorRuntimeGatewayNodeID: strings.TrimSpace(c.CollectorRuntime.NodeID),
+		InvokeStorageRPCGatewayTarget: strings.TrimSpace(c.Storage.GatewayTarget),
+	}
 }
 
 // CollectorRetentionConfig bounds the process-level execution-history cleanup.
@@ -132,23 +149,6 @@ type KlineResampleConfig struct {
 	StaleRunningAfter           time.Duration `yaml:"stale_running_after"`
 	DefaultSettleDelay          time.Duration `yaml:"default_settle_delay"`
 	RepairLookbackBuckets       int           `yaml:"repair_lookback_buckets"`
-}
-
-// SysDeployConfig describes optional dependency discovery through admin SysDeploy.
-type SysDeployConfig struct {
-	AdminGatewayURL string            `yaml:"admin_gateway_url"`
-	ServiceAuth     ServiceAuthConfig `yaml:"service_auth"`
-}
-
-// ServiceAuthConfig describes backend HMAC auth for /api/service calls.
-type ServiceAuthConfig struct {
-	AccessKey     string `yaml:"access_key"`
-	SecretKey     string `yaml:"secret_key"`
-	Caller        string `yaml:"caller"`
-	TargetNode    string `yaml:"target_node"`
-	CAFile        string `yaml:"ca_file"`
-	CAPEMBase64   string `yaml:"ca_pem_base64"`
-	ExpireSeconds int64  `yaml:"expire_seconds"`
 }
 
 // HealthConfig controls the lightweight HTTP health endpoint.
@@ -214,27 +214,6 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
-	}
-	if v := os.Getenv("MOOX_COLLECTOR_ADMIN_GATEWAY_URL"); v != "" {
-		c.SysDeploy.AdminGatewayURL = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.TargetNode = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.AccessKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.SecretKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CALLER"); v != "" {
-		c.SysDeploy.ServiceAuth.Caller = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
-		c.SysDeploy.ServiceAuth.CAFile = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CA_PEM_B64"); v != "" {
-		c.SysDeploy.ServiceAuth.CAPEMBase64 = v
 	}
 	if v := os.Getenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET"); v != "" {
 		c.Storage.GatewayTarget = v
@@ -450,9 +429,6 @@ func Default() *Config {
 			WorkerPollInterval: 5 * time.Second, WorkerMaxSourceKeysPerClaim: 20000,
 			StaleRunningAfter: 2 * time.Minute, DefaultSettleDelay: 10 * time.Second,
 			RepairLookbackBuckets: 3,
-		},
-		SysDeploy: SysDeployConfig{
-			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},
 		},
 		Health: HealthConfig{
 			Addr: ":11412",

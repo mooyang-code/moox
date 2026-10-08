@@ -36,7 +36,6 @@ func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_DB_PATH", "./override/collector.db")
 	t.Setenv("MOOX_COLLECTOR_HEALTH_ADDR", "127.0.0.1:16012")
 	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET", "ip://127.0.0.1:30100")
-	t.Setenv("MOOX_GATEWAY_CALLER", "collector")
 
 	path := writeCollectorConfig(t, `
 database:
@@ -50,7 +49,6 @@ storage:
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
 	assert.Equal(t, "ip://127.0.0.1:30100", cfg.Storage.GatewayTarget)
-	assert.Equal(t, "collector", cfg.SysDeploy.ServiceAuth.Caller)
 }
 
 func TestCollectorRuntimeGatewayConfigIsExplicitPair(t *testing.T) {

@@ -18,7 +18,7 @@ func TestRegisterTradeCreatesNodeLocalOwnerRouteIdempotently(t *testing.T) {
 		"control/trade_console": {NodeId: "control", ServiceName: "trade_console", Host: "203.0.113.9", Port: 11200},
 	}
 	browser := proto.Clone(rows["control/trade_console"])
-	c := New(tradeRegistryForwarder(t, rows, ""))
+	c := New(tradeRegistryGateway(t, rows, ""))
 	for range 2 {
 		require.NoError(t, c.RegisterServiceDeployment(context.Background(), "trade-node", "trade", "203.0.113.9"))
 	}
@@ -59,7 +59,7 @@ func TestRegisterTradeCreatesNodeLocalOwnerRouteIdempotently(t *testing.T) {
 
 func TestRegisterTradePropagatesOwnerRouteFailure(t *testing.T) {
 	rows := make(map[string]*pb.ServiceDeployment)
-	err := New(tradeRegistryForwarder(t, rows, "trade_owner")).RegisterServiceDeployment(context.Background(), "trade-node", "trade", "203.0.113.9")
+	err := New(tradeRegistryGateway(t, rows, "trade_owner")).RegisterServiceDeployment(context.Background(), "trade-node", "trade", "203.0.113.9")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "trade_owner")
 }
@@ -90,17 +90,17 @@ func TestStrategyRegistrationMigratesExistingNativePortToHTTP(t *testing.T) {
 			Host: "127.0.0.1", Port: 11430, GatewayPath: "trpc.moox.strategy.StrategyMgr",
 		},
 	}
-	c := New(tradeRegistryForwarder(t, rows, ""))
+	c := New(tradeRegistryGateway(t, rows, ""))
 	require.NoError(t, c.RegisterServiceDeployment(context.Background(), "control", "strategy", "127.0.0.1"))
 	updated := rows["control/moox_strategy"]
 	require.Equal(t, int32(11433), updated.GetPort())
 	require.Equal(t, "http", updated.GetProtocol())
 }
 
-func tradeRegistryForwarder(t *testing.T, rows map[string]*pb.ServiceDeployment, failService string) *fakeForwarder {
+func tradeRegistryGateway(t *testing.T, rows map[string]*pb.ServiceDeployment, failService string) *fakeGateway {
 	t.Helper()
 	nodes := make(map[string]*pb.GatewayNode)
-	return &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return &fakeGateway{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		var response proto.Message

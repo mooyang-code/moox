@@ -8,25 +8,14 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// MooxConfig moox服务配置
-type MooxConfig struct {
-	AuthTarget string `yaml:"auth_target"` // 认证服务地址
-}
-
 // Config CLI 配置。
 type Config struct {
-	Storage struct {
-		Target string `yaml:"target"`
-	} `yaml:"storage"`
-
-	MooX *MooxConfig `yaml:"moox"` // moox服务配置
-
 	Doctor DoctorConfig `yaml:"doctor"`
 }
 
+// DoctorConfig 是 doctor 命令的配置。doctor 经本机主机网关以 moox-cli 身份调用 Monitor 与 SysDeploy，
+// 密钥和 CA 取自发布根目录下的 secrets/caller-moox-cli.key 与 certs/moox-ca.crt。
 type DoctorConfig struct {
-	MonitorTarget           string `yaml:"monitor_target"`
-	SysDeployTarget         string `yaml:"sysdeploy_target"`
 	NodeID                  string `yaml:"node_id"`
 	ReleaseRoot             string `yaml:"release_root"`
 	SeedPath                string `yaml:"seed_path"`
@@ -35,7 +24,6 @@ type DoctorConfig struct {
 
 func (c *Config) EffectiveDoctor() DoctorConfig {
 	value := DoctorConfig{
-		MonitorTarget: "ip://127.0.0.1:11410", SysDeployTarget: "ip://127.0.0.1:11109",
 		ReleaseRoot: ".", SeedPath: "config/setup/service-deployments.yaml",
 		DatasetHealthPolicyPath: "config/setup/dataset-health-policy.yaml",
 	}
@@ -50,12 +38,6 @@ func (c *Config) EffectiveDoctor() DoctorConfig {
 }
 
 func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
-	if source.MonitorTarget != "" {
-		target.MonitorTarget = source.MonitorTarget
-	}
-	if source.SysDeployTarget != "" {
-		target.SysDeployTarget = source.SysDeployTarget
-	}
 	if source.NodeID != "" {
 		target.NodeID = source.NodeID
 	}
@@ -72,7 +54,6 @@ func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 
 func overrideDoctorFromEnv(value *DoctorConfig) {
 	for name, target := range map[string]*string{
-		"MOOX_DOCTOR_MONITOR_TARGET": &value.MonitorTarget, "MOOX_DOCTOR_SYSDEPLOY_TARGET": &value.SysDeployTarget,
 		"MOOX_NODE_ID": &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
 		"MOOX_SERVICE_DEPLOYMENTS_SEED": &value.SeedPath,
 		"MOOX_DATASET_HEALTH_POLICY":    &value.DatasetHealthPolicyPath,

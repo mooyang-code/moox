@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/require"
@@ -23,21 +24,21 @@ func TestDisableCollectorBlacklistedTimersBeforePublishing(t *testing.T) {
 			waited := false
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/api/admin/cloudnode/GetNodeList":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 					_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": []adminclient.CloudNode{
 						{NodeID: "blocked", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": true}},
 						{NodeID: "disabled", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": false}},
 						{NodeID: "allowed", Region: "ap-singapore", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer", Metadata: map[string]any{"timer_enabled": true}},
 						{NodeID: "invoke", Region: "ap-guangzhou", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke"},
 					}})
-				case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs":
 					var request struct {
 						Nodes []collectorRuntimeConfigPatch `json:"nodes"`
 					}
 					require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 					submitted = request.Nodes
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"disable"}`))
-				case "/api/admin/cloudnode/GetNodeBatchChange":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
 					waited = true
 					_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "job": map[string]any{"job_id": "disable", "status": status}})
 				default:
@@ -45,7 +46,7 @@ func TestDisableCollectorBlacklistedTimersBeforePublishing(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			err := disableCollectorBlacklistedTimers(context.Background(), adminclient.New(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}})
+			err := disableCollectorBlacklistedTimers(context.Background(), admintest.Client(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto", RegionBlacklist: []string{"ap-guangzhou"}})
 			if status == "SUCCESS" {
 				require.NoError(t, err)
 			} else {
@@ -66,20 +67,20 @@ func TestDisableCollectorTimerFleetLeavesInvokeNodesUntouched(t *testing.T) {
 	var submitted []collectorRuntimeConfigPatch
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/GetNodeList":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": []adminclient.CloudNode{
 				{NodeID: "timer-a", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer"},
 				{NodeID: "timer-b", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "timer"},
 				{NodeID: "invoke-a", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke"},
 			}})
-		case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs":
 			var request struct {
 				Nodes []collectorRuntimeConfigPatch `json:"nodes"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			submitted = append(submitted, request.Nodes...)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"disable-all"}`))
-		case "/api/admin/cloudnode/GetNodeBatchChange":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"disable-all","status":"SUCCESS"}}`))
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
@@ -87,7 +88,7 @@ func TestDisableCollectorTimerFleetLeavesInvokeNodesUntouched(t *testing.T) {
 	}))
 	defer server.Close()
 
-	require.NoError(t, disableCollectorTimerFleet(context.Background(), adminclient.New(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}))
+	require.NoError(t, disableCollectorTimerFleet(context.Background(), admintest.Client(server.URL), &setupconfig.SCFFetcherSpace{SpaceID: "crypto"}))
 	require.Len(t, submitted, 2)
 	require.Equal(t, []string{"timer-a", "timer-b"}, []string{submitted[0].NodeID, submitted[1].NodeID})
 	for _, patch := range submitted {

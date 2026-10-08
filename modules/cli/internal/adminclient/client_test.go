@@ -1,88 +1,81 @@
 package adminclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestPostJSONSendsSpaceHeader(t *testing.T) {
-	var gotSpaceID string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotSpaceID = r.Header.Get("X-Space-Id")
-		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
-	}))
-	defer server.Close()
+// newTestClient 把调用发往 httptest 服务器：POST /<tRPC 服务名>/<方法>，空间 ID 放在 X-Space-Id 请求头。
+// 与 admintest.Sender 相同；本包的测试不能引用 admintest（会形成循环引用）。
+func newTestClient(baseURL string) *Client {
+	return NewWithSender(func(ctx context.Context, servicePath, method string, body []byte, spaceID string) ([]byte, error) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/"+servicePath+"/"+method, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		if spaceID != "" {
+			request.Header.Set("X-Space-Id", spaceID)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			return nil, err
+		}
+		defer response.Body.Close()
+		raw, err := io.ReadAll(response.Body)
+		if err != nil {
+			return nil, err
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, fmt.Errorf("HTTP %s", response.Status)
+		}
+		return raw, nil
+	})
+}
 
-	client := New(server.URL)
-	client.SpaceID = "crypto"
-	if _, err := client.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListCloudAccounts", map[string]string{}); err != nil {
-		t.Fatalf("postJSON() error = %v", err)
+func TestCallSendsServiceMethodBodyAndSpace(t *testing.T) {
+	var gotService, gotMethod, gotSpace string
+	var gotBody []byte
+	client := NewWithSender(func(_ context.Context, servicePath, method string, body []byte, spaceID string) ([]byte, error) {
+		gotService, gotMethod, gotBody, gotSpace = servicePath, method, body, spaceID
+		return []byte(`{"ret_info":{"code":0}}`), nil
+	})
+	client.SpaceID = " crypto "
+	var response struct {
+		RetInfo retInfo `json:"ret_info"`
 	}
-	if gotSpaceID != "crypto" {
-		t.Fatalf("X-Space-Id = %q, want crypto", gotSpaceID)
-	}
-}
+	require.NoError(t, client.CallJSON(context.Background(), ServiceCloudNodeMgr, "ListCloudAccounts", map[string]string{"provider": "tencent"}, &response))
+	assert.Equal(t, "trpc.moox.cloudnode.CloudNodeMgr", gotService)
+	assert.Equal(t, "ListCloudAccounts", gotMethod)
+	assert.JSONEq(t, `{"provider":"tencent"}`, string(gotBody))
+	assert.Equal(t, "crypto", gotSpace)
 
-func TestRewriteToServiceRoute(t *testing.T) {
-	assert.Equal(t, "/api/service/CloudNodeMgr/ListAccounts", rewriteToServiceRoute("/api/admin/CloudNodeMgr/ListAccounts"))
-	assert.Equal(t, "/ListAccounts", rewriteToServiceRoute("/ListAccounts"))
-}
-
-func TestServiceAuthRejectsRemotePlainHTTP(t *testing.T) {
-	c := New("http://example.com")
-	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122", ExpireSecs: 60}
-	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
-	require.ErrorContains(t, err, "non-loopback HTTP")
-}
-
-func TestServiceAuthCannotBypassSafeTransportWithInjectedClient(t *testing.T) {
-	c := New("http://example.com")
-	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
-	c.HTTPClient = &http.Client{}
-	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
-	require.ErrorContains(t, err, "non-loopback HTTP")
-}
-
-func TestServiceAuthSignsConstructedEscapedPathWithBasePrefix(t *testing.T) {
-	now := time.Now()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		_, err = gatewayauth.Verify(gatewayauth.Credentials{KeyID: "ak", Secret: "sk"}, gatewayauth.Request{Method: r.Method, Path: r.URL.EscapedPath(), Body: body, TargetNode: "gateway-gz-122"}, r.Header, now)
-		require.NoError(t, err)
-		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
-	}))
-	defer server.Close()
-	c := New(server.URL + "/tenant%2Fone")
-	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
-	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]string{"a": "b"})
+	_, err := client.call(context.Background(), ServiceCloudNodeMgr, "GetNodeList", nil)
 	require.NoError(t, err)
+	assert.Equal(t, "{}", string(gotBody), "没有请求体时发送空对象")
 }
 
-func TestServiceAuthUsesConfiguredHTTPTimeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = w.Write([]byte(`{"ret_info":{"code":0}}`))
-	}))
-	defer server.Close()
-	c := New(server.URL)
-	c.ServiceAuth = &ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"}
-	c.HTTPClient = &http.Client{Timeout: 10 * time.Millisecond}
-
-	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
-
+func TestCallReportsTransportFailuresAndEmptyResponses(t *testing.T) {
+	failing := NewWithSender(func(context.Context, string, string, []byte, string) ([]byte, error) {
+		return nil, errors.New("没有已启用的部署")
+	})
+	_, err := failing.call(context.Background(), ServiceCollectMgr, "GetTaskList", nil)
+	require.ErrorContains(t, err, "trpc.moox.collector.CollectMgr/GetTaskList")
+	empty := NewWithSender(func(context.Context, string, string, []byte, string) ([]byte, error) { return nil, nil })
+	_, err = empty.call(context.Background(), ServiceCollectMgr, "GetTaskList", nil)
+	require.ErrorContains(t, err, "空响应")
+	_, err = (*Client)(nil).call(context.Background(), ServiceCollectMgr, "GetTaskList", nil)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.DeadlineExceeded), "error does not report a timeout: %v", err)
 }
 
 func TestIsRetInfoSuccess(t *testing.T) {
@@ -103,10 +96,10 @@ func TestSubmitCreateNodesAndGetNodeBatchChange(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/SubmitCreateNodes":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes":
 			require.Len(t, body["nodes"], 1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"node-batch-1","operation":1,"total_count":1}`))
-		case "/api/admin/cloudnode/GetNodeBatchChange":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
 			require.Equal(t, "node-batch-1", body["job_id"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"node-batch-1","operation":1,"status":4,"total_count":1,"failed_count":1},"items":[{"item_id":"item-1","node_id":"node-1","status":4,"error_message":"deploy failed"}]}`))
 		default:
@@ -115,7 +108,7 @@ func TestSubmitCreateNodesAndGetNodeBatchChange(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := newTestClient(server.URL)
 	submitted, err := client.SubmitCreateNodes(context.Background(), []NodeCreateItem{{PackageID: "pkg-1"}})
 	require.NoError(t, err)
 	assert.Equal(t, "node-batch-1", submitted.JobID)
@@ -131,8 +124,8 @@ func TestSubmitCreateNodesAndGetNodeBatchChange(t *testing.T) {
 	assert.Equal(t, "NODE_BATCH_ITEM_STATUS_FAILED", status.Items[0].Status)
 	assert.Equal(t, "deploy failed", status.Items[0].ErrorMessage)
 	assert.Equal(t, []string{
-		"/api/admin/cloudnode/SubmitCreateNodes",
-		"/api/admin/cloudnode/GetNodeBatchChange",
+		"/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes",
+		"/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange",
 	}, paths)
 }
 
@@ -148,7 +141,7 @@ func TestSubmitNodeBatchResponsesMustBeComplete(t *testing.T) {
 				_, _ = w.Write([]byte(response))
 			}))
 			defer server.Close()
-			_, err := New(server.URL).SubmitDeployNodes(context.Background(), []NodeDeployItem{{NodeID: "node-1", PackageID: "pkg-1"}})
+			_, err := newTestClient(server.URL).SubmitDeployNodes(context.Background(), []NodeDeployItem{{NodeID: "node-1", PackageID: "pkg-1"}})
 			require.Error(t, err)
 		})
 	}
@@ -159,7 +152,7 @@ func TestGetNodeBatchChangeRequiresJob(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[]}`))
 	}))
 	defer server.Close()
-	_, err := New(server.URL).GetNodeBatchChange(context.Background(), "node-batch-1")
+	_, err := newTestClient(server.URL).GetNodeBatchChange(context.Background(), "node-batch-1")
 	require.ErrorContains(t, err, "empty job")
 }
 
@@ -169,18 +162,8 @@ func TestGetNodeBatchChangeAcceptsRuntimeConfigOperation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	status, err := New(server.URL).GetNodeBatchChange(context.Background(), "runtime-batch-1")
+	status, err := newTestClient(server.URL).GetNodeBatchChange(context.Background(), "runtime-batch-1")
 	require.NoError(t, err)
 	require.NotNil(t, status.Job)
 	assert.Equal(t, "NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS", status.Job.Operation)
-}
-
-func TestBuildAuthHeader(t *testing.T) {
-	cfg := ServiceAuthConfig{AccessKey: "app", SecretKey: "key", TargetNode: "gateway-gz-122"}
-	now := time.Unix(1700000000, 0)
-	header, err := cfg.BuildAuthHeader("POST", "/api/service/x/Do", []byte(`{"a":1}`), now)
-	require.NoError(t, err)
-	assert.Equal(t, "gateway-gz-122", header.Get("X-Moox-Target-Node"))
-	_, err = gatewayauth.Verify(gatewayauth.Credentials{KeyID: "app", Secret: "key"}, gatewayauth.Request{Method: "POST", Path: "/api/service/x/Do", Body: []byte(`{"a":1}`), TargetNode: "gateway-gz-122"}, header, now)
-	require.NoError(t, err)
 }

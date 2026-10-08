@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,13 +20,13 @@ func TestEnsureStockCNKlineTaskCreatesGeneratedTaskFromTagDefinition(t *testing.
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 
 		switch r.URL.Path {
-		case "/api/admin/collectmgr/GetTaskList":
+		case "/trpc.moox.collector.CollectMgr/GetTaskList":
 			if !created {
 				_, _ = w.Write([]byte(`{"ret_info":{"code":0},"tasks":[],"page":{"has_more":false}}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"tasks":[{"space_id":"stockcn","task_id":"` + generatedID + `","task_name":"A 股 K 线 1m","data_type":"kline","tag_ids":["cn_a_share"],"enabled":true}],"page":{"has_more":false}}`))
-		case "/api/admin/collectmgr/CreateTask":
+		case "/trpc.moox.collector.CollectMgr/CreateTask":
 			task, ok := body["task"].(map[string]any)
 			require.True(t, ok)
 			assert.Equal(t, "stockcn", task["space_id"])
@@ -39,10 +39,10 @@ func TestEnsureStockCNKlineTaskCreatesGeneratedTaskFromTagDefinition(t *testing.
 			assert.NotContains(t, collectParams, "market_type")
 			created = true
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task_id":"` + generatedID + `"}`))
-		case "/api/admin/collectmgr/GetTaskDetail":
+		case "/trpc.moox.collector.CollectMgr/GetTaskDetail":
 			assert.Equal(t, generatedID, body["task_id"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task":{"space_id":"stockcn","task_id":"` + generatedID + `","task_name":"A 股 K 线 1m","data_type":"kline","tag_ids":["cn_a_share"],"enabled":false,"collect_params":{"frequency":"1m"}}}`))
-		case "/api/admin/collectmgr/UpdateTask":
+		case "/trpc.moox.collector.CollectMgr/UpdateTask":
 			task := body["task"].(map[string]any)
 			assert.Equal(t, true, task["enabled"])
 			assert.Equal(t, generatedID, task["task_id"])
@@ -53,7 +53,7 @@ func TestEnsureStockCNKlineTaskCreatesGeneratedTaskFromTagDefinition(t *testing.
 	}))
 	defer server.Close()
 
-	taskID, err := ensureStockCNKlineTask(context.Background(), adminclient.New(server.URL), "stockcn")
+	taskID, err := ensureStockCNKlineTask(context.Background(), admintest.Client(server.URL), "stockcn")
 	require.NoError(t, err)
 	assert.Equal(t, generatedID, taskID)
 }

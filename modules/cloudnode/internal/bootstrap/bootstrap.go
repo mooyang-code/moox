@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/cloudnode/schema"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +31,7 @@ import (
 type Runtime struct {
 	StartedAt       time.Time
 	Store           *store.Store
+	Gateway         *gatewayclient.Client
 	DebugServer     *http.Server
 	NodeBatchCancel context.CancelFunc
 }
@@ -49,6 +51,9 @@ func (r *Runtime) Close(ctx context.Context) error {
 		if err := r.DebugServer.Shutdown(ctx); err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+	if r.Gateway != nil {
+		r.Gateway.Close()
 	}
 	if r.Store != nil {
 		if err := r.Store.Close(); err != nil && firstErr == nil {
@@ -96,15 +101,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 
+	if runtime.Gateway, err = gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient}); err != nil {
+		return nil, fmt.Errorf("创建 cloudnode 的 gatewayclient: %w", err)
+	}
 	opts := []cloudnoderpc.Option{
 		cloudnoderpc.WithModuleMetrics(moduleMetrics),
-		cloudnoderpc.WithCollectorPublishLeaseValidator(publishlease.NewFromEnv()),
+		cloudnoderpc.WithCollectorPublishLeaseValidator(publishlease.New(runtime.Gateway.ClientOptions(gatewayclient.WithTimeout(3 * time.Second)))),
+		cloudnoderpc.WithCredentialResolver(cloudcredential.New(runtime.Gateway.ClientOptions(gatewayclient.WithTimeout(10 * time.Second)))),
 	}
-	credentialResolver, err := cloudcredential.NewFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	opts = append(opts, cloudnoderpc.WithCredentialResolver(credentialResolver))
 	svc := cloudnoderpc.New(dbm, opts...)
 	nodeBatchCtx, nodeBatchCancel := context.WithCancel(ctx)
 	runtime.NodeBatchCancel = nodeBatchCancel

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -133,7 +132,7 @@ func (r collectorHTTPInventoryReader) GetTaskResultInventory(ctx context.Context
 		return nil, err
 	}
 	var raw json.RawMessage
-	if err := r.control.CallJSON(ctx, http.MethodPost, "/api/admin/collectmgr/GetTaskResultInventory", json.RawMessage(body), &raw); err != nil {
+	if err := r.control.CallJSON(ctx, adminclient.ServiceCollectMgr, "GetTaskResultInventory", json.RawMessage(body), &raw); err != nil {
 		return nil, err
 	}
 	rsp := &collectorpb.GetTaskResultInventoryRsp{}

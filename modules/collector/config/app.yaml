@@ -59,18 +59,6 @@ kline_resample:
   default_settle_delay: 10s
   repair_lookback_buckets: 3
 
-sysdeploy:
-  # Collector 控制面通过节点网关 /api/service/<service>/* 调用 CloudNode 等服务。
-  # 同机后台调用默认直连 service gateway；远程环境应使用 HTTPS 11001。
-  admin_gateway_url: "http://127.0.0.1:11002"
-  service_auth:
-    caller: collector
-    target_node: ""
-    ca_file: ""
-    access_key: "moox-service"
-    secret_key: ""
-    expire_seconds: 60
-
 health:
   addr: ":11412"
 

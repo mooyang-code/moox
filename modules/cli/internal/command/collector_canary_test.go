@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -83,7 +84,7 @@ func TestCollectorSCFCanaryEnsuresPeriodBeforeInvoke(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := runCollectorSCFCanary(context.Background(), adminclient.New(server.URL), collectorPublishOptions{canaryProof: proof}, "canary-node")
+	err := runCollectorSCFCanary(context.Background(), admintest.Client(server.URL), collectorPublishOptions{canaryProof: proof}, "canary-node")
 	require.NoError(t, err)
 	require.EqualValues(t, 1, ensureCallsAtInvoke.Load(), "Storage must have persisted the period contract before SCF writes it")
 	require.NotNil(t, primary.ensuredExpectation)
@@ -111,7 +112,7 @@ func TestCollectorSCFCanaryDoesNotInvokeWhenEnsureFails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := runCollectorSCFCanary(context.Background(), adminclient.New(server.URL), collectorPublishOptions{canaryProof: proof}, "canary-node")
+	err := runCollectorSCFCanary(context.Background(), admintest.Client(server.URL), collectorPublishOptions{canaryProof: proof}, "canary-node")
 	require.ErrorContains(t, err, "ensure Storage period")
 	require.Zero(t, invokeCalls.Load())
 }
@@ -216,19 +217,19 @@ function_count = 1
 			var reads, uploads, mutations atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/api/admin/cloudnode/ListCloudAccounts", "/api/service/cloudnode/ListCloudAccounts":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/ListCloudAccounts":
 					reads.Add(1)
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"accounts":[{"account_id":"account-a","provider":"tencent","credential_secret_id":"cls-secret"}]}`))
-				case "/api/admin/secret/GetSecretValue", "/api/service/secret/GetSecretValue":
+				case "/trpc.moox.ops.SecretMgr/GetSecretValue":
 					reads.Add(1)
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_id":"cls-secret","category":"cloud","provider":"tencent","status":"active","key_id":"cls-id","secret_value":"cls-key"}}`))
-				case "/api/admin/cloudnode/GetNodeList", "/api/service/cloudnode/GetNodeList":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 					reads.Add(1)
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
-				case "/api/admin/cloudnode/InitPackageUpload":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/InitPackageUpload":
 					uploads.Add(1)
 					http.Error(w, "package upload must be blocked", http.StatusInternalServerError)
-				case "/api/admin/cloudnode/CreateCloudAccount", "/api/admin/cloudnode/SubmitCreateNodes", "/api/admin/cloudnode/SubmitDeployNodes", "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/CreateCloudAccount", "/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes", "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeployNodes", "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs":
 					mutations.Add(1)
 					http.Error(w, "node or account mutation must be blocked", http.StatusInternalServerError)
 				default:
@@ -240,7 +241,7 @@ function_count = 1
 
 			_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{
 				collectorPackageOptions: collectorPackageOptions{CollectorRoot: collectorRoot, SpaceID: "crypto", PackageConfigDir: "scf/market_data"},
-				ControlURL:              server.URL, File: tc.file, AccessToken: "test-token", ServiceAccessKey: "cli-test", ServiceSecretKey: "cli-secret", SpaceID: "crypto", ZipPath: tc.zipPath,
+				control:                 admintest.Client(server.URL), File: tc.file, SpaceID: "crypto", ZipPath: tc.zipPath,
 				CloudAccountID: "account-a", Region: tc.region, NodeCount: 1, TriggerType: tc.trigger, EventBusCredentialFile: credentialFile,
 			})
 			require.ErrorContains(t, err, "canary verification contract is unavailable")
@@ -406,7 +407,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
-				case "/api/admin/cloudnode/GetNodeList":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 					read := inventoryReads.Add(1)
 					if tc.interruptAfterDeploy && createJobTerminal.Load() && read > 1 && cancelOnce.CompareAndSwap(false, true) {
 						cancel()
@@ -415,7 +416,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 						sawCleanupWithLiveContext.Store(true)
 					}
 					_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": nodes, "page": map[string]any{"has_more": false}})
-				case "/api/admin/cloudnode/SubmitCreateNodes":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes":
 					var request struct {
 						Nodes []adminclient.NodeCreateItem `json:"nodes"`
 					}
@@ -428,7 +429,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 						TriggerType: item.TriggerType, BizType: "market_fetcher", FunctionName: prefix + "-ap-nanjing-0", Metadata: item.Metadata,
 					})
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"create-job","operation":"NODE_BATCH_OPERATION_CREATE_NODES","total_count":1}`))
-				case "/api/admin/cloudnode/GetNodeBatchChange":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
 					var request struct {
 						JobID string `json:"job_id"`
 					}
@@ -440,11 +441,11 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 						return
 					}
 					_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"delete-job","status":"NODE_BATCH_STATUS_SUCCESS"},"items":[]}`))
-				case "/api/admin/cloudnode/InvokeFunction":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/InvokeFunction":
 					response, err := json.Marshal(map[string]any{"ret_info": map[string]any{"code": 0}, "scf": map[string]any{"code": 0, "result": tc.invokeResult}})
 					require.NoError(t, err)
 					_, _ = w.Write(response)
-				case "/api/admin/cloudnode/SubmitDeleteNodes":
+				case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
 					var request struct {
 						NodeIDs []string `json:"node_ids"`
 					}
@@ -476,7 +477,7 @@ func TestPublishCollectorSCFReleaseCanaryFleetCleansTemporaryFunctions(t *testin
 				EventBusCredentialFile: credentialFile, StorageAppKeysJSON: collectorTestStorageAppKeysJSON,
 				canaryProof: proof,
 			}
-			summary, canaryNode, err := publishCollectorSCFReleaseCanaryFleet(ctx, adminclient.New(server.URL), opts, "candidate-package")
+			summary, canaryNode, err := publishCollectorSCFReleaseCanaryFleet(ctx, admintest.Client(server.URL), opts, "candidate-package")
 			if tc.wantError {
 				require.Error(t, err)
 			} else {
@@ -511,9 +512,9 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/GetNodeList":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": nodes, "page": map[string]any{"has_more": false}})
-		case "/api/admin/cloudnode/SubmitDeleteNodes":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
 			var request struct {
 				NodeIDs []string `json:"node_ids"`
 			}
@@ -525,7 +526,7 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 				}
 			}
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-job","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
-		case "/api/admin/cloudnode/GetNodeBatchChange":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
 			statusReads.Add(1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"delete-job","status":"NODE_BATCH_STATUS_SUCCESS"},"items":[]}`))
 		default:
@@ -537,7 +538,7 @@ func TestCleanupCollectorSCFReleaseCanaryFleetNeverDeletesUnrelatedNodes(t *test
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, admintest.Client(server.URL), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", FunctionNamePrefix: prefix,
 	}, "", true, false)
 	require.ErrorIs(t, err, errCollectorBatchOutcomeUnknown, "without the caller context, an accepted async delete cannot be reported as complete")
@@ -551,14 +552,14 @@ func TestCleanupWaitsForKnownCanaryDeploymentBatchBeforeInventory(t *testing.T) 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/GetNodeBatchChange":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
 			read := statusReads.Add(1)
 			status := "NODE_BATCH_STATUS_RUNNING"
 			if read > 1 {
 				status = "NODE_BATCH_STATUS_SUCCESS"
 			}
 			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":"create-job","status":%q},"items":[]}`, status)
-		case "/api/admin/cloudnode/GetNodeList":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 			inventoryAfterTerminal.Store(statusReads.Load() > 1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
 		default:
@@ -568,7 +569,7 @@ func TestCleanupWaitsForKnownCanaryDeploymentBatchBeforeInventory(t *testing.T) 
 	}))
 	defer server.Close()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), admintest.Client(server.URL), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: "r0123456789abcdef0123456789abcdef",
 	}, "create-job", false, false)
@@ -585,7 +586,7 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/GetNodeList":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 			read := inventoryReads.Add(1)
 			items := []adminclient.CloudNode(nil)
 			if read == 2 {
@@ -596,14 +597,14 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 				}}
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": items, "page": map[string]any{"has_more": false}})
-		case "/api/admin/cloudnode/SubmitDeleteNodes":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
 			var request struct {
 				NodeIDs []string `json:"node_ids"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			deletedIDs = append(deletedIDs, request.NodeIDs...)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-job","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
-		case "/api/admin/cloudnode/GetNodeBatchChange":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
 			statusReads.Add(1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"delete-job","status":"NODE_BATCH_STATUS_SUCCESS"},"items":[]}`))
 		default:
@@ -613,7 +614,7 @@ func TestCleanupUnknownCanaryWaitsForPrefixThenFailsClosedAfterBestEffortDelete(
 	}))
 	defer server.Close()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(context.Background(), admintest.Client(server.URL), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: prefix,
 	}, "", false, true)
@@ -634,7 +635,7 @@ func TestCleanupCanceledKnownCanaryBatchFailsClosedBeforeInventory(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, admintest.Client(server.URL), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: "r0123456789abcdef0123456789abcdef",
 	}, "create-job", false, false)
@@ -648,7 +649,7 @@ func TestCleanupCanceledKnownCanaryDeleteBatchFailsClosed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/GetNodeList":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"ret_info": map[string]any{"code": 0},
 				"items": []adminclient.CloudNode{{
@@ -658,9 +659,9 @@ func TestCleanupCanceledKnownCanaryDeleteBatchFailsClosed(t *testing.T) {
 				}},
 				"page": map[string]any{"has_more": false},
 			})
-		case "/api/admin/cloudnode/SubmitDeleteNodes":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-job","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
-		case "/api/admin/cloudnode/GetNodeBatchChange":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange":
 			statusReads.Add(1)
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"delete-job","status":"NODE_BATCH_STATUS_SUCCESS"},"items":[]}`))
 		default:
@@ -672,7 +673,7 @@ func TestCleanupCanceledKnownCanaryDeleteBatchFailsClosed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, adminclient.New(server.URL), collectorPublishOptions{
+	err := cleanupCollectorSCFReleaseCanaryFleet(ctx, admintest.Client(server.URL), collectorPublishOptions{
 		CloudAccountID: "account-a", Region: "ap-nanjing", Namespace: "canary-ns", NodeType: "scf-event", BizType: "market_fetcher", TriggerType: "invoke", NodeCount: 1,
 		FunctionNamePrefix: prefix,
 	}, "", true, false)
@@ -878,7 +879,7 @@ func TestCollectorSCFCanaryProofRequiresCompletePeriodAndExactPrimaryAndViewRows
 
 func TestCollectorStockCNActivationRequiresPackageIdentityBeforeManifestOrTimerMutation(t *testing.T) {
 	_, err := activateStockCNCollection(context.Background(), collectorStockCNActivateOptions{
-		ControlURL: "https://control.invalid", File: "/missing/moox.toml", Version: "candidate",
+		File: "/missing/moox.toml", Version: "candidate",
 	})
 	require.ErrorContains(t, err, "--region-package-id")
 }
@@ -890,13 +891,13 @@ func canaryResponseClient(t *testing.T, result map[string]any) *adminclient.Clie
 		"scf":      map[string]any{"code": 0, "result": result},
 	})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/cloudnode/InvokeFunction", r.URL.Path)
+		assert.Equal(t, "/trpc.moox.cloudnode.CloudNodeMgr/InvokeFunction", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write(raw)
 		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	return adminclient.New(server.URL)
+	return admintest.Client(server.URL)
 }
 
 func mustCanaryJSON(t *testing.T, value any) []byte {
@@ -1077,12 +1078,12 @@ func TestCollectorHTTPInventoryReaderUsesTheServiceGatewayRoute(t *testing.T) {
 	}))
 	defer server.Close()
 
-	reader := collectorHTTPInventoryReader{control: adminclient.New(server.URL)}
+	reader := collectorHTTPInventoryReader{control: admintest.Client(server.URL)}
 	rsp, err := reader.GetTaskResultInventory(context.Background(), &collectorpb.GetTaskResultInventoryReq{
 		SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 100},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "/api/admin/collectmgr/GetTaskResultInventory", gotPath)
+	assert.Equal(t, "/trpc.moox.collector.CollectMgr/GetTaskResultInventory", gotPath)
 	assert.Equal(t, "crypto", gotBody["space_id"])
 	assert.Equal(t, "snap-1", rsp.GetSnapshotId())
 	require.Len(t, rsp.GetEntries(), 1)

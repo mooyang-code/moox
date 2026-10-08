@@ -78,7 +78,7 @@ func TestCollectorTaskPurgeApplyRequiresConfirmation(t *testing.T) {
 	server := newCollectorTaskPurgeControlServer(t, orderPath)
 	defer server.Close()
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
-		DBPath: dbPath, ControlURL: server.URL, Apply: true,
+		DBPath: dbPath, Apply: true,
 		StopCommand: fmt.Sprintf("printf 'stop\\n' >> %q", orderPath),
 	})
 	require.Error(t, err)
@@ -139,7 +139,6 @@ func TestCollectorTaskPurgeApplyStopsBeforeDeletingTaskAndRuntime(t *testing.T) 
 		DBPath:         dbPath,
 		SpaceID:        "crypto",
 		MetadataTarget: "test-storage",
-		ControlURL:     server.URL,
 		Apply:          true,
 		Confirm:        true,
 		StopCommand:    stopCommand,
@@ -184,7 +183,6 @@ func TestCollectorTaskPurgeApplyUsesSpaceForEachTask(t *testing.T) {
 
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
 		DBPath:           dbPath,
-		ControlURL:       server.URL,
 		MetadataTarget:   "test-storage",
 		Apply:            true,
 		Confirm:          true,
@@ -211,7 +209,6 @@ func TestCollectorTaskPurgeStopFailureDoesNotDelete(t *testing.T) {
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
 		DBPath:         dbPath,
 		SpaceID:        "crypto",
-		ControlURL:     server.URL,
 		MetadataTarget: "test-storage",
 		Apply:          true,
 		Confirm:        true,

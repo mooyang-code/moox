@@ -1,58 +1,44 @@
-// Package secretclient reads Exchange credentials from the Admin gateway.
+// Package secretclient 经 gatewayclient 以 trade 身份从 Admin SecretMgr 读取交易所凭据。
+//
+// 请求和响应都用 JSON 序列化：响应按 snake_case 字段解析，Trade 因此不必引用 Admin 的协议包。
 package secretclient
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-// Config 是 SecretMgr 后台服务调用配置。
-type Config struct {
-	GatewayBaseURL string
-	ServiceAuth    ServiceAuthConfig
-	Timeout        time.Duration
-}
+// secretMgrService 是 Admin SecretMgr 的 tRPC 服务名。
+const secretMgrService = "trpc.moox.ops.SecretMgr"
 
-// ServiceAuthConfig 与 admin gateway service_auth 配置保持一致。
-type ServiceAuthConfig struct {
-	AccessKey  string
-	SecretKey  string
-	TargetNode string
-	CAFile     string
-	ExpireSecs int64
+const defaultTimeout = 10 * time.Second
+
+// Forwarder 是本包用到的 gatewayclient 能力：按给定序列化类型签名并转发请求体。
+type Forwarder interface {
+	Forward(ctx context.Context, servicePath, method string, serialization int, body []byte, opts ...gatewayclient.CallOption) ([]byte, error)
 }
 
 // Client 调用 admin SecretMgr。
 type Client struct {
-	baseURL   string
-	auth      ServiceAuthConfig
-	client    *http.Client
-	clientErr error
+	gateway Forwarder
+	timeout time.Duration
 }
 
-// New 创建 SecretMgr client。
-func New(cfg Config) *Client {
-	timeout := cfg.Timeout
+// New 创建 SecretMgr 客户端；timeout 不大于 0 时使用 10 秒。
+func New(gateway Forwarder, timeout time.Duration) *Client {
 	if timeout <= 0 {
-		timeout = 10 * time.Second
+		timeout = defaultTimeout
 	}
-	client, clientErr := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: cfg.ServiceAuth.CAFile})
-	return &Client{
-		baseURL: strings.TrimRight(cfg.GatewayBaseURL, "/"),
-		auth:    cfg.ServiceAuth,
-		// 目标网关来自本服务可信配置，不接受用户输入；这里使用固定超时 HTTP client。
-		client:    client,
-		clientErr: clientErr,
-	}
+	return &Client{gateway: gateway, timeout: timeout}
 }
 
 // GetExchangeSecret returns the configured credential and its trusted metadata.
@@ -95,58 +81,24 @@ func (c *Client) GetExchangeSecret(
 }
 
 func (c *Client) post(ctx context.Context, method string, req any, rsp responseWithRetInfo) error {
-	if c.clientErr != nil {
-		return c.clientErr
-	}
-	if c.baseURL == "" {
-		return fmt.Errorf("secret client gateway base url is empty")
+	if c == nil || c.gateway == nil {
+		return errors.New("SecretMgr 客户端没有配置 gatewayclient")
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/service/secret/"+method, bytes.NewReader(body))
+	out, err := c.gateway.Forward(ctx, secretMgrService, method, codec.SerializationTypeJSON, body, gatewayclient.WithTimeout(c.timeout))
 	if err != nil {
-		return err
+		return fmt.Errorf("调用 SecretMgr.%s: %w", method, err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	auth, err := c.authHeader(http.MethodPost, httpReq.URL.EscapedPath(), body, time.Now())
-	if err != nil {
-		return err
-	}
-	for name, values := range auth {
-		httpReq.Header[name] = append([]string(nil), values...)
-	}
-	httpRsp, err := c.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer httpRsp.Body.Close()
-	if httpRsp.StatusCode < 200 || httpRsp.StatusCode >= 300 {
-		return fmt.Errorf("secret %s HTTP %d", method, httpRsp.StatusCode)
-	}
-	if err := json.NewDecoder(httpRsp.Body).Decode(rsp); err != nil {
-		return err
+	if err := json.Unmarshal(out, rsp); err != nil {
+		return fmt.Errorf("解析 SecretMgr.%s 响应: %w", method, err)
 	}
 	if !rsp.retOK() {
-		return fmt.Errorf("secret %s failed: %s", method, rsp.retMessage())
+		return fmt.Errorf("SecretMgr.%s 失败: %s", method, rsp.retMessage())
 	}
 	return nil
-}
-
-func (c ServiceAuthConfig) normalized() ServiceAuthConfig {
-	if c.ExpireSecs <= 0 {
-		c.ExpireSecs = 60
-	}
-	return c
-}
-
-func (c *Client) authHeader(method, path string, body []byte, now time.Time) (http.Header, error) {
-	auth := c.auth.normalized()
-	if auth.AccessKey == "" || auth.SecretKey == "" || auth.TargetNode == "" {
-		return nil, fmt.Errorf("gateway service key_id, secret_key and target_node are required")
-	}
-	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: auth.AccessKey, Secret: auth.SecretKey, Expire: time.Duration(auth.ExpireSecs) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: auth.TargetNode}, now)
 }
 
 type responseWithRetInfo interface {
@@ -154,22 +106,10 @@ type responseWithRetInfo interface {
 	retMessage() string
 }
 
+// retInfo.code 是 tRPC JSON 序列化输出的枚举数值（SUCCESS = 0）；缺少 code 视为失败。
 type retInfo struct {
-	Code any    `json:"code"`
+	Code *int   `json:"code"`
 	Msg  string `json:"msg"`
-}
-
-func (r retInfo) ok() bool {
-	switch v := r.Code.(type) {
-	case float64:
-		return v == 0
-	case int:
-		return v == 0
-	case string:
-		return v == "0" || strings.EqualFold(v, "SUCCESS")
-	default:
-		return false
-	}
 }
 
 type secretDTO struct {
@@ -215,5 +155,5 @@ type getSecretValueRsp struct {
 	Secret  secretDTO `json:"secret"`
 }
 
-func (r *getSecretValueRsp) retOK() bool        { return r.RetInfo.ok() }
+func (r *getSecretValueRsp) retOK() bool        { return r.RetInfo.Code != nil && *r.RetInfo.Code == 0 }
 func (r *getSecretValueRsp) retMessage() string { return r.RetInfo.Msg }

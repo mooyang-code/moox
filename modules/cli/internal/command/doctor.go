@@ -9,14 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	core "github.com/mooyang-code/moox/packages/doctor"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/security"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -29,7 +32,7 @@ func (e doctorExitError) ExitCode() int { return e.code }
 
 type doctorCommandDeps struct {
 	loadConfig        func() (*config.Config, error)
-	newClient         func(string, string) *doctorcli.Client
+	newClient         func([]client.Option) *doctorcli.Client
 	newMetadataClient func(string, string) doctorcli.StorageActivationClient
 }
 
@@ -81,7 +84,12 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			if nodeID == "" {
 				nodeID = doctorCfg.NodeID
 			}
-			client := deps.newClient(doctorCfg.MonitorTarget, doctorCfg.SysDeployTarget)
+			gateway, closeGateway, err := newDoctorGateway(doctorCfg.ReleaseRoot)
+			if err != nil {
+				return err
+			}
+			defer closeGateway()
+			client := deps.newClient(gateway.ClientOptions(gatewayclient.WithTimeout(15 * time.Second)))
 			metadataClientFactory := deps.newMetadataClient
 			if metadataClientFactory == nil {
 				metadataClientFactory = newSignedStorageMetadataClient
@@ -132,6 +140,29 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "json", "report format: json, text, or markdown")
 	cmd.Flags().StringVar(&output, "output", "", "atomically write the report to this path")
 	return cmd
+}
+
+// newDoctorGateway 以 moox-cli 身份经本机主机网关访问 Monitor 和 SysDeploy：密钥和 CA 取自发布根目录，
+// 服务目录缓存放在临时目录，用完删除。
+func newDoctorGateway(releaseRoot string) (*gatewayclient.Client, func(), error) {
+	cacheDir, err := os.MkdirTemp("", "moox-doctor-gatewayclient-")
+	if err != nil {
+		return nil, nil, err
+	}
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: gatewayclient.Config{
+		Mode: gatewayclient.ModeLocal, Caller: servicecatalog.MooxCLICaller,
+		KeyFile:  resolveReleasePath(releaseRoot, "secrets/caller-moox-cli.key"),
+		CAFile:   resolveReleasePath(releaseRoot, "certs/moox-ca.crt"),
+		CacheDir: cacheDir,
+	}})
+	if err != nil {
+		_ = os.RemoveAll(cacheDir)
+		return nil, nil, fmt.Errorf("创建 doctor 的 gatewayclient: %w", err)
+	}
+	return gateway, func() {
+		gateway.Close()
+		_ = os.RemoveAll(cacheDir)
+	}, nil
 }
 
 type signedStorageMetadataClient struct {

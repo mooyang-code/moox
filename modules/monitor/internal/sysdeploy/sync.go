@@ -36,12 +36,9 @@ type ClientSource struct {
 	client deploymentClient
 }
 
-func NewClientSource(target string) *ClientSource {
-	return &ClientSource{client: adminpb.NewSysDeployClientProxy(
-		client.WithTarget(target),
-		client.WithProtocol("http"),
-		client.WithNetwork("tcp"),
-	)}
+// NewClientSource 用给定的 tRPC 客户端选项（gatewayclient，monitor 身份）读取 SysDeploy 的部署和节点。
+func NewClientSource(options []client.Option) *ClientSource {
+	return &ClientSource{client: adminpb.NewSysDeployClientProxy(options...)}
 }
 
 func (s *ClientSource) DesiredDeployments(ctx context.Context) ([]*adminpb.ServiceDeployment, error) {

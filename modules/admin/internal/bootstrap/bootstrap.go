@@ -7,7 +7,6 @@ import (
 
 	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/garbage"
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -60,7 +59,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	var cloudNode garbage.CloudNodeGarbage
 	if adminGateway != nil {
-		cloudNode = cloudnodepb.NewCloudNodeMgrClientProxy(adminGateway.ClientOptions()...)
+		cloudNode = adminGateway
 	} else {
 		log.Warn("没有配置 gateway_client.admin_key_file：每日垃圾回收不会清理 CloudNode")
 	}

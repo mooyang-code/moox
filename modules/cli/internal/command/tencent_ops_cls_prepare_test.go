@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/stretchr/testify/require"
 )
@@ -20,10 +20,8 @@ func (f prepareRunnerFunc) Prepare(ctx context.Context, source clsprepare.Accoun
 	return f(ctx, source, factory, opts)
 }
 
-func TestRunCLSPrepareUsesSignedControlClientAndExplicitAccount(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
+func TestRunCLSPrepareUsesControlClientAndExplicitAccount(t *testing.T) {
+	control := useTestCLSPrepareControl(t)
 	cmd := newCLSPrepareCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -31,25 +29,19 @@ func TestRunCLSPrepareUsesSignedControlClientAndExplicitAccount(t *testing.T) {
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
 	clsPrepareRunner = prepareRunnerFunc(func(_ context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, opts clsprepare.Options) (clsprepare.Result, error) {
-		client := source.(*adminclient.Client)
-		require.NotNil(t, client.ServiceAuth)
-		require.Equal(t, "svc-ak", client.ServiceAuth.AccessKey)
+		require.Same(t, control, source.(*adminclient.Client))
 		require.NotNil(t, factory)
 		require.Equal(t, "chosen", opts.CloudAccountID)
 		require.Equal(t, credentialPath, opts.CredentialsOutput)
 		return clsprepare.Result{AccountID: "chosen", Region: clsprepare.Region, LogsetID: "logset-1", TopicID: "topic-1"}, nil
 	})
-	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--cloud-account-id", "chosen", "--credentials-output", credentialPath})
+	cmd.SetArgs([]string{"--cloud-account-id", "chosen", "--credentials-output", credentialPath})
 	require.NoError(t, cmd.Execute())
 	require.Contains(t, out.String(), `"topic_id": "topic-1"`)
-	require.NotContains(t, out.String(), "svc-ak")
-	require.NotContains(t, out.String(), "svc-sk")
 }
 
 func TestRunCLSPreparePassesEmptyAccountForDefaultSelection(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
+	useTestCLSPrepareControl(t)
 	cmd := newCLSPrepareCommand()
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
@@ -57,7 +49,7 @@ func TestRunCLSPreparePassesEmptyAccountForDefaultSelection(t *testing.T) {
 		require.Empty(t, opts.CloudAccountID)
 		return clsprepare.Result{AccountID: "first", Region: clsprepare.Region}, nil
 	})
-	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+	cmd.SetArgs([]string{"--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
 	require.NoError(t, cmd.Execute())
 }
 
@@ -68,36 +60,44 @@ func TestCLSPrepareHasNoFixedResourceOverrideFlags(t *testing.T) {
 	}
 }
 
-func TestCLSPrepareRequiresControlURLAndCredentialOutput(t *testing.T) {
+func TestCLSPrepareRequiresCredentialOutput(t *testing.T) {
 	cmd := newCLSPrepareCommand()
 	cmd.SetArgs(nil)
 	err := cmd.Execute()
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "control-url") || strings.Contains(err.Error(), "credentials-output"))
+	require.ErrorContains(t, err, "credentials-output")
 }
 
-func TestCLSPrepareRequiresSignedServiceAuthentication(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "")
+func TestCLSPrepareReportsControlConnectionFailure(t *testing.T) {
+	old := clsPrepareOpenControl
+	t.Cleanup(func() { clsPrepareOpenControl = old })
+	clsPrepareOpenControl = func(string) (*adminclient.Client, func(), error) {
+		return nil, nil, errors.New("创建 moox-cli 的 gatewayclient: 密钥文件不存在")
+	}
 	cmd := newCLSPrepareCommand()
-	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
-	err := cmd.Execute()
-	require.ErrorContains(t, err, "service authentication is required")
+	cmd.SetArgs([]string{"--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+	require.ErrorContains(t, cmd.Execute(), "gatewayclient")
+}
+
+// useTestCLSPrepareControl 让 CLS prepare 使用测试替身客户端，返回该客户端。
+func useTestCLSPrepareControl(t *testing.T) *adminclient.Client {
+	t.Helper()
+	control := admintest.Client("http://127.0.0.1:1")
+	old := clsPrepareOpenControl
+	t.Cleanup(func() { clsPrepareOpenControl = old })
+	clsPrepareOpenControl = func(string) (*adminclient.Client, func(), error) { return control, func() {}, nil }
+	return control
 }
 
 func TestCLSPrepareSanitizesRunnerErrors(t *testing.T) {
 	const credential = "sid=account-id key=account-key Auth=signature body=credential-payload"
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
+	useTestCLSPrepareControl(t)
 	cmd := newCLSPrepareCommand()
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
 	clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
 		return clsprepare.Result{}, errors.New("upstream included " + credential)
 	})
-	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+	cmd.SetArgs([]string{"--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
 	err := cmd.Execute()
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), credential)
@@ -108,16 +108,14 @@ func TestCLSPrepareSanitizesRunnerErrors(t *testing.T) {
 }
 
 func TestCLSPreparePreservesKnownSafeRunnerDiagnostics(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
+	useTestCLSPrepareControl(t)
 	cmd := newCLSPrepareCommand()
 	oldRunner := clsPrepareRunner
 	t.Cleanup(func() { clsPrepareRunner = oldRunner })
 	clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
 		return clsprepare.Result{}, trustedCLSPrepareError{err: errors.New(`cloud account "missing" not found`)}
 	})
-	cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+	cmd.SetArgs([]string{"--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
 	err := cmd.Execute()
 	require.ErrorContains(t, err, `cloud account "missing" not found`)
 }
@@ -128,16 +126,14 @@ func TestCLSPrepareUnknownContextErrorsKeepIdentityWithoutLeakingText(t *testing
 		"deadline": context.DeadlineExceeded,
 	} {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-			t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "svc-ak")
-			t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "svc-sk")
+			useTestCLSPrepareControl(t)
 			cmd := newCLSPrepareCommand()
 			oldRunner := clsPrepareRunner
 			t.Cleanup(func() { clsPrepareRunner = oldRunner })
 			clsPrepareRunner = prepareRunnerFunc(func(context.Context, clsprepare.AccountSource, clsprepare.Factory, clsprepare.Options) (clsprepare.Result, error) {
 				return clsprepare.Result{}, fmt.Errorf("sid=account-id key=account-key Auth=signature body=payload: %w", sentinel)
 			})
-			cmd.SetArgs([]string{"--control-url", "http://127.0.0.1:11002", "--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
+			cmd.SetArgs([]string{"--credentials-output", filepath.Join(t.TempDir(), "cls.env")})
 			err := cmd.Execute()
 			require.Error(t, err)
 			require.ErrorIs(t, err, sentinel)

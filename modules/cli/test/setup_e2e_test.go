@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +22,7 @@ import (
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -67,8 +70,7 @@ host = "192.0.2.11"
 	require.NoError(t, err)
 	require.Len(t, validation.Checks, 4)
 
-	forwarder := &setupForwarder{handler: setupAdminHandler()}
-	privateClient := setupclient.New(forwarder)
+	privateClient := setupclient.New(&setupGateway{handler: setupAdminHandler()})
 	apply, err := privateClient.Apply(context.Background(), snapshot)
 	require.NoError(t, err)
 	assert.Equal(t, "created", apply.Action)
@@ -123,17 +125,20 @@ type staticSSHChecker struct{}
 
 func (staticSSHChecker) Check(context.Context, setupconfig.Host) error { return nil }
 
-type setupForwarder struct{ handler http.Handler }
+// setupGateway 把 setup client 的调用转成对 handler 的 POST /<服务名>/<方法>（protojson 编码）。
+type setupGateway struct{ handler http.Handler }
 
-func (f *setupForwarder) ForwardLocal(ctx context.Context, _ string) (net.Listener, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func (f *setupGateway) Invoke(ctx context.Context, servicePath, method string, req, rsp any, _ ...gatewayclient.CallOption) error {
+	raw, err := protojson.Marshal(req.(proto.Message))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	server := &http.Server{Handler: f.handler}
-	go func() { _ = server.Serve(listener) }()
-	go func() { <-ctx.Done(); _ = server.Close() }()
-	return listener, nil
+	recorder := httptest.NewRecorder()
+	f.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/"+servicePath+"/"+method, bytes.NewReader(raw)).WithContext(ctx))
+	if recorder.Code != http.StatusOK {
+		return fmt.Errorf("HTTP %d", recorder.Code)
+	}
+	return protojson.Unmarshal(recorder.Body.Bytes(), rsp.(proto.Message))
 }
 
 func setupAdminHandler() http.Handler {

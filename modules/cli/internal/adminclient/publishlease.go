@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -80,7 +79,7 @@ func (c *Client) AcquireCollectorPublishLease(ctx context.Context, spaceID, hold
 	if spaceID == "" || holderID == "" {
 		return nil, fmt.Errorf("space_id and holder_id are required")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/publishlease/AcquireCollectorPublishLease", map[string]any{
+	raw, err := c.call(ctx, ServicePublishLease, "AcquireCollectorPublishLease", map[string]any{
 		"space_id": spaceID, "holder_id": holderID,
 	})
 	if err != nil {
@@ -93,7 +92,7 @@ func (c *Client) RenewCollectorPublishLease(ctx context.Context, lease *Collecto
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return nil, fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/publishlease/RenewCollectorPublishLease", map[string]any{
+	raw, err := c.call(ctx, ServicePublishLease, "RenewCollectorPublishLease", map[string]any{
 		"space_id": lease.SpaceID, "lease_id": lease.LeaseID, "fencing_token": strconv.FormatInt(lease.FencingToken, 10),
 	})
 	if err != nil {
@@ -111,7 +110,7 @@ func (c *Client) ReleaseCollectorPublishLease(ctx context.Context, lease *Collec
 	if lease == nil || lease.SpaceID == "" || lease.LeaseID == "" || lease.FencingToken < 1 {
 		return fmt.Errorf("collector publish lease identity is incomplete")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/publishlease/ReleaseCollectorPublishLease", map[string]any{
+	raw, err := c.call(ctx, ServicePublishLease, "ReleaseCollectorPublishLease", map[string]any{
 		"space_id": lease.SpaceID, "lease_id": lease.LeaseID, "fencing_token": strconv.FormatInt(lease.FencingToken, 10),
 	})
 	if err != nil {

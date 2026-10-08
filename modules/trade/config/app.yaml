@@ -4,14 +4,13 @@
 database:
   path: ./data/moox_trade.db
 
-admin:
-  base_url: "https://106.53.107.122:11001"
-  service_auth:
-    target_node: ""
-    ca_file: ""
-    access_key: "moox-service"
-    secret_key: ""
-    expire_seconds: 60
+# 读取交易所凭据（SecretMgr）经本机主机网关
+gateway_client:
+  mode: local
+  caller: trade
+  key_file: ../secrets/caller-trade.key
+  ca_file: ../certs/moox-ca.crt
+  cache_dir: ./data/gatewayclient
 
 eventbus:
   enabled: true

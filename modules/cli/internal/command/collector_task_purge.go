@@ -24,10 +24,6 @@ type collectorTaskPurgeFlags struct {
 	File                  string
 	DBPath                string
 	SpaceID               string
-	ControlURL            string
-	AccessToken           string
-	ServiceAccessKey      string
-	ServiceSecretKey      string
 	StopCommand           string
 	BackupDir             string
 	SeedFile              string
@@ -212,10 +208,6 @@ func init() {
 	flags.StringVar(&collectorTaskPurgeFlagsValue.File, "file", "", "部署配置文件；用于解析数据库路径和可选 StorageRPCGatewayTarget")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.DBPath, "db-path", "", "Collector SQLite 数据库路径；默认取 MOOX_COLLECTOR_DB_PATH 或 ./data/moox_collector.db")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.SpaceID, "space-id", "", "只清理指定空间；留空表示清理全部空间")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.ControlURL, "control-url", "", "保留兼容；apply 不再调用控制面 DeleteTask，避免停机前物理删除结果")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.AccessToken, "access-token", "", "控制面登录态；默认取 MOOX_ACCESS_TOKEN")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.ServiceAccessKey, "service-access-key", "", "控制面服务签名 key id")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.ServiceSecretKey, "service-secret-key", "", "控制面服务签名 secret")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.StopCommand, "stop-command", "", "执行 apply 时首先停止 Collector 写入的本地命令")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.BackupDir, "backup-dir", "", "备份目录；默认写入数据库所在目录")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.SeedFile, "seed-file", "", "重建 Schema 后使用的 Collector 任务种子文件")
@@ -292,11 +284,9 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 		metadataSecret := firstNonEmpty(
 			strings.TrimSpace(flags.MetadataServiceSecret),
 			os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"),
-			strings.TrimSpace(flags.ServiceSecretKey),
 		)
 		metadataKey := firstNonEmpty(
 			strings.TrimSpace(flags.MetadataServiceKey),
-			strings.TrimSpace(flags.ServiceAccessKey),
 			"storage-metadata",
 		)
 		metadataClient = newCollectorStorageMetadataClient(metadataTarget, metadataProtocol, metadataKey, metadataSecret)
@@ -626,11 +616,6 @@ func validateCollectorTaskPurgeApply(flags collectorTaskPurgeFlags, summary *col
 	}
 	if strings.TrimSpace(flags.StopCommand) == "" {
 		return fmt.Errorf("collector task purge apply requires --stop-command to stop Collector writes")
-	}
-	if key, secret := strings.TrimSpace(flags.ServiceAccessKey), strings.TrimSpace(flags.ServiceSecretKey); key != "" || secret != "" {
-		if key == "" || secret == "" {
-			return fmt.Errorf("service access key and secret must be provided together")
-		}
 	}
 	if strings.TrimSpace(flags.SpaceID) == "" {
 		initBin := strings.TrimSpace(flags.CollectorInitBin)

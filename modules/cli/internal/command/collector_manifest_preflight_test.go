@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient/admintest"
+
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
@@ -45,29 +47,29 @@ func TestManifestCollectorEnvironmentPreflightStopsAllUploads(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reads.Add(1)
 		switch r.URL.Path {
-		case "/api/admin/collectmgr/GetTaskList", "/api/service/collectmgr/GetTaskList":
+		case "/trpc.moox.collector.CollectMgr/GetTaskList":
 			_, _ = io.WriteString(w, `{"ret_info":{"code":0},"tasks":[]}`)
-		case "/api/admin/cloudnode/ListCloudAccounts", "/api/service/cloudnode/ListCloudAccounts":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/ListCloudAccounts":
 			if accountMissing.Load() {
 				_, _ = io.WriteString(w, `{"ret_info":{"code":0},"accounts":[]}`)
 				return
 			}
 			_, _ = io.WriteString(w, `{"ret_info":{"code":0},"accounts":[{"account_id":"tencent-scf","credential_secret_id":"tencent-default"}]}`)
-		case "/api/admin/cloudnode/GetNodeList", "/api/service/cloudnode/GetNodeList":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList":
 			if legacyTimer.Load() {
 				_, _ = io.WriteString(w, `{"ret_info":{"code":0},"items":[{"node_id":"legacy-timer","region":"ap-nanjing","node_type":"scf-event","biz_type":"market_fetcher","trigger_type":"timer"}]}`)
 			} else {
 				_, _ = io.WriteString(w, `{"ret_info":{"code":0},"items":[]}`)
 			}
-		case "/api/admin/cloudnode/SubmitUpdateNodeRuntimeConfigs", "/api/service/cloudnode/SubmitUpdateNodeRuntimeConfigs", "/api/admin/cloudnode/CreateCloudAccount", "/api/service/cloudnode/CreateCloudAccount":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs", "/trpc.moox.cloudnode.CloudNodeMgr/CreateCloudAccount":
 			mutations.Add(1)
 			http.Error(w, "must not mutate", http.StatusInternalServerError)
-		case "/api/service/secret/GetSecretValue":
+		case "/trpc.moox.ops.SecretMgr/GetSecretValue":
 			_, _ = io.WriteString(w, `{"ret_info":{"code":0},"secret":{"category":"cloud","provider":"tencent","status":"active","key_id":"cls-id","secret_value":"cls-secret"}}`)
-		case "/api/admin/cloudnode/InitPackageUpload", "/api/service/cloudnode/InitPackageUpload":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/InitPackageUpload":
 			uploads.Add(1)
 			http.Error(w, "must not upload", http.StatusInternalServerError)
-		case "/api/admin/cloudnode/SubmitCreateNodes", "/api/admin/cloudnode/SubmitDeployNodes", "/api/service/cloudnode/SubmitCreateNodes", "/api/service/cloudnode/SubmitDeployNodes":
+		case "/trpc.moox.cloudnode.CloudNodeMgr/SubmitCreateNodes", "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeployNodes":
 			creates.Add(1)
 			http.Error(w, "must not create", http.StatusInternalServerError)
 		default:
@@ -225,7 +227,7 @@ function_count = 1
 			require.NoError(t, os.WriteFile(manifestPath, []byte(content), 0o600))
 			opts := collectorPublishOptions{
 				collectorPackageOptions: collectorPackageOptions{CollectorRoot: collectorRoot, Out: filepath.Join(t.TempDir(), "package.zip")},
-				ControlURL:              server.URL, File: manifestPath, SpaceID: tc.spaceID, PackageName: tc.packageName,
+				control:                 admintest.Client(server.URL), File: manifestPath, SpaceID: tc.spaceID, PackageName: tc.packageName,
 			}
 			if tc.padding != "" {
 				opts.Env = []string{"PADDING=" + tc.padding}

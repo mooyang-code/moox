@@ -12,7 +12,9 @@ func TestDefaultConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	cfg := DefaultConfig()
 	assert.False(t, cfg.Runtime.LiveTradingEnabled)
 	assert.Equal(t, "./data/moox_trade.db", cfg.Database.Path)
-	assert.Equal(t, "https://106.53.107.122:11001", cfg.Admin.BaseURL)
+	assert.Equal(t, "trade", cfg.GatewayClient.Caller)
+	assert.Equal(t, "../secrets/caller-trade.key", cfg.GatewayClient.KeyFile)
+	require.NoError(t, cfg.GatewayClient.Validate())
 	assert.True(t, cfg.EventBus.Enabled)
 	assert.False(t, cfg.DNSResolver.Enabled)
 	assert.Equal(t, 4, cfg.DNSResolver.MaxIPsPerDomain)
@@ -72,20 +74,12 @@ func TestApplyEnv_OverridesBusinessFields(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "env.db")
 	t.Setenv("MOOX_TRADE_DB_PATH", dbPath)
 	t.Setenv("MOOX_TRADE_LIVE_TRADING_ENABLED", "true")
-	t.Setenv("MOOX_TRADE_ADMIN_URL", "http://127.0.0.1:18080")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "env-ak")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "env-sk")
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
 
 	cfg := DefaultConfig()
 	require.NoError(t, cfg.applyEnv())
 
 	assert.Equal(t, dbPath, cfg.Database.Path)
 	assert.True(t, cfg.Runtime.LiveTradingEnabled)
-	assert.Equal(t, "http://127.0.0.1:18080", cfg.Admin.BaseURL)
-	assert.Equal(t, "env-ak", cfg.Admin.ServiceAuth.AccessKey)
-	assert.Equal(t, "env-sk", cfg.Admin.ServiceAuth.SecretKey)
-	assert.Equal(t, "gateway-gz-122", cfg.Admin.ServiceAuth.TargetNode)
 }
 
 func TestLoad_InvalidYAML_ShouldReturnParseError(t *testing.T) {

@@ -95,10 +95,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 collector schema 失败: %v", err)
 		return nil, err
 	}
-	deps, err := Resolve(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("resolve collector dependencies from sysdeploy: %w", err)
-	}
+	deps := cfg.SCFTargets()
 
 	datasetMetrics, err := report.NewDatasetMetrics(prometheus.DefaultRegisterer, "collector")
 	if err != nil {

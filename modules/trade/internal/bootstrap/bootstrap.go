@@ -34,6 +34,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -64,23 +65,20 @@ func initialize(
 	if err != nil {
 		return nil, err
 	}
+	gateway, err := gatewayclient.New(gatewayclient.Options{Config: cfg.GatewayClient})
+	if err != nil {
+		_ = tradeStore.Close()
+		return nil, fmt.Errorf("创建 trade 的 gatewayclient: %w", err)
+	}
 	cleanupStore := true
 	defer func() {
 		if cleanupStore {
+			gateway.Close()
 			_ = tradeStore.Close()
 		}
 	}()
 
-	secrets := secretclient.New(secretclient.Config{
-		GatewayBaseURL: cfg.Admin.BaseURL,
-		ServiceAuth: secretclient.ServiceAuthConfig{
-			AccessKey:  cfg.Admin.ServiceAuth.AccessKey,
-			SecretKey:  cfg.Admin.ServiceAuth.SecretKey,
-			TargetNode: cfg.Admin.ServiceAuth.TargetNode,
-			CAFile:     cfg.Admin.ServiceAuth.CAFile,
-			ExpireSecs: cfg.Admin.ServiceAuth.ExpireSeconds,
-		},
-	})
+	secrets := secretclient.New(gateway, 10*time.Second)
 	registry := execution.NewRegistry()
 	registerBuiltins(registry)
 	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
@@ -432,6 +430,7 @@ func initialize(
 			eventBus.Close()
 		}
 		workers.Wait()
+		gateway.Close()
 		_ = tradeStore.Close()
 	})
 	cleanupStore = false

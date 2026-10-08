@@ -25,7 +25,7 @@ func TestValidateSetupListenerRequiresLoopback(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "trpc_go.yaml")
-			body := "server:\n  service:\n    - name: trpc.moox.admin.Setup\n      ip: " + tt.address + "\n      port: 11110\n      network: tcp\n      protocol: http\n"
+			body := "server:\n  service:\n    - name: trpc.moox.admin.Setup\n      ip: " + tt.address + "\n      port: 11110\n      network: tcp\n      protocol: trpc\n"
 			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 			err := validateSetupListener(path)
 			if tt.wantErr {
@@ -138,7 +138,7 @@ cors:
       ip: 127.0.0.1
       port: 11110
       network: tcp
-      protocol: http
+      protocol: trpc
 `), 0o644))
 
 	origWD, err := os.Getwd()
@@ -193,7 +193,7 @@ cors:
       ip: 127.0.0.1
       port: 11110
       network: tcp
-      protocol: http
+      protocol: trpc
 `), 0o644))
 
 	origWD, err := os.Getwd()
