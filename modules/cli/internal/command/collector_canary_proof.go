@@ -677,6 +677,13 @@ func (p *collectorSCFCanaryProof) ensurePeriod(ctx context.Context) error {
 	return nil
 }
 
+// periodIsUnused proves that nothing has written the candidate period. The
+// Storage period state and the Primary fact row are authoritative; the View
+// only derives from Primary writes, so it is read solely to catch a stale
+// index row. The View need not cover the period yet: a disabled canary task
+// has no data, so its View never covers recent periods until the canary
+// itself writes one. The post-invocation proof still waits for the View to
+// serve the written row.
 func (p *collectorSCFCanaryProof) periodIsUnused(ctx context.Context) (bool, error) {
 	status, err := p.readPeriodStatus(ctx)
 	if err != nil {
@@ -689,11 +696,11 @@ func (p *collectorSCFCanaryProof) periodIsUnused(ctx context.Context) (bool, err
 	if err != nil {
 		return false, err
 	}
-	view, complete, err := p.readViewRow(ctx)
+	view, _, err := p.readViewRow(ctx)
 	if err != nil {
 		return false, err
 	}
-	return !primary && !view && complete, nil
+	return !primary && !view, nil
 }
 
 func (p *collectorSCFCanaryProof) readPeriodStatus(ctx context.Context) (string, error) {

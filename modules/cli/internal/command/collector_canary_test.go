@@ -763,6 +763,23 @@ func TestPrepareCollectorSCFCanaryProofReservesOnlyUnusedOwnedPeriod(t *testing.
 	require.GreaterOrEqual(t, primary.ensuredExpectation.GetDeadlineAt(), time.Date(2026, 10, 3, 13, 0, 0, 0, time.UTC).Unix())
 }
 
+func TestPrepareCollectorSCFCanaryProofAcceptsAViewThatDoesNotCoverThePeriodYet(t *testing.T) {
+	entry := collectorCanaryTestEntry()
+	primary := &collectorCanaryTestPrimary{status: "not_found"}
+	view := &collectorCanaryTestView{complete: false}
+	now := time.Date(2026, 10, 3, 12, 0, 10, 0, time.UTC)
+	fetcher := &setupconfig.SCFFetcherSpace{SpaceID: "crypto", CanaryTaskID: entry.GetTaskId(), MarketID: "crypto", ProviderID: "binance", SourceID: "spot_http", InstrumentType: "spot"}
+	access := collectorCanaryAccess{
+		inventory: collectorCanaryTestInventory{entries: []*collectorpb.TaskResultInventoryEntry{entry}}, primary: primary, view: view,
+		periodAuth: &commonpb.AuthInfo{AppId: "collector"}, primaryAuth: &commonpb.AuthInfo{AppId: "scf-market-canary"},
+		viewAuth: &commonpb.AuthInfo{AppId: "scf-market-canary"},
+	}
+	proof, err := prepareCollectorSCFCanaryProofWithClock(context.Background(), fetcher, access, now, func() time.Time { return now })
+	require.NoError(t, err, "a disabled canary task's empty View cannot cover recent periods; Primary absence is authoritative")
+	require.EqualValues(t, 1, primary.ensureCalls.Load())
+	require.Equal(t, proof.reservationID, primary.ensuredExpectation.GetReservationId())
+}
+
 func TestCollectorStockCNCanaryPeriodsRespectProviderHistoryWindow(t *testing.T) {
 	entry := &collectorpb.TaskResultInventoryEntry{
 		MarketId: "stockcn", CalendarId: "cn_stock", Timezone: "Asia/Shanghai",
