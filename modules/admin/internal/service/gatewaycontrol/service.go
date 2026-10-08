@@ -142,7 +142,9 @@ func authorize(ctx context.Context, hostID string) error {
 
 func retOK() *pb.RetInfo { return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "ok"} }
 
-func retError(code pb.ErrorCode, err error) *pb.RetInfo { return &pb.RetInfo{Code: code, Msg: err.Error()} }
+func retError(code pb.ErrorCode, err error) *pb.RetInfo {
+	return &pb.RetInfo{Code: code, Msg: err.Error()}
+}
 
 // placementError 把部署相关的错误转换为返回码。
 func placementError(err error) *pb.RetInfo {
